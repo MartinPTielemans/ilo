@@ -244,8 +244,12 @@ jobs:
         battery-os adblock adblock-lists adblock-cosmetic adblock-page store sync-extensions
         battery calls cards count everyday extensions favorites hosts
         idle media notifications policies popup preview ranking switch-frames translate webrtc windows
-        pictures boosts arrange-card foot-bar peek-motion rules overlays safe-start update-checks shots sidebar-right alt-click mini-bar
+        pictures boosts arrange-card foot-bar peek-motion rules overlays safe-start update-checks sidebar-right alt-click mini-bar
         page-menu arrange arrange-trade arrange-drop arrange-order panel-shadows share
+      # And at night alone: shots makes the Store's and the README's pictures of live sites and
+      # checks nothing past getting to them, and a train's red has to be about the PRs in it, not a
+      # site that didn't answer (#4074). Named, it runs on any dispatch.
+      WINDOWS_NIGHTS: shots
       # The runs that don't apply to Windows, a line each with why, which the summary gives. They're
       # skipped even when named.
       WINDOWS_SKIPS: |
@@ -279,9 +283,13 @@ jobs:
         env:
           RUNS: ${{ inputs.runs }}
           SHARD: ${{ matrix.shard }}
+          EVENT: ${{ github.event_name }}
         run: |
           case $RUNS in
-          '') todo=$WINDOWS_RUNS ;;
+          '')
+            todo=$WINDOWS_RUNS
+            [ "$EVENT" != schedule ] || todo="$todo $WINDOWS_NIGHTS"
+            ;;
           all) todo=$(../.github/scripts/runs.sh all) ;;
           *) todo=$RUNS ;;
           esac
@@ -623,6 +631,9 @@ jobs:
               fi
               ;;
             *)
+              case " $WINDOWS_NIGHTS " in
+              *" $run "*) [ -n "$why" ] || why="a night's run, or one named (#4074)" ;;
+              esac
               result="skipped: ${why:-not tried on Windows yet}"
               ;;
             esac

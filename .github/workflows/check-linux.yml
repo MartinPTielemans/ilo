@@ -75,7 +75,7 @@ env:
     favorites cards extensions adblock adblock-lists adblock-cosmetic adblock-page private little capture board
     passwords preview access dialogs crash import quit quit-history onboarding passkeys appearance about
     sync sync-account sync-devices sync-extensions
-    devices pair hosts handback store adblock-live widevine updates update-checks shots tab-drag count
+    devices pair hosts handback store adblock-live widevine updates update-checks tab-drag count
     blank mcp trouble ranking policies calls battery battery-os idle webrtc translate everyday
     window windows
     media pictures boosts links link-cards notifications switch-frames foot-bar peek-motion rules later-launch
@@ -129,12 +129,17 @@ jobs:
           legs=
           for session in $sessions; do
             passing=$LINUX_RUNS
+            [ "$session" != wayland ] || passing=$WAYLAND_RUNS
             # The night's alone: adblock-native makes uBlock Origin's pass of the 50 sites and then
             # the native engine's, on one snapshot, so a parity regression shows before the flip
-            # (#2111). A train's red has to be about the PRs in it, and two loads of 50 live sites
-            # minutes apart can go red on a site that changed between them.
-            [ "$EVENT" != schedule ] || passing="$passing adblock-native"
-            [ "$session" != wayland ] || passing=$WAYLAND_RUNS
+            # (#2111); and shots, on Wayland, makes the Store's and the README's pictures of live
+            # sites and checks nothing past getting to them (#4074). A train's red has to be about
+            # the PRs in it, and two loads of 50 live sites minutes apart can go red on a site that
+            # changed between them, as a train's shots did on a GitHub that didn't answer.
+            if [ "$EVENT" = schedule ]; then
+              [ "$session" = wayland ] || passing="$passing adblock-native"
+              [ "$session" != wayland ] || passing="$passing shots"
+            fi
             case $RUNS in
             '') runs=$passing ;;
             all) runs=$all ;;
