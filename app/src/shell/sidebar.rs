@@ -737,10 +737,6 @@ impl Shell {
             // Above the window, as GPUI's (-1, -1) before each leave on Linux and Windows: its
             // last move in the window says which way it went.
             self.left_by_last_move(cx);
-        } else if side < 0. {
-            // Past the edge along it, as the Mac's driver can post, it has left across it.
-            self.left_across_edge(cx);
-            self.reveal_heard = None;
         } else {
             let toward = self.reveal_heard.is_some_and(|(from, _)| side <= from);
             self.reveal_heard = Some((side, toward));
@@ -1821,8 +1817,7 @@ mod tests {
 
     /// A pointer flung at the edge of a window away from the screen's edge overshoots out of the
     /// window and comes back to the edge without moving along it, which brings the sidebar out, as
-    /// a pointer the screen's edge stopped would have (#3989); so does one heard past the edge, as
-    /// the Mac's driver posts it.
+    /// a pointer the screen's edge stopped would have (#3989).
     #[gpui::test]
     fn a_pointer_back_at_the_edge_after_an_overshoot_reveals(cx: &mut TestAppContext) {
         let shell = hidden_sidebar(cx);
@@ -1833,14 +1828,6 @@ mod tests {
         assert!(
             out_after_the_wait(&shell, cx),
             "back at the edge after an overshoot, the pointer didn't bring the sidebar out"
-        );
-        put_away(&shell, cx);
-        move_to(&shell, 16, 4., 300., cx);
-        move_to(&shell, 16, -20., 300., cx);
-        move_to(&shell, 200, 3., 300., cx);
-        assert!(
-            out_after_the_wait(&shell, cx),
-            "back at the edge from past it, the pointer didn't bring the sidebar out"
         );
         // The Mac tells the leave alone.
         put_away(&shell, cx);

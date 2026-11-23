@@ -1128,8 +1128,8 @@ elif windows; then
   overshoot
   send place $frame
 else
-  # The Mac's driver posts the move out of the window to it, as past its edge.
-  overshoot
+  # The Mac's driver sends no exit as a move leaves the window, so the app never hears it leave.
+  echo "SKIP: the overshoot at the window's edge, as the Mac's driver can't move the pointer out (#4076)"
 fi
 send move 400 300
 # The pointer has to move a few points up or down at the edge and stay a moment: one jumping
