@@ -821,7 +821,7 @@ if (document.hidden) post();
 send front
 send click 41 114
 expect '^browser: command select via favorite$' "a click on the favorite's tile didn't show it"
-go_from_bar "http://localhost:$port/badges.html"
+go_from_bar "${site}badges.html"
 await '^browser: title [0-9][0-9]* badges ready$' || fail "the badges page didn't paint"
 # The warning stayed off, so ⌘Q quits without asking, saving the favorite shown with the Spaces.
 echo "key q cmd" >&3
@@ -869,7 +869,7 @@ a=$(favorites | cut -d' ' -f1)
 x=$(favorites | cut -d' ' -f2)
 await '^browser: today ' || fail "the Today tabs didn't come back"
 await "^browser: selected $a\( in .*\)\{0,1\}\$" || fail "the relaunch didn't show the favorite shown last"
-go_from_bar "http://localhost:$port/badges.html"
+go_from_bar "${site}badges.html"
 await "^browser: title $a badges ready$" || fail "the badges page didn't paint in the restored favorite"
 
 # Hidden behind the second favorite, the first's page posts, and its tile draws the count as its
@@ -880,7 +880,7 @@ expect "^browser: tile $a drawn with badge 1\$" "the favorite's tile didn't coun
 
 # The second favorite goes to the badges page too: its page's posts are its own document's, never
 # the first's, though their URLs are the same.
-go_from_bar "http://localhost:$port/badges.html"
+go_from_bar "${site}badges.html"
 await "^browser: title $x badges ready$" || fail "the second favorite's badges page didn't paint"
 
 # An agent's tab is no favorite whatever its page, and its badges page loads hidden, so it posts
@@ -888,7 +888,7 @@ await "^browser: title $x badges ready$" || fail "the second favorite's badges p
 # too, as its page shares the favorite's URL.
 post agentspace claude-code Claude Code
 expect '^browser: made space [1-9][0-9]* for agent claude-code$' "the agent's Space wasn't made"
-send agentopen claude-code "http://localhost:$port/badges.html"
+send agentopen claude-code "${site}badges.html"
 expect "^browser: agent claude-code opened [0-9]*\$" "the agent didn't open the badges page"
 agent_tab=$(grep "^browser: agent claude-code opened " "$log" | tail -1 | cut -d' ' -f5)
 await "^browser: title $agent_tab badges posted 1$" ||
@@ -950,7 +950,7 @@ a=$(favorites | cut -d' ' -f1)
 x=$(favorites | cut -d' ' -f2)
 await '^browser: today ' || fail "the Today tabs didn't come back"
 await "^browser: selected $x\( in .*\)\{0,1\}\$" || fail "the relaunch didn't show the favorite shown last"
-go_from_bar "http://localhost:$port/badges.html"
+go_from_bar "${site}badges.html"
 await "^browser: title $x badges ready$" || fail "the badges page didn't paint in the last favorite shown"
 send key 1 cmd
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "⌘1 didn't show the first favorite again"
