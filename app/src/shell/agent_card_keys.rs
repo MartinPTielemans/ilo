@@ -202,13 +202,19 @@ pub(super) fn heard_title(title: &str) -> String {
 }
 
 /// The card's key `A`, which `does` while a card's stop has the keyboard by Focus Agent
-/// Question, and is passed on otherwise.
+/// Question, and is passed on otherwise. Passed on too once the keys are leaving, before the frame
+/// that gives the keyboard back: a window left for another app and hidden draws none, and a key as
+/// the user comes back would otherwise answer.
 fn card_key<A: gpui::Action>(
     does: fn(&mut Shell, &mut Window, &mut Context<Shell>),
     cx: &Context<Shell>,
 ) -> impl Fn(&A, &mut Window, &mut App) + 'static {
     cx.listener(move |shell, _: &A, window, cx| {
-        match shell.card_keys.is_some() && shell.card_focused(window).is_some() {
+        let held = shell
+            .card_keys
+            .as_ref()
+            .is_some_and(|keys| keys.leaving.is_none());
+        match held && shell.card_focused(window).is_some() {
             true => does(shell, window, cx),
             false => cx.propagate(),
         }
@@ -1688,6 +1694,30 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(answers(&host), Vec::<String>::new());
         assert!(!host.take().contains(&"focus page".to_string()));
+    }
+
+    /// A key reaching the window after it was left for another app, before the frame that gives
+    /// the keyboard back, as coming back to a window that drew nothing while hidden: it answers
+    /// nothing, long past the protection, and goes on as a key the card's keys don't have.
+    #[gpui::test]
+    fn a_key_after_the_window_was_left_answers_nothing(cx: &mut TestAppContext) {
+        let (host, shell, cx) = window_with(cx);
+        ask(&shell, cx, question(7));
+        from_page(&shell, cx, KEY);
+        wait(cx, PROTECT);
+        assert!(ring(&shell, cx).is_some());
+        host.take();
+        cx.update(|window, cx| {
+            shell.update(cx, |shell, cx| shell.card_keys_window_left("window", cx));
+            window.dispatch_action(Box::new(super::CardPress), cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            answers(&host),
+            Vec::<String>::new(),
+            "a key after the window was left answered the card"
+        );
+        assert_eq!(ring(&shell, cx), None);
     }
 
     /// GPUI saying the window stopped being active and active again in one batch of events, as
