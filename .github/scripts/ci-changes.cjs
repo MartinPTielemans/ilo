@@ -53,7 +53,6 @@ const JOBS = {
     /^\.github\/workflows\/mobile-ios\.yml$/,
   ],
   // The website (site/AGENTS.md), which reads nothing of the browser's and starts nothing of it.
-  // Its demo is a release's, fetched at deploy (site.yml).
   site: [/^site\//, /^\.github\/workflows\/site\.yml$/],
 };
 

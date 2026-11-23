@@ -4,9 +4,9 @@
 //! agent is at work, with focus in the page too. The strip is the task area's (task_area.rs).
 
 #[cfg(target_os = "linux")]
-use std::{cell::Cell, time::Duration};
+use std::time::Instant;
 #[cfg(target_os = "linux")]
-use web_time::Instant;
+use std::{cell::Cell, time::Duration};
 
 use gpui::{App, Context, SharedString};
 

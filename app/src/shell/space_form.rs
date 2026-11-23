@@ -2,7 +2,7 @@
 //! its profile and its theme (docs/ux-spec.md › Spaces).
 
 use crate::tokens::text;
-use web_time::Instant;
+use std::time::Instant;
 
 use gpui::{
     AnyElement, Context, FontWeight, MouseButton, MouseDownEvent, Pixels, Point, Window,
@@ -439,7 +439,7 @@ mod tests {
         accesskit::{Action, HasPopup, Node, NodeId, Role},
         point, px, size,
     };
-    use web_time::Instant;
+    use std::time::Instant;
 
     use crate::shell::{
         Command, FORM_FIELD_TOP, FORM_PROFILE_TOP, FORM_THEME_TOP, Shell, SpaceEntry,

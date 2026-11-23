@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
 use std::time::Duration;
-use web_time::Instant;
+use std::time::Instant;
 
 use gpui::{
     AnyElement, Bounds, Context, FontWeight, HighlightStyle, Hsla, MouseButton, Pixels,
@@ -1152,7 +1152,7 @@ impl Shell {
         );
         self.closed_preview = None;
         self.closed_pinned = None;
-        let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH);
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
         self.closed_task = Some((agent, now.unwrap_or_default().as_secs_f64() * 1000.));
     }
 

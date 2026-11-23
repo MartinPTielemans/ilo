@@ -9,8 +9,8 @@
 //! their order down the panel, and space or return does what a click on the ringed one does
 //! (#1382).
 
+use std::time::Instant;
 use std::{rc::Rc, sync::Arc, time::Duration};
-use web_time::Instant;
 
 use gpui::{
     App, Bounds, ClickEvent, Context, FocusHandle, Global, Image, KeyBinding, MouseButton,
