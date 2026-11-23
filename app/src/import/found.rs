@@ -135,8 +135,9 @@ pub struct LeftOut {
 }
 
 /// The words for a thing that won't be imported, as the import screen lists it: one, with its
-/// article, "a live folder", and many, to follow a count, "live folders". Each is shared by every
-/// source that has the thing, so the same thing reads the same.
+/// article, "a live folder", and many, to follow a count, "live folders". Those below are shared by
+/// every source that has the thing, so the same thing reads the same; a thing only one source
+/// has keeps its words in that source's reader.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Item {
     pub one: &'static str,
@@ -159,16 +160,6 @@ pub const SEPARATE_CONTAINER: Item = Item {
 pub const SPACE_ICON: Item = Item {
     one: "a Space icon",
     many: "Space icons",
-};
-/// Zen's.
-pub const ESSENTIALS_FOLDER: Item = Item {
-    one: "a folder in Essentials",
-    many: "folders in Essentials",
-};
-/// Ardia's.
-pub const TOP_APPS_FOLDER: Item = Item {
-    one: "a folder in Top Apps",
-    many: "folders in Top Apps",
 };
 pub const TAB_GROUP: Item = Item {
     one: "a tab group",
