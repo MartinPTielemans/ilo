@@ -22,7 +22,10 @@ use super::ready::{Found, Ready};
 use super::runner::{self, Cli, Failure, Launch, Out, Process};
 use super::sign_in::Offer;
 use super::{Agents, Client, Question, ToolResult, page, site, tools};
+use crate::agents::tier::Tier;
 use crate::shell::MenuEntry;
+
+pub mod ilo;
 
 /// The answers an ask shows as buttons on the card, at most, and how long each may be.
 pub const ANSWERS: usize = 3;
@@ -144,6 +147,8 @@ pub struct Conversation {
     pub answers: Vec<SharedString>,
     /// Whether its last line is the message the agent is writing, which comes in as it's written.
     pub writing: bool,
+    /// Its access, which the composer's chip shows and changes.
+    pub tier: Tier,
 }
 
 /// A line of a task's conversation.
@@ -162,6 +167,8 @@ pub enum Line {
         key: usize,
         failed: Option<SharedString>,
     },
+    /// ilo's own line, which only the app makes (ilo.rs).
+    Ilo(ilo::IloLine),
 }
 
 /// A stretch of the agent's work between two messages: a summary line, "Working · 5 steps" or
@@ -457,6 +464,17 @@ pub enum TaskAction {
     /// A failed card's Sign in to …, and its Cancel while that runs: the assistant's row's own.
     SignIn,
     CancelSignIn,
+    /// An ilo line's Take over: the tab is the user's.
+    TakeOver(u64),
+    /// A Stopped line's step up, or the composer's tier chip, up or down: only the user's press
+    /// sets a task's access.
+    SetTier(Tier),
+    /// A Sites line's Any site.
+    AnySite,
+    /// An ilo line's Hand back: the tab goes back to the agent.
+    HandBack(u64),
+    /// A step's Not now, by its line's key.
+    NotNow(usize),
 }
 
 /// A task the user dismissed, as the Library's Archived Tabs lists it among the tabs.
@@ -617,6 +635,12 @@ impl Agents {
             TaskAction::Undelete => self.delete_task(agent, false, cx),
             TaskAction::SignIn => self.sign_in_for_task(agent, cx),
             TaskAction::CancelSignIn => self.cancel_sign_in_for_task(agent),
+            // The surface's buttons, which the tier model wires (#4086 step 2).
+            TaskAction::TakeOver(_)
+            | TaskAction::SetTier(_)
+            | TaskAction::AnySite
+            | TaskAction::HandBack(_)
+            | TaskAction::NotNow(_) => {}
         }
         (None, None)
     }
@@ -701,6 +725,8 @@ impl Agents {
                 _ => Vec::new(),
             },
             writing: working && task.writing.as_ref().is_some_and(|writing| !writing.said),
+            // The tier model (#4086 step 2) keeps each task's own.
+            tier: Tier::default(),
         })
     }
 
