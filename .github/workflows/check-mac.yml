@@ -660,8 +660,14 @@ jobs:
           sparse-checkout: |
             .github/scripts
             app/check
+      # A build job that runs out its time is cancelled, not failed, and skips the check jobs, so
+      # report would say nothing. The check job that built the app before #3917 failed the run when
+      # it ran out, so this counts it as a failure. A run someone cancelled is still no verdict.
+      - id: timeout
+        if: ${{ !cancelled() && needs.build.result == 'cancelled' }}
+        run: echo "build=true" >> "$GITHUB_OUTPUT"
       - env:
           GH_TOKEN: ${{ github.token }}
-          RESULT: ${{ (needs.build.result == 'failure' || needs.check.result == 'failure' || needs.complete.result == 'failure' || (needs.check.result == 'cancelled' && needs.complete.result == 'success')) && 'failure' || needs.check.result }}
+          RESULT: ${{ (needs.build.result == 'failure' || steps.timeout.outputs.build == 'true' || needs.check.result == 'failure' || needs.complete.result == 'failure' || (needs.check.result == 'cancelled' && needs.complete.result == 'success')) && 'failure' || needs.check.result }}
           FOUND: ${{ needs.build.outputs.found }}
         run: .github/scripts/main-check.sh report "$RESULT" "$FOUND"
