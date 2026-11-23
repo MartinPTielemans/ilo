@@ -11,7 +11,7 @@ use gpui::{
     point, px,
 };
 
-use super::{Drawn, END_FADE, INTRO_END, OptIn, STEP_MOTION, STILL_END, STILL_FADE, Step};
+use super::{Drawn, END_FADE, INTRO_END, Level, OptIn, STEP_MOTION, STILL_END, STILL_FADE, Step};
 use crate::account::{self, State, Status};
 use crate::import::ImportEvent;
 use crate::shell::{Folders, Shell, commands::Command, recorder::Recorder};
@@ -40,10 +40,27 @@ fn first_window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestConte
         );
         shell.set_space(1, cx);
         shell.set_tabs(1, Vec::new(), vec![1], Vec::new(), Folders::default(), cx);
+        // Over no glass, as on Linux and Windows, so the flow's steps are the same on every OS;
+        // the transparency step's tests give it the Mac's.
+        shell.blurred = false;
     });
     cx.update(|window, cx| window.focus(&shell.focus_handle(cx), cx));
     cx.run_until_parked();
     (shell, cx, host)
+}
+
+/// A first window over glass, as the Mac's is, where the transparency step shows.
+fn glass_window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
+    let (shell, cx, host) = first_window(cx);
+    shell.update(cx, |shell, _| shell.blurred = true);
+    (shell, cx, host)
+}
+
+/// The level the transparency step shows.
+fn level(shell: &Entity<Shell>, cx: &VisualTestContext) -> Option<Level> {
+    shell.read_with(cx, |shell, _| {
+        shell.onboarding.as_ref().map(|onboarding| onboarding.level)
+    })
 }
 
 /// The step the flow shows, if it shows.
@@ -1891,5 +1908,111 @@ fn a_screen_reader_reads_the_engines_as_one_choice(cx: &mut TestAppContext) {
             ("Bing", Some(Toggled::False)),
             ("Google", Some(Toggled::False)),
         ]
+    );
+}
+
+/// Over glass the transparency step comes right after the colour; over none it's left out, as
+/// there's nothing behind the window to show through.
+#[gpui::test]
+fn the_transparency_step_follows_the_colour_over_glass(cx: &mut TestAppContext) {
+    let (shell, cx, _) = glass_window(cx);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Color);
+    cx.simulate_keystrokes("enter");
+    assert_eq!(step(&shell, cx), Some(Step::Transparency));
+}
+
+#[gpui::test]
+fn no_glass_leaves_the_transparency_step_out(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
+    started(&shell, cx);
+    let steps = shell.read_with(cx, |shell, _| {
+        shell.onboarding.as_ref().unwrap().steps.clone()
+    });
+    assert!(!steps.contains(&Step::Transparency), "{steps:?}");
+}
+
+/// The keyboard rests on the picker, which shows Standard, and the arrows move the pick, stopping
+/// at either end.
+#[gpui::test]
+fn the_arrows_move_the_transparency_pick(cx: &mut TestAppContext) {
+    let (shell, cx, _) = glass_window(cx);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Transparency);
+    later(&shell, cx, STEP_MOTION);
+    let resting = cx.update(|window, cx| {
+        let first = shell
+            .read(cx)
+            .onboarding
+            .as_ref()
+            .unwrap()
+            .first_stop
+            .clone();
+        first.is_focused(window)
+    });
+    assert!(resting, "the keyboard rests on the picker");
+    assert_eq!(level(&shell, cx), Some(Level::Standard));
+    cx.simulate_keystrokes("left");
+    assert_eq!(level(&shell, cx), Some(Level::Less));
+    cx.simulate_keystrokes("left up");
+    assert_eq!(level(&shell, cx), Some(Level::Less), "it stops at Less");
+    cx.simulate_keystrokes("right down down");
+    assert_eq!(level(&shell, cx), Some(Level::More), "and at More");
+    cx.simulate_keystrokes("up");
+    assert_eq!(level(&shell, cx), Some(Level::Standard));
+}
+
+/// ↩ goes on with the level shown; Esc and Skip go on with Standard, keeping nothing picked. Here
+/// it's the last step, so going on ends the flow.
+#[gpui::test]
+fn return_keeps_the_level_and_skip_puts_standard_back(cx: &mut TestAppContext) {
+    let (shell, cx, _) = glass_window(cx);
+    for (go_on, kept) in [
+        ("enter", Level::More),
+        ("escape", Level::Standard),
+        ("skip", Level::Standard),
+    ] {
+        started(&shell, cx);
+        skip_to(&shell, cx, Step::Transparency);
+        later(&shell, cx, STEP_MOTION);
+        cx.simulate_keystrokes("right");
+        match go_on {
+            "skip" => {
+                let viewport = shell.read_with(cx, |shell, _| shell.viewport);
+                let skip = point(px(SKIP_MARGIN + 30.), px(SKIP_MARGIN + 10.));
+                cx.simulate_click(
+                    point(viewport.width - skip.x, viewport.height - skip.y),
+                    Modifiers::none(),
+                );
+            }
+            key => cx.simulate_keystrokes(key),
+        }
+        let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
+        assert!(ending.is_some(), "{go_on} went on from the last step");
+        assert_eq!(level(&shell, cx), Some(kept), "{go_on}");
+        later(&shell, cx, END_FADE);
+    }
+}
+
+/// While the step shows, and while it slides in or away, the shell draws nothing of its own under
+/// the flow, so the window's glass is the preview; the step before keeps it, and it comes back
+/// as the flow ends.
+#[gpui::test]
+fn the_window_is_bare_glass_at_the_transparency_step(cx: &mut TestAppContext) {
+    let (shell, cx, _) = glass_window(cx);
+    let bare = |shell: &Entity<Shell>, cx: &VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.onboarding_bare())
+    };
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Color);
+    assert!(!bare(&shell, cx), "the colour step keeps the shell");
+    cx.simulate_keystrokes("escape");
+    assert!(bare(&shell, cx), "the transparency step is bare");
+    later(&shell, cx, STEP_MOTION);
+    assert!(bare(&shell, cx), "and stays bare once it's in");
+    cx.simulate_keystrokes("escape");
+    assert!(
+        !bare(&shell, cx),
+        "the shell comes back under the flow's fade"
     );
 }

@@ -91,6 +91,9 @@ pub(super) enum Step {
     SearchEngine,
     /// The first Space's colour, from the theme picker's swatches.
     Color,
+    /// How much of what's behind the window shows through its glass: the app's one level, which
+    /// the window takes at once. Left out where nothing blurs what's behind the window.
+    Transparency,
     /// Signing in to sync: Settings › Sync's view (crate::account); left out in a build that names
     /// no sync server, and once the browser is signed in.
     Account,
@@ -98,16 +101,58 @@ pub(super) enum Step {
     OptIns,
 }
 
-const STEPS: [Step; 8] = [
+const STEPS: [Step; 9] = [
     Step::Intro,
     Step::Import,
     Step::Favorites,
     Step::DefaultBrowser,
     Step::SearchEngine,
     Step::Color,
+    // After the colour, as a Space's glow reads through the same glass.
+    Step::Transparency,
     Step::Account,
     Step::OptIns,
 ];
+
+/// How much shows through the window's glass, the app's one level, Settings › Look's. Held by the
+/// flow until the palette's own level is in (#4128).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(super) enum Level {
+    Less,
+    #[default]
+    Standard,
+    More,
+}
+
+impl Level {
+    const ALL: [Level; 3] = [Level::Less, Level::Standard, Level::More];
+
+    /// What check.sh calls it.
+    fn name(self) -> &'static str {
+        match self {
+            Level::Less => "less",
+            Level::Standard => "standard",
+            Level::More => "more",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Level::Less => "Less",
+            Level::Standard => "Standard",
+            Level::More => "More",
+        }
+    }
+
+    /// The level `by` along from this one, stopping at either end.
+    fn along(self, by: isize) -> Level {
+        let at = Level::ALL
+            .iter()
+            .position(|&level| level == self)
+            .unwrap_or(1);
+        Level::ALL[(at as isize + by).clamp(0, Level::ALL.len() as isize - 1) as usize]
+    }
+}
 
 /// The opt-ins the first launch offers, each Settings' own switch.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -168,6 +213,7 @@ impl Step {
             Step::DefaultBrowser => "default-browser",
             Step::SearchEngine => "search-engine",
             Step::Color => "color",
+            Step::Transparency => "transparency",
             Step::Account => "account",
             Step::OptIns => "opt-ins",
         }
@@ -219,6 +265,15 @@ impl Step {
             Step::Color => (
                 "Pick a colour for your first Space.",
                 "The window takes it. Each Space can have its own, from its name in the sidebar.",
+                "Continue",
+            ),
+            Step::Transparency => (
+                "How much should show through?",
+                concat!(
+                    env!("APP_NAME"),
+                    "'s window is glass. Pick one and look around you: the window changes as you \
+                     choose."
+                ),
                 "Continue",
             ),
             // Its button only while signed out; the view's own buttons are the step's after.
@@ -349,6 +404,8 @@ pub(super) struct Onboarding {
     pub(super) step: Step,
     /// The swatch picked at the colour step, if one is.
     pub(super) picked: Option<usize>,
+    /// The level the transparency step shows, which the window takes as it's picked.
+    pub(super) level: Level,
     /// The search engines offered, each its keyword and name, and the profile's default's keyword,
     /// read until the core has them: a new profile's load after the flow starts.
     engines: (Vec<(SharedString, SharedString)>, SharedString),
@@ -454,6 +511,8 @@ impl Shell {
                 Step::SearchEngine => true,
                 Step::Account => account.is_some(),
                 Step::OptIns => opt_ins,
+                // Over no glass there's nothing to show through.
+                Step::Transparency => self.blurred,
                 _ => true,
             })
             .collect();
@@ -466,6 +525,7 @@ impl Shell {
             steps,
             step: Step::Intro,
             picked: None,
+            level: Level::Standard,
             engines,
             engine,
             os: self.browser.os(),
@@ -583,6 +643,14 @@ impl Shell {
         };
         let step = onboarding.step;
         log!("browser: onboarding left {} via {how}", step.name());
+        // Skipped, the window goes back to the level it had, and nothing is kept.
+        let unpicked = step == Step::Transparency
+            && matches!(how, "escape" | "skip")
+            && onboarding.level != Level::Standard;
+        if unpicked {
+            onboarding.level = Level::Standard;
+            log!("browser: onboarding transparency standard");
+        }
         // The count's switch is set as its step is left, whichever way: nothing is sent while the
         // step shows, and turned on and off again it's as it was (#2978).
         let count = (step == Step::OptIns)
@@ -699,6 +767,14 @@ impl Shell {
                 // check.sh reads this line.
                 log!("browser: onboarding picked color {color:06x}");
                 self.theme_changed(self.space, Theme::of_color(color), true, cx);
+            }
+            // The window has it already; Settings › Look keeps it once its stored level is in
+            // (#4129).
+            (Step::Transparency, _) => {
+                log!(
+                    "browser: onboarding transparency kept {}",
+                    onboarding.level.name()
+                );
             }
             _ => {}
         }
@@ -829,6 +905,29 @@ impl Shell {
         }
     }
 
+    /// Moves the transparency step's pick `by` along, which the window shows at once.
+    fn onboarding_level(&mut self, by: isize, cx: &mut Context<Self>) {
+        let Some(onboarding) = self.onboarding.as_mut() else {
+            return;
+        };
+        let level = onboarding.level.along(by);
+        if level != onboarding.level {
+            onboarding.level = level;
+            log!("browser: onboarding transparency {}", level.name());
+            cx.notify();
+        }
+    }
+
+    /// The flow shows its transparency step, or moves to or from it, over the window's glass, so
+    /// the shell draws nothing of its own under it.
+    pub(super) fn onboarding_bare(&self) -> bool {
+        self.onboarding.as_ref().is_some_and(|onboarding| {
+            onboarding.ending.is_none()
+                && (onboarding.step == Step::Transparency
+                    || (onboarding.leaving).is_some_and(|(step, _)| step == Step::Transparency))
+        })
+    }
+
     fn onboarding_pick(&mut self, index: usize, cx: &mut Context<Self>) {
         if let Some(onboarding) = self.onboarding.as_mut() {
             onboarding.picked = Some(index.min(SWATCHES.len() - 1));
@@ -871,6 +970,8 @@ impl Shell {
             (Step::Color, "left") => {
                 self.onboarding_pick(picked.map_or(SWATCHES.len(), |at| at.max(1)) - 1, cx)
             }
+            (Step::Transparency, "left" | "up") => self.onboarding_level(-1, cx),
+            (Step::Transparency, "right" | "down") => self.onboarding_level(1, cx),
             // ↑ and ↓ move the engine's pick, as they do the import's list's.
             (Step::SearchEngine, "down") => {
                 self.onboarding_pick_engine(engine.map_or(0, |at| at + 1), cx)
@@ -940,7 +1041,7 @@ impl Shell {
     fn onboarding_rest(&self, cx: &gpui::App) -> Option<gpui::FocusHandle> {
         let onboarding = self.onboarding.as_ref()?;
         Some(match onboarding.step {
-            Step::Color | Step::SearchEngine => onboarding.first_stop.clone(),
+            Step::Color | Step::SearchEngine | Step::Transparency => onboarding.first_stop.clone(),
             step if self.onboarding_has_button(step, cx) => onboarding.continue_stop.clone(),
             _ => onboarding.focus.clone(),
         })
@@ -1121,6 +1222,18 @@ impl Shell {
                     .child(said)
             });
         let opacity = ending.map_or(1., |at| fade_at(1., 0., at, END_FADE));
+        // At the transparency step the ground gives way to the window's own glass, at the level
+        // picked, so the whole window over what's behind it is the step's preview; it comes back
+        // as the step goes.
+        let glass = match (step, leaving) {
+            (Step::Transparency, _) => eased,
+            (_, Some((Step::Transparency, _))) => 1. - eased,
+            _ => 0.,
+        };
+        let ground = Rgba {
+            a: colors.ground.a * (1. - glass),
+            ..colors.ground
+        };
         Some(
             div()
                 .id("onboarding")
@@ -1128,7 +1241,7 @@ impl Shell {
                 .top_0()
                 .left_0()
                 .size_full()
-                .bg(colors.ground)
+                .bg(ground)
                 .occlude()
                 .opacity(opacity)
                 .on_mouse_down(
@@ -1233,6 +1346,7 @@ impl Shell {
             ),
             None => (title.into(), line, button.into()),
         };
+        let level = (step == Step::Transparency).then(|| self.level_slot(step, colors));
         let swatches = (step == Step::Color).then(|| {
             let picked = self
                 .onboarding
@@ -1371,6 +1485,7 @@ impl Shell {
                         .child(line),
                 )
                 .children(swatches)
+                .children(level)
                 .children(switches)
                 .children(engines)
                 .children(favorites)
@@ -1568,6 +1683,29 @@ impl Shell {
 
     /// The stop of the choice of `step`, while it's the step shown: the one leaving, drawn under
     /// it, has none.
+    /// Where Settings › Look's level picker goes at the transparency step once it's in (#4129),
+    /// the one form of it: until then the level shown, which the keyboard rests on and the arrows
+    /// move.
+    fn level_slot(&self, step: Step, colors: Colors) -> gpui::Stateful<gpui::Div> {
+        let level =
+            (self.onboarding.as_ref()).map_or(Level::Standard, |onboarding| onboarding.level);
+        div()
+            .id("onboarding-transparency")
+            .when_some(self.first_stop(step), |slot, stop| slot.track_focus(&stop))
+            .when(self.a11y, |slot| {
+                slot.role(Role::Group)
+                    .aria_label("Transparency")
+                    .aria_description(level.label())
+            })
+            .mt(px(BUTTON_GAP))
+            .h(px(BUTTON_HEIGHT))
+            .flex()
+            .items_center()
+            .text_size(px(LINE_SIZE))
+            .text_color(colors.ink(1.))
+            .child(level.label())
+    }
+
     fn first_stop(&self, step: Step) -> Option<gpui::FocusHandle> {
         (self.onboarding.as_ref())
             .filter(|onboarding| onboarding.step == step)
