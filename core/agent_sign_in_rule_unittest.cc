@@ -133,5 +133,40 @@ TEST(AgentSignInRule, AFieldsIdCantEndItsSelector) {
   EXPECT_EQ(FieldSelector(true, "a\nb", ""), "input[type=password][id=\"a\\a b\"]");
 }
 
+TEST(AgentSignInRule, AFormPostsWithinThePagesSite) {
+  EXPECT_TRUE(PostsWithin(GURL(), Page()));
+  EXPECT_TRUE(PostsWithin(GURL("https://shop.example.org/session"), Page()));
+  EXPECT_TRUE(PostsWithin(GURL("https://login.example.org/session"), Page()));
+}
+
+TEST(AgentSignInRule, AFormPostingElsewhereIsNot) {
+  EXPECT_FALSE(PostsWithin(GURL("https://collector.example.com/session"), Page()));
+  EXPECT_FALSE(PostsWithin(GURL("http://shop.example.org/session"), Page()));
+  EXPECT_FALSE(PostsWithin(GURL("javascript:void(0)"), Page()));
+  EXPECT_FALSE(PostsWithin(GURL("not a url"), Page()));
+  // Each name under a private registry, such as github.io, is a site of its own.
+  EXPECT_FALSE(PostsWithin(GURL("https://other.github.io/session"),
+                           url::Origin::Create(GURL("https://mine.github.io/login"))));
+}
+
+TEST(AgentSignInRule, AFailedSignInIsTheUsersStepThereForThatAgent) {
+  const url::Origin other = url::Origin::Create(GURL("https://mail.example.org/"));
+  SignInTries tries;
+  EXPECT_TRUE(tries.MayTry("claude", Page()));
+  tries.Failed("claude", Page());
+  EXPECT_FALSE(tries.MayTry("claude", Page()));
+  EXPECT_TRUE(tries.MayTry("claude", other));
+  EXPECT_TRUE(tries.MayTry("codex", Page()));
+}
+
+TEST(AgentSignInRule, AnAgentsTriesGoWithItsLastSession) {
+  SignInTries tries;
+  tries.Failed("claude", Page());
+  tries.Failed("codex", Page());
+  tries.Forget("claude");
+  EXPECT_TRUE(tries.MayTry("claude", Page()));
+  EXPECT_FALSE(tries.MayTry("codex", Page()));
+}
+
 }  // namespace
 }  // namespace browser_core

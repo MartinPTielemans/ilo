@@ -5,14 +5,16 @@
 #define BROWSER_CORE_AGENT_SIGN_IN_RULE_H_
 
 #include <cstddef>
+#include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
 
-namespace url {
-class Origin;
-}
+#include "url/origin.h"
+
+class GURL;
 
 namespace browser_core {
 
@@ -59,10 +61,34 @@ std::optional<size_t> UsernameOnlyField(const std::vector<FormField>& fields);
 // which no selector can tell apart.
 std::optional<std::string> FieldSelector(bool password, std::string_view id, std::string_view name);
 
+// Whether a form on a page of |page| whose action is |action| sends its fields within the page's
+// site: no action, or an https one on the same site. A page can carry another site's form, as
+// markup its users post, and the core never fills and submits a login into it.
+bool PostsWithin(const GURL& action, const url::Origin& page);
+
 // Whether |text|, something an agent could read of a page, shows |password|. One of six characters
 // or more shows in any text holding it. A shorter one, which ordinary words hold by chance, shows
 // only as all of a text, spaces around it aside.
 bool ShowsPassword(std::u16string_view text, std::u16string_view password);
+
+// The origins where an agent's sign-in submitted a login and didn't sign in, by agent, while the
+// agent has a session with any tab: another sign-in there is the user's step, so an agent never
+// tries a login again into a site's lock-out.
+class SignInTries {
+ public:
+  SignInTries();
+  SignInTries(const SignInTries&) = delete;
+  SignInTries& operator=(const SignInTries&) = delete;
+  ~SignInTries();
+
+  void Failed(const std::string& agent, const url::Origin& origin);
+  bool MayTry(const std::string& agent, const url::Origin& origin) const;
+  // The agent's last session ended.
+  void Forget(const std::string& agent);
+
+ private:
+  std::map<std::string, std::set<url::Origin>> failed_;
+};
 
 }  // namespace browser_core
 

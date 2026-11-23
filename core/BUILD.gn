@@ -262,6 +262,7 @@ source_set("agent_sign_in_rule") {
   ]
   deps = [
     "//base",
+    "//net",
     "//url",
   ]
 }

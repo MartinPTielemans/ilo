@@ -12,6 +12,7 @@
 #include "base/functional/callback.h"
 #include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
+#include "base/no_destructor.h"
 #include "base/strings/escape.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
@@ -43,6 +44,7 @@
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/password_manager/core/browser/password_store/stored_credential.h"
 #include "content/public/browser/global_routing_id.h"
+#include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -185,17 +187,20 @@ bool UrlShows(const GURL& url, std::u16string_view password) {
 }
 
 // A form step: the fields it fills and the selector of the one Enter goes into, the password's,
-// or the username's on a username-first sign-in's first page.
+// or the username's on a username-first sign-in's first page. Or the user's, for a form that would
+// send the login off the page's site.
 struct FormStep {
   FieldRendererId username;
   FieldRendererId password;
   std::string selector;
+  bool elsewhere = false;
 };
 
 // The step the main frame's forms allow: a login form's, with a current password field that's
 // visible and editable and no new password, or else a username-only form's. None if neither.
 std::optional<FormStep> StepOf(const std::vector<autofill::FormData>& forms,
-                               const std::u16string& username) {
+                               const std::u16string& username,
+                               const url::Origin& origin) {
   password_manager::FormDataParser parser;
   for (const autofill::FormData& form : forms) {
     std::unique_ptr<PasswordForm> parsed = parser.Parse(
@@ -212,6 +217,9 @@ std::optional<FormStep> StepOf(const std::vector<autofill::FormData>& forms,
                       base::UTF16ToUTF8(password->name_attribute()));
     if (!selector) {
       continue;
+    }
+    if (!PostsWithin(form.action(), origin)) {
+      return FormStep{.elsewhere = true};
     }
     const autofill::FormFieldData* name = FieldOf(form, parsed->username_element_renderer_id);
     return FormStep{name && name->is_visible() && !name->is_readonly() ? name->renderer_id()
@@ -233,11 +241,53 @@ std::optional<FormStep> StepOf(const std::vector<autofill::FormData>& forms,
         FieldSelector(false, base::UTF16ToUTF8(field.id_attribute()),
                       base::UTF16ToUTF8(field.name_attribute()));
     if (selector) {
+      if (!PostsWithin(form.action(), origin)) {
+        return FormStep{.elsewhere = true};
+      }
       return FormStep{field.renderer_id(), FieldRendererId(), *std::move(selector)};
     }
   }
   return std::nullopt;
 }
+
+// Where each agent's sign-in submitted a login and didn't sign in, for this run of the browser.
+SignInTries& Tries() {
+  static base::NoDestructor<SignInTries> tries;
+  return *tries;
+}
+
+// A tab a sign-in held because its page showed what was filled: agents get neither its title nor
+// its address until its main frame commits a document at another address.
+class WithheldPage : public content::WebContentsUserData<WithheldPage>,
+                     public content::WebContentsObserver {
+ public:
+  WithheldPage(const WithheldPage&) = delete;
+  WithheldPage& operator=(const WithheldPage&) = delete;
+  ~WithheldPage() override = default;
+
+  // content::WebContentsObserver:
+  void DidFinishNavigation(content::NavigationHandle* navigation) override {
+    if (navigation->IsInPrimaryMainFrame() && navigation->HasCommitted() &&
+        !navigation->IsSameDocument() && navigation->GetURL() != url_) {
+      // Deletes this.
+      GetWebContents().RemoveUserData(UserDataKey());
+    }
+  }
+
+ private:
+  friend class content::WebContentsUserData<WithheldPage>;
+
+  explicit WithheldPage(content::WebContents* contents)
+      : content::WebContentsUserData<WithheldPage>(*contents),
+        content::WebContentsObserver(contents),
+        url_(contents->GetPrimaryMainFrame()->GetLastCommittedURL()) {}
+
+  const GURL url_;
+
+  WEB_CONTENTS_USER_DATA_KEY_DECL();
+};
+
+WEB_CONTENTS_USER_DATA_KEY_IMPL(WithheldPage);
 
 class SignIn : public content::WebContentsUserData<SignIn>,
                public content::WebContentsObserver,
@@ -353,6 +403,11 @@ class SignIn : public content::WebContentsUserData<SignIn>,
       Chosen(usable_.front());
       return;
     }
+    // With no host to ask the user, the pick is still theirs, never a wait with no end.
+    if (!Host().sign_in_choose) {
+      Finish(false, BC_AGENT_FAILURE_USER_STEP, kUserStep);
+      return;
+    }
     // More than one is the user's pick, in an ilo line, with no timer.
     choosing_ = true;
     std::vector<std::string> accounts;
@@ -403,7 +458,16 @@ class SignIn : public content::WebContentsUserData<SignIn>,
   void NextStep(bool first) {
     std::optional<FormStep> step;
     if (SameOrigin()) {
-      step = StepOf(MainFrameForms(GetWebContents()), login_->username_value);
+      step = StepOf(MainFrameForms(GetWebContents()), login_->username_value, origin_);
+    }
+    if (step && step->elsewhere) {
+      if (first) {
+        Finish(false, BC_AGENT_FAILURE_USER_STEP, kUserStep);
+      } else {
+        user_step_ = true;
+        Settled();
+      }
+      return;
     }
     // After a username alone, only the password is filled, once.
     if (!first && step && step->password.is_null()) {
@@ -445,14 +509,19 @@ class SignIn : public content::WebContentsUserData<SignIn>,
 
   // Fills |fields| from |next| on, each as Chrome fills a saved login for the user, then submits.
   void Fill(std::vector<std::pair<FieldRendererId, bool>> fields, size_t next, FormStep step) {
+    // The page may have gone on since the last look: each fill, and the Enter, only into the main
+    // frame's document at the login's origin still.
+    content::RenderFrameHost* host = content::RenderFrameHost::FromID(frame_);
+    if (!host || host != GetWebContents().GetPrimaryMainFrame() ||
+        host->GetLastCommittedOrigin() != origin_) {
+      Settled();
+      return;
+    }
     if (next == fields.size()) {
       Submit(std::move(step));
       return;
     }
-    content::RenderFrameHost* host = content::RenderFrameHost::FromID(frame_);
-    auto* driver =
-        host ? password_manager::ContentPasswordManagerDriver::GetForRenderFrameHost(host)
-             : nullptr;
+    auto* driver = password_manager::ContentPasswordManagerDriver::GetForRenderFrameHost(host);
     if (!driver) {
       Settled();
       return;
@@ -509,9 +578,40 @@ class SignIn : public content::WebContentsUserData<SignIn>,
   void PasswordStep() { NextStep(/*first=*/false); }
 
   // The page has settled: whether the form has gone, then each field filled that's still in the
-  // page is emptied, whether or not it has, before anything an agent could read is looked at.
+  // page is emptied, whether or not it has, before anything an agent could read is looked at. A
+  // navigation the Enter started that the settling gave up on is waited for, to its commit or its
+  // failure, so the look reads the address a form sent with GET put the password in.
+  // Only those under way then: a frame that keeps navigating never keeps the tab held.
   void Settled() {
+    if (waiting_) {
+      return;
+    }
+    if (!navigations_.empty()) {
+      waiting_ = true;
+      awaited_ = navigations_;
+      return;
+    }
+    Look();
+  }
+
+  void Look() {
     Extract(GetWebContents(), base::BindOnce(&SignIn::Emptying, weak_factory_.GetWeakPtr()));
+  }
+
+  // content::WebContentsObserver: the navigations of the tab's frames under way, but in the page.
+  void DidStartNavigation(content::NavigationHandle* navigation) override {
+    if (!navigation->IsSameDocument() &&
+        (navigation->IsInPrimaryMainFrame() || !navigation->IsInMainFrame())) {
+      navigations_.insert(navigation->GetNavigationId());
+    }
+  }
+
+  void DidFinishNavigation(content::NavigationHandle* navigation) override {
+    navigations_.erase(navigation->GetNavigationId());
+    awaited_.erase(navigation->GetNavigationId());
+    if (waiting_ && awaited_.empty()) {
+      Look();
+    }
   }
 
   void Emptying() {
@@ -556,10 +656,16 @@ class SignIn : public content::WebContentsUserData<SignIn>,
       // As a handoff holds it: the agent's session stays for when the user hands it back, which
       // empties what's filled before the agent's next action (EmptyForAgent). Held after the
       // sign-in has ended, as Finish deletes it, and in the same task, so no agent acts between.
+      // Its title and address stay withheld from agents until its page is another.
       const bc_id tab = tab_;
+      WithheldPage::CreateForWebContents(&contents);
       Finish(false, BC_AGENT_FAILURE_USER_STEP, kUserStep);
       Hold(tab);
       AgentPage::SessionEnded(tab);
+      return;
+    }
+    if (user_step_) {
+      Finish(false, BC_AGENT_FAILURE_USER_STEP, kUserStep);
       return;
     }
     const bool signed_in = gone && password_submitted_;
@@ -569,6 +675,9 @@ class SignIn : public content::WebContentsUserData<SignIn>,
   // Answers the agent, tells the app of a sign-in, and ends: no agent's action waits any more.
   void Finish(bool signed_in, bc_agent_failure failure, std::string_view text) {
     weak_factory_.InvalidateWeakPtrs();
+    if (submitted_ && !signed_in) {
+      Tries().Failed(agent_, origin_);
+    }
     const std::string account =
         login_ ? base::UTF16ToUTF8(login_->username_value) : std::string();
     login_.reset();
@@ -635,6 +744,12 @@ class SignIn : public content::WebContentsUserData<SignIn>,
   // Whether Enter went into a form, and into a password's.
   bool submitted_ = false;
   bool password_submitted_ = false;
+  // The password's page was the user's step, its form sending off the site.
+  bool user_step_ = false;
+  // The tab's frames' navigations under way, and those the look waits for to end, once it does.
+  base::flat_set<int64_t> navigations_;
+  base::flat_set<int64_t> awaited_;
+  bool waiting_ = false;
   base::WeakPtrFactory<SignIn> weak_factory_{this};
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
@@ -684,12 +799,28 @@ void StartAgentSignIn(const std::string& agent, bc_id tab, uint64_t request) {
            BC_AGENT_FAILURE_NOT_ITS_SPACE);
     return;
   }
+  // A login submitted here that didn't sign in may be a wrong one: another try is the user's, not
+  // a step toward the site's lock-out.
+  if (!Tries().MayTry(agent, contents->GetPrimaryMainFrame()->GetLastCommittedOrigin())) {
+    Refuse(tab, request, kUserStep, BC_AGENT_FAILURE_USER_STEP);
+    return;
+  }
   SignIn::CreateForWebContents(contents, agent, request);
   SignIn::FromWebContents(contents)->Start();
 }
 
 bool SigningIn(bc_id tab) {
   return SignInOf(tab);
+}
+
+bool WithheldFromAgents(bc_id tab) {
+  content::WebContents* contents = Tab::FromId(tab);
+  return contents &&
+         (SignIn::FromWebContents(contents) || WithheldPage::FromWebContents(contents));
+}
+
+void ForgetSignInTries(const std::string& agent) {
+  Tries().Forget(agent);
 }
 
 bool ChooseSignIn(bc_id tab, uint64_t request, size_t account) {

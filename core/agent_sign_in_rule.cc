@@ -5,6 +5,8 @@
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "net/base/registry_controlled_domains/registry_controlled_domain.h"
+#include "url/gurl.h"
 #include "url/origin.h"
 #include "url/url_constants.h"
 
@@ -98,6 +100,18 @@ std::optional<std::string> FieldSelector(bool password, std::string_view id, std
   return std::nullopt;
 }
 
+bool PostsWithin(const GURL& action, const url::Origin& page) {
+  if (action.is_empty()) {
+    return true;
+  }
+  if (!action.is_valid() || !action.SchemeIs(url::kHttpsScheme)) {
+    return false;
+  }
+  return net::registry_controlled_domains::SameDomainOrHost(
+      url::Origin::Create(action), page,
+      net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
+}
+
 bool ShowsPassword(std::u16string_view text, std::u16string_view password) {
   if (password.empty()) {
     return false;
@@ -106,6 +120,22 @@ bool ShowsPassword(std::u16string_view text, std::u16string_view password) {
     return text.find(password) != std::u16string_view::npos;
   }
   return base::TrimWhitespace(text, base::TRIM_ALL) == password;
+}
+
+SignInTries::SignInTries() = default;
+SignInTries::~SignInTries() = default;
+
+void SignInTries::Failed(const std::string& agent, const url::Origin& origin) {
+  failed_[agent].insert(origin);
+}
+
+bool SignInTries::MayTry(const std::string& agent, const url::Origin& origin) const {
+  const auto it = failed_.find(agent);
+  return it == failed_.end() || !it->second.contains(origin);
+}
+
+void SignInTries::Forget(const std::string& agent) {
+  failed_.erase(agent);
 }
 
 }  // namespace browser_core

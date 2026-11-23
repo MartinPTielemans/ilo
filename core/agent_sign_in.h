@@ -21,6 +21,14 @@ void StartAgentSignIn(const std::string& agent, bc_id tab, uint64_t request);
 // Whether the core is signing |tab| in for an agent: no agent may act in it until that answers.
 bool SigningIn(bc_id tab);
 
+// bc_tab_withheld_from_agents: signing in, or held by a sign-in as its page showed what was filled,
+// until its main frame commits a document at another address.
+bool WithheldFromAgents(bc_id tab);
+
+// |agent| has no session with any tab now: its sign-ins that submitted and didn't sign in are
+// forgotten, and it may try those sites again.
+void ForgetSignInTries(const std::string& agent);
+
 // bc_tab_sign_in_choose.
 bool ChooseSignIn(bc_id tab, uint64_t request, size_t account);
 

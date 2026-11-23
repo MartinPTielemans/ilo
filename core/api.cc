@@ -766,6 +766,10 @@ bool bc_tab_signing_in(bc_id tab) {
   return browser_core::SigningIn(tab);
 }
 
+bool bc_tab_withheld_from_agents(bc_id tab) {
+  return browser_core::WithheldFromAgents(tab);
+}
+
 bool bc_tab_sign_in_choose(bc_id tab, uint64_t request, size_t account) {
   return browser_core::ChooseSignIn(tab, request, account);
 }
