@@ -81,7 +81,8 @@ launch() {
   # Emptied here, not by the app's own redirect, which comes some time after the fork: until
   # then the second launch's waits could read the first launch's lines (#4040).
   : > "$log"
-  BROWSER_DRIVE=1 BROWSER_URL="$1" "$browser" < "$out/drive" > "$log" 2>&1 &
+  ( exec < "$out/drive"; sleep 0.3; exec > "$log" 2>&1; sleep 2
+    BROWSER_DRIVE=1 BROWSER_URL="$1" exec "$browser" ) &
   pid=$!
   exec 3> "$out/drive"
 }
@@ -110,6 +111,8 @@ forget_policies
 step=0
 launch "$blocked"
 await_load
+! grep -q '^browser: title [0-9]* other page$' "$log" ||
+  fail "probe 4040: the second launch's wait read the first launch's lines"
 await '^browser: title [0-9]* blocked page$' || fail "with the policy gone, the page didn't load"
 exec 3>&-
 quit
