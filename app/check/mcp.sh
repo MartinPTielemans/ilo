@@ -3793,6 +3793,7 @@ CARD
     closes_ref=$(ref_in "$opened" button "Closing file")
     [ -n "$closes_ref" ] || fail "the page that closes its tab had no ref for its field: $opened"
     upload_asks "$upload_tab" "$closes_ref" "the field whose page closes its tab"
+    mains=$(grep -c '^browser: window [0-9]* main false$' "$log")
     upload_chosen "the field whose page closes its tab"
     dialog=
     for _ in $(seq 300); do
@@ -3803,6 +3804,15 @@ CARD
     done
     case "$dialog" in
     up)
+      # The core logs the dialog as it asks for one. Under Wayland it's the desktop portal's, which
+      # comes up later in another process, and a tab closing before then can't close it: the portal
+      # hasn't made the request yet, so the dialog opens after the tab's gone and covers the window
+      # for the rest of the run (train 6's Wayland leg, 45107971340). So the page closes once the
+      # dialog has taken the window from the browser.
+      if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        await_more '^browser: window [0-9]* main false$' "$mains" ||
+          fail "the file dialog never took the window from the browser: $(grep "browser: .*file field $upload_field " "$log" | tail -2 | tr '\n' ' ')"
+      fi
       ../tools/window-screenshot.sh "$pid" "$out/agent-upload-dialog.png" || fail "no window to capture"
       : > "$out/site/upload-closes.go"
       await_log "^browser: agent mcp-client file field $upload_field closed 0\$" \
