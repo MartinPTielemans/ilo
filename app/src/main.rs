@@ -288,9 +288,10 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     {
         return (true, "agent bar");
     }
+    let repeat = repeated_here || unsafe { platform::host_key_repeated() };
     // Focus Agent Question's key gives an agent's card the keyboard while one shows (#3869).
     if update_tab_window(tab, |shell, cx| {
-        shell.run_agent_card_page_key(&keystroke, cx)
+        shell.run_agent_card_page_key(&keystroke, repeat, cx)
     })
     .unwrap_or(false)
     {
@@ -323,7 +324,6 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     let shortcut = cx.as_ref().and_then(|cx| {
         cx.try_read_global(|keys: &shell::UserKeys, _| keys.command_for(&keystroke, false))
     });
-    let repeat = repeated_here || unsafe { platform::host_key_repeated() };
     let now = Instant::now();
     // Esc in full screen, pressed twice or held, leaves even when the page keeps it (Arc's).
     if keystroke == "escape"

@@ -12,7 +12,9 @@ use gpui::{
 };
 
 use super::Command;
-use super::commands::{BAR_COMMANDS, KEY_CONTEXT, Run, SHORTCUTS, keystroke_keys, keystroke_label};
+use super::commands::{
+    BAR_COMMANDS, KEY_CONTEXT, Run, SHORTCUTS, keystroke_keys, keystroke_label, keystroke_label_on,
+};
 
 /// Keys that run something other than a command: AppKit's Hide, Hide Others and Minimize, which
 /// main.rs binds, the Edit menu's, which reach the focused page or field, and the View menu's
@@ -685,17 +687,27 @@ impl UserKeys {
         self.set(command, all)
     }
 
-    /// How a menu shows the first key that runs `command`, if one does.
+    /// How a menu shows the first key that runs `command` here, if one does.
     pub fn label(&self, command: Command) -> Option<String> {
-        self.keys(command).first().map(|&key| keystroke_label(key))
+        self.label_on(command, OFF_THE_MAC)
+    }
+
+    /// `label`, on the Mac or `off_the_mac`.
+    fn label_on(&self, command: Command, off_the_mac: bool) -> Option<String> {
+        (self.first_key_on(command, off_the_mac)).map(|key| keystroke_label_on(key, off_the_mac))
+    }
+
+    /// The first key that runs `command` on the Mac or off it, `off_the_mac`: not another
+    /// platform's alone, as ⌥⇧⌘A, written first, would show as Ctrl+Alt+Shift+A off the Mac.
+    fn first_key_on(&self, command: Command, off_the_mac: bool) -> Option<&str> {
+        (self.keys(command).into_iter()).find(|key| applies(key, off_the_mac))
     }
 
     /// The same keys one by one, for a tooltip's chips: ⇧, ⌘ and L for ⇧⌘L. None if no key runs
     /// `command`.
     pub fn chips(&self, command: Command) -> Vec<String> {
-        self.keys(command)
-            .first()
-            .map(|&key| keystroke_keys(key))
+        self.first_key_on(command, OFF_THE_MAC)
+            .map(keystroke_keys)
             .unwrap_or_default()
     }
 
@@ -1071,6 +1083,29 @@ mod tests {
     };
 
     use super::{super::commands::ShellHandle, *};
+
+    /// Focus Agent Question shows the platform's own key: off the Mac its Alt+Shift+A, not the
+    /// Mac's ⌥⇧⌘A written first.
+    #[test]
+    fn a_commands_key_shows_as_its_platform_has_it() {
+        let keys = UserKeys::default();
+        let focus = Command::FocusAgentQuestion;
+        assert_eq!(keys.label_on(focus, true).as_deref(), Some("Alt+Shift+A"));
+        assert_eq!(keys.label_on(focus, false).as_deref(), Some("⌥⇧⌘A"));
+    }
+
+    /// The keys bound off the Mac alone run nothing from a Mac page, as from its UI: ⇧Esc there
+    /// is the page's, as the Mac's Chrome and Arc have no Task Manager key, and ⌃⇧A selects.
+    #[test]
+    fn the_other_platforms_keys_run_nothing_on_the_mac() {
+        let keys = UserKeys::default();
+        assert_eq!(keys.command_for("shift-escape", false), None);
+        assert_eq!(keys.command_for("ctrl-shift-a", false), None);
+        assert_eq!(
+            keys.command_for("alt-shift-cmd-a", false),
+            Some(Command::FocusAgentQuestion)
+        );
+    }
 
     /// A key the page has, asked about while the App is in an update, goes to the page without an
     /// update of ours, which would panic in the core's callback and abort ilo (#2705). Once the

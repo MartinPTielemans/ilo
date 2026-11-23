@@ -1773,7 +1773,7 @@ impl Shell {
             Command::RevealTab => return self.reveal_tab(cx),
             Command::FocusSidebar => return self.focus_sidebar(cx),
             Command::FocusAgentQuestion => {
-                return self.focus_agent_question(from == "page", cx);
+                return self.focus_agent_question(from, cx);
             }
             // In an agent's Space ⌘↩ is the bar's Take Over or Hand Back.
             Command::BackToPinnedUrl if self.agent_bar().is_some() => {

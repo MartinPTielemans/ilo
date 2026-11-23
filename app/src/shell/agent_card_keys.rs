@@ -12,8 +12,8 @@ use web_time::Instant;
 
 use gpui::accesskit::{Live, Role};
 use gpui::{
-    App, Context, Div, FocusHandle, FontWeight, Hsla, KeyBinding, Rgba, Stateful, Task, Window,
-    actions, canvas, div, prelude::*, px, svg,
+    App, ClickEvent, Context, Div, FocusHandle, FontWeight, Hsla, KeyBinding, Rgba, Stateful, Task,
+    Window, actions, canvas, div, prelude::*, px, svg,
 };
 
 use super::TITLE;
@@ -39,7 +39,7 @@ const CHIPPED_SIDE: f32 = BUTTON_GAP / 2.;
 /// What card_chips and card_key_close read from the last frame: the width of the card's row of
 /// buttons and where it ends, each button's top and its label's width, and where the card's top
 /// line ends.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct CardRoom {
     row: f32,
     row_end: f32,
@@ -185,6 +185,20 @@ pub(super) fn heard_title(title: &str) -> String {
     }
 }
 
+/// The card's key `A`, which `does` while a card's button has the keyboard by Focus Agent
+/// Question, and is passed on otherwise.
+fn card_key<A: gpui::Action>(
+    does: fn(&mut Shell, &mut Context<Shell>),
+    cx: &Context<Shell>,
+) -> impl Fn(&A, &mut Window, &mut App) + 'static {
+    cx.listener(move |shell, _: &A, window, cx| {
+        match shell.card_keys.is_some() && shell.on_card(window) {
+            true => does(shell, cx),
+            false => cx.propagate(),
+        }
+    })
+}
+
 /// Under the checks, once `PROTECT` has passed, says so while the keyboard is still on the card.
 /// Dropped, as the next key replaces it, it says nothing.
 fn ready(cx: &mut Context<Shell>) -> Option<Task<()>> {
@@ -205,8 +219,16 @@ fn ready(cx: &mut Context<Shell>) -> Option<Task<()>> {
 
 impl Shell {
     /// Focus Agent Question: the keyboard to the card shown, its primary button ringed, or with
-    /// the keyboard on it already, back where it was.
-    pub(super) fn focus_agent_question(&mut self, from_page: bool, cx: &mut Context<Self>) {
+    /// the keyboard on it already, back where it was. A held key's repeats do nothing, where the
+    /// host can tell them, as the key would otherwise go back and forth.
+    pub(super) fn focus_agent_question(&mut self, from: &str, cx: &mut Context<Self>) {
+        if from == "ui" && self.browser.key_repeated() {
+            return;
+        }
+        self.focus_agent_question_from(from == "page", cx)
+    }
+
+    fn focus_agent_question_from(&mut self, from_page: bool, cx: &mut Context<Self>) {
         if let Some(keys) = &mut self.card_keys {
             keys.leaving = true;
             return cx.notify();
@@ -222,13 +244,15 @@ impl Shell {
         let id = question.id;
         // check.sh waits for this line.
         log!("browser: agent card keys on {id} {}", list[at].label);
-        if from_page {
-            self.take_keyboard(cx);
-        }
+        // From the command bar or a menu the page may have had the keyboard, as before Focus
+        // Sidebar, and the UI takes it either way, so the ring is never on a card the keys miss.
+        let page = from_page
+            || (self.browser.page_has_keyboard(cx)).unwrap_or(self.page_keyboard.is_some());
+        self.take_keyboard(cx);
         self.card_keys = Some(CardKeys {
             question: id,
             at,
-            came: match from_page {
+            came: match page {
                 true => Came::Page,
                 false => Came::Ui(None),
             },
@@ -242,14 +266,33 @@ impl Shell {
 
     /// Focus Agent Question's key from the page, kept from it only while a card shows: the page
     /// gets it back once none does, and no other key reaches the card from the page.
-    pub fn run_agent_card_page_key(&mut self, keystroke: &str, cx: &mut Context<Self>) -> bool {
+    /// A held key's `repeat`s stay from the page and do nothing.
+    pub fn run_agent_card_page_key(
+        &mut self,
+        keystroke: &str,
+        repeat: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if self.agent_question().is_none()
             || user_keys(cx).command_for(keystroke, false) != Some(Command::FocusAgentQuestion)
         {
             return false;
         }
-        self.run(Command::FocusAgentQuestion, "page", cx);
+        if !repeat {
+            self.run(Command::FocusAgentQuestion, "page", cx);
+        }
         true
+    }
+
+    /// The window is the active one again: the protection starts over, as a key typed in the
+    /// other app or window, or on coming back, was never meant for the card.
+    pub(super) fn card_keys_active_again(&mut self, cx: &mut Context<Self>) {
+        let now = cx.background_executor().now();
+        let task = ready(cx);
+        if let Some(keys) = &mut self.card_keys {
+            keys.last = now;
+            keys._ready = task;
+        }
     }
 
     /// The page has the keyboard, which GPUI's focus doesn't follow, so the card's keys have
@@ -340,8 +383,12 @@ impl Shell {
                 window.focus(&self.focus_handle, cx);
                 self.browser.focus_page(cx);
             }
-            Came::Ui(Some(was)) => window.focus(&was, cx),
-            Came::Ui(None) => window.focus(&self.focus_handle, cx),
+            // What had the keyboard may have gone with the card's frame, as a field closed under
+            // it: the window has it then, as with nothing before.
+            Came::Ui(Some(was)) if self.focus_handle.contains(&was, window) => {
+                window.focus(&was, cx)
+            }
+            Came::Ui(_) => window.focus(&self.focus_handle, cx),
         }
     }
 
@@ -393,7 +440,7 @@ impl Shell {
                 log!("browser: agent card key escape");
                 self.press_card(does, cx);
             }
-            Some(None) => self.focus_agent_question(false, cx),
+            Some(None) => self.focus_agent_question_from(false, cx),
             None => {}
         }
     }
@@ -582,7 +629,14 @@ impl Shell {
             .when(self.a11y, |control| {
                 crate::settings_rows::named_button(control, button.label)
             })
-            .on_click(cx.listener(move |shell, _, _, cx| shell.press_card(button.does, cx)))
+            .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
+                // GPUI clicks a focused element on ↩ or Space let go; a key answers a button only
+                // through the card's keys, past the protection. An assistive app's press is a
+                // pointer's.
+                if !event.is_keyboard() {
+                    shell.press_card(button.does, cx)
+                }
+            }))
     }
 
     /// The ESC chip, on `chip`.
@@ -630,22 +684,37 @@ impl Shell {
             .when(self.a11y, |close| {
                 crate::settings_rows::named_button(close, "Close")
             })
-            .on_click(
-                cx.listener(|shell, _, _, cx| shell.press_card(Does::Answer(Answer::Dismiss), cx)),
-            )
+            .on_click(cx.listener(|shell, event: &ClickEvent, _, cx| {
+                if !event.is_keyboard() {
+                    shell.press_card(Does::Answer(Answer::Dismiss), cx)
+                }
+            }))
     }
 
-    /// The card's element taking its keys while one of its buttons has the keyboard.
-    pub(super) fn card_keys_on<E: gpui::InteractiveElement>(
+    /// The card's element taking its keys while one of its buttons has them through Focus Agent
+    /// Question. Otherwise, as with "See the whole request" or a button a press gave the
+    /// keyboard, its keys are what they'd be without the card's: a key answers a button only
+    /// through these.
+    pub(super) fn card_keys_on<E: gpui::InteractiveElement + FluentBuilder>(
         &self,
         card: E,
         cx: &Context<Self>,
     ) -> E {
-        card.key_context(CONTEXT)
-            .on_action(cx.listener(|shell, _: &CardPress, _, cx| shell.card_press(cx)))
-            .on_action(cx.listener(|shell, _: &CardNext, _, cx| shell.card_move(1, cx)))
-            .on_action(cx.listener(|shell, _: &CardBack, _, cx| shell.card_move(-1, cx)))
-            .on_action(cx.listener(|shell, _: &CardLeave, _, cx| shell.card_leave(cx)))
+        card.when(self.card_keys.is_some(), |card| {
+            card.key_context(CONTEXT)
+                .on_action(card_key::<CardPress>(|shell, cx| shell.card_press(cx), cx))
+                .on_action(card_key::<CardNext>(|shell, cx| shell.card_move(1, cx), cx))
+                .on_action(card_key::<CardBack>(
+                    |shell, cx| shell.card_move(-1, cx),
+                    cx,
+                ))
+                .on_action(card_key::<CardLeave>(|shell, cx| shell.card_leave(cx), cx))
+        })
+    }
+
+    /// Whether one of the card's buttons has GPUI's keyboard.
+    fn on_card(&self, window: &Window) -> bool {
+        self.agent_card_buttons.iter().any(|h| h.is_focused(window))
     }
 }
 
@@ -774,7 +843,9 @@ mod tests {
 
     /// The key as the page hands it over, before the page could keep it.
     fn from_page(shell: &Entity<Shell>, cx: &mut VisualTestContext, key: &str) -> bool {
-        let kept = shell.update(cx, |shell, cx| shell.run_agent_card_page_key(key, cx));
+        let kept = shell.update(cx, |shell, cx| {
+            shell.run_agent_card_page_key(key, false, cx)
+        });
         cx.run_until_parked();
         kept
     }
@@ -1332,5 +1403,276 @@ mod tests {
                 cx.run_until_parked();
             }
         }
+    }
+
+    /// `key` pressed and let go: GPUI clicks a focused element as ↩ or Space is let go, which its
+    /// test keystrokes never do.
+    fn press(cx: &mut VisualTestContext, key: &'static str) {
+        let keystroke = gpui::Keystroke::parse(key).expect("a key");
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(gpui::KeyUpEvent { keystroke });
+        cx.run_until_parked();
+    }
+
+    /// A button a press gave the keyboard, with no key asked, takes no answer from ↩ or Space,
+    /// let go too, however long after: a key answers a button only through the card's keys.
+    #[gpui::test]
+    fn a_button_a_press_gave_the_keyboard_takes_no_key(cx: &mut TestAppContext) {
+        let (host, shell, cx) = window_with(cx);
+        ask(&shell, cx, question(7));
+        let once = shell.read_with(cx, |shell, _| shell.agent_card_buttons[1].clone());
+        cx.update(|window, cx| window.focus(&once, cx));
+        cx.run_until_parked();
+        host.take();
+        for key in ["enter", "space"] {
+            press(cx, key);
+            wait(cx, PROTECT * 2);
+            press(cx, key);
+        }
+        assert_eq!(answers(&host), Vec::<String>::new());
+        let asked = shell.read_with(cx, |shell, _| shell.agent_question().map(|q| q.id));
+        assert_eq!(asked, Some(7), "a key answered the card");
+    }
+
+    /// With the card's keys, ↩ let go inside the protection answers nothing either: only the
+    /// card's key down does, past it.
+    #[gpui::test]
+    fn enter_let_go_inside_the_protection_answers_nothing(cx: &mut TestAppContext) {
+        let (host, shell, cx) = window_with(cx);
+        ask(&shell, cx, question(7));
+        from_page(&shell, cx, KEY);
+        host.take();
+        press(cx, "enter");
+        press(cx, "space");
+        assert_eq!(answers(&host), Vec::<String>::new());
+        assert_eq!(keyed(&shell, cx), Some(1));
+        wait(cx, PROTECT);
+        press(cx, "enter");
+        assert_eq!(answers(&host), ["answer agent 7 Once"]);
+    }
+
+    /// The window coming back to the front starts the protection over, as a key typed in another
+    /// window or app, or as it came back, was never meant for the card.
+    #[gpui::test]
+    fn the_protection_starts_over_as_the_window_comes_back(cx: &mut TestAppContext) {
+        let (host, shell, cx) = window_with(cx);
+        ask(&shell, cx, question(7));
+        from_page(&shell, cx, KEY);
+        wait(cx, PROTECT);
+        cx.deactivate_window();
+        cx.run_until_parked();
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        host.take();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(answers(&host), Vec::<String>::new());
+        assert_eq!(keyed(&shell, cx), Some(1), "the keyboard left the card");
+        wait(cx, PROTECT);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(answers(&host), ["answer agent 7 Once"]);
+    }
+
+    /// A click in the page ends the card's keys as the host says the page took the keyboard,
+    /// before any key of the page's: the ring goes, and the key from the page brings it back.
+    #[gpui::test]
+    fn a_click_in_the_page_ends_the_cards_keys(cx: &mut TestAppContext) {
+        let (host, shell, cx) = window_with(cx);
+        ask(&shell, cx, question(7));
+        from_page(&shell, cx, KEY);
+        shell.update_in(cx, |shell, window, cx| shell.page_took_keyboard(window, cx));
+        cx.run_until_parked();
+        let ring = shell.read_with(cx, |shell, _| shell.agent_card_ring());
+        assert_eq!(ring, None, "the card kept its keys and its ring");
+        host.take();
+        assert!(from_page(&shell, cx, KEY));
+        assert!(host.take().contains(&"focus ui".to_string()));
+        assert_eq!(keyed(&shell, cx), Some(1));
+    }
+
+    /// From the command bar, the page having had the keyboard, the UI takes it with the ring, and
+    /// the key again gives it back to the page.
+    #[gpui::test]
+    fn from_the_command_bar_the_ui_takes_the_keyboard(cx: &mut TestAppContext) {
+        let (host, shell, cx) = window_with(cx);
+        host.page_keys.set(Some(true));
+        ask(&shell, cx, question(7));
+        host.take();
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::FocusAgentQuestion, "command bar", cx)
+        });
+        cx.run_until_parked();
+        assert!(host.take().contains(&"focus ui".to_string()));
+        assert_eq!(keyed(&shell, cx), Some(1));
+        cx.simulate_keystrokes(KEY);
+        cx.run_until_parked();
+        assert!(host.take().contains(&"focus page".to_string()));
+        assert_eq!(keyed(&shell, cx), None);
+    }
+
+    /// A held key's repeats leave the keyboard where its press put it, from the UI or the page.
+    #[gpui::test]
+    fn a_held_key_moves_the_keyboard_once(cx: &mut TestAppContext) {
+        let (host, shell, cx) = window_with(cx);
+        let root = shell.read_with(cx, |shell, _| shell.focus_handle.clone());
+        cx.update(|window, cx| window.focus(&root, cx));
+        ask(&shell, cx, question(7));
+        cx.simulate_keystrokes(KEY);
+        cx.run_until_parked();
+        assert_eq!(keyed(&shell, cx), Some(1));
+        host.key_repeated.set(true);
+        for _ in 0..3 {
+            cx.simulate_keystrokes(KEY);
+            cx.run_until_parked();
+        }
+        assert_eq!(keyed(&shell, cx), Some(1), "a repeat moved the keyboard");
+        host.key_repeated.set(false);
+        shell.update(cx, |shell, cx| shell.leave_card_keys(cx));
+        cx.run_until_parked();
+        host.take();
+        let kept = shell.update(cx, |shell, cx| shell.run_agent_card_page_key(KEY, true, cx));
+        cx.run_until_parked();
+        assert!(kept, "the page got the key's repeat");
+        assert!(!host.take().contains(&"focus ui".to_string()));
+        let ring = shell.read_with(cx, |shell, _| shell.agent_card_ring());
+        assert_eq!(ring, None, "the repeat rang the card");
+    }
+
+    /// The card's room is the last frame's for its own card only: a new card starts with none,
+    /// so ESC never takes the ×'s place by the last card's line.
+    #[gpui::test]
+    fn a_new_card_starts_with_no_room(cx: &mut TestAppContext) {
+        use crate::tokens::shell::SIDEBAR_MAX;
+        let (_, shell, cx) = window_with(cx);
+        shell.update(cx, |shell, cx| {
+            shell.sidebar_width = SIDEBAR_MAX;
+            cx.notify();
+        });
+        ask(&shell, cx, question(7));
+        let drawn = shell.read_with(cx, |shell, _| shell.agent_card_room.get());
+        assert_ne!(
+            drawn,
+            super::CardRoom::default(),
+            "the card's room wasn't read"
+        );
+        let fresh = shell.update(cx, |shell, cx| {
+            shell.set_agent_question(Some(question(8)), cx);
+            shell.agent_card_room.get()
+        });
+        assert_eq!(fresh, super::CardRoom::default());
+    }
+
+    /// The keyboard goes back where it was in the UI when the card's answered or the key asked;
+    /// where that's no longer drawn, the window takes it, as with nothing before.
+    #[gpui::test]
+    fn the_keyboard_goes_back_where_it_was_or_to_the_window(cx: &mut TestAppContext) {
+        let (host, shell, cx) = window_with(cx);
+        let root = shell.read_with(cx, |shell, _| shell.focus_handle.clone());
+        cx.update(|window, cx| window.focus(&root, cx));
+        ask(&shell, cx, question(7));
+        cx.simulate_keystrokes(KEY);
+        cx.run_until_parked();
+        wait(cx, PROTECT);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(answers(&host), ["answer agent 7 Once"]);
+        cx.update(|window, _| assert!(root.is_focused(window), "the keyboard went elsewhere"));
+
+        // What had the keyboard is gone by the time it goes back.
+        let gone = cx.update(|_, cx| cx.focus_handle());
+        cx.update(|window, cx| window.focus(&gone, cx));
+        ask(&shell, cx, question(8));
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::FocusAgentQuestion, "ui", cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(keyed(&shell, cx), Some(1));
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::FocusAgentQuestion, "ui", cx)
+        });
+        cx.run_until_parked();
+        cx.update(|window, _| {
+            assert!(
+                !gone.is_focused(window),
+                "the keyboard went to nothing drawn"
+            );
+            assert!(root.is_focused(window), "the window hasn't the keyboard");
+        });
+    }
+
+    /// A click on ESC in the ×'s place answers as the × does.
+    #[gpui::test]
+    fn a_click_on_esc_answers_as_the_close_does(cx: &mut TestAppContext) {
+        use crate::tokens::shell::SIDEBAR_MAX;
+        use gpui::accesskit::Role;
+        let (host, shell, cx) = window_with(cx);
+        cx.simulate_a11y_activation();
+        shell.update(cx, |shell, cx| {
+            shell.sidebar_width = SIDEBAR_MAX;
+            cx.notify();
+        });
+        ask(&shell, cx, question(7));
+        from_page(&shell, cx, KEY);
+        let scale = f64::from(cx.update(|window, _| window.scale_factor()));
+        let tree = cx.a11y_tree().expect("GPUI built a tree");
+        let (_, close) = (tree.nodes.iter())
+            .find(|(_, n)| n.role() == Role::Button && n.label() == Some("Close"))
+            .expect("no Close");
+        let r = close.bounds().expect("a Close with no bounds");
+        let wide = (r.x1 - r.x0) / scale;
+        assert!(
+            wide > f64::from(crate::tokens::shell::permission::CLOSE) + 0.5,
+            "no ESC"
+        );
+        let at = |v: f64| px((v / scale) as f32);
+        host.take();
+        cx.simulate_click(
+            point(at((r.x0 + r.x1) / 2.), at((r.y0 + r.y1) / 2.)),
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+        assert_eq!(answers(&host), ["answer agent 7 Dismiss"]);
+    }
+
+    /// The command bar offers Focus Agent Question only while a card asks.
+    #[gpui::test]
+    fn the_command_is_offered_only_with_a_card(cx: &mut TestAppContext) {
+        let (_, shell, cx) = window_with(cx);
+        let offered = |cx: &mut VisualTestContext| {
+            shell.read_with(cx, |s, _| s.offers(Command::FocusAgentQuestion))
+        };
+        assert!(!offered(cx), "offered with no card");
+        ask(&shell, cx, question(7));
+        assert!(offered(cx), "not offered with a card");
+        shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
+        cx.run_until_parked();
+        assert!(!offered(cx), "offered after the card went");
+    }
+
+    /// The agent's name is heard as plain text, as the request card's: a line break or a control
+    /// character the client put in it says nothing of its own.
+    #[gpui::test]
+    fn the_agents_name_is_heard_plain(cx: &mut TestAppContext) {
+        use gpui::accesskit::Role;
+        let (_, shell, cx) = window_with(cx);
+        cx.simulate_a11y_activation();
+        let asked = Question {
+            agent: "Claude\n\u{7}Code\u{202E}".into(),
+            ..question(7)
+        };
+        ask(&shell, cx, asked);
+        let tree = cx.a11y_tree().expect("GPUI built a tree");
+        let (_, alert) = (tree.nodes.iter())
+            .find(|(_, node)| node.role() == Role::AlertDialog)
+            .expect("the card isn't an alert");
+        assert_eq!(
+            alert.label(),
+            Some("On mail.example. Claude Code wants to click “Send”.")
+        );
     }
 }

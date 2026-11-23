@@ -349,7 +349,7 @@ AGENT_TOKEN=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
 export AGENT_PORT AGENT_TOKEN
 # A helper Chromium leaves can still be writing the profile as this runs, and under set -e a failed
 # rm would turn the runs' passes into a failure.
-trap 'kill "$server" 2>/dev/null; rm -rf "$home" || true' EXIT
+trap 'kill "$server" 2>/dev/null || true; rm -rf "$home" || true' EXIT
 # fcitx5's own configuration: the US keyboard, quick phrase on Ctrl+;, and on X11 the composition
 # drawn by the app (on-the-spot XIM), not by fcitx5 over it.
 mkdir -p "$home/config/fcitx5/conf"

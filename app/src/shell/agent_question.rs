@@ -46,8 +46,7 @@ fn marked(agent: &str, what: &str) -> (String, std::ops::Range<usize>) {
 /// A question card's head and sentence. An action on the tab's page has the tab's own site as
 /// its head, "On shop.example", apart from the page's words in the sentence under it, which then
 /// can't move it or pass for it (#3836). Other questions have their sentence alone.
-fn head_and_title(question: &Question) -> (Option<String>, String) {
-    let agent = &question.agent;
+fn head_and_title(question: &Question, agent: &str) -> (Option<String>, String) {
     match (question.handoff, question.back) {
         (Some(_), true) => (None, format!("{agent} asks for a tab")),
         (Some(_), false) => (None, format!("{agent} needs you")),
@@ -74,6 +73,10 @@ impl Shell {
             log!("browser: agent question {} gone", gone.id);
         }
         let was = self.agent_question.as_ref().map(|old| old.id);
+        if question.as_ref().map(|new| new.id) != was {
+            // Another card's measures would place its chips; a new one's first frame has none.
+            self.agent_card_room.set(Default::default());
+        }
         if let Some(asked) = question.as_ref().filter(|new| Some(new.id) != was) {
             // check.sh reads these lines: each change as the card shows it, the agent's words
             // and then the browser's.
@@ -164,11 +167,12 @@ impl Shell {
                 self.card_key_button(at, count, button, escape, cx)
                     .when(row, |button| button.flex_basis(gpui::relative(1.)))
             });
-        let (head, title) = head_and_title(question);
-        // Heard in the order it's drawn: the site's line, then the sentence.
-        let heard = match &head {
-            Some(head) => format!("{} {}", heard_title(head), heard_title(&title)),
-            None => heard_title(&title),
+        let (head, title) = head_and_title(question, &question.agent);
+        // Heard in the order it's drawn: the site's line, then the sentence, with the agent's name
+        // as plain text, as the request card's.
+        let heard = match head_and_title(question, &request::plain(&question.agent)) {
+            (Some(head), title) => format!("{} {}", heard_title(&head), heard_title(&title)),
+            (None, title) => heard_title(&title),
         };
         // The head is drawn as the request card's is.
         let head = head.map(|head| {
@@ -616,7 +620,7 @@ mod tests {
     #[test]
     fn the_tabs_site_is_the_cards_head() {
         assert_eq!(
-            super::head_and_title(&question(1)),
+            super::head_and_title(&question(1), &question(1).agent),
             (
                 Some("On shop.example".to_string()),
                 "Claude Code wants to click “Place order”".to_string()
@@ -628,7 +632,7 @@ mod tests {
             ..question(2)
         };
         assert_eq!(
-            super::head_and_title(&named),
+            super::head_and_title(&named, &named.agent),
             (
                 Some("On shop.example".to_string()),
                 "Claude Code wants to click “Pay on bank.example”".to_string()
@@ -640,7 +644,7 @@ mod tests {
             ..question(3)
         };
         assert_eq!(
-            super::head_and_title(&download),
+            super::head_and_title(&download, &download.agent),
             (
                 None,
                 "Claude Code wants to download report.docx from files.example.com".to_string()
@@ -651,7 +655,7 @@ mod tests {
             ..question(4)
         };
         assert_eq!(
-            super::head_and_title(&handoff),
+            super::head_and_title(&handoff, &handoff.agent),
             (None, "Claude Code needs you".to_string())
         );
     }
@@ -1136,6 +1140,53 @@ mod tests {
         shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
         cx.run_until_parked();
         assert_eq!(cx.update(|_, cx| agent_request::showing(cx)), None);
+    }
+
+    /// "See the whole request" keeps its keys beside the card's: ↩ or Space, let go, opens the
+    /// whole request with the keyboard on it, a card's key asked or not, and answers nothing.
+    #[gpui::test]
+    fn see_keeps_its_keys(cx: &mut TestAppContext) {
+        cx.update(crate::shell::commands::bind_keys);
+        let (host, shell, cx) = window_with(cx);
+        let whole = cx.update(|_, cx| agent_request::open(Rc::new(Shown::default()), cx));
+        let whole = whole.expect("the whole request's window didn't open");
+        shell.update(cx, |shell, cx| {
+            let one = change("PUT", "/api/note", "Replace the note.");
+            shell.set_agent_question(Some(requests(7, vec![one])), cx);
+        });
+        cx.run_until_parked();
+        let see = shell.read_with(cx, |shell, _| shell.agent_request_see.clone());
+        for key in ["enter", "space"] {
+            cx.update(|window, cx| window.focus(&see, cx));
+            cx.run_until_parked();
+            let keystroke = gpui::Keystroke::parse(key).expect("a key");
+            cx.simulate_event(gpui::KeyDownEvent {
+                keystroke: keystroke.clone(),
+                is_held: false,
+                prefer_character_input: false,
+            });
+            cx.simulate_event(gpui::KeyUpEvent { keystroke });
+            cx.run_until_parked();
+            assert_eq!(
+                cx.update(|_, cx| agent_request::showing(cx)),
+                Some(7),
+                "{key} on See showed nothing"
+            );
+            whole
+                .update(cx, |_, window, cx| {
+                    window.dispatch_action(Box::new(agent_request::Dismiss), cx)
+                })
+                .unwrap();
+            cx.run_until_parked();
+            assert_eq!(cx.update(|_, cx| agent_request::showing(cx)), None);
+        }
+        assert!(
+            !host
+                .take()
+                .iter()
+                .any(|did| did.starts_with("answer agent")),
+            "a key on See answered the card"
+        );
     }
 
     /// Deny, after Escape in the whole request gave the keyboard back to "See the whole request",

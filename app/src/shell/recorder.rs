@@ -197,6 +197,8 @@ pub(super) struct Recorder {
     /// Whether the page has the keyboard, as a core that keeps it says, or None to leave it to the
     /// host's word, as the Mac's and Windows' do.
     pub(super) page_keys: Cell<Option<bool>>,
+    /// What key_repeated answers: the key handled now repeats a held one's.
+    pub(super) key_repeated: Cell<bool>,
     /// Each New Note: the Space whose profile's service it opens, and the tab it splits with.
     pub(super) notes: RefCell<Vec<(u64, Option<u64>)>>,
     /// The Spaces New Board made a Board in. Each opens as tab 900 and on.
@@ -1847,6 +1849,10 @@ impl Browser for Recorder {
 
     fn page_has_keyboard(&self, _: &App) -> Option<bool> {
         self.page_keys.get()
+    }
+
+    fn key_repeated(&self) -> bool {
+        self.key_repeated.get()
     }
 
     /// A bar that follows opens a new tab, as one ⌘T opened.
