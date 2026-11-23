@@ -19,6 +19,17 @@ TileRule& Rule() {
   return *rule;
 }
 
+// The page of |tab|, which was a tile in |view|, leaves it.
+void Ended(bc_id tab, const void* view) {
+  if (!view) {
+    return;
+  }
+  fprintf(stderr, "browser: tile %llu ended\n", static_cast<unsigned long long>(tab));
+  if (content::WebContents* contents = Tab::FromId(tab)) {
+    platform::EndTile(contents);
+  }
+}
+
 }  // namespace
 
 bool Show(bc_id tab, void* view, const gfx::Rect& frame, double corner_radius) {
@@ -45,13 +56,15 @@ bool Show(bc_id tab, void* view, const gfx::Rect& frame, double corner_radius) {
 }
 
 void End(bc_id tab) {
-  if (!Rule().End(tab)) {
-    return;
-  }
-  fprintf(stderr, "browser: tile %llu ended\n", static_cast<unsigned long long>(tab));
-  if (content::WebContents* contents = Tab::FromId(tab)) {
-    platform::EndTile(contents);
-  }
+  Ended(tab, Rule().Left(tab));
+}
+
+void EndTile(bc_id tab) {
+  Ended(tab, Rule().End(tab));
+}
+
+void ShowInCard(bc_id tab) {
+  Ended(tab, Rule().ShowInCard(tab));
 }
 
 bool Holds(bc_id tab) {

@@ -19,6 +19,9 @@ TileRule::Shown TileRule::Show(uint64_t tab,
   if (window_shows) {
     return Shown::kWindowShows;
   }
+  if (cards_.contains(tab)) {
+    return Shown::kCardShows;
+  }
   auto [it, added] = views_.try_emplace(tab, view);
   if (added) {
     return Shown::kNew;
@@ -40,6 +43,16 @@ const void* TileRule::End(uint64_t tab) {
   return view;
 }
 
+const void* TileRule::ShowInCard(uint64_t tab) {
+  cards_.insert(tab);
+  return End(tab);
+}
+
+const void* TileRule::Left(uint64_t tab) {
+  cards_.erase(tab);
+  return End(tab);
+}
+
 bool TileRule::Holds(uint64_t tab) const {
   return views_.contains(tab);
 }
@@ -57,6 +70,8 @@ const char* TileRule::Name(Shown shown) {
       return "refused, a user's tab";
     case Shown::kWindowShows:
       return "refused, a window shows it";
+    case Shown::kCardShows:
+      return "refused, a card shows it";
     case Shown::kNoPlatform:
       return "refused, no tiles here";
     case Shown::kNoView:

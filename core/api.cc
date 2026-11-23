@@ -2080,7 +2080,7 @@ void bc_tab_show_in(bc_id id, void* view, bc_rect frame, double corner_radius) {
     return;
   }
   // A card takes the page with its input.
-  browser_core::tiles::End(id);
+  browser_core::tiles::ShowInCard(id);
   browser_core::Window* window = browser_core::Window::Holding(id);
   // The frame the app passed, not the rect laid out from it, so the app can match it.
   auto shown = [](bc_id id, bc_rect frame) {
@@ -2099,7 +2099,7 @@ bool bc_tab_show_tile(bc_id tab, void* view, bc_rect frame, double corner_radius
 }
 
 void bc_tab_end_tile(bc_id tab) {
-  browser_core::tiles::End(tab);
+  browser_core::tiles::EndTile(tab);
 }
 
 void bc_tab_draw_preview(bc_id id, double scale, double about_x, double about_y, double opacity) {

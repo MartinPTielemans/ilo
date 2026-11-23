@@ -52,6 +52,34 @@ TEST(TileRule, RefusalsLeaveTheTabAsItWas) {
   EXPECT_EQ(tiles.End(4), &kView);
 }
 
+TEST(TileRule, ACardShowingTheTabKeepsIt) {
+  // bc_tab_show_in gives the page its input, as for a hand-off: a tile would take it from the user.
+  TileRule tiles;
+  EXPECT_EQ(tiles.ShowInCard(1), nullptr);
+  EXPECT_EQ(tiles.Show(1, &kView, true, false, true), Shown::kCardShows);
+  EXPECT_FALSE(tiles.Holds(1));
+  // bc_tab_end_tile is the tile's way out, never the card's.
+  EXPECT_EQ(tiles.End(1), nullptr);
+  EXPECT_EQ(tiles.Show(1, &kView, true, false, true), Shown::kCardShows);
+}
+
+TEST(TileRule, ACardTakesATilesPage) {
+  TileRule tiles;
+  tiles.Show(1, &kView, true, false, true);
+  EXPECT_EQ(tiles.ShowInCard(1), &kView);
+  EXPECT_FALSE(tiles.Holds(1));
+  EXPECT_EQ(tiles.Show(1, &kOtherView, true, false, true), Shown::kCardShows);
+}
+
+TEST(TileRule, AWindowOrTheTabClosingLetsTheCardGo) {
+  TileRule tiles;
+  tiles.ShowInCard(1);
+  EXPECT_EQ(tiles.Left(1), nullptr);
+  EXPECT_EQ(tiles.Show(1, &kView, true, false, true), Shown::kNew);
+  EXPECT_EQ(tiles.Left(1), &kView);
+  EXPECT_FALSE(tiles.Holds(1));
+}
+
 TEST(TileRule, APlatformWithOnePageAWindowShowsNoTile) {
   // Windows and Linux today: the app draws the tab's picture instead.
   TileRule tiles;
