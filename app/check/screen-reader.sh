@@ -499,10 +499,14 @@ press escape
 heard=$(wc -l < "$nvda_log")
 send click $page_point
 spoken "a click on the second page before F10"
+# The window before and with the ring, for the PR's record of how it looks.
+../tools/window-screenshot.sh "$pid" "$out/f10-before.png" || fail "no window to capture"
 judging=1
 at=$(wc -l < "$nvda_log")
 press f10
 expect '^browser: menu keyed$' "F10 from the page didn't ring the menu control"
+expect '^browser: menu ring at ' "the menu control's ring wasn't drawn after F10"
+../tools/window-screenshot.sh "$pid" "$out/f10-ring.png" || fail "no window to capture"
 tail -n 4 "$focus_file" | grep -q '^UI Automation focus: Button "[^"]* menu", framework AccessKit' ||
   fail "UI Automation's focus isn't on the menu control after F10: $focus_file"
 says "$at" " menu', 'button'" "NVDA didn't say the menu control after F10"

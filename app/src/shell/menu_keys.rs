@@ -6,7 +6,7 @@
 //! system has its own key for it. It moves only the user's view, so agents get no path, as with
 //! Focus Sidebar.
 
-use gpui::{Context, div, prelude::*, px};
+use gpui::{Context, canvas, div, prelude::*, px};
 
 use super::{NAV_RADIUS, Shell};
 use crate::tokens::shell::{KEYED, KEYED_RING};
@@ -69,6 +69,7 @@ impl Shell {
     /// before it, if it was there.
     pub(super) fn leave_menu_keys(&mut self, why: &str, cx: &mut Context<Self>) -> Option<bool> {
         let from_page = self.keyed_menu.take();
+        self.menu_ring_drawn.set(false);
         if from_page.is_some() {
             // check.sh waits for this line.
             log!("browser: menu keys left by {why}");
@@ -79,6 +80,23 @@ impl Shell {
 
     /// The ring over the menu control while the keys are on it, as the strip's stops have theirs.
     pub(super) fn menu_ring(&self) -> Option<impl IntoElement + use<>> {
+        let drawn = self.menu_ring_drawn.clone();
+        // The checks capture the window once this says the ring is on screen.
+        let frame = canvas(
+            move |bounds, _, _| {
+                if !drawn.replace(true) {
+                    let (origin, size) = (bounds.origin, bounds.size);
+                    log!(
+                        "browser: menu ring at {} {} {} {}",
+                        f32::from(origin.x),
+                        f32::from(origin.y),
+                        f32::from(size.width),
+                        f32::from(size.height),
+                    );
+                }
+            },
+            |_, _, _, _| {},
+        );
         self.keyed_menu.is_some().then(|| {
             div()
                 .absolute()
@@ -86,6 +104,7 @@ impl Shell {
                 .rounded(px(NAV_RADIUS))
                 .border(px(KEYED_RING))
                 .border_color(self.palette.plate(KEYED))
+                .child(frame.absolute().size_full())
         })
     }
 }
