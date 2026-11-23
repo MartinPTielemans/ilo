@@ -1179,7 +1179,7 @@ impl Capture {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let palette = look.palette();
-        let highlight = look.highlight;
+        let highlight = look.accent;
         let (width, height) = bar_size();
         let parts = Part::all().map(|part| {
             let chosen = part == Part::Tool(editing.tool) || part == Part::Colour(editing.colour);
@@ -1258,10 +1258,10 @@ impl Capture {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let palette = look.palette();
-        let highlight = look.highlight;
+        let highlight = look.plate();
         let lit = move |action: Action| lit.contains(&Some(action));
-        // A row of ilo's menu: the Space's accent under the pointer, with its title and glyph in
-        // the label solved on it, as menu.rs lights a row. Lit from state, where the pointer is
+        // A row of ilo's menu: the plate under the pointer, with its title and glyph in its label,
+        // as menu.rs lights a row. Lit from state, where the pointer is
         // over the menu, as a hover's text colour never reaches the title (#3137).
         let row = |action: Action| {
             div()
@@ -1486,7 +1486,7 @@ impl Capture {
                 .w(lit.size.width + px(2. * RING))
                 .h(lit.size.height + px(2. * RING))
                 .border(px(RING))
-                .border_color(look.highlight.fill)
+                .border_color(look.accent.fill)
                 .rounded(px(RING_RADIUS))
         });
         let pill = session.chosen.is_none().then(|| {

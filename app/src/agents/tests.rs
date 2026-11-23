@@ -68,6 +68,11 @@ struct Made {
     no_dialog: std::cell::Cell<bool>,
     /// Words the core refuses with in place of its own, as a later core may word them.
     reworded: RefCell<Option<&'static str>>,
+    /// The sign-in pages opened, each with its tab, and the tabs and windows closed; and whether
+    /// none can open.
+    sign_in_pages: RefCell<Vec<(String, u64)>>,
+    sign_in_closed: RefCell<Vec<(u64, u64)>>,
+    no_sign_in_page: std::cell::Cell<bool>,
 }
 
 impl Made {
@@ -403,6 +408,22 @@ impl Browser for Made {
             .borrow_mut()
             .push((profile, read, url.into(), max_bytes, timeout_ms));
     }
+
+    /// Each page in a tab of its own, 700 on across the tests, which share which tabs are quiet, in
+    /// a window numbered as the tab less 600.
+    fn open_sign_in(&self, url: &str, _: &mut App) -> Option<(u64, u64)> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(700);
+        if self.no_sign_in_page.get() {
+            return None;
+        }
+        let tab = NEXT.fetch_add(1, Ordering::SeqCst);
+        self.sign_in_pages.borrow_mut().push((url.into(), tab));
+        Some((tab, tab - 600))
+    }
+
+    fn close_sign_in(&self, tab: u64, window: u64, _: &mut App) {
+        self.sign_in_closed.borrow_mut().push((tab, window));
+    }
 }
 
 /// The clients' configs as Connect and Disconnect left them.
@@ -418,6 +439,31 @@ struct Configs {
     looked: Mutex<Vec<(crate::agents::runner::Cli, crate::agents::ready::Found)>>,
     /// Whether the user's shell leaves out the `ilo` command's folder.
     unsearched: Mutex<bool>,
+    /// Each sign-in started, as a stand-in the test says what it hears through; the CLIs whose
+    /// sign-in was cancelled; those signed out; and what the next sign-out answers, else Ok.
+    sign_ins: Mutex<Vec<(crate::agents::runner::Cli, SignInHeard)>>,
+    sign_ins_cancelled: Arc<Mutex<Vec<crate::agents::runner::Cli>>>,
+    signed_out: Mutex<Vec<crate::agents::runner::Cli>>,
+    sign_out_answers: Mutex<Option<Result<(), Option<String>>>>,
+    /// Whether the next sign-in can't start.
+    sign_in_fails: Mutex<bool>,
+}
+
+type SignInHeard = futures::channel::mpsc::UnboundedSender<crate::agents::sign_in::Heard>;
+
+/// A sign-in in the tests: a cancel is recorded, and ends it as a CLI's does.
+struct StandInSignIn {
+    cli: crate::agents::runner::Cli,
+    heard: SignInHeard,
+    cancelled: Arc<Mutex<Vec<crate::agents::runner::Cli>>>,
+}
+
+impl crate::agents::sign_in::Session for StandInSignIn {
+    fn cancel(&mut self) {
+        use crate::agents::sign_in::{Ended, Heard};
+        self.cancelled.lock().unwrap().push(self.cli);
+        _ = self.heard.unbounded_send(Heard::Ended(Ended::Cancelled));
+    }
 }
 
 impl Clients for Configs {
@@ -456,6 +502,38 @@ impl Clients for Configs {
             },
             |(_, found)| found.clone(),
         )
+    }
+
+    /// The tests never start a CLI of this computer's: the test says what each sign-in hears.
+    fn start_sign_in(
+        &self,
+        cli: crate::agents::runner::Cli,
+        _: &crate::agents::ready::Found,
+        heard: SignInHeard,
+    ) -> std::io::Result<Box<dyn crate::agents::sign_in::Session>> {
+        if std::mem::take(&mut *self.sign_in_fails.lock().unwrap()) {
+            return Err(std::io::ErrorKind::NotFound.into());
+        }
+        self.sign_ins.lock().unwrap().push((cli, heard.clone()));
+        let cancelled = self.sign_ins_cancelled.clone();
+        Ok(Box::new(StandInSignIn {
+            cli,
+            heard,
+            cancelled,
+        }))
+    }
+
+    fn sign_out(
+        &self,
+        cli: crate::agents::runner::Cli,
+        _: &crate::agents::ready::Found,
+    ) -> Result<(), Option<String>> {
+        self.signed_out.lock().unwrap().push(cli);
+        self.sign_out_answers
+            .lock()
+            .unwrap()
+            .take()
+            .unwrap_or(Ok(()))
     }
 }
 
@@ -9905,6 +9983,7 @@ fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
 
 mod fenced;
 mod holds;
+mod sign_ins;
 mod uploads;
 
 /// An agent's http:// is never one the user typed (#2417): open_tab and navigate hand the core the

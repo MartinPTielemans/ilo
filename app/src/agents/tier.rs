@@ -1,23 +1,26 @@
-//! A task's access (#4086): Look only, Work on pages or Full access. An agent's act is inside its
-//! task's tier, and happens, or above it, and the browser refuses it; nothing asks the user. Only
-//! the user changes a tier, from the task's own controls, and no tool reads or sets it.
-//!
-//! The rows are one table, so a change after the owner has used it is an edit here: what each tier
-//! allows, by why an act would be refused, and the words each refusal and change is told in.
+//! A task's access: how far its agent may act on pages without the user. ilo runs what's inside it
+//! and refuses what's above it, never asking, and only the user changes it (#4086). What each one
+//! refuses is a row of this table, so nothing else decides.
 
-/// A task's tier, lowest first.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+/// A task's access, lowest first, which their order follows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Tier {
+    /// It opens pages, reads, scrolls and takes pictures, and changes nothing.
     Look,
+    /// It types, presses, fills in and sends forms, but not what ilo recognises as paying, placing
+    /// an order, sending a message as the user, or a bank's site. Where every task starts.
     #[default]
     Work,
+    /// Everything the user could do on a page. Set by the user for one task, never a default and
+    /// never remembered.
     Full,
 }
 
 impl Tier {
+    /// Every tier, lowest first, as its menu lists them.
     pub const ALL: [Tier; 3] = [Tier::Look, Tier::Work, Tier::Full];
 
-    /// Its name, which is all the user sees of it.
+    /// Its name, as its chip, its menu and an ilo line say it.
     pub fn label(self) -> &'static str {
         match self {
             Tier::Look => "Look only",
@@ -26,7 +29,7 @@ impl Tier {
         }
     }
 
-    /// The tier one step up, or None at the top.
+    /// The tier one up, which a refusal offers, or None from the top.
     pub fn up(self) -> Option<Tier> {
         match self {
             Tier::Look => Some(Tier::Work),

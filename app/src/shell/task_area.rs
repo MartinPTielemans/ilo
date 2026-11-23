@@ -359,6 +359,13 @@ impl Shell {
         cx.notify();
     }
 
+    /// Puts a task's conversation beside the page it watches (`talk_beside`).
+    pub fn set_talk_beside(&mut self, beside: bool, cx: &mut Context<Self>) {
+        self.talk_beside = beside;
+        self.talk_redraw(cx);
+        cx.notify();
+    }
+
     /// The task's `tab` zooms out of its thumbnail, at `from` in the window and pictured by
     /// `picture` if there's one, to fill the page area, and says whether it did. With the user
     /// holding it from the agent it has the keyboard; while the agent drives, the UI keeps it.

@@ -12,7 +12,6 @@ use std::time::{Duration, Instant};
 
 use browser::account::{self, Account};
 use browser::ad_block::choice::{self as ad_blocker, EngineRow};
-use browser::agents::ready::Ready;
 use browser::agents::runner::Cli;
 use browser::agents::{self, Agents, Client};
 use browser::build_info;
@@ -43,9 +42,10 @@ use browser::settings_card::{self, Card, Paging};
 use browser::settings_column::{self, Section};
 use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
-    Chip, Look as RowLook, SLIDE, chevron_slot, chip, command_export, command_text, detailed_row,
-    end, frame, glyph_plate, group, group_lined, named_button, row, sent_part, stop_button,
-    stop_chip, stop_popup, stop_restore, stop_switch, text,
+    Act, Chip, Look as RowLook, SLIDE, another_agent_row, assistant_row, chevron_slot, chip,
+    command_export, command_text, detailed_row, end, frame, glyph_plate, group, group_lined,
+    named_button, row, sent_part, stop_button, stop_chip, stop_popup, stop_restore, stop_switch,
+    text,
 };
 use browser::settings_search::{
     self, EndSearch, Entry, NextControl, PageBottom, PageDown, PageTop, PageUp, PreviousControl,
@@ -177,10 +177,8 @@ enum Popup {
     ArchiveAfter(u64),
     /// A profile's New Note service, in Features.
     Notes(u64),
-    /// Run tasks on, in Agents.
-    TaskAgent,
-    /// The model a CLI runs tasks with.
-    TaskModel(Cli),
+    /// A signed-in assistant's ⋯ menu, in Agents › Your assistant.
+    Assistant(Cli),
     /// General's Page zoom.
     PageZoom,
 }
@@ -194,8 +192,7 @@ impl Popup {
             Popup::SearchEngine(_) => "Search engine".into(),
             Popup::ArchiveAfter(_) => "Archive Today tabs after".into(),
             Popup::Notes(_) => "New Note".into(),
-            Popup::TaskAgent => "Run tasks on".into(),
-            Popup::TaskModel(cli) => format!("{} model", cli.name()).into(),
+            Popup::Assistant(cli) => format!("{} options", cli.assistant()).into(),
             Popup::PageZoom => "Page zoom".into(),
         }
     }
@@ -3713,11 +3710,14 @@ impl Settings {
         });
         let mut blocks = vec![Block::Rows([master].into_iter().chain(tasks).collect())];
         if tasks_on {
-            blocks.push(Block::Heading("Tasks".into()));
-            blocks.push(Block::Group(self.tasks(agents, cx)));
+            blocks.push(Block::Heading("Your assistant".into()));
+            blocks.push(Block::Group(self.assistants(agents, cx)));
+            blocks.push(Block::Under(foot(look, NO_ASSISTANT_OF_ITS_OWN)));
         }
-        blocks.push(Block::Heading("Apps that connect".into()));
-        blocks.push(Block::Group(group(look, clients)));
+        blocks.push(Block::Heading(APPS_THAT_CONNECT.into()));
+        // Another agent's How comes here.
+        let apps = SharedString::from(APPS_THAT_CONNECT);
+        blocks.push(Block::Group(self.flashed(&apps, group(look, clients))));
         // Shown as Apps that connect are, whether agents are on or off: the command says they're
         // off when it's run.
         if agents.read(cx).command_offered() {
@@ -3884,13 +3884,8 @@ impl Settings {
         }
         // Its last line's foot, where check.sh scrolls it into sight before it captures it whole.
         let end = div().absolute().left_0().right_0().bottom_0().h(px(1.));
-        let foot = div()
+        let foot = foot(look, fence::FOOT)
             .relative()
-            .px(px(TEXT_X))
-            .text_size(px(text::SMALL))
-            .line_height(px(DETAIL_LINE))
-            .text_color(look.detail)
-            .child(fence::FOOT)
             .child(end.child(self.drawn("fence foot".into())));
         let under = match self.fence_adding {
             true => div().child(foot),
@@ -4125,156 +4120,166 @@ impl Settings {
         cx.notify();
     }
 
-    /// The tasks ⇥ asks in ⌘T: the agent they run on, then each CLI, whether it's installed and
-    /// signed in, with the command that does it to copy, as ilo runs neither, and the model it runs
-    /// tasks with.
-    fn tasks(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> gpui::Div {
+    /// Your assistant: a row for each CLI tasks from ⇥ in ⌘T run on, which signs in with its own
+    /// sign-in and has the mark that picks it, then a row for another agent, which connects.
+    fn assistants(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> gpui::Div {
         let look = &self.look;
         let model = agents.read(cx);
-        let ready: Vec<Cli> = Cli::ALL
-            .into_iter()
-            .filter(|cli| model.found(*cli) == Ready::SignedIn)
-            .collect();
-        let default = model.default_task_agent().filter(|cli| ready.contains(cli));
-        let run_on = match default {
-            Some(default) => {
-                let agents = agents.clone();
-                let popup = self.popup(
-                    Popup::TaskAgent,
-                    default.name().into(),
-                    POPUP_WIDTH,
-                    cx.listener(move |settings, _, window, cx| {
-                        settings.choose_task_agent(&agents, window, cx)
-                    }),
-                );
-                let detail = "⇥ in the command bar gives the task to this agent";
-                line_row(
-                    look,
-                    "Run tasks on",
-                    Some(detail.into()),
-                    vec![popup.into_any_element()],
-                )
-            }
-            None => line_row(
-                look,
-                "Run tasks on",
-                Some("Claude or Codex, once one below is signed in".into()),
-                Vec::new(),
-            ),
-        };
-        let rows = Cli::ALL.map(|cli| self.task_agent(agents, cli, cx));
-        group(look, std::iter::once(run_on).chain(rows))
-    }
-
-    /// A CLI's row: Signed in with its Model pop-up, or what to run in a terminal to install it or
-    /// sign in, with Copy.
-    fn task_agent(&self, agents: &Entity<Agents>, cli: Cli, cx: &mut Context<Self>) -> gpui::Div {
-        let look = &self.look;
-        let model = agents.read(cx);
-        let (detail, command): (SharedString, _) = match model.found(cli) {
-            Ready::Unknown => ("Looking…".into(), None),
-            Ready::NotFound => (
-                format!("Not found. Install it with {}", cli.install()).into(),
-                Some(cli.install()),
-            ),
-            Ready::SignedOut => (
-                format!("Not signed in. Run {} in a terminal", cli.sign_in()).into(),
-                Some(cli.sign_in()),
-            ),
-            Ready::SignedIn => ("Signed in".into(), None),
-        };
-        if let Some(command) = command {
-            let copy = self
-                .button(("copy-task-command", cli as usize), "Copy")
-                .on_click(move |_, _, cx| {
-                    log!("browser: task command copied {command}");
-                    cx.write_to_clipboard(ClipboardItem::new_string(command.to_string()));
-                });
-            let controls = vec![copy.into_any_element()];
-            return feature_row(look, cli.glyph(), cli.name(), Some(detail), controls);
-        }
-        if model.found(cli) != Ready::SignedIn {
-            return feature_row(look, cli.glyph(), cli.name(), Some(detail), Vec::new());
-        }
-        let chosen = model.task_model(cli).to_string();
-        let models = model.task_models(cli);
-        let label: SharedString = (models.iter().find(|(id, _)| *id == chosen))
-            .map_or(MenuEntry::label("Default"), |(_, name)| name.clone().into());
-        let agents = agents.clone();
-        let popup = self.popup(
-            Popup::TaskModel(cli),
-            label,
-            POPUP_WIDTH,
-            cx.listener(move |settings, _, window, cx| {
-                settings.choose_task_model(&agents, cli, window, cx)
-            }),
-        );
-        feature_row(
-            look,
-            cli.glyph(),
-            cli.name(),
-            Some(detail),
-            vec![popup.into_any_element()],
-        )
-    }
-
-    /// Opens Run tasks on's menu of the signed-in agents, and makes the one picked the default.
-    fn choose_task_agent(
-        &mut self,
-        agents: &Entity<Agents>,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) {
-        let model = agents.read(cx);
-        let ready: Vec<Cli> = Cli::ALL
-            .into_iter()
-            .filter(|cli| model.found(*cli) == Ready::SignedIn)
-            .collect();
-        let chosen = model.default_task_agent();
-        let items = (ready.iter())
-            .map(|&cli| {
-                let on = Some(cli) == chosen;
-                MenuEntry {
-                    checked: on,
-                    over: on,
-                    ..MenuEntry::named(cli.name(), true)
+        let marked = model.default_task_agent();
+        let rows = Cli::ALL.map(|cli| {
+            let act = {
+                let (settings, agents) = (cx.weak_entity(), agents.clone());
+                move |act: Act, window: &mut Window, cx: &mut App| {
+                    let agents = agents.clone();
+                    match act {
+                        Act::Get => {
+                            log!("browser: assistant install page {}", cli.id());
+                            open_notice(cli.install_page(), cx)
+                        }
+                        Act::SignIn => agents.update(cx, |agents, cx| agents.sign_in(cli, cx)),
+                        Act::Cancel => agents.update(cx, |agents, _| agents.cancel_sign_in(cli)),
+                        Act::Mark => {
+                            log!("browser: tasks run on {}", cli.id());
+                            agents.update(cx, |agents, cx| agents.set_default_task_agent(cli, cx))
+                        }
+                        Act::Menu => {
+                            let menu = |settings: &mut Settings, cx: &mut Context<Settings>| {
+                                settings.assistant_menu(&agents, cli, window, cx)
+                            };
+                            settings.update(cx, menu).ok();
+                        }
+                    }
                 }
-            })
-            .collect();
-        let (settings, agents) = (cx.weak_entity(), agents.clone());
-        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
-            if let Some(&cli) = picked.and_then(|index| ready.get(index)) {
-                log!("browser: tasks run on {}", cli.id());
-                agents.update(cx, |agents, cx| agents.set_default_task_agent(cli, cx));
-            }
-            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
+            };
+            assistant_row(
+                look,
+                cli,
+                &model.assistant_row(cli),
+                marked == Some(cli),
+                self.a11y,
+                self.menu_at(Popup::Assistant(cli)),
+                Rc::new(act),
+            )
         });
-        self.pop_up(Popup::TaskAgent, items, picked, window, cx);
+        let how = cx.listener(|settings, _: &(), window, cx| {
+            settings.show_found(Section::Agents, APPS_THAT_CONNECT.into(), window, cx)
+        });
+        let another = another_agent_row(look, self.a11y, move |window, cx| how(&(), window, cx));
+        group(look, rows.into_iter().chain([another]))
     }
 
-    /// Opens a CLI's Model menu: its own default first, then its models.
-    fn choose_task_model(
+    /// Where `which`'s menu opens: under the button the canvas fills, at its start.
+    fn menu_at(&self, which: Popup) -> gpui::Canvas<()> {
+        let texts = self.popup_texts.clone();
+        canvas(
+            |_, _, _| {},
+            move |bounds, _, _, _| {
+                let at = point(bounds.origin.x, bounds.origin.y + bounds.size.height);
+                let mut texts = texts.borrow_mut();
+                texts.retain(|&(each, _)| each != which);
+                texts.push((which, at));
+            },
+        )
+        .absolute()
+        .inset_0()
+    }
+
+    /// Opens a signed-in assistant's ⋯ menu: Model, with its own default first then its models,
+    /// and Sign Out, which asks first.
+    fn assistant_menu(
         &mut self,
         agents: &Entity<Agents>,
         cli: Cli,
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let (models, items) = agents.read(cx).task_model_menu(cli);
+        let (models, model_items) = agents.read(cx).task_model_menu(cli);
+        let mut items = vec![MenuEntry::new("Model", true)];
+        items.extend(model_items.into_iter().map(|item| MenuEntry {
+            parent: Some(0),
+            // A submenu opens beside its item, not over it.
+            over: false,
+            ..item
+        }));
+        items.push(MenuEntry::line());
+        let sign_out = items.len();
+        items.push(MenuEntry::new("Sign Out…", true));
         let (settings, agents) = (cx.weak_entity(), agents.clone());
         let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
-            if let Some((id, _)) = picked.and_then(|index| models.get(index)) {
-                // check.sh waits for this line.
-                log!(
-                    "browser: task model {} {}",
-                    cli.id(),
-                    if id.is_empty() { "default" } else { id }
-                );
-                agents.update(cx, |agents, cx| agents.set_task_model(cli, id, cx));
+            match picked {
+                Some(at) if at == sign_out => {
+                    let agents = agents.clone();
+                    // Asked once the menu is gone, in the window it was in.
+                    cx.defer(move |cx| {
+                        let Some(window) = cx.try_global::<SettingsWindow>().map(|w| w.0) else {
+                            return;
+                        };
+                        let ask = |settings: &mut Settings,
+                                   window: &mut Window,
+                                   cx: &mut Context<Settings>| {
+                            settings.ask_sign_out(&agents, cli, window, cx)
+                        };
+                        window.update(cx, ask).ok();
+                    });
+                }
+                Some(at) => {
+                    if let Some((id, _)) = at.checked_sub(1).and_then(|index| models.get(index)) {
+                        // check.sh waits for this line.
+                        log!(
+                            "browser: task model {} {}",
+                            cli.id(),
+                            if id.is_empty() { "default" } else { id }
+                        );
+                        agents.update(cx, |agents, cx| agents.set_task_model(cli, id, cx));
+                    }
+                }
+                None => {}
             }
             settings.update(cx, |settings, cx| settings.chose(cx)).ok();
         });
-        self.pop_up(Popup::TaskModel(cli), items, picked, window, cx);
+        self.pop_up(Popup::Assistant(cli), items, picked, window, cx);
+    }
+
+    /// Asks before Sign Out, which signs the assistant out everywhere it's used, as Delete asks
+    /// for a profile: in an alert, or on Linux in Settings' own dialog.
+    fn ask_sign_out(
+        &mut self,
+        agents: &Entity<Agents>,
+        cli: Cli,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let name = cli.assistant();
+        let message = format!("Sign out of {name}?");
+        let detail =
+            format!("This signs {name} out everywhere you use it, not only for tasks here.");
+        let agents = agents.clone();
+        let sign_out = move |cx: &mut App| {
+            log!("browser: assistant sign-out {}", cli.id());
+            agents.update(cx, |agents, cx| agents.sign_out(cli, cx))
+        };
+        #[cfg(target_os = "linux")]
+        dialog::ask_in(
+            &self.dialog,
+            message,
+            detail,
+            "Sign Out",
+            // It reaches past this device, so ↩ doesn't choose it.
+            dialog::Return::Nothing,
+            Box::new(sign_out),
+            window,
+            cx,
+        );
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = window;
+            cx.spawn(async move |_, cx| {
+                if crate::ask(&message, &detail, &["Sign Out", "Cancel"], false) == 0 {
+                    cx.update(sign_out);
+                }
+            })
+            .detach();
+        }
     }
 
     /// The sites where the user answered the agent for good, each with Revoke, and Revoke All
@@ -5487,6 +5492,27 @@ fn manage_passkeys(profile: u64, cx: &mut App) {
 /// A request's method, the first word of its target ("POST /api/items").
 fn method(target: &str) -> &str {
     target.split(' ').next().unwrap_or_default()
+}
+
+/// Apps that connect's heading, which Another agent's How goes to.
+const APPS_THAT_CONNECT: &str = "Apps that connect";
+
+/// What Your assistant's rows never do, under them.
+const NO_ASSISTANT_OF_ITS_OWN: &str = concat!(
+    env!("APP_NAME"),
+    " has no assistant of its own. You sign in on the assistant's own page, and ",
+    env!("APP_NAME"),
+    " never sees or keeps the sign-in."
+);
+
+/// A line under a group that says more of it, in a row's line's grey, as Fenced sites' has.
+fn foot(look: &RowLook, line: impl Into<SharedString>) -> gpui::Div {
+    div()
+        .px(px(TEXT_X))
+        .text_size(px(text::SMALL))
+        .line_height(px(DETAIL_LINE))
+        .text_color(look.detail)
+        .child(line.into())
 }
 
 /// A row: its name, the line under it, if any, and its controls at its end.
