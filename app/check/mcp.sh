@@ -3062,12 +3062,17 @@ CARD
   # agent's pages, on its Pages, out of its conversation, and with the command bar up, which the
   # click closes before the page takes the keyboard. Each case's outcome goes in show-tab.txt, and
   # the run fails after the last if any missed.
+  # The page puts what it sees of the keyboard in its title too, for a miss to show.
   printf '%s' '<!doctype html><title>handed</title><textarea id=f autofocus
  style="position:fixed;inset:0;width:100vw;height:100vh"
- oninput="document.title=`handed typed `+f.value"></textarea>' > "$out/site/handed.html"
-  handeds=$(grep -c "^browser: title $opened_tab handed\$" "$log" || true)
+ onfocus="document.title=`handed sees field focus`" onblur="document.title=`handed sees field blur`"
+ oninput="document.title=`handed typed `+f.value"></textarea><script>
+ onfocus=()=>document.title=`handed sees window focus, active ${document.activeElement.id}`;
+ onblur=()=>document.title=`handed sees window blur`;
+ onkeydown=e=>document.title=`handed sees key ${e.key} on ${document.activeElement.id}`</script>' > "$out/site/handed.html"
+  handeds=$(grep -c "^browser: title $opened_tab handed\( sees .*\)\?\$" "$log" || true)
   call navigate "{\"tab\":$opened_tab,\"url\":\"localhost:$port/handed.html\"}" > /dev/null
-  await_more "^browser: title $opened_tab handed\$" "$handeds" || fail "the page with a field didn't load in the agent's tab"
+  await_more "^browser: title $opened_tab handed\( sees .*\)\?\$" "$handeds" || fail "the page with a field didn't load in the agent's tab"
   show_tab_missed=
   # $1 says where the user is, $2 is the letter typed after the click, and $3, if "bar", opens the
   # command bar over the card first.
@@ -3096,7 +3101,7 @@ $1: the click didn't reach Show Tab"
     # The field keeps the letters of the cases before.
     await_more "^browser: title $opened_tab handed typed [a-z]*$2\$" 0 && typed=yes
     send state
-    shown=$(tail -n +"$from" "$log" | grep -E '^browser: (task page [0-9]+ (watched|shown|back)|task space ([0-9]+ shown|left)|task area [0-9]+ (open|closed)|task [a-z0-9-]+ (shown|page [0-9]+))$' |
+    shown=$(tail -n +"$from" "$log" | grep -E "^browser: (task page [0-9]+ (watched|shown|back)|task space ([0-9]+ shown|left)|task area [0-9]+ (open|closed)|task [a-z0-9-]+ (shown|page [0-9]+)|title $opened_tab handed sees .*)\$" |
       sed 's/^browser: //' | tr '\n' ';')
     echo "$1: typed $typed; key $key, focus $focus; $shown" | tee -a "$out/show-tab.txt"
     ../tools/window-screenshot.sh "$pid" "$out/show-tab-$2.png" || fail "no window to capture"
