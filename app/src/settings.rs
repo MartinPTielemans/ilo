@@ -1822,19 +1822,44 @@ impl Settings {
                 settings.choose_page_zoom(zoom_chosen, window, cx)
             }),
         );
-        let looks = vec![
-            pictured(look, "Appearance", appearance_line, appearances),
-            setting(
-                look,
-                "Page zoom",
-                Some("Every page's size, until you zoom a site, which keeps its own.".into()),
+        let zoom = setting(
+            look,
+            "Page zoom",
+            Some("Every page's size, until you zoom a site, which keeps its own.".into()),
+            vec![
+                zoom_popup
+                    .child(self.drawn("page zoom".into()))
+                    .into_any_element(),
+            ],
+        );
+        // Transparency, directly under Appearance, where the window has glass to show through.
+        let transparency = browser::transparency::row(look, browser::transparency::has_glass(), cx)
+            .map(|div| Row {
+                div,
+                name: browser::transparency::NAME.into(),
+                line: Some(browser::transparency::ABOUT.into()),
+                keys: None,
+                nested: false,
+            });
+        let mut looks = vec![pictured(look, "Appearance", appearance_line, appearances)];
+        // On the Mac the system's Reduce Transparency is said under the group, so Page zoom
+        // starts the next one.
+        let mut groups = match transparency {
+            Some(transparency) if cfg!(target_os = "macos") => {
+                looks.push(transparency);
+                let foot = foot(look, browser::transparency::REDUCE_TRANSPARENCY_WINS);
                 vec![
-                    zoom_popup
-                        .child(self.drawn("page zoom".into()))
-                        .into_any_element(),
-                ],
-            ),
-        ];
+                    Block::Rows(looks),
+                    Block::Under(foot),
+                    Block::Rows(vec![zoom]),
+                ]
+            }
+            transparency => {
+                looks.extend(transparency);
+                looks.push(zoom);
+                vec![Block::Rows(looks)]
+            }
+        };
         let right = shell::sidebar_right(cx);
         let pair = browser::settings_pictures::picker(
             look,
@@ -1869,15 +1894,11 @@ impl Settings {
             ),
             vec![top_bar],
         );
-        Page::new(
-            Section::Appearance,
-            "",
-            vec![
-                Block::Rows(looks),
-                Block::Heading("Layout".into()),
-                Block::Rows(vec![position, top_bar]),
-            ],
-        )
+        groups.extend([
+            Block::Heading("Layout".into()),
+            Block::Rows(vec![position, top_bar]),
+        ]);
+        Page::new(Section::Appearance, "", groups)
     }
 
     /// Tabs & Sidebar: when Today tabs are archived and unloaded, whether Battery Saver comes on, who
