@@ -151,8 +151,10 @@ jobs:
         run: engine/linux/test.sh "$ILO_ENGINE_ROOT/linux"
       # What a compile of the core reads besides the core, about 200 MB, for Core on Linux to check
       # any branch's core against until the next build, in minutes rather than the half hour a tree
-      # of its own takes (#3917). The build machine's paths are rewritten, as the pack is public. A
-      # failure here costs only that, never the engine.
+      # of its own takes (#3917). The build machine's paths are rewritten, as the pack is public. Kept
+      # 90 days, the most GitHub keeps an artifact, as a quiet core can go weeks without a Linux
+      # engine build, and without a pack every push prepares a tree. A failure here costs only the
+      # pack, never the engine.
       - id: core
         continue-on-error: true
         run: |
