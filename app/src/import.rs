@@ -3187,12 +3187,15 @@ fn listed(names: &[String]) -> String {
     }
 }
 
-/// "Won't be imported: 2 live folders and 1 Space icon", for what a browser has with no place
+/// "Won't be imported: 2 live folders and a Space icon", for what a browser has with no place
 /// here, in the order its reader found it; none if it has nothing of the kind.
 pub(crate) fn left_out_line(left_out: &[found::LeftOut]) -> Option<String> {
     let items: Vec<String> = (left_out.iter())
-        .filter(|each| each.count > 0)
-        .map(|each| counted(each.count, each.item.one, each.item.many))
+        .filter_map(|each| match each.count {
+            0 => None,
+            1 => Some(each.item.one.to_string()),
+            count => Some(format!("{} {}", grouped(count), each.item.many)),
+        })
         .collect();
     (!items.is_empty()).then(|| format!("Won't be imported: {}", listed(&items)))
 }

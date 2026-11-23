@@ -134,8 +134,9 @@ pub struct LeftOut {
     pub count: usize,
 }
 
-/// The words for a thing that won't be imported, one and many, as the import screen lists it.
-/// Each is shared by every source that has the thing, so the same thing reads the same.
+/// The words for a thing that won't be imported, as the import screen lists it: one, with its
+/// article, "a live folder", and many, to follow a count, "live folders". Each is shared by every
+/// source that has the thing, so the same thing reads the same.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Item {
     pub one: &'static str,
@@ -143,44 +144,44 @@ pub struct Item {
 }
 
 pub const LIVE_FOLDER: Item = Item {
-    one: "live folder",
+    one: "a live folder",
     many: "live folders",
 };
 /// A split view of more tabs than SPLIT_TABS.
 pub const FOUR_TAB_SPLIT: Item = Item {
-    one: "four-tab split",
+    one: "a four-tab split",
     many: "four-tab splits",
 };
 pub const SEPARATE_CONTAINER: Item = Item {
-    one: "tab in a separate container",
+    one: "a tab in a separate container",
     many: "tabs in separate containers",
 };
 pub const SPACE_ICON: Item = Item {
-    one: "Space icon",
+    one: "a Space icon",
     many: "Space icons",
 };
 /// Zen's.
 pub const ESSENTIALS_FOLDER: Item = Item {
-    one: "folder in Essentials",
+    one: "a folder in Essentials",
     many: "folders in Essentials",
 };
 /// Ardia's.
 pub const TOP_APPS_FOLDER: Item = Item {
-    one: "folder in Top Apps",
+    one: "a folder in Top Apps",
     many: "folders in Top Apps",
 };
 pub const TAB_GROUP: Item = Item {
-    one: "tab group",
+    one: "a tab group",
     many: "tab groups",
 };
 /// Ardia's, where its own words call it stacked and it can't come as a split here.
 pub const STACKED_SPLIT: Item = Item {
-    one: "stacked split",
+    one: "a stacked split",
     many: "stacked splits",
 };
 /// A tab at an address that can't open here and isn't one of the pages `quiet` names.
 pub const NOT_WEB_PAGE: Item = Item {
-    one: "tab that isn't a web page",
+    one: "a tab that isn't a web page",
     many: "tabs that aren't web pages",
 };
 
