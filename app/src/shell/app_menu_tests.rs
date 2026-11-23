@@ -188,6 +188,8 @@ fn focus_menu_rings_the_control_and_its_keys_open_the_menu(cx: &mut TestAppConte
         cx.simulate_a11y_activation();
         focus_menu(&shell, "page", cx);
         assert!(keyed(&shell, cx), "{key}");
+        let drawn = shell.read_with(cx, |shell, _| shell.menu_ring_drawn.get());
+        assert!(drawn, "{key}: the ring wasn't drawn");
         assert!(host.take().contains(&"focus ui".to_owned()), "{key}");
         let tree = cx.a11y_tree().expect("GPUI built a tree");
         let (_, node) = (tree.nodes.iter())
