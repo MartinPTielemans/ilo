@@ -831,7 +831,10 @@ exited
 grep -q '^browser: dialog shown Quit' "$log" && fail "⌘Q asked first with the warning off"
 
 # The Mac may have come back in use as the run went, and the notifications the rest of this run
-# posts would cover it, so the rest is skipped, as the run is when it begins in use.
+# posts would cover it, so the rest is skipped, as the run is when it begins in use. The badges
+# section reads the state again at each tab key it sends: an app that isn't the active one can't
+# take the keyboard, so the keys its driver posts route by the menu bar, whose ⌘2 runs Capture
+# instead of selecting the tab.
 if [ "$active" != 1 ]; then
   echo "skip: the Mac is in use, so the badges weren't checked"
   exit 0
@@ -875,6 +878,12 @@ await "^browser: title $a badges ready$" || fail "the badges page didn't paint i
 # Hidden behind the second favorite, the first's page posts, and its tile draws the count as its
 # badge.
 send key 2 cmd
+if [ "$active" != 1 ]; then
+  exec 3>&-
+  quit
+  echo "skip: the Mac came back in use, so the badges weren't checked"
+  exit 0
+fi
 expect "^browser: selected $x\( in .*\)\{0,1\}\$" "⌘2 didn't show the second favorite over the first"
 expect "^browser: tile $a drawn with badge 1\$" "the favorite's tile didn't count its page's notification"
 
@@ -907,6 +916,12 @@ expect "^browser: agent activity claude-code $user_tab navigate refused: The tab
 # Shown again, the favorite's badge goes, and the second favorite's page, hidden as the favorite
 # takes the window, posts as its own document only.
 send key 1 cmd
+if [ "$active" != 1 ]; then
+  exec 3>&-
+  quit
+  echo "skip: the Mac came back in use, so the rest of the badges weren't checked"
+  exit 0
+fi
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "⌘1 didn't show the favorite again"
 expect "^browser: tile $a drawn with badge none\$" "showing the favorite didn't take its badge away"
 await "^browser: title $x badges posted 1$" || fail "the second favorite's badges page didn't post as it hid"
@@ -915,6 +930,12 @@ none_since "^browser: tile $a drawn with badge [0-9]" ||
 
 # Hidden again, the favorite's page posts once more, and its tile draws the count again.
 send key 2 cmd
+if [ "$active" != 1 ]; then
+  exec 3>&-
+  quit
+  echo "skip: the Mac came back in use, so the rest of the badges weren't checked"
+  exit 0
+fi
 expect "^browser: selected $x\( in .*\)\{0,1\}\$" "⌘2 didn't show the second favorite over the first again"
 expect "^browser: tile $a drawn with badge 1\$" "the favorite's tile didn't count its page's second notification"
 
@@ -953,6 +974,12 @@ await "^browser: selected $x\( in .*\)\{0,1\}\$" || fail "the relaunch didn't sh
 go_from_bar "${site}badges.html"
 await "^browser: title $x badges ready$" || fail "the badges page didn't paint in the last favorite shown"
 send key 1 cmd
+if [ "$active" != 1 ]; then
+  exec 3>&-
+  quit
+  echo "skip: the Mac came back in use, so the badges' switch wasn't checked"
+  exit 0
+fi
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "⌘1 didn't show the first favorite again"
 await "^browser: title $x badges posted 1$" || fail "the second favorite's page didn't post as it hid"
 
