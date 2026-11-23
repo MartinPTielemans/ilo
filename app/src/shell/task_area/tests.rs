@@ -1758,18 +1758,7 @@ fn press_card(
             "the keyboard was asked for before the core showed the handed tab, so it would land \
              on the page shown before: {asked:?}"
         );
-        // As core_shows_task, with what the shell asks inside the core's call itself.
-        let in_the_show = shell.update(cx, |shell, cx| {
-            shell.set_space(3, cx);
-            shell.set_selected(30, cx);
-            host.take()
-        });
-        assert!(
-            !in_the_show.iter().any(|said| said == "focus page"),
-            "the keyboard was asked for while the core was showing the tab, which focuses the page \
-             shown before: {in_the_show:?}"
-        );
-        asked.extend(in_the_show);
+        core_shows_task(shell, cx, 30);
         draw(shell, cx);
         asked.extend(host.take());
     }

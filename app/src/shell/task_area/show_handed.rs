@@ -67,13 +67,12 @@ impl Shell {
         cx.notify();
     }
 
-    /// The core shows `tab` in the task's Space: the handed page Show Tab watched takes the
-    /// keyboard before the next frame. Not now: the core says so part way through showing the
-    /// Space, and the page it focused then would be the one shown before.
+    /// The core shows `tab` in the task's Space: the handed page Show Tab watched can take the
+    /// keyboard.
     pub(in crate::shell) fn handed_tab_shown(&mut self, tab: u64, cx: &mut Context<Self>) {
         if self.handed_keys == Some((tab, false)) {
             self.handed_keys = Some((tab, true));
-            cx.notify();
+            self.give_handed_keys(cx);
         }
     }
 

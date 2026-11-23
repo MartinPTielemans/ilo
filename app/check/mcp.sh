@@ -3062,12 +3062,15 @@ CARD
   # agent's pages, on its Pages, out of its conversation, and with the command bar up, which the
   # click closes before the page takes the keyboard. Each case's outcome goes in show-tab.txt, and
   # the run fails after the last if any missed.
-  # The page puts what it sees of the keyboard in its title too, for a miss to show.
+  # The page focuses its field whenever it gets the keyboard, as a sign-in page focuses its first
+  # field: the core blurs the field each time the agent gets the tab back (agent_session.cc), so
+  # without that, from the second case on, a letter reaching the page would reach no field. It puts
+  # what it sees of the keyboard in its title too, for a miss to show.
   printf '%s' '<!doctype html><title>handed</title><textarea id=f autofocus
  style="position:fixed;inset:0;width:100vw;height:100vh"
  onfocus="document.title=`handed sees field focus`" onblur="document.title=`handed sees field blur`"
  oninput="document.title=`handed typed `+f.value"></textarea><script>
- onfocus=()=>document.title=`handed sees window focus, active ${document.activeElement.id}`;
+ onfocus=()=>{document.title=`handed sees window focus, active ${document.activeElement.id}`;f.focus()};
  onblur=()=>document.title=`handed sees window blur`;
  onkeydown=e=>document.title=`handed sees key ${e.key} on ${document.activeElement.id}`</script>' > "$out/site/handed.html"
   handeds=$(grep -c "^browser: title $opened_tab handed\( sees .*\)\?\$" "$log" || true)
