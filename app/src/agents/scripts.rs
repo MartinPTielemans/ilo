@@ -84,6 +84,7 @@ impl Agents {
             true => refused,
         };
         let entry = Activity {
+            notes: SharedString::default(),
             at: SystemTime::now(),
             agent: AGENT.into(),
             connection: 0,

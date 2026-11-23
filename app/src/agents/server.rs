@@ -736,6 +736,7 @@ fn call(shared: &Shared, number: u64, agent: &str, tool: &str, arguments: Value)
         error: result.error.then(|| result.text.clone()),
         kind: result.kind,
         image: result.image.clone(),
+        notes: result.notes.map(|note| note.name),
     });
     result
 }

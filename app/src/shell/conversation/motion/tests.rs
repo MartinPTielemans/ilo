@@ -22,6 +22,7 @@ fn step(key: usize, title: &str, running: bool) -> TraceStep {
         running,
         failed: false,
         opens: Opens::Nothing,
+        under: "".into(),
     }
 }
 

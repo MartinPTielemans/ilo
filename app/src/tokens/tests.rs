@@ -120,6 +120,13 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "settings.share-space-radius",
     "settings.share-tile-radius",
     "mini-bar.radius",
+    // The Transparency picker's small ilo, at the drawing's scale (#4129).
+    "transparency.picture-radius",
+    "transparency.bright-radius",
+    "transparency.window-radius",
+    "transparency.row-radius",
+    "transparency.page-radius",
+    "transparency.menu-row-radius",
     // A card's recent rows, inside its picture's box (#3074).
     "hover-card.recent-row-radius",
 ];

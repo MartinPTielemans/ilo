@@ -23,11 +23,11 @@ use crate::tokens::settings::{
     CONTROL_HOVERED_LIGHT, CONTROL_LIGHT, CONTROL_PADDING, CONTROL_PRESSED, CONTROL_PRESSED_LIGHT,
     CONTROL_RADIUS, DETAIL, DETAIL_LINE, DETAIL_TOP, END_GAP, GLYPH, GLYPH_OFF, GLYPH_ON,
     GLYPH_PLATE, GLYPH_PLATE_FILL, GLYPH_PLATE_GAP, GROUP, GROUP_LIGHT, GROUP_RIM,
-    GROUP_RING_LIGHT, GROUP_SHADOW_BLUR, GROUP_SHADOW_LIGHT, GROUP_SHADOW_Y, HEADING,
-    HEADING_LIGHT, KNOB, KNOB_ALPHA, KNOB_INSET, KNOB_SHADOW, KNOB_SHADOW_BLUR, KNOB_SHADOW_Y,
-    LINE, NAME, NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE, ON_PRESSED, ON_SWITCH_OFF,
-    PADDING, RESTORE_RADIUS, ROW_HEIGHT, ROW_X, SIDE_ROOM, SWITCH_HEIGHT, SWITCH_OFF,
-    SWITCH_OFF_LIGHT, SWITCH_WIDTH,
+    GROUP_RING_LIGHT, GROUP_SHADOW_BLUR, GROUP_SHADOW_LIGHT, GROUP_SHADOW_Y, HEADING, KNOB,
+    KNOB_ALPHA, KNOB_INSET, KNOB_SHADOW, KNOB_SHADOW_BLUR, KNOB_SHADOW_Y, LINE, NAME, NAME_OFF,
+    ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE, ON_PRESSED, ON_SWITCH_OFF, PADDING, RESTORE_RADIUS,
+    ROW_HEIGHT, ROW_X, SIDE_ROOM, STACKED_GAP, SWITCH_HEIGHT, SWITCH_OFF, SWITCH_OFF_LIGHT,
+    SWITCH_WIDTH,
 };
 use crate::tokens::settings::{SENT_CHEVRON, SENT_GAP, SENT_INDENT, SENT_LABEL, SENT_LINES};
 use crate::tokens::shell::{KEYED, KEYED_RING};
@@ -404,7 +404,7 @@ impl Look {
             },
             glyph_plate: mix(GLYPH_PLATE_FILL),
             glyph: mix(GLYPH_ON),
-            heading: card.blend(base.opacity(pick(HEADING, HEADING_LIGHT))),
+            heading: card.blend(base.opacity(HEADING)),
             edge: Some(rgba(if dark { GROUP_RIM } else { GROUP_RING_LIGHT })),
             lifted: (!dark).then(|| rgba(GROUP_SHADOW_LIGHT)),
             accent: rgb(NO_THEME_ACCENT),
@@ -627,6 +627,23 @@ pub fn pictured(
             .mr(px(-SIDE_ROOM))
             .child(pictures),
     )
+}
+
+/// A row whose control is too wide for its end, such as Transparency's pictures: its name and
+/// `line`, then the control across the row under them, `inset` wider on each side than the text,
+/// so the control's own room keeps what it draws in the text's column.
+pub fn stacked(
+    look: &Look,
+    name: impl Into<SharedString>,
+    line: SharedString,
+    inset: f32,
+    control: impl IntoElement,
+) -> gpui::Div {
+    frame()
+        .flex_col()
+        .items_stretch()
+        .child(text(look, name, Some(line)))
+        .child(div().mt(px(STACKED_GAP)).mx(px(-inset)).child(control))
 }
 
 /// A feature's glyph on its quiet plate, 12 before its name, quieter while it's off.
@@ -1143,7 +1160,7 @@ mod tests {
                 ("a section", on(ground, SECTION_TEXT)),
                 (
                     "Chromium settings and the groups' labels",
-                    on(ground, if dark { HEADING } else { HEADING_LIGHT }),
+                    on(ground, HEADING),
                 ),
                 ("Search", on(field, DETAIL)),
                 ("⌘F", on(field, SEARCH_HINT)),
@@ -1333,7 +1350,7 @@ pub fn assistant_row(
                 div()
                     .id(("assistant-mark", index))
                     .when(a11y, |mark| {
-                        named_check(mark, format!("Run tasks on {name}"), marked)
+                        named_check(mark, format!("Run tasks with {name}"), marked)
                     })
                     .size(px(CONTROL_HEIGHT))
                     .flex()
@@ -1345,27 +1362,85 @@ pub fn assistant_row(
             vec![more.into_any_element(), mark.into_any_element()]
         }
     };
+    let line: SharedString = shown.line.clone().into();
+    let text = match shown.command() {
+        Some(command) => commanded(look, name, line, command).into_any_element(),
+        None => text(look, name, Some(line)).into_any_element(),
+    };
     frame()
         .child(glyph_plate(look, cli.glyph(), true))
-        .child(text(look, name, Some(shown.line.clone().into())))
+        .child(text)
         .when(!controls.is_empty(), |row| row.child(end(controls)))
 }
 
-/// Your assistant's last row: another agent, which connects as Apps that connect has it, where
-/// How goes.
+/// A row's text whose line has a command in it, set in the face a terminal shows it in, which only
+/// the computer's fonts can say, so it's found as it's drawn.
+#[derive(IntoElement)]
+struct Commanded {
+    look: Look,
+    name: SharedString,
+    line: SharedString,
+    command: std::ops::Range<usize>,
+}
+
+fn commanded(
+    look: &Look,
+    name: impl Into<SharedString>,
+    line: SharedString,
+    command: std::ops::Range<usize>,
+) -> Commanded {
+    Commanded {
+        look: *look,
+        name: name.into(),
+        line,
+        command,
+    }
+}
+
+impl RenderOnce for Commanded {
+    fn render(self, _: &mut gpui::Window, cx: &mut gpui::App) -> impl IntoElement {
+        let mono = crate::face::mono(&cx.text_system().all_font_names());
+        let run = |len: usize, family: &'static str| gpui::TextRun {
+            len,
+            font: gpui::font(family),
+            color: self.look.detail.into(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let runs = [
+            run(self.command.start, crate::face::UI),
+            run(self.command.len(), mono),
+            run(self.line.len() - self.command.end, crate::face::UI),
+        ]
+        .into_iter()
+        .filter(|run| run.len > 0);
+        text(&self.look, self.name, None).child(
+            div()
+                .mt(px(DETAIL_TOP))
+                .text_size(px(SMALL))
+                .line_height(px(DETAIL_LINE))
+                .text_color(self.look.detail)
+                .child(gpui::StyledText::new(self.line).with_runs(runs.collect())),
+        )
+    }
+}
+
+/// Your assistant's last row: another app, which connects as Apps that connect has it, where
+/// How to Connect goes.
 pub fn another_agent_row(
     look: &Look,
     a11y: bool,
     how: impl Fn(&mut gpui::Window, &mut gpui::App) + 'static,
 ) -> gpui::Div {
-    let how = stop_button(look, "assistant-another-how", "How", a11y)
+    let how = stop_button(look, "assistant-another-how", "How to Connect", a11y)
         .on_click(move |_, window, cx| how(window, cx));
     frame()
         .child(glyph_plate(look, "icons/cable.svg", true))
         .child(text(
             look,
-            "Another agent",
-            Some("Anything that speaks MCP".into()),
+            "Another app",
+            Some("Any app that uses MCP".into()),
         ))
         .child(end([how.into_any_element()]))
 }

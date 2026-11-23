@@ -17,8 +17,8 @@ use crate::settings_card::Follow;
 use crate::settings_rows::{drawn, named_button, ring};
 use crate::tokens::radius;
 use crate::tokens::settings::{
-    COLUMN, COLUMN_TOP, FOOT_BOTTOM, FOOT_GLYPH, FOOT_GLYPH_ALPHA, HEADING, HEADING_LIGHT,
-    LABEL_BOTTOM, LABEL_LINE, LABEL_TOP, PLATE_GAP, SEARCH_DIMMED, SEARCH_GAP, SECTION_GLYPH,
+    COLUMN, COLUMN_TOP, FOOT_BOTTOM, FOOT_GLYPH, FOOT_GLYPH_ALPHA, HEADING, LABEL_BOTTOM,
+    LABEL_LINE, LABEL_TOP, PLATE_GAP, SEARCH_DIMMED, SEARCH_GAP, SECTION_GLYPH,
     SECTION_GLYPH_ALPHA, SECTION_GLYPH_GAP, SECTION_HOVERED, SECTION_SELECTED,
     SECTION_SELECTED_GLYPH, SECTION_SELECTED_LIGHT, SECTION_SHADOW, SECTION_SHADOW_BLUR,
     SECTION_SHADOW_Y, SECTION_TEXT, SECTION_X,
@@ -150,7 +150,7 @@ pub fn column(
 ) -> gpui::Div {
     let base = if dark { rgb(PAPER) } else { rgb(INK) };
     // The labels and the foot, at the headings' alpha.
-    let quiet = base.opacity(if dark { HEADING } else { HEADING_LIGHT });
+    let quiet = base.opacity(HEADING);
     let groups = Section::GROUPS
         .into_iter()
         .enumerate()

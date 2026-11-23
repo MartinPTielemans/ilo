@@ -22,7 +22,7 @@ use super::ready::{Found, Ready};
 use super::runner::{self, Cli, Failure, Launch, Out, Process};
 use super::sign_in::Offer;
 use super::tier::{Sites, Stop, Tier};
-use super::{Agents, Client, Question, ToolResult, page, site, tools};
+use super::{Agents, Client, Question, ToolResult, notes, page, site, tools};
 use crate::shell::MenuEntry;
 
 pub mod ilo;
@@ -226,6 +226,8 @@ pub struct TraceStep {
     pub running: bool,
     pub failed: bool,
     pub opens: Opens,
+    /// The line under it, or empty: "With ilo's notes for GitHub" (#4122).
+    pub under: SharedString,
 }
 
 /// What a trace's line opens to.
@@ -258,6 +260,9 @@ pub struct Traced {
     pub picture: Option<Arc<gpui::Image>>,
     /// How a close ended when its page had a say.
     pub close: Option<tools::Close>,
+    /// The site whose notes its call's answer carried (#4122), by its note's name. From the
+    /// answer's own field, which only the app sets, never from the answer's text.
+    pub notes: Option<&'static str>,
 }
 
 /// The page the user was on when they asked, which goes as its address and title only.
@@ -1059,7 +1064,7 @@ impl Agents {
         self.tasks.found.get(&cli)?.models.as_ref()
     }
 
-    /// Run tasks on, in Settings › Agents.
+    /// Run tasks with, in Settings › Agents.
     pub fn set_default_task_agent(&mut self, cli: Cli, cx: &mut Context<Self>) {
         self.tasks.default = Some(cli);
         self.save();
@@ -1338,6 +1343,7 @@ impl Agents {
                     kind: None,
                     picture: None,
                     close: None,
+                    notes: None,
                 });
             }
             Out::Ended(None) => {
@@ -1873,6 +1879,7 @@ impl Agents {
             kind: None,
             picture: None,
             close: None,
+            notes: None,
         });
         // Its first step: it's under way, and what it wrote before it was said along the way.
         task.waiting = None;
@@ -2015,6 +2022,7 @@ impl Agents {
         error: Option<String>,
         kind: Option<tools::Kind>,
         image: Option<String>,
+        notes: Option<&'static str>,
         cx: &mut Context<Self>,
     ) {
         let Some(key) = self.tracer(agent, call) else {
@@ -2054,6 +2062,7 @@ impl Agents {
             .find(|step| step.call == call && step.ended.is_none());
         let Some(step) = step else { return };
         step.ended = Some(at);
+        step.notes = notes;
         // An error's first paragraph: a wait's goes on with the page's outline.
         step.kind = kind.filter(|_| error.is_some());
         step.error = error.map(|error| {
@@ -3302,6 +3311,7 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
             running: false,
             failed: false,
             opens: Opens::Nothing,
+            under: SharedString::default(),
         };
     }
     let description = match (&step.error, took) {
@@ -3333,6 +3343,12 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
         running: step.ended.is_none(),
         failed: step.error.is_some(),
         opens,
+        // The app's own words for the app's own note: nothing of the answer's text is read.
+        under: (step
+            .notes
+            .and_then(|name| notes::NOTES.iter().find(|note| note.name == name)))
+        .map(|note| note.with().into())
+        .unwrap_or_default(),
     }
 }
 
@@ -3369,6 +3385,7 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
             running: false,
             failed: false,
             opens: Opens::Steps(tabs),
+            under: SharedString::default(),
         };
     }
     let failed = tabs.iter().filter(|tab| tab.failed).count();
@@ -3419,6 +3436,7 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
         running: running > 0,
         failed: failed > 0,
         opens: Opens::Steps(tabs),
+        under: SharedString::default(),
     }
 }
 
