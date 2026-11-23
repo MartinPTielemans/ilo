@@ -2935,6 +2935,75 @@ CARD
     *) fail "hand_off answered: $handed" ;;
   esac
 
+  # Show Tab on a handoff's card puts the handed page in front of the user with the keyboard on it,
+  # so what they type next reaches the page without another click (#4065): watching another of the
+  # agent's pages, on its Pages, and out of its conversation. Each case's outcome goes in
+  # show-tab.txt, and the run fails after the last if any missed.
+  printf '%s' '<!doctype html><title>handed</title><textarea id=f autofocus
+ style="position:fixed;inset:0;width:100vw;height:100vh"
+ oninput="document.title=`handed typed `+f.value"></textarea>' > "$out/site/handed.html"
+  handeds=$(grep -c "^browser: title $opened_tab handed\$" "$log" || true)
+  call navigate "{\"tab\":$opened_tab,\"url\":\"localhost:$port/handed.html\"}" > /dev/null
+  await_more "^browser: title $opened_tab handed\$" "$handeds" || fail "the page with a field didn't load in the agent's tab"
+  show_tab_missed=
+  # $1 says where the user is, $2 is the letter typed after the click.
+  show_tab() {
+    cards=$(grep -c '^browser: agent question [0-9]* at ' "$log" || true)
+    request hand_off "{\"tab\":$opened_tab,\"reason\":\"Show Tab for the check\"}" >&4
+    await_more '^browser: agent question [0-9]* at ' "$cards" || fail "the handoff $1 wasn't drawn"
+    q=$(grep '^browser: agent question [0-9]* at ' "$log" | tail -1 | cut -d' ' -f4)
+    read -r qx qy qw qh <<CARD
+$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
+CARD
+    from=$(($(wc -l < "$log") + 1))
+    send click $((qx + qw - 30)) $((qy + qh - 26))
+    send type "$2"
+    typed=no
+    await_more "^browser: title $opened_tab handed typed $2\$" 0 && typed=yes
+    send state
+    shown=$(tail -n +"$from" "$log" | grep -E '^browser: (task page [0-9]+ (watched|shown|back)|task space ([0-9]+ shown|left)|task area [0-9]+ (open|closed)|task [a-z0-9-]+ (shown|page [0-9]+))$' |
+      sed 's/^browser: //' | tr '\n' ';')
+    echo "$1: typed $typed; key $key, focus $focus; $shown" | tee -a "$out/show-tab.txt"
+    ../tools/window-screenshot.sh "$pid" "$out/show-tab-$2.png" || fail "no window to capture"
+    [ "$typed" = yes ] || show_tab_missed="$show_tab_missed
+$1: typed $typed; key $key, focus $focus; $shown"
+    read -r qx qy qw qh <<CARD
+$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
+CARD
+    send click $((qx + 30)) $((qy + qh - 26))
+    await_log "^browser: agent mcp-client handed back $opened_tab\$" "Hand Back after Show Tab, $1, didn't hand the tab back"
+    handed=$(next_answer) || fail "the browser didn't answer the hand_off of Show Tab, $1"
+    case "$(printf '%s\n' "$handed" | answered hand_off)" in
+      "The user handed tab $opened_tab back."*) ;;
+      *) fail "the hand_off of Show Tab, $1, answered: $handed" ;;
+    esac
+  }
+  show_tab "watching another of the agent's pages" a
+  back_lines=$(grep -c '^browser: task page [0-9]* back$' "$log" || true)
+  send key escape
+  await_more '^browser: task page [0-9]* back$' "$back_lines" || fail "Escape didn't step back to Pages before Show Tab"
+  show_tab "on the agent's Pages" b
+  read -r px py pw ph <<PLATE
+$(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cut -d' ' -f6-)
+PLATE
+  closed=$(grep -c '^browser: task area [0-9]* closed$' "$log" || true)
+  send click $((px + pw / 2)) $((py + ph / 2))
+  await_more '^browser: task area [0-9]* closed$' "$closed" || fail "a click on the client's card didn't close its conversation"
+  show_tab "out of the agent's conversation" c
+  # Back to the agent's page watched, for the steps below.
+  if [ "$(grep -E '^browser: task area [0-9]+ (open|closed)$' "$log" | tail -1 | cut -d' ' -f5)" = closed ]; then
+    opened=$(grep -c "^browser: task $session shown\$" "$log" || true)
+    send click $((px + pw / 2)) $((py + ph / 2))
+    await_more "^browser: task $session shown\$" "$opened" || fail "a click on the client's card didn't open its conversation again"
+  fi
+  if grep -E '^browser: task page [0-9]+ (watched|back)$' "$log" | tail -1 | grep -q watched; then
+    back_lines=$(grep -c '^browser: task page [0-9]* back$' "$log" || true)
+    send key escape
+    await_more '^browser: task page [0-9]* back$' "$back_lines" || fail "Escape didn't step back to Pages after Show Tab"
+  fi
+  watch "$agent_tab"
+  [ -z "$show_tab_missed" ] || fail "Show Tab on a handoff's card didn't give the handed page the keys typed next:$show_tab_missed"
+
   # A sign-in the browser asks for, which no agent may answer, hands the agent's tab to the user as
   # hand_off does, its card naming the host that asks, and the call that met it waits (#3662). The
   # dialog shows over the agent's page once the user watches it, and not before. Esc cancels it and

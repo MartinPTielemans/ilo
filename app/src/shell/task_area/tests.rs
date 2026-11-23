@@ -1680,3 +1680,63 @@ fn an_agents_split_never_shows_its_pages_dialogs(cx: &mut TestAppContext) {
         .collect();
     assert!(shown.is_empty(), "{shown:?}");
 }
+
+/// Show Tab on a handoff's card (#4065) puts the handed page in front of the user, watched as the
+/// task's Pages watch it, with the keyboard on the page: the user's click asked for it.
+#[gpui::test]
+fn show_tab_on_a_handoff_shows_the_page_with_the_keyboard(cx: &mut TestAppContext) {
+    use crate::agents::Question;
+    use gpui::Modifiers;
+
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(
+            vec![Status {
+                agent: "task-1".into(),
+                name: "Claude".into(),
+                space: 3,
+                doing: "Typed · flights.example".into(),
+                held: vec![(30, "Sign in to flights.example".into())],
+            }],
+            cx,
+        );
+        let question = Question {
+            id: 7,
+            agent: "Claude".into(),
+            from: "task-1".into(),
+            what: "sign in".into(),
+            why: "flights.example asks you to sign in.".into(),
+            handoff: Some(30),
+            ..Default::default()
+        };
+        shell.set_agent_question(Some(question), cx);
+    });
+    draw(&shell, cx);
+    host.take();
+    // Show Tab is the primary, at the right of the card's bottom row.
+    let card = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
+    let card = card.expect("the handoff's card wasn't drawn");
+    let show = point(
+        card.origin.x + card.size.width * 0.75,
+        card.origin.y + card.size.height - px(26.),
+    );
+    cx.simulate_click(show, Modifiers::none());
+    cx.run_until_parked();
+    let asked = host.take();
+    // The core answers a select of the task's tab by showing its Space with it.
+    if asked.iter().any(|said| said == "select 30") {
+        core_shows_task(&shell, cx, 30);
+        draw(&shell, cx);
+    }
+    let after = host.take();
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(30))),
+        "Show Tab didn't put the handed page in front of the user"
+    );
+    assert!(
+        asked.iter().chain(&after).any(|said| said == "focus page"),
+        "Show Tab left the keyboard off the handed page: {asked:?} {after:?}"
+    );
+}
