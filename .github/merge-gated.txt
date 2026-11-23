@@ -1,0 +1,20 @@
+# The paths a pull request may change only with the orchestrator's word on its head: a commit
+# status orchestrator/word on that exact sha (#3917 A3). One Python regex a line, matched against
+# each changed file's path from its start. .github/scripts/merge-train.py reads this file from
+# main's tree, never from a pull request's, and it's under .github/, so a change to it needs the
+# word too. core/ and engine/ aren't here: they're never a train's.
+^\.github/
+^AGENTS\.md$
+^CONTRIBUTING\.md$
+^docs/decisions\.md$
+^tools/
+^app/build\.sh$
+^app/setup\.sh$
+^app/check\.sh$
+# A run's file is shared once a second run sources it, so all of check/ is gated.
+^app/check/
+^app/patches/gpui-.*\.patch$
+^app/platform/
+host\.h$
+# Agent code: the agents' tools, their permission rules and what they may reach.
+^app/src/agent
