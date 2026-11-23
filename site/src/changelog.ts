@@ -102,18 +102,27 @@ export const RELEASES: Release[] = [
         kind: "new",
         area: "Pages",
         only: ["mac"],
+        clip: "protected-video",
         text: "When a page needs protected video as you click or press a key in it, its tab moves to Safari's engine, with a note and Move Back, and ilo asks you first while you're typing or using the camera, microphone or screen.",
       },
       {
         kind: "new",
         area: "Pages",
         only: ["mac"],
+        clip: "apple-music",
         text: "Apple Music's web player opens in Safari's engine from its first page, and Clear Browsing Data… also clears what Safari's engine keeps.",
       },
       {
         kind: "new",
         area: "Library",
-        text: "An empty Boards list offers New Board, an empty Boosts list says where to make a Boost, and a Board's picture shows its cards.",
+        clip: "new-board",
+        text: "An empty Boards list offers New Board with its shortcut, and an empty Boosts list says where to make a Boost.",
+      },
+      {
+        kind: "new",
+        area: "Library",
+        clip: "board-pictures",
+        text: "A Board's picture in Library › Boards shows its cards.",
       },
       {
         kind: "new",
@@ -123,11 +132,13 @@ export const RELEASES: Release[] = [
       {
         kind: "new",
         area: "Keyboard",
+        clip: "shortcuts",
         text: "Settings › Shortcuts lists every shortcut a command has, and you can replace one at a time.",
       },
       {
         kind: "new",
         area: "Spaces",
+        clip: "mouse-spaces",
         text: "With the sidebar revealed, a mouse's back and forward buttons go to the previous and next Space.",
       },
       {
