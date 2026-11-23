@@ -6,6 +6,10 @@
 # one still where the pack can't stand for this tree's engine: no pack for pins.ini's Chromium,
 # a change to how the Linux tree is prepared or what its build generates headers from, or an
 # engine patch the packed headers don't take.
+# The fast path is clang's syntax check against the packed headers, not the build: nothing is
+# generated, compiled to code or linked, and the generated headers are the pack's engine's. So an
+# error only code generation finds, or one in a generated header the branch would change, passes
+# here, and every core batch's engine build is the real compile.
 name: Core on Linux
 
 on:
@@ -58,7 +62,7 @@ jobs:
           # core_syntax.py's GENERATES has it.
           changed=$(git diff --name-only "$sha" HEAD | grep -E \
             '^engine/(pins\.ini|args\.gn|tree\.sh|check-linux\.sh|linux/|patches/ungoogled-chromium-portablelinux/)|^(core|engine/patches)/(.*/)?([^/]*\.(mojom|proto|pdl|idl|json5|gni?)|BUILD\.gn)$' || true)
-          [ -z "$changed" ] || full "Since the pack's commit, $sha, this changes what the pack can't follow: $(echo $changed)."
+          [ -z "$changed" ] || full "Since the pack's commit, $sha, this changes what the pack can't follow: $(echo "$changed" | tr '\n' ' ')"
           printf 'run=%s\nname=%s\nsha=%s\n' "$run" "$name" "$sha" >> "$GITHUB_OUTPUT"
           echo "Checking against run $run's $name, built at $sha." | tee -a "$GITHUB_STEP_SUMMARY"
       - if: steps.pack.outputs.run != ''
