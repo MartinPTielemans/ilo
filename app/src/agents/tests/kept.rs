@@ -324,6 +324,10 @@ fn a_reply_takes_an_ended_task_up_at_work_on_pages(cx: &mut TestAppContext) {
     assert!(matches!(&talk.lines[at - 2], Line::Said(said) if said.contains("9:05")));
     assert_eq!(run.state(&agent, cx), State::Working);
     assert_eq!(run.kept(cx), (1, 0), "a pick-up is the same conversation");
+    // The activity log has it once, under the task.
+    let noted = log(&run.agents, &agent, cx);
+    let resumes = (noted.iter()).filter(|(action, _, _)| action == "resumed");
+    assert_eq!(resumes.count(), 1, "{noted:?}");
     // A reply while it works is a reply, with no line of ilo's.
     (run.agents).update(cx, |agents, cx| agents.reply(&agent, "By the window", cx));
     let resumed = |kind: &IloKind| matches!(kind, IloKind::Resumed { .. });

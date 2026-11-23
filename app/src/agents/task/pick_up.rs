@@ -112,6 +112,8 @@ impl Agents {
         record.resumed.push((said, record.tier));
         self.tasks.picked_up.insert(agent.to_string(), was);
         log!("browser: task {agent} picked up");
+        // The activity log's entry for it, under the task's own name.
+        self.note(agent, 0, "resumed", "", "");
     }
 
     /// `agent`'s run went, saying `said`. If it was to go on with a conversation its assistant no
@@ -175,7 +177,10 @@ impl Agents {
         }
         // One that couldn't go on keeps its field: at its assistant's limit it waits for Retry,
         // and failed, for what fixes it.
-        if !matches!(task.state, State::Done { .. } | State::Stopped) {
+        // And with no profile folder nothing is kept or looked for, so a task takes a reply as it
+        // did before any was.
+        if !matches!(task.state, State::Done { .. } | State::Stopped) || self.kept_root().is_none()
+        {
             return;
         }
         match record {
