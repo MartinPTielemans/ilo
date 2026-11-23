@@ -3,6 +3,7 @@
 //
 //   material serve           windows driven by lines on stdin (below), answers on stdout
 //   material read <png>      the ground patch's and the glow patch's mean colour in one capture
+//   material check <png> <rrggbb>   whether every pixel of a proof capture is that colour
 //   material fit <dir>       the tint alpha that brings each candidate nearest its targets
 //   material table <dir>     the table of grounds and contrasts, in Markdown
 //
@@ -15,11 +16,17 @@
 //     material drawn and no other window meets the backdrop: the candidate window's frame, in
 //     points from the main screen's top-left, for `screencapture -R`. Else "error: ..." naming
 //     what's in the way.
+//   proof <rrggbb>
+//     Shows the backdrop alone, all that colour, and answers "proved at <x>,<y>,<w>,<h>": its
+//     frame, for a capture `material check` reads. Every pixel the colour proves the spot shows
+//     the backdrop and nothing else: no Dock, banner, notification or dialog.
 //   quit
 //
-// The backdrop goes where no other process's window meets it, nearest the screen's foot and left,
-// and the candidate's window sits kMargin in from its edges. A capture is the candidate window's
-// frame as the screen composes it, so every patch below is in points from the window's top-left.
+// The backdrop goes where no window that says by its bounds where it draws meets it (an app's,
+// an alert, a desktop widget), clear of the menu bar, the Dock and the top right where banners
+// come, nearest the screen's foot and left. The candidate's window sits kMargin in from its edges.
+// A capture is the candidate window's frame as the screen composes it, so every patch below is in
+// points from the window's top-left.
 
 #import <AppKit/AppKit.h>
 #import <ImageIO/ImageIO.h>
@@ -80,11 +87,18 @@ static BOOL MaterialNamed(NSString* name, NSVisualEffectMaterial* material) {
 // The plain window behind: one colour, or a busy picture of slanted bands and a checker.
 @interface Backdrop : NSView
 @property(nonatomic, copy) NSString* kind;
+// A proof's colour, for the kind flat.
+@property(nonatomic, strong) NSColor* flat;
 @end
 
 @implementation Backdrop
 - (void)drawRect:(NSRect)dirty {
   NSRect bounds = self.bounds;
+  if ([self.kind isEqual:@"flat"]) {
+    [self.flat setFill];
+    NSRectFill(bounds);
+    return;
+  }
   if ([self.kind isEqual:@"ring"]) {
     [NSColor.whiteColor setFill];
     NSRectFill(bounds);
@@ -256,15 +270,25 @@ static CGRect ListRect(NSRect frame) {
   return CGRectMake(NSMinX(frame), top - NSMaxY(frame), NSWidth(frame), NSHeight(frame));
 }
 
-// Other processes' windows on screen, but for the desktop's: the dialogs, banners and apps that
-// would be in a capture or under the material.
+// Other processes' windows on screen that say by their bounds where they draw: apps' windows,
+// alerts and desktop widgets. The Dock's, Notification Center's and the window server's cover the
+// whole screen, see-through, as the wallpaper's and the desktop icons' do, and the cursor is above
+// them all: their bounds say nothing, so they're left to the pixel proof.
 static NSArray<NSDictionary*>* OthersOnScreen(void) {
-  NSArray<NSDictionary*>* list = CFBridgingRelease(CGWindowListCopyWindowInfo(
-      kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID));
+  NSArray<NSDictionary*>* list = CFBridgingRelease(
+      CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID));
+  CGRect screen = NSRectToCGRect(NSScreen.screens.firstObject.frame);
+  screen.origin = CGPointZero;
+  const int dock = CGWindowLevelForKey(kCGDockWindowLevelKey);
   NSMutableArray<NSDictionary*>* others = [NSMutableArray array];
   for (NSDictionary* info in list) {
+    CFDictionaryRef frame = (__bridge CFDictionaryRef)info[(__bridge id)kCGWindowBounds];
+    CGRect bounds;
     if ([info[(__bridge id)kCGWindowOwnerPID] intValue] == getpid() ||
-        [info[(__bridge id)kCGWindowAlpha] doubleValue] <= 0) {
+        [info[(__bridge id)kCGWindowAlpha] doubleValue] <= 0 ||
+        [info[(__bridge id)kCGWindowLayer] intValue] >= dock || !frame ||
+        !CGRectMakeWithDictionaryRepresentation(frame, &bounds) ||
+        CGRectContainsRect(bounds, screen)) {
       continue;
     }
     [others addObject:info];
@@ -289,16 +313,20 @@ static NSArray<NSString*>* InTheWay(NSArray<NSDictionary*>* others, CGRect area)
   return names;
 }
 
-// Where the backdrop goes: the first spot on the main screen, clear of the menu bar and the Dock,
-// that no other window meets, from the foot and the left. Else none, and |error| names what's in
-// the way of the screen's middle.
+// Where the backdrop goes: the first spot on the main screen, clear of the menu bar, the Dock and
+// the top right's 400 by 200 pt, where a banner may slide in mid-run, that none of OthersOnScreen
+// meets, from the foot and the left. Else none, and |error| names what's in the way of the
+// screen's middle.
 static BOOL PlaceBackdrop(NSRect* back, NSString** error) {
   NSRect screen = NSScreen.screens.firstObject.visibleFrame;
+  const CGRect banners =
+      CGRectMake(NSWidth(NSScreen.screens.firstObject.frame) - 400, 0, 400, 200);
   NSArray<NSDictionary*>* others = OthersOnScreen();
   for (CGFloat x = ceil(NSMinX(screen)); x + kBackWidth <= NSMaxX(screen); x += 10) {
     for (CGFloat y = ceil(NSMinY(screen)); y + kBackHeight <= NSMaxY(screen); y += 10) {
       NSRect spot = NSMakeRect(x, y, kBackWidth, kBackHeight);
-      if (!InTheWay(others, ListRect(spot)).count) {
+      if (!CGRectIntersectsRect(ListRect(spot), banners) &&
+          !InTheWay(others, ListRect(spot)).count) {
         *back = spot;
         return YES;
       }
@@ -409,8 +437,36 @@ static int Serve(void) {
       if ([words.firstObject isEqual:@"quit"]) {
         return 0;
       }
+      if ([words.firstObject isEqual:@"proof"]) {
+        unsigned hex = 0;
+        if (words.count != 2 || sscanf(words[1].UTF8String, "%6x", &hex) != 1) {
+          printf("error: proof <rrggbb>\n");
+          fflush(stdout);
+          continue;
+        }
+        [g_window orderOut:nil];
+        Backdrop* backdrop = (Backdrop*)g_backdrop.contentView;
+        backdrop.kind = @"flat";
+        backdrop.flat = Colour((RGB){(hex >> 16) & 0xff, (hex >> 8) & 0xff, hex & 0xff}, 1);
+        backdrop.needsDisplay = YES;
+        [g_backdrop orderFrontRegardless];
+        [g_backdrop displayIfNeeded];
+        BOOL visible = Pump(5, ^{
+          return (BOOL)((g_backdrop.occlusionState & NSWindowOcclusionStateVisible) != 0);
+        });
+        Pump(0.6, nil);
+        CGRect back = ListRect(g_backdrop.frame);
+        if (visible) {
+          printf("proved at %.0f,%.0f,%.0f,%.0f\n", back.origin.x, back.origin.y,
+                 back.size.width, back.size.height);
+        } else {
+          printf("error: the backdrop isn't visible\n");
+        }
+        fflush(stdout);
+        continue;
+      }
       if (![words.firstObject isEqual:@"show"]) {
-        printf("error: show or quit\n");
+        printf("error: show, proof or quit\n");
         fflush(stdout);
         continue;
       }
@@ -530,6 +586,49 @@ static BOOL ReadFile(NSString* path, Patch* ground, Patch* glow) {
     *glow = Read(&image, kGlow);
   }
   return YES;
+}
+
+// Whether every pixel of |path|, a capture of the backdrop's frame, is |hex| give or take 2 a
+// channel, the most a display's colour space moves a flat sRGB colour. Else it prints the
+// rectangle the other pixels are in, in points from the backdrop's top-left, and the first one.
+static int Check(NSString* path, NSString* hex) {
+  unsigned want = 0;
+  Image image;
+  if (sscanf(hex.UTF8String, "%6x", &want) != 1 || !Load(path, &image)) {
+    fprintf(stderr, "material: can't check %s\n", path.UTF8String);
+    return 2;
+  }
+  const int target[3] = {(want >> 16) & 0xff, (want >> 8) & 0xff, want & 0xff};
+  const uint8_t* bytes = image.pixels.bytes;
+  size_t off = 0, left = SIZE_MAX, top = SIZE_MAX, right = 0, bottom = 0;
+  size_t first_x = 0, first_y = 0;
+  for (size_t y = 0; y < image.height; ++y) {
+    for (size_t x = 0; x < image.width; ++x) {
+      const uint8_t* p = bytes + (y * image.width + x) * 4;
+      if (abs(p[0] - target[0]) <= 2 && abs(p[1] - target[1]) <= 2 && abs(p[2] - target[2]) <= 2) {
+        continue;
+      }
+      if (!off++) {
+        first_x = x;
+        first_y = y;
+      }
+      left = MIN(left, x);
+      top = MIN(top, y);
+      right = MAX(right, x + 1);
+      bottom = MAX(bottom, y + 1);
+    }
+  }
+  if (!off) {
+    printf("clear: every pixel #%06x\n", want);
+    return 0;
+  }
+  const double scale = image.width / kBackWidth;
+  const uint8_t* p = bytes + (first_y * image.width + first_x) * 4;
+  printf("not clear: %zu pixels aren't #%06x, in %.0f,%.0f,%.0f,%.0f pt from the backdrop's "
+         "top-left; the first is #%02x%02x%02x at %.0f,%.0f\n",
+         off, want, left / scale, top / scale, (right - left) / scale, (bottom - top) / scale, p[0],
+         p[1], p[2], first_x / scale, first_y / scale);
+  return 1;
 }
 
 static NSString* Hex(RGB rgb) {
@@ -772,13 +871,17 @@ int main(int argc, const char* argv[]) {
              Hex(glow.mean).UTF8String);
       return 0;
     }
+    if ([command isEqual:@"check"] && argc == 4) {
+      return Check(@(argv[2]), @(argv[3]));
+    }
     if ([command isEqual:@"fit"] && argc == 3) {
       return FitAll(@(argv[2]));
     }
     if ([command isEqual:@"table"] && argc == 3) {
       return Table(@(argv[2]));
     }
-    fprintf(stderr, "usage: material serve | read <png> | fit <dir> | table <dir>\n");
+    fprintf(stderr, "usage: material serve | read <png> | check <png> <rrggbb> | fit <dir> | "
+                    "table <dir>\n");
     return 2;
   }
 }

@@ -6,8 +6,14 @@
 #
 # The windows are the spike's own, two of them: a plain one, the backdrop, and the candidate's over
 # it, 160 pt in from its edges, more than the blur's reach (the ring shots check it). The app puts
-# the backdrop where no other process's window meets it, and refuses each shot while one does,
-# naming it. Dark and light are the candidate window's own appearance; the system's stays as it is.
+# the backdrop where no window that says by its bounds where it draws meets it (apps' windows,
+# alerts, desktop widgets), out of the top right where banners come, and refuses each shot while
+# one does, naming it. The Dock's and Notification Center's windows cover the whole screen,
+# see-through, so the spot is also proved by pixels, before the shots and at the end: the
+# backdrop alone in a flat colour no one meets, twice, captured as composed, every pixel that
+# colour, or the run fails naming the rectangle that isn't. The pointer is never in a capture:
+# screencapture leaves it out without -C. Dark and light are the candidate window's own
+# appearance; the system's stays as it is.
 #
 # A capture is the screen as composed, at the candidate window's frame (screencapture -R): the
 # window server blends what's behind into the material there, which a capture of the app's windows
@@ -126,11 +132,31 @@ shot() {
   echo "$file"
 }
 
+# The backdrop's spot shows it and nothing else: proved by pixels, in two colours, |when|.
+prove() {
+  for colour in 13a37f d0158e; do
+    echo "proof $colour" >&3 || fail "the spike's app is gone"
+    IFS= read -r -t 30 said <&4 || fail "the spike's app didn't answer the proof"
+    case $said in
+    "proved at "*) rect=${said#proved at } ;;
+    *) fail "proof: $said" ;;
+    esac
+    screencapture -x -R"$rect" "$work/proof.png" || screencapture -x -R"$rect" "$work/proof.png" ||
+      fail "couldn't capture the proof"
+    said=$("$bin" check "$work/proof.png" "$colour") || {
+      cp "$work/proof.png" "$out/proof-$colour.png"
+      fail "the backdrop's spot at $rect isn't clear $1: $said (capture in $out/proof-$colour.png)"
+    }
+  done
+  note "The backdrop's spot at $rect (pt from the screen's top-left) showed the backdrop alone $1."
+}
+
 behinds="white grey black picture"
 materials="underWindowBackground sidebar hudWindow fullScreenUI windowBackground"
 
 start
 note "macOS $(sw_vers -productVersion); Reduce Transparency read as $reduce_seen."
+prove "before the shots"
 
 # Each public material untinted, and today's: the dark material AppKit doesn't name under black at
 # 0.25, and the HUD window's under white at 0.8 in light.
@@ -189,6 +215,7 @@ if [ $# -eq 2 ]; then
   reduce_set=1
   if defaults write com.apple.universalaccess reduceTransparency -bool true; then
     start
+    prove "with Reduce Transparency on"
     if [ "$reduce_seen" = 1 ]; then
       while read -r material tint appearance; do
         shot "$material" "$tint" "$appearance" black active plain reduce
@@ -202,7 +229,9 @@ if [ $# -eq 2 ]; then
     note "Reduce Transparency couldn't be written, so no shots with it."
   fi
   restore
+  start
 fi
+prove "at the end"
 stop
 
 {
