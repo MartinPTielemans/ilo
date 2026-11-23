@@ -288,12 +288,17 @@ show_space "click $(dot "$first")" select-space sidebar "$first" "$a"
 # A tab whose page lets it go only after the Space switch typed straight after its ⌘W, as a loading
 # page's can, leaves its Space showing the tab it was opened over when the Space is shown again, as
 # a close that lands first does, not the top of Today (#3890). The page's beforeunload holds its
-# going for 0.3 s and asks nothing. ⌃2 goes to the app with ⌘W, not after its send has read the
-# driver's answer: on Windows that read, in Git Bash's slow forks, outlasts the 0.3 s.
+# going for 0.3 s, inside the 0.5 s Chromium waits for it, asks nothing, and titles the page "let
+# go" as it ends, so the log says whether the switch came while it held. The switch is ⌥⌘→, which
+# ilo takes before the page: ⌃2 is the page's first, and a page in its beforeunload answers it
+# only once it has let go, when the switch and the close race (#4021). ⌥⌘→ goes to the app with
+# ⌘W, not after its send has read the driver's answer: on Windows that read, in Git Bash's slow
+# forks, outlasts the 0.3 s.
 printf '%s' '<title>slow close</title><script>
 onbeforeunload = () => {
   const end = performance.now() + 300;
   while (performance.now() < end) {}
+  document.title = "let go";
 };
 requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
 </script>' > "$out/site/slow-close.html"
@@ -314,14 +319,17 @@ closing=$(today | cut -d' ' -f1)
 expect "^browser: title $closing ready\$" "slow-close.html didn't draw"
 post key w cmd
 closed_from=$step
-send key 2 ctrl
-expect "^browser: space $second in " "⌃2 straight after ⌘W didn't show the second Space"
+send key right alt cmd
+expect "^browser: space $second in " "⌥⌘→ straight after ⌘W didn't show the second Space"
 expect "^browser: tab $closing closed\$" "⌘W didn't close slow-close.html's tab" "$closed_from"
-since | sed -n "/^browser: space $second in /,\$p" | grep -q "^browser: tab $closing closed\$" ||
-  fail "slow-close.html's tab closed before ⌃2 showed the second Space, so nothing waited on its page"
+since "$closed_from" | grep -q "^browser: title $closing let go\$" ||
+  fail "slow-close.html's tab closed without its page saying it let go"
+since "$closed_from" | sed -n "/^browser: space $second in /,\$p" |
+  grep -q "^browser: title $closing let go\$" ||
+  fail "slow-close.html let go of its tab before ⌥⌘→ showed the second Space, so nothing waited on its page"
 send key 1 ctrl
 expect "^browser: space $first in " "⌃1 didn't show the first Space again"
-expect_tabs "$above $a" "$a" "the first Space, its tab closed after ⌃2"
+expect_tabs "$above $a" "$a" "the first Space, its tab closed after ⌥⌘→"
 # Back as it was, for what follows.
 send click $(row 0)
 expect "^browser: selected $above\( in .*\)\{0,1\}\$" "a click on its row didn't show $above"
@@ -347,8 +355,22 @@ expect "^browser: spaces $second $first\$" "the second Space didn't go first"
 send key z cmd
 expect '^browser: command undo via \(ui\|page\)$' "⌘Z didn't undo the Space's move"
 expect "^browser: spaces $first $second\$" "⌘Z didn't put the Spaces back in their order"
-# Until the dots have glided back, the second's is still drawn under the first's place (#2026).
-expect '^browser: spaces settled$' "the dots didn't settle after ⌘Z"
+# Until the dots have glided back, the second's is still drawn under the first's place (#2026). The
+# drop's own glide can settle after ⌘Z is sent and before the undo runs, so the settle waited for is
+# one after the order ⌘Z put back, which the app logs as it starts the dots' glide (#4059).
+wait_begins
+for _ in $(seq 100); do
+  since | sed -n "/^browser: spaces $first $second\$/,\$p" | grep -q '^browser: spaces settled$' && break
+  kill -0 "$pid" 2>/dev/null || {
+    ran_out '^browser: spaces settled$' "$step" exited
+    fail "the app exited: the dots didn't settle after ⌘Z put the Spaces back"
+  }
+  sleep 0.1
+done
+since | sed -n "/^browser: spaces $first $second\$/,\$p" | grep -q '^browser: spaces settled$' || {
+  ran_out '^browser: spaces settled$' "$step"
+  fail "the dots didn't settle after ⌘Z put the Spaces back: no \"spaces settled\" after \"spaces $first $second\""
+}
 send drag "$first_x" "$dot_y" $((second_x + 29)) "$dot_y"
 expect "^browser: dropped space $first after $second\$" "the first Space's dot flicked past the second's didn't move it"
 expect "^browser: spaces $second $first\$" "the first Space didn't go last"

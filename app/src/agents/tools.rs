@@ -27,9 +27,10 @@ pub const INSTRUCTIONS: &str = concat!(
      takes one out, and list_split says which are together.\n\n\
      Payments, orders, sending messages, banks' sites and every request that may change \
      something ask the user first. If they say no, \
-     don't try again. You can never type into a password field: a sign-in, a 2FA prompt, a \
-     CAPTCHA or a file field is the user's to do, so hand the tab to them with hand_off, and take a snapshot \
-     once they hand it back, as its page will have changed. The user can take a tab over too, \
+     don't try again. You can never type into a password field: a sign-in, a 2FA prompt or a \
+     CAPTCHA is the user's to do, so hand the tab to them with hand_off, and take a snapshot \
+     once they hand it back, as its page will have changed. For a file field, call upload: the \
+     user chooses the file. The user can take a tab over too, \
      on purpose: it's theirs until they hand it back. Carry on in your other tabs, and only \
      when the task can't go on without that one, ask for it with ask_for_tab, saying why. Use \
      run_steps for several actions in a row.\n\n\
@@ -59,7 +60,8 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
      short sentence, what they need to know to answer as its context, and up to three short \
      answers when there are a few to pick from. It waits for their answer.\n\n\
      Never ask for a password, a one-time code or a card number in the conversation. A sign-in, \
-     a 2FA prompt, a CAPTCHA or a file field is the user's to do: hand them the tab with hand_off.\n\n\
+     a 2FA prompt or a CAPTCHA is the user's to do: hand them the tab with hand_off. For a file \
+     field, call upload: the user chooses the file.\n\n\
      Never pay, and never place an order, book or send a message unless the user asked you to. \
      When the work ends on a page only the user may finish, such as a checkout, stop there.\n\n\
      When you're done, call finish with the result in a sentence or two, and its summary in one \
@@ -549,9 +551,23 @@ fn shared() -> Value {
             "annotations": acts,
         },
         {
+            "name": "upload",
+            "title": "Upload a file",
+            "description": "Ask the user to choose a file for a file field: an input of type file, which the outline shows as a button, often named Choose File or Browse. The user chooses it in the browser and it goes into the field. You never get its name or path, only what the page then shows of it. This waits for the user. Use it rather than clicking the field: a click opens nothing in your tab.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "ref": element,
+                    "tab": tab,
+                },
+                "required": ["ref"],
+            },
+            "annotations": acts,
+        },
+        {
             "name": "hand_off",
             "title": "Hand off to the user",
-            "description": "Hand a tab to the user for a step only they may do: a sign-in, 2FA, a CAPTCHA, a file to put in a page, or a choice that's theirs. They're asked in the browser, and this waits until they hand the tab back. Meanwhile the tab is theirs, and calls on it are refused. Its page will have changed when it's back: take a snapshot before you act in it.",
+            "description": "Hand a tab to the user for a step only they may do: a sign-in, 2FA, a CAPTCHA, or a choice that's theirs. They're asked in the browser, and this waits until they hand the tab back. Meanwhile the tab is theirs, and calls on it are refused. Its page will have changed when it's back: take a snapshot before you act in it.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -904,6 +920,12 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             "Couldn't hand you",
             site("a tab"),
         ),
+        "upload" => (
+            "Adding",
+            "Added",
+            "Couldn't add",
+            format!("a file to {}", site("a page")),
+        ),
         "ask_for_tab" => {
             let tab = site("a tab");
             return match tense {
@@ -935,9 +957,8 @@ pub fn group_title(did: &Did, pages: usize, tense: Tense) -> String {
         ..did.clone()
     };
     match did.tool.as_str() {
-        "open_tab" | "navigate" | "back" | "forward" | "read_page" | "snapshot" | "screenshot" => {
-            step_title(&on("pages"), tense)
-        }
+        "open_tab" | "navigate" | "back" | "forward" | "read_page" | "snapshot" | "screenshot"
+        | "upload" => step_title(&on("pages"), tense),
         "scroll" if matches!(did.target.as_str(), "up" | "down" | "") => {
             step_title(&on("pages"), tense)
         }
@@ -966,6 +987,7 @@ pub fn step_glyph(tool: &str) -> &'static str {
         }
         "pin_tab" | "unpin_tab" => "icons/pin.svg",
         "ask" => "icons/circle-question-mark.svg",
+        "upload" => "icons/file.svg",
         "thought" => "icons/lightbulb.svg",
         _ => "icons/globe.svg",
     }
@@ -1032,6 +1054,10 @@ pub fn describe(action: &str) -> &'static str {
         "stopped" => "You stopped it",
         "stopped by the user" => "You stopped it, which closed its connection",
         "hand_off" => "Handed you a tab",
+        "upload" => "Added a file to a page",
+        "file_dialog file_input" | "file_dialog file_system_access" => {
+            "Page tried to open a file dialog"
+        }
         "close_tab" => "Closed a tab",
         "page_dialog" => "Paused: the page shows a dialog",
         "discard_tab" => "Closed a tab without saving",
