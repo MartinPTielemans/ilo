@@ -136,10 +136,12 @@ the core decides which pages are tiles.
  - (void)enableDroppedScreenShotCopier;
 --- a/content/app_shim_remote_cocoa/web_contents_view_cocoa.mm
 +++ b/content/app_shim_remote_cocoa/web_contents_view_cocoa.mm
-@@ -204,6 +204,18 @@ gfx::PointF GetSanitizedFlippedPoint(NSPoint point, CGFloat height) {
+@@ -204,6 +204,20 @@ gfx::PointF GetSanitizedFlippedPoint(NSPoint point, CGFloat height) {
    return YES;
  }
  
++@synthesize browserCoreTile = _browserCoreTile;
++
 +- (void)setBrowserCoreTile:(BOOL)tile {
 +  if (_browserCoreTile == tile) {
 +    return;
@@ -155,7 +157,7 @@ the core decides which pages are tiles.
  // Registers for the view for the appropriate drag types.
  - (void)registerDragTypes {
    [self registerForDraggedTypes:@[
-@@ -215,7 +227,7 @@ gfx::PointF GetSanitizedFlippedPoint(NSPoint point, CGFloat height) {
+@@ -215,7 +229,7 @@ gfx::PointF GetSanitizedFlippedPoint(NSPoint point, CGFloat height) {
  }
  
  - (void)mouseEvent:(NSEvent*)theEvent {
