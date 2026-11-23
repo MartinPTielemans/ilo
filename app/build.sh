@@ -20,7 +20,8 @@ engine_changes() {
 }
 # On Linux, build/Browser: a copy of the engine, chrome and what it runs with, and libBrowser.so
 # beside it, which chrome loads (linux/Cargo.toml). Hard links, as chrome finds its files and the
-# app's beside its own path, which a symbolic link would leave in the engine's folder.
+# app's beside its own path, which a symbolic link would leave in the engine's folder, or a copy
+# when the engine is on another file system, as engine/fetch.sh's cache can be.
 if [ "$(uname -s)" = Linux ]; then
   [ -e .deps/engine/chrome ] || ./setup.sh
   [ -e .deps/engine/chrome ] || { echo "No Linux engine in .deps/engine." >&2; exit 1; }
@@ -36,7 +37,11 @@ if [ "$(uname -s)" = Linux ]; then
   cargo build --release --bin mcp-bridge --bin ilo-command $features
   rm -rf build/Browser
   mkdir -p build
-  cp -al "$(cd .deps/engine && pwd -P)" build/Browser
+  engine=$(cd .deps/engine && pwd -P)
+  if ! cp -al "$engine" build/Browser 2>/dev/null; then
+    rm -rf build/Browser
+    cp -a "$engine" build/Browser
+  fi
   cp target/release/libBrowser.so target/release/mcp-bridge target/release/ilo-command build/Browser/
   # uBlock Origin and a Board's page go beside chrome, Chromium's assets folder off the Mac, where
   # the core loads them.
@@ -100,13 +105,6 @@ case "$(uname -s)" in
     exit 0
     ;;
 esac
-[ -e .deps/Chromium.app ] || ./setup.sh
-engine_changes
-# setup.sh vendors it since the app patched it; a checkout set up before that hasn't got it.
-[ -d .deps/accesskit_macos ] || {
-  echo "No .deps/accesskit_macos. Run ./setup.sh again, with dev for the dev engine." >&2
-  exit 1
-}
 # Sparkle in the app at $1, checking the feed $2 every 8 hours for updates signed with the key $3,
 # or the nightly feed $4, if there's one, while the user takes nightly builds (src/updates.rs), and
 # installing what it downloads when the app quits (docs/ux-spec.md › Updates). Its helpers for
@@ -140,7 +138,8 @@ check_update_key() {
 # UPDATE_PUBLIC_KEY, both the run's own (check/updates.sh), and UPDATE_FEED_NIGHTLY, if it's set,
 # while it takes nightly builds (check/nightly.sh). Only the prod build carries the product's feeds
 # and key, and only it reaches users. Its own id keeps Sparkle's settings apart from every other
-# build's, and a quit sent to it from launching another.
+# build's, and a quit sent to it from launching another. It needs only build/Browser.app and
+# .deps/Sparkle, so a check job makes it from the app its build job made (check-mac.yml, #3917).
 if [ "${1:-}" = updates ]; then
   for feed in "${UPDATE_FEED:-}" "${UPDATE_FEED_NIGHTLY-http://127.0.0.1:0/}"; do
     case $feed in
@@ -162,6 +161,13 @@ if [ "${1:-}" = updates ]; then
   echo build/Updates.app
   exit 0
 fi
+[ -e .deps/Chromium.app ] || ./setup.sh
+engine_changes
+# setup.sh vendors it since the app patched it; a checkout set up before that hasn't got it.
+[ -d .deps/accesskit_macos ] || {
+  echo "No .deps/accesskit_macos. Run ./setup.sh again, with dev for the dev engine." >&2
+  exit 1
+}
 engine_out=$(dirname "$(cd .deps/Chromium.app && pwd -P)")
 id=dev.browser.app
 features=
@@ -188,8 +194,11 @@ if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
   [ -z "$features" ] || { echo "A prod build needs the whole history: git fetch --unshallow" >&2; exit 1; }
 fi
 build=$(git rev-list --count HEAD)
-# The build number, for Settings › About to show beside the version.
-APP_BUILD=$build cargo build --release --bin Browser --bin mcp-bridge --bin ilo-command $features
+# The build number, for Settings › About to show beside the version: a prod build's alone. Cargo
+# recompiles the browser crate when the variable changes, which a dev build's would on each commit.
+# Sparkle orders updates by the plist's CFBundleVersion below, which every build still gets.
+if [ -n "$features" ]; then export APP_BUILD="$build"; else unset APP_BUILD; fi
+cargo build --release --bin Browser --bin mcp-bridge --bin ilo-command $features
 
 app=build/Browser.app
 rm -rf "$app"
@@ -219,6 +228,10 @@ plutil -replace CFBundleIdentifier -string "$id" "$plist"
 name=$(cat branding/name)
 plutil -replace CFBundleName -string "$name" "$plist"
 plutil -replace CFBundleDisplayName -string "$name" "$plist"
+# The prod profile's folder, ~/Library/Application Support/<name> (profile_dir in src/lib.rs, from
+# the same file), is Chromium's default by this key, "Chromium" without it: from Chromium 158 only
+# the default folder keeps the Keychain key its cookies and passwords were saved under.
+plutil -replace CrProductDirName -string "$name" "$plist"
 plutil -replace CFBundleShortVersionString -string "$version" "$plist"
 plutil -replace CFBundleVersion -string "$build" "$plist"
 # macOS 15 (Sequoia) or later, the owner's call (#678). Below it macOS won't open the app, and

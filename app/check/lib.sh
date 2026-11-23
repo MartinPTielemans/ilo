@@ -201,24 +201,33 @@ counted_nowhere() {
 }
 # Whether the engine linked was built with the core's files $@ as this checkout has them, for a
 # step that needs a core change: an engine built before it skips the step, saying so. Only the
-# files of core/ and engine/patches/ are compared (tools/engine-changes.sh).
+# files of core/ and engine/patches/ are compared (tools/engine-changes.sh). The check's first call
+# looks them up and the rest read its answer, so no two steps read different engines and the lookup,
+# up to 80 s on Windows (#4014), is paid once. A lookup that fails stops the run: taken for "no", it
+# skipped every caller's steps unsaid (#4026).
+engine_changes=
 engine_has() {
-  local changes file
-  if git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
-    # The linked engine, prebuilt or a local build, against this checkout as it is now.
-    changes=$(../tools/engine-changes.sh 2> /dev/null) || return 1
-  else
-    # A copy of the tree with no repository, as a check VM's (#2554): build.sh compared it.
-    [ -f build/engine-changes ] ||
-      fail "this tree has no repository and build/engine-changes isn't there, so whether the engine has ${*} is unknown: build with ./build.sh where git is, and copy build/ with the app"
-    changes=$(cat build/engine-changes)
+  local file said
+  if [ -z "$engine_changes" ]; then
+    if git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+      # The linked engine, prebuilt or a local build, against this checkout as it is now, kept with
+      # the check's files for reading after it.
+      said=$(../tools/engine-changes.sh 2>&1 > build/check/engine-changes) ||
+        fail "the engine's changes couldn't be looked up, so whether it has ${*} is unknown: tools/engine-changes.sh said ${said:-nothing}"
+      engine_changes=$(cat build/check/engine-changes)
+    else
+      # A copy of the tree with no repository, as a check VM's (#2554): build.sh compared it.
+      [ -f build/engine-changes ] ||
+        fail "this tree has no repository and build/engine-changes isn't there, so whether the engine has ${*} is unknown: build with ./build.sh where git is, and copy build/ with the app"
+      engine_changes=$(cat build/engine-changes)
+    fi
   fi
   for file in "$@"; do
     case $file in
       ../*) file=${file#../} ;;
       *) file=app/$file ;;
     esac
-    ! printf '%s\n' "$changes" | grep -qxF "$file" || return 1
+    ! printf '%s\n' "$engine_changes" | grep -qxF "$file" || return 1
   done
 }
 # Waits up to 30 s for a line matching $1 in the log of the current run.

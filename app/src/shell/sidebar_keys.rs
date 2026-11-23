@@ -179,6 +179,12 @@ impl Shell {
     /// does, rather than the tab shown, and the ring goes to the row after it if it went. A folder
     /// isn't a tab; its menu deletes it. New Tab isn't one either.
     fn key_run(&mut self, run: &Run, cx: &mut Context<Self>) {
+        // Focus Sidebar again, F6 unless the user gave it other keys, comes back round to the page,
+        // as Chrome's F6 does, where it was a dead key a screen reader said nothing for (#4030).
+        if run.0 == Command::FocusSidebar && self.keyed.is_some() {
+            self.leave_keys("focus-sidebar", cx);
+            return self.browser.focus_page(cx);
+        }
         let Some(row) = self.keyed.filter(|_| run.0 == Command::CloseTab) else {
             return cx.propagate();
         };
@@ -756,6 +762,39 @@ mod tests {
         );
         host.take();
         cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        let calls = host.take();
+        assert!(calls.contains(&"focus page".to_owned()), "{calls:?}");
+        assert!(
+            !calls.iter().any(|call| call.starts_with("select")),
+            "{calls:?}"
+        );
+        assert_eq!(ringed(&shell, cx), (None, None));
+    }
+
+    /// Focus Sidebar again with the ring up gives the page the keyboard, as escape does, so F6
+    /// goes round to the page as Chrome's does (#4030).
+    #[gpui::test]
+    fn focus_sidebar_again_gives_the_page_the_keyboard(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx);
+        shell.update(cx, |shell, cx| {
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![20, 21],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
+            shell.run(Command::FocusSidebar, "ui", cx);
+        });
+        cx.run_until_parked();
+        assert!(
+            ringed(&shell, cx).0.is_some(),
+            "Focus Sidebar didn't ring a row"
+        );
+        host.take();
+        cx.simulate_keystrokes("f6");
         cx.run_until_parked();
         let calls = host.take();
         assert!(calls.contains(&"focus page".to_owned()), "{calls:?}");
