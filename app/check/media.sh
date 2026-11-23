@@ -1304,6 +1304,7 @@ if x11_other_app || wayland || windows || [ "$(uname)" = Darwin ]; then
   expect "^browser: menu shown " "the video's page had no menu over its Mini Player"
   if windows; then
     rm -f "$out/cover-front"
+    : > "$out/other-window.log" # an earlier run's window stays named in it until emptied (#4040)
     python3 -I -u check/app-windows.py cover "$(cat "/proc/$pid/winpid")" away \
       "$(cygpath -w "$out/cover-front")" > "$out/other-window.log" 2>&1 &
     other=$!
@@ -1318,6 +1319,7 @@ if x11_other_app || wayland || windows || [ "$(uname)" = Darwin ]; then
   elif [ "$(uname)" = Darwin ]; then
     rm -f "$out/other-in"
     mkfifo "$out/other-in"
+    : > "$out/other-window.log" # an earlier run's window stays named in it until emptied (#4040)
     "$out/other-app" < "$out/other-in" > "$out/other-window.log" 2>&1 &
     other=$!
     exec 7> "$out/other-in"
@@ -1332,6 +1334,7 @@ if x11_other_app || wayland || windows || [ "$(uname)" = Darwin ]; then
   else
     rm -f "$out/other-in"
     mkfifo "$out/other-in"
+    : > "$out/other-window.log" # an earlier run's window stays named in it until emptied (#4040)
     python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
     other=$!
     exec 7> "$out/other-in"

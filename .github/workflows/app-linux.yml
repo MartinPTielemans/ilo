@@ -146,7 +146,15 @@ jobs:
       # neither the tests nor the preview compile. It names none of the engine's symbols until chrome
       # loads it, so a check needs no engine, and finds what wouldn't compile, such as a call to a
       # function main.rs builds on the Mac and Windows alone.
-      - run: cargo check --release --manifest-path linux/Cargo.toml --target-dir target
+      # linux/Cargo.lock pins what ships, seeded from ../Cargo.lock (#3966); a stale one fails here,
+      # with the fix in its error, before the check below.
+      - name: Is linux/Cargo.lock seeded from Cargo.lock?
+        run: |
+          cargo metadata --locked --format-version 1 --manifest-path linux/Cargo.toml >/dev/null || {
+            echo "::error file=app/linux/Cargo.lock::app/linux/Cargo.lock is behind app/Cargo.lock. In app/, run: cp Cargo.lock linux/Cargo.lock && cargo metadata --format-version 1 --manifest-path linux/Cargo.toml >/dev/null, and commit linux/Cargo.lock."
+            exit 1
+          }
+      - run: cargo check --release --locked --manifest-path linux/Cargo.toml --target-dir target
       - run: cargo build --release --bin preview
       # What follows decides nothing, so this tree has passed.
       - uses: ./.github/actions/tree-proof
