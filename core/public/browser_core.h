@@ -3137,16 +3137,14 @@ BC_EXPORT void bc_tab_draw_preview(bc_id tab,
                                    double opacity);
 
 // Tiles: an agent's page shown small in a view of the app's, live, for the user to watch it work
-// (#4115). The user's alone: no agent path reaches them, and being shown tells neither the page nor
-// the agent anything. The page keeps its own size, visibility, screen and focus as if untiled, and
-// draws when it would anyway, while its agent works in it.
+// (#4115). The user's alone: no agent path reaches them. The page keeps its own size and screen,
+// and never has the keyboard.
 
 // Shows the page of |tab|, an agent's tab that no window shows, such as one in its Agent Space, in
 // |view|, an NSView of the app's, at |frame| in points from the view's top-left, scaled from its
 // own size, over what the view draws, with corners of |corner_radius|. The page never takes the
-// keyboard or makes its window key, whatever it or a commit asks, and gets no pointer, keys or
-// drops: a click on it is the view's. Call it again as the frame changes; a call with another view
-// moves it there. Returns false and shows nothing for a user's tab, a tab a window shows, and on
+// keyboard or makes its window key, whatever it or a commit asks, and gets no keys or drops. Call
+// it again as the frame changes; a call with another view moves it there. Returns false and shows nothing for a user's tab, a tab a window shows, and on
 // Windows and Linux, where the app shows the tab's picture instead. A window showing the tab, as a
 // Take over or a hand-off does, ends the tile first.
 BC_EXPORT bool bc_tab_show_tile(bc_id tab, void* view, bc_rect frame, double corner_radius);
