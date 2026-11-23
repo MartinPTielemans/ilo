@@ -125,6 +125,23 @@ pub struct Found {
     pub profiles: Vec<(String, String)>,
     /// What the browser has that has no place here, said before anything comes.
     pub left_out: Vec<LeftOut>,
+    /// Why the browser's Spaces can't be read here, said where they'd be counted, with what the
+    /// user can do instead, if anything. No reader gives one yet, and the screen doesn't draw it.
+    pub note: Option<Note>,
+}
+
+/// A browser's reason its Spaces can't come as it keeps them, in the import's words, and the
+/// control that brings them another way, if there is one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Note {
+    pub said: &'static str,
+    pub action: Option<Action>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    /// Choose a file the browser exported its Spaces to.
+    ChooseFile,
 }
 
 /// Things of one kind a browser has that won't be imported, as they have no place here, counted.

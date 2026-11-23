@@ -169,6 +169,7 @@ pub fn read(source: &Source, picked: &[Kind], now: SystemTime) -> Result<Found, 
         found.link_otherwise = sidebar.link_otherwise;
         found.profiles = sidebar.profiles;
         found.left_out = sidebar.left_out;
+        found.note = sidebar.note;
         if wants(Kind::Favorites) {
             found.favorites = sidebar.favorites;
         }
