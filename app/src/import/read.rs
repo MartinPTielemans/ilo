@@ -418,8 +418,9 @@ pub struct Read {
 }
 
 /// The profile here that `profile`'s things go to: the one this browser started with for the
-/// browser's own default, else one of its name.
-fn from(profile: &Profile) -> FromProfile {
+/// browser's own default, else one of its name. Each sidebar reader gives its profiles' things
+/// to the same profile this does.
+pub(super) fn from(profile: &Profile) -> FromProfile {
     if profile.default {
         FromProfile::Default
     } else {
