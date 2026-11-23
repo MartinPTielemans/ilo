@@ -1,0 +1,57 @@
+# Never to land (#4087): builds and runs the window-material spike on a hosted Mac, for its compile
+# and its script's shape. The numbers that count are the check VM's.
+name: Window material spike
+
+on:
+  push:
+    branches: [spike/window-material-4087-1]
+
+permissions:
+  contents: read
+
+jobs:
+  spike:
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      # As check-mac.yml grants it: screen capture to the processes the job runs under, which
+      # macOS asks rather than the capturing one, and replayd's approval of each.
+      - run: |
+          now=$(date +%s)
+          system="/Library/Application Support/com.apple.TCC/TCC.db"
+          approvals="$HOME/Library/Group Containers/group.com.apple.replayd/ScreenCaptureApprovals"
+          pid=$$
+          while [ "$pid" -gt 1 ]; do
+            path=$(ps -o comm= -p "$pid")
+            case $path in
+            /*)
+              sudo sqlite3 -cmd '.timeout 30000' "$system" "INSERT OR REPLACE INTO access (service,
+                client, client_type, auth_value, auth_reason, auth_version,
+                indirect_object_identifier, flags, last_modified) VALUES
+                ('kTCCServiceScreenCapture', '$path', 1, 2, 4, 1, 'UNUSED', 0, $now)"
+              defaults write "$approvals" "$path" -date "3000-01-01 00:00:00 +0000"
+              echo "granted $path"
+              ;;
+            esac
+            pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+          done
+          sudo killall tccd || true
+          launchctl kickstart -k "gui/$(id -u)/com.apple.tccd"
+          killall replayd || true
+
+      - run: spikes/window-material/build.sh "$RUNNER_TEMP/material"
+
+      - run: spikes/window-material/capture.sh "$RUNNER_TEMP/material" --reduce-transparency
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: window-material
+          path: |
+            ${{ runner.temp }}/material/captures
+            ${{ runner.temp }}/material/*.md
+            ${{ runner.temp }}/material/*.txt
+            ${{ runner.temp }}/material/*.log
+          if-no-files-found: warn
