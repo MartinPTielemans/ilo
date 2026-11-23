@@ -4960,6 +4960,14 @@ impl Render for Shell {
             .then(|| self.window_buttons(self.viewport.width, cx));
         let normal = self.task_area.is_none();
         let task_area = self.task_area_element(cx);
+        // Onboarding's transparency step shows the window's glass alone (onboarding.rs).
+        let bare = self.onboarding_bare();
+        let normal = normal && !bare;
+        let task_area = task_area.filter(|_| !bare);
+        let (under, sidebar, over, edge) = match bare {
+            true => (None, None, None, None),
+            false => (under, sidebar, over, edge),
+        };
         self.breath.arm(cx);
         div()
             .id("shell")
