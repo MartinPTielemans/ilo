@@ -53,14 +53,19 @@ jobs:
             engine/patches
 
       # The newest unexpired pack of pins.ini's major, from the newest Engine on macOS run that has
-      # one. None yet means no Mac engine has been built since the packs began: nothing to check.
+      # one: a run of this repository's own engine-mac.yml, dispatched here. None yet means no Mac
+      # engine has been built since the packs began: nothing to check.
       - id: find
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=$(git config -f engine/pins.ini chromium.version)
           major=${version%%.*}
-          for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/engine-mac.yml/runs?per_page=30" --jq '.workflow_runs[].id'); do
+          for id in $(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/engine-mac.yml/runs?per_page=30" --jq '
+            .workflow_runs[]
+            | select(.path == ".github/workflows/engine-mac.yml" and .event == "workflow_dispatch"
+                and .head_repository.full_name == $ENV.GITHUB_REPOSITORY)
+            | .id'); do
             name=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/artifacts?per_page=100" --jq \
               ".artifacts[] | select((.expired | not) and (.name | startswith(\"engine-mac-core-$major.\"))) | .name" | tail -1)
             if [ -n "$name" ]; then
