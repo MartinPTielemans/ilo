@@ -1,6 +1,6 @@
 //! What the chrome draws with over a Space's theme, or with none (#320's rules): the window's
 //! tint and how strongly the theme lies over it, the text and glyphs' alphas, the Space's accent
-//! and the label on it, and the opaque fills of what floats over the page.
+//! and the label on it, and the fills of what floats over the page.
 //!
 //! The window is translucent, Dia's measured composite (check/window.sh), so what's behind it
 //! shows through, and a theme is the user's, anything the picker makes. So what's drawn over it
@@ -32,9 +32,9 @@ pub use crate::tokens::palette::{
 };
 use crate::tokens::palette::{
     DIALOG_DARK, DIALOG_LIGHT, GRADIENT_ALPHA, GROUND_OVER_BLACK, GROUND_OVER_WHITE,
-    LIGHT_GRADIENT_ALPHA, LIGHT_GROUND_OVER_BLACK, LIGHT_GROUND_OVER_WHITE,
-    LIGHT_NEUTRAL_GRADIENT_ALPHA, LIGHT_STAND_IN, LIGHT_TINT, NEUTRAL, NEUTRAL_GRADIENT_ALPHA,
-    OVERLAY_LIGHT, STAND_IN, TINT,
+    LIGHT_DIALOG_ALPHA, LIGHT_GRADIENT_ALPHA, LIGHT_GROUND_OVER_BLACK, LIGHT_GROUND_OVER_WHITE,
+    LIGHT_NEUTRAL_GRADIENT_ALPHA, LIGHT_OVERLAY_ALPHA, LIGHT_STAND_IN, LIGHT_TINT, NEUTRAL,
+    NEUTRAL_GRADIENT_ALPHA, OVERLAY_ALPHA, OVERLAY_LIGHT, STAND_IN, TINT,
 };
 use crate::tokens::palette::{FAR_GLOW, LIGHT_SHOWN, LIGHT_SHOWN_HOVERED, SHOWN, SHOWN_HOVERED};
 pub use crate::tokens::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
@@ -205,6 +205,84 @@ impl Tone {
         match self {
             Tone::Dark => (rgb(OVERLAY_DARK), rgb(DIALOG_DARK)),
             Tone::Light => (rgb(OVERLAY_LIGHT), rgb(DIALOG_LIGHT)),
+        }
+    }
+}
+
+/// What floats over the window and takes its fill by one rule (#4090): frosted, its colour at
+/// `OVERLAY_ALPHA` or the light alphas over the host's blur where the host blurs under its window,
+/// and the same colour opaque where it can't, as a sharp page through it would read as noise.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Float {
+    Menu,
+    SiteControls,
+    Toast,
+    ZoomHud,
+    Tooltip,
+    HoverCard,
+    LinkPreview,
+    TabSwitcher,
+    Dialog,
+    FindBar,
+}
+
+impl Float {
+    pub const ALL: [Float; 10] = [
+        Float::Menu,
+        Float::SiteControls,
+        Float::Toast,
+        Float::ZoomHud,
+        Float::Tooltip,
+        Float::HoverCard,
+        Float::LinkPreview,
+        Float::TabSwitcher,
+        Float::Dialog,
+        Float::FindBar,
+    ];
+
+    /// Whether the host blurs what's behind its window: the Mac's, under its overlays and the Site
+    /// Controls (host.h). The rest have no blur under them yet, and Windows' host none at all.
+    pub fn blurred(self) -> bool {
+        match self {
+            Float::SiteControls | Float::TabSwitcher => cfg!(target_os = "macos"),
+            _ => false,
+        }
+    }
+
+    /// Its fill in a `tone` window, as drawn on this host.
+    pub fn fill(self, tone: Tone) -> Rgba {
+        self.fill_where(tone, self.blurred())
+    }
+
+    /// Its fill where the host does or doesn't blur under it.
+    pub fn fill_where(self, tone: Tone, blurred: bool) -> Rgba {
+        let (colour, alpha) = self.colour(tone);
+        Rgba {
+            a: if blurred { alpha } else { 1. },
+            ..colour
+        }
+    }
+
+    /// Its colour, and how opaque it lies over the blur. The find bar and tooltips are dark in
+    /// both looks, so their white text holds on any page.
+    fn colour(self, tone: Tone) -> (Rgba, f32) {
+        let tone = match self {
+            Float::FindBar | Float::Tooltip => Tone::Dark,
+            _ => tone,
+        };
+        match (self, tone) {
+            (Float::Dialog, Tone::Dark) => (rgb(DIALOG_DARK), OVERLAY_ALPHA),
+            (Float::Dialog, Tone::Light) => (rgb(DIALOG_LIGHT), LIGHT_DIALOG_ALPHA),
+            (_, Tone::Dark) => (rgb(OVERLAY_DARK), OVERLAY_ALPHA),
+            (_, Tone::Light) => (rgb(OVERLAY_LIGHT), LIGHT_OVERLAY_ALPHA),
+        }
+    }
+
+    /// The colour its text and glyphs are drawn in, Paper on the dark fills and Ink on the light.
+    pub fn ink(self, tone: Tone) -> Rgba {
+        match self {
+            Float::FindBar | Float::Tooltip => Tone::Dark.ink(),
+            _ => tone.ink(),
         }
     }
 }

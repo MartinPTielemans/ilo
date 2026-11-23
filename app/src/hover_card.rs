@@ -24,7 +24,7 @@ use gpui::{
 
 use crate::elevation::{Level, WINDOW_MARGIN};
 use crate::palette::{
-    Palette, STATE_HOVERED, STATE_PRESSED, STATE_SELECTED, STATE_SELECTED_HOVERED,
+    Float, Palette, STATE_HOVERED, STATE_PRESSED, STATE_SELECTED, STATE_SELECTED_HOVERED,
 };
 use crate::recent::{List, Recent, Row as RecentRow};
 use crate::shell::{PagePicture, cubic_bezier, scaled::scaled, spring};
@@ -1044,7 +1044,7 @@ impl Render for HoverCard {
                 .h(px(drawn.height))
                 .rounded(px(RADIUS))
                 .shadow(Level::Popover.shadow())
-                .bg(palette.overlay)
+                .bg(Float::HoverCard.fill(palette.tone))
                 .opacity(pose.opacity)
                 .children(picture)
                 .child(title)
