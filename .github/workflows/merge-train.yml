@@ -1,0 +1,67 @@
+# The train the integrator would cut from the queue:ready pull requests, as a dry run, for the
+# integrator to compare with the train it cuts by hand (#3917 A3, slice 1). Each pull request is
+# shown in or held, by the integrator's train rules: open and ready, based on main, a head of this
+# repository, its runs green, tools/pr-rules.py passing, the orchestrator's word on its head where
+# it changes a path in .github/merge-gated.txt or closes an issue, and merging onto main and the
+# train before it with no conflict. Every row says whether the word, a commit status
+# orchestrator/word, is on its head, and whether the integrator merges it by hand (an engine/ file,
+# a workflow file or a merge in it), which doesn't hold it. It writes the train as train.txt, in the
+# integrator's train-<k>.txt format.
+#
+# It changes nothing: it pushes, labels, comments and merges nothing, and its token can only read.
+# It runs nothing from a pull request's head. Heads are fetched as data, for git merge-tree, and
+# tools/pr-rules.py and the gated list come from main's tree. A read that fails or comes back empty,
+# and a head on which no run succeeded, is UNREAD and fails the run, as a dry run that decided
+# nothing mustn't pass.
+name: Merge train (dry run)
+
+on:
+  workflow_dispatch:
+    inputs:
+      prs:
+        description: Pull request numbers to decide, such as "3990 3991"; empty for the open queue:ready ones
+        default: ''
+      note:
+        description: What this run is for, shown in its summary
+        default: ''
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: read
+  actions: read
+
+jobs:
+  dry-run:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      # The commit this workflow runs at, for its script, and main's history, without file contents
+      # until merge-tree asks for them.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          filter: blob:none
+      - name: Test the decisions that need no GitHub
+        run: python3 -I .github/scripts/merge-train-test.py
+      - name: Decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRS: ${{ inputs.prs }}
+          NOTE: ${{ inputs.note }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/train"
+          [ -z "$NOTE" ] || printf '%s\n\n' "$NOTE" >> "$GITHUB_STEP_SUMMARY"
+          # Word splitting is wanted, globbing not: PRS is a list of numbers, and the script refuses
+          # anything else.
+          set -f
+          # shellcheck disable=SC2086
+          python3 -I .github/scripts/merge-train.py "$RUNNER_TEMP/train" $PRS
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: merge-train-${{ github.run_id }}
+          path: ${{ runner.temp }}/train/train.txt
+          if-no-files-found: ignore
+          retention-days: 30

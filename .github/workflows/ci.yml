@@ -108,6 +108,8 @@ jobs:
     if: needs.changes.outputs.core_linux == 'true'
     permissions:
       contents: read
+      # The core's pack, from an Engine on Linux run.
+      actions: read
     uses: ./.github/workflows/core-linux.yml
 
   app_mac:

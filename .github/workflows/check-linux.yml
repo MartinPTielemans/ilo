@@ -75,7 +75,7 @@ env:
     favorites cards extensions adblock adblock-lists adblock-cosmetic adblock-page private little capture board
     passwords preview access dialogs crash import quit quit-history onboarding passkeys appearance about
     sync sync-account sync-devices sync-extensions
-    devices pair hosts handback store adblock-live widevine updates update-checks shots tab-drag count
+    devices pair hosts handback store adblock-live widevine updates update-checks tab-drag count
     blank mcp trouble ranking policies calls battery battery-os idle webrtc translate everyday
     window windows
     media pictures boosts links link-cards notifications switch-frames foot-bar peek-motion rules later-launch
@@ -129,12 +129,17 @@ jobs:
           legs=
           for session in $sessions; do
             passing=$LINUX_RUNS
+            [ "$session" != wayland ] || passing=$WAYLAND_RUNS
             # The night's alone: adblock-native makes uBlock Origin's pass of the 50 sites and then
             # the native engine's, on one snapshot, so a parity regression shows before the flip
-            # (#2111). A train's red has to be about the PRs in it, and two loads of 50 live sites
-            # minutes apart can go red on a site that changed between them.
-            [ "$EVENT" != schedule ] || passing="$passing adblock-native"
-            [ "$session" != wayland ] || passing=$WAYLAND_RUNS
+            # (#2111); and shots, on Wayland, makes the Store's and the README's pictures of live
+            # sites and checks nothing past getting to them (#4074). A train's red has to be about
+            # the PRs in it, and two loads of 50 live sites minutes apart can go red on a site that
+            # changed between them, as a train's shots did on a GitHub that didn't answer.
+            if [ "$EVENT" = schedule ]; then
+              [ "$session" = wayland ] || passing="$passing adblock-native"
+              [ "$session" != wayland ] || passing="$passing shots"
+            fi
             case $RUNS in
             '') runs=$passing ;;
             all) runs=$all ;;
@@ -266,6 +271,9 @@ jobs:
       run:
         working-directory: app
     steps:
+      # When the job started, for the Runs step's limit below.
+      - run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+        working-directory: .
       # With the history, where fetch.sh looks for the engine's commit.
       - uses: actions/checkout@v4
         with:
@@ -473,15 +481,30 @@ jobs:
           run-id: ${{ inputs.lists_from }}
           github-token: ${{ github.token }}
 
+      # The Runs step's limit: what's left of the job's 180 minutes, less 5 for the steps after it,
+      # which took up to 67 s on main's last five runs. A job cut at its own limit is cancelled and
+      # runs nothing more, not even if: always() steps, so its results, its artifact and the run it
+      # was in are lost (45117074436, on Windows); a step cut at its limit is killed, and the job
+      # goes on to name the run and upload what it has (#4036).
+      - id: limit
+        working-directory: .
+        run: |
+          minutes=$((175 - ($(date +%s) - JOB_START + 59) / 60))
+          [ "$minutes" -ge 1 ] || minutes=1
+          echo "minutes=$minutes" | tee -a "$GITHUB_OUTPUT"
+
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check. A
       # run's result goes in the leg's results for the check job, which fails on it: the leg fails
       # only when it couldn't finish.
       - name: Runs
+        id: checks
         if: ${{ steps.engine.outputs.found == 'true' && matrix.session != 'ime' }}
+        timeout-minutes: ${{ fromJSON(steps.limit.outputs.minutes) }}
         env:
           SESSION: ${{ matrix.session }}
           RUNS: ${{ matrix.runs }}
           RESULTS: ${{ runner.temp }}/results/${{ matrix.session }}-${{ matrix.shard }}.tsv
+          RUNNING: ${{ runner.temp }}/running
           CHECK_TRACE_CATEGORIES: ${{ inputs.trace }}
           ADBLOCK_PARITY_LISTS: ${{ inputs.lists_from != '' && 'build/given-lists' || '' }}
           # The runner's C.UTF-8 names no country, for which Chromium's search engines leave out
@@ -509,9 +532,12 @@ jobs:
             [ "$run" != updates ] || limit=45m
             [ "$run" != perf ] || limit=40m
             [ "$run" != adblock-native ] || limit=40m
+            # The run going, for the step after this one if this step is cut at its limit.
+            echo "$run" > "$RUNNING"
             timeout "$limit" ./check.sh "$run" > "$dir/$run.log" 2>&1 || status=$?
             [ ! -d build/check ] || mv build/check "$dir/$run"
             pkill -9 -f "$PWD/build/Browser/" || true
+            rm -f "$RUNNING"
             # A run that passes may have skipped steps, or all of itself, such as when the app
             # wasn't the active one.
             skipped=$(grep '^skip: ' "$dir/$run.log" | cut -c7- | tr '|\t\n' '/ ;' | sed 's/;$//')
@@ -529,6 +555,33 @@ jobs:
             printf '%s\t%s\n' "$run" "$result" >> "$RESULTS"
             echo "| $run | $result |"
           done
+
+      # A Runs step cut at its limit names the run it was in, with that run's last lines, and gives
+      # it a failed row, so the results and the leg's artifact below say which run it was (#4036).
+      # The runs after it have no row, which the check job names.
+      - name: Cut run
+        if: ${{ always() && steps.checks.outcome != 'skipped' }}
+        env:
+          SESSION: ${{ matrix.session }}
+          RESULTS: ${{ runner.temp }}/results/${{ matrix.session }}-${{ matrix.shard }}.tsv
+          RUNNING: ${{ runner.temp }}/running
+          LIMIT: ${{ steps.limit.outputs.minutes }}
+        run: |
+          [ -e "$RUNNING" ] || exit 0
+          run=$(cat "$RUNNING")
+          where=
+          [ "$SESSION" != wayland ] || where=wayland/
+          dir=$RUNNER_TEMP/check/$where
+          pkill -9 -f "$PWD/build/Browser/" || true
+          [ ! -d build/check ] || mv build/check "$dir$run" || true
+          last=$(tail -1 "$dir$run.log" 2> /dev/null | tr '|\t' '/ ') || true
+          mkdir -p "$(dirname "$RESULTS")"
+          why="still going when the Runs step was cut at its $LIMIT minutes"
+          printf '%s\tfailed: %s; its last line: %s\n' "$run" "$why" "${last:-none}" >> "$RESULTS"
+          echo "::error::The Runs step was cut at its $LIMIT minutes in the $run run on $SESSION."
+          echo "Its log is $where$run.log in the artifact. Its last lines:"
+          tail -40 "$dir$run.log" 2> /dev/null || echo "(no log)"
+          exit 1
 
       # Drags from other apps under Wayland, which check.sh's driver, X11's, can't make.
       - if: ${{ !cancelled() && steps.engine.outputs.found == 'true' && matrix.session == 'ime' && (inputs.runs == '' || inputs.runs == 'all' || contains(inputs.runs, 'drops')) }}

@@ -316,6 +316,59 @@ EOF
   scaled="its first frame was at its browser window's scale as the output's went a step up and back with it hidden"
 fi
 
+# Off the Mac the card's page shows in the browser window, under the preview's, through a hole in
+# the dim, which has to take the page's rounded shape: at each corner, a pixel in from the page
+# frame's square corner and outside the card's rounded edge is the dim's colour, as the dim beside
+# the card on the same row is, and not the window's page undimmed (#3982). Both lie over the test
+# page in the pinned tab behind, whose white is flat there: its text is at the top left of its two
+# parts, far from the card's corners. The point is 2 pixels in for each point of the window's scale,
+# rounded down, as the card's edge crosses the corner's diagonal about 4 points in, and the dim's is
+# 1 out past the card's edge. Xvfb has no compositor to show the browser window under the preview's
+# window, so the hole comes out black there. The Mac draws the dim over the whole window.
+peek_corners() { # <light|dark> <capture>
+  if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; then
+    echo "skip: Peek's corners in a $1 Space. Xvfb has no compositor to show the browser window under the preview's window."
+    return
+  fi
+  expect '^browser: link preview page frame ' "$1: the preview didn't say where its page is"
+  frame=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: link preview page frame ' | tail -1)
+  set -- "$1" "$2" $(echo "$frame" | cut -d' ' -f6-9) "$(echo "$frame" | cut -d' ' -f12)"
+  read -r right bottom in << EOF
+$(awk "BEGIN { print $3 + $5 - 1, $4 + $6 - 1, int(2 * $7) }")
+EOF
+  if windows; then
+    to_bmp "$2" "$out/corners.bmp" || fail "PowerShell couldn't read $2"
+  else
+    magick "$2" BMP3:"$out/corners.bmp" || fail "ImageMagick couldn't read $2"
+  fi
+  # Each corner's point, then the dim's beside the card on its row, each with its colour.
+  printf '%s %s %s %s\n' \
+    $(($3 + in)) $(($4 + in)) $(($3 - in - 1)) $(($4 + in)) \
+    $((right - in)) $(($4 + in)) $((right + in + 1)) $(($4 + in)) \
+    $(($3 + in)) $((bottom - in)) $(($3 - in - 1)) $((bottom - in)) \
+    $((right - in)) $((bottom - in)) $((right + in + 1)) $((bottom - in)) |
+    python3 -I -c '
+import struct, sys
+# Python on Windows ends a line with \r\n, which the shell would read into the last colour.
+sys.stdout.reconfigure(newline="\n")
+data = open(sys.argv[1], "rb").read()
+offset, = struct.unpack_from("<I", data, 10)
+width, height, _, bits = struct.unpack_from("<iiHH", data, 18)
+stride = (bits * width + 31) // 32 * 4
+def at(x, y):
+    row = y if height < 0 else abs(height) - 1 - y
+    b, g, r = data[offset + row * stride + x * bits // 8:][:3]
+    return "%d,%d,%d" % (r, g, b)
+for line in sys.stdin:
+    x, y, dx, dy = map(int, line.split())
+    print(x, y, at(x, y), dx, dy, at(dx, dy))
+' "$out/corners.bmp" > "$out/preview-corners-$1.txt" || fail "$1: the capture's corners couldn't be read"
+  while read -r x y corner dx dy dim; do
+    [ "$corner" = "$dim" ] ||
+      fail "$1: Peek's page frame corner at $x $y is $corner, not the dim's $dim at $dx $dy beside the card: the window's page shows there undimmed"
+  done < "$out/preview-corners-$1.txt"
+}
+
 # Its look in a light and a dark Space theme: the theme picker's first swatch, then the sun, and
 # later the moon, each 13 right of its appearance-x token, as cards.sh and little.sh pick them.
 peek_look() { # <light|dark> <the appearance button's x> [swatch]
@@ -335,6 +388,7 @@ peek_look() { # <light|dark> <the appearance button's x> [swatch]
   expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
   open_preview "in a $1 Space"
   ../tools/window-screenshot.sh "$pid" "$out/preview-$1.png" || fail "no window to capture"
+  [ "$(uname)" = Darwin ] || peek_corners "$1" "$out/preview-$1.png"
   send key escape
   expect "^browser: tab $p closed\$" "Esc didn't close the preview in a $1 Space"
 }
@@ -415,6 +469,7 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; t
   open_preview "for another app"
   rm -f "$out/other-in"
   mkfifo "$out/other-in"
+  : > "$out/other-window.log" # an earlier run's window stays named in it until emptied (#4040)
   python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
   other_app=$!
   exec 7> "$out/other-in"

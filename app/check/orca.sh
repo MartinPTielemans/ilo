@@ -205,6 +205,13 @@ orca_press down
 orca_press down
 orca_press up
 orca_press escape
+# F10 from the page rings the footer's menu control (#4030), and F10 again leaves it. The window is
+# captured before and with the ring, for the PR's record of how it looks on Linux.
+../tools/window-screenshot.sh "$pid" "$out/f10-before.png" || fail "no window to capture"
+orca_press f10
+expect '^browser: menu ring at ' "F10 from the page didn't draw the menu control's ring"
+../tools/window-screenshot.sh "$pid" "$out/f10-ring.png" || fail "no window to capture"
+orca_press f10
 orca_mark end
 exec 3>&-
 quit

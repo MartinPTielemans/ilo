@@ -4,14 +4,16 @@
 #
 # `main-check.sh seen` writes seen=true to GITHUB_OUTPUT when another run of this workflow on this
 # branch already checked this commit, so a night with no new merge costs no runner. A run checked
-# it when its job named "check", the one with the default runs, failed past its "Engine" step, or
-# passed with its "Runs" step done: one with no engine for the commit, or cancelled, checked nothing.
+# it when its job named "check", the one with the default runs, or its build job, failed past its
+# "Engine" step, or each check job passed with its "Runs" step done: one with no engine for the
+# commit, or cancelled, checked nothing.
 #
-# `main-check.sh rerun`, in a re-run's check job, fails when an earlier attempt of this run failed
-# past its "Engine" step, or passed with a failure in its annotations, as the windows-2025 night's
-# steps leave one. A run's page, summary and conclusion are its last attempt's, and each
-# attempt's artifact has the same name, so a re-run's pass would show over that failure, as run
-# 41574039797's attempt 2 did over attempt 1 failing spaces (#1589). A new run checks again instead.
+# `main-check.sh rerun`, in a re-run's check job, fails when an earlier attempt of this run's check
+# or build jobs failed past its "Engine" step, or passed with a failure in its annotations, as the
+# windows-2025 night's steps leave one. A run's page, summary and conclusion are its last attempt's,
+# and each attempt's artifact has the same name, so a re-run's pass would show over that failure, as
+# run 41574039797's attempt 2 did over attempt 1 failing spaces (#1589). A new run checks again
+# instead.
 #
 # `main-check.sh report <result> <found>` keeps one open issue per workflow, "<workflow> fails on
 # main": a run that fails opens it, or comments on it if it's open, and one that passes with an
@@ -36,19 +38,22 @@ gh() {
   fi
 }
 
-# The jobs with the default runs: the one named "check", or Windows' "check 1/2" and "check 2/2",
-# which they're dealt across (#2618). CHECK_ON names the runner a run beside the gate's says it
-# ran on, such as " on windows-2025" (check-windows.yml, #3011), so its runs and the gate's are
-# each other's to skip for, never one for the other.
+# The jobs with the default runs: the one named "check", or the Mac's and Windows' "check 1/3" and
+# so on, which they're dealt across (#2618, #3917). CHECK_ON names the runner a run beside the
+# gate's says it ran on, such as " on windows-2025" (check-windows.yml, #3011), so its runs and the
+# gate's are each other's to skip for, never one for the other.
 defaults='[.jobs[] | select(.name == "check'"${CHECK_ON:-}"'" or (.name | test("^check [0-9]+/[0-9]+'"${CHECK_ON:-}"'$")))]'
+# The job that builds the app they run, before them: one that fails leaves them skipped (#3917).
+built='[.jobs[] | select(.name == "build'"${CHECK_ON:-}"'")]'
 
-# Whether run $1 checked its commit: one of its default jobs failed past its "Engine" step, or each
-# passed with its "Runs" step done.
+# Whether run $1 checked its commit: one of its default jobs, or its build job, failed past its
+# "Engine" step, or each default job passed with its "Runs" step done.
 checked() {
-  gh api "repos/$repo/actions/runs/$1/jobs" --jq "$defaults"' as $jobs | ($jobs | length > 0) and
-    (any($jobs[]; .conclusion == "failure"
+  gh api "repos/$repo/actions/runs/$1/jobs" --jq "$defaults"' as $jobs | '"$built"' as $built |
+    any(($jobs + $built)[]; .conclusion == "failure"
         and (any(.steps[]; .name == "Engine" and .conclusion == "failure") | not))
-      or all($jobs[]; .conclusion == "success" and any(.steps[]; .name == "Runs" and .conclusion == "success")))'
+      or (($jobs | length > 0)
+        and all($jobs[]; .conclusion == "success" and any(.steps[]; .name == "Runs" and .conclusion == "success")))'
 }
 
 # The runs that run $1 failed, from its default jobs' errors, a line each: "tabs", or "tabs@wayland"
@@ -82,7 +87,7 @@ rerun)
   while [ "$attempt" -lt "$GITHUB_RUN_ATTEMPT" ]; do
     jobs="repos/$repo/actions/runs/$GITHUB_RUN_ID/attempts/$attempt/jobs"
     failed=$(gh api "$jobs" --jq 'any(.jobs[];
-      (.name | startswith("check")) and .conclusion == "failure"
+      (.name | startswith("check") or startswith("build")) and .conclusion == "failure"
         and (any(.steps[]; .name == "Engine" and .conclusion == "failure") | not))')
     # The windows-2025 night's steps go on past a failure, so its job passes with the failure left
     # in its annotations (check-windows.yml, #3055).

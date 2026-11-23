@@ -24,6 +24,11 @@ use crate::tokens::shell::{KEYED, KEYED_RING};
 /// the shortcuts on the same keys, escape's Stop among them.
 pub(super) const CONTEXT: &str = "SidebarKeys";
 
+/// Added to the sidebar's context only while the ring is on the menu control, which then has the
+/// keyboard itself. Space is a text key: under the sidebar's own context it would be on the path of
+/// every field in the sidebar, a rename's or an input method's convert key among them.
+const MENU_CONTEXT: &str = "MenuKeys";
+
 /// How long the ring stays on the tab Close and Keep Pinned shows. Interim: Arc 1.170's was still
 /// there 2.5 s after it was drawn, in the one recording of it, which ended there.
 const ATTENTION: Duration = Duration::from_millis(2500);
@@ -36,7 +41,7 @@ actions!(
     sidebar_keys,
     [
         KeyUp, KeyDown, KeyShow, KeyLeave, KeyOpen, KeyOut, KeyMenu, TabIn, BackTabIn, KeyTab,
-        KeyBackTab
+        KeyBackTab, KeySpace
     ]
 );
 
@@ -45,6 +50,8 @@ pub(super) fn bind(cx: &mut App) {
         KeyBinding::new("up", KeyUp, Some(CONTEXT)),
         KeyBinding::new("down", KeyDown, Some(CONTEXT)),
         KeyBinding::new("enter", KeyShow, Some(CONTEXT)),
+        // Space opens the menu control's menu, as Return does (menu_keys.rs).
+        KeyBinding::new("space", KeySpace, Some(MENU_CONTEXT)),
         KeyBinding::new("escape", KeyLeave, Some(CONTEXT)),
         KeyBinding::new("right", KeyOpen, Some(CONTEXT)),
         KeyBinding::new("left", KeyOut, Some(CONTEXT)),
@@ -95,6 +102,7 @@ impl Shell {
     pub(super) fn key_row(&mut self, row: u64, cx: &mut Context<Self>) {
         self.keyed = Some(row);
         self.keyed_strip = None;
+        self.leave_menu_keys("sidebar", cx);
         match row {
             NEW_TAB => self.scroll_to_slot(Slot::NewTab, "new tab"),
             row => self.scroll_to_row(row),
@@ -106,6 +114,13 @@ impl Shell {
 
     /// Moves the ring to the next row down or up, stopping at the ends.
     fn key_step(&mut self, down: bool, cx: &mut Context<Self>) {
+        // On the menu control Down opens its menu, which opens above it, and Up has nowhere to go.
+        if self.keyed_menu.is_some() {
+            if down {
+                self.key_open_menu(cx);
+            }
+            return;
+        }
         let Some(keyed) = self.keyed else {
             return cx.propagate();
         };
@@ -179,6 +194,12 @@ impl Shell {
     /// does, rather than the tab shown, and the ring goes to the row after it if it went. A folder
     /// isn't a tab; its menu deletes it. New Tab isn't one either.
     fn key_run(&mut self, run: &Run, cx: &mut Context<Self>) {
+        // Focus Sidebar again, F6 unless the user gave it other keys, comes back round to the page,
+        // as Chrome's F6 does, where it was a dead key a screen reader said nothing for (#4030).
+        if run.0 == Command::FocusSidebar && self.keyed.is_some() {
+            self.leave_keys("focus-sidebar", cx);
+            return self.browser.focus_page(cx);
+        }
         let Some(row) = self.keyed.filter(|_| run.0 == Command::CloseTab) else {
             return cx.propagate();
         };
@@ -219,6 +240,9 @@ impl Shell {
     }
 
     fn key_show(&mut self, cx: &mut Context<Self>) {
+        if self.key_open_menu(cx) {
+            return;
+        }
         if let Some(stop) = self.keyed_strip {
             return self.key_strip_show(stop, cx);
         }
@@ -239,6 +263,9 @@ impl Shell {
     }
 
     fn key_leave(&mut self, cx: &mut Context<Self>) {
+        if self.keyed_menu.is_some() {
+            return self.give_back_menu_keys("escape", cx);
+        }
         // The window keeps the keyboard: the strip's page may be an agent's.
         if self.keyed_strip.is_some() {
             return self.leave_strip("escape", cx);
@@ -267,6 +294,7 @@ impl Shell {
         if gone {
             self.leave_keys("sidebar", cx);
             self.leave_strip("sidebar", cx);
+            self.leave_menu_keys("sidebar", cx);
         }
         // The strip's stop went with its page, or as its chips changed.
         if let Some(stop) = self.keyed_strip
@@ -274,17 +302,23 @@ impl Shell {
         {
             self.leave_strip("strip", cx);
         }
-        let ringed = self.keyed.is_some() || self.keyed_strip.is_some();
+        let ringed = self.ring_up();
         if std::mem::take(&mut self.focus_keys) && ringed {
             window.focus(&self.sidebar_keys, cx);
         } else if ringed && !self.sidebar_keys.is_focused(window) {
             self.leave_keys("focus", cx);
             self.leave_strip("focus", cx);
+            self.leave_menu_keys("focus", cx);
         }
-        let ringed = self.keyed.is_some() || self.keyed_strip.is_some();
+        let ringed = self.ring_up();
         if !ringed && self.sidebar_keys.is_focused(window) {
             window.focus(&self.focus_handle, cx);
         }
+    }
+
+    /// Whether the keys' ring is on a row, the strip or the menu control.
+    fn ring_up(&self) -> bool {
+        self.keyed.is_some() || self.keyed_strip.is_some() || self.keyed_menu.is_some()
     }
 
     /// The sidebar's element, taking its keys while it has the keyboard.
@@ -299,11 +333,24 @@ impl Shell {
             .when(self.a11y, |sidebar| {
                 sidebar.role(Role::Group).aria_label("Sidebar")
             })
-            .key_context(CONTEXT)
+            .key_context({
+                let mut context = gpui::KeyContext::default();
+                context.add(CONTEXT);
+                if self.keyed_menu.is_some() {
+                    context.add(MENU_CONTEXT);
+                }
+                context
+            })
             .track_focus(&self.sidebar_keys)
             .on_action(cx.listener(|shell, _: &KeyUp, _, cx| shell.key_step(false, cx)))
             .on_action(cx.listener(|shell, _: &KeyDown, _, cx| shell.key_step(true, cx)))
             .on_action(cx.listener(|shell, _: &KeyShow, _, cx| shell.key_show(cx)))
+            .on_action(cx.listener(|shell, _: &KeySpace, window, cx| {
+                // Only the sidebar's own element holds the menu's ring, never a field in it.
+                if !(shell.sidebar_keys.is_focused(window) && shell.key_open_menu(cx)) {
+                    cx.propagate()
+                }
+            }))
             .on_action(cx.listener(|shell, _: &KeyLeave, _, cx| shell.key_leave(cx)))
             .on_action(cx.listener(|shell, _: &KeyOpen, _, cx| shell.key_open(cx)))
             .on_action(cx.listener(|shell, _: &KeyOut, _, cx| shell.key_out(cx)))
@@ -756,6 +803,39 @@ mod tests {
         );
         host.take();
         cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        let calls = host.take();
+        assert!(calls.contains(&"focus page".to_owned()), "{calls:?}");
+        assert!(
+            !calls.iter().any(|call| call.starts_with("select")),
+            "{calls:?}"
+        );
+        assert_eq!(ringed(&shell, cx), (None, None));
+    }
+
+    /// Focus Sidebar again with the ring up gives the page the keyboard, as escape does, so F6
+    /// goes round to the page as Chrome's does (#4030).
+    #[gpui::test]
+    fn focus_sidebar_again_gives_the_page_the_keyboard(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx);
+        shell.update(cx, |shell, cx| {
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![20, 21],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
+            shell.run(Command::FocusSidebar, "ui", cx);
+        });
+        cx.run_until_parked();
+        assert!(
+            ringed(&shell, cx).0.is_some(),
+            "Focus Sidebar didn't ring a row"
+        );
+        host.take();
+        cx.simulate_keystrokes("f6");
         cx.run_until_parked();
         let calls = host.take();
         assert!(calls.contains(&"focus page".to_owned()), "{calls:?}");

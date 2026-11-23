@@ -48,7 +48,13 @@
 # closes the tab. A site's sign-in that the browser asks for hands its tab to the user, as hand_off
 # does, and shows over its page once they watch it; the call that met it waits until Hand Back, and
 # the password they type never reaches the agent, the log or the profile. Its download asks first, and Allow Once downloads the
-# file, which the answer names, and Never leaves none. It sends requests to its tab's site, carrying a session it
+# file, which the answer names, and Never leaves none. Its upload asks the user for a file in a card
+# naming the site of the field's frame, a subdomain's, an object's or another site's, where Don't
+# Allow says no; Choose File… opens the system's dialog, which closes as its page closes its tab,
+# the agent hearing it closed, and opens none for a field whose frame went, the agent hearing it
+# left. Before any card, upload is refused for a folder's field, a button, a sandboxed frame's field
+# and a field in a document whose root element frames none, and a field hidden behind its label is
+# outlined as the label's text with no ref (#3656). It sends requests to its tab's site, carrying a session it
 # never sees, and a change asks every time, in a card whose Allow sends it and Deny doesn't, a POST
 # whose override says GET too. A change without the agent's sentence of what it does is refused
 # before anything asks. The card shows the sentence, cut at a word, over what the browser knows from
@@ -1445,6 +1451,122 @@ RELOAD
   send click $sidebar_point
   hand_back_pressed "$presses"
 fi
+
+# upload asks the user for a file for a page's file field (#3656), and the core refuses one before
+# any card where it isn't a file field or names no site to give the file to: a folder's field, a
+# button, a field in a sandboxed frame, whose origin is opaque, and a field whose document's root
+# element frames no document, as an iframe the page put there after the snapshot or an object.
+# Each refusal says why, with an activity-log entry, and the core shows no field for a card. A file
+# field hidden behind its label is outlined as the label's text alone, with no ref to upload to.
+# A page told something to do waits for a file the run puts in the site (told.js).
+printf '%s' '// Runs then once the run puts name.go in the site, asked for every 100 ms till then.
+function told(name, then) {
+  const ask = () => fetch(name + ".go", { cache: "no-store" })
+    .then(answer => answer.ok ? then() : setTimeout(ask, 100), () => setTimeout(ask, 100));
+  ask();
+}' > "$out/site/told.js"
+printf '%s' '<input type=file aria-label="Sandboxed file">' > "$out/site/upload-sandboxed.html"
+printf '%s' '<title>loading</title>
+<input type=file webkitdirectory aria-label="Photos folder">
+<button>Send</button>
+<label for=cv>Upload your CV</label><input id=cv type=file style="display: none">
+<iframe sandbox src=upload-sandboxed.html onload="document.title = &quot;upload refused&quot;"></iframe>' \
+  > "$out/site/upload-refused.html"
+printf '%s' '<title>upload root</title><script src=told.js></script>
+<input type=file aria-label="Root file">
+<script>told("upload-root", () => {
+  const frame = document.createElement("iframe");
+  frame.append(document.querySelector("input"));
+  document.replaceChild(frame, document.documentElement);
+  fetch("upload-root.done");
+});</script>' > "$out/site/upload-root.html"
+printf '%s' '<title>upload object root</title>
+<input type=file aria-label="Object root file">
+<script>
+const object = document.createElement("object");
+object.data = "missing";
+object.append(document.querySelector("input"));
+document.replaceChild(object, document.documentElement);
+</script>' > "$out/site/upload-object-root.html"
+# The fields the core showed in tab $1 for a card, as its "file field <id> shown in <tab>" says.
+shown_fields() { grep -c "browser: file field [0-9]* shown in $1\$" "$log" || true; }
+# Calls upload for the ref $2 in tab $1, whose field is $3, and sets refused to its answer, failing
+# if a card asked or the core showed the field for one.
+upload_refused() {
+  asked=$(grep -c "^browser: agent mcp-client asks [0-9]* upload $1\$" "$log" || true)
+  shown=$(shown_fields "$1")
+  refused=$(call upload "{\"tab\":$1,\"ref\":\"$2\"}")
+  [ "$(grep -c "^browser: agent mcp-client asks [0-9]* upload $1\$" "$log" || true)" = "$asked" ] ||
+    fail "upload for $3 asked the user, as: $refused"
+  [ "$(shown_fields "$1")" = "$shown" ] || fail "the core showed $3 for a card, though upload answered: $refused"
+}
+# Opens the page $1 in a tab of the agent's and sets upload_tab to it and opened to the answer.
+upload_page() {
+  opened=$(call open_tab "{\"url\":\"$1\"}")
+  upload_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$upload_tab" ] || fail "open_tab of $1 answered: $opened"
+}
+folder_why="That field takes a folder. Hand the tab to the user with hand_off."
+button_why="That element isn't a file field. Call upload on an input type=file (listed in snapshot as a button, usually “Choose File” or “Browse”)."
+no_site_why="That field is in a frame with no site of its own, so ilo can't say which site is asking. Hand the tab to the user with hand_off."
+upload_page "localhost:$port/upload-refused.html"
+refused_tab=$upload_tab
+await_log "^browser: title $refused_tab upload refused\$" "the upload page's sandboxed frame didn't load"
+outline=$(call snapshot "{\"tab\":$refused_tab}")
+printf '%s\n' "$outline" > "$out/mcp-upload-refused.txt"
+for each in "Photos folder" Send "Sandboxed file"; do
+  [ -n "$(ref_in "$outline" button "$each")" ] || fail "the upload page's outline had no ref for $each: $outline"
+done
+upload_refused "$refused_tab" "$(ref_in "$outline" button "Photos folder")" "a folder's field"
+[ "$refused" = "error: $folder_why" ] || fail "upload for a folder's field answered: $refused"
+await_log "^browser: agent logged mcp-client upload localhost refused: $folder_why\$" \
+  "the refused upload for a folder's field isn't in the activity log"
+upload_refused "$refused_tab" "$(ref_in "$outline" button Send)" "a button"
+[ "$refused" = "error: $button_why" ] || fail "upload for a button answered: $refused"
+await_log "^browser: agent logged mcp-client upload localhost refused: $button_why\$" \
+  "the refused upload for a button isn't in the activity log"
+upload_refused "$refused_tab" "$(ref_in "$outline" button "Sandboxed file")" "a sandboxed frame's field"
+[ "$refused" = "error: $no_site_why" ] || fail "upload for a sandboxed frame's field answered: $refused"
+await_log "^browser: agent logged mcp-client upload localhost refused: $no_site_why\$" \
+  "the refused upload for a sandboxed frame's field isn't in the activity log"
+# Chromium leaves a field the page hid out of the tree, and its label names no field the outline
+# has, so it's the label's text, with no ref. An agent there has no field to upload to.
+label=$(printf '%s\n' "$outline" | grep -F 'Upload your CV')
+[ -n "$label" ] || fail "the outline left out the label of the file field hidden behind it: $outline"
+case "$label" in
+  *'[e'*) fail "the label of a file field hidden behind it was outlined with a ref, which upload's steps don't cover: $label" ;;
+esac
+# The page puts an iframe in its root element's place after the snapshot, the field inside it, where
+# it's never drawn: the field is gone, or is in a document whose root frames none, refused either way.
+upload_page "localhost:$port/upload-root.html"
+root_tab=$upload_tab
+root_ref=$(ref_in "$opened" button "Root file")
+[ -n "$root_ref" ] || fail "the page whose root element goes had no ref for its field: $opened"
+: > "$out/site/upload-root.go"
+served "^GET chromium localhost:$port/upload-root\\.done " "the page didn't put an iframe in its root element's place"
+upload_refused "$root_tab" "$root_ref" "a field the page moved into an iframe in its root element's place"
+case "$refused" in
+  "error: $no_site_why" | "error: The element isn't on the page any more. Take a new snapshot.") ;;
+  *) fail "upload for a field the page moved into an iframe in its root element's place answered: $refused" ;;
+esac
+# An object as the root, its data missing, draws the field inside it as what it falls back to.
+upload_page "localhost:$port/upload-object-root.html"
+object_tab=$upload_tab
+object_ref=
+for _ in $(seq 20); do
+  object_ref=$(ref_in "$opened" button "Object root file")
+  [ -n "$object_ref" ] && break
+  sleep 0.25
+  opened=$(call snapshot "{\"tab\":$object_tab}")
+done
+[ -n "$object_ref" ] || fail "the page whose root element is an object had no ref for the field inside it: $opened"
+upload_refused "$object_tab" "$object_ref" "a field in an object that's its document's root element"
+[ "$refused" = "error: $no_site_why" ] ||
+  fail "upload for a field in an object that's its document's root element answered: $refused"
+for each in "$refused_tab" "$root_tab" "$object_tab"; do
+  closed=$(call close_tab "{\"tab\":$each}")
+  case "$closed" in "Closed tab $each."*) ;; *) fail "closing upload's tab $each answered: $closed" ;; esac
+done
 
 if [ "$driven" = 1 ]; then
   # The core lists the agent's Space alone: its tab, and not the user's Wikipedia tab in theirs.
@@ -3575,6 +3697,227 @@ CARD
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 
+  # upload's card (#3656) names the site of the field's frame, which is what gets the file: a frame
+  # of a subdomain of the tab's site, an object showing a page of it and another site's frame each
+  # name their own, and Don't Allow answers that the user said no there. Choose File… opens the
+  # system's dialog over the window, which no driven input reaches, so its page closes its tab while
+  # it's up, whose field's end closes the dialog: the agent hears it closed with no file chosen, and
+  # the window takes the next card's click. Choose File… for a field whose frame went to another page
+  # after the card asked opens no dialog and answers that the field left. What happens to a pick
+  # once the field changed under the dialog is the core's tests' (FilesLand), as no run picks.
+  printf '%s' '<input type=file aria-label="Frame file">' > "$out/site/upload-frame.html"
+  printf '%s' '<input type=file aria-label="Object file">' > "$out/site/upload-object.html"
+  printf '%s' '<input type=file aria-label="Cross file">' > "$out/site/upload-cross.html"
+  printf '%s' '<p>Gone</p>' > "$out/site/upload-gone.html"
+  printf '%s' "<title>loading</title>
+<iframe src=http://x.a.localhost:$port/upload-frame.html></iframe>
+<object type=text/html data=http://x.a.localhost:$port/upload-object.html></object>
+<iframe src=http://127.0.0.1:$port/upload-cross.html></iframe>
+<script>let loading = 3;
+for (const each of document.querySelectorAll('iframe, object'))
+  each.onload = () => --loading || (document.title = 'upload frames');</script>" \
+    > "$out/site/upload-frames.html"
+  printf '%s' '<title>upload closes</title><script src=told.js></script>
+<input type=file aria-label="Closing file">
+<script>told("upload-closes", () => close());</script>' > "$out/site/upload-closes.html"
+  printf '%s' "<title>loading</title><script src=told.js></script>
+<iframe id=frame src=http://x.a.localhost:$port/upload-frame.html
+  onload=\"document.title = 'upload moves'\"></iframe>
+<script>told('upload-moves', () => {
+  frame.onload = () => fetch('upload-moves.done');
+  frame.src = 'http://x.a.localhost:$port/upload-gone.html';
+});</script>" > "$out/site/upload-moves.html"
+  # Asks for a file for the field $3, by the ref $2 in tab $1: sets q, the card's place once it's
+  # drawn, and upload_field, the core's id of the field it showed.
+  upload_asks() {
+    wants="^browser: agent mcp-client asks [0-9]* upload $1\$"
+    before=$(grep -c "$wants" "$log" || true)
+    request upload "{\"tab\":$1,\"ref\":\"$2\"}" >&4
+    await_more "$wants" "$before" || fail "upload for $3 didn't ask the user: $(grep 'browser: agent .*upload' "$log" | tail -2 | tr '\n' ' ')"
+    q=$(grep "$wants" "$log" | tail -1 | cut -d' ' -f5)
+    upload_field=$(sed -n "s/.*browser: file field \([0-9]*\) shown in $1\$/\1/p" "$log" | tail -1)
+    [ -n "$upload_field" ] || fail "upload for $3 asked with no field the core showed"
+    await_log "^browser: agent question $q at " "upload's question for $3 wasn't drawn"
+    read -r qx qy qw qh <<CARD
+$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
+CARD
+  }
+  # Don't Allow, at the left of Choose File… where the two share the card's last row, and across
+  # the row above where they don't fit one: that row is tried first, as a press there lands on the
+  # card's text where they share one, and one on the last row could open the system's dialog.
+  # Sets denied to the answer.
+  upload_denied() {
+    dismissed="^browser: agent mcp-client answered $q Dismiss\$"
+    send click $((qx + qw / 4)) $((qy + qh - 26 - 36))
+    for _ in $(seq 30); do grep -q "$dismissed" "$log" && break; sleep 0.1; done
+    grep -q "$dismissed" "$log" || send click $((qx + qw / 4)) $((qy + qh - 26))
+    await_log "$dismissed" "Don’t Allow didn't answer upload's question for $1"
+    denied=$(next_answer) || fail "the browser didn't answer the upload for $1"
+    denied=$(printf '%s\n' "$denied" | answered upload)
+  }
+  # Choose File…, the card's primary, at the right of its last row or across it.
+  upload_chosen() {
+    send click $((qx + qw * 3 / 4)) $((qy + qh - 26))
+    await_log "^browser: agent mcp-client answered $q Choose\$" "Choose File… didn't answer upload's question for $1$2"
+  }
+  upload_page "a.localhost:$port/upload-frames.html"
+  frames_upload_tab=$upload_tab
+  await_log "^browser: title $frames_upload_tab upload frames\$" "the upload page's frames didn't load"
+  outline=$(call snapshot "{\"tab\":$frames_upload_tab}")
+  printf '%s\n' "$outline" > "$out/mcp-upload-frames.txt"
+  for each in "Frame file|x.a.localhost|a subdomain's frame" "Object file|x.a.localhost|an object" \
+    "Cross file|127.0.0.1|another site's frame"; do
+    name=${each%%|*} site=${each#*|} what=${each##*|}
+    site=${site%%|*}
+    ref=$(ref_in "$outline" button "$name")
+    [ -n "$ref" ] || fail "the upload page's outline had no ref for the field in $what: $outline"
+    upload_asks "$frames_upload_tab" "$ref" "the field in $what"
+    if [ "$what" = "a subdomain's frame" ]; then
+      ../tools/window-screenshot.sh "$pid" "$out/agent-upload.png" || fail "no window to capture"
+    fi
+    upload_denied "the field in $what"
+    [ "$denied" = "error: The user said no: you can't add a file to “${name}” on $site. Don't try again." ] ||
+      fail "Don’t Allow on upload's card for the field in $what answered: $denied"
+    await_log "^browser: agent logged mcp-client upload $(printf '%s' "$site" | sed 's/\./\\./g') refused: You said no\\.\$" \
+      "the upload refused for the field in $what isn't in the activity log under $site"
+  done
+  # Choose File… with the dialog up, the page closes its own tab, and the dialog closes with it, as
+  # its Cancel would. Linux may have none, when neither a toolkit nor the portal answers. On Windows
+  # the dialog is a utility process's, which the core tells to close (#3759): once with it up, and
+  # once with the tab closing as Choose File… is pressed, before its window can show, when the core
+  # closes it as it shows. Either way the browser window, which it held, takes a click again: the
+  # next step's Choose File…, real input on CI.
+  dialog_said="opening a dialog that closes with its tab"
+  closes_cases=up
+  ! windows || closes_cases="up early"
+  for closes_case in $closes_cases; do
+    rm -f "$out/site/upload-closes.go"
+    upload_page "a.localhost:$port/upload-closes.html"
+    closes_ref=$(ref_in "$opened" button "Closing file")
+    [ -n "$closes_ref" ] || fail "the page that closes its tab had no ref for its field: $opened"
+    upload_asks "$upload_tab" "$closes_ref" "the field whose page closes its tab"
+    mains=$(grep -c '^browser: window [0-9]* main false$' "$log")
+    upload_chosen "the field whose page closes its tab"
+    [ "$closes_case" = up ] || : > "$out/site/upload-closes.go"
+    dialog=
+    for _ in $(seq 300); do
+      grep -q "browser: file field $upload_field dialog over window [0-9]*\$" "$log" && dialog=up && break
+      grep -q "browser: file field $upload_field has no dialog\$" "$log" && dialog=none && break
+      kill -0 "$pid" 2>/dev/null || fail "the app exited"
+      sleep 0.1
+    done
+    case "$dialog" in
+    up)
+      if [ "$closes_case" = up ]; then
+        # The core logs the dialog as it asks for one. Under Wayland it's the desktop portal's,
+        # which comes up later in another process, and a tab closing before then can't close it:
+        # the portal hasn't made the request yet, so the dialog opens after the tab's gone and
+        # covers the window for the rest of the run (train 6's Wayland leg, 45107971340). So the
+        # page closes once the dialog has taken the window from the browser. On Windows it's a
+        # utility process's, so the page closes once the dialog is shown.
+        if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+          await_more '^browser: window [0-9]* main false$' "$mains" ||
+            fail "the file dialog never took the window from the browser: $(grep "browser: .*file field $upload_field " "$log" | tail -2 | tr '\n' ' ')"
+        fi
+        if windows; then
+          shown=
+          for _ in $(seq 100); do
+            [ -n "$(python3 -I check/app-windows.py dialogs "$(cat "/proc/$pid/winpid")")" ] && shown=1 && break
+            sleep 0.1
+          done
+          [ -n "$shown" ] || fail "Choose File… showed no file dialog in 10 s"
+        fi
+        ../tools/window-screenshot.sh "$pid" "$out/agent-upload-dialog.png" || fail "no window to capture"
+        : > "$out/site/upload-closes.go"
+      fi
+      await_log "^browser: agent mcp-client file field $upload_field closed 0\$" \
+        "the file field's tab closing with its dialog up didn't end it as closed: $(grep "browser: .*file field $upload_field " "$log" | tail -3 | tr '\n' ' ')"
+      if windows; then
+        # What the user sees first: the dialog gone, and the browser window it held usable.
+        left=
+        for _ in $(seq 100); do
+          left=$(python3 -I check/app-windows.py dialogs "$(cat "/proc/$pid/winpid")")
+          [ -z "$left" ] && break
+          sleep 0.1
+        done
+        [ -z "$left" ] || fail "a file dialog was still up 10 s after its field's tab closed: $left"
+        held=
+        for _ in $(seq 50); do
+          held=$(python3 -I check/app-windows.py list "$(cat "/proc/$pid/winpid")" |
+            sed 's/^.*" //' | grep -w browser | grep -w disabled || true)
+          [ -z "$held" ] && break
+          sleep 0.1
+        done
+        [ -z "$held" ] || fail "the browser window was still disabled once its file dialog went: $held"
+        await_log "browser: file field $upload_field closing its dialog\$" \
+          "the core didn't close the file dialog of the field whose tab closed"
+        await_log "browser: file field $upload_field dialog ended\$" \
+          "the file dialog of the field whose tab closed didn't end: $(grep "browser: .*file field $upload_field " "$log" | tail -3 | tr '\n' ' ')"
+        # The core's line, after Chromium's prefix.
+        told=$(grep -o "browser: file field $upload_field dialog told to close.*" "$log" | tr -d '\r')
+        if [ "$closes_case" = up ]; then
+          [ "$told" = "browser: file field $upload_field dialog told to close" ] ||
+            fail "the file dialog that was up when its tab closed wasn't told to close as one up: $told"
+        else
+          # Which way it went is free, as the page asks every 100 ms and can't beat the dialog to
+          # showing; the summary says which, so the runs show whether both ways are seen.
+          case "$told" in
+          "browser: file field $upload_field dialog told to close as it showed")
+            early_said="before its dialog showed, closing it as it showed" ;;
+          "browser: file field $upload_field dialog told to close")
+            early_said="after its dialog had shown, closing it as one up" ;;
+          *) fail "the file dialog of the tab closed at once wasn't told to close: $told" ;;
+          esac
+          echo "the tab closed at once after Choose File… closed $early_said"
+          dialog_said="opening a dialog that closes with its tab, also with the tab closed at once ($early_said),"
+        fi
+      fi
+      chosen=$(next_answer) || fail "the browser didn't answer the upload whose tab closed"
+      chosen=$(printf '%s\n' "$chosen" | answered upload)
+      [ "$chosen" = "error: The file dialog closed before the user chose a file." ] ||
+        fail "the upload whose tab closed with its dialog up answered: $chosen"
+      grep -q "browser: file field $upload_field chose" "$log" &&
+        fail "the dialog of the field whose tab closed answered with a choice: $(grep "browser: file field $upload_field chose" "$log")"
+      ;;
+    none)
+      [ "$(uname)" = Linux ] || fail "Choose File… found no system file dialog off Linux"
+      chosen=$(next_answer) || fail "the browser didn't answer the upload with no file dialog"
+      chosen=$(printf '%s\n' "$chosen" | answered upload)
+      [ "$chosen" = "error: The file dialog couldn't open." ] ||
+        fail "the upload with no file dialog to open answered: $chosen"
+      dialog_said="answering that no dialog could open, as this Linux has none"
+      echo "skip: a file dialog closing with its tab. This Linux has no system file dialog, so Choose File… answered that none could open."
+      : > "$out/site/upload-closes.go"
+      ;;
+    *) fail "Choose File… opened no file dialog: $(grep "browser: file field $upload_field " "$log" | tail -2 | tr '\n' ' ')" ;;
+    esac
+  done
+  # Choose File… once the field's frame went to another page.
+  upload_page "a.localhost:$port/upload-moves.html"
+  moves_tab=$upload_tab
+  await_log "^browser: title $moves_tab upload moves\$" "the upload page's frame didn't load"
+  outline=$(call snapshot "{\"tab\":$moves_tab}")
+  moves_ref=$(ref_in "$outline" button "Frame file")
+  [ -n "$moves_ref" ] || fail "the page whose frame goes had no ref for its field: $outline"
+  upload_asks "$moves_tab" "$moves_ref" "the field whose frame goes"
+  : > "$out/site/upload-moves.go"
+  served "^GET chromium a\\.localhost:$port/upload-moves\\.done " "the upload page's frame didn't go to another page"
+  upload_chosen "the field whose frame went" ", or the file dialog of the step before is still up"
+  await_log "browser: file field $upload_field left before the dialog\$" \
+    "Choose File… for a field whose frame went didn't find it left: $(grep "browser: file field $upload_field " "$log" | tail -2 | tr '\n' ' ')"
+  await_log "^browser: agent mcp-client file field $upload_field left 0\$" \
+    "the app didn't hear the field whose frame went left"
+  chosen=$(next_answer) || fail "the browser didn't answer the upload whose frame went"
+  chosen=$(printf '%s\n' "$chosen" | answered upload)
+  [ "$chosen" = "error: The field left the page before the user chose a file." ] ||
+    fail "the upload whose frame went answered: $chosen"
+  grep -q "browser: file field $upload_field dialog over window" "$log" &&
+    fail "Choose File… for a field whose frame went opened a file dialog"
+  for each in "$frames_upload_tab" "$moves_tab"; do
+    closed=$(call close_tab "{\"tab\":$each}")
+    case "$closed" in "Closed tab $each."*) ;; *) fail "closing upload's tab $each answered: $closed" ;; esac
+  done
+
   # The site the user listed asks before the agent opens it, in a card of Never and Allow Once
   # alone, and Allow Once opens it. A tab that comes there by any other way, a link here, asks
   # before the agent's next call on it, a read included, and the click's answer gives nothing of
@@ -3768,6 +4111,7 @@ if [ "$driven" = 1 ]; then
       # bridge's here. sway gives it the keyboard.
       cargo build -q --release --manifest-path check/drag/Cargo.toml --target-dir target ||
         fail "check/drag didn't build"
+      : > "$out/other-window.log" # an earlier run's window stays named in it until emptied (#4040)
       target/release/drag 1280x800 window < "$out/other-in" > "$out/other-window.log" 2>&1 &
       other=$!
       exec 7> "$out/other-in"
@@ -3777,6 +4121,7 @@ if [ "$driven" = 1 ]; then
       swaymsg '[app_id=ilo-drag] focus' > /dev/null ||
         fail "sway didn't give check/drag's window the keyboard"
     else
+      : > "$out/other-window.log" # an earlier run's window stays named in it until emptied (#4040)
       python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
       other=$!
       exec 7> "$out/other-in"
@@ -4299,6 +4644,12 @@ if [ "$driven" = 1 ]; then
     "its download asks first and answers with the file," \
     "a refused one leaving none," \
     "one its watched page starts after its call answered asking too," \
+    "its upload asks in a card naming the field's frame's site," \
+    "Don't Allow saying no," \
+    "Choose File… $dialog_said and none for a field whose frame went," \
+    "and is refused unasked for a folder's field," \
+    "a button," \
+    "a sandboxed frame's field and a document whose root frames none," \
     "a key press that pays asks as a click on Pay now does," \
     "typing with submit," \
     "Enter in the card's field," \
@@ -4337,7 +4688,9 @@ else
     "and its actions wait for their element and their page to settle ($settle)," \
     "an app in a frame answering with its content or as busy ($framed)," \
     "and the tabs its page opens are kept in its Space," \
-    "behind$opened_said. A tab's id from before a relaunch is refused as such," \
+    "behind$opened_said. Its upload is refused unasked for a folder's field," \
+    "a button," \
+    "a sandboxed frame's field and a document whose root frames none. A tab's id from before a relaunch is refused as such," \
     "done ends its task once its handoff is answered and not before," \
     "its next task ends 3 s after its last page closed," \
     "and a passkey its page asks for $passkey_said. skip: reading a page in its Space. Browser wasn't the active app," \

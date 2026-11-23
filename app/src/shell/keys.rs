@@ -160,7 +160,7 @@ pub fn reserved(command: Command) -> bool {
 }
 
 /// Chrome's keys on Linux and Windows that the Mac's Chrome and Arc have no key for.
-const OFF_THE_MAC_ONLY: &[&str] = &["shift-escape"];
+const OFF_THE_MAC_ONLY: &[&str] = &["shift-escape", "f10"];
 /// Arc's keys off the Mac would press as another of ours: ⌃⌘N's Blank Window is Ctrl+Alt+N there,
 /// which is ⌥⌘N's Little ilo Window (#669).
 const MAC_ONLY: &[&str] = &["ctrl-cmd-n"];
@@ -275,9 +275,11 @@ fn one_press(a: &str, b: &str) -> bool {
 /// Ctrl for ⌘ and Alt for ⌃ (docs/ux-spec.md › Keyboard). The tests run the Mac's keys everywhere.
 pub const OFF_THE_MAC: bool = cfg!(not(any(target_os = "macos", test)));
 
-/// Chrome's Alt keys on Linux and Windows, which keep Chrome's meaning there, so no ⌃ key becomes
-/// one, with the key of ours that does what Chrome's does, if one does.
-const CHROME_ALT_KEYS: &[(&str, Option<&str>)] = &[
+/// Chrome's keys on Linux and Windows that the Mac's way of pressing ours doesn't give, its Alt keys
+/// and Ctrl+F4, which keep Chrome's meaning there, so no key of ours becomes one, with the key of
+/// ours that does what Chrome's does, if one does.
+const CHROME_KEYS: &[(&str, Option<&str>)] = &[
+    ("ctrl-f4", Some("cmd-w")),
     ("alt-left", Some("cmd-left")),
     ("alt-right", Some("cmd-right")),
     ("alt-d", Some("cmd-l")),
@@ -295,7 +297,7 @@ pub fn chrome_twins(key: &str) -> Vec<&'static str> {
 }
 
 fn chrome_twins_on(key: &str, off_the_mac: bool) -> Vec<&'static str> {
-    (CHROME_ALT_KEYS.iter())
+    (CHROME_KEYS.iter())
         .filter(|&&(_, ours)| off_the_mac && ours == Some(key))
         .map(|&(chrome, _)| chrome)
         .collect()
@@ -318,12 +320,10 @@ pub(super) fn pressed_off_the_mac(key: &str) -> Vec<String> {
         (true, true) => return Vec::new(),
         _ => written([cmd, ctrl || alt, shift, false], rest),
     };
-    if CHROME_ALT_KEYS.iter().any(|&(chrome, _)| chrome == pressed) {
+    if CHROME_KEYS.iter().any(|&(chrome, _)| chrome == pressed) {
         return Vec::new();
     }
-    let chrome = CHROME_ALT_KEYS
-        .iter()
-        .filter(|&&(_, ours)| ours == Some(key));
+    let chrome = CHROME_KEYS.iter().filter(|&&(_, ours)| ours == Some(key));
     std::iter::once(pressed)
         .chain(chrome.map(|&(chrome, _)| chrome.to_string()))
         .collect()
@@ -423,10 +423,7 @@ pub fn written_as(keystroke: &str) -> String {
 }
 
 fn written_off_the_mac(keystroke: &str) -> String {
-    if let Some(&(_, Some(ours))) = CHROME_ALT_KEYS
-        .iter()
-        .find(|&&(chrome, _)| chrome == keystroke)
-    {
+    if let Some(&(_, Some(ours))) = CHROME_KEYS.iter().find(|&&(chrome, _)| chrome == keystroke) {
         return ours.to_string();
     }
     let ([ctrl, alt, shift, superkey], rest) = held(keystroke);
@@ -1642,7 +1639,7 @@ mod tests {
             }
             let pressed = pressed_off_the_mac(key);
             let alt = key.replacen("ctrl-", "alt-", 1);
-            if !key.contains("cmd-") && CHROME_ALT_KEYS.iter().any(|&(chrome, _)| chrome == alt) {
+            if !key.contains("cmd-") && CHROME_KEYS.iter().any(|&(chrome, _)| chrome == alt) {
                 assert!(pressed.is_empty(), "{key} takes Chrome's key");
                 continue;
             }
@@ -1770,6 +1767,23 @@ mod tests {
         assert!(!one_press("ctrl-shift-2", "shift-cmd-@"));
     }
 
+    /// Off the Mac F10 is Focus ilo Menu's, as Chrome's F10 rings its menu button, unreserved as
+    /// Chrome's is, so a page that keeps F10 keeps it. The Mac's menu bar has the system's key, so
+    /// there it has none (#4030).
+    #[test]
+    fn f10_focuses_the_menu_off_the_mac_alone() {
+        let keys = UserKeys::default();
+        assert!(
+            keys.bindings_on(true)
+                .contains(&("f10", Command::FocusMenu))
+        );
+        let on_the_mac = keys.bindings_on(false);
+        let f10 = (on_the_mac.iter())
+            .filter(|&&(key, command)| key == "f10" || command == Command::FocusMenu);
+        assert_eq!(f10.count(), 0);
+        assert!(!reserved(Command::FocusMenu));
+    }
+
     /// Off the Mac, Chrome's Alt+Left and Alt+Right follow Back's and Forward's ⌘← and ⌘→, and
     /// ⌘[ has none. On the Mac, no key has one.
     #[test]
@@ -1778,6 +1792,10 @@ mod tests {
         assert_eq!(chrome_twins_on("cmd-right", true), ["alt-right"]);
         assert!(chrome_twins_on("cmd-[", true).is_empty());
         assert!(chrome_twins_on("cmd-left", false).is_empty());
+        // Close Tab's Ctrl+F4, as Chrome's on Windows and Linux (#4030), and none on the Mac.
+        assert_eq!(chrome_twins_on("cmd-w", true), ["ctrl-f4"]);
+        assert_eq!(pressed_off_the_mac("cmd-w"), ["ctrl-w", "ctrl-f4"]);
+        assert!(chrome_twins_on("cmd-w", false).is_empty());
         assert_eq!(
             super::super::commands::pressed_label_on("alt-left", true),
             "Alt+Left Arrow"

@@ -379,6 +379,7 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::ExpandFolders => "icons/folder-open.svg",
         Command::ExpandPinned => "icons/chevrons-up-down.svg",
         Command::FocusSidebar => "icons/keyboard.svg",
+        Command::FocusMenu => "icons/nav-menu.svg",
         Command::NewFolder => "icons/folder-plus.svg",
         Command::TogglePin | Command::PinToSpace(_) => "icons/pin.svg",
         Command::OpenFolder(_) => "icons/folder-open.svg",

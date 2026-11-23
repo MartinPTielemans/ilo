@@ -190,6 +190,7 @@ impl Browser for Core {
             PageAction::Screenshot => bc::BC_AGENT_PAGE_SCREENSHOT,
             PageAction::Quiet => bc::BC_AGENT_PAGE_QUIET,
             PageAction::Select => bc::BC_AGENT_PAGE_SELECT,
+            PageAction::FileField => bc::BC_AGENT_PAGE_FILE_FIELD,
         };
         // A NUL can't reach the page, so text with one goes without what follows it.
         let text = text.split('\0').next().unwrap_or_default();
@@ -254,6 +255,14 @@ impl Browser for Core {
 
     fn answer_download(&self, download: u64, keep: bool) {
         unsafe { bc::bc_agent_download_answer(download, keep) };
+    }
+
+    fn file_field_choose(&self, field: u64, window: u64) -> bool {
+        unsafe { bc::bc_file_field_choose(field, window) }
+    }
+
+    fn file_field_drop(&self, field: u64) {
+        unsafe { bc::bc_file_field_drop(field) };
     }
 
     fn set_pinned(&self, tab: u64, pinned: bool, _: &mut App) {

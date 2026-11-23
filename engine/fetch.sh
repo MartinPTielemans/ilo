@@ -102,9 +102,50 @@ case $status in
 *) fail "couldn't compare core/public/browser_core.h with the prebuilt engine's (${commit:0:12})." ;;
 esac
 
-dir=$PWD/.deps/prebuilt/$sha256
+# Off CI, the engines are in a cache every checkout shares, with app/setup.sh's GPUI (#3917), and
+# one fetch or setup at a time changes it, as there. Each is made whole in .part, then moved, and
+# never changed or deleted after: not made read-only, as the Mac's build signs its copy of the
+# engine, which keeps the engine's modes. CI and Git Bash keep theirs in .deps/prebuilt.
+cache=${ILO_SETUP_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/ilo-setup}
+[ -z "${GITHUB_ACTIONS:-}" ] || cache=
+[ "$platform" != windows ] || cache=
+prebuilt=$PWD/.deps/prebuilt
+[ -z "$cache" ] || prebuilt=$cache/prebuilt
+# The lock is a link naming its holder's process, made in one step. One left by a process that was
+# killed outright is named, not taken, as only the user knows none still runs.
+locked=
+lock() {
+  [ -n "$cache" ] && [ -z "$locked" ] || return 0
+  mkdir -p "$cache"
+  trap unlock EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM HUP
+  local waited=0 holder
+  until ln -s "$$" "$cache/lock" 2>/dev/null; do
+    holder=$(readlink "$cache/lock" 2>/dev/null || true)
+    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+      fail "process $holder, which has ended, holds $cache/lock. Remove it if no setup is running."
+    fi
+    [ "$waited" -gt 0 ] ||
+      echo "fetch: waiting for the setup or fetch${holder:+ in process $holder} using $cache" >&2
+    waited=$((waited + 1))
+    [ "$waited" -lt 1800 ] || fail "$cache/lock was held for 30 minutes."
+    sleep 1
+  done
+  locked=1
+}
+unlock() {
+  if [ -n "$cache" ] && [ "$(readlink "$cache/lock" 2>/dev/null)" = "$$" ]; then
+    rm -f "$cache/lock"
+  fi
+  locked=
+}
+
+dir=$prebuilt/$sha256
+# Looked for again once locked, as the fetch waited on may have made it.
+[ -d "$dir" ] || lock
 if [ ! -d "$dir" ]; then
-  mkdir -p .deps/prebuilt
+  mkdir -p "$prebuilt"
   name=${url##*/}
   archive=$dir.${name#*.}
   echo "fetch: downloading the prebuilt engine (${commit:0:12})" >&2
@@ -119,11 +160,13 @@ if [ ! -d "$dir" ]; then
   esac
   rm "$archive"
   mv "$dir.part" "$dir"
-  # Earlier prebuilt engines go, but not for the symbols, which go with the next engine. A built
-  # app keeps its own copy.
-  [ -n "$symbols" ] || find .deps/prebuilt -mindepth 1 -maxdepth 1 ! -name "$sha256" -exec rm -rf {} +
+  # Earlier prebuilt engines go, but not for the symbols, which go with the next engine, and not
+  # from the cache. A built app keeps its own copy.
+  [ -n "$symbols" ] || [ -n "$cache" ] ||
+    find .deps/prebuilt -mindepth 1 -maxdepth 1 ! -name "$sha256" -exec rm -rf {} +
 fi
 if [ -n "$symbols" ] && [ "$platform" = mac ]; then
+  [ -d "$dir/Chromium Framework.dSYM" ] || lock
   if ! [ -d "$dir/Chromium Framework.dSYM" ]; then
     url=${url%/*}/Chromium-mac-arm64-dSYMs.tar.xz
     sha256=$(curl -fsSL --retry 5 "$url.sha256") ||
@@ -137,8 +180,13 @@ if [ -n "$symbols" ] && [ "$platform" = mac ]; then
     mkdir "$dir.dSYMs"
     tar -xf "$archive" -C "$dir.dSYMs"
     rm "$archive"
-    mv "$dir.dSYMs"/*.dSYM "$dir"
-    rmdir "$dir.dSYMs"
+    # Each moves in whole, the framework's last, as it's what says they're all there. One a killed
+    # fetch already moved stays.
+    for each in "$dir.dSYMs"/*.dSYM; do
+      [ "${each##*/}" = "Chromium Framework.dSYM" ] || [ -e "$dir/${each##*/}" ] || mv "$each" "$dir"
+    done
+    [ ! -d "$dir.dSYMs/Chromium Framework.dSYM" ] || mv "$dir.dSYMs/Chromium Framework.dSYM" "$dir"
+    rm -rf "$dir.dSYMs"
   fi
   echo "$dir"
   exit 0

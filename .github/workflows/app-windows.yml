@@ -102,8 +102,16 @@ jobs:
       # The bridge an agent's MCP client runs to reach the browser's named pipe, and the ilo command,
       # which reaches it as one more client.
       - run: cargo build --release --bin mcp-bridge --bin ilo-command
+      # windows/Cargo.lock pins what ships, seeded from ../Cargo.lock (#3966); a stale one fails here,
+      # with the fix in its error, before the check below.
+      - name: Is windows/Cargo.lock seeded from Cargo.lock?
+        run: |
+          cargo metadata --locked --format-version 1 --manifest-path windows/Cargo.toml >/dev/null || {
+            echo "::error file=app/windows/Cargo.lock::app/windows/Cargo.lock is behind app/Cargo.lock. In app/, run: cp Cargo.lock windows/Cargo.lock && cargo metadata --format-version 1 --manifest-path windows/Cargo.toml >/dev/null, and commit windows/Cargo.lock."
+            exit 1
+          }
       # The browser, Browser.dll, unlinked, as it links the engine: its Windows code and the driver's.
-      - run: cargo check --release --manifest-path windows/Cargo.toml --target-dir target
+      - run: cargo check --release --locked --manifest-path windows/Cargo.toml --target-dir target
       # What follows decides nothing, so this tree has passed.
       - uses: ./.github/actions/tree-proof
         with:

@@ -1,7 +1,8 @@
-# On the Mac, app/check.sh and the runs it sources run under /bin/sh, which is bash 3.2.57 in POSIX
-# mode, and a file that starts #!/bin/bash under bash 3.2. On Linux /bin/sh is dash, which parses
-# no bashisms, such as a here-string, <<<, that bash 3.2 takes (#2074). Bash 5 takes what 3.2
-# can't, so the scripts may hold none of:
+# On the Mac, app/check.sh, the runs it sources and the files they source from a folder of their
+# own, such as check/import/'s (#4051), run under /bin/sh, which is bash 3.2.57 in POSIX mode, and
+# a file that starts #!/bin/bash under bash 3.2. On Linux /bin/sh is dash, which parses no bashisms,
+# such as a here-string, <<<, that bash 3.2 takes (#2074). Bash 5 takes what 3.2 can't, so the
+# scripts may hold none of:
 # - bash 4 features: declare -A, ${var,,}, mapfile, |&, ;& and so on;
 # - a process substitution, <( ), outside a #!/bin/bash file;
 # - an apostrophe in a comment inside $( ), or inside a single-quoted string.
@@ -9,8 +10,11 @@
 # and a parse error in a sourced run ends the check (#1267). This job builds bash 3.2 from GNU's
 # source once, caches it, and parses each script as the Mac would. The Mac update proof's scripts
 # in .github/sparkle-mac-proof/ run under the hosted Mac's bash 3.2 only at a release's cut, so
-# they're parsed here too, on the change that adds the bashism. A parse misses the bash 4 features
-# that fail only when they run, so a grep finds those.
+# they're parsed here too, on the change that adds the bashism, as is .github/scripts/runs.sh, which
+# the Mac's check job runs. A parse misses the bash 4 features that fail only when they run, so a
+# grep finds those.
+# runs.sh deals the Mac's and Windows' check runs across their jobs (#3917): for each OS, each list
+# and each job count its workflow uses, the job checks that each run is in exactly one job's share.
 # tools/check-lints.py checks the runs and the app's log lines they read: a "check.sh reads this
 # line" marker over a line no run reads, a bare sleep that says no window it waits out, and a
 # none_since straight after the input it's about (#2196).
@@ -23,13 +27,13 @@ on:
   # Branches only: an engine release's tag, pushed with the owner's token, starts nothing here.
   push:
     branches: ['**']
-    paths: [app/check.sh, 'app/check/*.sh', 'app/check/quarantine.*', 'app/src/**',
-      'app/platform/**', 'core/**', 'tools/**', '.github/workflows/**',
-      '.github/sparkle-mac-proof/*.sh']
+    paths: [app/check.sh, 'app/check/*.sh', 'app/check/*/*.sh', 'app/check/quarantine.*',
+      'app/src/**', 'app/platform/**', 'core/**', 'tools/**', '.github/workflows/**',
+      '.github/sparkle-mac-proof/*.sh', .github/scripts/runs.sh]
   pull_request:
-    paths: [app/check.sh, 'app/check/*.sh', 'app/check/quarantine.*', 'app/src/**',
-      'app/platform/**', 'core/**', 'tools/**', '.github/workflows/**',
-      '.github/sparkle-mac-proof/*.sh']
+    paths: [app/check.sh, 'app/check/*.sh', 'app/check/*/*.sh', 'app/check/quarantine.*',
+      'app/src/**', 'app/platform/**', 'core/**', 'tools/**', '.github/workflows/**',
+      '.github/sparkle-mac-proof/*.sh', .github/scripts/runs.sh]
   # 04:53 UTC, before the Check workflows' nights read the lists.
   schedule:
     - cron: '53 4 * * *'
@@ -82,7 +86,10 @@ jobs:
       - name: Parse each script as the Mac would
         run: |
           status=0
-          for file in app/check.sh app/check/*.sh .github/sparkle-mac-proof/*.sh; do
+          # With the files a run sources from a folder of its own, such as check/import/'s, none of
+          # which may be there yet (#4051).
+          shopt -s nullglob
+          for file in app/check.sh app/check/*.sh app/check/*/*.sh .github/sparkle-mac-proof/*.sh .github/scripts/runs.sh; do
             # Sourced on Windows alone, by Git Bash's bash 5.
             [ "$file" = app/check/git-bash.sh ] && continue
             if [ "$(head -n 1 "$file")" = '#!/bin/bash' ]; then mode=; else mode=--posix; fi
@@ -93,10 +100,72 @@ jobs:
             fi
           done
           # bash 4 features a parse takes but 3.2 fails on when it runs, outside comments.
-          if grep -nE '^[^#]*(declare -A|local -A|typeset -A|\<mapfile\>|\<readarray\>|\<coproc\>|\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?(,|\^))' app/check.sh app/check/*.sh .github/sparkle-mac-proof/*.sh; then
+          if grep -nE '^[^#]*(declare -A|local -A|typeset -A|\<mapfile\>|\<readarray\>|\<coproc\>|\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?(,|\^))' app/check.sh app/check/*.sh app/check/*/*.sh .github/sparkle-mac-proof/*.sh .github/scripts/runs.sh; then
             echo "::error::bash 4 features above, which the Mac's bash 3.2 lacks"
             status=1
           fi
+          exit $status
+
+      # For the default runs and all, over the jobs the workflow's matrix has for them: each of the
+      # runs the check does in exactly one job's share, and each of check.sh's runs too, as each job
+      # gives its share a result line. Under bash 3.2, as the Mac's check job runs runs.sh.
+      - name: Each run in one job's share
+        run: |
+          runs() { ~/bash32/bash .github/scripts/runs.sh "$@"; }
+          all=$(runs all)
+          status=0
+          for os in mac windows; do
+            file=.github/workflows/check-$os.yml
+            # The matrix's jobs for runs=all and for the default runs, as "1, 2, 3, 4;1, 2, 3".
+            counts=$(sed -n "s/.*inputs.runs == 'all' && '\[\([0-9, ]*\)\]' || inputs.runs == '' && '\[\([0-9, ]*\)\]'.*/\1;\2/p" "$file")
+            [ -n "$counts" ] || { echo "::error file=$file::No shard matrix for runs=all and the default runs"; status=1; continue; }
+            # The default runs, as the workflow's runs step makes them.
+            case $os in
+            mac)
+              vm=$(sed -n "s/^ *VM_RUNS: '\(.*\)'$/\1/p" "$file")
+              default=
+              for run in $(sh app/check.sh --runs default); do
+                case " $vm " in *" $run "*) ;; *) default="$default $run" ;; esac
+              done
+              ;;
+            windows) default=$(awk '/^ *WINDOWS_RUNS: >-$/ { on = 1; next } on && !/^        / { exit } on' "$file") ;;
+            esac
+            for list in all default; do
+              if [ "$list" = all ]; then todo=$all of=${counts%;*}; else todo=$default of=${counts#*;}; fi
+              of=$(echo "$of" | tr ',' '\n' | grep -c .)
+              todo=" $(echo $todo) "
+              shares=
+              sizes=
+              for n in $(seq "$of"); do
+                share=$(runs shard "$n" "$of" $todo)
+                shares="$shares $share"
+                done=0
+                for run in $share; do
+                  case $todo in *" $run "*) done=$((done + 1)) ;; esac
+                done
+                sizes="$sizes $done"
+              done
+              for run in $all; do
+                count=$(printf '%s\n' $shares | grep -cxF -- "$run" || true)
+                case $count in
+                1) ;;
+                0) echo "::error file=$file::$os, $list runs over $of jobs: $run is in no job's share" ;;
+                *) echo "::error file=$file::$os, $list runs over $of jobs: $run is in $count jobs' shares" ;;
+                esac
+                [ "$count" = 1 ] || status=1
+              done
+              for run in $todo; do
+                case " $all " in
+                *" $run "*) ;;
+                *)
+                  echo "::error file=$file::$os, $list runs: $run, which check.sh doesn't have, is in no job's share"
+                  status=1
+                  ;;
+                esac
+              done
+              echo "$os, $list runs over $of jobs, runs done in each:$sizes"
+            done
+          done
           exit $status
 
   lints:

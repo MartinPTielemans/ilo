@@ -120,23 +120,108 @@ jobs:
           *) exit "$status" ;;
           esac
 
-  check:
+  # The app the check jobs run, built once for them all (#3917), or the one another check of this
+  # commit kept (app-artifact.sh).
+  build:
     needs: engine
     if: ${{ needs.engine.outputs.found == 'true' }}
+    name: build${{ (github.event.schedule == '23 7 * * *' || inputs.runner == 'windows-2025') && ' on windows-2025' || '' }}
+    runs-on: ${{ github.event.schedule == '23 7 * * *' && 'windows-2025' || inputs.runner || 'windows-2022' }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      # app-artifact.sh find reads the repository's artifacts.
+      actions: read
+    defaults:
+      run:
+        shell: bash
+        working-directory: app
+    outputs:
+      run: ${{ steps.app.outputs.run }}
+    steps:
+      # setup.sh and the patches it applies need the repository's line endings.
+      - run: git config --global core.autocrlf false
+        working-directory: .
+      # With the history, where fetch.sh looks for the engine's commit.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The app another check of this commit built, if one kept it, unless this run asked for a
+      # build.
+      - id: kept
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REBUILD: ${{ inputs.rebuild }}
+        run: |
+          run=
+          [ "$REBUILD" = true ] || run=$(../.github/scripts/app-artifact.sh find "app-windows-$GITHUB_SHA")
+          echo "run=$run" | tee -a "$GITHUB_OUTPUT"
+
+      - if: ${{ steps.kept.outputs.run == '' }}
+        run: rustup update stable --no-self-update
+
+      # Every ref reads main's build cache, and main alone saves one: a copy saved by each
+      # branch pushed main's out of the repository's 10 GB (#1969).
+      - id: cache
+        if: ${{ steps.kept.outputs.run == '' }}
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: check-windows-${{ hashFiles('app/Cargo.lock', 'app/windows/Cargo.lock', 'app/setup.sh', 'app/patches/**') }}
+          restore-keys: |
+            check-windows-
+            app-windows-
+
+      - id: build
+        if: ${{ steps.kept.outputs.run == '' }}
+        run: ./setup.sh && ./build.sh
+
+      # For this run's check jobs, and for 3 days the next check of this commit's.
+      - if: ${{ steps.build.outcome == 'success' }}
+        run: ../.github/scripts/app-artifact.sh pack "$(../engine/fetch.sh)" "$RUNNER_TEMP/app.tar"
+      - if: ${{ steps.build.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-windows-${{ github.sha }}
+          path: ${{ runner.temp }}/app.tar
+          retention-days: 3
+          overwrite: true
+
+      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+      - id: app
+        env:
+          KEPT: ${{ steps.kept.outputs.run }}
+        run: echo "run=${KEPT:-$GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+
+  check:
+    needs: build
     # Named apart when it does other runs than the default ones, so it's no verdict on the commit.
-    name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}${{ matrix.shard != 0 && format(' {0}/{1}', matrix.shard, inputs.runs == 'all' && 3 || 2) || '' }}${{ (github.event.schedule == '23 7 * * *' || inputs.runner == 'windows-2025') && ' on windows-2025' || '' }}
-    # runs=all takes longer than the job's 120 minutes, so it's dealt across three jobs, each with
-    # its share of the runs (.github/scripts/runs.sh, #2271). Since 11-12 the default runs take longer
-    # too, so they're dealt across two (#2618). Any other list is one job's.
+    name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}${{ matrix.shard != 0 && format(' {0}/{1}', matrix.shard, strategy.job-total) || '' }}${{ (github.event.schedule == '23 7 * * *' || inputs.runner == 'windows-2025') && ' on windows-2025' || '' }}
+    # The default runs and runs=all take longer than the job's 120 minutes, so they're dealt across
+    # four jobs and five, each with its share of the runs (.github/scripts/runs.sh, #2271, #2618,
+    # #3917). Any other list is one job's.
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(inputs.runs == 'all' && '[1, 2, 3]' || inputs.runs == '' && '[1, 2]' || '[0]') }}
+        shard: ${{ fromJSON(inputs.runs == 'all' && '[1, 2, 3, 4, 5]' || inputs.runs == '' && '[1, 2, 3, 4]' || '[0]') }}
     runs-on: ${{ github.event.schedule == '23 7 * * *' && 'windows-2025' || inputs.runner || 'windows-2022' }}
     timeout-minutes: 120
     permissions:
       contents: read
-      # A re-run reads the run's earlier attempts (main-check.sh rerun).
+      # A re-run reads the run's earlier attempts (main-check.sh rerun), and the app is the build
+      # job's artifact, or another run's.
       actions: read
     defaults:
       run:
@@ -150,7 +235,7 @@ jobs:
       # the check's own, which the driver asks before it takes it.
       BROWSER_DRIVE_REAL: 1
       # How many jobs the runs are dealt across, for runs.sh shard.
-      SHARDS: ${{ inputs.runs == 'all' && 3 || 2 }}
+      SHARDS: ${{ strategy.job-total }}
       # The runs the Windows driver (platform/windows/drive.cc) is meant to pass so far.
       WINDOWS_RUNS: >-
         load tabs dialogs crash about onboarding import agents access passkeys passwords quit quit-history relaunch
@@ -159,8 +244,12 @@ jobs:
         battery-os adblock adblock-lists adblock-cosmetic adblock-page store sync-extensions
         battery calls cards count everyday extensions favorites hosts
         idle media notifications policies popup preview ranking switch-frames translate webrtc windows
-        pictures boosts arrange-card foot-bar peek-motion rules overlays safe-start update-checks shots sidebar-right alt-click mini-bar
+        pictures boosts arrange-card foot-bar peek-motion rules overlays safe-start update-checks sidebar-right alt-click mini-bar
         page-menu arrange arrange-trade arrange-drop arrange-order panel-shadows share
+      # And at night alone: shots makes the Store's and the README's pictures of live sites and
+      # checks nothing past getting to them, and a train's red has to be about the PRs in it, not a
+      # site that didn't answer (#4074). Named, it runs on any dispatch.
+      WINDOWS_NIGHTS: shots
       # The runs that don't apply to Windows, a line each with why, which the summary gives. They're
       # skipped even when named.
       WINDOWS_SKIPS: |
@@ -171,6 +260,9 @@ jobs:
         tab-drag: it checks Wayland's drag; the windows run checks the drag on Windows
         updates: Windows' updater is only in a release build, which check.sh doesn't make
     steps:
+      # When the job started, for the Runs step's limit below.
+      - run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+        working-directory: .
       # setup.sh and the patches it applies need the repository's line endings.
       - run: git config --global core.autocrlf false
         working-directory: .
@@ -185,24 +277,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: ../.github/scripts/main-check.sh rerun
 
-      - run: ../engine/fetch.sh > /dev/null
-
-      # The runs this job does.
+      # The runs this job does, and its share of check.sh's runs, each of which it gives a result
+      # line, done or skipped.
       - id: runs
         env:
           RUNS: ${{ inputs.runs }}
           SHARD: ${{ matrix.shard }}
+          EVENT: ${{ github.event_name }}
         run: |
           case $RUNS in
           '')
-            runs=
-            for run in $(../.github/scripts/runs.sh shard "$SHARD" "$SHARDS"); do
-              case " $(echo $WINDOWS_RUNS) " in *" $run "*) runs="$runs $run" ;; esac
-            done
+            todo=$WINDOWS_RUNS
+            [ "$EVENT" != schedule ] || todo="$todo $WINDOWS_NIGHTS"
             ;;
-          all) runs=$(../.github/scripts/runs.sh shard "$SHARD") ;;
-          *) runs=$RUNS ;;
+          all) todo=$(../.github/scripts/runs.sh all) ;;
+          *) todo=$RUNS ;;
           esac
+          share=$(../.github/scripts/runs.sh shard "$SHARD" "$SHARDS" $todo)
+          runs=
+          for run in $share; do
+            case " $(echo $todo) " in *" $run "*) runs="$runs $run" ;; esac
+          done
+          echo "share= $(echo $share) " >> "$GITHUB_OUTPUT"
           echo "list= $(echo $runs) " | tee -a "$GITHUB_OUTPUT"
 
       # The runs call python3, which the runner names python. The access run reads UI Automation
@@ -225,35 +321,47 @@ jobs:
           Set-Item -Path $maps -Value 'URL:Maps'
           New-ItemProperty -Path $maps -Name 'URL Protocol' -Value '' -Force | Out-Null
 
-      # The app another check of this commit built, if one kept it (app-artifact.sh), unless a run
-      # asked for builds one of its own with build.sh updates, which needs the build's target/.
-      - id: kept
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RUNS: ${{ inputs.runs }}
-          REBUILD: ${{ inputs.rebuild }}
-        run: |
-          run=
-          case " $RUNS " in
-          *" all "* | *" nightly "* | *" update-checks "*) ;;
-          *) [ "$REBUILD" = true ] || run=$(../.github/scripts/app-artifact.sh find "app-windows-$GITHUB_SHA") ;;
-          esac
-          echo "run=$run" | tee -a "$GITHUB_OUTPUT"
-      - if: ${{ steps.kept.outputs.run != '' }}
+      # The app the build job made or found. A check job never builds one of its own: without the
+      # build job's, it fails, saying so.
+      - id: download
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: app-windows-${{ github.sha }}
           path: ${{ runner.temp }}/app
-          run-id: ${{ steps.kept.outputs.run }}
+          run-id: ${{ needs.build.outputs.run }}
           github-token: ${{ github.token }}
-      - id: unpacked
-        if: ${{ steps.kept.outputs.run != '' }}
-        run: ../.github/scripts/app-artifact.sh unpack "$(../engine/fetch.sh)" "$RUNNER_TEMP/app/app.tar"
+      - id: app
+        name: App
+        env:
+          GOT: ${{ steps.download.outcome }}
+          RUN: ${{ needs.build.outputs.run }}
+        run: |
+          if [ "$GOT" != success ]; then
+            echo "::error::No app to check: the build job's app-windows-$GITHUB_SHA, in run $RUN, didn't download, and a check job never builds one of its own. The build job says why."
+            exit 1
+          fi
+          ../.github/scripts/app-artifact.sh unpack "$(../engine/fetch.sh)" "$RUNNER_TEMP/app/app.tar"
+
+      # The runs that compile a check copy of their own with the feed and key they make (build.sh
+      # updates: update-checks, nightly) need the toolchain, the build's cache and setup.sh's .deps,
+      # which only job 1 sets up, as runs.sh deals them there. The copy is of the build job's app.
+      - name: Toolchain
+        id: toolchain
+        env:
+          RUNS: ${{ steps.runs.outputs.list }}
+        run: |
+          need=
+          for run in $(grep -l 'build.sh updates' check/*.sh | sed 's|^check/\(.*\)\.sh$|\1|'); do
+            case $RUNS in *" $run "*) need=1 ;; esac
+          done
+          [ -n "$need" ] || { echo "No run compiles a check copy of its own, so no toolchain is set up."; exit 0; }
+          echo "need=1" >> "$GITHUB_OUTPUT"
 
       # Every ref reads main's build cache, and main alone saves one: a copy saved by each
       # branch pushed main's out of the repository's 10 GB (#1969).
       - id: cache
-        if: ${{ steps.kept.outputs.run == '' }}
+        if: ${{ steps.toolchain.outputs.need == '1' }}
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -265,29 +373,8 @@ jobs:
             check-windows-
             app-windows-
 
-      - id: build
-        if: ${{ steps.kept.outputs.run == '' }}
-        run: ./setup.sh && ./build.sh
-
-      # For the next check of this commit, for 3 days.
-      - if: ${{ steps.build.outcome == 'success' }}
-        run: ../.github/scripts/app-artifact.sh pack "$(../engine/fetch.sh)" "$RUNNER_TEMP/app.tar"
-      - if: ${{ steps.build.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-windows-${{ github.sha }}
-          path: ${{ runner.temp }}/app.tar
-          retention-days: 3
-          overwrite: true
-
-      - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            app/target
-          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - if: ${{ steps.toolchain.outputs.need == '1' }}
+        run: ./setup.sh
 
       # The runner's screen is 1024 by 768, where the app's 1280 by 800 window doesn't fit and the
       # windows the runs place are kept on screen elsewhere. A screen as big as the ones the Mac's
@@ -392,7 +479,7 @@ jobs:
       # own, on SQLite with a throwaway account, never the hosted one: built from the server's repo
       # at the commit check-linux.yml builds, when the runs include one.
       - id: server
-        if: ${{ (steps.build.outcome == 'success' || steps.unpacked.outcome == 'success') && (contains(steps.runs.outputs.list, ' sync-account ') || contains(steps.runs.outputs.list, ' sync-devices ') || contains(steps.runs.outputs.list, ' sync-extensions ')) }}
+        if: ${{ contains(steps.runs.outputs.list, ' sync-account ') || contains(steps.runs.outputs.list, ' sync-devices ') || contains(steps.runs.outputs.list, ' sync-extensions ') }}
         uses: actions/checkout@v4
         with:
           repository: MartinPTielemans/ilo-server
@@ -443,6 +530,16 @@ jobs:
           run-id: ${{ inputs.lists_from }}
           github-token: ${{ github.token }}
 
+      # The Runs step's limit: what's left of the job's 120 minutes, less 3 for the steps after it.
+      # A job cut at its own limit is cancelled and runs nothing more, not even if: always() steps,
+      # and GitHub kept no log of one (45117074436); a step cut at its limit is killed, and the job
+      # goes on to name the run it was in and upload the results (#4036).
+      - id: limit
+        run: |
+          minutes=$((117 - ($(date +%s) - JOB_START + 59) / 60))
+          [ "$minutes" -ge 1 ] || minutes=1
+          echo "minutes=$minutes" | tee -a "$GITHUB_OUTPUT"
+
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       # Each of the job's share of check.sh's runs gets a line in its results, done or skipped, which
       # the complete job reads.
@@ -451,16 +548,19 @@ jobs:
       - name: Runs
         id: checks
         continue-on-error: ${{ github.event.schedule == '23 7 * * *' }}
+        timeout-minutes: ${{ fromJSON(steps.limit.outputs.minutes) }}
         env:
           RUNS: ${{ steps.runs.outputs.list }}
+          SHARE: ${{ steps.runs.outputs.share }}
           SHARD: ${{ matrix.shard }}
           RESULTS: ${{ runner.temp }}/results/windows-${{ matrix.shard }}.tsv
+          RUNNING: ${{ runner.temp }}/running
           CHECK_TRACE_CATEGORIES: ${{ inputs.trace }}
           ADBLOCK_PARITY_LISTS: ${{ inputs.lists_from != '' && 'build/given-lists' || '' }}
         run: |
           out=$RUNNER_TEMP/check
           mkdir -p "$out" "$(dirname "$RESULTS")"
-          all=$(../.github/scripts/runs.sh shard "$SHARD" "$SHARDS")
+          all=$SHARE
           runs=$RUNS
           # check.sh runs on Windows, and the app has a driver there, only once
           # feat/windows-drive-454 is in.
@@ -491,6 +591,8 @@ jobs:
               [ "$run" != perf ] || limit=40m
               [ "$run" != adblock-native ] || limit=40m
               [ "$run" != mcp ] || limit=30m
+              # The run going, for the step after this one if this step is cut at its limit.
+              echo "$run" > "$RUNNING"
               timeout "$limit" ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
               # By the app's path, never by image name, which would reach any other Chrome. Before
               # the move, as Windows won't move a folder a process still has a file open in.
@@ -504,6 +606,7 @@ jobs:
                 cp -r build/check "$out/$run" || true
                 rm -rf build/check || true
               fi
+              rm -f "$RUNNING"
               # A run that skips all of itself, as one whose build lacks what it checks, says why on a
               # "skip all: " line, and its row says skip, so nobody reads it as a pass (#2284).
               whole=$(grep -m1 '^skip all: ' "$out/$run.log" | cut -c11- | tr '|' '/') || true
@@ -528,6 +631,9 @@ jobs:
               fi
               ;;
             *)
+              case " $WINDOWS_NIGHTS " in
+              *" $run "*) [ -n "$why" ] || why="a night's run, or one named (#4074)" ;;
+              esac
               result="skipped: ${why:-not tried on Windows yet}"
               ;;
             esac
@@ -537,6 +643,33 @@ jobs:
           { echo; sh check/quarantine.sh list windows; } | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$failed"
 
+      # A Runs step cut at its limit names the run it was in, with that run's last lines, and gives
+      # it a failed row, so the results and the check's artifact below say which run it was (#4036).
+      # The runs after it have no row, which complete names.
+      - name: Cut run
+        if: ${{ always() && steps.checks.outcome != 'skipped' }}
+        continue-on-error: ${{ github.event.schedule == '23 7 * * *' }}
+        env:
+          RESULTS: ${{ runner.temp }}/results/windows-${{ matrix.shard }}.tsv
+          RUNNING: ${{ runner.temp }}/running
+          LIMIT: ${{ steps.limit.outputs.minutes }}
+        run: |
+          [ -e "$RUNNING" ] || exit 0
+          run=$(cat "$RUNNING")
+          out=$RUNNER_TEMP/check
+          pkill -9 -f "$(cygpath -m "$PWD/build/Browser")/" || true
+          if [ -d build/check ] && ! mv build/check "$out/$run"; then
+            cp -r build/check "$out/$run" || true
+          fi
+          last=$(tail -1 "$out/$run.log" 2> /dev/null | tr '|\t' '/ ') || true
+          mkdir -p "$(dirname "$RESULTS")"
+          printf '%s\tfailed: still going when the Runs step was cut at its %s minutes; its last line: %s\n' \
+            "$run" "$LIMIT" "${last:-none}" >> "$RESULTS"
+          echo "| $run | failed: still going when the Runs step was cut at its $LIMIT minutes |" >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::The Runs step was cut at its $LIMIT minutes in the $run run. Its log: $run.log in the artifact. Its last lines:"
+          tail -40 "$out/$run.log" 2> /dev/null || echo "(no log)"
+          exit 1
+
       # Windows' own Microsoft sign-in, which Chromium logs on or off as it starts (#1345). The core
       # turns it on by default only on a device joined or registered to a work or school directory,
       # which a runner isn't, so here it's off until the CloudAPAuthEnabled policy turns it on, under
@@ -544,7 +677,7 @@ jobs:
       # leaves it off (engine/patches/ours/chromium-policy-windows-key.patch).
       - name: Microsoft sign-in
         id: sign-in
-        if: ${{ !cancelled() && (steps.build.outcome == 'success' || steps.unpacked.outcome == 'success') }}
+        if: ${{ !cancelled() && steps.app.outcome == 'success' }}
         continue-on-error: ${{ github.event.schedule == '23 7 * * *' }}
         run: |
           out=$RUNNER_TEMP/check
@@ -591,7 +724,7 @@ jobs:
         env:
           RUNS_OUTCOME: ${{ steps.checks.outcome }}
           SIGN_IN_OUTCOME: ${{ steps.sign-in.outcome }}
-          STEPS: ${{ runner.temp }}/results/windows-${{ matrix.shard }}.steps
+          STEPS: ${{ runner.temp }}/results/windows-${{ matrix.shard }}-${{ strategy.job-total }}.steps
         run: |
           mkdir -p "$(dirname "$STEPS")"
           printf 'Runs\t%s\nMicrosoft sign-in\t%s\n' "${RUNS_OUTCOME:-skipped}" "${SIGN_IN_OUTCOME:-skipped}" > "$STEPS"
@@ -640,8 +773,8 @@ jobs:
   # A run with no result, such as one its job's time ran out before, fails the check, so a run
   # missing from the summary can't read as passed (#2271).
   complete:
-    needs: [engine, check]
-    if: ${{ !cancelled() && needs.engine.outputs.found == 'true' }}
+    needs: [engine, build, check]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -688,9 +821,10 @@ jobs:
           for file in "$RESULTS"/*.steps; do
             [ -e "$file" ] || continue
             job=$(basename "$file" .steps)
-            steps+=$(awk -F'\t' -v job="${job#windows-}" '$2 != "success" {
+            job=${job#windows-}
+            steps+=$(awk -F'\t' -v job="${job%-*}/${job#*-}" '$2 != "success" {
               said = $2 == "failure" ? "failed" : "was " $2
-              print "- check " job "/2: the " $1 " step " said
+              print "- check " job ": the " $1 " step " said
             }' "$file")$'\n'
           done
           ls "$RESULTS"/*.steps > /dev/null 2>&1 || steps="- No check job said how its steps went."$'\n'
@@ -708,7 +842,7 @@ jobs:
   # which cancels it, as complete then runs and the run itself wasn't cancelled, or a run with no
   # result.
   report:
-    needs: [gate, engine, check, complete]
+    needs: [gate, engine, build, check, complete]
     if: ${{ always() && needs.gate.outputs.check == 'true' && github.ref == 'refs/heads/main' && github.repository == 'MartinPTielemans/ilo' && inputs.runs == '' && !(github.event.schedule == '23 7 * * *' || inputs.runner == 'windows-2025') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -724,8 +858,14 @@ jobs:
           sparse-checkout: |
             .github/scripts
             app/check
+      # A build job that runs out its time is cancelled, not failed, and skips the check jobs, so
+      # report would say nothing. The check job that built the app before #3917 failed the run when
+      # it ran out, so this counts it as a failure. A run someone cancelled is still no verdict.
+      - id: timeout
+        if: ${{ !cancelled() && needs.build.result == 'cancelled' }}
+        run: echo "build=true" >> "$GITHUB_OUTPUT"
       - env:
           GH_TOKEN: ${{ github.token }}
-          RESULT: ${{ (needs.engine.result == 'failure' || needs.check.result == 'failure' || needs.complete.result == 'failure' || (needs.check.result == 'cancelled' && needs.complete.result == 'success')) && 'failure' || needs.check.result }}
+          RESULT: ${{ (needs.engine.result == 'failure' || needs.build.result == 'failure' || steps.timeout.outputs.build == 'true' || needs.check.result == 'failure' || needs.complete.result == 'failure' || (needs.check.result == 'cancelled' && needs.complete.result == 'success')) && 'failure' || needs.check.result }}
           FOUND: ${{ needs.engine.outputs.found }}
         run: .github/scripts/main-check.sh report "$RESULT" "$FOUND"

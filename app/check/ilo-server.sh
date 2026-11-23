@@ -93,21 +93,17 @@ codes=0
 # in sign_in_release; the run's own build leaves it empty.
 sign_in() {
   sign_in_window=
-  focus_logged=
-  if [ -n "${sign_in_release:-}" ]; then
-    # The core logs the focus from 0.2.0 (a63ef3cfb). A release before it types once the page
-    # loads, as it did, and a later one waits for the line as this build does.
-    case $sign_in_release in
-    0.0.* | 0.1.*)
-      echo "note: ilo $sign_in_release predates the sign-in page's focus line, so its fields are typed into once they load"
-      ;;
-    *) focus_logged=1 ;;
-    esac
-  elif engine_has ../core/sync.cc; then
-    focus_logged=1
-  else
-    echo "note: the engine predates the sign-in page's focus line, so its fields are typed into once they load"
-  fi
+  # The core logs the focus from 0.2.0 (a63ef3cfb), so every engine the run's own build links has
+  # it, and the wait isn't left to asking the engine, which goes to the network (engine/fetch.sh):
+  # once that failed, C typed its code on the page's load alone, before the field had the keyboard,
+  # and stayed signing in (#4019). A release before 0.2.0 types once the page loads, as it did.
+  focus_logged=1
+  case ${sign_in_release:-} in
+  0.0.* | 0.1.*)
+    focus_logged=
+    echo "note: ilo $sign_in_release predates the sign-in page's focus line, so its fields are typed into once they load"
+    ;;
+  esac
   sign_in_type /authorize "$email"
   [ -z "${2:-}" ] || [ -z "$sign_in_window" ] || import -window "$sign_in_window" "$2" || true
   sign_in_keys key return

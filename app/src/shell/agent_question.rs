@@ -123,6 +123,16 @@ impl Shell {
         }
     }
 
+    /// Choose File… on an agent's question for a page's file field: the card goes, and the
+    /// system's file dialog opens over this window.
+    fn choose_agent_file(&mut self, cx: &mut Context<Self>) {
+        if let Some(question) = self.agent_question.take() {
+            self.browser
+                .choose_agent_file(question.id, self.browser.window(), cx);
+            cx.notify();
+        }
+    }
+
     /// The agent's question, as a card under the URL field.
     pub(super) fn agent_question_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         // The whole request shows only beside its question's card, so one a page's question covers
@@ -152,6 +162,7 @@ impl Shell {
                     Does::Answer(answer) => shell.answer_agent(answer, cx),
                     Does::Show(tab) => shell.select(tab, cx),
                     Does::HandBack(tab) => shell.browser.hand_back(tab, cx),
+                    Does::Choose => shell.choose_agent_file(cx),
                 }))
         });
         let (head, title) = head_and_title(question);
@@ -454,6 +465,8 @@ pub(super) enum Does {
     Show(u64),
     /// Gives the tab back to the agent.
     HandBack(u64),
+    /// Opens the system's file dialog for the page's file field the agent asks a file for.
+    Choose,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -475,6 +488,23 @@ pub(super) fn buttons(question: &Question) -> Vec<Button> {
         look,
         does,
     };
+    // The user chooses the file, or doesn't allow it, so there's nothing to allow for good.
+    if let Some(file) = question.file {
+        let choose = if file.many {
+            "Choose Files…"
+        } else {
+            "Choose File…"
+        };
+        return vec![
+            button(
+                "agent-file-deny",
+                "Don’t Allow",
+                Look::Quiet,
+                Does::Answer(Answer::Dismiss),
+            ),
+            button("agent-file-choose", choose, Look::Primary, Does::Choose),
+        ];
+    }
     match question.handoff {
         Some(tab) if question.back => vec![
             button(
@@ -568,9 +598,11 @@ mod tests {
 
     use super::BUTTONS_TOP;
     use crate::agent_request;
-    use crate::agents::{Question, request::Request};
+    use crate::agents::{Answer, Question, request::Request};
     use crate::shell::{Folders, Page, Question as PageQuestion, Shell, recorder::Recorder};
-    use crate::tokens::shell::permission::{BUTTON_GAP, BUTTON_HEIGHT, LINE, PADDING};
+    use crate::tokens::shell::permission::{
+        BUTTON_GAP, BUTTON_HEIGHT, CLOSE, CLOSE_INSET, LINE, PADDING,
+    };
 
     fn question(id: u64) -> Question {
         Question {
@@ -793,6 +825,70 @@ mod tests {
             shell.set_selected(10, cx);
         });
         (host, shell, cx)
+    }
+
+    fn upload(id: u64, many: bool) -> Question {
+        Question {
+            what: "add a file to “Résumé” on example.com".into(),
+            why: "You choose the file. Claude Code sees only what the page shows of it.".into(),
+            site: "example.com".into(),
+            each_time: true,
+            file: Some(crate::agents::FileAsk { field: 3, many }),
+            ..question(id)
+        }
+    }
+
+    /// An agent's ask for a file has Don’t Allow and then Choose File…, and nothing to allow for
+    /// good: Choose File… opens the dialog over the card's window, and Don’t Allow and the × say
+    /// no. A field that takes several chooses files.
+    #[gpui::test]
+    fn an_upload_card_chooses_a_file_or_doesnt_allow_it(cx: &mut TestAppContext) {
+        let labels = |question: &Question| {
+            (super::buttons(question).iter())
+                .map(|button| (button.label, button.does))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            labels(&upload(7, false)),
+            [
+                ("Don’t Allow", super::Does::Answer(Answer::Dismiss)),
+                ("Choose File…", super::Does::Choose),
+            ]
+        );
+        assert_eq!(labels(&upload(7, true))[1].0, "Choose Files…");
+
+        let (host, shell, cx) = window_with(cx);
+        shell.update(cx, |shell, cx| {
+            shell.set_agent_question(Some(upload(7, false)), cx)
+        });
+        cx.run_until_parked();
+        let card = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
+        let card = card.expect("the card wasn't drawn");
+        let last = card.bottom() - px(PADDING + BUTTON_HEIGHT / 2.);
+        cx.simulate_click(
+            point(card.left() + card.size.width * 0.75, last),
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+        let window = shell.read_with(cx, |shell, _| shell.browser.window());
+        assert!(
+            host.take()
+                .contains(&format!("choose agent file 7 in {window}"))
+        );
+        shell.read_with(cx, |shell, _| assert!(shell.agent_question().is_none()));
+
+        shell.update(cx, |shell, cx| {
+            shell.set_agent_question(Some(upload(8, false)), cx)
+        });
+        cx.run_until_parked();
+        // Its ×, as Don’t Allow, says no.
+        let inset = px(CLOSE_INSET + CLOSE / 2.);
+        cx.simulate_click(
+            point(card.right() - inset, card.top() + inset),
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+        assert!(host.take().contains(&"answer agent 8 Dismiss".to_string()));
     }
 
     /// A request's changes ask every time, so their card has Deny and Allow side by side in its

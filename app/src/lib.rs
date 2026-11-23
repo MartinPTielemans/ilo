@@ -124,7 +124,7 @@ pub fn log_handover(stage: &str, detail: &str) {
 /// its own, never the owner's, since the checks delete what the last run saved. The prod build
 /// keeps the user's in Application Support, under the product's name, or in Local AppData on
 /// Windows. The `ilo` command (agents::cli) finds its agent file here as the browser does, so it's
-/// the lib's.
+/// the lib's. On the Mac, build.sh names the prod folder Chromium's default from the same file.
 pub fn profile_dir() -> String {
     let home = std::env::var("HOME").unwrap_or_default();
     let name = include_str!("../branding/name").trim();

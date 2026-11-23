@@ -8,7 +8,7 @@
 # always, and beside chrome Linux's VERSION and Windows's manifest, in engines packaged since. On
 # Windows, first, a click in the page once its window is back from minimized gives it the keyboard.
 
-engine_version= engine_version_said= minimized= app_menu_said=
+engine_version= engine_version_said= minimized= app_menu_said= build_said=
 [ "$(uname)" != Darwin ] || engine_version=yes
 for file in "$app"/VERSION "$app"/[0-9]*.[0-9]*.manifest; do
   [ ! -e "$file" ] || engine_version=yes
@@ -78,6 +78,21 @@ for row in licence:LICENSE notices:NOTICE libraries:THIRD-PARTY.txt; do
     said=$(sed -n 's/^browser: settings about .*on Chromium //p' "$log" | tail -1)
     engine_version_said=" on Chromium $said"
   fi
+  # The build number About shows beside the version, on the Mac: a prod build's or a release's is
+  # its plist's CFBundleVersion, the one Sparkle orders updates by, and a dev build's is none, as
+  # build.sh gives only a prod build one, so a new commit doesn't recompile the browser (#3917).
+  if [ -z "$loaded" ] && [ "$(uname)" = Darwin ]; then
+    shown=$(sed -n 's/^browser: settings about [A-Za-z]* [^ ,]* (\([0-9]*\)),.*/\1/p' "$log" | tail -1)
+    numbered=$(plutil -extract CFBundleVersion raw -o - "$app/Contents/Info.plist")
+    if [ "$checked_app_id" = dev.browser.app ]; then
+      [ -z "$shown" ] || fail "a dev build's About showed build $shown, which only a prod build has"
+      build_said=" A dev build's About showed no build number."
+    else
+      [ "$shown" = "$numbered" ] ||
+        fail "About showed build ${shown:-none}, not the $numbered its CFBundleVersion has"
+      build_said=" About showed build $shown, its CFBundleVersion."
+    fi
+  fi
   # About logs where each Open is once, on its first draw.
   await "^browser: settings open $id at " || fail "About didn't draw the $id row's Open"
   [ -n "$loaded" ] || ../tools/window-screenshot.sh "$pid" "$out/about.png" all ||
@@ -113,4 +128,4 @@ exec 3>&-
 quit
 [ -n "$engine_version" ] || echo "skip: about's engine version. This engine was packaged before" \
   "it carried one (engine/linux/package.sh)."
-echo "ok: About ilo showed About$engine_version_said, and its rows' Open loaded$loaded in tabs.$minimized$app_menu_said Windows: $out/about.png, $out/about-opened.png"
+echo "ok: About ilo showed About$engine_version_said, and its rows' Open loaded$loaded in tabs.$build_said$minimized$app_menu_said Windows: $out/about.png, $out/about-opened.png"

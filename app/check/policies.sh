@@ -78,6 +78,9 @@ set_policies() {
   fi
 }
 launch() {
+  # Emptied here, not by the app's own redirect, which comes some time after the fork: until
+  # then the second launch's waits could read the first launch's lines (#4040).
+  : > "$log"
   BROWSER_DRIVE=1 BROWSER_URL="$1" "$browser" < "$out/drive" > "$log" 2>&1 &
   pid=$!
   exec 3> "$out/drive"

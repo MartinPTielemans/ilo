@@ -19,6 +19,8 @@ struct Recorder {
     shown_at_once: Cell<bool>,
     /// Whether it says when the frame the window draws is on screen, as Wayland's does.
     says_drawn: Cell<bool>,
+    /// The frame and corner radius the core was last told to clip a page under the window with.
+    clipped: Cell<Option<(Bounds<Pixels>, f32)>>,
 }
 
 impl Recorder {
@@ -45,7 +47,8 @@ impl Host for Recorder {
     }
     // A frame of the motion, which tells nothing of what the user did, but for the hole a page
     // under the window shows through.
-    fn drew(&self, page: Bounds<Pixels>, _: f32, _: f32) {
+    fn drew(&self, page: Bounds<Pixels>, radius: f32, _: f32) {
+        self.clipped.set(Some((page, radius)));
         if self.under.get() {
             self.push(format!("hole {}", describe(page)));
         }
@@ -683,6 +686,51 @@ fn rest(shown: &mut Shown) {
 fn frame(shown: &mut Shown) {
     shown.cx.update(|window, _| window.refresh());
     shown.cx.run_until_parked();
+}
+
+/// The dim's hole round a page under the window, as it draws it now.
+fn dim_hole(shown: &mut Shown) -> (Bounds<Pixels>, f32) {
+    shown.cx.cx.update(|cx| {
+        update(cx, |preview, _, _| {
+            preview.preview.as_ref().expect("no preview").hole
+        })
+        .expect("no window")
+    })
+}
+
+/// The dim round a page under the window leaves it a hole of the page's own shape, at the radius
+/// the core clips the page with, so nothing of the window's page shows undimmed round the card's
+/// corners (#3982): at rest, and as ⌘↩ grows the card into the tab's place and its corners with it.
+#[gpui::test]
+fn the_dims_hole_is_the_pages_shape(cx: &mut TestAppContext) {
+    let host = Recorder::default();
+    host.under.set(true);
+    let mut shown = Shown::on(host, cx);
+    shown.calls();
+    rest(&mut shown);
+    frame(&mut shown);
+    frame(&mut shown);
+    there(&mut shown, AT_REST);
+    assert_eq!(shown.drawn().last().map(String::as_str), Some(HOLE));
+    let at_rest = dim_hole(&mut shown);
+    assert_eq!(at_rest, (bounds(296., 106., 438., 428.), RADIUS));
+    assert_eq!(shown.host.clipped.get(), Some(at_rest));
+    // Halfway into the tab's place, its corners halfway to the window's page's.
+    shown.keys("cmd-enter");
+    shown.cx.cx.update(|cx| {
+        update(cx, |preview, _, _| {
+            let leaving = preview
+                .preview
+                .as_mut()
+                .and_then(|shown| shown.leaving.as_mut());
+            let (since, ..) = leaving.expect("⌘↩ didn't keep it");
+            *since = Instant::now() - Duration::from_secs_f32(KEEP / 2.);
+        })
+    });
+    frame(&mut shown);
+    let growing = dim_hole(&mut shown);
+    assert!(growing.1 < RADIUS && growing.1 > 6., "{growing:?}");
+    assert_eq!(shown.host.clipped.get(), Some(growing));
 }
 
 /// Esc closes it back into the link, and its page once it has left.

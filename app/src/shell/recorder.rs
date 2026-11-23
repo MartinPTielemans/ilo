@@ -974,6 +974,10 @@ impl Browser for Recorder {
         self.record(format!("answer agent {question} {answer:?}"))
     }
 
+    fn choose_agent_file(&self, question: u64, window: u64, _: &mut App) {
+        self.record(format!("choose agent file {question} in {window}"))
+    }
+
     fn open_elsewhere(&self, url: &str, _: &mut App) {
         self.record(format!("open elsewhere {url}"))
     }

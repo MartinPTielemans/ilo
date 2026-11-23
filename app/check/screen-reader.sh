@@ -13,8 +13,9 @@
 # past its last ring the tab shown's row, Tab and ⇧Tab from the ring go straight into the page,
 # with its focus back on its first and last control, and have NVDA say the page, and the Library's
 # key has it on the Library's search field, where ↓ has it say the row ringed and where it stands
-# and Tab has it on the Library's sections. Elsewhere it records, a Board's cards among them: read
-# as the keyboard reaches them, moved and deleted.
+# and Tab has it on the Library's sections. ⇧Tab goes round the page's stops backwards, and
+# escape or F6 from the ring gives the page the keyboard, read as the page (#4030). Elsewhere it
+# records, a Board's cards among them: read as the keyboard reaches them, moved and deleted.
 # NVDA's portable copy (GPL) is fetched from NV Access' release on GitHub, its checksum pinned, into
 # the hosted runner's temporary folder, and never installed: with NVDA_DIR naming a portable copy,
 # the run uses that instead. Off a hosted Windows runner, and without NVDA_DIR, it skips.
@@ -428,6 +429,14 @@ if tail -n "+$((at + 1))" "$nvda_log" | grep -q "^Speaking .*'Link', 'link'"; th
 fi
 press tab
 on_row Reading "Tab from where ⇧Tab from the ring left the keyboard, the page's last control"
+# ⇧Tab walks the same stops as Tab, backwards: from the ring the button, the link, then the ring
+# again (#4030).
+press tab shift
+page_focus Button 43 "⇧Tab from the ring, going round backwards"
+press tab shift
+page_focus Link 30 "⇧Tab from the button"
+press tab shift
+on_row Reading "⇧Tab from the link, round to the ring"
 judging=
 kill "$recorder" 2> /dev/null || true
 recorder=
@@ -452,11 +461,72 @@ press down
 on_row Reading down
 press up
 on_row Second up
+# Escape from the ring gives the page the keyboard back, as a click in it does: Windows' focus on
+# Chromium's window, not GPUI's, UI Automation's off the sidebar's rows, and NVDA says the page.
+# F6 again from the ring does the same, as Chrome's F6 comes back round to the page (#4030).
+page_has_keys() {
+  tail -n 6 "$focus_file" | grep -q '^focus window: Chrome_WidgetWin_1 ' ||
+    fail "$1 didn't give the page's window the focus: $focus_file"
+  if tail -n 6 "$focus_file" | grep -q '^UI Automation focus: .*framework AccessKit'; then
+    fail "UI Automation's focus stayed in the sidebar after $1: $focus_file"
+  fi
+  says "$2" "'Second', 'document'" "NVDA didn't say the page after $1"
+}
+judging=
+at=$(wc -l < "$nvda_log")
+press escape
+expect '^browser: sidebar keys left by escape$' "escape from the ring didn't leave it"
+page_has_keys "escape from the ring" "$at"
+press f6
+on_row Second "f6 from the page escape gave the keyboard back to"
+at=$(wc -l < "$nvda_log")
+press f6
+expect '^browser: sidebar keys left by focus-sidebar$' \
+  "f6 from the ring didn't leave it for the page, as Chrome's F6 comes back round to the page"
+page_has_keys "f6 from the ring" "$at"
+# Back on the row, where the steps after expect the ring.
+press f6
+on_row Second "f6 back to the ring"
+judging=1
 judging=
 # What the rest of the UI says, not judged yet: a row's menu and Settings.
 press f10 shift
 press down
 press escape
+# F10 from the page rings the footer's menu control, read by its name as a button, as Chrome's F10
+# rings its menu button. ↩ opens ilo's menu on its first item, and F10 from the control gives the
+# page the keyboard back, read as the page (#4030).
+heard=$(wc -l < "$nvda_log")
+send click $page_point
+spoken "a click on the second page before F10"
+# The window before and with the ring, for the PR's record of how it looks.
+../tools/window-screenshot.sh "$pid" "$out/f10-before.png" || fail "no window to capture"
+judging=1
+at=$(wc -l < "$nvda_log")
+press f10
+expect '^browser: menu keyed$' "F10 from the page didn't ring the menu control"
+expect '^browser: menu ring at ' "the menu control's ring wasn't drawn after F10"
+../tools/window-screenshot.sh "$pid" "$out/f10-ring.png" || fail "no window to capture"
+tail -n 4 "$focus_file" | grep -q '^UI Automation focus: Button "[^"]* menu", framework AccessKit' ||
+  fail "UI Automation's focus isn't on the menu control after F10: $focus_file"
+says "$at" " menu', 'button'" "NVDA didn't say the menu control after F10"
+judging=
+press return
+expect '^browser: menu shown Settings' "↩ on the menu control didn't open ilo's menu"
+expect '^browser: menu highlights .* at ' "the menu ↩ opened didn't highlight its first item"
+press escape
+expect '^browser: menu closed$' "escape didn't close ilo's menu"
+heard=$(wc -l < "$nvda_log")
+send click $page_point
+spoken "a click on the second page after ilo's menu"
+press f10
+expect '^browser: menu keyed$' "F10 from the page didn't ring the menu control again"
+at=$(wc -l < "$nvda_log")
+press f10
+expect '^browser: menu keys left by focus-menu$' "F10 from the menu control didn't leave it"
+tail -n 6 "$focus_file" | grep -q '^focus window: Chrome_WidgetWin_1 ' ||
+  fail "F10 from the menu control didn't give the page's window the focus: $focus_file"
+says "$at" "'Second', 'document'" "NVDA didn't say the page after F10 from the menu control"
 # The Library's key gives its search field, History's here, the keyboard, read by its name, where
 # it said only the window's before (#3238).
 judging=1
