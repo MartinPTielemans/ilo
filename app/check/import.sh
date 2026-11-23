@@ -21,6 +21,8 @@
 # the choices to the list. The fixture's Arc is put where the Mac keeps it, or Windows' Store, and
 # Chrome and Firefox where each system keeps them. Arc has no Linux build, so on Linux it isn't
 # found and its steps are left out.
+# Then each browser with a file in check/import/ that places its made-up profile here brings its
+# Spaces, a Space it names among them.
 # On the Mac a made-up Safari comes in last, its bookmarks kept from the app until it's given
 # Full Disk Access, which the import waits for and asks for.
 
@@ -667,6 +669,49 @@ expect '^browser: dialog confirmed$' "return didn't add Check Pinned"
 await "^browser: extension $pinned_id pinned as it was in the browser imported from\$" ||
   fail "the extension Brave pinned wasn't pinned once it came in"
 ../tools/window-screenshot.sh "$pid" "$out/import-pinned-extension.png" || fail "no window to capture"
+# Each browser whose Spaces are read from its sidebar, but Arc, has a file in check/import/, sourced
+# here: it places its made-up profile in $home where this system keeps that browser, and sets
+# sidebar_source to the name its row shows and sidebar_space to the name of a Space it brings,
+# plain words, as both go in patterns. Where the browser has no build it sets neither, and says why
+# in sidebar_skip. Settings finds each as it shows again, its Spaces come in, and the Space is
+# among their cards.
+placed=
+for file in check/import/*.sh; do
+  [ -e "$file" ] || continue
+  why=$(sh -n "$file" 2>&1) || fail "$file doesn't parse: $why"
+  name=${file##*/} sidebar_source= sidebar_space= sidebar_skip=
+  name=${name%.sh}
+  . "./$file"
+  if [ -z "$sidebar_source" ]; then
+    echo "skip: import's $name step. ${sidebar_skip:-$file placed nothing on this system.}"
+    continue
+  fi
+  placed="${placed:+$placed, }$sidebar_source"
+  send menu Import from Other Browsers…
+  expect '^browser: settings shown ' "Import from Other Browsers… didn't show Settings for $sidebar_source"
+  settings_drew 'Import & Export'
+  send clickkey $(drawn "toolbar Passwords")
+  expect '^browser: settings tab Passwords$' "a click on Passwords didn't show its section"
+  settings_drew Passwords
+  send clickkey $(drawn "toolbar Import & Export")
+  expect '^browser: settings tab Import & Export$' "a click on Import & Export didn't show its section"
+  settings_drew 'Import & Export'
+  expect "^browser: import found .*$sidebar_source" \
+    "Settings didn't find the made-up $sidebar_source $file placed: $(grep 'import found' "$log" | tail -1)"
+  click_in_sight "import-from $sidebar_source"
+  expect "^browser: import pick $sidebar_source\$" "Import… on $sidebar_source's row didn't show its choices"
+  expect '^browser: import drawn pick$' "$sidebar_source's choices didn't draw"
+  expect "^browser: import read $sidebar_source: Tally { spaces: [1-9]" \
+    "picking $sidebar_source read no Spaces from its sidebar: $(grep '^browser: import read' "$log" | tail -1)"
+  click_drawn import-go
+  expect "^browser: import cards \\(.*, \\)\\{0,1\\}$sidebar_space\\(, .*\\)\\{0,1\\}\$" \
+    "$sidebar_source's Space $sidebar_space didn't come as a card: $(grep '^browser: import cards' "$log" | tail -1)"
+  await "^browser: import done: .* from $sidebar_source\\.\$" || fail "$sidebar_source's import didn't end"
+  expect '^browser: import drawn done$' "$sidebar_source's import's end didn't draw"
+  ../tools/window-screenshot.sh "$pid" "$out/import-$name.png" || fail "no window to capture"
+  send key w cmd
+  expect '^browser: settings hidden$' "⌘W didn't hide Settings after $sidebar_source's import"
+done
 # On the Mac a made-up Safari comes in last, its Bookmarks.plist kept from the app as macOS keeps
 # ~/Library/Safari until the app has Full Disk Access. Picking it waits for that access, with Open
 # System Settings; back in the app without it, it says it's still waiting; with it, coming back
@@ -770,6 +815,8 @@ echo "  and the app menu's Import from Other Browsers… shows Import again."
 echo "  Add… on an imported extension loads its Web Store page, from the run's own server."
 [ "$(uname)" != Darwin ] || echo "  Safari waits for Full Disk Access, then its bookmarks, Reading List and history come in, once."
 echo "  With the sidebar hidden, Arc's two Spaces say so in a toast."
+[ -z "$placed" ] ||
+  echo "  From $placed come their Spaces, the one each names among them (check/import/)."
 echo "  Settings' list and $first_found's choices, under Import › $first_found, at 820 by 660 and"
 echo "  720 by 480, dark and light, and Esc goes back from the choices to the list."
 echo "  Windows: $out/import-settings-{list,choose}-{820,720}-{dark,light}.png,"
