@@ -14,6 +14,7 @@
 #include "browser_core/agent_page.h"
 #include "browser_core/agent_session.h"
 #include "browser_core/host.h"
+#include "browser_core/platform/file_dialog.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
@@ -86,6 +87,88 @@ std::string PathOf(const ui::SelectedFileInfo& file) {
 
 }  // namespace
 
+// The listener of a field's dialog, apart from the field so that it can outlive it (#3759). Until
+// the field ends it hands the dialog's answer to the field. Once the field has ended with the
+// dialog up, it holds what's closing the dialog, and drops the answer unread. The dialog answers its
+// listener once, a cancelled or broken run too, and that answer ends the run and all it holds: so
+// nothing closing a dialog outlives it, and none can close a dialog the user opens later.
+class AgentFileField::DialogRun : public ui::SelectFileDialog::Listener {
+ public:
+  DialogRun(bc_id field, std::unique_ptr<ui::SelectFileDialog::FileTypeInfo> types)
+      : field_(field), types_(std::move(types)) {}
+  DialogRun(const DialogRun&) = delete;
+  DialogRun& operator=(const DialogRun&) = delete;
+  ~DialogRun() override = default;
+
+  // Whether the system has a dialog to open: Linux has none when neither a toolkit nor the portal
+  // answers, which Chrome's pickers allow for.
+  bool Create() {
+    dialog_ = ui::SelectFileDialog::Create(this, /*policy=*/nullptr);
+    return !!dialog_;
+  }
+
+  // Over |owner|, where the system starts it: no title, folder or name of the page's or the agent's.
+  void Open(gfx::NativeWindow owner, bool many) {
+    // Kept, as the dialog may answer before SelectFile returns.
+    scoped_refptr<ui::SelectFileDialog> dialog = dialog_;
+    dialog->SelectFile(
+        many ? ui::SelectFileDialog::SELECT_OPEN_MULTI_FILE : ui::SelectFileDialog::SELECT_OPEN_FILE,
+        std::u16string(), base::FilePath(), types_.get(), types_ ? 1 : 0,
+        base::FilePath::StringType(), owner);
+  }
+
+  // The field ended with the dialog still up, over |owner|.
+  void FieldEnded(gfx::NativeWindow owner) {
+    ended_ = true;
+    closer_ = platform::EndFileDialog(*dialog_, owner, field_);
+    // Without one, the dialog has let go of its listener and won't answer.
+    if (!closer_) {
+      delete this;
+    }
+  }
+
+ private:
+  // ui::SelectFileDialog::Listener:
+  void FileSelected(const ui::SelectedFileInfo& file, int index) override {
+    Answered({PathOf(file)});
+  }
+  void MultiFilesSelected(const std::vector<ui::SelectedFileInfo>& files) override {
+    std::vector<std::string> paths;
+    for (const ui::SelectedFileInfo& file : files) {
+      paths.push_back(PathOf(file));
+    }
+    Answered(std::move(paths));
+  }
+  void FileSelectionCanceled() override { Answered({}); }
+
+  void Answered(std::vector<std::string> files) {
+    if (ended_) {
+      // Whatever the user picked, after the field's call ended, goes to no one. The dialog has
+      // ended, so what was closing it goes now, before any other dialog can open.
+      closer_.reset();
+      LOG(ERROR) << "browser: file field " << field_ << " dialog ended";
+    } else {
+      auto found = Fields().find(field_);
+      if (found != Fields().end() && found->second->run_ == this) {
+        found->second->run_ = nullptr;
+      }
+      // Posted, as ending the field inside the dialog's own call could end the dialog there.
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(&AgentFileField::Picked, field_, std::move(files)));
+    }
+    // After the dialog's call returns, as this may hold the last reference to it.
+    base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, this);
+  }
+
+  const bc_id field_;
+  // What the dialog filters by, which lives as long as it.
+  const std::unique_ptr<ui::SelectFileDialog::FileTypeInfo> types_;
+  scoped_refptr<ui::SelectFileDialog> dialog_;
+  bool ended_ = false;
+  // Declared after the dialog, so it goes first.
+  std::unique_ptr<platform::FileDialogCloser> closer_;
+};
+
 AgentFileField::AgentFileField(bc_id id,
                                bc_id tab,
                                std::string agent,
@@ -104,9 +187,13 @@ AgentFileField::AgentFileField(bc_id id,
       accepts_(std::move(accepts)) {}
 
 AgentFileField::~AgentFileField() {
-  // A dialog still up closes as the last reference to it goes, with no answer to this.
-  if (dialog_) {
-    dialog_->ListenerDestroyed();
+  // A dialog still up is ended, and its answer goes to no one.
+  if (run_) {
+    DialogRun* run = run_;
+    run_ = nullptr;
+    Window* owner = Window::FromId(window_);
+    views::Widget* widget = owner ? owner->widget() : nullptr;
+    run->FieldEnded(widget ? widget->GetNativeWindow() : gfx::NativeWindow());
   }
 }
 
@@ -148,24 +235,18 @@ bool AgentFileField::Choose(bc_id id, bc_id window) {
     End(id, BC_FILE_FIELD_LEFT, 0);
     return true;
   }
-  field.dialog_ = ui::SelectFileDialog::Create(&field, /*policy=*/nullptr);
-  // Linux has none when neither a toolkit nor the portal answers, which Chrome's pickers allow for.
-  if (!field.dialog_) {
+  auto run = std::make_unique<DialogRun>(id, TypesOf(field.accepts_));
+  if (!run->Create()) {
     LOG(ERROR) << "browser: file field " << id << " has no dialog";
     return false;
   }
   field.asked_ = true;
-  field.types_ = TypesOf(field.accepts_);
+  field.window_ = window;
+  // Held by the field before the dialog opens, which may answer before SelectFile returns.
+  field.run_ = run.release();
   LOG(ERROR) << "browser: file field " << id << " dialog over window " << window;
-  // Kept, as the dialog may answer before SelectFile returns, which ends the field.
-  scoped_refptr<ui::SelectFileDialog> dialog = field.dialog_;
-  // Over the window whose card the user pressed, where the system starts it: no title, folder or
-  // name of the page's or the agent's.
-  dialog->SelectFile(
-      field.many_ ? ui::SelectFileDialog::SELECT_OPEN_MULTI_FILE
-                  : ui::SelectFileDialog::SELECT_OPEN_FILE,
-      std::u16string(), base::FilePath(), field.types_.get(), field.types_ ? 1 : 0,
-      base::FilePath::StringType(), widget->GetNativeWindow());
+  // Over the window whose card the user pressed.
+  field.run_->Open(widget->GetNativeWindow(), field.many_);
   return true;
 }
 
@@ -208,36 +289,12 @@ bool AgentFileField::PageMayOpen(content::WebContents* contents, int kind) {
   return false;
 }
 
-void AgentFileField::FileSelected(const ui::SelectedFileInfo& file, int index) {
-  Answered({PathOf(file)});
-}
-
-void AgentFileField::MultiFilesSelected(const std::vector<ui::SelectedFileInfo>& files) {
-  std::vector<std::string> paths;
-  for (const ui::SelectedFileInfo& file : files) {
-    paths.push_back(PathOf(file));
-  }
-  Answered(std::move(paths));
-}
-
-void AgentFileField::FileSelectionCanceled() {
-  Answered({});
-}
-
-void AgentFileField::Answered(std::vector<std::string> files) {
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(&AgentFileField::Picked, id_, std::move(files)));
-}
-
 // static
 void AgentFileField::Picked(bc_id id, std::vector<std::string> files) {
   auto found = Fields().find(id);
   if (found == Fields().end()) {
     return;
   }
-  AgentFileField& field = *found->second;
-  field.dialog_.reset();
-  field.types_.reset();
   LOG(ERROR) << "browser: file field " << id << " chose " << files.size();
   if (files.empty()) {
     End(id, BC_FILE_FIELD_NONE, 0);
