@@ -413,9 +413,12 @@ none_since "^browser: page $a unloaded 1\$" || fail "⌘W in the preview unloade
 # focused link (#2858).
 if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; then
   open_preview "for another app"
+  # probe 4040: the file as an earlier run leaves it, naming a window that has gone.
+  printf '%s\n' 4194311 > "$out/other-window.log"
   rm -f "$out/other-in"
   mkfifo "$out/other-in"
-  python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
+  ( exec < "$out/other-in"; sleep 0.3; exec > "$out/other-window.log" 2>&1; sleep 2
+    exec python3 -I check/other-window.py ) &
   other_app=$!
   exec 7> "$out/other-in"
   for _ in $(seq 50); do grep -q '^[0-9]' "$out/other-window.log" && break; sleep 0.1; done
