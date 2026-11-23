@@ -700,7 +700,7 @@ impl Shell {
                     svg()
                         .path("icons/leaf.svg")
                         .size(px(URL_BUTTON_GLYPH))
-                        .text_color(self.palette.accent),
+                        .text_color(self.palette.glyph(1.)),
                 )
                 .child(frame)
         });

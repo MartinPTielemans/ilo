@@ -3039,27 +3039,31 @@ fn main() {
             if let Some(update) = &update {
                 preview_update(update, cx);
             }
-            // PREVIEW_SIDEBAR_POSITION=left or right shows Settings › Tabs & Sidebar's sidebar group
-            // alone, Sidebar position's drawings with that side chosen (#2407).
-            if let Ok(side) = std::env::var("PREVIEW_SIDEBAR_POSITION") {
+            // PREVIEW_APPEARANCE_PICKER=automatic, light or dark shows Settings › Appearance,
+            // Appearance's drawings with that one chosen and Settings drawn in it, Automatic's as
+            // PREVIEW_APPEARANCE has the system (#2429, #4092); PREVIEW_SIDEBAR_POSITION=left or
+            // right shows it with that side chosen (#2407), either alone.
+            let picked = std::env::var("PREVIEW_APPEARANCE_PICKER").ok();
+            let side = std::env::var("PREVIEW_SIDEBAR_POSITION").ok();
+            if picked.is_some() || side.is_some() {
+                let chosen = match picked.as_deref() {
+                    Some("light") => browser::theme::Appearance::Light,
+                    Some("dark") => browser::theme::Appearance::Dark,
+                    _ => browser::theme::Appearance::Automatic,
+                };
+                let right = side.as_deref() == Some("right");
                 preview_pictures(
-                    Pictures::Sidebar {
-                        right: side == "right",
+                    Pictures::Appearance {
+                        appearance: chosen,
+                        right,
                     },
                     cx,
                 );
                 return;
             }
-            // PREVIEW_APPEARANCE_PICKER=automatic, light or dark shows Settings › General's Look
-            // group alone, Appearance's drawings with that one chosen and Settings drawn in it,
-            // Automatic's as PREVIEW_APPEARANCE has the system (#2429).
-            if let Ok(chosen) = std::env::var("PREVIEW_APPEARANCE_PICKER") {
-                let chosen = match chosen.as_str() {
-                    "light" => browser::theme::Appearance::Light,
-                    "dark" => browser::theme::Appearance::Dark,
-                    _ => browser::theme::Appearance::Automatic,
-                };
-                preview_pictures(Pictures::Appearance(chosen), cx);
+            // PREVIEW_SETTINGS_GENERAL=1 shows Settings › General, on made-up values (#4092).
+            if std::env::var("PREVIEW_SETTINGS_GENERAL").is_ok() {
+                preview_pictures(Pictures::General, cx);
                 return;
             }
             // PREVIEW_SHARE_FAVORITES=every, profile or space shows Settings › Tabs & Sidebar's
@@ -4732,11 +4736,14 @@ fn preview_account(state: &str, cx: &mut App) {
 /// A Settings group whose row is chosen from drawings, on its card as Settings draws it.
 #[derive(Clone, Copy)]
 enum Pictures {
-    /// Tabs & Sidebar's sidebar group: Sidebar position, `right` chosen, and the two switches
-    /// under it.
-    Sidebar { right: bool },
-    /// General's Look group: Appearance, the one chosen, and Page zoom under it.
-    Appearance(browser::theme::Appearance),
+    /// Appearance: Appearance, the one `chosen`, Page zoom, and Sidebar position, `right` chosen,
+    /// and the Top bar under it.
+    Appearance {
+        appearance: browser::theme::Appearance,
+        right: bool,
+    },
+    /// General's groups as a profile has them, with ilo not the default browser.
+    General,
     /// Tabs & Sidebar's Share favorites, the scope chosen, in its group of one.
     Favorites(browser::shell::FavoritesScope),
     /// Agents' first row, its apps that connect, and the ilo command's row under them.
@@ -4757,17 +4764,9 @@ enum CommandLine {
     FlatpakOn,
 }
 
-/// `shown`'s group in a window of Settings' size. PREVIEW_BUTTONS=mac, windows or linux draws that
-/// OS's window buttons in the drawings.
+/// `shown`'s groups in a window of Settings' size.
 fn preview_pictures(shown: Pictures, cx: &mut App) {
-    use browser::settings_pictures::Buttons;
     use browser::tokens::settings::{HEIGHT, WIDTH};
-    let buttons = match std::env::var("PREVIEW_BUTTONS").as_deref() {
-        Ok("mac") => Buttons::Mac,
-        Ok("windows") => Buttons::Windows,
-        Ok("linux") => Buttons::Linux,
-        _ => Buttons::HERE,
-    };
     // PREVIEW_SETTINGS_WIDTH=<points> narrows the window, to Settings' least for one.
     let width = std::env::var("PREVIEW_SETTINGS_WIDTH")
         .ok()
@@ -4793,7 +4792,6 @@ fn preview_pictures(shown: Pictures, cx: &mut App) {
             });
             PicturesPage {
                 shown,
-                buttons,
                 card: Card::default(),
                 search,
                 logged: Rc::default(),
@@ -4807,7 +4805,6 @@ fn preview_pictures(shown: Pictures, cx: &mut App) {
 
 struct PicturesPage {
     shown: Pictures,
-    buttons: browser::settings_pictures::Buttons,
     card: Card,
     search: gpui::Entity<browser::text_input::TextInput>,
     logged: browser::settings_rows::Drawn,
@@ -4825,20 +4822,27 @@ impl gpui::Render for PicturesPage {
         use browser::settings_column::{self, Section};
         use browser::settings_pictures::{appearance_picker, favorites_picker, picker};
         use browser::settings_rows::{
-            Look, command_export, command_text, drawn, end, frame, glyph_plate, group, popup,
-            stop_button, stop_switch, text as row_text,
+            Look, command_export, command_text, drawn, end, frame, glyph_plate, group, pictured,
+            popup, stop_button, stop_switch, text as row_text,
         };
         use browser::theme::Appearance;
         use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
         use browser::tokens::settings::{
-            HEADING_BOTTOM, HEADING_TOP, NAME, POPUP_WIDTH, SIDE_ROOM, SIDE_TOP, TEXT_X,
+            CONTROL_GAP, FIRST_GROUP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, NAME, POPUP_WIDTH,
+            SHARE_TOP, SIDE_ROOM, TEXT_X,
         };
         use browser::tokens::text;
         use gpui::{FontWeight, ParentElement, Styled, div, rgb};
         // Settings takes Light's or Dark's look when it's chosen, and the system's for Automatic.
         let dark = match self.shown {
-            Pictures::Appearance(Appearance::Light) => false,
-            Pictures::Appearance(Appearance::Dark) => true,
+            Pictures::Appearance {
+                appearance: Appearance::Light,
+                ..
+            } => false,
+            Pictures::Appearance {
+                appearance: Appearance::Dark,
+                ..
+            } => true,
             _ => preview_tone() != Some(Tone::Light),
         };
         let look = Look::settings(dark);
@@ -4852,8 +4856,9 @@ impl gpui::Render for PicturesPage {
             cx,
         );
         let section = match self.shown {
-            Pictures::Sidebar { .. } | Pictures::Favorites(_) => Section::TabsAndSidebar,
-            Pictures::Appearance(_) => Section::General,
+            Pictures::Favorites(_) => Section::TabsAndSidebar,
+            Pictures::Appearance { .. } => Section::Appearance,
+            Pictures::General => Section::General,
             Pictures::CommandLine(_) | Pictures::Assistants { .. } => Section::Agents,
         };
         let column = settings_column::column(
@@ -4868,14 +4873,34 @@ impl gpui::Render for PicturesPage {
             a11y,
         );
         let page = cx.entity().downgrade();
+        let switch = |name: &'static str, on: bool| {
+            end([gpui::IntoElement::into_any_element(stop_switch(
+                &look, name, name, on, 1., look.on, a11y,
+            ))])
+        };
         let blocks: Vec<(Option<&str>, Vec<gpui::Div>)> = match self.shown {
-            Pictures::Sidebar { right } => {
+            Pictures::Appearance { appearance, right } => {
+                let three = appearance_picker(
+                    &look,
+                    base,
+                    appearance,
+                    a11y,
+                    self.logged.clone(),
+                    move |appearance, _, cx| {
+                        log!("preview: appearance {appearance:?}");
+                        page.update(cx, |page, cx| {
+                            page.shown = Pictures::Appearance { appearance, right };
+                            cx.notify();
+                        })
+                        .ok();
+                    },
+                );
+                let page = cx.entity().downgrade();
                 let pair = picker(
                     &look,
                     base,
                     dark,
                     right,
-                    self.buttons,
                     a11y,
                     self.logged.clone(),
                     move |side, _, cx| {
@@ -4884,91 +4909,19 @@ impl gpui::Render for PicturesPage {
                             browser::settings_pictures::title(side)
                         );
                         page.update(cx, |page, cx| {
-                            page.shown = Pictures::Sidebar { right: side };
+                            page.shown = Pictures::Appearance {
+                                appearance,
+                                right: side,
+                            };
                             cx.notify();
                         })
                         .ok();
                     },
                 );
-                let position = frame()
-                    .flex_col()
-                    .items_stretch()
-                    .child(row_text(
-                        &look,
-                        "Sidebar position",
-                        Some(
-                            "The side of the window the sidebar and the window's buttons are on."
-                                .into(),
-                        ),
-                    ))
-                    .child(div().flex().mt(px(SIDE_TOP)).ml(px(-SIDE_ROOM)).child(pair));
-                let switch = |name: &'static str, on: bool| {
-                    end([gpui::IntoElement::into_any_element(stop_switch(
-                        &look,
-                        name,
-                        name,
-                        on,
-                        1.,
-                        look.accent,
-                        a11y,
-                    ))])
+                let line = match cfg!(target_os = "macos") {
+                    true => "Light, dark, or as macOS is. View › Appearance has it too.",
+                    false => "Light, dark, or as the system is.",
                 };
-                let side = if right { "right" } else { "left" };
-                let edge = frame()
-                    .child(row_text(
-                        &look,
-                        "Show the hidden sidebar at the window's edge",
-                        Some(
-                            format!(
-                                "Move the pointer along the {side} edge. ⌘S shows it either way."
-                            )
-                            .into(),
-                        ),
-                    ))
-                    .child(switch("edge", true));
-                let option = frame()
-                    .child(row_text(
-                        &look,
-                        "Show the hidden sidebar when ⌥ is pressed alone",
-                        Some("Press and let go of ⌥ with no other key.".into()),
-                    ))
-                    .child(switch("option", false));
-                vec![(Some("The sidebar"), vec![position, edge, option])]
-            }
-            Pictures::Appearance(chosen) => {
-                let three = appearance_picker(
-                    &look,
-                    base,
-                    chosen,
-                    self.buttons,
-                    a11y,
-                    self.logged.clone(),
-                    move |appearance, _, cx| {
-                        log!("preview: appearance {appearance:?}");
-                        page.update(cx, |page, cx| {
-                            page.shown = Pictures::Appearance(appearance);
-                            cx.notify();
-                        })
-                        .ok();
-                    },
-                );
-                let line = match self.buttons {
-                    browser::settings_pictures::Buttons::Mac => {
-                        "Light, dark, or as macOS is. View › Appearance has it too."
-                    }
-                    _ => "Light, dark, or as the system is.",
-                };
-                let appearance = frame()
-                    .flex_col()
-                    .items_stretch()
-                    .child(row_text(&look, "Appearance", Some(line.into())))
-                    .child(
-                        div()
-                            .flex()
-                            .mt(px(SIDE_TOP))
-                            .ml(px(-SIDE_ROOM))
-                            .child(three),
-                    );
                 let zoom = frame()
                     .child(row_text(
                         &look,
@@ -4983,7 +4936,111 @@ impl gpui::Render for PicturesPage {
                         POPUP_WIDTH,
                         false,
                     ))]));
-                vec![(Some("Look"), vec![appearance, zoom])]
+                let top_bar = frame()
+                    .child(row_text(
+                        &look,
+                        "Top bar",
+                        Some(
+                            "The URL field and the sidebar's buttons in a row across the window's \
+                             top, the page under it. ⇧⌘D turns it on and off."
+                                .into(),
+                        ),
+                    ))
+                    .child(switch("top bar", false));
+                vec![
+                    (
+                        None,
+                        vec![pictured(&look, "Appearance", line.into(), three), zoom],
+                    ),
+                    (
+                        Some("Layout"),
+                        vec![
+                            pictured(
+                                &look,
+                                "Sidebar position",
+                                "The side of the window the sidebar, the Library and the \
+                                 window's buttons are on."
+                                    .into(),
+                                pair,
+                            ),
+                            top_bar,
+                        ],
+                    ),
+                ]
+            }
+            Pictures::General => {
+                let button = |id: &'static str, title: &'static str| {
+                    gpui::IntoElement::into_any_element(stop_button(&look, id, title, a11y))
+                };
+                let row = |name: &'static str, line: Option<&str>, control| {
+                    frame()
+                        .child(row_text(
+                            &look,
+                            name,
+                            line.map(|line| line.to_string().into()),
+                        ))
+                        .child(end([control]))
+                };
+                let folder = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(CONTROL_GAP))
+                    .child(div().text_color(look.detail).child("~/Downloads"))
+                    .child(button("download-folder", "Change…"));
+                vec![
+                    (
+                        Some("Opening and quitting"),
+                        vec![
+                            row(
+                                "Reopen your windows and tabs",
+                                Some(
+                                    "Off: ilo opens one empty window, and Today tabs go to the \
+                                     archive.",
+                                ),
+                                gpui::IntoElement::into_any_element(stop_switch(
+                                    &look, "restore", "restore", true, 1., look.on, a11y,
+                                )),
+                            ),
+                            row(
+                                "Ask before quitting",
+                                Some("⌘Q asks first, so a stray press can't close every window."),
+                                gpui::IntoElement::into_any_element(stop_switch(
+                                    &look, "warn", "warn", true, 1., look.on, a11y,
+                                )),
+                            ),
+                        ],
+                    ),
+                    (
+                        Some("Search and downloads"),
+                        vec![
+                            row(
+                                "Search engine",
+                                None,
+                                gpui::IntoElement::into_any_element(popup(
+                                    &look,
+                                    "DuckDuckGo",
+                                    POPUP_WIDTH,
+                                    false,
+                                )),
+                            ),
+                            row(
+                                "Save downloads to",
+                                None,
+                                gpui::IntoElement::into_any_element(folder),
+                            ),
+                            row(
+                                "Ask where to save each file",
+                                Some(
+                                    "Each download asks where it goes, rather than saving to its \
+                                     folder.",
+                                ),
+                                gpui::IntoElement::into_any_element(stop_switch(
+                                    &look, "ask", "ask", false, 1., look.on, a11y,
+                                )),
+                            ),
+                        ],
+                    ),
+                ]
             }
             Pictures::Favorites(chosen) => {
                 let three = favorites_picker(
@@ -5013,7 +5070,7 @@ impl gpui::Render for PicturesPage {
                     .child(
                         div()
                             .flex()
-                            .mt(px(SIDE_TOP))
+                            .mt(px(SHARE_TOP))
                             .ml(px(-SIDE_ROOM))
                             .child(three),
                     );
@@ -5039,7 +5096,7 @@ impl gpui::Render for PicturesPage {
                         "Let agents use the browser",
                         true,
                         1.,
-                        look.accent,
+                        look.on,
                         a11y,
                     ))],
                 );
@@ -5207,15 +5264,49 @@ impl gpui::Render for PicturesPage {
                     div()
                         .px(px(TEXT_X))
                         .mb(px(HEADING_BOTTOM))
+                        .text_size(px(text::SMALL))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(look.heading)
                         .child(heading)
                 });
+                let top = match (index, heading.is_some()) {
+                    (0, _) => FIRST_GROUP,
+                    (_, true) => HEADING_TOP,
+                    (_, false) => GROUP_GAP,
+                };
                 div()
-                    .mt(px(if index > 0 { HEADING_TOP } else { 0. }))
+                    .mt(px(top))
                     .children(heading)
                     .child(group(&look, rows))
             });
+        // The page's name, and General's sentence and Make Default, as Settings draws them.
+        let title = browser::shell::display_text(
+            section.name(),
+            browser::tokens::shell::library::TITLE_SIZE,
+            browser::tokens::shell::library::TITLE_LINE,
+            cx,
+        )
+        .text_color(base.opacity(browser::tokens::settings::TITLE));
+        let general = matches!(self.shown, Pictures::General);
+        let lede = general.then(|| {
+            div()
+                .mt(px(browser::tokens::settings::LEDE_TOP))
+                .line_height(px(browser::tokens::settings::LEDE_LINE))
+                .text_color(base.opacity(browser::tokens::settings::DETAIL))
+                .child("ilo isn't your default browser.")
+        });
+        let make = general.then(|| {
+            div()
+                .flex_none()
+                .ml(px(browser::tokens::settings::END_GAP))
+                .child(stop_button(&look, "make-default", "Make Default", a11y))
+        });
+        let head = div()
+            .px(px(TEXT_X))
+            .flex()
+            .items_start()
+            .child(div().flex_1().min_w_0().child(title).children(lede))
+            .children(make);
         let colors = Colors {
             line: look.line,
             name: base.opacity(NAME),
@@ -5223,7 +5314,14 @@ impl gpui::Render for PicturesPage {
         };
         let card = self.card.draw(
             section.name(),
-            div().flex().flex_col().children(blocks),
+            div()
+                .w_full()
+                .max_w(px(browser::tokens::settings::PAGE_WIDTH))
+                .mx_auto()
+                .flex()
+                .flex_col()
+                .child(head)
+                .children(blocks),
             dark,
             colors,
         );
