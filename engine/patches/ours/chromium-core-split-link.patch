@@ -16,7 +16,7 @@ tabs (//browser_core/hooks.h).
 +    source_web_contents_->OpenURL(
 +        GetOpenURLParamsWithExtraHeaders(
 +            params_.link_url, params_.frame_url, params_.frame_origin,
-+            WindowOpenDisposition::NEW_SPLIT_VIEW, ui::PAGE_TRANSITION_LINK,
++            WindowOpenDisposition::kNewSplitView, ui::PAGE_TRANSITION_LINK,
 +            /*extra_headers=*/std::string(), /*started_from_context_menu=*/true),
 +        /*navigation_handle_callback=*/{});
 +    return;

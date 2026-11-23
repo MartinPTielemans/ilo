@@ -1330,7 +1330,7 @@ void Tab::SystemPageOpen(const GURL& url) {
   }
   // A tab of Chromium's, which hands a site the engine is kept for back to it.
   NavigateParams params(tab->GetBrowserWindowInterface(), url, ui::PAGE_TRANSITION_LINK);
-  params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
+  params.disposition = WindowOpenDisposition::kNewForegroundTab;
   params.source_contents = web_contents();
   Navigate(&params);
 }

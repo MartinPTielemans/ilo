@@ -76,7 +76,8 @@ std::string Describe(aura::Window* window) {
     return "nothing";
   }
   views::Widget* widget = views::Widget::GetWidgetForNativeView(window);
-  return (widget ? widget->GetName() : std::string("no widget")) + " / " + window->GetName();
+  std::string name = widget ? widget->GetName() : "no widget";
+  return name + " / " + std::string(window->GetName());
 }
 
 // A window's class, in the logs below.

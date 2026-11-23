@@ -207,7 +207,7 @@ void LoadInTab(bc_id id,
   }
   browser_core::Tab::FromWebContents(contents)->Load(url, [&] {
     NavigateParams params(tab->GetBrowserWindowInterface(), url, transition);
-    params.disposition = WindowOpenDisposition::CURRENT_TAB;
+    params.disposition = WindowOpenDisposition::kCurrentTab;
     params.source_contents = contents;
     params.url_typed_with_http_scheme = typed_http;
     if (!new_group) {
