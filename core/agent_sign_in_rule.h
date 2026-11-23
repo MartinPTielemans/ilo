@@ -10,6 +10,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "url/origin.h"
@@ -66,14 +67,25 @@ std::optional<std::string> FieldSelector(bool password, std::string_view id, std
 // markup its users post, and the core never fills and submits a login into it.
 bool PostsWithin(const GURL& action, const url::Origin& page);
 
+// Every control or element that can send a form somewhere its action doesn't say: a button's or an
+// image input's formaction or formtarget, and a form's or the document's target.
+inline constexpr char kSubmitters[] = "[formaction], [formtarget], form[target], base[target]";
+
+// Whether an element kSubmitters found, by its attributes as name and value pairs, sends a form
+// elsewhere: any formaction that isn't empty, or a formtarget or target naming another browsing
+// context than the page's own. One in the main frame's document makes the whole sign-in there the
+// user's step, stricter than its form alone, since a page can tie any button to any form.
+bool SendsElsewhere(const std::vector<std::pair<std::string, std::string>>& attributes);
+
 // Whether |text|, something an agent could read of a page, shows |password|. One of six characters
 // or more shows in any text holding it. A shorter one, which ordinary words hold by chance, shows
 // only as all of a text, spaces around it aside.
 bool ShowsPassword(std::u16string_view text, std::u16string_view password);
 
-// The origins where an agent's sign-in submitted a login and didn't sign in, by agent, while the
-// agent has a session with any tab: another sign-in there is the user's step, so an agent never
-// tries a login again into a site's lock-out.
+// The origins where an agent's sign-in submitted a login and didn't sign in, by agent, in memory
+// until the user hands a tab at the origin back or the browser restarts: another sign-in there is
+// the user's step, so an agent never tries a login again into a site's lock-out, and no agent can
+// clear it by ending its sessions.
 class SignInTries {
  public:
   SignInTries();
@@ -83,8 +95,8 @@ class SignInTries {
 
   void Failed(const std::string& agent, const url::Origin& origin);
   bool MayTry(const std::string& agent, const url::Origin& origin) const;
-  // The agent's last session ended.
-  void Forget(const std::string& agent);
+  // The user took a tab at |origin| back from an agent: every agent may try there again.
+  void Forgive(const url::Origin& origin);
 
  private:
   std::map<std::string, std::set<url::Origin>> failed_;

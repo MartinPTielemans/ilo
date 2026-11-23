@@ -1,5 +1,6 @@
 #include "browser_core/agent_sign_in_rule.h"
 
+#include <iterator>
 #include <set>
 
 #include "base/strings/string_split.h"
@@ -112,6 +113,21 @@ bool PostsWithin(const GURL& action, const url::Origin& page) {
       net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
 }
 
+bool SendsElsewhere(const std::vector<std::pair<std::string, std::string>>& attributes) {
+  for (const auto& [name, value] : attributes) {
+    const std::string_view trimmed = base::TrimWhitespaceASCII(value, base::TRIM_ALL);
+    if (base::EqualsCaseInsensitiveASCII(name, "formaction") && !trimmed.empty()) {
+      return true;
+    }
+    if ((base::EqualsCaseInsensitiveASCII(name, "formtarget") ||
+         base::EqualsCaseInsensitiveASCII(name, "target")) &&
+        !trimmed.empty() && !base::EqualsCaseInsensitiveASCII(trimmed, "_self")) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool ShowsPassword(std::u16string_view text, std::u16string_view password) {
   if (password.empty()) {
     return false;
@@ -134,8 +150,11 @@ bool SignInTries::MayTry(const std::string& agent, const url::Origin& origin) co
   return it == failed_.end() || !it->second.contains(origin);
 }
 
-void SignInTries::Forget(const std::string& agent) {
-  failed_.erase(agent);
+void SignInTries::Forgive(const url::Origin& origin) {
+  for (auto it = failed_.begin(); it != failed_.end();) {
+    it->second.erase(origin);
+    it = it->second.empty() ? failed_.erase(it) : std::next(it);
+  }
 }
 
 }  // namespace browser_core

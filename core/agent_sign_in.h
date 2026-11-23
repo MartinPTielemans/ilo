@@ -7,6 +7,10 @@
 
 #include "browser_core/public/browser_core.h"
 
+namespace url {
+class Origin;
+}
+
 namespace browser_core {
 
 // An agent's sign-in (bc_agent_sign_in, #4098): the core fills a login the user saved into the
@@ -25,9 +29,17 @@ bool SigningIn(bc_id tab);
 // until its main frame commits a document at another address.
 bool WithheldFromAgents(bc_id tab);
 
-// |agent| has no session with any tab now: its sign-ins that submitted and didn't sign in are
-// forgotten, and it may try those sites again.
-void ForgetSignInTries(const std::string& agent);
+// Whether |tab|'s page is held as it showed what a sign-in filled: agents may only navigate it
+// elsewhere or close it (BC_AGENT_FAILURE_WITHHELD_PAGE), and nothing reads its text.
+bool PageWithheld(bc_id tab);
+
+// What an agent hears for any other act in such a page.
+inline constexpr char kWithheldPageRefusal[] =
+    "This tab's page shows what ilo filled when signing in. Go to another page first.";
+
+// The user handed back a tab at |origin|: every agent's sign-in there that submitted and didn't
+// sign in is forgiven, and agents may try it again. Ending a session forgives nothing.
+void ForgiveSignInTries(const url::Origin& origin);
 
 // bc_tab_sign_in_choose.
 bool ChooseSignIn(bc_id tab, uint64_t request, size_t account);

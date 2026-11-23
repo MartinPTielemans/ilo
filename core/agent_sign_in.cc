@@ -16,6 +16,8 @@
 #include "base/strings/escape.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "base/types/expected.h"
 #include "base/values.h"
 #include "browser_core/agent_page.h"
@@ -43,6 +45,7 @@
 #include "components/password_manager/core/browser/password_store/password_store_consumer.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/password_manager/core/browser/password_store/stored_credential.h"
+#include "content/public/browser/back_forward_cache.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
@@ -72,6 +75,14 @@ constexpr char kUserStep[] =
 constexpr char kTakenBack[] = "The user took the tab back, so ilo stopped signing it in.";
 constexpr char kEnded[] = "The agent's session with the tab ended, so ilo stopped signing it in.";
 constexpr char kSigningIn[] = "ilo is signing this tab in already. Wait for its answer.";
+// The back-forward cache's reason for a document a sign-in filled. None of Chrome's embedder
+// reasons (components/back_forward_cache/disabled_reason_id.h) covers it, and DevTools' report of
+// why a page wasn't restored reads every id from that list, with no case for another, so it's the
+// list's kUnknown, 0, with a description of ours.
+constexpr content::BackForwardCache::DisabledReasonType kNoBackForwardCache = 0;
+// How long the look waits for a navigation the submit started, as AgentPage and PageText wait for a
+// page to load.
+constexpr base::TimeDelta kSettleBound = base::Seconds(15);
 
 // The main frame's forms as autofill last saw them, each with its fields in the main frame alone:
 // autofill's form takes in its frames' fields, and nothing is filled in a frame.
@@ -267,8 +278,18 @@ class WithheldPage : public content::WebContentsUserData<WithheldPage>,
 
   // content::WebContentsObserver:
   void DidFinishNavigation(content::NavigationHandle* navigation) override {
-    if (navigation->IsInPrimaryMainFrame() && navigation->HasCommitted() &&
-        !navigation->IsSameDocument() && navigation->GetURL() != url_) {
+    if (!navigation->IsInPrimaryMainFrame() || !navigation->HasCommitted() ||
+        navigation->IsSameDocument()) {
+      pending_.erase(navigation->GetNavigationId());
+      return;
+    }
+    if (pending_.erase(navigation->GetNavigationId())) {
+      // What the sign-in's own submit was still loading, such as an address a form sent with GET
+      // put the password in, is the withheld page too.
+      url_ = navigation->GetURL();
+      return;
+    }
+    if (navigation->GetURL() != url_) {
       // Deletes this.
       GetWebContents().RemoveUserData(UserDataKey());
     }
@@ -277,12 +298,15 @@ class WithheldPage : public content::WebContentsUserData<WithheldPage>,
  private:
   friend class content::WebContentsUserData<WithheldPage>;
 
-  explicit WithheldPage(content::WebContents* contents)
+  WithheldPage(content::WebContents* contents, base::flat_set<int64_t> pending)
       : content::WebContentsUserData<WithheldPage>(*contents),
         content::WebContentsObserver(contents),
-        url_(contents->GetPrimaryMainFrame()->GetLastCommittedURL()) {}
+        url_(contents->GetPrimaryMainFrame()->GetLastCommittedURL()),
+        pending_(std::move(pending)) {}
 
-  const GURL url_;
+  GURL url_;
+  // The navigations under way as the sign-in held the tab, all the page's own.
+  base::flat_set<int64_t> pending_;
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
@@ -461,12 +485,7 @@ class SignIn : public content::WebContentsUserData<SignIn>,
       step = StepOf(MainFrameForms(GetWebContents()), login_->username_value, origin_);
     }
     if (step && step->elsewhere) {
-      if (first) {
-        Finish(false, BC_AGENT_FAILURE_USER_STEP, kUserStep);
-      } else {
-        user_step_ = true;
-        Settled();
-      }
+      Elsewhere(first);
       return;
     }
     // After a username alone, only the password is filled, once.
@@ -482,9 +501,33 @@ class SignIn : public content::WebContentsUserData<SignIn>,
       return;
     }
     frame_ = GetWebContents().GetPrimaryMainFrame()->GetGlobalId();
+    // Any control in the document that sends a form elsewhere, as a button with a formaction, makes
+    // the step the user's before anything is filled: a page can tie any button to any form.
+    AgentPage::FromWebContents(&GetWebContents())
+        ->CheckSubmitters(base::BindOnce(&SignIn::Submitters, weak_factory_.GetWeakPtr(),
+                                         std::move(*step), first));
+  }
+
+  void Submitters(FormStep step, bool first, bool clear) {
+    if (!clear) {
+      Elsewhere(first);
+      return;
+    }
     AgentPage* page = AgentPage::FromWebContents(&GetWebContents());
-    page->FindField(step->selector, /*submit=*/false,
-                    base::BindOnce(&SignIn::Found, weak_factory_.GetWeakPtr(), *step));
+    std::string selector = step.selector;
+    page->FindField(std::move(selector), /*submit=*/false,
+                    base::BindOnce(&SignIn::Found, weak_factory_.GetWeakPtr(), std::move(step)));
+  }
+
+  // The step sends its form off the site: the user's, before anything is filled, or after a
+  // username alone, once what was filled is emptied.
+  void Elsewhere(bool first) {
+    if (first && filled_.empty()) {
+      Finish(false, BC_AGENT_FAILURE_USER_STEP, kUserStep);
+      return;
+    }
+    user_step_ = true;
+    Settled();
   }
 
   void Found(FormStep step, bool found) {
@@ -526,6 +569,16 @@ class SignIn : public content::WebContentsUserData<SignIn>,
       Settled();
       return;
     }
+    if (next == 0) {
+      // The document never goes into the back-forward cache, where a page kept with the filled
+      // fields would come back as it was, past the emptying. Its report string, which pages read
+      // through the NotRestoredReasons API, says nothing.
+      content::BackForwardCache::DisableForRenderFrameHost(
+          host, content::BackForwardCache::DisabledReason(
+                    content::BackForwardCache::DisabledSource::kEmbedder, kNoBackForwardCache,
+                    "ilo filled a saved login in this document", /*context=*/"",
+                    /*report_string=*/"masked"));
+    }
     const auto [field, password] = fields[next];
     // Kept before it's filled, so a fill that lands but never answers is emptied too.
     filled_.push_back(field);
@@ -550,8 +603,19 @@ class SignIn : public content::WebContentsUserData<SignIn>,
             false));
   }
 
-  // Enter in the field filled last, once a form and never again in the call.
+  // Enter in the field filled last, once a form and never again in the call, if the document still
+  // has no control sending a form elsewhere: a script may have added one since the fill.
   void Submit(FormStep step) {
+    AgentPage::FromWebContents(&GetWebContents())
+        ->CheckSubmitters(base::BindOnce(&SignIn::SubmitIfClear, weak_factory_.GetWeakPtr(),
+                                         std::move(step)));
+  }
+
+  void SubmitIfClear(FormStep step, bool clear) {
+    if (!clear) {
+      Elsewhere(/*first=*/false);
+      return;
+    }
     const bool password = !step.password.is_null();
     AgentPage::FromWebContents(&GetWebContents())
         ->FindField(std::move(step.selector), /*submit=*/true,
@@ -589,9 +653,19 @@ class SignIn : public content::WebContentsUserData<SignIn>,
     if (!navigations_.empty()) {
       waiting_ = true;
       awaited_ = navigations_;
+      // Bounded as the core's other waits on a page: one that hasn't ended by then counts as
+      // showing the password, and the tab is the user's.
+      settle_bound_.Start(FROM_HERE, kSettleBound,
+                          base::BindOnce(&SignIn::NeverSettled, base::Unretained(this)));
       return;
     }
     Look();
+  }
+
+  void NeverSettled() {
+    // Nothing waits for the emptying: the tab is held from agents in this task.
+    Empty(frame_, filled_, base::DoNothing());
+    Withhold();
   }
 
   void Look() {
@@ -609,7 +683,8 @@ class SignIn : public content::WebContentsUserData<SignIn>,
   void DidFinishNavigation(content::NavigationHandle* navigation) override {
     navigations_.erase(navigation->GetNavigationId());
     awaited_.erase(navigation->GetNavigationId());
-    if (waiting_ && awaited_.empty()) {
+    if (waiting_ && awaited_.empty() && settle_bound_.IsRunning()) {
+      settle_bound_.Stop();
       Look();
     }
   }
@@ -653,15 +728,7 @@ class SignIn : public content::WebContentsUserData<SignIn>,
       shows = shows || UrlShows(frame->GetLastCommittedURL(), password);
     });
     if (shows) {
-      // As a handoff holds it: the agent's session stays for when the user hands it back, which
-      // empties what's filled before the agent's next action (EmptyForAgent). Held after the
-      // sign-in has ended, as Finish deletes it, and in the same task, so no agent acts between.
-      // Its title and address stay withheld from agents until its page is another.
-      const bc_id tab = tab_;
-      WithheldPage::CreateForWebContents(&contents);
-      Finish(false, BC_AGENT_FAILURE_USER_STEP, kUserStep);
-      Hold(tab);
-      AgentPage::SessionEnded(tab);
+      Withhold();
       return;
     }
     if (user_step_) {
@@ -670,6 +737,18 @@ class SignIn : public content::WebContentsUserData<SignIn>,
     }
     const bool signed_in = gone && password_submitted_;
     Finish(signed_in, BC_AGENT_FAILURE_NONE, signed_in ? kGone : kNotSignedIn);
+  }
+
+  // The tab is the user's, as a handoff holds it: the agent's session stays for when the user hands
+  // it back, which empties what's filled before the agent's next action (EmptyForAgent). Held after
+  // the sign-in has ended, as Finish deletes it, and in the same task, so no agent acts between.
+  // Its title and address stay withheld from agents until its page is another.
+  void Withhold() {
+    const bc_id tab = tab_;
+    WithheldPage::CreateForWebContents(&GetWebContents(), navigations_);
+    Finish(false, BC_AGENT_FAILURE_USER_STEP, kUserStep);
+    Hold(tab);
+    AgentPage::SessionEnded(tab);
   }
 
   // Answers the agent, tells the app of a sign-in, and ends: no agent's action waits any more.
@@ -750,6 +829,7 @@ class SignIn : public content::WebContentsUserData<SignIn>,
   base::flat_set<int64_t> navigations_;
   base::flat_set<int64_t> awaited_;
   bool waiting_ = false;
+  base::OneShotTimer settle_bound_;
   base::WeakPtrFactory<SignIn> weak_factory_{this};
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
@@ -792,6 +872,10 @@ void StartAgentSignIn(const std::string& agent, bc_id tab, uint64_t request) {
     Refuse(tab, request, kSigningIn, BC_AGENT_FAILURE_SIGNING_IN);
     return;
   }
+  if (PageWithheld(tab)) {
+    Refuse(tab, request, kWithheldPageRefusal, BC_AGENT_FAILURE_WITHHELD_PAGE);
+    return;
+  }
   // A tab the browser unloaded to save memory gets its page back, not shown.
   content::WebContents* contents = Window::PageOf(tab);
   if (!contents) {
@@ -819,8 +903,13 @@ bool WithheldFromAgents(bc_id tab) {
          (SignIn::FromWebContents(contents) || WithheldPage::FromWebContents(contents));
 }
 
-void ForgetSignInTries(const std::string& agent) {
-  Tries().Forget(agent);
+bool PageWithheld(bc_id tab) {
+  content::WebContents* contents = Tab::FromId(tab);
+  return contents && WithheldPage::FromWebContents(contents);
+}
+
+void ForgiveSignInTries(const url::Origin& origin) {
+  Tries().Forgive(origin);
 }
 
 bool ChooseSignIn(bc_id tab, uint64_t request, size_t account) {

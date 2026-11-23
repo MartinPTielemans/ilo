@@ -77,6 +77,10 @@ class AgentPage : public content::WebContentsObserver,
   // root (agent_sign_in_rule.h's FieldSelector). With |submit|, then presses Enter in it and waits
   // for the page to settle: |done| hears whether it did.
   void FindField(std::string selector, bool submit, base::OnceCallback<void(bool)> done);
+  // Whether no element in the main frame's document sends a form somewhere its action doesn't say
+  // (agent_sign_in_rule.h's kSubmitters and SendsElsewhere): |done| hears true only then, false if
+  // one does or the document couldn't be read.
+  void CheckSubmitters(base::OnceCallback<void(bool clear)> done);
   // Every frame's tree an agent could read, its outline's and read_page's, as DevTools gives them,
   // values and all, or none if the main frame's couldn't be read. For the core to search, never an
   // agent's.
@@ -369,6 +373,8 @@ class AgentPage : public content::WebContentsObserver,
   void AnswerHeld();
   // FindField's job: the field its selector finds, then with |submit| Enter in it.
   void Find(bool submit);
+  void Submitters();
+  void SubmitterAttributes(std::vector<int> nodes, size_t next);
   void PressEnterIn(int node);
 
   // Scrolls the job's element into view and gives its box, in the main frame's viewport's CSS

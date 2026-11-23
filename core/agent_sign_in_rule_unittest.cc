@@ -159,13 +159,51 @@ TEST(AgentSignInRule, AFailedSignInIsTheUsersStepThereForThatAgent) {
   EXPECT_TRUE(tries.MayTry("codex", Page()));
 }
 
-TEST(AgentSignInRule, AnAgentsTriesGoWithItsLastSession) {
+TEST(AgentSignInRule, HandingTheOriginBackForgivesEveryAgentThere) {
+  const url::Origin other = url::Origin::Create(GURL("https://mail.example.org/"));
   SignInTries tries;
   tries.Failed("claude", Page());
   tries.Failed("codex", Page());
-  tries.Forget("claude");
+  tries.Failed("claude", other);
+  tries.Forgive(Page());
   EXPECT_TRUE(tries.MayTry("claude", Page()));
-  EXPECT_FALSE(tries.MayTry("codex", Page()));
+  EXPECT_TRUE(tries.MayTry("codex", Page()));
+  EXPECT_FALSE(tries.MayTry("claude", other));
+}
+
+TEST(AgentSignInRule, AnotherOriginsHandBackForgivesNothing) {
+  SignInTries tries;
+  tries.Failed("claude", Page());
+  // The same site's other host, and the page's host over http, are other origins.
+  tries.Forgive(url::Origin::Create(GURL("https://login.example.org/")));
+  tries.Forgive(url::Origin::Create(GURL("http://shop.example.org/")));
+  EXPECT_FALSE(tries.MayTry("claude", Page()));
+}
+
+TEST(AgentSignInRule, ASubmitterSendingAFormElsewhereIsFound) {
+  EXPECT_TRUE(SendsElsewhere({{"formaction", "https://collector.example.com/"}}));
+  EXPECT_TRUE(SendsElsewhere({{"formaction", "/session"}}));
+  EXPECT_TRUE(SendsElsewhere({{"type", "submit"}, {"FORMTARGET", "_blank"}}));
+  EXPECT_TRUE(SendsElsewhere({{"target", "results"}}));
+  EXPECT_TRUE(SendsElsewhere({{"target", "_parent"}}));
+  EXPECT_TRUE(SendsElsewhere({{"target", "_top"}}));
+}
+
+TEST(AgentSignInRule, ASubmitterKeepingTheFormsOwnWayIsNot) {
+  EXPECT_FALSE(SendsElsewhere({}));
+  EXPECT_FALSE(SendsElsewhere({{"formaction", ""}}));
+  EXPECT_FALSE(SendsElsewhere({{"formaction", "  "}}));
+  EXPECT_FALSE(SendsElsewhere({{"formtarget", "_self"}}));
+  EXPECT_FALSE(SendsElsewhere({{"target", " _SELF "}}));
+  EXPECT_FALSE(SendsElsewhere({{"target", ""}}));
+  EXPECT_FALSE(SendsElsewhere({{"action", "https://collector.example.com/"}}));
+}
+
+TEST(AgentSignInRule, TheSubmittersSelectorNamesEachWay) {
+  const std::string_view selector = kSubmitters;
+  for (const char* each : {"[formaction]", "[formtarget]", "form[target]", "base[target]"}) {
+    EXPECT_NE(selector.find(each), std::string_view::npos) << each;
+  }
 }
 
 }  // namespace

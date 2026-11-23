@@ -1,6 +1,5 @@
 #include "browser_core/agent_session.h"
 
-#include <algorithm>
 #include <map>
 #include <optional>
 #include <set>
@@ -17,6 +16,7 @@
 #include "browser_core/host.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 
 namespace browser_core {
@@ -45,14 +45,6 @@ void Blur(bc_id tab) {
   }
 }
 
-// |agent|'s sign-in tries last while it has a session with any tab.
-void ForgetTriesIfLast(const std::string& agent) {
-  if (std::ranges::none_of(Sessions(),
-                           [&](const auto& session) { return session.second == agent; })) {
-    ForgetSignInTries(agent);
-  }
-}
-
 bool End(bc_id tab, std::optional<std::string_view> agent, int why) {
   auto it = Sessions().find(tab);
   if (it == Sessions().end() || (agent && it->second != *agent)) {
@@ -61,7 +53,6 @@ bool End(bc_id tab, std::optional<std::string_view> agent, int why) {
   const std::string held = std::move(it->second);
   Sessions().erase(it);
   StopSignIn(tab, BC_AGENT_FAILURE_NONE);
-  ForgetTriesIfLast(held);
   AgentPage::SessionEnded(tab);
   // One whose tab closed or left the agent's Space ended then, and the app saw it.
   if (!Space::AgentMayAct(held, tab)) {
@@ -76,21 +67,16 @@ bool End(bc_id tab, std::optional<std::string_view> agent, int why) {
 }  // namespace
 
 void AgentActed(const std::string& agent, bc_id tab) {
-  std::vector<std::string> ended;
   std::erase_if(Sessions(), [&](const auto& session) {
     if (Space::AgentMayAct(session.second, session.first)) {
       return false;
     }
     StopSignIn(session.first, BC_AGENT_FAILURE_NONE);
     AgentPage::SessionEnded(session.first);
-    ended.push_back(session.second);
     return true;
   });
   if (Sessions().insert_or_assign(tab, agent).second) {
     Blur(tab);
-  }
-  for (const std::string& each : ended) {
-    ForgetTriesIfLast(each);
   }
 }
 
@@ -158,6 +144,11 @@ bool HandBack(bc_id tab) {
   Blur(tab);
   // What Chrome filled for the user while they held it never reaches the agent.
   EmptyForAgent(tab);
+  // The user took the tab and gave it back, as after doing a sign-in an agent's failed: every
+  // agent may try a sign-in at its origin again.
+  if (content::WebContents* contents = Tab::FromId(tab)) {
+    ForgiveSignInTries(contents->GetPrimaryMainFrame()->GetLastCommittedOrigin());
+  }
   return true;
 }
 

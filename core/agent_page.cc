@@ -30,6 +30,7 @@
 #include "browser_core/agent_file_field.h"
 #include "browser_core/agent_job_voter.h"
 #include "browser_core/agent_sign_in.h"
+#include "browser_core/agent_sign_in_rule.h"
 #include "browser_core/agent_splash_rule.h"
 #include "browser_core/ax_text.h"
 #include "browser_core/host.h"
@@ -377,6 +378,9 @@ constexpr int kFind = -2;
 constexpr int kSubmit = -3;
 constexpr int kRead = -4;
 constexpr int kStep = -5;
+constexpr int kCheckSubmitters = -6;
+// More than a sign-in page holds: a document with more is read as one sending a form elsewhere.
+constexpr size_t kMostSubmitters = 16;
 
 // What an agent hears of a field that left before the user's files could go in.
 constexpr char kFieldGone[] = "The element isn't on the page any more. Take a new snapshot.";
@@ -658,6 +662,13 @@ void AgentPage::FindField(std::string selector, bool submit, base::OnceCallback<
   Next();
 }
 
+void AgentPage::CheckSubmitters(base::OnceCallback<void(bool)> done) {
+  Job job{0, kCheckSubmitters, 0, std::string()};
+  job.put = std::move(done);
+  jobs_.push_back(std::move(job));
+  Next();
+}
+
 void AgentPage::ReadAll(Trees done) {
   Job job{0, kRead, 0, std::string()};
   job.trees = std::move(done);
@@ -822,6 +833,9 @@ void AgentPage::Run() {
     case kFind:
     case kSubmit:
       Find(action == kSubmit);
+      return;
+    case kCheckSubmitters:
+      Submitters();
       return;
     case kRead:
       ReadTrees(0, Frames(), 0, {},
@@ -3628,6 +3642,86 @@ void AgentPage::Find(bool submit) {
                      page, submit));
            },
            weak_factory_.GetWeakPtr(), submit));
+}
+
+void AgentPage::Submitters() {
+  Send("DOM.getDocument", base::DictValue().Set("depth", 0),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, const base::DictValue* result) {
+             if (!page || !page->job_) {
+               return;
+             }
+             const std::optional<int> root =
+                 result ? result->FindIntByDottedPath("root.nodeId") : std::nullopt;
+             if (!root) {
+               page->Fail(std::string());
+               return;
+             }
+             page->Send(
+                 "DOM.querySelectorAll",
+                 base::DictValue().Set("nodeId", *root).Set("selector", kSubmitters),
+                 base::BindOnce(
+                     [](base::WeakPtr<AgentPage> page, const base::DictValue* result) {
+                       if (!page || !page->job_) {
+                         return;
+                       }
+                       const base::ListValue* found =
+                           result ? result->FindList("nodeIds") : nullptr;
+                       if (!found || found->size() > kMostSubmitters) {
+                         page->Fail(std::string());
+                         return;
+                       }
+                       std::vector<int> nodes;
+                       for (const base::Value& each : *found) {
+                         if (!each.is_int()) {
+                           page->Fail(std::string());
+                           return;
+                         }
+                         nodes.push_back(each.GetInt());
+                       }
+                       page->SubmitterAttributes(std::move(nodes), 0);
+                     },
+                     page));
+           },
+           weak_factory_.GetWeakPtr()));
+}
+
+void AgentPage::SubmitterAttributes(std::vector<int> nodes, size_t next) {
+  if (next == nodes.size()) {
+    Answer(std::string(), /*error=*/false);
+    return;
+  }
+  const int node = nodes[next];
+  Send("DOM.getAttributes", base::DictValue().Set("nodeId", node),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, std::vector<int> nodes, size_t next,
+              const base::DictValue* result) {
+             if (!page || !page->job_) {
+               return;
+             }
+             // Name, value, name, value, as DevTools gives them.
+             const base::ListValue* flat = result ? result->FindList("attributes") : nullptr;
+             if (!flat || flat->size() % 2) {
+               page->Fail(std::string());
+               return;
+             }
+             std::vector<std::pair<std::string, std::string>> attributes;
+             for (size_t i = 0; i < flat->size(); i += 2) {
+               const std::string* name = (*flat)[i].GetIfString();
+               const std::string* value = (*flat)[i + 1].GetIfString();
+               if (!name || !value) {
+                 page->Fail(std::string());
+                 return;
+               }
+               attributes.emplace_back(*name, *value);
+             }
+             if (SendsElsewhere(attributes)) {
+               page->Fail(std::string());
+               return;
+             }
+             page->SubmitterAttributes(std::move(nodes), next + 1);
+           },
+           weak_factory_.GetWeakPtr(), std::move(nodes), next));
 }
 
 void AgentPage::PressEnterIn(int node) {
