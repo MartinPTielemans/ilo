@@ -8,5 +8,3 @@ profiles@wayland #3159 2026-11-16 the driver can't do "type nihongo"
 adblock@wayland #3159 2026-11-17 the driver can't do "insert
 links@wayland #3159 2026-11-17 the driver can't do "insert
 peek-motion@wayland #2640 2026-11-20 a frame shows the window's page undimmed inside Peek's card
-arrange-order #3993 2026-11-23 turning on a file for 300 things made a task of
-arrange-order #3993 2026-11-23 a width change with a file for 300 things made a task of
