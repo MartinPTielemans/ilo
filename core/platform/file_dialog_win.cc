@@ -47,6 +47,7 @@ class Closer : public FileDialogCloser, public content::ServiceProcessHost::Obse
       }
     }
     Look();
+    started_ = true;
   }
 
  private:
@@ -118,7 +119,9 @@ class Closer : public FileDialogCloser, public content::ServiceProcessHost::Obse
     }
     closed_ = true;
     ::PostMessageW(window, WM_CLOSE, 0, 0);
-    LOG(ERROR) << "browser: file field " << field_ << " dialog told to close";
+    // Whether it was up when the field ended, or showed after, when the hook or a launch found it.
+    LOG(ERROR) << "browser: file field " << field_ << " dialog told to close"
+               << (started_ ? " as it showed" : "");
     Stop();
   }
 
@@ -161,6 +164,7 @@ class Closer : public FileDialogCloser, public content::ServiceProcessHost::Obse
   const bc_id field_;
   const HWND owner_;
   bool closed_ = false;
+  bool started_ = false;
   bool observing_ = false;
   std::vector<HWINEVENTHOOK> hooks_;
 };
