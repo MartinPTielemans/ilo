@@ -2,7 +2,6 @@
 # The static checks CI spreads over its workflows, in one run of a few seconds before a push (#3917):
 #
 #   rustfmt      app's Rust as UI on Linux's fmt job checks it: rustfmt --check on the files git tracks
-#   web time     the same job's grep: the site demo's code reads web_time's clock, not std::time's
 #   lints        tools/check-lints.py, as Check scripts' lints job runs it
 #   scripts      each shell script changed from the base parses: app/check's as Check scripts' bash
 #                3.2 job does (bash --posix and dash for sh, no bash 4 features, and bash 3.2 itself
@@ -71,26 +70,6 @@ if command -v rustfmt > /dev/null; then
   formatting=$!
 else
   formatting=
-fi
-
-# The site demo's clock, as app-linux.yml's "The demo's code reads web_time's clock" step reads it:
-# std's Instant and SystemTime panic on the web. Tests, and the browser's own main.rs and the
-# modules it declares, are left out, as the demo builds none of them.
-web_time() (
-  cd app || exit 2
-  set -f
-  skip=":!src/main.rs :!*tests.rs :!*/tests/*"
-  for module in $(sed -nE 's/^mod ([a-z0-9_]+);/\1/p' src/main.rs); do
-    skip="$skip :!src/$module.rs :!src/$module/*"
-  done
-  # shellcheck disable=SC2086 # The pathspecs split on their spaces.
-  ! git grep -nE '^use std::time::(\{[^}]*\b(Instant|SystemTime|UNIX_EPOCH)\b|(Instant|SystemTime|UNIX_EPOCH);)|^    time::(\{[^}]*\b(Instant|SystemTime|UNIX_EPOCH)\b|(Instant|SystemTime|UNIX_EPOCH)\b)' \
-    -- 'src/*.rs' $skip
-)
-if web_time; then
-  ok "web time"
-else
-  fail "web time: use web_time::{Instant, SystemTime, UNIX_EPOCH} for these, not std::time's" "web-time"
 fi
 
 # The lints, as check-scripts.yml's lints job runs them.
