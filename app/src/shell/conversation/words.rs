@@ -28,8 +28,27 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
             (format!("you gave this task {}", to.label()), None)
         }
         IloKind::TierChanged { to, .. } => (format!("you set this task to {}", to.label()), None),
+        IloKind::Resumed { tier } => (format!("resumed this task at {}", tier.label()), None),
+        // Where the assistant is the subject, a middle dot sets ilo's mark off from the sentence.
+        IloKind::KeptHere => (
+            format!("· {agent} keeps this conversation on {COMPUTER} so you can reply."),
+            None,
+        ),
+        IloKind::Gone => (format!("· {agent} no longer has this conversation."), None),
+        IloKind::KeepsNothing => (format!("· {agent} doesn't keep finished tasks."), None),
     }
 }
+
+/// The user's computer, by the platform's own noun.
+const COMPUTER: &str = if cfg!(target_os = "macos") {
+    "your Mac"
+} else if cfg!(target_os = "windows") {
+    "your PC"
+} else {
+    "your computer"
+};
+/// Where the switch that keeps finished tasks is, under the line that says they're kept.
+const KEPT_IN: &str = "Settings › Agents";
 
 /// What a line says under its head, if anything: why ilo stopped, in the user's terms, or what it
 /// signed in with. `at` is the line's name, already cut to its length.
@@ -45,6 +64,8 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
             SignedInWith::Extension(name) => format!("With {name}."),
         }),
         IloKind::Yours { .. } | IloKind::TabBack { .. } | IloKind::TierChanged { .. } => None,
+        IloKind::KeptHere => Some(KEPT_IN.into()),
+        IloKind::Resumed { .. } | IloKind::Gone | IloKind::KeepsNothing => None,
     }
 }
 
@@ -80,6 +101,7 @@ pub fn button(button: IloButton) -> &'static str {
         IloButton::AnySite => "Any site",
         IloButton::HandBack => "Hand back",
         IloButton::NotNow => "Not now",
+        IloButton::StartAgain => "Start Again",
     }
 }
 

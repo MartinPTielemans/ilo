@@ -2010,6 +2010,10 @@ impl Browser for Recorder {
         self.record(format!("show task {agent}"));
     }
 
+    fn ask_again(&self, asked: SharedString, _: &mut App) {
+        self.record(format!("ask again {asked}"));
+    }
+
     fn task_picture(&self, tab: u64, _: u64, _: &mut App) {
         self.record(format!("task picture {tab}"));
     }

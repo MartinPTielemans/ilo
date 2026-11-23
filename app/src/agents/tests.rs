@@ -10316,6 +10316,7 @@ fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
 
 mod fenced;
 mod holds;
+mod kept;
 mod sign_ins;
 mod uploads;
 

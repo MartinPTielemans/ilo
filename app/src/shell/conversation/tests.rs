@@ -1038,3 +1038,57 @@ fn no_key_presses_an_ilo_lines_button(cx: &mut TestAppContext) {
         "a key pressed an ilo line's button"
     );
 }
+
+/// A task that is done and takes no reply (#4105): ilo's line stands where its reply field was,
+/// so nothing typed is sent to it, and Start Again opens the command bar's ask with what the task
+/// was first asked, which sends nothing. Without the line its field is back.
+#[gpui::test]
+fn a_task_that_takes_no_reply_offers_start_again_in_its_fields_place(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    assert!(view.read_with(cx, |view, _| view.takes_reply()));
+    let talk = Conversation {
+        lines: vec![
+            Line::Said("Two seats at 9:05, car 4.".into()),
+            Line::Ilo(IloLine {
+                key: usize::MAX,
+                kind: IloKind::KeepsNothing,
+                settled: false,
+            }),
+        ],
+        stoppable: false,
+        ..conversation(0)
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(
+        !view.read_with(cx, |view, _| view.takes_reply()),
+        "the reply field stayed beside ilo's line"
+    );
+    let start = (usize::MAX, IloButton::StartAgain);
+    let (at, _) = ilo_button(&view, start, cx).expect("Start Again wasn't drawn");
+    let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(5);
+    view.update(cx, |view, _| {
+        view.ilo_drawn.borrow_mut().insert(start, (at, long_ago));
+    });
+    host.take();
+    cx.simulate_keystrokes("a n d enter");
+    cx.simulate_click(at.center(), Modifiers::none());
+    cx.run_until_parked();
+    let did = host.take();
+    assert!(
+        did.contains(&"ask again a flight to Lisbon next Friday".to_string()),
+        "Start Again didn't open the ask with the task's first request: {did:?}"
+    );
+    assert!(
+        !did.iter().any(|line| line.contains("Reply")),
+        "something was sent to the task: {did:?}"
+    );
+
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.takes_reply()));
+}
