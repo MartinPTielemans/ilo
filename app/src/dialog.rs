@@ -8,6 +8,7 @@
 //! device, which wait and go the same way, and a page's own, such as its alert(), over
 //! its tab's card alone, which come and go with the tab (docs/ux-spec.md › Page dialogs).
 
+use std::time::Instant;
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
@@ -15,7 +16,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use web_time::Instant;
 
 use gpui::{
     AnyElement, App, Bounds, BoxShadow, Context, Div, Entity, FocusHandle, Focusable, FontWeight,

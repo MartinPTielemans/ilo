@@ -3,7 +3,7 @@
 //! Lucide's check draws itself along its stroke.
 
 use std::time::Duration;
-use web_time::Instant;
+use std::time::Instant;
 
 use gpui::{
     AnyElement, App, Bounds, Hsla, PathBuilder, Transformation, Window, canvas, div, fill, point,

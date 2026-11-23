@@ -84,9 +84,6 @@ serve.
   (`.github/workflows/site.yml`, `wrangler.jsonc`), so main is what ilobrowser.com serves.
   Publishing a release deploys too, with the workflow as it stood at the release's tag, so main's
   `site/` has to build under the last tag's `site.yml` as well as main's.
-- `public/demo` holds the licences of the old home page's live demo and nothing the site uses. The
-  deploy that publishing 0.3.0 starts unpacks that release's demo there, so the folder stays until
-  0.3.0 is out. Never commit `ilo_demo.js` or `ilo_demo_bg.wasm` (`.gitignore`).
 - The download buttons link to `releases/latest/download/<file>` in the browser repo, with each
   platform's fixed file name from `src/downloads.ts`. GitHub serves whichever release is marked
   Latest, so every other release there (the engine builds) has to be made with `--latest=false`,
