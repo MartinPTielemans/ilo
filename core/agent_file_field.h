@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "base/memory/scoped_refptr.h"
+#include "base/memory/raw_ptr.h"
 #include "browser_core/agent_file_field_rule.h"
 #include "browser_core/public/browser_core.h"
 #include "content/public/browser/weak_document_ptr.h"
@@ -26,11 +26,11 @@ namespace browser_core {
 // from the page or the agent picks where the dialog starts or what it suggests: the field's accept
 // only filters it, and its multiple only lets the user pick more than one. No file's name or path
 // is told to anyone, or logged.
-class AgentFileField : public ui::SelectFileDialog::Listener {
+class AgentFileField {
  public:
   AgentFileField(const AgentFileField&) = delete;
   AgentFileField& operator=(const AgentFileField&) = delete;
-  ~AgentFileField() override;
+  ~AgentFileField();
 
   // The field |element| of |tab|, in |frame| at |place|, which the agent's card names, for
   // bc_file_field_choose: its id, or 0 if the tab is in no agent's Space. It ends the tab's
@@ -53,8 +53,7 @@ class AgentFileField : public ui::SelectFileDialog::Listener {
   static bool PageMayOpen(content::WebContents* contents, int kind);
 
  private:
-  AgentFileField(bc_id id,
-                 bc_id tab,
+  AgentFileField(bc_id tab,
                  std::string agent,
                  int64_t element,
                  content::WeakDocumentPtr document,
@@ -62,13 +61,9 @@ class AgentFileField : public ui::SelectFileDialog::Listener {
                  bool many,
                  std::vector<std::string> accepts);
 
-  // ui::SelectFileDialog::Listener:
-  void FileSelected(const ui::SelectedFileInfo& file, int index) override;
-  void MultiFilesSelected(const std::vector<ui::SelectedFileInfo>& files) override;
-  void FileSelectionCanceled() override;
+  // The listener of the field's dialog, which may outlive the field.
+  class DialogRun;
 
-  // The dialog answered: posted, as letting it go inside its own call could end it there.
-  void Answered(std::vector<std::string> files);
   // The user picked |files| for the field |id|, which go into it if it's still the one the card
   // named, or none.
   static void Picked(bc_id id, std::vector<std::string> files);
@@ -81,7 +76,6 @@ class AgentFileField : public ui::SelectFileDialog::Listener {
   // and |count|, if a Choose is still unanswered.
   static void End(bc_id id, int result, int count);
 
-  const bc_id id_;
   const bc_id tab_;
   // The agent whose card it is, whose Space the tab must still be in at the press and the pick.
   const std::string agent_;
@@ -91,9 +85,10 @@ class AgentFileField : public ui::SelectFileDialog::Listener {
   const FileFieldPlace place_;
   const bool many_;
   const std::vector<std::string> accepts_;
-  scoped_refptr<ui::SelectFileDialog> dialog_;
-  // What the dialog filters by, which lives as long as it.
-  std::unique_ptr<ui::SelectFileDialog::FileTypeInfo> types_;
+  // The window the user pressed Choose File… in, whose dialog's owner it is.
+  bc_id window_ = 0;
+  // The run of the field's dialog while the dialog is up: it lets the run go as it ends.
+  raw_ptr<DialogRun> run_ = nullptr;
   // Whether a Choose is unanswered: from the user's press until file_field_done.
   bool asked_ = false;
 };
