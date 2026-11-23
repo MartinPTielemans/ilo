@@ -2465,7 +2465,10 @@ fn import_home(fixture: &std::path::Path) -> std::path::PathBuf {
         })
         .and_then(|()| std::fs::write(support.join("zen/p.default/places.sqlite"), ""))
         .and_then(|()| std::fs::create_dir_all(support.join("Dia/User Data/Default")))
-        .and_then(|()| std::fs::write(support.join("Dia/User Data/Default/Preferences"), "{}"));
+        .and_then(|()| std::fs::write(support.join("Dia/User Data/Default/Preferences"), "{}"))
+        // Its bookmarks and history, as a browser with neither has nothing to bring and isn't listed.
+        .and_then(|()| std::fs::write(support.join("Dia/User Data/Default/Bookmarks"), "{}"))
+        .and_then(|()| std::fs::write(support.join("Dia/User Data/Default/History"), ""));
     if let Err(error) = made {
         log!("browser: preview import home: {error}");
     }

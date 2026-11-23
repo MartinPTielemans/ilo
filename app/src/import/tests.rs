@@ -450,6 +450,29 @@ fn what_wont_be_imported_goes_with_the_sidebar() {
     assert!(kept.left_out.is_empty());
 }
 
+/// Arc's link rules come only with its Spaces, as each goes to the Space its Arc Space becomes:
+/// its routing file is read with any of its sidebar, but its favorites or Today tabs alone, read
+/// or kept, bring no rule and nowhere for everything else.
+#[test]
+fn arcs_link_rules_come_only_with_its_spaces() {
+    let source = &sources::find(&Roots::under(&fixture(), Os::Mac))[0];
+    let now = SystemTime::now();
+    let all = [Kind::Spaces, Kind::OpenTabs, Kind::Favorites];
+    let found = read::read(source, &all, now).unwrap();
+    assert_eq!(found.link_rules, sidebar().link_rules);
+    assert_eq!(found.link_otherwise, sidebar().link_otherwise);
+    let spaces = read::read(source, &[Kind::Spaces], now).unwrap();
+    assert_eq!(spaces.link_rules, found.link_rules);
+    for kind in [Kind::OpenTabs, Kind::Favorites] {
+        let read = read::read(source, &[kind], now).unwrap();
+        let kept = read::keep(&found, source, &[kind]).unwrap();
+        for found in [read, kept] {
+            assert!(found.link_rules.is_empty(), "{kind:?}");
+            assert_eq!(found.link_otherwise, None, "{kind:?}");
+        }
+    }
+}
+
 /// On Windows, Arc in the folder the Store gives it, Chrome in Local AppData and Firefox's
 /// profiles in Roaming, the one used last first; a folder with no profile in it is no browser.
 #[test]
