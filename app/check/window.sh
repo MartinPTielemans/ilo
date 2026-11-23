@@ -1063,6 +1063,8 @@ toggle ui hidden "⌘S before the reveal"
 overshoot() {
   # A hand's moves on their way to the edge, heard twice in the strip: on Linux and Windows the
   # pointer over the page is Chromium's, and one heard once there may have jumped onto the page.
+  # Recorded, for a look at the sidebar coming out (overshoot.mp4).
+  record overshoot 3
   send move 400 300
   send move 8 300
   send move 4 300
@@ -1074,6 +1076,7 @@ overshoot() {
   send move 3 300
   expect '^browser: reveal shown$' \
     "the pointer back at the window's edge after overshooting it didn't bring the sidebar out" "$from"
+  recorded
   send move 200 300
   send move 250 300
   # On Linux the pointer over the page is Chromium's, and the panel goes as the pointer leaves it.
