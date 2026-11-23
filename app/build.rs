@@ -13,18 +13,22 @@ fn main() {
     }
 
     // The core's API, read from its header, so the two can't drift: on the web too, where the
-    // site's demo reads its constants and calls none of it.
-    bindgen::Builder::default()
-        .header(header.to_string_lossy())
-        .allowlist_function("bc_.*")
-        .allowlist_type("bc_.*")
-        .allowlist_var("BC_.*")
-        .derive_default(true)
-        .rust_edition(bindgen::RustEdition::Edition2024)
-        .generate()
-        .expect("couldn't read the core's header")
-        .write_to_file(PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("browser_core.rs"))
-        .unwrap();
+    // site's demo reads its constants and calls none of it. Only a header or a script newer than
+    // the bindings makes them again: a rerun for the tokens or the branding needn't parse it.
+    let bindings = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("browser_core.rs");
+    if stale(&bindings, &[&header]) {
+        bindgen::Builder::default()
+            .header(header.to_string_lossy())
+            .allowlist_function("bc_.*")
+            .allowlist_type("bc_.*")
+            .allowlist_var("BC_.*")
+            .derive_default(true)
+            .rust_edition(bindgen::RustEdition::Edition2024)
+            .generate()
+            .expect("couldn't read the core's header")
+            .write_to_file(&bindings)
+            .unwrap();
+    }
 
     // The name the user reads, from branding/, which build.sh also reads for the app's bundle.
     let name = root.join("branding/name");
@@ -72,7 +76,6 @@ fn main() {
         .expect("no adblock in Cargo.lock");
     println!("cargo:rustc-env=ADBLOCK_VERSION={adblock}");
     println!("cargo:rerun-if-changed={}", lock.display());
-    println!("cargo:rerun-if-changed=platform");
     println!("cargo:rerun-if-changed={}", header.display());
 
     // The look's values, from the file the code and the design file share (tools/design-sync.md).
@@ -90,28 +93,31 @@ fn native(root: &Path, header: &Path, os: &str) {
         // The driver calls the core for what only agent code will, once there is some.
         .include(root.join("../core/public"))
         .define("NDEBUG", None);
+    // host.h, which every host includes.
+    sources(&mut host, "platform", &[]);
     match os {
         "macos" => {
-            host.file("platform/mac/host.mm")
-                .file("platform/mac/drive.mm")
-                .file("platform/mac/menu_window.mm")
-                .file("platform/mac/emoji.mm")
-                .file("platform/mac/dock.mm")
-                .file("platform/mac/needs_you.mm")
-                .file("platform/mac/updates.mm")
-                .file("platform/mac/scripting.mm")
-                .flag("-std=c++20")
+            let files = [
+                "host.mm",
+                "drive.mm",
+                "menu_window.mm",
+                "emoji.mm",
+                "dock.mm",
+                "needs_you.mm",
+                "updates.mm",
+                "scripting.mm",
+            ];
+            sources(&mut host, "platform/mac", &files);
+            host.flag("-std=c++20")
                 .flag("-fobjc-arc")
                 // Sparkle's headers alone: updates.mm loads the framework at run time, from a
                 // release build that carries it (setup.sh fetches it).
                 .flag(format!("-F{}", root.join(".deps/Sparkle").display()));
         }
         "windows" => {
-            host.file("platform/windows/host.cc")
-                .file("platform/windows/drive.cc")
-                .file("platform/windows/updates.cc")
-                .file("platform/windows/ed25519.cc")
-                .flag("/std:c++20")
+            let files = ["host.cc", "drive.cc", "updates.cc", "ed25519.cc"];
+            sources(&mut host, "platform/windows", &files);
+            host.flag("/std:c++20")
                 .flag("/utf-8")
                 // C++/WinRT (the share sheet) throws, and its projection headers overflow the
                 // object file's default section count.
@@ -187,8 +193,8 @@ fn native(root: &Path, header: &Path, os: &str) {
                 "cargo:rerun-if-changed={}",
                 root.join("branding/id").display()
             );
-            host.file("platform/linux/host.cc")
-                .flag("-std=c++20")
+            sources(&mut host, "platform/linux", &["host.cc"]);
+            host.flag("-std=c++20")
                 .define("APP_ID", format!("\"{}\"", id.trim()).as_str());
         }
         other => panic!("no host for {other}"),
@@ -256,6 +262,41 @@ fn native(root: &Path, header: &Path, os: &str) {
     }
 }
 
+/// Adds `files` in `dir` to the host, and reruns this script when one of them or a header beside
+/// them changes: another OS's files, and the Rust that rustc follows itself, don't (#3917).
+fn sources(host: &mut cc::Build, dir: &str, files: &[&str]) {
+    for file in files {
+        let path = format!("{dir}/{file}");
+        println!("cargo:rerun-if-changed={path}");
+        host.file(path);
+    }
+    for entry in std::fs::read_dir(dir).unwrap_or_else(|_| panic!("no {dir}")) {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|extension| extension == "h") {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+    }
+}
+
+/// Whether `output` is missing or not newer than one of `inputs` or this script, which a change to
+/// build.rs or to bindgen's version builds again. Cargo's rerun-if-changed reads the same times.
+fn stale(output: &Path, inputs: &[&Path]) -> bool {
+    let modified = |path: &Path| {
+        std::fs::metadata(path)
+            .and_then(|file| file.modified())
+            .ok()
+    };
+    let Some(made) = modified(output) else {
+        return true;
+    };
+    let script = std::env::current_exe().ok();
+    inputs
+        .iter()
+        .copied()
+        .chain(script.as_deref())
+        .any(|input| modified(input).is_none_or(|changed| changed >= made))
+}
+
 /// The Mac's translator, Apple's Translation, which is Swift's alone (platform/mac/translate.swift):
 /// a static library for the browser, whose objects name the Swift runtime and the framework they
 /// need, which the linker finds in the SDK and the toolchain, the runtime at /usr/lib/swift.
@@ -280,28 +321,39 @@ fn translator_swift(root: &Path) {
     .to_owned();
     // The app's own minimum, which build.sh gives its Info.plist.
     let minimum = std::env::var("MACOSX_DEPLOYMENT_TARGET").unwrap_or_else(|_| "15.0".into());
-    let status = std::process::Command::new(&swiftc)
-        .args([
-            "-parse-as-library",
-            "-O",
-            "-swift-version",
-            "5",
-            "-static",
-            "-emit-library",
-        ])
-        .args(["-module-name", "IloTranslate", "-sdk", &sdk])
-        .arg("-target")
-        .arg(format!("{arch}-apple-macos{minimum}"))
-        .arg("-o")
-        .arg(&library)
-        .arg(&source)
-        .status()
-        .expect("couldn't run swiftc");
-    assert!(
-        status.success(),
-        "swiftc couldn't build {}",
-        source.display()
-    );
+    let target = format!("{arch}-apple-macos{minimum}");
+    // Built again only for a newer Swift file or script, or another SDK, compiler or target than
+    // the last library's, which the file beside it names: a rerun for anything else needn't.
+    let made_by = out.join("libilo_translate.made-by");
+    let how = format!("{sdk}\n{}\n{target}\n", swiftc.display());
+    let last = std::fs::read_to_string(&made_by).ok();
+    if stale(&library, &[&source]) || last.as_deref() != Some(how.as_str()) {
+        // Gone until swiftc succeeds, so a build it fails part way through isn't taken for one.
+        let _ = std::fs::remove_file(&made_by);
+        let status = std::process::Command::new(&swiftc)
+            .args([
+                "-parse-as-library",
+                "-O",
+                "-swift-version",
+                "5",
+                "-static",
+                "-emit-library",
+            ])
+            .args(["-module-name", "IloTranslate", "-sdk", &sdk])
+            .arg("-target")
+            .arg(&target)
+            .arg("-o")
+            .arg(&library)
+            .arg(&source)
+            .status()
+            .expect("couldn't run swiftc");
+        assert!(
+            status.success(),
+            "swiftc couldn't build {}",
+            source.display()
+        );
+        std::fs::write(&made_by, how).unwrap();
+    }
     let toolchain = swiftc.parent().and_then(Path::parent).unwrap();
     for arg in [
         library.display().to_string(),
