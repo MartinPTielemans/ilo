@@ -179,7 +179,7 @@ impl Shell {
                 .line_height(px(FACTS_LINE))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(self.palette.on_overlay(DETAIL))
-                .child(crate::address_wrap::text(&head))
+                .child(self.card_top_line(crate::address_wrap::text(&head)))
         });
         // Under a head, as a request's change is, and clear of × as the head keeps it.
         let headed = head.is_some();
@@ -204,7 +204,11 @@ impl Shell {
                         })
                         .text_color(self.palette.text(TITLE))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(crate::address_wrap::text(&title)),
+                        .map(|title_line| match headed {
+                            true => title_line.child(crate::address_wrap::text(&title)),
+                            false => title_line
+                                .child(self.card_top_line(crate::address_wrap::text(&title))),
+                        }),
                 )
                 .child(
                     div()

@@ -23,7 +23,7 @@ use crate::tokens::dialog::{
     CHIP_HEIGHT, CHIP_RADIUS, ESC_FILL, ESC_TEXT, RETURN_BORDER, RETURN_FILL, RETURN_GLYPH,
     RETURN_WIDTH,
 };
-use crate::tokens::shell::permission::{BUTTON_GAP, CLOSE, CLOSE_INSET, LINE};
+use crate::tokens::shell::permission::{BUTTON_GAP, CLOSE, CLOSE_INSET, LINE, PADDING};
 use crate::tokens::text;
 
 /// Between a button's label and its chips.
@@ -36,12 +36,24 @@ const ROOM_SLACK: f32 = 0.5;
 /// the sidebar's narrowest, Allow Once has its row to itself and room for ↩ only so.
 const CHIPPED_SIDE: f32 = BUTTON_GAP / 2.;
 
-/// What card_chips reads from the last frame: the width of the card's row of buttons, and each
-/// button's top and its label's width.
+/// What card_chips and card_key_close read from the last frame: the width of the card's row of
+/// buttons and where it ends, each button's top and its label's width, and where the card's top
+/// line ends.
 #[derive(Clone, Copy, Default)]
 pub(super) struct CardRoom {
     row: f32,
+    row_end: f32,
+    top_end: f32,
     buttons: [(f32, f32); MOST_BUTTONS],
+}
+
+impl CardRoom {
+    /// Whether ESC fits in the ×'s place beside the top line: the head and title keep room for
+    /// the × only, and a short line leaves room for ESC too.
+    fn esc_beside_top(&self) -> bool {
+        let esc_start = self.row_end + PADDING - CLOSE_INSET - ESC_WIDTH;
+        self.row_end > 0. && self.top_end + CHIP_GAP <= esc_start - ROOM_SLACK
+    }
 }
 use super::commands::{key_name, keystroke_keys};
 use super::{Shell, commands::Command, keys::user_keys};
@@ -447,12 +459,34 @@ impl Shell {
             move |bounds, _, _| {
                 let mut all = room.get();
                 all.row = f32::from(bounds.size.width);
+                all.row_end = f32::from(bounds.right());
                 room.set(all);
             },
             |_, _, _, _| {},
         )
         .absolute()
         .size_full()
+    }
+
+    /// `words`, the card's top line, drawn as wide as they are, so card_key_close knows where
+    /// they end.
+    pub(super) fn card_top_line(&self, words: impl IntoElement) -> Div {
+        let room = self.agent_card_room.clone();
+        let probe = canvas(
+            move |bounds, _, _| {
+                let mut all = room.get();
+                all.top_end = f32::from(bounds.right());
+                room.set(all);
+            },
+            |_, _, _, _| {},
+        );
+        div().flex().child(
+            div()
+                .relative()
+                .min_w_0()
+                .child(words)
+                .child(probe.absolute().size_full()),
+        )
     }
 
     /// The card's button `button`, `at` of `count` in its row, with the keyboard's marks while
@@ -561,14 +595,18 @@ impl Shell {
             .child("ESC")
     }
 
-    /// The card's × or, while the keyboard's on the card and Escape is the ×'s, ESC in its place,
-    /// pressed as the × is.
+    /// The card's × or, while the keyboard's on the card and Escape is the ×'s, ESC in its place
+    /// where the top line leaves it room, pressed as the × is. Where it doesn't, the × stays and
+    /// Escape still answers as it does.
     pub(super) fn card_key_close(
         &self,
         escape: Option<EscapeMark>,
         cx: &Context<Self>,
     ) -> Stateful<Div> {
-        let close = match self.agent_card_ring().is_some() && escape == Some(EscapeMark::Close) {
+        let esc = self.agent_card_ring().is_some()
+            && escape == Some(EscapeMark::Close)
+            && self.agent_card_room.get().esc_beside_top();
+        let close = match esc {
             true => div()
                 .id("agent-question-close")
                 .absolute()
@@ -1182,6 +1220,80 @@ mod tests {
     /// Where the row has room, as in the widest sidebar, ↩ is on the ringed button and ESC on
     /// Escape's, and in the narrowest neither is ever on another. The test's text runs wider than
     /// Inter or SF, so whether ↩ fits beside Allow Once there is the captures' to show.
+    /// ESC takes the ×'s place only where the card's top line ends short of it, so it never sits
+    /// on the site or the title; elsewhere the × stays, and Escape still answers as it does.
+    #[gpui::test]
+    fn esc_takes_the_close_only_beside_a_short_top_line(cx: &mut TestAppContext) {
+        use super::CHIP_GAP;
+        use crate::tokens::shell::permission::CLOSE;
+        use crate::tokens::shell::{SIDEBAR_MAX, SIDEBAR_MIN};
+        use gpui::accesskit::Role;
+        let (_, shell, cx) = window_with(cx);
+        cx.simulate_a11y_activation();
+        let long = "a.long.name.of.a.site.on.the.mail.example";
+        let cases = [
+            ("a short site, wide", SIDEBAR_MAX, question(1), true),
+            (
+                "a short site, fenced",
+                SIDEBAR_MAX,
+                Question {
+                    fenced: true,
+                    ..question(2)
+                },
+                true,
+            ),
+            (
+                "a long site",
+                SIDEBAR_MIN,
+                Question {
+                    site: long.into(),
+                    ..question(3)
+                },
+                false,
+            ),
+            (
+                "no site, a title that wraps",
+                SIDEBAR_MIN,
+                Question {
+                    site: "".into(),
+                    ..question(4)
+                },
+                false,
+            ),
+        ];
+        for (case, width, asked, esc) in cases {
+            shell.update(cx, |shell, cx| {
+                shell.sidebar_width = width;
+                cx.notify();
+            });
+            ask(&shell, cx, asked);
+            from_page(&shell, cx, KEY);
+            let scale = f64::from(cx.update(|window, _| window.scale_factor()));
+            let tree = cx.a11y_tree().expect("GPUI built a tree");
+            let (_, close) = (tree.nodes.iter())
+                .find(|(_, n)| n.role() == Role::Button && n.label() == Some("Close"))
+                .unwrap_or_else(|| panic!("{case}: no Close"));
+            let r = close.bounds().expect("a Close with no bounds");
+            let (left, wide) = (r.x0 / scale, (r.x1 - r.x0) / scale);
+            let top_end = shell.read_with(cx, |shell, _| shell.agent_card_room.get().top_end);
+            // ESC's place is wider than the ×'s.
+            let drawn = wide > f64::from(CLOSE) + 0.5;
+            assert_eq!(
+                drawn, esc,
+                "{case}: ESC drawn {drawn}, top line ends at {top_end}"
+            );
+            if drawn {
+                assert!(
+                    f64::from(top_end + CHIP_GAP) <= left + 0.5,
+                    "{case}: ESC at {left} sits on the top line, which ends at {top_end}"
+                );
+            }
+            from_page(&shell, cx, KEY);
+            shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
+            cx.run_until_parked();
+        }
+    }
+
     #[gpui::test]
     fn the_chips_show_where_the_row_has_room(cx: &mut TestAppContext) {
         use super::{EscapeMark, escape_mark};
