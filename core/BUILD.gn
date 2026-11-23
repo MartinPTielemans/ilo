@@ -1,6 +1,7 @@
 # Our layer in Chrome's framework (docs/decisions.md, decision 3). engine/setup.sh links this
 # directory into the tree as //browser_core, and engine/patches/ours/chromium-core-link.patch links
 # it into the framework.
+# Fallback probe, never to land (#3917).
 
 import("//build/config/sanitizers/sanitizers.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
