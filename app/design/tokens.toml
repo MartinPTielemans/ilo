@@ -405,6 +405,16 @@ modal-rim = 0xffff_ff26
 modal-shadow = 0x0000_008f
 modal-shadow-y = 24.0
 modal-shadow-blur = 64.0
+# A menu's glass (#4090) lies on two shadows of its own, wider than a popover's: one close under its
+# edge and one wide, fainter in the light look. Its outline is the levels' own.
+menu-contact = 0x0000_0033
+menu-contact-y = 2.0
+menu-contact-blur = 6.0
+menu-shadow = 0x0000_0061
+menu-shadow-y = 16.0
+menu-shadow-blur = 40.0
+light-menu-contact = 0x0000_000f
+light-menu-shadow = 0x0000_002e
 # How far a window that draws a popover's shadow itself reaches past what it holds, at least the
 # popover's `Level::reach` below it; a test holds every such window to it.
 window-margin = 40.0
@@ -751,12 +761,13 @@ room = 300.0
 
 [menu]
 # ilo's own context menu (ours, #331): 24 pt rows of 13 pt text in a panel of the palette's
-# overlay fills (#4090), frosted where the host blurs under it.
+# overlay fills, frosted where the host blurs under it, in glass (#4090): a light from the top,
+# a rim inside and the outline outside, and a wide shadow ([elevation] menu-*).
 row = 24.0
-# A row's corner is the control radius, and the panel's is concentric with it, PADDING out: 6 + 4.
-row-radius = 6.0
-padding = 4.0
-radius = 10.0
+# A row's corner, and the panel's concentric with it, PADDING out: 7 + 5.
+row-radius = 7.0
+padding = 5.0
+radius = 12.0
 # A row's text starts this far inside it, so 12 from the panel's edge.
 row-x = 8.0
 # A line between groups: 1 pt in the middle of this, 8 in from the rows' text.
@@ -778,11 +789,22 @@ max-width = 320.0
 overlap = 4.0
 # How far inside the screen's work area a menu stays.
 edge = 8.0
-# How far a menu a control opens lies off the control's plate, so the plate shows whole beside it:
-# the panel's own padding (ours, #3148; the Space menu opens at the pointer, on its dot).
+# How far a menu a control opens lies off the control's plate, so the plate shows whole beside it
+# (ours, #3148; the Space menu opens at the pointer, on its dot). Where a menu opens is #4108's.
 from-control = 4.0
-# The panel is on the popover elevation (#317), with its own rim, which reads in both looks.
+# The panel's rim, inside its edge, which reads in both looks; the menu's edge is never fainter
+# than this and the outline ([elevation]), as a dark menu's fill is near a dark window's (#4090).
 dark-rim = 0xffff_ff1f
+# The glass's light: white from the top, `top-light` at the edge to `top-light-end` at
+# `top-light-stop` of the way down and on to the bottom, and a line of it just under the top
+# edge in the dark look. The light look's inner rim is white, inside its Ink rim.
+dark-top-light = 0xffff_ff13
+dark-top-light-end = 0xffff_ff05
+dark-top-line = 0xffff_ff21
+light-top-light = 0xffff_ff80
+light-top-light-end = 0xffff_ff24
+light-inner-rim = 0xffff_ffb8
+top-light-stop = 0.46
 dark-label = 0xf3f0_e8eb
 # Shortcuts and chevrons.
 dark-secondary = 0xf3f0_e88c
@@ -799,10 +821,12 @@ light-destructive = 0xb326_1eff
 # A destructive item's highlight, with a Paper label on it.
 destructive-fill = 0xb326_1eff
 destructive-label = 0xf3f0_e8ff
-# Ink over the destructive highlight while the button is down on it. The others' highlight is the
-# Space's accent with the label the palette solves on it, and pressed, the accent moved away from
-# that label (palette.rs).
+# Ink over the destructive highlight while the button is down on it.
 pressed = 0x1614_0f2e
+# The others' highlight is a neutral plate, never the Space's accent (#4090): the look's label ink
+# at `plate`, and at `plate-pressed` while the button is down on it, under the label in its ink.
+plate = 0.11
+plate-pressed = 0.17
 # A Space's swatch in Move to (#320), before its name: its gradient, ringed by the palette's rule
 # for a swatch's ring (palette.rs) against the panel.
 swatch = 10.0
