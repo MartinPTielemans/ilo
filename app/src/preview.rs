@@ -2550,7 +2550,9 @@ fn import_found(given: &str) -> Option<(&'static str, browser::import::found::Fo
             }
             "Arc"
         }
-        // Zen with every thing its reader leaves out, each many, for the line at its longest.
+        // Every thing Zen's reader leaves out, each many, for the line at its longest. They come
+        // from the tests' Arc, as a Zen's Spaces are a choice only once its reader finds its
+        // session, which the made-up home has none of.
         "longest" => {
             found.spaces = vec![
                 space(
@@ -2578,7 +2580,7 @@ fn import_found(given: &str) -> Option<(&'static str, browser::import::found::Fo
             found.leave_out(FOUR_TAB_SPLIT, 2);
             found.leave_out(essentials, 4);
             found.leave_out(SPACE_ICON, 5);
-            "Zen"
+            "Arc"
         }
         "zen" => {
             found.spaces = vec![bookmarks("Zen")];
@@ -3643,8 +3645,8 @@ fn main() {
                     }
                     // PREVIEW_IMPORT=one, =four, =longest, =zen or =dia, with
                     // PREVIEW_ONBOARDING=<look>:import, picks a browser there with made-up things
-                    // read: Arc with one thing that won't be imported, or four, Zen with all it
-                    // leaves out, and Zen and Dia with their notes in place of their Spaces
+                    // read: Arc with one thing that won't be imported, or four, or all Zen's
+                    // reader leaves out, and Zen and Dia with their notes in place of their Spaces
                     // (#4051).
                     if let Ok(given) = std::env::var("PREVIEW_IMPORT")
                         && let Some((name, found)) = import_found(&given)

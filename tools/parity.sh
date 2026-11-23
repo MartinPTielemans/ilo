@@ -31,8 +31,8 @@
 # lines in Settings' narrowest window, and a Flatpak's, not there and there with the line to run
 # on the host, light and dark and in the narrowest window (#3667), and the import's choices from
 # a browser picked at the first launch, with one thing that won't be imported and with four, and
-# Zen's and Dia's notes in place of their Spaces, light and dark, and Zen's line of what won't be
-# imported at its longest, light (#4051). The preview's Linux host places no window, so sway
+# Zen's and Dia's notes in place of their Spaces, light and dark, and the line of what won't be
+# imported at its longest, all Zen's reader leaves out, light (#4051). The preview's Linux host places no window, so sway
 # puts Site Controls, the icon picker and the tooltip in the middle rather than where the Mac's host
 # would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
