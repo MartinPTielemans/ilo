@@ -16,7 +16,7 @@
 # none_since straight after the input it's about (#2196).
 # The workflow lints the quarantine lists too (app/check/quarantine.sh), each night as well as on each change,
 # as a line goes stale with no change: one over 14 days old, or whose issue closed, fails it, and so
-# does an issue of a run red on main twice running that no line names a day on (#2197).
+# does an issue of a run red on main twice running that no line names an hour on (#2197).
 name: Check scripts
 
 on:
@@ -139,3 +139,11 @@ jobs:
             sh app/check/quarantine.sh list "$os"
             echo
           done >> "$GITHUB_STEP_SUMMARY"
+
+      # Each night, whether the lists shrink (#3917): quarantine.sh weeks reads their history, so the
+      # night fetches it, without the files but the lists' own, and a change's run pays nothing.
+      - name: Count the quarantine lines by week
+        if: ${{ !cancelled() && github.event_name == 'schedule' }}
+        run: |
+          git fetch -q --filter=blob:none --unshallow origin
+          sh app/check/quarantine.sh weeks >> "$GITHUB_STEP_SUMMARY"

@@ -13,7 +13,7 @@
 //! motion. What they let go settles through `start`.
 
 use std::time::Duration;
-use web_time::Instant;
+use std::time::Instant;
 
 use gpui::App;
 
