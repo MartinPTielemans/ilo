@@ -550,8 +550,8 @@ typedef enum bc_agent_failure {
   BC_AGENT_FAILURE_SIGNING_IN = 11,
   // The step is the user's, such as a sign-in only they may finish: the app hands them the tab.
   BC_AGENT_FAILURE_USER_STEP = 12,
-  // The tab's page showed what a sign-in filled (bc_tab_withheld_from_agents): nothing but a
-  // navigation to another page, or closing the tab, until its main frame commits another document.
+  // The tab shows a page withheld as it showed what a sign-in filled (bc_tab_withheld_from_agents):
+  // nothing but a navigation to another page, or closing the tab.
   BC_AGENT_FAILURE_WITHHELD_PAGE = 13,
 } bc_agent_failure;
 
@@ -2185,7 +2185,8 @@ BC_EXPORT bool bc_agent_hand_off(const char* agent, bc_id tab);
 
 // The user hands |tab| back to agents, and returns whether they held it. Before an agent's next
 // action in its page runs, the main frame's password fields and the fields Chrome filled for the
-// user are emptied. The user's.
+// user are emptied, and agents may try a sign-in that failed at its origin again
+// (bc_agent_sign_in), unless the tab is closing. The user's, from their own click or key alone.
 BC_EXPORT bool bc_tab_hand_back(bc_id tab);
 
 // Whether the user holds |tab| from agents.
@@ -2236,10 +2237,12 @@ BC_EXPORT void bc_agent_sign_in(const char* agent, bc_id tab, uint64_t request);
 // Whether the core is signing |tab| in for an agent (bc_agent_sign_in), for the app to show.
 BC_EXPORT bool bc_tab_signing_in(bc_id tab);
 
-// Whether |tab|'s title and address are withheld from agents: while the core signs it in, and once
-// a sign-in held it because its page showed what was filled, until its main frame commits another
-// document. The app gives agents neither, in any answer that names the tab (list_tabs, an
-// outline's header, open_tab and navigate's answers). In the second case the core refuses agents
+// Whether |tab|'s title and address are withheld from agents: while the core signs it in, and while
+// it shows a page a sign-in withheld because it showed what was filled. That's the page then, what
+// the submit was still loading, and for the tab's life any page at one of their addresses again,
+// by history, a reload, a redirect or a navigation. The app gives agents neither, in any answer
+// that names the tab (list_tabs, an outline's header, open_tab and navigate's answers), and keeps
+// neither in what it shows or keeps for agents. While such a page shows, the core refuses agents
 // every act on the tab but a navigation and closing it, with BC_AGENT_FAILURE_WITHHELD_PAGE, and
 // bc_tab_read_text gives none of its text.
 BC_EXPORT bool bc_tab_withheld_from_agents(bc_id tab);
