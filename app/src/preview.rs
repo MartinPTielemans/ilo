@@ -2695,7 +2695,7 @@ fn task_conversation(agent: SharedString) -> Conversation {
 
 /// PREVIEW_TASK=<state> (#4095's bench) shows the working task's conversation beside its page in
 /// one of the states ilo's own lines are made for, from made-up data: working, refused,
-/// off-limits, yours, tab-back, signed-in or raised.
+/// off-limits, yours, tab-back, signed-in, raised or notes.
 fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
     let Ok(state) = std::env::var("PREVIEW_TASK") else {
         return;
@@ -2785,6 +2785,37 @@ fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 ),
                 working(10, "Clicking “Place order”"),
             ]
+        }
+        // A step whose answer carried a site's notes (#4122), which the line under it says.
+        "notes" => {
+            let github = &browser::agents::notes::NOTES[0];
+            let opened = TraceStep {
+                key: 10,
+                glyph: "icons/globe.svg",
+                title: "Opened github.com".into(),
+                description: "2 s".into(),
+                running: false,
+                failed: false,
+                opens: Opens::Nothing,
+                under: github.with().into(),
+            };
+            let reading = TraceStep {
+                key: 11,
+                glyph: "icons/text-align-start.svg",
+                title: "Reading github.com".into(),
+                description: "".into(),
+                running: true,
+                failed: false,
+                opens: Opens::Nothing,
+                under: "".into(),
+            };
+            let trace = Trace {
+                key: 10,
+                running: true,
+                took: None,
+                items: vec![TraceItem::Step(opened), TraceItem::Step(reading)],
+            };
+            vec![done(0, before), Line::Trace(trace)]
         }
         _ => vec![done(0, before), working(10, "Reading this page")],
     };
@@ -3097,6 +3128,13 @@ fn main() {
             if let Ok(state) = std::env::var("PREVIEW_ASSISTANTS") {
                 let signed_in = state == "signed-in";
                 preview_pictures(Pictures::Assistants { signed_in }, cx);
+                return;
+            }
+            // PREVIEW_SITE_NOTES=open or closed shows Settings › Agents' Site notes (#4122), its
+            // switch and its row a site, the first one's note open to read or none.
+            if let Ok(state) = std::env::var("PREVIEW_SITE_NOTES") {
+                let open = state == "open";
+                preview_pictures(Pictures::SiteNotes { open }, cx);
                 return;
             }
             // PREVIEW_ACCOUNT=signed-out, no-server, words, waiting or signed-in shows Settings ›
@@ -4750,6 +4788,8 @@ enum Pictures {
     CommandLine(CommandLine),
     /// Your assistant's rows in their states, `signed_in` or before (#4100).
     Assistants { signed_in: bool },
+    /// Agents' Site notes (#4122): the switch, on, and the sites' rows, the first `open`.
+    SiteNotes { open: bool },
 }
 
 /// Where the ilo command is (#3667).
@@ -4858,6 +4898,7 @@ impl gpui::Render for PicturesPage {
             Pictures::Appearance { .. } => Section::Appearance,
             Pictures::General => Section::General,
             Pictures::CommandLine(_) | Pictures::Assistants { .. } => Section::Agents,
+            Pictures::SiteNotes { .. } => Section::Agents,
         };
         let column = settings_column::column(
             &Default::default(),
@@ -5271,6 +5312,24 @@ impl gpui::Render for PicturesPage {
                         ),
                     ],
                 }
+            }
+            Pictures::SiteNotes { open } => {
+                use browser::agents::notes;
+                use browser::settings_rows::site_note_row;
+                let on = frame()
+                    .child(row_text(
+                        &look,
+                        notes::HEADING,
+                        Some(notes::SWITCH_LINE.into()),
+                    ))
+                    .child(switch(notes::HEADING, true));
+                let rows = (notes::NOTES.iter().enumerate())
+                    .map(|(index, note)| {
+                        let (opened, logged) = (open && index == 0, self.logged.clone());
+                        site_note_row(&look, note, opened, a11y, logged, |_, _, _| {})
+                    })
+                    .collect();
+                vec![(None, vec![on]), (None, rows)]
             }
         };
         let blocks = blocks
