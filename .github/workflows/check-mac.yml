@@ -86,48 +86,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: .github/scripts/main-check.sh seen
 
-  check:
+  # The app the check jobs run, built once for them all (#3917), or the one another check of this
+  # commit kept (app-artifact.sh), once the engine it runs on is found.
+  build:
     needs: gate
     if: needs.gate.outputs.check == 'true'
-    # Named apart when it does other runs than the default ones, so it's no verdict on the commit.
-    name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}${{ matrix.shard != 0 && format(' {0}/{1}', matrix.shard, inputs.runs == 'all' && 3 || 2) || '' }}
-    # runs=all takes longer than the job's 120 minutes, so it's dealt across three jobs, each with
-    # its share of the runs (.github/scripts/runs.sh, #2271). Since 11-18 the default runs take longer
-    # too, so they're dealt across two, as Windows' are (#3444). Any other list is one job's.
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: ${{ fromJSON(inputs.runs == 'all' && '[1, 2, 3]' || inputs.runs == '' && '[1, 2]' || '[0]') }}
     runs-on: macos-26
-    # The default runs took about 105 min here on 11-18, after about 16 of setting up, and ran out
-    # the job's time unsplit (44322076346).
-    timeout-minutes: 120
+    timeout-minutes: 60
     permissions:
       contents: read
-      # A re-run reads the run's earlier attempts (main-check.sh rerun).
+      # app-artifact.sh find reads the repository's artifacts.
       actions: read
     outputs:
       found: ${{ steps.engine.outputs.found }}
+      run: ${{ steps.app.outputs.run }}
+      artifact: ${{ steps.app.outputs.artifact }}
     defaults:
       run:
         working-directory: app
-    env:
-      # The runs a release still needs from the check VM, as the header says why: one leaves the
-      # list once it passes on the runner (#2248).
-      VM_RUNS: ''
-      # How many jobs the runs are dealt across, for runs.sh shard.
-      SHARDS: ${{ inputs.runs == 'all' && 3 || 2 }}
     steps:
       # With the history, where fetch.sh looks for the engine's commit.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      # A re-run's pass would show over the failure of the attempt before it.
-      - if: ${{ github.run_attempt != '1' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: ../.github/scripts/main-check.sh rerun
 
       # A run with no engine checks nothing, so it fails rather than pass, and the night after takes
       # it as not checked (main-check.sh seen) (#1563).
@@ -149,43 +130,9 @@ jobs:
           *) exit "$status" ;;
           esac
 
-      # The runs this job does.
-      - id: runs
-        if: ${{ steps.engine.outputs.found == 'true' }}
-        env:
-          RUNS: ${{ inputs.runs }}
-          SHARD: ${{ matrix.shard }}
-        run: |
-          case $RUNS in
-          '')
-            runs=
-            default=$(sh check.sh --runs default)
-            for run in $(../.github/scripts/runs.sh shard "$SHARD" "$SHARDS"); do
-              case " $(echo $default) " in *" $run "*) ;; *) continue ;; esac
-              case " $VM_RUNS " in *" $run "*) ;; *) runs="$runs $run" ;; esac
-            done
-            ;;
-          all) runs=$(../.github/scripts/runs.sh shard "$SHARD") ;;
-          *) runs=$RUNS ;;
-          esac
-          echo "list= $(echo $runs) " | tee -a "$GITHUB_OUTPUT"
-
-      # The runner's 1024 by 768 screen is too small for the windows the checks lay out for the VMs',
-      # and it reduces transparency, which draws the window's material opaque over any backdrop,
-      # and motion, under which the app moves nothing (#1529) where the checks time its motion
-      # (#1554). Before the build, which the Dock and the windows' layout settle over.
-      - if: ${{ steps.engine.outputs.found == 'true' }}
-        run: |
-          swift ../.github/scripts/display-mode.swift 1920 1080
-          for setting in reduceTransparency reduceMotion; do
-            defaults write com.apple.universalaccess "$setting" -bool false
-            [ "$(defaults read com.apple.universalaccess "$setting")" = 0 ] ||
-              { echo "::error::$setting stayed on"; exit 1; }
-          done
-
-      # The app another check of this commit built, if one kept it (app-artifact.sh), unless a run
-      # asked for builds one of its own with build.sh updates, which needs the build's target/, or
-      # keychain, which needs the prod build.
+      # The app another check of this commit built, if one kept it, unless this run asked for a
+      # build. The keychain run needs the prod build, on the Release engine the night publishes, as
+      # it uses the real Keychain: asked for alone, this job builds that, for this run alone.
       - id: kept
         env:
           GH_TOKEN: ${{ github.token }}
@@ -193,21 +140,9 @@ jobs:
           REBUILD: ${{ inputs.rebuild }}
         run: |
           run=
-          case " $RUNS " in
-          *" all "* | *" updates "* | *" nightly "* | *" update-checks "* | *" keychain "*) ;;
-          *) [ "$REBUILD" = true ] || run=$(../.github/scripts/app-artifact.sh find "app-mac-$GITHUB_SHA") ;;
-          esac
+          [ "$RUNS" = keychain ] || [ "$REBUILD" = true ] ||
+            run=$(../.github/scripts/app-artifact.sh find "app-mac-$GITHUB_SHA")
           echo "run=$run" | tee -a "$GITHUB_OUTPUT"
-      - if: ${{ steps.kept.outputs.run != '' }}
-        uses: actions/download-artifact@v4
-        with:
-          name: app-mac-${{ github.sha }}
-          path: ${{ runner.temp }}/app
-          run-id: ${{ steps.kept.outputs.run }}
-          github-token: ${{ github.token }}
-      - id: unpacked
-        if: ${{ steps.kept.outputs.run != '' }}
-        run: ../.github/scripts/app-artifact.sh unpack "$(../engine/fetch.sh)" "$RUNNER_TEMP/app/app.tar"
 
       - if: ${{ steps.kept.outputs.run == '' }}
         run: rustup update stable --no-self-update
@@ -225,36 +160,26 @@ jobs:
           key: check-mac-${{ hashFiles('app/Cargo.lock', 'app/setup.sh', 'app/patches/**') }}
           restore-keys: check-mac-
 
-      # The keychain run needs the prod build, on the Release engine the night publishes, as it uses
-      # the real Keychain: asked for alone, the job builds that.
       - id: build
         if: ${{ steps.kept.outputs.run == '' }}
         run: ./setup.sh prebuilt && ./build.sh ${{ inputs.runs == 'keychain' && 'prod' || '' }}
-      # And it adds its copies to the cookie key's partition with KEYCHAIN_PASSWORD, the password of
-      # the default keychain the key is made in, the login keychain, whose password on the runner
-      # isn't known: the job makes a default keychain of its own with one it knows. securityd keeps
-      # the login keychain open, so one made anew in its place wouldn't unlock.
-      - if: ${{ steps.engine.outputs.found == 'true' && inputs.runs == 'keychain' }}
-        run: |
-          password=$(openssl rand -hex 16)
-          echo "::add-mask::$password"
-          keychain="$HOME/Library/Keychains/check.keychain-db"
-          security create-keychain -p "$password" "$keychain"
-          security set-keychain-settings "$keychain"
-          security unlock-keychain -p "$password" "$keychain"
-          security list-keychains -d user -s "$keychain"
-          security default-keychain -d user -s "$keychain"
-          echo "KEYCHAIN_PASSWORD=$password" >> "$GITHUB_ENV"
 
-      # For the next check of this commit, for 3 days, but never the prod build.
-      - if: ${{ steps.build.outcome == 'success' && inputs.runs != 'keychain' }}
-        run: ../.github/scripts/app-artifact.sh pack "$(../engine/fetch.sh)" "$RUNNER_TEMP/app.tar"
-      - if: ${{ steps.build.outcome == 'success' && inputs.runs != 'keychain' }}
+      # With Sparkle beside it, which build.sh updates adds to the copies the updates, nightly and
+      # update-checks runs make of it.
+      - if: ${{ steps.build.outcome == 'success' }}
+        run: |
+          ../.github/scripts/app-artifact.sh pack "$(../engine/fetch.sh)" "$RUNNER_TEMP/app.tar"
+          tar -cf "$RUNNER_TEMP/sparkle.tar" -C .deps Sparkle
+      # For this run's check jobs, and for 3 days the next check of this commit's, but the prod
+      # build for this run's alone, under a name no other check looks for.
+      - if: ${{ steps.build.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
-          name: app-mac-${{ github.sha }}
-          path: ${{ runner.temp }}/app.tar
-          retention-days: 3
+          name: app-mac-${{ inputs.runs == 'keychain' && 'prod-' || '' }}${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/app.tar
+            ${{ runner.temp }}/sparkle.tar
+          retention-days: ${{ inputs.runs == 'keychain' && 1 || 3 }}
           overwrite: true
 
       - if: ${{ steps.cache.outcome == 'success' && steps.cache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
@@ -266,11 +191,140 @@ jobs:
             app/target
           key: ${{ steps.cache.outputs.cache-primary-key }}
 
+      - id: app
+        env:
+          KEPT: ${{ steps.kept.outputs.run }}
+          ARTIFACT: app-mac-${{ inputs.runs == 'keychain' && 'prod-' || '' }}${{ github.sha }}
+        run: |
+          echo "run=${KEPT:-$GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+          echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
+
+  check:
+    needs: build
+    # Named apart when it does other runs than the default ones, so it's no verdict on the commit.
+    name: ${{ inputs.runs != '' && 'check (runs asked for)' || 'check' }}${{ matrix.shard != 0 && format(' {0}/{1}', matrix.shard, strategy.job-total) || '' }}
+    # The default runs and runs=all take longer than the job's 120 minutes, so they're dealt across
+    # three jobs and four, each with its share of the runs (.github/scripts/runs.sh, #2271, #3444,
+    # #3917). Any other list is one job's.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.runs == 'all' && '[1, 2, 3, 4]' || inputs.runs == '' && '[1, 2, 3]' || '[0]') }}
+    runs-on: macos-26
+    # The default runs took about 105 min here on 11-18, after about 16 of setting up, and ran out
+    # the job's time unsplit (44322076346).
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      # A re-run reads the run's earlier attempts (main-check.sh rerun), and the app is the build
+      # job's artifact, or another run's.
+      actions: read
+    defaults:
+      run:
+        working-directory: app
+    env:
+      # The runs a release still needs from the check VM, as the header says why: one leaves the
+      # list once it passes on the runner (#2248).
+      VM_RUNS: ''
+      # How many jobs the runs are dealt across, for runs.sh shard.
+      SHARDS: ${{ strategy.job-total }}
+    steps:
+      # When the job started, for the Runs step's limit below.
+      - run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+        working-directory: .
+      # With the history, where fetch.sh looks for the engine's commit.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # A re-run's pass would show over the failure of the attempt before it.
+      - if: ${{ github.run_attempt != '1' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ../.github/scripts/main-check.sh rerun
+
+      # The runs this job does, and its share of check.sh's runs, each of which it gives a result
+      # line, done or skipped.
+      - id: runs
+        env:
+          RUNS: ${{ inputs.runs }}
+          SHARD: ${{ matrix.shard }}
+        run: |
+          case $RUNS in
+          '')
+            todo=
+            for run in $(sh check.sh --runs default); do
+              case " $VM_RUNS " in *" $run "*) ;; *) todo="$todo $run" ;; esac
+            done
+            ;;
+          all) todo=$(../.github/scripts/runs.sh all) ;;
+          *) todo=$RUNS ;;
+          esac
+          share=$(../.github/scripts/runs.sh shard "$SHARD" "$SHARDS" $todo)
+          runs=
+          for run in $share; do
+            case " $(echo $todo) " in *" $run "*) runs="$runs $run" ;; esac
+          done
+          echo "share= $(echo $share) " >> "$GITHUB_OUTPUT"
+          echo "list= $(echo $runs) " | tee -a "$GITHUB_OUTPUT"
+
+      # The runner's 1024 by 768 screen is too small for the windows the checks lay out for the VMs',
+      # and it reduces transparency, which draws the window's material opaque over any backdrop,
+      # and motion, under which the app moves nothing (#1529) where the checks time its motion
+      # (#1554). First, so the Dock and the windows' layout settle over the steps after it.
+      - run: |
+          swift ../.github/scripts/display-mode.swift 1920 1080
+          for setting in reduceTransparency reduceMotion; do
+            defaults write com.apple.universalaccess "$setting" -bool false
+            [ "$(defaults read com.apple.universalaccess "$setting")" = 0 ] ||
+              { echo "::error::$setting stayed on"; exit 1; }
+          done
+
+      # The app the build job made or found, with Sparkle for build.sh updates. A check job never
+      # builds one of its own: without the build job's, it fails, saying so.
+      - id: download
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: ${{ runner.temp }}/app
+          run-id: ${{ needs.build.outputs.run }}
+          github-token: ${{ github.token }}
+      - name: App
+        env:
+          GOT: ${{ steps.download.outcome }}
+          ARTIFACT: ${{ needs.build.outputs.artifact }}
+          RUN: ${{ needs.build.outputs.run }}
+        run: |
+          if [ "$GOT" != success ]; then
+            echo "::error::No app to check: the build job's $ARTIFACT, in run $RUN, didn't download, and a check job never builds one of its own. The build job says why."
+            exit 1
+          fi
+          ../.github/scripts/app-artifact.sh unpack "$(../engine/fetch.sh)" "$RUNNER_TEMP/app/app.tar"
+          mkdir -p .deps
+          tar -xf "$RUNNER_TEMP/app/sparkle.tar" -C .deps
+
+      # The keychain run adds its copies to the cookie key's partition with KEYCHAIN_PASSWORD, the
+      # password of the default keychain the key is made in, the login keychain, whose password on
+      # the runner isn't known: the job makes a default keychain of its own with one it knows.
+      # securityd keeps the login keychain open, so one made anew in its place wouldn't unlock.
+      - if: ${{ inputs.runs == 'keychain' }}
+        run: |
+          password=$(openssl rand -hex 16)
+          echo "::add-mask::$password"
+          keychain="$HOME/Library/Keychains/check.keychain-db"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security default-keychain -d user -s "$keychain"
+          echo "KEYCHAIN_PASSWORD=$password" >> "$GITHUB_ENV"
+
       # The sync-account, sync-devices and sync-extensions runs sign in to an ilo-server of their
       # own, on SQLite with a throwaway account, never the hosted one: built from the server's repo
       # at the commit check-linux.yml builds, when the runs include one, as the default ones do.
       - id: server
-        if: ${{ steps.engine.outputs.found == 'true' && (contains(steps.runs.outputs.list, ' sync-account ') || contains(steps.runs.outputs.list, ' sync-devices ') || contains(steps.runs.outputs.list, ' sync-extensions ')) }}
+        if: ${{ contains(steps.runs.outputs.list, ' sync-account ') || contains(steps.runs.outputs.list, ' sync-devices ') || contains(steps.runs.outputs.list, ' sync-extensions ') }}
         uses: actions/checkout@v4
         with:
           repository: MartinPTielemans/ilo-server
@@ -288,6 +342,8 @@ jobs:
       - if: ${{ steps.server.outcome == 'success' }}
         working-directory: app/.deps/ilo-server
         run: |
+          # The toolchain its cache was built with, as the job builds nothing else (#3917).
+          rustup update stable --no-self-update
           # The server's passkeys link OpenSSL, which Homebrew has on the runner's image.
           brew list openssl@3 > /dev/null 2>&1 || brew install openssl@3
           OPENSSL_DIR=$(brew --prefix openssl@3) cargo build --release --locked
@@ -305,8 +361,7 @@ jobs:
       # activation, and the run's clicks and keys went nowhere (#1554). The check VMs answered
       # it once; a hosted runner is new each time, with SIP off, so the job grants them, and
       # Accessibility for the notifications run's banners, to the processes it runs under. Each grant is read back, and a missing one fails the job.
-      - if: ${{ steps.engine.outputs.found == 'true' }}
-        run: |
+      - run: |
           now=$(date +%s)
           # Runs the SQL $2 on the database $1, leaving its output in $said. tccd may hold the
           # database as the job starts, and sqlite3 gives up at the first lock unless told to wait
@@ -390,7 +445,7 @@ jobs:
 
       # The lists an earlier run's adblock-parity downloaded, on any OS, for this run's to block
       # with, so the OSes' runs compare the engines on one snapshot (#2111).
-      - if: ${{ steps.engine.outputs.found == 'true' && inputs.lists_from != '' }}
+      - if: ${{ inputs.lists_from != '' }}
         uses: actions/download-artifact@v4
         with:
           name: adblock-parity-lists
@@ -398,21 +453,35 @@ jobs:
           run-id: ${{ inputs.lists_from }}
           github-token: ${{ github.token }}
 
+      # The Runs step's limit: what's left of the job's 120 minutes, less 3 for the steps after it,
+      # which took at most 37 s on the ten Mac check runs before this. A job cut at its own limit is
+      # cancelled and runs nothing more, not even if: always() steps; a step cut at its limit is
+      # killed, and the job goes on to name the run it was in and upload the results (#4036).
+      - id: limit
+        working-directory: .
+        run: |
+          minutes=$((117 - ($(date +%s) - JOB_START + 59) / 60))
+          [ "$minutes" -ge 1 ] || minutes=1
+          echo "minutes=$minutes" | tee -a "$GITHUB_OUTPUT"
+
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       # Each of the job's share of check.sh's runs gets a line in its results, done or skipped, which
       # the complete job reads.
       - name: Runs
-        if: ${{ steps.engine.outputs.found == 'true' }}
+        id: checks
+        timeout-minutes: ${{ fromJSON(steps.limit.outputs.minutes) }}
         env:
           RUNS: ${{ steps.runs.outputs.list }}
+          SHARE: ${{ steps.runs.outputs.share }}
           SHARD: ${{ matrix.shard }}
           RESULTS: ${{ runner.temp }}/results/mac-${{ matrix.shard }}.tsv
+          RUNNING: ${{ runner.temp }}/running
           CHECK_TRACE_CATEGORIES: ${{ inputs.trace }}
           ADBLOCK_PARITY_LISTS: ${{ inputs.lists_from != '' && 'build/given-lists' || '' }}
         run: |
           out=$RUNNER_TEMP/check
           mkdir -p "$out" "$(dirname "$RESULTS")"
-          all=$(../.github/scripts/runs.sh shard "$SHARD" "$SHARDS")
+          all=$SHARE
           runs=$RUNS
           {
             echo "| Run | Result |"
@@ -459,9 +528,12 @@ jobs:
               # Perf measures Chrome beside the app.
               minutes=20m
               [ "$run" != perf ] || minutes=40m
+              # The run going, for the step after this one if this step is cut at its limit.
+              echo "$run" > "$RUNNING"
               ${limit:+$limit $minutes} ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
               [ ! -d build/check ] || mv build/check "$out/$run"
               pkill -9 -f "$PWD/build/Browser.app/" || true
+              rm -f "$RUNNING"
               # A run that passes may have skipped steps, or all of itself, such as when the app
               # wasn't the active one.
               skipped=$(grep '^skip: ' "$out/$run.log" | cut -c7- | tr '|\n' '/;' | sed 's/;$//')
@@ -500,9 +572,34 @@ jobs:
           { echo; sh check/quarantine.sh list mac; } | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$failed"
 
+      # A Runs step cut at its limit names the run it was in, with that run's last lines, and gives
+      # it a failed row, so the results and the check's artifact below say which run it was (#4036).
+      # The runs after it have no row, which complete names.
+      - name: Cut run
+        if: ${{ always() && steps.checks.outcome != 'skipped' }}
+        env:
+          RESULTS: ${{ runner.temp }}/results/mac-${{ matrix.shard }}.tsv
+          RUNNING: ${{ runner.temp }}/running
+          LIMIT: ${{ steps.limit.outputs.minutes }}
+        run: |
+          [ -e "$RUNNING" ] || exit 0
+          run=$(cat "$RUNNING")
+          out=$RUNNER_TEMP/check
+          pkill -9 -f "$PWD/build/Browser.app/" || true
+          [ ! -d build/check ] || mv build/check "$out/$run" || true
+          last=$(tail -1 "$out/$run.log" 2> /dev/null | tr '|\t' '/ ') || true
+          mkdir -p "$(dirname "$RESULTS")"
+          why="still going when the Runs step was cut at its $LIMIT minutes"
+          printf '%s\tfailed: %s; its last line: %s\n' "$run" "$why" "${last:-none}" >> "$RESULTS"
+          echo "| $run | failed: $why |" >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::The Runs step was cut at its $LIMIT minutes in the $run run."
+          echo "Its log is $run.log in the artifact. Its last lines:"
+          tail -40 "$out/$run.log" 2> /dev/null || echo "(no log)"
+          exit 1
+
       # The lists this run's adblock-parity blocked with, for a run on another OS to take with
       # lists_from (#2111). A few MB, apart from the check's artifact, which can be a GB.
-      - if: ${{ !cancelled() && steps.engine.outputs.found == 'true' && hashFiles('app/build/adblock-parity-lists/snapshot.txt') != '' }}
+      - if: ${{ !cancelled() && hashFiles('app/build/adblock-parity-lists/snapshot.txt') != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: adblock-parity-lists
@@ -512,7 +609,7 @@ jobs:
       # The results first, a few hundred bytes, so complete still names each run's result when
       # the check folder's upload fails or doesn't end, as on Windows (#3471, #3720).
       - id: results
-        if: ${{ always() && steps.engine.outputs.found == 'true' }}
+        if: ${{ always() }}
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
@@ -535,7 +632,7 @@ jobs:
       # making the artifact, or a stall ended at the limit, doesn't make the job's result: the
       # Runs step's exit does, so a passed check stays green and a failed one red (#3720).
       - id: folder
-        if: ${{ always() && steps.engine.outputs.found == 'true' }}
+        if: ${{ always() }}
         timeout-minutes: 10
         continue-on-error: true
         uses: actions/upload-artifact@v4
@@ -554,8 +651,8 @@ jobs:
   # A run with no result, such as one its job's time ran out before, fails the check, so a run
   # missing from the summary can't read as passed (#2271).
   complete:
-    needs: [gate, check]
-    if: ${{ !cancelled() && needs.gate.outputs.check == 'true' && needs.check.outputs.found == 'true' }}
+    needs: [gate, build, check]
+    if: ${{ !cancelled() && needs.gate.outputs.check == 'true' && needs.build.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -592,7 +689,7 @@ jobs:
   # One verdict for all its jobs: it fails when one failed, or ran out of its time, which cancels
   # it, as complete then runs and the run itself wasn't cancelled, or when a run has no result.
   report:
-    needs: [gate, check, complete]
+    needs: [gate, build, check, complete]
     if: ${{ always() && needs.gate.outputs.check == 'true' && github.ref == 'refs/heads/main' && github.repository == 'MartinPTielemans/ilo' && inputs.runs == '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -608,8 +705,14 @@ jobs:
           sparse-checkout: |
             .github/scripts
             app/check
+      # A build job that runs out its time is cancelled, not failed, and skips the check jobs, so
+      # report would say nothing. The check job that built the app before #3917 failed the run when
+      # it ran out, so this counts it as a failure. A run someone cancelled is still no verdict.
+      - id: timeout
+        if: ${{ !cancelled() && needs.build.result == 'cancelled' }}
+        run: echo "build=true" >> "$GITHUB_OUTPUT"
       - env:
           GH_TOKEN: ${{ github.token }}
-          RESULT: ${{ (needs.check.result == 'failure' || needs.complete.result == 'failure' || (needs.check.result == 'cancelled' && needs.complete.result == 'success')) && 'failure' || needs.check.result }}
-          FOUND: ${{ needs.check.outputs.found }}
+          RESULT: ${{ (needs.build.result == 'failure' || steps.timeout.outputs.build == 'true' || needs.check.result == 'failure' || needs.complete.result == 'failure' || (needs.check.result == 'cancelled' && needs.complete.result == 'success')) && 'failure' || needs.check.result }}
+          FOUND: ${{ needs.build.outputs.found }}
         run: .github/scripts/main-check.sh report "$RESULT" "$FOUND"

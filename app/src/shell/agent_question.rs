@@ -44,6 +44,22 @@ fn marked(agent: &str, what: &str) -> (String, std::ops::Range<usize>) {
     (format!("{mark} “{}”", request::shown(what)), 0..end)
 }
 
+/// A question card's head and sentence. An action on the tab's page has the tab's own site as
+/// its head, "On shop.example", apart from the page's words in the sentence under it, which then
+/// can't move it or pass for it (#3836). Other questions have their sentence alone.
+fn head_and_title(question: &Question) -> (Option<String>, String) {
+    let agent = &question.agent;
+    match (question.handoff, question.back) {
+        (Some(_), true) => (None, format!("{agent} asks for a tab")),
+        (Some(_), false) => (None, format!("{agent} needs you")),
+        (None, _) if !question.asks.is_empty() && !question.site.is_empty() => (
+            Some(format!("On {}", question.site)),
+            format!("{agent} wants to {}", question.asks),
+        ),
+        (None, _) => (None, format!("{agent} wants to {}", question.what)),
+    }
+}
+
 impl Shell {
     /// The Agents ask the user `question`, or no longer ask (None).
     pub fn set_agent_question(&mut self, question: Option<Question>, cx: &mut Context<Self>) {
@@ -107,6 +123,16 @@ impl Shell {
         }
     }
 
+    /// Choose File… on an agent's question for a page's file field: the card goes, and the
+    /// system's file dialog opens over this window.
+    fn choose_agent_file(&mut self, cx: &mut Context<Self>) {
+        if let Some(question) = self.agent_question.take() {
+            self.browser
+                .choose_agent_file(question.id, self.browser.window(), cx);
+            cx.notify();
+        }
+    }
+
     /// The agent's question, as a card under the URL field.
     pub(super) fn agent_question_card(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         // The whole request shows only beside its question's card, so one a page's question covers
@@ -136,13 +162,23 @@ impl Shell {
                     Does::Answer(answer) => shell.answer_agent(answer, cx),
                     Does::Show(tab) => shell.select(tab, cx),
                     Does::HandBack(tab) => shell.browser.hand_back(tab, cx),
+                    Does::Choose => shell.choose_agent_file(cx),
                 }))
         });
-        let title = match (question.handoff, question.back) {
-            (Some(_), true) => format!("{} asks for a tab", question.agent),
-            (Some(_), false) => format!("{} needs you", question.agent),
-            (None, _) => format!("{} wants to {}", question.agent, question.what),
-        };
+        let (head, title) = head_and_title(question);
+        // The head is drawn as the request card's is.
+        let head = head.map(|head| {
+            div()
+                .id("agent-question-site")
+                .pr(px(BESIDE_CLOSE))
+                .text_size(px(text::SMALL))
+                .line_height(px(FACTS_LINE))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(self.palette.on_overlay(DETAIL))
+                .child(crate::address_wrap::text(&head))
+        });
+        // Under a head, as a request's change is, and clear of × as the head keeps it.
+        let headed = head.is_some();
         let close = question.handoff.is_none().then(|| {
             card_close(&self.palette, "agent-question-close")
                 .on_click(cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Dismiss, cx)))
@@ -150,9 +186,14 @@ impl Shell {
         Some(
             self.plate("agent-question")
                 .child(listener)
+                .children(head)
                 .child(
                     div()
-                        .when(close.is_some(), |title| title.pr(px(BESIDE_CLOSE)))
+                        .id("agent-question-title")
+                        .when(headed, |title| title.mt(px(CHANGE_ALONE_TOP)))
+                        .when(close.is_some() && !headed, |title| {
+                            title.pr(px(BESIDE_CLOSE))
+                        })
                         .text_color(self.palette.text(TITLE))
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(crate::address_wrap::text(&title)),
@@ -424,6 +465,8 @@ pub(super) enum Does {
     Show(u64),
     /// Gives the tab back to the agent.
     HandBack(u64),
+    /// Opens the system's file dialog for the page's file field the agent asks a file for.
+    Choose,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -445,6 +488,23 @@ pub(super) fn buttons(question: &Question) -> Vec<Button> {
         look,
         does,
     };
+    // The user chooses the file, or doesn't allow it, so there's nothing to allow for good.
+    if let Some(file) = question.file {
+        let choose = if file.many {
+            "Choose Files…"
+        } else {
+            "Choose File…"
+        };
+        return vec![
+            button(
+                "agent-file-deny",
+                "Don’t Allow",
+                Look::Quiet,
+                Does::Answer(Answer::Dismiss),
+            ),
+            button("agent-file-choose", choose, Look::Primary, Does::Choose),
+        ];
+    }
     match question.handoff {
         Some(tab) if question.back => vec![
             button(
@@ -538,9 +598,11 @@ mod tests {
 
     use super::BUTTONS_TOP;
     use crate::agent_request;
-    use crate::agents::{Question, request::Request};
+    use crate::agents::{Answer, Question, request::Request};
     use crate::shell::{Folders, Page, Question as PageQuestion, Shell, recorder::Recorder};
-    use crate::tokens::shell::permission::{BUTTON_GAP, BUTTON_HEIGHT, LINE, PADDING};
+    use crate::tokens::shell::permission::{
+        BUTTON_GAP, BUTTON_HEIGHT, CLOSE, CLOSE_INSET, LINE, PADDING,
+    };
 
     fn question(id: u64) -> Question {
         Question {
@@ -548,9 +610,57 @@ mod tests {
             agent: "Claude Code".into(),
             from: "claude-code".into(),
             what: "click “Place order” on shop.example".into(),
+            asks: "click “Place order”".into(),
             why: "It looks like a payment or an order.".into(),
+            site: "shop.example".into(),
             ..Question::default()
         }
+    }
+
+    /// An action on the tab's page has the tab's own site as the card's head and its sentence
+    /// without it, so a control's name that names another site stays in the sentence (#3836).
+    /// A question that names no such site, and a handoff, have no head.
+    #[test]
+    fn the_tabs_site_is_the_cards_head() {
+        assert_eq!(
+            super::head_and_title(&question(1)),
+            (
+                Some("On shop.example".to_string()),
+                "Claude Code wants to click “Place order”".to_string()
+            )
+        );
+        let named = Question {
+            what: "click “Pay on bank.example” on shop.example".into(),
+            asks: "click “Pay on bank.example”".into(),
+            ..question(2)
+        };
+        assert_eq!(
+            super::head_and_title(&named),
+            (
+                Some("On shop.example".to_string()),
+                "Claude Code wants to click “Pay on bank.example”".to_string()
+            )
+        );
+        let download = Question {
+            what: "download report.docx from files.example.com".into(),
+            asks: "".into(),
+            ..question(3)
+        };
+        assert_eq!(
+            super::head_and_title(&download),
+            (
+                None,
+                "Claude Code wants to download report.docx from files.example.com".to_string()
+            )
+        );
+        let handoff = Question {
+            handoff: Some(10),
+            ..question(4)
+        };
+        assert_eq!(
+            super::head_and_title(&handoff),
+            (None, "Claude Code needs you".to_string())
+        );
     }
 
     /// The card asks whatever tab the window shows, a page's own question goes first, and its
@@ -715,6 +825,70 @@ mod tests {
             shell.set_selected(10, cx);
         });
         (host, shell, cx)
+    }
+
+    fn upload(id: u64, many: bool) -> Question {
+        Question {
+            what: "add a file to “Résumé” on example.com".into(),
+            why: "You choose the file. Claude Code sees only what the page shows of it.".into(),
+            site: "example.com".into(),
+            each_time: true,
+            file: Some(crate::agents::FileAsk { field: 3, many }),
+            ..question(id)
+        }
+    }
+
+    /// An agent's ask for a file has Don’t Allow and then Choose File…, and nothing to allow for
+    /// good: Choose File… opens the dialog over the card's window, and Don’t Allow and the × say
+    /// no. A field that takes several chooses files.
+    #[gpui::test]
+    fn an_upload_card_chooses_a_file_or_doesnt_allow_it(cx: &mut TestAppContext) {
+        let labels = |question: &Question| {
+            (super::buttons(question).iter())
+                .map(|button| (button.label, button.does))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            labels(&upload(7, false)),
+            [
+                ("Don’t Allow", super::Does::Answer(Answer::Dismiss)),
+                ("Choose File…", super::Does::Choose),
+            ]
+        );
+        assert_eq!(labels(&upload(7, true))[1].0, "Choose Files…");
+
+        let (host, shell, cx) = window_with(cx);
+        shell.update(cx, |shell, cx| {
+            shell.set_agent_question(Some(upload(7, false)), cx)
+        });
+        cx.run_until_parked();
+        let card = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
+        let card = card.expect("the card wasn't drawn");
+        let last = card.bottom() - px(PADDING + BUTTON_HEIGHT / 2.);
+        cx.simulate_click(
+            point(card.left() + card.size.width * 0.75, last),
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+        let window = shell.read_with(cx, |shell, _| shell.browser.window());
+        assert!(
+            host.take()
+                .contains(&format!("choose agent file 7 in {window}"))
+        );
+        shell.read_with(cx, |shell, _| assert!(shell.agent_question().is_none()));
+
+        shell.update(cx, |shell, cx| {
+            shell.set_agent_question(Some(upload(8, false)), cx)
+        });
+        cx.run_until_parked();
+        // Its ×, as Don’t Allow, says no.
+        let inset = px(CLOSE_INSET + CLOSE / 2.);
+        cx.simulate_click(
+            point(card.right() - inset, card.top() + inset),
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+        assert!(host.take().contains(&"answer agent 8 Dismiss".to_string()));
     }
 
     /// A request's changes ask every time, so their card has Deny and Allow side by side in its

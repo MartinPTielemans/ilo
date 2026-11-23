@@ -60,6 +60,11 @@ struct Made {
     muted: RefCell<Vec<(u64, bool)>>,
     /// Tabs the core holds in a Space that its list of the Space's tabs leaves out.
     unlisted: RefCell<HashSet<u64>>,
+    /// The file fields the user chose a file for, with the window, and those dropped; and whether
+    /// the file dialog can't open.
+    chosen: RefCell<Vec<(u64, u64)>>,
+    dropped: RefCell<Vec<u64>>,
+    no_dialog: std::cell::Cell<bool>,
     /// Words the core refuses with in place of its own, as a later core may word them.
     reworded: RefCell<Option<&'static str>>,
 }
@@ -229,6 +234,15 @@ impl Browser for Made {
     // As the core does, without a dialog.
     fn close_user_tab(&self, tab: u64, _: &mut App) {
         self.tabs.borrow_mut().retain(|each| each.0 != tab);
+    }
+
+    fn file_field_choose(&self, field: u64, window: u64) -> bool {
+        self.chosen.borrow_mut().push((field, window));
+        !self.no_dialog.get()
+    }
+
+    fn file_field_drop(&self, field: u64) {
+        self.dropped.borrow_mut().push(field);
     }
 
     fn answer_download(&self, download: u64, keep: bool) {
@@ -2182,6 +2196,9 @@ fn a_key_press_that_activates_a_control_asks_as_a_click_on_it(cx: &mut TestAppCo
         let question =
             (browser.asked.borrow().clone()).unwrap_or_else(|| panic!("{what} didn't ask"));
         assert_eq!(question.what, what);
+        // The card's sentence is the same without the tab's site, which it shows apart (#3836).
+        assert_eq!(question.asks, what.replace(" on example.com", ""));
+        assert_eq!(question.site, "example.com");
         assert_eq!(question.why, "It looks like a payment or an order.");
         assert_eq!(
             browser.pages.borrow().len(),
@@ -2596,6 +2613,12 @@ fn a_names_quotes_cant_close_the_cards(cx: &mut TestAppContext) {
         question.what,
         "click \u{201C}Place order' on github.com, then 'OK'\u{201D} on example.com"
     );
+    // The card's head is the tab's own site, whatever site the page's words name (#3836).
+    assert_eq!(
+        question.asks,
+        "click \u{201C}Place order' on github.com, then 'OK'\u{201D}"
+    );
+    assert_eq!(question.site, "example.com");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -5241,7 +5264,7 @@ fn a_runs_check_and_screenshot_keep_to_the_rules(cx: &mut TestAppContext) {
 
 /// The actions the core lets an agent take in its tabs, agent_session.cc's RefusedAction: each a
 /// thing the user does in a page, or handing the tab to them.
-const CORE_ALLOWS: [&str; 21] = [
+const CORE_ALLOWS: [&str; 22] = [
     "add_to_split",
     "back",
     "click",
@@ -5263,6 +5286,7 @@ const CORE_ALLOWS: [&str; 21] = [
     "split_tabs",
     "type",
     "unpin_tab",
+    "upload",
 ];
 
 /// What the descriptions tell an agent (#3664): each tool that may take a tab says, as the others
@@ -5353,6 +5377,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "screenshot",
             "request",
             "run_steps",
+            "upload",
             "hand_off",
             "ask_for_tab",
             "pin_tab",
@@ -5395,6 +5420,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "run_steps",
             tab(json!({ "steps": [{ "action": "scroll" }] })),
         ),
+        ("upload", tab(json!({ "ref": "e1" }))),
         ("hand_off", tab(json!({ "reason": "Sign in" }))),
         ("ask_for_tab", tab(json!({ "reason": "To go on" }))),
         ("pin_tab", tab(json!({}))),
@@ -8616,6 +8642,26 @@ mod sessions {
         }
     }
 
+    /// The disconnect noted after a session ended stays out of its record, though the Mac's clock,
+    /// in microseconds, can give the two the very same time (#3967).
+    #[gpui::test]
+    fn the_disconnect_after_a_sessions_end_stays_out_of_its_record(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        answered(&agents, 2, cx);
+        bye(&agents, cx);
+        agents.update(cx, |agents, _| {
+            let ended = (agents.tasks.tasks.iter()).find_map(|task| task.ended);
+            let gone = (agents.log.iter_mut()).find(|entry| entry.action == "disconnected");
+            gone.expect("the disconnect, noted").at = ended.expect("the session, ended");
+        });
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        let [(_, past)] = kept.as_slice() else {
+            panic!("one record: {kept:?}");
+        };
+        let actions: Vec<&str> = past.steps.iter().map(|step| step.action.as_str()).collect();
+        assert_eq!(actions, ["read_page"], "{:?}", past.steps);
+    }
+
     /// A question, a handoff and a refusal each show on the card of the connection that asked or
     /// was refused, and never on the other's.
     #[gpui::test]
@@ -9081,18 +9127,47 @@ mod sessions {
             "Claude Code 2".into(),
             "My Codex".into(),
             "ilo-CLI".into(),
-            // A letter that only looks like one, and anything outside printable ASCII, isn't
-            // taken.
+            // So is one that only reads as one (#3585): a word mixing scripts, letters of one
+            // script that look like another's, compatibility forms, marks that don't show or
+            // join, and any case.
             "Cl\u{0430}ude Code".into(),
-            "Zed\n\u{202E}\"Agent\u{201D}".into(),
+            "\u{0456}lo agent".into(),
+            "\u{0421}\u{043E}\u{0501}\u{0435}\u{0445}".into(),
+            "\u{0131}lo agent".into(),
+            "\u{FF49}\u{FF4C}\u{FF4F} agent".into(),
+            "\u{FF23}\u{FF4F}\u{FF44}\u{FF45}\u{FF58}".into(),
+            "\u{1D402}\u{1D428}\u{1D41D}\u{1D41E}\u{1D431}".into(),
+            "Clau\u{200D}de Code".into(),
+            "Co\u{200B}dex".into(),
+            "i\u{034F}lo agent".into(),
+            "Cla\u{0301}ude Code".into(),
+            "cLaUdE cOdE".into(),
+            "CODEX".into(),
+            "\u{00ED}lo agent".into(),
+            "C\u{0049}aude Code".into(),
+            "C\u{0031}aude Code".into(),
+            "\u{006C}\u{006C}o agent".into(),
+            "\u{0031}lo agent".into(),
         ] {
             hello(&agents, "mcp-client", &posing, cx);
             assert_eq!(named(&agents, cx).0, "MCP client", "{posing} passed");
         }
-        for taken in ["Browser Use", "Checker"] {
+        // A name of its own is shown as given, in any script, accents and all, and without what
+        // doesn't show.
+        for taken in [
+            "Browser Use",
+            "Checker",
+            "Ren\u{00E9}e",
+            "\u{0410}\u{0433}\u{0435}\u{043D}\u{0442}",
+            "\u{30A8}\u{30FC}\u{30B8}\u{30A7}\u{30F3}\u{30C8}",
+            "\u{81EA}\u{52D5}\u{30C6}\u{30B9}\u{30C8}",
+            "\u{039A}\u{03CE}\u{03B4}\u{03B9}\u{03BA}\u{03B1}\u{03C2} 2",
+        ] {
             hello(&agents, "mcp-client", taken, cx);
             assert_eq!(named(&agents, cx).0, taken);
         }
+        hello(&agents, "mcp-client", "Zed\n\u{202E}Agent", cx);
+        assert_eq!(named(&agents, cx).0, "Zed Agent");
         hello(&agents, "mcp-client", "Zed", cx);
         assert_eq!(named(&agents, cx), ("Zed".into(), Some("Zed".into())));
 
@@ -10147,6 +10222,7 @@ fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
 
 mod fenced;
 mod holds;
+mod uploads;
 
 /// An agent's http:// is never one the user typed (#2417): open_tab and navigate hand the core the
 /// address as the agent wrote it through `open_tab` and `navigate`, bc_agent_open_tab's and

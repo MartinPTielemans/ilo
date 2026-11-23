@@ -116,6 +116,7 @@ if [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] && ! sway_xwayland; t
     fail "the alert holding the input focus, ilo didn't hear the presses on the display: $(heard)"
   rm -f "$out/other-in"
   mkfifo "$out/other-in"
+  : > "$out/other-window.log" # an earlier run's window stays named in it until emptied (#4040)
   python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
   other_app=$!
   exec 7> "$out/other-in"
@@ -899,6 +900,7 @@ if sway_xwayland; then
   swaymsg 'workspace 2' > /dev/null || fail "sway didn't go to another workspace"
   rm -f "$out/other-in"
   mkfifo "$out/other-in"
+  : > "$out/other-window.log" # an earlier run's window stays named in it until emptied (#4040)
   python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
   other=$!
   exec 5> "$out/other-in"

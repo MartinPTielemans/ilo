@@ -428,6 +428,9 @@ under_log="$out/panel-shadows-under.log"
 # Opens the other app's window under ilo's, which reads the frame's size, the browser window's own
 # rectangle round it and its content's top left, from the frame's top left.
 open_under() {
+  # Emptied here, not by the helper's own redirect, which Git Bash opens some time after the fork:
+  # until then the loop can read the line the helper before this one left (#4035).
+  : > "$under_log"
   python3 -I -u check/under-window.py open "$(cat "/proc/$pid/winpid")" > "$under_log" 2>&1 &
   under=$!
   for _ in $(seq 100); do

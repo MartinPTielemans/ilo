@@ -1,5 +1,5 @@
 // ilobrowser.com: a Worker with no script, serving the prerendered pages in dist/client.
-// Deploy with `vp build && wrangler deploy`.
+// GitHub deploys it (.github/workflows/site.yml): on a push to main, a release, or by hand.
 {
   "name": "ilo-site",
   "compatibility_date": "2026-10-29",

@@ -3,7 +3,7 @@
 //! system's browsers in a made-up home folder.
 
 use std::path::{Path, PathBuf};
-use web_time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Os {
@@ -542,7 +542,6 @@ fn source(
         used: None,
     };
     files.extend(source.arc_sidebar());
-    // A file's time is std's, which the web's clock isn't.
     let modified = |file: &PathBuf| {
         let modified = file.metadata().ok()?.modified().ok()?;
         modified.duration_since(std::time::UNIX_EPOCH).ok()

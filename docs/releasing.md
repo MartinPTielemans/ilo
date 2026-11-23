@@ -99,13 +99,12 @@ A draft release whose files keep their names, so `releases/latest/download/<name
 - `ilo-linux-x86_64.flatpak` and `ilo.flatpakref`.
 - `SHA256SUMS` and `appcast.xml`.
 - `ilo-mac-arm64-<a>-to-<b>.delta`: Sparkle's deltas to the DMG's app from the feed's three Mac builds before it, made from their releases' DMGs. A copy on one downloads a few MB instead of the DMG; any other copy, or one a delta doesn't match, takes the DMG.
-- `ilo-demo.tar.gz`, the site's live demo built from the same commit (`.github/workflows/demo.yml`), when the commit has one.
 
 Once the draft is published:
 
 - The `publish` job puts its `appcast.xml` in the release `updates`, the feed the Mac and Windows builds read (`app/branding/update-feed`).
 - The Linux build, already in the Flatpak repository unseen, goes live.
-- The `site` job deploys [ilobrowser.com](https://ilobrowser.com) (`.github/workflows/site.yml`). Its changelog shows the release's entry, its pages name the release as the newest, its star and contributor counts are asked for again, and its download buttons link the newest release. The job is `site.yml` as it stood at the tag, run on main's `site/`, so a change to how the site deploys takes effect for releases with the next tag, and main's `site/` has to build under the last tag's file until then. A prerelease deploys nothing.
+- The `site` job deploys [ilobrowser.com](https://ilobrowser.com) (`.github/workflows/site.yml`). Its changelog shows the release's entry, its pages name the release as the newest, its star and contributor counts are asked for again, and its download buttons link the newest release. The job is `site.yml` as it stood at the tag, run on main's `site/`, so a change to how the site deploys takes effect for releases with the next tag, and main's `site/` has to build under the last tag's file until then. It needs the environment's two secrets, which `release.yml` passes it (**The site**, below); when the job fails, the release stays published and the site goes out by the hand dispatch there. A prerelease deploys nothing.
 - Martin's Grok bot announces it: it records clips and a film of the new features on the published build, adds the clips to the site's changelog through its own pull request, and drafts the post. With `RELEASE_WEBHOOK_URL` and `RELEASE_WEBHOOK_KEY` set, the `announce` job tells it at once; without them, it finds the release at one of its three daily check-ins, at 10:00, 16:00 and 21:00 Copenhagen time. The release never waits for it.
 
 Every other release in this repository, such as `updates` and `nightly`, is made with `--latest=false`, or the site's buttons would link it. The prebuilt engines live in [ilo-engine](https://github.com/MartinPTielemans/ilo-engine), the repository `engine/prebuilt.ini` names, as `engine-mac-`, `engine-linux-` and `engine-windows-<commit>`, also with `--latest=false`.
@@ -156,7 +155,7 @@ and the repository variable `FLATPAK_REPO_URL`, the bucket's public address, suc
 | `CLOUDFLARE_ACCOUNT_ID` (secret) | The account's ID |
 | `SITE_DEPLOY` (variable) | `live` to deploy ilobrowser.com from a push to main and from a published release. Unset, only a preview goes up |
 
-Without the secrets the deploy job deploys nothing and says so. With them, `gh workflow run site.yml --ref main` uploads the site to the Worker `ilo-site-preview` on workers.dev to compare with the live site, and once `SITE_DEPLOY` is `live`, `-f live=true` deploys ilobrowser.com.
+`ci.yml` and `release.yml` call `site.yml` and pass it both secrets by name. A called workflow gets an environment's secrets only from its caller: without that it gets none, and no error says so. Without the secrets the deploy job deploys nothing, and once `SITE_DEPLOY` is `live` it fails; before that, it says so in a notice. With them, `gh workflow run site.yml --ref main` uploads the site to the Worker `ilo-site-preview` on workers.dev to compare with the live site, and once `SITE_DEPLOY` is `live`, `-f live=true` deploys ilobrowser.com. That dispatch is also the fallback when a push to main or a published release didn't deploy the site: it deploys main's `site/` as it stands.
 
 **Outside this repository.**
 

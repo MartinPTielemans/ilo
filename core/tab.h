@@ -348,6 +348,7 @@ class Tab : public content::WebContentsObserver,
   void OnVisibilityChanged(content::Visibility visibility) override;
   void OnWebContentsFocused(content::RenderWidgetHost* render_widget_host) override;
   void MediaStartedPlaying(const MediaPlayerInfo& info, const content::MediaPlayerId& id) override;
+  void BeforeUnloadFired(bool proceed) override;
   void WebContentsDestroyed() override;
 
   // platform::SystemPage::Delegate:

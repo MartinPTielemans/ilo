@@ -105,11 +105,13 @@ ol {
   justify-content: center;
   pointer-events: none;
 }
+/* The bar grows to fill its row up to its width, and a gathered bar on a phone stops growing and is as wide as what is
+   in it: its flex-grow eases from 1 to 0, which takes it from the row's width to its own. */
 .nav-in {
   pointer-events: auto;
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
-  width: 100%;
   max-width: var(--bar-w);
   height: var(--bar-h);
   margin-top: 0;
@@ -120,6 +122,7 @@ ol {
 .live .nav-in {
   transition:
     max-width 0.62s var(--ease),
+    flex-grow 0.62s var(--ease),
     height 0.62s var(--ease),
     margin-top 0.62s var(--ease),
     padding 0.62s var(--ease),
@@ -256,6 +259,22 @@ ol {
 .spaces button:active i {
   transform: scale(0.96);
 }
+/* In a window this short (a phone lying down, a low laptop window) the first screen's words run down past the
+   switcher, which would sit on them. So there it waits while the page is at rest, and comes up when the page moves,
+   as the bar gathers. The hero's words reach it in windows up to 780 px tall, at any width. */
+@media (max-height: 800px) {
+  .nav:not(.compact) ~ .spaces {
+    opacity: 0;
+    visibility: hidden;
+    transform: translate(-50%, 8px);
+  }
+}
+.live .spaces {
+  transition:
+    opacity 0.3s var(--ease),
+    visibility 0.3s,
+    transform 0.3s var(--ease);
+}
 
 .home > section {
   position: relative;
@@ -315,11 +334,13 @@ h2 {
   transform: scale(0.96);
 }
 
-.hero {
-  min-height: max(100svh, 720px);
+/* The first screen is a section like the rest, and adds a gutter: its words are centred on bare ground with no
+   .wrap around them, and a line as wide as a phone would run to the screen's edges. */
+.home > .hero {
   place-items: center;
   text-align: center;
-  padding: 92px 24px 104px;
+  padding-left: 24px;
+  padding-right: 24px;
 }
 .hero-in {
   display: flex;
@@ -345,6 +366,7 @@ h2 {
 }
 .hero .note {
   margin-top: 20px;
+  text-wrap: balance; /* two even lines on a phone, not one and a word */
 }
 
 .wrap {
@@ -649,8 +671,19 @@ h2 {
   .nav-links a:not(.nav-cta) {
     display: none;
   }
+  /* Gathered here, the bar is as wide as its mark and button with their insets, and may take the row to 4 px from
+     each side for a label that needs it, in a face that falls back wider. */
   .nav.compact .nav-in {
-    max-width: 250px;
+    flex-grow: 0;
+    max-width: calc(100% - 8px);
+  }
+  /* Gathered, the bar here is hardly wider than the hero's mark, which would hang out from under it like a second
+     copy as the page moves. So the mark goes when the bar gathers, as if into it, and is back when the bar opens. */
+  .nav.compact ~ main .hero .wordmark {
+    opacity: 0;
+  }
+  .live .hero .wordmark {
+    transition: opacity 0.3s var(--ease);
   }
   .home > section {
     padding: 104px 0 112px;
@@ -705,8 +738,10 @@ h2 {
   }
   body,
   .nav-in,
+  .hero .wordmark,
   .dot,
   .btn,
+  .spaces,
   .spaces i,
   .nav-links a {
     transition: none !important;

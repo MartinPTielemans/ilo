@@ -185,15 +185,16 @@ async function walk() {
       "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1",
   };
   const PLATFORM = { mac: "MacIntel", windows: "Win32", linux: "Linux x86_64", phone: "iPhone" };
-  /** The visitor: a desk's screen on `who`'s computer, or a phone. */
-  const visitor = async (who) => {
+  /** The visitor: a desk's screen on `who`'s computer, or a phone, held under a finger, of the size given. */
+  const visitor = async (who, width, height) => {
     const phone = who === "phone";
     await send("Emulation.setDeviceMetricsOverride", {
-      width: phone ? 390 : 1440,
-      height: phone ? 844 : 900,
+      width: width ?? (phone ? 390 : 1440),
+      height: height ?? (phone ? 844 : 900),
       deviceScaleFactor: 1,
       mobile: phone,
     });
+    await send("Emulation.setTouchEmulationEnabled", { enabled: phone });
     await send("Emulation.setUserAgentOverride", {
       userAgent: AGENTS[who],
       platform: PLATFORM[who],
@@ -228,7 +229,45 @@ async function walk() {
       nowhere: [...document.querySelectorAll('a[href^="#"]')].map((a) => a.getAttribute("href")).filter((h) => h.length > 1 && !document.getElementById(decodeURIComponent(h.slice(1)))),
       inner: [...new Set([...document.querySelectorAll('a[href^="/"]')].map((a) => a.getAttribute("href")))],
       small: [...document.querySelectorAll("main p, main li, main dd, main td, main figcaption, .foot a, .foot p")].filter((el) => el.offsetParent && parseFloat(getComputedStyle(el).fontSize) < 15).length,
+      first: (() => {
+        // The page's first words as they're set, line by line: how near they come to the bar and to the window's sides.
+        const lines = [...document.querySelectorAll("main h1, main h1 ~ p, .hero .note")].map((el) => { const all = document.createRange(); all.selectNodeContents(el); return all.getBoundingClientRect(); });
+        return [Math.min(...lines.map((b) => b.top)) - document.querySelector(".nav-in").getBoundingClientRect().bottom, Math.min(...lines.map((b) => Math.min(b.left, innerWidth - b.right)))].map(Math.round);
+      })(),
     };
+  })()`;
+  // Where the bar's ink and the hero's mark are, and whether the mark shows.
+  const MARK = `(() => {
+    const at = (el) => el.getBoundingClientRect();
+    const nav = document.getElementById("nav");
+    const ink = nav.classList.contains("compact") ? [at(nav.querySelector(".nav-in"))] : [at(nav.querySelector(".nav-brand")), at(nav.querySelector(".nav-cta"))];
+    const mark = document.querySelector(".hero .wordmark");
+    const m = at(mark);
+    return { shows: parseFloat(getComputedStyle(mark).opacity), under: ink.some((b) => m.left < b.right && m.right > b.left && m.top < b.bottom && m.bottom > b.top) };
+  })()`;
+  // What of the gathered bar lies outside it by the insets it's drawn with, 22 px before the mark and 8 after the
+  // button: each thing's name and how many px it's out.
+  const INSIDE = `(() => {
+    const bar = document.querySelector(".nav-in").getBoundingClientRect();
+    const things = [document.querySelector(".nav-brand svg"), ...[...document.querySelectorAll(".nav-links a")].filter((a) => a.offsetParent)];
+    return things.map((el) => {
+      const b = el.getBoundingClientRect();
+      const out = Math.max(bar.left + 22 - b.left, b.right - (bar.right - 8), bar.top - b.top, b.bottom - bar.bottom);
+      return [el.localName === "a" ? el.textContent.trim() : "the mark", Math.round(out * 10) / 10];
+    }).filter(([, out]) => out > 0.5);
+  })()`;
+  // Which of the hero's words the Space switcher sits on, if it shows.
+  const SWITCHER = `(() => {
+    const switcher = document.querySelector(".spaces");
+    const style = getComputedStyle(switcher);
+    if (style.visibility === "hidden" || parseFloat(style.opacity) === 0) return [];
+    const s = switcher.getBoundingClientRect();
+    return [...document.querySelectorAll(".hero h1, .hero .lede, .hero .btn, .hero .note")].filter((el) => {
+      const words = document.createRange();
+      words.selectNodeContents(el);
+      const b = el.matches(".btn") ? el.getBoundingClientRect() : words.getBoundingClientRect();
+      return b.left < s.right && b.right > s.left && b.top < s.bottom && b.bottom > s.top;
+    }).map((el) => el.localName + (el.className ? "." + el.className : ""));
   })()`;
   const PAGES = [
     ["home", "/"],
@@ -261,6 +300,7 @@ async function walk() {
       await sleep(1300);
       page.moved = await js(`scrollY > 40`);
       page.pill = await js(`(${box})(document.querySelector(".nav-in"))`);
+      if (who === "phone" && page.moved) page.outside = await js(INSIDE);
       await shot(`${name}-${width}-mid`);
       await js(`scrollTo(0, document.documentElement.scrollHeight)`);
       await sleep(900);
@@ -284,7 +324,107 @@ async function walk() {
       )
         problems.push(`${at}: the bar reads ${page.links.join(" · ")}`);
       if (page.moved && page.pill[2] >= page.bar[2]) problems.push(`${at}: the bar didn't gather`);
+      for (const [thing, out] of page.outside ?? [])
+        problems.push(`${at}: gathered, ${thing} lies ${out} px past the bar's inset`);
+      if (page.first[0] < 0) problems.push(`${at}: the bar lies over the page's first words`);
+      if (page.first[1] < 16)
+        problems.push(
+          `${at}: its first words come within ${page.first[1]} px of the screen's side`,
+        );
     }
+  }
+
+  // Gathered on a phone of any width from 320 px up, the bar holds its mark and its button whatever the button says:
+  // the phone's label (src/send.ts's brief one: the bar's button is the visitor's own download), and each computer's
+  // in a narrow window (src/downloads.ts), in its face, a step larger, and in the faces it falls back to before
+  // Figtree arrives. Larger and in a fallback face at once is only reported: at 320 the longest labels can't fit both.
+  const LABELS = [
+    "Send to my computer",
+    "Download for Mac",
+    "Download for Windows",
+    "Download for Linux",
+  ];
+  const FALLBACK = `font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif`;
+  const FACES = [
+    ["in its face", "", true],
+    ["a step larger", "font-size: 17.5px", true],
+    ["in its fallback face", FALLBACK, true],
+    ["a step larger in its fallback face", `font-size: 17.5px; ${FALLBACK}`, false],
+  ];
+  report.gathered = {};
+  for (const width of [320, 360, 390, 440]) {
+    await visitor("phone", width, 800);
+    await visit("/");
+    await js(`scrollTo(0, 600)`);
+    await sleep(1300);
+    await shot(`home-${width}-gathered`);
+    await js(
+      `document.head.appendChild(Object.assign(document.createElement("style"), { textContent: "* { transition: none !important; }" }))`,
+    );
+    for (const label of LABELS) {
+      for (const [face, style, held] of FACES) {
+        const outside = await js(
+          `(() => { const a = document.querySelector(".nav-cta"); a.textContent = ${JSON.stringify(label)}; a.style.cssText = ${JSON.stringify(style)}; return new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))); })().then(() => ${INSIDE})`,
+        );
+        const at = `home gathered at ${width}, "${label}" ${face}`;
+        report.gathered[at] = outside;
+        if (held)
+          for (const [thing, out] of outside)
+            problems.push(`${at}: ${thing} lies ${out} px past the bar's inset`);
+      }
+    }
+  }
+
+  // Home in a phone's own shapes: a wide phone with its browser's bars showing, and lying down. The first words
+  // keep off the screen's sides, the switcher stays off them at rest, and nowhere down the first screen does the
+  // bar lie over the hero's mark, which is back at the top of the page.
+  for (const [width, height] of [
+    [440, 760],
+    [852, 340],
+    [844, 390],
+    [667, 375],
+  ]) {
+    const at = `home at ${width} by ${height}`;
+    await visitor("phone", width, height);
+    await visit("/");
+    const page = await js(SHARED);
+    const covered = await js(SWITCHER);
+    await shot(`home-${width}-rest`);
+    // What eases is looked at where it comes to rest.
+    await js(
+      `document.head.appendChild(Object.assign(document.createElement("style"), { textContent: "* { transition: none !important; }" }))`,
+    );
+    const tall = await js(`document.querySelector(".hero").offsetHeight`);
+    const under = [];
+    let comes = false;
+    for (let y = 0; y <= tall; y += 10) {
+      await js(
+        `scrollTo(0, ${y}); new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))`,
+      );
+      const mark = await js(MARK);
+      if (mark.under && mark.shows > 0) under.push(y);
+      if (y === 150) {
+        await shot(`home-${width}-moved`);
+        comes = await js(
+          `(() => { const s = getComputedStyle(document.querySelector(".spaces")); return s.visibility === "visible" && s.opacity === "1"; })()`,
+        );
+      }
+    }
+    await js(`scrollTo(0, 0); new Promise((done) => requestAnimationFrame(done))`);
+    const back = (await js(MARK)).shows;
+    report.pages[at] = { wide: page.wide, first: page.first, covered, comes, under, back };
+    if (page.wide[1] > width) problems.push(`${at}: the page is ${page.wide[1]} wide`);
+    if (page.first[0] < 0) problems.push(`${at}: the bar lies over the page's first words`);
+    if (page.first[1] < 16)
+      problems.push(`${at}: its first words come within ${page.first[1]} px of the screen's side`);
+    if (covered.length)
+      problems.push(`${at}: the switcher lies over ${covered.join(", ")} at rest`);
+    if (!comes) problems.push(`${at}: the switcher isn't there once the page has moved`);
+    if (under.length)
+      problems.push(
+        `${at}: the bar lies over the hero's mark from ${under[0]} to ${under.at(-1)} px down the page`,
+      );
+    if (back !== 1) problems.push(`${at}: the hero's mark isn't back at the top of the page`);
   }
 
   // Every page a link on the site names is there.
