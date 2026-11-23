@@ -1138,7 +1138,7 @@ BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await '^browser: restored in ' || fail "the relaunch didn't restore the Space"
-await '^browser: outline [0-9]*+\[[0-9]*-\[[0-9]*\] [0-9]* [0-9]*\] [0-9]* [0-9]*\$' ||
+await '^browser: outline [0-9]*+\[[0-9]*-\[[0-9]*\] [0-9]* [0-9]*\] [0-9]* [0-9]*$' ||
   fail "the pinned rows didn't come back: $(outline)"
 c=$(outline | sed 's/.* //')
 await "^browser: page $c back 1 forward 0 loading 0 $site\$" ||
@@ -1193,7 +1193,7 @@ BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
 pid=$!
 exec 3> "$out/drive"
 await '^browser: restored in ' || fail "the relaunch didn't restore the Space"
-await '^browser: outline [0-9]*+\[[0-9]*-\[[0-9]*\] [0-9]* [0-9]*\] [0-9]* [0-9]*\$' ||
+await '^browser: outline [0-9]*+\[[0-9]*-\[[0-9]*\] [0-9]* [0-9]*\] [0-9]* [0-9]*$' ||
   fail "the pinned rows didn't come back: $(outline)"
 c=$(outline | sed 's/.* //')
 await "^browser: page $c back 1 forward 0 loading 0 ${site}notes.txt\$" ||
