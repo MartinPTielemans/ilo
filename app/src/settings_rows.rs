@@ -591,7 +591,7 @@ pub fn end(controls: impl IntoIterator<Item = gpui::AnyElement>) -> gpui::Div {
 /// A row: its name, and its control at the end.
 pub fn row(name: impl Into<SharedString>, control: gpui::AnyElement) -> gpui::Div {
     frame()
-        .child(div().flex_1().min_w_0().truncate().child(name.into()))
+        .child(name_of(name).flex_1().min_w_0())
         .child(end([control]))
 }
 

@@ -26,7 +26,7 @@ use crate::tokens::transparency::{
     BRIGHT, BRIGHT_HEIGHT, BRIGHT_LINE, BRIGHT_LINE_FIRST, BRIGHT_LINE_GAP, BRIGHT_LINE_HEIGHT,
     BRIGHT_LINE_WIDTH, BRIGHT_LINE_X, BRIGHT_LINE_Y, BRIGHT_RADIUS, BRIGHT_WIDTH, BRIGHT_X,
     BRIGHT_Y, DESKTOP_ANGLE, DESKTOP_FROM, DESKTOP_LAST, DESKTOP_TO, DESKTOP_TO_STOP, DOT,
-    DOT_ALPHA, DOT_GAP, DOT_INSET, HAIRLINE, HEIGHT, LINE, LINE_TOP, MENU_HAIRLINE, MENU_PADDING,
+    DOT_ALPHA, DOT_GAP, DOT_INSET, HAIRLINE, HEIGHT, LINE_TOP, MENU_HAIRLINE, MENU_PADDING,
     MENU_PLATE, MENU_RADIUS, MENU_RIM, MENU_ROW, MENU_ROW_PADDING, MENU_ROW_RADIUS, MENU_SHADOW,
     MENU_SHADOW_BLUR, MENU_SHADOW_Y, MENU_WIDTH, MENU_X, MENU_Y, PAGE, PAGE_HEADING,
     PAGE_HEADING_HEIGHT, PAGE_HEADING_WIDTH, PAGE_LINE, PAGE_LINE_HEIGHT, PAGE_LINE_WIDTH,
@@ -276,11 +276,11 @@ impl RenderOnce for Picker {
         let group = group(&look, NAME, chosen.index(), count, a11y, picked)
             .when(a11y, |group| group.aria_description(chosen.line()))
             .children(options);
-        // It says what the chosen picture does, as a row's line says what its row does.
+        // It says what the chosen picture does, as a row's line says what its row does, and as quietly.
         let line = detail_type()
             .mt(px(LINE_TOP))
             .mx(px(SIDE_ROOM))
-            .text_color(base.opacity(LINE))
+            .text_color(look.detail)
             .child(chosen.line());
         div().child(group).child(line)
     }
