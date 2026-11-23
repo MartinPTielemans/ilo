@@ -280,6 +280,10 @@ impl Shell {
         div()
             .id(MENU_CONTROL)
             .when(self.a11y, |button| button.button_named(MENU_CONTROL_NAME))
+            // A screen reader says the control as the keys' while the ring is on it.
+            .when(self.a11y && self.keyed_menu.is_some(), |button| {
+                button.aria_active_descendant()
+            })
             .absolute()
             .right(px(PLUS_INSET + NAV_PITCH))
             .bottom(px((FOOTER_HEIGHT - NAV_SIZE) / 2.))
@@ -303,6 +307,7 @@ impl Shell {
             // that let go outside it and close it, as Windows' did.
             .on_click(cx.listener(|shell, _, _, cx| shell.app_menu(cx)))
             .child(self.button_frame(MENU_CONTROL))
+            .children(self.menu_ring())
             .child(
                 svg()
                     .path("icons/nav-menu.svg")

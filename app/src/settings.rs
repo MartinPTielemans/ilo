@@ -4573,6 +4573,8 @@ impl Settings {
                 .filter(|(_, keys)| match keys {
                     Keys::Of(Command::NewLittleWindow | Command::OpenInMainWindow) => little,
                     Keys::Of(Command::NewNote | Command::NewNoteSplit) => note,
+                    // The Mac's menu bar holds ilo's menu, so there's no control to ring.
+                    Keys::Of(Command::FocusMenu) => shell::OFF_THE_MAC,
                     _ => true,
                 })
                 .map(|(name, keys)| {

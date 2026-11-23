@@ -160,7 +160,7 @@ pub fn reserved(command: Command) -> bool {
 }
 
 /// Chrome's keys on Linux and Windows that the Mac's Chrome and Arc have no key for.
-const OFF_THE_MAC_ONLY: &[&str] = &["shift-escape"];
+const OFF_THE_MAC_ONLY: &[&str] = &["shift-escape", "f10"];
 /// Arc's keys off the Mac would press as another of ours: ⌃⌘N's Blank Window is Ctrl+Alt+N there,
 /// which is ⌥⌘N's Little ilo Window (#669).
 const MAC_ONLY: &[&str] = &["ctrl-cmd-n"];
@@ -1765,6 +1765,23 @@ mod tests {
             "a digit's symbol needs its shift"
         );
         assert!(!one_press("ctrl-shift-2", "shift-cmd-@"));
+    }
+
+    /// Off the Mac F10 is Focus ilo Menu's, as Chrome's F10 rings its menu button, unreserved as
+    /// Chrome's is, so a page that keeps F10 keeps it. The Mac's menu bar has the system's key, so
+    /// there it has none (#4030).
+    #[test]
+    fn f10_focuses_the_menu_off_the_mac_alone() {
+        let keys = UserKeys::default();
+        assert!(
+            keys.bindings_on(true)
+                .contains(&("f10", Command::FocusMenu))
+        );
+        let on_the_mac = keys.bindings_on(false);
+        let f10 = (on_the_mac.iter())
+            .filter(|&&(key, command)| key == "f10" || command == Command::FocusMenu);
+        assert_eq!(f10.count(), 0);
+        assert!(!reserved(Command::FocusMenu));
     }
 
     /// Off the Mac, Chrome's Alt+Left and Alt+Right follow Back's and Forward's ⌘← and ⌘→, and
