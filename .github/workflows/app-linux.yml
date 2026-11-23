@@ -161,8 +161,10 @@ jobs:
       # libBrowser.so, the browser on Linux (linux/Cargo.toml): main.rs and platform/linux, which
       # neither the tests nor the preview compile. It names none of the engine's symbols until chrome
       # loads it, so a check needs no engine, and finds what wouldn't compile, such as a call to a
-      # function main.rs builds on the Mac and Windows alone.
-      - run: cargo check --release --manifest-path linux/Cargo.toml --target-dir target
+      # function main.rs builds on the Mac and Windows alone. --locked, as linux/Cargo.lock pins what
+      # ships in it: a change to ../Cargo.lock copies it over linux/Cargo.lock and runs
+      # `cargo metadata --manifest-path linux/Cargo.toml`, which keeps the same versions (#3966).
+      - run: cargo check --release --locked --manifest-path linux/Cargo.toml --target-dir target
       - run: cargo build --release --bin preview
       # The site's demo is the preview built for the web (demo.yml), which only a release builds, so
       # a change that breaks it is caught here. A check, not demo.yml's build: no LTO or wasm-bindgen.
