@@ -4948,8 +4948,12 @@ impl gpui::Render for PicturesPage {
                     ))
                     .child(switch("top bar", false));
                 // Transparency under Appearance, at the level kept, as Settings has it (#4129).
-                let transparency =
-                    browser::transparency::row(&look, browser::transparency::has_glass(), cx);
+                let transparency = browser::transparency::row(
+                    &look,
+                    browser::transparency::has_glass(),
+                    self.logged.clone(),
+                    cx,
+                );
                 let mut looks = vec![pictured(&look, "Appearance", line.into(), three)];
                 let mut groups = Vec::new();
                 match transparency {

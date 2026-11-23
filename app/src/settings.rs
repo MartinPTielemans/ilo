@@ -1833,14 +1833,19 @@ impl Settings {
             ],
         );
         // Transparency, directly under Appearance, where the window has glass to show through.
-        let transparency = browser::transparency::row(look, browser::transparency::has_glass(), cx)
-            .map(|div| Row {
-                div,
-                name: browser::transparency::NAME.into(),
-                line: Some(browser::transparency::ABOUT.into()),
-                keys: None,
-                nested: false,
-            });
+        let transparency = browser::transparency::row(
+            look,
+            browser::transparency::has_glass(),
+            self.drawn_logged.clone(),
+            cx,
+        )
+        .map(|div| Row {
+            div,
+            name: browser::transparency::NAME.into(),
+            line: Some(browser::transparency::ABOUT.into()),
+            keys: None,
+            nested: false,
+        });
         let mut looks = vec![pictured(look, "Appearance", appearance_line, appearances)];
         // On the Mac the system's Reduce Transparency is said under the group, so Page zoom
         // starts the next one.

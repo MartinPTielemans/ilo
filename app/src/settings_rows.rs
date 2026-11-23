@@ -498,13 +498,17 @@ pub fn frame() -> gpui::Div {
         .items_center()
 }
 
+/// A row's line's type, which says more under its name, and any line that describes as a row's
+/// does.
+pub fn detail_type() -> gpui::Div {
+    div().text_size(px(SMALL)).line_height(px(DETAIL_LINE))
+}
+
 /// A row's text: its name, at medium, and the line under it that says more, if any, which wraps.
 pub fn text(look: &Look, name: impl Into<SharedString>, line: Option<SharedString>) -> gpui::Div {
     let line = line.map(|line| {
-        div()
+        detail_type()
             .mt(px(DETAIL_TOP))
-            .text_size(px(SMALL))
-            .line_height(px(DETAIL_LINE))
             .text_color(look.detail)
             .child(line)
     });
@@ -547,13 +551,7 @@ pub fn command_text(
         None => vec![run(line.len(), crate::face::UI)],
     };
     let runs: Vec<_> = runs.into_iter().filter(|run| run.len > 0).collect();
-    let small = || {
-        div()
-            .mt(px(DETAIL_TOP))
-            .text_size(px(SMALL))
-            .line_height(px(DETAIL_LINE))
-            .text_color(look.detail)
-    };
+    let small = || detail_type().mt(px(DETAIL_TOP)).text_color(look.detail);
     div()
         .flex_1()
         .min_w_0()
