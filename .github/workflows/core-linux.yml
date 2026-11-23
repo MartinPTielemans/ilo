@@ -1,5 +1,15 @@
 # The core compiles on Linux (AGENTS.md, Hit every surface: Platforms). See engine/check-linux.sh.
 # ci.yml calls it when a change touches the core or the engine (.github/scripts/ci-changes.cjs).
+# Each Linux engine build packs what a compile of the core reads besides the core
+# (engine/core_syntax.py), so this checks the core against the newest pack in minutes, with the
+# build's own flags, instead of preparing a tree of its own for half an hour (#3917). It prepares
+# one still where the pack can't stand for this tree's engine: no pack for pins.ini's Chromium,
+# a change to how the Linux tree is prepared or what its build generates headers from, or an
+# engine patch the packed headers don't take.
+# The fast path is clang's syntax check against the packed headers, not the build: nothing is
+# generated, compiled to code or linked, and the generated headers are the pack's engine's. So an
+# error only code generation finds, or one in a generated header the branch would change, passes
+# here, and every core batch's engine build is the real compile.
 name: Core on Linux
 
 on:
@@ -12,13 +22,77 @@ jobs:
   compile:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
+    permissions:
+      contents: read
+      # The pack, from an Engine on Linux run.
+      actions: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
 
+      # The newest unexpired pack of pins.ini's Chromium that Engine on Linux made in this
+      # repository, as an artifact of that name could come from any workflow a pull request runs.
+      # Its commit must differ from this tree only where the pack follows: the core's sources and
+      # the engine patches' headers. Else, as when there's no pack, the full compile runs.
+      - id: pack
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          name=engine-linux-core-$(git config -f engine/pins.ini chromium.version)
+          full() {
+            echo "::notice::$1 So the core is compiled in a tree of its own."
+            echo "$1 So the core is compiled in a tree of its own." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+          run= sha=
+          for artifact in $(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$name&per_page=20" \
+            --jq '.artifacts[] | select(.expired | not) | "\(.workflow_run.id),\(.workflow_run.head_sha)"'); do
+            ours=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/${artifact%,*}" --jq '
+              .path == ".github/workflows/engine-linux.yml" and .head_repository.full_name == $ENV.GITHUB_REPOSITORY
+              and (.event == "push" or .event == "schedule" or .event == "workflow_dispatch")')
+            if [ "$ours" = true ]; then
+              run=${artifact%,*} sha=${artifact#*,}
+              break
+            fi
+          done
+          [ -n "$run" ] || full "No Engine on Linux run has packed the core's headers for Chromium ${name#engine-linux-core-}."
+          git fetch -q --depth=1 --no-tags origin "$sha" || full "The pack's commit, $sha, can't be fetched."
+          # How the tree is prepared and built, and what the build generates headers from, as
+          # core_syntax.py's GENERATES has it.
+          changed=$(git diff --name-only "$sha" HEAD | grep -E \
+            '^engine/(pins\.ini|args\.gn|tree\.sh|check-linux\.sh|linux/|patches/ungoogled-chromium-portablelinux/)|^(core|engine/patches)/(.*/)?([^/]*\.(mojom|proto|pdl|idl|json5|gni?)|BUILD\.gn)$' || true)
+          [ -z "$changed" ] || full "Since the pack's commit, $sha, this changes what the pack can't follow: $(echo "$changed" | tr '\n' ' ')"
+          printf 'run=%s\nname=%s\nsha=%s\n' "$run" "$name" "$sha" >> "$GITHUB_OUTPUT"
+          echo "Checking against run $run's $name, built at $sha." | tee -a "$GITHUB_STEP_SUMMARY"
+      - if: steps.pack.outputs.run != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.name }}
+          path: ${{ runner.temp }}/pack
+          run-id: ${{ steps.pack.outputs.run }}
+          github-token: ${{ github.token }}
+      # With the engine patches the pack's engine was built with, its commit's, to bring the packed
+      # headers to this tree's. Exit 3 is a patch they can't take or one that changes what the
+      # build generates headers from, for the full compile. Each error shows on its line.
+      - id: check
+        if: steps.pack.outputs.run != ''
+        name: Check against the pack
+        env:
+          SHA: ${{ steps.pack.outputs.sha }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/built"
+          git archive "$SHA" engine/series engine/patches | tar -xf - -C "$RUNNER_TEMP/built"
+          zstd -dc "$RUNNER_TEMP/pack/core-syntax.tar.zst" | tar -xf - -C "$RUNNER_TEMP/pack"
+          status=0
+          python3 engine/core_syntax.py check --platform linux "$RUNNER_TEMP/pack" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/built/engine" || status=$?
+          [ "$status" != 3 ] || { echo full=true >> "$GITHUB_OUTPUT"; exit 0; }
+          exit "$status"
+
+      # The full compile, from here to engine/check-linux.sh.
       # Dawn's code generators need the Go its go.mod names, newer than Ubuntu's.
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      - if: steps.pack.outputs.run == '' || steps.check.outputs.full
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26'
           cache: false
@@ -30,11 +104,12 @@ jobs:
       # fetches that one file from whichever of three hosts answers, checked against the SHA-256
       # that noble's signed index gives it, and saves it for the runs after.
       - id: gperf
+        if: steps.pack.outputs.run == '' || steps.check.outputs.full
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/gperf
           key: gperf_3.1-1build1_amd64
-      - if: steps.gperf.outputs.cache-hit != 'true'
+      - if: (steps.pack.outputs.run == '' || steps.check.outputs.full) && steps.gperf.outputs.cache-hit != 'true'
         run: |
           mkdir -p "$RUNNER_TEMP/gperf"
           cd "$RUNNER_TEMP/gperf"
@@ -49,13 +124,14 @@ jobs:
           done
           echo "::error::No host gave gperf 3.1-1build1 (#2425)."
           exit 1
-      - if: steps.gperf.outputs.cache-hit != 'true'
+      - if: (steps.pack.outputs.run == '' || steps.check.outputs.full) && steps.gperf.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/gperf
           key: ${{ steps.gperf.outputs.cache-primary-key }}
 
       - name: Install tools
+        if: steps.pack.outputs.run == '' || steps.check.outputs.full
         run: |
           sudo dpkg -i "$RUNNER_TEMP"/gperf/gperf_*.deb
           for tool in clang-format ninja; do
@@ -66,12 +142,14 @@ jobs:
 
       # The tree takes about 40 GB. The runner's second disk has more room than its first.
       - name: Make room
+        if: steps.pack.outputs.run == '' || steps.check.outputs.full
         run: |
           df -h / /mnt
           sudo mkdir /mnt/work
           sudo chown "$USER" /mnt/work
 
-      - run: engine/check-linux.sh /mnt/work
+      - if: steps.pack.outputs.run == '' || steps.check.outputs.full
+        run: engine/check-linux.sh /mnt/work
       - uses: ./.github/actions/tree-proof
         with:
           job: ci-core_linux
