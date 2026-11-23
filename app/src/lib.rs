@@ -228,6 +228,7 @@ pub mod title_log;
 pub mod toast;
 pub mod tokens;
 pub mod tooltip;
+pub mod transparency;
 pub mod updates;
 pub mod usage;
 pub mod widevine;
