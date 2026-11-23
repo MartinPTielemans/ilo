@@ -29,6 +29,7 @@
 #include "base/time/time.h"
 #include "browser_core/agent_file_field.h"
 #include "browser_core/agent_job_voter.h"
+#include "browser_core/agent_sign_in.h"
 #include "browser_core/agent_splash_rule.h"
 #include "browser_core/ax_text.h"
 #include "browser_core/host.h"
@@ -3158,10 +3159,16 @@ void AgentPage::Answer(std::string text, bool error, bc_agent_failure failure) {
   // after (#1443).
   if (std::optional<GURL> app = std::exchange(app_link_, std::nullopt); app && !error) {
     const std::string opens = app_name_.empty() ? "an app" : base::UTF16ToUTF8(app_name_);
+    // A title withheld from agents, as after a sign-in whose page showed what it filled, isn't
+    // named.
+    const std::string stayed =
+        WithheldFromAgents(tab_)
+            ? std::string("The tab stayed on its page")
+            : base::StrCat({"The tab stayed on “", base::UTF16ToUTF8(GetWebContents().GetTitle()),
+                            "”"});
     text = base::StrCat({"That link opens ", opens, " (", app->GetScheme(),
-                         ":), outside the browser, and agents can't open apps. ",
-                         "The tab stayed on “", base::UTF16ToUTF8(GetWebContents().GetTitle()),
-                         "”. Ask the user, or use the page's web link if it has one."});
+                         ":), outside the browser, and agents can't open apps. ", stayed,
+                         ". Ask the user, or use the page's web link if it has one."});
     error = true;
   }
   app_name_.clear();
