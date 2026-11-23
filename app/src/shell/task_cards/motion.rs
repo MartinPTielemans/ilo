@@ -2,7 +2,7 @@
 //! from where it had got to, so nothing jumps.
 
 use std::time::Duration;
-use web_time::Instant;
+use std::time::Instant;
 
 use crate::shell::cubic_bezier;
 use crate::tokens::shell::task::motion::EASE;

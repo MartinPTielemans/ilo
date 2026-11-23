@@ -6,7 +6,7 @@
 use std::collections::VecDeque;
 use std::process::ChildStdin;
 use std::sync::Mutex;
-use web_time::Instant;
+use std::time::Instant;
 
 use serde_json::{Map, Value, json};
 

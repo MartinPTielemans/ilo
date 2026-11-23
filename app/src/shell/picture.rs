@@ -1,6 +1,7 @@
 //! The picture of a page that another window shows, which the window it left draws in its card, and
 //! a click on it takes the page back (docs/ux-spec.md › Window › Several windows; ours).
 
+use std::time::Instant;
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -10,7 +11,6 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-use web_time::Instant;
 
 use gpui::{
     AnyElement, AsyncApp, Bounds, Context, Corners, MouseButton, Pixels, RenderImage, WeakEntity,

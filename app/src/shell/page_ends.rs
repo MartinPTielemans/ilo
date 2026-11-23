@@ -10,7 +10,7 @@
 //! Peek shows) the app doesn't take the keyboard, and the page wraps.
 
 use std::time::Duration;
-use web_time::Instant;
+use std::time::Instant;
 
 use gpui::{Context, Role, SharedString, Stateful, div, prelude::*, px};
 
