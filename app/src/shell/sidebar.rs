@@ -732,22 +732,28 @@ impl Shell {
     pub(super) fn pointer_over(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
         let (x, y) = (f32::from(at.x), f32::from(at.y));
         let side = self.from_side(x);
-        // Past the edge, as the Mac's driver can post, it has left across it.
-        if side < 0. {
+        let mut back = false;
+        if y < 0. {
+            // Above the window, as GPUI's (-1, -1) before each leave on Linux and Windows: its
+            // last move in the window says which way it went.
+            self.left_by_last_move(cx);
+        } else if side < 0. {
+            // Past the edge along it, as the Mac's driver can post, it has left across it.
             self.left_across_edge(cx);
-        }
-        self.reveal_inward = side > self.from_side(self.reveal_x);
-        let back = self.reveal_strip.is_none() && (0. ..CARD_INSET).contains(&side) && {
+            self.reveal_heard = None;
+        } else {
+            let toward = self.reveal_heard.is_some_and(|(from, _)| side <= from);
+            self.reveal_heard = Some((side, toward));
+            // Its first move back over the window is its return.
             let left = self.reveal_left.take();
             let now = cx.background_executor().now();
-            left.is_some_and(|left| now.duration_since(left) <= REVEAL_BACK)
-        };
-        self.reveal_strip = (0. ..CARD_INSET)
-            .contains(&side)
-            .then(|| match self.reveal_strip {
-                Some((from, moved)) => (from, moved || (y - from).abs() >= REVEAL_MOVE),
-                None => (y, back),
-            });
+            back = left.is_some_and(|left| now.duration_since(left) <= REVEAL_BACK);
+        }
+        let in_strip = (0. ..CARD_INSET).contains(&side) && y >= 0.;
+        self.reveal_strip = in_strip.then(|| match self.reveal_strip {
+            Some((from, moved)) => (from, moved || (y - from).abs() >= REVEAL_MOVE),
+            None => (y, back),
+        });
         self.pointer_at(x, cx);
     }
 
@@ -755,14 +761,20 @@ impl Shell {
     /// at the edge ends as one the pointer passed. On Linux and Windows the page is Chromium's
     /// window, whose moves the shell doesn't hear, so its leave is how the shell knows.
     pub(super) fn pointer_left(&mut self, cx: &mut Context<Self>) {
-        // From the strip, a last move away from the edge took it onto the page, which starts where
-        // the strip ends; any other went out across the edge.
-        if !self.reveal_inward {
-            self.left_across_edge(cx);
-        }
+        self.left_by_last_move(cx);
         if !self.revealed {
             self.reveal_wait = None;
             self.reveal_strip = None;
+        }
+    }
+
+    /// The pointer left the window's view. From the strip, a last move away from the edge took it
+    /// onto the page, which starts where the strip ends, and one toward the edge or along it took
+    /// it out across the edge. A first move in, with none heard before it to tell, counts as
+    /// neither: a pointer jumping onto the page and one jumping out look the same.
+    fn left_by_last_move(&mut self, cx: &mut Context<Self>) {
+        if self.reveal_heard.take().is_some_and(|(_, toward)| toward) {
+            self.left_across_edge(cx);
         }
     }
 
@@ -770,6 +782,8 @@ impl Shell {
     /// sidebar still to reveal, it's when its return counts.
     fn left_across_edge(&mut self, cx: &mut Context<Self>) {
         if self.can_reveal() && !self.revealed && self.reveal_strip.is_some() {
+            // check.sh reads this line.
+            log!("browser: reveal left across the edge");
             self.reveal_left = Some(cx.background_executor().now());
         }
     }
@@ -1772,10 +1786,14 @@ mod tests {
         shell.update(cx, |shell, cx| shell.pointer_over(point(px(x), px(y)), cx));
     }
 
-    /// The pointer leaving the window's own view, after `wait`.
+    /// The pointer leaving the window's own view, after `wait`, as GPUI tells it on Linux and
+    /// Windows: a move to (-1, -1), then the leave.
     fn leave(shell: &Entity<Shell>, wait: u64, cx: &mut TestAppContext) {
         cx.executor().advance_clock(Duration::from_millis(wait));
-        shell.update(cx, |shell, cx| shell.pointer_left(cx));
+        shell.update(cx, |shell, cx| {
+            shell.pointer_over(point(px(-1.), px(-1.)), cx);
+            shell.pointer_left(cx);
+        });
     }
 
     /// Whether the sidebar is out once the reveal's wait is over.
@@ -1823,6 +1841,51 @@ mod tests {
         assert!(
             out_after_the_wait(&shell, cx),
             "back at the edge from past it, the pointer didn't bring the sidebar out"
+        );
+        // The Mac tells the leave alone.
+        put_away(&shell, cx);
+        move_to(&shell, 16, 4., 300., cx);
+        cx.executor().advance_clock(Duration::from_millis(16));
+        shell.update(cx, |shell, cx| shell.pointer_left(cx));
+        move_to(&shell, 200, 3., 300., cx);
+        assert!(
+            out_after_the_wait(&shell, cx),
+            "back at the edge after a leave alone, the pointer didn't bring the sidebar out"
+        );
+    }
+
+    /// On Linux and Windows the page is a window the shell doesn't hear the pointer in, so it hears
+    /// a pointer coming from the page first in the strip: heard twice on its way to the edge before
+    /// it overshoots, its return brings the sidebar out.
+    #[gpui::test]
+    fn a_pointer_heard_only_at_the_edge_reveals_after_an_overshoot(cx: &mut TestAppContext) {
+        let shell = hidden_sidebar(cx);
+        leave(&shell, 0, cx);
+        move_to(&shell, 1500, 8., 300., cx);
+        move_to(&shell, 8, 4., 300., cx);
+        leave(&shell, 8, cx);
+        move_to(&shell, 200, 3., 300., cx);
+        assert!(
+            out_after_the_wait(&shell, cx),
+            "back at the edge after an overshoot from the page, the pointer didn't bring the \
+             sidebar out"
+        );
+    }
+
+    /// A pointer heard once in the strip before it leaves may have jumped onto the page as well as
+    /// out across the edge: its jump back to the edge has to move along it, as one from the page.
+    #[gpui::test]
+    fn a_pointer_heard_once_at_the_edge_has_to_move_along_it_after_leaving(
+        cx: &mut TestAppContext,
+    ) {
+        let shell = hidden_sidebar(cx);
+        leave(&shell, 0, cx);
+        move_to(&shell, 1500, 1., 300., cx);
+        leave(&shell, 300, cx);
+        move_to(&shell, 200, 0., 300., cx);
+        assert!(
+            !out_after_the_wait(&shell, cx),
+            "a pointer jumping back to the edge from the page brought the sidebar out"
         );
     }
 

@@ -1066,9 +1066,15 @@ none_since() {
 # afresh. The sleeps are for nothing to happen, which no line marks: past the second, and the
 # reveal's 100 ms wait.
 overshoot() {
+  # A hand's moves on their way to the edge, heard twice in the strip: on Linux and Windows the
+  # pointer over the page is Chromium's, and one heard once there may have jumped onto the page.
   send move 400 300
+  send move 8 300
   send move 4 300
+  from=$((step + 1))
   send move -20 300
+  expect '^browser: reveal left across the edge$' \
+    "the pointer out across the window's edge from the strip wasn't heard leaving across it" "$from"
   from=$((step + 1))
   send move 3 300
   expect '^browser: reveal shown$' \
@@ -1080,6 +1086,7 @@ overshoot() {
   expect '^browser: reveal hidden$' "the pointer past the sidebar out after an overshoot didn't send it away"
   send move 400 300
   from=$((step + 1))
+  send move 8 300
   send move 4 300
   send move -20 300
   sleep 1.2 # past the second a return counts in

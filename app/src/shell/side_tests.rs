@@ -194,7 +194,10 @@ fn on_the_right_a_return_after_an_overshoot_reveals(cx: &mut TestAppContext) {
     shell.update(cx, |shell, _| shell.sidebar_hidden = true);
     to(WIDTH - 400., cx);
     to(WIDTH - 4., cx);
-    shell.update(cx, |shell, cx| shell.pointer_left(cx));
+    shell.update(cx, |shell, cx| {
+        shell.pointer_over(point(px(-1.), px(-1.)), cx);
+        shell.pointer_left(cx)
+    });
     to(WIDTH - 3., cx);
     cx.executor().advance_clock(REVEAL_WAIT * 2);
     cx.run_until_parked();
