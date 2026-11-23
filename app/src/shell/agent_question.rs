@@ -150,7 +150,7 @@ impl Shell {
                 .when(row, |button| button.flex_basis(gpui::relative(1.)))
                 .on_click(cx.listener(move |shell, _, _, cx| match button.does {
                     Does::Answer(answer) => shell.answer_agent(answer, cx),
-                    Does::Show(tab) => shell.select(tab, cx),
+                    Does::Show(tab) => shell.show_handed(tab, cx),
                     Does::HandBack(tab) => shell.browser.hand_back(tab, cx),
                 }))
         });

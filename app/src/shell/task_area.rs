@@ -1267,5 +1267,7 @@ fn strip_chip(
     }
 }
 
+mod show_handed;
+
 #[cfg(test)]
 mod tests;

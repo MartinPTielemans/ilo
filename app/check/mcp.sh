@@ -2937,8 +2937,9 @@ CARD
 
   # Show Tab on a handoff's card puts the handed page in front of the user with the keyboard on it,
   # so what they type next reaches the page without another click (#4065): watching another of the
-  # agent's pages, on its Pages, and out of its conversation. Each case's outcome goes in
-  # show-tab.txt, and the run fails after the last if any missed.
+  # agent's pages, on its Pages, out of its conversation, and with the command bar up, which the
+  # click closes before the page takes the keyboard. Each case's outcome goes in show-tab.txt, and
+  # the run fails after the last if any missed.
   printf '%s' '<!doctype html><title>handed</title><textarea id=f autofocus
  style="position:fixed;inset:0;width:100vw;height:100vh"
  oninput="document.title=`handed typed `+f.value"></textarea>' > "$out/site/handed.html"
@@ -2946,7 +2947,8 @@ CARD
   call navigate "{\"tab\":$opened_tab,\"url\":\"localhost:$port/handed.html\"}" > /dev/null
   await_more "^browser: title $opened_tab handed\$" "$handeds" || fail "the page with a field didn't load in the agent's tab"
   show_tab_missed=
-  # $1 says where the user is, $2 is the letter typed after the click.
+  # $1 says where the user is, $2 is the letter typed after the click, and $3, if "bar", opens the
+  # command bar over the card first.
   show_tab() {
     cards=$(grep -c '^browser: agent question [0-9]* at ' "$log" || true)
     request hand_off "{\"tab\":$opened_tab,\"reason\":\"Show Tab for the check\"}" >&4
@@ -2955,8 +2957,18 @@ CARD
     read -r qx qy qw qh <<CARD
 $(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
+    if [ "${3-}" = bar ]; then
+      send key l cmd
+      expect '^browser: command bar shown$' "⌘L didn't open the command bar over the handoff's card"
+    fi
     from=$(($(wc -l < "$log") + 1))
+    shows=$(grep -c "^browser: show tab $opened_tab\$" "$log" || true)
     send click $((qx + qw - 30)) $((qy + qh - 26))
+    if [ "${3-}" = bar ]; then
+      expect '^browser: command bar hidden$' "a click on Show Tab didn't close the command bar over it"
+    fi
+    await_more "^browser: show tab $opened_tab\$" "$shows" || show_tab_missed="$show_tab_missed
+$1: the click didn't reach Show Tab"
     send type "$2"
     typed=no
     await_more "^browser: title $opened_tab handed typed $2\$" 0 && typed=yes
@@ -2990,6 +3002,12 @@ PLATE
   send click $((px + pw / 2)) $((py + ph / 2))
   await_more '^browser: task area [0-9]* closed$' "$closed" || fail "a click on the client's card didn't close its conversation"
   show_tab "out of the agent's conversation" c
+  if [ "$(grep -E '^browser: task area [0-9]+ (open|closed)$' "$log" | tail -1 | cut -d' ' -f5)" = open ]; then
+    closed=$(grep -c '^browser: task area [0-9]* closed$' "$log" || true)
+    send click $((px + pw / 2)) $((py + ph / 2))
+    await_more '^browser: task area [0-9]* closed$' "$closed" || fail "a click on the client's card didn't close its conversation after Show Tab"
+  fi
+  show_tab "with the command bar up, out of the conversation" d bar
   # Back to the agent's page watched, for the steps below.
   if [ "$(grep -E '^browser: task area [0-9]+ (open|closed)$' "$log" | tail -1 | cut -d' ' -f5)" = closed ]; then
     opened=$(grep -c "^browser: task $session shown\$" "$log" || true)

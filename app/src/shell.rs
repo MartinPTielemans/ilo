@@ -1874,6 +1874,8 @@ pub struct Shell {
     agent_request_see: FocusHandle,
     /// Every Space's agent tasks' cards, newest first, as the Agents last said (Agent task).
     task_cards: Vec<crate::agents::task::Card>,
+    /// The handed tab Show Tab watched, whose page gets the keyboard once no overlay has it.
+    handed_keys: Option<u64>,
     /// The window's tasks' plates at the sidebar's foot, and ⌘T's slot among them.
     foot: task_cards::Foot,
     /// The task ✕ dismissed last, which ⇧⌘T brings back unless a tab has closed since, and when,
@@ -2342,6 +2344,7 @@ impl Shell {
             agent_request_see_drawn: Rc::default(),
             agent_request_see: cx.focus_handle(),
             task_cards: Vec::new(),
+            handed_keys: None,
             foot: task_cards::Foot::default(),
             closed_task: None,
             archived_tasks: Vec::new(),
@@ -4664,6 +4667,7 @@ impl Render for Shell {
             log!("browser: copy url {copied}");
         }
         self.step_keys(window, cx);
+        self.give_handed_keys(cx);
         self.step_keyed_drawn();
         if std::mem::take(&mut self.focus_form)
             && let Some(form) = self.form()

@@ -1226,6 +1226,13 @@ pub fn show(request: Request, cx: &mut App) {
     });
 }
 
+/// Whether a menu shows, which has the keyboard while it does.
+pub fn showing(cx: &App) -> bool {
+    (cx.try_global::<MenuWindow>())
+        .and_then(|menu| menu.0.read(cx).ok())
+        .is_some_and(|menu| menu.shown.is_some())
+}
+
 /// Highlights the first item of the menu that shows, as a menu opened from the keyboard (⇧F10)
 /// does, so VoiceOver reads it with the menu.
 pub fn highlight_first(cx: &mut App) {
