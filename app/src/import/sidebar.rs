@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use super::found::Found;
+use super::found::{Found, Note};
 use super::read::ReadError;
 use super::sources::Source;
 use super::{arc, ardia, dia, zen};
@@ -35,5 +35,15 @@ pub fn read(source: &Source) -> Result<Option<Found>, ReadError> {
         "Zen" => zen::read(source),
         "Ardia" => ardia::read(source),
         _ => Ok(None),
+    }
+}
+
+/// Why `source`'s Spaces can't come here, said in their place: a browser that keeps them where
+/// ilo can't read them may keep no sidebar file it can, so this asks whether there's none.
+pub fn note(source: &Source) -> Option<Note> {
+    match source.browser.name {
+        "Dia" => dia::note(source),
+        "Zen" => zen::note(source),
+        _ => None,
     }
 }
