@@ -1901,9 +1901,11 @@ pub struct Shell {
     card_keys: Option<agent_card_keys::CardKeys>,
     /// Every Space's agent tasks' cards, newest first, as the Agents last said (Agent task).
     task_cards: Vec<crate::agents::task::Card>,
-    /// The handed tab Show Tab watched, and whether the core shows it yet: its page gets the
-    /// keyboard once it does and no overlay has the keyboard.
-    handed_keys: Option<(u64, bool)>,
+    /// The handed tab Show Tab watched, whose page gets the keyboard once the core shows it, the
+    /// key that pressed it is up and no overlay has the keyboard.
+    handed_keys: Option<task_area::HandedKeys>,
+    /// Whether the card's press being made is a key's, ↩ or Space, rather than a click's.
+    card_key_down: bool,
     /// The window's tasks' plates at the sidebar's foot, and ⌘T's slot among them.
     foot: task_cards::Foot,
     /// The task ✕ dismissed last, which ⇧⌘T brings back unless a tab has closed since, and when,
@@ -2380,6 +2382,7 @@ impl Shell {
             card_keys: None,
             task_cards: Vec::new(),
             handed_keys: None,
+            card_key_down: false,
             foot: task_cards::Foot::default(),
             closed_task: None,
             archived_tasks: Vec::new(),
@@ -4970,6 +4973,9 @@ impl Render for Shell {
             })
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
+            .capture_key_up(cx.listener(|shell, event: &gpui::KeyUpEvent, _, cx| {
+                shell.card_key_went_up(&event.keystroke.key, cx)
+            }))
             .on_action(cx.listener(|shell, _: &sidebar_keys::TabIn, window, cx| {
                 shell.tab_in(false, window, cx)
             }))

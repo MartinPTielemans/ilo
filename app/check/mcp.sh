@@ -3153,16 +3153,19 @@ CARD
   # Show Tab on a handoff's card puts the handed page in front of the user with the keyboard on it,
   # so what they type next reaches the page without another click (#4065): watching another of the
   # agent's pages, on its Pages, out of its conversation, and with the command bar up, which the
-  # click closes before the page takes the keyboard. Each case's outcome goes in show-tab.txt, and
-  # the run fails after the last if any missed.
+  # click closes before the page takes the keyboard. Then ↩ on Show Tab, from the card's keys,
+  # which runs once: the field's form isn't sent by it, the card's keys are off after it, and a ↩
+  # typed next is the page's, sending the form. Each case's outcome goes in show-tab.txt, and the
+  # run fails after the last if any missed.
   # The page focuses its field whenever it gets the keyboard, as a sign-in page focuses its first
   # field: the core blurs the field each time the agent gets the tab back (agent_session.cc), so
   # without that, from the second case on, a letter reaching the page would reach no field. It puts
   # what it sees of the keyboard in its title too, for a miss to show.
-  printf '%s' '<!doctype html><title>handed</title><textarea id=f autofocus
+  printf '%s' '<!doctype html><title>handed</title><form
+ onsubmit="document.title=`handed sent `+f.value;return false"><input id=f autofocus
  style="position:fixed;inset:0;width:100vw;height:100vh"
  onfocus="document.title=`handed sees field focus`" onblur="document.title=`handed sees field blur`"
- oninput="document.title=`handed typed `+f.value"></textarea><script>
+ oninput="document.title=`handed typed `+f.value"></form><script>
  onfocus=()=>{document.title=`handed sees window focus, active ${document.activeElement.id}`;f.focus()};
  onblur=()=>document.title=`handed sees window blur`;
  onkeydown=e=>document.title=`handed sees key ${e.key} on ${document.activeElement.id}`</script>' > "$out/site/handed.html"
@@ -3171,7 +3174,7 @@ CARD
   await_more "^browser: title $opened_tab handed\( sees .*\)\?\$" "$handeds" || fail "the page with a field didn't load in the agent's tab"
   show_tab_missed=
   # $1 says where the user is, $2 is the letter typed after the click, and $3, if "bar", opens the
-  # command bar over the card first.
+  # command bar over the card first, or if "key", presses Show Tab with ↩ from the card's keys.
   show_tab() {
     cards=$(grep -c '^browser: agent question [0-9]* at ' "$log" || true)
     request hand_off "{\"tab\":$opened_tab,\"reason\":\"Show Tab for the check\"}" >&4
@@ -3184,9 +3187,18 @@ CARD
       send key l cmd
       expect '^browser: command bar shown$' "⌘L didn't open the command bar over the handoff's card"
     fi
+    if [ "${3-}" = key ]; then
+      send key $card_key
+      expect "^browser: agent card keys on $q Show Tab\$" "Focus Agent Question's key didn't ring Show Tab, the handoff's primary"
+      expect_late "^browser: agent card keys ready on $q\$" "the app never said the protection had passed"
+    fi
     from=$(($(wc -l < "$log") + 1))
     shows=$(grep -c "^browser: show tab $opened_tab\$" "$log" || true)
-    send click $((qx + qw - 30)) $((qy + qh - 26))
+    if [ "${3-}" = key ]; then
+      send key return
+    else
+      send click $((qx + qw - 30)) $((qy + qh - 26))
+    fi
     if [ "${3-}" = bar ]; then
       expect '^browser: command bar hidden$' "a click on Show Tab didn't close the command bar over it"
     fi
@@ -3199,6 +3211,20 @@ $1: the click didn't reach Show Tab"
     send state
     shown=$(tail -n +"$from" "$log" | grep -E "^browser: (task page [0-9]+ (watched|shown|back)|task space ([0-9]+ shown|left)|task area [0-9]+ (open|closed)|task [a-z0-9-]+ (shown|page [0-9]+)|title $opened_tab handed sees .*)\$" |
       sed 's/^browser: //' | tr '\n' ';')
+    if [ "${3-}" = key ]; then
+      # Show Tab's ↩ sent nothing; the card's keys are off, so a ↩ typed next is the page's.
+      sent=$(tail -n +"$from" "$log" | grep -c "^browser: title $opened_tab handed sent " || true)
+      [ "$sent" = 0 ] || show_tab_missed="$show_tab_missed
+$1: Show Tab's ↩ reached the page and sent its form"
+      tail -n +"$from" "$log" | grep -q '^browser: agent card keys left by page$' || show_tab_missed="$show_tab_missed
+$1: the card's keys weren't off after Show Tab"
+      presses=$(grep -c '^browser: agent card key pressed ' "$log" || true)
+      send key return
+      await_more "^browser: title $opened_tab handed sent [a-z]*$2\$" 0 || show_tab_missed="$show_tab_missed
+$1: a ↩ typed after Show Tab didn't reach the page"
+      [ "$(grep -c '^browser: agent card key pressed ' "$log" || true)" = "$presses" ] || show_tab_missed="$show_tab_missed
+$1: a ↩ typed after Show Tab pressed a card button"
+    fi
     echo "$1: typed $typed; key $key, focus $focus; $shown" | tee -a "$out/show-tab.txt"
     ../tools/window-screenshot.sh "$pid" "$out/show-tab-$2.png" || fail "no window to capture"
     [ "$typed" = yes ] || show_tab_missed="$show_tab_missed
@@ -3232,6 +3258,12 @@ PLATE
     await_more '^browser: task area [0-9]* closed$' "$closed" || fail "a click on the client's card didn't close its conversation after Show Tab"
   fi
   show_tab "with the command bar up, out of the conversation" d bar
+  if [ "$(grep -E '^browser: task area [0-9]+ (open|closed)$' "$log" | tail -1 | cut -d' ' -f5)" = open ]; then
+    closed=$(grep -c '^browser: task area [0-9]* closed$' "$log" || true)
+    send click $((px + pw / 2)) $((py + ph / 2))
+    await_more '^browser: task area [0-9]* closed$' "$closed" || fail "a click on the client's card didn't close its conversation after Show Tab"
+  fi
+  show_tab "with ↩ from the card's keys, out of the conversation" e key
   # Back to the agent's page watched, for the steps below.
   if [ "$(grep -E '^browser: task area [0-9]+ (open|closed)$' "$log" | tail -1 | cut -d' ' -f5)" = closed ]; then
     opened=$(grep -c "^browser: task $session shown\$" "$log" || true)

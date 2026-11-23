@@ -1271,6 +1271,7 @@ fn strip_chip(
 }
 
 mod show_handed;
+pub(super) use show_handed::HandedKeys;
 
 #[cfg(test)]
 mod tests;
