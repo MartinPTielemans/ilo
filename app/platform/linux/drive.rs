@@ -1311,6 +1311,7 @@ pub(super) fn keysym(key: &str) -> Option<u32> {
         "down" => 0xff54,
         "left" => 0xff51,
         "right" => 0xff53,
+        "f4" => 0xffc1,
         "f6" => 0xffc3,
         "f10" => 0xffc7,
         "f12" => 0xffc9,

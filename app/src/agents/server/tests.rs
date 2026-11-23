@@ -431,6 +431,7 @@ fn the_server_answers_what_needs_no_browser() {
             "screenshot",
             "request",
             "run_steps",
+            "upload",
             "hand_off",
             "ask_for_tab",
             "pin_tab",

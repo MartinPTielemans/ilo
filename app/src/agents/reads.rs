@@ -490,6 +490,7 @@ impl Agents {
             asks: String::new(),
             field: String::new(),
             download: 0,
+            file: None,
             requests: Vec::new(),
             did: None,
             fenced: Fenced::No,

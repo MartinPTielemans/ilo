@@ -203,6 +203,52 @@ fn an_unanswered_proposal_is_declined_at_the_ask_wait(cx: &mut TestAppContext) {
     );
 }
 
+/// The agent going with a proposed read on its card and an upload waiting behind it leaves
+/// neither: no card, no read saved, and the file field dropped, as the page gets nothing.
+#[gpui::test]
+fn the_agent_going_leaves_neither_its_proposal_nor_its_upload(cx: &mut TestAppContext) {
+    let (agents, browser, proposing) = proposed(cx);
+    let form = json!({ "nodes": [
+        { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Apply" },
+          "childIds": ["2"] },
+        { "nodeId": "2", "role": { "value": "button" }, "name": { "value": "Résumé" },
+          "backendDOMNodeId": 61 },
+    ]});
+    let outline = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    assert!(!page_done(&agents, &browser, outline, form.to_string(), cx).error);
+    let uploading = call(
+        &agents,
+        "claude-code",
+        "upload",
+        json!({ "tab": 20, "ref": "e1" }),
+        cx,
+    );
+    let (_, request, action, _, _) = browser.pages.borrow().last().unwrap().clone();
+    assert_eq!(action, PageAction::FileField);
+    let field = json!({ "field": 7.0, "label": "Résumé", "site": "example.com" }).to_string();
+    agents.update(cx, |agents, cx| agents.page_done(request, field, None, cx));
+    cx.run_until_parked();
+    assert_eq!(agents.read_with(cx, |agents, _| agents.asking.len()), 2);
+
+    agents.update(cx, |agents, cx| {
+        let bye = Event::Bye {
+            agent: "claude-code".into(),
+        };
+        agents.handle(bye, cx)
+    });
+    cx.run_until_parked();
+    assert!(agents.read_with(cx, |agents, _| agents.asking.is_empty()));
+    assert_eq!(*browser.asked.borrow(), None);
+    assert_eq!(*browser.dropped.borrow(), [7]);
+    assert!(
+        titles(&agents, cx)
+            .iter()
+            .all(|(title, _)| !title.starts_with("Saved"))
+    );
+    // Neither call is answered: the agent that made them is gone.
+    assert!(proposing.try_recv().is_err() && uploading.try_recv().is_err());
+}
+
 /// Saves the proposal, as the user's Save Read does.
 fn saved(cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>) {
     let (agents, browser, answer) = proposed(cx);
