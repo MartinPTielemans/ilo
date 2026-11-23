@@ -20,7 +20,7 @@ pub const PRIVACY_POLICY: &str = concat!(env!("APP_SITE"), "/privacy");
 /// The details of this copy of the app and the computer it runs on.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BuildInfo {
-    /// The version, with the build number when the build has one: "0.1.0 (4321)".
+    /// The version, with the build number a prod build has: "0.1.0 (4321)".
     pub version: String,
     /// Chromium's version, where it can be read.
     pub engine: Option<String>,
@@ -140,7 +140,7 @@ fn windows_install(updater: Updater) -> &'static str {
 /// is built in a crate of its own (linux/, windows/), whose version isn't the app's.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The version Settings › About shows, with the build number build.sh gives a build.
+/// The version Settings › About shows, with the build number build.sh gives a prod build.
 pub fn version() -> String {
     match option_env!("APP_BUILD") {
         Some(build) => format!("{VERSION} ({build})"),

@@ -188,8 +188,11 @@ if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
   [ -z "$features" ] || { echo "A prod build needs the whole history: git fetch --unshallow" >&2; exit 1; }
 fi
 build=$(git rev-list --count HEAD)
-# The build number, for Settings › About to show beside the version.
-APP_BUILD=$build cargo build --release --bin Browser --bin mcp-bridge --bin ilo-command $features
+# The build number, for Settings › About to show beside the version: a prod build's alone. Cargo
+# recompiles the browser crate when the variable changes, which a dev build's would on each commit.
+# Sparkle orders updates by the plist's CFBundleVersion below, which every build still gets.
+if [ -n "$features" ]; then export APP_BUILD="$build"; else unset APP_BUILD; fi
+cargo build --release --bin Browser --bin mcp-bridge --bin ilo-command $features
 
 app=build/Browser.app
 rm -rf "$app"
