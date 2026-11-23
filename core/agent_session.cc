@@ -12,6 +12,7 @@
 #include "base/no_destructor.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_page.h"
+#include "browser_core/agent_sign_in.h"
 #include "browser_core/host.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
@@ -50,6 +51,7 @@ bool End(bc_id tab, std::optional<std::string_view> agent, int why) {
   }
   const std::string held = std::move(it->second);
   Sessions().erase(it);
+  StopSignIn(tab, BC_AGENT_FAILURE_NONE);
   AgentPage::SessionEnded(tab);
   // One whose tab closed or left the agent's Space ended then, and the app saw it.
   if (!Space::AgentMayAct(held, tab)) {
@@ -68,6 +70,7 @@ void AgentActed(const std::string& agent, bc_id tab) {
     if (Space::AgentMayAct(session.second, session.first)) {
       return false;
     }
+    StopSignIn(session.first, BC_AGENT_FAILURE_NONE);
     AgentPage::SessionEnded(session.first);
     return true;
   });
@@ -108,7 +111,7 @@ std::string RefusedAction(std::string_view action) {
   static constexpr auto kAllowed = base::MakeFixedFlatSet<std::string_view>(
       {"add_to_split", "back", "click", "close_tab", "forward", "hand_off", "list_split",
        "navigate", "pin_tab", "press_key", "read_page", "remove_tab", "request", "screenshot",
-       "scroll", "select_option", "separate_tab", "snapshot", "split_tabs", "type", "unpin_tab",
+       "scroll", "select_option", "separate_tab", "sign_in", "snapshot", "split_tabs", "type", "unpin_tab",
        "upload"});
   // Those agents ask for that the rules forbid outright, with why.
   static constexpr auto kForbidden = base::MakeFixedFlatMap<std::string_view, std::string_view>({
@@ -138,6 +141,8 @@ bool HandBack(bc_id tab) {
     return false;
   }
   Blur(tab);
+  // What Chrome filled for the user while they held it never reaches the agent.
+  EmptyForAgent(tab);
   return true;
 }
 
