@@ -3,13 +3,13 @@
 //! and Boosts, and beside it the section's list, newest first under day headings, with a search field
 //! over it, or for Spaces a card for each (docs/ux-spec.md › Archive and Downloads).
 
+use std::time::Instant;
 use std::{
     cell::Cell,
     hash::{DefaultHasher, Hash, Hasher},
     rc::Rc,
     sync::Arc,
 };
-use web_time::Instant;
 
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, Context, DispatchPhase, Div, DragMoveEvent, Entity,
@@ -4271,7 +4271,7 @@ impl Shell {
             )
             // A task's card folding into it bumps its glyph as it lands.
             .child({
-                let (scale, alpha) = self.archive_glyph(web_time::Instant::now());
+                let (scale, alpha) = self.archive_glyph(std::time::Instant::now());
                 svg()
                     .path("icons/library.svg")
                     .size(px(16.))

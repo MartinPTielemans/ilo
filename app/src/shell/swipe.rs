@@ -2,24 +2,18 @@
 //! Library (docs/ux-spec.md › Spaces › Switching), and the list's scroll edge.
 
 use std::collections::VecDeque;
-use web_time::Instant;
+use std::time::Instant;
 
 use gpui::{
     Context, DispatchPhase, Point, ScrollDelta, ScrollEvent, TouchPhase, Window, canvas, div,
-    point, prelude::*, px,
+    prelude::*, px,
 };
 
 use super::{
     Command, ROW_PITCH, SCROLL_EDGE, SCROLL_EDGE_FADE, SWIPE_FLICK, SWIPE_HISTORY, SWIPE_TRACKING,
-    Settle, Shell, Space, Swipe, WEB, WHEEL_BURST, WHEEL_LINE, WHEEL_REST, fade_at,
-    library::library_band,
-    rubber_band,
-    wheel_gestures::{GAP, LONG},
+    Settle, Shell, Space, Swipe, WHEEL_BURST, WHEEL_LINE, WHEEL_REST, fade_at,
+    library::library_band, rubber_band,
 };
-
-/// Points the fingers go on the web before which way they went says whether they swipe across
-/// or scroll along.
-const DECIDE: f32 = 4.;
 
 impl Shell {
     /// The Spaces' pages the sidebar draws, and where from its left edge: the shown Space's, and
@@ -376,174 +370,6 @@ impl Shell {
         self.nearest(swipe.from, toward).map(Landing::Space)
     }
 
-    /// A browser's wheel event at `at`, as the fingers landing, moving and lifting that AppKit's
-    /// phases tell (`wheel_gestures`): a page swipe commits its Space as they lift, and the rest of
-    /// its momentum is swallowed. The fingers lift too once the events stop.
-    fn web_scroll(
-        &mut self,
-        event: &ScrollEvent,
-        at: Instant,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        self.note("wheel", "");
-        let ScrollDelta::Pixels(delta) = event.delta else {
-            return self.scroll_at(event, at, window, cx);
-        };
-        // The way the swipe goes once that's known, so a hand's drift along a swipe across never
-        // reads as the fingers turning; until then, the way of the larger delta.
-        let across = self.swipe.as_ref().and_then(|swipe| swipe.across);
-        let way = match across {
-            Some(true) => delta.x,
-            Some(false) => delta.y,
-            None if delta.x.abs() >= delta.y.abs() => delta.x,
-            None => delta.y,
-        };
-        let cut = self.web_wheel.event(f32::from(way), at);
-        let phase = |touch_phase, delta| ScrollEvent {
-            touch_phase,
-            delta,
-            ..event.clone()
-        };
-        let still = ScrollDelta::Pixels(Point::default());
-        if let Some(why) = cut.lifted {
-            self.note("lift", why);
-            self.web_undecided = None;
-            self.web_lift(&phase(TouchPhase::Ended, still), at, window, cx);
-        }
-        if let Some(why) = cut.landed {
-            self.note("land", why);
-            self.web_undecided = Some(Point::default());
-            self.scroll_at(&phase(TouchPhase::Started, still), at, window, cx);
-        }
-        // The fingers' first DECIDE points go on as one move, so the way they went, not one
-        // event a browser rounded or summed, tells across from along, as AppKit starts a scroll
-        // only once they've gone a few points.
-        let moved = match self.web_undecided.take() {
-            Some(way) => {
-                let way = way + delta;
-                if way.x.abs().max(way.y.abs()) < px(DECIDE) {
-                    self.web_undecided = Some(way);
-                    None
-                } else {
-                    Some(ScrollDelta::Pixels(way))
-                }
-            }
-            None => Some(event.delta),
-        };
-        let deciding = self
-            .swipe
-            .as_ref()
-            .is_none_or(|swipe| swipe.across.is_none());
-        // Until the lift is found, momentum moves the pages as fingers would, on past the Space they
-        // take. Only fingers going faster than they have yet take them past it: one swipe takes one
-        // Space, and past it fingers only stretch the band. A slower event goes as far as that
-        // Space and no further, or at 60 Hz the one that crosses it, two summed, ran on past it.
-        let fastest = self.web_wheel.fastest();
-        let took = moved.is_none_or(|delta| {
-            let delta = match (delta, self.swipe.as_ref()) {
-                (ScrollDelta::Pixels(delta), Some(swipe)) if !fastest && delta.x != px(0.) => {
-                    let x = self.short_of_next(swipe, f32::from(delta.x));
-                    if x == 0. {
-                        return true;
-                    }
-                    ScrollDelta::Pixels(point(px(x), delta.y))
-                }
-                (delta, _) => delta,
-            };
-            self.scroll_at(&phase(TouchPhase::Moved, delta), at, window, cx)
-        });
-        if deciding && let Some(across) = self.swipe.as_ref().and_then(|swipe| swipe.across) {
-            self.note("axis", if across { "across" } else { "along" });
-        }
-        let lift = phase(TouchPhase::Ended, still);
-        self.web_wheel_quiet = Some(cx.spawn_in(window, async move |shell, cx| {
-            // Slowed fingers lift after GAP, and others after LONG.
-            for wait in [GAP, LONG - GAP] {
-                cx.background_executor().timer(wait).await;
-                let lift = lift.clone();
-                let quiet = |shell: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
-                    shell.web_quiet(&lift, cx.background_executor().now(), window, cx)
-                };
-                shell.update_in(cx, quiet).ok();
-            }
-        }));
-        took
-    }
-
-    /// How much of `dx` moves `swipe`'s pages no further than the Space beside the one it began
-    /// on: all of it short of that Space or back toward it, as far as it of one that crosses it,
-    /// and none further past it.
-    fn short_of_next(&self, swipe: &Swipe, dx: f32) -> f32 {
-        let across = swipe.across == Some(true) && swipe.cards.is_none() && !swipe.library;
-        let width = self.width();
-        let way = swipe.way + SWIPE_TRACKING * dx;
-        if !across || way.abs() <= width || way.abs() < swipe.way.abs() {
-            return dx;
-        }
-        let room = (width.copysign(way) - swipe.way) / SWIPE_TRACKING;
-        if room * dx > 0. { room } else { 0. }
-    }
-
-    /// No wheel event since the last, at `now`: fingers still down lift, as `lift`.
-    fn web_quiet(
-        &mut self,
-        lift: &ScrollEvent,
-        now: Instant,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(why) = self.web_wheel.quiet(now) {
-            self.note("lift", why);
-            self.web_lift(lift, now, window, cx);
-        }
-    }
-
-    /// The fingers lifted, as a browser's wheel events tell some events after they did: by then
-    /// their momentum has moved the page on, as the app's settle would have, so the settle keeps no
-    /// more of their speed than lands it without passing its place. Their full speed still says
-    /// which Space it lands on.
-    fn web_lift(
-        &mut self,
-        lift: &ScrollEvent,
-        at: Instant,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let before = self.settle.as_ref().map(|settle| settle.start);
-        let (from, library) = (
-            self.swipe.as_ref().map(|swipe| swipe.from),
-            self.library_open,
-        );
-        self.scroll_at(lift, at, window, cx);
-        if self.library_open != library {
-            self.note("library", if self.library_open { "open" } else { "closed" });
-        }
-        if let Some(settle) = self
-            .settle
-            .as_mut()
-            .filter(|settle| Some(settle.start) != before)
-        {
-            settle.spend();
-            let space = settle.space;
-            let index = |id| self.spaces.iter().position(|space| space.id == id);
-            if let Some((to, from)) = index(space).zip(from.and_then(index)) {
-                self.note("space", &format!("{:+}", to as i64 - from as i64));
-            }
-        }
-    }
-
-    /// Has the demo's `?trace` told each thing the wheel's events decide of a swipe.
-    pub fn note_wheel(&mut self, notes: super::WheelNotes) {
-        self.web_notes = Some(notes);
-    }
-
-    fn note(&self, kind: &'static str, what: &str) {
-        if let Some(notes) = &self.web_notes {
-            notes(kind, what);
-        }
-    }
-
     /// A wheel's ticks across the sidebar page once per burst, then rest. Past the first Space they
     /// open the Library, and back they close it. Back off the form they cancel it. Over the
     /// Library's Spaces cards at `x`, they scroll them first.
@@ -566,10 +392,6 @@ impl Shell {
             .wheel_paged
             .is_some_and(|paged| now - paged < WHEEL_REST)
         {
-            // A browser's momentum goes on long after a burst: it rests until the events stop.
-            if WEB {
-                self.wheel_paged = Some(now);
-            }
             return true;
         }
         let sum = match self.wheel {
@@ -653,11 +475,7 @@ impl Shell {
                             }
                             false => bounds.contains(&event.position),
                         };
-                        (over || shell.swipe.is_some())
-                            && match WEB {
-                                true => shell.web_scroll(event, wheel_time(), window, cx),
-                                false => shell.scroll(event, window, cx),
-                            }
+                        (over || shell.swipe.is_some()) && shell.scroll(event, window, cx)
                     });
                     if took.unwrap_or(false) {
                         cx.stop_propagation();
@@ -809,27 +627,6 @@ pub(super) enum Landing {
     Space(u64),
 }
 
-/// When the browser's wheel event being handled came, by its own clock: a page busy drawing hears
-/// the trackpad's events late, and several summed into one.
-#[cfg(target_family = "wasm")]
-fn wheel_time() -> Instant {
-    let performance = web_sys::window().and_then(|window| window.performance());
-    let age = performance.map_or(0., |performance| {
-        performance.now() - gpui_web::wheel_time_stamp()
-    });
-    // A browser that gives no stamp leaves the event as old as the page.
-    let age = if (0. ..1000.).contains(&age) { age } else { 0. };
-    let now = Instant::now();
-    now.checked_sub(std::time::Duration::from_secs_f64(age / 1000.))
-        .unwrap_or(now)
-}
-
-/// Off the web, the wheel's events are the app's, AppKit's phases and all (`scroll`).
-#[cfg(not(target_family = "wasm"))]
-fn wheel_time() -> Instant {
-    Instant::now()
-}
-
 /// How fast the page went over the last SWIPE_HISTORY before `now`, from `samples` of where it
 /// was, in points a second. None from fewer than two.
 fn velocity(samples: &VecDeque<(Instant, f32)>, now: Instant) -> Option<f32> {
@@ -858,9 +655,6 @@ fn heading(x: f32, velocity: f32, width: f32) -> f32 {
         x
     }
 }
-
-#[cfg(test)]
-mod model;
 
 #[cfg(test)]
 mod tests {
