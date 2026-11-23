@@ -104,6 +104,9 @@ modules:
       - install -Dm644 -t /app/etc cobalt.ini
       - install -Dm644 -t /app/share/applications app.ilo.browser.desktop
       - install -Dm644 -t /app/share/icons/hicolor/scalable/apps app.ilo.browser.svg
+      # Each small size its own image, drawn to whole pixels (app/branding/render.sh), as the
+      # scalable one alone would be scaled down to it.
+      - for size in 16 24 32 48 64 128 256; do install -Dm644 icons/$size.png /app/share/icons/hicolor/${size}x$size/apps/app.ilo.browser.png; done
       - install -Dm644 -t /app/share/metainfo app.ilo.browser.metainfo.xml
     sources:
       - type: dir
@@ -113,6 +116,9 @@ modules:
         path: ilo.sh
       - type: file
         path: cobalt.ini
+      - type: dir
+        path: icons
+        dest: icons
       - type: file
         path: app.ilo.browser.desktop
       - type: file
