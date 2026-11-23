@@ -6,19 +6,24 @@
 #ifndef BROWSER_CORE_BROWSER_WINDOW_STAND_IN_H_
 #define BROWSER_CORE_BROWSER_WINDOW_STAND_IN_H_
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
+#include "base/timer/timer.h"
+#include "browser_core/page_key_wait.h"
 #include "chrome/browser/ui/autofill/autofill_bubble_handler.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 #include "chrome/browser/ui/find_bar/find_bar.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
+#include "components/input/native_web_keyboard_event.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/base/unowned_user_data/scoped_unowned_user_data.h"
 #include "ui/views/controls/webview/unhandled_keyboard_event_handler.h"
@@ -373,6 +378,19 @@ class BrowserWindowStandIn : public BrowserWindow,
   // the page left.
   bool RunPageLeftKey(const input::NativeWebKeyboardEvent& event);
 
+  // A shortcut the page gets first runs as one it didn't keep if it hasn't answered within
+  // kPageKeyBound (#3944). One watch per tab hears its page's answers while a key of its waits.
+  class PageKeyWatch;
+  void SentToPage(content::WebContents* contents,
+                  const input::NativeWebKeyboardEvent& event,
+                  KeyGoesTo to);
+  void PageKeyAnswered(const PageKey& key, bool kept);
+  void PageKeyTabGone(uint64_t tab);
+  void RunDuePageKeys();
+  // Starts the timer for the next key's bound, stops it if none waits, and lets go of the watches
+  // of tabs with nothing left to hear.
+  void PageKeysChanged();
+
   // Takes the window full screen for the page, or back, on |display_id| going.
   void PutFullscreen(bool fullscreen, int64_t display_id);
 
@@ -386,6 +404,17 @@ class BrowserWindowStandIn : public BrowserWindow,
   NoAutofillBubbles autofill_bubbles_;
   std::optional<ui::ScopedUnownedUserData<autofill::AutofillBubbleHandler>> autofill_bubbles_data_;
   views::UnhandledKeyboardEventHandler unhandled_keyboard_event_handler_;
+  PageKeyWait page_keys_;
+  // The presses waiting, as sent, for the bound to run.
+  struct PageKeyPress {
+    PageKey key;
+    input::NativeWebKeyboardEvent event;
+    base::TimeTicks sent;
+  };
+  std::vector<PageKeyPress> page_key_presses_;
+  std::vector<std::unique_ptr<PageKeyWatch>> page_key_watches_;
+  // Runs only while a key waits; going with the window, it stops.
+  base::OneShotTimer page_key_timer_;
   base::ScopedObservation<views::Widget, views::WidgetObserver> widget_observation_{this};
   base::WeakPtrFactory<BrowserWindowStandIn> weak_factory_{this};
 };

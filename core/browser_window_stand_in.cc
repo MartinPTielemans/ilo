@@ -5,12 +5,16 @@
 
 #include "browser_core/browser_window_stand_in.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <utility>
 
 #include "base/functional/bind.h"
+#include "base/scoped_multi_source_observation.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/single_thread_task_runner.h"
+#include "base/time/time.h"
 #include "browser_core/held_keys.h"
 #include "build/build_config.h"
 #include "browser_core/autofill_offer.h"
@@ -36,10 +40,19 @@
 #include "components/input/native_web_keyboard_event.h"
 #include "content/public/browser/eye_dropper.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
+#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/render_widget_host.h"
+#include "content/public/browser/render_widget_host_observer.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_observer.h"
+#include "third_party/blink/public/common/input/web_input_event.h"
+#include "third_party/blink/public/common/input/web_keyboard_event.h"
+#include "third_party/blink/public/mojom/input/input_event_result.mojom-shared.h"
 #include "ui/base/mojom/window_show_state.mojom.h"
 #include "ui/content_accelerators/accelerator_util.h"
 #include "ui/display/types/display_constants.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/range/range.h"
 #include "ui/native_theme/native_theme.h"
 #include "ui/views/focus/focus_manager.h"
@@ -63,7 +76,118 @@ bool AskApp(bool (*callback)(void*, bc_id, const bc_key*),
                                          contents->IsFocusedElementEditable());
 }
 
+// A key going down that the browser could have a command for, which kPageKeyBound holds to: one
+// with ⌘, Ctrl or Alt, a function key or escape. Typing, and a modifier alone, never wait. An
+// agent's press_key is skip_if_unhandled, so it never waits and no agent key runs a shortcut at the
+// bound.
+bool CouldBeShortcut(const input::NativeWebKeyboardEvent& event) {
+  if (event.GetType() != blink::WebInputEvent::Type::kRawKeyDown || event.skip_if_unhandled) {
+    return false;
+  }
+  switch (event.windows_key_code) {
+    case ui::VKEY_SHIFT:
+    case ui::VKEY_LSHIFT:
+    case ui::VKEY_RSHIFT:
+    case ui::VKEY_CONTROL:
+    case ui::VKEY_LCONTROL:
+    case ui::VKEY_RCONTROL:
+    case ui::VKEY_MENU:
+    case ui::VKEY_LMENU:
+    case ui::VKEY_RMENU:
+    case ui::VKEY_LWIN:
+    case ui::VKEY_RWIN:
+      return false;
+    case ui::VKEY_ESCAPE:
+      return true;
+    default:
+      break;
+  }
+  constexpr int kShortcut = blink::WebInputEvent::kControlKey | blink::WebInputEvent::kMetaKey |
+                            blink::WebInputEvent::kAltKey;
+  return (event.GetModifiers() & kShortcut) ||
+         (event.windows_key_code >= ui::VKEY_F1 && event.windows_key_code <= ui::VKEY_F24);
+}
+
+PageKey KeyOf(bc_id tab, const blink::WebKeyboardEvent& event) {
+  constexpr int kHeld = blink::WebInputEvent::kShiftKey | blink::WebInputEvent::kControlKey |
+                        blink::WebInputEvent::kAltKey | blink::WebInputEvent::kMetaKey;
+  return {.tab = tab,
+          .time = event.TimeStamp(),
+          .code = event.dom_code,
+          .modifiers = event.GetModifiers() & kHeld};
+}
+
+// The page's focused frame's widget, which a key goes to.
+content::RenderWidgetHost* KeyWidgetOf(content::WebContents* contents) {
+  content::RenderFrameHost* frame = contents->GetFocusedFrame();
+  return (frame ? frame : contents->GetPrimaryMainFrame())->GetRenderWidgetHost();
+}
+
 }  // namespace
+
+// Hears one tab's page answer the keys it was given, from each widget a waiting key went to, and
+// the tab going.
+class BrowserWindowStandIn::PageKeyWatch : public content::WebContentsObserver,
+                                           public content::RenderWidgetHost::InputEventObserver,
+                                           public content::RenderWidgetHostObserver {
+ public:
+  PageKeyWatch(base::WeakPtr<BrowserWindowStandIn> stand_in, content::WebContents* contents)
+      : content::WebContentsObserver(contents),
+        stand_in_(std::move(stand_in)),
+        tab_(Tab::IdOf(contents)) {}
+
+  bc_id tab() const { return tab_; }
+
+  void Hear(content::RenderWidgetHost* widget) {
+    if (widget && !acks_.IsObservingSource(widget)) {
+      acks_.AddObservation(widget);
+      gone_.AddObservation(widget);
+    }
+  }
+
+  // Hears nothing more, as it's about to go.
+  void Stop() {
+    acks_.RemoveAllObservations();
+    gone_.RemoveAllObservations();
+    Observe(nullptr);
+  }
+
+  // content::RenderWidgetHost::InputEventObserver:
+  void OnInputEventAck(const content::RenderWidgetHost&,
+                       blink::mojom::InputEventResultSource,
+                       blink::mojom::InputEventResultState state,
+                       const blink::WebInputEvent& event) override {
+    if (event.GetType() != blink::WebInputEvent::Type::kRawKeyDown || !stand_in_) {
+      return;
+    }
+    stand_in_->PageKeyAnswered(KeyOf(tab_, static_cast<const blink::WebKeyboardEvent&>(event)),
+                               state == blink::mojom::InputEventResultState::kConsumed);
+  }
+
+  // content::RenderWidgetHostObserver: a page a navigation replaced never answers. Its keys wait
+  // for the bound, as the user pressed them for the browser too.
+  void RenderWidgetHostDestroyed(content::RenderWidgetHost* widget) override {
+    acks_.RemoveObservation(widget);
+    gone_.RemoveObservation(widget);
+  }
+
+  // content::WebContentsObserver:
+  void WebContentsDestroyed() override {
+    Stop();
+    if (stand_in_) {
+      stand_in_->PageKeyTabGone(tab_);
+    }
+  }
+
+ private:
+  base::WeakPtr<BrowserWindowStandIn> stand_in_;
+  const bc_id tab_;
+  base::ScopedMultiSourceObservation<content::RenderWidgetHost,
+                                     content::RenderWidgetHost::InputEventObserver>
+      acks_{this};
+  base::ScopedMultiSourceObservation<content::RenderWidgetHost, content::RenderWidgetHostObserver>
+      gone_{this};
+};
 
 NoLocationBar::NoLocationBar() : LocationBar(nullptr) {}
 NoLocationBar::~NoLocationBar() = default;
@@ -609,9 +733,27 @@ content::KeyboardEventProcessingResult BrowserWindowStandIn::PreHandleKeyboardEv
     dialog_keys::KeyGate(event, "kept: held for a field of the app's");
     return content::KeyboardEventProcessingResult::HANDLED;
   }
-  return AskApp(Host().tab_key_before_page, browser_, event)
-             ? content::KeyboardEventProcessingResult::HANDLED
-             : content::KeyboardEventProcessingResult::NOT_HANDLED;
+  // What the app runs before the page, as ⌘W, can close the tab, or the window and this with it.
+  const bc_id tab = contents ? Tab::IdOf(contents) : 0;
+  base::WeakPtr<BrowserWindowStandIn> self = weak_factory_.GetWeakPtr();
+  const bool taken = AskApp(Host().tab_key_before_page, browser_, event);
+  if (self && tab && CouldBeShortcut(event)) {
+    if (taken) {
+      // A second press, or a key the browser keeps from pages: a press of it still waiting is
+      // settled, and its late answer doesn't run it again.
+      page_keys_.TakenBefore(KeyOf(tab, event));
+      PageKeysChanged();
+    } else {
+      // Nothing ran, so the page is as it was. Only the page's answer is heard: a key that went to
+      // docked DevTools, or to a tab's dialog, comes back by its hand-back alone (#3946).
+      content::RenderWidgetHostView* view = contents->GetRenderWidgetHostView();
+      SentToPage(contents, event,
+                 view && view->HasFocus() && !dialog_keys::Asking(event) ? KeyGoesTo::kPage
+                                                                         : KeyGoesTo::kPastThePage);
+    }
+  }
+  return taken ? content::KeyboardEventProcessingResult::HANDLED
+               : content::KeyboardEventProcessingResult::NOT_HANDLED;
 }
 
 bool BrowserWindowStandIn::HandleKeyboardEvent(const input::NativeWebKeyboardEvent& event) {
@@ -620,6 +762,15 @@ bool BrowserWindowStandIn::HandleKeyboardEvent(const input::NativeWebKeyboardEve
       browser_ ? browser_->GetTabStripModel()->GetActiveWebContents() : nullptr;
   const bc_id tab = contents ? Tab::IdOf(contents) : 0;
   const base::TimeTicks key = event.TimeStamp();
+  if (event.GetType() == blink::WebInputEvent::Type::kRawKeyDown) {
+    const bool runs = page_keys_.RunsUnkept(KeyOf(tab, event));
+    // A press this settles waits no more, and its timer and watch go with it (#3946).
+    PageKeysChanged();
+    // The bound or a second press ran it already: this is the page's late answer (#3944).
+    if (!runs) {
+      return true;
+    }
+  }
   const bool ran = RunPageLeftKey(event);
   // What the page left and the browser ran was pressed for the browser, not the page (#3593).
   if (Tab* each = ran && tab ? Tab::Get(tab) : nullptr) {
@@ -652,6 +803,101 @@ bool BrowserWindowStandIn::RunPageLeftKey(const input::NativeWebKeyboardEvent& e
   // As BrowserView does: what neither the page nor the app used goes to the window's menus.
   return focus_manager &&
          unhandled_keyboard_event_handler_.HandleKeyboardEvent(event, focus_manager);
+}
+
+void BrowserWindowStandIn::SentToPage(content::WebContents* contents,
+                                      const input::NativeWebKeyboardEvent& event,
+                                      KeyGoesTo to) {
+  const PageKey key = KeyOf(Tab::IdOf(contents), event);
+  const base::TimeTicks now = base::TimeTicks::Now();
+  if (!page_keys_.Sent(key, now, to)) {
+    return;
+  }
+  page_key_presses_.push_back({key, event, now});
+  auto watch = std::find_if(page_key_watches_.begin(), page_key_watches_.end(),
+                            [&](const auto& each) { return each->tab() == key.tab; });
+  if (watch == page_key_watches_.end()) {
+    page_key_watches_.push_back(
+        std::make_unique<PageKeyWatch>(weak_factory_.GetWeakPtr(), contents));
+    watch = page_key_watches_.end() - 1;
+  }
+  (*watch)->Hear(KeyWidgetOf(contents));
+  PageKeysChanged();
+}
+
+void BrowserWindowStandIn::PageKeyAnswered(const PageKey& key, bool kept) {
+  if (!page_keys_.HasKeysOf(key.tab)) {
+    return;
+  }
+  if (!page_keys_.Answered(key, kept)) {
+    fprintf(stderr,
+            "browser: tab %llu page answered a key the browser ran, %s, %.1f ms after the press\n",
+            static_cast<unsigned long long>(key.tab), kept ? "kept" : "not kept",
+            (base::TimeTicks::Now() - key.time).InMillisecondsF());
+  }
+  PageKeysChanged();
+}
+
+void BrowserWindowStandIn::PageKeyTabGone(uint64_t tab) {
+  page_keys_.TabGone(tab);
+  PageKeysChanged();
+}
+
+void BrowserWindowStandIn::RunDuePageKeys() {
+  base::WeakPtr<BrowserWindowStandIn> self = weak_factory_.GetWeakPtr();
+  for (const PageKey& key : page_keys_.Due(base::TimeTicks::Now())) {
+    auto press = std::find_if(page_key_presses_.begin(), page_key_presses_.end(),
+                              [&](const PageKeyPress& each) { return each.key == key; });
+    if (press == page_key_presses_.end()) {
+      continue;
+    }
+    const input::NativeWebKeyboardEvent event = std::move(press->event);
+    const base::TimeTicks sent = press->sent;
+    page_key_presses_.erase(press);
+    // Only in the tab it was pressed in, while it's shown: a key for a tab left behind isn't for
+    // the one shown now.
+    content::WebContents* contents =
+        browser_ ? browser_->GetTabStripModel()->GetActiveWebContents() : nullptr;
+    if (!contents || Tab::IdOf(contents) != key.tab) {
+      continue;
+    }
+    const base::TimeTicks now = base::TimeTicks::Now();
+    fprintf(stderr,
+            "browser: tab %llu page didn't answer a key, run %.1f ms after it had it, %.1f ms "
+            "after the press\n",
+            static_cast<unsigned long long>(key.tab), (now - sent).InMillisecondsF(),
+            (now - key.time).InMillisecondsF());
+    const bool ran = RunPageLeftKey(event);
+    // What it ran can close the window, and this with it.
+    if (!self) {
+      return;
+    }
+    if (Tab* each = ran ? Tab::Get(key.tab) : nullptr) {
+      each->PageKeyTakenBack(key.time);
+    }
+  }
+  PageKeysChanged();
+}
+
+void BrowserWindowStandIn::PageKeysChanged() {
+  std::erase_if(page_key_presses_,
+                [&](const PageKeyPress& each) { return !page_keys_.Waits(each.key); });
+  // A watch can be the one telling, so it goes after the task running.
+  auto done = std::stable_partition(
+      page_key_watches_.begin(), page_key_watches_.end(),
+      [&](const std::unique_ptr<PageKeyWatch>& each) { return page_keys_.HasKeysOf(each->tab()); });
+  for (auto each = done; each != page_key_watches_.end(); ++each) {
+    (*each)->Stop();
+    base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, std::move(*each));
+  }
+  page_key_watches_.erase(done, page_key_watches_.end());
+  if (const std::optional<base::TimeTicks> due = page_keys_.NextDue()) {
+    page_key_timer_.Start(
+        FROM_HERE, std::max(*due - base::TimeTicks::Now(), base::TimeDelta()),
+        base::BindOnce(&BrowserWindowStandIn::RunDuePageKeys, base::Unretained(this)));
+  } else {
+    page_key_timer_.Stop();
+  }
 }
 
 std::unique_ptr<FindBar> BrowserWindowStandIn::CreateFindBar() {

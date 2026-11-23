@@ -35,6 +35,10 @@ void PageFocused(content::WebContents* page);
 // code and modifiers: nothing of the page.
 void KeyGate(const input::NativeWebKeyboardEvent& key, const char* why);
 
+// Whether |key| is one a tab's dialog is asking the app about, which goes to the dialog, not its
+// page, so no answer of the page's comes for it (#3944).
+bool Asking(const input::NativeWebKeyboardEvent& key);
+
 #if !BUILDFLAG(IS_MAC)
 // The same, for the page whose view holds |view|, or is held by it, which took aura's focus. A page
 // whose tab ignores input, as it does under a dialog, doesn't tell its tab it was focused, and its
