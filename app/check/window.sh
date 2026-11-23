@@ -1054,6 +1054,39 @@ if [ "$(uname)" = Linux ]; then
 fi
 send key s cmd
 toggle ui hidden "⌘S before the reveal"
+# none_since <what>: nothing has brought the sidebar out, or started its wait, since command $from.
+none_since() {
+  ! sed -n "/^browser: drive $from: /,\$p" "$log" | grep -q '^browser: reveal \(waits\|shown\)$' ||
+    fail "$1"
+}
+# overshoot: in a window away from the screen's edge, which doesn't stop the pointer, one flung at
+# the window's edge overshoots it out of the window, and back in the strip within a second it has
+# moved in the edge, as one the screen's edge stopped would have, and the sidebar comes out
+# (#3989). Gone on out, as to another window or display, and back only later, it has come in
+# afresh. The sleeps are for nothing to happen, which no line marks: past the second, and the
+# reveal's 100 ms wait.
+overshoot() {
+  send move 400 300
+  send move 4 300
+  send move -20 300
+  from=$((step + 1))
+  send move 3 300
+  expect '^browser: reveal shown$' \
+    "the pointer back at the window's edge after overshooting it didn't bring the sidebar out" "$from"
+  send move 200 300
+  send move 250 300
+  # On Linux the pointer over the page is Chromium's, and the panel goes as the pointer leaves it.
+  [ "$(uname)" = Linux ] || send move 600 300
+  expect '^browser: reveal hidden$' "the pointer past the sidebar out after an overshoot didn't send it away"
+  send move 400 300
+  from=$((step + 1))
+  send move 4 300
+  send move -20 300
+  sleep 1.2 # past the second a return counts in
+  send move 3 300
+  sleep 0.3 # past the reveal's 100 ms wait
+  none_since "the pointer back at the window's edge 1.2 s after passing out across it brought the sidebar out"
+}
 if [ "$(uname)" = Linux ]; then
   # A press in the band at the left edge and a drag sizes the window from there, as a hand's
   # does, its right edge kept: in by 40, then back out. With the sidebar hidden, a straight press
@@ -1073,9 +1106,22 @@ if [ "$(uname)" = Linux ]; then
   }
   from=$((step + 1))
   sized 40 "a drag in from the band at the window's left edge"
+  none_since "a press and drag in the band at the window's left edge brought the sidebar out"
+  # The window's left edge is 40 in from the screen's, which doesn't stop the pointer.
+  overshoot
+  from=$((step + 1))
   sized -40 "a drag out from the band at the window's left edge"
-  ! sed -n "/^browser: drive $from: /,\$p" "$log" | grep -q '^browser: reveal \(waits\|shown\)$' ||
-    fail "a press and drag in the band at the window's left edge brought the sidebar out"
+  none_since "a press and drag in the band at the window's left edge brought the sidebar out"
+elif windows; then
+  # Its window's left edge in from the screen's, by its invisible resize border and 40, and back.
+  send order
+  frame=$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
+  send place $(echo "$frame" | awk '{ print $1 + 40, $2, $3 - 40, $4 }')
+  overshoot
+  send place $frame
+else
+  # The Mac's driver posts the move out of the window to it, as past its edge.
+  overshoot
 fi
 send move 400 300
 # The pointer has to move a few points up or down at the edge and stay a moment: one jumping
