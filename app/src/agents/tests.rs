@@ -60,6 +60,11 @@ struct Made {
     muted: RefCell<Vec<(u64, bool)>>,
     /// Tabs the core holds in a Space that its list of the Space's tabs leaves out.
     unlisted: RefCell<HashSet<u64>>,
+    /// The file fields the user chose a file for, with the window, and those dropped; and whether
+    /// the file dialog can't open.
+    chosen: RefCell<Vec<(u64, u64)>>,
+    dropped: RefCell<Vec<u64>>,
+    no_dialog: std::cell::Cell<bool>,
     /// Words the core refuses with in place of its own, as a later core may word them.
     reworded: RefCell<Option<&'static str>>,
 }
@@ -229,6 +234,15 @@ impl Browser for Made {
     // As the core does, without a dialog.
     fn close_user_tab(&self, tab: u64, _: &mut App) {
         self.tabs.borrow_mut().retain(|each| each.0 != tab);
+    }
+
+    fn file_field_choose(&self, field: u64, window: u64) -> bool {
+        self.chosen.borrow_mut().push((field, window));
+        !self.no_dialog.get()
+    }
+
+    fn file_field_drop(&self, field: u64) {
+        self.dropped.borrow_mut().push(field);
     }
 
     fn answer_download(&self, download: u64, keep: bool) {
@@ -5250,7 +5264,7 @@ fn a_runs_check_and_screenshot_keep_to_the_rules(cx: &mut TestAppContext) {
 
 /// The actions the core lets an agent take in its tabs, agent_session.cc's RefusedAction: each a
 /// thing the user does in a page, or handing the tab to them.
-const CORE_ALLOWS: [&str; 21] = [
+const CORE_ALLOWS: [&str; 22] = [
     "add_to_split",
     "back",
     "click",
@@ -5272,6 +5286,7 @@ const CORE_ALLOWS: [&str; 21] = [
     "split_tabs",
     "type",
     "unpin_tab",
+    "upload",
 ];
 
 /// What the descriptions tell an agent (#3664): each tool that may take a tab says, as the others
@@ -5362,6 +5377,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "screenshot",
             "request",
             "run_steps",
+            "upload",
             "hand_off",
             "ask_for_tab",
             "pin_tab",
@@ -5404,6 +5420,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "run_steps",
             tab(json!({ "steps": [{ "action": "scroll" }] })),
         ),
+        ("upload", tab(json!({ "ref": "e1" }))),
         ("hand_off", tab(json!({ "reason": "Sign in" }))),
         ("ask_for_tab", tab(json!({ "reason": "To go on" }))),
         ("pin_tab", tab(json!({}))),
@@ -10205,6 +10222,7 @@ fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
 
 mod fenced;
 mod holds;
+mod uploads;
 
 /// An agent's http:// is never one the user typed (#2417): open_tab and navigate hand the core the
 /// address as the agent wrote it through `open_tab` and `navigate`, bc_agent_open_tab's and

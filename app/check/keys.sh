@@ -611,6 +611,25 @@ send key w cmd
 expect "^browser: today $before\$" "⌘W didn't close the history tab"
 send click $page_point
 in_browser RenderWidgetHostViewCocoa "after the history tab closed"
+# Off the Mac, Ctrl+F4 closes the tab as Ctrl+W does, as Chrome's does there: reserved, so from
+# the page it reaches the UI before the page, and it runs once (#4030). ⌘F4 to the driver.
+if [ "$(uname)" != Darwin ]; then
+  page_shortcut y view-history
+  expect "^browser: today [0-9][0-9]*${before:+ $before}\$" \
+    "⌘Y with the page focused didn't open a tab for Ctrl+F4 to close"
+  tab=$(today | cut -d' ' -f1)
+  expect "^browser: loaded $tab chrome://history/\$" \
+    "⌘Y with the page focused didn't open the history page for Ctrl+F4 to close"
+  send click $page_point
+  in_browser RenderWidgetHostViewCocoa "before Ctrl+F4"
+  send key f4 cmd
+  expect '^browser: command close-tab via page$' "Ctrl+F4 with the page focused didn't reach the UI"
+  expect "^browser: today $before\$" "Ctrl+F4 with the page focused didn't close the history tab"
+  ran_once close-tab "one Ctrl+F4 with the page focused"
+  expect '^browser: window [0-9]* shows [0-9]*$' "Ctrl+F4 didn't show the tab before the history tab"
+  send click $page_point
+  in_browser RenderWidgetHostViewCocoa "after Ctrl+F4 closed the history tab"
+fi
 
 # Settings' search, at the column's top, finds a command by the words of its name or by its keys
 # (#682, #1636). Under it, New Tab comes first, its keys in a chip at the row's right, 56 wide

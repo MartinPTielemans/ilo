@@ -139,3 +139,21 @@ pub(crate) unsafe extern "C" fn tab_text(
     );
     agents_core::update(move |agents, cx| agents.text_read(request, text, cx));
 }
+
+/// What came of the user's Choose File… for a page's file field: how many files went in, never
+/// which.
+pub(crate) unsafe extern "C" fn file_field_done(
+    _: *mut c_void,
+    field: bc::bc_id,
+    result: c_int,
+    count: c_int,
+) {
+    use browser::agents::FileFieldEnd;
+    let end = match result as u32 {
+        bc::BC_FILE_FIELD_PUT => FileFieldEnd::Put(count.max(0) as usize),
+        bc::BC_FILE_FIELD_NONE => FileFieldEnd::NoFile,
+        bc::BC_FILE_FIELD_LEFT => FileFieldEnd::Left,
+        _ => FileFieldEnd::Closed,
+    };
+    agents_core::update(move |agents, cx| agents.file_field_done(field, end, cx));
+}
