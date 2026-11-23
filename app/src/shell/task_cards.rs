@@ -53,7 +53,8 @@ use crate::tokens::shell::task::{
     GHOST_RADIUS, GLYPH, GLYPH_TOP, HEIGHT, LINE, QUESTION_LINE, SHIMMER_FROM, SHIMMER_HIGH,
     SHIMMER_REACH, SHIMMER_TO, SLOT_DASH, STATUS, STATUS_GAP, STATUS_LINE, STOPPED, TOP,
 };
-use crate::tokens::shell::{MEDIA_BUTTON, URL_FIELD};
+use crate::palette::FIELD_PLATE as URL_FIELD;
+use crate::tokens::shell::MEDIA_BUTTON;
 use crate::tokens::text;
 use crate::tooltip::text_width;
 use glyph::{Glyph, State};

@@ -13,14 +13,15 @@
 //! its own and the page starts after it. With the sidebar on the right (#2375) the column is the
 //! window's right edge, taken and shown there, so a picture shows only on the side it was taken.
 //!
-//! What does move with the window's size is the colour behind the column, which runs down the
-//! window and along its diagonal, so the picture shows only within [`TOLERANCE`] of its size.
+//! What does move with the window's size is the colour behind the column, the Space's glows from
+//! the window's bottom and far top corners, so the picture shows only within [`TOLERANCE`] of its
+//! size.
 
 /// How far the window's width and its height may each be from the picture's, as a share of the
-/// picture's. The theme's colour at a point of the column is `y` of the way down the window and
-/// `(x + y) / (width + height)` along its diagonal, reaching the second colour `SECOND_AT` (0.75)
-/// along it, so within 1 % of each it moves by at most 1.3 % of a theme's range: 3.4 levels in 255
-/// for a theme from black to white, under a fifth of the quietest fill the sidebar shows to be
+/// picture's. The glows are fixed in points from the window's corners, so within 1 % of its size a
+/// point of the column moves at most 1 % of the window in them: 7 points of 677, where the foot's
+/// glow, 0.36 at its strongest, fades over 331 points, by under 0.008 of the colour, 2 levels in
+/// 255 for a theme from black to white, under a fifth of the quietest fill the sidebar shows to be
 /// seen (the header's hover plate, white 0.077), and none without a theme. 3 points of 677 is
 /// 0.44 %.
 pub const TOLERANCE: f64 = 0.01;
@@ -167,7 +168,7 @@ mod tests {
     #[test]
     fn a_different_width_shows_within_the_tolerance_only() {
         // The sidebar keeps its width and the page starts after it, so nothing in the column
-        // moves; the colour behind it does, with the window's diagonal.
+        // moves; the colour behind it does, with the window's corners.
         assert!(shows_left(&TAKEN, 1014., 677.));
         assert!(shows_left(&TAKEN, 1034., 674.));
         assert!(!shows_left(&TAKEN, 1000., 677.));
