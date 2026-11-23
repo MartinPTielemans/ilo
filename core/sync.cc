@@ -341,6 +341,12 @@ class SignInWindow : public views::WidgetObserver,
                  << web_contents()->GetLastCommittedURL().path();
     }
   }
+  // For the checks, which type only once the page has also painted: until then Blink holds a
+  // same-site page's paint and drops its keys, even in a focused field (#4019).
+  void DidFirstVisuallyNonEmptyPaint() override {
+    LOG(ERROR) << "browser: sync sign-in painted "
+               << web_contents()->GetLastCommittedURL().path();
+  }
 
   // views::WidgetObserver:
   void OnWidgetDestroying(views::Widget* widget) override {
