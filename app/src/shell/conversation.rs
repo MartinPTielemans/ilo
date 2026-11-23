@@ -462,7 +462,8 @@ impl Shell {
         let Some(talk) = &self.talk else { return };
         let view = talk.view.read(cx);
         let (reply, replies) = (view.reply.focus_handle(cx), view.replies);
-        if self.watched_task_page().is_some() {
+        // Standing on a page, the field is beside it and keeps the keyboard the user gives it.
+        if self.watched_task_page().is_some() && !self.task_standing() {
             if reply.is_focused(window) {
                 window.focus(&self.focus_handle, cx);
             }
@@ -1597,9 +1598,12 @@ impl TalkView {
         if opens {
             line = line.on_click(cx.listener(move |view, _, _, cx| view.toggle(fold, false, cx)));
         }
-        // Beside the page, the step under way on it is the live line, with Take over at its end.
+        // Beside the page, the step under way on it is the live line, with Take over at its end,
+        // unless the user stands on the page, whose strip has it.
         let live = (self.shown.as_ref())
-            .filter(|shown| look.beside && glyph && step.running && shown.stoppable)
+            .filter(|shown| {
+                look.beside && !look.standing && glyph && step.running && shown.stoppable
+            })
             .and_then(|shown| shown.on);
         let line = match live {
             None => line.into_any_element(),
@@ -1978,45 +1982,24 @@ impl TalkView {
             IloKind::SignedIn { .. } => "icons/key-round.svg",
             IloKind::TierChanged { .. } => "icons/shield.svg",
         };
-        let head = div()
+        // Its words follow the mark closer than the line's gap.
+        let mark = super::display_face::display_text(words::MARK, MARK_SIZE, TRACE_LINE, cx)
             .flex_none()
-            .max_w_full()
-            .h(px(TRACE_LINE))
-            .flex()
-            .items_center()
-            .gap(px(TRACE_GAP))
-            .whitespace_nowrap()
-            .child(
-                svg()
-                    .flex_none()
-                    .path(glyph)
-                    .size(px(ILO_GLYPH))
-                    .text_color(palette.glyph(ILO_INK)),
-            )
-            .child(
-                div()
-                    .min_w_0()
-                    .flex()
-                    .items_center()
-                    .text_color(ink)
-                    .child(
-                        super::display_face::display_text(words::MARK, MARK_SIZE, TRACE_LINE, cx)
-                            .flex_none()
-                            .mr(px(MARK_GAP)),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .child(StyledText::new(said).with_highlights(highlights)),
-                    ),
-            )
-            .children(count.map(|count| {
-                div()
-                    .flex_none()
-                    .text_color(palette.text(TRACE_NOTE))
-                    .child(count)
-            }));
+            .mr(px(MARK_GAP - TRACE_GAP))
+            .into_any_element();
+        let head = trace_line(
+            look,
+            TraceLine {
+                glyph: Some(glyph),
+                mark: Some(mark),
+                highlights,
+                ..TraceLine::new(
+                    LineKey::Ilo(line.key),
+                    said.into(),
+                    count.unwrap_or_default().into(),
+                )
+            },
+        );
         // What it says more starts under its words.
         let under = px(ILO_GLYPH + TRACE_GAP);
         let body = words::body(&line.kind, name.as_deref().unwrap_or("")).map(|body| {
@@ -2267,8 +2250,13 @@ fn steps(lines: &[Line]) -> usize {
 /// as it says, or under Reduce Motion, holds at the title's colour. What changed on it fades or
 /// rolls in by the rest.
 struct TraceLine {
-    fold: Fold,
+    key: LineKey,
     glyph: Option<&'static str>,
+    /// ilo's mark before its words, which makes it one of ilo's lines: its glyph and words in
+    /// ilo's ink and size.
+    mark: Option<gpui::AnyElement>,
+    /// Its words' parts set apart, as an ilo line's name from a page.
+    highlights: Vec<(std::ops::Range<usize>, HighlightStyle)>,
     failed: bool,
     title: SharedString,
     note: SharedString,
@@ -2282,10 +2270,12 @@ struct TraceLine {
 }
 
 impl TraceLine {
-    fn new(fold: Fold, title: SharedString, note: SharedString) -> Self {
+    fn new(key: impl Into<LineKey>, title: SharedString, note: SharedString) -> Self {
         TraceLine {
-            fold,
+            key: key.into(),
             glyph: None,
+            mark: None,
+            highlights: Vec::new(),
             failed: false,
             title,
             note,
@@ -2299,13 +2289,28 @@ impl TraceLine {
     }
 }
 
+/// Which line a `TraceLine` is: a trace's, which folds, or one of ilo's.
+#[derive(Clone, Copy)]
+enum LineKey {
+    Fold(Fold),
+    Ilo(usize),
+}
+
+impl From<Fold> for LineKey {
+    fn from(fold: Fold) -> Self {
+        LineKey::Fold(fold)
+    }
+}
+
 /// A trace's line, with a chevron if it opens, which turns down as it opens. Under the pointer, a
 /// line that opens has a plate hanging outside its text, which goes to the title's colour.
 fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
     let palette = look.palette;
     let TraceLine {
-        fold,
+        key,
         glyph,
+        mark,
+        highlights,
         failed,
         title,
         note: description,
@@ -2316,13 +2321,14 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         chevron_alpha,
         rolled,
     } = line;
-    let (id, group): (ElementId, SharedString) = match fold {
-        Fold::Trace(key) => (("trace", key).into(), format!("trace-{key}").into()),
-        Fold::Step(key) => (
+    let (id, group): (ElementId, SharedString) = match key {
+        LineKey::Ilo(key) => (("ilo", key).into(), format!("ilo-{key}").into()),
+        LineKey::Fold(Fold::Trace(key)) => (("trace", key).into(), format!("trace-{key}").into()),
+        LineKey::Fold(Fold::Step(key)) => (
             ("trace-step", key).into(),
             format!("trace-step-{key}").into(),
         ),
-        Fold::Group(key) => (
+        LineKey::Fold(Fold::Group(key)) => (
             ("trace-group", key).into(),
             format!("trace-group-{key}").into(),
         ),
@@ -2334,23 +2340,25 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
     } else {
         palette.text(TRACE_NOTE)
     };
+    let ilos = mark.is_some();
     let words = match (failed, shimmers) {
         (true, _) => red,
+        (false, _) if ilos => palette.text(ILO_INK),
         (false, Some(None)) => palette.text(TITLE),
         // At the shimmer's peak, which each part fades down from.
         (false, Some(Some(_))) => palette.lit(TRACE_TITLE, SHIMMER, 1.),
         (false, None) => palette.text(TRACE_TITLE),
     };
     let glyph = glyph.map(|glyph| {
-        let color = if failed {
-            red
-        } else {
-            palette.glyph(TRACE_GLYPH_ALPHA)
+        let (color, size) = match (failed, ilos) {
+            (true, _) => (red, TRACE_GLYPH),
+            (false, true) => (palette.glyph(ILO_INK), ILO_GLYPH),
+            (false, false) => (palette.glyph(TRACE_GLYPH_ALPHA), TRACE_GLYPH),
         };
         svg()
             .flex_none()
             .path(glyph)
-            .size(px(TRACE_GLYPH))
+            .size(px(size))
             .text_color(color)
     });
     let opens = chevron.is_some();
@@ -2385,14 +2393,28 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
             .into_any_element(),
     };
     let hover = group.clone();
+    let title = div()
+        .min_w_0()
+        .truncate()
+        .opacity(alpha)
+        .text_color(words)
+        // A shimmering title is lit by its shimmer, under the pointer too.
+        .when(
+            opens && !failed && !matches!(shimmers, Some(Some(_))),
+            |title| title.group_hover(hover, move |style| style.text_color(palette.text(TITLE))),
+        )
+        .child(match shimmers {
+            Some(Some(phase)) => shimmering(&palette, title, phase),
+            _ => StyledText::new(title).with_highlights(highlights),
+        });
     div()
         .id(id)
         .group(group)
         .flex_none()
         .max_w_full()
         .h(px(TRACE_LINE))
-        .ml(px(-TRACE_HANG))
-        .px(px(TRACE_HANG))
+        // Its plate hangs outside its text, which ilo's lines, which don't open, have none of.
+        .when(!ilos, |line| line.ml(px(-TRACE_HANG)).px(px(TRACE_HANG)))
         .flex()
         .items_center()
         .gap(px(TRACE_GAP))
@@ -2403,24 +2425,9 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
                 .hover(move |style| style.bg(palette.plate(TRACE_HOVER)))
         })
         .children(glyph)
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .opacity(alpha)
-                .text_color(words)
-                // A shimmering title is lit by its shimmer, under the pointer too.
-                .when(
-                    opens && !failed && !matches!(shimmers, Some(Some(_))),
-                    |title| {
-                        title.group_hover(hover, move |style| style.text_color(palette.text(TITLE)))
-                    },
-                )
-                .child(match shimmers {
-                    Some(Some(phase)) => shimmering(&palette, title, phase),
-                    _ => StyledText::new(title),
-                }),
-        )
+        // ilo's mark stays whole before its words, which truncate.
+        .children(mark)
+        .child(title)
         .when(noted, |line| {
             line.child(
                 div()
@@ -2459,6 +2466,8 @@ struct Look {
     behind: bool,
     /// The conversation stands beside the page it watches (`Shell::talk_beside`).
     beside: bool,
+    /// The user stands on one of its pages, the conversation in a panel beside it.
+    standing: bool,
 }
 
 impl Look {
@@ -2496,6 +2505,7 @@ impl Render for TalkView {
                 asked_favicon,
                 behind: shell.task_page_going_back(),
                 beside: shell.talk_beside,
+                standing: shell.task_standing(),
             }
         }) else {
             return div().into_any_element();

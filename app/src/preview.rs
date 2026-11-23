@@ -12,11 +12,11 @@ use std::{
 };
 
 use browser::account::{self, Account};
-use browser::agents::task::ilo::{IloKind, IloLine, SignedInWith, Why};
+use browser::agents::task::ilo::{IloKind, IloLine, SignedInWith};
 use browser::agents::task::{
     Card as TaskCard, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep,
 };
-use browser::agents::tier::Tier;
+use browser::agents::tier::{Tier, Why};
 use browser::boost_editor;
 use browser::boost_style::{self, Case, Face, Style};
 use browser::command_bar::{self, Suggestion};
@@ -2491,9 +2491,13 @@ fn task_space(id: u64) -> SpaceEntry {
 
 /// PREVIEW_TASK_RING=<stop> (with PREVIEW_TASKS=open) watches the working task's page, and
 /// rings the stop named, as Tab from the window does: none, card, back, page, take-over or stop
-/// (#3220).
+/// (#3220). PREVIEW_TASK's bench stands on its page the same way, with no ring.
 fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
-    let Ok(stop) = std::env::var("PREVIEW_TASK_RING") else {
+    let bench = std::env::var_os("PREVIEW_TASK").is_some();
+    let Some(stop) = std::env::var("PREVIEW_TASK_RING")
+        .ok()
+        .or(bench.then(|| "none".to_string()))
+    else {
         return;
     };
     // Tabs after the strip's first stop, the task's card.
@@ -2505,7 +2509,8 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
         "stop" => Some(4),
         _ => None,
     };
-    let tab = FIRST_TASK + 300;
+    // The bench's page is its conversation's.
+    let tab = FIRST_TASK + if bench { 200 } else { 300 };
     let agent: SharedString = format!("task-{FIRST_TASK}").into();
     cx.spawn(async move |cx| {
         // After the conversation the card's click opens.

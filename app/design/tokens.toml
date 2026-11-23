@@ -768,6 +768,11 @@ row = 24.0
 row-radius = 7.0
 padding = 5.0
 radius = 12.0
+# A level of choices, with a check before the chosen one, has quiet rows (#4090): taller and
+# rounder, and its panel concentric with them, 9 + 5.
+quiet-row = 28.0
+quiet-row-radius = 9.0
+quiet-radius = 14.0
 # A row's text starts this far inside it, so 12 from the panel's edge.
 row-x = 8.0
 # A line between groups: 1 pt in the middle of this, 8 in from the rows' text.
@@ -1715,6 +1720,10 @@ primary-key = 0.75
 gap = 10.0
 back = 26.0
 back-glyph = 16.0
+# Standing on one of its pages with the conversation beside it (#4095), the conversation is a panel
+# this wide at the card's right, at most half the card, and this far from the page.
+beside = 360.0
+beside-gap = 10.0
 
 [shell.assets]
 # Every Lucide outline's stroke, in its 24 grid: 1.5 pt in a 16 pt box, 1.3 at 14 and 1.69 at 18.
