@@ -60,7 +60,7 @@ env:
   # each X11 run with this list (nights, trains, a dispatch naming none) trips if its signed-out
   # answer changes shape (#2979).
   LINUX_RUNS: >-
-    tabs window find agents spaces crash profiles private blank quit mcp appearance access history
+    tabs window find agents spaces crash profiles private blank quit quit-history mcp appearance access history
     load preview import adblock adblock-lists adblock-cosmetic adblock-page passkeys onboarding links link-cards
     relaunch split extensions capture board popup pinned about windows dialogs trouble cards passwords updates
     restore favorites keys clear media store adblock-live live-folder-site widevine sync sync-account sync-devices
@@ -73,7 +73,7 @@ env:
   WAYLAND_RUNS: >-
     load keys tabs popup history spaces agents profiles restore relaunch find pinned clear split
     favorites cards extensions adblock adblock-lists adblock-cosmetic adblock-page private little capture board
-    passwords preview access dialogs crash import quit onboarding passkeys appearance about
+    passwords preview access dialogs crash import quit quit-history onboarding passkeys appearance about
     sync sync-account sync-devices sync-extensions
     devices pair hosts handback store adblock-live widevine updates update-checks shots tab-drag count
     blank mcp trouble ranking policies calls battery battery-os idle webrtc translate everyday

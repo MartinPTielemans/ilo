@@ -2154,6 +2154,13 @@ void Tab::CaptureChanged(content::WebContents* contents) {
   }
 }
 
+void Tab::BeforeUnloadFired(bool proceed) {
+  // Stay: a close the user started stays undone, and the window shows this tab again (#3890).
+  if (!proceed) {
+    Window::ClosingKept(id_);
+  }
+}
+
 void Tab::WebContentsDestroyed() {
   user_load_.Closed();
   // The driver is the page's too, and may go before the tab does, as may its infobars.

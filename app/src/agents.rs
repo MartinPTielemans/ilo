@@ -739,10 +739,17 @@ pub struct Activity {
     pub said: SharedString,
 }
 
+static NEXT_ENTRY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// A new entry's id: the log's entries are made in more than one place.
 pub fn entry_id() -> u64 {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    NEXT_ENTRY.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The id the log's next entry will take, so what's noted from now on is told from what was
+/// before, however close the clock puts them.
+pub fn next_entry_id() -> u64 {
+    NEXT_ENTRY.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// An agent the user connected.

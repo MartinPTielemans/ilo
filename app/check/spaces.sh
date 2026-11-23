@@ -285,6 +285,49 @@ show_space "click $(dot "$second")" select-space sidebar "$second" "$b"
 show_space "click $(dot "$first")" select-space sidebar "$first" "$a"
 ../tools/window-screenshot.sh "$pid" "$out/spaces.png" || fail "no window to capture"
 
+# A tab whose page lets it go only after the Space switch typed straight after its ⌘W, as a loading
+# page's can, leaves its Space showing the tab it was opened over when the Space is shown again, as
+# a close that lands first does, not the top of Today (#3890). The page's beforeunload holds its
+# going for 0.3 s and asks nothing. ⌃2 goes to the app with ⌘W, not after its send has read the
+# driver's answer: on Windows that read, in Git Bash's slow forks, outlasts the 0.3 s.
+printf '%s' '<title>slow close</title><script>
+onbeforeunload = () => {
+  const end = performance.now() + 300;
+  while (performance.now() < end) {}
+};
+requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
+</script>' > "$out/site/slow-close.html"
+send key t cmd
+expect '^browser: command bar shown$' "⌘T in the first Space didn't open the command bar"
+send type "http://localhost:$port/two.html"
+send key return
+expect "^browser: today [0-9][0-9]* $a\$" "the tab for two.html didn't open above $a"
+above=$(today | cut -d' ' -f1)
+send click $(row 1)
+expect "^browser: selected $a\( in .*\)\{0,1\}\$" "a click on its row didn't show $a again"
+send key t cmd
+expect '^browser: command bar shown$' "⌘T over $a didn't open the command bar"
+send type "http://localhost:$port/slow-close.html"
+send key return
+expect "^browser: today [0-9][0-9]* $above $a\$" "slow-close.html didn't open at the top of Today"
+closing=$(today | cut -d' ' -f1)
+expect "^browser: title $closing ready\$" "slow-close.html didn't draw"
+post key w cmd
+closed_from=$step
+send key 2 ctrl
+expect "^browser: space $second in " "⌃2 straight after ⌘W didn't show the second Space"
+expect "^browser: tab $closing closed\$" "⌘W didn't close slow-close.html's tab" "$closed_from"
+since | sed -n "/^browser: space $second in /,\$p" | grep -q "^browser: tab $closing closed\$" ||
+  fail "slow-close.html's tab closed before ⌃2 showed the second Space, so nothing waited on its page"
+send key 1 ctrl
+expect "^browser: space $first in " "⌃1 didn't show the first Space again"
+expect_tabs "$above $a" "$a" "the first Space, its tab closed after ⌃2"
+# Back as it was, for what follows.
+send click $(row 0)
+expect "^browser: selected $above\( in .*\)\{0,1\}\$" "a click on its row didn't show $above"
+send key w cmd
+expect_tabs "$a" "$a" "the first Space, two.html's tab closed"
+
 # A dot dragged along the switcher moves its Space: the second's let go before the first's goes
 # first, and ⌘Z puts it back. Held there, its copy is at the pointer and the line before the first
 # (#1580). A drag with one move, as a flick, moves it too.

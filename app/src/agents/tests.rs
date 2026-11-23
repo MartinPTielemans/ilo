@@ -8668,6 +8668,26 @@ mod sessions {
         }
     }
 
+    /// The disconnect noted after a session ended stays out of its record, though the Mac's clock,
+    /// in microseconds, can give the two the very same time (#3967).
+    #[gpui::test]
+    fn the_disconnect_after_a_sessions_end_stays_out_of_its_record(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        answered(&agents, 2, cx);
+        bye(&agents, cx);
+        agents.update(cx, |agents, _| {
+            let ended = (agents.tasks.tasks.iter()).find_map(|task| task.ended);
+            let gone = (agents.log.iter_mut()).find(|entry| entry.action == "disconnected");
+            gone.expect("the disconnect, noted").at = ended.expect("the session, ended");
+        });
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        let [(_, past)] = kept.as_slice() else {
+            panic!("one record: {kept:?}");
+        };
+        let actions: Vec<&str> = past.steps.iter().map(|step| step.action.as_str()).collect();
+        assert_eq!(actions, ["read_page"], "{:?}", past.steps);
+    }
+
     /// A question, a handoff and a refusal each show on the card of the connection that asked or
     /// was refused, and never on the other's.
     #[gpui::test]
@@ -9133,18 +9153,47 @@ mod sessions {
             "Claude Code 2".into(),
             "My Codex".into(),
             "ilo-CLI".into(),
-            // A letter that only looks like one, and anything outside printable ASCII, isn't
-            // taken.
+            // So is one that only reads as one (#3585): a word mixing scripts, letters of one
+            // script that look like another's, compatibility forms, marks that don't show or
+            // join, and any case.
             "Cl\u{0430}ude Code".into(),
-            "Zed\n\u{202E}\"Agent\u{201D}".into(),
+            "\u{0456}lo agent".into(),
+            "\u{0421}\u{043E}\u{0501}\u{0435}\u{0445}".into(),
+            "\u{0131}lo agent".into(),
+            "\u{FF49}\u{FF4C}\u{FF4F} agent".into(),
+            "\u{FF23}\u{FF4F}\u{FF44}\u{FF45}\u{FF58}".into(),
+            "\u{1D402}\u{1D428}\u{1D41D}\u{1D41E}\u{1D431}".into(),
+            "Clau\u{200D}de Code".into(),
+            "Co\u{200B}dex".into(),
+            "i\u{034F}lo agent".into(),
+            "Cla\u{0301}ude Code".into(),
+            "cLaUdE cOdE".into(),
+            "CODEX".into(),
+            "\u{00ED}lo agent".into(),
+            "C\u{0049}aude Code".into(),
+            "C\u{0031}aude Code".into(),
+            "\u{006C}\u{006C}o agent".into(),
+            "\u{0031}lo agent".into(),
         ] {
             hello(&agents, "mcp-client", &posing, cx);
             assert_eq!(named(&agents, cx).0, "MCP client", "{posing} passed");
         }
-        for taken in ["Browser Use", "Checker"] {
+        // A name of its own is shown as given, in any script, accents and all, and without what
+        // doesn't show.
+        for taken in [
+            "Browser Use",
+            "Checker",
+            "Ren\u{00E9}e",
+            "\u{0410}\u{0433}\u{0435}\u{043D}\u{0442}",
+            "\u{30A8}\u{30FC}\u{30B8}\u{30A7}\u{30F3}\u{30C8}",
+            "\u{81EA}\u{52D5}\u{30C6}\u{30B9}\u{30C8}",
+            "\u{039A}\u{03CE}\u{03B4}\u{03B9}\u{03BA}\u{03B1}\u{03C2} 2",
+        ] {
             hello(&agents, "mcp-client", taken, cx);
             assert_eq!(named(&agents, cx).0, taken);
         }
+        hello(&agents, "mcp-client", "Zed\n\u{202E}Agent", cx);
+        assert_eq!(named(&agents, cx).0, "Zed Agent");
         hello(&agents, "mcp-client", "Zed", cx);
         assert_eq!(named(&agents, cx), ("Zed".into(), Some("Zed".into())));
 
