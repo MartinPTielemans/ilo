@@ -201,6 +201,9 @@ HWND g_real_aim = nullptr;
 POINT g_real_move{};
 ULONG_PTR g_real_move_number = 0;
 bool g_real_move_again = false;
+// Whether the move being sent is out of the app's windows, such as past the driven window's edge
+// onto the desktop, whose window hears it: nothing of the app's does, to wait on.
+bool g_real_move_away = false;
 void RealMoveTo(POINT at, bool again = false);
 // The real input a step sends after it brought the app in front, held for the steps that send it
 // once the app has had a turn, while it's true.
@@ -579,7 +582,7 @@ void SendReal(INPUT input) {
   if (SendInput(1, &input, sizeof input) != 1) {
     fprintf(stderr, "browser: drive: SendInput failed, error %lu\n", GetLastError());
     g_real_heard = number;
-  } else if ((move || let_go) && !OursInFront()) {
+  } else if (((move || let_go) && !OursInFront()) || (move && g_real_move_away)) {
     // Another app's window hears it, as it would a hand's: there's nothing of the app's to wait on.
     g_real_heard = number;
   }
@@ -668,7 +671,15 @@ void RealMoveTo(POINT at, bool again) {
   input.mi.dx = along(at.x, SM_XVIRTUALSCREEN, SM_CXVIRTUALSCREEN);
   input.mi.dy = along(at.y, SM_YVIRTUALSCREEN, SM_CYVIRTUALSCREEN);
   input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+  // Out of the driven window's frame too, not only away from what Windows says is under the point:
+  // just after the app comes in front, another app's window can still be there, and the move is
+  // sent again.
+  RECT frame{};
+  const HWND driven = Driven();
+  g_real_move_away = driven && GetWindowRect(driven, &frame) && !PtInRect(&frame, at) &&
+                     !Ours(GetAncestor(WindowFromPoint(at), GA_ROOT));
   SendReal(input);
+  g_real_move_away = false;
   g_real_move_again = again;
   g_real_move = at;
   g_real_move_number = g_real_sent;
