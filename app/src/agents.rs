@@ -98,6 +98,31 @@ pub enum PageAction {
     /// The tree once the page has settled, as after an action, without one.
     Quiet,
     Select,
+    /// Describes a file field, for the card that asks the user for a file (upload).
+    FileField,
+}
+
+/// What came of the user's Choose File… for a page's file field (file_field_done). Never a file's
+/// name or path.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FileFieldEnd {
+    /// This many of the user's files went into the field.
+    Put(usize),
+    /// The user closed the dialog choosing none.
+    NoFile,
+    /// The field left the page, or the agent's hands, before the files could go in.
+    Left,
+    /// The dialog closed as its field was dropped, its tab closed or its session ended.
+    Closed,
+}
+
+/// A page's file field an agent asks the user to fill (upload), as the core described it.
+#[derive(Clone, Debug, PartialEq)]
+struct FileField {
+    id: u64,
+    /// The field's accessible name, as the page gives it, or empty.
+    label: String,
+    many: bool,
 }
 
 /// What closing an agent's tab did (bc_agent_close_tab), or came to (agent_close_answered).
@@ -158,9 +183,21 @@ pub struct Question {
     pub site: SharedString,
     /// Whether it asks every time, as a payment does, so its card has no Always or Never.
     pub each_time: bool,
+    /// The page's file field the agent asks the user to choose a file for (upload), whose card
+    /// chooses one or doesn't allow it.
+    pub file: Option<FileAsk>,
     /// Whether it asks on a site the user fenced (fence.rs), so its card has Never and Allow
     /// Once, and no Always.
     pub fenced: bool,
+}
+
+/// A file field a card asks the user to choose a file for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FileAsk {
+    /// The core's id for it (bc_file_field_choose).
+    pub field: u64,
+    /// Whether the user may choose several files.
+    pub many: bool,
 }
 
 /// The windows' cards ask again whenever a question changes, which is on every Agents change, so
@@ -183,7 +220,8 @@ impl PartialEq for Question {
             &other.asks,
             &other.why,
         ) && (self.handoff, self.back, &self.site) == (other.handoff, other.back, &other.site)
-            && (self.each_time, self.fenced) == (other.each_time, other.fenced)
+            && (self.each_time, self.file, self.fenced)
+                == (other.each_time, other.file, other.fenced)
             && std::rc::Rc::ptr_eq(&self.changes, &other.changes)
     }
 }
@@ -296,6 +334,11 @@ pub trait Browser {
     /// Answers for the user about a download an agent's page started, which the core holds
     /// (bc_agent_download_answer): `keep` lets it go on, else it's cancelled and its file gone.
     fn answer_download(&self, download: u64, keep: bool);
+    /// Opens the system's file dialog over `window` for the user to choose a file for the page's
+    /// file `field` (bc_file_field_choose): false if it can't, else file_field_done answers once.
+    fn file_field_choose(&self, field: u64, window: u64) -> bool;
+    /// Forgets the page's file `field`, closing its dialog if it's up (bc_file_field_drop).
+    fn file_field_drop(&self, field: u64);
     /// Pins `tab` in its Space at the page it's at, or unpins it to the top of its Today tabs, as
     /// the user does (bc_tab_set_pinned).
     fn set_pinned(&self, tab: u64, pinned: bool, cx: &mut App);
@@ -480,6 +523,8 @@ struct Act {
     asks: String,
     /// The download it lets go on, for "download", else 0.
     download: u64,
+    /// The file field it asks the user to choose a file for, for "upload".
+    file: Option<FileField>,
     /// The HTTP requests it sends (request).
     requests: Vec<request::Request>,
     /// The text open_tab or navigate waits for in the page once it settles.
@@ -693,6 +738,14 @@ struct Asking {
     _timer: Task<()>,
 }
 
+/// An upload whose file dialog the user opened (Agents::choose_file).
+struct Choosing {
+    site: String,
+    act: Act,
+    /// Drops the field once HANDOFF_WAIT passes with no file chosen; an end drops it.
+    _timer: Task<()>,
+}
+
 /// An entry of the activity log: what an agent did, or was refused, where and when.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Activity {
@@ -832,6 +885,10 @@ pub struct Agents {
     had: HashMap<u64, (String, page::Outline)>,
     /// The actions waiting on the user, the first asked now.
     asking: Vec<Asking>,
+    /// The uploads waiting on the core's description of their file field, by request.
+    describing: HashMap<u64, Act>,
+    /// The uploads whose file dialog the user opened, by field, until file_field_done.
+    choosing: HashMap<u64, Choosing>,
     /// The downloads the user let agents' pages make, by download.
     downloading: HashMap<u64, Downloading>,
     /// How the downloads that ended while their question waited ended, by download: a small file
@@ -1023,6 +1080,8 @@ impl Agents {
             closing: HashMap::new(),
             gone: HashMap::new(),
             acting: HashMap::new(),
+            describing: HashMap::new(),
+            choosing: HashMap::new(),
             sending: HashMap::new(),
             saved_reading: HashMap::new(),
             refs: HashMap::new(),
@@ -1476,6 +1535,7 @@ impl Agents {
             let site = site(&self.browser.tab(tab, cx).url);
             self.note(agent, self.holder(agent, tab), why, &site, "");
             cx.notify();
+            self.fields_left(tab, cx);
         }
     }
 
@@ -1757,6 +1817,7 @@ impl Agents {
                     note: String::new(),
                     show,
                     download: 0,
+                    file: None,
                     field: String::new(),
                     requests: Vec::new(),
                     wait,
@@ -1858,6 +1919,12 @@ impl Agents {
                 };
                 self.next_step(run, cx);
                 self.advance(cx);
+            }
+            "upload" => {
+                let Some(tab) = self.tab_for(&agent, connection, &arguments, &reply, cx) else {
+                    return;
+                };
+                self.upload(&agent, connection, id, tab, &arguments, reply, cx);
             }
             "hand_off" => {
                 let Some(tab) = self.tab_for(&agent, connection, &arguments, &reply, cx) else {
@@ -2143,6 +2210,7 @@ impl Agents {
                     asks: String::new(),
                     field: String::new(),
                     download: 0,
+                    file: None,
                     requests,
                     wait: None,
                     did: None,
@@ -2726,6 +2794,21 @@ impl Agents {
         self.cleared.remove(&tab);
         self.left(tab, Gone::Closed);
         self.let_go(tab, held::Event::Closed, cx);
+        self.fields_left(tab, cx);
+    }
+
+    /// The core dropped `tab`'s file fields, as its tab closed or its agent's session there ended:
+    /// the uploads still asking for them end. One whose dialog is up hears its end from the core.
+    fn fields_left(&mut self, tab: u64, cx: &mut Context<Self>) {
+        let left = |asking: &mut Asking| asking.act.tab == tab && asking.act.file.is_some();
+        let left: Vec<Asking> = self.asking.extract_if(.., left).collect();
+        if left.is_empty() {
+            return;
+        }
+        for Asking { site, act, .. } in left {
+            self.refuse(act, &site, Refused::new(LEFT_PAGE), cx);
+        }
+        self.asked(cx);
     }
 
     /// `tab`'s page shows its own dialog of `kind`, or none any more (pages::tab_dialog), with
@@ -2888,7 +2971,19 @@ impl Agents {
             .asking
             .extract_if(.., |asking| asking.act.agent == agent)
         {
+            if let Some(file) = &asking.act.file {
+                self.browser.file_field_drop(file.id);
+            }
             _ = asking.act.reply.send(stopped());
+        }
+        for (field, choosing) in
+            (self.choosing).extract_if(|_, choosing| choosing.act.agent == agent)
+        {
+            self.browser.file_field_drop(field);
+            _ = choosing.act.reply.send(stopped());
+        }
+        for (_, act) in self.describing.extract_if(|_, act| act.agent == agent) {
+            _ = act.reply.send(stopped());
         }
         for tab in self.held_from(agent) {
             self.let_go(tab, held::Event::Stop { holder: true }, cx);
@@ -3014,6 +3109,7 @@ impl Agents {
             what: String::new(),
             asks: String::new(),
             download: 0,
+            file: None,
             requests: Vec::new(),
             wait: None,
             did: None,
@@ -3343,6 +3439,11 @@ impl Agents {
             question.id,
             act.what
         );
+        self.put_question(question, site, act, cx);
+    }
+
+    /// Puts the question to the user, for ASK_WAIT at most.
+    fn put_question(&mut self, question: Question, site: String, act: Act, cx: &mut Context<Self>) {
         let id = question.id;
         self.asking.push(Asking {
             question,
@@ -3354,6 +3455,205 @@ impl Agents {
             }),
         });
         self.asked(cx);
+    }
+
+    /// An agent asks the user for a file for the page's file field `ref` (upload): the core
+    /// describes the field, for the card, and the agent never learns what the user chose. A tab
+    /// the agent may not act in is refused with no card.
+    fn upload(
+        &mut self,
+        agent: &str,
+        connection: u64,
+        call: u64,
+        tab: u64,
+        arguments: &Value,
+        reply: mpsc::Sender<ToolResult>,
+        cx: &mut Context<Self>,
+    ) {
+        let host = site(&self.browser.tab(tab, cx).url);
+        if let Err(refused) = self.may_act(agent, tab, "upload", cx) {
+            let logged = self.log_words(tab, &refused.why, cx);
+            self.note(agent, connection, "upload", &host, &logged);
+            cx.notify();
+            _ = reply.send(refused.into());
+            return;
+        }
+        let Some(name) = arguments.get("ref").and_then(Value::as_str) else {
+            _ = reply.send(ToolResult::error("upload needs a ref."));
+            return;
+        };
+        let Some(element) = self.refs.get(&tab).and_then(|refs| refs.get(name)) else {
+            _ = reply.send(ToolResult::error(format!(
+                "There's no element {name} in tab {tab}. Use a ref from its latest outline."
+            )));
+            return;
+        };
+        let node = element.node;
+        self.current.insert((agent.into(), connection), tab);
+        let request = self.next_request;
+        self.next_request += 1;
+        let mut act = act_of(agent, connection, call, tab, reply);
+        (act.action, act.page, act.element) = ("upload", PageAction::FileField, node);
+        self.describing.insert(request, act);
+        self.act_in_page(agent, tab, request, PageAction::FileField, node, "");
+    }
+
+    /// The core described the upload's file field, as JSON, or refused it with why: the card asks
+    /// the user for a file for it.
+    fn file_field_described(
+        &mut self,
+        mut act: Act,
+        text: String,
+        error: Option<Failure>,
+        cx: &mut Context<Self>,
+    ) {
+        let host = site(&self.browser.tab(act.tab, cx).url);
+        if let Some(failure) = error {
+            self.note(&act.agent, act.connection, "upload", &host, &text);
+            cx.notify();
+            _ = act.reply.send(ToolResult {
+                kind: failure.kind(),
+                ..ToolResult::error(text)
+            });
+            return;
+        }
+        let field: Value = serde_json::from_str(&text).unwrap_or_default();
+        // The core writes ids as JSON doubles, which Chromium's writer gives a ".0".
+        let id = field.get("field").and_then(Value::as_f64).unwrap_or(0.0) as u64;
+        let label = field.get("label").and_then(Value::as_str).unwrap_or("");
+        // The page's words, kept inside the quotes they're shown in.
+        let label = page::clip(&request::plain(label), 60);
+        let many = field.get("many").and_then(Value::as_bool).unwrap_or(false);
+        let site = match field.get("site").and_then(Value::as_str) {
+            Some(site) if !site.is_empty() => site.to_string(),
+            _ => host,
+        };
+        let files = if many { "files" } else { "a file" };
+        // As on the tab's other actions, its card shows the site apart from the label (#3836):
+        // the browser's, the field frame's that gets the file, never the page's words.
+        act.say(&site, |on| match label.is_empty() {
+            true => format!("add {files} to a page{on}"),
+            false => format!("add {files} to “{label}”{on}"),
+        });
+        act.file = Some(FileField { id, label, many });
+        let agent = self.agent_name(&act.agent);
+        let question = Question {
+            id: self.next_request,
+            agent: agent.clone(),
+            from: act.agent.clone().into(),
+            what: act.what.clone().into(),
+            asks: act.asks.clone().into(),
+            why: format!("You choose the file. {agent} sees only what the page shows of it.")
+                .into(),
+            site: site.clone().into(),
+            each_time: true,
+            file: Some(FileAsk { field: id, many }),
+            ..Question::default()
+        };
+        self.next_request += 1;
+        // check.sh reads this line.
+        log!(
+            "browser: agent {} asks {} upload {}",
+            act.agent,
+            question.id,
+            act.tab
+        );
+        self.put_question(question, site, act, cx);
+    }
+
+    /// The user pressed the card's Choose File… for the question `id`: the system's file dialog
+    /// opens over `window`, and the agent waits for what came of it, HANDOFF_WAIT at most.
+    pub fn choose_file(&mut self, id: u64, window: u64, cx: &mut Context<Self>) {
+        let Some(at) = (self.asking.iter())
+            .position(|asking| asking.question.id == id && asking.act.file.is_some())
+        else {
+            return;
+        };
+        let Asking { site, act, .. } = self.asking.remove(at);
+        self.asked(cx);
+        let Some(field) = act.file.as_ref().map(|file| file.id) else {
+            return;
+        };
+        // check.sh reads this line.
+        log!("browser: agent {} answered {id} Choose", act.agent);
+        if !self.browser.file_field_choose(field, window) {
+            let refused = Refused::new("The file dialog couldn't open.");
+            return self.refuse(act, &site, refused, cx);
+        }
+        let timer = cx.spawn(async move |agents, cx| {
+            cx.background_executor()
+                .timer(Waits::launch().handoff)
+                .await;
+            _ = agents.update(cx, |agents, cx| {
+                if let Some(Choosing { site, act, .. }) = agents.choosing.remove(&field) {
+                    let why = "The user didn't choose a file in 15 minutes.";
+                    agents.refuse(act, &site, Refused::new(why), cx);
+                }
+            });
+        });
+        let choosing = Choosing {
+            site,
+            act,
+            _timer: timer,
+        };
+        self.choosing.insert(field, choosing);
+    }
+
+    /// What came of the user's Choose File… for the page's file `field` (file_field_done): the
+    /// agent hears how many files went in, never which.
+    pub fn file_field_done(&mut self, field: u64, end: FileFieldEnd, cx: &mut Context<Self>) {
+        let (site, act) = match self.choosing.remove(&field) {
+            Some(Choosing { site, act, .. }) => (site, act),
+            None => {
+                // The core ends a tab's earlier field as a new one shows there, its card still up.
+                let at = (self.asking.iter()).position(|asking| {
+                    asking
+                        .act
+                        .file
+                        .as_ref()
+                        .is_some_and(|file| file.id == field)
+                });
+                let Some(at) = at else {
+                    return;
+                };
+                let Asking { site, act, .. } = self.asking.remove(at);
+                self.asked(cx);
+                (site, act)
+            }
+        };
+        let (said, count) = match end {
+            FileFieldEnd::Put(count) => ("put", count),
+            FileFieldEnd::NoFile => ("none", 0),
+            FileFieldEnd::Left => ("left", 0),
+            FileFieldEnd::Closed => ("closed", 0),
+        };
+        // check.sh reads this line, which names no file.
+        log!(
+            "browser: agent {} file field {field} {said} {count}",
+            act.agent
+        );
+        let label = act.file.as_ref().map_or("", |file| file.label.as_str());
+        let why = match end {
+            FileFieldEnd::Put(count) => {
+                let files = match count {
+                    1 => "a file".to_string(),
+                    _ => format!("{count} files"),
+                };
+                let text = match label.is_empty() {
+                    true => format!("The user put {files} in the field."),
+                    false => format!("The user put {files} in “{label}”."),
+                };
+                self.browser.file_field_drop(field);
+                self.note(&act.agent, act.connection, "upload", &site, "");
+                cx.notify();
+                _ = act.reply.send(ToolResult::text(text));
+                return;
+            }
+            FileFieldEnd::NoFile => "The user chose no file.",
+            FileFieldEnd::Left => LEFT_PAGE,
+            FileFieldEnd::Closed => "The file dialog closed before the user chose a file.",
+        };
+        self.refuse(act, &site, Refused::new(why), cx);
     }
 
     /// The question `id` waited ASK_WAIT with no answer: the action is refused this once, as the
@@ -3398,6 +3698,10 @@ impl Agents {
         else {
             return self.answer_back(id, answer, cx);
         };
+        // A file is chosen with the card's Choose File… (choose_file), so only a no answers one.
+        if self.asking[at].act.file.is_some() && matches!(answer, Answer::Once | Answer::Always) {
+            return;
+        }
         let Asking {
             site,
             act,
@@ -3640,9 +3944,20 @@ impl Agents {
                 self.browser.answer_download(asking.act.download, false);
                 self.ended.remove(&asking.act.download);
             }
+            // Nor does a file field: the page gets nothing.
+            if let Some(file) = &asking.act.file {
+                self.browser.file_field_drop(file.id);
+            }
         }
         self.asking
             .retain(|asking| !theirs(&asking.act.agent, asking.act.connection));
+        let choosing = (self.choosing)
+            .extract_if(|_, choosing| theirs(&choosing.act.agent, choosing.act.connection));
+        for (field, _) in choosing {
+            self.browser.file_field_drop(field);
+        }
+        self.describing
+            .retain(|_, act| !theirs(&act.agent, act.connection));
         self.downloading
             .retain(|_, downloading| !theirs(&downloading.agent, downloading.connection));
         self.acting
@@ -3669,6 +3984,10 @@ impl Agents {
         if act.download != 0 {
             self.browser.answer_download(act.download, false);
             self.ended.remove(&act.download);
+        }
+        // Dropping a field the core ended already is harmless, so every end drops it.
+        if let Some(file) = &act.file {
+            self.browser.file_field_drop(file.id);
         }
         // A call's requests the user said no to are each listed, as each sent one is.
         match act.requests.as_slice() {
@@ -3884,6 +4203,7 @@ impl Agents {
             show: Show::Nothing,
             field: String::new(),
             download: id,
+            file: None,
             requests: Vec::new(),
             wait: None,
             did: None,
@@ -4082,6 +4402,9 @@ impl Agents {
         error: Option<Failure>,
         cx: &mut Context<Self>,
     ) {
+        if let Some(act) = self.describing.remove(&request) {
+            return self.file_field_described(act, text, error, cx);
+        }
         let Some(Acting {
             agent,
             connection,
@@ -4937,8 +5260,18 @@ impl Agents {
         for tab in self.held.keys().copied().collect::<Vec<_>>() {
             self.let_go(tab, held::Event::Gone { holder: true }, cx);
         }
-        // A handoff's card goes too, the user still holding its tab.
+        // A handoff's card goes too, the user still holding its tab, and the page's file fields.
+        let asked = self.asking.iter().map(|asking| &asking.act);
+        let fields = asked.filter_map(|act| act.file.as_ref().map(|file| file.id));
+        let fields = fields
+            .chain(self.choosing.keys().copied())
+            .collect::<Vec<_>>();
+        for field in fields {
+            self.browser.file_field_drop(field);
+        }
         self.asking.clear();
+        self.choosing.clear();
+        self.describing.clear();
         self.browser.ask(None, cx);
         for agent in std::mem::take(&mut self.live) {
             self.browser.disconnected(&agent, cx);
@@ -5236,6 +5569,7 @@ fn act_of(
         asks: String::new(),
         field: String::new(),
         download: 0,
+        file: None,
         requests: Vec::new(),
         wait: None,
         did: None,
@@ -5301,6 +5635,9 @@ fn finish(sending: Sending, error: bool, kind: Option<tools::Kind>) {
 const SAID_NO: &str = "You said no.";
 /// What the log says of an action that asked and had no answer in ASK_WAIT.
 const NO_ANSWER: &str = "No answer in 5 minutes.";
+
+/// Why an upload ends when its field went before the user's files could go in.
+const LEFT_PAGE: &str = "The field left the page before the user chose a file.";
 /// The spec's: how long an action asking first waits for the user's answer.
 const ASK_WAIT: Duration = Duration::from_secs(5 * 60);
 /// The spec's: how long a handoff's call waits for the user to hand the tab back.
