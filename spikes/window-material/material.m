@@ -9,11 +9,17 @@
 // serve's lines:
 //   show <material> <tint> <dark|light> <white|grey|black|picture> <active|inactive> <plain|glow>
 //     <tint> is "none" or <rrggbb>a<alpha in thousandths>, such as 141417a480.
-//     Answers "shown reduce <0|1>" once the window is on screen with its material drawn.
+//     <behind> may also be ring: black, with white in the outer half of the margin, to show that
+//     nothing past the backdrop reaches the patch the ground is read from.
+//     Answers "shown reduce <0|1> at <x>,<y>,<w>,<h>" once the window is on screen with its
+//     material drawn and no other window meets the backdrop: the candidate window's frame, in
+//     points from the main screen's top-left, for `screencapture -R`. Else "error: ..." naming
+//     what's in the way.
 //   quit
 //
-// A capture is the backdrop's frame, which holds the candidate's window kMargin in from its edges,
-// so every patch below is in points from the backdrop's top-left.
+// The backdrop goes where no other process's window meets it, nearest the screen's foot and left,
+// and the candidate's window sits kMargin in from its edges. A capture is the candidate window's
+// frame as the screen composes it, so every patch below is in points from the window's top-left.
 
 #import <AppKit/AppKit.h>
 #import <ImageIO/ImageIO.h>
@@ -25,13 +31,15 @@
 // Macros, as C takes only constant expressions in the patches' initializers.
 #define kWidth 360.0
 #define kHeight 520.0
-#define kMargin 60.0
+// More than the blur's reach, so what's past the backdrop never shows in the material: the ring
+// backdrop checks it. Was 60.
+#define kMargin 160.0
 #define kBackWidth (kWidth + 2 * kMargin)
 #define kBackHeight (kHeight + 2 * kMargin)
 // Clear of the text, the edges and the rounded corners.
-static const NSRect kGround = {{kMargin + 264, kMargin + 240}, {80, 80}};
+static const NSRect kGround = {{264, 240}, {80, 80}};
 // At the foot's left corner, where the glow is brightest.
-static const NSRect kGlow = {{kMargin + 20, kMargin + kHeight - 60}, {40, 40}};
+static const NSRect kGlow = {{20, kHeight - 60}, {40, 40}};
 
 // The brief's targets (docs on #4087): dark's grounds over white, grey and black, and light's
 // ends today. Grey has no light target.
@@ -77,6 +85,13 @@ static BOOL MaterialNamed(NSString* name, NSVisualEffectMaterial* material) {
 @implementation Backdrop
 - (void)drawRect:(NSRect)dirty {
   NSRect bounds = self.bounds;
+  if ([self.kind isEqual:@"ring"]) {
+    [NSColor.whiteColor setFill];
+    NSRectFill(bounds);
+    [NSColor.blackColor setFill];
+    NSRectFill(NSInsetRect(bounds, kMargin / 2, kMargin / 2));
+    return;
+  }
   if ([self.kind isEqual:@"white"] || [self.kind isEqual:@"black"] || [self.kind isEqual:@"grey"]) {
     double v = [self.kind isEqual:@"white"] ? 1 : [self.kind isEqual:@"black"] ? 0 : 128 / 255.0;
     [[NSColor colorWithSRGBRed:v green:v blue:v alpha:1] setFill];
@@ -192,8 +207,8 @@ static NSString* Show(NSArray<NSString*>* words) {
   BOOL active = [words[5] isEqual:@"active"];
   BOOL glow = [words[6] isEqual:@"glow"];
   NSString* behind = words[4];
-  if (![@[ @"white", @"grey", @"black", @"picture" ] containsObject:behind]) {
-    return @"error: behind is white, grey, black or picture";
+  if (![@[ @"white", @"grey", @"black", @"picture", @"ring" ] containsObject:behind]) {
+    return @"error: behind is white, grey, black, picture or ring";
   }
 
   ((Backdrop*)g_backdrop.contentView).kind = behind;
@@ -234,10 +249,77 @@ static NSString* Show(NSArray<NSString*>* words) {
   return nil;
 }
 
-static void MakeWindows(void) {
-  NSRect screen = NSScreen.mainScreen.visibleFrame;
-  NSRect back = NSMakeRect(round(NSMidX(screen) - kBackWidth / 2),
-                           round(NSMidY(screen) - kBackHeight / 2), kBackWidth, kBackHeight);
+// |frame|, in AppKit's screen coordinates, in the window list's: points from the main screen's
+// top-left.
+static CGRect ListRect(NSRect frame) {
+  CGFloat top = NSMaxY(NSScreen.screens.firstObject.frame);
+  return CGRectMake(NSMinX(frame), top - NSMaxY(frame), NSWidth(frame), NSHeight(frame));
+}
+
+// Other processes' windows on screen, but for the desktop's: the dialogs, banners and apps that
+// would be in a capture or under the material.
+static NSArray<NSDictionary*>* OthersOnScreen(void) {
+  NSArray<NSDictionary*>* list = CFBridgingRelease(CGWindowListCopyWindowInfo(
+      kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID));
+  NSMutableArray<NSDictionary*>* others = [NSMutableArray array];
+  for (NSDictionary* info in list) {
+    if ([info[(__bridge id)kCGWindowOwnerPID] intValue] == getpid() ||
+        [info[(__bridge id)kCGWindowAlpha] doubleValue] <= 0) {
+      continue;
+    }
+    [others addObject:info];
+  }
+  return others;
+}
+
+// The names of those of |others| that meet |area|, in the window list's coordinates.
+static NSArray<NSString*>* InTheWay(NSArray<NSDictionary*>* others, CGRect area) {
+  NSMutableArray<NSString*>* names = [NSMutableArray array];
+  for (NSDictionary* info in others) {
+    CFDictionaryRef frame = (__bridge CFDictionaryRef)info[(__bridge id)kCGWindowBounds];
+    CGRect bounds;
+    if (!frame || !CGRectMakeWithDictionaryRepresentation(frame, &bounds) ||
+        CGRectIsEmpty(CGRectIntersection(bounds, area))) {
+      continue;
+    }
+    NSString* owner = info[(__bridge id)kCGWindowOwnerName] ?: @"a process";
+    NSString* title = info[(__bridge id)kCGWindowName];
+    [names addObject:title.length ? [NSString stringWithFormat:@"%@ (“%@”)", owner, title] : owner];
+  }
+  return names;
+}
+
+// Where the backdrop goes: the first spot on the main screen, clear of the menu bar and the Dock,
+// that no other window meets, from the foot and the left. Else none, and |error| names what's in
+// the way of the screen's middle.
+static BOOL PlaceBackdrop(NSRect* back, NSString** error) {
+  NSRect screen = NSScreen.screens.firstObject.visibleFrame;
+  NSArray<NSDictionary*>* others = OthersOnScreen();
+  for (CGFloat x = ceil(NSMinX(screen)); x + kBackWidth <= NSMaxX(screen); x += 10) {
+    for (CGFloat y = ceil(NSMinY(screen)); y + kBackHeight <= NSMaxY(screen); y += 10) {
+      NSRect spot = NSMakeRect(x, y, kBackWidth, kBackHeight);
+      if (!InTheWay(others, ListRect(spot)).count) {
+        *back = spot;
+        return YES;
+      }
+    }
+  }
+  NSRect middle = NSMakeRect(round(NSMidX(screen) - kBackWidth / 2),
+                             round(NSMidY(screen) - kBackHeight / 2), kBackWidth, kBackHeight);
+  *error = [NSString
+      stringWithFormat:@"no spot %g by %g pt on the screen is clear of other windows; in the "
+                       @"middle: %@",
+                       kBackWidth, kBackHeight,
+                       [InTheWay(others, ListRect(middle)) componentsJoinedByString:@", "]];
+  return NO;
+}
+
+static NSString* MakeWindows(void) {
+  NSRect back;
+  NSString* error;
+  if (!PlaceBackdrop(&back, &error)) {
+    return error;
+  }
   g_backdrop = [[NSWindow alloc] initWithContentRect:back
                                            styleMask:NSWindowStyleMaskBorderless
                                              backing:NSBackingStoreBuffered
@@ -262,6 +344,7 @@ static void MakeWindows(void) {
   g_window.titleVisibility = NSWindowTitleHidden;
   g_window.title = @"Window material";
   [g_window setFrame:NSInsetRect(back, kMargin, kMargin) display:NO];
+  return nil;
 }
 
 // Runs the app's events for |seconds|, or until |until| says so.
@@ -286,7 +369,12 @@ static int Serve(void) {
   [NSApplication sharedApplication];
   [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
   [NSApp finishLaunching];
-  MakeWindows();
+  NSString* error = MakeWindows();
+  if (error) {
+    printf("error: %s\n", error.UTF8String);
+    fflush(stdout);
+    return 1;
+  }
   int reduce = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceTransparency;
   printf("serving reduce %d\n", reduce);
   fflush(stdout);
@@ -339,7 +427,19 @@ static int Serve(void) {
       });
       Pump(0.6, nil);
       reduce = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceTransparency;
-      printf("%s reduce %d\n", visible ? "shown" : "error: the window isn't visible", reduce);
+      // The capture is the screen as composed, so another window over the backdrop, or under the
+      // material, would be in it: a dialog, a banner, an app that came forward.
+      NSArray<NSString*>* inWay = InTheWay(OthersOnScreen(), ListRect(g_backdrop.frame));
+      CGRect window = ListRect(g_window.frame);
+      if (!visible) {
+        printf("error: the window isn't visible\n");
+      } else if (inWay.count) {
+        printf("error: in the way of the backdrop: %s\n",
+               [inWay componentsJoinedByString:@", "].UTF8String);
+      } else {
+        printf("shown reduce %d at %.0f,%.0f,%.0f,%.0f\n", reduce, window.origin.x,
+               window.origin.y, window.size.width, window.size.height);
+      }
       fflush(stdout);
     }
   }
@@ -384,7 +484,7 @@ static BOOL Load(NSString* path, Image* image) {
 }
 
 static Patch Read(const Image* image, NSRect rect) {
-  double scale = image->width / kBackWidth;
+  double scale = image->width / kWidth;
   size_t x0 = (size_t)round(NSMinX(rect) * scale), y0 = (size_t)round(NSMinY(rect) * scale);
   size_t x1 = (size_t)round(NSMaxX(rect) * scale), y1 = (size_t)round(NSMaxY(rect) * scale);
   const uint8_t* bytes = image->pixels.bytes;
@@ -418,10 +518,10 @@ static BOOL ReadFile(NSString* path, Patch* ground, Patch* glow) {
   if (!Load(path, &image)) {
     return NO;
   }
-  // The capture is the backdrop's frame; any other shape means it took something else.
+  // The capture is the candidate window's frame; any other shape means it took something else.
   double ratio = (double)image.width / image.height;
-  if (fabs(ratio - kBackWidth / kBackHeight) > 0.01) {
-    fprintf(stderr, "material: %s is %zux%zu, not the backdrop's shape\n", path.UTF8String,
+  if (fabs(ratio - kWidth / kHeight) > 0.01) {
+    fprintf(stderr, "material: %s is %zux%zu, not the window's shape\n", path.UTF8String,
             image.width, image.height);
     return NO;
   }
@@ -640,7 +740,8 @@ static int Table(NSString* dir) {
       sortedArrayUsingSelector:@selector(compare:)];
   for (NSString* file in files) {
     Name name;
-    if (!ParseName(file, &name) || !name.extra.length) {
+    // The ring's too, which has no column of its own.
+    if (!ParseName(file, &name) || (!name.extra.length && BehindIndex(name.behind) >= 0)) {
       continue;
     }
     Patch ground, glow;

@@ -8,7 +8,12 @@
 
 `./build.sh OUT` builds a small Mac app, `OUT/material`, with Xcode's command-line tools alone. `./capture.sh OUT` runs it and prints the table, which it also writes to `OUT/table.md`. It needs nothing else: no network, no sudo and no image tool. The app reads the captures itself.
 
-For each candidate, in dark and in light, the app shows a window like the browser's: titled, its content the whole window, its title bar clear. In it are the material, a tint over the material as the UI draws one, and a sidebar-sized column of text samples: Paper (`0xf3f0e8`) in dark, Ink (`0x16140f`) in light, at 1.0, 0.6 and 0.42, at 13 and 11 pt. Behind it is a plain window of the app's own: white, 50% grey, black, or a busy picture the app draws of slanted bands and a checker. `tools/window-screenshot.sh` captures the app's windows alone, at the plain window's frame, so nothing else on screen gets in.
+For each candidate, in dark and in light, the app shows a window like the browser's: titled, its content the whole window, its title bar clear. In it are the material, a tint over the material as the UI draws one, and a sidebar-sized column of text samples: Paper (`0xf3f0e8`) in dark, Ink (`0x16140f`) in light, at 1.0, 0.6 and 0.42, at 13 and 11 pt. Behind it is a plain window of the app's own: white, 50% grey, black, or a busy picture the app draws of slanted bands and a checker.
+
+**The capture is the screen as composed.** The window server blends what's behind into the material on the screen alone. A capture of the app's windows (`tools/window-screenshot.sh`) leaves that out, which made the first runs' tables flat. So `capture.sh` takes the screen at the candidate window's frame with `screencapture -R`.
+- **It runs only in a VM.** It checks the hardware (`kern.hv_vmm_present`, `hw.model`), never an environment variable, and refuses anywhere else. The check VM and GitHub's hosted Macs pass. A capture of the screen on the owner's Mac, or anyone's, is never allowed.
+- **It refuses a dirty screen.** The app puts its windows where no other process's window meets the backdrop, from the screen's foot and left. Before each shot it checks the window list again. If anything meets the backdrop, such as a dialog, a banner or an app, the shot fails and names it.
+- **The wallpaper is never the backdrop.** The backdrop reaches 160 pt past the candidate window on each side, more than the blur's reach. Each chosen candidate is also shot over a ring: black, with white in the margin's outer half. The notes say whether its ground matches the ground over black, which shows that nothing past the backdrop reaches the material.
 
 The candidates are `.underWindowBackground`, `.sidebar`, `.hudWindow`, `.fullScreenUI` and `.windowBackground`, plus the material the app uses today. Each is captured in `.behindWindow` blending, untinted and with the tint that brings it nearest its targets. Today's dark material is one AppKit doesn't name (29), so it's here only as today's row, never as a candidate.
 
@@ -17,7 +22,7 @@ The candidates are `.underWindowBackground`, `.sidebar`, `.hudWindow`, `.fullScr
 - **Contrast.** WCAG's ratio of the text colour at each step, blended over the ground, against the ground, taken over the backdrop where it's lowest. It's computed from the ground rather than read from the glyphs, as the UI blends its text with the ground the same way.
 - **The chosen candidate in each appearance, and today's.** These are also captured with the window inactive, with the Space's glow over the picture, and, with `--reduce-transparency`, with Reduce Transparency on. The glow is a radial gradient from the foot's left corner, `rgba(122,112,244,.36)` to clear, 560 by 460 pt. `capture.sh`'s header says how it sets Reduce Transparency and puts it back.
 
-Files are named `<material>-<tint>-<appearance>-<behind>.png`, with `-inactive`, `-glow` or `-reduce` at the end for those. A tint is `none` or `<rrggbb>a<alpha in thousandths>`.
+Files are named `<material>-<tint>-<appearance>-<behind>.png`, with `-inactive`, `-glow` or `-reduce` at the end for those, and `ring` as the behind for the margin's check. Each is the candidate window's frame alone, so a run's output stays near 4 MB. A tint is `none` or `<rrggbb>a<alpha in thousandths>`.
 
 What it doesn't measure:
 

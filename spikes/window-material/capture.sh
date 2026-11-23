@@ -5,9 +5,16 @@
 # <out>/table.md, and what it read from each capture in <out>/reads.txt.
 #
 # The windows are the spike's own, two of them: a plain one, the backdrop, and the candidate's over
-# it, 60 pt in from its edges. tools/window-screenshot.sh takes the process's windows alone, at the
-# backdrop's frame, so nothing else on screen is in a capture. Dark and light are the candidate
-# window's own appearance; the system's stays as it is.
+# it, 160 pt in from its edges, more than the blur's reach (the ring shots check it). The app puts
+# the backdrop where no other process's window meets it, and refuses each shot while one does,
+# naming it. Dark and light are the candidate window's own appearance; the system's stays as it is.
+#
+# A capture is the screen as composed, at the candidate window's frame (screencapture -R): the
+# window server blends what's behind into the material there, which a capture of the app's windows
+# alone (tools/window-screenshot.sh) leaves out. That's a capture of the screen, so the script
+# refuses to run anywhere but a VM, as the check VM and GitHub's hosted Macs are, by what the
+# hardware says (kern.hv_vmm_present, hw.model), never an environment variable: it never runs on
+# the owner's Mac, or anyone's.
 #
 # --reduce-transparency also takes the chosen candidates with Reduce Transparency on. It's the
 # system's setting, so it's turned on with
@@ -20,8 +27,18 @@
 set -u
 usage() { echo "usage: $0 <out> [--reduce-transparency]" >&2; exit 2; }
 { [ $# -eq 1 ] || { [ $# -eq 2 ] && [ "$2" = --reduce-transparency ]; }; } || usage
+model=$(sysctl -n hw.model 2> /dev/null)
+case $model in
+VirtualMac*) ;;
+*)
+  [ "$(sysctl -n kern.hv_vmm_present 2> /dev/null)" = 1 ] || {
+    echo "capture: this captures the screen, so it runs only in a VM, such as the check VM or a" \
+      "GitHub runner, and this Mac (${model:-of no model}) isn't one" >&2
+    exit 1
+  }
+  ;;
+esac
 here=$(cd "$(dirname "$0")" && pwd)
-repo=$(cd "$here/../.." && pwd)
 mkdir -p "$1"
 out=$(cd "$1" && pwd)
 bin=$out/material
@@ -99,12 +116,11 @@ shot() {
   echo "show $1 $2 $3 $4 ${5:-active} ${6:-plain}" >&3 || fail "the spike's app is gone"
   IFS= read -r -t 30 said <&4 || fail "the spike's app didn't answer for $file"
   case $said in
-  shown*) ;;
+  "shown reduce "*" at "*) rect=${said##* at } ;;
   *) fail "$file: $said" ;;
   esac
   # One more try: a capture has failed once for a reason of the runner's (#2963).
-  "$repo/tools/window-screenshot.sh" "$pid" "$shots/$file" > /dev/null ||
-    "$repo/tools/window-screenshot.sh" "$pid" "$shots/$file" > /dev/null ||
+  screencapture -x -R"$rect" "$shots/$file" || screencapture -x -R"$rect" "$shots/$file" ||
     fail "couldn't capture $file"
   echo "$file $("$bin" read "$shots/$file")" >> "$out/reads.txt"
   echo "$file"
@@ -154,6 +170,16 @@ while read -r material tint appearance; do
   shot "$material" "$tint" "$appearance" black inactive plain inactive
   shot "$material" "$tint" "$appearance" white inactive plain inactive
   shot "$material" "$tint" "$appearance" picture active glow glow
+  # Black with white in the margin's outer half, 80 pt out from the window and more from the
+  # patch: the same ground as over black says nothing past the backdrop reaches the material.
+  shot "$material" "$tint" "$appearance" ring
+done < "$work/extras"
+while read -r material tint appearance; do
+  over=$(awk -v f="$material-$tint-$appearance-black.png" '$1 == f { print $3 }' "$out/reads.txt")
+  ring=$(awk -v f="$material-$tint-$appearance-ring.png" '$1 == f { print $3 }' "$out/reads.txt")
+  if [ -n "$over" ] && [ "$over" = "$ring" ]; then same=same; else same=NOT the same; fi
+  note "Margin 160 pt, $material $tint $appearance: over black ${over:-unread}, with the ring" \
+    "${ring:-unread}: $same."
 done < "$work/extras"
 
 if [ $# -eq 2 ]; then
