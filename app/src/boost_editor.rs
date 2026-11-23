@@ -1541,7 +1541,7 @@ impl Render for BoostEditor {
                 .top(px(MENU_TOP))
                 .w(px(menu::MIN_WIDTH))
                 .h(px(menu_height()));
-            crate::menu::glass(panel, light, true)
+            crate::menu::glass(panel, light, menu::RADIUS, true)
                 .child(
                     div()
                         .absolute()
