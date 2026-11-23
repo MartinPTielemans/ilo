@@ -157,8 +157,9 @@
 //                                         the Dock icon's right click opens, or with none logs
 //                                         its items, as "browser: dock menu <titles>"
 //   dockicon <path>                       draws the Dock's icon, as the app last set it, to a 1024
-//                                         px PNG at <path> and logs the color of its dot, as
-//                                         "browser: dock icon <r> <g> <b>" in sRGB
+//                                         px PNG at <path> and logs the color of its ground line,
+//                                         which the Space's color takes in the Default and Dark
+//                                         styles, as "browser: dock icon <r> <g> <b>" in sRGB
 //   statusitem [click | capture <path>]   logs whether the menu bar has Little ilo's button,
 //                                         "browser: status item shown" or "none", or clicks it,
 //                                         or draws it to a PNG at <path>, logged as "browser:
@@ -2354,8 +2355,8 @@ bool Run(const std::string& line, void (^done)(void)) {
   }
   if (action == "dockicon") {
     // The image the app gave the Dock, which is what the Dock draws: a capture of the Dock itself
-    // would need the screen, with other apps' icons. Drawn as dock.mm draws macOS's, with the dot
-    // at (512, 328) from the top left.
+    // would need the screen, with other apps' icons. Drawn as dock.mm draws macOS's, with the
+    // ground line at (400, 887) from the top left.
     std::string path;
     std::getline(words >> std::ws, path);
     if (path.empty()) {
@@ -2377,13 +2378,13 @@ bool Run(const std::string& line, void (^done)(void)) {
     [NSApp.applicationIconImage drawInRect:NSMakeRect(0, 0, 1024, 1024)];
     [NSGraphicsContext restoreGraphicsState];
     NSData* png = [picture representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
-    NSColor* dot =
-        [[picture colorAtX:512 y:328] colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
-    if (!dot || ![png writeToFile:@(path.c_str()) atomically:YES]) {
+    NSColor* ground =
+        [[picture colorAtX:400 y:887] colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+    if (!ground || ![png writeToFile:@(path.c_str()) atomically:YES]) {
       return false;
     }
-    fprintf(stderr, "browser: dock icon %.0f %.0f %.0f\n", dot.redComponent * 255,
-            dot.greenComponent * 255, dot.blueComponent * 255);
+    fprintf(stderr, "browser: dock icon %.0f %.0f %.0f\n", ground.redComponent * 255,
+            ground.greenComponent * 255, ground.blueComponent * 255);
     done();
     return true;
   }
