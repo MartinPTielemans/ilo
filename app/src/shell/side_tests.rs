@@ -178,6 +178,35 @@ fn the_revealed_sidebar_hears_the_pointer_mirrored(cx: &mut TestAppContext) {
     assert!(!after(true, f32::MAX, cx), "the pointer gone kept it out");
 }
 
+/// On the right, a pointer that overshoots the window's right edge and comes back to it brings
+/// the sidebar out, as on the left (#3989).
+#[gpui::test]
+fn on_the_right_a_return_after_an_overshoot_reveals(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window(cx);
+    side(true, &shell, cx);
+    let to = |x: f32, cx: &mut VisualTestContext| {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(16));
+        shell.update(cx, |shell, cx| {
+            shell.pointer_over(point(px(x), px(300.)), cx)
+        });
+    };
+    shell.update(cx, |shell, _| shell.sidebar_hidden = true);
+    to(WIDTH - 400., cx);
+    to(WIDTH - 4., cx);
+    shell.update(cx, |shell, cx| {
+        shell.pointer_over(point(px(-1.), px(-1.)), cx);
+        shell.pointer_left(cx)
+    });
+    to(WIDTH - 3., cx);
+    cx.executor().advance_clock(REVEAL_WAIT * 2);
+    cx.run_until_parked();
+    assert!(
+        shell.read_with(cx, |shell, _| shell.revealed),
+        "back at the right edge after an overshoot, the pointer didn't bring the sidebar out"
+    );
+}
+
 /// The column's edge drags the width from the left of the column, between the same limits.
 #[gpui::test]
 fn the_edge_drags_the_width_from_the_columns_left(cx: &mut TestAppContext) {
