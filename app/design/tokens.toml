@@ -1637,10 +1637,11 @@ form-pill = 0.1
 create-unnamed = 0.4
 # The reveal panel's radius, the plates' 12 and their 8 in (ours), and its frame as the window's
 # (#4089): a 0.5 pt line of black at `reveal-border` round it and a 1 pt rim of white at
-# `reveal-rim` inside it. Its shadow is its window's, which the OS draws.
+# `reveal-rim` inside it, `reveal-rim-width` wide. Its shadow is its window's, which the OS draws.
 reveal-radius = 20.0
 reveal-border = 0.6
 reveal-rim = 0.1
+reveal-rim-width = 1.0
 window-button-y = 24.0
 window-button-size = 14.0
 window-button-glyph = 0x00000080

@@ -5606,7 +5606,7 @@ impl Shell {
                         color: gpui::white().opacity(crate::tokens::shell::REVEAL_RIM),
                         offset: point(px(0.), px(0.)),
                         blur_radius: px(0.),
-                        spread_radius: px(1.),
+                        spread_radius: px(crate::tokens::shell::REVEAL_RIM_WIDTH),
                         inset: true,
                     }])
                     .bg(self.palette.underlay)

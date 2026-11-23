@@ -115,7 +115,11 @@ fn picture(
     window: &mut gpui::Window,
     cx: &mut App,
 ) -> Arc<RenderImage> {
-    let key = (crate::theme::packed(color), corner.at_left(mirrored), corner == Corner::Foot);
+    let key = (
+        crate::theme::packed(color),
+        corner.at_left(mirrored),
+        corner == Corner::Foot,
+    );
     let (found, dropped) = PICTURES.with(|pictures| {
         let mut pictures = pictures.borrow_mut();
         if let Some(at) = pictures.iter().position(|(each, _)| *each == key) {
@@ -178,7 +182,9 @@ mod tests {
             assert_eq!(corner.strength(0., height), 0.);
             let halfway = corner.strength(width / 2., 0.);
             assert!((halfway - 0.5).abs() < 1e-4, "{halfway}");
-            assert!(corner.strength(width / 4., height / 4.) > corner.strength(width / 2., height / 2.));
+            assert!(
+                corner.strength(width / 4., height / 4.) > corner.strength(width / 2., height / 2.)
+            );
         }
     }
 

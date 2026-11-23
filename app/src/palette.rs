@@ -27,22 +27,20 @@ use crate::tokens::palette::{
     ACCENT_HOVERED, ACCENT_PRESSED, INTENSITY_FLOOR, INTENSITY_SPAN, RING, SELECTION,
     SWATCH_MAIN_TO,
 };
+pub use crate::tokens::palette::{
+    BUTTON_PLATE, CARD_PLATE, FIELD_PLATE, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_TERTIARY,
+};
 use crate::tokens::palette::{
     DIALOG_DARK, DIALOG_LIGHT, GRADIENT_ALPHA, GROUND_OVER_BLACK, GROUND_OVER_WHITE,
     LIGHT_GRADIENT_ALPHA, LIGHT_GROUND_OVER_BLACK, LIGHT_GROUND_OVER_WHITE,
     LIGHT_NEUTRAL_GRADIENT_ALPHA, LIGHT_STAND_IN, LIGHT_TINT, NEUTRAL, NEUTRAL_GRADIENT_ALPHA,
     OVERLAY_LIGHT, STAND_IN, TINT,
 };
+use crate::tokens::palette::{FAR_GLOW, LIGHT_SHOWN, LIGHT_SHOWN_HOVERED, SHOWN, SHOWN_HOVERED};
 pub use crate::tokens::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
-use crate::tokens::palette::{
-    FAR_GLOW, LIGHT_SHOWN, LIGHT_SHOWN_HOVERED, SHOWN, SHOWN_HOVERED,
-};
 use crate::tokens::palette::{
     LIGHT_SELECTED, LIGHT_SELECTED_HOVERED, LIGHT_SELECTED_SHADOW, LIGHT_SELECTED_SHADOW_BLUR,
     LIGHT_SELECTED_SHADOW_Y,
-};
-pub use crate::tokens::palette::{
-    BUTTON_PLATE, CARD_PLATE, FIELD_PLATE, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_TERTIARY,
 };
 pub use crate::tokens::palette::{
     STATE_HOVERED, STATE_PRESSED, STATE_SELECTED, STATE_SELECTED_HOVERED,
@@ -584,7 +582,12 @@ impl Palette {
     /// or the selected plate for a Space without one.
     pub fn shown(&self, hover: f32) -> Hsla {
         let Some(color) = self.shown else {
-            return self.selected(hover);
+            // On a dark window the ladder's hovered plate is Paper too strong for Paper's text to
+            // read on, so without a colour the plate keeps its strength under the pointer.
+            return match self.tone {
+                Tone::Dark => self.selected(0.),
+                Tone::Light => self.selected(hover),
+            };
         };
         let (rest, under) = self.tone.shown();
         Hsla::from(color).opacity(rest + (under - rest) * hover)

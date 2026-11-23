@@ -702,7 +702,10 @@ fn the_shown_spaces_icon_reads_on_the_footer_light_and_dark() {
         };
         let palette = Palette::of(Some(theme), tone);
         let footer = fine_window(&palette);
-        for at in footer.into_iter().map(|at| over(at, palette.ink, GRAIN_SHIFT * theme.grain)) {
+        for at in footer
+            .into_iter()
+            .map(|at| over(at, palette.ink, GRAIN_SHIFT * theme.grain))
+        {
             let ratio = contrast(palette.accent, at);
             if ratio < worst.0 {
                 worst = (ratio, theme.to_text());
@@ -1058,7 +1061,9 @@ fn the_pickers_card_is_opaque_where_nothing_blurs_what_is_behind_it() {
 #[test]
 fn the_tab_shown_reads_on_every_space_colour_dark_and_light() {
     let mut themes = grid(
-        &[0., 30., 60., 90., 120., 150., 180., 210., 240., 270., 300., 330.],
+        &[
+            0., 30., 60., 90., 120., 150., 180., 210., 240., 270., 300., 330.,
+        ],
         &[0., 0.5, 1.],
         &[0., 0.25, 0.5, 0.75, 1.],
         &[0., crate::theme::DEFAULT_INTENSITY, 1.],
@@ -1086,7 +1091,9 @@ fn the_tab_shown_reads_on_every_space_colour_dark_and_light() {
             }
             // It is the Space's colour: its hue kept wherever it has one.
             let main = rgb(theme.main_color());
-            let shown = palette.shown.expect("a Space with a colour has a shown colour");
+            let shown = palette
+                .shown
+                .expect("a Space with a colour has a shown colour");
             let [_, a, b] = crate::theme::oklab(main);
             let [_, sa, sb] = crate::theme::oklab(shown);
             if a.hypot(b) > 0.02 {
