@@ -256,6 +256,19 @@ async function walk() {
       return [el.localName === "a" ? el.textContent.trim() : "the mark", Math.round(out * 10) / 10];
     }).filter(([, out]) => out > 0.5);
   })()`;
+  // Which of the hero's words the Space switcher sits on, if it shows.
+  const SWITCHER = `(() => {
+    const switcher = document.querySelector(".spaces");
+    const style = getComputedStyle(switcher);
+    if (style.visibility === "hidden" || parseFloat(style.opacity) === 0) return [];
+    const s = switcher.getBoundingClientRect();
+    return [...document.querySelectorAll(".hero h1, .hero .lede, .hero .btn, .hero .note")].filter((el) => {
+      const words = document.createRange();
+      words.selectNodeContents(el);
+      const b = el.matches(".btn") ? el.getBoundingClientRect() : words.getBoundingClientRect();
+      return b.left < s.right && b.right > s.left && b.top < s.bottom && b.bottom > s.top;
+    }).map((el) => el.localName + (el.className ? "." + el.className : ""));
+  })()`;
   const PAGES = [
     ["home", "/"],
     ["changelog", "/changelog"],
@@ -362,17 +375,20 @@ async function walk() {
     }
   }
 
-  // Home in a phone's own shapes: a wide phone with its browser's bars showing, and one lying down. The first words
-  // keep off the screen's sides, and nowhere down the first screen does the bar lie over the hero's mark, which
-  // is back at the top of the page.
+  // Home in a phone's own shapes: a wide phone with its browser's bars showing, and lying down. The first words
+  // keep off the screen's sides, the switcher stays off them at rest, and nowhere down the first screen does the
+  // bar lie over the hero's mark, which is back at the top of the page.
   for (const [width, height] of [
     [440, 760],
     [852, 340],
+    [844, 390],
+    [667, 375],
   ]) {
     const at = `home at ${width} by ${height}`;
     await visitor("phone", width, height);
     await visit("/");
     const page = await js(SHARED);
+    const covered = await js(SWITCHER);
     await shot(`home-${width}-rest`);
     // What eases is looked at where it comes to rest.
     await js(
@@ -380,21 +396,30 @@ async function walk() {
     );
     const tall = await js(`document.querySelector(".hero").offsetHeight`);
     const under = [];
+    let comes = false;
     for (let y = 0; y <= tall; y += 10) {
       await js(
         `scrollTo(0, ${y}); new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))`,
       );
       const mark = await js(MARK);
       if (mark.under && mark.shows > 0) under.push(y);
-      if (y === 150) await shot(`home-${width}-moved`);
+      if (y === 150) {
+        await shot(`home-${width}-moved`);
+        comes = await js(
+          `(() => { const s = getComputedStyle(document.querySelector(".spaces")); return s.visibility === "visible" && s.opacity === "1"; })()`,
+        );
+      }
     }
     await js(`scrollTo(0, 0); new Promise((done) => requestAnimationFrame(done))`);
     const back = (await js(MARK)).shows;
-    report.pages[at] = { wide: page.wide, first: page.first, under, back };
+    report.pages[at] = { wide: page.wide, first: page.first, covered, comes, under, back };
     if (page.wide[1] > width) problems.push(`${at}: the page is ${page.wide[1]} wide`);
     if (page.first[0] < 0) problems.push(`${at}: the bar lies over the page's first words`);
     if (page.first[1] < 16)
       problems.push(`${at}: its first words come within ${page.first[1]} px of the screen's side`);
+    if (covered.length)
+      problems.push(`${at}: the switcher lies over ${covered.join(", ")} at rest`);
+    if (!comes) problems.push(`${at}: the switcher isn't there once the page has moved`);
     if (under.length)
       problems.push(
         `${at}: the bar lies over the hero's mark from ${under[0]} to ${under.at(-1)} px down the page`,
