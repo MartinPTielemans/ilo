@@ -1,7 +1,8 @@
 //! The keys of a list, one rule for every list in the app (#4108): the arrows on its axis step,
-//! Home and End (Page Up and Page Down, ⌥ with an arrow) go to its ends, return or space chooses,
-//! and, where the list asks, a character selects by type-ahead. Lifted from the menu's keys
-//! (menu.rs `key_of`, `Tracking::key` and `type_select`), the copy that already had all of them.
+//! Home and End (Page Up and Page Down, and down a column ⌥↑ and ⌥↓) go to its ends, return or
+//! space chooses, and, where the list asks, a character selects by type-ahead. Lifted from the
+//! menu's keys (menu.rs `key_of`, `Tracking::key` and `type_select`), the copy that already had
+//! all of them.
 //!
 //! It decides and the surface draws: it's told where the list is and answers where it goes, so it
 //! never takes the keyboard or requests focus itself. Focus stays the surface's act.
@@ -86,7 +87,7 @@ impl ListKeys {
 
     /// What `event` does to a list of `count` items whose keyboard is on `at` (none yet: a move
     /// starts at the end it heads from). `None` is a key the list doesn't take: one with ⌘, ⌃ or
-    /// ⇧, an arrow off its axis, or an empty list's.
+    /// ⇧ (or ⌥ but on a column's ↑ and ↓), an arrow off its axis, or an empty list's.
     pub fn step(&self, event: &KeyDownEvent, at: Option<usize>, count: usize) -> Option<Step> {
         let keys = &event.keystroke;
         let modifiers = &keys.modifiers;
@@ -99,9 +100,12 @@ impl ListKeys {
         };
         let last = count - 1;
         let key = keys.key.as_str();
+        // ⌥↑ and ⌥↓ are a column's ends, as the Mac's lists and menus have them; ⌥← and ⌥→ are a
+        // word's moves there, nothing a row takes, so with ⌥ a row's keys are the window's.
+        let ends = modifiers.alt && self.axis == Axis::Vertical;
         let to = match key {
-            _ if key == back && modifiers.alt => 0,
-            _ if key == on && modifiers.alt => last,
+            _ if key == back && ends => 0,
+            _ if key == on && ends => last,
             _ if modifiers.alt => return None,
             _ if key == back => match (at, self.ends) {
                 (None, _) => last,
@@ -281,8 +285,11 @@ mod tests {
         ] {
             assert_eq!(walk(COLUMN, Some(2), 5, &[keys]), Some(to), "{keys}");
         }
-        assert_eq!(walk(ROW, Some(1), 3, &["alt-right"]), Some(2));
-        assert_eq!(COLUMN.step(&press("alt-left"), Some(2), 5), None);
+        assert_eq!(walk(ROW, Some(1), 3, &["end", "home"]), Some(0));
+        for keys in ["alt-left", "alt-right"] {
+            assert_eq!(ROW.step(&press(keys), Some(1), 3), None, "{keys}");
+            assert_eq!(COLUMN.step(&press(keys), Some(2), 5), None, "{keys}");
+        }
     }
 
     #[test]
