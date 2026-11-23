@@ -315,11 +315,13 @@ h2 {
   transform: scale(0.96);
 }
 
-.hero {
-  min-height: max(100svh, 720px);
+/* The first screen is a section like the rest, and adds a gutter: its words are centred on bare ground with no
+   .wrap around them, and a line as wide as a phone would run to the screen's edges. */
+.home > .hero {
   place-items: center;
   text-align: center;
-  padding: 92px 24px 104px;
+  padding-left: 24px;
+  padding-right: 24px;
 }
 .hero-in {
   display: flex;
@@ -345,6 +347,7 @@ h2 {
 }
 .hero .note {
   margin-top: 20px;
+  text-wrap: balance; /* two even lines on a phone, not one and a word */
 }
 
 .wrap {
@@ -652,6 +655,14 @@ h2 {
   .nav.compact .nav-in {
     max-width: 250px;
   }
+  /* Gathered, the bar here is hardly wider than the hero's mark, which would hang out from under it like a second
+     copy as the page moves. So the mark goes when the bar gathers, as if into it, and is back when the bar opens. */
+  .nav.compact ~ main .hero .wordmark {
+    opacity: 0;
+  }
+  .live .hero .wordmark {
+    transition: opacity 0.3s var(--ease);
+  }
   .home > section {
     padding: 104px 0 112px;
   }
@@ -705,6 +716,7 @@ h2 {
   }
   body,
   .nav-in,
+  .hero .wordmark,
   .dot,
   .btn,
   .spaces i,

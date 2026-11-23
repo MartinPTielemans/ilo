@@ -6,9 +6,11 @@
 # which never touches ilobrowser.com, or deploys with live.
 #
 # Only the deploy job reads the Cloudflare secrets: they're the GitHub environment ilobrowser.com's,
-# which only main and v* tags may use (docs/releasing.md). With either missing, it deploys nothing
-# and says so. A live deploy also waits for that environment's SITE_DEPLOY variable to be `live`, so
-# this repo deploys ilobrowser.com only once the owner switches the old site repo's deploy off.
+# which only main and v* tags may use (docs/releasing.md). A caller has to pass both by name, or
+# they're empty here even in that environment's job, without an error (GitHub's "Reuse workflows").
+# With either missing, it deploys nothing: a red once SITE_DEPLOY is `live`, a notice before. A live
+# deploy also waits for that environment's SITE_DEPLOY variable to be `live`, so this repo deploys
+# ilobrowser.com only once the owner switches the old site repo's deploy off.
 name: Site
 
 on:
@@ -18,6 +20,13 @@ on:
         description: Deploy after the checks
         type: boolean
         default: false
+    # Named, never `secrets: inherit`, which would hand over every repository secret. They resolve
+    # only in the job that sets the environment, deploy, and check reads neither.
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        required: true
   workflow_dispatch:
     inputs:
       live:
@@ -80,6 +89,11 @@ jobs:
           LIVE: ${{ inputs.live }}
         run: |
           if [ -z "$TOKEN" ] || [ -z "$ACCOUNT" ]; then
+            # A live site that silently doesn't deploy reads as one that did (#3957).
+            if [ "$SITE_DEPLOY" = live ]; then
+              echo "::error::SITE_DEPLOY is live, but this job has no CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID: the ilobrowser.com environment needs both, and a workflow calling site.yml has to pass them (docs/releasing.md). Nothing is deployed."
+              exit 1
+            fi
             echo "::notice::No CLOUDFLARE_API_TOKEN or CLOUDFLARE_ACCOUNT_ID in the ilobrowser.com environment (docs/releasing.md), so nothing is deployed."
             echo "mode=none" >> "$GITHUB_OUTPUT"
             exit 0
