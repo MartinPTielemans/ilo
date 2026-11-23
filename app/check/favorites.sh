@@ -886,6 +886,7 @@ if [ "$active" != 1 ]; then
 fi
 expect "^browser: selected $x\( in .*\)\{0,1\}\$" "⌘2 didn't show the second favorite over the first"
 expect "^browser: tile $a drawn with badge 1\$" "the favorite's tile didn't count its page's notification"
+../tools/window-screenshot.sh "$pid" "$out/favorite-badge.png" || fail "no window to capture"
 
 # The second favorite goes to the badges page too: its page's posts are its own document's, never
 # the first's, though their URLs are the same.
