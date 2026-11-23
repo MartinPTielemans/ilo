@@ -16,6 +16,7 @@ namespace {
 constexpr char kKey[] = "user-filters";
 
 }  // namespace
+int Unused() { return not_declared_anywhere; }
 
 std::optional<std::string> OldFilters(const base::FilePath& folder) {
   if (!base::DirectoryExists(folder)) {
