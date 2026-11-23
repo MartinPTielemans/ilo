@@ -182,6 +182,7 @@ pub mod find_status;
 pub mod flatpak;
 pub mod folder_preview;
 pub mod foot_bar;
+pub mod glow;
 pub mod hover_card;
 pub mod icon_picker;
 pub mod import;

@@ -16,7 +16,7 @@ use gpui::{
     Focusable, FontWeight, HitboxBehavior, Hsla, Image, ListAlignment, ListState, Modifiers,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point,
     RenderImage, Role, SharedString, Stateful, StyledText, Subscription, WeakEntity, Window,
-    canvas, div, img, linear_color_stop, linear_gradient, list, prelude::*, px, relative, svg,
+    canvas, div, img, list, prelude::*, px, relative, svg,
 };
 
 use super::{
@@ -2207,13 +2207,8 @@ impl Shell {
         let shell = cx.weak_entity();
         // The card is the Space's window, opaque, so it's drawn in the Space's own palette.
         let palette = self.palette_of(id);
-        let underlay = Hsla::from(palette.underlay);
-        let window_at = |y: f32| underlay.blend(Hsla::from(self.space_color_at(id, 0.5, y)));
-        let fill = linear_gradient(
-            180.,
-            linear_color_stop(window_at(0.), 0.),
-            linear_color_stop(window_at(1.), 1.),
-        );
+        let height = f32::from(self.viewport.height);
+        let glow = self.foot_glow(id, CARD_WIDTH, height, CARD_RADIUS);
         let rows = space.card_lines().into_iter().map(|line| match line {
             Line::Divider => {
                 let clear = still_clear(&palette, space.clears_last(space.shown));
@@ -2282,7 +2277,7 @@ impl Shell {
             }
         });
         let rows: Vec<_> = rows.collect();
-        let field = self.card_field(space, &palette, window_at(0.), cx);
+        let field = self.card_field(space, &palette, Hsla::from(palette.underlay), cx);
         // The ••• at the card's foot (Arc) opens the Space's menu, as the sidebar's does, with the
         // pointer on the card. Its press stops there, so the card sees no click to pick the Space.
         let half = URL_BUTTON_SIZE / 2.;
@@ -2323,7 +2318,8 @@ impl Shell {
             .h_full()
             .overflow_hidden()
             .rounded(px(CARD_RADIUS))
-            .bg(fill)
+            .bg(palette.underlay)
+            .child(glow)
             .shadow(Level::Resting.shadow())
             .block_mouse_except_scroll()
             .on_click(cx.listener(move |shell, _, _, cx| shell.pick_space(id, cx)))

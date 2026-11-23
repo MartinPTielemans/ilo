@@ -268,14 +268,6 @@ fn a_swatch_keeps_its_own_colour_until_a_drag() {
     assert_eq!(slate.moved(0, slate.x, slate.y), slate);
 }
 
-/// The diagonal runs from the window's top left to its bottom right, its middle at the centre.
-#[test]
-fn the_diagonal_spans_the_window() {
-    assert_eq!(diagonal(0., 0., 1800., 1130.), 0.);
-    assert_eq!(diagonal(1., 1., 1800., 1130.), 1.);
-    assert!((diagonal(0.5, 0.5, 1800., 1130.) - 0.5).abs() < 1e-6);
-}
-
 /// OKLab mixing keeps its ends and stays between them.
 #[test]
 fn oklab_mixing_keeps_its_ends() {

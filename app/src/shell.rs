@@ -566,7 +566,7 @@ use crate::tokens::shell::SLEEPING_FAVICON;
 use crate::tokens::shell::TILE;
 use crate::tokens::shell::TITLE;
 use crate::tokens::shell::UNSELECTED_TITLE;
-use crate::tokens::shell::URL_FIELD;
+use crate::palette::FIELD_PLATE as URL_FIELD;
 /// A tile, and the URL field, under the pointer: the ladder's hover over its resting plate.
 pub(crate) const TILE_HOVERED: f32 =
     crate::palette::state_alpha(TILE, crate::palette::STATE_HOVERED);
@@ -5614,8 +5614,24 @@ impl Shell {
                     .w(px(self.width()))
                     .rounded(px(REVEAL_RADIUS))
                     .border(px(0.5))
-                    .border_color(self.palette.faint(REVEAL_BORDER))
-                    .bg(self.gradient(Some(self.palette.underlay.into())))
+                    .border_color(gpui::black().opacity(REVEAL_BORDER))
+                    .shadow(vec![BoxShadow {
+                        color: gpui::white().opacity(crate::tokens::shell::REVEAL_RIM),
+                        offset: point(px(0.), px(0.)),
+                        blur_radius: px(0.),
+                        spread_radius: px(crate::tokens::shell::REVEAL_RIM_WIDTH),
+                        inset: true,
+                    }])
+                    .bg(self.palette.underlay)
+                    .children(self.paged_weights().into_iter().map(|(space, weight)| {
+                        self.foot_glow(
+                            space,
+                            self.width(),
+                            f32::from(window.viewport_size().height) - 2. * REVEAL_INSET,
+                            REVEAL_RADIUS,
+                        )
+                        .opacity(weight)
+                    }))
                     .children((!self.bar_on()).then(|| self.window_buttons(px(self.width()), cx)))
                     .child(self.sidebar(cx).left_0())
                     .children(edge)
@@ -6168,7 +6184,7 @@ fn selected_plate(
     hover: f32,
     developer: bool,
 ) -> gpui::Div {
-    let fill = palette.selected(hover);
+    let fill = palette.shown(hover);
     let firmer = if developer {
         DEVELOPER_SELECTED - crate::palette::STATE_SELECTED
     } else {
@@ -6179,8 +6195,8 @@ fn selected_plate(
         ..fill
     };
     plate
-        .bg(fill.opacity(fill.a * opacity))
-        .shadow(palette.selected_shadow(opacity))
+        .bg(fill.opacity(opacity))
+        .shadow(palette.shown_shadow(opacity))
 }
 
 /// The shown tab's outline in Developer Mode, inside its plate's or tile's `radius` corners, over

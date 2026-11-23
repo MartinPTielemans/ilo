@@ -25,6 +25,24 @@ fn rows() -> Vec<Entry> {
     let little = concat!("Little ", env!("APP_NAME"));
     vec![
         row(
+            Section::Appearance,
+            None,
+            "Appearance",
+            Some("Light, dark, or as the system is."),
+        ),
+        row(
+            Section::Appearance,
+            None,
+            "Page zoom",
+            Some("Every page's size, until you zoom a site, which keeps its own."),
+        ),
+        row(
+            Section::Appearance,
+            None,
+            "Top bar",
+            Some("The URL field and the sidebar's buttons in a row across the window's top."),
+        ),
+        row(
             Section::General,
             None,
             "Reopen your windows and tabs",
@@ -43,7 +61,7 @@ fn rows() -> Vec<Entry> {
             Some("After 2 hours out of sight a tab frees its memory."),
         ),
         row(
-            Section::TabsAndSidebar,
+            Section::Appearance,
             None,
             "Sidebar position",
             Some("The side of the window the sidebar and the window's buttons are on."),
@@ -93,6 +111,25 @@ fn pip_finds_the_mini_player_by_another_name() {
     assert_eq!(names("pip"), ["Mini Player"]);
     assert_eq!(names("picture"), ["Mini Player"]);
     assert_eq!(names("link prev"), ["Peek"]);
+}
+
+/// The look's rows, moved out of General and Tabs & Sidebar (#4092), are each found by their
+/// names and other names, under Appearance alone.
+#[test]
+fn the_looks_rows_are_found_under_appearance() {
+    let rows = rows();
+    for (typed, name) in [
+        ("dark mode", "Appearance"),
+        ("zoom", "Page zoom"),
+        ("font size", "Page zoom"),
+        ("top bar", "Top bar"),
+        ("right sidebar", "Sidebar position"),
+    ] {
+        let found: Vec<&Entry> = find(typed, &rows).into_iter().map(|at| &rows[at]).collect();
+        let names: Vec<&str> = found.iter().map(|entry| entry.name.as_ref()).collect();
+        assert_eq!(names, [name], "{typed}");
+        assert_eq!(sections(&found), [Section::Appearance], "{typed}");
+    }
 }
 
 /// The drawings have no words to find, so the row's other names hold its sides: either side's
