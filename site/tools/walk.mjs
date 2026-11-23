@@ -245,6 +245,17 @@ async function walk() {
     const m = at(mark);
     return { shows: parseFloat(getComputedStyle(mark).opacity), under: ink.some((b) => m.left < b.right && m.right > b.left && m.top < b.bottom && m.bottom > b.top) };
   })()`;
+  // What of the gathered bar lies outside it by the insets it's drawn with, 22 px before the mark and 8 after the
+  // button: each thing's name and how many px it's out.
+  const INSIDE = `(() => {
+    const bar = document.querySelector(".nav-in").getBoundingClientRect();
+    const things = [document.querySelector(".nav-brand svg"), ...[...document.querySelectorAll(".nav-links a")].filter((a) => a.offsetParent)];
+    return things.map((el) => {
+      const b = el.getBoundingClientRect();
+      const out = Math.max(bar.left + 22 - b.left, b.right - (bar.right - 8), bar.top - b.top, b.bottom - bar.bottom);
+      return [el.localName === "a" ? el.textContent.trim() : "the mark", Math.round(out * 10) / 10];
+    }).filter(([, out]) => out > 0.5);
+  })()`;
   const PAGES = [
     ["home", "/"],
     ["changelog", "/changelog"],
@@ -276,6 +287,7 @@ async function walk() {
       await sleep(1300);
       page.moved = await js(`scrollY > 40`);
       page.pill = await js(`(${box})(document.querySelector(".nav-in"))`);
+      if (who === "phone" && page.moved) page.outside = await js(INSIDE);
       await shot(`${name}-${width}-mid`);
       await js(`scrollTo(0, document.documentElement.scrollHeight)`);
       await sleep(900);
@@ -299,11 +311,54 @@ async function walk() {
       )
         problems.push(`${at}: the bar reads ${page.links.join(" · ")}`);
       if (page.moved && page.pill[2] >= page.bar[2]) problems.push(`${at}: the bar didn't gather`);
+      for (const [thing, out] of page.outside ?? [])
+        problems.push(`${at}: gathered, ${thing} lies ${out} px past the bar's inset`);
       if (page.first[0] < 0) problems.push(`${at}: the bar lies over the page's first words`);
       if (page.first[1] < 16)
         problems.push(
           `${at}: its first words come within ${page.first[1]} px of the screen's side`,
         );
+    }
+  }
+
+  // Gathered on a phone of any width from 320 px up, the bar holds its mark and its button whatever the button says:
+  // the phone's label (src/send.ts's brief one: the bar's button is the visitor's own download), and each computer's
+  // in a narrow window (src/downloads.ts), in its face, a step larger, and in the faces it falls back to before
+  // Figtree arrives. Larger and in a fallback face at once is only reported: at 320 the longest labels can't fit both.
+  const LABELS = [
+    "Send to my computer",
+    "Download for Mac",
+    "Download for Windows",
+    "Download for Linux",
+  ];
+  const FALLBACK = `font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif`;
+  const FACES = [
+    ["in its face", "", true],
+    ["a step larger", "font-size: 17.5px", true],
+    ["in its fallback face", FALLBACK, true],
+    ["a step larger in its fallback face", `font-size: 17.5px; ${FALLBACK}`, false],
+  ];
+  report.gathered = {};
+  for (const width of [320, 360, 390, 440]) {
+    await visitor("phone", width, 800);
+    await visit("/");
+    await js(`scrollTo(0, 600)`);
+    await sleep(1300);
+    await shot(`home-${width}-gathered`);
+    await js(
+      `document.head.appendChild(Object.assign(document.createElement("style"), { textContent: "* { transition: none !important; }" }))`,
+    );
+    for (const label of LABELS) {
+      for (const [face, style, held] of FACES) {
+        const outside = await js(
+          `(() => { const a = document.querySelector(".nav-cta"); a.textContent = ${JSON.stringify(label)}; a.style.cssText = ${JSON.stringify(style)}; return new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))); })().then(() => ${INSIDE})`,
+        );
+        const at = `home gathered at ${width}, "${label}" ${face}`;
+        report.gathered[at] = outside;
+        if (held)
+          for (const [thing, out] of outside)
+            problems.push(`${at}: ${thing} lies ${out} px past the bar's inset`);
+      }
     }
   }
 
