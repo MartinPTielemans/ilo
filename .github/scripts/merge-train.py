@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """The train the integrator would cut from the queue:ready pull requests, as a dry run (#3917 A3,
 slice 1): each pull request in or held, by the rules the integrator's train applies, with whether
-the orchestrator's word is on its head. It pushes, labels, comments and merges nothing.
+the orchestrator's word is on its head and whether the integrator merges it by hand. It pushes,
+labels, comments and merges nothing.
 
 It runs nothing from a pull request: each head is fetched as data, for git merge-tree, and the
 rules it reads, tools/pr-rules.py and .github/merge-gated.txt, come from main's tree. A read that
@@ -17,16 +18,18 @@ import re
 import subprocess
 import sys
 
-REPO = os.environ["GITHUB_REPOSITORY"]
+REPO = os.environ.get("GITHUB_REPOSITORY", "")
 OWNER = REPO.split("/")[0]
 WORD = "orchestrator/word"
-# What a core batch carries, and the other engine files, which the integrator takes by hand.
+# What a core batch carries: never a train's.
 CORE = re.compile(r"^(core/|engine/(patches/|series$|pins\.ini$))")
+# The other engine files, which the integrator merges by hand.
 ENGINE = re.compile(r"^engine/")
 # A merge by the workflow's own token can't hold a workflow file.
 WORKFLOWS = re.compile(r"^\.github/workflows/")
 # Bots' review checks, which the integrator's reading leaves out too.
 IGNORED_CHECKS = re.compile(r"coderabbit", re.I)
+# Green once something on the head has succeeded: a skipped run alone ran nothing.
 GREEN = {"success", "skipped", "neutral"}
 
 
@@ -79,30 +82,40 @@ def word(sha):
     return sorted(int(n) for n in found.group(1).split(",") if n) if found else []
 
 
-def checks(sha, branch):
-    """What's not green among the newest run of each workflow and event on this head and branch,
-    and the other statuses on it. Empty when all are green; Unread when there are none. A copy of
-    the head on another branch, whose runs are often cancelled, doesn't count."""
-    runs = [r for r in api(f"repos/{REPO}/actions/runs?head_sha={sha}&per_page=100").get("workflow_runs") or []
-            if r["head_branch"] == branch]
-    if not runs:
-        raise Unread(f"no workflow runs on {sha}")
+def changed_files(base, head):
+    """Every path the head changes from base. A rename is its old path and its new one, so a file
+    moved out of a gated path is a change to that path."""
+    return [f for f in git("diff", "--name-only", "--no-renames", base, head).stdout.splitlines() if f]
+
+
+def not_green(runs, statuses, sha):
+    """What's not green among the newest run of each workflow and event, and the other statuses.
+    Empty when all are green. Unread when nothing on the head has succeeded, as a head whose runs
+    were all skipped, such as a draft's, ran nothing."""
     newest = {}
     for r in sorted(runs, key=lambda r: r["created_at"]):
-        newest[(r["workflow_id"], r["event"])] = r
+        if not IGNORED_CHECKS.search(r["name"]):
+            newest[(r["workflow_id"], r["event"])] = r
+    if not any(r["status"] == "completed" and r["conclusion"] == "success" for r in newest.values()):
+        raise Unread(f"nothing ran on this head, {sha}: no run on it and its branch succeeded")
     bad = []
     for r in newest.values():
-        if IGNORED_CHECKS.search(r["name"]):
-            continue
         if r["status"] != "completed":
             bad.append(f"{r['name']} ({r['event']}) {r['id']} not finished")
         elif r["conclusion"] not in GREEN:
             bad.append(f"{r['name']} ({r['event']}) {r['id']} {r['conclusion']}")
-    combined = api(f"repos/{REPO}/commits/{sha}/status")
-    for s in combined.get("statuses", []):
+    for s in statuses:
         if s["context"] != WORD and not IGNORED_CHECKS.search(s["context"]) and s["state"] != "success":
             bad.append(f"status {s['context']} {s['state']}")
     return bad
+
+
+def checks(sha, branch):
+    """not_green() of the runs on this head and branch, and its statuses. A copy of the head on
+    another branch, whose runs are often cancelled, doesn't count."""
+    runs = [r for r in api(f"repos/{REPO}/actions/runs?head_sha={sha}&per_page=100").get("workflow_runs") or []
+            if r["head_branch"] == branch]
+    return not_green(runs, api(f"repos/{REPO}/commits/{sha}/status").get("statuses", []), sha)
 
 
 def queue_order(number):
@@ -147,22 +160,25 @@ def decide(number, gated, rules):
     if git("rev-parse", f"refs/mq/{number}").stdout.strip() != head:
         raise Unread(f"#{number}'s fetched head isn't {head}")
     base = git("merge-base", "origin/main", head).stdout.strip()
-    files = [f for f in git("diff", "--name-only", base, head).stdout.splitlines() if f]
+    files = changed_files(base, head)
     if not files:
         raise Unread(f"#{number} changes no files from main")
     merges = git("rev-list", "--min-parents=2", f"{base}..{head}").stdout.split()
 
-    # Whose it is, when it isn't a train's.
+    # What's never a train's.
     if fork:
         held.append("a fork's head: the integrator's")
     if any(CORE.match(f) for f in files):
         held.append("a core batch's")
-    elif any(ENGINE.match(f) for f in files):
-        held.append("the integrator's: it changes engine/ files")
+    # What rides the train but the integrator merges by hand. Slice 3, which merges, holds these.
+    by = []
+    if any(ENGINE.match(f) for f in files) and not any(CORE.match(f) for f in files):
+        by.append("it changes engine/ files")
     if any(WORKFLOWS.match(f) for f in files):
-        held.append("the integrator's: a workflow file, which this workflow's token can't merge")
+        by.append("a workflow file, which this workflow's token can't merge")
     if merges:
-        held.append("the integrator's: it holds a merge, so GitHub won't rebase it")
+        by.append("it holds a merge, so GitHub won't rebase it")
+    row["merges_by"] = ("integrator: " + "; ".join(by)) if by else "train"
 
     bad = checks(head, pr["head"]["ref"])
     if bad:
@@ -196,6 +212,8 @@ def main():
     rules = os.path.join(out, "pr-rules.py")
     summary, unread = [], []
     try:
+        if not REPO:
+            raise Unread("GITHUB_REPOSITORY isn't set")
         git("fetch", "-q", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main")
         main_sha = git("rev-parse", "origin/main").stdout.strip()
         text = main_file("tools/pr-rules.py")
@@ -266,11 +284,12 @@ def main():
 
     summary.append(f"Main at {main_sha}. The gated list is {source}. Nothing was pushed, labelled or merged.")
     summary.append("")
-    summary.append("| PR | Head | In | Word on head | allowclose | Closes | Why held |")
-    summary.append("|---|---|---|---|---|---|---|")
+    summary.append("| PR | Head | In | Merges by | Word on head | allowclose | Closes | Why held |")
+    summary.append("|---|---|---|---|---|---|---|---|")
     for _, (row, head, issues, ok) in rows:
         why = "; ".join(row["held"]) or row.get("note", "")
-        summary.append(f"| #{row['pr']} | `{head[:12]}` | {'no' if row['held'] else 'yes'} | {row['word']} | "
+        summary.append(f"| #{row['pr']} | `{head[:12]}` | {'no' if row['held'] else 'yes'} | "
+                       f"{row.get('merges_by', '–').replace('|', '/')} | {row['word']} | "
                        f"{','.join(map(str, row['allowclose'])) or '–'} | "
                        f"{','.join(f'#{i}' for i in row['closes']) or '–'} | {why.replace('|', '/')} |")
     if unread:
