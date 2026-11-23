@@ -20,6 +20,7 @@ use serde_json::Value;
 
 use super::ready::{Found, Ready};
 use super::runner::{self, Cli, Failure, Launch, Out, Process};
+use super::sign_in::Offer;
 use super::{Agents, Client, Question, ToolResult, page, site, tools};
 use crate::shell::MenuEntry;
 
@@ -76,10 +77,11 @@ pub enum State {
         resets: Option<SharedString>,
     },
     Stopped,
-    /// It couldn't go on: why, and the command that fixes it, if one does.
+    /// It couldn't go on: why, and whether its assistant's row fixes it, as it does when the
+    /// assistant isn't signed in or isn't installed.
     Failed {
         why: SharedString,
-        command: Option<&'static str>,
+        assistant: bool,
     },
 }
 
@@ -410,8 +412,8 @@ pub struct Card {
     pub open: Vec<(u64, SharedString)>,
     /// Limit's Retry.
     pub retry: bool,
-    /// The command that fixes a failure.
-    pub command: Option<&'static str>,
+    /// A failure's fix, its assistant's row's own button: Sign in to …, Cancel or Get ….
+    pub fix: Option<(Cli, Offer)>,
 }
 
 impl Card {
@@ -452,6 +454,9 @@ pub enum TaskAction {
     /// The Archive's Delete from Archive, and ⌘Z's undoing of it.
     Delete,
     Undelete,
+    /// A failed card's Sign in to …, and its Cancel while that runs: the assistant's row's own.
+    SignIn,
+    CancelSignIn,
 }
 
 /// A task the user dismissed, as the Library's Archived Tabs lists it among the tabs.
@@ -610,6 +615,8 @@ impl Agents {
             TaskAction::OpenTab(tab) => return (self.open_result(agent, Some(tab), cx), None),
             TaskAction::Delete => self.delete_task(agent, true, cx),
             TaskAction::Undelete => self.delete_task(agent, false, cx),
+            TaskAction::SignIn => self.sign_in_for_task(agent, cx),
+            TaskAction::CancelSignIn => self.cancel_sign_in_for_task(agent),
         }
         (None, None)
     }
@@ -870,8 +877,13 @@ impl Agents {
             question,
             open,
             retry: matches!(task.state, State::Limit { .. }) && self.tasks_on(),
-            command: match task.state {
-                State::Failed { command, .. } => command,
+            fix: match (&task.state, task.cli) {
+                (
+                    State::Failed {
+                        assistant: true, ..
+                    },
+                    Some(cli),
+                ) => self.card_offer(cli).map(|offer| (cli, offer)),
                 _ => None,
             },
         }
@@ -1336,16 +1348,16 @@ impl Agents {
                 let why = format!("{} isn't signed in.", cli.name()).into();
                 State::Failed {
                     why,
-                    command: Some(cli.sign_in()),
+                    assistant: true,
                 }
             }
             Failure::Other(why) if why.contains("isn't installed") => State::Failed {
                 why: why.into(),
-                command: Some(cli.install()),
+                assistant: true,
             },
             Failure::Other(why) => State::Failed {
                 why: page::clip(&why, 200).into(),
-                command: None,
+                assistant: false,
             },
         };
         if let State::Limit { resets } = &state {

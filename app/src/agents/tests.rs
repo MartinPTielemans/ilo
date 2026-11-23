@@ -6029,6 +6029,7 @@ mod tasks {
     use super::*;
     use crate::agents::ready::{Found, Ready};
     use crate::agents::runner::{self, Cli, Failure, Out};
+    use crate::agents::sign_in::Offer;
     use crate::agents::task::{AskedOn, Dot, State, TaskAction};
 
     /// A stand-in for `claude` that keeps what it's sent beside itself, and never answers. Each
@@ -6094,6 +6095,13 @@ mod tasks {
             agents.tasks.default = Some(Cli::Claude);
         });
         (agents, browser)
+    }
+
+    /// What the last look found of Claude Code.
+    fn set_found(agents: &Entity<Agents>, ready: Ready, cx: &mut TestAppContext) {
+        agents.update(cx, |agents, _| {
+            agents.tasks.found.get_mut(&Cli::Claude).unwrap().ready = ready
+        });
     }
 
     fn page() -> Option<AskedOn> {
@@ -6321,12 +6329,12 @@ mod tasks {
     fn a_cli_not_installed_says_how_to_install_it(cx: &mut TestAppContext) {
         let (agents, _) = ready(None, cx);
         start(&agents, "Find a flight", cx);
+        // As the look its failure starts finds it.
+        set_found(&agents, Ready::NotFound, cx);
         let card = card_of(&agents, cx);
         assert_eq!(card.status.as_ref(), "Claude isn't installed.");
-        assert_eq!(
-            card.command,
-            Some("npm install -g @anthropic-ai/claude-code")
-        );
+        // Its row's own Get.
+        assert_eq!(card.fix, Some((Cli::Claude, Offer::Get)));
         assert_eq!(card.dot, Dot::Ended);
     }
 
@@ -7106,11 +7114,19 @@ mod tasks {
         let listed = agents.read_with(cx, |agents, _| agents.ask_agents());
         assert_eq!(listed[0].resets.as_deref(), Some(resets.as_str()));
         said(&agents, &agent, Out::Ended(Some(Failure::SignedOut)), cx);
+        // As the look its failure starts finds it: the card offers its row's own Sign in.
+        set_found(&agents, Ready::SignedOut, cx);
         let card = card_of(&agents, cx);
         assert_eq!(
-            (card.status.as_ref(), card.command),
-            ("Claude isn't signed in.", Some("claude auth login"))
+            (card.status.as_ref(), card.fix),
+            (
+                "Claude isn't signed in.",
+                Some((Cli::Claude, Offer::SignIn))
+            )
         );
+        // Signed in since, it offers nothing more.
+        set_found(&agents, Ready::SignedIn, cx);
+        assert_eq!(card_of(&agents, cx).fix, None);
     }
 
     #[gpui::test]

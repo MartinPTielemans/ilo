@@ -2,7 +2,7 @@
 //! each, of a player's shape and fill, oldest lowest, so the list's rows above never move as tasks
 //! come and go. The favicon's column holds the state's glyph; the title is a row's, over a status
 //! line where each step rolls in, the agent's question, or its result's line; its chips sit under
-//! that: the answers, Retry, Copy or Open. ✕ shows under the pointer. Three show, waiting first,
+//! that: the answers, Retry, its assistant's Sign in to … or Get …, or Open. ✕ shows under the pointer. Three show, waiting first,
 //! then working, then done, and a fourth plate says how many more there are and opens the foot to
 //! all of them. While ⌘T asks for a task, the foot holds an empty slot a plate tall, which the bar
 //! folds into and the card fills. The foot is the window's, as the players are, so switching Spaces
@@ -37,6 +37,8 @@ use super::{
     TILE_RADIUS, TITLE, TITLE_END_INSET, TITLE_GAP, What, cubic_bezier, dashed_plate,
     selected_plate, title,
 };
+use crate::agents::runner::Cli;
+use crate::agents::sign_in::Offer;
 use crate::agents::task::{Card, Dot, TaskAction, foot_words, open_label, status_lead};
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
 use crate::tokens::shell::task::motion::{
@@ -126,7 +128,8 @@ pub(super) struct Shape {
 enum Chip {
     Answer(SharedString),
     Retry,
-    Copy(&'static str),
+    /// A failure's fix, its assistant's row's own button.
+    Assistant(Cli, Offer),
     Open(SharedString),
 }
 
@@ -135,21 +138,21 @@ impl Chip {
         match self {
             Chip::Answer(answer) => answer.clone(),
             Chip::Retry => "Retry".into(),
-            Chip::Copy(_) => "Copy".into(),
+            Chip::Assistant(cli, offer) => offer.label(*cli).unwrap_or_default().into(),
             Chip::Open(label) => label.clone(),
         }
     }
 }
 
-/// A card's chips: the ask's answers, Limit's Retry, Copy for the command that fixes a failure, or
+/// A card's chips: the ask's answers, Limit's Retry, a failure's fix from its assistant's row, or
 /// Done's Open <site> or Open 3 pages.
 fn chips(card: &Card) -> Vec<Chip> {
     let mut chips: Vec<Chip> = card.answers.iter().cloned().map(Chip::Answer).collect();
     if card.retry {
         chips.push(Chip::Retry);
     }
-    if let Some(command) = card.command {
-        chips.push(Chip::Copy(command));
+    if let Some((cli, offer)) = card.fix {
+        chips.push(Chip::Assistant(cli, offer));
     }
     if let Some(label) = open_label(&card.open) {
         chips.push(Chip::Open(label));
@@ -1811,10 +1814,17 @@ impl Shell {
                             shell.open_task_pages(agent.clone(), None, from, cx);
                         }))
                     }
-                    Chip::Copy(command) => element.on_click(cx.listener(move |shell, _, _, cx| {
-                        cx.stop_propagation();
-                        shell.copy(command, "Command Copied", cx);
-                    })),
+                    Chip::Assistant(cli, Offer::Get) => {
+                        element.on_click(cx.listener(move |shell, _, _, cx| {
+                            cx.stop_propagation();
+                            log!("browser: assistant install page {} via sidebar", cli.id());
+                            shell.browser.open_page(cli.install_page(), cx);
+                        }))
+                    }
+                    Chip::Assistant(_, Offer::Cancel) => {
+                        element.on_click(act(agent, TaskAction::CancelSignIn, cx))
+                    }
+                    Chip::Assistant(..) => element.on_click(act(agent, TaskAction::SignIn, cx)),
                 };
                 Some(element.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()))
             });

@@ -2579,7 +2579,7 @@ fn task_cards(home: u64) -> Vec<TaskCard> {
             _ => Vec::new(),
         },
         retry: false,
-        command: None,
+        fix: None,
     };
     let mut cards: Vec<TaskCard> = (FIRST_TASK..).zip(TASKS).map(card).collect();
     // PREVIEW_SESSION=working, done or open shows an outside agent's card alone: at work after it
