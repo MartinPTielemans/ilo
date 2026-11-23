@@ -2,7 +2,7 @@
 # Which of this checkout's core and engine patch files the engine app/ links wasn't built with: a
 # line naming the engine, then one path per file, from the checkout's root. check/lib.sh's
 # engine_has reads it, and app/build.sh keeps it as build/engine-changes for a copy of the tree with
-# no repository, as a check VM's (#2554). Exits non-zero when it can't tell.
+# no repository, as a check VM's (#2554). Exits non-zero when it can't tell, saying why.
 # A prebuilt engine was built at a commit of ilo's, which git compares with. A local build, Release
 # or Dev, was built from the engine tree, which links a checkout's core and keeps a copy of each
 # patch it applied (engine/tree.sh): a file that differs from the tree's, or that changed there
@@ -33,7 +33,7 @@ if [ -n "$engine" ] && [ -n "$out" ] && [ -f "$out/browser_core.h.built" ]; then
     { cmp -s "$file" "$there" && [ ! "$there" -nt "$built" ]; } || echo "$file"
   done
 else
-  commit=$(engine/fetch.sh commit 2> /dev/null)
+  commit=$(engine/fetch.sh commit)
   echo "$commit"
   git diff --name-only "$commit" -- core engine/patches
 fi
