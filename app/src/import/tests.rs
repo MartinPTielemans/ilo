@@ -2978,6 +2978,58 @@ pub(crate) fn let_read(home: &Path) {
     fs::set_permissions(bookmarks, fs::Permissions::from_mode(0o644)).unwrap();
 }
 
+/// A browser whose Spaces can't be read here has its reader's note where they'd be counted, first
+/// and with no count, even one whose sidebar isn't read here; its other kinds come as ever, and
+/// its Spaces never fold into the line of kinds with nothing to bring.
+#[gpui::test]
+fn a_note_stands_where_the_spaces_would_be_counted(cx: &mut TestAppContext) {
+    let page = Page {
+        url: "https://example.org/".into(),
+        title: "Example".into(),
+        last_visit: 0,
+        visits: 1,
+        typed: 0,
+    };
+    let noted = || Found {
+        history: vec![(FromProfile::Default, vec![page.clone()])],
+        note: Some(super::dia::ENCRYPTED),
+        ..Found::default()
+    };
+    let browser = Rc::new(Browser::new(None));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    view.update(cx, |view, cx| view.preview_read("Arc", noted(), cx));
+    // The read the pick started comes to nothing once it's in.
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.choices(),
+            [
+                (Kind::Spaces, String::new()),
+                (Kind::History, "1 page".into())
+            ]
+        );
+        assert_eq!(view.spaces_note(), Some(&super::dia::ENCRYPTED));
+        assert_eq!(
+            view.nothing().as_deref(),
+            Some("Nothing to bring from Open tabs, Favorites, Addresses or Extensions.")
+        );
+    });
+
+    let made = chrome("chrome-noted", &[("Default", "Me")], SystemTime::now());
+    let browser = Rc::new(Browser::new(Some(Roots::under(&made, Os::Linux))));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false));
+    view.update(cx, |view, cx| view.preview_read("Chrome", noted(), cx));
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        let kinds: Vec<Kind> = view.choices().into_iter().map(|(kind, _)| kind).collect();
+        assert_eq!(kinds, [Kind::Spaces, Kind::History]);
+        assert!(!view.nothing().unwrap_or_default().contains("Spaces"));
+    });
+    fs::remove_dir_all(made).unwrap();
+}
+
 /// Picking a browser reads it, away from the UI, and its choices then say how much of each kind
 /// comes, with the profiles it goes into: Arc's Spaces by name, a new profile for its Work, and
 /// Chrome's bookmarks, open tabs, history and address. A kind with nothing to bring isn't a choice:

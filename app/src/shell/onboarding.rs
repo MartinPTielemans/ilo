@@ -631,6 +631,19 @@ impl Shell {
         cx.notify();
     }
 
+    /// Picks the browser named `name` at the import step, with `found` as though its files had
+    /// been read, for the preview's captures.
+    pub fn onboarding_import_read(
+        &mut self,
+        name: &str,
+        found: crate::import::found::Found,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(importing) = &self.importing {
+            (importing.view).update(cx, |view, cx| view.preview_read(name, found, cx));
+        }
+    }
+
     /// Turns the daily count's switch on at the opt-ins step, for the preview's captures.
     pub fn onboarding_count_on(&mut self, cx: &mut Context<Self>) {
         self.onboarding_switch(OptIn::DailyCount, cx);

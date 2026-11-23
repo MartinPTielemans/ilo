@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use super::found::Found;
+use super::found::{Found, Note};
 use super::read::ReadError;
 use super::sources::Source;
 
@@ -16,3 +16,9 @@ pub fn files(_source: &Source) -> Vec<PathBuf> {
 pub fn read(_source: &Source) -> Result<Option<Found>, ReadError> {
     Ok(None)
 }
+
+/// Said in place of Zen's Spaces when its version keeps them where ilo can't read them.
+pub const TOO_OLD: Note = Note {
+    said: "This version of Zen is older than 1.18, so ilo can't import Spaces.",
+    action: None,
+};
