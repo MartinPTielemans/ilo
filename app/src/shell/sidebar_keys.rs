@@ -24,6 +24,11 @@ use crate::tokens::shell::{KEYED, KEYED_RING};
 /// the shortcuts on the same keys, escape's Stop among them.
 pub(super) const CONTEXT: &str = "SidebarKeys";
 
+/// Added to the sidebar's context only while the ring is on the menu control, which then has the
+/// keyboard itself. Space is a text key: under the sidebar's own context it would be on the path of
+/// every field in the sidebar, a rename's or an input method's convert key among them.
+const MENU_CONTEXT: &str = "MenuKeys";
+
 /// How long the ring stays on the tab Close and Keep Pinned shows. Interim: Arc 1.170's was still
 /// there 2.5 s after it was drawn, in the one recording of it, which ended there.
 const ATTENTION: Duration = Duration::from_millis(2500);
@@ -46,7 +51,7 @@ pub(super) fn bind(cx: &mut App) {
         KeyBinding::new("down", KeyDown, Some(CONTEXT)),
         KeyBinding::new("enter", KeyShow, Some(CONTEXT)),
         // Space opens the menu control's menu, as Return does (menu_keys.rs).
-        KeyBinding::new("space", KeySpace, Some(CONTEXT)),
+        KeyBinding::new("space", KeySpace, Some(MENU_CONTEXT)),
         KeyBinding::new("escape", KeyLeave, Some(CONTEXT)),
         KeyBinding::new("right", KeyOpen, Some(CONTEXT)),
         KeyBinding::new("left", KeyOut, Some(CONTEXT)),
@@ -328,13 +333,21 @@ impl Shell {
             .when(self.a11y, |sidebar| {
                 sidebar.role(Role::Group).aria_label("Sidebar")
             })
-            .key_context(CONTEXT)
+            .key_context({
+                let mut context = gpui::KeyContext::default();
+                context.add(CONTEXT);
+                if self.keyed_menu.is_some() {
+                    context.add(MENU_CONTEXT);
+                }
+                context
+            })
             .track_focus(&self.sidebar_keys)
             .on_action(cx.listener(|shell, _: &KeyUp, _, cx| shell.key_step(false, cx)))
             .on_action(cx.listener(|shell, _: &KeyDown, _, cx| shell.key_step(true, cx)))
             .on_action(cx.listener(|shell, _: &KeyShow, _, cx| shell.key_show(cx)))
-            .on_action(cx.listener(|shell, _: &KeySpace, _, cx| {
-                if !shell.key_open_menu(cx) {
+            .on_action(cx.listener(|shell, _: &KeySpace, window, cx| {
+                // Only the sidebar's own element holds the menu's ring, never a field in it.
+                if !(shell.sidebar_keys.is_focused(window) && shell.key_open_menu(cx)) {
                     cx.propagate()
                 }
             }))
