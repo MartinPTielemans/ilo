@@ -349,6 +349,8 @@ EOF
     $((right - in)) $((bottom - in)) $((right + in + 1)) $((bottom - in)) |
     python3 -I -c '
 import struct, sys
+# Python on Windows ends a line with \r\n, which the shell would read into the last colour.
+sys.stdout.reconfigure(newline="\n")
 data = open(sys.argv[1], "rb").read()
 offset, = struct.unpack_from("<I", data, 10)
 width, height, _, bits = struct.unpack_from("<iiHH", data, 18)
