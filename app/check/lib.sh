@@ -1445,3 +1445,4 @@ other_app_closes() {
   other_app=
   other_app_token=
 }
+# merge-train probe 2, never to land (#3917).
