@@ -498,26 +498,29 @@ pub fn frame() -> gpui::Div {
         .items_center()
 }
 
+/// A row's line's type, which says more under its name, and any line that describes as a row's
+/// does.
+pub fn detail_type() -> gpui::Div {
+    div().text_size(px(SMALL)).line_height(px(DETAIL_LINE))
+}
+
 /// A row's text: its name, at medium, and the line under it that says more, if any, which wraps.
 pub fn text(look: &Look, name: impl Into<SharedString>, line: Option<SharedString>) -> gpui::Div {
     let line = line.map(|line| {
-        div()
+        detail_type()
             .mt(px(DETAIL_TOP))
-            .text_size(px(SMALL))
-            .line_height(px(DETAIL_LINE))
             .text_color(look.detail)
             .child(line)
     });
+    div().flex_1().min_w_0().child(name_of(name)).children(line)
+}
+
+/// A row's name, at medium, on one line.
+fn name_of(name: impl Into<SharedString>) -> gpui::Div {
     div()
-        .flex_1()
-        .min_w_0()
-        .child(
-            div()
-                .truncate()
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .child(name.into()),
-        )
-        .children(line)
+        .truncate()
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .child(name.into())
 }
 
 /// A row's text whose line sets what the user or an agent types in `mono`, the face a terminal
@@ -547,17 +550,11 @@ pub fn command_text(
         None => vec![run(line.len(), crate::face::UI)],
     };
     let runs: Vec<_> = runs.into_iter().filter(|run| run.len > 0).collect();
-    let small = || {
-        div()
-            .mt(px(DETAIL_TOP))
-            .text_size(px(SMALL))
-            .line_height(px(DETAIL_LINE))
-            .text_color(look.detail)
-    };
+    let small = || detail_type().mt(px(DETAIL_TOP)).text_color(look.detail);
     div()
         .flex_1()
         .min_w_0()
-        .child(div().truncate().child(name.into()))
+        .child(name_of(name))
         .child(small().child(gpui::StyledText::new(line.clone()).with_runs(runs)))
 }
 
@@ -594,7 +591,7 @@ pub fn end(controls: impl IntoIterator<Item = gpui::AnyElement>) -> gpui::Div {
 /// A row: its name, and its control at the end.
 pub fn row(name: impl Into<SharedString>, control: gpui::AnyElement) -> gpui::Div {
     frame()
-        .child(div().flex_1().min_w_0().truncate().child(name.into()))
+        .child(name_of(name).flex_1().min_w_0())
         .child(end([control]))
 }
 
@@ -1443,4 +1440,38 @@ pub fn another_agent_row(
             Some("Any app that uses MCP".into()),
         ))
         .child(end([how.into_any_element()]))
+}
+
+/// A site's note in Settings › Agents' Site notes (#4122): the site's name over what its note
+/// holds, and a button that opens the note's own text under them, as an agent gets it, and
+/// closes it again. A press calls `toggle`.
+pub fn site_note_row(
+    look: &Look,
+    note: &'static crate::agents::notes::Note,
+    opened: bool,
+    a11y: bool,
+    logged: Drawn,
+    toggle: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+) -> gpui::Div {
+    use crate::agents::notes::{CLOSE, READ};
+    let host = note.host;
+    let title = if opened { CLOSE } else { READ };
+    let id = gpui::ElementId::Name(format!("agent-note-read-{host}").into());
+    let read = stop_button(look, id, title, a11y)
+        .relative()
+        .child(drawn(format!("note {host}"), logged))
+        .on_click(toggle);
+    let head = frame()
+        .child(text(look, note.name, Some(note.about.into())))
+        .child(end([read.into_any_element()]));
+    let words = opened.then(|| {
+        div()
+            .px(px(ROW_X))
+            .pb(px(PADDING))
+            .text_size(px(SMALL))
+            .line_height(px(DETAIL_LINE))
+            .text_color(look.detail)
+            .child(note.text.trim_end())
+    });
+    div().child(head).children(words)
 }

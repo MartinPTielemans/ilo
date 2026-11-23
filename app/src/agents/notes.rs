@@ -4,9 +4,9 @@
 //! A note is the app's own text, compiled in from `notes/`. Nothing else makes or changes one: no
 //! page, agent, file or server, and nothing here reads anything at run time. A note grants
 //! nothing and passes through no check, so one that names what a task's access refuses is a bug
-//! in the note. It goes to the agent as a field of its answer, never as part of the answer's text,
-//! so what a page writes can't become one: the frame is put first only where the answer leaves
-//! for the agent, and the user's line and the log's words come from the field.
+//! in the note. It's a field of its answer, never part of the answer's text, and leaves for the
+//! agent as a part of its own, ahead of the part that holds the page's words, so what a page
+//! writes can't become one. The user's line and the log's words come from the field.
 //!
 //! Every string a person or an agent reads for it is here or in `notes/`, but for the sentence
 //! the server's instructions say of them (`tools::INSTRUCTIONS`).
@@ -57,11 +57,11 @@ const FRAME: &str = concat!(env!("APP_NAME"), "'s notes for ");
 /// Settings › Agents' heading over the list, its switch and the sentence under it.
 pub const HEADING: &str = "Site notes";
 pub const SWITCH_LINE: &str = concat!(
-    "An agent gets what ",
+    "A task gets what ",
     env!("APP_NAME"),
     " knows about a site when its tab lands there."
 );
-pub const SWITCH_OFF_LINE: &str = "Off: agents find their way on every site by reading it.";
+pub const SWITCH_OFF_LINE: &str = "Off: tasks find their way on every site by reading it.";
 pub const FOOT: &str = concat!(
     "Notes are part of ",
     env!("APP_NAME"),
@@ -87,7 +87,7 @@ pub fn note_for(url: &str) -> Option<&'static Note> {
 }
 
 impl Note {
-    /// The note as an answer starts with it: the frame's line, then its text.
+    /// The note as the agent gets it, an answer's first part: the frame's line, then its text.
     pub fn framed(&self) -> String {
         format!("{FRAME}{}:\n{}", self.name, self.text.trim_end())
     }
