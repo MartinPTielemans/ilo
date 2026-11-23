@@ -1,0 +1,126 @@
+Never to land (#3946 probe): logs a frame's beforeunload wait and its timer, so a quit whose
+Leave site? closes its tab unanswered says whether the timer fired, a second request proceeded
+under the dialog, or an answer came. Each line starts "probe3946 rfh".
+
+--- a/content/browser/renderer_host/render_frame_host_impl.cc
++++ b/content/browser/renderer_host/render_frame_host_impl.cc
+@@ -23,6 +23,7 @@
+ #include "base/containers/span_reader.h"
+ #include "base/debug/crash_logging.h"
+ #include "base/debug/dump_without_crashing.h"
++#include "base/debug/stack_trace.h"
+ #include "base/feature_list.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback_helpers.h"
+@@ -7133,6 +7134,8 @@
+   bool showed_dialog = has_shown_beforeunload_dialog_;
+ 
+   // Resets beforeunload waiting state.
++  LOG(ERROR) << "probe3946 rfh " << static_cast<const void*>(this) << " main " << IsOutermostMainFrame() << " " << "beforeunload completed proceed " << proceed << " showed dialog "
++         << showed_dialog << " timer running " << (beforeunload_timeout_ && beforeunload_timeout_->IsRunning());
+   is_waiting_for_beforeunload_completion_ = false;
+   has_shown_beforeunload_dialog_ = false;
+   if (beforeunload_timeout_) {
+@@ -7523,6 +7526,10 @@
+   // Stop any timers that are waiting.
+   for (RenderFrameHostImpl* frame = this; frame; frame = frame->GetParent()) {
+     if (frame->beforeunload_timeout_) {
++      LOG(ERROR) << "probe3946 rfh " << static_cast<const void*>(this) << " main " << IsOutermostMainFrame() << " " << "beforeunload dialog: stops timer of "
++             << static_cast<const void*>(frame) << " running "
++             << frame->beforeunload_timeout_->IsRunning() << " waiting "
++             << frame->is_waiting_for_beforeunload_completion_;
+       frame->beforeunload_timeout_->Stop();
+     }
+   }
+@@ -11837,6 +11844,8 @@
+   // or close acks.  We clear them here to be safe, since they can cause
+   // navigations to be ignored in DidCommitProvisionalLoad.
+   if (is_waiting_for_beforeunload_completion_) {
++    LOG(ERROR) << "probe3946 rfh " << static_cast<const void*>(this) << " main " << IsOutermostMainFrame() << " " << "reset waiting state, timer running " << (beforeunload_timeout_ && beforeunload_timeout_->IsRunning()) << " stack\n"
++           << base::debug::StackTrace().ToString();
+     is_waiting_for_beforeunload_completion_ = false;
+     if (beforeunload_timeout_) {
+       beforeunload_timeout_->Stop();
+@@ -12143,6 +12152,10 @@
+   // This may be called more than once (if the user clicks the tab close button
+   // several times, or if they click the tab close button then the browser close
+   // button), and we only send the message once.
++  LOG(ERROR) << "probe3946 rfh " << static_cast<const void*>(this) << " main " << IsOutermostMainFrame() << " " << "dispatch beforeunload type " << static_cast<int>(type)
++             << " already waiting " << is_waiting_for_beforeunload_completion_
++             << " timer running " << (beforeunload_timeout_ && beforeunload_timeout_->IsRunning()) << " dialog showing "
++             << delegate_->IsJavaScriptDialogShowing();
+   if (is_waiting_for_beforeunload_completion_) {
+     // Some of our close messages could be for the tab, others for cross-site
+     // transitions. We always want to think it's for closing the tab if any
+@@ -12165,6 +12178,7 @@
+       // reply from the dialog. If this incoming request is for a DISCARD be
+       // sure to reply with |proceed = false|, because the presence of a dialog
+       // indicates that the page can't be discarded.
++      LOG(ERROR) << "probe3946 rfh " << static_cast<const void*>(this) << " main " << IsOutermostMainFrame() << " " << "dispatch: a dialog is up, so beforeunload proceeds unasked";
+       SimulateBeforeUnloadCompleted(type != BeforeUnloadType::DISCARD);
+     } else {
+       // Start a timer that will be shared by all frames that need to run
+@@ -12174,6 +12188,8 @@
+       }
+ 
+       beforeunload_pending_replies_.clear();
++      LOG(ERROR) << "probe3946 rfh " << static_cast<const void*>(this) << " main " << IsOutermostMainFrame() << " " << "dispatch: timer started "
++             << beforeunload_timeout_delay_.InMilliseconds() << " ms";
+       beforeunload_dialog_request_cancels_unload_ =
+           (type == BeforeUnloadType::DISCARD);
+ 
+@@ -12247,6 +12263,7 @@
+     if (beforeunload_timeout_) {
+       beforeunload_timeout_->Stop();
+       frame_tree_node_->navigation_request()->StartAsyncBeforeUnloadTimer();
++      LOG(ERROR) << "probe3946 rfh " << static_cast<const void*>(this) << " main " << IsOutermostMainFrame() << " " << "beforeunload handed to the async timer";
+     }
+     // Inserts `this` GlobalRenderFrameHostId into
+     // `beforeunload_pending_replies_` as a placeholder. This matches the
+@@ -12417,6 +12434,8 @@
+ 
+ void RenderFrameHostImpl::SimulateBeforeUnloadCompleted(bool proceed) {
+   CHECK(is_waiting_for_beforeunload_completion_);
++  LOG(ERROR) << "probe3946 rfh " << static_cast<const void*>(this) << " main " << IsOutermostMainFrame() << " " << "simulated beforeunload completion proceed " << proceed
++         << " stack\n" << base::debug::StackTrace().ToString();
+   base::TimeTicks approx_renderer_start_time = send_before_unload_start_time_;
+ 
+   // Dispatch the ACK to prevent re-entrancy.
+@@ -12628,6 +12647,7 @@
+     const std::u16string& user_input) {
+   GetProcess()->SetBlocked(false);
+   std::move(dialog_closed_callback).Run(success, user_input);
++  LOG(ERROR) << "probe3946 rfh " << static_cast<const void*>(this) << " main " << IsOutermostMainFrame() << " " << "dialog closed success " << success;
+   // If executing as part of beforeunload event handling, there may have been
+   // timers stopped in this frame or a frame up in the frame hierarchy. Restart
+   // any timers that were stopped in OnRunBeforeUnloadConfirm().
+@@ -12635,6 +12655,8 @@
+     if (frame->is_waiting_for_beforeunload_completion_ &&
+         frame->beforeunload_timeout_) {
+       frame->beforeunload_timeout_->Start(beforeunload_timeout_delay_);
++      LOG(ERROR) << "probe3946 rfh " << static_cast<const void*>(this) << " main " << IsOutermostMainFrame() << " " << "dialog closed: timer restarted for "
++             << static_cast<const void*>(frame);
+     }
+   }
+ }
+@@ -12848,6 +12870,9 @@
+ 
+   // Get back to a clean state, in case we start a new navigation without
+   // completing an unload handler.
++  LOG(ERROR) << "probe3946 rfh " << static_cast<const void*>(this) << " main " << IsOutermostMainFrame() << " " << "commit navigation same document " << is_same_document
++         << " waiting " << is_waiting_for_beforeunload_completion_
++         << " timer running " << (beforeunload_timeout_ && beforeunload_timeout_->IsRunning());
+   // ilo: a same-document commit keeps its document, so a beforeunload it is
+   // still answering, for a tab's close or the browser's quit, stays awaited
+   // and timed. Resetting here dropped that answer, and the close never came
+@@ -15380,6 +15405,10 @@
+ }
+ 
+ void RenderFrameHostImpl::BeforeUnloadTimeout() {
++  LOG(ERROR) << "probe3946 rfh " << static_cast<const void*>(this) << " main " << IsOutermostMainFrame() << " " << "beforeunload timer fired, waiting "
++         << is_waiting_for_beforeunload_completion_ << " ignored "
++         << delegate_->ShouldIgnoreUnresponsiveRenderer() << " dialog showing "
++         << delegate_->IsJavaScriptDialogShowing();
+   if (delegate_->ShouldIgnoreUnresponsiveRenderer()) {
+     return;
+   }

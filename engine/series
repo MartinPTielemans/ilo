@@ -102,3 +102,5 @@ ours/chromium-same-document-keeps-beforeunload.patch
 mac/chromium-crashpad-mac-handler.patch
 mac/chromium-crashpad-mac-async-start.patch
 mac/chromium-core-touch-id-keychain-group.patch
+# Never to land (#3946 probe), last so it rebuilds least.
+ours/probe-3946-beforeunload-timer.patch
