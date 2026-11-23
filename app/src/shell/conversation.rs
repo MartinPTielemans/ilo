@@ -462,7 +462,8 @@ impl Shell {
         let Some(talk) = &self.talk else { return };
         let view = talk.view.read(cx);
         let (reply, replies) = (view.reply.focus_handle(cx), view.replies);
-        if self.watched_task_page().is_some() {
+        // Standing on a page, the field is beside it and keeps the keyboard the user gives it.
+        if self.watched_task_page().is_some() && !self.task_standing() {
             if reply.is_focused(window) {
                 window.focus(&self.focus_handle, cx);
             }
@@ -1597,9 +1598,12 @@ impl TalkView {
         if opens {
             line = line.on_click(cx.listener(move |view, _, _, cx| view.toggle(fold, false, cx)));
         }
-        // Beside the page, the step under way on it is the live line, with Take over at its end.
+        // Beside the page, the step under way on it is the live line, with Take over at its end,
+        // unless the user stands on the page, whose strip has it.
         let live = (self.shown.as_ref())
-            .filter(|shown| look.beside && glyph && step.running && shown.stoppable)
+            .filter(|shown| {
+                look.beside && !look.standing && glyph && step.running && shown.stoppable
+            })
             .and_then(|shown| shown.on);
         let line = match live {
             None => line.into_any_element(),
@@ -2459,6 +2463,8 @@ struct Look {
     behind: bool,
     /// The conversation stands beside the page it watches (`Shell::talk_beside`).
     beside: bool,
+    /// The user stands on one of its pages, the conversation in a panel beside it.
+    standing: bool,
 }
 
 impl Look {
@@ -2496,6 +2502,7 @@ impl Render for TalkView {
                 asked_favicon,
                 behind: shell.task_page_going_back(),
                 beside: shell.talk_beside,
+                standing: shell.task_standing(),
             }
         }) else {
             return div().into_any_element();
