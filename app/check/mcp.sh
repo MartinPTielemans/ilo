@@ -963,6 +963,8 @@ hand_back_pressed() {
   await_more "^browser: agent mcp-client handed back $pressed\$" "$handed" ||
     fail "⌘↩ didn't hand back the page a click took, $pressed"
 }
+# Focus Agent Question's key (#3869).
+if [ "$(uname)" = Darwin ]; then card_key="a alt shift cmd"; else card_key="a ctrl shift"; fi
 # Agent actions never move the user's focus (decision 8): through all the agent did in its own Space
 # since the user clicked into their field, their Space, tab and keyboard stayed, and their next keys
 # go into the field.
@@ -984,6 +986,54 @@ if [ -n "$yours_step" ]; then
       fail "the user's field lost the keyboard while the agent worked"
     send type ok
     expect "^browser: title $user_tab yours typed ok\$" "the user's keys after the agent's work didn't reach their field"
+    # One of the app's own windows taking the keyboard from the agent's card (#3869): with the
+    # card's keys come from the user's field, ⌘T's command bar ends them where they are, giving
+    # nobody the keyboard under it, and keeps it, a letter typed reaching the bar and nothing in
+    # the field. Escape gives it back where ⌘T found it, the card, which has no ring: ↩ answers
+    # nothing and a letter reaches no field. Then the key and Escape on the card dismiss the change
+    # unsent.
+    asks=$(grep -c '^browser: agent mcp-client asks ' "$log" || true)
+    request request "{\"tab\":$agent_tab,\"requests\":[{\"method\":\"PUT\",\"path\":\"/note\",\"body\":{},\"what\":\"Replace the note.\"}]}" >&4
+    await_more '^browser: agent mcp-client asks ' "$asks" || fail "the agent's change didn't ask"
+    q=$(grep '^browser: agent mcp-client asks ' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
+    await_log "^browser: agent question $q at " "the change's question wasn't drawn"
+    send key $card_key
+    expect "^browser: agent card keys on $q " "Focus Agent Question's key from the user's field didn't give the card the keyboard"
+    ons=$(grep -c "^browser: agent card keys on $q " "$log" || true)
+    send key t cmd
+    bar_step=$step
+    expect '^browser: command bar shown$' "⌘T from the agent's card didn't open the command bar"
+    send type x
+    expect '^browser: command bar suggestions "x" in ' "x typed with the command bar open over the card didn't reach the bar"
+    sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep "^browser: title $user_tab yours typed " &&
+      fail "x typed with the command bar open over the card reached the user's field"
+    send key escape
+    expect '^browser: command bar hidden$' "Escape didn't close the command bar opened over the card"
+    ended=$(sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep -E '^browser: agent card keys (back|left) by ' | head -1)
+    case "$ended" in
+      "") fail "the command bar taking the keyboard didn't end the card's keys" ;;
+      "browser: agent card keys back by "*)
+        fail "the card's keys gave the keyboard back with the command bar over them: $ended" ;;
+    esac
+    send key return
+    send type y
+    # The key after them, once handled, says they were.
+    send key $card_key
+    await_more "^browser: agent card keys on $q " "$ons" ||
+      fail "Focus Agent Question's key didn't give the card the keyboard after the bar"
+    sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep "^browser: title $user_tab yours typed " &&
+      fail "a letter typed with or after the command bar over the card reached the user's field"
+    sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep -E "^browser: agent card key escape\$|^browser: agent mcp-client answered $q " &&
+      fail "the card answered after the command bar opened over it, with no ring"
+    expect "^browser: agent card keys ready on $q\$" "the app never said the protection had passed"
+    send key escape
+    expect '^browser: agent card key escape$' "Escape on the card didn't answer it as its × does"
+    await_log "^browser: agent mcp-client answered $q Dismiss\$" "Escape didn't dismiss the change"
+    unsent=$(next_answer) || fail "the browser didn't answer the dismissed change"
+    case "$(printf '%s\n' "$unsent" | answered "the dismissed change")" in
+      "error: The user said no"*) ;;
+      *) fail "the dismissed change answered: $unsent" ;;
+    esac
   fi
 else
   echo "skip: mcp: the user's focus through the agent's work. Browser wasn't the active app."
@@ -1037,7 +1087,42 @@ const q = new URLSearchParams(location.search);
 onload = () => setTimeout(() => { location.href = q.get("file"); }, Number(q.get("ms")));
 </script>' > "$out/site/later.html"
   later_logged='^browser: agent logged mcp-client download later\.localhost$'
-  for ms in 2000 7000; do
+  # Focus Agent Question's key (#3869), ⌥⇧⌘A on the Mac and Alt+Shift+A elsewhere, gives the card
+  # the keyboard and answers nothing, leaving the conversation's area as it is; ↩ straight after it
+  # is ignored, the key again gives the keyboard back, and ↩ once the app says the protection's
+  # 500 ms have passed presses Allow Once, which the activity log records as a click's answer.
+  # On a third card Escape answers as its × does, allowing nothing.
+  answer_by_keys() {
+    closed=$(grep -c '^browser: task area [0-9]* closed$' "$log" || true)
+    # ↩ goes in the driver's queue with the key, as it handles each command once the last is
+    # done: waiting for the key's done line first took Windows' shell past the protection.
+    post key $card_key
+    chord=$step
+    send key return
+    expect "^browser: agent card keys on $1 Allow Once\$" \
+      "Focus Agent Question's key didn't give the later download's card the keyboard on Allow Once" "$chord"
+    expect "^browser: agent card key ignored, " "↩ straight after Focus Agent Question's key wasn't ignored" "$chord"
+    send key $card_key
+    expect "^browser: agent card keys back by key\$" "Focus Agent Question's key again didn't give the keyboard back"
+    ! grep -q "^browser: agent mcp-client answered $1 " "$log" ||
+      fail "Focus Agent Question's key, or ↩ straight after it, answered the later download: $(grep "^browser: agent mcp-client answered $1 " "$log")"
+    [ "$(grep -c '^browser: task area [0-9]* closed$' "$log" || true)" = "$closed" ] ||
+      fail "Focus Agent Question's key closed the conversation's area"
+    send key $card_key
+    expect "^browser: agent card keys on $1 Allow Once\$" "Focus Agent Question's key didn't give the card the keyboard a second time"
+    expect "^browser: agent card keys ready on $1\$" "the app never said the protection had passed"
+    send key return
+    expect "^browser: agent card keys back by card\$" "↩ after the protection didn't answer, giving the keyboard back"
+  }
+  answer_by_escape() {
+    send key $card_key
+    expect "^browser: agent card keys on $1 Allow Once\$" \
+      "Focus Agent Question's key didn't give the third later download's card the keyboard"
+    expect "^browser: agent card keys ready on $1\$" "the app never said the protection had passed"
+    send key escape
+    expect '^browser: agent card key escape$' "Escape on the card didn't answer it as its × does"
+  }
+  for ms in 2000 7000 3000; do
     stem=later-${ms%000}
     printf 'later\n' > "$out/site/$stem.docx"
     later_asks="^browser: agent mcp-client asks [0-9]*: download $stem\.docx from later\.localhost\$"
@@ -1052,7 +1137,15 @@ onload = () => setTimeout(() => { location.href = q.get("file"); }, Number(q.get
     read -r qx qy qw qh <<CARD
 $(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
-    send click $((qx + qw * 3 / 4)) $((qy + qh - 26 - 36))
+    case $ms in
+      2000) send click $((qx + qw * 3 / 4)) $((qy + qh - 26 - 36)) ;;
+      7000) answer_by_keys "$q" ;;
+      *)
+        answer_by_escape "$q"
+        await_log "^browser: agent mcp-client answered $q Dismiss\$" "Escape didn't dismiss the later download's card"
+        continue
+        ;;
+    esac
     await_log "^browser: agent mcp-client answered $q Once\$" "Allow Once didn't answer the later download"
     await_more "$later_logged" "$logged" ||
       fail "the watched tab's later download isn't in the activity log as the agent's"
