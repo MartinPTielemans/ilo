@@ -59,7 +59,7 @@ use browser::tokens::settings::{
     DETAIL_LINE, DETAIL_TOP, END_GAP, FIELD_PADDING, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME,
     GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE,
     LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SENT_TUCK,
-    SHORT_PADDING, SHORT_ROW, SIDE_ROOM, SIDE_TOP, TEXT_X, TITLE, WIDTH,
+    SHARE_TOP, SHORT_PADDING, SHORT_ROW, SIDE_ROOM, TEXT_X, TITLE, WIDTH,
 };
 use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
 use browser::tokens::shell::{
@@ -1197,11 +1197,12 @@ pub fn bar_hidden() {
 
 fn build_index(cx: &mut App) {
     let started = Instant::now();
-    let accent = rgb(NO_THEME_ACCENT);
     // Its rows are built only to be read, so in an arena freed as it ends: the fallback one GPUI
     // gives elements built outside a draw is never cleared, and each build added to it (#2138).
     let entries = gpui::with_scratch_element_arena(|| {
-        view(cx).update(cx, |settings, cx| settings.searched_rows(accent, cx).0)
+        view(cx).update(cx, |settings, cx| {
+            settings.searched_rows(settings.look.on, cx).0
+        })
     });
     // check.sh reads this line.
     log!(
@@ -1552,9 +1553,11 @@ impl Settings {
             div().mt(px(top)).child(block)
         });
         let blocks: Vec<gpui::Div> = blocks.collect();
+        // One column, centred on the card (#4092).
         div()
             .w_full()
             .max_w(px(PAGE_WIDTH))
+            .mx_auto()
             .flex()
             .flex_col()
             .child(head)
@@ -1567,6 +1570,7 @@ impl Settings {
             .relative()
             .child(self.card.mark(heading.clone()))
             .px(px(TEXT_X))
+            .text_size(px(text::SMALL))
             .font_weight(FontWeight::MEDIUM)
             .text_color(self.look.heading)
             .child(heading)
@@ -1624,7 +1628,7 @@ impl Settings {
     fn general(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         let default = self.default_browser.read(cx);
         let lede: SharedString = match (default.is_default(), default.offers()) {
-            (true, _) => concat!("How ", env!("APP_NAME"), " opens, quits and looks.").into(),
+            (true, _) => concat!("How ", env!("APP_NAME"), " opens and quits.").into(),
             (false, true) => concat!(env!("APP_NAME"), " isn't your default browser.").into(),
             (false, false) => format!(
                 "{} isn't your default browser. {}",
@@ -1742,75 +1746,7 @@ impl Settings {
             vec![ask],
         );
         let found: Vec<Row> = search.into_iter().chain(folders).chain([ask]).collect();
-        let appearance = self.appearance;
-        let appearance_line: SharedString = match cfg!(target_os = "macos") {
-            true => "Light, dark, or as macOS is. View › Appearance has it too.",
-            false => "Light, dark, or as the system is.",
-        }
-        .into();
-        let appearances = browser::settings_pictures::appearance_picker(
-            look,
-            self.base(),
-            appearance,
-            browser::settings_pictures::Buttons::HERE,
-            self.a11y,
-            self.drawn_logged.clone(),
-            |appearance, _, cx| {
-                crate::browser_windows::update_shells_in(cx, |shell, cx| {
-                    shell.run(Command::Appearance(appearance), "settings", cx)
-                })
-            },
-        )
-        .relative()
-        // Drawn once for each choice the first time it's shown, which check.sh waits for.
-        .child(self.drawn(format!("appearance {}", appearance_title(appearance))));
-        // As Sidebar position's: the drawings under the row's line, their ring's room outside it.
-        let appearances = Row {
-            div: frame()
-                .flex_col()
-                .items_stretch()
-                .child(text(look, "Appearance", Some(appearance_line.clone())))
-                .child(
-                    div()
-                        .flex()
-                        .mt(px(SIDE_TOP))
-                        .ml(px(-SIDE_ROOM))
-                        .child(appearances),
-                ),
-            name: "Appearance".into(),
-            line: Some(appearance_line),
-            keys: None,
-            nested: false,
-        };
-        let zoom = unsafe { bc::bc_page_zoom() };
-        let zoom_chosen = PAGE_ZOOM
-            .iter()
-            .position(|&(_, each)| (each - zoom).abs() < 0.001);
-        let zoom_label: SharedString = match zoom_chosen {
-            Some(index) => PAGE_ZOOM[index].0.into(),
-            None => format!("{:.0}%", zoom * 100.).into(),
-        };
-        let zoom_popup = self.popup(
-            Popup::PageZoom,
-            zoom_label,
-            POPUP_WIDTH,
-            cx.listener(move |settings, _, window, cx| {
-                settings.choose_page_zoom(zoom_chosen, window, cx)
-            }),
-        );
-        let mut looks = vec![
-            appearances,
-            setting(
-                look,
-                "Page zoom",
-                Some("Every page's size, until you zoom a site, which keeps its own.".into()),
-                vec![
-                    zoom_popup
-                        .child(self.drawn("page zoom".into()))
-                        .into_any_element(),
-                ],
-            ),
-        ];
+        let mut looks = Vec::new();
         // Where the host draws the dot: the Dock icon's, or Windows' taskbar button's.
         if let Some(switch) = browser::dock_dot::SWITCH {
             let colored = !off(DOCK_ICON_PLAIN);
@@ -1832,9 +1768,12 @@ impl Settings {
         let mut blocks = vec![
             Block::Heading("Opening and quitting".into()),
             Block::Rows(opening),
-            Block::Heading("Look".into()),
-            Block::Rows(looks),
         ];
+        // The Dock's row stays until its colour goes (#4078).
+        if !looks.is_empty() {
+            blocks.push(Block::Heading("Look".into()));
+            blocks.push(Block::Rows(looks));
+        }
         if !found.is_empty() {
             blocks.push(Block::Heading("Search and downloads".into()));
             blocks.push(Block::Rows(found));
@@ -1845,8 +1784,107 @@ impl Settings {
         }
     }
 
+    /// Appearance (#4092): the settings whose choice is a picture, Appearance and Sidebar
+    /// position, with Page zoom and the Top bar beside them.
+    fn appearance_page(&self, accent: Rgba, cx: &mut Context<Self>) -> Page {
+        let look = &self.look;
+        let appearance = self.appearance;
+        let appearance_line: SharedString = match cfg!(target_os = "macos") {
+            true => "Light, dark, or as macOS is. View › Appearance has it too.",
+            false => "Light, dark, or as the system is.",
+        }
+        .into();
+        let appearances = browser::settings_pictures::appearance_picker(
+            look,
+            self.base(),
+            appearance,
+            self.a11y,
+            self.drawn_logged.clone(),
+            |appearance, _, cx| {
+                crate::browser_windows::update_shells_in(cx, |shell, cx| {
+                    shell.run(Command::Appearance(appearance), "settings", cx)
+                })
+            },
+        )
+        .relative()
+        // Drawn once for each choice the first time it's shown, which check.sh waits for.
+        .child(self.drawn(format!("appearance {}", appearance_title(appearance))));
+        let zoom = unsafe { bc::bc_page_zoom() };
+        let zoom_chosen = PAGE_ZOOM
+            .iter()
+            .position(|&(_, each)| (each - zoom).abs() < 0.001);
+        let zoom_label: SharedString = match zoom_chosen {
+            Some(index) => PAGE_ZOOM[index].0.into(),
+            None => format!("{:.0}%", zoom * 100.).into(),
+        };
+        let zoom_popup = self.popup(
+            Popup::PageZoom,
+            zoom_label,
+            POPUP_WIDTH,
+            cx.listener(move |settings, _, window, cx| {
+                settings.choose_page_zoom(zoom_chosen, window, cx)
+            }),
+        );
+        let looks = vec![
+            pictured(look, "Appearance", appearance_line, appearances),
+            setting(
+                look,
+                "Page zoom",
+                Some("Every page's size, until you zoom a site, which keeps its own.".into()),
+                vec![
+                    zoom_popup
+                        .child(self.drawn("page zoom".into()))
+                        .into_any_element(),
+                ],
+            ),
+        ];
+        let right = shell::sidebar_right(cx);
+        let pair = browser::settings_pictures::picker(
+            look,
+            self.base(),
+            self.dark,
+            right,
+            self.a11y,
+            self.drawn_logged.clone(),
+            |side, _, cx| set_sidebar_right(side, cx),
+        )
+        .relative()
+        // Drawn again once the side changes, which check.sh waits for.
+        .child(self.drawn(format!("sidebar position {}", side_title(right))));
+        let position = pictured(
+            look,
+            "Sidebar position",
+            "The side of the window the sidebar, the Library and the window's buttons are on."
+                .into(),
+            pair,
+        );
+        let top_bar = self.toggle("top bar", "Top bar", off(TOP_BAR), set_top_bar, accent, cx);
+        let top_bar_keys = shell::keystroke_label("shift-cmd-d");
+        let top_bar = setting(
+            look,
+            "Top bar",
+            Some(
+                format!(
+                    "The URL field and the sidebar's buttons in a row across the window's top, \
+                     the page under it. {top_bar_keys} turns it on and off."
+                )
+                .into(),
+            ),
+            vec![top_bar],
+        );
+        Page::new(
+            Section::Appearance,
+            "",
+            vec![
+                Block::Rows(looks),
+                Block::Heading("Layout".into()),
+                Block::Rows(vec![position, top_bar]),
+            ],
+        )
+    }
+
     /// Tabs & Sidebar: when Today tabs are archived and unloaded, whether Battery Saver comes on, who
-    /// shares the favorites, which side the sidebar is on and how it comes while hidden.
+    /// shares the favorites and how the sidebar comes while hidden.
     fn tabs_and_sidebar(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
         let reopen = shell::keystroke_label("shift-cmd-t");
@@ -1945,7 +1983,7 @@ impl Settings {
                 .child(
                     div()
                         .flex()
-                        .mt(px(SIDE_TOP))
+                        .mt(px(SHARE_TOP))
                         .ml(px(-SIDE_ROOM))
                         .child(shared),
                 ),
@@ -1979,34 +2017,6 @@ impl Settings {
             Block::Rows(vec![favorites]),
         ];
         let right = shell::sidebar_right(cx);
-        let line: SharedString =
-            "The side of the window the sidebar, the Library and the window's buttons are on."
-                .into();
-        let pair = browser::settings_pictures::picker(
-            look,
-            self.base(),
-            self.dark,
-            right,
-            browser::settings_pictures::Buttons::HERE,
-            self.a11y,
-            self.drawn_logged.clone(),
-            |side, _, cx| set_sidebar_right(side, cx),
-        )
-        .relative()
-        // Drawn again once the side changes, which check.sh waits for.
-        .child(self.drawn(format!("sidebar position {}", side_title(right))));
-        // The drawings go under the row's line, at its start, their ring's room outside it.
-        let position = Row {
-            div: frame()
-                .flex_col()
-                .items_stretch()
-                .child(text(look, "Sidebar position", Some(line.clone())))
-                .child(div().flex().mt(px(SIDE_TOP)).ml(px(-SIDE_ROOM)).child(pair)),
-            name: "Sidebar position".into(),
-            line: Some(line),
-            keys: None,
-            nested: false,
-        };
         let edge = self.toggle(
             "edge reveals sidebar",
             "Show the hidden sidebar at the window's edge",
@@ -2017,35 +2027,17 @@ impl Settings {
         );
         let toggle_keys = shell::keystroke_label("cmd-s");
         let side = if right { "right" } else { "left" };
-        let top_bar = self.toggle("top bar", "Top bar", off(TOP_BAR), set_top_bar, accent, cx);
-        let top_bar_keys = shell::keystroke_label("shift-cmd-d");
-        let top_bar = setting(
+        let mut hidden = vec![setting(
             look,
-            "Top bar",
+            "Show the hidden sidebar at the window's edge",
             Some(
                 format!(
-                    "The URL field and the sidebar's buttons in a row across the window's top, \
-                     the page under it. {top_bar_keys} turns it on and off."
+                    "Move the pointer along the {side} edge. {toggle_keys} shows it either way."
                 )
                 .into(),
             ),
-            vec![top_bar],
-        );
-        let mut hidden = vec![
-            position,
-            top_bar,
-            setting(
-                look,
-                "Show the hidden sidebar at the window's edge",
-                Some(
-                    format!(
-                        "Move the pointer along the {side} edge. {toggle_keys} shows it either way."
-                    )
-                    .into(),
-                ),
-                vec![edge],
-            ),
-        ];
+            vec![edge],
+        )];
         // Where the host watches for it (host_watch_option_taps), or on Windows the core.
         if cfg!(any(
             target_os = "macos",
@@ -5553,6 +5545,22 @@ fn feature(
     }
 }
 
+/// A row whose control is drawn pictures, as Settings' search reads it.
+fn pictured(
+    look: &RowLook,
+    name: &'static str,
+    line: SharedString,
+    pictures: impl IntoElement,
+) -> Row {
+    Row {
+        div: browser::settings_rows::pictured(look, name, line.clone(), pictures),
+        name: name.into(),
+        line: Some(line),
+        keys: None,
+        nested: false,
+    }
+}
+
 /// A feature's own setting, under it in its group, its text and the hairline over it starting
 /// where the feature's name does.
 fn nested(row: Row) -> Row {
@@ -5752,8 +5760,8 @@ impl Render for Settings {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.drawn_logged.borrow_mut().frame();
         self.a11y = window.is_a11y_active();
-        // The app's window, not a Space's, so ilo green rather than a Space's accent (#319).
-        let accent = rgb(NO_THEME_ACCENT);
+        // What's on is neutral, the text colour, never green or a Space's colour (#4092).
+        let accent = self.look.on;
         // As Linux's client-side decorations leave it, and Windows', where GPUI hides the system's
         // title bar and its buttons for a transparent one; AppKit's frame is always there.
         let frameless = cfg!(target_os = "windows")
@@ -5934,6 +5942,7 @@ impl Settings {
     ) -> Page {
         match section {
             Section::General => self.general(&profiles(), accent, cx),
+            Section::Appearance => self.appearance_page(accent, cx),
             Section::TabsAndSidebar => self.tabs_and_sidebar(&profiles(), accent, cx),
             Section::Features => self.features(&profiles(), accent, cx),
             Section::Agents => match agents::global(cx) {
@@ -5998,6 +6007,7 @@ impl Settings {
         let profiles = profiles();
         let mut pages = vec![
             self.general(&profiles, accent, cx),
+            self.appearance_page(accent, cx),
             self.tabs_and_sidebar(&profiles, accent, cx),
             self.features(&profiles, accent, cx),
         ];

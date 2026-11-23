@@ -941,44 +941,49 @@ light-selected-shadow-blur = 2.0
 # Ours (#1636): an ilo window of its own. Its sections run down a column on the window's material,
 # as the sidebar's rows do, and the section shown sits on a card, as a page does. Its colours are
 # alphas of the palette's paper in dark and its ink in light, over the stand-in and the card.
-width = 820.0
+width = 900.0
 height = 660.0
 # The least it can be made: room for the column and a row with a sentence and a control.
 min-width = 720.0
 min-height = 480.0
-# The column: the window buttons, then the sections, three groups 12 apart, and at its foot
-# Chromium's settings, 8 up from the window's bottom. Each section is the sidebar's row, 36 tall on
-# a plate 8 in at the row radius, 2 apart, its glyph 10 in and 9 before its name.
+# The column: the window buttons, then the sections in three groups, each under its small label
+# (Browser, Private, ilo: #4092), 14 under what's above, on a 14 line, 6 over its first section; at its
+# foot Chromium's settings, 8 up from the window's bottom. Each section is the sidebar's row, 36
+# tall on a plate 8 in at the row radius, 2 apart, its glyph 10 in and 9 before its name. The
+# mock's rows are 30 tall; they keep the sidebar's 36 so no hit area shrinks.
 column = 208.0
 column-top = 48.0
 plate-gap = 2.0
-section-group-gap = 12.0
+label-top = 14.0
+label-bottom = 6.0
+label-line = 14.0
 section-x = 10.0
-section-glyph = 16.0
+section-glyph = 15.0
 section-glyph-gap = 9.0
 foot-bottom = 8.0
-foot-glyph = 15.0
-# A section's name and glyph, the selected one's plate (the sidebar's, white with its shadow in
-# light), and the foot's quieter name and glyph: the name at the headings' alpha, the least that
-# reads at 4.5:1 on the light stand-in too (#1636). The plate's shadow falls 1 and blurs 2, as the
-# sidebar's light-selected one does.
-section-text = 0.78
-section-glyph-alpha = 0.66
-section-selected = 0.2
+foot-glyph = 13.0
+# A section's name and glyph, the selected one's neutral plate (white with its shadow in light),
+# its glyph nearly the name's ink, and the foot's quieter name and glyph. Labels and the foot's
+# name are at the headings' alpha. The plate's shadow falls 1 and blurs 2, as the sidebar's
+# light-selected one does. Under the pointer, a plate a little quieter than the selected one's.
+section-text = 0.76
+section-glyph-alpha = 0.56
+section-selected = 0.13
+section-selected-glyph = 0.9
 section-selected-light = 0xffffffd9
 section-shadow = 0x00000033
 section-shadow-y = 1.0
 section-shadow-blur = 2.0
-section-hovered = 0.12
-foot-text = 0.66
-foot-glyph-alpha = 0.45
+section-hovered = 0.08
+foot-glyph-alpha = 0.4
 # Ours (#1636): the search field at the column's top is the Library's (shell.library search-*),
-# 8 in, with the sections 12 under it, and "Search" in the rows' grey. ⌘F sits at its end, at the
+# 8 in, with the first group's label right under it (its own 14 above), and "Search" in the rows'
+# grey. ⌘F sits at its end, at the
 # headings' alpha, as 0.4 read at 2.4:1 on the light field, until typing starts; then ✕ on an 18
 # circle empties it. While it finds rows, the sections with none dim to 0.35, so where things live
 # stays readable, and a row a click on its section's name goes to flashes once: a plate under it up
 # to the sidebar's hovered 0.12 and back over 600 ms.
-search-gap = 12.0
+search-gap = 0.0
 search-hint = 0.66
 search-clear = 18.0
 search-clear-glyph = 10.0
@@ -997,47 +1002,57 @@ card-shadow = 0x0000000f
 card-shadow-y = 1.0
 card-shadow-blur = 3.0
 fade = 28.0
-# A section's page: 26 down, 36 in, at most 632 wide, its text 14 in, so headings, names and lines
-# share a column and the groups' plates hang outside it.
-page-top = 26.0
-page-x = 36.0
+# A section's page: one column 620 wide, centred on the card and at least 24 from its sides, 30
+# down, its text 16 in, so headings, names and lines share a column and the groups' plates hang
+# outside it (#4092).
+page-top = 30.0
+page-x = 24.0
 page-bottom = 36.0
-page-width = 632.0
-text-x = 14.0
+page-width = 620.0
+text-x = 16.0
 # The page's name, in the display face as the Library's heading (shell.library title-size and
-# title-line), then one sentence under it in the rows' grey (`detail`), and a heading over a group
-# where it needs one.
+# title-line), then one sentence under it in the rows' grey (`detail`), and a small, quiet heading
+# over a group where it needs one, 26 under the group before and 9 over its own. The heading's
+# alpha reads at 4.7:1 on the dark card; light keeps the alpha that reads at 4.5:1 on its card
+# (#1636).
 title = 0.96
 lede-top = 4.0
 lede-line = 18.0
-heading-top = 20.0
-heading-bottom = 7.0
-heading = 0.66
+heading-top = 26.0
+heading-bottom = 9.0
+heading = 0.5
+heading-light = 0.66
 # Once scrolled, the section's name holds at the card's top, in body semibold over a hairline.
 held-title = 44.0
-# A group: a plate of rows at the row radius, 10 apart, the first 20 under the sentence.
-group = 0.04
-group-light = 0.035
-group-gap = 10.0
-first-group = 20.0
-# A row: its text 14 in and 12 from its top and bottom, the agent card's padding
-# (shell.permission), so at least 48 tall, a control's 24 with that padding, and even with and
-# without one; a hairline between rows from its text to 14 short of the plate's end; its name, then
-# a grey line 4 under it, as the page's sentence is under its name, at the dialog's sub-line 16,
-# and its controls 20 after the text, 8 apart (#1636: at 10, 2 and 14 the line crowded its name).
-row-height = 48.0
-row-x = 14.0
+# A group: one card of rows at the row radius, the text colour at 0.065 in dark with a white rim,
+# a white plate in light with a faint ring and a shadow 1 down blurred 2, 12 apart, the first 22
+# under the sentence.
+group = 0.065
+group-light = 0xffffffa8
+group-rim = 0xffffff0e
+group-ring-light = 0x0000000f
+group-shadow-light = 0x0000000a
+group-shadow-y = 1.0
+group-shadow-blur = 2.0
+group-gap = 12.0
+first-group = 22.0
+# A row: its text 16 in and 12 from its top and bottom, so at least 58 tall, a control's 28 with
+# that padding and the name and its line, and even with and without one; a hairline between rows
+# 16 short of each side; its name at medium, then a grey line 6 under it at the dialog's sub-line
+# 16, and its controls 16 after the text, 8 apart.
+row-height = 58.0
+row-x = 16.0
 padding = 12.0
-line = 0.07
-name = 0.92
+line = 0.075
+name = 1.0
 name-off = 0.7
-# The grey of a row's line, the page's sentence and the lines between groups, in dark and light:
-# a task card's status (shell.task status), the same 11 on 14 under a name, at 8:1 on Settings'
-# boxes, where 0.52 read at 4.7:1 on the dark card (#1636).
-detail = 0.75
-detail-top = 4.0
+# The grey of a row's line, the page's sentence and the lines between groups: 4.9:1 on a dark
+# group; light keeps the 0.66 that reads at 4.5:1 on its plate (#1636).
+detail = 0.55
+detail-light = 0.66
+detail-top = 6.0
 detail-line = 16.0
-end-gap = 20.0
+end-gap = 16.0
 control-gap = 8.0
 # A feature's row leads with its glyph on a quiet plate, 12 before its name, and its own settings
 # under it start where its name does.
@@ -1047,45 +1062,48 @@ glyph = 16.0
 glyph-plate-fill = 0.07
 glyph-on = 0.82
 glyph-off = 0.38
-# A switch is a pill 30 by 18, its knob 14 across, 2 in, the paper in dark and white in light,
-# white on the accent. It slides over 150 ms.
+# A switch is a pill 30 by 18, its knob 14 across, 2 in, the paper in dark and white in light.
+# Settings' controls are neutral (#4092): on, the pill is the text colour, Paper with an Ink knob in
+# dark and Ink with a white knob in light, as a ticked box is. It slides over 150 ms.
 switch-width = 30.0
 switch-height = 18.0
 knob = 14.0
 knob-inset = 2.0
-knob-alpha = 0.94
+knob-alpha = 0.92
 # The knob's shadow, 1 down and blurred 2.
-knob-shadow = 0x00000047
+knob-shadow = 0x00000040
 knob-shadow-y = 1.0
 knob-shadow-blur = 2.0
-switch-off = 0.17
-switch-off-light = 0.14
-# Pop-up buttons and buttons are 24 tall at the control radius, a button's title 10 in, a pop-up's
-# 10 in with its chevrons 5 from its end. Under the pointer, a step toward pressed.
-control-height = 24.0
-control-padding = 10.0
+switch-off = 0.2
+switch-off-light = 0.18
+# Buttons are 28 tall at the control radius, their title 12 in. A pop-up is its value and its
+# chevrons, 5 apart, on no plate until the pointer is over it, where it gets a button's; it keeps
+# the button's height and its width, so its hit area is a button's. Under the pointer, a step
+# toward pressed.
+control-height = 28.0
+control-padding = 12.0
 control-radius = 6.0
 chevrons = 13.0
 chevrons-end = 5.0
-chevrons-alpha = 0.5
+chevrons-alpha = 0.45
 button-glyph = 13.0
-control = 0.08
-control-light = 0.075
-control-hovered = 0.12
-control-hovered-light = 0.1
-control-pressed = 0.16
-control-pressed-light = 0.135
+control = 0.1
+control-light = 0.1
+control-hovered = 0.14
+control-hovered-light = 0.13
+control-pressed = 0.18
+control-pressed-light = 0.16
 popup-width = 155.0
 popup-end = 0.0
 # Buttons under the groups are 11 below them.
 buttons-top = 11.0
-# Ours: a checkbox, as the dialog's, 8 before its name, ticked in the accent with a white tick;
+# Ours: a checkbox, as the dialog's, 8 before its name, ticked in the look's on colour with its
+# knob's colour for the tick (Settings' neutral, the first launch's accent and white);
 # and a disclosure, such as the import's Choose folders, its chevron 4 after its words.
 check-box = 16.0
 check-radius = 6.0
 check-gap = 8.0
 check-glyph = 12.0
-check-tick = 0xffffff
 disclosure-gap = 4.0
 disclosure-glyph = 12.0
 # Ours (#1673): the import's numbered steps, such as Full Disk Access's, each number on a circle
@@ -1159,56 +1177,50 @@ sent-indent = 12.0
 sent-tuck = 4.0
 sent-lines = 8
 sent-chevron = 12.0
-# Ours (#2407): Sidebar position is two drawings of the window, under its row's line, 6 down from
-# it with their ring's room around them. Each is 128 by 80 at the window's radius, 20 apart, named
-# 6 under it in the row's small text, the chosen one's name in the row's ink at medium. A drawing
-# is the window's material, the sidebar 30% of it, with five bars for its rows under the window's
-# buttons, then the page's card 4 in from the other edges at radius 5, a heading's line and four
-# of text on it. The chosen one is ringed in the accent 2 off its edge, 2 wide, and the other has
-# a hairline. The buttons are 4 across, 2.5 apart, the Windows glyphs 4 at 3 apart, at a row 6
-# tall 5 down, 4 in. Appearance (#2429) is three of them, the sidebar on the left: Automatic, Light
-# and Dark, Light's and Dark's in that look whatever Settings' own, and Automatic's Light's with
-# Dark's right half over it.
-side-width = 128.0
-side-height = 80.0
+# Ours (#2407, #4092): Sidebar position and Appearance are drawings of the window, the row's one
+# control at its end in its padding, their ring's room outside it. Each is
+# 92 by 60 at radius 8, 12 apart, named 8 under it in the row's small text, the chosen one's name
+# in the row's ink. A drawing is the window's ground 3 in round the page's card (radius 5, which
+# is concentric), the sidebar 25% of it with three bars for its rows, 8 down and 4 in from its
+# outer edge, 3 tall and 3.5 apart, the first brighter. Sidebar position's sidebar sits on a plate
+# of the ink. The chosen one is ringed in the text colour 2 off its edge, 1.5 wide, never in a
+# colour; the others have a hairline. Appearance is three, the sidebar on the left: Automatic,
+# Light and Dark, Light's and Dark's in that look whatever Settings' own, and Automatic's Light's
+# with Dark's right half over it. Share favorites keeps its larger drawings under its row's line.
+side-width = 92.0
+side-height = 60.0
 side-radius = 8.0
-side-gap = 20.0
-side-top = 6.0
+side-gap = 12.0
 side-room = 6.0
-side-label-gap = 6.0
-side-sidebar = 0.3
-side-inset = 4.0
+side-label-gap = 8.0
+side-sidebar = 0.25
+side-inset = 3.0
 side-page-radius = 5.0
-side-page-padding = 7.0
-side-sidebar-padding = 5.0
-side-rows-gap = 5.0
-side-ring = 2.0
+side-sidebar-padding = 8.0
+side-rows-gap = 3.5
+side-bar-height = 3.0
+side-ring = 1.5
 side-ring-gap = 2.0
-side-other = 0.14
-side-window = 0x0e0e0e
-side-window-light = 0xdcdcdc
-side-page = 0x36332c
+side-other = 0.12
+side-window = 0x232327
+side-window-light = 0xe7e5df
+side-page = 0x3b3b42
 side-page-light = 0xffffff
-side-page-ring = 0.1
-side-bar = 0.28
-side-bar-first = 0.4
-side-heading = 0.3
-side-text = 0.16
-side-buttons = 6.0
-side-button = 4.0
-side-button-gap = 2.5
-side-glyph-gap = 3.0
-side-glyph = 0.8
-# The Mac's buttons are AppKit's own, so the drawing takes their colours.
-side-mac-close = 0xff5f57
-side-mac-minimize = 0xfebc2e
-side-mac-zoom = 0x28c840
-# Ours (#2430): Share favorites is three drawings at the side-* size, ring and window, each three
-# Spaces' sidebars, the first two on one profile's plate and the third on another's, 6 apart.
+side-plate = 0.16
+side-plate-light = 0.14
+side-bar = 0.26
+side-bar-light = 0.2
+side-bar-first = 0.5
+side-bar-first-light = 0.42
+# Ours (#2430): Share favorites is three drawings 128 by 80, under its row's line 6 down from it,
+# at the side-* radius, ring and window, each three Spaces' sidebars, the first two on one profile's plate and the third on another's, 6 apart.
 # A sidebar is 32 by 60 at radius 4, tinted with its Space's colour, with four favorites' tiles
 # 13 by 10 at radius 3, 2 apart, over three tabs' bars. Spaces that share favorites show the same
 # four marks, in the same colours and the same shape, which is a list's alone: dots, squares or
 # rings 1.5 wide, so who shares reads without the colours.
+share-width = 128.0
+share-height = 80.0
+share-top = 6.0
 share-space-width = 32.0
 share-space-height = 60.0
 share-space-radius = 4.0
