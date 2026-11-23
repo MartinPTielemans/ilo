@@ -199,6 +199,8 @@ pub(super) struct Recorder {
     pub(super) page_keys: Cell<Option<bool>>,
     /// What key_repeated answers: the key handled now repeats a held one's.
     pub(super) key_repeated: Cell<bool>,
+    /// What app_active answers: the app is the active one, its window or not.
+    pub(super) app_active: Cell<bool>,
     /// Each New Note: the Space whose profile's service it opens, and the tab it splits with.
     pub(super) notes: RefCell<Vec<(u64, Option<u64>)>>,
     /// The Spaces New Board made a Board in. Each opens as tab 900 and on.
@@ -1860,6 +1862,10 @@ impl Browser for Recorder {
 
     fn key_repeated(&self) -> bool {
         self.key_repeated.get()
+    }
+
+    fn app_active(&self) -> bool {
+        self.app_active.get()
     }
 
     /// A bar that follows opens a new tab, as one ⌘T opened.

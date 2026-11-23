@@ -314,8 +314,8 @@ impl Shell {
         true
     }
 
-    /// The window stopped being the active one, as for another app or window: the card's keys end
-    /// and the keyboard goes back where it was, so coming back the user asks again with the key.
+    /// The window stopped being the active one for another app's: the card's keys end and the
+    /// keyboard goes back where it was, so coming back the user asks again with the key.
     /// On the Mac and Linux GPUI says so (`why` "window"); on Windows, where its window inside the
     /// frame hears no activation, the host's word that the keyboard left for another app does
     /// (keyboard_left, "app").
@@ -330,7 +330,9 @@ impl Shell {
     /// handled, not at a frame, which a hidden window may never draw: still inactive then, the
     /// window was left. Sway's leave and enter as a keyboard comes or its keymap changes come in
     /// one flush, which one read takes and one dispatch handles, so the window is active again by
-    /// then and the keys stay.
+    /// then and the keys stay. Left for one of the app's own windows, as the command bar, a menu or
+    /// Peek over it, the keys end where they are and the keyboard stays that window's: given back
+    /// now, the page would take it from under the overlay.
     pub(super) fn card_keys_window_inactive(
         &mut self,
         window: &mut Window,
@@ -342,8 +344,15 @@ impl Shell {
         cx.spawn_in(window, async move |shell, cx| {
             shell
                 .update_in(cx, |shell, window, cx| {
-                    if !window.is_window_active() {
-                        shell.card_keys_window_left("window", cx);
+                    if window.is_window_active() {
+                        return;
+                    }
+                    if !shell.browser.app_active() {
+                        return shell.card_keys_window_left("window", cx);
+                    }
+                    if shell.card_keys.take().is_some() {
+                        log!("browser: agent card keys left by window");
+                        cx.notify();
                     }
                 })
                 .ok();
@@ -1650,6 +1659,35 @@ mod tests {
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         assert_eq!(answers(&host), Vec::<String>::new());
+    }
+
+    /// One of the app's own windows taking the keyboard, as the command bar does over the window,
+    /// ends the card's keys where they are: the page isn't given the keyboard from under it, and
+    /// the window active again has no ring, ↩ answering nothing.
+    #[gpui::test]
+    fn an_overlay_of_the_apps_ends_the_cards_keys_where_they_are(cx: &mut TestAppContext) {
+        let (host, shell, cx) = window_with(cx);
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        ask(&shell, cx, question(7));
+        from_page(&shell, cx, KEY);
+        wait(cx, PROTECT);
+        host.take();
+        host.app_active.set(true);
+        cx.deactivate_window();
+        cx.run_until_parked();
+        assert_eq!(ring(&shell, cx), None, "the ring outlived the window");
+        assert!(
+            !host.take().contains(&"focus page".to_string()),
+            "the page was given the keyboard under the app's own window"
+        );
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        assert_eq!(ring(&shell, cx), None, "the ring came back with the window");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(answers(&host), Vec::<String>::new());
+        assert!(!host.take().contains(&"focus page".to_string()));
     }
 
     /// GPUI saying the window stopped being active and active again in one batch of events, as

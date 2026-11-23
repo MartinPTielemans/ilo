@@ -1937,6 +1937,15 @@ impl Browser for Engine {
         }
     }
 
+    fn app_active(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        return needs_you::app_active();
+        #[cfg(not(target_os = "linux"))]
+        unsafe {
+            platform::host_app_active()
+        }
+    }
+
     fn page_has_keyboard(&self, _: &App) -> Option<bool> {
         // The core routes every key between page and UI there, X11's by the X server's focus.
         #[cfg(target_os = "linux")]

@@ -931,6 +931,12 @@ pub trait Browser {
     fn key_repeated(&self) -> bool {
         false
     }
+    /// Whether the app is the active one: with its window not active, one of the app's own windows
+    /// has the keyboard, as the command bar, a menu or Peek does over it, rather than another
+    /// app's.
+    fn app_active(&self) -> bool {
+        false
+    }
     /// The window shows another Space: the command bar, if it shows over this window, lists
     /// `tabs` from it, or `open_tabs` for Search Tabs, and its profile's suggestions (decision 5).
     /// Returns whether its pick opens a new tab, for New Tab to keep its plate.
