@@ -180,8 +180,13 @@ if [ -n "$symbols" ] && [ "$platform" = mac ]; then
     mkdir "$dir.dSYMs"
     tar -xf "$archive" -C "$dir.dSYMs"
     rm "$archive"
-    mv "$dir.dSYMs"/*.dSYM "$dir"
-    rmdir "$dir.dSYMs"
+    # Each moves in whole, the framework's last, as it's what says they're all there. One a killed
+    # fetch already moved stays.
+    for each in "$dir.dSYMs"/*.dSYM; do
+      [ "${each##*/}" = "Chromium Framework.dSYM" ] || [ -e "$dir/${each##*/}" ] || mv "$each" "$dir"
+    done
+    [ ! -d "$dir.dSYMs/Chromium Framework.dSYM" ] || mv "$dir.dSYMs/Chromium Framework.dSYM" "$dir"
+    rm -rf "$dir.dSYMs"
   fi
   echo "$dir"
   exit 0
