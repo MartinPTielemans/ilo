@@ -287,6 +287,8 @@ pub struct Settings {
     /// it sent (#2326), and those of them showing every line.
     requests_opened: HashSet<u64>,
     requests_all: HashSet<u64>,
+    /// The site notes opened to read, by host (#4122).
+    notes_opened: HashSet<&'static str>,
 }
 
 /// Settings' dialog, which it draws in its own content, so there's nothing to show.
@@ -1145,6 +1147,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             autofill: HashMap::new(),
             asked: HashSet::new(),
             requests_opened: HashSet::new(),
+            notes_opened: HashSet::new(),
             requests_all: HashSet::new(),
             import: None,
             _import: None,
@@ -3728,7 +3731,7 @@ impl Settings {
             blocks.push(Block::Under(foot(look, NO_ASSISTANT_OF_ITS_OWN)));
         }
         blocks.push(Block::Heading(APPS_THAT_CONNECT.into()));
-        // Another agent's How comes here.
+        // Another app's How to Connect comes here.
         let apps = SharedString::from(APPS_THAT_CONNECT);
         blocks.push(Block::Group(self.flashed(&apps, group(look, clients))));
         // Shown as Apps that connect are, whether agents are on or off: the command says they're
@@ -3738,6 +3741,7 @@ impl Settings {
             blocks.push(Block::Rows(vec![self.command_line(agents, cx)]));
         }
         blocks.extend(self.fenced_sites(agents, cx));
+        blocks.extend(self.site_notes(agents, accent, cx));
         // AppleScript is the Mac's alone.
         if cfg!(target_os = "macos") {
             blocks.extend(self.scripts(agents, accent, cx));
@@ -3763,7 +3767,12 @@ impl Settings {
                             true => agents::tools::Tense::Done,
                             false => agents::tools::Tense::Failed,
                         };
-                        agents::tools::step_title(&did, tense)
+                        let title = agents::tools::step_title(&did, tense);
+                        // The call's answer carried a site's notes (#4122).
+                        match entry.notes.is_empty() {
+                            true => title,
+                            false => agents::notes::logged(&title),
+                        }
                     };
                     let what = title(entry);
                     let refused = (entry.steps.iter().map(|step| &step.refused))
@@ -3921,6 +3930,71 @@ impl Settings {
             Block::Heading(fence::HEADING.into()),
             Block::Group(group(look, rows)),
             Block::Under(under),
+        ]
+    }
+
+    /// Site notes (#4122): the switch, then a row for each site ilo has a note for, which opens
+    /// to the note's own text, as the agent gets it. The list is the app's, so nothing adds to it.
+    fn site_notes(
+        &self,
+        agents: &Entity<Agents>,
+        accent: Rgba,
+        cx: &mut Context<Self>,
+    ) -> Vec<Block> {
+        use agents::notes;
+        let look = &self.look;
+        let on = agents.read(cx).notes_on();
+        let switch = {
+            let agents = agents.clone();
+            let set =
+                move |on, cx: &mut App| agents.update(cx, |agents, cx| agents.set_notes_on(on, cx));
+            self.toggle("agent site notes", notes::HEADING, on, set, accent, cx)
+        };
+        let line = match on {
+            true => notes::SWITCH_LINE,
+            false => notes::SWITCH_OFF_LINE,
+        };
+        let row = setting(look, notes::HEADING, Some(line.into()), vec![switch]);
+        let rows: Vec<gpui::Div> = (notes::NOTES.iter().enumerate())
+            .map(|(index, note)| {
+                let opened = self.notes_opened.contains(note.host);
+                let title = match opened {
+                    true => notes::CLOSE,
+                    false => notes::READ,
+                };
+                let host = note.host;
+                let read = self
+                    .button(("agent-note-read", index as u64), title)
+                    .relative()
+                    .child(self.drawn(format!("note {host}")))
+                    .on_click(cx.listener(move |settings, _, _, cx| {
+                        if !settings.notes_opened.remove(host) {
+                            settings.notes_opened.insert(host);
+                        }
+                        cx.notify();
+                    }));
+                let head = line_row(
+                    look,
+                    note.name,
+                    Some(note.about.into()),
+                    vec![read.into_any_element()],
+                );
+                let text = opened.then(|| {
+                    div()
+                        .px(px(ROW_X))
+                        .pb(px(browser::tokens::settings::PADDING))
+                        .text_size(px(text::SMALL))
+                        .line_height(px(DETAIL_LINE))
+                        .text_color(look.detail)
+                        .child(note.text.trim_end())
+                });
+                div().child(head).children(text)
+            })
+            .collect();
+        vec![
+            Block::Rows(vec![row]),
+            Block::Group(group(look, rows)),
+            Block::Under(foot(look, notes::FOOT)),
         ]
     }
 
@@ -4264,8 +4338,10 @@ impl Settings {
     ) {
         let name = cli.assistant();
         let message = format!("Sign out of {name}?");
-        let detail =
-            format!("This signs {name} out everywhere you use it, not only for tasks here.");
+        let detail = format!(
+            "This signs {name} out everywhere you use it, not just in {}.",
+            env!("APP_NAME")
+        );
         let agents = agents.clone();
         let sign_out = move |cx: &mut App| {
             log!("browser: assistant sign-out {}", cli.id());
@@ -5507,15 +5583,15 @@ fn method(target: &str) -> &str {
     target.split(' ').next().unwrap_or_default()
 }
 
-/// Apps that connect's heading, which Another agent's How goes to.
+/// Apps that connect's heading, which Another app's How to Connect goes to.
 const APPS_THAT_CONNECT: &str = "Apps that connect";
 
 /// What Your assistant's rows never do, under them.
 const NO_ASSISTANT_OF_ITS_OWN: &str = concat!(
     env!("APP_NAME"),
-    " has no assistant of its own. You sign in on the assistant's own page, and ",
+    " has no assistant of its own. You sign in on your assistant's page, and ",
     env!("APP_NAME"),
-    " never sees or keeps the sign-in."
+    " never sees or keeps your login."
 );
 
 /// A line under a group that says more of it, in a row's line's grey, as Fenced sites' has.

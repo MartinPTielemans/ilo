@@ -20,6 +20,7 @@ mod codex;
 pub mod command;
 pub mod fence;
 mod held;
+pub mod notes;
 pub mod page;
 #[cfg(windows)]
 mod pipe;
@@ -419,6 +420,8 @@ pub enum Event {
         error: Option<String>,
         kind: Option<tools::Kind>,
         image: Option<String>,
+        /// The site whose notes the answer carried, by its note's name.
+        notes: Option<&'static str>,
     },
 }
 
@@ -445,6 +448,9 @@ pub struct ToolResult {
     pub image: Option<String>,
     /// Of an error, the kind a task's card says it in, if any.
     pub kind: Option<tools::Kind>,
+    /// The site's note the answer starts with (#4122). It's apart from `text`, which may hold a
+    /// page's words, so only the app's own note is ever one: the user's line and the log go by it.
+    pub notes: Option<&'static notes::Note>,
 }
 
 impl ToolResult {
@@ -455,6 +461,7 @@ impl ToolResult {
             error: false,
             image: None,
             kind: None,
+            notes: None,
         }
     }
 
@@ -464,6 +471,7 @@ impl ToolResult {
             error: true,
             image: None,
             kind: None,
+            notes: None,
         }
     }
 
@@ -481,21 +489,42 @@ impl ToolResult {
             error: false,
             image: Some(jpeg),
             kind: None,
+            notes: None,
+        }
+    }
+
+    /// A page's answer `text` after the site's `note`, the two together within an answer's limit.
+    fn noted(text: String, note: Option<&'static notes::Note>) -> Self {
+        let before = note.map_or(0, |note| note.framed().chars().count() + 2);
+        ToolResult {
+            text: tools::capped_after(text, before),
+            notes: note,
+            ..ToolResult::text(String::new())
+        }
+    }
+
+    /// What the agent reads: the site's note first, in its frame, then the answer's text.
+    pub fn said(&self) -> String {
+        match self.notes {
+            Some(note) if self.text.is_empty() => note.framed(),
+            Some(note) => format!("{}\n\n{}", note.framed(), self.text),
+            None => self.text.clone(),
         }
     }
 
     pub fn to_json(&self) -> Value {
+        let text = self.said();
         match &self.image {
             Some(jpeg) => {
                 let picture = json!({ "type": "image", "data": jpeg, "mimeType": "image/jpeg" });
-                let content = match self.text.is_empty() {
+                let content = match text.is_empty() {
                     true => vec![picture],
-                    false => vec![json!({ "type": "text", "text": self.text }), picture],
+                    false => vec![json!({ "type": "text", "text": text }), picture],
                 };
                 json!({ "content": content, "isError": self.error })
             }
             None => {
-                json!({ "content": [{ "type": "text", "text": self.text }], "isError": self.error })
+                json!({ "content": [{ "type": "text", "text": text }], "isError": self.error })
             }
         }
     }
@@ -629,6 +658,9 @@ impl Did {
 /// text (`Show::Text`), after what it did, its `note`.
 struct Reading {
     agent: String,
+    /// The connection its call came on, and its entry in the log, for the site's notes.
+    connection: u64,
+    entry: u64,
     tab: u64,
     reply: mpsc::Sender<ToolResult>,
     note: String,
@@ -705,6 +737,8 @@ struct Acting {
     opened_tabs: Vec<u64>,
     /// The text it waits for once its page settles, looking again until it shows.
     wait: Option<WaitText>,
+    /// Its call's entry in the log, which says so if its answer carries a site's notes, or 0.
+    entry: u64,
 }
 
 /// A text open_tab or navigate waits for in the page's outline once it has settled, as a wait
@@ -783,6 +817,8 @@ pub struct Activity {
     pub sent: Vec<request::Sent>,
     /// What the agent said a request does, in its own words, without their secrets (#3548).
     pub said: SharedString,
+    /// The site whose notes its answer carried (#4122), by its note's name, or empty.
+    pub notes: SharedString,
 }
 
 static NEXT_ENTRY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -891,6 +927,11 @@ pub struct Agents {
     /// changes since.
     outlines: HashMap<u64, page::Outline>,
     had: HashMap<u64, (String, page::Outline)>,
+    /// The site notes each task has had (#4122), and Settings › Agents' Site notes turned off.
+    noted: notes::Given,
+    notes_off: bool,
+    /// The log's last entry, by its id.
+    logged: u64,
     /// The actions waiting on the user, the first asked now.
     asking: Vec<Asking>,
     /// The uploads waiting on the core's description of their file field, by request.
@@ -1095,6 +1136,9 @@ impl Agents {
             refs: HashMap::new(),
             outlines: HashMap::new(),
             had: HashMap::new(),
+            noted: notes::Given::default(),
+            notes_off: false,
+            logged: 0,
             asking: Vec::new(),
             downloading: HashMap::new(),
             ended: HashMap::new(),
@@ -1181,6 +1225,7 @@ impl Agents {
         }))
         .collect();
         self.tasks_off = tasks.get("on").and_then(Value::as_bool) == Some(false);
+        self.notes_off = saved.get("notes").and_then(Value::as_bool) == Some(false);
         self.on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
         self.scripts = saved
             .get("scripts")
@@ -1211,6 +1256,21 @@ impl Agents {
             return;
         }
         self.tasks_off = !on;
+        self.save();
+        cx.notify();
+    }
+
+    /// Whether Settings › Agents' Site notes is on, as it is unless the user turned it off.
+    pub fn notes_on(&self) -> bool {
+        !self.notes_off
+    }
+
+    /// Settings › Agents' Site notes. Off, no answer carries a site's notes from then on.
+    pub fn set_notes_on(&mut self, on: bool, cx: &mut Context<Self>) {
+        if on != self.notes_off {
+            return;
+        }
+        self.notes_off = !on;
         self.save();
         cx.notify();
     }
@@ -1551,7 +1611,9 @@ impl Agents {
     pub fn text_read(&mut self, request: u64, text: Option<String>, cx: &mut Context<Self>) {
         let Some(Reading {
             agent,
-            tab,
+            connection,
+            entry,
+            tab: id,
             reply,
             note,
             from,
@@ -1562,12 +1624,15 @@ impl Agents {
         // Read once it loaded, as the page tools look once they've acted: the tab may have gone
         // somewhere agents may not, and the core reads any page. Loaded, a page still on the empty
         // start page is no web page either, as the core's page tools find.
-        let refused = self.off_limits(&agent, tab, cx);
-        let came = self
-            .came_to(tab, cx)
-            .map(|site| fence::withheld(tab, &site));
-        let tab = self.browser.tab(tab, cx);
+        let refused = self.off_limits(&agent, id, cx);
+        let came = self.came_to(id, cx).map(|site| fence::withheld(id, &site));
+        let tab = self.browser.tab(id, cx);
         let refused = refused.or_else(|| (!is_web(&tab.url)).then_some(NOT_WEB_PAGE));
+        // The page's start alone, as a read from further on goes on with one the agent has.
+        let notes = match (&text, refused, &came, from) {
+            (Some(_), None, None, 0) => self.notes_now(&agent, connection, entry, id, cx),
+            _ => None,
+        };
         _ = reply.send(match (text, refused, came) {
             (Some(_), Some(why), _) => ToolResult::error(why),
             (Some(_), None, Some(came)) => ToolResult::text(match note.is_empty() {
@@ -1576,10 +1641,11 @@ impl Agents {
             }),
             (Some(text), None, None) => {
                 let text = tools::page_text(&tab, &text, from);
-                ToolResult::text(match note.is_empty() {
+                let text = match note.is_empty() {
                     true => text,
                     false => format!("{note}\n\n{text}"),
-                })
+                };
+                ToolResult::noted(text, notes)
             }
             (None, _, _) => ToolResult::error(
                 "The tab has no page loaded: it loads once the user shows it. Try another tab.",
@@ -1634,7 +1700,8 @@ impl Agents {
                 error,
                 kind,
                 image,
-            } => self.answered(&agent, id, at, error, kind, image, cx),
+                notes,
+            } => self.answered(&agent, id, at, error, kind, image, notes, cx),
         }
     }
 
@@ -1787,6 +1854,8 @@ impl Agents {
                 let note = String::new();
                 self.read_page(Reading {
                     agent,
+                    connection,
+                    entry: self.logged,
                     tab,
                     reply,
                     note,
@@ -2434,7 +2503,8 @@ impl Agents {
         answer: ToolResult,
         cx: &mut Context<Self>,
     ) -> Option<ToolResult> {
-        let (agent, tab, seconds) = (run.agent.clone(), run.tab, wait.seconds);
+        let (agent, connection) = (run.agent.clone(), run.connection);
+        let (tab, seconds) = (run.tab, wait.seconds);
         // The tab came to a fenced site while it waited: the wait ends with that alone, whatever
         // the page shows or does, so no try tells the agent anything of it (#3724).
         if let Some(site) = self.came_to(tab, cx) {
@@ -2454,30 +2524,22 @@ impl Agents {
         match &wait.what {
             WaitFor::Time => {
                 let note = format!("Waited {seconds} s.");
-                return Some(ToolResult::text(
-                    self.answer_with(&agent, tab, note, show, cx),
-                ));
+                return Some(self.page_answer(&agent, connection, 0, tab, note, show, cx));
             }
             WaitFor::Quiet => match answer.text.starts_with(BUSY) {
                 // What it shows held still, though a poll's request may never end.
                 false if answer.text.starts_with(REQUESTS) => {
                     let note = REQUESTS.to_string();
-                    return Some(ToolResult::text(
-                        self.answer_with(&agent, tab, note, show, cx),
-                    ));
+                    return Some(self.page_answer(&agent, connection, 0, tab, note, show, cx));
                 }
                 false => {
                     let note = "The page settled.".to_string();
-                    return Some(ToolResult::text(
-                        self.answer_with(&agent, tab, note, show, cx),
-                    ));
+                    return Some(self.page_answer(&agent, connection, 0, tab, note, show, cx));
                 }
                 // A page that never settles, as one that polls, is no reason to stop the run.
                 true if late => {
                     let note = format!("The page was still busy after {seconds} s.");
-                    return Some(ToolResult::text(
-                        self.answer_with(&agent, tab, note, show, cx),
-                    ));
+                    return Some(self.page_answer(&agent, connection, 0, tab, note, show, cx));
                 }
                 true => next = Duration::ZERO,
             },
@@ -2520,9 +2582,7 @@ impl Agents {
                         });
                     }
                     Some((note, None)) => {
-                        return Some(ToolResult::text(
-                            self.answer_with(&agent, tab, note, show, cx),
-                        ));
+                        return Some(self.page_answer(&agent, connection, 0, tab, note, show, cx));
                     }
                     None => {}
                 }
@@ -2598,6 +2658,7 @@ impl Agents {
             reply,
             opened_tabs: vec![],
             wait: None,
+            entry: 0,
         };
         self.acting.insert(request, acting);
         self.act_in_page(agent, tab, request, action, 0, "");
@@ -4080,6 +4141,8 @@ impl Agents {
                 &agent, connection, call, tab, true, closed, &site, reply, cx,
             );
         }
+        // The entry this call logs below, which its answer marks if it carries a site's notes.
+        let logged = next_entry_id();
         if action == "open_tab" {
             let site = site(&url);
             // An agent's first call may be this one, and the core opens a tab only in its Space.
@@ -4122,6 +4185,9 @@ impl Agents {
         let request = self.next_request;
         self.next_request += 1;
         let opened = action == "open_tab";
+        let entry = Some(self.logged)
+            .filter(|entry| *entry >= logged)
+            .unwrap_or(0);
         let acting = Acting {
             agent: agent.clone(),
             connection,
@@ -4136,6 +4202,7 @@ impl Agents {
             reply,
             opened_tabs: vec![],
             wait,
+            entry,
         };
         self.acting.insert(request, acting);
         self.act_in_page(&agent, tab, request, page, element, &text);
@@ -4427,6 +4494,7 @@ impl Agents {
             reply,
             opened_tabs,
             wait,
+            entry,
             ..
         }) = self.acting.remove(&request)
         else {
@@ -4516,14 +4584,14 @@ impl Agents {
         // The page's whole outline is stored even when the answer shows a part, since what has
         // the keyboard decides what a key press asks next (GHSA-hqw3-jp9p-3rhj).
         let whole = page::outline(&info, &nodes, refs, None);
-        let text = match show {
+        let answer = match show {
             Show::Element(node) => {
                 let part = page::outline(&info, &nodes, refs, Some(node)).text();
                 self.outlines.insert(tab, whole);
-                match note.is_empty() {
+                ToolResult::text(match note.is_empty() {
                     true => part,
                     false => format!("{note}\n\n{part}"),
-                }
+                })
             }
             show => {
                 if let Some(mut wait) = wait {
@@ -4546,6 +4614,7 @@ impl Agents {
                             reply,
                             opened_tabs,
                             wait: Some(wait),
+                            entry,
                         };
                         let after = LOOK_EVERY.min(until.saturating_duration_since(now));
                         return self.look_again(acting, after, cx);
@@ -4565,16 +4634,18 @@ impl Agents {
                 if show == Show::Text {
                     return self.read_page(Reading {
                         agent,
+                        connection,
+                        entry,
                         tab,
                         reply,
                         note,
                         from: 0,
                     });
                 }
-                self.answer_with(&agent, tab, note, show, cx)
+                self.page_answer(&agent, connection, entry, tab, note, show, cx)
             }
         };
-        _ = reply.send(ToolResult::text(text));
+        _ = reply.send(answer);
         self.advance(cx);
     }
 
@@ -4637,6 +4708,89 @@ impl Agents {
         let tab = reading.tab;
         self.reading.insert(request, reading);
         self.browser.read_text(tab, request);
+    }
+
+    /// A call's answer as `answer_with` words it, with the site's notes if it shows the agent the
+    /// page and its task hasn't had them (#4122). `entry` is the call's in the log, or 0.
+    #[allow(clippy::too_many_arguments)]
+    fn page_answer(
+        &mut self,
+        agent: &str,
+        connection: u64,
+        entry: u64,
+        tab: u64,
+        note: String,
+        show: Show,
+        cx: &App,
+    ) -> ToolResult {
+        // Before the outline is the agent's, so a tab that came to a fenced site says only that.
+        let notes = match show {
+            Show::Nothing | Show::Text => None,
+            _ => self.notes_now(agent, connection, entry, tab, cx),
+        };
+        ToolResult::noted(self.answer_with(agent, tab, note, show, cx), notes)
+    }
+
+    /// The note for the site `agent`'s `tab` is on, the first time its task is shown a page there,
+    /// and never after: only for a tab of its own Space that the user doesn't hold, on a page that
+    /// isn't off limits or on a fenced site it came to, with Site notes on. The log's entry for the
+    /// call says it carried them, and nothing else is kept.
+    fn notes_now(
+        &mut self,
+        agent: &str,
+        connection: u64,
+        entry: u64,
+        tab: u64,
+        cx: &App,
+    ) -> Option<&'static notes::Note> {
+        if self.notes_off || self.held.contains_key(&tab) || !self.owns(agent, tab, cx) {
+            return None;
+        }
+        if self.off_limits(agent, tab, cx).is_some() || self.came_to(tab, cx).is_some() {
+            return None;
+        }
+        let note = notes::note_for(&self.browser.tab(tab, cx).url)?;
+        // The task under way: the user's own by its agent, or the client's session on this
+        // connection. A call of no task has no first time, so gets none.
+        let task = (self.tasks.tasks.iter()).find(|task| match &task.session {
+            None => task.agent == agent,
+            Some(session) => {
+                task.state == task::State::Working
+                    && session.agent == agent
+                    && session.connection == connection
+            }
+        })?;
+        let task = task.agent.clone();
+        let tasks = &self.tasks.tasks;
+        (self.noted).keep(|key| tasks.iter().any(|task| task.agent == key));
+        if !self.noted.first(&task, note) {
+            return None;
+        }
+        self.log_notes(agent, connection, entry, note);
+        Some(note)
+    }
+
+    /// Marks the log's entry `entry`, or with 0 the last one of the agent's connection, a run's
+    /// last step if it's a run, as one whose answer carried `note`.
+    fn log_notes(&mut self, agent: &str, connection: u64, entry: u64, note: &notes::Note) {
+        let mine = |each: &&mut Activity| each.agent == agent && each.connection == connection;
+        let found = match entry {
+            0 => (self.log.iter_mut().rev())
+                .find(mine)
+                .map(|each| match each.steps.is_empty() {
+                    true => each,
+                    false => each.steps.last_mut().expect("it has steps"),
+                }),
+            entry => (self.log.iter_mut().rev())
+                .flat_map(|each| match each.id == entry {
+                    true => vec![each],
+                    false => each.steps.iter_mut().collect(),
+                })
+                .find(|each| each.id == entry),
+        };
+        if let Some(found) = found {
+            found.notes = note.name.into();
+        }
     }
 
     /// `note`, what an action did, then the tab's latest outline as `show` says, which is the
@@ -5214,7 +5368,9 @@ impl Agents {
             url: SharedString::from(url.to_string()),
             sent,
             said: SharedString::from(said.to_string()),
+            notes: SharedString::default(),
         };
+        self.logged = entry.id;
         if self.stepping == Some((agent.into(), connection)) {
             let run = (self.log.iter_mut().rev()).find(|each| {
                 each.agent == agent && each.connection == connection && each.action == "run_steps"
@@ -5332,6 +5488,7 @@ impl Agents {
             "fenced": self.fenced,
             "tasks": tasks,
             "scripts": self.scripts,
+            "notes": !self.notes_off,
         });
         if let Err(error) = clients::write_private(path, saved.to_string().as_bytes()) {
             log!("couldn't save the agents' settings: {error}");
@@ -5637,6 +5794,7 @@ fn finish(sending: Sending, error: bool, kind: Option<tools::Kind>) {
         error,
         image: None,
         kind: kind.filter(|_| error),
+        notes: None,
     });
 }
 

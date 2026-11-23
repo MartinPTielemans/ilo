@@ -1661,7 +1661,16 @@ impl TalkView {
             ),
         };
         let opened = content.and_then(|content| self.unfolding(fold, open, content.w_full(), look));
-        std::iter::once(line).chain(opened).collect()
+        // The line under its title, as the task made it (the site's notes its answer carried), in
+        // the ink of what a line opens to.
+        let sub = (!step.under.is_empty()).then(|| {
+            div()
+                .pl(px(under))
+                .text_color(palette.text(SECONDARY))
+                .child(step.under.clone())
+                .into_any_element()
+        });
+        std::iter::once(line).chain(sub).chain(opened).collect()
     }
 
     /// What was asked, with its page, and the lines after it, then the answers to the question it
