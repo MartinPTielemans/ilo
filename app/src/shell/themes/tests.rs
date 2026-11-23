@@ -166,8 +166,8 @@ fn remove_theme_color_takes_the_space_back_to_the_accent(cx: &mut TestAppContext
 }
 
 /// ilo's menu takes the window's look: light where the Space's theme makes it light, dark where
-/// it makes it dark, and the system's where it's automatic; its highlight the Space's accent in
-/// that look. The Space's menu keeps Delete Space apart, below a line.
+/// it makes it dark, and the system's where it's automatic; its accent, for capture's markup, the
+/// Space's in that look. The Space's menu keeps Delete Space apart, below a line.
 #[gpui::test]
 fn the_menu_takes_the_windows_look(cx: &mut TestAppContext) {
     use crate::menu::Highlight;
@@ -207,7 +207,7 @@ fn the_menu_takes_the_windows_look(cx: &mut TestAppContext) {
     let accents = shown
         .map(|(appearance, _, tone)| Highlight::of(&Palette::of(Some(&themed(appearance)), tone)));
     assert_eq!(
-        looks.iter().map(|look| look.highlight).collect::<Vec<_>>(),
+        looks.iter().map(|look| look.accent).collect::<Vec<_>>(),
         accents
     );
     assert_ne!(

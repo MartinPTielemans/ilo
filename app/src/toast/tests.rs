@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use gpui::{Bounds, Pixels, TestAppContext, hsla};
+use gpui::{Bounds, Pixels, TestAppContext};
 
 use super::*;
 
@@ -31,14 +31,8 @@ const TIME: Duration = Duration::from_secs(5);
 
 fn open_toast(cx: &mut TestAppContext) -> Rc<Recorder> {
     let host = Rc::new(Recorder::default());
-    cx.update(|cx| {
-        open(
-            host.clone(),
-            |_| (hsla(0., 0., 0., 1.), Default::default()),
-            cx,
-        )
-    })
-    .expect("no toast window");
+    cx.update(|cx| open(host.clone(), |_| Default::default(), cx))
+        .expect("no toast window");
     host
 }
 
@@ -206,13 +200,7 @@ fn a_toast_with_buttons_takes_clicks_while_it_shows(cx: &mut TestAppContext) {
 fn voiceover_says_the_toast_as_it_comes(cx: &mut TestAppContext) {
     use gpui::{VisualTestContext, accesskit::Live};
     let host = Rc::new(Recorder::default());
-    let window = cx.update(|cx| {
-        open(
-            host.clone(),
-            |_| (hsla(0., 0., 0., 1.), Default::default()),
-            cx,
-        )
-    });
+    let window = cx.update(|cx| open(host.clone(), |_| Default::default(), cx));
     let mut window = VisualTestContext::from_window(window.expect("no toast window").into(), cx);
     window.simulate_a11y_activation();
     show_deleted(cx);

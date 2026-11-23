@@ -8,7 +8,7 @@ use std::{cell::RefCell, collections::HashMap, ffi::CString, ffi::c_void, rc::Rc
 use browser::{
     elevation::Level,
     find_status, log,
-    palette::{Palette, STATE_HOVERED, STATE_PRESSED},
+    palette::{Float, Palette, STATE_HOVERED, STATE_PRESSED, Tone},
     shell::{self, keystroke_keys},
     text_input::TextInput,
     tooltip::{self, Anchor, Tip},
@@ -30,8 +30,6 @@ use browser::tokens::find_bar::HEIGHT;
 use browser::tokens::find_bar::RADIUS;
 use browser::tokens::find_bar::WIDTH;
 const RIGHT: f32 = shell::CARD_INSET * 2.;
-// Arc's fill, a navy unlike its window's colour (one Space captured).
-use browser::tokens::find_bar::FILL;
 const TOP: f32 = shell::CARD_INSET * 2.;
 use browser::tokens::find_bar::ARROW_OVERLAP;
 use browser::tokens::find_bar::BUTTON;
@@ -609,7 +607,7 @@ impl Render for FindBar {
                         .items_center()
                         .px(px(INSET))
                         .rounded(px(RADIUS))
-                        .bg(rgb(FILL))
+                        .bg(Float::FindBar.fill(Tone::Dark))
                         .text_color(rgb(TEXT))
                         .text_size(px(text::BODY))
                         .line_height(px(TEXT_LINE))
