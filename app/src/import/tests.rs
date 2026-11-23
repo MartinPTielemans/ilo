@@ -388,18 +388,22 @@ fn what_wont_be_imported_is_one_line() {
     found.leave_out(LIVE_FOLDER, 1);
     assert_eq!(
         super::left_out_line(&found.left_out).as_deref(),
-        Some("Won't be imported: 1 live folder")
+        Some("Won't be imported: a live folder")
     );
     found.leave_out(SPACE_ICON, 1);
     found.leave_out(LIVE_FOLDER, 1);
     assert_eq!(
         super::left_out_line(&found.left_out).as_deref(),
-        Some("Won't be imported: 2 live folders and 1 Space icon")
+        Some("Won't be imported: 2 live folders and a Space icon")
     );
     found.leave_out(NOT_WEB_PAGE, 3);
+    found.leave_out(super::found::FOUR_TAB_SPLIT, 1200);
     assert_eq!(
         super::left_out_line(&found.left_out).as_deref(),
-        Some("Won't be imported: 2 live folders, 1 Space icon and 3 tabs that aren't web pages")
+        Some(
+            "Won't be imported: 2 live folders, a Space icon, 3 tabs that aren't web pages and \
+             1,200 four-tab splits"
+        )
     );
 }
 
