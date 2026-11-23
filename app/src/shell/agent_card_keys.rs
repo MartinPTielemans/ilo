@@ -316,11 +316,12 @@ impl Shell {
 
     /// The window stopped being the active one, as for another app or window: the card's keys end
     /// and the keyboard goes back where it was, so coming back the user asks again with the key.
-    /// On the Mac and Linux GPUI says so; on Windows, where its window inside the frame hears no
-    /// activation, the host's word that the keyboard left for another app does (keyboard_left).
-    pub(super) fn card_keys_window_left(&mut self, cx: &mut Context<Self>) {
+    /// On the Mac and Linux GPUI says so (`why` "window"); on Windows, where its window inside the
+    /// frame hears no activation, the host's word that the keyboard left for another app does
+    /// (keyboard_left, "app").
+    pub(super) fn card_keys_window_left(&mut self, why: &'static str, cx: &mut Context<Self>) {
         if let Some(keys) = &mut self.card_keys {
-            keys.leaving = Some("window");
+            keys.leaving = Some(why);
             cx.notify();
         }
     }
@@ -381,6 +382,7 @@ impl Shell {
         // that, the core's word on Linux, else the host's that the page took it, or another tab
         // shown, whose page takes it as it shows.
         let page = self.page_has_keyboard(window, cx);
+        let active = window.is_window_active();
         let selected = self.selected;
         let now = cx.background_executor().now();
         let Some(keys) = &mut self.card_keys else {
@@ -392,6 +394,12 @@ impl Shell {
             }
             return;
         };
+        // GPUI's word that the window stopped being active, with the window active again by the
+        // frame, was the compositor leaving and entering at once, as sway does to the window with
+        // the keyboard as a keyboard comes or its keymap changes: the user never left.
+        if keys.leaving == Some("window") && active {
+            keys.leaving = None;
+        }
         let why = match showing {
             _ if keys.leaving.is_some() => keys.leaving.unwrap_or("key"),
             _ if !keys.due && (page || keys.selected != selected) => {
@@ -1623,6 +1631,31 @@ mod tests {
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         assert_eq!(answers(&host), Vec::<String>::new());
+    }
+
+    /// GPUI saying the window stopped being active, with the window active again by the frame, as
+    /// sway's leave and enter at once as a keyboard comes: the card keeps its keys, and ↩ answers.
+    #[gpui::test]
+    fn leaving_and_entering_at_once_keeps_the_cards_keys(cx: &mut TestAppContext) {
+        let (host, shell, cx) = window_with(cx);
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        ask(&shell, cx, question(7));
+        from_page(&shell, cx, KEY);
+        wait(cx, PROTECT);
+        let ringed = ring(&shell, cx);
+        host.take();
+        shell.update(cx, |shell, cx| shell.card_keys_window_left("window", cx));
+        cx.run_until_parked();
+        assert_eq!(
+            ring(&shell, cx),
+            ringed,
+            "the ring went with the window still active"
+        );
+        assert!(!host.take().contains(&"focus page".to_string()));
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(answers(&host), ["answer agent 7 Once"]);
     }
 
     /// A click in the page ends the card's keys as the host says the page took the keyboard,
