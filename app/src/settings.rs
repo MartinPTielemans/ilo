@@ -3728,7 +3728,7 @@ impl Settings {
             blocks.push(Block::Under(foot(look, NO_ASSISTANT_OF_ITS_OWN)));
         }
         blocks.push(Block::Heading(APPS_THAT_CONNECT.into()));
-        // Another agent's How comes here.
+        // Another app's How to Connect comes here.
         let apps = SharedString::from(APPS_THAT_CONNECT);
         blocks.push(Block::Group(self.flashed(&apps, group(look, clients))));
         // Shown as Apps that connect are, whether agents are on or off: the command says they're
@@ -4264,8 +4264,10 @@ impl Settings {
     ) {
         let name = cli.assistant();
         let message = format!("Sign out of {name}?");
-        let detail =
-            format!("This signs {name} out everywhere you use it, not only for tasks here.");
+        let detail = format!(
+            "This signs {name} out everywhere you use it, not just in {}.",
+            env!("APP_NAME")
+        );
         let agents = agents.clone();
         let sign_out = move |cx: &mut App| {
             log!("browser: assistant sign-out {}", cli.id());
@@ -5507,15 +5509,15 @@ fn method(target: &str) -> &str {
     target.split(' ').next().unwrap_or_default()
 }
 
-/// Apps that connect's heading, which Another agent's How goes to.
+/// Apps that connect's heading, which Another app's How to Connect goes to.
 const APPS_THAT_CONNECT: &str = "Apps that connect";
 
 /// What Your assistant's rows never do, under them.
 const NO_ASSISTANT_OF_ITS_OWN: &str = concat!(
     env!("APP_NAME"),
-    " has no assistant of its own. You sign in on the assistant's own page, and ",
+    " has no assistant of its own. You sign in on your assistant's page, and ",
     env!("APP_NAME"),
-    " never sees or keeps the sign-in."
+    " never sees or keeps your login."
 );
 
 /// A line under a group that says more of it, in a row's line's grey, as Fenced sites' has.

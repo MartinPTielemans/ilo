@@ -1042,7 +1042,7 @@ impl Agents {
         self.tasks.found.get(&cli)?.models.as_ref()
     }
 
-    /// Run tasks on, in Settings › Agents.
+    /// Run tasks with, in Settings › Agents.
     pub fn set_default_task_agent(&mut self, cli: Cli, cx: &mut Context<Self>) {
         self.tasks.default = Some(cli);
         self.save();
