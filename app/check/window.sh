@@ -1054,11 +1054,6 @@ if [ "$(uname)" = Linux ]; then
 fi
 send key s cmd
 toggle ui hidden "⌘S before the reveal"
-# none_since <what>: nothing has brought the sidebar out, or started its wait, since command $from.
-none_since() {
-  ! sed -n "/^browser: drive $from: /,\$p" "$log" | grep -q '^browser: reveal \(waits\|shown\)$' ||
-    fail "$1"
-}
 # overshoot: in a window away from the screen's edge, which doesn't stop the pointer, one flung at
 # the window's edge overshoots it out of the window, and back in the strip within a second it has
 # moved in the edge, as one the screen's edge stopped would have, and the sidebar comes out
@@ -1092,7 +1087,8 @@ overshoot() {
   sleep 1.2 # past the second a return counts in
   send move 3 300
   sleep 0.3 # past the reveal's 100 ms wait
-  none_since "the pointer back at the window's edge 1.2 s after passing out across it brought the sidebar out"
+  none_since '^browser: reveal waits$' "$from" ||
+    fail "the pointer back at the window's edge 1.2 s after passing out across it brought the sidebar out"
 }
 if [ "$(uname)" = Linux ]; then
   # A press in the band at the left edge and a drag sizes the window from there, as a hand's
@@ -1113,12 +1109,14 @@ if [ "$(uname)" = Linux ]; then
   }
   from=$((step + 1))
   sized 40 "a drag in from the band at the window's left edge"
-  none_since "a press and drag in the band at the window's left edge brought the sidebar out"
+  none_since '^browser: reveal waits$' "$from" ||
+    fail "a press and drag in the band at the window's left edge brought the sidebar out"
   # The window's left edge is 40 in from the screen's, which doesn't stop the pointer.
   overshoot
   from=$((step + 1))
   sized -40 "a drag out from the band at the window's left edge"
-  none_since "a press and drag in the band at the window's left edge brought the sidebar out"
+  none_since '^browser: reveal waits$' "$from" ||
+    fail "a press and drag in the band at the window's left edge brought the sidebar out"
 elif windows; then
   # Its window's left edge in from the screen's, by its invisible resize border and 40, and back.
   send order
