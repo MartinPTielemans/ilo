@@ -108,7 +108,17 @@ pub const BROWSERS: &[Browser] = &[
     Browser {
         name: "Dia",
         family: Chromium,
-        paths: &[(Mac, Support, "Dia/User Data")],
+        // Windows' from the Microsoft Store, its folders moved into the package's, and from its
+        // installer, as raycast/extensions@7602d2c1ff51 extensions/dia/src/platform.ts finds them.
+        paths: &[
+            (Mac, Support, "Dia/User Data"),
+            (
+                Windows,
+                Store,
+                "TheBrowserCompany.Dia*/LocalCache/Local/Dia/User Data",
+            ),
+            (Windows, Local, "Dia/User Data"),
+        ],
     },
     Browser {
         name: "Edge",
