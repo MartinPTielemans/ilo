@@ -292,12 +292,14 @@ const order = () => {
 (async () => {
   const at = await lifted;
   // After the load, whose end the core may lay the page out again for. The window stays off the
-  // passes at the end of the hold, the runtime pass 1.5 s after its load and the core one 1.55 s
-  // after the commit. Both start no earlier than the navigation, 0 on the page clock, and end no
-  // later than 1.55 s after the lift, which may come a second or more after the navigation on a
-  // slow runner (#3929). So a window that would end past 1450 ms on the page clock starts from a
-  // quiet frame after at + 1700 instead, and the title says when it started. A page with no quiet
-  // frame by its bound says "quiet none".
+  // passes at the end of the hold, which the page load event times neither of: the core starts
+  // both at the commit, the runtime pass 1.5 s after the load op the core sends it then and the
+  // core one 1.55 s after (Arrange::Load). The lift is the runtime placing the things, which it
+  // does only once it has that op, so both come after the navigation, 0 on the page clock, and
+  // within 1.55 s of the lift, which may come a second or more after the navigation on a slow
+  // runner (#3929). So a window that would end past 1450 ms on the page clock starts from a quiet
+  // frame after at + 1700 instead, and the title says when it started. A page with no quiet frame
+  // by its bound says "quiet none".
   if (document.readyState !== "complete") await new Promise((done) => addEventListener("load", done, { once: true }));
   let settled = await quiet(at + 1200);
   if (performance.now() + 250 > 1450) {
