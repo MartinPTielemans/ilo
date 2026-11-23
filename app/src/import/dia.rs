@@ -24,7 +24,8 @@ pub fn note(_source: &Source) -> Option<Note> {
 }
 
 /// Said in place of Dia's Spaces, which it keeps encrypted, with the way to bring them from its
-/// export.
+/// export. Only PREVIEW_IMPORT shows it until Choose File… does something: the change that makes
+/// `note` give it is the one that reads the export the user chooses.
 pub const ENCRYPTED: Note = Note {
     said: "Dia encrypts its Spaces, so ilo can't import them directly. Export a Markdown file \
         from Dia, then choose it here.",

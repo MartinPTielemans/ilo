@@ -2968,7 +2968,8 @@ impl ImportView {
     }
 
     /// The Spaces' row when the browser's can't be read here: why, in its reader's words, and the
-    /// control that brings them another way, if there is one.
+    /// control that brings them another way, if there is one. Its glyph is dimmed only when there's
+    /// none, as the row then offers nothing to do.
     fn note_row(&self, note: &found::Note, _cx: &mut Context<Self>) -> gpui::Div {
         let look = &self.look;
         let action = note.action.map(|action| match action {
@@ -2977,13 +2978,16 @@ impl ImportView {
                     Os::Mac => "Choose File…",
                     _ => "Choose file…",
                 };
+                // Called by what it chooses, as the passwords' row's Choose File… is beside it.
                 button(look, "import-choose-spaces", label)
-                    .when(self.a11y, |choose| named_button(choose, label))
+                    .when(self.a11y, |choose| {
+                        named_button(choose, "Choose Spaces Export…")
+                    })
                     .into_any_element()
             }
         });
         frame()
-            .child(glyph_plate(look, glyph(Kind::Spaces), false))
+            .child(glyph_plate(look, glyph(Kind::Spaces), action.is_some()))
             .child(
                 div()
                     .flex_1()

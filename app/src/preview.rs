@@ -2478,8 +2478,8 @@ fn import_home(fixture: &std::path::Path) -> std::path::PathBuf {
 /// The browser PREVIEW_IMPORT picks and what it finds there, made up.
 fn import_found(given: &str) -> Option<(&'static str, browser::import::found::Found)> {
     use browser::import::found::{
-        FOUR_TAB_SPLIT, Found, FromProfile, LIVE_FOLDER, NOT_WEB_PAGE, Node, Page, SPACE_ICON,
-        Space, SpaceFrom, Tab,
+        FOUR_TAB_SPLIT, Found, FromProfile, Item, LIVE_FOLDER, NOT_WEB_PAGE, Node, Page,
+        SEPARATE_CONTAINER, SPACE_ICON, Space, SpaceFrom, Tab,
     };
     let tab = |name: &str, url: &str| Tab {
         name: name.into(),
@@ -2549,6 +2549,36 @@ fn import_found(given: &str) -> Option<(&'static str, browser::import::found::Fo
                 found.leave_out(NOT_WEB_PAGE, 2);
             }
             "Arc"
+        }
+        // Zen with every thing its reader leaves out, each many, for the line at its longest.
+        "longest" => {
+            found.spaces = vec![
+                space(
+                    SpaceFrom::Sidebar,
+                    "Home",
+                    tabs(7, "example.com"),
+                    Vec::new(),
+                ),
+                space(
+                    SpaceFrom::Sidebar,
+                    "Work",
+                    tabs(5, "example.org"),
+                    Vec::new(),
+                ),
+            ];
+            found.history = history(2_316);
+            // Zen's reader's own words, which come with it.
+            let essentials = Item {
+                one: "a folder in Essentials",
+                many: "folders in Essentials",
+            };
+            found.leave_out(SEPARATE_CONTAINER, 14);
+            found.leave_out(LIVE_FOLDER, 3);
+            found.leave_out(NOT_WEB_PAGE, 6);
+            found.leave_out(FOUR_TAB_SPLIT, 2);
+            found.leave_out(essentials, 4);
+            found.leave_out(SPACE_ICON, 5);
+            "Zen"
         }
         "zen" => {
             found.spaces = vec![bookmarks("Zen")];
@@ -3611,10 +3641,11 @@ fn main() {
                             shell.onboarding_count_on(cx);
                         }
                     }
-                    // PREVIEW_IMPORT=one, =four, =zen or =dia, with PREVIEW_ONBOARDING=<look>:import,
-                    // picks a browser there with made-up things read: Arc with one thing that
-                    // won't be imported, or four, and Zen and Dia with their notes in place of
-                    // their Spaces (#4051).
+                    // PREVIEW_IMPORT=one, =four, =longest, =zen or =dia, with
+                    // PREVIEW_ONBOARDING=<look>:import, picks a browser there with made-up things
+                    // read: Arc with one thing that won't be imported, or four, Zen with all it
+                    // leaves out, and Zen and Dia with their notes in place of their Spaces
+                    // (#4051).
                     if let Ok(given) = std::env::var("PREVIEW_IMPORT")
                         && let Some((name, found)) = import_found(&given)
                     {
