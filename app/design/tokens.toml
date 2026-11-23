@@ -924,10 +924,6 @@ far-glow-fade = 0.7
 # dialog.
 overlay-dark = 0x1f1d17
 dialog-dark = 0x2a2720
-# What floats is frosted (#4090): its fill at this over the host's blur where the host blurs under
-# it, and opaque where it can't, so text at 0.6 of the ink holds 4.5:1 over any page. The find
-# bar and tooltips take the dark fill and this in both looks.
-overlay-alpha = 0.9
 # The light window: the same material under white, at each level (#4087), and its stand-in, as
 # the dark one's. The glow is a little fainter on it (#4089).
 light-tint-less = 0.83
@@ -958,10 +954,6 @@ light-neutral-gradient-alpha = 0.11
 # the dark dialog is a step lighter than the dark overlay (ours).
 overlay-light = 0xf3f0e8
 dialog-light = 0xfbf9f4
-# The light fills over the blur: the least alphas at which text at 0.6 of Ink holds 4.5:1 over a
-# black page (#4090's table had 0.93 for both, which falls under it there).
-light-overlay-alpha = 0.97
-light-dialog-alpha = 0.94
 # The accent of a Space without a theme starts from ilo green (#0B8045), lighter, so Ink reads on
 # it at 4.6:1 where Paper on #0B8045 is 4.4:1. On the measured window over a white backdrop it's
 # 2.7:1, so the palette takes it lighter still at its hue, to #57B97A, as it does a theme's colour.
