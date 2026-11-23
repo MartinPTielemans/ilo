@@ -52,13 +52,15 @@ page='data:text/html,<title>loading</title>
 requestAnimationFrame(() => setTimeout(() => document.title = "ready"));
 text.oninput = () => document.title = "value " + text.value;
 // Like Google Docs, the page keeps ⌘F, and ⌘L once its field ends with "keep", as a web terminal
-// does. It answers ⌘L late, as a busy page can, past the 0.4 s the keys typed after it were once
-// held for. No number sign: it would end this data URL.
+// does. It answers ⌘L late, as a busy page can, though at half the core'"'"'s 0.2 s bound; past it
+// once its field ends with "slow". No number sign: it would end this data URL.
 addEventListener("keydown", e => {
   if (!e.'"$cmd_key"') return;
   document.title = "page saw cmd-" + e.key;
-  if (e.key == "f" || (e.key == "l" && text.value.endsWith("keep"))) e.preventDefault();
-  for (const until = performance.now() + (e.key == "l" ? 700 : 0); performance.now() < until;);
+  const slow = text.value.endsWith("slow");
+  if (e.key == "f" || (e.key == "l" && (slow || text.value.endsWith("keep")))) e.preventDefault();
+  const late = e.key != "l" ? 0 : slow ? 600 : 100;
+  for (const until = performance.now() + late; performance.now() < until;);
 }, true);
 addEventListener("keydown", e => {
   if (e.key == "Escape") document.title = "page saw escape " + (e.repeat ? "repeat" : "press");
@@ -245,6 +247,30 @@ grep -q '^browser: title [0-9]* page saw cmd-[twnW]$' "$log" && fail "the page s
 grep -q '^browser: title [0-9]* page saw cmd-l$' "$log" || fail "⌘L with the page focused didn't reach the page first"
 grep -q '^browser: command find via page$' "$log" && fail "the page kept ⌘F, but the UI ran it too"
 grep -q '^browser: command \(back\|forward\) via page$' "$log" && fail "⌘← or ⌘→ in the page's text field went back or forward"
+# A page that keeps ⌘L past the core's bound, kPageKeyBound's 200 ms, as a busy one does, runs its
+# own handler and loses the key to the browser too: the bar opens once, at the bound, and stays
+# open through the page's late answer (#3944).
+send key a cmd
+send type slow
+expect '^browser: title [0-9]* value slow$' "the page didn't get \"slow\""
+from=$((step + 1))
+send key l cmd
+expect "^browser: tab $tab page didn't answer a key, run " \
+  "a page that kept ⌘L past the bound kept it from the browser (#3944)" "$from"
+expect '^browser: command bar shown$' "⌘L didn't open the command bar over a page past the bound (#3944)" "$from"
+expect "^browser: tab $tab page answered a key the browser ran, kept, " \
+  "the late answer of a page that kept ⌘L past the bound never came" "$from"
+logged '^browser: title [0-9]* page saw cmd-l$' "$from" || fail "the page past the bound didn't get ⌘L"
+[ "$(sed -n "/^browser: drive $from: /,\$p" "$log" | grep -c '^browser: command bar shown$')" = 1 ] ||
+  fail "⌘L over a page past the bound opened the command bar more than once (#3944)"
+! logged '^browser: command bar hidden$' "$from" ||
+  fail "the late answer of a page that kept ⌘L past the bound closed the command bar (#3944)"
+send key escape
+expect '^browser: command bar hidden$' "escape didn't close the command bar" "$from"
+in_browser RenderWidgetHostViewCocoa "after the command bar over the page past the bound closed"
+send key a cmd
+send type abcd
+expect '^browser: title [0-9]* value abcd$' "⌘A in the page didn't select all"
 
 # Korean composes in the page a syllable at a time, from a 2-set keyboard: one key can commit a
 # syllable and start the next, backspace takes a letter off the syllable composing, and return
@@ -422,16 +448,17 @@ elif windows; then
   send type y
   expect '^browser: title [0-9]* value y$' "Ctrl+A in the page didn't select all"
 else
-  # The page answers ⌘L 0.7 s late, so the composition comes while the keys are held for the bar,
-  # which shows after it.
+  # The page answers ⌘L 0.1 s late, so the composition starts while the keys are held for the bar,
+  # which shows after it, and may end once the bar has the keyboard: either way the bar takes all
+  # of it.
   send $ime
   typed_after l nihongo
   typed=$step
   expect "^browser: command bar drew \"$preedit\"\$" \
     "a composition typed right after ⌘L didn't go to the command bar: $(drew 'command bar')"
-  [ "$(grep -n "^browser: drive $typed done" "$log" | cut -d: -f1)" -lt \
+  [ "$(grep -n "^browser: drive $typed: " "$log" | cut -d: -f1)" -lt \
     "$(grep -n '^browser: command bar shown$' "$log" | tail -1 | cut -d: -f1)" ] ||
-    fail "the composition after ⌘L was typed once the command bar showed, not while ⌘L was held"
+    fail "the composition after ⌘L started once the command bar showed, not while ⌘L was held"
   send state
   [ "$marked" = "$preedit_marked" ] || fail "the command bar didn't take all of the composition: marked $marked"
   send key escape
