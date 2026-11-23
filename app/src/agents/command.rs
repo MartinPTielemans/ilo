@@ -65,6 +65,7 @@ const WORDS: &[Word] = &[
     word("add-to-split", "add_to_split", &["split"]),
     word("separate", "separate_tab", &[]),
     word("splits", "list_split", &[]),
+    word("upload", "upload", &["ref"]),
     word("hand-off", "hand_off", &["reason"]),
     word("ask-for", "ask_for_tab", &["reason"]),
     word("done", "done", &[]),
