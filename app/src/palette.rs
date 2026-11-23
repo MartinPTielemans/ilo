@@ -225,8 +225,10 @@ fn float_alphas(level: Transparency) -> [f32; 3] {
 }
 
 /// Whether this host's windows have a material behind them, which the host says once as the app
-/// starts (host.h): what floats over it takes the level, and the level is offered.
-static WINDOW_MATERIAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// starts (host.h): what floats over it takes the level, and the level is offered. Until it says,
+/// as in the preview, which has no host, it's the Mac's answer on the Mac and no elsewhere.
+static WINDOW_MATERIAL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(cfg!(target_os = "macos"));
 
 pub fn set_window_material(has: bool) {
     WINDOW_MATERIAL.store(has, std::sync::atomic::Ordering::Relaxed);
