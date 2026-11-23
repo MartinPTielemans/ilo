@@ -5549,7 +5549,7 @@ mod requests {
     /// The log keeps the agent's sentence as theirs, without a value after a secret's name.
     #[gpui::test]
     fn the_log_keeps_a_sentence_without_its_secret(cx: &mut TestAppContext) {
-        let (agents, browser, _) = connected(cx);
+        let (agents, _, _) = connected(cx);
         let change = json!({ "tab": 20, "requests": [
             { "method": "PUT", "path": "/api/settings", "body": { "on": true },
               "what": "Set the API key to sk-live-123" },
@@ -8450,7 +8450,7 @@ mod sessions {
     /// and never on the other's.
     #[gpui::test]
     fn a_handoff_and_a_refusal_show_on_their_own_card(cx: &mut TestAppContext) {
-        let (agents, browser) = at_work(cx);
+        let (agents, _) = at_work(cx);
         answered(&agents, 2, cx);
         let first = cards(&agents, cx)[0].agent.to_string();
         hello_on(&agents, "claude-code", 2, "claude-code", cx);
