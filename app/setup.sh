@@ -113,6 +113,9 @@ unbuilt() {
     rm -rf "$1.part"
   fi
 }
+# How setup builds a tree in the cache, numbered and in both trees' keys: raised whenever what goes
+# into a tree changes, such as a name added below, so no checkout links a tree built the old way.
+RECIPE=1
 # The instructions downloaded code brings for coding agents, under $1. Zed's tell agents to edit
 # its README: they're written for that project's contributors and don't apply to work here.
 unagent() {
@@ -135,7 +138,7 @@ mirror() {
 
 if [ -n "$shared" ]; then
   # Named by the revision and by the patches, so a branch with other patches gets its own tree.
-  key=$({ echo "zed $ZED_REV"; for patch in $PATCHES; do cat "patches/$patch"; done; } | sha256)
+  key=$({ echo "zed $ZED_REV $RECIPE"; for p in $PATCHES; do cat "patches/$p"; done; } | sha256)
   key=$(echo "$key" | cut -c1-16)
   tree=$cache/zed/$(echo "$ZED_REV" | cut -c1-12)-$key
   [ -d "$tree" ] || mirror
@@ -204,7 +207,7 @@ vendor() {
   archive "$crate" "https://static.crates.io/crates/$1/$1-$2.crate" "$3"
   rm -rf ".deps/$1" ".deps/$1-$2"
   if [ -n "$shared" ]; then
-    built=$cache/crates/$1-$2-$({ echo "$3"; cat "patches/$4"; } | sha256 | cut -c1-16)
+    built=$cache/crates/$1-$2-$({ echo "$3 $RECIPE"; cat "patches/$4"; } | sha256 | cut -c1-16)
     # Looked for again once locked, as the setup waited on may have built it.
     [ -d "$built" ] || lock
     if [ ! -d "$built" ]; then
