@@ -23,6 +23,7 @@
 #include "content/public/browser/notification_event_dispatcher.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "ui/message_center/public/cpp/notification.h"
 #include "url/gurl.h"
 
 namespace browser_core {
@@ -68,8 +69,8 @@ class Notifications : public base::SupportsUserData::Data,
     // the answer is one of this profile's documents. Null for a worker's, and for one whose page
     // closed or navigated away, as its notification in Chrome is no document's once it is gone.
     content::RenderFrameHost* document =
-        NotificationEventDispatcher::GetInstance()->GetNonPersistentNotificationDocument(
-            notification.id());
+        content::NotificationEventDispatcher::GetInstance()
+            ->GetNonPersistentNotificationDocument(notification.id());
     if (!document || !document->GetLastCommittedURL().SchemeIsHTTPOrHTTPS()) {
       return;
     }
