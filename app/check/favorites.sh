@@ -984,6 +984,18 @@ fi
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "⌘1 didn't show the first favorite again"
 await "^browser: title $x badges posted 1$" || fail "the second favorite's page didn't post as it hid"
 
+# The second favorite shows for the quit, so the run below takes the first favorite out with
+# another tab shown: its click on Today's top row has a tab to change from. The first's page
+# posts as it hides, with the setting off, so it counts for nothing.
+send key 2 cmd
+if [ "$active" != 1 ]; then
+  exec 3>&-
+  quit
+  echo "skip: the Mac came back in use, so the badges' switch wasn't checked"
+  exit 0
+fi
+expect "^browser: selected $x\( in .*\)\{0,1\}\$" "⌘2 didn't show the second favorite for the quit"
+
 # The switch had come back off if a click on it turns the setting on. Posts while it was off
 # counted for nothing, so no badge came with the relaunch.
 send click $sidebar_point
