@@ -4,7 +4,7 @@
 //! rows).
 
 use std::time::Duration;
-use web_time::Instant;
+use std::time::Instant;
 
 use gpui::{App, Context, Global, Task, Window, div, prelude::*, px};
 

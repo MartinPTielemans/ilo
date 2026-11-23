@@ -4,7 +4,7 @@
 //! their new places once the browser reports the new order.
 
 use std::collections::HashMap;
-use web_time::Instant;
+use std::time::Instant;
 
 use gpui::{
     AnyElement, Bounds, Context, DispatchPhase, DragMoveEvent, Entity, MouseButton, MouseUpEvent,

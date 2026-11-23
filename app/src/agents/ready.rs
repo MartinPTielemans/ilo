@@ -10,7 +10,7 @@ use std::process::Stdio;
 use crate::child::command;
 use std::sync::mpsc;
 use std::time::Duration;
-use web_time::Instant;
+use std::time::Instant;
 
 use serde_json::Value;
 

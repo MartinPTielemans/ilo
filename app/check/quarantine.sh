@@ -17,7 +17,9 @@
 #   quarantine.sh list <os>    the lines as a Markdown table, for a Check run's summary
 #   quarantine.sh lint         fails on a line that's malformed, names no run, is more than 14 days
 #                              old or whose issue isn't open, and on an issue main-check.sh opened
-#                              for a run red twice running that no line names a day later
+#                              for a run red twice running that no line names an hour later
+#   quarantine.sh weeks [<n>]  how many lines each list had as each of the last n weeks (8) began,
+#                              and has now, as a Markdown table, from the lists' history in git
 set -eu
 dir=$(cd "$(dirname "$0")" && pwd)
 repo=${GITHUB_REPOSITORY:-MartinPTielemans/ilo}
@@ -25,7 +27,12 @@ days=14
 
 # The lines of quarantine.$1, without comments and blank lines.
 lines() {
-  sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' "$dir/quarantine.$1"
+  strip < "$dir/quarantine.$1"
+}
+
+# Its input without comments and blank lines.
+strip() {
+  sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d'
 }
 
 # $1 with each run of blanks made one space, and none at its ends.
@@ -36,6 +43,11 @@ squeeze() {
 # Seconds since 1970 of the day $1, YYYY-MM-DD, with GNU date or the Mac's.
 day() {
   date -u -d "$1" +%s 2> /dev/null || date -u -j -f %Y-%m-%d "$1" +%s 2> /dev/null
+}
+
+# Seconds since 1970 of the time $1, as GitHub gives it: YYYY-MM-DDTHH:MM:SSZ.
+stamp() {
+  date -u -d "$1" +%s 2> /dev/null || date -u -j -f %Y-%m-%dT%H:%M:%SZ "$1" +%s 2> /dev/null
 }
 
 # Sets state to issue $1's, OPEN or CLOSED, or to why it's unread. GitHub's API now and then times
@@ -169,22 +181,66 @@ lint)
       fi
     done < "$dir/$file"
   done
-  # A run red on main twice running is fixed that day, which closes its issue (main-check.sh),
-  # or quarantined under it.
+  # A run red on main twice running is fixed within the hour, which closes its issue
+  # (main-check.sh), or quarantined under it, so a known red doesn't sit on every branch's Check.
+  clock=$(date -u +%s)
   gh issue list --repo "$repo" --state open --search 'in:title "fails on main twice running"' \
-    --json number,title,createdAt -q '.[] | "\(.number) \(.createdAt[0:10]) \(.title)"' > "${TMPDIR:-/tmp}/twice.$$" ||
+    --json number,title,createdAt -q '.[] | "\(.number) \(.createdAt) \(.title)"' > "${TMPDIR:-/tmp}/twice.$$" ||
     { echo "quarantine.sh: couldn't list the issues of runs red twice running" >&2; status=1; }
   while read -r number opened title; do
     case " $named " in *" $number "*) continue ;; esac
-    since=$(day "$opened") || continue
-    [ $((now - since)) -lt 86400 ] ||
-      bad quarantine.sh 1 "#$number, $title, is open a day on and no quarantine line names it: fix the run or quarantine it"
+    since=$(stamp "$opened") || continue
+    [ $((clock - since)) -lt 3600 ] ||
+      bad quarantine.sh 1 "#$number, $title, is open an hour on and no quarantine line names it: fix the run or quarantine it"
   done < "${TMPDIR:-/tmp}/twice.$$"
   rm -f "${TMPDIR:-/tmp}/twice.$$"
   exit "$status"
   ;;
+weeks)
+  # Read, never kept: each count comes from main's history of the lists, first parents only, at
+  # each Monday 00:00 UTC, so the table shows whether the lists shrink.
+  [ $# -le 2 ] || { echo "usage: quarantine.sh weeks [<n>]" >&2; exit 2; }
+  n=${2:-8}
+  case $n in '' | *[!0-9]* | 0*) echo "quarantine.sh: weeks takes a number of weeks, such as 8" >&2; exit 2 ;; esac
+  at=$(git -C "$dir" rev-parse --show-prefix 2> /dev/null) &&
+    [ "$(git -C "$dir" rev-parse --is-shallow-repository)" = false ] ||
+    { echo "quarantine.sh: weeks reads the lists' history in git, which a shallow clone lacks" >&2; exit 2; }
+  # The lines of each list at commit $2, or now with none, under the row's name $1; – where the
+  # list wasn't there yet.
+  row() {
+    all=0 cells=
+    for os in mac windows linux; do
+      if [ -z "$2" ]; then
+        count=$(lines "$os" | wc -l)
+      elif git -C "$dir" cat-file -e "$2:${at}quarantine.$os" 2> /dev/null; then
+        count=$(git -C "$dir" show "$2:${at}quarantine.$os" | strip | wc -l)
+      else
+        cells="$cells – |"
+        continue
+      fi
+      count=$((count + 0))
+      all=$((all + count))
+      cells="$cells $count |"
+    done
+    echo "| $1 |$cells $all |"
+  }
+  today=$(day "$(date -u +%Y-%m-%d)")
+  monday=$((today - ($(date -u +%u) - 1) * 86400))
+  echo "Quarantine lines as each week began (Monday 00:00 UTC), and now:"
+  echo
+  echo "| Week of | Mac | Windows | Linux | All |"
+  echo "|---|---|---|---|---|"
+  i=$((n - 1))
+  while [ "$i" -ge 0 ]; do
+    start=$((monday - i * 604800))
+    commit=$(git -C "$dir" rev-list -1 --first-parent --before="@$start" HEAD)
+    [ -n "$commit" ] && row "$(date -u -d "@$start" +%Y-%m-%d 2> /dev/null || date -u -r "$start" +%Y-%m-%d)" "$commit"
+    i=$((i - 1))
+  done
+  row now ""
+  ;;
 *)
-  echo "usage: quarantine.sh match <os> <run> <session> <FAIL line> | list <os> | lint" >&2
+  echo "usage: quarantine.sh match <os> <run> <session> <FAIL line> | list <os> | lint | weeks [<n>]" >&2
   exit 2
   ;;
 esac

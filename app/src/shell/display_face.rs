@@ -4,7 +4,7 @@
 //! launch, since registering a font makes GPUI shape every line again once.
 
 use std::borrow::Cow;
-use web_time::Instant;
+use std::time::Instant;
 
 use gpui::{App, FontWeight, Global, ParentElement, SharedString, Styled, div, px};
 

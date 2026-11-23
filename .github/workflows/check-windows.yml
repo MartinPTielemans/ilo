@@ -153,7 +153,7 @@ jobs:
       SHARDS: ${{ inputs.runs == 'all' && 3 || 2 }}
       # The runs the Windows driver (platform/windows/drive.cc) is meant to pass so far.
       WINDOWS_RUNS: >-
-        load tabs dialogs crash about onboarding import agents access passkeys passwords quit relaunch
+        load tabs dialogs crash about onboarding import agents access passkeys passwords quit quit-history relaunch
         private blank links link-cards capture board spaces pinned profiles devices pair history appearance adblock-live find
         mcp keys sync sync-account sync-devices split trouble window clear handback restore little
         battery-os adblock adblock-lists adblock-cosmetic adblock-page store sync-extensions
@@ -485,10 +485,12 @@ jobs:
               start=$SECONDS
               status=0
               # Perf measures Chrome beside the app, and a lone adblock-native makes uBlock Origin's
-              # pass of the 50 sites before its own (#3260).
+              # pass of the 50 sites before its own (#3260). Mcp's launches take 13 to 20 minutes
+              # here, every part moving to the end (#3972).
               limit=20m
               [ "$run" != perf ] || limit=40m
               [ "$run" != adblock-native ] || limit=40m
+              [ "$run" != mcp ] || limit=30m
               timeout "$limit" ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
               # By the app's path, never by image name, which would reach any other Chrome. Before
               # the move, as Windows won't move a folder a process still has a file open in.

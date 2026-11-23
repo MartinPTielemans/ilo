@@ -99,7 +99,6 @@ A draft release whose files keep their names, so `releases/latest/download/<name
 - `ilo-linux-x86_64.flatpak` and `ilo.flatpakref`.
 - `SHA256SUMS` and `appcast.xml`.
 - `ilo-mac-arm64-<a>-to-<b>.delta`: Sparkle's deltas to the DMG's app from the feed's three Mac builds before it, made from their releases' DMGs. A copy on one downloads a few MB instead of the DMG; any other copy, or one a delta doesn't match, takes the DMG.
-- `ilo-demo.tar.gz`, the site's live demo built from the same commit (`.github/workflows/demo.yml`), when the commit has one.
 
 Once the draft is published:
 

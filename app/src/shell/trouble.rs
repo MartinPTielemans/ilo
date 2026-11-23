@@ -5,7 +5,7 @@
 //! while its page has died or hung. The core reports which (bc_tab_state.trouble), and agents read
 //! the same.
 
-use web_time::Instant;
+use std::time::Instant;
 
 use gpui::{
     Bounds, Context, Div, FontWeight, MouseButton, Pixels, Stateful, Window, div, prelude::*, px,

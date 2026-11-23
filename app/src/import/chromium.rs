@@ -4,21 +4,19 @@
 //! are never read. Arc's sidebar is arc.rs's.
 
 use std::path::Path;
-use web_time::SystemTime;
+use std::time::SystemTime;
 
 use serde_json::Value;
 
 use super::extensions;
 use super::found::{Address, Node, Page, Tab, opens_here};
 use super::read::{Kind, Read, ReadError, folder_name, pinned};
-#[cfg(not(target_family = "wasm"))]
 use super::{
     found::Field,
     read::{Copy, micros},
 };
 
 /// Chromium's times count microseconds from 1601, 11,644,473,600 seconds before 1970.
-#[cfg(not(target_family = "wasm"))]
 const FROM_1601: i64 = 11_644_473_600_000_000;
 
 /// What of `picked` the profile at `path` has, its history since `since`.
@@ -45,7 +43,6 @@ pub fn read(path: &Path, picked: &[Kind], since: SystemTime) -> Result<Read, Rea
     Ok(read)
 }
 
-#[cfg(not(target_family = "wasm"))]
 /// The addresses saved in the `Web Data` file at `path`, the user's own and their account's, with
 /// each field as Chromium keeps it. Since Web Data's version 134 they're in one table, before it in
 /// one for the user's own and one for their account's. It reads a copy, as history() does.
@@ -92,11 +89,6 @@ pub fn addresses(path: &Path) -> Result<Vec<Address>, ReadError> {
         }
     }
     Ok(addresses.into_iter().map(|(_, address)| address).collect())
-}
-
-#[cfg(target_family = "wasm")]
-pub fn addresses(_: &Path) -> Result<Vec<Address>, ReadError> {
-    Err(super::read::on_the_web())
 }
 
 /// A profile's bookmarks as pinned tabs and folders: the bar's at the top, or in a folder of its
@@ -160,7 +152,6 @@ fn nodes(folder: &Value) -> Vec<Node> {
         .collect()
 }
 
-#[cfg(not(target_family = "wasm"))]
 /// The pages of the `History` file at `path` visited since `since`, the latest first, but for
 /// those Chromium hides, such as a frame's, and those that can't open here. It reads a copy, as the
 /// browser keeps the file locked while it runs.
@@ -188,9 +179,4 @@ pub fn history(path: &Path, since: SystemTime) -> Result<Vec<Page>, ReadError> {
         }
     }
     Ok(pages)
-}
-
-#[cfg(target_family = "wasm")]
-pub fn history(_: &Path, _: SystemTime) -> Result<Vec<Page>, ReadError> {
-    Err(super::read::on_the_web())
 }

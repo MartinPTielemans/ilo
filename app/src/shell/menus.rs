@@ -299,14 +299,15 @@ impl Shell {
     /// sidebar's empty space's menu (ours: Arc's divider has none recorded, #2344).
     pub(super) fn divider_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let keys = user_keys(cx);
-        let command = |title, command| {
-            let entry = MenuEntry::new(title, self.offers(command)).shortcut(command, keys);
+        let command = |command: Command| {
+            let entry =
+                MenuEntry::new(command.title(), self.offers(command)).shortcut(command, keys);
             let action: MenuAction = Box::new(move |shell, cx| shell.run(command, "sidebar", cx));
             (entry, action)
         };
         let mut items = vec![
-            command("Sort Today Tabs by Site", Command::SortBySite),
-            command("Clear Today", Command::Clear),
+            command(Command::SortBySite),
+            command(Command::Clear),
             (MenuEntry::line(), Box::new(|_, _| {})),
         ];
         let after = items.len();
@@ -1821,20 +1822,20 @@ impl Shell {
             return;
         };
         let keys = user_keys(cx);
-        let command = |title, command| {
-            let entry = MenuEntry::new(title, true).shortcut(command, keys);
+        let command = |command: Command| {
+            let entry = MenuEntry::new(command.title(), true).shortcut(command, keys);
             let action: MenuAction = Box::new(move |shell, cx| shell.run(command, "footer", cx));
             (entry, action)
         };
         let line = || -> (MenuEntry, MenuAction) { (MenuEntry::line(), Box::new(|_, _| {})) };
         let items = vec![
-            command("Settings…", Command::Settings),
-            command("Import from Other Browsers…", Command::Import),
-            command("Privacy Policy", Command::PrivacyPolicy),
+            command(Command::Settings),
+            command(Command::Import),
+            command(Command::PrivacyPolicy),
             line(),
-            command(concat!("About ", env!("APP_NAME")), Command::About),
+            command(Command::About),
             line(),
-            command(concat!("Quit ", env!("APP_NAME")), Command::Quit),
+            command(Command::Quit),
         ];
         let entries: Vec<MenuEntry> = items.iter().map(|(entry, _)| entry.clone()).collect();
         let foot = frame.top() - gpui::px(crate::menu::FROM_CONTROL);

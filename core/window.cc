@@ -29,6 +29,7 @@
 #include "browser_core/auto_archive.h"
 #include "browser_core/boost_colors.h"
 #include "browser_core/browser_window_stand_in.h"
+#include "browser_core/closing_way_back.h"
 #include "browser_core/dialog_keys.h"
 #include "browser_core/extensions.h"
 #include "browser_core/favorites.h"
@@ -557,6 +558,12 @@ void MakeHeldBy(Space& space, NavigateParams& params) {
                      },
                      made->GetWeakPtr()));
   params.contents_to_insert = std::move(made);
+}
+
+// The tabs the user closed whose pages haven't let them go yet (#3890).
+ClosingWayBack& UserClosing() {
+  static base::NoDestructor<ClosingWayBack> closing;
+  return *closing;
 }
 
 }  // namespace
@@ -1180,6 +1187,10 @@ void Window::AdjustNavigate(NavigateParams& params) {
 // static
 void Window::OnTabClosing(bc_id tab) {
   Space* space = Space::Holding(tab);
+  // The tab its Space has it give way to, as it was when the window left the Space if its page let
+  // it go only after that (#3890).
+  const bc_id next =
+      UserClosing().Closed(tab, space ? space->NextAfterLeaving(tab, &Tab::Loaded) : 0);
   if (!space && !Favorites::Has(tab)) {
     return;
   }
@@ -1192,7 +1203,6 @@ void Window::OnTabClosing(bc_id tab) {
       (browser_shutdown::IsTryingToQuit() || std::ranges::any_of(Windows(), regular_closing))) {
     KeepSession();
   }
-  const bc_id next = space ? space->NextAfterLeaving(tab, &Tab::Loaded) : 0;
   // A favorite split's page closing leaves the rest of it to show, the one on its right first.
   bc_id beside = 0;
   if (!space) {
@@ -1209,6 +1219,17 @@ void Window::OnTabClosing(bc_id tab) {
   }
   // The window the user was in picks first, as another passes over the tab that one shows.
   for (Window* window : All()) {
+    // A window that left the Space showing it shows that next when the Space is shown again, not
+    // whatever leads the Space then (#3890).
+    auto remembered =
+        space ? window->selected_in_space_.find(space->id()) : window->selected_in_space_.end();
+    if (remembered != window->selected_in_space_.end() && remembered->second == tab) {
+      if (next) {
+        remembered->second = next;
+      } else {
+        window->selected_in_space_.erase(remembered);
+      }
+    }
     if (window->selected_ == tab) {
       window->selected_ = 0;
       Space* shown = space || beside ? nullptr : Space::FromId(window->space_);
@@ -1225,6 +1246,7 @@ void Window::OnTabClosing(bc_id tab) {
       }
 #endif
       // Posted: Chrome is part way through closing the tab, and its tab strip can't change yet.
+      window->selecting_after_closing_ = true;
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
           FROM_HERE,
           base::BindOnce(&Window::SelectAfterClosing, window->weak_factory_.GetWeakPtr()));
@@ -1478,8 +1500,21 @@ void Window::CloseTab(bc_id tab, bool discard) {
     tabs->DetachAndDeleteWebContentsAt(tabs->GetIndexOfWebContents(contents));
     return;
   }
+  // Its page may let it go only once the window shows another Space (#3890).
+  UserClosing().Closing(tab);
   tabs->CloseWebContentsAt(tabs->GetIndexOfWebContents(contents),
                            TabCloseTypes::CLOSE_USER_GESTURE);
+}
+
+// static
+void Window::ClosingKept(bc_id tab) {
+  UserClosing().Stayed(tab);
+}
+
+void Window::KeepWayBack(const Space& left) const {
+  if (selected_ && UserClosing().IsClosing(selected_)) {
+    UserClosing().Left(selected_, left.NextAfterLeaving(selected_, &Tab::Loaded));
+  }
 }
 
 // static
@@ -2155,7 +2190,11 @@ void Window::ShowSpace(bc_id space, bool page) {
   }
   const bc_id tab = page ? TabToShowIn(space) : 0;
   if (space_) {
-    selected_in_space_[space_] = selected_;
+    // A close that landed as the user left, its pick still to come, leaves the Space showing that
+    // pick, which isn't the Space shown now's to make (#3890).
+    const bc_id picked =
+        std::exchange(selecting_after_closing_, false) ? std::exchange(next_after_closing_, 0) : 0;
+    selected_in_space_[space_] = selected_ ? selected_ : picked;
   }
   space_ = space;
   // Posted before the tab is, so the app knows the Space when it hears which tab shows.
@@ -2939,6 +2978,10 @@ bc_id Window::Reopen(bc_id space_id, size_t index, const SavedTab& saved) {
 }
 
 void Window::SelectAfterClosing() {
+  // The window showed another Space first, which took the pick (ShowSpace).
+  if (!std::exchange(selecting_after_closing_, false)) {
+    return;
+  }
   const bc_id next = std::exchange(next_after_closing_, 0);
   if (next && Tab::Get(next)) {
     Pick(next);
