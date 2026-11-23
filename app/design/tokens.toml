@@ -942,6 +942,16 @@ light-stand-in = 0xebebeb
 overlay-fill-less = 0.88
 overlay-fill = 0.78
 overlay-fill-more = 0.56
+# The light fill's and a light dialog's (#4090): at Less, the least at which text at 0.6 of Ink
+# holds 4.5:1 over a white, grey and black page through the material, as run 6 measured it; at
+# Standard and More, as far down as the dark fill steps. Where the host has no material, what
+# floats is opaque.
+light-overlay-fill-less = 0.94
+light-overlay-fill = 0.84
+light-overlay-fill-more = 0.62
+light-dialog-fill-less = 0.87
+light-dialog-fill = 0.77
+light-dialog-fill-more = 0.55
 light-gradient-alpha = 0.32
 light-neutral-gradient-alpha = 0.11
 # What floats over a light window: Paper, the light menu's fill, and a dialog a step lighter, as

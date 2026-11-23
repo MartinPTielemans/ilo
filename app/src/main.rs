@@ -913,6 +913,7 @@ fn profile_dir() -> String {
 /// What the app gives the core to start with: Chromium's switches, from the arguments the process
 /// was `given`, and the callbacks.
 fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
+    browser::palette::set_window_material(unsafe { platform::host_has_window_material() });
     let profile = profile_dir();
     // The Flatpak's sandbox has no cameras: Chromium reaches one through PipeWire and the Camera
     // portal, which asks the user, rather than through a grant of every device (#3166). Without a

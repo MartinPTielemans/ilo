@@ -31,10 +31,10 @@ pub use crate::tokens::palette::{
     BUTTON_PLATE, CARD_PLATE, FIELD_PLATE, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_TERTIARY,
 };
 use crate::tokens::palette::{
-    DIALOG_DARK, DIALOG_LIGHT, GRADIENT_ALPHA, LIGHT_DIALOG_ALPHA, LIGHT_GRADIENT_ALPHA,
-    LIGHT_MATERIAL_OVER_BLACK, LIGHT_MATERIAL_OVER_WHITE, LIGHT_NEUTRAL_GRADIENT_ALPHA,
-    MATERIAL_OVER_BLACK, MATERIAL_OVER_WHITE, LIGHT_OVERLAY_ALPHA, LIGHT_STAND_IN, LIGHT_TINT, NEUTRAL,
-    NEUTRAL_GRADIENT_ALPHA, OVERLAY_ALPHA, OVERLAY_LIGHT, STAND_IN, TINT,
+    DIALOG_DARK, DIALOG_LIGHT, GRADIENT_ALPHA, LIGHT_GRADIENT_ALPHA, LIGHT_MATERIAL_OVER_BLACK,
+    LIGHT_MATERIAL_OVER_WHITE, LIGHT_NEUTRAL_GRADIENT_ALPHA, LIGHT_STAND_IN, LIGHT_TINT,
+    MATERIAL_OVER_BLACK, MATERIAL_OVER_WHITE, NEUTRAL, NEUTRAL_GRADIENT_ALPHA, OVERLAY_LIGHT,
+    STAND_IN, TINT,
 };
 use crate::tokens::palette::{FAR_GLOW, LIGHT_SHOWN, LIGHT_SHOWN_HOVERED, SHOWN, SHOWN_HOVERED};
 pub use crate::tokens::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
@@ -211,9 +211,64 @@ impl Tone {
     }
 }
 
-/// What floats over the window and takes its fill by one rule (#4090): frosted, its colour at
-/// `OVERLAY_ALPHA` or the light alphas over the host's blur where the host blurs under its window,
-/// and the same colour opaque where it can't, as a sharp page through it would read as noise.
+/// How much of what's behind it what floats shows (#4090): one level for the whole app, which the
+/// user picks where the host has a material behind its windows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Transparency {
+    Less,
+    Standard,
+    More,
+}
+
+impl Transparency {
+    pub const ALL: [Transparency; 3] = [
+        Transparency::Less,
+        Transparency::Standard,
+        Transparency::More,
+    ];
+
+    /// What floats' alphas at this level over the material: the dark fill's, the light fill's and
+    /// a light dialog's.
+    fn row(self) -> [f32; 3] {
+        use crate::tokens::palette as t;
+        match self {
+            Transparency::Less => [
+                t::OVERLAY_FILL_LESS,
+                t::LIGHT_OVERLAY_FILL_LESS,
+                t::LIGHT_DIALOG_FILL_LESS,
+            ],
+            Transparency::Standard => {
+                [t::OVERLAY_FILL, t::LIGHT_OVERLAY_FILL, t::LIGHT_DIALOG_FILL]
+            }
+            Transparency::More => [
+                t::OVERLAY_FILL_MORE,
+                t::LIGHT_OVERLAY_FILL_MORE,
+                t::LIGHT_DIALOG_FILL_MORE,
+            ],
+        }
+    }
+}
+
+/// Whether this host's windows have a material behind them, which the host says once as the app
+/// starts (host.h): what floats over it takes the level, and the level is offered.
+static WINDOW_MATERIAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_window_material(has: bool) {
+    WINDOW_MATERIAL.store(has, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn window_material() -> bool {
+    WINDOW_MATERIAL.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The level what floats is drawn at: Standard, until the palette holds the user's (#4128).
+pub fn transparency() -> Transparency {
+    Transparency::Standard
+}
+
+/// What floats over the window and takes its fill by one rule (#4090): its colour at the
+/// transparency level's alpha over the host's material where the host has one under it, and the
+/// same colour opaque where it hasn't, as a sharp page through it would read as noise.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Float {
     Menu,
@@ -242,50 +297,54 @@ impl Float {
         Float::FindBar,
     ];
 
-    /// Whether the host blurs what's behind its window: the Mac's, under its overlays and the Site
-    /// Controls (host.h). The rest have no blur under them yet, and Windows' host none at all.
-    pub fn blurred(self) -> bool {
-        match self {
-            Float::SiteControls | Float::TabSwitcher => cfg!(target_os = "macos"),
-            _ => false,
-        }
+    /// Whether the host has its windows' material under it (host.h): the Mac's overlays and Site
+    /// Controls. The rest have none under them yet.
+    pub fn over_material(self) -> bool {
+        window_material() && matches!(self, Float::SiteControls | Float::TabSwitcher)
     }
 
     /// Its fill in a `tone` window, as drawn on this host.
     pub fn fill(self, tone: Tone) -> Rgba {
-        self.fill_where(tone, self.blurred())
+        self.fill_at(tone, self.over_material().then(transparency))
     }
 
-    /// Its fill where the host does or doesn't blur under it.
-    pub fn fill_where(self, tone: Tone, blurred: bool) -> Rgba {
-        let (colour, alpha) = self.colour(tone);
-        Rgba {
-            a: if blurred { alpha } else { 1. },
-            ..colour
-        }
+    /// Its fill at `level` over the host's material, or opaque with none.
+    pub fn fill_at(self, tone: Tone, level: Option<Transparency>) -> Rgba {
+        let colour = self.colour(tone);
+        let Some(level) = level else {
+            return colour;
+        };
+        let [dark, light, light_dialog] = level.row();
+        let a = match (self, self.tone(tone)) {
+            (_, Tone::Dark) => dark,
+            (Float::Dialog, Tone::Light) => light_dialog,
+            (_, Tone::Light) => light,
+        };
+        Rgba { a, ..colour }
     }
 
-    /// Its colour, and how opaque it lies over the blur. The find bar and tooltips are dark in
-    /// both looks, so their white text holds on any page.
-    fn colour(self, tone: Tone) -> (Rgba, f32) {
-        let tone = match self {
+    /// The look it's drawn in: the find bar and tooltips are dark in both, so their white text
+    /// holds on any page.
+    fn tone(self, tone: Tone) -> Tone {
+        match self {
             Float::FindBar | Float::Tooltip => Tone::Dark,
             _ => tone,
-        };
-        match (self, tone) {
-            (Float::Dialog, Tone::Dark) => (rgb(DIALOG_DARK), OVERLAY_ALPHA),
-            (Float::Dialog, Tone::Light) => (rgb(DIALOG_LIGHT), LIGHT_DIALOG_ALPHA),
-            (_, Tone::Dark) => (rgb(OVERLAY_DARK), OVERLAY_ALPHA),
-            (_, Tone::Light) => (rgb(OVERLAY_LIGHT), LIGHT_OVERLAY_ALPHA),
         }
+    }
+
+    /// Its colour, opaque.
+    fn colour(self, tone: Tone) -> Rgba {
+        rgb(match (self, self.tone(tone)) {
+            (Float::Dialog, Tone::Dark) => DIALOG_DARK,
+            (Float::Dialog, Tone::Light) => DIALOG_LIGHT,
+            (_, Tone::Dark) => OVERLAY_DARK,
+            (_, Tone::Light) => OVERLAY_LIGHT,
+        })
     }
 
     /// The colour its text and glyphs are drawn in, Paper on the dark fills and Ink on the light.
     pub fn ink(self, tone: Tone) -> Rgba {
-        match self {
-            Float::FindBar | Float::Tooltip => Tone::Dark.ink(),
-            _ => tone.ink(),
-        }
+        self.tone(tone).ink()
     }
 }
 

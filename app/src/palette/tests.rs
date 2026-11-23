@@ -1133,46 +1133,64 @@ fn secondary_text_unlifted() {
     }
 }
 
-/// What floats holds #4090's floor wherever it's drawn: text at 0.6 of its ink reads at 4.5:1 on
-/// its fill, frosted over a white page, a black page, a photo's colours and the window's dark
-/// grounds (#4089), and opaque. A blur averages what's behind it, so each is a flat colour at
-/// worst.
+/// What the HUD window's material, which what floats lies on, makes of a white page, a mid grey
+/// one, a black one and a photo, untinted, in each look: run 6 in the VM (#4087), as captured.
+const MATERIAL_DARK: [u32; 4] = [0xadacac, 0x646464, 0x1f1f1f, 0x733e50];
+const MATERIAL_LIGHT: [u32; 4] = [0xf5f5f4, 0xbcbcbb, 0x7c7c7c, 0xcf98ab];
+
+/// What AppKit draws in the material's place with Reduce Transparency or Increase Contrast, an
+/// opaque ground, dark and light. Run 6's window background material stands in until the VM reads
+/// the HUD window's under those settings.
+const OPAQUE_MATERIAL_DARK: u32 = 0x333332;
+const OPAQUE_MATERIAL_LIGHT: u32 = 0xffffff;
+
+fn material(tone: Tone) -> [u32; 4] {
+    match tone {
+        Tone::Dark => MATERIAL_DARK,
+        Tone::Light => MATERIAL_LIGHT,
+    }
+}
+
+/// The lowest contrast of `surface`'s ink at `strength`, at `level` in `tone`, over `grounds`.
+fn least_on(
+    surface: Float,
+    tone: Tone,
+    level: Transparency,
+    grounds: &[u32],
+    strength: f32,
+) -> f32 {
+    let fill = surface.fill_at(tone, Some(level));
+    let text = surface.ink(tone);
+    grounds
+        .iter()
+        .map(|&behind| {
+            let ground = over(rgb(behind), fill, fill.a);
+            contrast(over(ground, text, strength), ground)
+        })
+        .fold(f32::MAX, f32::min)
+}
+
+/// Each transparency level holds its rule over what the material makes of any page (#4090). Less
+/// holds the floor before levels, text at 0.6 of the ink at 4.5:1 over a white, grey and black
+/// page. Standard and More hold text at full strength at 4.5:1 and at 0.6 at 3:1 over all of them
+/// and a photo.
 #[test]
-fn what_floats_holds_text_at_six_tenths_over_any_page() {
-    let behind = [
-        // A white page, a black one and a grey one.
-        0xffffff,
-        0x000000,
-        0x808080,
-        // A photo: the mocks' sky, sun, field and water, skin, and the primaries.
-        0xf4a98a,
-        0xfff6d6,
-        0x2c5647,
-        0x9fd0f0,
-        0xe0ac8f,
-        0xff0000,
-        0x00ff00,
-        0x0000ff,
-        // The window's dark grounds over black, mid grey and white (#4089), as a menu lies over
-        // the sidebar as well as the page, and the light window's.
-        0x0a0a0b,
-        0x242426,
-        0x3f3f40,
-        0xd8d8d8,
-        0xfcfcfc,
-    ];
+fn each_transparency_level_holds_its_rule_over_any_page() {
     let mut failures = Vec::new();
     for surface in Float::ALL {
         for tone in [Tone::Dark, Tone::Light] {
-            for blurred in [true, false] {
-                let fill = surface.fill_where(tone, blurred);
-                let text = surface.ink(tone);
-                for page in behind {
-                    let ground = over(rgb(page), fill, fill.a);
-                    let ratio = contrast(over(ground, text, 0.6), ground);
-                    if ratio < TEXT {
+            // One drawn dark in both looks lies on the dark material.
+            let grounds = material(surface.tone(tone));
+            for level in Transparency::ALL {
+                let rules: &[(&[u32], f32, f32)] = match level {
+                    Transparency::Less => &[(&grounds[..3], 0.6, TEXT)],
+                    _ => &[(&grounds, 1., TEXT), (&grounds, 0.6, 3.)],
+                };
+                for &(on, strength, floor) in rules {
+                    let ratio = least_on(surface, tone, level, on, strength);
+                    if ratio < floor {
                         failures.push(format!(
-                            "{surface:?} {tone:?} blurred {blurred} over {page:06x}: {ratio:.2}"
+                            "{surface:?} {tone:?} {level:?} at {strength}: {ratio:.2}"
                         ));
                     }
                 }
@@ -1182,26 +1200,57 @@ fn what_floats_holds_text_at_six_tenths_over_any_page() {
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
-/// Each surface is translucent only where its host blurs under it, and opaque elsewhere.
+/// Each level shows more of what's behind than the one before, and the dark and light fills step
+/// together, so the user's choice reads the same in both looks.
 #[test]
-fn what_floats_is_frosted_only_over_a_blur() {
+fn each_transparency_level_shows_more_than_the_one_before() {
     for surface in Float::ALL {
         for tone in [Tone::Dark, Tone::Light] {
+            let alphas = Transparency::ALL.map(|level| surface.fill_at(tone, Some(level)).a);
             assert!(
-                surface.fill_where(tone, true).a < 1.,
-                "{surface:?} {tone:?}"
+                alphas.windows(2).all(|pair| pair[0] > pair[1]),
+                "{surface:?} {tone:?}: {alphas:?}"
             );
-            assert_eq!(
-                surface.fill_where(tone, false).a,
-                1.,
-                "{surface:?} {tone:?}"
-            );
-            let (frosted, opaque) = (surface.fill_where(tone, true), surface.fill(tone));
-            assert_eq!(
-                (frosted.r, frosted.g, frosted.b),
-                (opaque.r, opaque.g, opaque.b),
-                "{surface:?} {tone:?}: the same colour"
-            );
+        }
+    }
+}
+
+/// Reduce Transparency and Increase Contrast win at every level: AppKit draws an opaque ground
+/// in the material's place, and text at 0.6 of the ink holds 4.5:1 on any level's fill over it.
+#[test]
+fn reduce_transparency_wins_at_every_level() {
+    for surface in Float::ALL {
+        for tone in [Tone::Dark, Tone::Light] {
+            let ground = match surface.tone(tone) {
+                Tone::Dark => OPAQUE_MATERIAL_DARK,
+                Tone::Light => OPAQUE_MATERIAL_LIGHT,
+            };
+            for level in Transparency::ALL {
+                let ratio = least_on(surface, tone, level, &[ground], 0.6);
+                assert!(ratio >= TEXT, "{surface:?} {tone:?} {level:?}: {ratio:.2}");
+            }
+        }
+    }
+}
+
+/// With no material under it, what floats is opaque, its colour at every level, so text at 0.6
+/// of its ink holds 4.5:1 on any page.
+#[test]
+fn what_floats_is_opaque_with_no_material_under_it() {
+    for surface in Float::ALL {
+        for tone in [Tone::Dark, Tone::Light] {
+            let opaque = surface.fill_at(tone, None);
+            assert_eq!(opaque.a, 1., "{surface:?} {tone:?}");
+            for level in Transparency::ALL {
+                let frosted = surface.fill_at(tone, Some(level));
+                assert_eq!(
+                    (frosted.r, frosted.g, frosted.b),
+                    (opaque.r, opaque.g, opaque.b),
+                    "{surface:?} {tone:?} {level:?}: the same colour"
+                );
+            }
+            let ratio = contrast(over(opaque, surface.ink(tone), 0.6), opaque);
+            assert!(ratio >= TEXT, "{surface:?} {tone:?}: {ratio:.2}");
         }
     }
 }
