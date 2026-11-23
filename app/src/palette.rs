@@ -48,6 +48,7 @@ pub use crate::tokens::palette::{
 use crate::tokens::shell::library::{COLUMN, LIBRARY_PLATE};
 use crate::tokens::shell::{CARD as PAGE_CARD, LIGHT_CARD as LIGHT_PAGE_CARD};
 use crate::tokens::shell::{LIGHT_UNPAINTED, UNPAINTED};
+use crate::transparency::Transparency;
 /// The ends of the scale each family's text runs toward, which the accent's search needs, and the
 /// ground a swatch's colours are judged on.
 const BLACK: Rgba = Rgba {
@@ -211,42 +212,16 @@ impl Tone {
     }
 }
 
-/// How much of what's behind it what floats shows (#4090): one level for the whole app, which the
-/// user picks where the host has a material behind its windows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Transparency {
-    Less,
-    Standard,
-    More,
-}
-
-impl Transparency {
-    pub const ALL: [Transparency; 3] = [
-        Transparency::Less,
-        Transparency::Standard,
-        Transparency::More,
-    ];
-
-    /// What floats' alphas at this level over the material: the dark fill's, the light fill's and
-    /// a light dialog's.
-    fn row(self) -> [f32; 3] {
-        use crate::tokens::palette as t;
-        match self {
-            Transparency::Less => [
-                t::OVERLAY_FILL_LESS,
-                t::LIGHT_OVERLAY_FILL_LESS,
-                t::LIGHT_DIALOG_FILL_LESS,
-            ],
-            Transparency::Standard => {
-                [t::OVERLAY_FILL, t::LIGHT_OVERLAY_FILL, t::LIGHT_DIALOG_FILL]
-            }
-            Transparency::More => [
-                t::OVERLAY_FILL_MORE,
-                t::LIGHT_OVERLAY_FILL_MORE,
-                t::LIGHT_DIALOG_FILL_MORE,
-            ],
-        }
-    }
+/// What floats' alphas over the material at `level`: the dark fill's, which the level gives, and
+/// beside it the light fill's and a light dialog's (#4090).
+fn float_alphas(level: Transparency) -> [f32; 3] {
+    use crate::tokens::palette as t;
+    let light = match level {
+        Transparency::Less => [t::LIGHT_OVERLAY_FILL_LESS, t::LIGHT_DIALOG_FILL_LESS],
+        Transparency::Standard => [t::LIGHT_OVERLAY_FILL, t::LIGHT_DIALOG_FILL],
+        Transparency::More => [t::LIGHT_OVERLAY_FILL_MORE, t::LIGHT_DIALOG_FILL_MORE],
+    };
+    [level.overlay_fill(), light[0], light[1]]
 }
 
 /// Whether this host's windows have a material behind them, which the host says once as the app
@@ -314,7 +289,7 @@ impl Float {
         let Some(level) = level else {
             return colour;
         };
-        let [dark, light, light_dialog] = level.row();
+        let [dark, light, light_dialog] = float_alphas(level);
         let a = match (self, self.tone(tone)) {
             (_, Tone::Dark) => dark,
             (Float::Dialog, Tone::Light) => light_dialog,
