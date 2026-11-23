@@ -2979,6 +2979,14 @@ fn main() {
                 preview_pictures(Pictures::CommandLine(state), cx);
                 return;
             }
+            // PREVIEW_ASSISTANTS=start or signed-in shows Settings › Agents' Your assistant, its
+            // rows in each state before a sign-in and while and after it fails, or signed in and
+            // signing out, with the same rows as Settings draws (#4100).
+            if let Ok(state) = std::env::var("PREVIEW_ASSISTANTS") {
+                let signed_in = state == "signed-in";
+                preview_pictures(Pictures::Assistants { signed_in }, cx);
+                return;
+            }
             // PREVIEW_ACCOUNT=signed-out, no-server, words, waiting or signed-in shows Settings ›
             // Account in that state, alone, no-server's for a build that names no sync server; =approve
             // shows another device's request over the browser window.
@@ -4617,6 +4625,8 @@ enum Pictures {
     Favorites(browser::shell::FavoritesScope),
     /// Agents' first row, its apps that connect, and the ilo command's row under them.
     CommandLine(CommandLine),
+    /// Your assistant's rows in their states, `signed_in` or before (#4100).
+    Assistants { signed_in: bool },
 }
 
 /// Where the ilo command is (#3667).
@@ -4728,7 +4738,7 @@ impl gpui::Render for PicturesPage {
         let section = match self.shown {
             Pictures::Sidebar { .. } | Pictures::Favorites(_) => Section::TabsAndSidebar,
             Pictures::Appearance(_) => Section::General,
-            Pictures::CommandLine(_) => Section::Agents,
+            Pictures::CommandLine(_) | Pictures::Assistants { .. } => Section::Agents,
         };
         let column = settings_column::column(
             &Default::default(),
@@ -4984,6 +4994,93 @@ impl gpui::Render for PicturesPage {
                     (Some("Apps that connect"), clients),
                     (Some("Command line"), vec![command]),
                 ]
+            }
+            Pictures::Assistants { signed_in } => {
+                use browser::agents::ready::Ready;
+                use browser::agents::runner::Cli;
+                use browser::agents::sign_in::{Row, shown};
+                use browser::settings_rows::{another_agent_row, assistant_row};
+                let row = |cli, ready, plan: Option<&str>, row: Row, marked| {
+                    let shown = shown(cli, ready, plan, &row);
+                    assistant_row(
+                        &look,
+                        cli,
+                        &shown,
+                        marked,
+                        a11y,
+                        gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
+                        Rc::new(|_, _, _| {}),
+                    )
+                };
+                // Where the parity sheet waits for the rows to be drawn.
+                let another = || {
+                    another_agent_row(&look, a11y, |_, _| {})
+                        .relative()
+                        .child(drawn("assistant rows".into(), self.logged.clone()))
+                };
+                // A made-up assistant's words, as a failed sign-in shows them.
+                let said = "Your workspace doesn't allow Codex".to_string();
+                match signed_in {
+                    false => vec![
+                        (
+                            Some("Your assistant"),
+                            vec![
+                                row(Cli::Claude, Ready::SignedOut, None, Row::Idle, false),
+                                row(Cli::Codex, Ready::NotFound, None, Row::Idle, false),
+                                another(),
+                            ],
+                        ),
+                        (
+                            Some("Signing in"),
+                            vec![row(
+                                Cli::Claude,
+                                Ready::SignedOut,
+                                None,
+                                Row::SigningIn,
+                                false,
+                            )],
+                        ),
+                        (
+                            Some("Failed"),
+                            vec![
+                                row(
+                                    Cli::Codex,
+                                    Ready::SignedOut,
+                                    None,
+                                    Row::Failed(Some(said)),
+                                    false,
+                                ),
+                                row(
+                                    Cli::Claude,
+                                    Ready::SignedOut,
+                                    None,
+                                    Row::Failed(None),
+                                    false,
+                                ),
+                            ],
+                        ),
+                    ],
+                    true => vec![
+                        (
+                            Some("Your assistant"),
+                            vec![
+                                row(Cli::Claude, Ready::SignedIn, None, Row::Idle, true),
+                                row(Cli::Codex, Ready::SignedIn, Some("Plus"), Row::Idle, false),
+                                another(),
+                            ],
+                        ),
+                        (
+                            Some("Signing out"),
+                            vec![row(
+                                Cli::Codex,
+                                Ready::SignedIn,
+                                Some("Plus"),
+                                Row::SigningOut,
+                                false,
+                            )],
+                        ),
+                    ],
+                }
             }
         };
         let blocks = blocks
