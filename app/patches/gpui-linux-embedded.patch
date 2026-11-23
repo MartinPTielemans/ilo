@@ -267,7 +267,7 @@ index 0000000000..a202ddef4e
 +}
 diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
 new file mode 100644
-index 0000000000..cd539b12ce
+index 0000000000..08f40b68ea
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/overlay.rs
 @@ -0,0 +1,2330 @@
@@ -779,7 +779,7 @@ index 0000000000..cd539b12ce
 +            || RELEASED.get().is_some_and(|released| not_before(released, time))
 +    };
 +    match pressed {
-+        Some(time) if in_gpui && taken.to_under && taken.active && since && !over(time) => {
++        Some(time) if false && in_gpui && taken.to_under && taken.active && since && !over(time) => {
 +            WAITED.set(Some(time));
 +            WAITING.set(Some((view, showing, time)));
 +            After::Wait
