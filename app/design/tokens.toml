@@ -1093,15 +1093,14 @@ text-x = 16.0
 # The page's name, in the display face as the Library's heading (shell.library title-size and
 # title-line), then one sentence under it in the rows' grey (`detail`), and a small, quiet heading
 # over a group where it needs one, 26 under the group before and 9 over its own. The heading's
-# alpha reads at 4.7:1 on the dark card; light keeps the alpha that reads at 4.5:1 on its card
-# (#1636).
+# alpha, which the column's group labels and its foot share, is one in both looks: at 0.5 in dark
+# they read at 4.1:1 over the window's Standard ground, and at 0.66 at 6:1 (5.5:1 at More's).
 title = 0.96
 lede-top = 4.0
 lede-line = 18.0
 heading-top = 26.0
 heading-bottom = 9.0
-heading = 0.5
-heading-light = 0.66
+heading = 0.66
 # Once scrolled, the section's name holds at the card's top, in body semibold over a hairline.
 held-title = 44.0
 # A group: one card of rows at the row radius, the text colour at 0.065 in dark with a white rim,
