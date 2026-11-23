@@ -3122,10 +3122,13 @@ CARD
     send key return cmd
     await_more "$taken" "$takeovers" || fail "$1: ⌘↩ didn't take the tab"
   }
-  # How many child windows the browser window has, Chrome's autofill dropdown among them.
+  # Sets child_windows to how many child windows the browser window has, Chrome's autofill dropdown
+  # among them. It's called in the run's own shell, never in $(...): a send in a subshell loses its
+  # step, and every send after it waits on an earlier step's line (#3936).
   children() {
     send layout
-    sed -n "/^browser: drive $step: /,\$p" "$log" | grep -c '^browser: layout child' || true
+    child_windows=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
+      grep -c '^browser: layout child' || true)
   }
   logins() {
     grep -c "^browser: title $opened_tab login\$" "$log" || true
@@ -3172,7 +3175,8 @@ CARD
   call navigate "{\"tab\":$opened_tab,\"url\":\"localhost:$port/login.html\"}" > /dev/null
   await_more "^browser: title $opened_tab login\$" "$before" ||
     fail "the login page didn't load in the agent's tab"
-  shown=$(children)
+  children
+  shown=$child_windows
   # The agent's own click in the username field, where Chrome's dropdown would offer the login. A
   # user's press there would take the tab over (#1080), and the login would be theirs to fill.
   outline=$(call snapshot "{\"tab\":$opened_tab}")
@@ -3195,10 +3199,12 @@ CARD
       fail "the agent's pointer's window stayed over the page"
   fi
   ../tools/window-screenshot.sh "$pid" "$out/agent-login-empty.png" || fail "no window to capture"
-  [ "$(children)" = "$shown" ] || fail "the agent's tab offered the saved login in a dropdown"
+  children
+  [ "$child_windows" = "$shown" ] || fail "the agent's tab offered the saved login in a dropdown"
   # Nor do the agent's keys, which would open the dropdown and accept its login (#2355).
   call press_key "{\"tab\":$opened_tab,\"key\":\"ArrowDown\"}" > /dev/null
-  [ "$(children)" = "$shown" ] || fail "the agent's ArrowDown offered the saved login in a dropdown"
+  children
+  [ "$child_windows" = "$shown" ] || fail "the agent's ArrowDown offered the saved login in a dropdown"
   grep -q "^browser: title $opened_tab filled\$" "$log" &&
     fail "Chrome filled the saved password in the agent's tab"
   outline=$(call snapshot "{\"tab\":$opened_tab}")
@@ -3219,11 +3225,11 @@ CARD
   await_log "^browser: title $opened_tab filled\$" "Take Over didn't fill the saved password in"
   [ "$(logins)" = "$before" ] || fail "Take Over reloaded the login page to fill it"
   send click 600 60
-  for _ in $(seq 30); do [ "$(children)" -gt "$shown" ] && break; done
-  [ "$(children)" -gt "$shown" ] || fail "the held tab's username field offered no saved login"
-  # children sends its layout from a subshell, whose steps the count here didn't keep: without
-  # them, each send after waits on an earlier step's line, and reads the frame before its own.
-  step=$(sed -n 's/^browser: drive \([0-9]*\)[: ].*/\1/p' "$log" | sort -n | tail -1)
+  for _ in $(seq 30); do
+    children
+    [ "$child_windows" -gt "$shown" ] && break
+  done
+  [ "$child_windows" -gt "$shown" ] || fail "the held tab's username field offered no saved login"
   ../tools/window-screenshot.sh "$pid" "$out/agent-login-filled.png" || fail "no window to capture"
   send key escape
   before=$(grep -c "$handed" "$log" || true)

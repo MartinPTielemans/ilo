@@ -19,6 +19,10 @@ void drive_start(void);
 // top-left corner.
 void host_centered(double width, double height, double* x, double* y);
 
+// Windows, the preview's: its windows that can't be resized, its overlays, have no border, as the
+// app's overlays have none once the host adopts them.
+void host_preview_frameless(void);
+
 // Puts a window on screen at |x|, |y|, |width| by |height| in host_centered's terms, where the
 // first browser window will open, with the window's material and, unless |picture_width| is 0,
 // the sidebar's picture from |profile_dir| that a |picture_width| by |picture_height| window took

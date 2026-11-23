@@ -179,6 +179,8 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // |discard|, they don't run, so nothing asks, and it's gone before this returns, unless it's being
   // dragged between windows, when it stays.
   static void CloseTab(bc_id tab, bool discard = false);
+  // |tab|'s page kept it as the user closed it, as Stay on its beforeunload does (#3890).
+  static void ClosingKept(bc_id tab);
   // Keeps nothing of |tab|'s page, |url|, as it closes while still there: it isn't archived or
   // among the tabs ReopenClosedTab reopens (bc_tab_forget_page).
   static void ForgetPage(bc_id tab, const GURL& url);
@@ -242,6 +244,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // pinned tab, else no page, passing over tabs another window shows. With |page| false, no page,
   // as a new window opens.
   void ShowSpace(bc_id space, bool page = true);
+  // As the window leaves |left|, before |left| forgets where its tabs came from: keeps the tab
+  // |left| would show were the tab the window shows, one the user is closing, gone now (#3890).
+  void KeepWayBack(const Space& left) const;
   // The tab the window shows in |space|, or showed there last. 0 if none.
   bc_id SelectedIn(bc_id space) const;
   // The tab ShowSpace shows for |space|, or the tab shown for the Space shown, which may be a
@@ -544,6 +549,8 @@ class Window : public web_modal::WebContentsModalDialogHost,
   bc_id waiting_ = 0;
   // Once the tab shown closes, the one to show next, as its Space picked it.
   bc_id next_after_closing_ = 0;
+  // Whether SelectAfterClosing is still to show next_after_closing_.
+  bool selecting_after_closing_ = false;
   // The tab each Space the window showed had shown when it left that Space.
   std::map<bc_id, bc_id> selected_in_space_;
   gfx::Rect page_frame_;

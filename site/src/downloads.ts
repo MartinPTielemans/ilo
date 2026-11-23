@@ -1,8 +1,8 @@
 // What ilo is offered for, in the order the site names them. Each platform's file has one name in
 // every release (the browser repo's release.yml names them), so GitHub always serves the newest
 // release's at the same address. Taking a platform out of this list takes it out of the buttons and
-// the copy. `note` is the short word the list of computers gives it, `needs` what the line
-// under the download button says it takes, and `stage` how far along ilo is there.
+// the copy. `note` is the short word the list of computers gives it, and `needs` what the line
+// under the download button says it takes.
 export const PLATFORMS = [
   {
     id: "mac",
@@ -10,7 +10,6 @@ export const PLATFORMS = [
     file: "ilo-mac-arm64.dmg",
     note: "Apple silicon",
     needs: "macOS 15 Sequoia or later, on Apple silicon",
-    stage: "in beta",
   },
   {
     id: "windows",
@@ -18,7 +17,6 @@ export const PLATFORMS = [
     file: "ilo-windows-x64-setup.exe",
     note: "64-bit",
     needs: "64-bit Windows 10 or later",
-    stage: "in beta",
   },
   {
     id: "linux",
@@ -26,11 +24,13 @@ export const PLATFORMS = [
     file: "ilo-linux-x86_64.flatpak",
     note: "x64",
     needs: "A Flatpak, for x64",
-    stage: "in beta",
   },
 ] as const;
 
 export type Platform = (typeof PLATFORMS)[number];
+
+/** How far along ilo is, on every platform alike, as a sentence says it. */
+export const STAGE = "in beta";
 
 // The browser's source, where its releases are published.
 export const SOURCE = "https://github.com/MartinPTielemans/ilo";
@@ -46,7 +46,7 @@ export const PLATFORM_LIST = PLATFORMS.map((platform) => platform.name)
 /**
  * Whether ilo runs on a visitor's device, from its user agent: not on a phone, a tablet or a
  * Chromebook. An iPad says it's a Mac, so its touch screen (`touches`, navigator.maxTouchPoints)
- * tells it from one. The reading pages' script carries this function's source (src/reading.ts), so
+ * tells it from one. Every page's script carries this function's source (src/page.ts), so
  * it uses nothing outside itself.
  */
 export function runsIlo(agent: string, touches = 0) {

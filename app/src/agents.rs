@@ -136,7 +136,12 @@ pub struct Question {
     /// The agent's id, by which a task's card asks it rather than the windows' card.
     pub from: SharedString,
     /// What it would do, following "wants to", such as "click “Place order” on shop.example".
+    /// Whole wherever it's logged or answered.
     pub what: SharedString,
+    /// The same without its site, "click “Place order”", for an action on the tab's page: its
+    /// card puts the site, the tab's own, on the line above, apart from the page's words (#3836).
+    /// Empty for a question that names no such site.
+    pub asks: SharedString,
     /// Why that asks, such as "It looks like a payment or an order.", or for a handoff, what the
     /// agent needs the user to do.
     pub why: SharedString,
@@ -163,9 +168,21 @@ pub struct Question {
 /// and their bodies may be megabytes.
 impl PartialEq for Question {
     fn eq(&self, other: &Question) -> bool {
-        (self.id, &self.agent, &self.from, &self.what, &self.why)
-            == (other.id, &other.agent, &other.from, &other.what, &other.why)
-            && (self.handoff, self.back, &self.site) == (other.handoff, other.back, &other.site)
+        (
+            self.id,
+            &self.agent,
+            &self.from,
+            &self.what,
+            &self.asks,
+            &self.why,
+        ) == (
+            other.id,
+            &other.agent,
+            &other.from,
+            &other.what,
+            &other.asks,
+            &other.why,
+        ) && (self.handoff, self.back, &self.site) == (other.handoff, other.back, &other.site)
             && (self.each_time, self.fenced) == (other.each_time, other.fenced)
             && std::rc::Rc::ptr_eq(&self.changes, &other.changes)
     }
@@ -458,8 +475,9 @@ struct Act {
     show: Show,
     /// The field it chooses in, as its answer names it: "combobox “Status”".
     field: String,
-    /// What it would do, as a question has it.
+    /// What it would do, as a question has it, and that without the site (Question::asks).
     what: String,
+    asks: String,
     /// The download it lets go on, for "download", else 0.
     download: u64,
     /// The HTTP requests it sends (request).
@@ -471,6 +489,15 @@ struct Act {
     /// Its place at a fence the user set.
     fenced: Fenced,
     reply: mpsc::Sender<ToolResult>,
+}
+
+impl Act {
+    /// Sets what it would do on the tab's page at `host`, whole and without the site, from
+    /// `words`, which puts what it's given (" on host", or nothing) where the site goes.
+    fn say(&mut self, host: &str, words: impl Fn(&str) -> String) {
+        self.what = words(&format!(" on {host}"));
+        self.asks = words("");
+    }
 }
 
 /// An action's place at a site the user fenced (#3724).
@@ -1713,6 +1740,7 @@ impl Agents {
                     action: "open_tab",
                     tab: 0,
                     what: format!("open {host}"),
+                    asks: String::new(),
                     did: None,
                     fenced: Fenced::No,
                     url,
@@ -2105,6 +2133,7 @@ impl Agents {
                     note: String::new(),
                     show: Show::Nothing,
                     what,
+                    asks: String::new(),
                     field: String::new(),
                     download: 0,
                     requests,
@@ -2976,6 +3005,7 @@ impl Agents {
             show,
             field: String::new(),
             what: String::new(),
+            asks: String::new(),
             download: 0,
             requests: Vec::new(),
             wait: None,
@@ -3041,7 +3071,7 @@ impl Agents {
                 act.page = PageAction::Click;
                 sends = true;
                 act.note = format!("Clicked {} {}.", element.role, label(element));
-                act.what = format!("click {} on {host}", label(element));
+                act.say(&host, |on| format!("click {}{on}", label(element)));
                 let outline = self.outlines.get(&tab);
                 let message = outline.is_some_and(|outline| outline.sends_message(element.form));
                 risk = page::risk(&host, &element.name, message);
@@ -3072,7 +3102,7 @@ impl Agents {
                     label(element),
                     if submit { " and pressed Enter" } else { "" }
                 );
-                act.what = format!("send {} on {host}", page::curly(&text, 60));
+                act.say(&host, |on| format!("send {}{on}", page::curly(&text, 60)));
                 // Its Enter asks as a click on what it submits would, and else as a message sent.
                 // A line break in a rich-text editor is that Enter, as a chat's composer sends
                 // on it.
@@ -3090,16 +3120,14 @@ impl Agents {
                         // long one can't then push out of the sidebar's row or the strip.
                         let control = label(&pressing.control);
                         let typed = format!("{} into {}", page::curly(&text, 60), label(element));
-                        act.what = match pressing.surely {
+                        act.say(&host, |on| match pressing.surely {
                             true => {
-                                format!(
-                                    "press Enter to click {control} on {host} after typing {typed}"
-                                )
+                                format!("press Enter to click {control}{on} after typing {typed}")
                             }
                             false => format!(
-                                "press Enter, which may click {control} on {host}, after typing {typed}"
+                                "press Enter, which may click {control}{on}, after typing {typed}"
                             ),
-                        };
+                        });
                         Some(pressing.why)
                     }
                     None => enter.then(|| page::risk(&host, "send", false)).flatten(),
@@ -3125,7 +3153,9 @@ impl Agents {
                 // in it is a space there.
                 let chose = page::curly(&page::one_line(&option), 60);
                 act.note = format!("Chose {chose} in the {}.", act.field);
-                act.what = format!("choose {chose} in {} on {host}", label(element));
+                act.say(&host, |on| {
+                    format!("choose {chose} in {}{on}", label(element))
+                });
                 // As a click on the field or the option would.
                 let outline = self.outlines.get(&tab);
                 let message = outline.is_some_and(|outline| outline.sends_message(element.form));
@@ -3146,17 +3176,19 @@ impl Agents {
                 act.page = PageAction::Key;
                 sends = true;
                 act.note = format!("Pressed {key}.");
-                act.what = format!("press Enter to send on {host}");
+                act.say(&host, |on| {
+                    format!("press Enter, which may send a form{on}")
+                });
                 // What the key activates asks as a click on it would (GHSA-hqw3-jp9p-3rhj), and
                 // Enter else as a message sent.
                 let outline = self.outlines.get(&tab);
                 risk = match page::pressing_risk(&host, outline, &key, None) {
                     Some(pressing) => {
                         let control = label(&pressing.control);
-                        act.what = match pressing.surely {
-                            true => format!("press {key} to click {control} on {host}"),
-                            false => format!("press {key}, which may click {control} on {host}"),
-                        };
+                        act.say(&host, |on| match pressing.surely {
+                            true => format!("press {key} to click {control}{on}"),
+                            false => format!("press {key}, which may click {control}{on}"),
+                        });
                         Some(pressing.why)
                     }
                     None => (key == "Enter")
@@ -3274,6 +3306,7 @@ impl Agents {
             agent: self.agent_name(&act.agent),
             from: act.agent.clone().into(),
             what: act.what.clone().into(),
+            asks: act.asks.clone().into(),
             why: match fenced {
                 true => fence::why(&site).into(),
                 false => why.into(),
@@ -3835,6 +3868,7 @@ impl Agents {
             // The question is about the file, wherever its tab is.
             tab: 0,
             what: format!("download {name} from {host}"),
+            asks: String::new(),
             url,
             page: PageAction::Snapshot,
             element: 0,
@@ -5192,6 +5226,7 @@ fn act_of(
         note: String::new(),
         show: Show::Nothing,
         what: String::new(),
+        asks: String::new(),
         field: String::new(),
         download: 0,
         requests: Vec::new(),

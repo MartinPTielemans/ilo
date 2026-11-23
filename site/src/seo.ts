@@ -7,12 +7,12 @@ export const SITE = "https://ilobrowser.com";
 /** Where the changelog's feed is served (src/feed.ts). */
 export const FEED = "/changelog.xml";
 
-/** The picture every shared link shows: a real capture of ilo, 1200 × 630. */
+/** The picture every shared link shows, 1200 × 630: the home page's own hero, its wordmark and what it says. */
 export const SHARE_IMAGE = {
   url: `${SITE}/media/og.jpg`,
   width: 1200,
   height: 630,
-  alt: "ilo with Wikivoyage's Lisbon guide open, its tabs in a sidebar on the left",
+  alt: 'ilo\'s wordmark over the words "a browser you get to keep.", on a green field of dots',
 };
 
 /**

@@ -17,12 +17,27 @@ export const Route = createFileRoute("/help")({
   component: Help,
 });
 
+/** The page's sections, by id, as the index beside them names each. */
+const INDEX: [string, string][] = [
+  ["install", "Installing"],
+  ["spaces", "Spaces and profiles"],
+  ["tabs", "Tabs"],
+  ["command-bar", "The command bar"],
+  ["split", "Split view"],
+  ["extensions", "Extensions and ad blocking"],
+  ["updates", "Updates"],
+  ["problem", "Reporting a problem"],
+  ["questions", "Questions"],
+];
+
 // The keys are the app's (the browser's docs/ux-spec.md › Keyboard). Off the Mac each is pressed
 // with Ctrl for ⌘ and Alt for ⌃, which the page says once rather than at every key.
 function Help() {
   return (
     <TextPage
+      here="/help"
       title="Help"
+      index={INDEX}
       lead={
         <>
           The short version of how ilo works. The keys are the Mac's: on Windows and Linux, press
@@ -31,18 +46,6 @@ function Help() {
         </>
       }
     >
-      <nav className="toc" aria-label="On this page">
-        <a href="#install">Installing</a>
-        <a href="#spaces">Spaces and profiles</a>
-        <a href="#tabs">Tabs</a>
-        <a href="#command-bar">The command bar</a>
-        <a href="#split">Split view</a>
-        <a href="#extensions">Extensions and ad blocking</a>
-        <a href="#updates">Updates</a>
-        <a href="#problem">Reporting a problem</a>
-        <a href="#questions">Questions</a>
-      </nav>
-
       <section id="install">
         <h2>Installing</h2>
         <p>

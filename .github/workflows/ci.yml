@@ -154,6 +154,10 @@ jobs:
     uses: ./.github/workflows/site.yml
     with:
       deploy: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    # Only the ilobrowser.com environment holds them, and only site.yml's deploy job sets it.
+    secrets:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   # To hook in app-linux.yml or engine-windows.yml: replace its push and pull_request triggers with
   # `on: workflow_call`, add a job like core_linux gated on needs.changes.outputs.app_linux (or

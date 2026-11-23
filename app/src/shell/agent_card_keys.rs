@@ -632,6 +632,8 @@ mod tests {
             agent: "Claude Code".into(),
             from: "claude-code".into(),
             what: "click “Send” on mail.example".into(),
+            asks: "click “Send”".into(),
+            site: "mail.example".into(),
             why: "It sends a message.".into(),
             ..Question::default()
         }
@@ -1147,7 +1149,8 @@ mod tests {
             );
             (label, described)
         };
-        let title = "Claude Code wants to click “Send” on mail.example.".to_string();
+        // The site's line first, as it's drawn above the sentence.
+        let title = "On mail.example. Claude Code wants to click “Send”.".to_string();
         let line = |words: &str| Some(format!("Press {words} to answer."));
         assert_eq!(heard(cx), (title.clone(), line("Option Shift Command A")));
         cx.update(|_, cx| {
