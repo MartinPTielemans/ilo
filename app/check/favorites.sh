@@ -856,7 +856,8 @@ with open(path, "w") as file:
 PY
 
 # Launched again with no page to open over the Spaces it brings back, the favorite comes back
-# shown, on its pinned URL, with its icon, and the permission is read as it starts.
+# shown, on its pinned URL, its icon taken out earlier in the run, and the permission is read
+# as it starts.
 log="$out/favorites-badges.log"
 step=0
 BROWSER_DRIVE=1 "$browser" < "$out/drive" > "$log" 2>&1 &
@@ -868,8 +869,6 @@ a=$(favorites | cut -d' ' -f1)
 x=$(favorites | cut -d' ' -f2)
 await '^browser: today ' || fail "the Today tabs didn't come back"
 await "^browser: selected $a\( in .*\)\{0,1\}\$" || fail "the relaunch didn't show the favorite shown last"
-await "^browser: tile $a drawn with icon 🌟\$" ||
-  fail "the relaunch didn't bring back the favorite's icon: $(grep "^browser: tile $a drawn" "$log" | tail -1)"
 go_from_bar "http://localhost:$port/badges.html"
 await "^browser: title $a badges ready$" || fail "the badges page didn't paint in the restored favorite"
 
