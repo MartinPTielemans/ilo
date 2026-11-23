@@ -10,14 +10,59 @@
 //! its `childrenIds`, in order, some of which may name items that are gone.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 
 use serde_json::Value;
 
 use super::found::{
-    Destination, Found, FromProfile, LinkRule, Node, SPLIT_TABS, Space, Split, Tab, opens_here,
+    Destination, Found, FromProfile, LinkRule, Node, SPLIT_TABS, Space, SpaceFrom, Split, Tab,
+    opens_here,
 };
+use super::read::ReadError;
+use super::sources::Source;
 use crate::link_rules::Condition;
 use crate::theme::{Appearance, MAX_COLORS, Place, Texture, Theme, place_of};
+
+/// Arc's sidebar, beside its user data folder, where its Spaces, pinned tabs and favorites are.
+pub fn files(source: &Source) -> Vec<PathBuf> {
+    sidebar(source).into_iter().collect()
+}
+
+fn sidebar(source: &Source) -> Option<PathBuf> {
+    let path = source.dir.parent()?.join("StorableSidebar.json");
+    path.is_file().then_some(path)
+}
+
+/// Arc's Spaces, favorites and link rules, from its sidebar and the routing file beside it.
+pub fn read(source: &Source) -> Result<Option<Found>, ReadError> {
+    let Some(path) = sidebar(source) else {
+        return Ok(None);
+    };
+    let routing = link_routing(source).and_then(|routing| std::fs::read_to_string(routing).ok());
+    Ok(Some(parse(
+        &std::fs::read_to_string(&path)?,
+        routing.as_deref(),
+    )?))
+}
+
+/// Arc's Air Traffic Control rules beside its sidebar: `StorableLinkRouting.json`, else the
+/// newest `StorableLinkRouting<time>.json`, as some of Arc's versions name it.
+fn link_routing(source: &Source) -> Option<PathBuf> {
+    let dir = sidebar(source)?.parent()?.to_path_buf();
+    let plain = dir.join("StorableLinkRouting.json");
+    if plain.is_file() {
+        return Some(plain);
+    }
+    let routing = |entry: &std::fs::DirEntry| {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        name.starts_with("StorableLinkRouting") && name.ends_with(".json")
+    };
+    (std::fs::read_dir(dir).ok()?.flatten())
+        .filter(routing)
+        .max_by_key(|entry| entry.metadata().and_then(|meta| meta.modified()).ok())
+        .map(|entry| entry.path())
+}
 
 /// The sidebar `json` holds, with the link rules of `routing`, Arc's routing file, if it has one,
 /// or why the sidebar can't be read.
@@ -174,6 +219,7 @@ impl Reader<'_> {
             .unwrap_or_default();
         let info = space.get("customInfo");
         Space {
+            from: SpaceFrom::Sidebar,
             name: if name.trim().is_empty() {
                 "Space".into()
             } else {

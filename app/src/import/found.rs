@@ -55,8 +55,18 @@ pub struct Split {
 /// The most tabs a split view holds, as the core keeps it (bc_tab_split_with).
 pub const SPLIT_TABS: usize = 3;
 
+/// Where a found Space came from, which decides the switch that brings its pinned tabs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpaceFrom {
+    /// The browser's own sidebar (sidebar.rs), under Spaces.
+    Sidebar,
+    /// A profile's bookmarks, under Bookmarks, as one Space named after the browser.
+    Bookmarks,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Space {
+    pub from: SpaceFrom,
     pub name: String,
     pub profile: FromProfile,
     /// As a Space keeps it here: an emoji, `glyph:` and one of ours, or empty.
@@ -109,6 +119,21 @@ pub struct Found {
     pub link_rules: Vec<LinkRule>,
     /// Where Arc opens a link no rule matches, if not in Little Arc, ours' default too.
     pub link_otherwise: Option<Destination>,
+    /// The profiles a sidebar names that aren't folders of the browser's, such as Zen's
+    /// containers, each by the key its `FromProfile::Custom` gives and its name. Only the name is
+    /// read, so each comes as the profile here with that name, or a new one with no sign-ins.
+    pub profiles: Vec<(String, String)>,
+    /// What the browser has that has no place here, said before anything comes.
+    pub left_out: Vec<LeftOut>,
+}
+
+/// Things of one kind a browser has that don't come, such as a split view of more tabs than
+/// SPLIT_TABS, counted, with the words for one and for more.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LeftOut {
+    pub one: &'static str,
+    pub many: &'static str,
+    pub count: usize,
 }
 
 /// A link rule: links whose URL meets `condition` with `text` open at `to`.
