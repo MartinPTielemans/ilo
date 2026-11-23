@@ -1874,8 +1874,9 @@ pub struct Shell {
     agent_request_see: FocusHandle,
     /// Every Space's agent tasks' cards, newest first, as the Agents last said (Agent task).
     task_cards: Vec<crate::agents::task::Card>,
-    /// The handed tab Show Tab watched, whose page gets the keyboard once no overlay has it.
-    handed_keys: Option<u64>,
+    /// The handed tab Show Tab watched, and whether the core shows it yet: its page gets the
+    /// keyboard once it does and no overlay has the keyboard.
+    handed_keys: Option<(u64, bool)>,
     /// The window's tasks' plates at the sidebar's foot, and ⌘T's slot among them.
     foot: task_cards::Foot,
     /// The task ✕ dismissed last, which ⇧⌘T brings back unless a tab has closed since, and when,

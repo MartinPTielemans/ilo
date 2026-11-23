@@ -277,6 +277,7 @@ impl Shell {
             {
                 page.tab = tab;
             }
+            self.handed_tab_shown(tab, cx);
             cx.notify();
             return true;
         }

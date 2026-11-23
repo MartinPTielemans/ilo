@@ -8,6 +8,7 @@
 use gpui::Context;
 
 use super::{Watched, Zoom};
+use crate::agents::task::Dot;
 use crate::shell::Shell;
 
 impl Shell {
@@ -16,8 +17,14 @@ impl Shell {
         let space = (self.task_spaces.iter())
             .find(|space| space.pinned.contains(&tab) || space.today.contains(&tab))
             .map(|space| space.id);
-        let agent = (self.task_cards.iter())
-            .find(|card| Some(card.space) == space)
+        // Sessions of one agent share its Space: the one waiting is the one that handed the tab.
+        let cards = || {
+            self.task_cards
+                .iter()
+                .filter(|card| Some(card.space) == space)
+        };
+        let agent = (cards().find(|card| card.dot == Dot::Waiting))
+            .or_else(|| cards().next())
             .map(|card| card.agent.clone());
         let (Some(space), Some(agent)) = (space, agent) else {
             return;
@@ -28,7 +35,11 @@ impl Shell {
         if self.task_open() != Some(space) {
             return;
         }
-        if self.watched_task_page() != Some((space, tab)) {
+        let watched = self.watched_task_page() == Some((space, tab));
+        // A page newly watched takes the keyboard once the core shows it, or the focus lands on
+        // the page it showed before.
+        self.handed_keys = Some((tab, watched));
+        if !watched {
             let (frame, _) = self.page_frame(self.viewport);
             if let Some(area) = &mut self.task_area {
                 if let Some(Watched {
@@ -52,23 +63,34 @@ impl Shell {
             self.browser.select(tab, cx);
             self.lay_out_page(cx);
         }
-        self.handed_keys = Some(tab);
         self.give_handed_keys(cx);
         cx.notify();
     }
 
+    /// The core shows `tab` in the task's Space: the handed page Show Tab watched can take the
+    /// keyboard.
+    pub(in crate::shell) fn handed_tab_shown(&mut self, tab: u64, cx: &mut Context<Self>) {
+        if self.handed_keys == Some((tab, false)) {
+            self.handed_keys = Some((tab, true));
+            self.give_handed_keys(cx);
+        }
+    }
+
     /// Before each frame, and after Show Tab: the handed page watched gets the keyboard Show Tab
-    /// asked for, once none of the app's overlays has it.
+    /// asked for, once the core shows it and none of the app's overlays has the keyboard. It's
+    /// forgotten once that page isn't watched.
     pub(in crate::shell) fn give_handed_keys(&mut self, cx: &mut Context<Self>) {
-        let Some(tab) = self.handed_keys else {
+        let Some((tab, shown)) = self.handed_keys else {
             return;
         };
-        if self.browser.command_bar_open(cx) || crate::menu::showing(cx) {
+        if self.watched_task_page().map(|(_, watched)| watched) != Some(tab) {
+            self.handed_keys = None;
+            return;
+        }
+        if !shown || self.browser.command_bar_open(cx) || crate::menu::showing(cx) {
             return;
         }
         self.handed_keys = None;
-        if self.watched_task_page().map(|(_, watched)| watched) == Some(tab) {
-            self.browser.focus_page(cx);
-        }
+        self.browser.focus_page(cx);
     }
 }

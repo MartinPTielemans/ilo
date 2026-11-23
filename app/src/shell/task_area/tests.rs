@@ -1753,6 +1753,11 @@ fn press_card(
     cx.run_until_parked();
     let mut asked = host.take();
     if asked.iter().any(|said| said == "select 30") {
+        assert!(
+            !asked.iter().any(|said| said == "focus page"),
+            "the keyboard was asked for before the core showed the handed tab, so it would land \
+             on the page shown before: {asked:?}"
+        );
         core_shows_task(shell, cx, 30);
         draw(shell, cx);
         asked.extend(host.take());
@@ -1881,6 +1886,34 @@ fn show_tab_waits_for_the_command_bar_to_go(cx: &mut TestAppContext) {
     assert_eq!(host.take(), ["focus page"]);
     draw(&shell, cx);
     assert!(host.take().is_empty(), "the keyboard was asked for again");
+}
+
+/// With two sessions of the agent in its Space, Show Tab opens the conversation of the one waiting
+/// on the user, which handed the tab, though the other's card comes first.
+#[gpui::test]
+fn show_tab_opens_the_waiting_sessions_conversation(cx: &mut TestAppContext) {
+    use crate::agents::task::Dot;
+
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    handed(&shell, &host, cx);
+    shell.update(cx, |shell, cx| {
+        let mut cards = shell.task_cards.clone();
+        let mut working = cards[0].clone();
+        working.agent = "task-0".into();
+        working.dot = Dot::Working;
+        cards.insert(0, working);
+        shell.set_task_cards(cards, cx);
+    });
+    draw(&shell, cx);
+    host.take();
+    let asked = press_card(&shell, &host, cx, true);
+    watched_with_keys(&shell, &asked, cx, "with two sessions in the Space");
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.talk_agent()),
+        Some("task-1".into()),
+        "Show Tab opened the conversation of a session that didn't hand the tab"
+    );
 }
 
 /// Hand Back still works from the page Show Tab shows.
