@@ -1669,7 +1669,9 @@ impl Shell {
     ) -> gpui::Stateful<gpui::Div> {
         let level = (self.onboarding.as_ref()).map_or_else(Transparency::default, |o| o.level);
         let shell = cx.weak_entity();
-        let picker = transparency::picker(level, colors.ink == PAPER, move |level, _, cx| {
+        // On the window's ground, chosen in the step's accent as its switches are.
+        let look = Look::on(colors.ground, colors.ink(1.), rgb(SIGNAL));
+        let picker = transparency::picker(level, &look, Rc::default(), move |level, _, cx| {
             shell
                 .update(cx, |shell, cx| shell.onboarding_transparency(level, cx))
                 .ok();
