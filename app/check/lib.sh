@@ -1,4 +1,5 @@
 # What the runs share. check.sh sources it, then each run's file.
+# merge-train probe 2, its head.
 
 # $1, ilo's menu items as the Mac's menus write them, or a pattern of them, as the app writes them
 # here (shell/menus.rs): off the Mac in sentence case, keeping each item's first word, Space,
