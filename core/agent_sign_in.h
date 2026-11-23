@@ -25,12 +25,12 @@ void StartAgentSignIn(const std::string& agent, bc_id tab, uint64_t request);
 // Whether the core is signing |tab| in for an agent: no agent may act in it until that answers.
 bool SigningIn(bc_id tab);
 
-// bc_tab_withheld_from_agents: signing in, or held by a sign-in as its page showed what was filled,
-// until its main frame commits a document at another address.
+// bc_tab_withheld_from_agents: signing in, or showing a page a sign-in withheld (PageWithheld).
 bool WithheldFromAgents(bc_id tab);
 
-// Whether |tab|'s page is held as it showed what a sign-in filled: agents may only navigate it
-// elsewhere or close it (BC_AGENT_FAILURE_WITHHELD_PAGE), and nothing reads its text.
+// Whether |tab| shows a page a sign-in withheld as it showed what was filled, or one at its address
+// again, for the tab's life (WithheldHistory): agents may only navigate it elsewhere or close it
+// (BC_AGENT_FAILURE_WITHHELD_PAGE), and nothing reads its text.
 bool PageWithheld(bc_id tab);
 
 // What an agent hears for any other act in such a page.

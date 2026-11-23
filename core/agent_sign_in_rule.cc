@@ -138,6 +138,30 @@ bool ShowsPassword(std::u16string_view text, std::u16string_view password) {
   return base::TrimWhitespace(text, base::TRIM_ALL) == password;
 }
 
+WithheldHistory::WithheldHistory() = default;
+WithheldHistory::~WithheldHistory() = default;
+
+void WithheldHistory::Withhold(const GURL& now, const std::set<int64_t>& pending) {
+  addresses_.insert(now.GetWithoutRef());
+  pending_.insert(pending.begin(), pending.end());
+  shown_ = true;
+}
+
+void WithheldHistory::Ended(int64_t navigation) {
+  pending_.erase(navigation);
+}
+
+bool WithheldHistory::Committed(int64_t navigation, const GURL& url, bool same_document) {
+  const GURL address = url.GetWithoutRef();
+  if (pending_.erase(navigation) || (same_document && shown_)) {
+    addresses_.insert(address);
+    shown_ = true;
+  } else {
+    shown_ = addresses_.contains(address);
+  }
+  return shown_;
+}
+
 SignInTries::SignInTries() = default;
 SignInTries::~SignInTries() = default;
 

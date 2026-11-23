@@ -5,6 +5,7 @@
 #define BROWSER_CORE_AGENT_SIGN_IN_RULE_H_
 
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <set>
@@ -13,9 +14,8 @@
 #include <utility>
 #include <vector>
 
+#include "url/gurl.h"
 #include "url/origin.h"
-
-class GURL;
 
 namespace browser_core {
 
@@ -81,6 +81,33 @@ bool SendsElsewhere(const std::vector<std::pair<std::string, std::string>>& attr
 // or more shows in any text holding it. A shorter one, which ordinary words hold by chance, shows
 // only as all of a text, spaces around it aside.
 bool ShowsPassword(std::u16string_view text, std::u16string_view password);
+
+// A tab's pages withheld from agents as they showed what a sign-in filled, for the tab's life: the
+// page held then, the commit of any navigation under way as it was, and later any page at one of
+// their addresses, which history, a reload or a redirect can bring back, a form sent with GET
+// holding the password in its address. Addresses without their fragment, in memory only.
+class WithheldHistory {
+ public:
+  WithheldHistory();
+  WithheldHistory(const WithheldHistory&) = delete;
+  WithheldHistory& operator=(const WithheldHistory&) = delete;
+  ~WithheldHistory();
+
+  // The page at |now| is withheld, and so is what each of |pending|, the main frame's navigations
+  // under way, commits.
+  void Withhold(const GURL& now, const std::set<int64_t>& pending);
+  // A main frame's navigation ended without committing.
+  void Ended(int64_t navigation);
+  // A main frame's navigation committed |url|. Returns whether the page shown now is withheld: it
+  // is one of the pending ones', or it's the withheld document still, or its address is one.
+  bool Committed(int64_t navigation, const GURL& url, bool same_document);
+  bool shown() const { return shown_; }
+
+ private:
+  std::set<GURL> addresses_;
+  std::set<int64_t> pending_;
+  bool shown_ = false;
+};
 
 // The origins where an agent's sign-in submitted a login and didn't sign in, by agent, in memory
 // until the user hands a tab at the origin back or the browser restarts: another sign-in there is

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <set>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -267,8 +268,9 @@ SignInTries& Tries() {
   return *tries;
 }
 
-// A tab a sign-in held because its page showed what was filled: agents get neither its title nor
-// its address until its main frame commits a document at another address.
+// A tab whose pages a sign-in withheld as they showed what was filled (WithheldHistory), for the
+// tab's life: while one is shown, agents get neither its title nor its address, and may only take
+// the tab to another page or close it.
 class WithheldPage : public content::WebContentsUserData<WithheldPage>,
                      public content::WebContentsObserver {
  public:
@@ -276,37 +278,37 @@ class WithheldPage : public content::WebContentsUserData<WithheldPage>,
   WithheldPage& operator=(const WithheldPage&) = delete;
   ~WithheldPage() override = default;
 
+  // The page |contents| shows now is withheld, and what each of |pending| commits.
+  static void Withhold(content::WebContents& contents, const base::flat_set<int64_t>& pending) {
+    CreateForWebContents(&contents);
+    FromWebContents(&contents)->history_.Withhold(
+        contents.GetPrimaryMainFrame()->GetLastCommittedURL(),
+        std::set<int64_t>(pending.begin(), pending.end()));
+  }
+
+  bool shown() const { return history_.shown(); }
+
   // content::WebContentsObserver:
   void DidFinishNavigation(content::NavigationHandle* navigation) override {
-    if (!navigation->IsInPrimaryMainFrame() || !navigation->HasCommitted() ||
-        navigation->IsSameDocument()) {
-      pending_.erase(navigation->GetNavigationId());
+    if (!navigation->IsInPrimaryMainFrame()) {
       return;
     }
-    if (pending_.erase(navigation->GetNavigationId())) {
-      // What the sign-in's own submit was still loading, such as an address a form sent with GET
-      // put the password in, is the withheld page too.
-      url_ = navigation->GetURL();
+    if (!navigation->HasCommitted()) {
+      history_.Ended(navigation->GetNavigationId());
       return;
     }
-    if (navigation->GetURL() != url_) {
-      // Deletes this.
-      GetWebContents().RemoveUserData(UserDataKey());
-    }
+    history_.Committed(navigation->GetNavigationId(), navigation->GetURL(),
+                       navigation->IsSameDocument());
   }
 
  private:
   friend class content::WebContentsUserData<WithheldPage>;
 
-  WithheldPage(content::WebContents* contents, base::flat_set<int64_t> pending)
+  explicit WithheldPage(content::WebContents* contents)
       : content::WebContentsUserData<WithheldPage>(*contents),
-        content::WebContentsObserver(contents),
-        url_(contents->GetPrimaryMainFrame()->GetLastCommittedURL()),
-        pending_(std::move(pending)) {}
+        content::WebContentsObserver(contents) {}
 
-  GURL url_;
-  // The navigations under way as the sign-in held the tab, all the page's own.
-  base::flat_set<int64_t> pending_;
+  WithheldHistory history_;
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
@@ -742,10 +744,11 @@ class SignIn : public content::WebContentsUserData<SignIn>,
   // The tab is the user's, as a handoff holds it: the agent's session stays for when the user hands
   // it back, which empties what's filled before the agent's next action (EmptyForAgent). Held after
   // the sign-in has ended, as Finish deletes it, and in the same task, so no agent acts between.
-  // Its title and address stay withheld from agents until its page is another.
+  // Its title and address stay withheld from agents while it shows that page, or one at its
+  // address again.
   void Withhold() {
     const bc_id tab = tab_;
-    WithheldPage::CreateForWebContents(&GetWebContents(), navigations_);
+    WithheldPage::Withhold(GetWebContents(), navigations_);
     Finish(false, BC_AGENT_FAILURE_USER_STEP, kUserStep);
     Hold(tab);
     AgentPage::SessionEnded(tab);
@@ -899,13 +902,13 @@ bool SigningIn(bc_id tab) {
 
 bool WithheldFromAgents(bc_id tab) {
   content::WebContents* contents = Tab::FromId(tab);
-  return contents &&
-         (SignIn::FromWebContents(contents) || WithheldPage::FromWebContents(contents));
+  return contents && (SignIn::FromWebContents(contents) || PageWithheld(tab));
 }
 
 bool PageWithheld(bc_id tab) {
   content::WebContents* contents = Tab::FromId(tab);
-  return contents && WithheldPage::FromWebContents(contents);
+  const WithheldPage* page = contents ? WithheldPage::FromWebContents(contents) : nullptr;
+  return page && page->shown();
 }
 
 void ForgiveSignInTries(const url::Origin& origin) {

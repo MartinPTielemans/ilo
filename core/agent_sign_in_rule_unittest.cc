@@ -180,6 +180,45 @@ TEST(AgentSignInRule, AnotherOriginsHandBackForgivesNothing) {
   EXPECT_FALSE(tries.MayTry("claude", Page()));
 }
 
+TEST(AgentSignInRule, AWithheldPageIsWithheldWhereverItComesBackFrom) {
+  const GURL login("https://shop.example.org/login");
+  const GURL echo("https://shop.example.org/session?u=ada&p=hunter2-by-ada");
+  const GURL other("https://shop.example.org/help");
+  WithheldHistory history;
+  // The look held the login page, with the submit's navigation, 7, still under way.
+  history.Withhold(login, {7});
+  EXPECT_TRUE(history.shown());
+  EXPECT_TRUE(history.Committed(7, echo, /*same_document=*/false));
+  // Away: the mark lifts.
+  EXPECT_FALSE(history.Committed(8, other, false));
+  // Back, a reload, a redirect or a navigation to either address: withheld again, fragment or not.
+  EXPECT_TRUE(history.Committed(9, echo, false));
+  EXPECT_FALSE(history.Committed(10, other, false));
+  EXPECT_TRUE(history.Committed(11, GURL(login.spec() + "#top"), false));
+  // Another query is another address.
+  EXPECT_FALSE(history.Committed(12, GURL("https://shop.example.org/login?next=%2F"), false));
+}
+
+TEST(AgentSignInRule, AWithheldDocumentStaysWithheldWhateverItsAddressBecomes) {
+  const GURL login("https://shop.example.org/login");
+  WithheldHistory history;
+  history.Withhold(login, {});
+  // The page moves its own address: the document is the same, and its new address is withheld.
+  EXPECT_TRUE(history.Committed(1, GURL("https://shop.example.org/welcome"), true));
+  EXPECT_FALSE(history.Committed(2, GURL("https://shop.example.org/help"), false));
+  EXPECT_TRUE(history.Committed(3, GURL("https://shop.example.org/welcome"), false));
+  // A page not withheld moving its address to a withheld one is withheld too.
+  EXPECT_FALSE(history.Committed(4, GURL("https://shop.example.org/help"), false));
+  EXPECT_TRUE(history.Committed(5, login, true));
+}
+
+TEST(AgentSignInRule, ANavigationThatEndedUncommittedIsNoLongerTheWithheldPages) {
+  WithheldHistory history;
+  history.Withhold(GURL("https://shop.example.org/login"), {7});
+  history.Ended(7);
+  EXPECT_FALSE(history.Committed(7, GURL("https://shop.example.org/help"), false));
+}
+
 TEST(AgentSignInRule, ASubmitterSendingAFormElsewhereIsFound) {
   EXPECT_TRUE(SendsElsewhere({{"formaction", "https://collector.example.com/"}}));
   EXPECT_TRUE(SendsElsewhere({{"formaction", "/session"}}));

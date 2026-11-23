@@ -145,8 +145,10 @@ bool HandBack(bc_id tab) {
   // What Chrome filled for the user while they held it never reaches the agent.
   EmptyForAgent(tab);
   // The user took the tab and gave it back, as after doing a sign-in an agent's failed: every
-  // agent may try a sign-in at its origin again.
-  if (content::WebContents* contents = Tab::FromId(tab)) {
+  // agent may try a sign-in at its origin again. Not as a held tab closes, which the app hands back
+  // too, by the user or by its page: it has left its Space by then, while its unload handlers run.
+  content::WebContents* contents = Tab::FromId(tab);
+  if (contents && !contents->IsBeingDestroyed() && Space::Holding(tab)) {
     ForgiveSignInTries(contents->GetPrimaryMainFrame()->GetLastCommittedOrigin());
   }
   return true;
