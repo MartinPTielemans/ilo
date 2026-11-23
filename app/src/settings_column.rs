@@ -280,7 +280,13 @@ pub fn column(
                 .min_h_0()
                 .child(sections.follow.before())
                 .child(list)
-                .child(sections.follow.after(sections.scroll.clone(), 0., 0.)),
+                // A label's height kept above the section the keys move to, so a group's first
+                // brings its label into sight, and General the list's top.
+                .child(sections.follow.after(
+                    sections.scroll.clone(),
+                    LABEL_TOP + LABEL_LINE + LABEL_BOTTOM,
+                    0.,
+                )),
         )
         .child(
             div()

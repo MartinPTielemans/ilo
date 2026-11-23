@@ -942,7 +942,9 @@ light-selected-shadow-blur = 2.0
 # as the sidebar's rows do, and the section shown sits on a card, as a page does. Its colours are
 # alphas of the palette's paper in dark and its ink in light, over the stand-in and the card.
 width = 900.0
-height = 660.0
+# Tall enough for every section, under its group's label, over the foot, at the sidebar's 36 a
+# row: the mock's 660 fits them only at 30 a row, which would shrink each one's hit area (#4092).
+height = 760.0
 # The least it can be made: room for the column and a row with a sentence and a control.
 min-width = 720.0
 min-height = 480.0
@@ -1046,10 +1048,10 @@ padding = 12.0
 line = 0.075
 name = 1.0
 name-off = 0.7
-# The grey of a row's line, the page's sentence and the lines between groups: 4.9:1 on a dark
-# group; light keeps the 0.66 that reads at 4.5:1 on its plate (#1636).
-detail = 0.55
-detail-light = 0.66
+# The grey of a row's line, the page's sentence and the search's placeholder, in both looks: the
+# mock's 0.55 reads at 4.0:1 on the light card and 3.7:1 on the light field, so it keeps the 0.66
+# that reads at 4.5:1 on each (#1636, #4092).
+detail = 0.66
 detail-top = 6.0
 detail-line = 16.0
 end-gap = 16.0
@@ -1202,6 +1204,8 @@ side-bar-height = 3.0
 side-ring = 1.5
 side-ring-gap = 2.0
 side-other = 0.12
+# How wide that hairline is, just inside each drawing's edge.
+side-edge = 1.0
 side-window = 0x232327
 side-window-light = 0xe7e5df
 side-page = 0x3b3b42

@@ -26,7 +26,7 @@ use crate::tokens::command_bar::site_colors::{
     LINKEDIN, REDDIT, SPOTIFY,
 };
 use crate::tokens::settings::{
-    SHARE_HEIGHT, SHARE_WIDTH, SIDE_BAR, SIDE_BAR_FIRST, SIDE_BAR_FIRST_LIGHT, SIDE_BAR_HEIGHT,
+    SHARE_HEIGHT, SHARE_WIDTH, SIDE_BAR, SIDE_BAR_FIRST, SIDE_EDGE, SIDE_BAR_FIRST_LIGHT, SIDE_BAR_HEIGHT,
     SIDE_BAR_LIGHT, SIDE_GAP, SIDE_HEIGHT, SIDE_INSET, SIDE_LABEL_GAP, SIDE_OTHER, SIDE_PAGE,
     SIDE_PAGE_LIGHT, SIDE_PAGE_RADIUS, SIDE_PLATE, SIDE_PLATE_LIGHT, SIDE_RADIUS, SIDE_RING,
     SIDE_RING_GAP, SIDE_ROOM, SIDE_ROWS_GAP, SIDE_SIDEBAR, SIDE_SIDEBAR_PADDING, SIDE_WIDTH,
@@ -469,7 +469,7 @@ fn inset(color: Rgba) -> BoxShadow {
         color: color.into(),
         offset: point(px(0.), px(0.)),
         blur_radius: px(0.),
-        spread_radius: px(1.),
+        spread_radius: px(SIDE_EDGE),
         inset: true,
     }
 }

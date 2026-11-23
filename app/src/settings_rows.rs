@@ -21,7 +21,7 @@ use crate::tokens::settings::{
     CHEVRONS_END, CHIP, CHIP_FIXED, CHIP_FIXED_TEXT, CHIP_HEIGHT, CHIP_NONE_TEXT, CHIP_PADDING,
     CHIP_RADIUS, CHIP_TEXT, CHIP_WIDTH, CONTROL, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_HOVERED,
     CONTROL_HOVERED_LIGHT, CONTROL_LIGHT, CONTROL_PADDING, CONTROL_PRESSED, CONTROL_PRESSED_LIGHT,
-    CONTROL_RADIUS, DETAIL, DETAIL_LIGHT, DETAIL_LINE, DETAIL_TOP, END_GAP, GLYPH, GLYPH_OFF,
+    CONTROL_RADIUS, DETAIL, DETAIL_LINE, DETAIL_TOP, END_GAP, GLYPH, GLYPH_OFF,
     GLYPH_ON, GLYPH_PLATE, GLYPH_PLATE_FILL, GLYPH_PLATE_GAP, GROUP, GROUP_LIGHT, GROUP_RIM,
     GROUP_RING_LIGHT, GROUP_SHADOW_BLUR, GROUP_SHADOW_LIGHT, GROUP_SHADOW_Y, HEADING,
     HEADING_LIGHT, KNOB, KNOB_ALPHA, KNOB_INSET, KNOB_SHADOW, KNOB_SHADOW_BLUR, KNOB_SHADOW_Y,
@@ -388,7 +388,7 @@ impl Look {
             surface,
             ink: mix(NAME),
             line: mix(LINE),
-            detail: mix(pick(DETAIL, DETAIL_LIGHT)),
+            detail: mix(DETAIL),
             control: mix(pick(CONTROL, CONTROL_LIGHT)),
             hovered: mix(pick(CONTROL_HOVERED, CONTROL_HOVERED_LIGHT)),
             pressed: mix(pick(CONTROL_PRESSED, CONTROL_PRESSED_LIGHT)),
@@ -719,9 +719,10 @@ fn lit(look: &Look, control: gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::
         .active(move |button| button.bg(pressed))
 }
 
-/// A pop-up button `width` wide showing `label`, with its chevrons after it at its end: on no plate
-/// at rest, a button's plate under the pointer, and pressed while its menu is `open` (#4092). It
-/// opens on a press, as a pop-up button does, which its caller listens for.
+/// A pop-up button `width` wide showing `label`, with its chevrons at its end, lit as a button is
+/// under the pointer and pressed while its menu is `open`. Its text stays at its start, where its
+/// menu puts the chosen item's. It opens on a press, as a pop-up button does, which its caller
+/// listens for.
 pub fn popup(look: &Look, label: impl Into<SharedString>, width: f32, open: bool) -> gpui::Div {
     let chevrons = svg()
         .flex_none()
@@ -736,10 +737,10 @@ pub fn popup(look: &Look, label: impl Into<SharedString>, width: f32, open: bool
         .pr(px(CHEVRONS_END))
         .flex()
         .items_center()
-        .justify_end()
+        .justify_between()
         .gap(px(CHEVRONS_END))
         .rounded(px(CONTROL_RADIUS))
-        .when(open, |popup| popup.bg(look.pressed))
+        .bg(if open { look.pressed } else { look.control })
         .when(!open, |popup| {
             let hovered = look.hovered;
             popup.hover(move |popup| popup.bg(hovered))

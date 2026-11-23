@@ -8,6 +8,7 @@ use gpui::{
 };
 
 use super::*;
+use crate::tokens::settings::{HEIGHT, WIDTH};
 use crate::tokens::shell::library::SEARCH_HEIGHT;
 
 /// The column alone, showing what it last picked.
@@ -55,7 +56,7 @@ fn shown(cx: &mut TestAppContext) -> (gpui::Entity<Shown>, &mut VisualTestContex
         picked: Rc::default(),
         foot: Rc::default(),
     });
-    cx.simulate_resize(size(px(820.), px(660.)));
+    cx.simulate_resize(size(px(WIDTH), px(HEIGHT)));
     cx.run_until_parked();
     (view, cx)
 }
@@ -350,7 +351,7 @@ fn voiceover_names_every_stop_the_keyboard_reaches(cx: &mut TestAppContext) {
     ] {
         assert!(names.contains(&name), "⇥ never reached {name}: {names:?}");
     }
-    assert_eq!(stops.len(), 20, "{names:?}");
+    assert_eq!(stops.len(), 21, "{names:?}");
 }
 
 /// Settings in small for the keyboard: the column with the search field, and the card with a
