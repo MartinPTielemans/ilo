@@ -105,13 +105,6 @@ case "$(uname -s)" in
     exit 0
     ;;
 esac
-[ -e .deps/Chromium.app ] || ./setup.sh
-engine_changes
-# setup.sh vendors it since the app patched it; a checkout set up before that hasn't got it.
-[ -d .deps/accesskit_macos ] || {
-  echo "No .deps/accesskit_macos. Run ./setup.sh again, with dev for the dev engine." >&2
-  exit 1
-}
 # Sparkle in the app at $1, checking the feed $2 every 8 hours for updates signed with the key $3,
 # or the nightly feed $4, if there's one, while the user takes nightly builds (src/updates.rs), and
 # installing what it downloads when the app quits (docs/ux-spec.md › Updates). Its helpers for
@@ -145,7 +138,8 @@ check_update_key() {
 # UPDATE_PUBLIC_KEY, both the run's own (check/updates.sh), and UPDATE_FEED_NIGHTLY, if it's set,
 # while it takes nightly builds (check/nightly.sh). Only the prod build carries the product's feeds
 # and key, and only it reaches users. Its own id keeps Sparkle's settings apart from every other
-# build's, and a quit sent to it from launching another.
+# build's, and a quit sent to it from launching another. It needs only build/Browser.app and
+# .deps/Sparkle, so a check job makes it from the app its build job made (check-mac.yml, #3917).
 if [ "${1:-}" = updates ]; then
   for feed in "${UPDATE_FEED:-}" "${UPDATE_FEED_NIGHTLY-http://127.0.0.1:0/}"; do
     case $feed in
@@ -167,6 +161,13 @@ if [ "${1:-}" = updates ]; then
   echo build/Updates.app
   exit 0
 fi
+[ -e .deps/Chromium.app ] || ./setup.sh
+engine_changes
+# setup.sh vendors it since the app patched it; a checkout set up before that hasn't got it.
+[ -d .deps/accesskit_macos ] || {
+  echo "No .deps/accesskit_macos. Run ./setup.sh again, with dev for the dev engine." >&2
+  exit 1
+}
 engine_out=$(dirname "$(cd .deps/Chromium.app && pwd -P)")
 id=dev.browser.app
 features=
