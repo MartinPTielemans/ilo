@@ -9,14 +9,14 @@ null, so the header alone still builds.
 
 --- a/content/public/browser/notification_event_dispatcher.h
 +++ b/content/public/browser/notification_event_dispatcher.h
-@@ -12,6 +12,7 @@
- #include "content/common/content_export.h"
- 
- class GURL;
-+class RenderFrameHost;
- 
+@@ -15,6 +15,7 @@
  namespace content {
  
+ class BrowserContext;
++class RenderFrameHost;
+ enum class PersistentNotificationStatus;
+ 
+ // This is the dispatcher to be used for firing events related to notifications.
 @@ -64,6 +65,17 @@
    virtual void DispatchNonPersistentCloseEvent(
        const std::string& notification_id,
