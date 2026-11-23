@@ -4,11 +4,12 @@
 
 use gpui::{
     Context, Entity, FocusHandle, Modifiers, Render, TestAppContext, VisualTestContext,
-    accesskit::{Node, NodeId},
+    accesskit::{Action, Node, NodeId, Role, Toggled},
     point, size,
 };
 
 use super::*;
+use crate::tokens::settings::SIDE_GAP;
 
 /// Where the picker sits in the test's window.
 const INSET: f32 = 20.;
@@ -27,14 +28,19 @@ impl Render for Shown {
             .track_focus(&self.focus)
             .size_full()
             .p(px(INSET))
-            .child(picker(self.chosen, true, move |level, _, cx| {
-                view.update(cx, |view, cx| {
-                    view.chosen = level;
-                    view.picks.push(level);
-                    cx.notify();
-                })
-                .ok();
-            }))
+            .child(picker(
+                self.chosen,
+                &Look::settings(true),
+                Rc::default(),
+                move |level, _, cx| {
+                    view.update(cx, |view, cx| {
+                        view.chosen = level;
+                        view.picks.push(level);
+                        cx.notify();
+                    })
+                    .ok();
+                },
+            ))
     }
 }
 
@@ -61,11 +67,10 @@ fn picks(view: &Entity<Shown>, cx: &mut VisualTestContext) -> Vec<Transparency> 
 
 /// The middle of `level`'s picture: three alike, side by side across the picker, inside its room.
 fn picture_at(level: Transparency) -> gpui::Point<gpui::Pixels> {
-    let across = WIDTH - 2. * INSET - 2. * ROOM;
-    let gap = GAP - 2. * (RING_GAP + RING);
-    let each = (across - 2. * gap) / 3.;
-    let x = INSET + ROOM + level.index() as f32 * (each + gap) + each / 2.;
-    let y = INSET + ROOM + RING + RING_GAP + HEIGHT / 2.;
+    let across = WIDTH - 2. * INSET - 2. * SIDE_ROOM;
+    let each = (across - 2. * SIDE_GAP) / 3.;
+    let x = INSET + SIDE_ROOM + level.index() as f32 * (each + SIDE_GAP) + each / 2.;
+    let y = INSET + SIDE_ROOM + HEIGHT / 2.;
     point(px(x), px(y))
 }
 
@@ -216,7 +221,7 @@ impl Render for Settings {
         div()
             .size_full()
             .p(px(INSET))
-            .children(row(&look, self.glass, cx))
+            .children(row(&look, self.glass, Rc::default(), cx))
     }
 }
 

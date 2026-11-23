@@ -4778,10 +4778,8 @@ fn preview_pictures(shown: Pictures, cx: &mut App) {
         point(px(x as f32), px(y as f32)),
         size(px(width), px(HEIGHT)),
     );
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
-        ..Default::default()
-    };
+    // As the app opens Settings, so a capture shows what it draws (#4129).
+    let options = browser::settings_column::window_options(bounds, "Settings".into());
     let opened = cx.open_window(options, |_, cx| {
         cx.new(|cx| {
             let look = browser::settings_rows::Look::settings(true);
@@ -4950,8 +4948,12 @@ impl gpui::Render for PicturesPage {
                     ))
                     .child(switch("top bar", false));
                 // Transparency under Appearance, at the level kept, as Settings has it (#4129).
-                let transparency =
-                    browser::transparency::row(&look, browser::transparency::has_glass(), cx);
+                let transparency = browser::transparency::row(
+                    &look,
+                    browser::transparency::has_glass(),
+                    self.logged.clone(),
+                    cx,
+                );
                 let mut looks = vec![pictured(&look, "Appearance", line.into(), three)];
                 let mut groups = Vec::new();
                 match transparency {
