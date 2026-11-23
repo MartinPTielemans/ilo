@@ -7,9 +7,7 @@
 //! the active one does. Only the user's keys come here: an agent's go to its page (keys.rs's
 //! tab_key_before_page).
 
-use std::time::Duration;
-
-use web_time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui::accesskit::{Live, Role};
 use gpui::{

@@ -13,7 +13,7 @@ use gpui::{
 
 use super::Command;
 use super::commands::{
-    BAR_COMMANDS, KEY_CONTEXT, Run, SHORTCUTS, keystroke_keys, keystroke_label, keystroke_label_on,
+    BAR_COMMANDS, KEY_CONTEXT, Run, SHORTCUTS, keystroke_keys, keystroke_label_on,
 };
 
 /// Keys that run something other than a command: AppKit's Hide, Hide Others and Minimize, which
@@ -1096,7 +1096,10 @@ mod tests {
         Context, FocusHandle, Modifiers, TestAppContext, VisualTestContext, Window, div, prelude::*,
     };
 
-    use super::{super::commands::ShellHandle, *};
+    use super::{
+        super::commands::{ShellHandle, keystroke_label},
+        *,
+    };
 
     /// Focus Agent Question shows the platform's own key: off the Mac its Alt+Shift+A, not the
     /// Mac's ⌥⇧⌘A written first.
