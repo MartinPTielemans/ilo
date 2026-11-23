@@ -31,6 +31,7 @@ pub mod scripts;
 mod server;
 pub mod sign_in;
 pub mod task;
+pub mod tier;
 pub mod tools;
 
 pub use server::address;
