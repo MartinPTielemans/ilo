@@ -30,8 +30,6 @@ use browser::tokens::find_bar::HEIGHT;
 use browser::tokens::find_bar::RADIUS;
 use browser::tokens::find_bar::WIDTH;
 const RIGHT: f32 = shell::CARD_INSET * 2.;
-// Arc's fill, a navy unlike its window's colour (one Space captured).
-use browser::tokens::find_bar::FILL;
 const TOP: f32 = shell::CARD_INSET * 2.;
 use browser::tokens::find_bar::ARROW_OVERLAP;
 use browser::tokens::find_bar::BUTTON;

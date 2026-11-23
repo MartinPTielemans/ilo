@@ -767,11 +767,12 @@ pub(crate) fn finish_opening(
         },
         cx,
     );
-    // The window the toast shows over gives its palette.
+    // The window the toast and the link target show over gives its colour and palette; the toast
+    // takes only the palette, as its fill is what floats' (#4090).
     let look = |cx: &App| {
         let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
         let shell = shell?.upgrade()?;
-        Some(shell.read(cx).palette())
+        Some((shell.read(cx).window_fill(), shell.read(cx).palette()))
     };
     let toast_host = Rc::new(ToastHost {
         view: Cell::new(std::ptr::null_mut()),
@@ -782,7 +783,7 @@ pub(crate) fn finish_opening(
             move |cx| {
                 if let Some(toast) = toast::open(
                     toast_host.clone(),
-                    move |cx| look(cx).unwrap_or_default(),
+                    move |cx| look(cx).map(|(_, palette)| palette).unwrap_or_default(),
                     cx,
                 ) && let Ok(view) = toast.update(cx, |_, window, _| ns_view(window))
                 {
