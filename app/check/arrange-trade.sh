@@ -246,12 +246,15 @@ body { margin: 0; height: 100vh; font: 16px sans-serif; background: rgb(243, 245
 #row > span { display: block; height: 40px; background: rgb(217, 226, 230) }
 a { position: absolute; left: 20px; width: 60px; height: 30px }
 </style>
-<div id="col"><section id="a" aria-label="Alpha"></section><section id="b" aria-label="Beta"></section><section id="c" aria-label="Gamma"></section><section id="w" aria-label="Wide"></section></div>
-<div id="row"><span id="r1" style="width: 60px"></span><span id="r2" style="width: 100px"></span><span id="r3" style="width: 140px"></span><span id="r4" style="width: 80px"></span></div>
+<template id="later"><div id="col"><section id="a" aria-label="Alpha"></section><section id="b" aria-label="Beta"></section><section id="c" aria-label="Gamma"></section><section id="w" aria-label="Wide"></section></div><div id="row"><span id="r1" style="width: 60px"></span><span id="r2" style="width: 100px"></span><span id="r3" style="width: 140px"></span><span id="r4" style="width: 80px"></span></div></template>
 <a href="arrange-idle.html?m2" style="top: 470px">m2</a><a href="arrange-idle.html?m4" style="top: 510px">m4</a><a href="arrange-idle.html?m12" style="top: 550px">m12</a>
 <script>
 const file = location.search.slice(1);
-const things = [...document.querySelectorAll("#col > section, #row > span")];
+const things = [];
+// Probe (#3929), never to land: m12 has its things 1.3 s after the navigation, as a slow runner
+// might, so its lift comes then too; the others have them at once.
+const put = () => { document.body.prepend(document.getElementById("later").content.cloneNode(true)); things.push(...document.querySelectorAll("#col > section, #row > span")); };
+if (file === "m12") setTimeout(put, Math.max(0, 1300 - performance.now())); else put();
 let seen = 0;
 document.addEventListener("toggle", (e) => { if (things.includes(e.target)) seen++; }, true);
 new MutationObserver((records) => { for (const r of records) if (things.includes(r.target)) seen++; })
