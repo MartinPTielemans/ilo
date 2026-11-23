@@ -15,9 +15,10 @@ all=$(sh "$check" --runs)
 # The long runs, when done, have the last job to themselves: about 58 minutes of them on 11-21.
 long="adblock-parity adblock-cost adblock-native perf perf-native"
 # Job 1's, each in its turn: the runs that compose with Windows' Japanese and Korean IMEs, which a
-# job installs in 40 to 50 s, and those that compile a check copy of their own on Windows (build.sh
-# updates) with the toolchain a job sets up, so that one job alone pays for each.
-first="dialogs keys board updates nightly update-checks"
+# job installs in 40 to 50 s, those that compile a check copy of their own on Windows (build.sh
+# updates) with the toolchain a job sets up, so that one job alone pays for each, and keychain,
+# whose job takes the Mac's prod build for its turn (check-mac.yml, #4000).
+first="dialogs keys board updates nightly update-checks keychain"
 # Whether the list $1 has the run $2.
 has() { case " $1 " in *" $2 "*) ;; *) return 1 ;; esac; }
 case ${1:-} in
