@@ -352,7 +352,28 @@ fn the_mac_finds_arc_with_its_profiles() {
         [("Arc", vec!["Personal".to_string(), "Work".to_string()])]
     );
     let arc = &sources::find(&roots)[0];
-    assert!(arc.arc_sidebar().is_some());
+    assert!(super::sidebar::has(arc));
+}
+
+/// A browser whose sidebar isn't read yet, such as Dia's or Zen's, shows what its family does,
+/// with no Spaces, and reading what a sidebar would add brings nothing (#4051).
+#[test]
+fn a_sidebar_not_read_yet_adds_nothing() {
+    let home = home("sidebar-not-read");
+    chromium_dir(home.join("Library/Application Support/Dia/User Data"), 10);
+    firefox_dir(home.join(".zen"), 10);
+    let sidebar = [Kind::Spaces, Kind::OpenTabs, Kind::Favorites];
+    for (os, name) in [(Os::Mac, "Dia"), (Os::Linux, "Zen")] {
+        let sources = sources::find(&Roots::under(&home, os));
+        let source = (sources.iter())
+            .find(|source| source.browser.name == name)
+            .unwrap();
+        assert!(!super::sidebar::has(source), "{name}");
+        assert!(!read::kinds(source).contains(&Kind::Spaces), "{name}");
+        let found = read::read(source, &sidebar, SystemTime::now()).unwrap();
+        assert_eq!(found, Found::default(), "{name}");
+    }
+    fs::remove_dir_all(home).unwrap();
 }
 
 /// On Windows, Arc in the folder the Store gives it, Chrome in Local AppData and Firefox's

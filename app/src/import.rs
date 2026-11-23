@@ -18,8 +18,10 @@
 #[path = "../platform/linux/app_icons.rs"]
 pub mod app_icons;
 pub mod arc;
+pub mod ardia;
 mod arrival;
 pub mod chromium;
+pub mod dia;
 pub mod extensions;
 pub mod firefox;
 pub mod found;
@@ -28,11 +30,13 @@ pub mod plan;
 pub mod read;
 pub mod safari;
 pub mod session;
+pub mod sidebar;
 pub mod sources;
 pub mod suggested;
 #[cfg(test)]
 pub(crate) mod tests;
 mod tiles;
+pub mod zen;
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -1984,6 +1988,7 @@ impl ImportView {
                 _ if !view.is_run(id) => {}
                 Ok(pinned) => {
                     let space = found::Space {
+                        from: found::SpaceFrom::Bookmarks,
                         name: "Bookmarks".into(),
                         profile: FromProfile::Default,
                         icon: String::new(),
