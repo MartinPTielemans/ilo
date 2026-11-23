@@ -2180,9 +2180,9 @@ BC_EXPORT bool bc_tab_take_back(bc_id tab);
 // bc_agent_may_act.
 BC_EXPORT bool bc_agent_hand_off(const char* agent, bc_id tab);
 
-// The user hands |tab| back to agents, and returns whether they held it. Before an agent may act in
-// it again, the main frame's password fields and the fields Chrome filled for the user are
-// emptied. The user's.
+// The user hands |tab| back to agents, and returns whether they held it. Before an agent's next
+// action in its page runs, the main frame's password fields and the fields Chrome filled for the
+// user are emptied. The user's.
 BC_EXPORT bool bc_tab_hand_back(bc_id tab);
 
 // Whether the user holds |tab| from agents.
@@ -2207,6 +2207,10 @@ BC_EXPORT bool bc_tab_held(bc_id tab);
 //   agent may act in the tab: bc_agent_may_act refuses with BC_AGENT_FAILURE_SIGNING_IN. Once the
 //   page has settled, each field the core filled that's still in the page is emptied, whether or
 //   not the form has gone, before the answer.
+// - The tab is the user's if the page shows what was filled: before the hold lifts, the core looks
+//   for the password in all an agent could read of the page, every frame's fields and the text of
+//   its outline and its read, and if it's there anywhere the answer is BC_AGENT_FAILURE_USER_STEP
+//   and the tab stays held, as bc_tab_take_back holds it.
 // - A login Chrome fills only after the user's own check, such as Touch ID, isn't filled: the
 //   answer is BC_AGENT_FAILURE_USER_STEP. The core never asks for the check in an agent's tab.
 // Refused with a bc_agent_failure value as bc_agent_may_act refuses: a tab not in the agent's
