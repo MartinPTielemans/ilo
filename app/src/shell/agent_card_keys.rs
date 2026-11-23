@@ -326,6 +326,31 @@ impl Shell {
         }
     }
 
+    /// GPUI says the window stopped being active. Decided once the events that came with it are
+    /// handled, not at a frame, which a hidden window may never draw: still inactive then, the
+    /// window was left. Sway's leave and enter as a keyboard comes or its keymap changes come in
+    /// one flush, which one read takes and one dispatch handles, so the window is active again by
+    /// then and the keys stay.
+    pub(super) fn card_keys_window_inactive(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.card_keys.is_none() {
+            return;
+        }
+        cx.spawn_in(window, async move |shell, cx| {
+            shell
+                .update_in(cx, |shell, window, cx| {
+                    if !window.is_window_active() {
+                        shell.card_keys_window_left("window", cx);
+                    }
+                })
+                .ok();
+        })
+        .detach();
+    }
+
     /// The page has the keyboard, which GPUI's focus doesn't follow, so the card's keys have
     /// ended: the key from the page gives the card the keyboard again rather than back.
     pub fn leave_card_keys(&mut self, cx: &mut Context<Self>) {
@@ -382,7 +407,6 @@ impl Shell {
         // that, the core's word on Linux, else the host's that the page took it, or another tab
         // shown, whose page takes it as it shows.
         let page = self.page_has_keyboard(window, cx);
-        let active = window.is_window_active();
         let selected = self.selected;
         let now = cx.background_executor().now();
         let Some(keys) = &mut self.card_keys else {
@@ -394,12 +418,6 @@ impl Shell {
             }
             return;
         };
-        // GPUI's word that the window stopped being active, with the window active again by the
-        // frame, was the compositor leaving and entering at once, as sway does to the window with
-        // the keyboard as a keyboard comes or its keymap changes: the user never left.
-        if keys.leaving == Some("window") && active {
-            keys.leaving = None;
-        }
         let why = match showing {
             _ if keys.leaving.is_some() => keys.leaving.unwrap_or("key"),
             _ if !keys.due && (page || keys.selected != selected) => {
@@ -1614,6 +1632,7 @@ mod tests {
         assert!(host.take().contains(&"focus page".to_string()));
         cx.update(|window, _| window.activate_window());
         cx.run_until_parked();
+        assert_eq!(ring(&shell, cx), None, "the ring came back with the window");
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         assert_eq!(answers(&host), Vec::<String>::new());
@@ -1633,11 +1652,29 @@ mod tests {
         assert_eq!(answers(&host), Vec::<String>::new());
     }
 
-    /// GPUI saying the window stopped being active, with the window active again by the frame, as
-    /// sway's leave and enter at once as a keyboard comes: the card keeps its keys, and ↩ answers.
+    /// GPUI saying the window stopped being active and active again in one batch of events, as
+    /// sway's leave and enter as a keyboard comes: a frame drawn between, while it was inactive,
+    /// decides nothing, and the card keeps its keys, ↩ answering. The leave goes on the other
+    /// window and back, each change its own task, as the platform's events are.
     #[gpui::test]
     fn leaving_and_entering_at_once_keeps_the_cards_keys(cx: &mut TestAppContext) {
+        struct Blank;
+        impl gpui::Render for Blank {
+            fn render(
+                &mut self,
+                _: &mut gpui::Window,
+                _: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                gpui::div()
+            }
+        }
         let (host, shell, cx) = window_with(cx);
+        let other = cx.update(|_, cx| {
+            cx.open_window(Default::default(), |_, cx| {
+                gpui::AppContext::new(cx, |_| Blank)
+            })
+            .unwrap()
+        });
         cx.update(|window, _| window.activate_window());
         cx.run_until_parked();
         ask(&shell, cx, question(7));
@@ -1645,12 +1682,17 @@ mod tests {
         wait(cx, PROTECT);
         let ringed = ring(&shell, cx);
         host.take();
-        shell.update(cx, |shell, cx| shell.card_keys_window_left("window", cx));
+        cx.update(|window, cx| {
+            other
+                .update(cx, |_, other, _| other.activate_window())
+                .unwrap();
+            window.activate_window();
+        });
         cx.run_until_parked();
         assert_eq!(
             ring(&shell, cx),
             ringed,
-            "the ring went with the window still active"
+            "the ring went with the window active again"
         );
         assert!(!host.take().contains(&"focus page".to_string()));
         cx.simulate_keystrokes("enter");
