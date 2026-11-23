@@ -36,7 +36,7 @@ actions!(
     sidebar_keys,
     [
         KeyUp, KeyDown, KeyShow, KeyLeave, KeyOpen, KeyOut, KeyMenu, TabIn, BackTabIn, KeyTab,
-        KeyBackTab
+        KeyBackTab, KeySpace
     ]
 );
 
@@ -45,6 +45,8 @@ pub(super) fn bind(cx: &mut App) {
         KeyBinding::new("up", KeyUp, Some(CONTEXT)),
         KeyBinding::new("down", KeyDown, Some(CONTEXT)),
         KeyBinding::new("enter", KeyShow, Some(CONTEXT)),
+        // Space opens the menu control's menu, as Return does (menu_keys.rs).
+        KeyBinding::new("space", KeySpace, Some(CONTEXT)),
         KeyBinding::new("escape", KeyLeave, Some(CONTEXT)),
         KeyBinding::new("right", KeyOpen, Some(CONTEXT)),
         KeyBinding::new("left", KeyOut, Some(CONTEXT)),
@@ -95,6 +97,7 @@ impl Shell {
     pub(super) fn key_row(&mut self, row: u64, cx: &mut Context<Self>) {
         self.keyed = Some(row);
         self.keyed_strip = None;
+        self.leave_menu_keys("sidebar", cx);
         match row {
             NEW_TAB => self.scroll_to_slot(Slot::NewTab, "new tab"),
             row => self.scroll_to_row(row),
@@ -106,6 +109,13 @@ impl Shell {
 
     /// Moves the ring to the next row down or up, stopping at the ends.
     fn key_step(&mut self, down: bool, cx: &mut Context<Self>) {
+        // On the menu control Down opens its menu, which opens above it, and Up has nowhere to go.
+        if self.keyed_menu.is_some() {
+            if down {
+                self.key_open_menu(cx);
+            }
+            return;
+        }
         let Some(keyed) = self.keyed else {
             return cx.propagate();
         };
@@ -219,6 +229,9 @@ impl Shell {
     }
 
     fn key_show(&mut self, cx: &mut Context<Self>) {
+        if self.key_open_menu(cx) {
+            return;
+        }
         if let Some(stop) = self.keyed_strip {
             return self.key_strip_show(stop, cx);
         }
@@ -239,6 +252,9 @@ impl Shell {
     }
 
     fn key_leave(&mut self, cx: &mut Context<Self>) {
+        if self.keyed_menu.is_some() {
+            return self.give_back_menu_keys("escape", cx);
+        }
         // The window keeps the keyboard: the strip's page may be an agent's.
         if self.keyed_strip.is_some() {
             return self.leave_strip("escape", cx);
@@ -267,6 +283,7 @@ impl Shell {
         if gone {
             self.leave_keys("sidebar", cx);
             self.leave_strip("sidebar", cx);
+            self.leave_menu_keys("sidebar", cx);
         }
         // The strip's stop went with its page, or as its chips changed.
         if let Some(stop) = self.keyed_strip
@@ -274,17 +291,23 @@ impl Shell {
         {
             self.leave_strip("strip", cx);
         }
-        let ringed = self.keyed.is_some() || self.keyed_strip.is_some();
+        let ringed = self.ring_up();
         if std::mem::take(&mut self.focus_keys) && ringed {
             window.focus(&self.sidebar_keys, cx);
         } else if ringed && !self.sidebar_keys.is_focused(window) {
             self.leave_keys("focus", cx);
             self.leave_strip("focus", cx);
+            self.leave_menu_keys("focus", cx);
         }
-        let ringed = self.keyed.is_some() || self.keyed_strip.is_some();
+        let ringed = self.ring_up();
         if !ringed && self.sidebar_keys.is_focused(window) {
             window.focus(&self.focus_handle, cx);
         }
+    }
+
+    /// Whether the keys' ring is on a row, the strip or the menu control.
+    fn ring_up(&self) -> bool {
+        self.keyed.is_some() || self.keyed_strip.is_some() || self.keyed_menu.is_some()
     }
 
     /// The sidebar's element, taking its keys while it has the keyboard.
@@ -304,6 +327,11 @@ impl Shell {
             .on_action(cx.listener(|shell, _: &KeyUp, _, cx| shell.key_step(false, cx)))
             .on_action(cx.listener(|shell, _: &KeyDown, _, cx| shell.key_step(true, cx)))
             .on_action(cx.listener(|shell, _: &KeyShow, _, cx| shell.key_show(cx)))
+            .on_action(cx.listener(|shell, _: &KeySpace, _, cx| {
+                if !shell.key_open_menu(cx) {
+                    cx.propagate()
+                }
+            }))
             .on_action(cx.listener(|shell, _: &KeyLeave, _, cx| shell.key_leave(cx)))
             .on_action(cx.listener(|shell, _: &KeyOpen, _, cx| shell.key_open(cx)))
             .on_action(cx.listener(|shell, _: &KeyOut, _, cx| shell.key_out(cx)))
