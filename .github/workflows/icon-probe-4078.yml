@@ -1,0 +1,66 @@
+# Never to land (#4078): renders the R3 icon's images with app/branding/render.sh and compares
+# them with the owner's reference PNGs, and compiles app/branding/ilo.icon with actool on macOS 26.
+# The artifacts hold only pictures, the rendered images and Assets.car.
+name: Icon probe 4078
+
+on:
+  push:
+    branches: [feat/app-icon-r3-4078-1]
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: resvg and Pillow
+        run: |
+          cargo install --locked resvg --version 0.45.1
+          python3 -m venv "$RUNNER_TEMP/py"
+          "$RUNNER_TEMP/py/bin/pip" install --quiet pillow==11.0.0
+          echo "$RUNNER_TEMP/py/bin" >> "$GITHUB_PATH"
+      - name: Render
+        run: |
+          resvg --version
+          app/branding/render.sh "$RUNNER_TEMP/png"
+          git status --short
+      - name: Compare with the reference
+        run: |
+          python3 -I .github/probe-4078/diff.py "$RUNNER_TEMP/png" .github/probe-4078/ref \
+            "$RUNNER_TEMP/out/side" | tee -a "$GITHUB_STEP_SUMMARY"
+          cp "$RUNNER_TEMP"/png/*.png "$RUNNER_TEMP/out/"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: icon-render
+          path: |
+            ${{ runner.temp }}/out
+            app/branding/ilo.icns
+            app/platform/windows/package/Assets/
+            app/platform/linux/flatpak/icons/
+            app/platform/linux/flatpak/app.ilo.browser.svg
+            site/public/favicon.ico
+            site/public/favicon.svg
+            site/public/apple-touch-icon.png
+
+  icon:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: actool
+        run: |
+          sw_vers
+          xcodebuild -version
+          app/icon.sh
+          mkdir -p "$RUNNER_TEMP/out"
+          cp app/branding/Assets.car "$RUNNER_TEMP/out/"
+          # A path or host name compiled into the file, which mustn't be committed: counted only.
+          n=$(strings -a app/branding/Assets.car | grep -c -i -e /Users -e /private -e /var/folders -e runner -e "$(hostname -s)" || true)
+          echo "paths or host names in Assets.car: $n" | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: icon-compiled
+          path: ${{ runner.temp }}/out
