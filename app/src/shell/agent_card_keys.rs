@@ -396,7 +396,6 @@ impl Shell {
             _ if keys.leaving.is_some() => keys.leaving.unwrap_or("key"),
             _ if !keys.due && (page || keys.selected != selected) => {
                 self.card_keys = None;
-                // check.sh waits for this line.
                 log!("browser: agent card keys left by page");
                 return cx.notify();
             }
