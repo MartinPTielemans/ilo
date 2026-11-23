@@ -9,7 +9,7 @@
 //! the user's again as it goes. Nothing here runs for a window that shows no task.
 
 use std::time::Duration;
-use web_time::Instant;
+use std::time::Instant;
 
 use std::f32::consts::FRAC_PI_2;
 

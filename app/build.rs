@@ -4,16 +4,11 @@ fn main() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let header = root.join("../core/public/browser_core.h");
     let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
-    // The web's preview has neither the core nor a host in C++: the page is its host.
-    let web = std::env::var("CARGO_CFG_TARGET_FAMILY").is_ok_and(|family| family == "wasm");
 
     println!("cargo::rustc-check-cfg=cfg(engine_header_mismatch)");
-    if !web {
-        native(&root, &header, &os);
-    }
+    native(&root, &header, &os);
 
-    // The core's API, read from its header, so the two can't drift: on the web too, where the
-    // site's demo reads its constants and calls none of it.
+    // The core's API, read from its header, so the two can't drift.
     bindgen::Builder::default()
         .header(header.to_string_lossy())
         .allowlist_function("bc_.*")
