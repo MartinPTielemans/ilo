@@ -20,6 +20,7 @@ use serde_json::Value;
 
 use super::ready::{Found, Ready};
 use super::runner::{self, Cli, Failure, Launch, Out, Process};
+use super::tier::{Sites, Stop, Tier};
 use super::{Agents, Client, Question, ToolResult, page, site, tools};
 use crate::shell::MenuEntry;
 
@@ -304,6 +305,15 @@ pub struct Task {
     /// The ask's call, which waits for the user's answer, with the number it takes among the
     /// agent's prompts, which show in the order they came.
     asking: Option<(u64, mpsc::Sender<ToolResult>)>,
+    /// Its access, which only the user changes and which ends with it: never kept, so Full access
+    /// is never remembered.
+    pub tier: Tier,
+    /// The sites it may use.
+    pub sites: Sites,
+    /// What ilo stopped, as its conversation shows each, oldest first.
+    pub stops: Vec<Stop>,
+    /// What ilo tells its CLI with the user's next turn: a change of tier while it wasn't working.
+    pub(super) told: Option<String>,
     /// While it's thinking, what ends the turn if its CLI never answers (NO_ANSWER). It goes as
     /// the CLI answers, so nothing waits once the agent is under way.
     pub(super) waiting: Option<gpui::Task<()>>,
@@ -357,6 +367,10 @@ impl Task {
     fn end(&mut self, at: SystemTime) {
         self.ended = Some(at);
         self.end_entry = super::next_entry_id();
+        // A refusal is passed once its task ends: there's nothing left to raise or take over.
+        for stop in &mut self.stops {
+            stop.settled = true;
+        }
     }
 
     pub(super) fn token(&self) -> &str {
@@ -809,6 +823,10 @@ impl Agents {
             (State::Working | State::Asking { .. }, Some(question)) => {
                 (needs_you(question), Dot::Waiting)
             }
+            // A refusal the user hasn't settled says where it stopped, as its line says why.
+            (State::Working, None) if let Some(stop) = task.stops.iter().rfind(|s| !s.settled) => {
+                (format!("{STOPPED_AT} {}", stop.at).into(), Dot::Waiting)
+            }
             (State::Working, None) => (working(task), Dot::Working),
             (State::Asking { question, .. }, None) if asks => (question.clone(), Dot::Waiting),
             (State::Asking { .. }, None) => (NEEDS_YOU.into(), Dot::Waiting),
@@ -1082,6 +1100,10 @@ impl Agents {
             waiting: None,
             writing: None,
             named: None,
+            tier: Tier::default(),
+            sites: Sites::default(),
+            stops: Vec::new(),
+            told: None,
         };
         self.tasks.tasks.push(task);
         self.tokens_changed();
@@ -1371,6 +1393,12 @@ impl Agents {
             .push(Message::new(Who::User, text.to_string()));
         task.state = State::Working;
         task.writing = None;
+        // What ilo had to tell it since its last turn comes first, as ilo's, not the user's.
+        let text = match task.told.take() {
+            Some(told) => format!("{told}\n\n{text}"),
+            None => text.to_string(),
+        };
+        let text = text.as_str();
         let sent = task.process.as_mut().map(|process| process.say(text));
         if !matches!(sent, Some(Ok(()))) {
             // Gone, or never started: a new run, with the conversation so far.
@@ -1885,6 +1913,44 @@ impl Agents {
         Some(task.agent.clone())
     }
 
+    /// The task an act of `agent`'s on `connection`, for its call `call` (0 for none), is of: a ⌘T
+    /// task's own, else the session its call is part of, else its connection's session under way.
+    pub(super) fn acting_task(&self, agent: &str, connection: u64, call: u64) -> Option<&Task> {
+        if let Some(task) = self.task(agent) {
+            return Some(task);
+        }
+        if let Some(task) = (call != 0).then(|| self.session_of(agent, call)).flatten() {
+            return Some(task);
+        }
+        (self.tasks.tasks.iter()).find(|task| {
+            task.state == State::Working
+                && (task.session.as_ref()).is_some_and(|session| {
+                    session.agent == agent && session.connection == connection
+                })
+        })
+    }
+
+    /// Tells the task `key` ilo runs what ilo has to say, `text`, which is ilo's own: now if it's
+    /// working or `now` is set, which starts it on a turn, else with the user's next turn.
+    pub(super) fn tell_task(&mut self, key: &str, text: String, now: bool, cx: &mut Context<Self>) {
+        let Some(task) = self.task_mut(key) else {
+            return;
+        };
+        if !now && task.state != State::Working {
+            task.told = Some(text);
+            return;
+        }
+        task.told = None;
+        task.state = State::Working;
+        task.writing = None;
+        let sent = task.process.as_mut().map(|process| process.say(&text));
+        if !matches!(sent, Some(Ok(()))) {
+            let first = format!("{}\n\n{text}", conversation(task));
+            self.launch(key, &first, cx);
+        }
+        self.wait_for_answer(key, cx);
+    }
+
     /// The session of `agent`'s whose call `call` is under way.
     pub(super) fn session_of(&self, agent: &str, call: u64) -> Option<&Task> {
         (self.tasks.tasks.iter()).find(|task| {
@@ -2090,6 +2156,10 @@ impl Agents {
             waiting: None,
             writing: None,
             named: None,
+            tier: Tier::default(),
+            sites: Sites::default(),
+            stops: Vec::new(),
+            told: None,
         });
         cx.notify();
         Some(key)
@@ -2195,6 +2265,7 @@ impl Agents {
                     target: entry.target.to_string(),
                     url: entry.url.to_string(),
                     sent: entry.sent.clone(),
+                    tier: entry.tier.to_string(),
                 })
                 .collect();
             let over = steps.len().saturating_sub(crate::agent_history::STEPS);
@@ -2786,6 +2857,8 @@ fn first_words(result: &str) -> SharedString {
 /// status the card sets heavier (`status_lead`).
 pub const NEEDS_YOU: &str = "Needs you";
 pub const NEEDS_OK: &str = "Needs your OK";
+/// A card's status while a refusal of its task's access is unsettled, before what it stopped.
+pub const STOPPED_AT: &str = "Stopped at";
 
 /// A task's status while it works, saying how far it has got by its own steps: "Step 5 · Clicking
 /// “Tickets”", the step of the turn it's on, else the last it took, counted among the turn's steps

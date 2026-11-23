@@ -1,8 +1,9 @@
-//! Sites the user fenced (#3724), as an agent comes to one: by an open the user answers, or any
-//! other way, which asks before the agent's next call on the tab, a read included.
+//! Sites on the user's Off limits list (#3724), as an agent comes to one: an open is refused at
+//! every tier, and any other way there refuses the agent's next call on the tab, a read included.
 
 use super::*;
 use crate::agents::fence;
+use crate::agents::tier::{Tier, Why};
 
 /// Claude Code, connected, with mybank.example fenced.
 fn fenced(cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>) {
@@ -63,34 +64,37 @@ fn withheld(answer: &ToolResult, tab: u64, site: &str) {
     assert!(!answer.text.contains("Balance"), "{}", answer.text);
 }
 
-/// The agent's next call on `tab`, a snapshot, asks the user first to use `site`, with an open's
-/// answers, before the core is asked anything of the page.
+/// The agent's next call on `tab`, a snapshot, is refused at once for being on `site`, before the
+/// core is asked anything of the page.
 fn asks_next(
     agents: &Entity<Agents>,
     browser: &Made,
     tab: u64,
     site: &str,
     cx: &mut TestAppContext,
-) -> (mpsc::Receiver<ToolResult>, Question) {
+) -> ToolResult {
     let (pages, reads) = (browser.pages.borrow().len(), browser.reads.borrow().len());
     let answer = call(agents, "claude-code", "snapshot", json!({ "tab": tab }), cx);
-    let question = (browser.asked.borrow().clone())
-        .unwrap_or_else(|| panic!("the call on tab {tab} at {site} didn't ask"));
-    assert_eq!(question.what, fence::arrival(site));
-    assert_eq!(question.why, fence::why(site));
-    assert!(question.fenced && !question.each_time);
+    let refused = refused(
+        agents,
+        browser,
+        answer,
+        &fence::arrival(site),
+        Why::Fenced,
+        site,
+        cx,
+    );
     assert_eq!(browser.pages.borrow().len(), pages, "the page was asked of");
     assert_eq!(browser.reads.borrow().len(), reads, "the page was read");
-    assert!(answer.try_recv().is_err(), "it answered before the user");
-    (answer, question)
+    refused
 }
 
-/// Each way a tab comes to a fenced site but an open the user allowed, a click on another site, a
-/// redirect after an open of another, back, the page itself, a tab a page opened and a tab the
-/// user handed over, asks before the agent's next call there, and what the call that took it there
+/// Each way a tab comes to a fenced site, a click on another site, a redirect after an open of
+/// another, back, the page itself, a tab a page opened and a tab the user handed over, refuses the
+/// agent's next call there, and what the call that took it there
 /// answers says nothing of the page, not even its outline (#3724).
 #[gpui::test]
-fn each_way_onto_a_fenced_site_asks_before_the_next_call(cx: &mut TestAppContext) {
+fn each_way_onto_a_fenced_site_refuses_the_next_call(cx: &mut TestAppContext) {
     // A click on another site.
     let (agents, browser) = fenced(cx);
     let answer = click_on(&agents, &browser, more_tree(), "Show more", cx);
@@ -132,10 +136,10 @@ fn each_way_onto_a_fenced_site_asks_before_the_next_call(cx: &mut TestAppContext
     asks_next(&agents, &browser, 25, "mybank.example", cx);
 }
 
-/// Every call that reads or acts on the page asks, a read included, and leaving the tab, closing
-/// it or listing tabs doesn't; list_tabs gives it no title or address (#3724).
+/// Every call that reads or acts on the page is refused, a read included, and leaving the tab,
+/// closing it or listing tabs isn't; list_tabs gives it no title or address (#3724).
 #[gpui::test]
-fn a_tab_on_a_fenced_site_it_came_to_gives_nothing_unasked(cx: &mut TestAppContext) {
+fn a_tab_on_a_fenced_site_it_came_to_gives_nothing(cx: &mut TestAppContext) {
     for (tool, arguments) in [
         ("read_page", json!({ "tab": 20 })),
         ("screenshot", json!({ "tab": 20 })),
@@ -155,16 +159,22 @@ fn a_tab_on_a_fenced_site_it_came_to_gives_nothing_unasked(cx: &mut TestAppConte
         let (agents, browser) = fenced(cx);
         arrives(&agents, &browser, 20, "https://mybank.example/", cx);
         let answer = call(&agents, "claude-code", tool, arguments, cx);
-        let question = browser.asked.borrow().clone();
-        let question = question.unwrap_or_else(|| panic!("{tool} didn't ask"));
-        assert_eq!(question.what, fence::arrival("mybank.example"), "{tool}");
+        let what = fence::arrival("mybank.example");
+        refused(
+            &agents,
+            &browser,
+            answer,
+            &what,
+            Why::Fenced,
+            "mybank.example",
+            cx,
+        );
         assert!(browser.pages.borrow().is_empty(), "{tool} asked the page");
         assert!(browser.reads.borrow().is_empty(), "{tool} read the page");
         assert!(
             browser.requests.borrow().is_empty(),
             "{tool} sent a request"
         );
-        assert!(answer.try_recv().is_err(), "{tool} answered");
     }
 
     let (agents, browser) = fenced(cx);
@@ -184,130 +194,53 @@ fn a_tab_on_a_fenced_site_it_came_to_gives_nothing_unasked(cx: &mut TestAppConte
     );
 }
 
-/// Allow Once lets the tab stay, its call going as it came, until the tab leaves the fenced site,
-/// and coming back asks again; the log has the question and the answer (#3724).
+/// An open of a fenced site is refused at once at every tier, Full access included, and taking the
+/// site off the list ends the fence at once (#3724).
 #[gpui::test]
-fn allow_once_lets_the_tab_stay_until_it_leaves(cx: &mut TestAppContext) {
+fn an_open_of_a_fenced_site_is_refused_at_every_tier(cx: &mut TestAppContext) {
     let (agents, browser) = fenced(cx);
-    arrives(&agents, &browser, 20, "https://mybank.example/", cx);
-    let (answer, question) = asks_next(&agents, &browser, 20, "mybank.example", cx);
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Always, cx)
-    });
-    let snapshot = page_done(&agents, &browser, answer, bank_tree(), cx);
-    assert!(snapshot.text.contains("Balance 1,234"), "{}", snapshot.text);
-    let grants = agents.read_with(cx, |agents, _| agents.grants("claude-code"));
-    assert!(grants.is_empty(), "the fence's answer kept {grants:?}");
-    let entries = log(&agents, "claude-code", cx);
-    for action in [fence::ASKED_ACTION, fence::CAME_ACTION, "snapshot"] {
-        let entry = (
-            action.to_string(),
-            "mybank.example".to_string(),
-            String::new(),
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    assert!(!page_done(&agents, &browser, answer, more_tree(), cx).error);
+    for tier in [Tier::Work, Tier::Look, Tier::Full] {
+        give(&agents, tier, cx);
+        let go = json!({ "tab": 20, "url": "mybank.example" });
+        let answer = call(&agents, "claude-code", "navigate", go, cx);
+        let told = refused(
+            &agents,
+            &browser,
+            answer,
+            "mybank.example",
+            Why::Fenced,
+            "mybank.example",
+            cx,
         );
-        assert!(entries.contains(&entry), "no {action} in {entries:?}");
+        assert!(
+            told.text
+                .contains("off limits to agents, whatever a task's access"),
+            "{}",
+            told.text
+        );
+        let tab = json!({ "url": "https://app.mybank.example/" });
+        let answer = call(&agents, "claude-code", "open_tab", tab, cx);
+        refused(
+            &agents,
+            &browser,
+            answer,
+            "app.mybank.example",
+            Why::Fenced,
+            "app.mybank.example",
+            cx,
+        );
     }
-
-    // A page further in, under the same entry, stays allowed.
-    arrives(
-        &agents,
-        &browser,
-        20,
-        "https://app.mybank.example/accounts",
-        cx,
-    );
-    let again = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
-    assert_eq!(
-        *browser.asked.borrow(),
-        None,
-        "the tab let stay asked again"
-    );
-    assert!(!page_done(&agents, &browser, again, bank_tree(), cx).error);
-
-    arrives(&agents, &browser, 20, "https://news.example/", cx);
-    arrives(&agents, &browser, 20, "https://mybank.example/", cx);
-    asks_next(&agents, &browser, 20, "mybank.example", cx);
-}
-
-/// Never at the fence refuses as an open's Never does: the site is refused for the agent, unasked,
-/// from then on, and the refusal says nothing of the list (#3724).
-#[gpui::test]
-fn never_at_the_fence_refuses_as_an_opens_never(cx: &mut TestAppContext) {
-    let (agents, browser) = fenced(cx);
-    arrives(&agents, &browser, 20, "https://mybank.example/", cx);
-    let (answer, question) = asks_next(&agents, &browser, 20, "mybank.example", cx);
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Never, cx)
-    });
-    let refused = answer.recv().unwrap();
-    assert!(refused.error);
-    assert!(!refused.text.contains("first"), "{}", refused.text);
-    let grants = agents.read_with(cx, |agents, _| agents.grants("claude-code"));
-    assert_eq!(grants, [("mybank.example".into(), false)]);
-
-    let read = call(
-        &agents,
-        "claude-code",
-        "read_page",
-        json!({ "tab": 20 }),
-        cx,
-    );
-    assert_eq!(*browser.asked.borrow(), None, "a site answered Never asked");
-    assert!(read.try_recv().expect("it wasn't refused").error);
-    assert!(browser.reads.borrow().is_empty(), "the page was read");
-}
-
-/// An open of a fenced site asks every time, an Always Allow given there before included, its
-/// card keeping no answer for good; once allowed the tab stays, and taking the site off the list
-/// ends the fence at once (#3724).
-#[gpui::test]
-fn an_open_of_a_fenced_site_asks_every_time(cx: &mut TestAppContext) {
-    let (agents, browser) = fenced(cx);
-    let go = json!({ "tab": 20, "url": "mybank.example" });
-    let answer = call(&agents, "claude-code", "navigate", go.clone(), cx);
-    let question = browser.asked.borrow().clone().expect("the open didn't ask");
-    assert_eq!(question.why, fence::why("mybank.example"));
-    assert!(question.fenced);
+    assert!(browser.navigated.borrow().is_empty(), "it went");
     assert!(
-        browser.navigated.borrow().is_empty(),
-        "it went before the answer"
+        browser.tabs.borrow().iter().all(|tab| tab.0 != 30),
+        "it opened"
     );
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Always, cx)
-    });
-    arrives(&agents, &browser, 20, "https://mybank.example/", cx);
-    let opened = page_done(&agents, &browser, answer, bank_tree(), cx);
-    assert!(!opened.error && !opened.text.contains(&fence::withheld(20, "mybank.example")));
-    let read = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
-    assert_eq!(*browser.asked.borrow(), None, "the tab it opened asked");
-    assert!(!page_done(&agents, &browser, read, bank_tree(), cx).error);
-
-    let _again = call(&agents, "claude-code", "navigate", go, cx);
-    assert!(
-        browser.asked.borrow().is_some(),
-        "the second open didn't ask"
-    );
-    let question = browser.asked.borrow().clone().unwrap();
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Once, cx)
-    });
-
-    let tab = json!({ "url": "https://app.mybank.example/" });
-    let opening = call(&agents, "claude-code", "open_tab", tab, cx);
-    let question = browser.asked.borrow().clone().expect("open_tab didn't ask");
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Once, cx)
-    });
-    assert!(!page_done(&agents, &browser, opening, bank_tree(), cx).error);
-    let read = call(&agents, "claude-code", "snapshot", json!({ "tab": 30 }), cx);
     assert_eq!(
-        *browser.asked.borrow(),
-        None,
-        "the tab open_tab opened asked"
+        log(&agents, "claude-code", cx)[0].2,
+        "mybank.example is on your Off limits list."
     );
-    assert!(!page_done(&agents, &browser, read, bank_tree(), cx).error);
-    let grants = agents.read_with(cx, |agents, _| agents.grants("claude-code"));
-    assert!(grants.is_empty(), "an open kept {grants:?}");
 
     agents.update(cx, |agents, cx| agents.unfence("mybank.example", cx));
     (browser.tabs.borrow_mut()).push((25, 2, "MyBank", "https://mybank.example/"));
@@ -315,79 +248,6 @@ fn an_open_of_a_fenced_site_asks_every_time(cx: &mut TestAppContext) {
     assert_eq!(*browser.asked.borrow(), None, "a site off the list asked");
     assert!(!page_done(&agents, &browser, read, bank_tree(), cx).error);
 }
-
-/// On a fenced site the tab may stay on, each click, key or form the agent sends asks every time,
-/// whatever it answered on the site before, a payment's question staying a payment's; its
-/// requests ask too, reads included (#3724).
-#[gpui::test]
-fn each_thing_sent_on_a_fenced_site_asks(cx: &mut TestAppContext) {
-    // Not a bank's, whose money words would ask as payments.
-    let (agents, browser, _) = connected(cx);
-    // Allowed for good before the site was fenced.
-    arrives(&agents, &browser, 20, "https://pension.example/", cx);
-    let answer = click_on(&agents, &browser, post_tree(), "Send", cx);
-    let question = browser.asked.borrow().clone().expect("the Send didn't ask");
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Always, cx)
-    });
-    assert!(!page_done(&agents, &browser, answer, post_tree(), cx).error);
-    let grants = agents.read_with(cx, |agents, _| agents.grants("claude-code"));
-    assert_eq!(grants, [("pension.example".into(), true)]);
-    agents.update(cx, |agents, cx| _ = agents.fence("pension.example", cx));
-    let (answer, question) = asks_next(&agents, &browser, 20, "pension.example", cx);
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Once, cx)
-    });
-    page_done(&agents, &browser, answer, post_tree(), cx);
-
-    for name in ["Send", "Send"] {
-        let answer = click_on(&agents, &browser, post_tree(), name, cx);
-        let question = (browser.asked.borrow().clone()).expect("a click on the fence didn't ask");
-        assert_eq!(question.why, fence::why("pension.example"));
-        assert!(question.fenced);
-        agents.update(cx, |agents, cx| {
-            agents.answer(question.id, Answer::Once, cx)
-        });
-        assert!(!page_done(&agents, &browser, answer, post_tree(), cx).error);
-    }
-    let answer = click_on(&agents, &browser, shop_tree(), "Place order", cx);
-    let question = browser
-        .asked
-        .borrow()
-        .clone()
-        .expect("the payment didn't ask");
-    assert_eq!(question.why, "It looks like a payment or an order.");
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Once, cx)
-    });
-    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
-    let scroll = json!({ "tab": 20, "direction": "down" });
-    let answer = call(&agents, "claude-code", "scroll", scroll, cx);
-    assert_eq!(*browser.asked.borrow(), None, "a scroll asked");
-    assert!(!page_done(&agents, &browser, answer, post_tree(), cx).error);
-
-    let get = json!({ "tab": 20, "requests": [{ "method": "GET", "path": "/api/balance" }] });
-    let answer = call(&agents, "claude-code", "request", get, cx);
-    let question = browser
-        .asked
-        .borrow()
-        .clone()
-        .expect("the read request didn't ask");
-    assert_eq!(question.what, fence::requests(1, "pension.example"));
-    assert_eq!(question.why, fence::why("pension.example"));
-    assert!(question.each_time && !question.fenced);
-    assert!(browser.requests.borrow().is_empty(), "it was sent unasked");
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Once, cx)
-    });
-    assert_eq!(
-        browser.requests.borrow().len(),
-        1,
-        "the allowed request wasn't sent"
-    );
-    drop(answer);
-}
-
 /// A run whose step takes the tab to a fenced site stops there, saying nothing of the page
 /// (#3724).
 #[gpui::test]
@@ -605,21 +465,11 @@ fn every_other_answer_about_a_tab_that_came_to_a_fenced_site_is_without_its_page
         }
     }
 
-    // Sorting by site: the tab of the site the agent opened stays where it is, not beside it.
+    // Sorting by site: a tab on the fenced site stays where it is, not beside the other one there.
     let (agents, browser) = fenced(cx);
     (browser.tabs.borrow_mut()).push((21, 2, "Docs", "https://docs.example.com/"));
-    let opening = call(
-        &agents,
-        "claude-code",
-        "open_tab",
-        json!({ "url": "https://app.mybank.example/" }),
-        cx,
-    );
-    let question = browser.asked.borrow().clone().expect("open_tab didn't ask");
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Once, cx)
-    });
-    assert!(!page_done(&agents, &browser, opening, bank_tree(), cx).error);
+    (browser.tabs.borrow_mut()).push((30, 2, "MyBank", "https://app.mybank.example/"));
+    arrives(&agents, &browser, 30, "https://app.mybank.example/", cx);
     arrives(&agents, &browser, 20, "https://mybank.example/account", cx);
     let sorted = call(&agents, "claude-code", "sort_tabs_by_site", json!({}), cx);
     assert_eq!(
@@ -633,9 +483,8 @@ fn every_other_answer_about_a_tab_that_came_to_a_fenced_site_is_without_its_page
     assert_eq!(order, [20, 21, 30]);
 }
 
-/// A download from a fenced site the tab came to answers the agent's call without its name or how
-/// it ends, while the user is asked as for any download; one the user allowed opening keeps its
-/// name (#3724).
+/// A download from a fenced site the tab came to is refused at every tier, and answers the agent's
+/// call at once without its name (#3724).
 #[gpui::test]
 fn a_download_from_a_fenced_site_gives_the_agent_no_name(cx: &mut TestAppContext) {
     let download = |request, id| Download {
@@ -648,164 +497,28 @@ fn a_download_from_a_fenced_site_gives_the_agent_no_name(cx: &mut TestAppContext
         tab_empty: false,
     };
     let (agents, browser) = fenced(cx);
-    let answer = click_on(&agents, &browser, more_tree(), "Show more", cx);
-    let request = browser.pages.borrow().last().unwrap().1;
-    arrives(&agents, &browser, 20, "https://mybank.example/", cx);
-    agents.update(cx, |agents, cx| {
-        agents.download_started(download(request, 900), cx)
-    });
-    // At once, while the user is asked: it waits on nothing of theirs.
-    let answer = answer
-        .try_recv()
-        .expect("the download wasn't answered at once");
-    assert_eq!(answer, ToolResult::text(fence::download("mybank.example")));
-    let question = browser
-        .asked
-        .borrow()
-        .clone()
-        .expect("the download didn't ask");
-    assert_eq!(
-        question.what,
-        "download statement-1234.pdf from mybank.example"
-    );
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Once, cx)
-    });
-    let done = DownloadEnd::Done {
-        name: "statement-1234.pdf".into(),
-        bytes: 48_213,
-        path: "/Users/someone/Downloads/statement-1234.pdf".into(),
-    };
-    agents.update(cx, |agents, cx| agents.download_ended(900, done, cx));
-
-    // An open of it the user allowed is their yes.
-    let (agents, browser) = fenced(cx);
-    let go = json!({ "tab": 20, "url": "https://mybank.example/statement-1234.pdf" });
-    let answer = call(&agents, "claude-code", "navigate", go, cx);
-    let question = browser.asked.borrow().clone().expect("the open didn't ask");
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Once, cx)
-    });
-    let request = browser.pages.borrow().last().unwrap().1;
-    agents.update(cx, |agents, cx| {
-        agents.download_started(download(request, 901), cx)
-    });
-    let question = browser
-        .asked
-        .borrow()
-        .clone()
-        .expect("the download didn't ask");
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Once, cx)
-    });
-    let done = DownloadEnd::Done {
-        name: "statement-1234.pdf".into(),
-        bytes: 48_213,
-        path: "/Users/someone/Downloads/statement-1234.pdf".into(),
-    };
-    agents.update(cx, |agents, cx| agents.download_ended(901, done, cx));
-    assert!(
-        answer
-            .recv()
-            .unwrap()
-            .text
-            .starts_with("Downloaded statement-1234.pdf")
-    );
-    // The open didn't take the tab there, so a later way there asks.
-    arrives(&agents, &browser, 20, "https://mybank.example/", cx);
-    asks_next(&agents, &browser, 20, "mybank.example", cx);
-}
-
-/// A navigate the user allowed that fails takes their yes back, so the tab coming there later by a
-/// link asks; a tab let stay on the site before keeps that (#3724).
-#[gpui::test]
-fn a_failed_open_takes_its_yes_back(cx: &mut TestAppContext) {
-    let (agents, browser) = fenced(cx);
-    let go = |url: &str| json!({ "tab": 20, "url": url });
-    *browser.cant_go.borrow_mut() = true;
-    let answer = call(&agents, "claude-code", "navigate", go("mybank.example"), cx);
-    let question = browser.asked.borrow().clone().expect("the open didn't ask");
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Once, cx)
-    });
-    assert_eq!(
-        answer.recv().unwrap(),
-        ToolResult::error("The tab couldn't go there.")
-    );
-    arrives(&agents, &browser, 20, "https://mybank.example/", cx);
-    let (answer, question) = asks_next(&agents, &browser, 20, "mybank.example", cx);
-
-    // Let stay, then an open further in that fails: the tab stays let stay where it is.
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Once, cx)
-    });
-    page_done(&agents, &browser, answer, bank_tree(), cx);
-    let answer = call(
-        &agents,
-        "claude-code",
-        "navigate",
-        go("app.mybank.example"),
-        cx,
-    );
-    let question = browser.asked.borrow().clone().expect("the open didn't ask");
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Once, cx)
-    });
-    assert!(answer.recv().unwrap().error);
-    let read = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
-    assert_eq!(*browser.asked.borrow(), None, "the tab let stay asked");
-    assert!(!page_done(&agents, &browser, read, bank_tree(), cx).error);
-}
-
-/// The yes ends once the tab is off the entry by any address the core reports, going back or
-/// forward included, a page the back-forward cache restores being one that loads nothing; and an
-/// allowed open that went elsewhere, by a redirect, ends it too (#3724).
-#[gpui::test]
-fn back_and_forward_onto_a_fenced_site_ask_again(cx: &mut TestAppContext) {
-    let (agents, browser) = fenced(cx);
-    let go = json!({ "tab": 20, "url": "mybank.example" });
-    let answer = call(&agents, "claude-code", "navigate", go.clone(), cx);
-    let question = browser.asked.borrow().clone().expect("the open didn't ask");
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Once, cx)
-    });
-    arrives(&agents, &browser, 20, "https://mybank.example/", cx);
-    assert!(!page_done(&agents, &browser, answer, bank_tree(), cx).error);
-
-    // Back to where it was, and forward again, each restored with no load.
-    for (way, url) in [
-        ("back", "https://www.example.com/"),
-        ("forward", "https://mybank.example/"),
-    ] {
-        let moved = call(
-            &agents,
-            "claude-code",
-            "navigate",
-            json!({ "tab": 20, "url": way }),
-            cx,
+    for (tier, id) in [(Tier::Work, 900), (Tier::Full, 901)] {
+        let answer = click_on(&agents, &browser, more_tree(), "Show more", cx);
+        give(&agents, tier, cx);
+        let request = browser.pages.borrow().last().unwrap().1;
+        arrives(&agents, &browser, 20, "https://mybank.example/", cx);
+        agents.update(cx, |agents, cx| {
+            agents.download_started(download(request, id), cx)
+        });
+        let answer = answer
+            .try_recv()
+            .expect("the download wasn't answered at once");
+        assert_eq!(answer, ToolResult::text(fence::download("mybank.example")));
+        assert_eq!(*browser.asked.borrow(), None, "the download asked");
+        assert_eq!(
+            browser.downloads.borrow().last(),
+            Some(&(id, false)),
+            "{tier:?}"
         );
-        assert_eq!(*browser.asked.borrow(), None, "{way} asked");
-        arrives(&agents, &browser, 20, url, cx);
-        let moved = page_done(&agents, &browser, moved, bank_tree(), cx);
-        if way == "forward" {
-            withheld(&moved, 20, "mybank.example");
-        }
+        // The tab leaves, so the next round's click is on a page off the list.
+        arrives(&agents, &browser, 20, "https://shop.example/", cx);
     }
-    asks_next(&agents, &browser, 20, "mybank.example", cx);
-
-    // An allowed open whose page redirected off the site, then a link back onto it.
-    let (agents, browser) = fenced(cx);
-    let answer = call(&agents, "claude-code", "navigate", go, cx);
-    let question = browser.asked.borrow().clone().expect("the open didn't ask");
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Once, cx)
-    });
-    arrives(&agents, &browser, 20, "https://other.example/", cx);
-    page_done(&agents, &browser, answer, more_tree(), cx);
-    arrives(&agents, &browser, 20, "https://mybank.example/", cx);
-    asks_next(&agents, &browser, 20, "mybank.example", cx);
 }
-
 /// A call refused on a tab that came to a subdomain of a fenced site while its page shows a dialog
 /// tells the agent nothing was done, and the log the user reads names the entry of their list the
 /// site matched, not the tab's host (#3724).
@@ -821,18 +534,15 @@ fn a_refusal_at_the_fence_tells_the_agent_and_the_log_each_in_its_words(cx: &mut
         assert_eq!(
             answer.recv().unwrap(),
             ToolResult::failed(
-                tools::Kind::NeedsOk,
-                "Nothing was done. Tab 20 is now on login.mybank.example, where the user wants to \
-                 be asked first. Your next call on this tab will ask them."
+                tools::Kind::Outside,
+                "Nothing was done. Tab 20 is now on login.mybank.example, which is off limits to \
+                 agents, so nothing of its page is shown and calls on it are refused."
             ),
             "{tool}"
         );
         let logged = (log(&agents, "claude-code", cx).into_iter())
             .find(|(action, ..)| action == tool)
             .unwrap_or_else(|| panic!("{tool} wasn't logged"));
-        assert_eq!(
-            logged.2, "mybank.example is on Always ask first; you'll be asked next.",
-            "{tool}"
-        );
+        assert_eq!(logged.2, "mybank.example is on Off limits.", "{tool}");
     }
 }
