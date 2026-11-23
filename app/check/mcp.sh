@@ -4056,6 +4056,7 @@ if [ "$driven" = 1 ]; then
       # bridge's here. sway gives it the keyboard.
       cargo build -q --release --manifest-path check/drag/Cargo.toml --target-dir target ||
         fail "check/drag didn't build"
+      : > "$out/other-window.log" # an earlier run's window stays named in it until emptied (#4040)
       target/release/drag 1280x800 window < "$out/other-in" > "$out/other-window.log" 2>&1 &
       other=$!
       exec 7> "$out/other-in"
@@ -4065,6 +4066,7 @@ if [ "$driven" = 1 ]; then
       swaymsg '[app_id=ilo-drag] focus' > /dev/null ||
         fail "sway didn't give check/drag's window the keyboard"
     else
+      : > "$out/other-window.log" # an earlier run's window stays named in it until emptied (#4040)
       python3 -I check/other-window.py < "$out/other-in" > "$out/other-window.log" 2>&1 &
       other=$!
       exec 7> "$out/other-in"
