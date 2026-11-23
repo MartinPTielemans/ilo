@@ -701,6 +701,8 @@ impl Shell {
         // Once the field is left, from where the focus has gone.
         if to_page {
             self.page_took_keyboard(window, cx);
+        } else {
+            self.card_keys_window_left("app", cx);
         }
     }
 
