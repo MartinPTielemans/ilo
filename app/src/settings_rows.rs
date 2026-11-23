@@ -512,16 +512,15 @@ pub fn text(look: &Look, name: impl Into<SharedString>, line: Option<SharedStrin
             .text_color(look.detail)
             .child(line)
     });
+    div().flex_1().min_w_0().child(name_of(name)).children(line)
+}
+
+/// A row's name, at medium, on one line.
+fn name_of(name: impl Into<SharedString>) -> gpui::Div {
     div()
-        .flex_1()
-        .min_w_0()
-        .child(
-            div()
-                .truncate()
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .child(name.into()),
-        )
-        .children(line)
+        .truncate()
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .child(name.into())
 }
 
 /// A row's text whose line sets what the user or an agent types in `mono`, the face a terminal
@@ -555,7 +554,7 @@ pub fn command_text(
     div()
         .flex_1()
         .min_w_0()
-        .child(div().truncate().child(name.into()))
+        .child(name_of(name))
         .child(small().child(gpui::StyledText::new(line.clone()).with_runs(runs)))
 }
 
