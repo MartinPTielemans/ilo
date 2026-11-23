@@ -12,6 +12,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/host.h"
 #include "browser_core/tab.h"
+#include "browser_core/tile.h"
 #include "browser_core/window.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
@@ -133,6 +134,11 @@ PageMenu::~PageMenu() {
 std::unique_ptr<RenderViewContextMenuBase> PageMenu::Show(
     content::WebContents* contents,
     std::unique_ptr<RenderViewContextMenuBase> menu) {
+  // A tile's page opens none: Chrome's would open over the user's window, at the tile, and take
+  // the pointer and keys until it closed.
+  if (Tab::FromWebContents(contents) && tiles::Holds(Tab::IdOf(contents))) {
+    return nullptr;
+  }
   Window* window = Tab::FromWebContents(contents) ? Window::Showing(Tab::IdOf(contents)) : nullptr;
   content::RenderWidgetHostView* view = contents->GetTopLevelRenderWidgetHostView();
   if (!window || !window->widget() || !view || !Host().tab_page_menu) {

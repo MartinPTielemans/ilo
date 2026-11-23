@@ -2172,6 +2172,15 @@ std::optional<std::pair<gfx::Rect, gfx::Rect>> DevToolsFrames(views::Widget* wid
   return std::nullopt;
 }
 
+bool CanTile() {
+  // One page a window here: the app draws an agent's tab's picture instead.
+  return false;
+}
+
+void ShowTile(content::WebContents*, void*, const gfx::Rect&, double) {}
+
+void EndTile(content::WebContents*) {}
+
 void StretchOnResize(content::RenderWidgetHostView*, bool) {
   // shortcut: no stretch on Linux; the page shows its last frame unscaled until it redraws.
 }

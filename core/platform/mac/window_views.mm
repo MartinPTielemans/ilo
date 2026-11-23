@@ -14,8 +14,10 @@
 #include "base/time/time.h"
 #import "components/remote_cocoa/app_shim/bridged_content_view.h"
 #include "content/public/browser/frame_shown.h"
+#include "content/public/browser/page_tile_mac.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/stretch_content_on_resize_mac.h"
+#include "content/public/browser/web_contents.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/widget/widget.h"
@@ -215,6 +217,21 @@
     }
   }
   [CATransaction commit];
+}
+@end
+
+// A tile's holder (#4115): clips the page to the tile's rounded frame, and takes no pointer, so a
+// click on the tile is the app's view's under it.
+@interface BrowserCoreTileView : NSView
+@end
+
+@implementation BrowserCoreTileView
+- (BOOL)isFlipped {
+  return YES;
+}
+
+- (NSView*)hitTest:(NSPoint)point {
+  return nil;
 }
 @end
 
@@ -578,6 +595,98 @@ void ShowPageIn(views::Widget*,
 
 // The page is in the app's view, which scales and fades it with the card.
 void DrawPageIn(views::Widget*, gfx::NativeView, float, const gfx::PointF&, float) {}
+
+namespace {
+
+// Scales |page|'s layer from the page's own size to |tile|'s width, its top-left at the tile's, so
+// the page is never laid out again for it. As scalePages does, where the transform puts it is
+// measured in the tile's layer, since AppKit keeps the layer's anchor point and which way up it is.
+void ScaleIntoTile(NSView* tile, NSView* page) {
+  CALayer* layer = page.layer;
+  CALayer* space = tile.layer;
+  if (!layer || !space) {
+    return;
+  }
+  auto in_tile = [space](CALayer* moved) { return [moved convertRect:moved.bounds toLayer:space]; };
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  layer.transform = CATransform3DIdentity;
+  // At the tile's top-left, which is the tile layer's least y if it's the right way up.
+  const CGRect own = in_tile(layer);
+  const bool top_is_min = std::abs(CGRectGetMinY(own)) < 0.5;
+  auto top = [top_is_min](CGRect rect) {
+    return top_is_min ? CGRectGetMinY(rect) : CGRectGetMaxY(rect);
+  };
+  const double scale = CGRectGetWidth(own) > 0 ? NSWidth(tile.bounds) / CGRectGetWidth(own) : 1;
+  const CATransform3D scaled = CATransform3DMakeScale(scale, scale, 1);
+  layer.transform = scaled;
+  const CGRect at = in_tile(layer);
+  const double dx = CGRectGetMinX(own) - CGRectGetMinX(at);
+  const double dy = top(own) - top(at);
+  layer.transform = CATransform3DConcat(scaled, CATransform3DMakeTranslation(dx, dy, 0));
+  // A layer upside down to the tile's moves the other way.
+  if (std::abs(top(in_tile(layer)) - top(own)) > 0.5) {
+    layer.transform = CATransform3DConcat(scaled, CATransform3DMakeTranslation(dx, -dy, 0));
+  }
+  [CATransaction commit];
+}
+
+}  // namespace
+
+bool CanTile() {
+  return true;
+}
+
+void ShowTile(content::WebContents* contents,
+              void* view,
+              const gfx::Rect& frame,
+              double corner_radius) {
+  NSView* holder = (__bridge NSView*)view;
+  NSView* page_view = contents->GetNativeView().GetNativeNSView();
+  if (!holder || !page_view) {
+    return;
+  }
+  // Before the page is in the tile's window, which it's never told it moved to.
+  content::SetPageTile(contents, true);
+  BrowserCoreTileView* tile = base::apple::ObjCCast<BrowserCoreTileView>(page_view.superview);
+  const bool placed = !tile || tile.superview != holder;
+  if (!tile) {
+    tile = [[BrowserCoreTileView alloc] initWithFrame:NSZeroRect];
+    tile.wantsLayer = YES;
+    tile.autoresizingMask = NSViewNotSizable;
+    Unhide(page_view, /*hidden=*/false);
+    [page_view setFrameOrigin:NSZeroPoint];
+    [tile addSubview:page_view];
+  }
+  if (tile.superview != holder) {
+    [holder addSubview:tile];
+  }
+  RoundCorners(tile, corner_radius, kAllCorners);
+  NSRect rect = frame.ToCGRect();
+  if (!holder.isFlipped) {
+    rect.origin.y = NSHeight(holder.bounds) - NSMaxY(rect);
+  }
+  // The app calls again for each frame of a tile's motion, which mostly only moves it.
+  const bool resized = !NSEqualSizes(tile.frame.size, rect.size);
+  tile.frame = rect;
+  if (placed || resized) {
+    ScaleIntoTile(tile, page_view);
+  }
+  if (placed) {
+    UpdateOcclusion(holder.window);
+  }
+}
+
+void EndTile(content::WebContents* contents) {
+  NSView* page_view = contents->GetNativeView().GetNativeNSView();
+  if (BrowserCoreTileView* tile = base::apple::ObjCCast<BrowserCoreTileView>(page_view.superview)) {
+    [page_view removeFromSuperview];
+    [tile removeFromSuperview];
+    page_view.layer.transform = CATransform3DIdentity;
+  }
+  // Once it's out of the tile's window, so the page hears of the one it goes to next.
+  content::SetPageTile(contents, false);
+}
 
 bool FocusSettledOnActivation() {
   // AppKit can be part way through moving the keyboard, as when a committing page hides the view
