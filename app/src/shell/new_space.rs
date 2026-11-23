@@ -4,7 +4,7 @@
 //! Space, as New Space… does (Arc 1.170 on video; docs/ux-spec.md › Spaces).
 
 use std::f32::consts::PI;
-use web_time::Instant;
+use std::time::Instant;
 
 use gpui::{
     Bounds, BoxShadow, Context, Hsla, PathBuilder, Window,

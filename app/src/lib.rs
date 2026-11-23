@@ -21,7 +21,6 @@ macro_rules! log {
 /// makes one for each piece, so a line Chromium logs at the same time can't land inside it, where
 /// the checks wouldn't find it. tools/check-lints.py holds the lines that may use it.
 #[macro_export]
-#[cfg(not(target_family = "wasm"))]
 macro_rules! log_always {
     ($($arg:tt)*) => {{
         use std::io::Write as _;
@@ -29,24 +28,13 @@ macro_rules! log_always {
     }};
 }
 
-/// The web has no stderr; the page's console is where its lines go.
-#[macro_export]
-#[cfg(target_family = "wasm")]
-macro_rules! log_always {
-    ($($arg:tt)*) => {
-        web_sys::console::log_1(&format!($($arg)*).into())
-    };
-}
-
 static CHECKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 /// Whether `log!` writes its lines: when the checks run the app, under their driver (BROWSER_DRIVE)
-/// or check.sh (BROWSER_CHECK), read once. The web demo, which has no environment, writes them.
+/// or check.sh (BROWSER_CHECK), read once.
 pub fn checked() -> bool {
     *CHECKED.get_or_init(|| {
-        cfg!(target_family = "wasm")
-            || std::env::var_os("BROWSER_DRIVE").is_some()
-            || std::env::var_os("BROWSER_CHECK").is_some()
+        std::env::var_os("BROWSER_DRIVE").is_some() || std::env::var_os("BROWSER_CHECK").is_some()
     })
 }
 
@@ -101,14 +89,6 @@ pub fn uptime_ms() -> f64 {
     };
     unsafe { clock_gettime(CLOCK_MONOTONIC, &mut now) };
     now.tv_sec as f64 * 1e3 + now.tv_nsec as f64 / 1e6
-}
-
-/// Milliseconds on the page's clock, the site demo's, which has no engine to agree with.
-#[cfg(target_family = "wasm")]
-pub fn uptime_ms() -> f64 {
-    web_sys::window()
-        .and_then(|window| window.performance())
-        .map_or(0., |clock| clock.now())
 }
 
 /// The core's API, generated from core/public/browser_core.h. Here, rather than in the browser's

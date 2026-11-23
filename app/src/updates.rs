@@ -7,7 +7,7 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
-use web_time::Instant;
+use std::time::Instant;
 
 use gpui::{
     App, Bounds, Context, Global, Pixels, SharedString, Subscription, Window, canvas, div,

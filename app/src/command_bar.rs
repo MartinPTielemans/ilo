@@ -7,14 +7,14 @@
 //! Arc's. A click on the sidebar's URL field opens a narrower panel over the field,
 //! as Arc's does. What it asks of the core and of its window goes through `Host`.
 
+use std::time::Instant;
 use std::{cell::Cell, collections::HashMap, rc::Rc, sync::Arc};
-use web_time::Instant;
 
 use gpui::{
-    AnyElement, AnyView, AnyWindowHandle, App, Bounds, Context, Entity, FocusHandle, Focusable,
-    FontWeight, Global, HoverListenerMode, Hsla, Image, KeyBinding, Pixels, Rgba, ScrollHandle,
-    SharedString, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
-    WindowKind, WindowOptions, actions, div, img, point, prelude::*, px, size, svg,
+    AnyElement, AnyView, AnyWindowHandle, App, Bounds, Context, Entity, Focusable, FontWeight,
+    Global, HoverListenerMode, Hsla, Image, KeyBinding, Pixels, Rgba, ScrollHandle, SharedString,
+    TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
+    WindowOptions, actions, div, img, point, prelude::*, px, size, svg,
 };
 use gpui::{Role, Size, accesskit::Live, canvas};
 
@@ -594,9 +594,8 @@ pub trait Host {
     fn restore_archived(&self, archived: u64, cx: &mut App) -> bool;
     /// Now, in milliseconds since 1970, which a row counts the days since its page's visit from.
     fn now(&self) -> f64 {
-        // web_time's: std's panics in the web preview.
-        web_time::SystemTime::now()
-            .duration_since(web_time::UNIX_EPOCH)
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
             .map_or(0., |since| since.as_secs_f64() * 1000.)
     }
 }
@@ -724,7 +723,7 @@ pub struct CommandBar {
     open: Cell<bool>,
 }
 
-/// The bar, and the window it draws in: its own, or on the web the browser's one window.
+/// The bar, and the window of its own it draws in.
 #[derive(Clone)]
 struct CommandBarWindow {
     window: AnyWindowHandle,
@@ -789,7 +788,7 @@ pub fn open_at(
         ..Default::default()
     };
     let window = cx.open_window(options, |window, cx| {
-        let bar = new_bar(host, true, window, cx);
+        let bar = new_bar(host, window, cx);
         window.focus(&bar.read(cx).input.focus_handle(cx), cx);
         bar
     });
@@ -807,25 +806,6 @@ pub fn open_at(
             None
         }
     }
-}
-
-/// Makes the command bar in `window`, the browser's, for a host that draws it there over the shell:
-/// the web's, which has one window. `Host::show` puts it on screen.
-pub fn open_in(host: Rc<dyn Host>, window: &mut Window, cx: &mut App) -> Entity<CommandBar> {
-    bind_keys(cx);
-    let bar = new_bar(host, false, window, cx);
-    let window = window.window_handle();
-    cx.set_global(CommandBarWindow {
-        window,
-        bar: bar.clone(),
-    });
-    bar
-}
-
-/// The bar's field, which a host that draws the bar in the browser's window focuses to show it.
-pub fn input_focus(cx: &App) -> Option<FocusHandle> {
-    let bar = cx.try_global::<CommandBarWindow>()?;
-    Some(bar.bar.read(cx).input.focus_handle(cx))
 }
 
 fn bind_keys(cx: &mut App) {
@@ -862,13 +842,8 @@ fn bind_keys(cx: &mut App) {
     ]);
 }
 
-/// The bar, in its own window if `own_window`, else in the browser's.
-fn new_bar(
-    host: Rc<dyn Host>,
-    own_window: bool,
-    window: &mut Window,
-    cx: &mut App,
-) -> Entity<CommandBar> {
+/// The bar, in its own window.
+fn new_bar(host: Rc<dyn Host>, window: &mut Window, cx: &mut App) -> Entity<CommandBar> {
     let input = cx.new(|cx| {
         TextInput::new(PLACEHOLDER_TEXT, cx)
             .placeholder_color(palette::current(cx).on_overlay(PLACEHOLDER))
@@ -882,16 +857,14 @@ fn new_bar(
         })
         .detach();
         // In a window of its own, nothing else there takes the field's focus.
-        if own_window {
-            cx.observe_window_activation(window, |bar: &mut CommandBar, window, cx| {
-                bar.activation_changed(window, cx)
-            })
-            .detach();
-            text_input::on_leave(&input.focus_handle(cx), window, cx, |bar, window, cx| {
-                bar.keep_focus(window, cx)
-            })
-            .detach();
-        }
+        cx.observe_window_activation(window, |bar: &mut CommandBar, window, cx| {
+            bar.activation_changed(window, cx)
+        })
+        .detach();
+        text_input::on_leave(&input.focus_handle(cx), window, cx, |bar, window, cx| {
+            bar.keep_focus(window, cx)
+        })
+        .detach();
         CommandBar {
             host,
             input,
