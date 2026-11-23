@@ -2540,6 +2540,38 @@ reply-gap = 16.0
 # the window's material under them is the system's, so no fade's colour can match it.
 lines-below = 16.0
 
+[shell.conversation.ilo]
+# Ours (#4086, no asks; the owner's dev build tunes these): what ilo itself says in a task's
+# conversation, drawn as the trace's lines are, flat and unboxed. An ilo line is the trace's line
+# with ilo's mark before its words, both at `ink` of the full ink; what it says more is under its
+# words, and its buttons, the conversation's page chips, under that, with a note under a button
+# that needs one. A name it takes from a page, the button it stopped at or a site, is cut to
+# `quoted-chars` and drawn in the title's ink, apart from ilo's words. A refusal repeated is one
+# line, its count at its end in the trace's note ink.
+glyph = 13.0
+mark = 13.0
+mark-gap = 5.0
+ink = 0.8
+quoted-chars = 40.0
+text-top = 1.0
+text-line = 17.0
+buttons-top = 9.0
+buttons-gap = 6.0
+note-top = 8.0
+note-ink = 0.6
+below = 12.0
+# A button that widens what the agent may do takes no press for this long, in seconds, after its
+# line comes or moves under the pointer, as Chromium's permission prompts do: an agent decides when
+# such a line comes, and the user's press may have been meant for what was there before.
+arm = 0.5
+# The live line is the trace's step under way, on the page the task stands on, with Take over at
+# the column's end.
+# The composer's row under the reply field: the task's access on a chip, which opens its menu, and
+# Stop at the row's end.
+composer-top = 6.0
+composer-chevron = 10.0
+composer-chevron-gap = 4.0
+
 [shell.conversation.motion]
 # Ours, in seconds on the task's ease ([shell.task.motion], whose roll, chips and crossfade it
 # shares): only what changes while the conversation shows moves. What the user sent goes from the

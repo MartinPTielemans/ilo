@@ -30,6 +30,7 @@ pub mod saved_read;
 pub mod scripts;
 mod server;
 pub mod task;
+pub mod tier;
 pub mod tools;
 
 pub use server::address;

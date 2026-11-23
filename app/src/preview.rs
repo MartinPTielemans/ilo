@@ -12,9 +12,11 @@ use std::{
 };
 
 use browser::account::{self, Account};
+use browser::agents::task::ilo::{IloKind, IloLine, SignedInWith, Why};
 use browser::agents::task::{
     Card as TaskCard, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep,
 };
+use browser::agents::tier::Tier;
 use browser::boost_editor;
 use browser::boost_style::{self, Case, Face, Style};
 use browser::command_bar::{self, Suggestion};
@@ -2654,7 +2656,7 @@ fn task_conversation(agent: SharedString) -> Conversation {
         TraceItem::Step(step(3, click, "Clicked “Accept”", "", false, false)),
         TraceItem::Step(step(4, click, "Clicking “Tickets”", "", true, false)),
     ];
-    Conversation {
+    let mut talk = Conversation {
         agent,
         name: "Claude".into(),
         title: title.into(),
@@ -2666,7 +2668,7 @@ fn task_conversation(agent: SharedString) -> Conversation {
             key: 0,
             running: true,
             took: None,
-            items,
+            items: items.clone(),
         })],
         tabs: vec![
             (FIRST_TASK + 200, "tickets.example".into()),
@@ -2679,7 +2681,104 @@ fn task_conversation(agent: SharedString) -> Conversation {
         open: None,
         answers: Vec::new(),
         writing: false,
-    }
+        tier: Default::default(),
+    };
+    bench_task(&mut talk, items);
+    talk
+}
+
+/// PREVIEW_TASK=<state> (#4095's bench) shows the working task's conversation beside its page in
+/// one of the states ilo's own lines are made for, from made-up data: working, refused,
+/// off-limits, yours, tab-back, signed-in or raised.
+fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
+    let Ok(state) = std::env::var("PREVIEW_TASK") else {
+        return;
+    };
+    let tab = FIRST_TASK + 200;
+    let done = |key, items: &[TraceItem]| {
+        Line::Trace(Trace {
+            key,
+            running: false,
+            took: Some(40),
+            items: items.to_vec(),
+        })
+    };
+    let working = |key: usize, title: &str| {
+        Line::Trace(Trace {
+            key,
+            running: true,
+            took: None,
+            items: vec![TraceItem::Step(TraceStep {
+                key,
+                glyph: "icons/mouse-pointer-2.svg",
+                title: title.to_string().into(),
+                description: "".into(),
+                running: true,
+                failed: false,
+                opens: Opens::Nothing,
+            })],
+        })
+    };
+    let ilo = |key, kind, settled| Line::Ilo(IloLine { key, kind, settled });
+    let line = |key, kind| ilo(key, kind, false);
+    let before = &items[..items.len() - 1];
+    let stopped = |why, at: &str, count| IloKind::Stopped {
+        tab,
+        at: at.to_string().into(),
+        why,
+        tier: Tier::Work,
+        count,
+    };
+    talk.progress = "".into();
+    talk.lines = match state.as_str() {
+        "refused" => vec![
+            done(0, before),
+            Line::Said("Two seats in row 12 are in the basket. Placing the order is the last step.".into()),
+            line(100, stopped(Why::Order, "Place order", 2)),
+        ],
+        "off-limits" => vec![
+            done(0, before),
+            line(100, stopped(Why::Fenced, "seatmap.example", 1)),
+        ],
+        "yours" => vec![
+            done(0, before),
+            Line::Said("tickets.example wants you to sign in before it shows the seats. I'll carry on once you hand the tab back.".into()),
+            line(100, IloKind::Yours { tab }),
+        ],
+        "tab-back" => vec![
+            done(0, before),
+            Line::Said("I need the seat map back to pick two seats together.".into()),
+            line(100, IloKind::TabBack { tab: FIRST_TASK + 201 }),
+        ],
+        "signed-in" => vec![
+            done(0, before),
+            line(
+                100,
+                IloKind::SignedIn {
+                    tab,
+                    site: "tickets.example".into(),
+                    with: SignedInWith::Saved("ada@example.com".into()),
+                },
+            ),
+            working(10, "Reading this page"),
+        ],
+        "raised" => {
+            talk.tier = Tier::Full;
+            vec![
+                done(0, before),
+                ilo(100, stopped(Why::Order, "Place order", 1), true),
+                line(
+                    101,
+                    IloKind::TierChanged {
+                        from: Tier::Work,
+                        to: Tier::Full,
+                    },
+                ),
+                working(10, "Clicking “Place order”"),
+            ]
+        }
+        _ => vec![done(0, before), working(10, "Reading this page")],
+    };
 }
 
 /// Opens the command bar at `at`, with the suggestions for what `mode` has typed.
@@ -3053,7 +3152,10 @@ fn main() {
                     // PREVIEW_TASKS=1 shows three tasks' cards at the foot, one at work, one
                     // stopped and one done; =open shows the first's conversation, as its card's
                     // click does.
-                    let tasks = std::env::var("PREVIEW_TASKS").ok();
+                    let tasks = std::env::var("PREVIEW_TASKS").ok().or_else(|| {
+                        // The bench's states show the working task's conversation.
+                        std::env::var_os("PREVIEW_TASK").map(|_| "open".to_string())
+                    });
                     if tasks.is_some() {
                         spaces.extend((FIRST_TASK..).take(TASKS.len()).map(task_space));
                     }
@@ -3428,7 +3530,12 @@ fn main() {
                             let (shown, agent) = (cx.weak_entity(), format!("task-{FIRST_TASK}"));
                             window.on_next_frame(move |_, cx| {
                                 shown
-                                    .update(cx, |shell, cx| shell.show_task(agent.into(), cx))
+                                    .update(cx, |shell, cx| {
+                                        if std::env::var_os("PREVIEW_TASK").is_some() {
+                                            shell.set_talk_beside(true, cx);
+                                        }
+                                        shell.show_task(agent.into(), cx)
+                                    })
                                     .ok();
                                 preview_task_ring(shown, cx);
                             });
