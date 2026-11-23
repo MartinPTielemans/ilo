@@ -20,8 +20,8 @@
 # engine found (<found> true) closes it. Other results, such as cancelled, leave it as it is.
 # A run of check.sh that fails this verdict and the one before it on main, the night's or a
 # train's, gets an issue of its own, "<workflow>: the <run> run fails on main twice running": fixed,
-# the next verdict that passes closes it, and otherwise app/check/quarantine.<os> names it within a
-# day, or Check scripts fails (app/check/quarantine.sh lint) (#2197). A quarantined failure is a
+# the next verdict that passes closes it, and otherwise app/check/quarantine.<os> names it within
+# the hour, or Check scripts fails (app/check/quarantine.sh lint) (#2197). A quarantined failure is a
 # warning, not an error, so it counts for neither.
 # MAIN_CHECK_DRY=1 prints the issues it would write instead.
 set -euo pipefail
@@ -171,7 +171,7 @@ The next run of $GITHUB_WORKFLOW on main that passes closes this issue (.github/
       else
         gh issue create --repo "$repo" --title "$title" --body "$body
 
-Fix it today: the next run of $GITHUB_WORKFLOW on main that passes closes this issue. Or quarantine it under this issue, with a line in app/check/quarantine.$os that starts \`$what #<this issue> <today>\` (app/check/quarantine.sh says how). A day after this issue opens with neither done, Check scripts fails (#2197)."
+Fix it now: the next run of $GITHUB_WORKFLOW on main that passes closes this issue. Or quarantine it under this issue, with a line in app/check/quarantine.$os that starts \`$what #<this issue> <today>\` (app/check/quarantine.sh says how). From an hour after this issue opens, while neither is done, Check scripts fails (#2197)."
       fi
     done
     ;;

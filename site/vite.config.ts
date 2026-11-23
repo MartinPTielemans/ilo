@@ -54,11 +54,10 @@ export default defineConfig({
   ],
   // ILO_PUBLISHED reaches the pages as import.meta.env.ILO_PUBLISHED, unset when it's unset.
   envPrefix: ["VITE_", "ILO_PUBLISHED"],
-  // The router plugin writes the route tree on every build, and public/demo is a release's build
-  // of the old home page's demo, which a deploy run from a tag before 0.3.1 still unpacks there.
-  fmt: { ignorePatterns: ["src/routeTree.gen.ts", "public/demo/**"] },
+  // The router plugin writes the route tree on every build.
+  fmt: { ignorePatterns: ["src/routeTree.gen.ts"] },
   lint: {
-    ignorePatterns: ["src/routeTree.gen.ts", "public/demo/**"],
+    ignorePatterns: ["src/routeTree.gen.ts"],
     options: { typeAware: true, typeCheck: true },
   },
 });

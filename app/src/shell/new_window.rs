@@ -3,7 +3,7 @@
 //! once it's full screen too, and if the user has gone to another window by then, once they come
 //! back (docs/ux-spec.md › Window › New window).
 
-use web_time::Instant;
+use std::time::Instant;
 
 use gpui::{Context, Window};
 
