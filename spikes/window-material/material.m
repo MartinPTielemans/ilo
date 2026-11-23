@@ -296,14 +296,15 @@ static NSArray<NSDictionary*>* OthersOnScreen(void) {
   return others;
 }
 
-// The names of those of |others| that meet |area|, in the window list's coordinates.
-static NSArray<NSString*>* InTheWay(NSArray<NSDictionary*>* others, CGRect area) {
+// The names of those of |others| that meet |area|, in the window list's coordinates, each grown by
+// |clear| on every side: a window's bounds leave out its shadow.
+static NSArray<NSString*>* InTheWay(NSArray<NSDictionary*>* others, CGRect area, CGFloat clear) {
   NSMutableArray<NSString*>* names = [NSMutableArray array];
   for (NSDictionary* info in others) {
     CFDictionaryRef frame = (__bridge CFDictionaryRef)info[(__bridge id)kCGWindowBounds];
     CGRect bounds;
     if (!frame || !CGRectMakeWithDictionaryRepresentation(frame, &bounds) ||
-        CGRectIsEmpty(CGRectIntersection(bounds, area))) {
+        CGRectIsEmpty(CGRectIntersection(CGRectInset(bounds, -clear, -clear), area))) {
       continue;
     }
     NSString* owner = info[(__bridge id)kCGWindowOwnerName] ?: @"a process";
@@ -315,7 +316,7 @@ static NSArray<NSString*>* InTheWay(NSArray<NSDictionary*>* others, CGRect area)
 
 // Where the backdrop goes: the first spot on the main screen, clear of the menu bar, the Dock and
 // the top right's 400 by 200 pt, where a banner may slide in mid-run, that none of OthersOnScreen
-// meets, from the foot and the left. Else none, and |error| names what's in the way of the
+// comes within 64 pt of, so their shadows fall short of it too, from the foot and the left. Else none, and |error| names what's in the way of the
 // screen's middle.
 static BOOL PlaceBackdrop(NSRect* back, NSString** error) {
   NSRect screen = NSScreen.screens.firstObject.visibleFrame;
@@ -326,7 +327,7 @@ static BOOL PlaceBackdrop(NSRect* back, NSString** error) {
     for (CGFloat y = ceil(NSMinY(screen)); y + kBackHeight <= NSMaxY(screen); y += 10) {
       NSRect spot = NSMakeRect(x, y, kBackWidth, kBackHeight);
       if (!CGRectIntersectsRect(ListRect(spot), banners) &&
-          !InTheWay(others, ListRect(spot)).count) {
+          !InTheWay(others, ListRect(spot), 64).count) {
         *back = spot;
         return YES;
       }
@@ -338,7 +339,7 @@ static BOOL PlaceBackdrop(NSRect* back, NSString** error) {
       stringWithFormat:@"no spot %g by %g pt on the screen is clear of other windows; in the "
                        @"middle: %@",
                        kBackWidth, kBackHeight,
-                       [InTheWay(others, ListRect(middle)) componentsJoinedByString:@", "]];
+                       [InTheWay(others, ListRect(middle), 64) componentsJoinedByString:@", "]];
   return NO;
 }
 
@@ -485,7 +486,7 @@ static int Serve(void) {
       reduce = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceTransparency;
       // The capture is the screen as composed, so another window over the backdrop, or under the
       // material, would be in it: a dialog, a banner, an app that came forward.
-      NSArray<NSString*>* inWay = InTheWay(OthersOnScreen(), ListRect(g_backdrop.frame));
+      NSArray<NSString*>* inWay = InTheWay(OthersOnScreen(), ListRect(g_backdrop.frame), 0);
       CGRect window = ListRect(g_window.frame);
       if (!visible) {
         printf("error: the window isn't visible\n");
