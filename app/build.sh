@@ -228,6 +228,10 @@ plutil -replace CFBundleIdentifier -string "$id" "$plist"
 name=$(cat branding/name)
 plutil -replace CFBundleName -string "$name" "$plist"
 plutil -replace CFBundleDisplayName -string "$name" "$plist"
+# The prod profile's folder, ~/Library/Application Support/<name> (profile_dir in src/lib.rs, from
+# the same file), is Chromium's default by this key, "Chromium" without it: from Chromium 158 only
+# the default folder keeps the Keychain key its cookies and passwords were saved under.
+plutil -replace CrProductDirName -string "$name" "$plist"
 plutil -replace CFBundleShortVersionString -string "$version" "$plist"
 plutil -replace CFBundleVersion -string "$build" "$plist"
 # macOS 15 (Sequoia) or later, the owner's call (#678). Below it macOS won't open the app, and
