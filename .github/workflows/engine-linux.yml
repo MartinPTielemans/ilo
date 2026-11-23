@@ -5,7 +5,8 @@
 # engine (#871), so the download keeps up with the core without a build for each merge holding the
 # runner; and on engine-build/ branches, which only those who can push here make, to try an engine
 # change before it merges. Never on other branches or pull requests, as the repository is public.
-# core-linux.yml compiles the core alone on every push.
+# core-linux.yml compiles the core alone on every push, against the core's pack from the newest of
+# these builds where it can.
 name: Engine on Linux
 
 on:
@@ -148,6 +149,24 @@ jobs:
       # outranks, with the test fonts they load, which never go in the package.
       - name: Test the core
         run: engine/linux/test.sh "$ILO_ENGINE_ROOT/linux"
+      # What a compile of the core reads besides the core, about 200 MB, for Core on Linux to check
+      # any branch's core against until the next build, in minutes rather than the half hour a tree
+      # of its own takes (#3917). The build machine's paths are rewritten, as the pack is public. A
+      # failure here costs only that, never the engine.
+      - id: core
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/core"
+          python3 engine/core_syntax.py pack --platform linux "$ILO_ENGINE_ROOT/linux/src" "$RUNNER_TEMP/core/core-syntax.tar.zst"
+          echo "name=engine-linux-core-$(git config -f engine/pins.ini chromium.version)" >> "$GITHUB_OUTPUT"
+      - if: steps.core.outcome == 'success'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.core.outputs.name }}
+          path: ${{ runner.temp }}/core/core-syntax.tar.zst
+          retention-days: 90
+          compression-level: 0
       - name: Package
         run: engine/linux/package.sh "$ILO_ENGINE_ROOT/linux" "$RUNNER_TEMP/Chromium-linux-x64.tar.xz"
       # A release in prebuilt.ini's repository, named after the commit, which holds the engine's
