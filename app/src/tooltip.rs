@@ -35,7 +35,7 @@ pub const WINDOW_HEIGHT: f32 = HEIGHT;
 /// Round at half its height, but the corner at what it names, which is nearly square.
 const RADIUS: f32 = HEIGHT / 2.;
 use crate::elevation::{Level, WINDOW_MARGIN};
-use crate::palette::{INK, OVERLAY_DARK, PAPER, over};
+use crate::palette::{Float, INK, OVERLAY_DARK, PAPER, Tone, over};
 use crate::tokens::tooltip::CHIP;
 use crate::tokens::tooltip::CHIP_AFTER_TEXT;
 use crate::tokens::tooltip::CHIP_BODY;
@@ -592,7 +592,7 @@ impl Render for Tooltip {
         root.child(
             shape(div().relative().w(px(layout.width)).h(px(HEIGHT)))
                 .shadow(Level::Popover.shadow())
-                .bg(rgb(OVERLAY_DARK))
+                .bg(Float::Tooltip.fill(Tone::Dark))
                 .child(text)
                 .children(chips)
                 .child(rim),

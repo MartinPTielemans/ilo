@@ -1505,13 +1505,13 @@ impl Render for BoostEditor {
             let tone = palette::current(cx).tone;
             let (fill, rim, label, destructive) = match tone {
                 palette::Tone::Dark => (
-                    menu::DARK_FILL,
+                    crate::menu::DARK_FILL,
                     menu::DARK_RIM,
                     menu::DARK_LABEL,
                     menu::DARK_DESTRUCTIVE,
                 ),
                 palette::Tone::Light => (
-                    menu::LIGHT_FILL,
+                    crate::menu::LIGHT_FILL,
                     menu::LIGHT_RIM,
                     menu::LIGHT_LABEL,
                     menu::LIGHT_DESTRUCTIVE,

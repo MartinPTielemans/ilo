@@ -8,7 +8,7 @@ use std::{cell::RefCell, collections::HashMap, ffi::CString, ffi::c_void, rc::Rc
 use browser::{
     elevation::Level,
     find_status, log,
-    palette::{Palette, STATE_HOVERED, STATE_PRESSED},
+    palette::{Float, Palette, STATE_HOVERED, STATE_PRESSED, Tone},
     shell::{self, keystroke_keys},
     text_input::TextInput,
     tooltip::{self, Anchor, Tip},
@@ -609,7 +609,7 @@ impl Render for FindBar {
                         .items_center()
                         .px(px(INSET))
                         .rounded(px(RADIUS))
-                        .bg(rgb(FILL))
+                        .bg(Float::FindBar.fill(Tone::Dark))
                         .text_color(rgb(TEXT))
                         .text_size(px(text::BODY))
                         .line_height(px(TEXT_LINE))

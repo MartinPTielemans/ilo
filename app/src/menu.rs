@@ -3,7 +3,7 @@
 // the keyboard's walk over the selectable rows and the submenu's open and close. Copyright Zed
 // Industries, Inc. Licensed under the GNU General Public License, version 3 or later.
 
-//! ilo's own context menu, the same on every platform (#324): an opaque panel of 24-pt rows, with
+//! ilo's own context menu, the same on every platform (#324): a panel of 24-pt rows, with
 //! submenus, keys, type-to-select, press-drag-release and a safe triangle on the way to a
 //! submenu. GPUI can't draw over the page's native view, so it's a window of its own that the host
 //! shows over the browser window, as its child, with the keyboard, as the command bar is
@@ -28,6 +28,10 @@ use crate::{
 };
 
 pub use crate::tokens::menu::*;
+
+/// The panel's colour, 0xRRGGBBAA: what floats over a dark or a light window (#4090).
+pub const DARK_FILL: u32 = (crate::tokens::palette::OVERLAY_DARK << 8) | 0xff;
+pub const LIGHT_FILL: u32 = (crate::tokens::palette::OVERLAY_LIGHT << 8) | 0xff;
 
 /// A release this close to the press that opened the menu leaves it open, as a click.
 const DRAG_SLOP: f32 = 4.;
@@ -132,6 +136,15 @@ impl Look {
 
     pub fn palette(self) -> &'static Palette {
         if self.light { &LIGHT } else { &DARK }
+    }
+
+    /// The panel as drawn: frosted where the host blurs under the menu's window (#4090).
+    pub fn fill(self) -> Rgba {
+        let tone = match self.light {
+            true => crate::palette::Tone::Light,
+            false => crate::palette::Tone::Dark,
+        };
+        crate::palette::Float::Menu.fill(tone)
     }
 }
 
@@ -1736,7 +1749,7 @@ impl ContextMenu {
                     .rounded(px(RADIUS))
                     .shadow(Elevation::Popover.shadow())
             })
-            .bg(rgba(palette.fill))
+            .bg(shown.look.fill())
             .border_1()
             .border_color(rgba(palette.rim))
             .text_size(px(TEXT))

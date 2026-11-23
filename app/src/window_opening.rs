@@ -767,11 +767,11 @@ pub(crate) fn finish_opening(
         },
         cx,
     );
-    // The window the toast shows over gives its colour and palette.
+    // The window the toast shows over gives its palette.
     let look = |cx: &App| {
         let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
         let shell = shell?.upgrade()?;
-        Some((shell.read(cx).window_fill(), shell.read(cx).palette()))
+        Some(shell.read(cx).palette())
     };
     let toast_host = Rc::new(ToastHost {
         view: Cell::new(std::ptr::null_mut()),
