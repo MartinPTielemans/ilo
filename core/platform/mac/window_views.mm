@@ -649,6 +649,7 @@ void ShowTile(content::WebContents* contents,
   // Before the page is in the tile's window, which it's never told it moved to.
   content::SetPageTile(contents, true);
   BrowserCoreTileView* tile = base::apple::ObjCCast<BrowserCoreTileView>(page_view.superview);
+  const bool placed = !tile || tile.superview != holder;
   if (!tile) {
     tile = [[BrowserCoreTileView alloc] initWithFrame:NSZeroRect];
     tile.wantsLayer = YES;
@@ -665,9 +666,15 @@ void ShowTile(content::WebContents* contents,
   if (!holder.isFlipped) {
     rect.origin.y = NSHeight(holder.bounds) - NSMaxY(rect);
   }
+  // The app calls again for each frame of a tile's motion, which mostly only moves it.
+  const bool resized = !NSEqualSizes(tile.frame.size, rect.size);
   tile.frame = rect;
-  ScaleIntoTile(tile, page_view);
-  UpdateOcclusion(holder.window);
+  if (placed || resized) {
+    ScaleIntoTile(tile, page_view);
+  }
+  if (placed) {
+    UpdateOcclusion(holder.window);
+  }
 }
 
 void EndTile(content::WebContents* contents) {
