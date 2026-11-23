@@ -12,11 +12,11 @@ use std::{
 };
 
 use browser::account::{self, Account};
-use browser::agents::task::ilo::{IloKind, IloLine, SignedInWith, Why};
+use browser::agents::task::ilo::{IloKind, IloLine, SignedInWith};
 use browser::agents::task::{
     Card as TaskCard, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep,
 };
-use browser::agents::tier::Tier;
+use browser::agents::tier::{Tier, Why};
 use browser::boost_editor;
 use browser::boost_style::{self, Case, Face, Style};
 use browser::command_bar::{self, Suggestion};
