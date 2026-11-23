@@ -103,7 +103,9 @@ jobs:
       # which reaches it as one more client.
       - run: cargo build --release --bin mcp-bridge --bin ilo-command
       # The browser, Browser.dll, unlinked, as it links the engine: its Windows code and the driver's.
-      - run: cargo check --release --manifest-path windows/Cargo.toml --target-dir target
+      # --locked, as windows/Cargo.lock pins what ships in it: a change to ../Cargo.lock copies it over
+      # windows/Cargo.lock and runs `cargo metadata --manifest-path windows/Cargo.toml` (#3966).
+      - run: cargo check --release --locked --manifest-path windows/Cargo.toml --target-dir target
       # What follows decides nothing, so this tree has passed.
       - uses: ./.github/actions/tree-proof
         with:
