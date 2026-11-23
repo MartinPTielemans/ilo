@@ -742,6 +742,12 @@ pub fn checkbox(look: &Look, on: bool, accent: Rgba, tick: Rgba) -> gpui::Div {
         })
 }
 
+/// The mark that picks one of a list, as Your assistant's picks the assistant tasks run on: a
+/// checkbox, round.
+pub fn mark(look: &Look, on: bool, accent: Rgba, tick: Rgba) -> gpui::Div {
+    checkbox(look, on, accent, tick).rounded_full()
+}
+
 /// A row with a checkbox before its name, as a list to tick from has.
 pub fn checked_row(
     look: &Look,

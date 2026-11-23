@@ -387,6 +387,35 @@ impl Browser for Core {
         };
         unsafe { bc::bc_profile_read(profile, read, url.as_ptr(), max_bytes, timeout_ms) };
     }
+
+    fn open_sign_in(&self, url: &str, cx: &mut App) -> Option<(u64, u64)> {
+        // The user's window in front, whose profile's private session the page opens in, as
+        // ⇧⌘N's window does.
+        let from = WINDOWS.with_borrow(|windows| windows.iter().find(|w| w.regular()).cloned())?;
+        let profile = unsafe { bc::bc_space_profile(bc::bc_window_space(from.id)) };
+        if profile == 0 {
+            return None;
+        }
+        let private = Some(crate::browser_windows::Own::Private(profile));
+        let window = crate::window_opening::open_window(Some(from), private, cx)?;
+        let tab = crate::tabs::open_typed(window, url, "", false);
+        if tab == 0 {
+            unsafe { bc::bc_window_close(window) };
+            return None;
+        }
+        unsafe { bc::bc_window_select(window, tab) };
+        // check.sh reads this line, which names no address: a sign-in's can hold its state.
+        browser::log!("browser: sign-in page {tab} in private window {window}");
+        Some((tab, window))
+    }
+
+    fn close_sign_in(&self, tab: u64, window: u64, cx: &mut App) {
+        let space = unsafe { bc::bc_window_space(window) };
+        match self.space_tab_ids(space, cx).as_slice() {
+            [only] if *only == tab => unsafe { bc::bc_window_close(window) },
+            _ => unsafe { bc::bc_tab_close(tab, false) },
+        }
+    }
 }
 
 /// The core's answer to a saved read (bc_profile_read), for what waits on it.
