@@ -12,9 +12,9 @@ the core's windows don't have.
  
  #include <algorithm>
  #include <memory>
-@@ -44,6 +45,11 @@
- #include "chrome/browser/web_applications/os_integration/mac/web_app_shortcut_mac.h"
- #endif
+@@ -39,6 +40,11 @@
+ #include "third_party/blink/public/common/features_generated.h"
+ #include "url/origin.h"
  
 +// browser_core: the core's windows ask with the app's prompt (//browser_core/hooks.h).
 +std::unique_ptr<permissions::PermissionPrompt> (*g_browser_core_permission_prompt)(
@@ -24,7 +24,7 @@ the core's windows don't have.
  namespace {
  
  BrowserWindowInterface* GetBrowser(content::WebContents* web_contents) {
-@@ -290,6 +296,11 @@
+@@ -314,6 +320,11 @@
  std::unique_ptr<permissions::PermissionPrompt> CreatePermissionPrompt(
      content::WebContents* web_contents,
      permissions::PermissionPrompt::Delegate* delegate) {

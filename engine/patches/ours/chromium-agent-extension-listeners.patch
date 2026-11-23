@@ -6,9 +6,9 @@ tab at a handoff too. Needs chromium-agent-extension-nodes.patch, for the extens
 
 --- a/third_party/blink/renderer/core/dom/events/event_target.cc
 +++ b/third_party/blink/renderer/core/dom/events/event_target.cc
-@@ -36,6 +36,10 @@
- 
+@@ -37,6 +37,10 @@
  #include "base/format_macros.h"
+ #include "base/memory/raw_ptr_exclusion.h"
  #include "base/time/time.h"
 +// browser_core: for an agent's input.
 +#include "third_party/blink/public/common/input/web_input_event.h"
@@ -17,7 +17,7 @@ tab at a handoff too. Needs chromium-agent-extension-nodes.patch, for the extens
  #include "third_party/blink/renderer/bindings/core/v8/js_based_event_listener.h"
  #include "third_party/blink/renderer/bindings/core/v8/js_event_listener.h"
  #include "third_party/blink/renderer/bindings/core/v8/to_v8_traits.h"
-@@ -1015,6 +1019,13 @@
+@@ -1017,6 +1021,13 @@
    return GetDispatchEventResult(event);
  }
  
@@ -31,7 +31,7 @@ tab at a handoff too. Needs chromium-agent-extension-nodes.patch, for the extens
  // Fire event listeners, creates a copy of EventListenerVector on being called.
  bool EventTarget::FireEventListeners(Event& event,
                                       EventTargetData* d,
-@@ -1078,6 +1089,17 @@
+@@ -1080,6 +1091,17 @@
      }
  
      EventListener* listener = registered_listener->Callback();

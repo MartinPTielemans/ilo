@@ -1,16 +1,17 @@
 # ungoogled-chromium-portablelinux's chromium-156-remove-private-verification-tokens.patch at
-# 6f0aa178c239 (its 156.0.8078.79-1 tag), rebased by ilo onto Chromium 157.0.8103.50 until it tags
-# 157. Changed from upstream's:
-# - Context: 157 adds //chrome/browser/origin_gating next to devtools' dep, and reorders
-#   chrome/test's browser_tests deps, so upstream's removals are the same lines in their 157 places.
+# 6f0aa178c239 (its 156.0.8078.79-1 tag), rebased by ilo onto Chromium 158.0.8127.36 until it tags
+# 158. Changed from upstream's:
+# - Context: 157 adds //chrome/browser/origin_gating next to devtools' dep, 158 adds
+#   //chrome/browser/private_ai and //chrome/browser/profiles:profile_manager_impl next to the
+#   service's, and chrome/test's browser_tests deps are reordered, so upstream's removals are the
+#   same lines in their 158 places.
 # - 157's ChromeBrowsingDataRemoverDelegateFactory depends on the service's factory, which then
 #   isn't linked, so it no longer does: the delegate it makes no longer uses the service.
-# It's the same change as ungoogled-chromium-macos's fix-disable-verification-token.patch, and
-# ilo's two rebased copies are identical below this header.
+# It's the same change as ungoogled-chromium-macos's fix-disable-verification-token.patch.
 #
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
-@@ -1182,7 +1182,6 @@ source_set("core") {
+@@ -1186,7 +1186,6 @@
      "//chrome/browser/preloading/search_preload:feature",
      "//chrome/browser/privacy_sandbox:headers",
      "//chrome/browser/private_ai",
@@ -18,17 +19,17 @@
      "//chrome/browser/profiles:misc",
      "//chrome/browser/profiles:profile_io_data",
      "//chrome/browser/profiles:profiles_extra_parts",
-@@ -2432,7 +2431,6 @@ source_set("browser") {
-     "//chrome/browser/preloading/search_preload",
+@@ -2486,7 +2485,6 @@
      "//chrome/browser/privacy",
      "//chrome/browser/privacy_sandbox:impl",
+     "//chrome/browser/private_ai",
 -    "//chrome/browser/private_verification_tokens",
      "//chrome/browser/profiles:misc",
+     "//chrome/browser/profiles:profile_manager_impl",
      "//chrome/browser/profiles:profile_util_impl",
-     "//chrome/browser/profiles:profiles_extra_parts_impl",
 --- a/chrome/browser/browsing_data/BUILD.gn
 +++ b/chrome/browser/browsing_data/BUILD.gn
-@@ -128,7 +128,6 @@ source_set("impl") {
+@@ -128,7 +128,6 @@
      "//chrome/browser/preloading/prefetch/no_state_prefetch",
      "//chrome/browser/preloading/prefetch/search_prefetch",
      "//chrome/browser/privacy_sandbox:headers",
@@ -36,7 +37,7 @@
      "//chrome/browser/profiles/keep_alive",
      "//chrome/browser/reading_list",
      "//chrome/browser/safe_browsing",
-@@ -276,7 +275,6 @@ source_set("unit_tests") {
+@@ -276,7 +275,6 @@
      "//chrome/browser/payments/browser_binding:browser_bound_key_deleter",
      "//chrome/browser/payments/browser_binding:test_support",
      "//chrome/browser/permissions",
@@ -44,7 +45,7 @@
      "//chrome/browser/reading_list",
      "//chrome/browser/safe_browsing:verdict_cache_manager_factory",
      "//chrome/browser/segmentation_platform",
-@@ -307,7 +305,6 @@ source_set("unit_tests") {
+@@ -307,7 +305,6 @@
      "//components/privacy_sandbox:privacy_sandbox_settings_headers",
      "//components/privacy_sandbox/privacy_sandbox_attestations",
      "//components/privacy_sandbox/privacy_sandbox_attestations:test_support",
@@ -54,7 +55,7 @@
      "//components/safe_browsing/core/browser:verdict_cache_manager",
 --- a/chrome/browser/browsing_data/chrome_browsing_data_model_delegate.cc
 +++ b/chrome/browser/browsing_data/chrome_browsing_data_model_delegate.cc
-@@ -127,15 +127,6 @@ void ChromeBrowsingDataModelDelegate::GetAllDataKeys(
+@@ -127,15 +127,6 @@
  
    GetAllMediaDeviceSaltDataKeys(concurrent.CreateCallback(), {});
  
@@ -70,7 +71,7 @@
  
    // TODO(crbug.com/40205603): Implement data retrieval for remaining data
    // types.
-@@ -180,20 +171,6 @@ void ChromeBrowsingDataModelDelegate::RemoveDataKey(
+@@ -180,20 +171,6 @@
    }
  #endif  // !BUILDFLAG(IS_ANDROID)
  
@@ -93,7 +94,7 @@
  }
 --- a/chrome/browser/browsing_data/chrome_browsing_data_remover_delegate.cc
 +++ b/chrome/browser/browsing_data/chrome_browsing_data_remover_delegate.cc
-@@ -732,29 +732,6 @@ void ChromeBrowsingDataRemoverDelegate::RemoveEmbedderData(
+@@ -732,29 +732,6 @@
  #endif  // BUILDFLAG(IS_CHROMEOS)
    }
  
@@ -143,7 +144,7 @@
    DependsOn(safe_browsing::VerdictCacheManagerFactory::GetInstance());
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -6264,21 +6264,6 @@ ChromeContentBrowserClient::CreateURLLoaderThrottles(
+@@ -6318,21 +6318,6 @@
      result.push_back(std::move(signin_throttle));
    }
  
@@ -167,7 +168,7 @@
            contextual_tasks::ContextualTasksURLLoaderThrottle::MaybeCreate(
 --- a/chrome/browser/component_updater/BUILD.gn
 +++ b/chrome/browser/component_updater/BUILD.gn
-@@ -157,7 +157,6 @@ source_set("impl") {
+@@ -160,7 +160,6 @@
      "//chrome/browser/net:key_pinning_proto",
      "//chrome/browser/page_load_metrics",
      "//chrome/browser/permissions",
@@ -175,7 +176,7 @@
      "//chrome/browser/profiles:profile",
      "//chrome/browser/update_client",
      "//chrome/common",
-@@ -174,7 +173,6 @@ source_set("impl") {
+@@ -177,7 +176,6 @@
      "//components/permissions",
      "//components/privacy_sandbox:features",
      "//components/privacy_sandbox/privacy_sandbox_attestations",
@@ -185,7 +186,7 @@
      "//components/security_interstitials/content:security_interstitial_page",
 --- a/chrome/browser/component_updater/private_verification_tokens_installer.cc
 +++ b/chrome/browser/component_updater/private_verification_tokens_installer.cc
-@@ -25,32 +25,6 @@ namespace component_updater {
+@@ -25,32 +25,6 @@
  
  void RegisterPrivateVerificationTokensComponentIfEnabled(
      ComponentUpdateService* cus) {
@@ -220,7 +221,7 @@
  }  // namespace component_updater
 --- a/chrome/browser/devtools/BUILD.gn
 +++ b/chrome/browser/devtools/BUILD.gn
-@@ -445,7 +445,6 @@ static_library("devtools") {
+@@ -446,7 +446,6 @@
        "//chrome/browser/badging",
        "//chrome/browser/custom_handlers",
        "//chrome/browser/origin_gating",
@@ -228,7 +229,7 @@
        "//chrome/browser/ui:browser_window_header",
        "//chrome/browser/ui/media_router",
        "//chrome/browser/ui/startup",
-@@ -458,7 +457,6 @@ static_library("devtools") {
+@@ -459,7 +458,6 @@
        "//components/origin_gating/core",
        "//components/payments/content",
        "//components/privacy_sandbox/privacy_sandbox_attestations",
@@ -236,7 +237,7 @@
        "//components/security_state/content",
        "//components/subresource_filter/content/browser",
        "//components/web_package",
-@@ -692,7 +690,6 @@ if (enable_devtools_frontend) {
+@@ -695,7 +693,6 @@
        "//chrome/browser/prefs:util",
        "//chrome/browser/preloading:prefs",
        "//chrome/browser/preloading:test_support",
@@ -244,7 +245,7 @@
        "//chrome/browser/search_engines",
        "//chrome/browser/sync/test/integration:sync_integration_test_support",
        "//chrome/browser/ui/autofill",
-@@ -704,7 +701,6 @@ if (enable_devtools_frontend) {
+@@ -707,7 +704,6 @@
        "//components/infobars/content",
        "//components/javascript_dialogs",
        "//components/language/core/browser",
@@ -309,7 +310,7 @@
  // TODO: crbug.com/380896828 - move CDP support for BTM to //content.
  void StorageHandler::RunBounceTrackingMitigations(
      std::unique_ptr<RunBounceTrackingMitigationsCallback> callback) {
-@@ -82,152 +50,3 @@ void StorageHandler::GotDeletedSites(
+@@ -82,152 +50,3 @@
        std::make_unique<protocol::Array<protocol::String>>(sites);
    callback->sendSuccess(std::move(deleted_sites));
  }
@@ -488,7 +489,7 @@
   public:
    StorageHandler(content::WebContents* web_contents,
                   protocol::UberDispatcher* dispatcher);
-@@ -31,41 +24,14 @@ class StorageHandler : public protocol::Storage::Backend,
+@@ -31,41 +24,14 @@
    ~StorageHandler() override;
  
   private:
@@ -532,7 +533,7 @@
  #endif  // CHROME_BROWSER_DEVTOOLS_PROTOCOL_STORAGE_HANDLER_H_
 --- a/chrome/browser/private_verification_tokens/BUILD.gn
 +++ b/chrome/browser/private_verification_tokens/BUILD.gn
-@@ -8,9 +8,7 @@ source_set("private_verification_tokens") {
+@@ -8,9 +8,7 @@
      "//chrome/browser:*",
      "//chrome/browser/browsing_data:*",
      "//chrome/browser/component_updater:*",
@@ -542,7 +543,7 @@
    ]
  
    public = [
-@@ -52,12 +50,6 @@ source_set("impl") {
+@@ -52,12 +50,6 @@
      "//chrome/browser/profiles:profile",
      "//components/content_settings/core/browser",
      "//components/keyed_service/core",
@@ -555,7 +556,7 @@
      "//content/public/browser",
      "//net",
      "//services/network/public/cpp",
-@@ -77,10 +69,6 @@ source_set("browser_tests") {
+@@ -77,10 +69,6 @@
      "//chrome/test:test_support",
      "//chrome/test/base:chrome_test_utils",
      "//components/content_settings/core/common",
@@ -566,7 +567,7 @@
      "//net:test_support",
      "//services/network:test_support",
      "//url",
-@@ -101,13 +89,6 @@ source_set("unit_tests") {
+@@ -101,13 +89,6 @@
      "//chrome/test:test_support",
      "//components/content_settings/core/browser",
      "//components/content_settings/core/common",
@@ -582,7 +583,7 @@
      "//services/network:test_support",
 --- a/chrome/browser/profiles/BUILD.gn
 +++ b/chrome/browser/profiles/BUILD.gn
-@@ -829,7 +829,6 @@ source_set("profiles_extra_parts_impl") {
+@@ -852,7 +852,6 @@
      "//chrome/browser/privacy_sandbox:headers",
      "//chrome/browser/private_ai",
      "//chrome/browser/private_insights",
@@ -592,7 +593,7 @@
      "//chrome/browser/reduce_accept_language",
 --- a/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
 +++ b/chrome/browser/profiles/chrome_browser_main_extra_parts_profiles.cc
-@@ -1333,7 +1333,6 @@ void ChromeBrowserMainExtraPartsProfiles::
+@@ -1331,7 +1331,6 @@
    PrivacyMetricsServiceFactory::GetInstance();
    PrivacySandboxServiceFactory::GetInstance();
    PrivacySandboxSettingsFactory::GetInstance();
@@ -602,7 +603,7 @@
    ProfilePasswordStoreFactory::GetInstance();
 --- a/chrome/test/BUILD.gn
 +++ b/chrome/test/BUILD.gn
-@@ -1453,7 +1453,6 @@ if (!is_android) {
+@@ -1333,7 +1333,6 @@
        "//chrome/browser/preloading/prerender:browser_tests",
        "//chrome/browser/preloading/search_preload:browser_tests",
        "//chrome/browser/privacy_sandbox:browser_tests",
@@ -610,7 +611,7 @@
        "//chrome/browser/profile_resetter:browser_tests",
        "//chrome/browser/profiles:browser_tests",
        "//chrome/browser/push_messaging:browser_tests",
-@@ -2856,7 +2855,6 @@ test("unit_tests") {
+@@ -2676,7 +2675,6 @@
      "//chrome/browser/preloading/prerender:unit_tests",
      "//chrome/browser/privacy_sandbox:unit_tests",
      "//chrome/browser/private_ai:unit_tests",
@@ -620,7 +621,7 @@
      "//chrome/browser/pwc:unit_tests",
 --- a/components/BUILD.gn
 +++ b/components/BUILD.gn
-@@ -315,7 +315,6 @@ test("components_unittests") {
+@@ -314,7 +314,6 @@
      "//components/power_metrics:unit_tests",
      "//components/prefs:unit_tests",
      "//components/privacy_sandbox:unit_tests",
@@ -630,7 +631,7 @@
      "//components/proxy_config:unit_tests",
 --- a/components/component_updater/installer_policies/BUILD.gn
 +++ b/components/component_updater/installer_policies/BUILD.gn
-@@ -38,7 +38,6 @@ static_library("installer_policies_no_content_deps") {
+@@ -40,7 +40,6 @@
      "//components/lookalikes/core:proto",
      "//components/lookalikes/core:safety_tips",
      "//components/prefs",
@@ -638,7 +639,7 @@
      "//components/update_client",
      "//mojo/public/cpp/base:protobuf_support",
      "//services/network/public/cpp",
-@@ -107,8 +106,6 @@ source_set("unit_tests") {
+@@ -110,8 +109,6 @@
      "//components/history_embeddings/core",
      "//components/optimization_guide/core",
      "//components/optimization_guide/proto:optimization_guide_proto",

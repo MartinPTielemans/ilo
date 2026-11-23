@@ -11,9 +11,9 @@ namespace browser_core {
 namespace {
 
 // A Wayland seat's keyboard with no keymap, as fcitx5's virtual one can be, still sends its
-// modifiers, which crashed the engine (#1138). Chromium's test for its fix,
-// patches/upstream/chromium-xkb-no-state-guard.patch, doesn't apply to the pinned version, so
-// this checks the same two calls.
+// modifiers, which crashed the engine (#1138). Chromium fixed it in 158; its test,
+// XkbKeyboardLayoutEngineTest.NoStateBeforeKeymap, is in events_unittests, which the core's tests
+// don't run, so this checks the same two calls.
 TEST(XkbNoKeymapTest, NothingWithNoKeymap) {
   ui::XkbEvdevCodes codes;
   ui::XkbKeyboardLayoutEngine engine(codes);

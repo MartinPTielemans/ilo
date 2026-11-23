@@ -702,12 +702,12 @@ def hides_none(rule, important=False):
 # Blink's own rules that set display: none !important, which DevTools reports with origin
 # user-agent, as it does a blocker's. They were read from every style sheet Blink gives a page, as
 # third_party/blink/public/blink_resources.grd and core/css/css_default_style_sheets.cc name them,
-# at Chromium 156.0.8078.79 and 157.0.8103.78: html.css has these two, and -internal- ones that
-# the word leaves out, as fullscreen.css, capability_element.css and media_controls'
-# mediaControls.css have. Another major may add one, so a browser of a major not in
-# BLINKS_READ fails the run until its sheets are read the same way.
+# at Chromium 156.0.8078.79, 157.0.8103.78 and 158.0.8127.36: html.css has these two, and
+# -internal- ones that the word leaves out, as fullscreen.css, capability_element.css and
+# media_controls' mediaControls.css have. Another major may add one, so a browser of a major not
+# in BLINKS_READ fails the run until its sheets are read the same way.
 BLINKS = {"audio:not([controls])", 'input[type="hidden" i]'}
-BLINKS_READ = {156, 157}
+BLINKS_READ = {156, 157, 158}
 
 
 def blockers(rules):

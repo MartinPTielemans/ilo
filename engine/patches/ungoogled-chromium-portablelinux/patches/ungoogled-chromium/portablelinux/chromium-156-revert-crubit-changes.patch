@@ -1,11 +1,11 @@
 # ungoogled-chromium-portablelinux's chromium-156-revert-crubit-changes.patch at 6f0aa178c239 (its
-# 156.0.8078.79-1 tag), rebased by ilo onto Chromium 157.0.8103.50 until it tags 157. It's the
-# same change as ungoogled-chromium-macos's fix-build-without-crubit.patch, and ilo's two rebased
-# copies are identical below this header. Changed from upstream's:
+# 156.0.8078.79-1 tag), rebased by ilo onto Chromium 158.0.8127.36 until it tags 158. Changed from
+# upstream's:
 # - Blink: 157 moves the font sources into font_rust_headers and font_rust_support. Those take the
 #   cxx font_format_check library in place of the Crubit bindings and lose IFT's patcher, and the
 #   unit tests drop the bindings too. font_format_check takes 157's crates, read_fonts 0.45 and
-#   skrifa 0.48. 157's blink_platform BUILD.gn conflict keeps its own deps.
+#   skrifa 0.48. 157's blink_platform BUILD.gn conflict keeps its own deps. 158 drops the TODO
+#   above DecodedWebFont's patcher with the patcher.
 # - Blink core: 157 adds IFT to CSS fonts (css/ift_custom_font_data), built on the patcher this
 #   patch removes. It's taken out of core's build and remote_font_face_source.
 # - QR codes: 157 deletes the cxx fallback that 156 used without Crubit
@@ -17,7 +17,7 @@
 #
 --- a/chrome/browser/devtools/chrome_devtools_session.cc
 +++ b/chrome/browser/devtools/chrome_devtools_session.cc
-@@ -78,11 +78,6 @@ ChromeDevToolsSession::ChromeDevToolsSession(
+@@ -78,11 +78,6 @@
        cast_handler_ = std::make_unique<CastHandler>(
            agent_host->GetWebContents(), dispatcher());
      }
@@ -31,7 +31,7 @@
        (agent_host->GetType() == content::DevToolsAgentHost::kTypePage ||
 --- a/components/cbor/BUILD.gn
 +++ b/components/cbor/BUILD.gn
-@@ -12,7 +12,7 @@ buildflag_header("buildflags") {
+@@ -12,7 +12,7 @@
    # TODO(crbug.com/535682335): Remove `USE_CBOR_RUST` buildflag entirely,
    # unconditionally enable Rust CBOR parser, and drop `is_cronet_build` check
    # once Cronet supports Crubit dependencies.
@@ -40,7 +40,7 @@
  }
  
  source_set("cbor_headers") {
-@@ -48,7 +48,7 @@ source_set("cbor_rust_impl") {
+@@ -48,7 +48,7 @@
      "//base",
    ]
  
@@ -49,7 +49,7 @@
      deps += [
        "//build/rust/crubit",
        "//components/cbor/rust:cbor_rust_bindings",
-@@ -91,7 +91,7 @@ source_set("unit_tests") {
+@@ -91,7 +91,7 @@
      "//testing/gtest",
      "//third_party/fuzztest",
    ]
@@ -69,7 +69,7 @@
  import("//testing/libfuzzer/fuzzer_test.gni")
  
  declare_args() {
-@@ -9,8 +11,9 @@ declare_args() {
+@@ -9,8 +11,9 @@
    enable_qr_print = false
  }
  
@@ -80,7 +80,7 @@
  }
  
  source_set("bitmap_generator") {
-@@ -30,23 +33,51 @@ source_set("bitmap_generator") {
+@@ -30,23 +33,51 @@
    ]
  }
  
@@ -161,7 +161,7 @@
  
  namespace qr_code_generator {
  
-@@ -22,6 +29,7 @@ GeneratedCode::~GeneratedCode() = default;
+@@ -22,6 +29,7 @@
  GeneratedCode::GeneratedCode(GeneratedCode&&) = default;
  GeneratedCode& GeneratedCode::operator=(GeneratedCode&&) = default;
  
@@ -169,7 +169,7 @@
  Error RustErrorToCppError(const ::qr_code::types::QrError& rust_error) {
    if (rust_error == ::qr_code::types::QrError::MakeDataTooLong()) {
      return Error::kInputTooLong;
-@@ -63,5 +71,32 @@ base::expected<GeneratedCode, Error> GenerateCode(
+@@ -63,5 +71,32 @@
    CHECK_EQ(code.data.size(), static_cast<size_t>(code.qr_size * code.qr_size));
    return code;
  }
@@ -313,7 +313,7 @@
 +}
 --- a/components/web_package/BUILD.gn
 +++ b/components/web_package/BUILD.gn
-@@ -51,8 +51,6 @@ source_set("web_package_rust_impl") {
+@@ -51,8 +51,6 @@
      "//components/base32",
      "//components/cbor",
      "//components/web_package/mojom",
@@ -322,7 +322,7 @@
      "//mojo/public/cpp/bindings",
      "//net",
      "//services/network/public/mojom",
-@@ -67,12 +65,10 @@ static_library("web_package") {
+@@ -67,12 +65,10 @@
      "signed_web_bundles/signed_web_bundle_signature_stack.cc",
      "signed_web_bundles/signed_web_bundle_signature_stack_entry.cc",
      "web_bundle_builder.cc",
@@ -335,7 +335,7 @@
      "//base",
      "//components/base32",
      "//components/cbor",
-@@ -115,7 +111,6 @@ source_set("mojom_mapped_types_rust_impl") {
+@@ -115,7 +111,6 @@
    deps = [
      ":mojom_mapped_types_headers",
      "//base",
@@ -343,7 +343,7 @@
      "//crypto",
      "//mojo/public/cpp/bindings",
    ]
-@@ -159,8 +154,6 @@ source_set("unit_tests") {
+@@ -159,8 +154,6 @@
      ":web_package",
      "//base/test:test_support",
      "//components/cbor",
@@ -364,7 +364,7 @@
  
  namespace web_package {
  
-@@ -50,8 +51,9 @@ EcdsaP256SHA256Signature::EcdsaP256SHA256Signature(std::vector<uint8_t> bytes)
+@@ -50,8 +51,9 @@
  [[nodiscard]] bool EcdsaP256SHA256Signature::Verify(
      base::span<const uint8_t> message,
      const EcdsaP256PublicKey& public_key) const {
@@ -386,7 +386,7 @@
  #include "third_party/boringssl/src/include/openssl/curve25519.h"
  
  namespace web_package {
-@@ -43,8 +42,11 @@ Ed25519Signature::Ed25519Signature(std::array<uint8_t, kLength>& bytes)
+@@ -43,8 +42,11 @@
  [[nodiscard]] bool Ed25519Signature::Verify(
      base::span<const uint8_t> message,
      const Ed25519PublicKey& public_key) const {
@@ -482,7 +482,7 @@
  IntegrityBlockParser::IntegrityBlockParser(
      mojom::BundleDataSource& data_source,
      WebBundleParser::ParseIntegrityBlockCallback callback)
-@@ -102,37 +60,103 @@ void IntegrityBlockParser::OnIntegrityBlockRead(
+@@ -102,37 +60,103 @@
      RunErrorCallback("Error reading the integrity block.");
      return;
    }
@@ -609,7 +609,7 @@
    }
  
    std::move(complete_callback_)
-@@ -140,13 +164,74 @@ void IntegrityBlockParser::OnIntegrityBlockRead(
+@@ -140,13 +164,74 @@
                            std::move(integrity_block), nullptr));
  }
  
@@ -705,7 +705,7 @@
  #include "components/web_package/signed_web_bundles/types.h"
  #include "components/web_package/web_bundle_parser.h"
  
-@@ -20,7 +15,7 @@ namespace web_package {
+@@ -20,7 +15,7 @@
  class IntegrityBlockParser : public WebBundleParser::WebBundleSectionParser {
   public:
    explicit IntegrityBlockParser(
@@ -714,7 +714,7 @@
        WebBundleParser::ParseIntegrityBlockCallback callback);
  
    IntegrityBlockParser(const IntegrityBlockParser&) = delete;
-@@ -35,7 +30,10 @@ class IntegrityBlockParser : public WebBundleParser::WebBundleSectionParser {
+@@ -35,7 +30,10 @@
   private:
    void OnIntegrityBlockRead(const std::optional<BinaryData>& data);
  
@@ -728,7 +728,7 @@
  
 --- a/components/web_package/signed_web_bundles/rust/BUILD.gn
 +++ b/components/web_package/signed_web_bundles/rust/BUILD.gn
-@@ -11,7 +11,6 @@ rust_static_library("signed_web_bundles_rust") {
+@@ -11,7 +11,6 @@
    sources = [
      "constants.rs",
      "integrity_block.rs",
@@ -757,7 +757,7 @@
  #include "third_party/abseil-cpp/absl/functional/overload.h"
  #include "third_party/boringssl/src/include/openssl/sha.h"
  
-@@ -37,10 +40,32 @@ namespace {
+@@ -37,10 +40,32 @@
  
  std::vector<uint8_t> CreateIntegrityBlockCbor(
      const SignedWebBundleIntegrityBlock& integrity_block) {
@@ -794,7 +794,7 @@
  }
  
  base::expected<void, SignedWebBundleSignatureVerifier::Error>
-@@ -104,7 +129,7 @@ SignedWebBundleSignatureVerifier::CalculateHashOfUnsignedWebBundle(
+@@ -104,7 +129,7 @@
      return base::unexpected(base::File::ErrorToString(file.GetLastFileError()));
    }
  
@@ -803,7 +803,7 @@
  
    // Calculate the hash of the Signed Web Bundle excluding its integrity block.
    // The file might be too big to read it into memory all at once, which is why
-@@ -121,14 +146,15 @@ SignedWebBundleSignatureVerifier::CalculateHashOfUnsignedWebBundle(
+@@ -121,14 +146,15 @@
            base::File::ErrorToString(file.GetLastFileError()));
      }
      data.resize(*bytes_read);
@@ -869,7 +869,7 @@
  }  // namespace web_package
 --- a/components/webapps/isolated_web_apps/bundle_operations/bundle_operations.cc
 +++ b/components/webapps/isolated_web_apps/bundle_operations/bundle_operations.cc
-@@ -89,9 +89,7 @@ void ReadSignedWebBundleIdInsecurely(
+@@ -89,9 +89,7 @@
      const base::FilePath& path,
      base::OnceCallback<void(base::expected<web_package::SignedWebBundleId,
                                             std::string>)> callback) {
@@ -880,7 +880,7 @@
  }
  
  void ValidateSignedWebBundleSignatures(
-@@ -99,20 +97,6 @@ void ValidateSignedWebBundleSignatures(
+@@ -99,20 +97,6 @@
      const base::FilePath& path,
      const web_package::SignedWebBundleId& expected_web_bundle_id,
      base::OnceCallback<void(IntegrityBlockResult)> callback) {
@@ -903,7 +903,7 @@
  void CloseBundle(content::BrowserContext* browser_context,
 --- a/components/webapps/isolated_web_apps/reading/BUILD.gn
 +++ b/components/webapps/isolated_web_apps/reading/BUILD.gn
-@@ -16,8 +16,6 @@ source_set("reading") {
+@@ -16,8 +16,6 @@
      "response_reader_registry.h",
      "response_reader_registry_factory.cc",
      "response_reader_registry_factory.h",
@@ -914,7 +914,7 @@
    ]
 --- a/components/webapps/isolated_web_apps/reading/response_reader_factory.cc
 +++ b/components/webapps/isolated_web_apps/reading/response_reader_factory.cc
-@@ -45,19 +45,6 @@ void IsolatedWebAppResponseReaderFactory::CreateResponseReader(
+@@ -45,19 +45,6 @@
    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
    DCHECK(!web_bundle_id.is_for_proxy_mode());
  
@@ -936,7 +936,7 @@
  void IsolatedWebAppResponseReaderFactory::OnReaderCreated(
 --- a/services/network/web_bundle/web_bundle_url_loader_factory.cc
 +++ b/services/network/web_bundle/web_bundle_url_loader_factory.cc
-@@ -577,25 +577,6 @@ bool WebBundleURLLoaderFactory::HasError() const {
+@@ -574,25 +574,6 @@
  
  void WebBundleURLLoaderFactory::SetBundleStream(
      mojo::ScopedDataPipeConsumerHandle body) {
@@ -964,7 +964,7 @@
  mojo::PendingRemote<mojom::URLLoaderClient>
 --- a/third_party/blink/renderer/core/BUILD.gn
 +++ b/third_party/blink/renderer/core/BUILD.gn
-@@ -407,7 +407,6 @@ component("core") {
+@@ -407,7 +407,6 @@
    deps = [
      ":font_resource",
      ":generate_eventhandler_names",
@@ -972,7 +972,7 @@
      ":make_deprecation_info",
      ":xml_ffi",
      "//base",
-@@ -463,7 +462,6 @@ component("core") {
+@@ -463,7 +462,6 @@
    allow_circular_includes_from = [
      ":core_generated",
      ":core_hot",
@@ -980,7 +980,7 @@
      "//third_party/blink/renderer/core/animation",
      "//third_party/blink/renderer/core/exported",
      "//third_party/blink/renderer/core/probe",
-@@ -506,23 +504,6 @@ blink_core_sources("font_resource") {
+@@ -506,23 +504,6 @@
    ]
  }
  
@@ -1006,7 +1006,7 @@
  # here.
 --- a/third_party/blink/renderer/core/css/build.gni
 +++ b/third_party/blink/renderer/core/css/build.gni
-@@ -531,7 +531,6 @@ blink_core_sources_css = [
+@@ -528,7 +528,6 @@
    "hash_tools.h",
    "if_condition.cc",
    "if_condition.h",
@@ -1014,7 +1014,7 @@
    "inline_css_style_declaration.cc",
    "inline_css_style_declaration.h",
    "invalidation/invalidation_flags.cc",
-@@ -936,7 +935,6 @@ blink_core_tests_css = [
+@@ -933,7 +932,6 @@
    "font_size_functions_test.cc",
    "font_update_invalidation_test.cc",
    "force_dark_test.cc",
@@ -1032,7 +1032,7 @@
  #include "third_party/blink/renderer/core/dom/document.h"
  #include "third_party/blink/renderer/core/frame/local_dom_window.h"
  #include "third_party/blink/renderer/core/frame/local_frame.h"
-@@ -219,9 +218,6 @@ void RemoteFontFaceSource::NotifyFinished(Resource* resource) {
+@@ -216,9 +215,6 @@
    DCHECK(!custom_font_data_);
    if (resource->PassedIntegrityChecks() || !check_integrity) {
      custom_font_data_ = font->GetCustomFontData();
@@ -1042,7 +1042,7 @@
    }
    url_ = resource->Url().GetString();
  
-@@ -349,9 +345,7 @@ const SimpleFontData* RemoteFontFaceSource::CreateFontData(
+@@ -363,9 +359,7 @@
  
    histograms_.RecordFallbackTime();
  
@@ -1053,7 +1053,7 @@
    return MakeGarbageCollected<SimpleFontData>(
        custom_font_data_->GetFontPlatformData(
            font_description.EffectiveFontSize(),
-@@ -451,7 +445,6 @@ void RemoteFontFaceSource::Trace(Visitor* visitor) const {
+@@ -465,7 +459,6 @@
    visitor->Trace(face_);
    visitor->Trace(font_selector_);
    visitor->Trace(custom_font_data_);
@@ -1063,7 +1063,7 @@
  }
 --- a/third_party/blink/renderer/core/css/remote_font_face_source.h
 +++ b/third_party/blink/renderer/core/css/remote_font_face_source.h
-@@ -18,7 +18,6 @@ class CSSFontFace;
+@@ -18,7 +18,6 @@
  class Document;
  class FontCustomPlatformData;
  class FontSelector;
@@ -1071,7 +1071,7 @@
  
  class RemoteFontFaceSource final : public CSSFontFaceSource,
                                     public FontResourceClient {
-@@ -158,8 +157,6 @@ class RemoteFontFaceSource final : public CSSFontFaceSource,
+@@ -164,8 +163,6 @@
  
    // |nullptr| if font is not loaded or failed to decode.
    Member<const FontCustomPlatformData> custom_font_data_;
@@ -1090,7 +1090,7 @@
  #include "third_party/blink/renderer/platform/fonts/web_font_decoder.h"
  #include "third_party/blink/renderer/platform/heap/cross_thread_handle.h"
  #include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
-@@ -85,7 +84,8 @@ base::expected<DecodedWebFont, String> DecodeFont(SegmentedBuffer* buffer) {
+@@ -82,7 +81,8 @@
      return base::unexpected("");
    }
    auto decode_start_time = base::TimeTicks::Now();
@@ -1100,7 +1100,7 @@
    base::UmaHistogramMicrosecondsTimes(
        "Blink.Fonts.BackgroundDecodeTime",
        base::TimeTicks::Now() - decode_start_time);
-@@ -316,22 +316,13 @@ const FontCustomPlatformData* FontResource::GetCustomFontData() {
+@@ -313,22 +313,13 @@
          font_data_ = FontCustomPlatformData::Create(
              std::move(background_decode_result_->sk_typeface),
              background_decode_result_->decoded_size);
@@ -1125,7 +1125,7 @@
        }
      } else {
        ots_parsing_message_ = background_decode_result_.error();
-@@ -340,7 +331,6 @@ const FontCustomPlatformData* FontResource::GetCustomFontData() {
+@@ -337,7 +328,6 @@
  
    if (!font_data_) {
      SetStatus(ResourceStatus::kDecodeError);
@@ -1133,7 +1133,7 @@
    } else {
      // Call observers once and remove them.
      HeapHashSet<WeakMember<FontResourceClearDataObserver>> observers;
-@@ -353,10 +343,6 @@ const FontCustomPlatformData* FontResource::GetCustomFontData() {
+@@ -350,10 +340,6 @@
    return font_data_;
  }
  
@@ -1146,7 +1146,7 @@
    DCHECK(Loader()->IsCacheAwareLoadingActivated());
 --- a/third_party/blink/renderer/core/loader/resource/font_resource.h
 +++ b/third_party/blink/renderer/core/loader/resource/font_resource.h
-@@ -47,7 +47,6 @@ class FetchParameters;
+@@ -47,7 +47,6 @@
  class ResourceFetcher;
  class FontCustomPlatformData;
  class FontResourceClient;
@@ -1154,7 +1154,7 @@
  
  // An observer that will be notified when original data is cleared
  // from the resource. Inspector may collect this data and store it for
-@@ -78,7 +77,6 @@ class CORE_EXPORT FontResource final : public Resource {
+@@ -78,7 +77,6 @@
    String OtsParsingMessage() const { return ots_parsing_message_; }
  
    const FontCustomPlatformData* GetCustomFontData();
@@ -1162,7 +1162,7 @@
  
    // Returns true if the loading priority of the remote font resource can be
    // lowered. The loading priority of the font can be lowered only if the
-@@ -127,7 +125,6 @@ class CORE_EXPORT FontResource final : public Resource {
+@@ -127,7 +125,6 @@
    };
  
    Member<FontCustomPlatformData> font_data_;
@@ -1172,7 +1172,7 @@
    bool cors_failed_;
 --- a/third_party/blink/renderer/platform/BUILD.gn
 +++ b/third_party/blink/renderer/platform/BUILD.gn
-@@ -208,10 +208,7 @@ source_set("character_property_data") {
+@@ -208,10 +208,7 @@
  
  source_set("font_rust_headers") {
    visibility += [ "//third_party/blink/renderer/core:*" ]
@@ -1184,7 +1184,7 @@
    configs += [
      ":blink_platform_pch",
      ":blink_platform_config",
-@@ -219,11 +216,9 @@ source_set("font_rust_headers") {
+@@ -219,11 +216,9 @@
      "//third_party/blink/renderer:non_test_config",
    ]
    public_deps = [
@@ -1197,7 +1197,7 @@
      "//skia",
      "//third_party/blink/renderer/platform/wtf",
    ]
-@@ -233,7 +228,6 @@ source_set("font_rust_support") {
+@@ -233,7 +228,6 @@
    public = []
    sources = [
      "fonts/font_custom_platform_data.cc",
@@ -1205,7 +1205,7 @@
      "fonts/opentype/font_format_check.cc",
      "fonts/web_font_decoder.cc",
      "fonts/web_font_typeface_factory.cc",
-@@ -258,6 +252,18 @@ source_set("font_rust_support") {
+@@ -258,6 +252,18 @@
    ]
  }
  
@@ -1224,7 +1224,7 @@
  rust_static_library("rustfft_ffi") {
    allow_unsafe = true  # Needed for FFI that underpins the `cxx` crate.
    crate_root = "audio/rustfft_ffi.rs"
-@@ -325,7 +331,6 @@ group("blink_platform_public_deps") {
+@@ -325,7 +331,6 @@
      "//third_party/boringssl",
      "//third_party/libwebp",
      "//third_party/ots",
@@ -1232,7 +1232,7 @@
      "//ui/gfx/animation/keyframe",
      "//url",
      "//v8",
-@@ -2308,7 +2313,6 @@ source_set("blink_platform_unittests_sources") {
+@@ -2296,7 +2301,6 @@
      "fonts/font_test.cc",
      "fonts/font_test_utilities.cc",
      "fonts/generic_font_family_settings_test.cc",
@@ -1240,7 +1240,7 @@
      "fonts/opentype/color_table_lookup_test.cc",
      "fonts/opentype/font_format_check_test.cc",
      "fonts/opentype/font_settings_test.cc",
-@@ -2610,9 +2614,6 @@ source_set("blink_platform_unittests_sources") {
+@@ -2596,9 +2600,6 @@
      ":bridge_ice_controller_tests",
      ":font_rust_headers",
      ":rustfft_ffi_unittests",
@@ -1252,10 +1252,11 @@
    data_deps = [ ":blink_platform_unittests_data" ]
 --- a/third_party/blink/renderer/platform/fonts/font_custom_platform_data.cc
 +++ b/third_party/blink/renderer/platform/fonts/font_custom_platform_data.cc
-@@ -356,7 +356,8 @@ FontCustomPlatformData* FontCustomPlatformData::Create(
+@@ -358,8 +358,8 @@
      SharedBuffer* buffer,
      String& ots_parse_message) {
    DCHECK(buffer);
+-  // TODO(wmedrano): Avoid creating unused `IftPatcher` within `DecodedWebFont`.
 -  base::expected<DecodedWebFont, String> decode_result = DecodeWebFont(buffer);
 +  base::expected<DecodedWebFont, String> decode_result =
 +      DecodedWebFont::Create(buffer);
@@ -1318,7 +1319,7 @@
  }
  
  bool FontFormatCheck::IsVariableColrV0Font() const {
-@@ -58,7 +57,7 @@ bool FontFormatCheck::IsColorFont() const {
+@@ -58,7 +57,7 @@
  
  bool FontFormatCheck::IsAvar2Font() const {
    return RuntimeEnabledFeatures::FontFormatAvar2Enabled() &&
@@ -1338,7 +1339,7 @@
  #include "third_party/blink/renderer/platform/platform_export.h"
  #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
  #include "third_party/skia/include/core/SkData.h"
-@@ -19,7 +19,7 @@ class PLATFORM_EXPORT FontFormatCheck {
+@@ -19,7 +19,7 @@
  
   public:
    explicit FontFormatCheck(sk_sp<SkData>);
@@ -1347,7 +1348,7 @@
    virtual bool IsVariableFont() const;
    virtual bool IsCbdtCblcColorFont() const;
    virtual bool IsEbdtEblcMonochromeFont() const;
-@@ -46,7 +46,7 @@ class PLATFORM_EXPORT FontFormatCheck {
+@@ -46,7 +46,7 @@
    enum class COLRVersion { kCOLRV0, kCOLRV1, kNoCOLR };
  
   private:
@@ -1358,7 +1359,7 @@
  }  // namespace blink
 --- a/third_party/blink/renderer/platform/fonts/opentype/format_check.rs
 +++ b/third_party/blink/renderer/platform/fonts/opentype/format_check.rs
-@@ -23,7 +23,7 @@ pub struct FontFormatInfo {
+@@ -23,7 +23,7 @@
      format_flags: Option<FontFormatFlags>,
  }
  
@@ -1367,7 +1368,7 @@
      let file_ref = make_font_ref_internal(font_bytes, 0);
  
      match file_ref {
-@@ -32,11 +32,11 @@ pub fn get_font_format_info(font_bytes: &[u8]) -> FontFormatInfo {
+@@ -32,11 +32,11 @@
                  font.table_directory().table_records().iter().map(|e| e.tag()).collect();
              let color_version = get_colr_version(&font);
              let avar_version = get_avar_version(&font);
@@ -1382,7 +1383,7 @@
      }
  }
  
-@@ -44,10 +44,10 @@ fn get_colr_version(font_ref: &FontRef) -> Option<u16> {
+@@ -44,10 +44,10 @@
      Some(font_ref.colr().ok()?.version())
  }
  
@@ -1395,7 +1396,7 @@
      matches!(&format_info.format_flags, Some(FontFormatFlags { color_version: Some(0), .. }),)
  }
  
-@@ -58,7 +58,7 @@ fn get_avar_version(font_ref: &FontRef) -> Option<(u16, u16)> {
+@@ -58,7 +58,7 @@
  
  // https://crbug.com/513446410: For safety we want to pass unknown avar2
  // versions through fontations, too.
@@ -1404,7 +1405,7 @@
      matches!(
          &format_info.format_flags,
          Some(FontFormatFlags {
-@@ -77,22 +77,39 @@ fn has_tags(format_info: &FontFormatInfo, query: &[Tag]) -> bool {
+@@ -77,22 +77,39 @@
      }
  }
  
@@ -1479,7 +1480,7 @@
  
  namespace blink {
  
-@@ -65,11 +57,6 @@ const size_t kMaxDecompressedSizeMb = 30;
+@@ -65,11 +57,6 @@
  const size_t kMaxDecompressedSizeMb = 128;
  #endif
  
@@ -1491,7 +1492,7 @@
  class BlinkOTSContext final : public ots::OTSContext {
    DISALLOW_NEW();
  
-@@ -189,94 +176,17 @@ ots::TableAction BlinkOTSContext::GetTableAction(uint32_t tag) {
+@@ -189,94 +176,17 @@
    }
  }
  
@@ -1591,7 +1592,7 @@
    if (buffer->size() > kMaxDecompressedSize) {
      return base::unexpected(
          Format("Web font size more than {}MB", kMaxDecompressedSizeMb));
-@@ -291,11 +201,7 @@ base::expected<DecodedWebFont, String> DecodeWebFont(SegmentedBuffer* buffer) {
+@@ -291,11 +201,7 @@
    SegmentedBuffer::DeprecatedFlatData flattened_buffer(buffer);
  
    bool ok;
@@ -1604,7 +1605,7 @@
      TRACE_EVENT("blink", "DecodeFont");
      ok = ots_context.Process(
          output.get(), reinterpret_cast<const uint8_t*>(flattened_buffer.data()),
-@@ -307,9 +213,9 @@ base::expected<DecodedWebFont, String> DecodeWebFont(SegmentedBuffer* buffer) {
+@@ -307,9 +213,9 @@
    }
  
    const void* decoded_data = output->get();
@@ -1628,7 +1629,7 @@
  #include "base/types/expected.h"
  #include "third_party/blink/renderer/platform/platform_export.h"
  #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
-@@ -42,7 +40,6 @@ class SkTypeface;
+@@ -42,7 +40,6 @@
  
  namespace blink {
  
@@ -1636,7 +1637,7 @@
  class SegmentedBuffer;
  
  // Represents a font that has been successfully decoded and sanitized.
-@@ -56,32 +53,18 @@ struct PLATFORM_EXPORT DecodedWebFont {
+@@ -56,32 +53,18 @@
    // The size of the font after decoding and sanitizing.
    size_t decoded_size = 0;
  

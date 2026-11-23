@@ -1,10 +1,10 @@
 # ungoogled-chromium-portablelinux's fix-compiling-on-arm64.patch at 6f0aa178c239 (its
-# 156.0.8078.79-1 tag), rebased by ilo onto Chromium 157.0.8103.50 until it tags 157. Changed from
-# upstream's: 157 moved the bindgen build's Debian sysroot download into tools/rust/host_tools.py,
-# so that hunk moves there; build_rust.py keeps its GitCherryPick import, which 157 calls for a
-# Rust cherry-pick; and the two ncursesw and OpenSSL URL f-strings get the closing parenthesis
-# upstream's copy is missing. The hunks only run on arm64, where shared.sh builds Rust and bindgen
-# from source.
+# 156.0.8078.79-1 tag), rebased by ilo onto Chromium 157.0.8103.50, and taken as it is by
+# 158.0.8127.36, until it tags 158. Changed from upstream's: 157 moved the bindgen build's Debian
+# sysroot download into tools/rust/host_tools.py, so that hunk moves there; build_rust.py keeps its
+# GitCherryPick import, which 157 calls for a Rust cherry-pick; and the two ncursesw and OpenSSL
+# URL f-strings get the closing parenthesis upstream's copy is missing. The hunks only run on
+# arm64, where shared.sh builds Rust and bindgen from source.
 --- a/build/toolchain/linux/BUILD.gn
 +++ b/build/toolchain/linux/BUILD.gn
 @@ -182,6 +182,13 @@ clang_v8_toolchain("clang_x64_v8_loong64") {

@@ -5,9 +5,9 @@ Apache License 2.0.
 
 --- a/components/remote_cocoa/app_shim/bridged_content_view.h
 +++ b/components/remote_cocoa/app_shim/bridged_content_view.h
-@@ -57,6 +57,11 @@
- @property(assign, nonatomic) BOOL drawMenuBackgroundForBlur;
- @property(strong, nonatomic) NSEvent* keyDownEventForTesting;
+@@ -71,6 +71,11 @@
+ // ends.
+ @property(assign, nonatomic) BOOL deferInputContextActivation;
  
 +// browser_core: a subview showing the core's app UI and pages over the widget's views. Hit testing
 +// and accessibility ask it first, so the points it covers reach its views and assistive
@@ -19,15 +19,15 @@ Apache License 2.0.
                          bounds:(gfx::Rect)rect;
 --- a/components/remote_cocoa/app_shim/bridged_content_view.mm
 +++ b/components/remote_cocoa/app_shim/bridged_content_view.mm
-@@ -198,6 +198,7 @@
- @synthesize bridge = _bridge;
+@@ -221,6 +221,7 @@
  @synthesize drawMenuBackgroundForBlur = _drawMenuBackgroundForBlur;
  @synthesize keyDownEventForTesting = _keyDownEvent;
+ @synthesize deferInputContextActivation = _deferInputContextActivation;
 +@synthesize embeddedView = _embeddedView;
  
  - (instancetype)initWithBridge:(remote_cocoa::NativeWidgetNSWindowBridge*)bridge
                          bounds:(gfx::Rect)bounds {
-@@ -291,6 +292,13 @@
+@@ -369,6 +370,13 @@
    // This is important when the window has a native titlebar, in which case the
    // superview is taller than the contentView.
    NSPoint pointInView = [self convertPoint:point fromView:self.superview];
@@ -41,7 +41,7 @@ Apache License 2.0.
    gfx::Point flippedPoint(point.x, NSHeight(self.frame) - pointInView.y);
    remote_cocoa::mojom::HitTestResult hitTestResult;
    _bridge->host()->GetHitTestResult(flippedPoint, &hitTestResult);
-@@ -1714,6 +1722,10 @@
+@@ -1812,6 +1820,10 @@
  // NSAccessibility formal protocol implementation:
  
  - (NSArray*)accessibilityChildren {
@@ -52,7 +52,7 @@ Apache License 2.0.
    if (id accessible = _bridge->host_helper()->GetNativeViewAccessible())
      return @[ accessible ];
    return [super accessibilityChildren];
-@@ -1721,7 +1733,19 @@
+@@ -1819,7 +1831,19 @@
  
  // NSAccessibility informal protocol implementation:
  
