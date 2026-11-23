@@ -8761,8 +8761,8 @@ mod sessions {
     }
 
     /// A page another connection still works in stays out of its opener's ended card (#3837):
-    /// that card doesn't offer it, and its going doesn't close it. Once the other connection ends
-    /// too, the opener's card offers it again, as its page.
+    /// that card doesn't offer it, and its going doesn't close it but makes it the other's page.
+    /// Kept, once the other connection ends too, the opener's card offers it again, as its page.
     #[gpui::test]
     fn an_ended_card_leaves_a_page_another_connection_works_in(cx: &mut TestAppContext) {
         let (agents, browser) = at_work(cx);
@@ -8789,6 +8789,17 @@ mod sessions {
         agents.update(cx, |agents, cx| agents.drop_task(&first, cx));
         assert!(open(&browser), "the page the second works in closed");
         assert!(!browser.tabs.borrow().iter().any(|tab| tab.0 == 20));
+        // It's the second's page now: its card offers it once it ends, and no other card does.
+        closed(&agents, 2, cx);
+        bye(&agents, cx);
+        assert_eq!(
+            card(&agents, &second, cx).open,
+            vec![(30, "example.org".into())]
+        );
+        let offered = (cards(&agents, cx).iter())
+            .filter(|card| card.open.iter().any(|(tab, _)| *tab == 30))
+            .count();
+        assert_eq!(offered, 1, "offered by {offered} cards");
 
         // Again, with the opener's card kept.
         let (agents, browser) = at_work(cx);

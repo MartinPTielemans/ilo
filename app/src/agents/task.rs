@@ -1571,10 +1571,14 @@ impl Agents {
         // check.sh reads this line.
         log!("browser: task {agent} dropped");
         // A session's Space is its client's, which keeps the tabs of its other sessions: its own
-        // close, but for any a session under way works in.
+        // close, but for any a session under way works in, which becomes that one's page, so its
+        // card offers it once it ends (#3837).
         if let Some(session) = task.session {
             let pages = self.pages_of(&session, task.space, cx);
             let live = self.worked_in();
+            for &tab in pages.iter().filter(|tab| live.contains(tab)) {
+                self.hand_over(tab);
+            }
             for tab in pages.into_iter().filter(|tab| !live.contains(tab)) {
                 // The task is gone from the list, so `left` wouldn't find whose it was.
                 if !self.gone.contains_key(&tab) {
@@ -1601,6 +1605,17 @@ impl Agents {
             .map(|session| session.agent.clone());
         if let Some(agent) = whose.filter(|_| !self.gone.contains_key(&tab)) {
             self.went(tab, &agent, gone);
+        }
+    }
+
+    /// `tab`, whose card went, becomes the page of the first session under way that acted in it.
+    fn hand_over(&mut self, tab: u64) {
+        let heir = (self.tasks.tasks.iter_mut())
+            .filter(|task| task.state == State::Working)
+            .filter_map(|task| task.session.as_mut())
+            .find(|session| session.acted.contains(&tab));
+        if let Some(heir) = heir.filter(|heir| !heir.tabs.contains(&tab)) {
+            heir.tabs.push(tab);
         }
     }
 
