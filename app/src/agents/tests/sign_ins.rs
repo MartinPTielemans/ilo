@@ -219,7 +219,12 @@ fn no_agent_reaches_a_sign_in() {
         ("task.rs", include_str!("../task.rs")),
     ];
     for (file, source) in reached {
-        // Not `Cli::sign_in`, the command a row copied before #4100.
+        // A card's Sign in to … comes only from the user's press, through the shell.
+        if file != "task.rs" {
+            for action in ["TaskAction::SignIn", "TaskAction::CancelSignIn"] {
+                assert!(!source.contains(action), "{file} sends {action}");
+            }
+        }
         let calls = [
             "sign_in(Cli::",
             "sign_in(cli,",
