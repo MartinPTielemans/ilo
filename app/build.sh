@@ -20,7 +20,8 @@ engine_changes() {
 }
 # On Linux, build/Browser: a copy of the engine, chrome and what it runs with, and libBrowser.so
 # beside it, which chrome loads (linux/Cargo.toml). Hard links, as chrome finds its files and the
-# app's beside its own path, which a symbolic link would leave in the engine's folder.
+# app's beside its own path, which a symbolic link would leave in the engine's folder, or a copy
+# when the engine is on another file system, as engine/fetch.sh's cache can be.
 if [ "$(uname -s)" = Linux ]; then
   [ -e .deps/engine/chrome ] || ./setup.sh
   [ -e .deps/engine/chrome ] || { echo "No Linux engine in .deps/engine." >&2; exit 1; }
@@ -36,7 +37,11 @@ if [ "$(uname -s)" = Linux ]; then
   cargo build --release --bin mcp-bridge --bin ilo-command $features
   rm -rf build/Browser
   mkdir -p build
-  cp -al "$(cd .deps/engine && pwd -P)" build/Browser
+  engine=$(cd .deps/engine && pwd -P)
+  if ! cp -al "$engine" build/Browser 2>/dev/null; then
+    rm -rf build/Browser
+    cp -a "$engine" build/Browser
+  fi
   cp target/release/libBrowser.so target/release/mcp-bridge target/release/ilo-command build/Browser/
   # uBlock Origin and a Board's page go beside chrome, Chromium's assets folder off the Mac, where
   # the core loads them.
