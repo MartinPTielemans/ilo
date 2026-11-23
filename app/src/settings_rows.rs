@@ -23,11 +23,11 @@ use crate::tokens::settings::{
     CONTROL_HOVERED_LIGHT, CONTROL_LIGHT, CONTROL_PADDING, CONTROL_PRESSED, CONTROL_PRESSED_LIGHT,
     CONTROL_RADIUS, DETAIL, DETAIL_LINE, DETAIL_TOP, END_GAP, GLYPH, GLYPH_OFF, GLYPH_ON,
     GLYPH_PLATE, GLYPH_PLATE_FILL, GLYPH_PLATE_GAP, GROUP, GROUP_LIGHT, GROUP_RIM,
-    GROUP_RING_LIGHT, GROUP_SHADOW_BLUR, GROUP_SHADOW_LIGHT, GROUP_SHADOW_Y, HEADING,
-    KNOB, KNOB_ALPHA, KNOB_INSET, KNOB_SHADOW, KNOB_SHADOW_BLUR, KNOB_SHADOW_Y,
-    LINE, NAME, NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE, ON_PRESSED, ON_SWITCH_OFF,
-    PADDING, RESTORE_RADIUS, ROW_HEIGHT, ROW_X, SIDE_ROOM, SWITCH_HEIGHT, SWITCH_OFF,
-    SWITCH_OFF_LIGHT, SWITCH_WIDTH,
+    GROUP_RING_LIGHT, GROUP_SHADOW_BLUR, GROUP_SHADOW_LIGHT, GROUP_SHADOW_Y, HEADING, KNOB,
+    KNOB_ALPHA, KNOB_INSET, KNOB_SHADOW, KNOB_SHADOW_BLUR, KNOB_SHADOW_Y, LINE, NAME, NAME_OFF,
+    ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE, ON_PRESSED, ON_SWITCH_OFF, PADDING, RESTORE_RADIUS,
+    ROW_HEIGHT, ROW_X, SIDE_ROOM, STACKED_GAP, SWITCH_HEIGHT, SWITCH_OFF, SWITCH_OFF_LIGHT,
+    SWITCH_WIDTH,
 };
 use crate::tokens::settings::{SENT_CHEVRON, SENT_GAP, SENT_INDENT, SENT_LABEL, SENT_LINES};
 use crate::tokens::shell::{KEYED, KEYED_RING};
@@ -627,6 +627,23 @@ pub fn pictured(
             .mr(px(-SIDE_ROOM))
             .child(pictures),
     )
+}
+
+/// A row whose control is too wide for its end, such as Transparency's pictures: its name and
+/// `line`, then the control across the row under them, `inset` wider on each side than the text,
+/// so the control's own room keeps what it draws in the text's column.
+pub fn stacked(
+    look: &Look,
+    name: impl Into<SharedString>,
+    line: SharedString,
+    inset: f32,
+    control: impl IntoElement,
+) -> gpui::Div {
+    frame()
+        .flex_col()
+        .items_stretch()
+        .child(text(look, name, Some(line)))
+        .child(div().mt(px(STACKED_GAP)).mx(px(-inset)).child(control))
 }
 
 /// A feature's glyph on its quiet plate, 12 before its name, quieter while it's off.

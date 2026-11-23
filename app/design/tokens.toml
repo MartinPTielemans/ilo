@@ -1133,6 +1133,9 @@ detail-top = 6.0
 detail-line = 16.0
 end-gap = 16.0
 control-gap = 8.0
+# A control too wide for a row's end, such as Transparency's pictures, goes under its text, this
+# far under the line (the mock's 12).
+stacked-gap = 12.0
 # A feature's row leads with its glyph on a quiet plate, 12 before its name, and its own settings
 # under it start where its name does.
 glyph-plate = 28.0

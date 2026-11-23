@@ -38,10 +38,7 @@ impl Render for Shown {
     }
 }
 
-fn shown(
-    chosen: Transparency,
-    cx: &mut TestAppContext,
-) -> (Entity<Shown>, &mut VisualTestContext) {
+fn shown(chosen: Transparency, cx: &mut TestAppContext) -> (Entity<Shown>, &mut VisualTestContext) {
     let (view, cx) = cx.add_window_view(|_, cx| Shown {
         chosen,
         picks: Vec::new(),
@@ -106,8 +103,16 @@ fn it_shows_the_level_it_is_given_and_what_that_level_does(cx: &mut TestAppConte
 fn a_click_on_each_picture_picks_its_level_and_the_line_follows(cx: &mut TestAppContext) {
     let (view, cx) = shown(Transparency::Standard, cx);
     cx.simulate_click(picture_at(Transparency::Standard), Modifiers::none());
-    assert_eq!(picks(&view, cx), [], "a click on the chosen one picked it again");
-    for level in [Transparency::More, Transparency::Less, Transparency::Standard] {
+    assert_eq!(
+        picks(&view, cx),
+        [],
+        "a click on the chosen one picked it again"
+    );
+    for level in [
+        Transparency::More,
+        Transparency::Less,
+        Transparency::Standard,
+    ] {
         cx.simulate_click(picture_at(level), Modifiers::none());
         cx.run_until_parked();
         assert_eq!(picks(&view, cx).last(), Some(&level));
@@ -134,13 +139,20 @@ fn arrows_move_the_choice_once_the_picker_has_the_keyboard(cx: &mut TestAppConte
     cx.simulate_keystrokes("left left");
     assert_eq!(
         picks(&view, cx),
-        [Transparency::More, Transparency::Standard, Transparency::Less]
+        [
+            Transparency::More,
+            Transparency::Standard,
+            Transparency::Less
+        ]
     );
     cx.simulate_keystrokes("left");
     assert_eq!(picks(&view, cx).len(), 3, "← past Less picked");
     assert_eq!(
         showing(cx),
-        (vec![Transparency::Less], Transparency::Less.line().to_string())
+        (
+            vec![Transparency::Less],
+            Transparency::Less.line().to_string()
+        )
     );
 }
 
@@ -185,7 +197,92 @@ fn the_drawn_material_gives_its_measured_colours() {
         let fill = material(dark);
         for (under, measured) in [(1., white), (0., black)] {
             let got = under * (1. - fill.a) + fill.r * fill.a;
-            assert!((got - rgb(measured).r).abs() < 0.002, "{dark} {under}: {got}");
+            assert!(
+                (got - rgb(measured).r).abs() < 0.002,
+                "{dark} {under}: {got}"
+            );
         }
     }
+}
+
+/// Settings' row in a window of its own, the level kept in a folder of the test's.
+struct Settings {
+    glass: bool,
+}
+
+impl Render for Settings {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let look = crate::settings_rows::Look::settings(true);
+        div()
+            .size_full()
+            .p(px(INSET))
+            .children(row(&look, self.glass, cx))
+    }
+}
+
+/// A folder of the test's own, empty, for the level to be kept in.
+fn folder(name: &str) -> String {
+    let dir = std::env::temp_dir().join(format!("ilo-transparency-{}-{name}", std::process::id()));
+    _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.to_string_lossy().into_owned()
+}
+
+fn settings<'a>(dir: &str, glass: bool, cx: &'a mut TestAppContext) -> &'a mut VisualTestContext {
+    let dir = dir.to_string();
+    cx.update(|cx| keep_in(dir, cx));
+    let (_, cx) = cx.add_window_view(|_, _| Settings { glass });
+    cx.simulate_resize(size(px(WIDTH), px(400.)));
+    cx.simulate_a11y_activation();
+    cx.run_until_parked();
+    cx
+}
+
+#[gpui::test]
+fn the_row_shows_the_stored_level(cx: &mut TestAppContext) {
+    let dir = folder("shows");
+    std::fs::write(format!("{dir}/transparency"), "more").unwrap();
+    let cx = settings(&dir, true, cx);
+    assert_eq!(showing(cx).0, [Transparency::More]);
+}
+
+#[gpui::test]
+fn a_pick_in_the_row_is_kept_and_shown(cx: &mut TestAppContext) {
+    let dir = folder("keeps");
+    let cx = settings(&dir, true, cx);
+    assert_eq!(
+        showing(cx).0,
+        [Transparency::Standard],
+        "none kept is Standard"
+    );
+    for level in [
+        Transparency::Less,
+        Transparency::More,
+        Transparency::Standard,
+    ] {
+        let (id, _) = named(cx, Role::RadioButton, level.title());
+        cx.simulate_a11y_action(id, Action::Click);
+        cx.run_until_parked();
+        assert_eq!(stored_in(&dir), level);
+        assert_eq!(showing(cx), (vec![level], level.line().to_string()));
+        assert_eq!(cx.update(|_, cx| super::level(cx)), level);
+    }
+    assert!(
+        !std::path::Path::new(&format!("{dir}/transparency")).exists(),
+        "Standard left a file"
+    );
+}
+
+#[gpui::test]
+fn the_row_is_absent_where_the_host_has_no_glass(cx: &mut TestAppContext) {
+    let dir = folder("absent");
+    let cx = settings(&dir, false, cx);
+    let tree = cx.a11y_tree().expect("no accessibility tree");
+    assert!(
+        !tree
+            .nodes
+            .iter()
+            .any(|(_, node)| node.label() == Some(NAME)),
+        "a Transparency control was drawn"
+    );
 }

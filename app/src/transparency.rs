@@ -18,7 +18,7 @@ use gpui::{
 
 use crate::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
 use crate::settings_pictures::keyed;
-use crate::settings_rows::ring;
+use crate::settings_rows::{Look, ring, stacked};
 use crate::tokens::palette::{
     LIGHT_MATERIAL_OVER_BLACK, LIGHT_MATERIAL_OVER_WHITE, LIGHT_TINT, LIGHT_TINT_LESS,
     LIGHT_TINT_MORE, MATERIAL_OVER_BLACK, MATERIAL_OVER_WHITE, OVERLAY_FILL, OVERLAY_FILL_LESS,
@@ -29,8 +29,8 @@ use crate::tokens::transparency::{
     BRIGHT, BRIGHT_HEIGHT, BRIGHT_LINE, BRIGHT_LINE_FIRST, BRIGHT_LINE_GAP, BRIGHT_LINE_HEIGHT,
     BRIGHT_LINE_WIDTH, BRIGHT_LINE_X, BRIGHT_LINE_Y, BRIGHT_RADIUS, BRIGHT_WIDTH, BRIGHT_X,
     BRIGHT_Y, DESKTOP_ANGLE, DESKTOP_FROM, DESKTOP_LAST, DESKTOP_TO, DESKTOP_TO_STOP, DOT,
-    DOT_ALPHA, DOT_GAP, DOT_INSET, EDGE, EDGE_WIDTH, GAP, HAIRLINE, HEIGHT, LABEL_GAP, LABEL_OFF, LINE,
-    LINE_TOP, MENU_HAIRLINE, MENU_PADDING, MENU_PLATE, MENU_RADIUS, MENU_RIM, MENU_ROW,
+    DOT_ALPHA, DOT_GAP, DOT_INSET, EDGE, EDGE_WIDTH, GAP, HAIRLINE, HEIGHT, LABEL_GAP, LABEL_OFF,
+    LINE, LINE_TOP, MENU_HAIRLINE, MENU_PADDING, MENU_PLATE, MENU_RADIUS, MENU_RIM, MENU_ROW,
     MENU_ROW_PADDING, MENU_ROW_RADIUS, MENU_SHADOW, MENU_SHADOW_BLUR, MENU_SHADOW_Y, MENU_WIDTH,
     MENU_X, MENU_Y, PAGE, PAGE_HEADING, PAGE_HEADING_HEIGHT, PAGE_HEADING_WIDTH, PAGE_LINE,
     PAGE_LINE_HEIGHT, PAGE_LINE_WIDTH, PAGE_LINE_X, PAGE_LINE_Y, PAGE_LINES, PAGE_RADIUS,
@@ -123,6 +123,80 @@ impl Transparency {
     }
 }
 
+/// The setting's name and what it does, in Settings' row and as its search reads it.
+pub const NAME: &str = "Transparency";
+pub const ABOUT: &str =
+    "How much of what’s behind ilo shows through its window, its menus and the command bar.";
+/// Under Settings' group on the Mac, where the system's setting overrides every level.
+pub const REDUCE_TRANSPARENCY_WINS: &str =
+    "Your Mac’s Reduce Transparency still wins: with it on, ilo is solid at every level.";
+
+/// The level the app is at and the folder it's kept in, read the first time it's asked.
+struct Kept {
+    level: Transparency,
+    dir: String,
+}
+
+impl gpui::Global for Kept {}
+
+/// The file the level is kept in, in the app's own folder: none while it's Standard.
+const FILE: &str = "transparency";
+
+/// The level kept in `dir`, Standard if none is, or if what's there names no level.
+pub fn stored_in(dir: &str) -> Transparency {
+    std::fs::read_to_string(format!("{dir}/{FILE}"))
+        .ok()
+        .and_then(|key| Transparency::named(key.trim()))
+        .unwrap_or_default()
+}
+
+/// Keeps the level in `dir`, as the app keeps it in its profile's folder.
+fn keep_in(dir: String, cx: &mut App) {
+    let level = stored_in(&dir);
+    cx.set_global(Kept { level, dir });
+}
+
+/// The level the app is at.
+pub fn level(cx: &mut App) -> Transparency {
+    if !cx.has_global::<Kept>() {
+        keep_in(crate::profile_dir(), cx);
+    }
+    cx.global::<Kept>().level
+}
+
+/// The one way a level is set: it's kept, and every window draws again at it. What applies the
+/// level to the window, its menus and the command bar reads `level` as it draws, so it needs no call
+/// of its own; the window lane (#4128) hooks here if it needs one.
+pub fn set(level: Transparency, cx: &mut App) {
+    if !cx.has_global::<Kept>() {
+        keep_in(crate::profile_dir(), cx);
+    }
+    let kept = cx.global_mut::<Kept>();
+    kept.level = level;
+    let path = format!("{}/{FILE}", kept.dir);
+    _ = match level {
+        Transparency::Standard => std::fs::remove_file(path),
+        _ => std::fs::write(path, level.key()),
+    };
+    cx.refresh_windows();
+}
+
+/// Settings' row, where the host has `glass` behind the window: the setting's name, what it does,
+/// and the picker under them across the row at the level the app is at, the pictures' edges in
+/// line with the text.
+pub fn row(look: &Look, glass: bool, cx: &mut App) -> Option<gpui::Div> {
+    let chosen = level(cx);
+    let picker = picker(chosen, !look.light(), |level, _, cx| set(level, cx));
+    glass.then(|| stacked(look, NAME, ABOUT.into(), ROOM + RING + RING_GAP, picker))
+}
+
+/// Whether ilo's window has a material behind it for the levels to show, and so the setting to
+/// pick one: the Mac's. Stands in until the host answers it itself, which the window lane (#4128)
+/// adds to the host; this goes then, and its callers ask the host.
+pub fn has_glass() -> bool {
+    cfg!(target_os = "macos")
+}
+
 /// What the picker calls with the level picked, by a click or a key, when it isn't the one chosen.
 pub type Pick = Rc<dyn Fn(Transparency, &mut Window, &mut App)>;
 
@@ -157,7 +231,7 @@ impl RenderOnce for Picker {
         let keyed_pick = pick.clone();
         let line = div()
             .mt(px(LINE_TOP))
-            .mx(px(ROOM))
+            .mx(px(ROOM + RING + RING_GAP))
             .text_size(px(SMALL))
             .text_color(ink.opacity(LINE))
             .child(chosen.line());
@@ -249,7 +323,10 @@ fn option(
 fn material(dark: bool) -> Rgba {
     let (white, black) = match dark {
         true => (rgb(MATERIAL_OVER_WHITE), rgb(MATERIAL_OVER_BLACK)),
-        false => (rgb(LIGHT_MATERIAL_OVER_WHITE), rgb(LIGHT_MATERIAL_OVER_BLACK)),
+        false => (
+            rgb(LIGHT_MATERIAL_OVER_WHITE),
+            rgb(LIGHT_MATERIAL_OVER_BLACK),
+        ),
     };
     let alpha = 1. - (white.r - black.r);
     Rgba {
