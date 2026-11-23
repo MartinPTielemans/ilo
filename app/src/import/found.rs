@@ -174,11 +174,6 @@ pub const TAB_GROUP: Item = Item {
     one: "a tab group",
     many: "tab groups",
 };
-/// Ardia's, where its own words call it stacked and it can't come as a split here.
-pub const STACKED_SPLIT: Item = Item {
-    one: "a stacked split",
-    many: "stacked splits",
-};
 /// A tab at an address that can't open here and isn't one of the pages `quiet` names.
 pub const NOT_WEB_PAGE: Item = Item {
     one: "a tab that isn't a web page",
