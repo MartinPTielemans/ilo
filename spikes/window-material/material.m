@@ -316,8 +316,8 @@ static NSArray<NSString*>* InTheWay(NSArray<NSDictionary*>* others, CGRect area,
 
 // Where the backdrop goes: the first spot on the main screen, clear of the menu bar, the Dock and
 // the top right's 400 by 200 pt, where a banner may slide in mid-run, that none of OthersOnScreen
-// comes within 64 pt of, so their shadows fall short of it too, from the foot and the left. Else none, and |error| names what's in the way of the
-// screen's middle.
+// comes within 64 pt of, so their shadows fall short of it too, from the foot and the left. Else
+// none, and |error| names what's in the way of the screen's middle.
 static BOOL PlaceBackdrop(NSRect* back, NSString** error) {
   NSRect screen = NSScreen.screens.firstObject.visibleFrame;
   const CGRect banners =
