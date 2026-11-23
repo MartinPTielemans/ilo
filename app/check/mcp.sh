@@ -3844,7 +3844,7 @@ CARD
         held=
         for _ in $(seq 50); do
           held=$(python3 -I check/app-windows.py list "$(cat "/proc/$pid/winpid")" |
-            sed 's/^.*" //' | grep -w browser | grep -w disabled)
+            sed 's/^.*" //' | grep -w browser | grep -w disabled || true)
           [ -z "$held" ] && break
           sleep 0.1
         done
