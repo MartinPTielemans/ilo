@@ -24,6 +24,22 @@ path = "src/bridge.rs"
 name = "ilo-command"
 path = "src/ilo_command.rs"
 
+# The edit loop's unit tests and preview (`cargo test --profile fast --lib`): the dependencies,
+# GPUI's among them, optimised as in release and built once, and this crate lightly and
+# incrementally, so a change rebuilds in seconds. What's measured or shipped (check.sh, perf,
+# prod, CI) stays `--release`. It inherits release's settings, debug assertions off included, so
+# the tests see the same arithmetic.
+[profile.fast]
+inherits = "release"
+opt-level = 1
+incremental = true
+codegen-units = 256
+
+[profile.fast.package."*"]
+opt-level = 3
+codegen-units = 16
+incremental = false
+
 [features]
 # The build for daily use (`build.sh prod`): the user's profile and the real Keychain.
 prod = []
