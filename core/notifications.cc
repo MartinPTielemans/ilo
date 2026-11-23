@@ -1,9 +1,10 @@
 // The unseen notifications a page posts, as its favorite's badge counts them: the core hears of
 // each notification a page's document posted as Chromium displays it (NotificationDisplayService's
-// observer), counts it on the tab holding the document if no window shows it, and clears the count
-// as a window shows the tab again (Tab::Shown). A notification a worker posted has no document and
-// counts for no tab, as Chrome's click opens none either. Not an agent's: its Space's tabs are the
-// agent's.
+// observer), asks the engine for the document that posted it, by the notification's id
+// (NotificationEventDispatcher), and counts it on that document's tab if no window shows it,
+// clearing the count as a window shows the tab again (Tab::Shown). A notification a worker posted
+// has no document and counts for no tab, as Chrome's click opens none either. Not an agent's: its
+// Space's tabs are the agent's.
 
 #include "browser_core/notifications.h"
 
@@ -19,21 +20,23 @@
 #include "chrome/browser/notifications/notification_display_service.h"
 #include "chrome/browser/notifications/notification_display_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "content/public/browser/notification_event_dispatcher.h"
+#include "content/public/browser/render_frame_host.h"
+#include "content/public/browser/web_contents.h"
 #include "url/gurl.h"
 
 namespace browser_core {
 
 namespace {
 
-// Lives as long as the profile, watching its notifications: a notification's document can be held
-// by the profile's own tabs alone, so each profile hears its own.
+// Lives as long as the profile, watching its notifications: the profile's display service
+// hears its own pages' notifications alone, so each profile hears its own.
 class Notifications : public base::SupportsUserData::Data,
                      public NotificationDisplayService::Observer {
  public:
   static constexpr char kKey[] = "browser_core::Notifications";
 
-  Notifications(Profile* profile, NotificationDisplayService* service)
-      : profile_(profile), service_(service) {
+  explicit Notifications(NotificationDisplayService* service) : service_(service) {
     service_->AddObserver(this);
   }
 
@@ -46,30 +49,35 @@ class Notifications : public base::SupportsUserData::Data,
   }
 
   // NotificationDisplayService::Observer:
-  // The notification is displayed: counted on the tab holding the page that posted it, if no
-  // window shows it. Chromium runs this before the notification reaches the desktop.
+  // The notification is displayed: counted on the tab of the document that posted it, if no window
+  // shows it. Chromium runs this before the notification reaches the desktop.
   void OnNotificationDisplayed(const message_center::Notification& notification,
                                const NotificationCommon::Metadata* const metadata) override {
     if (!UserSettings().favorite_notification_badges) {
       return;
     }
     // Only a page's own: an extension's, a download's, a call's and the rest are the browser's,
-    // not a favorite's, and a worker's has no document to hold it.
+    // not a favorite's.
     if (!metadata || metadata->type != NotificationHandler::Type::WEB_NON_PERSISTENT) {
       return;
     }
-    const NonPersistentNotificationMetadata* page =
-        NonPersistentNotificationMetadata::From(metadata);
-    const GURL document = page ? page->document_url : GURL();
-    if (!document.is_valid() || !document.SchemeIsHTTPOrHTTPS()) {
+    // The document that posted it, as the engine holds it for the notification's id: the page
+    // itself, whatever frame of the tab posted, where matching its URL against the tabs could
+    // only guess, and guessed wrong with two tabs at one URL. The observer hears its own profile's
+    // displays alone, and a display's notification was registered by the page that posted it, so
+    // the answer is one of this profile's documents. Null for a worker's, and for one whose page
+    // closed or navigated away, as its notification in Chrome is no document's once it is gone.
+    content::RenderFrameHost* document =
+        NotificationEventDispatcher::GetInstance()->GetNonPersistentNotificationDocument(
+            notification.id());
+    if (!document || !document->GetLastCommittedURL().SchemeIsHTTPOrHTTPS()) {
       return;
     }
-    // The profile's tab whose page is at the document, if the page is in one. A page that posts a
-    // notification and closes leaves none, as its notification does in Chrome once its document is
-    // gone. An agent's tab is the agent's, and its page's notifications are its own to read there,
-    // not the user's unseen ones.
-    Tab* tab = Tab::HoldingDocument(document, profile_);
-    if (!tab || IsAgentTab(tab->web_contents()) || Window::Showing(tab->id())) {
+    // The tab of the page that posted it. An agent's tab is the agent's, and its page's
+    // notifications are its own to read there, not the user's unseen ones.
+    content::WebContents* contents = content::WebContents::FromRenderFrameHost(document);
+    Tab* tab = Tab::FromWebContents(contents);
+    if (!tab || IsAgentTab(contents) || Window::Showing(tab->id())) {
       return;
     }
     // The notification's id, as Chromium holds it for the document's page: the tab counts it once,
@@ -86,7 +94,6 @@ class Notifications : public base::SupportsUserData::Data,
   }
 
  private:
-  const raw_ptr<Profile> profile_;
   raw_ptr<NotificationDisplayService> service_;
 };
 
@@ -102,7 +109,7 @@ void ObserveNotifications(Profile* profile) {
     return;
   }
   profile->SetUserData(
-      Notifications::kKey, std::make_unique<Notifications>(profile, service));
+      Notifications::kKey, std::make_unique<Notifications>(service));
 }
 
 void ClearFavoriteNotificationCounts() {

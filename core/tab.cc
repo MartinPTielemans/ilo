@@ -319,20 +319,6 @@ std::vector<Tab*> Tab::All() {
 }
 
 // static
-Tab* Tab::HoldingDocument(const GURL& document, Profile* profile) {
-  for (Tab* tab : All()) {
-    // The page the notification's document names, as Chrome matches it to its renderer's
-    // documents: the page's own URL, not the site's. Only the profile's own tabs, as a page of
-    // another profile's at the same URL is another notification's.
-    if (tab->profile() == profile && tab->web_contents() &&
-        tab->web_contents()->GetLastCommittedURL() == document) {
-      return tab;
-    }
-  }
-  return nullptr;
-}
-
-// static
 bc_id Tab::Restore(Profile* profile, const SavedTab& saved) {
   return profile ? Make(profile, std::string(), saved) : 0;
 }

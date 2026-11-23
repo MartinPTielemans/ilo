@@ -565,6 +565,7 @@ impl Shell {
             .children(self.tile_badge(tab))
             .children(self.keyed_ring(tab, TILE_RADIUS))
             .child(self.icon_drawn(tab))
+            .child(self.badge_drawn(tab))
     }
 
     /// A favorite's mark in its tile's top right: what its page captures or shares, as its row's,
@@ -624,6 +625,30 @@ impl Shell {
                     // check.sh reads this line.
                     let icon = if icon.is_empty() { "none" } else { &icon };
                     log!("browser: tile {tab} drawn with icon {icon}");
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0()
+    }
+
+    /// Logs the count `tab`'s tile's badge draws once it's another than the one it drew, or first
+    /// draws one, so a capture waits for the frame that shows it, and the count reaching 0 logs
+    /// none, the badge gone.
+    fn badge_drawn(&self, tab: u64) -> impl IntoElement + use<> {
+        let (drawn, count) = (self.tile_badges_drawn.clone(), self.page(tab).notifications);
+        canvas(
+            move |_, _, _| {
+                let before = drawn.borrow_mut().insert(tab, count);
+                if before.map_or(count > 0, |before| before != count) {
+                    // check.sh reads this line.
+                    let words: SharedString = if count == 0 {
+                        "none".into()
+                    } else {
+                        badge_words(count)
+                    };
+                    log!("browser: tile {tab} drawn with badge {words}");
                 }
             },
             |_, _, _, _| {},

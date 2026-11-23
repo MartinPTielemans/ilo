@@ -591,9 +591,14 @@ fn a_tiles_badge_draws_its_count_and_leaves_at_0(cx: &mut TestAppContext) {
         );
     });
     cx.run_until_parked();
+    // The tile drew its badge, and the other tiles drew none: a count of 0 draws no badge.
     assert_eq!(
-        shell.read_with(cx, |shell, _| shell.page(10).notifications),
+        shell.read_with(cx, |shell, _| shell.tile_badges_drawn.borrow()[&10]),
         3
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.tile_badges_drawn.borrow()[&11]),
+        0
     );
     shell.update(cx, |shell, cx| {
         shell.set_page(
@@ -607,8 +612,10 @@ fn a_tiles_badge_draws_its_count_and_leaves_at_0(cx: &mut TestAppContext) {
         );
     });
     cx.run_until_parked();
+    // The count reaching 0 leaves the tile with no badge, as the window showing the tab does and
+    // the setting off does.
     assert_eq!(
-        shell.read_with(cx, |shell, _| shell.page(10).notifications),
+        shell.read_with(cx, |shell, _| shell.tile_badges_drawn.borrow()[&10]),
         0
     );
 }

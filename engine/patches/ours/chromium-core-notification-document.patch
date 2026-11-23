@@ -1,0 +1,79 @@
+Lets the core ask for the document that posted a page's notification (#679). The dispatcher
+already keeps, per non-persistent notification id, the weak document and creator type its
+listener was registered with, so the core no longer has to match the page's URL against the
+tabs a profile holds, which a second tab on the same URL makes ambiguous. A worker's
+notification has no document, and one whose document went away returns null; a document in
+back/forward cache still counts, because the core counts a notification when Chromium
+displays it, not when the page hears the show event. The public header's default returns
+null, so the header alone still builds.
+
+--- a/content/public/browser/notification_event_dispatcher.h
++++ b/content/public/browser/notification_event_dispatcher.h
+@@ -12,6 +12,7 @@
+ #include "content/common/content_export.h"
+ 
+ class GURL;
++class RenderFrameHost;
+ 
+ namespace content {
+ 
+@@ -64,6 +65,17 @@
+   virtual void DispatchNonPersistentCloseEvent(
+       const std::string& notification_id,
+       base::OnceClosure completed_closure) = 0;
++
++  // browser_core: the document that posted the non-persistent notification
++  // identified by `notification_id`, or null for none it knows, a worker's or
++  // one whose document went away. The core counts a page's notifications on
++  // the tab of the document that posted them (#679), rather than matching the
++  // page's URL against the tabs it holds, which a second tab on that URL makes
++  // ambiguous.
++  virtual RenderFrameHost* GetNonPersistentNotificationDocument(
++      const std::string& notification_id) {
++    return nullptr;
++  }
+ 
+  protected:
+   virtual ~NotificationEventDispatcher() {}
+--- a/content/browser/notifications/notification_event_dispatcher_impl.h
++++ b/content/browser/notifications/notification_event_dispatcher_impl.h
+@@ -16,4 +16,5 @@
+ #include "content/public/browser/notification_database_data.h"
+ #include "content/public/browser/notification_event_dispatcher.h"
++#include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/render_process_host.h"
+ #include "content/public/browser/weak_document_ptr.h"
+@@ -57,6 +58,8 @@
+   void DispatchNonPersistentCloseEvent(
+       const std::string& notification_id,
+       base::OnceClosure completed_closure) override;
++  RenderFrameHost* GetNonPersistentNotificationDocument(
++      const std::string& notification_id) override;
+ 
+   // Registers the associated document weak pointer and the listener to receive
+   // the show, click and close events of the non-persistent notification
+--- a/content/browser/notifications/notification_event_dispatcher_impl.cc
++++ b/content/browser/notifications/notification_event_dispatcher_impl.cc
+@@ -546,6 +546,22 @@
+                             creator_type));
+ }
+ 
++// browser_core: unlike the listeners above, the document is returned even
++// when it sits in back/forward cache, because the core counts a notification
++// as soon as Chromium displays it, not when the page hears the show event.
++RenderFrameHost*
++NotificationEventDispatcherImpl::GetNonPersistentNotificationDocument(
++    const std::string& notification_id) {
++  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M159);
++  auto it = non_persistent_notification_listeners_.find(notification_id);
++  if (it == non_persistent_notification_listeners_.end() ||
++      it->second.creator_type !=
++          RenderProcessHost::NotificationServiceCreatorType::kDocument) {
++    return nullptr;
++  }
++  return it->second.document.AsRenderFrameHostIfValid();
++}
++
+ // Only fire the notification listeners (including show, click and
+ // close) when it exists in the map and the document is currently
+ // not in back/forward cache.

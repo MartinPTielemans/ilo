@@ -2089,6 +2089,8 @@ pub struct Shell {
     tab_row_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The icon each tile drew last, for the line check.sh waits on once one changes.
     tile_icons_drawn: Rc<RefCell<HashMap<u64, SharedString>>>,
+    /// The count each tile's badge drew last, for the line check.sh waits on once it changes.
+    tile_badges_drawn: Rc<RefCell<HashMap<u64, u32>>>,
     /// Where each Space's dot in the switcher was drawn last, for the line check.sh clicks it by.
     space_dots_drawn: Rc<RefCell<HashMap<u64, (i32, i32)>>>,
     name_row_before: Option<Bounds<Pixels>>,
@@ -2447,6 +2449,7 @@ impl Shell {
             name_row_drawn: Rc::default(),
             tab_row_drawn: Rc::default(),
             tile_icons_drawn: Rc::default(),
+            tile_badges_drawn: Rc::default(),
             space_dots_drawn: Rc::default(),
             name_row_before: None,
             icon_placeholder: None,

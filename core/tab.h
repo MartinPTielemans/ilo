@@ -72,10 +72,6 @@ class Tab : public content::WebContentsObserver,
   static content::WebContents* FromId(bc_id id);
   // Every tab, with its page or without.
   static std::vector<Tab*> All();
-  // The tab of |profile|'s whose page is at |document|, the URL a non-persistent notification
-  // names for the page that posted it (notifications.cc), or null if none: its page may have
-  // closed, or be one no window holds, or one of another profile's.
-  static Tab* HoldingDocument(const GURL& document, Profile* profile);
   // Whether |id| has its page loaded, which it hasn't without one, nor once unloaded in place by
   // Chrome, nor while opened behind and not yet shown.
   static bool Loaded(bc_id id);
