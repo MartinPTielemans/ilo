@@ -228,11 +228,17 @@ impl Agents {
     }
 
     /// At launch: the conversations an earlier run of the browser left go, as its tasks went.
+    /// From `load`, which the app calls once the first window's UI has shown, so none of this is
+    /// in the time to the first frame. With no file of ids, as on every launch after a run that
+    /// kept nothing, the one look for the file is all a launch pays: nothing is read, started or
+    /// spawned.
     pub(crate) fn remove_old_kept(&mut self, cx: &mut Context<Self>) {
         let Some(root) = self.kept_root() else {
             return;
         };
-        self.tasks.kept.read(&root);
+        if !self.tasks.kept.read(&root) {
+            return;
+        }
         self.remove_kept(|record| record.task.is_none(), cx);
     }
 

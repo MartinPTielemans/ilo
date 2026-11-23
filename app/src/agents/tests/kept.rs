@@ -543,6 +543,30 @@ fn the_next_launch_removes_what_the_run_before_kept(cx: &mut TestAppContext) {
     assert!(!next.profile.join(kept::FOLDER).exists());
 }
 
+/// A launch after a run that kept nothing looks for the file of ids and does no more: no process
+/// is started, nothing is spawned, nothing is made in the profile, and no one is told of a change.
+#[cfg(unix)]
+#[gpui::test]
+fn a_launch_with_no_file_of_ids_starts_and_spawns_nothing(cx: &mut TestAppContext) {
+    let run = Run::new("no-file", cx);
+    // What starting the agents spawned is over, so anything that runs after is the launch's.
+    cx.run_until_parked();
+    let before = run.files();
+    let told = Rc::new(std::cell::Cell::new(0));
+    let _told = cx.update(|cx| {
+        let told = told.clone();
+        cx.observe(&run.agents, move |_, _| told.set(told.get() + 1))
+    });
+    (run.agents).update(cx, |agents, cx| agents.remove_old_kept(cx));
+    assert!(!cx.executor().tick(), "the launch spawned something");
+    assert_eq!(told.get(), 0);
+    assert!(run.purged(cx).is_empty());
+    assert!(!beside(&run.program, "args.1").exists());
+    assert_eq!(run.files(), before);
+    assert!(!run.profile.join(kept::FOLDER).exists());
+    assert_eq!(run.kept(cx), (0, 0));
+}
+
 /// The id goes to the assistant's command line and ilo's file of ids, and nowhere else: not in
 /// anything an agent or an outside client is told, nor its task's instructions, MCP config or
 /// messages, nor the agents' settings, the conversation the user sees, the activity log or

@@ -30,8 +30,13 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         IloKind::TierChanged { to, .. } => (format!("you set this task to {}", to.label()), None),
         IloKind::Resumed { tier } => (format!("resumed this task at {}", tier.label()), None),
         // Where the assistant is the subject, a middle dot sets ilo's mark off from the sentence.
+        // A kept task takes a reply while the browser runs, and the words promise no more.
         IloKind::KeptHere => (
-            format!("· {agent} keeps this conversation on {COMPUTER} so you can reply."),
+            format!(
+                "· {agent} keeps this conversation on {COMPUTER} until you quit {}, so you can \
+                 reply.",
+                env!("APP_NAME")
+            ),
             None,
         ),
         IloKind::Gone => (format!("· {agent} no longer has this conversation."), None),

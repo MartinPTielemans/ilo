@@ -265,10 +265,11 @@ impl Kept {
     }
 
     /// Takes the ids an earlier run of the browser left in `root`'s file: their tasks went with
-    /// that run, so they're held only to be removed.
-    pub fn read(&mut self, root: &Path) {
+    /// that run, so they're held only to be removed. Whether there was a file: with none, the
+    /// look for it is all this does.
+    pub fn read(&mut self, root: &Path) -> bool {
         let Ok(saved) = std::fs::read(root.join(INDEX)) else {
-            return;
+            return false;
         };
         let saved: Value = serde_json::from_slice(&saved).unwrap_or_default();
         for each in saved.as_array().into_iter().flatten() {
@@ -283,6 +284,7 @@ impl Kept {
             }
             self.hold_for(None, cli, id);
         }
+        true
     }
 
     /// Writes the ids held to `root`'s file, which only its owner can read, or removes the file

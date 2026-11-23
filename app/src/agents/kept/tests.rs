@@ -156,7 +156,7 @@ fn the_file_of_ids_holds_each_id_and_its_assistant_and_nothing_else() {
     ]);
     std::fs::write(root.join(INDEX), other.to_string()).unwrap();
     let mut after = Kept::default();
-    after.read(&root);
+    assert!(after.read(&root));
     assert_eq!(after.count(), 1);
     assert_eq!(after.of("task-1"), None);
     assert_eq!(
@@ -167,6 +167,9 @@ fn the_file_of_ids_holds_each_id_and_its_assistant_and_nothing_else() {
     after.removed(&id, true);
     after.write(&root);
     assert!(!root.exists());
+    // And with no file there's nothing to take.
+    assert!(!after.read(&root));
+    assert_eq!(after.count(), 0);
 }
 
 #[cfg(unix)]

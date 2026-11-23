@@ -5705,8 +5705,12 @@ fn feature_row(
         .when(!controls.is_empty(), |row| row.child(end(controls)))
 }
 
-/// Settings › Agents' switch that keeps finished tasks, and its button.
-const KEEP_TASKS: &str = "Keep finished tasks so you can reply";
+/// Settings › Agents' switch that keeps finished tasks, and its button. A kept task takes a reply
+/// while the browser runs, and the name promises no more.
+const KEEP_TASKS: &str = concat!(
+    "Keep finished tasks so you can reply, until you quit ",
+    env!("APP_NAME")
+);
 const REMOVE_ALL: &str = "Remove All…";
 
 /// Asks before the kept conversations go (`Settings::ask_remove_kept`), once the click that asked
