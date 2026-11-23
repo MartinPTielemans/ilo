@@ -550,6 +550,7 @@ use crate::tokens::shell::CANCEL_BOTTOM;
 use crate::tokens::shell::CANCEL_HEIGHT;
 use crate::tokens::shell::CREATE_BOTTOM;
 
+use crate::palette::FIELD_PLATE as URL_FIELD;
 use crate::tokens::shell::CHOSEN;
 use crate::tokens::shell::CLEAR;
 use crate::tokens::shell::CLEAR_HOVERED;
@@ -566,7 +567,6 @@ use crate::tokens::shell::SLEEPING_FAVICON;
 use crate::tokens::shell::TILE;
 use crate::tokens::shell::TITLE;
 use crate::tokens::shell::UNSELECTED_TITLE;
-use crate::palette::FIELD_PLATE as URL_FIELD;
 /// A tile, and the URL field, under the pointer: the ladder's hover over its resting plate.
 pub(crate) const TILE_HOVERED: f32 =
     crate::palette::state_alpha(TILE, crate::palette::STATE_HOVERED);
