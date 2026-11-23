@@ -29,7 +29,7 @@ pub const SWITCH: Option<Switch> = if cfg!(target_os = "macos") {
     Some(Switch {
         name: "Dock icon takes the Space's color",
         line: concat!(
-            "It takes the color of the Space in front. Off, it stays ",
+            "It matches the Space in front. Off, it stays ",
             env!("APP_NAME"),
             " green."
         ),
