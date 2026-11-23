@@ -404,7 +404,7 @@ impl Browser for Core {
             return None;
         }
         unsafe { bc::bc_window_select(window, tab) };
-        // check.sh reads this line, which names no address: a sign-in's can hold its state.
+        // It names no address: a sign-in's can hold its state.
         browser::log!("browser: sign-in page {tab} in private window {window}");
         Some((tab, window))
     }

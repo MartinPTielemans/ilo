@@ -247,14 +247,14 @@ pub(crate) unsafe extern "C" fn tab_link_to_site(
         update_app_later(move |_| {
             let url = url.to_string_lossy();
             let (to, opened, space) = open_link_in(window, &url, routed);
-            // check.sh reads this line. A sign-in's page's links can hold its state (#4100).
-            match browser::agents::sign_in::quiet(tab) {
-                true => {
-                    log!("browser: link from {tab}: tab {opened} in space {space} of window {to}")
-                }
-                false => log!(
+            // A sign-in's page's links can hold its state (#4100), so its line names no address.
+            if browser::agents::sign_in::quiet(tab) {
+                log!("browser: link from {tab}: tab {opened} in space {space} of window {to}");
+            } else {
+                // check.sh reads this line.
+                log!(
                     "browser: link from {tab} {url}: tab {opened} in space {space} of window {to}"
-                ),
+                );
             }
             let ui_view = WINDOWS
                 .with_borrow(|windows| windows.iter().find(|w| w.id == to).map(|w| w.ui_view));
