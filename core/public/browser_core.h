@@ -550,6 +550,9 @@ typedef enum bc_agent_failure {
   BC_AGENT_FAILURE_SIGNING_IN = 11,
   // The step is the user's, such as a sign-in only they may finish: the app hands them the tab.
   BC_AGENT_FAILURE_USER_STEP = 12,
+  // The tab's page showed what a sign-in filled (bc_tab_withheld_from_agents): nothing but a
+  // navigation to another page, or closing the tab, until its main frame commits another document.
+  BC_AGENT_FAILURE_WITHHELD_PAGE = 13,
 } bc_agent_failure;
 
 // An agent's call the core checked, for the activity log (bc_agent_may_act).
@@ -2201,16 +2204,19 @@ BC_EXPORT bool bc_tab_held(bc_id tab);
 //   asks for the password on the next, is filled and submitted, then the password once its field
 //   shows, on the same origin alone, in the same call.
 // - Where the form sends it: a form with no action, or an https one on the page's own site. A
-//   form that sends it anywhere else is the user's step (BC_AGENT_FAILURE_USER_STEP).
+//   form that sends it anywhere else is the user's step (BC_AGENT_FAILURE_USER_STEP), and so is
+//   any page whose main frame's document has a control with a formaction, or a form, a control or
+//   a base element naming another browsing context than the form's own.
 // - Filling and submitting: each field as Chrome fills a saved login for the user, then Enter in
 //   the field filled last, once a form and never again in the call. Each fill is into the main
 //   frame's document at the login's origin still, or the core fills no more. The password goes
-//   from the profile's store to the page and nowhere else.
+//   from the profile's store to the page and nowhere else, and the document it's filled into
+//   never goes into the back-forward cache, so Back never brings it again.
 // - The hold: an action under way in the tab answers first, and then until agent_sign_in_done no
 //   agent may act in the tab: bc_agent_may_act refuses with BC_AGENT_FAILURE_SIGNING_IN. Once the
 //   page has settled, and a navigation the tab's frames were on then has committed or failed,
 //   each field the core filled that's still in the page is emptied, whether or not the form has
-//   gone, before the answer.
+//   gone, before the answer. One that hasn't within 15 s counts as showing what was filled.
 // - The tab is the user's if the page shows what was filled: before the hold lifts, the core looks
 //   for the password in all an agent could read of the page, every frame's fields and the text of
 //   its outline and its read, its title and every frame's address, and if it's there anywhere the
@@ -2220,8 +2226,8 @@ BC_EXPORT bool bc_tab_held(bc_id tab);
 // - With more than one login and no sign_in_choose to ask the user, the answer is
 //   BC_AGENT_FAILURE_USER_STEP.
 // - Once a sign-in submitted a login at an origin and didn't sign in, the agent's next one there is
-//   the user's step (BC_AGENT_FAILURE_USER_STEP), until the agent has no session with any tab, so
-//   no agent tries a login again into a site's lock-out.
+//   the user's step (BC_AGENT_FAILURE_USER_STEP), until the user hands back a tab at that origin
+//   or the browser restarts, so no agent tries a login again into a site's lock-out.
 // Refused with a bc_agent_failure value as bc_agent_may_act refuses: a tab not in the agent's
 // Space, held, or signing in already. Not signed in, with no failure, for a page that isn't https,
 // or one with nothing the core can fill, whether or not the user saved a login for it.
@@ -2233,7 +2239,9 @@ BC_EXPORT bool bc_tab_signing_in(bc_id tab);
 // Whether |tab|'s title and address are withheld from agents: while the core signs it in, and once
 // a sign-in held it because its page showed what was filled, until its main frame commits another
 // document. The app gives agents neither, in any answer that names the tab (list_tabs, an
-// outline's header, open_tab and navigate's answers).
+// outline's header, open_tab and navigate's answers). In the second case the core refuses agents
+// every act on the tab but a navigation and closing it, with BC_AGENT_FAILURE_WITHHELD_PAGE, and
+// bc_tab_read_text gives none of its text.
 BC_EXPORT bool bc_tab_withheld_from_agents(bc_id tab);
 
 // The user's answer to sign_in_choose for |tab|'s |request|: the index of the account in its
