@@ -13,6 +13,7 @@ use gpui::{
 };
 
 use crate::agents::request::Sent;
+pub use crate::keyboard_ring::{ring, ring_round};
 use crate::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
 use crate::tokens::palette::{ACCENT_HOVERED, ACCENT_PRESSED, DIALOG_LIGHT};
 use crate::tokens::radius;
@@ -30,7 +31,6 @@ use crate::tokens::settings::{
     SWITCH_WIDTH,
 };
 use crate::tokens::settings::{SENT_CHEVRON, SENT_GAP, SENT_INDENT, SENT_LABEL, SENT_LINES};
-use crate::tokens::shell::{KEYED, KEYED_RING};
 use crate::tokens::text::SMALL;
 
 /// The places `drawn` logged, one a control, shared by a view's controls.
@@ -154,36 +154,6 @@ pub fn named_popup<E: StatefulInteractiveElement>(
         .aria_label(name)
         .aria_value(item)
         .a11y_synthetic_children(|builder| builder.parent_node().set_has_popup(HasPopup::Menu))
-}
-
-/// The keyboard's ring, Focus Sidebar's: `shell.keyed-ring` wide inside the control's plate, in
-/// the ink `ink` is in at `shell.keyed`, while it has the keyboard from a key. A click shows none.
-pub fn ring(ink: Rgba) -> impl FnOnce(gpui::StyleRefinement) -> gpui::StyleRefinement {
-    let color = Rgba { a: KEYED, ..ink };
-    move |style| {
-        style.shadow(vec![BoxShadow {
-            color: color.into(),
-            offset: point(px(0.), px(0.)),
-            blur_radius: px(0.),
-            spread_radius: px(KEYED_RING),
-            inset: true,
-        }])
-    }
-}
-
-/// The same ring round a control whose own plate fills it, as a switch's pill does, which would
-/// cover a ring inside: just outside its edge, as Site Controls ring a round control.
-pub fn ring_round(ink: Rgba) -> impl FnOnce(gpui::StyleRefinement) -> gpui::StyleRefinement {
-    let color = Rgba { a: KEYED, ..ink };
-    move |style| {
-        style.shadow(vec![BoxShadow {
-            color: color.into(),
-            offset: point(px(0.), px(0.)),
-            blur_radius: px(0.),
-            spread_radius: px(KEYED_RING),
-            inset: false,
-        }])
-    }
 }
 
 /// Settings' push button: a tab stop as every button here is, which an assistive app, while one

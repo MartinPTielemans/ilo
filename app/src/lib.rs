@@ -186,6 +186,7 @@ pub mod glow;
 pub mod hover_card;
 pub mod icon_picker;
 pub mod import;
+pub mod keyboard_ring;
 pub mod launch;
 pub mod launch_picture;
 pub mod lazy_window;
