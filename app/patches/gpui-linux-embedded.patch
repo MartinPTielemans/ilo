@@ -267,10 +267,10 @@ index 0000000000..a202ddef4e
 +}
 diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
 new file mode 100644
-index 0000000000..afef68c905
+index 0000000000..cd539b12ce
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/overlay.rs
-@@ -0,0 +1,2061 @@
+@@ -0,0 +1,2330 @@
 +//! An embedder's overlays: windows GPUI opened with `show: false` that the embedder shows over its
 +//! own window, as a browser shows its command bar over its pages. Under Wayland one is a subsurface
 +//! of the embedder's surface, on X11 a window of its own over the embedder's. One shown
@@ -440,6 +440,17 @@ index 0000000000..afef68c905
 +    /// On X11, each overlay that was given the keys in a showing: the presses there had been as it
 +    /// asked for them, and whether it asked again after the focus was taken back (`asks_again`).
 +    static ASKED: RefCell<Vec<Asked>> = const { RefCell::new(Vec::new()) };
++    /// On X11, the overlays the input focus left with the keys, until `Op::TakenBack` says why.
++    static DECIDING: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
++    /// On X11, the overlay waiting for GPUI to handle the press that took its focus, with the
++    /// showing and the press's time it waits for (`after_taken`), and the last press waited for.
++    static WAITING: std::cell::Cell<Option<(usize, u64, u32)>> =
++        const { std::cell::Cell::new(None) };
++    static WAITED: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
++    /// On X11, the time of the last press GPUI handled in one of its windows, and of the last
++    /// button let go anywhere on the display, heard as the presses are.
++    static HANDLED: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
++    static RELEASED: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
 +    /// On X11, the window each overlay shows over.
 +    static PARENTS: RefCell<Vec<(usize, u32)>> = const { RefCell::new(Vec::new()) };
 +    /// The outlines overlays have that aren't rounded rectangles (`set_overlay_outlines`).
@@ -621,7 +632,11 @@ index 0000000000..afef68c905
 +/// gave leave as before, and a focus event never tells it of a press.
 +#[cfg(feature = "x11")]
 +pub(crate) fn focus_left(view: usize, to_ancestor: bool, pressed_on: impl FnOnce() -> bool) {
-+    holds(view, false);
++    // Taken from it again while it waited for a press, it's decided afresh, and never waits for
++    // that press twice (`after_taken`).
++    if WAITING.get().is_some_and(|(waiting, ..)| waiting == view) {
++        WAITING.set(None);
++    }
 +    let shown = SHOWN.with_borrow(|all| {
 +        (all.iter())
 +            .find(|shown| shown.view == view)
@@ -629,10 +644,14 @@ index 0000000000..afef68c905
 +    });
 +    let keyboard = shown.map(|(keyboard, _)| keyboard);
 +    if keyboard == Some(true) && to_ancestor && is_panel(view) && pressed_on() {
++        holds(view, false);
 +        later(Op::Retake { view, pressed: true });
 +    } else if let Some((true, showing)) = shown {
++        DECIDING.with_borrow_mut(|all| all.push(view));
++        holds(view, false);
 +        later(Op::TakenBack(view, showing));
 +    } else {
++        holds(view, false);
 +        left(view);
 +    }
 +}
@@ -676,6 +695,99 @@ index 0000000000..afef68c905
 +    }
 +}
 +
++/// A button let go anywhere on the display at `time`, heard as the presses are. It ends an
++/// overlay's wait for a press at `time` or before, which GPUI would have heard by now: the X server
++/// sends a press a window manager grabbed on before the release that came while it held it.
++#[allow(dead_code)]
++pub(crate) fn released_button_anywhere(time: u32) {
++    RELEASED.set(Some(time));
++    if WAITING.get().is_some_and(|(_, _, pressed)| not_before(time, pressed)) {
++        end_wait();
++    }
++}
++
++/// GPUI handled a press at `time` in one of its windows, the handlers it ran included. It ends an
++/// overlay's wait for that press.
++#[allow(dead_code)]
++pub(crate) fn press_handled(time: u32) {
++    HANDLED.set(Some(time));
++    if WAITING.get().is_some_and(|(_, _, pressed)| pressed == time) {
++        end_wait();
++    }
++}
++
++/// Whether the X time `time` is `than` or later, as times wrap around every 49 days.
++fn not_before(time: u32, than: u32) -> bool {
++    time.wrapping_sub(than) < u32::MAX / 2
++}
++
++/// The overlay waiting for a press (`after_taken`) waits no more: it's left, unless it's no longer
++/// in the showing it waited in.
++fn end_wait() {
++    let Some((view, showing, _)) = WAITING.take() else {
++        return;
++    };
++    let still = SHOWN.with_borrow(|all| {
++        all.iter().any(|shown| shown.view == view && shown.showing == showing)
++    });
++    if still {
++        left(view);
++    }
++    hear_as_now();
++}
++
++/// What an overlay with the keys does once the input focus has left it (`Op::TakenBack`).
++#[allow(dead_code)]
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub(crate) enum After {
++    /// It takes the focus back, as nothing the user did took it (`asks_again`).
++    AskAgain,
++    /// It takes the focus back until GPUI has handled the press that took it, then it's left.
++    Wait,
++    /// It's left.
++    Left,
++}
++
++/// What the overlay `view`, in `showing`, does now that the input focus has left it as `taken`
++/// says, `in_gpui` if a press where the pointer is lands in GPUI's window under the overlay.
++///
++/// A window manager that focuses the window clicked, as Openbox does, takes the focus with a press
++/// it grabs, and only then hands the press on: so the focus can leave the overlay before GPUI hears
++/// the press in its own window, or after. Left first, the overlay would close as dismissed and the
++/// same press then reach the button that opened it, which would open it again (#4072). So for a
++/// press outside the overlays in GPUI's window under it, the overlay takes the focus back, which
++/// keeps the keys typed meanwhile in it rather than the page, and waits: until GPUI has handled
++/// that press (`press_handled`), its button is let go (`released_button_anywhere`), as when the
++/// window manager kept the press to move or resize the window, or the focus leaves again or the
++/// app is no longer active. A press it has handled or let go of already, or waited for, needs no
++/// wait.
++#[allow(dead_code)]
++pub(crate) fn after_taken(view: usize, showing: u64, taken: Taken, in_gpui: bool) -> After {
++    if asks_again(view, showing, taken) {
++        return After::AskAgain;
++    }
++    // A press outside the overlays since it last took the keys, as `asks_again` reads it.
++    let since = ASKED.with_borrow(|all| {
++        all.iter().any(|asked| {
++            asked.view == view && asked.showing == showing && last_outside() > asked.outside
++        })
++    });
++    let pressed = OUTSIDE.with_borrow(|all| all.last().map(|&(_, time)| time));
++    let over = |time| {
++        HANDLED.get() == Some(time)
++            || WAITED.get() == Some(time)
++            || RELEASED.get().is_some_and(|released| not_before(released, time))
++    };
++    match pressed {
++        Some(time) if in_gpui && taken.to_under && taken.active && since && !over(time) => {
++            WAITED.set(Some(time));
++            WAITING.set(Some((view, showing, time)));
++            After::Wait
++        }
++        _ => After::Left,
++    }
++}
++
 +/// Adds `each` to the presses not paired yet, keeping the last 16: a press's two events come
 +/// within a few of each other, and of the unpaired presses outside, the last says enough.
 +fn kept<T>(all: &mut Vec<T>, each: T) {
@@ -702,15 +814,27 @@ index 0000000000..afef68c905
 +/// one and an overlay with the keys holds the input focus, as a press on the embedder's page then
 +/// moves the focus from the overlay to the page's window, which is the user leaving it, and GPUI
 +/// has to know of the press to tell that from the focus taken back with no input (`asks_again`).
++/// It still hears them once the focus has left one, until the overlay is left or waits no more
++/// (`after_taken`), so the release of the press that moved the focus isn't missed in between.
 +#[allow(dead_code)]
 +fn hears_presses() -> bool {
 +    ACTIVE.get()
-+        && HOLDING.with_borrow(|holding| {
-+            SHOWN.with_borrow(|all| {
-+                (all.iter())
-+                    .any(|shown| shown.keyboard && !shown.away && holding.contains(&shown.view))
-+            })
-+        })
++        && (WAITING.get().is_some()
++            || DECIDING.with_borrow(|deciding| !deciding.is_empty())
++            || HOLDING.with_borrow(|holding| {
++                SHOWN.with_borrow(|all| {
++                    (all.iter()).any(|shown| {
++                        shown.keyboard && !shown.away && holding.contains(&shown.view)
++                    })
++                })
++            }))
++}
++
++/// Has GPUI start or stop hearing every button press, if `hears_presses` says otherwise now.
++fn hear_as_now() {
++    if hears_presses() != HEARING.get() {
++        later(Op::Hear);
++    }
 +}
 +
 +/// The overlay `view` asked for the input focus (`on`), or the focus left it, or it's no longer
@@ -736,9 +860,11 @@ index 0000000000..afef68c905
 +        return;
 +    };
 +    ACTIVE.set(active);
-+    if hears_presses() != HEARING.get() {
-+        later(Op::Hear);
++    // Another app active, an overlay waiting for a press is left (`after_taken`).
++    if !active {
++        end_wait();
 +    }
++    hear_as_now();
 +}
 +
 +/// The overlay `view` asked for the keys in the showing it's in now.
@@ -1666,6 +1792,11 @@ index 0000000000..afef68c905
 +        }
 +        #[cfg(feature = "x11")]
 +        Op::TakenBack(view, showing) => {
++            DECIDING.with_borrow_mut(|all| {
++                if let Some(at) = all.iter().position(|&each| each == view) {
++                    all.remove(at);
++                }
++            });
 +            let asked_again = super::platform::with_embedded_connection(|connection| {
 +                let DisplayConnection::X11(x11) = connection else {
 +                    return false;
@@ -1677,17 +1808,27 @@ index 0000000000..afef68c905
 +                let Some(taken) = x11.focus_taken(view as _, parent).log_err() else {
 +                    return false;
 +                };
-+                if !asks_again(view, showing, taken) {
-+                    return false;
++                let in_gpui = parent.is_some_and(|parent| x11.press_lands_in(parent));
++                match after_taken(view, showing, taken, in_gpui) {
++                    After::Left => return false,
++                    After::AskAgain => {
++                        log::info!("overlay {view:#x} takes back the input focus taken from it")
++                    }
++                    After::Wait => log::info!(
++                        "overlay {view:#x} takes back the input focus a press in GPUI's window took, \
++                         until GPUI has handled the press"
++                    ),
 +                }
-+                log::info!("overlay {view:#x} takes back the input focus taken from it");
 +                let asked = x11.overlay_takes_focus(view as _, None).log_err().is_some();
 +                if asked {
 +                    x11.overlay_raised(view as _).log_err();
 +                    holds(view, true);
++                } else if WAITING.get().is_some_and(|(waiting, ..)| waiting == view) {
++                    WAITING.set(None);
 +                }
 +                asked
 +            });
++            hear_as_now();
 +            // Only the showing the focus left is left: one shown since under the same view, as
 +            // the menu a right-click on the next row shows in place of the last, isn't (#2993).
 +            let still = SHOWN.with_borrow(|all| {
@@ -2239,6 +2380,126 @@ index 0000000000..afef68c905
 +
 +    #[cfg(feature = "x11")]
 +    #[test]
++    fn a_press_in_gpuis_window_that_took_an_overlays_focus_runs_before_the_overlay_is_left() {
++        let view = 51;
++        let show = |showing| {
++            SHOWN.with_borrow_mut(|all| {
++                all.retain(|shown| shown.view != view);
++                all.push(Shown {
++                    view,
++                    keyboard: true,
++                    ready: true,
++                    left: Some(told),
++                    showing,
++                    away: false,
++                    parent: 0,
++                })
++            });
++            asked(view);
++        };
++        // What the display says as Openbox focuses the browser window at a press on it, with the
++        // button still down: the TakenBack op's part with no display here.
++        let taken = Taken { to_under: true, pressed: true, active: true };
++        let run_ops = || {
++            while let Some(op) = OPS.with_borrow_mut(|ops| ops.pop_front()) {
++                if !matches!(op, Op::TakenBack(..)) {
++                    run_op(op);
++                }
++            }
++        };
++        // The TakenBack op the focus leaving queued, as it runs with a display: no longer deciding,
++        // what the display says decides.
++        let decide = |showing, taken, in_gpui| {
++            OPS.with_borrow_mut(|ops| ops.retain(|op| !matches!(op, Op::TakenBack(..))));
++            DECIDING.with_borrow_mut(|all| all.retain(|&each| each != view));
++            after_taken(view, showing, taken, in_gpui)
++        };
++        let hearing = || {
++            HEARING.set(hears_presses());
++            HEARING.get()
++        };
++
++        // The press on the Site Controls' button heard anywhere, then the focus leaving the panel,
++        // both before GPUI hears the press in its window (#4072). The presses are still heard
++        // until it's decided, and while it waits.
++        show(1);
++        pressed_button_anywhere(100);
++        focus_left(view, false, || false);
++        assert!(hearing(), "the focus left, and the release of its press went unheard");
++        assert_eq!(decide(1, taken, true), After::Wait);
++        run_ops();
++        assert!(hearing(), "waiting for the press, the presses went unheard");
++        assert_eq!(TOLD.get(), 0, "left before GPUI handled the press in its window");
++        // An earlier click's release doesn't end it.
++        released_button_anywhere(99);
++        run_ops();
++        assert_eq!(TOLD.get(), 0, "an earlier click's release ended the wait");
++        // GPUI handles the press, whose handler closes the panel as a toggle, then it's left.
++        press_handled(100);
++        run_ops();
++        assert_eq!(TOLD.get(), 1, "GPUI handled the press, and the overlay wasn't left");
++        assert!(!hearing(), "left, it still heard every press");
++
++        // GPUI handled the press before the focus's leaving was decided, as in the runs that
++        // passed: it's left at once.
++        show(2);
++        pressed_button_anywhere(110);
++        focus_left(view, false, || false);
++        press_handled(110);
++        assert_eq!(decide(2, taken, true), After::Left);
++
++        // The window manager keeps the press, to move the window at Alt and a press or resize it at
++        // an edge: GPUI never hears it, and the button let go ends the wait.
++        show(3);
++        pressed_button_anywhere(120);
++        focus_left(view, false, || false);
++        assert_eq!(decide(3, taken, true), After::Wait);
++        released_button_anywhere(125);
++        run_ops();
++        assert_eq!(TOLD.get(), 2, "the button let go, and the overlay wasn't left");
++        // A press already let go needs no wait.
++        show(4);
++        pressed_button_anywhere(130);
++        released_button_anywhere(131);
++        focus_left(view, false, || false);
++        assert_eq!(decide(4, taken, true), After::Left);
++
++        // A press on the page lands in no window of GPUI's, and leaves it at once.
++        show(5);
++        pressed_button_anywhere(140);
++        focus_left(view, false, || false);
++        assert_eq!(decide(5, taken, false), After::Left);
++
++        // The focus leaving again while it waits: decided afresh, never waiting for that press
++        // twice.
++        show(6);
++        pressed_button_anywhere(150);
++        focus_left(view, false, || false);
++        assert_eq!(decide(6, taken, true), After::Wait);
++        focus_left(view, false, || false);
++        assert_eq!(decide(6, taken, true), After::Left);
++
++        // Another app active while it waits: it's left.
++        show(7);
++        pressed_button_anywhere(160);
++        focus_left(view, false, || false);
++        assert_eq!(decide(7, taken, true), After::Wait);
++        let told = TOLD.get();
++        app_activated(Some(false));
++        run_ops();
++        assert_eq!(TOLD.get(), told + 1, "another app active, and the waiting overlay wasn't left");
++        assert!(!hearing(), "another app active, it still heard every press");
++        app_activated(Some(true));
++
++        // With no press outside since it took the keys, it's no press of the user's: it takes
++        // them back, as before.
++        show(8);
++        let unpressed = Taken { pressed: false, ..taken };
++        assert_eq!(decide(8, unpressed, true), After::AskAgain);
++    }
++
++    #[cfg(feature = "x11")]
++    #[test]
 +    fn presses_are_heard_only_while_an_overlay_holds_the_focus_and_the_app_is_active() {
 +        let view = 31;
 +        SHOWN.with_borrow_mut(|all| {
@@ -2270,7 +2531,15 @@ index 0000000000..afef68c905
 +        assert!(!hears_presses(), "presses heard before the overlay asked for the focus");
 +        asked(view);
 +        edge(true, "the overlay asked for the focus");
++        // The focus leaving it: they're still heard until it's decided why (`after_taken`), here
++        // with no display to say, so it's left.
 +        focus_left(view, false, || false);
++        assert!(hears_presses(), "the focus left, and the presses went unheard before it was decided");
++        let taken_back = OPS.with_borrow_mut(|ops| {
++            let at = ops.iter().position(|op| matches!(op, Op::TakenBack(..)));
++            at.and_then(|at| ops.remove(at))
++        });
++        run_op(taken_back.expect("the focus left, and nothing decided why"));
 +        edge(false, "the focus left the overlay");
 +        asked(view);
 +        edge(true, "the overlay asked again");
@@ -6492,7 +6761,7 @@ index f9b9727330..e1e2214d9d 100644
  pub(crate) use window::*;
  pub(crate) use xim_handler::*;
 diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
-index e21f019c64..cfca5a3044 100644
+index e21f019c64..c232280390 100644
 --- a/crates/gpui_linux/src/linux/x11/client.rs
 +++ b/crates/gpui_linux/src/linux/x11/client.rs
 @@ -3,6 +3,7 @@ use ashpd::WindowIdentifier;
@@ -6971,7 +7240,7 @@ index e21f019c64..cfca5a3044 100644
                  let mut state = self.0.borrow_mut();
                  if !state.has_xim() {
                      drop(state);
-@@ -879,9 +1152,206 @@ impl X11Client {
+@@ -879,9 +1152,209 @@ impl X11Client {
              .map(|window_reference| window_reference.window.clone())
      }
  
@@ -7085,6 +7354,9 @@ index e21f019c64..cfca5a3044 100644
 +            Event::XinputRawButtonPress(event) => {
 +                crate::linux::overlay::pressed_button_anywhere(event.time);
 +            }
++            Event::XinputRawButtonRelease(event) => {
++                crate::linux::overlay::released_button_anywhere(event.time);
++            }
 +            // A file's drag has the pointer until it's let go (drag.rs).
 +            Event::XinputMotion(event) if self.file_drag_held() => {
 +                let (x, y) = ((event.root_x >> 16) as i16, (event.root_y >> 16) as i16);
@@ -7178,7 +7450,7 @@ index e21f019c64..cfca5a3044 100644
                  let mut state = self.0.borrow_mut();
                  if let Some(window_ref) = state.windows.get_mut(&event.window) {
                      window_ref.is_mapped = false;
-@@ -889,13 +1359,31 @@ impl X11Client {
+@@ -889,13 +1362,31 @@ impl X11Client {
                  handle_visibility_changed(state, event.window);
              }
              Event::MapNotify(event) => {
@@ -7212,7 +7484,7 @@ index e21f019c64..cfca5a3044 100644
                  let mut state = self.0.borrow_mut();
                  if let Some(window_ref) = state.windows.get_mut(&event.window) {
                      window_ref.last_visibility = event.state;
-@@ -1033,7 +1521,16 @@ impl X11Client {
+@@ -1033,7 +1524,16 @@ impl X11Client {
                      self.0.borrow_mut().xdnd_state.retrieved = true;
                  }
              }
@@ -7229,7 +7501,7 @@ index e21f019c64..cfca5a3044 100644
                  let bounds = Bounds {
                      origin: Point {
                          x: event.x.into(),
-@@ -1044,13 +1541,114 @@ impl X11Client {
+@@ -1044,13 +1544,114 @@ impl X11Client {
                          height: event.height.into(),
                      },
                  };
@@ -7344,7 +7616,7 @@ index e21f019c64..cfca5a3044 100644
                  let window = self.get_window(event.window)?;
                  window
                      .property_notify(event)
-@@ -1069,6 +1667,24 @@ impl X11Client {
+@@ -1069,6 +1670,24 @@ impl X11Client {
                  self.enable_ime();
              }
              Event::FocusOut(event) => {
@@ -7369,7 +7641,7 @@ index e21f019c64..cfca5a3044 100644
                  let window = self.get_window(event.event)?;
                  window.set_active(false);
                  let mut state = self.0.borrow_mut();
-@@ -1117,6 +1733,12 @@ impl X11Client {
+@@ -1117,6 +1736,12 @@ impl X11Client {
                  );
                  let modifiers = modifiers_from_xkb(&state.xkb);
                  let capslock = capslock_from_xkb(&state.xkb);
@@ -7382,7 +7654,7 @@ index e21f019c64..cfca5a3044 100644
                  if state.last_modifiers_changed_event == modifiers
                      && state.last_capslock_changed_event == capslock
                  {
-@@ -1143,6 +1765,7 @@ impl X11Client {
+@@ -1143,6 +1768,7 @@ impl X11Client {
                  }
              }
              Event::KeyPress(event) => {
@@ -7390,7 +7662,7 @@ index e21f019c64..cfca5a3044 100644
                  let window = self.get_window(event.event)?;
                  let mut state = self.0.borrow_mut();
  
-@@ -1156,7 +1779,17 @@ impl X11Client {
+@@ -1156,7 +1782,17 @@ impl X11Client {
                      let mut keystroke = keystroke_from_xkb(&key_event_state, modifiers, code);
                      let keysym = key_event_state.key_get_one_sym(code);
  
@@ -7408,7 +7680,7 @@ index e21f019c64..cfca5a3044 100644
                          return Some(());
                      }
  
-@@ -1200,6 +1833,7 @@ impl X11Client {
+@@ -1200,6 +1836,7 @@ impl X11Client {
                      keystroke
                  };
                  drop(state);
@@ -7416,7 +7688,7 @@ index e21f019c64..cfca5a3044 100644
                  window.handle_input(PlatformInput::KeyDown(gpui::KeyDownEvent {
                      keystroke,
                      is_held: false,
-@@ -1220,6 +1854,9 @@ impl X11Client {
+@@ -1220,6 +1857,9 @@ impl X11Client {
                      let keysym = key_event_state.key_get_one_sym(code);
  
                      if keysym.is_modifier_key() {
@@ -7426,7 +7698,7 @@ index e21f019c64..cfca5a3044 100644
                          return Some(());
                      }
  
-@@ -1229,8 +1866,26 @@ impl X11Client {
+@@ -1229,8 +1869,26 @@ impl X11Client {
                  window.handle_input(PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }));
              }
              Event::XinputButtonPress(event) => {
@@ -7453,7 +7725,7 @@ index e21f019c64..cfca5a3044 100644
  
                  let modifiers = modifiers_from_xinput_info(event.mods);
                  state.modifiers = modifiers;
-@@ -1255,22 +1910,8 @@ impl X11Client {
+@@ -1255,22 +1913,8 @@ impl X11Client {
                  }
                  match button_or_scroll_from_event_detail(event.detail) {
                      Some(ButtonOrScroll::Button(button)) => {
@@ -7478,9 +7750,12 @@ index e21f019c64..cfca5a3044 100644
  
                          drop(state);
                          window.handle_input(PlatformInput::MouseDown(gpui::MouseDownEvent {
-@@ -1307,7 +1948,12 @@ impl X11Client {
+@@ -1306,8 +1950,15 @@ impl X11Client {
+                         log::error!("Unknown x11 button: {}", event.detail);
                      }
                  }
++                // Its handlers have run, so an overlay waiting for it can be left now.
++                crate::linux::overlay::press_handled(event.time);
              }
 -            Event::XinputButtonRelease(event) => {
 +            Event::XinputButtonRelease(mut event) => {
@@ -7492,7 +7767,7 @@ index e21f019c64..cfca5a3044 100644
                  let window = self.get_window(event.event)?;
                  let mut state = self.0.borrow_mut();
                  let modifiers = modifiers_from_xinput_info(event.mods);
-@@ -1319,7 +1965,7 @@ impl X11Client {
+@@ -1319,7 +1970,7 @@ impl X11Client {
                  );
                  match button_or_scroll_from_event_detail(event.detail) {
                      Some(ButtonOrScroll::Button(button)) => {
@@ -7501,7 +7776,7 @@ index e21f019c64..cfca5a3044 100644
                          drop(state);
                          window.handle_input(PlatformInput::MouseUp(gpui::MouseUpEvent {
                              button,
-@@ -1332,7 +1978,26 @@ impl X11Client {
+@@ -1332,7 +1983,26 @@ impl X11Client {
                      None => {}
                  }
              }
@@ -7529,7 +7804,7 @@ index e21f019c64..cfca5a3044 100644
                  let window = self.get_window(event.event)?;
                  let mut state = self.0.borrow_mut();
                  state.restore_cursor_after_hide();
-@@ -1384,12 +2049,8 @@ impl X11Client {
+@@ -1384,12 +2054,8 @@ impl X11Client {
                  if let Some(pointer) = state.pointer_device_states.get_mut(&event.sourceid) {
                      let scroll_delta = get_scroll_delta_and_update_state(pointer, &event);
                      drop(state);
@@ -7544,7 +7819,7 @@ index e21f019c64..cfca5a3044 100644
                      }
                  }
              }
-@@ -1400,7 +2061,21 @@ impl X11Client {
+@@ -1400,7 +2066,21 @@ impl X11Client {
                  state.mouse_focused_window = Some(event.event);
                  state.restore_cursor_after_hide();
              }
@@ -7567,7 +7842,7 @@ index e21f019c64..cfca5a3044 100644
                  let mut state = self.0.borrow_mut();
  
                  // Set last scroll values to `None` so that a large delta isn't created if scrolling is done outside the window (the valuator is global)
-@@ -1413,9 +2088,15 @@ impl X11Client {
+@@ -1413,9 +2093,15 @@ impl X11Client {
                  );
                  let modifiers = modifiers_from_xinput_info(event.mods);
                  state.modifiers = modifiers;
@@ -7583,7 +7858,7 @@ index e21f019c64..cfca5a3044 100644
                  window.handle_input(PlatformInput::MouseExited(gpui::MouseExitEvent {
                      pressed_button,
                      position,
-@@ -1523,6 +2204,35 @@ impl X11Client {
+@@ -1523,6 +2209,35 @@ impl X11Client {
          };
      }
  
@@ -7619,7 +7894,7 @@ index e21f019c64..cfca5a3044 100644
      fn xim_handle_event(&self, event: Event) -> Option<()> {
          match event {
              Event::KeyPress(event) | Event::KeyRelease(event) => {
-@@ -1608,6 +2318,7 @@ impl X11Client {
+@@ -1608,6 +2323,7 @@ impl X11Client {
  
      fn handle_keyboard_layout_change(&self) {
          let mut state = self.0.borrow_mut();
@@ -7627,7 +7902,7 @@ index e21f019c64..cfca5a3044 100644
          let layout_idx = state.xkb.serialize_layout(STATE_LAYOUT_EFFECTIVE);
          let keymap = state.xkb.get_keymap();
          let layout_name = keymap.layout_get_name(layout_idx);
-@@ -1781,7 +2492,7 @@ impl X11Client {
+@@ -1781,7 +2497,7 @@ impl X11Client {
              return;
          }
  
@@ -7636,7 +7911,7 @@ index e21f019c64..cfca5a3044 100644
              return;
          };
  
-@@ -1842,8 +2553,9 @@ impl X11Client {
+@@ -1842,8 +2558,9 @@ impl X11Client {
          let mut state = self.0.borrow_mut();
          state
              .clipboard
@@ -7647,7 +7922,7 @@ index e21f019c64..cfca5a3044 100644
                  clipboard::ClipboardKind::Clipboard,
                  clipboard::WaitConfig::None,
              )
-@@ -1888,6 +2600,11 @@ impl X11Client {
+@@ -1888,6 +2605,11 @@ impl X11Client {
          })
      }
  
@@ -7659,7 +7934,7 @@ index e21f019c64..cfca5a3044 100644
      pub(crate) fn window_stack(&self) -> Option<Vec<AnyWindowHandle>> {
          let state = self.0.borrow();
          let root = state.xcb_connection.setup().roots[state.x_root_index].root;
-@@ -2052,6 +2769,9 @@ impl X11ClientState {
+@@ -2052,6 +2774,9 @@ impl X11ClientState {
          x_window: xproto::Window,
          refresh_rate: Duration,
      ) -> RegistrationToken {
@@ -7669,7 +7944,7 @@ index e21f019c64..cfca5a3044 100644
          self.loop_handle
              .insert_source(calloop::timer::Timer::immediate(), {
                  let this = self.this.clone();
-@@ -2087,44 +2807,1712 @@ impl X11ClientState {
+@@ -2087,43 +2812,1726 @@ impl X11ClientState {
              .expect("Failed to initialize window refresh timer")
      }
  
@@ -7995,7 +8270,6 @@ index e21f019c64..cfca5a3044 100644
  
 -        let cursor = match result {
 -            Ok(cursor) => Some(cursor),
--            Err(err) => {
 +    /// Ends the managed overlay `window`'s wait for its place in `PLACE_BOUND` at most, from now:
 +    /// whatever its manager does or doesn't do, it's then seen where it is.
 +    fn bound_place(&self, window: xproto::Window) {
@@ -8902,21 +9176,36 @@ index e21f019c64..cfca5a3044 100644
 +        Ok(true)
 +    }
 +
-+    /// Hears every button press on the display while `on`, for `overlay::asks_again`, which only
-+    /// counts them and reads nothing of them: not the button, the window or the place. They're raw
-+    /// events because those come before the FocusOut a press causes, and a press on the embedder's
-+    /// window, its own X client's, reaches GPUI no other way. Keys need none: one typed while an
-+    /// overlay holds the focus goes to the overlay.
++    /// Hears every button press on the display while `on`, for `overlay::asks_again`, and each
++    /// button let go, for `overlay::after_taken`, which only count them and read nothing of them
++    /// but their time: not the button, the window or the place. They're raw events because those
++    /// come before the FocusOut a press causes, and a press on the embedder's window, its own X
++    /// client's, reaches GPUI no other way. Keys need none: one typed while an overlay holds the
++    /// focus goes to the overlay.
 +    pub(crate) fn hear_presses(&self, on: bool) -> anyhow::Result<()> {
 +        let root = self.xcb_connection.setup().roots[self.x_root_index].root;
 +        let mask = match on {
-+            true => xinput::XIEventMask::RAW_BUTTON_PRESS,
++            true => xinput::XIEventMask::RAW_BUTTON_PRESS | xinput::XIEventMask::RAW_BUTTON_RELEASE,
 +            false => xinput::XIEventMask::from(0u32),
 +        };
 +        let masks = [xinput::EventMask { deviceid: XINPUT_ALL_DEVICE_GROUPS, mask: vec![mask] }];
 +        self.xcb_connection.xinput_xi_select_events(root, &masks)?;
 +        self.xcb_connection.flush()?;
 +        Ok(())
++    }
++
++    /// Whether a press where the pointer is lands in one of GPUI's windows embedded in the
++    /// embedder's `parent`, for `overlay::after_taken`: whether the child of `parent` the X server
++    /// finds the pointer in, by each window's bounding and input shapes as it finds the window a
++    /// press goes to, is GPUI's. That child is always one of `parent`'s own, or none.
++    pub(crate) fn press_lands_in(&self, parent: u32) -> bool {
++        let pointer = || -> anyhow::Result<bool> {
++            let pointer = self.xcb_connection.query_pointer(parent)?.reply()?;
++            Ok(pointer.same_screen
++                && pointer.child != x11rb::NONE
++                && self.windows.contains_key(&pointer.child))
++        };
++        pointer().log_err().unwrap_or(false)
 +    }
 +
 +    /// Where the input focus is now that it left the overlay `view`, for `overlay::asks_again`.
@@ -9409,11 +9698,10 @@ index e21f019c64..cfca5a3044 100644
 +
 +        let cursor = match result {
 +            Ok(cursor) => Some(cursor),
-+            Err(err) => {
+             Err(err) => {
                  match self
                      .cursor_handle
-                     .load_cursor(&self.xcb_connection, DEFAULT_CURSOR_ICON_NAME)
-@@ -2197,7 +4585,7 @@ impl X11ClientState {
+@@ -2197,7 +4605,7 @@ impl X11ClientState {
              .get(&hidden_window)
              .copied()
              .unwrap_or(CursorStyle::Arrow);
@@ -9422,7 +9710,7 @@ index e21f019c64..cfca5a3044 100644
              log::warn!(
                  "X11: no cursor icon available to restore {:?} after hide; cursor may stay invisible",
                  style
-@@ -2219,6 +4607,71 @@ impl X11ClientState {
+@@ -2219,6 +4627,71 @@ impl X11ClientState {
      }
  }
  
@@ -9494,7 +9782,7 @@ index e21f019c64..cfca5a3044 100644
  // Adapted from:
  // https://docs.rs/winit/0.29.11/src/winit/platform_impl/linux/x11/monitor.rs.html#103-111
  pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
-@@ -2232,6 +4685,51 @@ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
+@@ -2232,6 +4705,51 @@ pub fn mode_refresh_rate(mode: &randr::ModeInfo) -> Duration {
      Duration::from_micros(micros)
  }
  
@@ -9546,7 +9834,7 @@ index e21f019c64..cfca5a3044 100644
  /// Applies a mapped/obscured change to the refresh loop and reports the
  /// resulting visibility to the window. Consumes the client borrow because the
  /// visibility callback re-enters GPUI.
-@@ -2246,10 +4744,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
+@@ -2246,10 +4764,54 @@ fn handle_visibility_changed(mut state: RefMut<'_, X11ClientState>, x_window: xp
      window.set_visibility(visibility);
  }
  
@@ -9601,7 +9889,7 @@ index e21f019c64..cfca5a3044 100644
  fn detect_compositor_gpu(
      xcb_connection: &XCBConnection,
      screen: &xproto::Screen,
-@@ -2273,73 +4815,77 @@ fn detect_compositor_gpu(
+@@ -2273,73 +4835,77 @@ fn detect_compositor_gpu(
      crate::linux::compositor_gpu_hint_from_dev_t(metadata.rdev())
  }
  
@@ -9629,15 +9917,8 @@ index e21f019c64..cfca5a3044 100644
 -    // Method 2: Check for _NET_WM_CM_OWNER
 -    let atom_name = "_NET_WM_CM_OWNER";
 -    let atom2 = get_reply(
-+/// Whether a compositor runs on the screen `screen`: one owns its `_NET_WM_CM_S<screen>` selection,
-+/// as EWMH has a compositing manager do. A window manager that only says it's one, such as openbox
-+/// under Xvfb, sets `_NET_SUPPORTING_WM_CHECK` but composites nothing, and the X server then draws
-+/// a window's transparent pixels opaque.
-+fn check_compositor_present(xcb_connection: &XCBConnection, screen: usize) -> bool {
-+    let atom_name = format!("_NET_WM_CM_S{screen}");
-+    let owner = get_reply(
-         || format!("Failed to intern {atom_name}"),
-         xcb_connection.intern_atom(false, atom_name.as_bytes()),
+-        || format!("Failed to intern {atom_name}"),
+-        xcb_connection.intern_atom(false, atom_name.as_bytes()),
 -    );
 -    let method2 = match atom2.log_with_level(Level::Debug) {
 -        Some(reply) if reply.atom != x11rb::NONE => {
@@ -9655,8 +9936,15 @@ index e21f019c64..cfca5a3044 100644
 -    // Method 3: Check for _NET_SUPPORTING_WM_CHECK
 -    let atom_name = "_NET_SUPPORTING_WM_CHECK";
 -    let atom3 = get_reply(
--        || format!("Failed to intern {atom_name}"),
--        xcb_connection.intern_atom(false, atom_name.as_bytes()),
++/// Whether a compositor runs on the screen `screen`: one owns its `_NET_WM_CM_S<screen>` selection,
++/// as EWMH has a compositing manager do. A window manager that only says it's one, such as openbox
++/// under Xvfb, sets `_NET_SUPPORTING_WM_CHECK` but composites nothing, and the X server then draws
++/// a window's transparent pixels opaque.
++fn check_compositor_present(xcb_connection: &XCBConnection, screen: usize) -> bool {
++    let atom_name = format!("_NET_WM_CM_S{screen}");
++    let owner = get_reply(
+         || format!("Failed to intern {atom_name}"),
+         xcb_connection.intern_atom(false, atom_name.as_bytes()),
 -    );
 -    let method3 = match atom3.log_with_level(Level::Debug) {
 -        Some(reply) if reply.atom != x11rb::NONE => {
@@ -9742,7 +10030,7 @@ index e21f019c64..cfca5a3044 100644
  }
  
  fn check_gtk_frame_extents_supported(
-@@ -2465,6 +5011,20 @@ fn current_pointer_device_states(
+@@ -2465,6 +5031,20 @@ fn current_pointer_device_states(
      )
      .log_err()?;
  
@@ -9763,7 +10051,7 @@ index e21f019c64..cfca5a3044 100644
      let mut pointer_device_states = BTreeMap::new();
      pointer_device_states.extend(
          devices_query_result
-@@ -2498,6 +5058,8 @@ fn current_pointer_device_states(
+@@ -2498,6 +5078,8 @@ fn current_pointer_device_states(
                          PointerDeviceState {
                              horizontal: horizontal.unwrap_or_else(Default::default),
                              vertical: vertical.unwrap_or_else(Default::default),
@@ -9772,7 +10060,7 @@ index e21f019c64..cfca5a3044 100644
                          },
                      ))
                  }
-@@ -2539,10 +5101,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
+@@ -2539,10 +5121,12 @@ fn reset_pointer_device_scroll_positions(pointer: &mut PointerDeviceState) {
  }
  
  /// Returns the scroll delta for a smooth scrolling motion event, or `None` if no scroll data is present.
@@ -9786,7 +10074,7 @@ index e21f019c64..cfca5a3044 100644
      let delta_x = get_axis_scroll_delta_and_update_state(event, &mut pointer.horizontal);
      let delta_y = get_axis_scroll_delta_and_update_state(event, &mut pointer.vertical);
      if delta_x.is_some() || delta_y.is_some() {
-@@ -2555,13 +5119,13 @@ fn get_scroll_delta_and_update_state(
+@@ -2555,13 +5139,13 @@ fn get_scroll_delta_and_update_state(
  fn get_axis_scroll_delta_and_update_state(
      event: &xinput::MotionEvent,
      axis: &mut ScrollAxisState,
@@ -9803,7 +10091,7 @@ index e21f019c64..cfca5a3044 100644
          axis.scroll_value = Some(new_scroll);
          delta_scroll
      } else {
-@@ -2570,6 +5134,35 @@ fn get_axis_scroll_delta_and_update_state(
+@@ -2570,6 +5154,35 @@ fn get_axis_scroll_delta_and_update_state(
      }
  }
  
@@ -9839,7 +10127,7 @@ index e21f019c64..cfca5a3044 100644
  fn make_scroll_wheel_event(
      position: Point<Pixels>,
      scroll_delta: Point<f32>,
-@@ -2620,6 +5213,11 @@ fn get_scale_factor(
+@@ -2620,6 +5233,11 @@ fn get_scale_factor(
      resource_database: &Database,
      screen_index: usize,
  ) -> f32 {
@@ -9851,7 +10139,7 @@ index e21f019c64..cfca5a3044 100644
      let env_dpi = std::env::var(GPUI_X11_SCALE_FACTOR_ENV)
          .ok()
          .map(|var| {
-@@ -2898,6 +5496,160 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
+@@ -2898,6 +5516,160 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
  mod tests {
      use super::*;
  
@@ -10012,7 +10300,7 @@ index e21f019c64..cfca5a3044 100644
      fn test_keymap(layouts: &str) -> xkbc::Keymap {
          test_keymap_with_variant(layouts, "")
      }
-@@ -3213,3 +5965,101 @@ mod tests {
+@@ -3213,3 +5985,101 @@ mod tests {
          assert_eq!(key_event_state.key_get_utf8(space), " ");
      }
  }
