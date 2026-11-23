@@ -981,9 +981,11 @@ if [ -n "$yours_step" ]; then
     send type ok
     expect "^browser: title $user_tab yours typed ok\$" "the user's keys after the agent's work didn't reach their field"
     # One of the app's own windows taking the keyboard from the agent's card (#3869): with the
-    # card's keys come from the user's field, ⌘T's command bar ends them and keeps the keyboard, a
-    # letter typed reaching the bar and nothing in the field; Escape gives the field the keyboard
-    # again, and the card no ring. Then the key and Escape on the card dismiss the change unsent.
+    # card's keys come from the user's field, ⌘T's command bar ends them where they are, giving
+    # nobody the keyboard under it, and keeps it, a letter typed reaching the bar and nothing in
+    # the field. Escape gives it back where ⌘T found it, the card, which has no ring: ↩ answers
+    # nothing and a letter reaches no field. Then the key and Escape on the card dismiss the change
+    # unsent.
     asks=$(grep -c '^browser: agent mcp-client asks ' "$log" || true)
     request request "{\"tab\":$agent_tab,\"requests\":[{\"method\":\"PUT\",\"path\":\"/note\",\"body\":{},\"what\":\"Replace the note.\"}]}" >&4
     await_more '^browser: agent mcp-client asks ' "$asks" || fail "the agent's change didn't ask"
@@ -991,6 +993,7 @@ if [ -n "$yours_step" ]; then
     await_log "^browser: agent question $q at " "the change's question wasn't drawn"
     send key $card_key
     expect "^browser: agent card keys on $q " "Focus Agent Question's key from the user's field didn't give the card the keyboard"
+    ons=$(grep -c "^browser: agent card keys on $q " "$log" || true)
     send key t cmd
     bar_step=$step
     expect '^browser: command bar shown$' "⌘T from the agent's card didn't open the command bar"
@@ -1000,15 +1003,22 @@ if [ -n "$yours_step" ]; then
       fail "x typed with the command bar open over the card reached the user's field"
     send key escape
     expect '^browser: command bar hidden$' "Escape didn't close the command bar opened over the card"
-    send type y
-    expect "^browser: title $user_tab yours typed oky\$" \
-      "the user's field didn't have the keyboard again once the bar opened over the card closed"
     ended=$(sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep -E '^browser: agent card keys (back|left) by ' | head -1)
-    [ -n "$ended" ] || fail "the command bar taking the keyboard didn't end the card's keys"
-    sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep -E "^browser: agent card keys on |^browser: agent card key escape\$|^browser: agent mcp-client answered $q " &&
-      fail "the card had its keys or answered after the command bar opened over it"
+    case "$ended" in
+      "") fail "the command bar taking the keyboard didn't end the card's keys" ;;
+      "browser: agent card keys back by "*)
+        fail "the card's keys gave the keyboard back with the command bar over them: $ended" ;;
+    esac
+    send key return
+    send type y
+    # The key after them, once handled, says they were.
     send key $card_key
-    expect "^browser: agent card keys on $q " "Focus Agent Question's key didn't give the card the keyboard after the bar"
+    await_more "^browser: agent card keys on $q " "$ons" ||
+      fail "Focus Agent Question's key didn't give the card the keyboard after the bar"
+    sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep "^browser: title $user_tab yours typed " &&
+      fail "a letter typed with or after the command bar over the card reached the user's field"
+    sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep -E "^browser: agent card key escape\$|^browser: agent mcp-client answered $q " &&
+      fail "the card answered after the command bar opened over it, with no ring"
     expect "^browser: agent card keys ready on $q\$" "the app never said the protection had passed"
     send key escape
     expect '^browser: agent card key escape$' "Escape on the card didn't answer it as its × does"
