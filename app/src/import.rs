@@ -2796,6 +2796,23 @@ impl ImportView {
         }
     }
 
+    /// The line that lists what the browser picked has that won't be imported, as it has no place
+    /// here, while any of its sidebar comes.
+    pub(crate) fn left_out(&self) -> Option<String> {
+        let Step::Pick {
+            read: Some(read),
+            picked,
+            ..
+        } = &self.step
+        else {
+            return None;
+        };
+        let sidebar = [Kind::Spaces, Kind::OpenTabs, Kind::Favorites];
+        (sidebar.iter().any(|kind| picked.contains(kind)))
+            .then(|| left_out_line(&read.found.left_out))
+            .flatten()
+    }
+
     /// The line under the choices: the profiles what comes goes into, and that cards and sign-ins
     /// don't.
     pub(crate) fn note(&self) -> Option<String> {
@@ -2882,10 +2899,16 @@ impl ImportView {
         let nothing = self
             .nothing()
             .map(|nothing| marked(look, &nothing).mt_0().px(px(ROW_X)));
+        let left_out = self
+            .left_out()
+            .map(|left_out| marked(look, &left_out).mt_0().px(px(ROW_X)));
         let note = self
             .note()
             .map(|note| marked(look, &note).mt_0().px(px(ROW_X)));
-        let lines = div().flex().flex_col().children(nothing).children(note);
+        let lines = (div().flex().flex_col())
+            .children(nothing)
+            .children(left_out)
+            .children(note);
         // Its host's heading says where it's from, if it has one.
         let named = (!self.headed && !self.guided).then(|| line(format!("From {}", from.name())));
         div()
@@ -3162,6 +3185,16 @@ fn listed(names: &[String]) -> String {
         [one] => one.clone(),
         [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     }
+}
+
+/// "Won't be imported: 2 live folders and 1 Space icon", for what a browser has with no place
+/// here, in the order its reader found it; none if it has nothing of the kind.
+pub(crate) fn left_out_line(left_out: &[found::LeftOut]) -> Option<String> {
+    let items: Vec<String> = (left_out.iter())
+        .filter(|each| each.count > 0)
+        .map(|each| counted(each.count, each.item.one, each.item.many))
+        .collect();
+    (!items.is_empty()).then(|| format!("Won't be imported: {}", listed(&items)))
 }
 
 /// The line under a browser's choices: the profiles here that what comes goes into, by name,

@@ -376,6 +376,76 @@ fn a_sidebar_not_read_yet_adds_nothing() {
     fs::remove_dir_all(home).unwrap();
 }
 
+/// What a browser has with no place here is one line, each kind counted in the words every
+/// source shares, in the order its reader found them; none when there's nothing of the kind.
+#[test]
+fn what_wont_be_imported_is_one_line() {
+    use super::found::{LIVE_FOLDER, NOT_WEB_PAGE, SPACE_ICON};
+    let mut found = Found::default();
+    assert_eq!(super::left_out_line(&found.left_out), None);
+    found.leave_out(LIVE_FOLDER, 0);
+    assert_eq!(super::left_out_line(&found.left_out), None);
+    found.leave_out(LIVE_FOLDER, 1);
+    assert_eq!(
+        super::left_out_line(&found.left_out).as_deref(),
+        Some("Won't be imported: 1 live folder")
+    );
+    found.leave_out(SPACE_ICON, 1);
+    found.leave_out(LIVE_FOLDER, 1);
+    assert_eq!(
+        super::left_out_line(&found.left_out).as_deref(),
+        Some("Won't be imported: 2 live folders and 1 Space icon")
+    );
+    found.leave_out(NOT_WEB_PAGE, 3);
+    assert_eq!(
+        super::left_out_line(&found.left_out).as_deref(),
+        Some("Won't be imported: 2 live folders, 1 Space icon and 3 tabs that aren't web pages")
+    );
+}
+
+/// A blank tab and a browser's own new tab, home or private window page drop without a word,
+/// whatever its scheme; its other pages are tabs that aren't web pages.
+#[test]
+fn a_new_tab_drops_quietly_and_a_browsers_own_page_is_counted() {
+    for url in [
+        "",
+        " ",
+        "about:blank",
+        "about:newtab",
+        "about:home",
+        "about:privatebrowsing",
+        "chrome://newtab/",
+        "chrome://new-tab-page/",
+        "edge://newtab",
+        "arc://newtab",
+    ] {
+        assert!(super::found::quiet(url), "{url:?}");
+    }
+    for url in [
+        "chrome://settings/",
+        "dia://settings",
+        "about:preferences",
+        "javascript:void(0)",
+    ] {
+        assert!(!super::found::quiet(url), "{url:?}");
+    }
+}
+
+/// What won't be imported is said while any of a sidebar comes, its Spaces, Today tabs or
+/// favorites, as it's read with them, and not with only history.
+#[test]
+fn what_wont_be_imported_goes_with_the_sidebar() {
+    let source = &sources::find(&Roots::under(&fixture(), Os::Mac))[0];
+    let mut found = Found::default();
+    found.leave_out(super::found::SPACE_ICON, 1);
+    for kind in [Kind::Spaces, Kind::OpenTabs, Kind::Favorites] {
+        let kept = read::keep(&found, source, &[kind]).unwrap();
+        assert_eq!(kept.left_out, found.left_out, "{kind:?}");
+    }
+    let kept = read::keep(&found, source, &[Kind::History]).unwrap();
+    assert!(kept.left_out.is_empty());
+}
+
 /// On Windows, Arc in the folder the Store gives it, Chrome in Local AppData and Firefox's
 /// profiles in Roaming, the one used last first; a folder with no profile in it is no browser.
 #[test]
