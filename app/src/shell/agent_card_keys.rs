@@ -1305,6 +1305,44 @@ mod tests {
         assert_eq!(clicked, ["answer agent 7 Once"]);
     }
 
+    /// An agent's ask for a file rings Choose File…, and ↩ on it opens the dialog over the card's
+    /// window as its click does: the key and the click take one path, which has every button's.
+    #[gpui::test]
+    fn enter_on_choose_file_chooses_as_the_click_does(cx: &mut TestAppContext) {
+        let (host, shell, cx) = window_with(cx);
+        let upload = Question {
+            what: "add a file to “Résumé” on example.com".into(),
+            site: "example.com".into(),
+            each_time: true,
+            file: Some(crate::agents::FileAsk {
+                field: 3,
+                many: false,
+            }),
+            ..question(7)
+        };
+        ask(&shell, cx, upload);
+        from_page(&shell, cx, KEY);
+        assert_eq!(
+            keyed(&shell, cx),
+            Some(1),
+            "Choose File… hasn't the keyboard"
+        );
+        wait(cx, PROTECT);
+        host.take();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let window = shell.read_with(cx, |shell, _| shell.browser.window());
+        let did = host.take();
+        assert!(
+            did.contains(&format!("choose agent file 7 in {window}")),
+            "{did:?}"
+        );
+        assert!(
+            !did.iter().any(|d| d.starts_with("answer agent")),
+            "{did:?}"
+        );
+    }
+
     /// The keyboard's marks are paint: the card keeps its size as it comes and as the ring and ↩
     /// move along, and at the narrowest sidebar every button, Never beside Allow Once's ↩ too,
     /// stays whole inside the card, as tall as it was.
