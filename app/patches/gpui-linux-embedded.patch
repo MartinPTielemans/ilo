@@ -267,10 +267,10 @@ index 0000000000..a202ddef4e
 +}
 diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
 new file mode 100644
-index 0000000000..42c88b8f1a
+index 0000000000..cbaaa00d4f
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/overlay.rs
-@@ -0,0 +1,2341 @@
+@@ -0,0 +1,2339 @@
 +//! An embedder's overlays: windows GPUI opened with `show: false` that the embedder shows over its
 +//! own window, as a browser shows its command bar over its pages. Under Wayland one is a subsurface
 +//! of the embedder's surface, on X11 a window of its own over the embedder's. One shown
@@ -920,10 +920,8 @@ index 0000000000..42c88b8f1a
 +        // A press outside the overlays, as on the page, is heard anywhere and in no overlay. Paired
 +        // by time, a press in one heard while it didn't hold the focus can't hide a later one.
 +        let outside = last_outside() > asked.outside;
-+        if asked.presses != PRESSES.get() {
-+            asked.again = 0;
-+        }
-+        if asked.again >= 2 || outside || taken.pressed || !taken.to_under || !taken.active {
++        if (asked.again > 0 && asked.presses == PRESSES.get())
++            || outside || taken.pressed || !taken.to_under || !taken.active {
 +            return false;
 +        }
 +        asked.presses = PRESSES.get();
