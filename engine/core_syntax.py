@@ -146,7 +146,7 @@ def pack(src, archive, out=OUT, toolchain=None, linux=False):
             # its place, as the path would name the machine.
             if linux and os.path.islink(path) and os.path.isabs(os.readlink(path)):
                 path = os.path.realpath(path)
-            t.add(path, arcname="src/" + name, recursive=False)
+            t.add(path, arcname="src/" + name, recursive=False, filter=anonymous)
         for name, data in sorted(written.items()):
             info = tarfile.TarInfo("src/" + name)
             info.size, info.mtime, info.mode = len(data), int(time.time()), 0o644
@@ -155,6 +155,14 @@ def pack(src, archive, out=OUT, toolchain=None, linux=False):
     if zstd.wait():
         sys.exit("zstd failed")
     print(f"Packed {len(names) + len(written)} files in {os.path.getsize(archive) / 1e6:.0f} MB.")
+
+
+def anonymous(info):
+    """A packed file's entry without the build machine's account, which a tar names by default, as
+    the pack is public."""
+    info.uid = info.gid = 0
+    info.uname = info.gname = ""
+    return info
 
 
 def flag_files(src, out):
