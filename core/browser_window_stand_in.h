@@ -381,7 +381,9 @@ class BrowserWindowStandIn : public BrowserWindow,
   // A shortcut the page gets first runs as one it didn't keep if it hasn't answered within
   // kPageKeyBound (#3944). One watch per tab hears its page's answers while a key of its waits.
   class PageKeyWatch;
-  void SentToPage(content::WebContents* contents, const input::NativeWebKeyboardEvent& event);
+  void SentToPage(content::WebContents* contents,
+                  const input::NativeWebKeyboardEvent& event,
+                  KeyGoesTo to);
   void PageKeyAnswered(const PageKey& key, bool kept);
   void PageKeyTabGone(uint64_t tab);
   void RunDuePageKeys();

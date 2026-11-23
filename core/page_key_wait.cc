@@ -32,8 +32,12 @@ bool Take(std::vector<PageKey>& list, const PageKey& key) {
 PageKeyWait::PageKeyWait() = default;
 PageKeyWait::~PageKeyWait() = default;
 
-void PageKeyWait::Sent(const PageKey& key, base::TimeTicks now) {
+bool PageKeyWait::Sent(const PageKey& key, base::TimeTicks now, KeyGoesTo to) {
+  if (to != KeyGoesTo::kPage) {
+    return false;
+  }
   waiting_.push_back({key, now + kPageKeyBound});
+  return true;
 }
 
 bool PageKeyWait::Answered(const PageKey& key, bool kept) {
@@ -55,13 +59,14 @@ bool PageKeyWait::Answered(const PageKey& key, bool kept) {
 }
 
 bool PageKeyWait::RunsUnkept(const PageKey& key) {
-  auto at = std::find_if(unkept_late_.begin(), unkept_late_.end(),
-                         [&](const PageKey& each) { return each.SamePress(key); });
-  if (at == unkept_late_.end()) {
-    return true;
+  const auto same = [&](const PageKey& each) { return each.SamePress(key); };
+  // Ran already: its late answer was heard first, or this is it.
+  if (std::erase_if(unkept_late_, same) || std::erase_if(late_, same)) {
+    return false;
   }
-  unkept_late_.erase(at);
-  return false;
+  // In time: this is its answer, which the watch may not hear.
+  std::erase_if(waiting_, [&](const Waiting& each) { return each.key.SamePress(key); });
+  return true;
 }
 
 void PageKeyWait::TakenBefore(const PageKey& key) {

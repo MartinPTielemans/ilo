@@ -39,6 +39,11 @@ struct PageKey {
   bool operator==(const PageKey& other) const { return SameKey(other) && time == other.time; }
 };
 
+// Where a key the app let pass goes. Only the page's answer comes to the browser's watch: DevTools
+// docked beside the page, when it has the keyboard, and a tab dialog's keys (dialog_keys), which
+// ask the browser themselves with no page behind them, answer where it doesn't hear.
+enum class KeyGoesTo { kPage, kPastThePage };
+
 class PageKeyWait {
  public:
   PageKeyWait();
@@ -46,16 +51,19 @@ class PageKeyWait {
   PageKeyWait& operator=(const PageKeyWait&) = delete;
   ~PageKeyWait();
 
-  // |key| went to its page at |now|, and waits on its answer.
-  void Sent(const PageKey& key, base::TimeTicks now);
+  // |key| went where |to| says at |now|. True if it waits on its page's answer, as only a key to
+  // the page does: one past it is answered by its hand-back alone, or kept there.
+  bool Sent(const PageKey& key, base::TimeTicks now, KeyGoesTo to = KeyGoesTo::kPage);
 
   // The page answered |key|, which it |kept| or not. True if it answered in time, so the browser
   // goes on as it always has: nothing for a key it kept, else the key runs as one it didn't keep.
   // False if the bound or a later press already ran it: its answer is dropped.
   bool Answered(const PageKey& key, bool kept);
 
-  // Chromium hands |key| back as one the page didn't keep. Whether the browser runs it: not for a
-  // late answer Answered dropped. Matched by the press alone, as Chromium doesn't say the tab.
+  // Chromium hands |key| back as one the page didn't keep, by whichever route: the page's own, or
+  // one the watch doesn't hear, as DevTools' or a tab dialog's. Whether the browser runs it: once,
+  // so not for a key the bound or a later press already ran. A press still waiting is settled by
+  // it, as it is the page's answer. Matched by the press alone, as Chromium doesn't say the tab.
   bool RunsUnkept(const PageKey& key);
 
   // The app ran |key|'s command before its page, as a second press within a second does. A press

@@ -43,6 +43,7 @@
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_observer.h"
+#include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
@@ -76,7 +77,9 @@ bool AskApp(bool (*callback)(void*, bc_id, const bc_key*),
 }
 
 // A key going down that the browser could have a command for, which kPageKeyBound holds to: one
-// with ⌘, Ctrl or Alt, a function key or escape. Typing, and a modifier alone, never wait.
+// with ⌘, Ctrl or Alt, a function key or escape. Typing, and a modifier alone, never wait. An
+// agent's press_key is skip_if_unhandled, so it never waits and no agent key runs a shortcut at the
+// bound.
 bool CouldBeShortcut(const input::NativeWebKeyboardEvent& event) {
   if (event.GetType() != blink::WebInputEvent::Type::kRawKeyDown || event.skip_if_unhandled) {
     return false;
@@ -741,8 +744,12 @@ content::KeyboardEventProcessingResult BrowserWindowStandIn::PreHandleKeyboardEv
       page_keys_.TakenBefore(KeyOf(tab, event));
       PageKeysChanged();
     } else {
-      // Nothing ran, so the page is as it was.
-      SentToPage(contents, event);
+      // Nothing ran, so the page is as it was. Only the page's answer is heard: a key that went to
+      // docked DevTools, or to a tab's dialog, comes back by its hand-back alone (#3946).
+      content::RenderWidgetHostView* view = contents->GetRenderWidgetHostView();
+      SentToPage(contents, event,
+                 view && view->HasFocus() && !dialog_keys::Asking(event) ? KeyGoesTo::kPage
+                                                                         : KeyGoesTo::kPastThePage);
     }
   }
   return taken ? content::KeyboardEventProcessingResult::HANDLED
@@ -755,11 +762,14 @@ bool BrowserWindowStandIn::HandleKeyboardEvent(const input::NativeWebKeyboardEve
       browser_ ? browser_->GetTabStripModel()->GetActiveWebContents() : nullptr;
   const bc_id tab = contents ? Tab::IdOf(contents) : 0;
   const base::TimeTicks key = event.TimeStamp();
-  // The bound or a second press ran it already: this is the page's late answer (#3944).
-  if (event.GetType() == blink::WebInputEvent::Type::kRawKeyDown &&
-      !page_keys_.RunsUnkept(KeyOf(tab, event))) {
-    // PageKeyAnswered said so as the answer came.
-    return true;
+  if (event.GetType() == blink::WebInputEvent::Type::kRawKeyDown) {
+    const bool runs = page_keys_.RunsUnkept(KeyOf(tab, event));
+    // A press this settles waits no more, and its timer and watch go with it (#3946).
+    PageKeysChanged();
+    // The bound or a second press ran it already: this is the page's late answer (#3944).
+    if (!runs) {
+      return true;
+    }
   }
   const bool ran = RunPageLeftKey(event);
   // What the page left and the browser ran was pressed for the browser, not the page (#3593).
@@ -796,10 +806,13 @@ bool BrowserWindowStandIn::RunPageLeftKey(const input::NativeWebKeyboardEvent& e
 }
 
 void BrowserWindowStandIn::SentToPage(content::WebContents* contents,
-                                      const input::NativeWebKeyboardEvent& event) {
+                                      const input::NativeWebKeyboardEvent& event,
+                                      KeyGoesTo to) {
   const PageKey key = KeyOf(Tab::IdOf(contents), event);
   const base::TimeTicks now = base::TimeTicks::Now();
-  page_keys_.Sent(key, now);
+  if (!page_keys_.Sent(key, now, to)) {
+    return;
+  }
   page_key_presses_.push_back({key, event, now});
   auto watch = std::find_if(page_key_watches_.begin(), page_key_watches_.end(),
                             [&](const auto& each) { return each->tab() == key.tab; });
