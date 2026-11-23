@@ -535,8 +535,16 @@ jobs:
               fi
               before=$(bundle)
               mv build/Browser.app "$RUNNER_TEMP/dev.app"
-              ../.github/scripts/app-artifact.sh unpack "$(../engine/fetch.sh)" \
-                "$RUNNER_TEMP/prod/prod.tar"
+              # Unpacked only in part, the turn would check whatever is there; the dev build goes
+              # back for the runs after it, and the row says why.
+              if ! ../.github/scripts/app-artifact.sh unpack "$(../engine/fetch.sh)" \
+                "$RUNNER_TEMP/prod/prod.tar"; then
+                rm -rf build/Browser.app
+                mv "$RUNNER_TEMP/dev.app" build/Browser.app
+                echo "FAIL: the prod build couldn't be unpacked from the build job's download," \
+                  "so keychain didn't run" > "$out/keychain.log"
+                return 1
+              fi
             fi
             searched=$(security list-keychains -d user | tr -d '"')
             was=$(security default-keychain -d user | tr -d '" ')
