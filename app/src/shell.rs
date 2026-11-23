@@ -304,6 +304,11 @@ const REVEAL_WAIT: Duration = Duration::from_millis(100);
 // did once it had moved a few points there, and not as it jumped in (*interim*, Arc's distance
 // isn't measured).
 const REVEAL_MOVE: f32 = 3.;
+// How long after the pointer left the window across the edge's strip its return there counts as a
+// move in the edge, as at a screen's edge, which keeps the pointer in (#3989): an overshoot, a
+// stop, and the way back. Ours, *interim*, as Arc in a window away from the screen's edge isn't
+// recorded; it only bounds how old a leave can be.
+const REVEAL_BACK: Duration = Duration::from_secs(1);
 const REVEAL_IN_RESPONSE: f32 = 0.175;
 const REVEAL_IN_DAMPING: f32 = 0.8;
 const REVEAL_OUT_RESPONSE: f32 = 0.175;
@@ -1702,6 +1707,11 @@ pub struct Shell {
     /// While the pointer is in the strip at the window's left edge: where up or down it came in,
     /// and whether it has moved `REVEAL_MOVE` from there since.
     reveal_strip: Option<(f32, bool)>,
+    /// When the pointer last left the window across its edge from the strip, which its return to
+    /// the strip within `REVEAL_BACK` counts as a move in the edge.
+    reveal_left: Option<Instant>,
+    /// Whether the pointer's last move over the window went away from its sidebar-side edge.
+    reveal_inward: bool,
     /// The list's knob: whether it's the legacy one, as the system shows scroll bars always, and
     /// when the user last scrolled, for the overlay one.
     legacy_scroller: bool,
@@ -2268,6 +2278,8 @@ impl Shell {
             reveal_x: 0.,
             reveal_window: 0.,
             reveal_strip: None,
+            reveal_left: None,
+            reveal_inward: false,
             legacy_scroller: false,
             scroller: Default::default(),
             pointer_on_card: false,
@@ -4410,7 +4422,7 @@ impl Shell {
                     if phase == DispatchPhase::Capture {
                         shell
                             .update(cx, |shell, cx| {
-                                shell.pointer_left();
+                                shell.pointer_left(cx);
                                 shell.sidebar_hover(false, cx)
                             })
                             .ok();
@@ -4449,6 +4461,10 @@ impl Shell {
                         MouseButton::Left,
                         cx.listener(move |shell, _: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
+                            // The window manager takes the pointer, which leaves the strip for a
+                            // drag and not out across the edge, so its return after is a fresh
+                            // one in (`pointer_left`).
+                            shell.reveal_strip = None;
                             // GPUI's window is inside the browser window, so the browser resizes
                             // that. On X11 GPUI's own lets go of the pointer grab its press took,
                             // which would keep the window manager from taking the pointer.
