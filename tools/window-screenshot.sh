@@ -42,9 +42,10 @@ case "$(uname)" in
     stage=$(mktemp)
     status=0
     env PID="$(cat "/proc/$1/winpid")" OUT="$(cygpath -w "$2")" ALL="${3:+all}" \
-      STAGE="$(cygpath -w "$stage")" timeout 60 powershell.exe -NoProfile -NonInteractive -Command '
-[IO.File]::WriteAllText($env:STAGE, "compiling the capture")
-Add-Type -ReferencedAssemblies System.Drawing, System.Windows.Forms -TypeDefinition @"
+      STAGE="$(cygpath -w "$stage")" SCRIPT="$(cygpath -wa "$0")" \
+      timeout 60 powershell.exe -NoProfile -NonInteractive -Command '
+[IO.File]::WriteAllText($env:STAGE, "loading the capture")
+$source = @"
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -297,6 +298,31 @@ public static class Capture {
   }
 }
 "@
+# Compiling the class took 1 to 2 s of each picture, 48 a Windows mcp run (#4014), so the first
+# picture compiles it to the temp folder for the pictures after to load, named for the hash of this
+# script, so that a changed script never loads one compiled from another. It is written under a
+# name of its own and renamed when whole. One that does not load goes, and the picture compiles the
+# class in memory, as it did before.
+$kept = $null
+try {
+  $hash = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash(
+    [IO.File]::ReadAllBytes($env:SCRIPT))).Replace("-", "").Substring(0, 16)
+  $kept = Join-Path ([IO.Path]::GetTempPath()) "ilo-capture-$hash.dll"
+  if (-not (Test-Path $kept)) {
+    [IO.File]::WriteAllText($env:STAGE, "compiling the capture")
+    $part = Join-Path ([IO.Path]::GetTempPath()) "ilo-capture-$hash-$PID.dll"
+    Add-Type -ReferencedAssemblies System.Drawing, System.Windows.Forms -TypeDefinition $source `
+      -OutputAssembly $part -OutputType Library
+    try { [IO.File]::Move($part, $kept) } catch { Remove-Item -Force $part -ErrorAction Ignore }
+  }
+  if (-not ("Capture" -as [type])) { Add-Type -Path $kept }
+} catch {
+  if ($kept) { Remove-Item -Force $kept -ErrorAction Ignore }
+}
+if (-not ("Capture" -as [type])) {
+  [IO.File]::WriteAllText($env:STAGE, "compiling the capture")
+  Add-Type -ReferencedAssemblies System.Drawing, System.Windows.Forms -TypeDefinition $source
+}
 # One frame of a window as Windows composes it, by Windows.Graphics.Capture, or $null where that
 # fails: PowerShell knows the WinRT types, and Capture makes what needs COM.
 $grab = [Func[IntPtr, System.Drawing.Bitmap]] {
