@@ -3955,40 +3955,18 @@ impl Settings {
             false => notes::SWITCH_OFF_LINE,
         };
         let row = setting(look, notes::HEADING, Some(line.into()), vec![switch]);
-        let rows: Vec<gpui::Div> = (notes::NOTES.iter().enumerate())
-            .map(|(index, note)| {
-                let opened = self.notes_opened.contains(note.host);
-                let title = match opened {
-                    true => notes::CLOSE,
-                    false => notes::READ,
-                };
+        let rows: Vec<gpui::Div> = (notes::NOTES.iter())
+            .map(|note| {
                 let host = note.host;
-                let read = self
-                    .button(("agent-note-read", index as u64), title)
-                    .relative()
-                    .child(self.drawn(format!("note {host}")))
-                    .on_click(cx.listener(move |settings, _, _, cx| {
-                        if !settings.notes_opened.remove(host) {
-                            settings.notes_opened.insert(host);
-                        }
-                        cx.notify();
-                    }));
-                let head = line_row(
-                    look,
-                    note.name,
-                    Some(note.about.into()),
-                    vec![read.into_any_element()],
-                );
-                let text = opened.then(|| {
-                    div()
-                        .px(px(ROW_X))
-                        .pb(px(browser::tokens::settings::PADDING))
-                        .text_size(px(text::SMALL))
-                        .line_height(px(DETAIL_LINE))
-                        .text_color(look.detail)
-                        .child(note.text.trim_end())
+                let opened = self.notes_opened.contains(host);
+                let toggle = cx.listener(move |settings, _, _, cx| {
+                    if !settings.notes_opened.remove(host) {
+                        settings.notes_opened.insert(host);
+                    }
+                    cx.notify();
                 });
-                div().child(head).children(text)
+                let logged = self.drawn_logged.clone();
+                browser::settings_rows::site_note_row(look, note, opened, self.a11y, logged, toggle)
             })
             .collect();
         vec![
