@@ -7200,6 +7200,7 @@ mod tasks {
             error,
             kind: result.kind,
             image: result.image.clone(),
+            notes: result.notes.map(|note| note.name),
         };
         agents.update(cx, |agents, cx| agents.handle(answered, cx));
         result
@@ -7608,6 +7609,7 @@ mod tasks {
             kind: Some(Kind::NotWebPage),
             picture: None,
             close: None,
+            notes: None,
         };
         let lines = fold(&[], &[failed], true, false, None);
         let [Line::Trace(trace)] = lines.as_slice() else {
@@ -7651,6 +7653,7 @@ mod tasks {
                 kind,
                 picture: None,
                 close: None,
+                notes: None,
             };
             let lines = fold(&[], &[failed], true, false, None);
             let [Line::Trace(trace)] = lines.as_slice() else {
@@ -7831,6 +7834,7 @@ mod tasks {
             kind: None,
             picture: None,
             close: None,
+            notes: None,
         };
         let mut messages = vec![message(Who::User, "Museum hours", 0)];
         let mut trace = vec![step("open_tab", 1, 1, Some(3))];
@@ -7901,6 +7905,7 @@ mod tasks {
             kind: None,
             picture: None,
             close: None,
+            notes: None,
         }];
         let mut messages = vec![
             message(Who::User, "Museum hours", 0),
@@ -7939,6 +7944,7 @@ mod tasks {
             kind: None,
             picture: None,
             close: None,
+            notes: None,
         };
         let messages = [Message {
             who: Who::User,
@@ -8481,6 +8487,7 @@ mod sessions {
             error: None,
             kind: None,
             image: None,
+            notes: None,
         };
         agents.update(cx, |agents, cx| agents.handle(event, cx));
     }
@@ -9745,6 +9752,7 @@ mod sessions {
                 error: None,
                 kind: None,
                 image: None,
+                notes: None,
             };
             agents.update(cx, |agents, cx| agents.handle(event, cx));
             let closed = Event::Closed {
@@ -10316,6 +10324,7 @@ fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
 
 mod fenced;
 mod holds;
+mod notes;
 mod sign_ins;
 mod uploads;
 

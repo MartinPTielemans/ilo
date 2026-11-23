@@ -2637,6 +2637,7 @@ fn task_conversation(agent: SharedString) -> Conversation {
             true => Opens::Text("Another element would get the click: div.cookie-banner".into()),
             false => Opens::Nothing,
         },
+        under: "".into(),
     };
     let (click, read) = ("icons/mouse-pointer-2.svg", "icons/text-align-start.svg");
     let items = vec![
@@ -2721,6 +2722,7 @@ fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 running: true,
                 failed: false,
                 opens: Opens::Nothing,
+                under: "".into(),
             })],
         })
     };
