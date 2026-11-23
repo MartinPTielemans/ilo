@@ -13,7 +13,6 @@ use std::time::{Duration, Instant};
 use browser::account::{self, Account};
 use browser::ad_block::choice::{self as ad_blocker, EngineRow};
 use browser::agents::runner::Cli;
-use browser::agents::sign_in::Offer;
 use browser::agents::{self, Agents, Client};
 use browser::build_info;
 use browser::default_browser::{self, DefaultBrowser, Os};
@@ -43,9 +42,10 @@ use browser::settings_card::{self, Card, Paging};
 use browser::settings_column::{self, Section};
 use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
-    Chip, Look as RowLook, SLIDE, chevron_slot, chip, command_export, command_text, detailed_row,
-    end, frame, glyph_plate, group, group_lined, icon_button, mark, named_button, named_check, row,
-    sent_part, stop_button, stop_chip, stop_popup, stop_restore, stop_switch, text,
+    Act, Chip, Look as RowLook, SLIDE, another_agent_row, assistant_row, chevron_slot, chip,
+    command_export, command_text, detailed_row, end, frame, glyph_plate, group, group_lined,
+    named_button, row, sent_part, stop_button, stop_chip, stop_popup, stop_restore, stop_switch,
+    text,
 };
 use browser::settings_search::{
     self, EndSearch, Entry, NextControl, PageBottom, PageDown, PageTop, PageUp, PreviousControl,
@@ -55,12 +55,11 @@ use browser::settings_shortcuts::{Keys, SHORTCUTS};
 use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
 use browser::tokens::radius;
 use browser::tokens::settings::{
-    BUTTONS_TOP, CHECK_TICK, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING,
-    CONTROL_RADIUS, DETAIL, DETAIL_LINE, DETAIL_TOP, END_GAP, FIELD_PADDING, FIRST_GROUP,
-    FOUND_FLASH, FOUND_FLASH_TIME, GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM,
-    HEADING_TOP, HEIGHT, LEDE_LINE, LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH,
-    ROW_X, SECTION_TEXT, SENT_TUCK, SHORT_PADDING, SHORT_ROW, SIDE_ROOM, SIDE_TOP, TEXT_X, TITLE,
-    WIDTH,
+    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS, DETAIL,
+    DETAIL_LINE, DETAIL_TOP, END_GAP, FIELD_PADDING, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME,
+    GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE,
+    LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SENT_TUCK,
+    SHORT_PADDING, SHORT_ROW, SIDE_ROOM, SIDE_TOP, TEXT_X, TITLE, WIDTH,
 };
 use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
 use browser::tokens::shell::{
@@ -3712,7 +3711,7 @@ impl Settings {
         let mut blocks = vec![Block::Rows([master].into_iter().chain(tasks).collect())];
         if tasks_on {
             blocks.push(Block::Heading("Your assistant".into()));
-            blocks.push(Block::Group(self.assistants(agents, accent, cx)));
+            blocks.push(Block::Group(self.assistants(agents, cx)));
             blocks.push(Block::Under(foot(look, NO_ASSISTANT_OF_ITS_OWN)));
         }
         blocks.push(Block::Heading(APPS_THAT_CONNECT.into()));
@@ -4123,117 +4122,50 @@ impl Settings {
 
     /// Your assistant: a row for each CLI tasks from ⇥ in ⌘T run on, which signs in with its own
     /// sign-in and has the mark that picks it, then a row for another agent, which connects.
-    fn assistants(
-        &self,
-        agents: &Entity<Agents>,
-        accent: Rgba,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
-        let look = &self.look;
-        let rows = Cli::ALL.map(|cli| self.assistant(agents, cli, accent, cx));
-        let how = self
-            .button("assistant-another-how", "How")
-            .on_click(cx.listener(|settings, _, window, cx| {
-                settings.show_found(Section::Agents, APPS_THAT_CONNECT.into(), window, cx)
-            }));
-        let another = feature_row(
-            look,
-            ANOTHER_AGENT_GLYPH,
-            "Another agent",
-            Some("Anything that speaks MCP".into()),
-            vec![how.into_any_element()],
-        );
-        group(look, rows.into_iter().chain([another]))
-    }
-
-    /// An assistant's row, as `Agents::assistant_row` has it, the same in first run: what it says,
-    /// and Get, Sign in, Cancel or Try Again, or once it's signed in, its ⋯ menu and the mark.
-    fn assistant(
-        &self,
-        agents: &Entity<Agents>,
-        cli: Cli,
-        accent: Rgba,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
+    fn assistants(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> gpui::Div {
         let look = &self.look;
         let model = agents.read(cx);
-        let shown = model.assistant_row(cli);
-        let index = cli as usize;
-        let sign_in = |id: &'static str, title: SharedString| {
-            let agents = agents.clone();
-            self.button((id, index), title)
-                .on_click(move |_, _, cx| agents.update(cx, |agents, cx| agents.sign_in(cli, cx)))
-                .into_any_element()
-        };
-        let controls = match shown.offer {
-            Offer::Nothing => Vec::new(),
-            Offer::Get => {
-                let get = format!("Get {}", cli.assistant());
-                let get = self
-                    .button(("assistant-get", index), get)
-                    .on_click(move |_, _, cx| {
-                        log!("browser: assistant install page {}", cli.id());
-                        open_notice(cli.install_page(), cx)
-                    });
-                vec![get.into_any_element()]
-            }
-            Offer::SignIn => {
-                let title = format!("Sign in to {}", cli.assistant());
-                vec![sign_in("assistant-sign-in", title.into())]
-            }
-            Offer::TryAgain => vec![sign_in("assistant-try-again", "Try Again".into())],
-            Offer::Cancel => {
-                let agents = agents.clone();
-                let cancel =
-                    self.button(("assistant-cancel", index), "Cancel")
-                        .on_click(move |_, _, cx| {
-                            agents.update(cx, |agents, _| agents.cancel_sign_in(cli))
-                        });
-                vec![cancel.into_any_element()]
-            }
-            Offer::SignedIn => {
-                let more = {
+        let marked = model.default_task_agent();
+        let rows = Cli::ALL.map(|cli| {
+            let act = {
+                let (settings, agents) = (cx.weak_entity(), agents.clone());
+                move |act: Act, window: &mut Window, cx: &mut App| {
                     let agents = agents.clone();
-                    let at = self.menu_at(Popup::Assistant(cli));
-                    let more = icon_button(look, ("assistant-more", index), "icons/ellipsis.svg")
-                        .relative()
-                        .child(at)
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |settings, _, window, cx| {
-                                settings.assistant_menu(&agents, cli, window, cx)
-                            }),
-                        );
-                    let spoken = format!("{} options", cli.assistant());
-                    more.when(self.a11y, |more| named_button(more, spoken))
-                };
-                let on = model.default_task_agent() == Some(cli);
-                let mark = {
-                    let agents = agents.clone();
-                    let spoken = format!("Run tasks on {}", cli.assistant());
-                    div()
-                        .id(("assistant-mark", index))
-                        .when(self.a11y, |mark| named_check(mark, spoken, on))
-                        .size(px(CONTROL_HEIGHT))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(mark(look, on, accent, rgb(CHECK_TICK)))
-                        .on_click(move |_, _, cx| {
+                    match act {
+                        Act::Get => {
+                            log!("browser: assistant install page {}", cli.id());
+                            open_notice(cli.install_page(), cx)
+                        }
+                        Act::SignIn => agents.update(cx, |agents, cx| agents.sign_in(cli, cx)),
+                        Act::Cancel => agents.update(cx, |agents, _| agents.cancel_sign_in(cli)),
+                        Act::Mark => {
                             log!("browser: tasks run on {}", cli.id());
                             agents.update(cx, |agents, cx| agents.set_default_task_agent(cli, cx))
-                        })
-                };
-                vec![more.into_any_element(), mark.into_any_element()]
-            }
-        };
-        feature_row(
-            look,
-            cli.glyph(),
-            cli.assistant(),
-            Some(shown.line.into()),
-            controls,
-        )
+                        }
+                        Act::Menu => {
+                            let menu = |settings: &mut Settings, cx: &mut Context<Settings>| {
+                                settings.assistant_menu(&agents, cli, window, cx)
+                            };
+                            settings.update(cx, menu).ok();
+                        }
+                    }
+                }
+            };
+            assistant_row(
+                look,
+                cli,
+                &model.assistant_row(cli),
+                marked == Some(cli),
+                self.a11y,
+                self.menu_at(Popup::Assistant(cli)),
+                Rc::new(act),
+            )
+        });
+        let how = cx.listener(|settings, _: &(), window, cx| {
+            settings.show_found(Section::Agents, APPS_THAT_CONNECT.into(), window, cx)
+        });
+        let another = another_agent_row(look, self.a11y, move |window, cx| how(&(), window, cx));
+        group(look, rows.into_iter().chain([another]))
     }
 
     /// Where `which`'s menu opens: under the button the canvas fills, at its start.
@@ -4332,7 +4264,8 @@ impl Settings {
             message,
             detail,
             "Sign Out",
-            dialog::Return::Action,
+            // It reaches past this device, so ↩ doesn't choose it.
+            dialog::Return::Nothing,
             Box::new(sign_out),
             window,
             cx,
@@ -4341,7 +4274,7 @@ impl Settings {
         {
             let _ = window;
             cx.spawn(async move |_, cx| {
-                if crate::ask(&message, &detail, &["Sign Out", "Cancel"], true) == 0 {
+                if crate::ask(&message, &detail, &["Sign Out", "Cancel"], false) == 0 {
                     cx.update(sign_out);
                 }
             })
@@ -5563,9 +5496,6 @@ fn method(target: &str) -> &str {
 
 /// Apps that connect's heading, which Another agent's How goes to.
 const APPS_THAT_CONNECT: &str = "Apps that connect";
-
-/// Another agent's glyph, under Your assistant: a cable, as it connects.
-const ANOTHER_AGENT_GLYPH: &str = "icons/cable.svg";
 
 /// What Your assistant's rows never do, under them.
 const NO_ASSISTANT_OF_ITS_OWN: &str = concat!(
