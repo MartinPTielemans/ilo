@@ -278,6 +278,9 @@ fn keep_spaces(found: &mut Found, picked: &[Kind]) {
     if !spaces {
         found.link_rules.clear();
         found.link_otherwise = None;
+    }
+    // What a sidebar has that won't be imported is said while any of it comes, as it's read then.
+    if !(spaces || wants(Kind::OpenTabs) || wants(Kind::Favorites)) {
         found.left_out.clear();
     }
 }

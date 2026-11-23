@@ -127,13 +127,74 @@ pub struct Found {
     pub left_out: Vec<LeftOut>,
 }
 
-/// Things of one kind a browser has that don't come, such as a split view of more tabs than
-/// SPLIT_TABS, counted, with the words for one and for more.
+/// Things of one kind a browser has that won't be imported, as they have no place here, counted.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LeftOut {
+    pub item: Item,
+    pub count: usize,
+}
+
+/// The words for a thing that won't be imported, one and many, as the import screen lists it.
+/// Each is shared by every source that has the thing, so the same thing reads the same.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Item {
     pub one: &'static str,
     pub many: &'static str,
-    pub count: usize,
+}
+
+pub const LIVE_FOLDER: Item = Item {
+    one: "live folder",
+    many: "live folders",
+};
+/// A split view of more tabs than SPLIT_TABS.
+pub const FOUR_TAB_SPLIT: Item = Item {
+    one: "four-tab split",
+    many: "four-tab splits",
+};
+pub const SEPARATE_CONTAINER: Item = Item {
+    one: "tab in a separate container",
+    many: "tabs in separate containers",
+};
+pub const SPACE_ICON: Item = Item {
+    one: "Space icon",
+    many: "Space icons",
+};
+/// Zen's.
+pub const ESSENTIALS_FOLDER: Item = Item {
+    one: "folder in Essentials",
+    many: "folders in Essentials",
+};
+/// Ardia's.
+pub const TOP_APPS_FOLDER: Item = Item {
+    one: "folder in Top Apps",
+    many: "folders in Top Apps",
+};
+pub const TAB_GROUP: Item = Item {
+    one: "tab group",
+    many: "tab groups",
+};
+/// Ardia's, where its own words call it stacked and it can't come as a split here.
+pub const STACKED_SPLIT: Item = Item {
+    one: "stacked split",
+    many: "stacked splits",
+};
+/// A tab at an address that can't open here and isn't one of the pages `quiet` names.
+pub const NOT_WEB_PAGE: Item = Item {
+    one: "tab that isn't a web page",
+    many: "tabs that aren't web pages",
+};
+
+impl Found {
+    /// Counts `count` more of `item` among what won't be imported.
+    pub fn leave_out(&mut self, item: Item, count: usize) {
+        if count == 0 {
+            return;
+        }
+        match self.left_out.iter_mut().find(|each| each.item == item) {
+            Some(each) => each.count += count,
+            None => self.left_out.push(LeftOut { item, count }),
+        }
+    }
 }
 
 /// A link rule: links whose URL meets `condition` with `text` open at `to`.
@@ -152,6 +213,26 @@ pub enum Destination {
     /// The Space the window in front shows.
     Front,
     Little,
+}
+
+/// Whether a tab at `url`, which doesn't open here, is one no one misses, so it's dropped without
+/// being counted among the tabs that aren't web pages: a tab with no address, a blank page, or a
+/// browser's own new tab, home or private window page, whatever the browser calls its scheme.
+pub fn quiet(url: &str) -> bool {
+    let url = url.trim().to_ascii_lowercase();
+    let page = match url.split_once("://") {
+        Some((_, page)) => page.trim_end_matches('/'),
+        None => url.as_str(),
+    };
+    matches!(
+        page,
+        "" | "about:blank"
+            | "about:newtab"
+            | "about:home"
+            | "about:privatebrowsing"
+            | "newtab"
+            | "new-tab-page"
+    )
 }
 
 /// Whether a page at `url` can open here: another browser's own pages, such as `arc://` or
