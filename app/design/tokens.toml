@@ -887,16 +887,23 @@ sheet = 20.0
 # The chrome's text and glyphs, Ink on a light window and Paper on a dark one (#320).
 ink = 0x16140f
 paper = 0xf3f0e8
-# The window is its material under black at `tint`, then the Space's colours. Dia's tint is 0.4,
-# but material 29 draws darker in our window than Dia's measures, so the lighter tint brings the
-# window to Dia's composite; check/window.sh measures it. The train's window run reads that ground
-# as these over a black and over a white backdrop, the extremes the chrome is checked over.
-tint = 0.25
-ground-over-black = 0x0e0e0e
-ground-over-white = 0x3d3d3d
+# The window is the HUD window's material, behind the window, under black at `tint` on a dark
+# window and white at `light-tint` on a light one, then the Space's glow (#4087). How see-through
+# it is is the user's, in three levels: Less, Standard (`tint`) and More. 0.44 is the dark scale's
+# floor, where Paper at 0.6 still holds 3:1, so there's no level under it and none between.
+tint-less = 0.64
+tint = 0.52
+tint-more = 0.44
+# The material alone, untinted, over a white, a grey and a black backdrop (run 5); the window's
+# ground over each is the tint's colour at its alpha over these, which run 6 measured to the hex.
+material-over-white = 0xadacac
+material-over-grey = 0x646464
+material-over-black = 0x1f1f1f
 # What stands in for the material where the window's look has to be opaque, under rows it covers
-# or in the reveal's panel over the page: Dia's composite over grey 20, before the gradient (ours).
-stand-in = 0x131313
+# or in the reveal's panel over the page: the ground over grey at Standard. The palette works out
+# each level's from the tokens above; this one is for what reads it without a palette, and a test
+# holds it to the palette's.
+stand-in = 0x303030
 # The Space's colour is a glow from the sidebar's foot, not a wash over the window (#4089): an
 # ellipse `glow-width` by `glow-height` (its radii) centred on the window's bottom left corner, the
 # main colour at `gradient-alpha` there, going in a straight line to nothing at `glow-fade` of the
@@ -921,14 +928,20 @@ dialog-dark = 0x2a2720
 # it, and opaque where it can't, so text at 0.6 of the ink holds 4.5:1 over any page. The find
 # bar and tooltips take the dark fill and this in both looks.
 overlay-alpha = 0.9
-# The light window, Dia's light layers: material 13 under white at `light-tint`, read before the
-# gradient as Dia's composite gives it over a black and a white backdrop, 0.8·255 + 0.2·(137, 243)
-# (interim, until the window run measures ours). The glow is a little fainter on it (#4089). The
-# stand-in is Dia's light composite over grey 20 (ours, as the dark one).
-light-tint = 0.8
-light-ground-over-black = 0xe7e7e7
-light-ground-over-white = 0xfdfdfd
-light-stand-in = 0xe9e9e9
+# The light window: the same material under white, at each level (#4087), and its stand-in, as
+# the dark one's. The glow is a little fainter on it (#4089).
+light-tint-less = 0.83
+light-tint = 0.7
+light-tint-more = 0.58
+light-material-over-white = 0xf5f5f4
+light-material-over-grey = 0xbcbcbb
+light-material-over-black = 0x7c7c7c
+light-stand-in = 0xebebeb
+# What floats over the window at each level, for the transparency picker: the dark fill over the
+# window's material at these, beside the window's own tints.
+overlay-fill-less = 0.88
+overlay-fill = 0.78
+overlay-fill-more = 0.56
 light-gradient-alpha = 0.32
 light-neutral-gradient-alpha = 0.11
 # What floats over a light window: Paper, the light menu's fill, and a dialog a step lighter, as

@@ -1126,7 +1126,6 @@ fn secondary_text_reads_at_both_ends_of_each_window() {
 fn secondary_text_unlifted() {
     for tone in [Tone::Dark, Tone::Light] {
         for ground in tone.grounds() {
-            let ground = rgb(ground);
             let ink = tone.ink();
             let ratio = contrast(over(ground, ink, TEXT_SECONDARY), ground);
             println!("{tone:?} over {:06x}: {ratio:.2}", theme::packed(ground));
@@ -1159,8 +1158,8 @@ fn what_floats_holds_text_at_six_tenths_over_any_page() {
         0x0a0a0b,
         0x242426,
         0x3f3f40,
-        LIGHT_GROUND_OVER_BLACK,
-        LIGHT_GROUND_OVER_WHITE,
+        0xd8d8d8,
+        0xfcfcfc,
     ];
     let mut failures = Vec::new();
     for surface in Float::ALL {

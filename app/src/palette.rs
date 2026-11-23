@@ -31,9 +31,9 @@ pub use crate::tokens::palette::{
     BUTTON_PLATE, CARD_PLATE, FIELD_PLATE, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_TERTIARY,
 };
 use crate::tokens::palette::{
-    DIALOG_DARK, DIALOG_LIGHT, GRADIENT_ALPHA, GROUND_OVER_BLACK, GROUND_OVER_WHITE,
-    LIGHT_DIALOG_ALPHA, LIGHT_GRADIENT_ALPHA, LIGHT_GROUND_OVER_BLACK, LIGHT_GROUND_OVER_WHITE,
-    LIGHT_NEUTRAL_GRADIENT_ALPHA, LIGHT_OVERLAY_ALPHA, LIGHT_STAND_IN, LIGHT_TINT, NEUTRAL,
+    DIALOG_DARK, DIALOG_LIGHT, GRADIENT_ALPHA, LIGHT_DIALOG_ALPHA, LIGHT_GRADIENT_ALPHA,
+    LIGHT_MATERIAL_OVER_BLACK, LIGHT_MATERIAL_OVER_WHITE, LIGHT_NEUTRAL_GRADIENT_ALPHA,
+    MATERIAL_OVER_BLACK, MATERIAL_OVER_WHITE, LIGHT_OVERLAY_ALPHA, LIGHT_STAND_IN, LIGHT_TINT, NEUTRAL,
     NEUTRAL_GRADIENT_ALPHA, OVERLAY_ALPHA, OVERLAY_LIGHT, STAND_IN, TINT,
 };
 use crate::tokens::palette::{FAR_GLOW, LIGHT_SHOWN, LIGHT_SHOWN_HOVERED, SHOWN, SHOWN_HOVERED};
@@ -143,12 +143,14 @@ impl Tone {
         }
     }
 
-    /// The tinted material over a black and over a white backdrop.
-    fn grounds(self) -> [u32; 2] {
-        match self {
-            Tone::Dark => [GROUND_OVER_BLACK, GROUND_OVER_WHITE],
-            Tone::Light => [LIGHT_GROUND_OVER_BLACK, LIGHT_GROUND_OVER_WHITE],
-        }
+    /// The tinted material over a black and over a white backdrop: the tint's colour at its
+    /// alpha over the material alone, as run 6 measured it.
+    fn grounds(self) -> [Rgba; 2] {
+        let material = match self {
+            Tone::Dark => [MATERIAL_OVER_BLACK, MATERIAL_OVER_WHITE],
+            Tone::Light => [LIGHT_MATERIAL_OVER_BLACK, LIGHT_MATERIAL_OVER_WHITE],
+        };
+        material.map(|under| over(rgb(under), self.tint_color(), self.tint()))
     }
 
     fn stand_in(self) -> Rgba {
@@ -1210,7 +1212,7 @@ fn layer_alpha(theme: &Theme, tone: Tone) -> f32 {
 /// at `shade`.
 fn grounds(tone: Tone, shade: f32) -> [Rgba; 2] {
     tone.grounds()
-        .map(|ground| over(rgb(ground), tone.tint_color(), shade))
+        .map(|ground| over(ground, tone.tint_color(), shade))
 }
 
 /// The most a control on an overlay rests at under its text: a chip's or a button's plate.
