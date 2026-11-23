@@ -344,21 +344,23 @@ fn corners(size: Size<Pixels>, radius: f32) -> [(f32, f32, f32); 4] {
     ]
 }
 
-/// The parts of a window of `size` round `hole`: above it, below it, left and right of it.
-fn around(hole: Bounds<Pixels>, size: Size<Pixels>) -> [Bounds<Pixels>; 4] {
-    let (width, height, rows) = (size.width, size.height, hole.size.height);
-    [
-        Bounds::new(point(px(0.), px(0.)), gpui::size(width, hole.top())),
-        Bounds::new(
-            point(px(0.), hole.bottom()),
-            gpui::size(width, height - hole.bottom()),
-        ),
-        Bounds::new(point(px(0.), hole.top()), gpui::size(hole.left(), rows)),
-        Bounds::new(
-            point(hole.right(), hole.top()),
-            gpui::size(width - hole.right(), rows),
-        ),
-    ]
+/// The dim over the window at `bounds`, round the hole a page under the window shows through, at
+/// `hole` with corners of `radius`: the page's shape as the core clips it, so the window's page shows
+/// nowhere round the card's corners (#3982).
+fn paint_dim(
+    bounds: Bounds<Pixels>,
+    (hole, radius): (Bounds<Pixels>, f32),
+    color: Hsla,
+    window: &mut Window,
+) {
+    let mut dim = PathBuilder::fill();
+    outline(&mut dim, bounds.origin, &corners(bounds.size, 0.), 0.);
+    if hole.size.width >= px(1.) && hole.size.height >= px(1.) {
+        outline(&mut dim, hole.origin, &corners(hole.size, radius), 0.);
+    }
+    if let Ok(path) = dim.build() {
+        window.paint_path(path, color);
+    }
 }
 
 /// The card at `card` with corners of `radius`, as a frame round the hole a page under the window
@@ -534,6 +536,9 @@ struct Preview {
     held: bool,
     /// The frame check.sh last read the card holds the page at, in pixels, and the scale.
     logged: Option<([i32; 4], f32)>,
+    /// Where a page under the window shows, in the window, and the radius the core clips its
+    /// corners with, as the host was last told: the dim's hole.
+    hole: (Bounds<Pixels>, f32),
     /// Once it's leaving: when, how, and where the motion was.
     leaving: Option<(Instant, Leave, Pose)>,
     _leave: Option<Task<()>>,
@@ -782,6 +787,7 @@ pub fn show(
             _covering: None,
             held: false,
             logged: None,
+            hole: (Bounds::default(), 0.),
             leaving: None,
             _leave: None,
         };
@@ -1197,8 +1203,11 @@ impl Render for LinkPreview {
                 }
             }
         };
+        // The dim's hole takes the page's shape, as the core clips it.
+        shown.hole = (page, page_radius * pose.scale);
+        let hole = shown.hole;
         if moving || settling || under {
-            self.host.drew(page, page_radius * pose.scale, pose.page);
+            self.host.drew(hole.0, hole.1, pose.page);
         }
         // The page leaves once the hole has closed over it.
         if let Some(at) = leave_to {
@@ -1359,15 +1368,14 @@ impl Render for LinkPreview {
         let dim_color = Hsla::from(rgb(DIM)).opacity(DIM_OPACITY * pose.dim);
         let dim = match under {
             false => dim.bg(dim_color),
-            true => dim.children(around(page, window.viewport_size()).map(|each| {
-                div()
-                    .absolute()
-                    .left(each.left())
-                    .top(each.top())
-                    .w(each.size.width)
-                    .h(each.size.height)
-                    .bg(dim_color)
-            })),
+            true => dim.child(
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| paint_dim(bounds, hole, dim_color, window),
+                )
+                .absolute()
+                .size_full(),
+            ),
         };
         // The controls grow from the link and leave with the card, as part of it.
         let preview = div().absolute().size_full().child(card).child(controls);

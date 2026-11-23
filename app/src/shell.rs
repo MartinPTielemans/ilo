@@ -110,6 +110,7 @@ mod little_tests;
 mod live_folders;
 mod media_player;
 mod menu_bar;
+mod menu_keys;
 mod menus;
 mod naming;
 mod new_space;
@@ -1526,6 +1527,12 @@ pub struct Shell {
     /// row's, with the sidebar's focus, and where the ring's last Tab into a page came from
     /// (page_ends.rs, #3220).
     keyed_strip: Option<page_ends::StripStop>,
+    /// Off the Mac, the menu control holding the ring the keys act on, with the sidebar's focus,
+    /// and whether the page had the keyboard before, which gets it back (menu_keys.rs, #4030).
+    keyed_menu: Option<bool>,
+    /// Whether the menu control's ring has been drawn since the keys came to it, which the log says
+    /// once.
+    menu_ring_drawn: Rc<Cell<bool>>,
     page_ends: page_ends::PageEnds,
     /// The tab Close and Keep Pinned showed, whose row has the ring for a moment, and the timer
     /// that takes it off.
@@ -2184,6 +2191,8 @@ impl Shell {
             focus_keys: false,
             keyed_drawn: Rc::default(),
             keyed_strip: None,
+            keyed_menu: None,
+            menu_ring_drawn: Rc::default(),
             page_ends: Default::default(),
             attention: None,
             tools_on: false,

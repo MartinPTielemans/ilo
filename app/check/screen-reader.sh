@@ -505,6 +505,40 @@ judging=
 press f10 shift
 press down
 press escape
+# F10 from the page rings the footer's menu control, read by its name as a button, as Chrome's F10
+# rings its menu button. ↩ opens ilo's menu on its first item, and F10 from the control gives the
+# page the keyboard back, read as the page (#4030).
+heard=$(wc -l < "$nvda_log")
+send click $page_point
+spoken "a click on the second page before F10"
+# The window before and with the ring, for the PR's record of how it looks.
+../tools/window-screenshot.sh "$pid" "$out/f10-before.png" || fail "no window to capture"
+judging=1
+at=$(wc -l < "$nvda_log")
+press f10
+expect '^browser: menu keyed$' "F10 from the page didn't ring the menu control"
+expect '^browser: menu ring at ' "the menu control's ring wasn't drawn after F10"
+../tools/window-screenshot.sh "$pid" "$out/f10-ring.png" || fail "no window to capture"
+tail -n 4 "$focus_file" | grep -q '^UI Automation focus: Button "[^"]* menu", framework AccessKit' ||
+  fail "UI Automation's focus isn't on the menu control after F10: $focus_file"
+says "$at" " menu', 'button'" "NVDA didn't say the menu control after F10"
+judging=
+press return
+expect '^browser: menu shown Settings' "↩ on the menu control didn't open ilo's menu"
+expect '^browser: menu highlights .* at ' "the menu ↩ opened didn't highlight its first item"
+press escape
+expect '^browser: menu closed$' "escape didn't close ilo's menu"
+heard=$(wc -l < "$nvda_log")
+send click $page_point
+spoken "a click on the second page after ilo's menu"
+press f10
+expect '^browser: menu keyed$' "F10 from the page didn't ring the menu control again"
+at=$(wc -l < "$nvda_log")
+press f10
+expect '^browser: menu keys left by focus-menu$' "F10 from the menu control didn't leave it"
+tail -n 6 "$focus_file" | grep -q '^focus window: Chrome_WidgetWin_1 ' ||
+  fail "F10 from the menu control didn't give the page's window the focus: $focus_file"
+says "$at" "'Second', 'document'" "NVDA didn't say the page after F10 from the menu control"
 # The Library's key gives its search field, History's here, the keyboard, read by its name, where
 # it said only the window's before (#3238).
 judging=1

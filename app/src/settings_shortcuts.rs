@@ -86,6 +86,7 @@ pub const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
             of(Command::RevealTab),
             of(Command::FocusSidebar),
             of(Command::FocusAgentQuestion),
+            of(Command::FocusMenu),
             of(Command::Clear),
             of(Command::SortBySite),
             of(Command::ResetSpaceTabs),

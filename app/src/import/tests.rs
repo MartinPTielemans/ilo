@@ -352,7 +352,125 @@ fn the_mac_finds_arc_with_its_profiles() {
         [("Arc", vec!["Personal".to_string(), "Work".to_string()])]
     );
     let arc = &sources::find(&roots)[0];
-    assert!(arc.arc_sidebar().is_some());
+    assert!(super::sidebar::has(arc));
+}
+
+/// A browser whose sidebar isn't read yet, such as Dia's or Zen's, shows what its family does,
+/// with no Spaces, and reading what a sidebar would add brings nothing (#4051).
+#[test]
+fn a_sidebar_not_read_yet_adds_nothing() {
+    let home = home("sidebar-not-read");
+    chromium_dir(home.join("Library/Application Support/Dia/User Data"), 10);
+    firefox_dir(home.join(".zen"), 10);
+    let sidebar = [Kind::Spaces, Kind::OpenTabs, Kind::Favorites];
+    for (os, name) in [(Os::Mac, "Dia"), (Os::Linux, "Zen")] {
+        let sources = sources::find(&Roots::under(&home, os));
+        let source = (sources.iter())
+            .find(|source| source.browser.name == name)
+            .unwrap();
+        assert!(!super::sidebar::has(source), "{name}");
+        assert!(!read::kinds(source).contains(&Kind::Spaces), "{name}");
+        let found = read::read(source, &sidebar, SystemTime::now()).unwrap();
+        assert_eq!(found, Found::default(), "{name}");
+    }
+    fs::remove_dir_all(home).unwrap();
+}
+
+/// What a browser has with no place here is one line, each kind counted in the words every
+/// source shares, in the order its reader found them; none when there's nothing of the kind.
+#[test]
+fn what_wont_be_imported_is_one_line() {
+    use super::found::{LIVE_FOLDER, NOT_WEB_PAGE, SPACE_ICON};
+    let mut found = Found::default();
+    assert_eq!(super::left_out_line(&found.left_out), None);
+    found.leave_out(LIVE_FOLDER, 0);
+    assert_eq!(super::left_out_line(&found.left_out), None);
+    found.leave_out(LIVE_FOLDER, 1);
+    assert_eq!(
+        super::left_out_line(&found.left_out).as_deref(),
+        Some("Won't be imported: a live folder")
+    );
+    found.leave_out(SPACE_ICON, 1);
+    found.leave_out(LIVE_FOLDER, 1);
+    assert_eq!(
+        super::left_out_line(&found.left_out).as_deref(),
+        Some("Won't be imported: 2 live folders and a Space icon")
+    );
+    found.leave_out(NOT_WEB_PAGE, 3);
+    found.leave_out(super::found::FOUR_TAB_SPLIT, 1200);
+    assert_eq!(
+        super::left_out_line(&found.left_out).as_deref(),
+        Some(
+            "Won't be imported: 2 live folders, a Space icon, 3 tabs that aren't web pages and \
+             1,200 four-tab splits"
+        )
+    );
+}
+
+/// A blank tab and a browser's own new tab, home or private window page drop without a word,
+/// whatever its scheme; its other pages are tabs that aren't web pages.
+#[test]
+fn a_new_tab_drops_quietly_and_a_browsers_own_page_is_counted() {
+    for url in [
+        "",
+        " ",
+        "about:blank",
+        "about:newtab",
+        "about:home",
+        "about:privatebrowsing",
+        "chrome://newtab/",
+        "chrome://new-tab-page/",
+        "edge://newtab",
+        "arc://newtab",
+    ] {
+        assert!(super::found::quiet(url), "{url:?}");
+    }
+    for url in [
+        "chrome://settings/",
+        "dia://settings",
+        "about:preferences",
+        "javascript:void(0)",
+    ] {
+        assert!(!super::found::quiet(url), "{url:?}");
+    }
+}
+
+/// What won't be imported is said while any of a sidebar comes, its Spaces, Today tabs or
+/// favorites, as it's read with them, and not with only history.
+#[test]
+fn what_wont_be_imported_goes_with_the_sidebar() {
+    let source = &sources::find(&Roots::under(&fixture(), Os::Mac))[0];
+    let mut found = Found::default();
+    found.leave_out(super::found::SPACE_ICON, 1);
+    for kind in [Kind::Spaces, Kind::OpenTabs, Kind::Favorites] {
+        let kept = read::keep(&found, source, &[kind]).unwrap();
+        assert_eq!(kept.left_out, found.left_out, "{kind:?}");
+    }
+    let kept = read::keep(&found, source, &[Kind::History]).unwrap();
+    assert!(kept.left_out.is_empty());
+}
+
+/// Arc's link rules come only with its Spaces, as each goes to the Space its Arc Space becomes:
+/// its routing file is read with any of its sidebar, but its favorites or Today tabs alone, read
+/// or kept, bring no rule and nowhere for everything else.
+#[test]
+fn arcs_link_rules_come_only_with_its_spaces() {
+    let source = &sources::find(&Roots::under(&fixture(), Os::Mac))[0];
+    let now = SystemTime::now();
+    let all = [Kind::Spaces, Kind::OpenTabs, Kind::Favorites];
+    let found = read::read(source, &all, now).unwrap();
+    assert_eq!(found.link_rules, sidebar().link_rules);
+    assert_eq!(found.link_otherwise, sidebar().link_otherwise);
+    let spaces = read::read(source, &[Kind::Spaces], now).unwrap();
+    assert_eq!(spaces.link_rules, found.link_rules);
+    for kind in [Kind::OpenTabs, Kind::Favorites] {
+        let read = read::read(source, &[kind], now).unwrap();
+        let kept = read::keep(&found, source, &[kind]).unwrap();
+        for found in [read, kept] {
+            assert!(found.link_rules.is_empty(), "{kind:?}");
+            assert_eq!(found.link_otherwise, None, "{kind:?}");
+        }
+    }
 }
 
 /// On Windows, Arc in the folder the Store gives it, Chrome in Local AppData and Firefox's

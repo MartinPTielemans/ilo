@@ -87,6 +87,9 @@ pub enum Command {
     /// Gives an agent's question card the keyboard, or with the keyboard on it, gives it back
     /// (agent_card_keys.rs).
     FocusAgentQuestion,
+    /// Off the Mac, rings the footer's menu control, which Return opens, as Chrome's F10 rings its
+    /// menu button (menu_keys.rs).
+    FocusMenu,
     /// Loads the selected pinned tab's pinned URL.
     BackToPinnedUrl,
     /// Loads the pinned URL of each pinned tab of the Space shown that's away from it, as Arc's
@@ -410,6 +413,9 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     // shows (agent_card_keys.rs).
     ("alt-shift-cmd-a", Command::FocusAgentQuestion, false),
     ("ctrl-shift-a", Command::FocusAgentQuestion, false),
+    // Chrome's key for its menu button, unreserved as Chrome's is, off the Mac alone, whose menu
+    // bar has the system's own key.
+    ("f10", Command::FocusMenu, false),
     ("shift-cmd-l", Command::ViewLibrary, false),
     ("shift-cmd-j", Command::ViewDownloads, false),
     ("cmd-y", Command::ViewHistory, false),
@@ -513,6 +519,7 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
             "prompt",
         ],
     ),
+    row(Command::FocusMenu, &["keyboard", "open menu"]),
     row(Command::NewFolder, &[]),
     row(Command::BackToPinnedUrl, &["reset tab"]),
     row(Command::ToggleMute, &["sound", "audio"]),
@@ -1123,6 +1130,7 @@ impl Command {
             Command::RevealTab => "reveal-tab",
             Command::FocusSidebar => "focus-sidebar",
             Command::FocusAgentQuestion => "focus-agent-question",
+            Command::FocusMenu => "focus-menu",
             Command::BackToPinnedUrl => "back-to-pinned-url",
             Command::ResetSpaceTabs => "reset-space-tabs",
             Command::ToggleMute => "toggle-mute",
@@ -1595,6 +1603,7 @@ impl Shell {
             Command::FocusAgentQuestion => {
                 return self.focus_agent_question(from, cx);
             }
+            Command::FocusMenu => return self.focus_menu(from == "page", cx),
             // In an agent's Space ⌘↩ is the bar's Take Over or Hand Back.
             Command::BackToPinnedUrl if self.agent_bar().is_some() => {
                 return self.agent_bar_primary(cx);
@@ -2250,6 +2259,7 @@ impl Shell {
                 self.library.is_none() && !self.page_fullscreen && !self.sidebar_rows().is_empty()
             }
             Command::FocusAgentQuestion => self.agent_question().is_some(),
+            Command::FocusMenu => self.menu_reaches(),
             Command::ExpandFolders => self.shown_space().is_some_and(|space| {
                 space
                     .folders
