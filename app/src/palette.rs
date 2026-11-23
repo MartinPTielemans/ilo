@@ -35,8 +35,14 @@ use crate::tokens::palette::{
 };
 pub use crate::tokens::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
 use crate::tokens::palette::{
+    FAR_GLOW, LIGHT_SHOWN, LIGHT_SHOWN_HOVERED, SHOWN, SHOWN_HOVERED,
+};
+use crate::tokens::palette::{
     LIGHT_SELECTED, LIGHT_SELECTED_HOVERED, LIGHT_SELECTED_SHADOW, LIGHT_SELECTED_SHADOW_BLUR,
     LIGHT_SELECTED_SHADOW_Y,
+};
+pub use crate::tokens::palette::{
+    BUTTON_PLATE, CARD_PLATE, FIELD_PLATE, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_TERTIARY,
 };
 pub use crate::tokens::palette::{
     STATE_HOVERED, STATE_PRESSED, STATE_SELECTED, STATE_SELECTED_HOVERED,
@@ -58,6 +64,13 @@ const WHITE: Rgba = Rgba {
     b: 1.,
     a: 1.,
 };
+/// Nothing: the glows of a Space without a colour.
+const CLEAR: Rgba = Rgba {
+    r: 0.,
+    g: 0.,
+    b: 0.,
+    a: 0.,
+};
 /// The shade's steps, from none up.
 const SHADE_STEP: f32 = 0.05;
 /// WCAG's minimums: text, and glyphs, boundaries and focus rings.
@@ -68,19 +81,22 @@ const LABEL: f32 = 4.6;
 /// Grain at 1 moves the window toward the text's colour by half its strength on the whole, where
 /// the text has least room.
 const GRAIN_SHIFT: f32 = GRAIN_STRENGTH * 0.5;
-/// The plates under rows, in Paper: the selected row's, one under the pointer, the URL field's,
-/// a Library section's and a split target's.
+/// The plates under rows, in Paper: the selected row's, one under the pointer, a field's (the
+/// palette's `field-plate`, a step under the button's, which is checked in its place), a Library
+/// section's and a split target's.
 pub const SELECTED_PLATE: f32 = 0.2;
 pub const HOVERED_PLATE: f32 = 0.12;
-pub const FIELD_PLATE: f32 = 0.1;
 pub const SECTION_PLATE: f32 = 0.09;
 pub const TARGET_PLATE: f32 = 0.06;
 /// A split target lies the accent at this over its plate.
 pub const TARGET_ACCENT: f32 = 0.15;
-/// Where on the window the colours are checked: across the gradient's line and down it. The
-/// tests check a finer grid.
+/// Where on a swatch its colours are checked: across its gradient's line and down it.
 const ALONG: [f32; 9] = [0., 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.];
 const DOWN: [f32; 9] = ALONG;
+/// How strong the foot's glow and the far one are where the window is checked: anywhere from none
+/// to their centres, as text may lie anywhere under them. The tests check finer steps.
+const FOOT: [f32; 5] = [0., 0.25, 0.5, 0.75, 1.];
+const FAR: [f32; 2] = [0., 1.];
 /// The window between those points can dip a little under them, so what's checked at them has
 /// this much to spare.
 const BETWEEN: f32 = 0.05;
@@ -162,6 +178,14 @@ impl Tone {
         }
     }
 
+    /// The tab shown's plate in the Space's colour, at rest and under the pointer.
+    fn shown(self) -> (f32, f32) {
+        match self {
+            Tone::Dark => (SHOWN, SHOWN_HOVERED),
+            Tone::Light => (LIGHT_SHOWN, LIGHT_SHOWN_HOVERED),
+        }
+    }
+
     /// The card the pages lie in.
     fn page(self) -> Rgba {
         rgba(match self {
@@ -198,8 +222,16 @@ pub struct Palette {
     /// The window's ground where it has to be opaque, under rows it covers or in the reveal's
     /// panel over the page.
     pub underlay: Rgba,
-    /// How opaque the theme's colours lie over the ground; 0 without a theme.
+    /// How opaque the Space's colour lies at the centre of the glow from the sidebar's foot; 0
+    /// without a theme.
     pub layer_alpha: f32,
+    /// The glows' colours, each at its alpha at its centre: the main colour from the sidebar's
+    /// foot and the second, faint, from the window's top right. Clear without a theme.
+    pub glow: Rgba,
+    pub far_glow: Rgba,
+    /// The tab shown's colour: the Space's main colour, or the colour nearest it at its hue on
+    /// which the ink reads; none without a theme, which takes the selected plate.
+    pub shown: Option<Rgba>,
     /// The tint's colour over the tint for a theme the ink can't read on over a backdrop; 0 for
     /// most, and always without a theme.
     pub shade: f32,
@@ -271,8 +303,18 @@ impl Palette {
         };
         let window = Window::of(theme, tone);
         let (shade, layer_alpha) = window.fit();
-        let palette = Palette::with(shade, layer_alpha, &window);
-        let accent = palette.solve_accent(rgb(theme.main_color()), &window);
+        let main = rgb(theme.main_color());
+        let shown = solve_shown(main, tone, &window.samples(shade, layer_alpha));
+        let mut palette = Palette::with(shade, layer_alpha, &window, Some(shown));
+        palette.glow = Rgba {
+            a: layer_alpha,
+            ..main
+        };
+        palette.far_glow = Rgba {
+            a: window.far_at(layer_alpha),
+            ..window.far
+        };
+        let accent = palette.solve_accent(main, &window);
         let section_glyph = palette.solve_section_glyph(accent, &window);
         let swatch = Swatch::of(Some(theme), &window);
         Palette {
@@ -288,7 +330,7 @@ impl Palette {
     /// be to read on it, as the accent.
     fn untinted(tone: Tone) -> Palette {
         let window = Window::of_none(tone);
-        let palette = Palette::with(0., 0., &window);
+        let palette = Palette::with(0., 0., &window, None);
         let accent = palette.solve_accent(rgb(NO_THEME_ACCENT), &window);
         let section_glyph = palette.solve_section_glyph(accent, &window);
         let swatch = Swatch::of(None, &window);
@@ -301,7 +343,7 @@ impl Palette {
         }
     }
 
-    fn with(shade: f32, layer_alpha: f32, window: &Window) -> Palette {
+    fn with(shade: f32, layer_alpha: f32, window: &Window, shown: Option<Rgba>) -> Palette {
         let tone = window.tone;
         let ink = tone.ink();
         let (overlay, dialog) = tone.overlays();
@@ -313,6 +355,9 @@ impl Palette {
             },
             underlay: over(tone.stand_in(), tone.tint_color(), shade),
             layer_alpha,
+            glow: CLEAR,
+            far_glow: CLEAR,
+            shown,
             shade,
             ink,
             text_floor: 0.,
@@ -355,6 +400,12 @@ impl Palette {
         // selected plate.
         let (selected, alpha, _) = self.tone.selected();
         grounds.extend(plain.iter().map(|&at| over(at, selected, alpha)));
+        if let Some(shown) = self.shown {
+            let (rest, under) = self.tone.shown();
+            for alpha in [rest, under] {
+                grounds.extend(plain.iter().map(|&at| over(at, shown, alpha)));
+            }
+        }
         for plate in [SELECTED_PLATE, HOVERED_PLATE, FIELD_PLATE] {
             grounds.extend(plain.iter().map(|&at| over(at, self.ink, plate)));
         }
@@ -386,6 +437,12 @@ impl Palette {
             underlay: mix(self.underlay, other.underlay),
             tint: mix(self.tint, other.tint),
             layer_alpha: self.layer_alpha + (other.layer_alpha - self.layer_alpha) * t,
+            glow: near.glow,
+            far_glow: near.far_glow,
+            shown: match (self.shown, other.shown) {
+                (Some(from), Some(to)) => Some(mix(from, to)),
+                _ => near.shown,
+            },
             shade: self.shade + (other.shade - self.shade) * t,
             ink: mix(self.ink, other.ink),
             text_floor: self.text_floor.max(other.text_floor),
@@ -523,6 +580,41 @@ impl Palette {
         Hsla::from(color).opacity(rest + (under - rest) * hover)
     }
 
+    /// The tab shown's plate, `hover` of the way to its fill under the pointer: the Space's colour,
+    /// or the selected plate for a Space without one.
+    pub fn shown(&self, hover: f32) -> Hsla {
+        let Some(color) = self.shown else {
+            return self.selected(hover);
+        };
+        let (rest, under) = self.tone.shown();
+        Hsla::from(color).opacity(rest + (under - rest) * hover)
+    }
+
+    /// What lifts the tab shown's plate off a light window, at `opacity`: the selected plate's,
+    /// for a Space without a colour; a plate of the Space's colour lies flat.
+    pub fn shown_shadow(&self, opacity: f32) -> Vec<BoxShadow> {
+        match self.shown {
+            Some(_) => Vec::new(),
+            None => self.selected_shadow(opacity),
+        }
+    }
+
+    /// The window's colour over its ground, `foot` of the way to the foot glow's full strength and
+    /// `far` of the way to the far one's, with each one's alpha: what to lay over the ground there.
+    pub fn glow_at(&self, foot: f32, far: f32) -> Rgba {
+        let (foot, far) = (
+            Rgba {
+                a: self.glow.a * foot,
+                ..self.glow
+            },
+            Rgba {
+                a: self.far_glow.a * far,
+                ..self.far_glow
+            },
+        );
+        composite(foot, far)
+    }
+
     /// What lifts the selected row's plate off a light window, at `opacity`; nothing on a dark
     /// one.
     pub fn selected_shadow(&self, opacity: f32) -> Vec<BoxShadow> {
@@ -543,11 +635,19 @@ impl Palette {
         Hsla::from(self.ink).opacity(alpha)
     }
 
-    /// The window `along` the gradient's line and `y` down it, with `theme` (this palette's own),
-    /// as it's seen over a black and over a white backdrop.
-    pub fn window_at(&self, theme: Option<&Theme>, along: f32, y: f32) -> [Rgba; 2] {
-        let layer = theme.map_or(Layer::none(), |theme| Layer::of(theme, along, y));
-        grounds(self.tone, self.shade).map(|ground| layer.over(ground, self.layer_alpha))
+    /// A sidebar row's plate under the pointer, the only one a row has but the tab shown's.
+    pub fn hovered_row(&self) -> Hsla {
+        self.plate(match self.tone {
+            Tone::Dark => crate::tokens::shell::HOVERED,
+            Tone::Light => crate::tokens::shell::LIGHT_HOVERED,
+        })
+    }
+
+    /// The window where its foot's glow is `foot` of its full strength and the far one `far` of
+    /// its, as it's seen over a black and over a white backdrop.
+    pub fn window_at(&self, foot: f32, far: f32) -> [Rgba; 2] {
+        let glow = self.glow_at(foot, far);
+        grounds(self.tone, self.shade).map(|ground| over(ground, glow, glow.a))
     }
 
     /// The window where its theme's colour is `layer`, translucent, over a black and over a
@@ -833,17 +933,21 @@ impl Swatch {
     }
 }
 
-/// The theme's window, worked out once: how opaque its layer is, and the layer's colours at every
-/// point checked.
+/// The theme's window, worked out once: how opaque its glows are and their colours, and the
+/// colours its swatch runs through.
 struct Window {
     tone: Tone,
+    /// The foot's glow at its centre, and the far one's at the theme's own alpha.
     alpha: f32,
-    layers: Vec<Layer>,
+    far_alpha: f32,
+    main: Rgba,
+    far: Rgba,
     grain: f32,
+    swatch: Vec<Rgba>,
 }
 
-/// The theme's colour at one point of the window: the gradient's, and a third colour over it at
-/// a share of the layer's alpha.
+/// The theme's colour at one point of its swatch's run: the gradient's, and a third colour over it
+/// at a share of the layer's alpha.
 #[derive(Clone, Copy)]
 struct Layer {
     color: Rgba,
@@ -851,13 +955,6 @@ struct Layer {
 }
 
 impl Layer {
-    fn none() -> Layer {
-        Layer {
-            color: BLACK,
-            third: None,
-        }
-    }
-
     /// `theme`'s colour `along` the gradient's line (0 at the window's top left, 1 at its bottom
     /// right) and `y` down the window: one colour going to the same at HSL lightness + 0.25 down
     /// the window; two from the main one to the second SECOND_AT along; a third coming in toward
@@ -898,45 +995,73 @@ impl Window {
         Window {
             tone,
             alpha: 0.,
-            layers: vec![Layer::none()],
+            far_alpha: 0.,
+            main: BLACK,
+            far: BLACK,
             grain: 0.,
+            swatch: vec![BLACK],
         }
     }
 
     fn of(theme: &Theme, tone: Tone) -> Window {
         let colors: Vec<Rgba> = theme.colors().into_iter().map(rgb).collect();
         let alongs: &[f32] = if colors.len() == 1 { &[0.] } else { &ALONG };
-        let layers = alongs
+        let swatch = alongs
             .iter()
             .flat_map(|&along| DOWN.iter().map(move |&y| Layer::of(theme, along, y)))
+            .map(|layer| layer.over(BLACK, 1.))
             .collect();
+        let alpha = layer_alpha(theme, tone);
+        let (colored, _) = tone.gradient_alphas();
         Window {
             tone,
-            alpha: layer_alpha(theme, tone),
-            layers,
+            alpha,
+            far_alpha: FAR_GLOW * alpha / colored,
+            main: colors[0],
+            far: colors.get(1).copied().unwrap_or(colors[0]),
             grain: theme.grain,
+            swatch,
         }
     }
 
-    /// The window at every point checked over both backdrops, its ground under the tint's colour
-    /// at `shade` and the theme's layer at `alpha`.
+    /// The far glow's alpha where the foot's is `alpha`, as `fit` may fade them together.
+    fn far_at(&self, alpha: f32) -> f32 {
+        match self.alpha > 0. {
+            true => self.far_alpha * alpha / self.alpha,
+            false => 0.,
+        }
+    }
+
+    /// The window at every point checked over both backdrops: its ground under the tint's colour
+    /// at `shade`, with the foot's glow at `alpha` at its centre and the far one with it, each
+    /// anywhere from none to full.
     fn samples(&self, shade: f32, alpha: f32) -> Vec<Rgba> {
+        let far_alpha = self.far_at(alpha);
         grounds(self.tone, shade)
             .into_iter()
             .flat_map(|ground| {
-                self.layers
-                    .iter()
-                    .map(move |layer| layer.over(ground, alpha))
+                FOOT.iter().flat_map(move |&foot| {
+                    FAR.iter().map(move |&far| {
+                        let glow = composite(
+                            Rgba {
+                                a: alpha * foot,
+                                ..self.main
+                            },
+                            Rgba {
+                                a: far_alpha * far,
+                                ..self.far
+                            },
+                        );
+                        over(ground, glow, glow.a)
+                    })
+                })
             })
             .collect()
     }
 
     /// The theme's colours as a swatch shows them, opaque.
     fn swatch(&self) -> Vec<Rgba> {
-        self.layers
-            .iter()
-            .map(|layer| layer.over(BLACK, 1.))
-            .collect()
+        self.swatch.clone()
     }
 
     /// The least shade, in steps, at which the ink reads on the window and the selected and
@@ -968,6 +1093,22 @@ impl Window {
             .find(|&(shade, alpha)| reads(shade, alpha))
             .unwrap_or((1., 0.))
     }
+}
+
+/// The tab shown's colour for a Space whose main colour is `main`, on a window of `tone` checked
+/// at `samples`: `main`, or the colour nearest it at its hue on which the ink reads at text's
+/// minimum, at rest and under the pointer, everywhere on the window.
+fn solve_shown(main: Rgba, tone: Tone, samples: &[Rgba]) -> Rgba {
+    let ink = tone.ink();
+    let (rest, under) = tone.shown();
+    let passes = |c: Rgba| {
+        samples.iter().all(|&at| {
+            [rest, under]
+                .iter()
+                .all(|&alpha| contrast(ink, over(at, c, alpha)) >= TEXT + BETWEEN)
+        })
+    };
+    nearest(main, passes).unwrap_or(ink)
 }
 
 /// How opaque `theme`'s colours lie over a window of `tone`, as a Space's colour alone does at
@@ -1050,6 +1191,21 @@ fn in_gamut(l: f32, a: f32, b: f32) -> Rgba {
 /// `color` as it is once it's 8 bits a channel.
 pub fn quantized(color: Rgba) -> Rgba {
     rgb(theme::packed(color))
+}
+
+/// Translucent `top` over translucent `under`, as one translucent colour.
+pub fn composite(under: Rgba, top: Rgba) -> Rgba {
+    let a = top.a + under.a * (1. - top.a);
+    if a <= 0. {
+        return CLEAR;
+    }
+    let mix = |u: f32, t: f32| (t * top.a + u * under.a * (1. - top.a)) / a;
+    Rgba {
+        r: mix(under.r, top.r),
+        g: mix(under.g, top.g),
+        b: mix(under.b, top.b),
+        a,
+    }
 }
 
 /// `color` at `alpha` over opaque `base`.

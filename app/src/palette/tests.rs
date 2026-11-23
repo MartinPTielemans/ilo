@@ -32,15 +32,14 @@ fn hex(color: Rgba) -> u32 {
     theme::packed(color)
 }
 
-/// The window, finer than the palette checks it: 17 points along the gradient's line and 17 down,
-/// the sidebar's and the page's alike, each over a black and a white backdrop.
-fn fine_window(palette: &Palette, theme: Option<&Theme>) -> Vec<Rgba> {
+/// The window, finer than the palette checks it: the foot's glow at 17 strengths and the far one's
+/// at 5, each with each wherever the window's size makes them meet, over a black and a white
+/// backdrop.
+fn fine_window(palette: &Palette) -> Vec<Rgba> {
     let steps = 16;
     (0..=steps)
-        .flat_map(|along| {
-            (0..=steps).map(move |y| (along as f32 / steps as f32, y as f32 / steps as f32))
-        })
-        .flat_map(|(along, y)| palette.window_at(theme, along, y))
+        .flat_map(|foot| (0..=4).map(move |far| (foot as f32 / steps as f32, far as f32 / 4.)))
+        .flat_map(|(foot, far)| palette.window_at(foot, far))
         .collect()
 }
 
@@ -48,7 +47,7 @@ fn fine_window(palette: &Palette, theme: Option<&Theme>) -> Vec<Rgba> {
 /// from the token ladder, on every point of a window of `tone`, below its WCAG minimum.
 fn failures(theme: Option<&Theme>, tone: Tone) -> Vec<String> {
     let palette = Palette::of(theme, tone);
-    let window = fine_window(&palette, theme);
+    let window = fine_window(&palette);
     let grain = theme.map_or(0., |theme| theme.grain);
     let ink = palette.ink;
     let grained: Vec<Rgba> = window
@@ -77,6 +76,12 @@ fn failures(theme: Option<&Theme>, tone: Tone) -> Vec<String> {
         .map(|&at| over(at, selected, selected.a))
         .collect();
     check("selected title", on(palette.text(1.), &selected), TEXT);
+    // The tab shown's row, in the Space's colour, at rest and under the pointer (#4091).
+    for (name, hover) in [("shown title", 0.), ("hovered shown title", 1.)] {
+        let shown = Rgba::from(palette.shown(hover));
+        let shown: Vec<Rgba> = window.iter().map(|&at| over(at, shown, shown.a)).collect();
+        check(name, on(palette.text(1.), &shown), TEXT);
+    }
     check("unselected title", on(palette.text(0.78), &grained), TEXT);
     check(
         "title on hovered plate",
@@ -169,7 +174,7 @@ fn failures(theme: Option<&Theme>, tone: Tone) -> Vec<String> {
     check("picker segment label", label, TEXT);
     // A Library card is its Space's window, drawn in its palette, split segments too.
     let card: Vec<Rgba> = (0..=16)
-        .flat_map(|y| palette.window_at(theme, 0.5, y as f32 / 16.))
+        .flat_map(|foot| palette.window_at(foot as f32 / 16., 0.))
         .collect();
     check(
         "card split segment title",
@@ -242,7 +247,7 @@ fn failures(theme: Option<&Theme>, tone: Tone) -> Vec<String> {
     }
     // Every surface's controls in each of the ladder's states over their resting fills (#318):
     // the text on them at 4.5:1 and the glyphs at 3:1.
-    for (name, content, minimum, on_states) in states(&palette, theme) {
+    for (name, content, minimum, on_states) in states(&palette) {
         check(
             &format!("{name}, every state"),
             on(content, &on_states),
@@ -273,10 +278,10 @@ fn failures(theme: Option<&Theme>, tone: Tone) -> Vec<String> {
 /// Each control drawn on a state of the ladder, off the sidebar, whose measured states the ladder
 /// is: its name, what's drawn on it, the contrast that needs, and the grounds it's drawn on, its
 /// resting fill under each state it takes.
-fn states(palette: &Palette, theme: Option<&Theme>) -> Vec<(String, Hsla, f32, Vec<Rgba>)> {
+fn states(palette: &Palette) -> Vec<(String, Hsla, f32, Vec<Rgba>)> {
     use crate::tokens::{command_bar, dialog, offer, shell, site_controls, toast};
     const PRESSABLE: [f32; 2] = [STATE_PRESSED, STATE_HOVERED];
-    let window = fine_window(palette, theme);
+    let window = fine_window(palette);
     let ink = palette.ink;
     // A control resting at `rest`, a plate of the ink, on `grounds`, in each of `states`.
     let lay = |grounds: &[Rgba], rest: f32, states: &[f32]| -> Vec<Rgba> {
@@ -350,19 +355,19 @@ fn states(palette: &Palette, theme: Option<&Theme>) -> Vec<(String, Hsla, f32, V
             "URL field host",
             palette.text(shell::SECONDARY),
             TEXT,
-            lay(&window, shell::URL_FIELD, &[STATE_HOVERED]),
+            lay(&window, FIELD_PLATE, &[STATE_HOVERED]),
         ),
         (
             "URL field placeholder",
             palette.text(shell::header::URL_PLACEHOLDER),
             TEXT,
-            lay(&window, shell::URL_FIELD, &[STATE_HOVERED]),
+            lay(&window, FIELD_PLATE, &[STATE_HOVERED]),
         ),
         (
             "question card button",
             palette.text(shell::TITLE),
             TEXT,
-            lay(&window, shell::URL_FIELD, &PRESSABLE),
+            lay(&window, FIELD_PLATE, &PRESSABLE),
         ),
         (
             "offer button",
@@ -696,12 +701,8 @@ fn the_shown_spaces_icon_reads_on_the_footer_light_and_dark() {
             Tone::Dark
         };
         let palette = Palette::of(Some(theme), tone);
-        let footer = (0..=16).flat_map(|along| {
-            (12..=16).flat_map(move |y| {
-                palette.window_at(Some(theme), along as f32 / 16., y as f32 / 16.)
-            })
-        });
-        for at in footer.map(|at| over(at, palette.ink, GRAIN_SHIFT * theme.grain)) {
+        let footer = fine_window(&palette);
+        for at in footer.into_iter().map(|at| over(at, palette.ink, GRAIN_SHIFT * theme.grain)) {
             let ratio = contrast(palette.accent, at);
             if ratio < worst.0 {
                 worst = (ratio, theme.to_text());
@@ -1047,6 +1048,83 @@ fn the_pickers_card_is_opaque_where_nothing_blurs_what_is_behind_it() {
                 opaque,
                 over(rgb(OVERLAY_DARK), palette.card, palette.card.a)
             );
+        }
+    }
+}
+
+/// The tab shown's row keeps its Space's colour, and its title reads on it at 4.5:1 at rest and
+/// under the pointer, wherever the window's glow puts it, on every Space colour the picker makes,
+/// on a dark window and a light one, over a black and a white backdrop (#4091).
+#[test]
+fn the_tab_shown_reads_on_every_space_colour_dark_and_light() {
+    let mut themes = grid(
+        &[0., 30., 60., 90., 120., 150., 180., 210., 240., 270., 300., 330.],
+        &[0., 0.5, 1.],
+        &[0., 0.25, 0.5, 0.75, 1.],
+        &[0., crate::theme::DEFAULT_INTENSITY, 1.],
+    );
+    for color in [
+        0xf0eae5, 0xe59eba, 0x9e749b, 0xe1676f, 0xef8c63, 0xf2d46c, 0x73e49b, 0x7eb6d5, 0x656786,
+        0x7a70f4, 0xe8743b, 0x12a594, 0x000000, 0xffffff, 0xffff00, 0x0000ff,
+    ] {
+        themes.push(Theme::of_color(color));
+    }
+    let mut worst = (f32::MAX, String::new());
+    for theme in &themes {
+        for tone in [Tone::Dark, Tone::Light] {
+            let palette = Palette::of(Some(theme), tone);
+            let title = Rgba::from(palette.text(1.));
+            for hover in [0., 1.] {
+                let plate = Rgba::from(palette.shown(hover));
+                for at in fine_window(&palette) {
+                    let under = over(at, plate, plate.a);
+                    let ratio = contrast(over(under, title, title.a), under);
+                    if ratio < worst.0 {
+                        worst = (ratio, format!("{} {tone:?} hover {hover}", theme.to_text()));
+                    }
+                }
+            }
+            // It is the Space's colour: its hue kept wherever it has one.
+            let main = rgb(theme.main_color());
+            let shown = palette.shown.expect("a Space with a colour has a shown colour");
+            let [_, a, b] = crate::theme::oklab(main);
+            let [_, sa, sb] = crate::theme::oklab(shown);
+            if a.hypot(b) > 0.02 {
+                let turned = (a * sb - b * sa).atan2(a * sa + b * sb).abs();
+                assert!(turned < 0.2, "{} {tone:?} turned {turned}", theme.to_text());
+            }
+        }
+    }
+    assert!(worst.0 >= TEXT, "{:.2} on {}", worst.0, worst.1);
+}
+
+/// The neutrals hold their order, and text at the secondary strength reads at 4.5:1 on a window
+/// of either tone over either end of its backdrop, the ground tokens' (#4089): the floor lifts it
+/// where 0.6 alone falls short.
+#[test]
+fn secondary_text_reads_at_both_ends_of_each_window() {
+    assert!(TEXT_TERTIARY < TEXT_SECONDARY && TEXT_SECONDARY < TEXT_PRIMARY);
+    assert!(CARD_PLATE < FIELD_PLATE && FIELD_PLATE < BUTTON_PLATE);
+    for tone in [Tone::Dark, Tone::Light] {
+        let palette = Palette::of(None, tone);
+        let text = Rgba::from(palette.text(TEXT_SECONDARY));
+        for at in palette.window_samples(None) {
+            let ratio = contrast(over(at, text, text.a), at);
+            assert!(ratio >= TEXT - 1e-4, "{tone:?} {ratio:.2} on {at:?}");
+        }
+    }
+}
+
+/// What 0.6 of the ink alone reads at, at each end of each window, for the PR to report.
+#[test]
+#[ignore]
+fn secondary_text_unlifted() {
+    for tone in [Tone::Dark, Tone::Light] {
+        for ground in tone.grounds() {
+            let ground = rgb(ground);
+            let ink = tone.ink();
+            let ratio = contrast(over(ground, ink, TEXT_SECONDARY), ground);
+            println!("{tone:?} over {:06x}: {ratio:.2}", theme::packed(ground));
         }
     }
 }

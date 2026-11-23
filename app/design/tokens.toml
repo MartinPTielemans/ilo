@@ -870,26 +870,36 @@ ground-over-white = 0x3d3d3d
 # What stands in for the material where the window's look has to be opaque, under rows it covers
 # or in the reveal's panel over the page: Dia's composite over grey 20, before the gradient (ours).
 stand-in = 0x131313
-# How opaque a theme's colours lie over the window at the intensity a theme starts with, and a
-# neutral one's, under this HSL saturation (ours: Dia's line isn't measured).
-gradient-alpha = 0.18
-neutral-gradient-alpha = 0.06
+# The Space's colour is a glow from the sidebar's foot, not a wash over the window (#4089): an
+# ellipse `glow-width` by `glow-height` (its radii) centred on the window's bottom left corner, the
+# main colour at `gradient-alpha` there, going in a straight line to nothing at `glow-fade` of the
+# way out; and a faint one `far-glow-width` by `far-glow-height` on the top right, the second
+# colour (or the main one) at `far-glow`, gone by `far-glow-fade`. The alphas are at the intensity
+# a theme starts with; a neutral theme's, under this HSL saturation, is a third as strong.
+gradient-alpha = 0.36
+neutral-gradient-alpha = 0.12
 neutral = 0.1
+glow-width = 560.0
+glow-height = 460.0
+glow-fade = 0.72
+far-glow-width = 380.0
+far-glow-height = 260.0
+far-glow = 0.1
+far-glow-fade = 0.7
 # What floats over the window: the command bar, a menu and the theme picker's panel, and a
 # dialog.
 overlay-dark = 0x1f1d17
 dialog-dark = 0x2a2720
 # The light window, Dia's light layers: material 13 under white at `light-tint`, read before the
 # gradient as Dia's composite gives it over a black and a white backdrop, 0.8·255 + 0.2·(137, 243)
-# (interim, until the window run measures ours). A theme's colours lie over it at 0.75 of the
-# gradient's 0.36, and a neutral one's of its 0.12. The stand-in is Dia's light composite over
-# grey 20 (ours, as the dark one).
+# (interim, until the window run measures ours). The glow is a little fainter on it (#4089). The
+# stand-in is Dia's light composite over grey 20 (ours, as the dark one).
 light-tint = 0.8
 light-ground-over-black = 0xe7e7e7
 light-ground-over-white = 0xfdfdfd
 light-stand-in = 0xe9e9e9
-light-gradient-alpha = 0.27
-light-neutral-gradient-alpha = 0.09
+light-gradient-alpha = 0.32
+light-neutral-gradient-alpha = 0.11
 # What floats over a light window: Paper, the light menu's fill, and a dialog a step lighter, as
 # the dark dialog is a step lighter than the dark overlay (ours).
 overlay-light = 0xf3f0e8
@@ -898,8 +908,9 @@ dialog-light = 0xfbf9f4
 # it at 4.6:1 where Paper on #0B8045 is 4.4:1. On the measured window over a white backdrop it's
 # 2.7:1, so the palette takes it lighter still at its hue, to #57B97A, as it does a theme's colour.
 no-theme-accent = 0x289054
-# Two colours go from the main one at the window's top left to the second this far along its
-# diagonal (Arc 1.170 rec at 2×, with Ardia's account of Arc's rule: OKLab, 45°, to 75 %).
+# A Space's swatch of two colours runs from the main one to the second this far along its
+# diagonal, as the window's wash did (Arc 1.170 rec at 2×, with Ardia's account of Arc's rule:
+# OKLab, 45°, to 75 %); a swatch's ring is judged over that run.
 second-at = 0.75
 # How strongly the window takes a theme's colours at intensity `i`: in proportion to
 # `INTENSITY_FLOOR + INTENSITY_SPAN * i`, so the slider's start is the colour as before themes
@@ -936,6 +947,25 @@ light-selected-hovered = 1.0
 light-selected-shadow = 0.2
 light-selected-shadow-y = 1.0
 light-selected-shadow-blur = 2.0
+# The tab shown keeps the Space's colour on its row, the only colour in the chrome (#4089): its
+# main colour at `shown` on a dark window and `light-shown` on a light one, and a step firmer under
+# the pointer (ours: the mock has no hovered shown row). Where the ink wouldn't read on it at 4.5:1
+# over every point of the window, the colour moves in OKLab lightness, its hue kept, until it does.
+# A Space with no colour has the ladder's selected plate.
+shown = 0.3
+shown-hovered = 0.38
+light-shown = 0.22
+light-shown-hovered = 0.28
+# The neutrals every surface of the new look draws with (#4089), in the ink, Paper on dark and Ink
+# on light: text at three strengths, and a card's, a field's and a button's plate. Text at
+# `text-tertiary` is under 3:1 on a light window and on a dark one over white, so it's only for
+# what nobody has to read, never a label alone.
+text-primary = 1.0
+text-secondary = 0.6
+text-tertiary = 0.42
+card-plate = 0.065
+field-plate = 0.085
+button-plate = 0.1
 
 [settings]
 # Ours (#1636): an ilo window of its own. Its sections run down a column on the window's material,
@@ -1500,9 +1530,10 @@ cancel-height = 15.0
 # black, darker than any Space and without its colour (ours: Arc's and Dia's private look isn't
 # recorded).
 private-shade = 0.35
-# Dia's card, #121212 at 0.5 on a dark window and white at 0.7 on a light one, under the page.
-card = 0x1212_1280
-light-card = 0xffff_ffb3
+# The card under the page, which ilo's own pages (a new tab's, the Library) are drawn on, so the
+# window shows through them (#4089): near-black at 0.4 on a dark window, white at 0.5 on a light one.
+card = 0x0606_0966
+light-card = 0xffff_ff80
 # What a page shows until its first frame: black while websites are told the appearance is dark,
 # white while it's light (Arc 1.171, measured by an outside reverse-engineering, #1404), the
 # colour a page in that appearance most likely draws.
@@ -1520,13 +1551,15 @@ selected-hovered = 0.36
 # A row chosen with ⌘- or ⇧-click besides the tab shown: Arc's secondary selection, P3 #FAFBFF
 # 0.10 over dark and black 0.10 over light (docs/ux-spec.md › Tokens).
 chosen = 0.1
+# A row under the pointer is the only plate a row has but the tab shown's (#4091): 0.12 on a dark
+# window, 0.07 on a light one.
 hovered = 0.12
+light-hovered = 0.07
 pressed = 0.065
 secondary = 0.62
 # The close button's square under the pointer: Dia's subtle fill, 0.12, at the header buttons'
 # radius (ours: Dia's fill isn't measured).
 close-hovered = 0.12
-url-field = 0.1
 new-tab = 0.62
 new-tab-plus = 0.45
 # The update banner over the footer (#678), as Arc's: a pill this tall at rest, this far over the
@@ -1553,12 +1586,14 @@ clear = 0.62
 clear-hovered = 0.81
 # A tab whose page isn't loaded fades its favicon (ours: Arc's alpha isn't measured).
 sleeping-favicon = 0.5
-# A favorite's tile: 0.10 at rest (Dia), with the resting level's rim, and under the pointer the
-# ladder's hover over that (palette's `state-hovered`; Dia's isn't measured). The one shown is
+# A favorite's tile: a quiet plate with no shadow (#4091), the ink at 0.07 on a dark window and
+# white at 0.55 on a light one, with the resting level's rim, and under the pointer the ladder's
+# hover over that (palette's `state-hovered`). The one shown is
 # themed by its icon (tile_theme.rs), and black with Dia's default selection ring, white 0.45,
 # where the icon gives no theme. A light window's is white (Dia), unthemed whatever its icon until
 # the light theme is built (ours).
-tile = 0.1
+tile = 0.07
+light-tile = 0.55
 tile-ring = 0.45
 keyed = 0.45
 tile-unthemed = 0x0000_00ff
@@ -1600,11 +1635,12 @@ form-placeholder = 0.55
 form-glyph-color = 0.5
 form-pill = 0.1
 create-unnamed = 0.4
-# The reveal panel's radius, the plates' 12 and their 8 in (ours), and its 0.5 pt light border, as
-# in a capture of Arc at 1×: one pixel of white 0.27 over the panel, which half a pixel of white
-# 0.54 makes.
+# The reveal panel's radius, the plates' 12 and their 8 in (ours), and its frame as the window's
+# (#4089): a 0.5 pt line of black at `reveal-border` round it and a 1 pt rim of white at
+# `reveal-rim` inside it. Its shadow is its window's, which the OS draws.
 reveal-radius = 20.0
-reveal-border = 0.54
+reveal-border = 0.6
+reveal-rim = 0.1
 window-button-y = 24.0
 window-button-size = 14.0
 window-button-glyph = 0x00000080
