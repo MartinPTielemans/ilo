@@ -169,16 +169,14 @@ class AgentFileField::DialogRun : public ui::SelectFileDialog::Listener {
   std::unique_ptr<platform::FileDialogCloser> closer_;
 };
 
-AgentFileField::AgentFileField(bc_id id,
-                               bc_id tab,
+AgentFileField::AgentFileField(bc_id tab,
                                std::string agent,
                                int64_t element,
                                content::WeakDocumentPtr document,
                                FileFieldPlace place,
                                bool many,
                                std::vector<std::string> accepts)
-    : id_(id),
-      tab_(tab),
+    : tab_(tab),
       agent_(std::move(agent)),
       element_(element),
       document_(std::move(document)),
@@ -211,7 +209,7 @@ bc_id AgentFileField::Shown(bc_id tab,
   // One field a tab, so what's kept is bounded by tabs whatever an agent asks.
   TabEnded(tab);
   const bc_id id = g_next_field++;
-  Fields()[id] = base::WrapUnique(new AgentFileField(id, tab, agent->id, element,
+  Fields()[id] = base::WrapUnique(new AgentFileField(tab, agent->id, element,
                                                      frame.GetWeakDocumentPtr(), std::move(place),
                                                      many, std::move(accepts)));
   LOG(ERROR) << "browser: file field " << id << " shown in " << tab;
