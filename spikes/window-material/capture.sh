@@ -181,10 +181,15 @@ while read -r material appearance tint off; do
 done < "$out/fit.txt"
 
 # The window lane's candidates, beside the fitted ones: the HUD window's material under black in
-# dark, and under white at 0.83 in light.
+# dark, and under white at 0.83 in light, then the two more see-through levels in each, for a
+# setting of three.
 named="hudWindow 000000a640 dark
 hudWindow 000000a660 dark
-hudWindow ffffffa830 light"
+hudWindow 000000a520 dark
+hudWindow 000000a440 dark
+hudWindow ffffffa830 light
+hudWindow ffffffa700 light
+hudWindow ffffffa580 light"
 while read -r material tint appearance; do
   for behind in $behinds; do
     [ -f "$shots/$material-$tint-$appearance-$behind.png" ] ||
@@ -192,6 +197,17 @@ while read -r material tint appearance; do
   done
 done << EOF
 $named
+EOF
+
+# What floats over a page, a menu or the command bar, whose blur is behind-window too, so the same
+# window stands in for it: the warm dark tint at three alphas over white, black and the picture.
+floats="hudWindow 1f1d17a880 dark
+hudWindow 1f1d17a780 dark
+hudWindow 1f1d17a560 dark"
+while read -r material tint appearance; do
+  for behind in white black picture; do shot "$material" "$tint" "$appearance" "$behind"; done
+done << EOF
+$floats
 EOF
 
 # The chosen candidate in each appearance, the public material nearest its targets once tinted, the
@@ -202,7 +218,8 @@ light=$(chosen light)
 note "Chosen in dark: ${dark:-none}; in light: ${light:-none} (material, appearance, tint, off)."
 extras="today 000000a250 dark
 hudWindow ffffffa800 light
-$named"
+$named
+$floats"
 [ -z "$dark" ] || extras="$extras
 $(echo "$dark" | awk '{ print $1, $3, $2 }')"
 [ -z "$light" ] || extras="$extras

@@ -913,7 +913,8 @@ static int Table(NSString* dir) {
 
   // The shots taken once per chosen or named candidate: inactive, Reduce Transparency, the glow.
   printf("### Once per chosen or named candidate\n\n");
-  printf("| shot | ground | glow corner | contrast at 0.6 |\n|---|---|---|---|\n");
+  printf("| shot | ground | glow corner | contrast at 1.0 | contrast at 0.6 |\n"
+         "|---|---|---|---|---|\n");
   NSArray<NSString*>* files = [[NSFileManager.defaultManager contentsOfDirectoryAtPath:dir
                                                                                  error:nil]
       sortedArrayUsingSelector:@selector(compare:)];
@@ -928,9 +929,10 @@ static int Table(NSString* dir) {
       continue;
     }
     BOOL light = [name.appearance isEqual:@"light"];
-    printf("| %s | %s | %s | %.2f |\n", file.stringByDeletingPathExtension.UTF8String,
+    printf("| %s | %s | %s | %.2f | %.2f |\n", file.stringByDeletingPathExtension.UTF8String,
            Hex(ground.mean).UTF8String,
            [name.extra isEqual:@"glow"] ? Hex(glow.mean).UTF8String : "–",
+           Contrast(light ? kInk : kPaper, 1.0, ground.mean),
            Contrast(light ? kInk : kPaper, 0.6, ground.mean));
   }
   return 0;
