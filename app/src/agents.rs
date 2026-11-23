@@ -39,7 +39,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
-use web_time::{Instant, SystemTime};
+use std::time::{Instant, SystemTime};
 
 use futures::StreamExt;
 use gpui::{App, AppContext, Context, Entity, Global, SharedString, Task};

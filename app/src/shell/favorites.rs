@@ -315,7 +315,7 @@ impl Shell {
             .collect();
         // As the rows' (move_rows): slides over stay for the next frame to say the tiles settled.
         let clock = self.clock.clone();
-        let over = |(_, start, curve): &([f32; 3], web_time::Instant, Curve)| {
+        let over = |(_, start, curve): &([f32; 3], std::time::Instant, Curve)| {
             curve.at(Self::since_on(&clock, *start)).is_none()
         };
         self.tile_slides.retain(|_, slide| over(slide));

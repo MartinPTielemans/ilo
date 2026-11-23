@@ -4,3 +4,5 @@
 switch-frames #2248 2026-11-10 the page area showed no page through a switch
 media #3354 2026-11-19 the pointer on the Mini Player didn't bring its scrim
 history #3717 2026-11-20 Go to Pane 1 (⌃⇧1) on
+sync-devices #4019 2026-11-23 B, signed in, didn't need the account's secret
+sync-devices #4019 2026-11-23 C, signed in, didn't need the account's secret

@@ -413,17 +413,6 @@ fn printed_path(mut command: Command, wait: std::time::Duration) -> Option<Strin
     path.ok().flatten()
 }
 
-/// The site's demo, on the web, has no programs to run, so it finds no Claude Code.
-#[cfg(not(any(unix, windows)))]
-fn unix_claude(_: &[PathBuf]) -> Option<PathBuf> {
-    None
-}
-
-#[cfg(not(any(unix, windows)))]
-fn printed_path(_: Command, _: std::time::Duration) -> Option<String> {
-    None
-}
-
 /// The folders on PATH as a terminal opened now has them: the browser's own PATH, from when
 /// Explorer started it, then the system's and the user's as the registry has them now, which an
 /// install since may have added to, each `%VARIABLE%` in them filled in from `var`.

@@ -16,7 +16,7 @@ use adblock::request::Request;
 use adblock::resources::{MimeType, PermissionMask, Resource, ResourceType};
 use base64::Engine as _;
 use base64::prelude::BASE64_STANDARD;
-use web_time::Instant;
+use std::time::Instant;
 
 pub mod choice;
 mod responses;
