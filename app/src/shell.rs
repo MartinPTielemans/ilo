@@ -34,6 +34,7 @@ use crate::{
 
 mod access;
 mod agent_bar;
+mod agent_card_keys;
 mod agent_pointer;
 mod agent_question;
 #[cfg(test)]
@@ -109,6 +110,7 @@ mod little_tests;
 mod live_folders;
 mod media_player;
 mod menu_bar;
+mod menu_keys;
 mod menus;
 mod naming;
 mod new_space;
@@ -302,6 +304,11 @@ const REVEAL_WAIT: Duration = Duration::from_millis(100);
 // did once it had moved a few points there, and not as it jumped in (*interim*, Arc's distance
 // isn't measured).
 const REVEAL_MOVE: f32 = 3.;
+// How long after the pointer left the window across the edge's strip its return there counts as a
+// move in the edge, as at a screen's edge, which keeps the pointer in (#3989): an overshoot, a
+// stop, and the way back. Ours, *interim*, as Arc in a window away from the screen's edge isn't
+// recorded; it only bounds how old a leave can be.
+const REVEAL_BACK: Duration = Duration::from_secs(1);
 const REVEAL_IN_RESPONSE: f32 = 0.175;
 const REVEAL_IN_DAMPING: f32 = 0.8;
 const REVEAL_OUT_RESPONSE: f32 = 0.175;
@@ -1525,6 +1532,12 @@ pub struct Shell {
     /// row's, with the sidebar's focus, and where the ring's last Tab into a page came from
     /// (page_ends.rs, #3220).
     keyed_strip: Option<page_ends::StripStop>,
+    /// Off the Mac, the menu control holding the ring the keys act on, with the sidebar's focus,
+    /// and whether the page had the keyboard before, which gets it back (menu_keys.rs, #4030).
+    keyed_menu: Option<bool>,
+    /// Whether the menu control's ring has been drawn since the keys came to it, which the log says
+    /// once.
+    menu_ring_drawn: Rc<Cell<bool>>,
     page_ends: page_ends::PageEnds,
     /// The tab Close and Keep Pinned showed, whose row has the ring for a moment, and the timer
     /// that takes it off.
@@ -1694,6 +1707,13 @@ pub struct Shell {
     /// While the pointer is in the strip at the window's left edge: where up or down it came in,
     /// and whether it has moved `REVEAL_MOVE` from there since.
     reveal_strip: Option<(f32, bool)>,
+    /// When the pointer last left the window across its edge from the strip, which its return to
+    /// the strip within `REVEAL_BACK` counts as a move in the edge.
+    reveal_left: Option<Instant>,
+    /// Since the pointer came over the window's view: how far from its sidebar-side edge the shell
+    /// last heard it, and whether that move went toward the edge or along it, from one heard
+    /// before it.
+    reveal_heard: Option<(f32, bool)>,
     /// The list's knob: whether it's the legacy one, as the system shows scroll bars always, and
     /// when the user last scrolled, for the overlay one.
     legacy_scroller: bool,
@@ -1872,6 +1892,13 @@ pub struct Shell {
     /// The request card's "See the whole request", where Escape in the whole request puts the
     /// keyboard back (#3548).
     agent_request_see: FocusHandle,
+    /// The agent card's buttons, in its buttons' order, which Focus Agent Question gives the
+    /// keyboard (#3869).
+    agent_card_buttons: [FocusHandle; agent_card_keys::MOST_BUTTONS],
+    /// The room the agent card's key chips have, as last drawn.
+    agent_card_room: Rc<Cell<agent_card_keys::CardRoom>>,
+    /// The keyboard on the agent card's buttons, while it is.
+    card_keys: Option<agent_card_keys::CardKeys>,
     /// Every Space's agent tasks' cards, newest first, as the Agents last said (Agent task).
     task_cards: Vec<crate::agents::task::Card>,
     /// The handed tab Show Tab watched, and whether the core shows it yet: its page gets the
@@ -2179,6 +2206,8 @@ impl Shell {
             focus_keys: false,
             keyed_drawn: Rc::default(),
             keyed_strip: None,
+            keyed_menu: None,
+            menu_ring_drawn: Rc::default(),
             page_ends: Default::default(),
             attention: None,
             tools_on: false,
@@ -2254,6 +2283,8 @@ impl Shell {
             reveal_x: 0.,
             reveal_window: 0.,
             reveal_strip: None,
+            reveal_left: None,
+            reveal_heard: None,
             legacy_scroller: false,
             scroller: Default::default(),
             pointer_on_card: false,
@@ -2344,6 +2375,9 @@ impl Shell {
             agent_question_rows: RefCell::default(),
             agent_request_see_drawn: Rc::default(),
             agent_request_see: cx.focus_handle(),
+            agent_card_buttons: std::array::from_fn(|_| cx.focus_handle()),
+            agent_card_room: Rc::default(),
+            card_keys: None,
             task_cards: Vec::new(),
             handed_keys: None,
             foot: task_cards::Foot::default(),
@@ -4394,7 +4428,7 @@ impl Shell {
                     if phase == DispatchPhase::Capture {
                         shell
                             .update(cx, |shell, cx| {
-                                shell.pointer_left();
+                                shell.pointer_left(cx);
                                 shell.sidebar_hover(false, cx)
                             })
                             .ok();
@@ -4433,6 +4467,11 @@ impl Shell {
                         MouseButton::Left,
                         cx.listener(move |shell, _: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
+                            // The window manager takes the pointer, which leaves the strip for a
+                            // drag and not out across the edge, so its return after is a fresh
+                            // one in (`pointer_left`).
+                            shell.reveal_strip = None;
+                            shell.reveal_heard = None;
                             // GPUI's window is inside the browser window, so the browser resizes
                             // that. On X11 GPUI's own lets go of the pointer grab its press took,
                             // which would keep the window manager from taking the pointer.
@@ -4590,6 +4629,7 @@ impl Render for Shell {
             }
         }
         self.see_gone_keyboard(window, cx);
+        self.step_card_keys(window, cx);
         self.lone_header = cx
             .try_global::<LoneSpaceHeader>()
             .is_some_and(|kept| kept.0);

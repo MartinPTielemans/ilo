@@ -963,6 +963,8 @@ hand_back_pressed() {
   await_more "^browser: agent mcp-client handed back $pressed\$" "$handed" ||
     fail "⌘↩ didn't hand back the page a click took, $pressed"
 }
+# Focus Agent Question's key (#3869).
+if [ "$(uname)" = Darwin ]; then card_key="a alt shift cmd"; else card_key="a ctrl shift"; fi
 # Agent actions never move the user's focus (decision 8): through all the agent did in its own Space
 # since the user clicked into their field, their Space, tab and keyboard stayed, and their next keys
 # go into the field.
@@ -984,6 +986,54 @@ if [ -n "$yours_step" ]; then
       fail "the user's field lost the keyboard while the agent worked"
     send type ok
     expect "^browser: title $user_tab yours typed ok\$" "the user's keys after the agent's work didn't reach their field"
+    # One of the app's own windows taking the keyboard from the agent's card (#3869): with the
+    # card's keys come from the user's field, ⌘T's command bar ends them where they are, giving
+    # nobody the keyboard under it, and keeps it, a letter typed reaching the bar and nothing in
+    # the field. Escape gives it back where ⌘T found it, the card, which has no ring: ↩ answers
+    # nothing and a letter reaches no field. Then the key and Escape on the card dismiss the change
+    # unsent.
+    asks=$(grep -c '^browser: agent mcp-client asks ' "$log" || true)
+    request request "{\"tab\":$agent_tab,\"requests\":[{\"method\":\"PUT\",\"path\":\"/note\",\"body\":{},\"what\":\"Replace the note.\"}]}" >&4
+    await_more '^browser: agent mcp-client asks ' "$asks" || fail "the agent's change didn't ask"
+    q=$(grep '^browser: agent mcp-client asks ' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
+    await_log "^browser: agent question $q at " "the change's question wasn't drawn"
+    send key $card_key
+    expect "^browser: agent card keys on $q " "Focus Agent Question's key from the user's field didn't give the card the keyboard"
+    ons=$(grep -c "^browser: agent card keys on $q " "$log" || true)
+    send key t cmd
+    bar_step=$step
+    expect '^browser: command bar shown$' "⌘T from the agent's card didn't open the command bar"
+    send type x
+    expect '^browser: command bar suggestions "x" in ' "x typed with the command bar open over the card didn't reach the bar"
+    sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep "^browser: title $user_tab yours typed " &&
+      fail "x typed with the command bar open over the card reached the user's field"
+    send key escape
+    expect '^browser: command bar hidden$' "Escape didn't close the command bar opened over the card"
+    ended=$(sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep -E '^browser: agent card keys (back|left) by ' | head -1)
+    case "$ended" in
+      "") fail "the command bar taking the keyboard didn't end the card's keys" ;;
+      "browser: agent card keys back by "*)
+        fail "the card's keys gave the keyboard back with the command bar over them: $ended" ;;
+    esac
+    send key return
+    send type y
+    # The key after them, once handled, says they were.
+    send key $card_key
+    await_more "^browser: agent card keys on $q " "$ons" ||
+      fail "Focus Agent Question's key didn't give the card the keyboard after the bar"
+    sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep "^browser: title $user_tab yours typed " &&
+      fail "a letter typed with or after the command bar over the card reached the user's field"
+    sed -n "/^browser: drive $bar_step: /,\$p" "$log" | grep -E "^browser: agent card key escape\$|^browser: agent mcp-client answered $q " &&
+      fail "the card answered after the command bar opened over it, with no ring"
+    expect "^browser: agent card keys ready on $q\$" "the app never said the protection had passed"
+    send key escape
+    expect '^browser: agent card key escape$' "Escape on the card didn't answer it as its × does"
+    await_log "^browser: agent mcp-client answered $q Dismiss\$" "Escape didn't dismiss the change"
+    unsent=$(next_answer) || fail "the browser didn't answer the dismissed change"
+    case "$(printf '%s\n' "$unsent" | answered "the dismissed change")" in
+      "error: The user said no"*) ;;
+      *) fail "the dismissed change answered: $unsent" ;;
+    esac
   fi
 else
   echo "skip: mcp: the user's focus through the agent's work. Browser wasn't the active app."
@@ -1037,7 +1087,42 @@ const q = new URLSearchParams(location.search);
 onload = () => setTimeout(() => { location.href = q.get("file"); }, Number(q.get("ms")));
 </script>' > "$out/site/later.html"
   later_logged='^browser: agent logged mcp-client download later\.localhost$'
-  for ms in 2000 7000; do
+  # Focus Agent Question's key (#3869), ⌥⇧⌘A on the Mac and Alt+Shift+A elsewhere, gives the card
+  # the keyboard and answers nothing, leaving the conversation's area as it is; ↩ straight after it
+  # is ignored, the key again gives the keyboard back, and ↩ once the app says the protection's
+  # 500 ms have passed presses Allow Once, which the activity log records as a click's answer.
+  # On a third card Escape answers as its × does, allowing nothing.
+  answer_by_keys() {
+    closed=$(grep -c '^browser: task area [0-9]* closed$' "$log" || true)
+    # ↩ goes in the driver's queue with the key, as it handles each command once the last is
+    # done: waiting for the key's done line first took Windows' shell past the protection.
+    post key $card_key
+    chord=$step
+    send key return
+    expect "^browser: agent card keys on $1 Allow Once\$" \
+      "Focus Agent Question's key didn't give the later download's card the keyboard on Allow Once" "$chord"
+    expect "^browser: agent card key ignored, " "↩ straight after Focus Agent Question's key wasn't ignored" "$chord"
+    send key $card_key
+    expect "^browser: agent card keys back by key\$" "Focus Agent Question's key again didn't give the keyboard back"
+    ! grep -q "^browser: agent mcp-client answered $1 " "$log" ||
+      fail "Focus Agent Question's key, or ↩ straight after it, answered the later download: $(grep "^browser: agent mcp-client answered $1 " "$log")"
+    [ "$(grep -c '^browser: task area [0-9]* closed$' "$log" || true)" = "$closed" ] ||
+      fail "Focus Agent Question's key closed the conversation's area"
+    send key $card_key
+    expect "^browser: agent card keys on $1 Allow Once\$" "Focus Agent Question's key didn't give the card the keyboard a second time"
+    expect "^browser: agent card keys ready on $1\$" "the app never said the protection had passed"
+    send key return
+    expect "^browser: agent card keys back by card\$" "↩ after the protection didn't answer, giving the keyboard back"
+  }
+  answer_by_escape() {
+    send key $card_key
+    expect "^browser: agent card keys on $1 Allow Once\$" \
+      "Focus Agent Question's key didn't give the third later download's card the keyboard"
+    expect "^browser: agent card keys ready on $1\$" "the app never said the protection had passed"
+    send key escape
+    expect '^browser: agent card key escape$' "Escape on the card didn't answer it as its × does"
+  }
+  for ms in 2000 7000 3000; do
     stem=later-${ms%000}
     printf 'later\n' > "$out/site/$stem.docx"
     later_asks="^browser: agent mcp-client asks [0-9]*: download $stem\.docx from later\.localhost\$"
@@ -1052,7 +1137,15 @@ onload = () => setTimeout(() => { location.href = q.get("file"); }, Number(q.get
     read -r qx qy qw qh <<CARD
 $(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
 CARD
-    send click $((qx + qw * 3 / 4)) $((qy + qh - 26 - 36))
+    case $ms in
+      2000) send click $((qx + qw * 3 / 4)) $((qy + qh - 26 - 36)) ;;
+      7000) answer_by_keys "$q" ;;
+      *)
+        answer_by_escape "$q"
+        await_log "^browser: agent mcp-client answered $q Dismiss\$" "Escape didn't dismiss the later download's card"
+        continue
+        ;;
+    esac
     await_log "^browser: agent mcp-client answered $q Once\$" "Allow Once didn't answer the later download"
     await_more "$later_logged" "$logged" ||
       fail "the watched tab's later download isn't in the activity log as the agent's"
@@ -3877,20 +3970,24 @@ CARD
     await_log "^browser: agent logged mcp-client upload $(printf '%s' "$site" | sed 's/\./\\./g') refused: You said no\\.\$" \
       "the upload refused for the field in $what isn't in the activity log under $site"
   done
-  # Choose File… with the dialog up, the page closes its own tab. Windows can't close the system's
-  # dialog from outside, where it would then hold the window for the rest of the run (#3759), and
-  # Linux may have none, when neither a toolkit nor the portal answers.
+  # Choose File… with the dialog up, the page closes its own tab, and the dialog closes with it, as
+  # its Cancel would. Linux may have none, when neither a toolkit nor the portal answers. On Windows
+  # the dialog is a utility process's, which the core tells to close (#3759): once with it up, and
+  # once with the tab closing as Choose File… is pressed, before its window can show, when the core
+  # closes it as it shows. Either way the browser window, which it held, takes a click again: the
+  # next step's Choose File…, real input on CI.
   dialog_said="opening a dialog that closes with its tab"
-  if windows; then
-    dialog_said="not tried with a dialog up, as Windows can't close one from outside (#3759),"
-    echo "skip: Choose File… on a field whose page closes its tab. Windows can't close the system's file dialog from outside, so it would hold the window (#3759)."
-  else
+  closes_cases=up
+  ! windows || closes_cases="up early"
+  for closes_case in $closes_cases; do
+    rm -f "$out/site/upload-closes.go"
     upload_page "a.localhost:$port/upload-closes.html"
     closes_ref=$(ref_in "$opened" button "Closing file")
     [ -n "$closes_ref" ] || fail "the page that closes its tab had no ref for its field: $opened"
     upload_asks "$upload_tab" "$closes_ref" "the field whose page closes its tab"
     mains=$(grep -c '^browser: window [0-9]* main false$' "$log")
     upload_chosen "the field whose page closes its tab"
+    [ "$closes_case" = up ] || : > "$out/site/upload-closes.go"
     dialog=
     for _ in $(seq 300); do
       grep -q "browser: file field $upload_field dialog over window [0-9]*\$" "$log" && dialog=up && break
@@ -3900,19 +3997,70 @@ CARD
     done
     case "$dialog" in
     up)
-      # The core logs the dialog as it asks for one. Under Wayland it's the desktop portal's, which
-      # comes up later in another process, and a tab closing before then can't close it: the portal
-      # hasn't made the request yet, so the dialog opens after the tab's gone and covers the window
-      # for the rest of the run (train 6's Wayland leg, 45107971340). So the page closes once the
-      # dialog has taken the window from the browser.
-      if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
-        await_more '^browser: window [0-9]* main false$' "$mains" ||
-          fail "the file dialog never took the window from the browser: $(grep "browser: .*file field $upload_field " "$log" | tail -2 | tr '\n' ' ')"
+      if [ "$closes_case" = up ]; then
+        # The core logs the dialog as it asks for one. Under Wayland it's the desktop portal's,
+        # which comes up later in another process, and a tab closing before then can't close it:
+        # the portal hasn't made the request yet, so the dialog opens after the tab's gone and
+        # covers the window for the rest of the run (train 6's Wayland leg, 45107971340). So the
+        # page closes once the dialog has taken the window from the browser. On Windows it's a
+        # utility process's, so the page closes once the dialog is shown.
+        if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+          await_more '^browser: window [0-9]* main false$' "$mains" ||
+            fail "the file dialog never took the window from the browser: $(grep "browser: .*file field $upload_field " "$log" | tail -2 | tr '\n' ' ')"
+        fi
+        if windows; then
+          shown=
+          for _ in $(seq 100); do
+            [ -n "$(python3 -I check/app-windows.py dialogs "$(cat "/proc/$pid/winpid")")" ] && shown=1 && break
+            sleep 0.1
+          done
+          [ -n "$shown" ] || fail "Choose File… showed no file dialog in 10 s"
+        fi
+        ../tools/window-screenshot.sh "$pid" "$out/agent-upload-dialog.png" || fail "no window to capture"
+        : > "$out/site/upload-closes.go"
       fi
-      ../tools/window-screenshot.sh "$pid" "$out/agent-upload-dialog.png" || fail "no window to capture"
-      : > "$out/site/upload-closes.go"
       await_log "^browser: agent mcp-client file field $upload_field closed 0\$" \
         "the file field's tab closing with its dialog up didn't end it as closed: $(grep "browser: .*file field $upload_field " "$log" | tail -3 | tr '\n' ' ')"
+      if windows; then
+        # What the user sees first: the dialog gone, and the browser window it held usable.
+        left=
+        for _ in $(seq 100); do
+          left=$(python3 -I check/app-windows.py dialogs "$(cat "/proc/$pid/winpid")")
+          [ -z "$left" ] && break
+          sleep 0.1
+        done
+        [ -z "$left" ] || fail "a file dialog was still up 10 s after its field's tab closed: $left"
+        held=
+        for _ in $(seq 50); do
+          held=$(python3 -I check/app-windows.py list "$(cat "/proc/$pid/winpid")" |
+            sed 's/^.*" //' | grep -w browser | grep -w disabled || true)
+          [ -z "$held" ] && break
+          sleep 0.1
+        done
+        [ -z "$held" ] || fail "the browser window was still disabled once its file dialog went: $held"
+        await_log "browser: file field $upload_field closing its dialog\$" \
+          "the core didn't close the file dialog of the field whose tab closed"
+        await_log "browser: file field $upload_field dialog ended\$" \
+          "the file dialog of the field whose tab closed didn't end: $(grep "browser: .*file field $upload_field " "$log" | tail -3 | tr '\n' ' ')"
+        # The core's line, after Chromium's prefix.
+        told=$(grep -o "browser: file field $upload_field dialog told to close.*" "$log" | tr -d '\r')
+        if [ "$closes_case" = up ]; then
+          [ "$told" = "browser: file field $upload_field dialog told to close" ] ||
+            fail "the file dialog that was up when its tab closed wasn't told to close as one up: $told"
+        else
+          # Which way it went is free, as the page asks every 100 ms and can't beat the dialog to
+          # showing; the summary says which, so the runs show whether both ways are seen.
+          case "$told" in
+          "browser: file field $upload_field dialog told to close as it showed")
+            early_said="before its dialog showed, closing it as it showed" ;;
+          "browser: file field $upload_field dialog told to close")
+            early_said="after its dialog had shown, closing it as one up" ;;
+          *) fail "the file dialog of the tab closed at once wasn't told to close: $told" ;;
+          esac
+          echo "the tab closed at once after Choose File… closed $early_said"
+          dialog_said="opening a dialog that closes with its tab, also with the tab closed at once ($early_said),"
+        fi
+      fi
       chosen=$(next_answer) || fail "the browser didn't answer the upload whose tab closed"
       chosen=$(printf '%s\n' "$chosen" | answered upload)
       [ "$chosen" = "error: The file dialog closed before the user chose a file." ] ||
@@ -3932,7 +4080,7 @@ CARD
       ;;
     *) fail "Choose File… opened no file dialog: $(grep "browser: file field $upload_field " "$log" | tail -2 | tr '\n' ' ')" ;;
     esac
-  fi
+  done
   # Choose File… once the field's frame went to another page.
   upload_page "a.localhost:$port/upload-moves.html"
   moves_tab=$upload_tab

@@ -852,6 +852,7 @@ source_set("browser_core") {
     "permission_question.cc",
     "permission_question.h",
     "platform/battery.h",
+    "platform/file_dialog.h",
     "platform/keyboard.h",
     "platform/keychain.h",
     "platform/native_hosts.h",
@@ -1195,6 +1196,7 @@ source_set("browser_core") {
   }
   if (is_win) {
     sources += [
+      "platform/file_dialog_win.cc",
       "platform/native_hosts_win.cc",
       "platform/win/app_library.cc",
       "platform/win/battery.cc",
@@ -1204,6 +1206,7 @@ source_set("browser_core") {
     ]
     deps += [
       "//chrome/installer/util:with_no_strings",
+      "//chrome/services/util_win/public/mojom",
       "//components/cdm/common:buildflags",
       "//ui/base/ime",
       "//ui/events:dom_keyboard_layout",
@@ -1212,6 +1215,7 @@ source_set("browser_core") {
     libs = [ "powrprof.lib" ]
   } else {
     sources += [
+      "platform/file_dialog_posix.cc",
       "platform/native_hosts_posix.cc",
       "platform/playready_none.cc",
     ]

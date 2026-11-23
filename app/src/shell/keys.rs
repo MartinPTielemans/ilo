@@ -12,7 +12,9 @@ use gpui::{
 };
 
 use super::Command;
-use super::commands::{BAR_COMMANDS, KEY_CONTEXT, Run, SHORTCUTS, keystroke_keys, keystroke_label};
+use super::commands::{
+    BAR_COMMANDS, KEY_CONTEXT, Run, SHORTCUTS, keystroke_keys, keystroke_label_on,
+};
 
 /// Keys that run something other than a command: AppKit's Hide, Hide Others and Minimize, which
 /// main.rs binds, the Edit menu's, which reach the focused page or field, and the View menu's
@@ -160,10 +162,11 @@ pub fn reserved(command: Command) -> bool {
 }
 
 /// Chrome's keys on Linux and Windows that the Mac's Chrome and Arc have no key for.
-const OFF_THE_MAC_ONLY: &[&str] = &["shift-escape"];
+/// Focus Agent Question's Alt+Shift+A, Chrome's there, is ⌥⇧⌘A on the Mac, as Chrome's is.
+const OFF_THE_MAC_ONLY: &[&str] = &["shift-escape", "ctrl-shift-a", "f10"];
 /// Arc's keys off the Mac would press as another of ours: ⌃⌘N's Blank Window is Ctrl+Alt+N there,
 /// which is ⌥⌘N's Little ilo Window (#669).
-const MAC_ONLY: &[&str] = &["ctrl-cmd-n"];
+const MAC_ONLY: &[&str] = &["ctrl-cmd-n", "alt-shift-cmd-a"];
 
 /// Whether SHORTCUTS' `key` is a key on the Mac, or off it if `off_the_mac`.
 fn applies(key: &str, off_the_mac: bool) -> bool {
@@ -578,7 +581,11 @@ impl UserKeys {
             .find_map(|(before, _)| given(before));
         renamed.or_else(|| given(keystroke)).or_else(|| {
             (SHORTCUTS.iter())
-                .find(|&&(key, command, _)| key == keystroke && !self.is_set(command))
+                // Not a key that's another platform's alone: ⌃⇧A, Alt+Shift+A's way of writing it,
+                // selects to a field's start on the Mac.
+                .find(|&&(key, command, _)| {
+                    key == keystroke && applies(key, OFF_THE_MAC) && !self.is_set(command)
+                })
                 .map(|&(_, command, _)| command)
         })
     }
@@ -615,9 +622,7 @@ impl UserKeys {
     /// The keys that run `command` here, as Settings › Shortcuts shows them, a chip each, the one
     /// menus show first first (#3328). The ways one press is written (one_press) share a chip.
     pub fn shown_keys(&self, command: Command) -> Vec<Vec<&str>> {
-        let keys: Vec<&str> = (self.keys(command).into_iter())
-            .filter(|key| applies(key, OFF_THE_MAC))
-            .collect();
+        let keys = self.keys_on(command, OFF_THE_MAC);
         // Each key's chip, named by its first key, joined through any key between them, as ⇧⌘+
         // joins ⌘+ and ⇧⌘=.
         let mut chip: Vec<usize> = (0..keys.len()).collect();
@@ -660,7 +665,9 @@ impl UserKeys {
             .collect();
         let mut all: Vec<String> = Vec::new();
         let mut keys = Some(keys);
-        for key in self.keys(command) {
+        // Only the keys here: another platform's default kept in the user's list would run here
+        // as theirs, as ⌃⇧A did on the Mac once Focus Agent Question's key changed.
+        for key in self.keys_on(command, OFF_THE_MAC) {
             match replaced.iter().any(|each| each == key) {
                 true => all.extend(keys.take().unwrap_or_default()),
                 false => all.push(key.to_string()),
@@ -677,17 +684,41 @@ impl UserKeys {
         self.set(command, all)
     }
 
-    /// How a menu shows the first key that runs `command`, if one does.
+    /// How a menu shows the first key that runs `command` here, if one does.
     pub fn label(&self, command: Command) -> Option<String> {
-        self.keys(command).first().map(|&key| keystroke_label(key))
+        self.label_on(command, OFF_THE_MAC)
+    }
+
+    /// `label`, on the Mac or `off_the_mac`.
+    fn label_on(&self, command: Command, off_the_mac: bool) -> Option<String> {
+        (self.first_key_on(command, off_the_mac)).map(|key| keystroke_label_on(key, off_the_mac))
+    }
+
+    /// The first key that runs `command` on the Mac or off it, `off_the_mac`: not another
+    /// platform's alone, as ⌥⇧⌘A, written first, would show as Ctrl+Alt+Shift+A off the Mac.
+    fn first_key_on(&self, command: Command, off_the_mac: bool) -> Option<&str> {
+        self.keys_on(command, off_the_mac).into_iter().next()
+    }
+
+    /// The keys that run `command` on the Mac or off it, `off_the_mac`: its defaults there, or
+    /// every key the user gave it, as one recorded here is a key here whatever another platform
+    /// binds it to, as ⌃⇧A recorded on the Mac.
+    fn keys_on(&self, command: Command, off_the_mac: bool) -> Vec<&str> {
+        let set = self.is_set(command);
+        (self.keys(command).into_iter())
+            .filter(|key| set || applies(key, off_the_mac))
+            .collect()
     }
 
     /// The same keys one by one, for a tooltip's chips: ⇧, ⌘ and L for ⇧⌘L. None if no key runs
     /// `command`.
     pub fn chips(&self, command: Command) -> Vec<String> {
-        self.keys(command)
-            .first()
-            .map(|&key| keystroke_keys(key))
+        self.chips_on(command, OFF_THE_MAC)
+    }
+
+    fn chips_on(&self, command: Command, off_the_mac: bool) -> Vec<String> {
+        self.first_key_on(command, off_the_mac)
+            .map(keystroke_keys)
             .unwrap_or_default()
     }
 
@@ -1062,7 +1093,64 @@ mod tests {
         Context, FocusHandle, Modifiers, TestAppContext, VisualTestContext, Window, div, prelude::*,
     };
 
-    use super::{super::commands::ShellHandle, *};
+    use super::{
+        super::commands::{ShellHandle, keystroke_label},
+        *,
+    };
+
+    /// Focus Agent Question shows the platform's own key: off the Mac its Alt+Shift+A, not the
+    /// Mac's ⌥⇧⌘A written first.
+    #[test]
+    fn a_commands_key_shows_as_its_platform_has_it() {
+        let keys = UserKeys::default();
+        let focus = Command::FocusAgentQuestion;
+        assert_eq!(keys.label_on(focus, true).as_deref(), Some("Alt+Shift+A"));
+        assert_eq!(keys.label_on(focus, false).as_deref(), Some("⌥⇧⌘A"));
+        assert_eq!(keys.chips_on(focus, true), keystroke_keys("ctrl-shift-a"));
+        assert_eq!(
+            keys.chips_on(focus, false),
+            keystroke_keys("alt-shift-cmd-a")
+        );
+    }
+
+    /// A key the user records is a key where they recorded it, though another platform's defaults
+    /// have it alone: ⌃⇧A given a command on the Mac runs it and shows, so Settings › Shortcuts has
+    /// its chip to remove.
+    #[test]
+    fn a_recorded_key_shows_where_it_runs() {
+        let mut keys = UserKeys::default();
+        let focus = Command::FocusAgentQuestion;
+        keys.set_key(focus, 0, vec!["ctrl-shift-a".into()])
+            .expect("the key was refused");
+        assert_eq!(keys.command_for("ctrl-shift-a", false), Some(focus));
+        assert_eq!(keys.shown_keys(focus), [["ctrl-shift-a"]]);
+        assert_eq!(keys.chips(focus), keystroke_keys("ctrl-shift-a"));
+    }
+
+    /// Changing a command's key keeps only the keys that apply here: another platform's default
+    /// isn't taken into the user's list, where it would run.
+    #[test]
+    fn a_changed_key_takes_no_other_platforms_key() {
+        let mut keys = UserKeys::default();
+        let focus = Command::FocusAgentQuestion;
+        keys.set_key(focus, 0, vec!["ctrl-alt-k".into()])
+            .expect("the key was refused");
+        assert_eq!(keys.keys(focus), ["ctrl-alt-k"]);
+        assert_eq!(keys.command_for("ctrl-shift-a", false), None);
+    }
+
+    /// The keys bound off the Mac alone run nothing from a Mac page, as from its UI: ⇧Esc there
+    /// is the page's, as the Mac's Chrome and Arc have no Task Manager key, and ⌃⇧A selects.
+    #[test]
+    fn the_other_platforms_keys_run_nothing_on_the_mac() {
+        let keys = UserKeys::default();
+        assert_eq!(keys.command_for("shift-escape", false), None);
+        assert_eq!(keys.command_for("ctrl-shift-a", false), None);
+        assert_eq!(
+            keys.command_for("alt-shift-cmd-a", false),
+            Some(Command::FocusAgentQuestion)
+        );
+    }
 
     /// A key the page has, asked about while the App is in an update, goes to the page without an
     /// update of ours, which would panic in the core's callback and abort ilo (#2705). Once the
@@ -1765,6 +1853,23 @@ mod tests {
             "a digit's symbol needs its shift"
         );
         assert!(!one_press("ctrl-shift-2", "shift-cmd-@"));
+    }
+
+    /// Off the Mac F10 is Focus ilo Menu's, as Chrome's F10 rings its menu button, unreserved as
+    /// Chrome's is, so a page that keeps F10 keeps it. The Mac's menu bar has the system's key, so
+    /// there it has none (#4030).
+    #[test]
+    fn f10_focuses_the_menu_off_the_mac_alone() {
+        let keys = UserKeys::default();
+        assert!(
+            keys.bindings_on(true)
+                .contains(&("f10", Command::FocusMenu))
+        );
+        let on_the_mac = keys.bindings_on(false);
+        let f10 = (on_the_mac.iter())
+            .filter(|&&(key, command)| key == "f10" || command == Command::FocusMenu);
+        assert_eq!(f10.count(), 0);
+        assert!(!reserved(Command::FocusMenu));
     }
 
     /// Off the Mac, Chrome's Alt+Left and Alt+Right follow Back's and Forward's ⌘← and ⌘→, and

@@ -229,6 +229,9 @@ jobs:
       # How many jobs the runs are dealt across, for runs.sh shard.
       SHARDS: ${{ strategy.job-total }}
     steps:
+      # When the job started, for the Runs step's limit below.
+      - run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+        working-directory: .
       # With the history, where fetch.sh looks for the engine's commit.
       - uses: actions/checkout@v4
         with:
@@ -450,15 +453,29 @@ jobs:
           run-id: ${{ inputs.lists_from }}
           github-token: ${{ github.token }}
 
+      # The Runs step's limit: what's left of the job's 120 minutes, less 3 for the steps after it,
+      # which took at most 37 s on the ten Mac check runs before this. A job cut at its own limit is
+      # cancelled and runs nothing more, not even if: always() steps; a step cut at its limit is
+      # killed, and the job goes on to name the run it was in and upload the results (#4036).
+      - id: limit
+        working-directory: .
+        run: |
+          minutes=$((117 - ($(date +%s) - JOB_START + 59) / 60))
+          [ "$minutes" -ge 1 ] || minutes=1
+          echo "minutes=$minutes" | tee -a "$GITHUB_OUTPUT"
+
       # Each run alone, so one failing doesn't hide the rest, and each keeps its own build/check.
       # Each of the job's share of check.sh's runs gets a line in its results, done or skipped, which
       # the complete job reads.
       - name: Runs
+        id: checks
+        timeout-minutes: ${{ fromJSON(steps.limit.outputs.minutes) }}
         env:
           RUNS: ${{ steps.runs.outputs.list }}
           SHARE: ${{ steps.runs.outputs.share }}
           SHARD: ${{ matrix.shard }}
           RESULTS: ${{ runner.temp }}/results/mac-${{ matrix.shard }}.tsv
+          RUNNING: ${{ runner.temp }}/running
           CHECK_TRACE_CATEGORIES: ${{ inputs.trace }}
           ADBLOCK_PARITY_LISTS: ${{ inputs.lists_from != '' && 'build/given-lists' || '' }}
         run: |
@@ -511,9 +528,12 @@ jobs:
               # Perf measures Chrome beside the app.
               minutes=20m
               [ "$run" != perf ] || minutes=40m
+              # The run going, for the step after this one if this step is cut at its limit.
+              echo "$run" > "$RUNNING"
               ${limit:+$limit $minutes} ./check.sh "$run" > "$out/$run.log" 2>&1 || status=$?
               [ ! -d build/check ] || mv build/check "$out/$run"
               pkill -9 -f "$PWD/build/Browser.app/" || true
+              rm -f "$RUNNING"
               # A run that passes may have skipped steps, or all of itself, such as when the app
               # wasn't the active one.
               skipped=$(grep '^skip: ' "$out/$run.log" | cut -c7- | tr '|\n' '/;' | sed 's/;$//')
@@ -551,6 +571,31 @@ jobs:
           [ ! -s "$out/local-network.log" ] || cat "$out/local-network.log"
           { echo; sh check/quarantine.sh list mac; } | tee -a "$GITHUB_STEP_SUMMARY"
           exit "$failed"
+
+      # A Runs step cut at its limit names the run it was in, with that run's last lines, and gives
+      # it a failed row, so the results and the check's artifact below say which run it was (#4036).
+      # The runs after it have no row, which complete names.
+      - name: Cut run
+        if: ${{ always() && steps.checks.outcome != 'skipped' }}
+        env:
+          RESULTS: ${{ runner.temp }}/results/mac-${{ matrix.shard }}.tsv
+          RUNNING: ${{ runner.temp }}/running
+          LIMIT: ${{ steps.limit.outputs.minutes }}
+        run: |
+          [ -e "$RUNNING" ] || exit 0
+          run=$(cat "$RUNNING")
+          out=$RUNNER_TEMP/check
+          pkill -9 -f "$PWD/build/Browser.app/" || true
+          [ ! -d build/check ] || mv build/check "$out/$run" || true
+          last=$(tail -1 "$out/$run.log" 2> /dev/null | tr '|\t' '/ ') || true
+          mkdir -p "$(dirname "$RESULTS")"
+          why="still going when the Runs step was cut at its $LIMIT minutes"
+          printf '%s\tfailed: %s; its last line: %s\n' "$run" "$why" "${last:-none}" >> "$RESULTS"
+          echo "| $run | failed: $why |" >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::The Runs step was cut at its $LIMIT minutes in the $run run."
+          echo "Its log is $run.log in the artifact. Its last lines:"
+          tail -40 "$out/$run.log" 2> /dev/null || echo "(no log)"
+          exit 1
 
       # The lists this run's adblock-parity blocked with, for a run on another OS to take with
       # lists_from (#2111). A few MB, apart from the check's artifact, which can be a GB.

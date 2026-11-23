@@ -66,6 +66,10 @@ impl Command {
             ExpandFolders => &["Expand All Folders"],
             RevealTab => &["Reveal Tab in Sidebar"],
             FocusSidebar => &["Focus Sidebar"],
+            FocusAgentQuestion => &["Focus Agent Question"],
+            // It rings the control, as Focus Sidebar rings a row; if it ever opens the menu in one
+            // step, its name changes with it.
+            FocusMenu => &[concat!("Focus ", env!("APP_NAME"), " Menu")],
             BackToPinnedUrl => &["Back to Pinned URL"],
             ResetSpaceTabs => &["Reset all tabs in this Space"],
             ToggleMute => &["Mute/Unmute Tab"],

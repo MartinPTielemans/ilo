@@ -13,11 +13,10 @@ use std::rc::Rc;
 
 use gpui::{Context, FontWeight, Window, accesskit::Role, div, prelude::*, px};
 
+use super::agent_card_keys::{escape_mark, heard_title};
 use super::{
     Shell, TITLE,
-    permission::{
-        BESIDE_CLOSE, BUTTONS_TOP, Look, card_button_as, card_close, card_listener, part_listener,
-    },
+    permission::{BESIDE_CLOSE, BUTTONS_TOP, Look, card_listener, part_listener},
 };
 use crate::agent_request::{self, Closed};
 use crate::agents::request::{self, Does as Kind, Request};
@@ -47,8 +46,7 @@ fn marked(agent: &str, what: &str) -> (String, std::ops::Range<usize>) {
 /// A question card's head and sentence. An action on the tab's page has the tab's own site as
 /// its head, "On shop.example", apart from the page's words in the sentence under it, which then
 /// can't move it or pass for it (#3836). Other questions have their sentence alone.
-fn head_and_title(question: &Question) -> (Option<String>, String) {
-    let agent = &question.agent;
+fn head_and_title(question: &Question, agent: &str) -> (Option<String>, String) {
     match (question.handoff, question.back) {
         (Some(_), true) => (None, format!("{agent} asks for a tab")),
         (Some(_), false) => (None, format!("{agent} needs you")),
@@ -75,6 +73,10 @@ impl Shell {
             log!("browser: agent question {} gone", gone.id);
         }
         let was = self.agent_question.as_ref().map(|old| old.id);
+        if question.as_ref().map(|new| new.id) != was {
+            // Another card's measures would place its chips; a new one's first frame has none.
+            self.agent_card_room.set(Default::default());
+        }
         if let Some(asked) = question.as_ref().filter(|new| Some(new.id) != was) {
             // check.sh reads these lines: each change as the card shows it, the agent's words
             // and then the browser's.
@@ -112,6 +114,17 @@ impl Shell {
     /// The agent's question the card shows, unless a page's question or chooser has the place.
     pub(super) fn agent_question(&self) -> Option<&Question> {
         self.agent_question.as_ref().filter(|_| !self.page_asks())
+    }
+
+    /// What a card's button does, pressed or by its key: one path, so the activity log and the
+    /// 30-day file record a key's answer as a click's.
+    pub(super) fn press_card(&mut self, does: Does, cx: &mut Context<Self>) {
+        match does {
+            Does::Answer(answer) => self.answer_agent(answer, cx),
+            Does::Show(tab) => self.show_handed(tab, cx),
+            Does::HandBack(tab) => self.browser.hand_back(tab, cx),
+            Does::Choose => self.choose_agent_file(cx),
+        }
     }
 
     fn answer_agent(&mut self, answer: Answer, cx: &mut Context<Self>) {
@@ -154,18 +167,24 @@ impl Shell {
         }
         self.agent_request_see_drawn.set(None);
         let listener = card_listener("agent question", &self.agent_question_drawn, question.id);
-        let buttons = buttons(question).into_iter().map(|button| {
-            let row = button.look == Look::Text;
-            card_button_as(&self.palette, button.id, button.label, button.look)
-                .when(row, |button| button.flex_basis(gpui::relative(1.)))
-                .on_click(cx.listener(move |shell, _, _, cx| match button.does {
-                    Does::Answer(answer) => shell.answer_agent(answer, cx),
-                    Does::Show(tab) => shell.show_handed(tab, cx),
-                    Does::HandBack(tab) => shell.browser.hand_back(tab, cx),
-                    Does::Choose => shell.choose_agent_file(cx),
-                }))
-        });
-        let (head, title) = head_and_title(question);
+        let a11y = self.a11y;
+        let escape = escape_mark(question);
+        let count = buttons(question).len();
+        let buttons = buttons(question)
+            .into_iter()
+            .enumerate()
+            .map(|(at, button)| {
+                let row = button.look == Look::Text;
+                self.card_key_button(at, count, button, escape, cx)
+                    .when(row, |button| button.flex_basis(gpui::relative(1.)))
+            });
+        let (head, title) = head_and_title(question, &question.agent);
+        // Heard in the order it's drawn: the site's line, then the sentence, with the agent's name
+        // as plain text, as the request card's.
+        let heard = match head_and_title(question, &request::plain(&question.agent)) {
+            (Some(head), title) => format!("{} {}", heard_title(&head), heard_title(&title)),
+            (None, title) => heard_title(&title),
+        };
         // The head is drawn as the request card's is.
         let head = head.map(|head| {
             div()
@@ -175,17 +194,21 @@ impl Shell {
                 .line_height(px(FACTS_LINE))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(self.palette.on_overlay(DETAIL))
-                .child(crate::address_wrap::text(&head))
+                .child(self.card_top_line(crate::address_wrap::text(&head)))
         });
         // Under a head, as a request's change is, and clear of × as the head keeps it.
         let headed = head.is_some();
-        let close = question.handoff.is_none().then(|| {
-            card_close(&self.palette, "agent-question-close")
-                .on_click(cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Dismiss, cx)))
-        });
+        let close = (question.handoff.is_none()).then(|| self.card_key_close(escape, cx));
+        let described = self.agent_card_described(cx);
         Some(
-            self.plate("agent-question")
+            self.card_keys_on(self.plate("agent-question"), cx)
                 .child(listener)
+                .when(a11y, |card| {
+                    card.child(Self::card_announcer(&heard, described.as_deref()))
+                        .role(Role::AlertDialog)
+                        .aria_label(heard)
+                        .when_some(described, |card, line| card.aria_description(line))
+                })
                 .children(head)
                 .child(
                     div()
@@ -196,7 +219,11 @@ impl Shell {
                         })
                         .text_color(self.palette.text(TITLE))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(crate::address_wrap::text(&title)),
+                        .map(|title_line| match headed {
+                            true => title_line.child(crate::address_wrap::text(&title)),
+                            false => title_line
+                                .child(self.card_top_line(crate::address_wrap::text(&title))),
+                        }),
                 )
                 .child(
                     div()
@@ -212,6 +239,8 @@ impl Shell {
                         .flex()
                         .flex_wrap()
                         .gap(px(BUTTON_GAP))
+                        .relative()
+                        .child(self.card_room_probe())
                         .children(buttons),
                 )
                 .children(close)
@@ -344,11 +373,19 @@ impl Shell {
             .overflow_y_scroll()
             .children(changes);
         let showing = agent_request::showing(cx) == Some(question.id);
+        let count = buttons(question).len();
         let see = div()
             .id("agent-request-see")
             .mt(px(SEE_TOP))
             .track_focus(&self.agent_request_see)
             .focus_visible(crate::settings_rows::ring(self.palette.accent.into()))
+            // Ringed as a stop of the card's keys, as its buttons are.
+            .when(self.agent_card_ring() == Some(count), |mut see| {
+                let style = std::mem::take(Styled::style(&mut see));
+                *Styled::style(&mut see) =
+                    crate::settings_rows::ring(self.palette.accent.into())(style);
+                see
+            })
             .rounded(px(SEE_RING))
             .text_color(self.palette.accent)
             .font_weight(FontWeight::MEDIUM)
@@ -365,25 +402,22 @@ impl Shell {
                     .aria_expanded(showing)
             })
             .on_click(cx.listener(|shell, _, window, cx| shell.see_whole_request(window, cx)));
-        let buttons = buttons(question).into_iter().map(|button| {
-            card_button_as(&self.palette, button.id, button.label, button.look)
-                .when(a11y, |control| {
-                    crate::settings_rows::named_button(control, button.label)
-                })
-                .on_click(cx.listener(move |shell, _, _, cx| match button.does {
-                    Does::Answer(answer) => shell.answer_agent(answer, cx),
-                    _ => {}
-                }))
-        });
-        let close = card_close(&self.palette, "agent-question-close")
-            .when(a11y, |close| {
-                crate::settings_rows::named_button(close, "Close")
-            })
-            .on_click(cx.listener(|shell, _, _, cx| shell.answer_agent(Answer::Dismiss, cx)));
-        let named = format!("{agent} asks to {}", question.what);
-        self.plate("agent-question")
+        let escape = escape_mark(question);
+        let buttons = buttons(question)
+            .into_iter()
+            .enumerate()
+            .map(|(at, button)| self.card_key_button(at, count, button, escape, cx));
+        let close = self.card_key_close(escape, cx);
+        let named = heard_title(&format!("{agent} asks to {}", question.what));
+        let described = self.agent_card_described(cx);
+        self.card_keys_on(self.plate("agent-question"), cx)
             .child(listener)
-            .when(a11y, |card| card.role(Role::AlertDialog).aria_label(named))
+            .when(a11y, |card| {
+                card.child(Self::card_announcer(&named, described.as_deref()))
+                    .role(Role::AlertDialog)
+                    .aria_label(named)
+                    .when_some(described, |card, line| card.aria_description(line))
+            })
             .child(head)
             .child(changes)
             .child(
@@ -398,6 +432,8 @@ impl Shell {
                     .mt(px(BUTTONS_TOP))
                     .flex()
                     .gap(px(BUTTON_GAP))
+                    .relative()
+                    .child(self.card_room_probe())
                     .children(buttons),
             )
             .child(close)
@@ -406,7 +442,7 @@ impl Shell {
 
     /// Shows the agent's request whole, beside its card, with the keyboard; Escape there gives it
     /// back to "See the whole request".
-    fn see_whole_request(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn see_whole_request(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(question) = self.agent_question() else {
             return;
         };
@@ -474,7 +510,7 @@ pub(super) struct Button {
     pub(super) id: &'static str,
     pub(super) label: &'static str,
     pub(super) look: Look,
-    does: Does,
+    pub(super) does: Does,
 }
 
 /// The card's buttons, in order: the answer that leaves things as they are on the quiet plate, then
@@ -623,7 +659,7 @@ mod tests {
     #[test]
     fn the_tabs_site_is_the_cards_head() {
         assert_eq!(
-            super::head_and_title(&question(1)),
+            super::head_and_title(&question(1), &question(1).agent),
             (
                 Some("On shop.example".to_string()),
                 "Claude Code wants to click “Place order”".to_string()
@@ -635,7 +671,7 @@ mod tests {
             ..question(2)
         };
         assert_eq!(
-            super::head_and_title(&named),
+            super::head_and_title(&named, &named.agent),
             (
                 Some("On shop.example".to_string()),
                 "Claude Code wants to click “Pay on bank.example”".to_string()
@@ -647,7 +683,7 @@ mod tests {
             ..question(3)
         };
         assert_eq!(
-            super::head_and_title(&download),
+            super::head_and_title(&download, &download.agent),
             (
                 None,
                 "Claude Code wants to download report.docx from files.example.com".to_string()
@@ -658,7 +694,7 @@ mod tests {
             ..question(4)
         };
         assert_eq!(
-            super::head_and_title(&handoff),
+            super::head_and_title(&handoff, &handoff.agent),
             (None, "Claude Code needs you".to_string())
         );
     }
@@ -993,7 +1029,7 @@ mod tests {
         assert_eq!(
             read(cx),
             [
-                "AlertDialog Claude Code asks to make a change on team.example.com".to_string(),
+                "AlertDialog Claude Code asks to make a change on team.example.com.".to_string(),
                 format!(
                     "Group {app} sees: Changes something on team.example.com. Claude Code says: \
                      {whole}."
@@ -1207,6 +1243,53 @@ mod tests {
         shell.update(cx, |shell, cx| shell.set_agent_question(None, cx));
         cx.run_until_parked();
         assert_eq!(cx.update(|_, cx| agent_request::showing(cx)), None);
+    }
+
+    /// "See the whole request" keeps its keys beside the card's: ↩ or Space, let go, opens the
+    /// whole request with the keyboard on it, a card's key asked or not, and answers nothing.
+    #[gpui::test]
+    fn see_keeps_its_keys(cx: &mut TestAppContext) {
+        cx.update(crate::shell::commands::bind_keys);
+        let (host, shell, cx) = window_with(cx);
+        let whole = cx.update(|_, cx| agent_request::open(Rc::new(Shown::default()), cx));
+        let whole = whole.expect("the whole request's window didn't open");
+        shell.update(cx, |shell, cx| {
+            let one = change("PUT", "/api/note", "Replace the note.");
+            shell.set_agent_question(Some(requests(7, vec![one])), cx);
+        });
+        cx.run_until_parked();
+        let see = shell.read_with(cx, |shell, _| shell.agent_request_see.clone());
+        for key in ["enter", "space"] {
+            cx.update(|window, cx| window.focus(&see, cx));
+            cx.run_until_parked();
+            let keystroke = gpui::Keystroke::parse(key).expect("a key");
+            cx.simulate_event(gpui::KeyDownEvent {
+                keystroke: keystroke.clone(),
+                is_held: false,
+                prefer_character_input: false,
+            });
+            cx.simulate_event(gpui::KeyUpEvent { keystroke });
+            cx.run_until_parked();
+            assert_eq!(
+                cx.update(|_, cx| agent_request::showing(cx)),
+                Some(7),
+                "{key} on See showed nothing"
+            );
+            whole
+                .update(cx, |_, window, cx| {
+                    window.dispatch_action(Box::new(agent_request::Dismiss), cx)
+                })
+                .unwrap();
+            cx.run_until_parked();
+            assert_eq!(cx.update(|_, cx| agent_request::showing(cx)), None);
+        }
+        assert!(
+            !host
+                .take()
+                .iter()
+                .any(|did| did.starts_with("answer agent")),
+            "a key on See answered the card"
+        );
     }
 
     /// Deny, after Escape in the whole request gave the keyboard back to "See the whole request",

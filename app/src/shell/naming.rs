@@ -701,6 +701,8 @@ impl Shell {
         // Once the field is left, from where the focus has gone.
         if to_page {
             self.page_took_keyboard(window, cx);
+        } else {
+            self.card_keys_window_left("app", cx);
         }
     }
 
@@ -807,6 +809,25 @@ mod tests {
             "the field stayed"
         );
         assert_eq!(host.take_edits(), ["rename space 1 Work"]);
+    }
+
+    /// Space in a field of the sidebar is a space, the menu control's Space binding notwithstanding:
+    /// that binding's context is only there while the ring is on the control (#4056).
+    #[gpui::test]
+    fn a_space_typed_in_a_sidebar_name_is_a_space(cx: &mut TestAppContext) {
+        use crate::shell::Folders;
+
+        let (shell, cx, host) = renaming(cx);
+        cx.simulate_keystrokes("a space b enter");
+        assert_eq!(host.take_edits(), ["rename space 1 a b"]);
+        shell.update(cx, |shell, cx| {
+            shell.set_tabs(1, Vec::new(), vec![3], Vec::new(), Folders::default(), cx);
+            shell.set_selected(3, cx);
+            shell.rename_tab(3, cx);
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("cmd-a c space d enter");
+        assert_eq!(host.take_edits(), ["rename tab 3 c d"]);
     }
 
     /// Edit… puts the pinned URL in the row's field: ↩ makes what's typed the address it goes back

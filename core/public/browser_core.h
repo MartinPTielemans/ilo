@@ -1103,8 +1103,9 @@ typedef struct bc_host {
   // keep it from the page, as browsers keep their reserved shortcuts (⌘T, ⌘W, ⌘Q). Keys an input
   // method is composing with don't come here.
   bool (*tab_key_before_page)(void* context, bc_id tab, const bc_key* key);
-  // The tab's page didn't keep a key, such as ⌘F on a page without a find of its own. Return true
-  // if the app used it; otherwise the window's menus get it, as ⌘M does on the Mac.
+  // The tab's page didn't keep a key, such as ⌘F on a page without a find of its own, or didn't
+  // answer within the core's bound, as a busy page doesn't (#3944). Return true if the app used
+  // it; otherwise the window's menus get it, as ⌘M does on the Mac.
   bool (*tab_key_unhandled)(void* context, bc_id tab, const bc_key* key);
   // Tab in the tab's page went past its last control (|reverse| false), or ⇧Tab before its first
   // (true), where Chrome moves the keyboard to its toolbar. Return true if the app took the
