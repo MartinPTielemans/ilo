@@ -1093,15 +1093,14 @@ text-x = 16.0
 # The page's name, in the display face as the Library's heading (shell.library title-size and
 # title-line), then one sentence under it in the rows' grey (`detail`), and a small, quiet heading
 # over a group where it needs one, 26 under the group before and 9 over its own. The heading's
-# alpha reads at 4.7:1 on the dark card; light keeps the alpha that reads at 4.5:1 on its card
-# (#1636).
+# alpha, which the column's group labels and its foot share, is one in both looks: at 0.5 in dark
+# they read at 4.1:1 over the window's Standard ground, and at 0.66 at 6:1 (5.5:1 at More's).
 title = 0.96
 lede-top = 4.0
 lede-line = 18.0
 heading-top = 26.0
 heading-bottom = 9.0
-heading = 0.5
-heading-light = 0.66
+heading = 0.66
 # Once scrolled, the section's name holds at the card's top, in body semibold over a hairline.
 held-title = 44.0
 # A group: one card of rows at the row radius, the text colour at 0.065 in dark with a white rim,
@@ -1134,6 +1133,9 @@ detail-top = 6.0
 detail-line = 16.0
 end-gap = 16.0
 control-gap = 8.0
+# A control too wide for a row's end, such as Transparency's pictures, goes under its text, this
+# far under the line (the mock's 12).
+stacked-gap = 12.0
 # A feature's row leads with its glyph on a quiet plate, 12 before its name, and its own settings
 # under it start where its name does.
 glyph-plate = 28.0
@@ -1156,10 +1158,9 @@ knob-shadow-y = 1.0
 knob-shadow-blur = 2.0
 switch-off = 0.2
 switch-off-light = 0.18
-# Buttons are 28 tall at the control radius, their title 12 in. A pop-up is its value and its
-# chevrons, 5 apart, on no plate until the pointer is over it, where it gets a button's; it keeps
-# the button's height and its width, so its hit area is a button's. Under the pointer, a step
-# toward pressed.
+# Buttons are 28 tall at the control radius, their title 12 in. A pop-up is its value at its start,
+# where its menu puts the chosen item's, and its chevrons at its end, on a button's plate, at a
+# button's height. Under the pointer, a step toward pressed.
 control-height = 28.0
 control-padding = 12.0
 control-radius = 6.0
@@ -3034,6 +3035,108 @@ chip-text-size = 11.0
 # #D2D3FC over a lip of #8486E3, their glyphs #1F2AFF. Ours (#319): the overlay's dark fill, Paper
 # text, Paper chips with Ink glyphs, over a lip of Paper at this on the fill.
 chip-lip-fill = 0.55
+
+[transparency]
+# The Transparency picker (#4129), in Settings and the onboarding: three pictures 12 apart, each a
+# small ilo over a drawn desktop with a bright window on it, drawn from its level's own tints in
+# `palette` (tint-less … overlay-fill-more over the material), the same on every OS. The material
+# is drawn as the fill that gives its measured colour over white and over black, without the blur.
+# A picture is 118 tall at a drawing's corner, with a hairline of the window's ink inside its edge;
+# the chosen one is ringed 2 out, 2 clear of it, in the accent, its name under it at full strength
+# and the others' at 0.6, 9 under. The line under the three says what the chosen level does, 12
+# under their names. The keyboard's ring goes round the three, 4 out from the accent's room.
+gap = 12.0
+room = 4.0
+height = 118.0
+picture-radius = 9.0
+edge = 0.14
+edge-width = 1.0
+ring = 2.0
+ring-gap = 2.0
+label-gap = 9.0
+label-off = 0.6
+line-top = 12.0
+line = 0.92
+# The desktop: orange to violet, then into teal, at 125°.
+desktop-angle = 125.0
+desktop-from = 0xe9a13b
+desktop-to = 0x7a4bd6
+desktop-to-stop = 0.7
+desktop-last = 0x2f8f7a
+# The bright window behind the sidebar, its left edge off the picture's: white, with three lines.
+bright-x = -8.0
+bright-y = 12.0
+bright-width = 74.0
+bright-height = 64.0
+bright-radius = 5.0
+bright = 0xffffff
+bright-line-x = 14.0
+bright-line-y = 9.0
+bright-line-width = 34.0
+bright-line-height = 3.0
+bright-line-gap = 8.0
+bright-line-first = 0xc9c7c1
+bright-line = 0xe3e1dc
+# ilo's window: 16 from the picture's left, 10 from its right, 22 down and past its foot, its top
+# corners round, with a hairline and a shadow under it.
+window-x = 16.0
+window-right = 10.0
+window-y = 22.0
+window-radius = 8.0
+window-hairline = 0x00000080
+window-shadow = 0x00000059
+window-shadow-y = 6.0
+window-shadow-blur = 18.0
+# The sidebar on the glass, 74 wide: its buttons 4 across, 7 apart, 6 in, in the text colour at
+# 0.3; then four rows 13 tall in the window's text at 7, 15 down, 6 in, their words 5 in at the
+# drawing's corner, the first on a plate of the text at 0.14, the last two at 0.6.
+sidebar-width = 74.0
+sidebar-top = 15.0
+sidebar-x = 6.0
+dot = 4.0
+dot-gap = 3.0
+dot-inset = 6.0
+dot-alpha = 0.3
+row-height = 13.0
+row-padding = 5.0
+row-radius = 4.0
+row-plate = 0.14
+quiet = 0.6
+words = 7.0
+# The page, 4 from the window's right and top, a heading and three grey lines 1 in from its ends,
+# their tops this far under the heading's.
+page-right = 4.0
+page-top = 4.0
+page-radius = 5.0
+page = 0xfbfaf7
+page-line-x = 12.0
+page-line-y = 12.0
+page-heading-width = 52.0
+page-heading-height = 4.0
+page-heading = 0x2a2823
+page-line-width = 50.0
+page-line-height = 2.0
+page-lines = [11.0, 18.0, 25.0]
+page-line = 0xc9c7c1
+# A menu floating over the sidebar and the page, at the level's overlay fill over the material: 62
+# wide, 52 in and 40 down in the window, 3 inside it rows 12 tall, words 4 in at the menu's corner
+# less 3, the second on a plate of the text at 0.12, the shortcuts at 0.6. Its rim is white at 0.14
+# inside and black at 0.4 outside, with a shadow under it.
+menu-x = 52.0
+menu-y = 40.0
+menu-width = 62.0
+menu-padding = 3.0
+menu-radius = 6.0
+menu-row = 12.0
+menu-row-padding = 4.0
+menu-row-radius = 3.0
+menu-plate = 0.12
+menu-rim = 0xffffff24
+menu-hairline = 0x00000066
+menu-shadow = 0x0000004d
+menu-shadow-y = 6.0
+menu-shadow-blur = 14.0
+hairline = 0.5
 
 [zoom-hud]
 # Arc's, measured at 2× (Arc 1.170 rec): 41.5 tall, 8 inside the card's top right corner, the
