@@ -86,7 +86,7 @@ export const RELEASES: Release[] = [
       {
         kind: "changed",
         area: "Agents",
-        text: "Sign-in pages and file upload fields hand the tab to you, and later downloads ask you first.",
+        text: "Sign-in pages and file upload fields hand the tab to you, and later downloads ask you first. When you take a tab, the agent sees only its number.",
       },
       {
         kind: "new",
@@ -102,12 +102,28 @@ export const RELEASES: Release[] = [
         kind: "new",
         area: "Pages",
         only: ["mac"],
-        text: "When a page needs protected video as you click or press a key in it, its tab moves to Safari's engine, with a note and Move Back, and ilo asks you first while you're typing or using the camera, microphone or screen. Apple Music opens there from its first page, and Clear Browsing Data… also clears what Safari's engine keeps.",
+        text: "When a page needs protected video as you click or press a key in it, its tab moves to Safari's engine, with a note and Move Back, and ilo asks you first while you're typing or using the camera, microphone or screen.",
+      },
+      {
+        kind: "new",
+        area: "Pages",
+        only: ["mac"],
+        text: "Apple Music's web player opens in Safari's engine from its first page, and Clear Browsing Data… also clears what Safari's engine keeps.",
       },
       {
         kind: "new",
         area: "Library",
-        text: "An empty Boards list offers New Board, a Board's picture shows its cards, clicking a row in a pinned tab's or Favorite's hover card opens it in that tab, and Settings › Shortcuts lists every shortcut a command has.",
+        text: "An empty Boards list offers New Board, an empty Boosts list says where to make a Boost, and a Board's picture shows its cards.",
+      },
+      {
+        kind: "new",
+        area: "Previews",
+        text: "Clicking a row in a pinned tab's or Favorite's hover card opens it in that tab.",
+      },
+      {
+        kind: "new",
+        area: "Keyboard",
+        text: "Settings › Shortcuts lists every shortcut a command has, and you can replace one at a time.",
       },
       {
         kind: "new",
@@ -126,9 +142,29 @@ export const RELEASES: Release[] = [
       },
       {
         kind: "fixed",
+        area: "Agents",
+        text: "Each session of an agent, such as one in each of two terminals, gets its own card, and a card stops saying Working once the agent is done. Open on an earlier card no longer moves the tabs a newer task is working in.",
+      },
+      {
+        kind: "fixed",
+        area: "Spaces",
+        text: "Clicks and keys right after Create on a new Space land on the new Space.",
+      },
+      {
+        kind: "fixed",
+        area: "Command bar",
+        text: "Pressing ⌘L twice no longer sends a key to the page, and when you go back to the previous window before a new one from ⌘N appears, the command bar waits for you to switch to it.",
+      },
+      {
+        kind: "fixed",
+        area: "Downloads",
+        text: "Dragging a download's row quickly still drags its file.",
+      },
+      {
+        kind: "fixed",
         area: "Pages",
         only: ["mac"],
-        text: "When a dialog closes, the page gets clicks and the keyboard back at once, and a key the page didn't use as an alert closes is no longer typed into the next field.",
+        text: "When a dialog closes, the page gets clicks and the keyboard back at once, a key the page didn't use as an alert closes is no longer typed into the next field, and what a page in Safari's engine saves right before you quit is kept.",
       },
       {
         kind: "fixed",
