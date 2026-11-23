@@ -53,8 +53,7 @@ class AgentFileField {
   static bool PageMayOpen(content::WebContents* contents, int kind);
 
  private:
-  AgentFileField(bc_id id,
-                 bc_id tab,
+  AgentFileField(bc_id tab,
                  std::string agent,
                  int64_t element,
                  content::WeakDocumentPtr document,
@@ -77,7 +76,6 @@ class AgentFileField {
   // and |count|, if a Choose is still unanswered.
   static void End(bc_id id, int result, int count);
 
-  const bc_id id_;
   const bc_id tab_;
   // The agent whose card it is, whose Space the tab must still be in at the press and the pick.
   const std::string agent_;
