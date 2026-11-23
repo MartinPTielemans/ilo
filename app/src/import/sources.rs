@@ -411,31 +411,6 @@ impl Source {
             }
         }
     }
-
-    /// Arc's sidebar, beside its user data folder, where its Spaces, pinned tabs and favorites are.
-    pub fn arc_sidebar(&self) -> Option<PathBuf> {
-        let path = self.dir.parent()?.join("StorableSidebar.json");
-        (self.browser.name == "Arc" && path.is_file()).then_some(path)
-    }
-
-    /// Arc's Air Traffic Control rules beside its sidebar: `StorableLinkRouting.json`, else the
-    /// newest `StorableLinkRouting<time>.json`, as some of Arc's versions name it.
-    pub fn arc_link_routing(&self) -> Option<PathBuf> {
-        let dir = self.arc_sidebar()?.parent()?.to_path_buf();
-        let plain = dir.join("StorableLinkRouting.json");
-        if plain.is_file() {
-            return Some(plain);
-        }
-        let routing = |entry: &std::fs::DirEntry| {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            name.starts_with("StorableLinkRouting") && name.ends_with(".json")
-        };
-        (std::fs::read_dir(dir).ok()?.flatten())
-            .filter(routing)
-            .max_by_key(|entry| entry.metadata().and_then(|meta| meta.modified()).ok())
-            .map(|entry| entry.path())
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -541,7 +516,7 @@ fn source(
         profiles,
         used: None,
     };
-    files.extend(source.arc_sidebar());
+    files.extend(super::sidebar::files(&source));
     let modified = |file: &PathBuf| {
         let modified = file.metadata().ok()?.modified().ok()?;
         modified.duration_since(std::time::UNIX_EPOCH).ok()

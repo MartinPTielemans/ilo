@@ -327,6 +327,7 @@ impl Shell {
     /// Rings the strip's `stop`, the UI keeping the keyboard.
     fn key_strip(&mut self, stop: StripStop, cx: &mut Context<Self>) {
         self.keyed = None;
+        self.leave_menu_keys("strip", cx);
         self.keyed_strip = Some(stop);
         log!("browser: strip keyed {}", strip_stop_name(stop));
         cx.notify();

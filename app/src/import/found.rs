@@ -55,8 +55,18 @@ pub struct Split {
 /// The most tabs a split view holds, as the core keeps it (bc_tab_split_with).
 pub const SPLIT_TABS: usize = 3;
 
+/// Where a found Space came from, which decides the switch that brings its pinned tabs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpaceFrom {
+    /// The browser's own sidebar (sidebar.rs), under Spaces.
+    Sidebar,
+    /// A profile's bookmarks, under Bookmarks, as one Space named after the browser.
+    Bookmarks,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Space {
+    pub from: SpaceFrom,
     pub name: String,
     pub profile: FromProfile,
     /// As a Space keeps it here: an emoji, `glyph:` and one of ours, or empty.
@@ -109,6 +119,86 @@ pub struct Found {
     pub link_rules: Vec<LinkRule>,
     /// Where Arc opens a link no rule matches, if not in Little Arc, ours' default too.
     pub link_otherwise: Option<Destination>,
+    /// The profiles a sidebar names that aren't folders of the browser's, such as Zen's
+    /// containers, each by the key its `FromProfile::Custom` gives and its name. Only the name is
+    /// read, so each comes as the profile here with that name, or a new one with no sign-ins.
+    pub profiles: Vec<(String, String)>,
+    /// What the browser has that has no place here, said before anything comes.
+    pub left_out: Vec<LeftOut>,
+    /// Why the browser's Spaces can't be read here, said where they'd be counted, with what the
+    /// user can do instead, if anything. No reader gives one yet, and the screen doesn't draw it.
+    pub note: Option<Note>,
+}
+
+/// A browser's reason its Spaces can't come as it keeps them, in the import's words, and the
+/// control that brings them another way, if there is one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Note {
+    pub said: &'static str,
+    pub action: Option<Action>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    /// Choose a file the browser exported its Spaces to.
+    ChooseFile,
+}
+
+/// Things of one kind a browser has that won't be imported, as they have no place here, counted.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LeftOut {
+    pub item: Item,
+    pub count: usize,
+}
+
+/// The words for a thing that won't be imported, as the import screen lists it: one, with its
+/// article, "a live folder", and many, to follow a count, "live folders". Those below are shared by
+/// every source that has the thing, so the same thing reads the same; a thing only one source
+/// has keeps its words in that source's reader.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Item {
+    pub one: &'static str,
+    pub many: &'static str,
+}
+
+pub const LIVE_FOLDER: Item = Item {
+    one: "a live folder",
+    many: "live folders",
+};
+/// A split view of more tabs than SPLIT_TABS.
+pub const FOUR_TAB_SPLIT: Item = Item {
+    one: "a four-tab split",
+    many: "four-tab splits",
+};
+pub const SEPARATE_CONTAINER: Item = Item {
+    one: "a tab in a separate container",
+    many: "tabs in separate containers",
+};
+pub const SPACE_ICON: Item = Item {
+    one: "a Space icon",
+    many: "Space icons",
+};
+pub const TAB_GROUP: Item = Item {
+    one: "a tab group",
+    many: "tab groups",
+};
+/// A tab at an address that can't open here and isn't one of the pages `quiet` names.
+pub const NOT_WEB_PAGE: Item = Item {
+    one: "a tab that isn't a web page",
+    many: "tabs that aren't web pages",
+};
+
+impl Found {
+    /// Counts `count` more of `item` among what won't be imported.
+    pub fn leave_out(&mut self, item: Item, count: usize) {
+        if count == 0 {
+            return;
+        }
+        match self.left_out.iter_mut().find(|each| each.item == item) {
+            Some(each) => each.count += count,
+            None => self.left_out.push(LeftOut { item, count }),
+        }
+    }
 }
 
 /// A link rule: links whose URL meets `condition` with `text` open at `to`.
@@ -127,6 +217,26 @@ pub enum Destination {
     /// The Space the window in front shows.
     Front,
     Little,
+}
+
+/// Whether a tab at `url`, which doesn't open here, is one no one misses, so it's dropped without
+/// being counted among the tabs that aren't web pages: a tab with no address, a blank page, or a
+/// browser's own new tab, home or private window page, whatever the browser calls its scheme.
+pub fn quiet(url: &str) -> bool {
+    let url = url.trim().to_ascii_lowercase();
+    let page = match url.split_once("://") {
+        Some((_, page)) => page.trim_end_matches('/'),
+        None => url.as_str(),
+    };
+    matches!(
+        page,
+        "" | "about:blank"
+            | "about:newtab"
+            | "about:home"
+            | "about:privatebrowsing"
+            | "newtab"
+            | "new-tab-page"
+    )
 }
 
 /// Whether a page at `url` can open here: another browser's own pages, such as `arc://` or

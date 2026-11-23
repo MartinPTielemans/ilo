@@ -10,7 +10,7 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::extensions::Extension;
-use super::found::{Address, Found, FromProfile, Node, Page, Space, Tab};
+use super::found::{Address, Found, FromProfile, Node, Page, Space, SpaceFrom, Tab};
 use super::sources::{Family, Profile, Source};
 use super::{chromium, firefox, safari};
 
@@ -24,12 +24,12 @@ pub const HISTORY_DAYS: u64 = 90;
 /// What the user can bring from a browser, each shown as a switch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
-    /// Arc's Spaces, with their pinned tabs and folders, and its link rules.
+    /// A sidebar's Spaces (sidebar.rs), with their pinned tabs and folders, and Arc's link rules.
     Spaces,
-    /// Arc's favorites.
+    /// A sidebar's favorites.
     Favorites,
     Bookmarks,
-    /// The tabs a Chromium-based browser had open in its last session, or Arc's Today tabs.
+    /// The tabs a Chromium-based browser had open in its last session, or a sidebar's Today tabs.
     OpenTabs,
     /// Safari's Reading List, as a folder beside its bookmarks.
     ReadingList,
@@ -95,30 +95,44 @@ impl From<String> for ReadError {
     }
 }
 
-/// What can come from `source`: Arc's sidebar in place of its bookmarks, which it doesn't show,
-/// and the extensions of Chromium's family, which Firefox's and Safari's aren't.
+/// What can come from `source`: a sidebar of its own first, its Spaces, Today tabs and favorites,
+/// beside its bookmarks, but for Arc's, which it doesn't show; and the extensions of Chromium's
+/// family, which Firefox's and Safari's aren't.
 pub fn kinds(source: &Source) -> &'static [Kind] {
-    if source.arc_sidebar().is_some() {
-        &[
+    match (source.browser.family, super::sidebar::has(source)) {
+        (Family::Chromium, true) if source.browser.name == "Arc" => &[
             Kind::Spaces,
             Kind::OpenTabs,
             Kind::Favorites,
             Kind::History,
             Kind::Addresses,
             Kind::Extensions,
-        ]
-    } else {
-        match source.browser.family {
-            Family::Safari => &[Kind::Bookmarks, Kind::ReadingList, Kind::History],
-            Family::Firefox => &[Kind::Bookmarks, Kind::History],
-            Family::Chromium => &[
-                Kind::Bookmarks,
-                Kind::OpenTabs,
-                Kind::History,
-                Kind::Addresses,
-                Kind::Extensions,
-            ],
-        }
+        ],
+        (Family::Chromium, true) => &[
+            Kind::Spaces,
+            Kind::OpenTabs,
+            Kind::Favorites,
+            Kind::Bookmarks,
+            Kind::History,
+            Kind::Addresses,
+            Kind::Extensions,
+        ],
+        (Family::Firefox, true) => &[
+            Kind::Spaces,
+            Kind::OpenTabs,
+            Kind::Favorites,
+            Kind::Bookmarks,
+            Kind::History,
+        ],
+        (Family::Safari, _) => &[Kind::Bookmarks, Kind::ReadingList, Kind::History],
+        (Family::Firefox, false) => &[Kind::Bookmarks, Kind::History],
+        (Family::Chromium, false) => &[
+            Kind::Bookmarks,
+            Kind::OpenTabs,
+            Kind::History,
+            Kind::Addresses,
+            Kind::Extensions,
+        ],
     }
 }
 
@@ -131,7 +145,7 @@ pub fn has_any(source: &Source) -> bool {
         // import asks for once it's picked.
         Family::Safari => return true,
     };
-    source.arc_sidebar().is_some()
+    super::sidebar::has(source)
         || (source.profiles.iter())
             .any(|profile| files.iter().any(|file| profile.path.join(file).is_file()))
 }
@@ -141,20 +155,21 @@ pub fn has_any(source: &Source) -> bool {
 pub fn read(source: &Source, picked: &[Kind], now: SystemTime) -> Result<Found, ReadError> {
     let mut found = Found::default();
     let wants = |kind| picked.contains(&kind);
-    if let Some(path) = source.arc_sidebar()
+    let sidebar = super::sidebar::has(source);
+    if sidebar
         && [Kind::Spaces, Kind::OpenTabs, Kind::Favorites]
             .iter()
             .any(|kind| wants(*kind))
+        && let Some(mut sidebar) = super::sidebar::read(source)?
     {
         // Arc's link rules come with its Spaces, each to the Space its Arc Space becomes.
-        let routing = (source.arc_link_routing())
-            .filter(|_| wants(Kind::Spaces))
-            .and_then(|routing| std::fs::read_to_string(routing).ok());
-        let mut sidebar = super::arc::parse(&std::fs::read_to_string(&path)?, routing.as_deref())?;
-        keep_arc(&mut sidebar, picked);
+        keep_spaces(&mut sidebar, picked);
         found.spaces = sidebar.spaces;
         found.link_rules = sidebar.link_rules;
         found.link_otherwise = sidebar.link_otherwise;
+        found.profiles = sidebar.profiles;
+        found.left_out = sidebar.left_out;
+        found.note = sidebar.note;
         if wants(Kind::Favorites) {
             found.favorites = sidebar.favorites;
         }
@@ -163,9 +178,9 @@ pub fn read(source: &Source, picked: &[Kind], now: SystemTime) -> Result<Found, 
     let since = now
         .checked_sub(Duration::from_secs(HISTORY_DAYS * 24 * 60 * 60))
         .unwrap_or(UNIX_EPOCH);
-    // Arc's open tabs are its sidebar's Today tabs, never its Chromium session's.
+    // A sidebar's open tabs are its Today tabs, never its profiles' session's.
     let picked: Vec<Kind> = (picked.iter().copied())
-        .filter(|kind| source.arc_sidebar().is_none() || *kind != Kind::OpenTabs)
+        .filter(|kind| !sidebar || *kind != Kind::OpenTabs)
         .collect();
     for profile in &source.profiles {
         let read = match source.browser.family {
@@ -176,6 +191,7 @@ pub fn read(source: &Source, picked: &[Kind], now: SystemTime) -> Result<Found, 
         let from = from(profile);
         if !read.pinned.is_empty() || !read.today.is_empty() {
             found.spaces.push(Space {
+                from: SpaceFrom::Bookmarks,
                 // One Space for the browser, or one for each of its profiles, by its name.
                 name: if source.profiles.len() == 1 {
                     name.into()
@@ -214,28 +230,12 @@ pub fn read(source: &Source, picked: &[Kind], now: SystemTime) -> Result<Found, 
 /// read, as Safari's Reading List, a folder among its bookmarks, when only one of them comes.
 pub fn keep(found: &Found, source: &Source, picked: &[Kind]) -> Option<Found> {
     let wants = |kind| picked.contains(&kind);
-    let mut found = found.clone();
-    if source.arc_sidebar().is_some() {
-        keep_arc(&mut found, picked);
-    } else {
-        if source.browser.family == Family::Safari
-            && wants(Kind::Bookmarks) != wants(Kind::ReadingList)
-        {
-            return None;
-        }
-        let bookmarks = wants(Kind::Bookmarks) || wants(Kind::ReadingList);
-        for space in &mut found.spaces {
-            if !bookmarks {
-                space.pinned.clear();
-            }
-            if !wants(Kind::OpenTabs) {
-                space.today.clear();
-            }
-        }
-        found
-            .spaces
-            .retain(|space| !space.pinned.is_empty() || !space.today.is_empty());
+    if source.browser.family == Family::Safari && wants(Kind::Bookmarks) != wants(Kind::ReadingList)
+    {
+        return None;
     }
+    let mut found = found.clone();
+    keep_spaces(&mut found, picked);
     if !wants(Kind::Favorites) {
         found.favorites.clear();
     }
@@ -251,33 +251,45 @@ pub fn keep(found: &Found, source: &Source, picked: &[Kind]) -> Option<Found> {
     Some(found)
 }
 
-/// Leaves of Arc's Spaces in `found` what of `picked` comes: with Spaces, every Space with its
-/// pinned tabs and folders, and the link rules to them; with Open tabs, each Space's Today tabs,
-/// which bring their Space where Spaces stay off, as a Today tab belongs to one.
-fn keep_arc(found: &mut Found, picked: &[Kind]) {
-    let (spaces, today) = (
-        picked.contains(&Kind::Spaces),
-        picked.contains(&Kind::OpenTabs),
-    );
+/// Leaves of the Spaces in `found` what of `picked` comes. From a sidebar, with Spaces, every
+/// Space with its pinned tabs and folders, and the link rules to them, and with Open tabs, each
+/// Space's Today tabs, which bring their Space where Spaces stay off, as a Today tab belongs to
+/// one. From bookmarks, with Bookmarks or Safari's Reading List, their Space's pinned tabs and
+/// folders, and with Open tabs its Today tabs, a Space with neither staying out.
+fn keep_spaces(found: &mut Found, picked: &[Kind]) {
+    let wants = |kind| picked.contains(&kind);
+    let spaces = wants(Kind::Spaces);
+    let bookmarks = wants(Kind::Bookmarks) || wants(Kind::ReadingList);
     for space in &mut found.spaces {
-        if !spaces {
+        let pinned = match space.from {
+            SpaceFrom::Sidebar => spaces,
+            SpaceFrom::Bookmarks => bookmarks,
+        };
+        if !pinned {
             space.pinned.clear();
         }
-        if !today {
+        if !wants(Kind::OpenTabs) {
             space.today.clear();
         }
     }
+    found.spaces.retain(|space| match space.from {
+        SpaceFrom::Sidebar => spaces || !space.today.is_empty(),
+        SpaceFrom::Bookmarks => !space.pinned.is_empty() || !space.today.is_empty(),
+    });
     if !spaces {
         found.link_rules.clear();
         found.link_otherwise = None;
-        found.spaces.retain(|space| !space.today.is_empty());
+    }
+    // What a sidebar has that won't be imported is said while any of it comes, as it's read then.
+    if !(spaces || wants(Kind::OpenTabs) || wants(Kind::Favorites)) {
+        found.left_out.clear();
     }
 }
 
 /// How much of each kind a browser has, as its choices say before anything comes.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Tally {
-    /// Arc's Spaces, the tabs pinned in them and their folders, and its link rules.
+    /// A sidebar's Spaces, the tabs pinned in them and their folders, and Arc's link rules.
     pub spaces: usize,
     pub pinned: usize,
     pub folders: usize,
@@ -321,7 +333,6 @@ pub fn tally(found: &Found, source: &Source) -> Tally {
             .count(),
         ..Tally::default()
     };
-    let arc = source.arc_sidebar().is_some();
     let safari = source.browser.family == Family::Safari;
     for space in &found.spaces {
         let mut pinned = &space.pinned[..];
@@ -335,13 +346,13 @@ pub fn tally(found: &Found, source: &Source) -> Tally {
         }
         let mut counted = (0, 0);
         count(pinned, &mut counted);
-        match arc {
-            true => {
+        match space.from {
+            SpaceFrom::Sidebar => {
                 tally.spaces += 1;
                 (tally.pinned, tally.folders) =
                     (tally.pinned + counted.0, tally.folders + counted.1);
             }
-            false => {
+            SpaceFrom::Bookmarks => {
                 tally.bookmarks += counted.0;
                 tally.bookmark_folders += counted.1;
             }
@@ -408,8 +419,9 @@ pub struct Read {
 }
 
 /// The profile here that `profile`'s things go to: the one this browser started with for the
-/// browser's own default, else one of its name.
-fn from(profile: &Profile) -> FromProfile {
+/// browser's own default, else one of its name. Each sidebar reader gives its profiles' things
+/// to the same profile this does.
+pub(super) fn from(profile: &Profile) -> FromProfile {
     if profile.default {
         FromProfile::Default
     } else {

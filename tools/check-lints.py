@@ -230,7 +230,8 @@ PLACE = re.compile(r"# check\.sh runs this at [0-9]+(, only when named)?\.")
 def run_places():
     found = []
     others = {path: read(path) for path in tracked(*READERS)}
-    for path in tracked("app/check/*.sh"):
+    # Only check/ itself: a file in a folder under it, such as check/import/, is one a run sources.
+    for path in tracked(":(glob)app/check/*.sh"):
         lines = read(path).splitlines()
         said = [n for n, line in enumerate(lines) if line.startswith("# check.sh runs this")]
         if said:
