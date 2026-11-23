@@ -885,10 +885,16 @@ fn a_pop_ups_menu_opens_with_its_choice_over_the_buttons_title() {
         button.x,
         "the title's left on the button's"
     );
-    assert_eq!(row.origin.y, button.y, "the row's top on the button's text");
+    // A menu of choices has quiet rows, whose titles sit lower in them than a command row's.
+    let lower = (super::QUIET_ROW - super::ROW) / 2.;
+    assert_eq!(
+        row.origin.y + px(lower),
+        button.y,
+        "the row's title on the button's text"
+    );
     assert_eq!(
         root.bounds.origin.y,
-        button.y - px(PADDING + super::ROW),
+        button.y - px(PADDING + super::QUIET_ROW + lower),
         "Default above it"
     );
 

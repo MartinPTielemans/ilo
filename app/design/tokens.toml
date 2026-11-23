@@ -768,6 +768,11 @@ row = 24.0
 row-radius = 7.0
 padding = 5.0
 radius = 12.0
+# A level of choices, with a check before the chosen one, has quiet rows (#4090): taller and
+# rounder, and its panel concentric with them, 9 + 5.
+quiet-row = 28.0
+quiet-row-radius = 9.0
+quiet-radius = 14.0
 # A row's text starts this far inside it, so 12 from the panel's edge.
 row-x = 8.0
 # A line between groups: 1 pt in the middle of this, 8 in from the rows' text.
