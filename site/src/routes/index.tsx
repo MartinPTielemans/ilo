@@ -1,489 +1,305 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { type ReactNode, useEffect, useRef, useState } from "react";
-import { Download, useVisitor } from "../components/download";
-import { Reel } from "../components/reel";
+import { RELEASES, published } from "../changelog";
+import { DownloadLink } from "../components/download";
+import { Shell } from "../components/shell";
 import { Wordmark } from "../components/wordmark";
-import { PLATFORM_LIST, SOURCE as GITHUB } from "../downloads";
-import { useEntrances } from "../entrances";
-import { type DemoSpaces, type Tab, WILL_LIVE, scroller, startLive } from "../live";
+import { PLATFORMS, PLATFORM_LIST, SOURCE, STAGE } from "../downloads";
+import { CONTRIBUTORS, FACES, FACES_SHOWN, STARS } from "../github";
 import { pageHead, structuredData } from "../seo";
-import { grain, startSky } from "../sky";
 
-const description = `ilo is a free, open-source browser: every part of your life in its own Space, a sidebar that tidies itself and one bar for every command, on Chromium. In beta for Mac and Linux, alpha on Windows.`;
+const description = `ilo is a free, open-source browser on Chromium: every part of your life in its own Space, a sidebar that tidies itself and one bar for every command. ${STAGE.charAt(0).toUpperCase()}${STAGE.slice(1)} for ${PLATFORM_LIST}.`;
 
 export const Route = createFileRoute("/")({
-  head: () => ({
-    ...pageHead({
+  head: () =>
+    pageHead({
       path: "/",
-      title: "ilo: the free, open-source browser that keeps going",
+      title: "ilo: a free, open-source browser you get to keep",
       description,
       data: structuredData(description),
     }),
-    // Known before the first paint, so the first screen is already the one that fits (src/live.ts).
-    scripts: [{ children: WILL_LIVE }],
-  }),
-  // The one page whose interactions need React in the browser (src/routes/__root.tsx).
-  staticData: { hydrates: true },
   component: Home,
 });
 
-const icon = (site: string) => `/media/fav-${site}.png`;
-const WIKIPEDIA = icon("wikipedia");
-// The page itself, as a tab in ilo.
-const HOME = "/";
-
-// What ilo has open around the page: three Spaces of pages that let another site frame them, and
-// this site's own. GitHub won't be framed, so its tab shows a note and a link.
-const FAVORITES: Tab[] = [
-  { title: "Wikipedia", url: "https://en.wikipedia.org/wiki/Main_Page", icon: WIKIPEDIA },
-  { title: "Internet Archive", url: "https://archive.org/", icon: icon("archive") },
-  {
-    title: "Wikimedia Commons",
-    url: "https://commons.wikimedia.org/wiki/Main_Page",
-    icon: icon("commons"),
-  },
-];
-const SPACES: { name: string; color: string; pinned: Tab[]; today: Tab[]; selected?: string }[] = [
-  {
-    name: "ilo",
-    color: "#0E9F55",
-    pinned: [
-      {
-        title: "MartinPTielemans/ilo",
-        url: "https://github.com/MartinPTielemans/ilo",
-        icon: icon("github"),
-      },
-    ],
-    today: [
-      { title: "ilo, a good tool", url: HOME, icon: icon("ilo") },
-      { title: "What's new in ilo", url: "/changelog", icon: icon("ilo") },
-      { title: "Help", url: "/help", icon: icon("ilo") },
-      {
-        title: "The Rust Programming Language",
-        url: "https://doc.rust-lang.org/book/",
-        icon: icon("rust"),
-      },
-      { title: "Lobsters", url: "https://lobste.rs/", icon: icon("lobsters") },
-      { title: "Tool – Wikipedia", url: "https://en.wikipedia.org/wiki/Tool", icon: WIKIPEDIA },
-    ],
-    selected: HOME,
-  },
-  {
-    name: "Lisbon",
-    color: "#BF8355",
-    pinned: [
-      {
-        title: "OpenStreetMap",
-        url: "https://www.openstreetmap.org/export/embed.html?bbox=-9.144%2C38.7065%2C-9.124%2C38.7165&layer=mapnik",
-        icon: icon("osm"),
-      },
-    ],
-    today: [
-      {
-        title: "Lisbon – Wikivoyage",
-        url: "https://en.wikivoyage.org/wiki/Lisbon",
-        icon: icon("wikivoyage"),
-      },
-      { title: "Alfama – Wikipedia", url: "https://en.wikipedia.org/wiki/Alfama", icon: WIKIPEDIA },
-    ],
-  },
-  {
-    name: "Reading",
-    color: "#5583BF",
-    pinned: [
-      { title: "Project Gutenberg", url: "https://www.gutenberg.org/", icon: icon("gutenberg") },
-    ],
-    today: [
-      {
-        title: "Bauhaus – Wikipedia",
-        url: "https://en.wikipedia.org/wiki/Bauhaus",
-        icon: WIKIPEDIA,
-      },
-      {
-        title: "Wikisource",
-        url: "https://en.wikisource.org/wiki/Main_Page",
-        icon: icon("wikisource"),
-      },
-    ],
-  },
-];
-
-const here = (path: string) => new URL(path, location.origin).href;
-
-/** The Spaces as the live interface takes them, with this site's own pages at its own address. */
-function demoSpaces(): DemoSpaces {
-  const tab = (one: Tab) => ({
-    ...one,
-    url: here(one.url),
-    ...(one.icon && { icon: here(one.icon) }),
-  });
-  return {
-    favorites: FAVORITES.map(tab),
-    spaces: SPACES.map((space) => ({
-      name: space.name,
-      color: Number.parseInt(space.color.slice(1), 16),
-      pinned: space.pinned.map(tab),
-      today: space.today.map(tab),
-      ...(space.selected && { selected: here(space.selected) }),
-    })),
-  };
-}
-
-/** Whether the visitor's keyboard is Apple's, with ⌘ and ⇧ on its keys, as the prerendered page takes it to be. */
-function useApple() {
-  const [apple, setApple] = useState(true);
-  useEffect(() => setApple(/Mac|iPhone|iPad/.test(navigator.userAgent)), []);
-  return apple;
-}
-
-// The bar on top: it stays as the page scrolls, and takes the page's ground once it has left the
-// first screen's sky.
-function Head() {
-  const [stuck, setStuck] = useState(false);
-  useEffect(() => {
-    const within = scroller();
-    const scrolled = within ?? window;
-    const update = () => setStuck((within ? within.scrollTop : scrollY) > 24);
-    update();
-    scrolled.addEventListener("scroll", update, { passive: true });
-    return () => scrolled.removeEventListener("scroll", update);
-  }, []);
+/**
+ * One of ilo's clips: its window, whole, standing on the field. The page's script plays it while
+ * it's on screen; a visitor who asked for no motion sees `still`, the moment its caption is about,
+ * and gets its controls.
+ */
+function Clip({ name, wide, still = true }: { name: string; wide?: boolean; still?: boolean }) {
+  const size = wide ? { width: 2400, height: 1350 } : { width: 1600, height: 900 };
   return (
-    <header className={stuck ? "head stuck" : "head"}>
-      <a className="brand" href="#top" aria-label="ilo, back to the top">
-        <Wordmark />
-      </a>
-      <nav className="links" aria-label="Sections">
-        <a href="#look">What it does</a>
-        <a href="#why">Why trust it</a>
-        <a href={GITHUB}>GitHub</a>
-        <Download className="button" brief />
-      </nav>
-    </header>
+    <video
+      muted
+      loop
+      playsInline
+      preload="none"
+      {...size}
+      poster={`/media/${name}.jpg`}
+      data-still={still ? `/media/${name}-still.jpg` : undefined}
+    >
+      <source src={`/media/${name}.mp4`} type="video/mp4" />
+    </video>
   );
 }
 
-/** One of the parts to see: its clip, its name, how it's reached and what it does. */
-function Part({
-  clip,
-  shows,
-  name,
-  keys,
-  children,
-}: {
-  clip: string;
-  shows: string;
-  name: string;
-  keys: string;
-  children: ReactNode;
-}) {
-  return (
-    <figure>
-      <Reel name={clip} width={1440} height={900} label={shows} />
-      <figcaption>
-        <h3>{name}</h3>
-        <kbd>{keys}</kbd>
-        <p>{children}</p>
-      </figcaption>
-    </figure>
-  );
-}
+/** The four small things: each with its name, how it's reached, and what it does. */
+const PARTS = [
+  {
+    clip: "zap",
+    name: "Zap",
+    how: "in Boosts",
+    what: "Click what you don’t want on a site and it stays gone next time.",
+  },
+  {
+    clip: "peek",
+    name: "Peek",
+    how: "⇧ click a link",
+    what: "Open any link over the page you’re on, then press Escape to go back.",
+  },
+  {
+    clip: "split",
+    name: "Split view",
+    how: "drag a tab onto the page",
+    what: "Two pages sit side by side in one window.",
+  },
+  {
+    clip: "little",
+    name: "Little ilo",
+    how: "⌥⌘N",
+    what: "A small window for a single page, moved into the main window with one key.",
+  },
+];
 
-// The site opens in ilo. It comes as a page; on a computer that can draw it, ilo's real interface
-// then appears around the page, and the page is a tab in it, so a visitor has used ilo before they
-// are asked for anything. Everywhere else the page is a page, with a clip where the live interface
-// would be.
+/** The Spaces a visitor can turn the page to, each named and with its field's lit tone (src/land.js). */
+const SPACES = [
+  ["Green", "#12A853"],
+  ["Violet", "#7C60FF"],
+  ["Red", "#F04A2C"],
+  ["Blue", "#3F7DF5"],
+  ["Pink", "#E8408F"],
+] as const;
+
 function Home() {
-  const stage = useRef<HTMLDivElement>(null);
-  const hero = useRef<HTMLElement>(null);
-  const sky = useRef<HTMLCanvasElement>(null);
-  const dust = useRef<HTMLDivElement>(null);
-  // What opens ilo's command bar, once ilo has drawn.
-  const openBar = useRef<() => void>(undefined);
-  // Whether ilo shows another tab than the page, and whether one of the page's own download
-  // buttons is on screen: the button that follows is up when the visitor has neither before them.
-  const [away, setAway] = useState(false);
-  const [offered, setOffered] = useState(true);
-  const { runs } = useVisitor();
-  const apple = useApple();
-  useEntrances();
-
-  // The lights stand on the foot of the first screen, or on the clip where ilo's interface can't
-  // run.
-  useEffect(() => {
-    const screen = hero.current;
-    if (!screen || !sky.current || !dust.current) return;
-    grain(dust.current);
-    try {
-      const lights = startSky(sky.current, (_, height) => {
-        const clip = screen.querySelector(".film")?.getBoundingClientRect();
-        return clip?.height
-          ? clip.top + clip.height * 0.5 - screen.getBoundingClientRect().top
-          : height;
-      });
-      const sized = new ResizeObserver(() => lights.size());
-      sized.observe(screen);
-      return () => {
-        sized.disconnect();
-        lights.stop();
-      };
-    } catch (error) {
-      console.warn("The sky didn't start; the first screen stays dark.", error);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!stage.current) return;
-    // The page scrolls in its own box where ilo will run around it, so the keys that scroll a
-    // page reach it only once it has the focus.
-    const page = scroller();
-    if (page && document.activeElement === document.body) {
-      page.tabIndex = -1;
-      page.focus({ preventScroll: true });
-    }
-    return startLive(stage.current, demoSpaces(), here(HOME), {
-      shown: (home) => setAway(!home),
-      ready: (open) => (openBar.current = open),
-    });
-  }, []);
-
-  useEffect(() => {
-    const seen = new Set<Element>();
-    const watch = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) seen.add(entry.target);
-          else seen.delete(entry.target);
-        }
-        setOffered(seen.size > 0);
-      },
-      { root: scroller() },
-    );
-    for (const button of document.querySelectorAll(".cta")) watch.observe(button);
-    return () => watch.disconnect();
-  }, []);
-
-  const follows = away || !offered;
+  const newest = published(RELEASES, import.meta.env.ILO_PUBLISHED)[0];
+  const faces = CONTRIBUTORS.filter((one) => one.face).slice(0, FACES_SHOWN);
   return (
-    <div className="stage" ref={stage}>
-      <div className="pages">
-        <div className="pitch">
-          <Head />
-
-          <main>
-            <section className="hero" id="top" ref={hero}>
-              <canvas className="sky" ref={sky} aria-hidden="true" />
-              <div className="grain" ref={dust} aria-hidden="true" />
-              <h1>
-                The browser <br />
-                that keeps going.
-              </h1>
-              <div className="say">
-                <p className="lede">
-                  Every part of your life in its own Space, a sidebar that tidies itself, and one
-                  bar for every command. Free and open source, on Chromium.
-                </p>
-                <div className="act">
-                  <Download className="button big cta" />
-                  <p className="note">
-                    {runs
-                      ? "In beta for Mac and Linux, alpha on Windows."
-                      : `ilo is for ${PLATFORM_LIST}.`}
-                  </p>
-                </div>
-              </div>
-              {/* One line says the ilo around the page is real, and what to press. A window that
-                  looks like a picture has to say it isn't one, or nobody clicks it. */}
-              <p className="hint">
-                <b>That is ilo around this page, running for real.</b> Press{" "}
-                <button
-                  type="button"
-                  className="key"
-                  aria-label={`Open the command bar (${apple ? "⌘K" : "Ctrl K"})`}
-                  onClick={() => openBar.current?.()}
-                >
-                  {apple ? "⌘K" : "Ctrl K"}
-                </button>{" "}
-                or open a tab in its sidebar.
-              </p>
-              <div className="film">
-                <Reel
-                  name="bar"
-                  width={1280}
-                  height={648}
-                  label="ilo's command bar finding an open tab from a few typed letters"
-                />
-              </div>
-            </section>
-
-            {/* What the page can't run, in real footage cut down to the action. */}
-            <section className="look" id="look" aria-labelledby="look-title">
-              <div className="lead">
-                <h2 id="look-title">
-                  The parts you <br />
-                  have to see.
-                </h2>
-                <p>Filmed in ilo, and played a little faster than life.</p>
-              </div>
-              <div className="clips">
-                <div className="col">
-                  <Part
-                    clip="zap"
-                    shows="Zap hiding the notices at the top of a travel guide, one click each"
-                    name="Zap"
-                    keys="Boosts"
-                  >
-                    Click what you don't want on a site. It's gone, and it stays gone when you come
-                    back.
-                  </Part>
-                  <Part
-                    clip="peek"
-                    shows="A link opened in Peek, over the page it was on, then closed"
-                    name="Peek"
-                    keys={apple ? "⇧ click" : "Shift click"}
-                  >
-                    Open any link over the page you're on. Escape, and you're back.
-                  </Part>
-                  <p className="get">
-                    <Download className="button big cta" />
-                    Free, with no account.
-                  </p>
-                </div>
-                <div className="col">
-                  <Part
-                    clip="split"
-                    shows="A tab dragged from the sidebar onto the page, where the two sit side by side"
-                    name="Split view"
-                    keys="Drag a tab"
-                  >
-                    Drag a tab onto the page and the two sit side by side.
-                  </Part>
-                  <Part
-                    clip="little"
-                    shows="Little ilo opening as a small window, loading a page and moving it into the main window"
-                    name="Little ilo"
-                    keys={apple ? "⌥⌘N" : "Ctrl Alt N"}
-                  >
-                    A small window for a quick page. One key moves it into the main window.
-                  </Part>
-                </div>
-              </div>
-            </section>
-
-            {/* The one thing no other browser does for you, on the brand's own green. */}
-            <section className="order" aria-labelledby="order-title">
-              <h2 id="order-title">
-                It keeps itself <br />
-                in order.
-              </h2>
-              <ul>
-                <li>
-                  <b>12 hours</b>
-                  <span>A tab you haven't looked at in 12 hours moves to the archive.</span>
-                </li>
-                <li>
-                  <b>Pinned</b>
-                  <span>Pin what you want to keep, and it stays.</span>
-                </li>
-                <li>
-                  <b>Backed up</b>
-                  <span>
-                    ilo keeps backups of your sidebar, and Help › Restore Earlier Sidebar brings one
-                    back.
-                  </span>
-                </li>
-              </ul>
-            </section>
-
-            {/* Every reason not to try it, answered. Each answer says no more than Help and Privacy
-                do. */}
-            <section className="why" id="why" aria-labelledby="why-title">
-              <h2 id="why-title">No catch.</h2>
-              <dl>
-                <dt>Free</dt>
-                <dd>
-                  The whole browser, on every computer it runs on. No ads, no licence checks and no
-                  paid features.
-                </dd>
-                <dt>Open</dt>
-                <dd>
-                  All of ilo that runs on your computer is under the{" "}
-                  <a href={`${GITHUB}/blob/main/LICENSE`}>GPL-3.0</a>, and its source is{" "}
-                  <a href={GITHUB}>on GitHub</a>.
-                </dd>
-                <dt>Private</dt>
-                <dd>
-                  It needs no account. It sends one anonymous count a day, with no ID, only if you
-                  turn that on.
-                </dd>
-                <dt>Compatible</dt>
-                <dd>
-                  Chrome's extensions work, from the Chrome Web Store. uBlock Origin is built in.
-                </dd>
-                <dt>Moved in</dt>
-                <dd>
-                  Bring your tabs, bookmarks and history in from the other browsers on your
-                  computer.
-                </dd>
-              </dl>
-            </section>
-
-            {/* The name, as tall as the room, with the download where its dot is. */}
-            <section className="end" id="get" aria-labelledby="get-title">
-              <div className="name">
-                <div className="letters">
-                  <svg viewBox="0 12 226 162" aria-hidden="true">
-                    <rect x="7" y="70" width="24" height="100" rx="12" />
-                    <rect x="67" y="20" width="24" height="150" rx="12" />
-                    <path
-                      fillRule="evenodd"
-                      d="M171 70a50 50 0 1 0 0 100a50 50 0 1 0 0-100zm0 24a26 26 0 1 1 0 52a26 26 0 1 1 0-52z"
-                    />
-                  </svg>
-                  <Download className="dot cta">
-                    {(platform) => (
-                      <span>
-                        Download <small>for {platform.name}</small>
-                      </span>
-                    )}
-                  </Download>
-                </div>
-                <div className="words">
-                  <h2 id="get-title">a good tool.</h2>
-                  <p>
-                    ilo is <a href="/ilo">Esperanto for a tool</a>. This one is free, and yours to
-                    keep.
-                  </p>
-                  <nav className="more" aria-label="Elsewhere">
-                    <a href="/mac">Mac</a>
-                    <a href="/windows">Windows</a>
-                    <a href="/linux">Linux</a>
-                    <a href="/changelog">Changelog</a>
-                    <a href="/help">Help</a>
-                    <a href="/privacy">Privacy</a>
-                    <a href={GITHUB}>GitHub</a>
-                  </nav>
-                  <Download className="button big cta" />
-                </div>
-              </div>
-              {/* The GPL's offer of source for the interface this page runs, and whose pages the
-                  clips show. */}
-              <p className="fine">
-                This site runs ilo's own interface, built from{" "}
-                <a href={import.meta.env.ILO_DEMO_SOURCE}>its source</a> under the GPL-3.0. The
-                clips show Wikivoyage and Wikipedia (CC BY-SA) and OpenStreetMap (ODbL). No cookies,
-                no tracking.
-              </p>
-            </section>
-          </main>
+    <Shell
+      name="home"
+      after={
+        <>
+          {/* The page signs off with the mark, under the foot, and the switcher under that. */}
+          <Wordmark className="wordmark giant" label="ilo" />
+          {/* As at the foot of ilo's sidebar: pick a colour and it crosses the page from the dot pressed. */}
+          <div className="spaces" id="switcher" role="group" aria-label="Space colour">
+            {SPACES.map(([name, colour], index) => (
+              <button key={name} type="button" aria-label={name} aria-pressed={index === 0}>
+                <i style={{ background: colour }} />
+              </button>
+            ))}
+          </div>
+        </>
+      }
+    >
+      <section className="hero" data-part="">
+        <div className="hero-in">
+          <Wordmark className="wordmark" label="ilo" />
+          <div data-clear="0">
+            <h1>a browser you get to keep.</h1>
+            <p className="lede">
+              Free and open source, with Spaces for your tabs, one bar for every command, no ads and
+              no account.
+            </p>
+          </div>
+          <DownloadLink className="btn" />
+          <p className="note" data-clear="0">
+            In beta for {PLATFORM_LIST}. iPhone on the way.
+          </p>
         </div>
-      </div>
+      </section>
 
-      {/* The button follows a visitor who has left the page's own buttons, or the page's tab. It's
-          the site's, laid over ilo's window, not part of ilo. */}
-      <div className={follows ? "dock up" : "dock"} inert={!follows}>
-        <Download className="button" brief />
-      </div>
-    </div>
+      <section data-part="">
+        <div className="wrap broad stack">
+          <div className="head" data-clear="0">
+            <h2>Switch Space and the window follows.</h2>
+            <p className="lede">
+              Put every part of your life in its own Space, with pinned tabs, today’s tabs and a
+              colour you pick.
+            </p>
+          </div>
+          <figure className="win wide">
+            {/* This clip leads the page: at each swipe in it, every field moves on a colour as the
+                window does. data-swipes is when, and which way; data-from where the fingers are. */}
+            <video
+              id="swipes"
+              muted
+              loop
+              playsInline
+              preload="none"
+              width={2400}
+              height={1350}
+              poster="/media/spaces.jpg"
+              data-from="0.069 0.578"
+              data-swipes="1.50:1,3.90:1,6.30:1,8.70:-1,10.30:-1,11.90:-1"
+            >
+              <source src="/media/spaces.mp4" type="video/mp4" />
+            </video>
+            <figcaption data-clear="0">Switching Spaces swaps your tabs and colour.</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section data-part="">
+        <div className="wrap broad stack">
+          <div className="mid" data-clear="0">
+            <h2>One bar for every command</h2>
+            <p className="lede">
+              Type a few letters to find an open tab, open a page or run a command. ⌘T on Mac, Ctrl
+              T elsewhere.
+            </p>
+          </div>
+          <figure className="win wide">
+            <Clip name="bar" wide />
+            <figcaption data-clear="0">Tabs, pages and commands in one bar.</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section data-part="">
+        <div className="wrap broad stack">
+          <div className="mid" data-clear="0">
+            <h2>Four small things</h2>
+            <p className="lede">Built right in, ready when you need them.</p>
+          </div>
+          <div className="parts">
+            {PARTS.map((part) => (
+              <figure key={part.clip} className="win part">
+                <Clip name={part.clip} />
+                <figcaption data-clear="0">
+                  <b>{part.name}</b>
+                  <kbd>{part.how}</kbd>
+                  <span>{part.what}</span>
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section data-part="">
+        <div className="wrap stack">
+          <div className="mid" data-clear="0">
+            <h2>It keeps itself in order.</h2>
+          </div>
+          <dl className="list three">
+            <div>
+              <dt>Archive</dt>
+              <dd>A tab you haven’t looked at in 12 hours moves to the archive.</dd>
+            </div>
+            <div>
+              <dt>Pinned tabs</dt>
+              <dd>Pin what you want to keep, and it stays right where you put it.</dd>
+            </div>
+            <div>
+              <dt>Backups</dt>
+              <dd>
+                ilo keeps sidebar backups, and{" "}
+                <span className="menu">Help › Restore Earlier Sidebar</span> brings one back.
+              </dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <section data-part="">
+        <div className="wrap two">
+          <div data-clear="0">
+            <h2>No one can fence it off.</h2>
+          </div>
+          <dl className="list rows">
+            <div>
+              <dt>Free</dt>
+              <dd>
+                The whole browser, on every computer it runs on. No ads, no licence checks and no
+                paid features.
+              </dd>
+            </div>
+            <div>
+              <dt>Open</dt>
+              <dd>
+                All of ilo that runs on your computer is under the GPL-3.0. The source is on GitHub.
+                <span className="counts">
+                  <a href={`${SOURCE}/stargazers`}>
+                    <span>
+                      <b>{STARS}</b> stars
+                    </span>
+                  </a>
+                  <a href={`${SOURCE}/graphs/contributors`}>
+                    <span className="faces">
+                      {faces.map(({ login, face }) => (
+                        <img
+                          key={login}
+                          src={`${FACES}/${face}`}
+                          alt=""
+                          width={32}
+                          height={32}
+                          loading="lazy"
+                        />
+                      ))}
+                      {CONTRIBUTORS.length > faces.length && (
+                        <i>+{CONTRIBUTORS.length - faces.length}</i>
+                      )}
+                    </span>
+                    <span>
+                      <b>{CONTRIBUTORS.length}</b> contributors
+                    </span>
+                  </a>
+                </span>
+              </dd>
+            </div>
+            <div>
+              <dt>Private</dt>
+              <dd>
+                No account needed. It sends one anonymous count a day, with no ID, only if you turn
+                that on.
+              </dd>
+            </div>
+            <div>
+              <dt>Compatible</dt>
+              <dd>Install extensions from the Chrome Web Store. uBlock Origin is built in.</dd>
+            </div>
+            <div>
+              <dt>Switching</dt>
+              <dd>
+                Bring your tabs, bookmarks and history in from the other browsers on your computer.
+              </dd>
+            </div>
+          </dl>
+        </div>
+      </section>
+
+      <section className="end" data-part="">
+        <div className="mid" data-clear="0">
+          <h2>Pick a colour and move in.</h2>
+          <p className="lede">
+            Free for{" "}
+            {PLATFORMS.map((platform, index) => (
+              <span key={platform.id}>
+                {index > 0 && (index === PLATFORMS.length - 1 ? " and " : ", ")}
+                <a href={`/${platform.id}`}>{platform.name}</a>
+              </span>
+            ))}
+            . No account needed.
+          </p>
+        </div>
+        <DownloadLink className="btn" />
+        {newest && (
+          <p className="note new" data-clear="0">
+            <a href="/changelog">
+              ilo {newest.version}, {newest.date}
+            </a>
+          </p>
+        )}
+      </section>
+    </Shell>
   );
 }

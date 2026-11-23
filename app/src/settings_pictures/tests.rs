@@ -13,7 +13,7 @@ use crate::palette::{INK, PAPER};
 struct Pair {
     right: bool,
     picks: Vec<bool>,
-    logged: Rc<RefCell<Vec<String>>>,
+    logged: crate::settings_rows::Drawn,
     focus: FocusHandle,
 }
 
@@ -67,7 +67,7 @@ fn at(pair: &Entity<Pair>, side: bool, cx: &mut VisualTestContext) -> gpui::Poin
         "browser: settings sidebar position option {} at ",
         title(side)
     );
-    let logged = pair.read_with(cx, |pair, _| pair.logged.borrow().clone());
+    let logged = pair.read_with(cx, |pair, _| pair.logged.borrow().lines().to_vec());
     let line = (logged.iter())
         .find_map(|line| line.strip_prefix(&prefix))
         .unwrap_or_else(|| panic!("{} wasn't drawn: {logged:?}", title(side)));
@@ -165,7 +165,7 @@ fn voiceover_reads_a_pair_of_options_with_one_chosen_and_presses_the_other(
 struct Appearances {
     chosen: Appearance,
     picks: Vec<Appearance>,
-    logged: Rc<RefCell<Vec<String>>>,
+    logged: crate::settings_rows::Drawn,
     focus: FocusHandle,
 }
 
@@ -225,7 +225,7 @@ fn drawn_at(
         "browser: settings appearance option {} at ",
         appearance_title(appearance)
     );
-    let logged = view.read_with(cx, |view, _| view.logged.borrow().clone());
+    let logged = view.read_with(cx, |view, _| view.logged.borrow().lines().to_vec());
     let line = (logged.iter())
         .find_map(|line| line.strip_prefix(&prefix))
         .unwrap_or_else(|| panic!("{appearance:?} wasn't drawn: {logged:?}"));
@@ -326,7 +326,7 @@ fn share_favorites_tells_who_shares_by_the_marks_shape_too() {
 struct Shared {
     chosen: FavoritesScope,
     picks: Vec<FavoritesScope>,
-    logged: Rc<RefCell<Vec<String>>>,
+    logged: crate::settings_rows::Drawn,
 }
 
 impl Render for Shared {
@@ -367,7 +367,7 @@ fn share_favorites_draws_its_three_scopes_and_a_click_or_voiceover_picks_one(
             "browser: settings share favorites option {} at ",
             scope.caption()
         );
-        let logged = view.read_with(cx, |view, _| view.logged.borrow().clone());
+        let logged = view.read_with(cx, |view, _| view.logged.borrow().lines().to_vec());
         let line = (logged.iter())
             .find_map(|line| line.strip_prefix(&prefix))
             .unwrap_or_else(|| panic!("{scope:?} wasn't drawn: {logged:?}"));

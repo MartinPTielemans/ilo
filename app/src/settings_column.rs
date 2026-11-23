@@ -2,7 +2,6 @@
 //! groups, as the sidebar's rows are, the one shown on its plate, and Chromium's settings at its
 //! foot. The Settings window draws it beside the card its section shows on.
 
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
@@ -133,7 +132,7 @@ pub fn column(
     sections: &Sections,
     shown: Section,
     dark: bool,
-    logged: Rc<RefCell<Vec<String>>>,
+    logged: crate::settings_rows::Drawn,
     field: AnyElement,
     found: Option<&[Section]>,
     pick: Pick,

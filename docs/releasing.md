@@ -46,7 +46,7 @@ From that squash until the release's branch is cut at its version commit, main t
    - **The only reds allowed** are the runs, or steps of runs, in `app/check/quarantine.<os>`. They still run, but they don't fail a check, and each check's summary lists them under its runs.
    - **Any other red stops the release.** Fix it, or quarantine it under an open issue (`app/check/quarantine.sh` says how), before tagging. Never accept it at the gate.
    - **A quarantine line lasts 14 days.** Check scripts fails on a line older than that, or on one whose issue has closed.
-4. **Write the release's changelog entry** in `site/src/changelog.ts` from the notes, with the day of the tag, and merge it before tagging. It stays off ilobrowser.com until the release is published, as the site's build shows only the releases GitHub lists as published (`.github/workflows/site.yml`). Each update's notes and its first launch open `/changelog#<version>` on the site (`tools/appcast.sh`).
+4. **Write the release's changelog entry** in `site/src/changelog.ts` from the notes, with the day of the tag, and merge it before tagging. An entry is the release's `changes`, one for each thing a reader would name, each with its kind (security, new, changed or fixed), the part of ilo it's in and, when it isn't for every platform, the platforms it's for (`site/AGENTS.md`). It stays off ilobrowser.com until the release is published, as the site's build shows only the releases GitHub lists as published (`.github/workflows/site.yml`). Each update's notes and its first launch open `/changelog#<version>` on the site (`tools/appcast.sh`).
 5. **Tag the commit and push the tag.** The release's notes are the tag's message, written in Markdown with no title line, since GitHub shows the release's name above them:
 
    ```bash
@@ -105,7 +105,7 @@ Once the draft is published:
 
 - The `publish` job puts its `appcast.xml` in the release `updates`, the feed the Mac and Windows builds read (`app/branding/update-feed`).
 - The Linux build, already in the Flatpak repository unseen, goes live.
-- The `site` job deploys [ilobrowser.com](https://ilobrowser.com) (`.github/workflows/site.yml`). Its changelog shows the release's entry, its live demo becomes the release's `ilo-demo.tar.gz` with its source linked to the tag's commit, and its download buttons link the newest release. A prerelease deploys nothing.
+- The `site` job deploys [ilobrowser.com](https://ilobrowser.com) (`.github/workflows/site.yml`). Its changelog shows the release's entry, its pages name the release as the newest, its star and contributor counts are asked for again, and its download buttons link the newest release. The job is `site.yml` as it stood at the tag, run on main's `site/`, so a change to how the site deploys takes effect for releases with the next tag, and main's `site/` has to build under the last tag's file until then. It needs the environment's two secrets, which `release.yml` passes it (**The site**, below); when the job fails, the release stays published and the site goes out by the hand dispatch there. A prerelease deploys nothing.
 - Martin's Grok bot announces it: it records clips and a film of the new features on the published build, adds the clips to the site's changelog through its own pull request, and drafts the post. With `RELEASE_WEBHOOK_URL` and `RELEASE_WEBHOOK_KEY` set, the `announce` job tells it at once; without them, it finds the release at one of its three daily check-ins, at 10:00, 16:00 and 21:00 Copenhagen time. The release never waits for it.
 
 Every other release in this repository, such as `updates` and `nightly`, is made with `--latest=false`, or the site's buttons would link it. The prebuilt engines live in [ilo-engine](https://github.com/MartinPTielemans/ilo-engine), the repository `engine/prebuilt.ini` names, as `engine-mac-`, `engine-linux-` and `engine-windows-<commit>`, also with `--latest=false`.
@@ -156,7 +156,7 @@ and the repository variable `FLATPAK_REPO_URL`, the bucket's public address, suc
 | `CLOUDFLARE_ACCOUNT_ID` (secret) | The account's ID |
 | `SITE_DEPLOY` (variable) | `live` to deploy ilobrowser.com from a push to main and from a published release. Unset, only a preview goes up |
 
-Without the secrets the deploy job deploys nothing and says so. With them, `gh workflow run site.yml --ref main` uploads the site to the Worker `ilo-site-preview` on workers.dev to compare with the live site, and once `SITE_DEPLOY` is `live`, `-f live=true` deploys ilobrowser.com.
+`ci.yml` and `release.yml` call `site.yml` and pass it both secrets by name. A called workflow gets an environment's secrets only from its caller: without that it gets none, and no error says so. Without the secrets the deploy job deploys nothing, and once `SITE_DEPLOY` is `live` it fails; before that, it says so in a notice. With them, `gh workflow run site.yml --ref main` uploads the site to the Worker `ilo-site-preview` on workers.dev to compare with the live site, and once `SITE_DEPLOY` is `live`, `-f live=true` deploys ilobrowser.com. That dispatch is also the fallback when a push to main or a published release didn't deploy the site: it deploys main's `site/` as it stands.
 
 **Outside this repository.**
 

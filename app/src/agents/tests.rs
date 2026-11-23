@@ -60,6 +60,8 @@ struct Made {
     muted: RefCell<Vec<(u64, bool)>>,
     /// Tabs the core holds in a Space that its list of the Space's tabs leaves out.
     unlisted: RefCell<HashSet<u64>>,
+    /// Words the core refuses with in place of its own, as a later core may word them.
+    reworded: RefCell<Option<&'static str>>,
 }
 
 impl Made {
@@ -135,10 +137,17 @@ impl Browser for Made {
             .map_or(0, |each| each.1)
     }
 
-    fn may_act(&self, agent: &str, tab: u64, action: &str, _: &mut App) -> Result<(), String> {
+    fn may_act(
+        &self,
+        agent: &str,
+        tab: u64,
+        action: &str,
+        _: &mut App,
+    ) -> Result<(), (Failure, String)> {
         self.checked.borrow_mut().push(action.into());
+        let words = |words: &str| (*self.reworded.borrow()).unwrap_or(words).to_string();
         if self.held.borrow().contains(&tab) {
-            return Err(HELD.into());
+            return Err((Failure::Held, words(HELD)));
         }
         let space = self.agent_space(agent);
         match self
@@ -148,7 +157,10 @@ impl Browser for Made {
             .any(|each| each.0 == tab && each.1 == space && space != 0)
         {
             true => Ok(()),
-            false => Err("The tab isn't in the agent's own Space.".into()),
+            false => Err((
+                Failure::NotItsSpace,
+                words("The tab isn't in the agent's own Space."),
+            )),
         }
     }
 
@@ -1569,7 +1581,7 @@ fn navigate_answers_with_the_text_it_asks_for(cx: &mut TestAppContext) {
     );
     let request = browser.pages.borrow().last().unwrap().1;
     agents.update(cx, |agents, cx| {
-        agents.page_done(request, shop_tree(), false, cx)
+        agents.page_done(request, shop_tree(), None, cx)
     });
     assert!(
         answer.try_recv().is_err(),
@@ -1622,7 +1634,7 @@ fn page_done(
     cx: &mut TestAppContext,
 ) -> ToolResult {
     let request = browser.pages.borrow().last().unwrap().1;
-    agents.update(cx, |agents, cx| agents.page_done(request, text, false, cx));
+    agents.update(cx, |agents, cx| agents.page_done(request, text, None, cx));
     answer.recv().unwrap()
 }
 
@@ -1766,7 +1778,7 @@ fn an_agent_opens_a_page_and_acts_by_ref(cx: &mut TestAppContext) {
     let answer = call(&agents, "claude-code", "click", json!({ "ref": "e1" }), cx);
     let request = browser.pages.borrow().last().unwrap().1;
     agents.update(cx, |agents, cx| {
-        agents.page_done(request, "It's gone.".into(), true, cx)
+        agents.page_done(request, "It's gone.".into(), Some(Failure::Other), cx)
     });
     assert_eq!(answer.recv().unwrap(), ToolResult::error("It's gone."));
 }
@@ -1787,19 +1799,25 @@ fn a_tab_opened_still_loading_is_named_in_the_error(cx: &mut TestAppContext) {
     );
     let request = browser.pages.borrow().last().unwrap().1;
     agents.update(cx, |agents, cx| {
-        agents.page_done(request, loading.into(), true, cx)
+        agents.page_done(request, loading.into(), Some(Failure::Loading), cx)
     });
     assert_eq!(
         answer.recv().unwrap(),
-        ToolResult::error(format!("Opened tab 30. {loading}"))
+        ToolResult::failed(
+            tools::Kind::StillLoading,
+            format!("Opened tab 30. {loading}")
+        )
     );
 
     let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 30 }), cx);
     let request = browser.pages.borrow().last().unwrap().1;
     agents.update(cx, |agents, cx| {
-        agents.page_done(request, loading.into(), true, cx)
+        agents.page_done(request, loading.into(), Some(Failure::Loading), cx)
     });
-    assert_eq!(answer.recv().unwrap(), ToolResult::error(loading));
+    assert_eq!(
+        answer.recv().unwrap(),
+        ToolResult::failed(tools::Kind::StillLoading, loading)
+    );
 }
 
 /// Tab 20's page with a size picker, open or not, in the document `document`: a menu, a heading,
@@ -1948,7 +1966,7 @@ fn an_action_answers_with_what_changed_in_the_page(cx: &mut TestAppContext) {
     let answer = call(&agents, "claude-code", "run_steps", steps, cx);
     let request = browser.pages.borrow().last().unwrap().1;
     agents.update(cx, |agents, cx| {
-        agents.page_done(request, size_picker(false, 2), false, cx)
+        agents.page_done(request, size_picker(false, 2), None, cx)
     });
     let ran = page_done(&agents, &browser, answer, size_picker(true, 2), cx);
     assert!(
@@ -2058,7 +2076,7 @@ fn an_agent_chooses_an_option_by_its_text(cx: &mut TestAppContext) {
     let (_, request, action, ..) = browser.pages.borrow().last().cloned().unwrap();
     assert_eq!(action, PageAction::Select);
     agents.update(cx, |agents, cx| {
-        agents.page_done(request, answered(Some("51")), false, cx)
+        agents.page_done(request, answered(Some("51")), None, cx)
     });
     let ran = run.recv().unwrap();
     assert!(
@@ -2164,6 +2182,9 @@ fn a_key_press_that_activates_a_control_asks_as_a_click_on_it(cx: &mut TestAppCo
         let question =
             (browser.asked.borrow().clone()).unwrap_or_else(|| panic!("{what} didn't ask"));
         assert_eq!(question.what, what);
+        // The card's sentence is the same without the tab's site, which it shows apart (#3836).
+        assert_eq!(question.asks, what.replace(" on example.com", ""));
+        assert_eq!(question.site, "example.com");
         assert_eq!(question.why, "It looks like a payment or an order.");
         assert_eq!(
             browser.pages.borrow().len(),
@@ -2374,7 +2395,10 @@ fn what_an_agent_may_not_do_is_refused_and_logged(cx: &mut TestAppContext) {
     let answer = call(&agents, "claude-code", "open_tab", file, cx);
     assert_eq!(
         answer.recv().unwrap(),
-        ToolResult::error("Agents may open only http and https pages.")
+        ToolResult::failed(
+            tools::Kind::NotWebPage,
+            "Agents may open only http and https pages."
+        )
     );
     let settings = json!({ "url": "chrome://settings" });
     let answer = call(&agents, "claude-code", "navigate", settings, cx);
@@ -2398,7 +2422,10 @@ fn what_an_agent_may_not_do_is_refused_and_logged(cx: &mut TestAppContext) {
 fn an_agent_never_reaches_chromes_password_manager(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
     let tabs = browser.tabs.borrow().len();
-    let refused = ToolResult::error("Agents may open only http and https pages.");
+    let refused = ToolResult::failed(
+        tools::Kind::NotWebPage,
+        "Agents may open only http and https pages.",
+    );
     let addresses = [
         "chrome://password-manager/passwords",
         "chrome://settings/passwords",
@@ -2436,7 +2463,10 @@ fn an_agent_never_reaches_chromes_password_manager(cx: &mut TestAppContext) {
 fn an_agent_never_reaches_the_history(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
     let tabs = browser.tabs.borrow().len();
-    let refused = ToolResult::error("Agents may open only http and https pages.");
+    let refused = ToolResult::failed(
+        tools::Kind::NotWebPage,
+        "Agents may open only http and https pages.",
+    );
     for url in [
         "chrome://history",
         "chrome://history/?q=bank",
@@ -2569,6 +2599,12 @@ fn a_names_quotes_cant_close_the_cards(cx: &mut TestAppContext) {
         question.what,
         "click \u{201C}Place order' on github.com, then 'OK'\u{201D} on example.com"
     );
+    // The card's head is the tab's own site, whatever site the page's words name (#3836).
+    assert_eq!(
+        question.asks,
+        "click \u{201C}Place order' on github.com, then 'OK'\u{201D}"
+    );
+    assert_eq!(question.site, "example.com");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -3199,7 +3235,8 @@ fn a_denied_download_leaves_no_file(cx: &mut TestAppContext) {
     assert_eq!(*browser.downloads.borrow(), [(900, false)]);
     assert_eq!(
         answer.recv().unwrap(),
-        ToolResult::error(
+        ToolResult::failed(
+            tools::Kind::SaidNo,
             "The user said no: you can't download report.docx from files.example.com. Don't try \
              again."
         )
@@ -3263,7 +3300,10 @@ fn no_to_an_agent_is_kept(cx: &mut TestAppContext) {
     });
     assert_eq!(
         answer.recv().unwrap(),
-        ToolResult::error("The user said no: you can't open chase.com. Don't try again.")
+        ToolResult::failed(
+            tools::Kind::SaidNo,
+            "The user said no: you can't open chase.com. Don't try again."
+        )
     );
     assert_eq!(
         log(&agents, "claude-code", cx)[0],
@@ -3412,7 +3452,7 @@ fn a_wait_step_ends_on_a_page_that_holds_still_while_it_polls(cx: &mut TestAppCo
     .to_string();
     let request = browser.pages.borrow().last().unwrap().1;
     agents.update(cx, |agents, cx| {
-        agents.page_done(request, polling, false, cx)
+        agents.page_done(request, polling, None, cx)
     });
     cx.run_until_parked();
     let ran = run.recv().unwrap();
@@ -3431,7 +3471,7 @@ fn a_wait_step_ends_on_a_page_that_holds_still_while_it_polls(cx: &mut TestAppCo
 fn shop_done(agents: &Entity<Agents>, browser: &Made, cx: &mut TestAppContext) {
     let request = browser.pages.borrow().last().unwrap().1;
     agents.update(cx, |agents, cx| {
-        agents.page_done(request, shop_tree(), false, cx)
+        agents.page_done(request, shop_tree(), None, cx)
     });
 }
 
@@ -3468,7 +3508,7 @@ fn a_wait_step_waits_for_the_page_to_settle(cx: &mut TestAppContext) {
     .to_string();
     let look = |tree: String, cx: &mut TestAppContext| {
         let request = browser.pages.borrow().last().unwrap().1;
-        agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
+        agents.update(cx, |agents, cx| agents.page_done(request, tree, None, cx));
         cx.run_until_parked();
     };
     let last = || browser.pages.borrow().last().unwrap().2;
@@ -3524,7 +3564,7 @@ fn a_wait_step_waits_for_text_to_go(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
     let look = |tree: String, cx: &mut TestAppContext| {
         let request = browser.pages.borrow().last().unwrap().1;
-        agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
+        agents.update(cx, |agents, cx| agents.page_done(request, tree, None, cx));
         cx.run_until_parked();
     };
     let looks = || browser.pages.borrow().len();
@@ -3580,7 +3620,7 @@ fn navigate_and_open_tab_wait_for_their_text(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
     let look = |tree: String, cx: &mut TestAppContext| {
         let request = browser.pages.borrow().last().unwrap().1;
-        agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
+        agents.update(cx, |agents, cx| agents.page_done(request, tree, None, cx));
         cx.run_until_parked();
     };
     let looks = || browser.pages.borrow().len();
@@ -3652,7 +3692,7 @@ fn the_text_answer_comes_after_wait_for(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
     let look = |tree: String, cx: &mut TestAppContext| {
         let request = browser.pages.borrow().last().unwrap().1;
-        agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
+        agents.update(cx, |agents, cx| agents.page_done(request, tree, None, cx));
         cx.run_until_parked();
     };
     let splash = json!({ "nodes": [
@@ -3711,7 +3751,7 @@ fn a_wait_reads_nothing_once_the_user_takes_the_tab(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
     let look = |tree: String, cx: &mut TestAppContext| {
         let request = browser.pages.borrow().last().unwrap().1;
-        agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
+        agents.update(cx, |agents, cx| agents.page_done(request, tree, None, cx));
         cx.run_until_parked();
     };
     let looks = || browser.pages.borrow().len();
@@ -3771,7 +3811,10 @@ fn a_handoff_waits_for_the_user_to_hand_the_tab_back(cx: &mut TestAppContext) {
     let status = agents.read_with(cx, |agents, _| agents.status());
     assert_eq!(status[0].held, [(20, "Sign in to example.com".into())]);
     let refused = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
-    assert_eq!(refused.recv().unwrap(), ToolResult::error(HELD));
+    assert_eq!(
+        refused.recv().unwrap(),
+        ToolResult::failed(tools::Kind::Yours, HELD)
+    );
     assert!(
         handed.try_recv().is_err(),
         "the handoff answered before the tab came back"
@@ -4054,7 +4097,7 @@ fn asks_for_sign_in(
                  action ran. Nothing more can be done on the tab while it's up, and no tool \
                  answers it. close_tab closes the tab, and the dialog with it.";
     agents.update(cx, |agents, cx| {
-        agents.page_done(request, ended.into(), true, cx)
+        agents.page_done(request, ended.into(), Some(Failure::Other), cx)
     });
     cx.run_until_parked();
 }
@@ -4091,7 +4134,10 @@ fn a_sign_in_the_browser_asks_for_hands_the_tab_to_the_user(cx: &mut TestAppCont
         "the call answered before the tab came back"
     );
     let refused = call(&agents, "claude-code", "snapshot", json!({ "tab": 30 }), cx);
-    assert_eq!(refused.recv().unwrap(), ToolResult::error(HELD));
+    assert_eq!(
+        refused.recv().unwrap(),
+        ToolResult::failed(tools::Kind::Yours, HELD)
+    );
 
     agents.update(cx, |agents, cx| agents.hand_back(30, cx));
     let back = opened.recv().unwrap();
@@ -4182,7 +4228,7 @@ fn a_sign_in_handoff_answers_after_15_minutes(cx: &mut TestAppContext) {
     });
     let request = browser.pages.borrow().last().unwrap().1;
     agents.update(cx, |agents, cx| {
-        agents.page_done(request, "ended".into(), true, cx)
+        agents.page_done(request, "ended".into(), Some(Failure::Other), cx)
     });
     assert_eq!(looked.recv().unwrap(), ToolResult::error("ended"));
     assert!(!browser.held.borrow().contains(&30));
@@ -4906,7 +4952,7 @@ fn a_wait_step_waits_for_its_text_in_the_page(cx: &mut TestAppContext) {
     page_done(&agents, &browser, answer, shop_tree(), cx);
     let look = |tree: String, cx: &mut TestAppContext| {
         let request = browser.pages.borrow().last().unwrap().1;
-        agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
+        agents.update(cx, |agents, cx| agents.page_done(request, tree, None, cx));
     };
     let looks = || browser.pages.borrow().len();
     let thanks = json!({ "nodes": [
@@ -5112,7 +5158,7 @@ fn a_wait_for_text_takes_minutes_and_looks_less_often(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
     let look = |tree: String, cx: &mut TestAppContext| {
         let request = browser.pages.borrow().last().unwrap().1;
-        agents.update(cx, |agents, cx| agents.page_done(request, tree, false, cx));
+        agents.update(cx, |agents, cx| agents.page_done(request, tree, None, cx));
         cx.run_until_parked();
     };
     let looks = || browser.pages.borrow().len();
@@ -5624,7 +5670,8 @@ mod requests {
         });
         assert_eq!(
             answer.recv().unwrap(),
-            ToolResult::error(
+            ToolResult::failed(
+                tools::Kind::SaidNo,
                 "The user said no: you can't make 2 changes on example.com. Don't try again."
             )
         );
@@ -7040,6 +7087,7 @@ mod tasks {
             id,
             at,
             error,
+            kind: result.kind,
             image: result.image.clone(),
         };
         agents.update(cx, |agents, cx| agents.handle(answered, cx));
@@ -7411,21 +7459,26 @@ mod tasks {
         );
     }
 
-    /// A failed step says why when its error gives a reason, and nothing when it doesn't, as its
-    /// title already says it couldn't. A failed open opens to its address over the error.
+    /// A failed step says why when its call's kind gives a reason, and nothing when it doesn't,
+    /// as its title already says it couldn't. A failed open opens to its address over the error.
     #[test]
     fn a_failed_step_says_why_only_when_it_knows() {
         use crate::agents::task::{Line, Opens, TraceItem, Traced, fold};
+        use crate::agents::tools::Kind;
         let reasons = [
-            ("The tab couldn't open.", ""),
-            ("Timed out waiting for the page.", "timed out"),
-            ("The page answered HTTP 504.", "504"),
-            ("Tab 30 isn't an http or https page.", "not a web page"),
-            ("The page is still loading.", "still loading"),
-            ("There's no element e12 on the page.", "not found"),
+            (None, ""),
+            (Some(Kind::Stopped), "stopped"),
+            (Some(Kind::SaidNo), "you said no"),
+            (Some(Kind::NeedsOk), "needs your OK"),
+            (Some(Kind::Password), "password field"),
+            (Some(Kind::NotWebPage), "not a web page"),
+            (Some(Kind::NotFound), "not found"),
+            (Some(Kind::StillLoading), "still loading"),
+            (Some(Kind::DidntShow), "didn't show"),
+            (Some(Kind::Yours), "it's yours"),
         ];
-        for (error, reason) in reasons {
-            assert_eq!(tools::reason(error), reason, "{error}");
+        for (kind, reason) in reasons {
+            assert_eq!(tools::reason(kind), reason, "{kind:?}");
         }
         let now = std::time::Instant::now();
         let url = "https://www.maat.pt/en/visit";
@@ -7440,7 +7493,8 @@ mod tasks {
             after: 0,
             started: now,
             ended: Some(now),
-            error: Some("Timed out waiting for the page.".into()),
+            error: Some("Agents may open only http and https pages.".into()),
+            kind: Some(Kind::NotWebPage),
             picture: None,
             close: None,
         };
@@ -7453,14 +7507,68 @@ mod tasks {
         };
         assert_eq!(
             (step.title.as_ref(), step.description.as_ref(), step.failed),
-            ("Couldn't open maat.pt", "timed out", true)
+            ("Couldn't open maat.pt", "not a web page", true)
         );
-        let opens = format!("{url}\nTimed out waiting for the page.");
+        let opens = format!("{url}\nAgents may open only http and https pages.");
         assert!(
             matches!(&step.opens, Opens::Text(text) if *text == opens),
             "{:?}",
             step.opens
         );
+    }
+
+    /// A step's card says why it failed from its call's kind alone (#3702): each error the app
+    /// once sorted by its words, reworded, says the same, and those words with no kind say
+    /// nothing.
+    #[test]
+    fn a_reworded_error_says_the_same_why() {
+        use crate::agents::task::{Line, TraceItem, Traced, fold};
+        use crate::agents::tools::Kind;
+        let why = |error: &str, kind: Option<Kind>| {
+            let now = std::time::Instant::now();
+            let failed = Traced {
+                call: 1,
+                did: tools::Did {
+                    tool: "click".into(),
+                    site: "example.com".into(),
+                    ..Default::default()
+                },
+                after: 0,
+                started: now,
+                ended: Some(now),
+                error: Some(error.into()),
+                kind,
+                picture: None,
+                close: None,
+            };
+            let lines = fold(&[], &[failed], true, false, None);
+            let [Line::Trace(trace)] = lines.as_slice() else {
+                panic!("{lines:?}")
+            };
+            let [TraceItem::Step(step)] = trace.items.as_slice() else {
+                panic!("{:?}", trace.items)
+            };
+            assert!(step.failed);
+            step.description.to_string()
+        };
+        // What each error said that its word was read from, and its kind.
+        let once = [
+            ("The user stopped the agent.", Kind::Stopped),
+            ("The user said no.", Kind::SaidNo),
+            ("It asks the user first; stopped.", Kind::NeedsOk),
+            ("That's a password field.", Kind::Password),
+            ("Tab 30 isn't an http or https page.", Kind::NotWebPage),
+            ("There's no element e12 in tab 30.", Kind::NotFound),
+            ("The page is still loading.", Kind::StillLoading),
+            ("“Basket” didn't show in 5 s.", Kind::DidntShow),
+            ("The tab is the user's already.", Kind::Yours),
+        ];
+        for (words, kind) in once {
+            let said = tools::reason(Some(kind));
+            assert!(!said.is_empty(), "{kind:?}");
+            assert_eq!(why("Something else went on.", Some(kind)), said, "{words}");
+            assert_eq!(why(words, None), "", "{words}");
+        }
     }
 
     /// A step says what it did in the tense it's in: under way, done or failed. A field's text
@@ -7609,6 +7717,7 @@ mod tasks {
             started: at(started),
             ended: ended.map(at),
             error: None,
+            kind: None,
             picture: None,
             close: None,
         };
@@ -7678,6 +7787,7 @@ mod tasks {
             started: at(1),
             ended: Some(at(3)),
             error: None,
+            kind: None,
             picture: None,
             close: None,
         }];
@@ -7715,6 +7825,7 @@ mod tasks {
             started: at(seconds),
             ended: Some(at(seconds + 1)),
             error: None,
+            kind: None,
             picture: None,
             close: None,
         };
@@ -7780,9 +7891,10 @@ mod tasks {
 
         // One tab's click failed: the line says how many, and the tab's says why.
         let last = trace.last_mut().unwrap();
-        (last.ended, last.error) = (
+        (last.ended, last.error, last.kind) = (
             Some(at(7)),
             Some("There's no element e7 on the page.".into()),
+            Some(tools::Kind::NotFound),
         );
         let clicks = lines(&trace).pop().unwrap();
         let said = (clicks.title.as_ref(), clicks.description.as_ref());
@@ -7847,7 +7959,10 @@ mod tasks {
             cx,
         );
         agents.update(cx, |agents, cx| agents.stop_task(&agent, cx));
-        assert_eq!(opening.recv().unwrap(), ToolResult::error(STOPPED));
+        assert_eq!(
+            opening.recv().unwrap(),
+            ToolResult::failed(tools::Kind::Stopped, STOPPED)
+        );
         let card = card_of(&agents, cx);
         // It says how far it got: the open_tab the stop answered.
         assert_eq!(
@@ -8253,6 +8368,7 @@ mod sessions {
             id,
             at: std::time::Instant::now(),
             error: None,
+            kind: None,
             image: None,
         };
         agents.update(cx, |agents, cx| agents.handle(event, cx));
@@ -8507,6 +8623,26 @@ mod sessions {
                 assert_eq!(sites, ["example.org"]);
             }
         }
+    }
+
+    /// The disconnect noted after a session ended stays out of its record, though the Mac's clock,
+    /// in microseconds, can give the two the very same time (#3967).
+    #[gpui::test]
+    fn the_disconnect_after_a_sessions_end_stays_out_of_its_record(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        answered(&agents, 2, cx);
+        bye(&agents, cx);
+        agents.update(cx, |agents, _| {
+            let ended = (agents.tasks.tasks.iter()).find_map(|task| task.ended);
+            let gone = (agents.log.iter_mut()).find(|entry| entry.action == "disconnected");
+            gone.expect("the disconnect, noted").at = ended.expect("the session, ended");
+        });
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        let [(_, past)] = kept.as_slice() else {
+            panic!("one record: {kept:?}");
+        };
+        let actions: Vec<&str> = past.steps.iter().map(|step| step.action.as_str()).collect();
+        assert_eq!(actions, ["read_page"], "{:?}", past.steps);
     }
 
     /// A question, a handoff and a refusal each show on the card of the connection that asked or
@@ -8794,6 +8930,46 @@ mod sessions {
         assert_eq!(refused(5, 10, cx), NOT_ITS_SPACE);
     }
 
+    /// The core's refusals are decided on by their code, whatever their words (#3702): a held
+    /// tab is the user's, a page that left the agent's Space still says why it went, and one
+    /// that was never the agent's answers the core's words as they are.
+    #[gpui::test]
+    fn the_cores_refusal_is_decided_by_its_code(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let words = "Something else went on.";
+        *browser.reworded.borrow_mut() = Some(words);
+        let refused = |id, tab, cx: &mut TestAppContext| {
+            let answer = call_as(&agents, id, "read_page", json!({ "tab": tab }), cx);
+            let answer = answer.try_recv().expect("an answer at once");
+            assert!(answer.error, "{answer:?}");
+            answer
+        };
+
+        browser.held.borrow_mut().insert(20);
+        let held = refused(3, 20, cx);
+        assert_eq!(
+            (held.text.as_str(), held.kind),
+            (words, Some(tools::Kind::Yours))
+        );
+        browser.held.borrow_mut().remove(&20);
+
+        cx.update(|cx| browser.move_tab(20, 1, cx));
+        agents.update(cx, |agents, cx| agents.space_changed(2, cx));
+        let moved = refused(4, 20, cx);
+        assert_eq!(
+            (moved.text.as_str(), moved.kind),
+            (
+                "The user moved tab 20 to one of their own Spaces: it's theirs now. To carry \
+                 on, open the page again with open_tab.",
+                None
+            )
+        );
+
+        let never = refused(5, 10, cx);
+        assert_eq!((never.text.as_str(), never.kind), (words, None));
+    }
+
     /// The agent's own remove_tab, the one tool of its that takes a page out of its Space, says
     /// so of the page and of the rest of its split, which close with it, not that the user closed
     /// them, though the core says only that they closed (#3660).
@@ -8934,18 +9110,47 @@ mod sessions {
             "Claude Code 2".into(),
             "My Codex".into(),
             "ilo-CLI".into(),
-            // A letter that only looks like one, and anything outside printable ASCII, isn't
-            // taken.
+            // So is one that only reads as one (#3585): a word mixing scripts, letters of one
+            // script that look like another's, compatibility forms, marks that don't show or
+            // join, and any case.
             "Cl\u{0430}ude Code".into(),
-            "Zed\n\u{202E}\"Agent\u{201D}".into(),
+            "\u{0456}lo agent".into(),
+            "\u{0421}\u{043E}\u{0501}\u{0435}\u{0445}".into(),
+            "\u{0131}lo agent".into(),
+            "\u{FF49}\u{FF4C}\u{FF4F} agent".into(),
+            "\u{FF23}\u{FF4F}\u{FF44}\u{FF45}\u{FF58}".into(),
+            "\u{1D402}\u{1D428}\u{1D41D}\u{1D41E}\u{1D431}".into(),
+            "Clau\u{200D}de Code".into(),
+            "Co\u{200B}dex".into(),
+            "i\u{034F}lo agent".into(),
+            "Cla\u{0301}ude Code".into(),
+            "cLaUdE cOdE".into(),
+            "CODEX".into(),
+            "\u{00ED}lo agent".into(),
+            "C\u{0049}aude Code".into(),
+            "C\u{0031}aude Code".into(),
+            "\u{006C}\u{006C}o agent".into(),
+            "\u{0031}lo agent".into(),
         ] {
             hello(&agents, "mcp-client", &posing, cx);
             assert_eq!(named(&agents, cx).0, "MCP client", "{posing} passed");
         }
-        for taken in ["Browser Use", "Checker"] {
+        // A name of its own is shown as given, in any script, accents and all, and without what
+        // doesn't show.
+        for taken in [
+            "Browser Use",
+            "Checker",
+            "Ren\u{00E9}e",
+            "\u{0410}\u{0433}\u{0435}\u{043D}\u{0442}",
+            "\u{30A8}\u{30FC}\u{30B8}\u{30A7}\u{30F3}\u{30C8}",
+            "\u{81EA}\u{52D5}\u{30C6}\u{30B9}\u{30C8}",
+            "\u{039A}\u{03CE}\u{03B4}\u{03B9}\u{03BA}\u{03B1}\u{03C2} 2",
+        ] {
             hello(&agents, "mcp-client", taken, cx);
             assert_eq!(named(&agents, cx).0, taken);
         }
+        hello(&agents, "mcp-client", "Zed\n\u{202E}Agent", cx);
+        assert_eq!(named(&agents, cx).0, "Zed Agent");
         hello(&agents, "mcp-client", "Zed", cx);
         assert_eq!(named(&agents, cx), ("Zed".into(), Some("Zed".into())));
 
@@ -9001,7 +9206,12 @@ mod sessions {
         let failed = order(4, Answer::Once, cx);
         let request = browser.pages.borrow().last().unwrap().1;
         agents.update(cx, |agents, cx| {
-            agents.page_done(request, "The button went away.".into(), true, cx)
+            agents.page_done(
+                request,
+                "The button went away.".into(),
+                Some(Failure::Other),
+                cx,
+            )
         });
         assert!(failed.recv().unwrap().error);
         answered(&agents, 4, cx);
@@ -9422,6 +9632,7 @@ mod sessions {
                 id,
                 at: std::time::Instant::now(),
                 error: None,
+                kind: None,
                 image: None,
             };
             agents.update(cx, |agents, cx| agents.handle(event, cx));

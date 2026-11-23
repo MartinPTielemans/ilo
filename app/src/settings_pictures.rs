@@ -6,7 +6,6 @@
 //! draws it light, dark, and split between the two for Automatic, and Share favorites (#2430)
 //! draws three Spaces' favorites, alike where they're shared.
 
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
@@ -99,7 +98,7 @@ pub fn pictures(
     chosen: usize,
     choices: Vec<Choice>,
     a11y: bool,
-    logged: Rc<RefCell<Vec<String>>>,
+    logged: crate::settings_rows::Drawn,
     pick: impl Fn(usize, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
     let pick = Rc::new(pick);
@@ -188,7 +187,7 @@ pub fn picker(
     right: bool,
     buttons: Buttons,
     a11y: bool,
-    logged: Rc<RefCell<Vec<String>>>,
+    logged: crate::settings_rows::Drawn,
     pick: impl Fn(bool, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
     let choices = [false, true]
@@ -232,7 +231,7 @@ pub fn appearance_picker(
     chosen: Appearance,
     buttons: Buttons,
     a11y: bool,
-    logged: Rc<RefCell<Vec<String>>>,
+    logged: crate::settings_rows::Drawn,
     pick: impl Fn(Appearance, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
     let light = || window(rgb(INK), false, false, buttons);
@@ -287,7 +286,7 @@ pub fn favorites_picker(
     dark: bool,
     chosen: FavoritesScope,
     a11y: bool,
-    logged: Rc<RefCell<Vec<String>>>,
+    logged: crate::settings_rows::Drawn,
     pick: impl Fn(FavoritesScope, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
     let choices = FavoritesScope::ALL

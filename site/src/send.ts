@@ -18,8 +18,8 @@ export const SEND = {
 export type Sent = typeof SEND;
 
 /**
- * A mail with `sent` in it, addressed to no one, for the visitor to send themselves. The reading
- * pages' script carries this function's source (src/reading.ts), so it uses nothing outside itself.
+ * A mail with `sent` in it, addressed to no one, for the visitor to send themselves. Every
+ * page's script carries this function's source (src/page.ts), so it uses nothing outside itself.
  */
 export function mailFor(sent: Sent) {
   return `mailto:?subject=${encodeURIComponent(sent.title)}&body=${encodeURIComponent(`${sent.text}\n${sent.url}`)}`;
