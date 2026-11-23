@@ -2,6 +2,7 @@
 //! measured sizes (docs/ux-spec.md › Window and › Sidebar). The shell shows what the browser tells
 //! it and asks the browser for changes, so the engine stays the one place tabs live.
 
+use std::time::Instant;
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet, VecDeque},
@@ -12,7 +13,6 @@ use std::{
     },
     time::Duration,
 };
-use web_time::Instant;
 
 use gpui::{
     AnyElement, App, BackgroundExecutor, Bounds, BoxShadow, Context, CursorStyle, DispatchPhase,
@@ -169,7 +169,6 @@ mod translate;
 mod trouble;
 mod undo;
 mod update_banner;
-mod wheel_gestures;
 
 pub use assets::Assets;
 pub use bar_usage::{HistoryDeleted, PICKS_FILE, history_deleted, move_old_picks, picked_in_bar};
@@ -311,8 +310,6 @@ const REVEAL_OUT_DAMPING: f32 = 0.76;
 /// spring's overshoot.
 const REVEAL_OVERSHOOT: f32 = 8.;
 
-/// The site's demo, in a page's canvas, where wheel events carry no phase.
-const WEB: bool = cfg!(target_family = "wasm");
 /// Whether something blurs what's behind the browser window. Only the Mac's material does: on
 /// Wayland the UI is a subsurface under Chromium's translucent surface, which no compositor's
 /// blur reaches, and on X11 and Windows nothing asks for one (#3676).
@@ -614,12 +611,8 @@ pub const WINDOW_BUTTONS: [(f32, u32); 3] = [
 ];
 // On Linux the browser window is Chromium's without a frame, and on Windows the host takes its
 // title bar away (platform/windows/host.cc), so nothing else draws its buttons: the UI draws them
-// where AppKit's show. The site's demo has no window of an OS's, so it draws them as the Mac's.
-const DRAWS_WINDOW_BUTTONS: bool = cfg!(any(
-    target_os = "linux",
-    target_os = "windows",
-    target_family = "wasm"
-));
+// where AppKit's show.
+const DRAWS_WINDOW_BUTTONS: bool = cfg!(any(target_os = "linux", target_os = "windows"));
 // The third button maximizes on Linux and Windows, as their title bars' does, where on the Mac it
 // goes full screen.
 const ZOOM_GLYPH: &str = match cfg!(any(target_os = "linux", target_os = "windows")) {
@@ -1312,9 +1305,6 @@ struct Settle {
     next_door: bool,
 }
 
-/// Told a kind of decision the demo's wheel made of a swipe, and what it decided.
-pub type WheelNotes = Rc<dyn Fn(&'static str, &str)>;
-
 /// A page's full screen resizing the window, while `Shell::full_screen_step` waits to time it.
 struct FullScreenTiming {
     entering: bool,
@@ -1340,13 +1330,6 @@ impl Settle {
         let offset = (self.from + rise * t) * decay;
         let speed = (self.velocity - omega * rise * t) * decay;
         (offset.abs() > 0.25 || speed.abs() > 10.).then_some(offset)
-    }
-
-    /// Keeps no more of the speed than lands the page without passing its place: from `from`, the
-    /// spring passes it going toward it faster than ω·|from|.
-    fn spend(&mut self) {
-        let most = std::f32::consts::TAU / SPACE_SETTLE * self.from.abs();
-        self.velocity = self.velocity.clamp(-most, most);
     }
 
     fn elapsed(&self) -> f32 {
@@ -1483,16 +1466,6 @@ pub struct Shell {
     /// How long each frame drawn while the Spaces' pages moved took the sidebar, in ms, for the
     /// settle's log.
     paging_frames: Rc<RefCell<Vec<f32>>>,
-    /// On the web, the wheel's events cut into fingers landing, moving and lifting, and the timer
-    /// that lifts them once the events stop.
-    web_wheel: wheel_gestures::WheelGestures,
-    web_wheel_quiet: Option<Task<()>>,
-    /// On the web, the way fingers that just landed have gone, held until it's enough to tell
-    /// across from along.
-    web_undecided: Option<Point<Pixels>>,
-    /// With the demo's `?trace`, told each thing the wheel's events decide of a swipe, as its kind
-    /// and what it decided.
-    web_notes: Option<WheelNotes>,
     /// Where the page of the Space beside drew its tiles, by tab, and its URL field, as 0.
     #[cfg(test)]
     beside_frames: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
@@ -2176,10 +2149,6 @@ impl Shell {
             preview_row: None,
             pointer_at: Point::default(),
             paging_frames: Rc::default(),
-            web_wheel: Default::default(),
-            web_wheel_quiet: None,
-            web_undecided: None,
-            web_notes: None,
             #[cfg(test)]
             beside_frames: Rc::default(),
             button_frames: Rc::default(),
@@ -4440,7 +4409,7 @@ impl Shell {
     /// window, as one in Chromium's own band does. None while the window is maximized or full
     /// screen, when the core has no band.
     fn resize_bands(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        if !cfg!(target_os = "linux") || WEB || self.maximized || self.full_screen {
+        if !cfg!(target_os = "linux") || self.maximized || self.full_screen {
             return Vec::new();
         }
         [false, true]
@@ -4977,7 +4946,7 @@ impl Render for Shell {
             .size_full()
             .relative()
             .font_family(crate::face::UI)
-            .when(!WEB, |shell| shell.bg(self.window_tint()))
+            .bg(self.window_tint())
             .capture_any_mouse_down(cx.listener(|shell, _, _, cx| shell.leave_keys("press", cx)))
             // The rows, buttons and fields keep their presses. Everywhere else is the window's
             // background, which moves the window as a title bar does.
@@ -5013,15 +4982,14 @@ impl Render for Shell {
                     }
                 }),
             )
-            .children((!WEB).then(|| self.window_background()))
-            .children(WEB.then(|| self.web_backdrop()).into_iter().flatten())
+            .child(self.window_background())
             .child(self.leave_listener(cx))
             .child(self.ui_press_listener(cx))
             // The page views go over the cards, as native views. A task the page area shows takes
             // the card's place, the Space's page pushed out of the window (task_area.rs).
             .when(normal, |shell| {
                 shell
-                    .children((!WEB).then(|| self.cards()).into_iter().flatten())
+                    .children(self.cards())
                     .children(self.little_bar(cx))
                     .children(
                         self.little
@@ -5047,93 +5015,10 @@ impl Render for Shell {
             .child(self.navigate_listener(cx))
             .children(self.onboarding_layer(window, cx))
             .children(self.resize_bands(cx))
-            // The site's demo has one window, the page's canvas, so the reveal's panel is in it.
-            .children(WEB.then(|| {
-                let panel = self.render_reveal(window, cx);
-                let span = div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .w(px(self.reveal_span()));
-                let span = if self.right {
-                    span.right_0()
-                } else {
-                    span.left_0()
-                };
-                span.child(panel)
-            }))
     }
 }
 
 impl Shell {
-    /// On the web, the window's ground, tint and colour everywhere but the page's frame, where
-    /// the site's frame shows through the canvas from under it, as Chromium's page view goes over
-    /// the window in the app. GPUI paints over, never through, so the ground goes around the frame
-    /// in four bands, and the frame's rounded corners are filled with the window's colour there.
-    fn web_backdrop(&self) -> Vec<gpui::Div> {
-        let (frame, radius) = self.page_frame(self.viewport);
-        let (width, height) = (self.viewport.width, self.viewport.height);
-        let ground = |left: Pixels, top: Pixels, w: Pixels, h: Pixels| {
-            let window = div()
-                .absolute()
-                .left(-left)
-                .top(-top)
-                .w(width)
-                .h(height)
-                .bg(self.palette.underlay)
-                .child(div().absolute().size_full().bg(self.palette.tint))
-                .child(self.window_background());
-            div()
-                .absolute()
-                .left(left)
-                .top(top)
-                .w(w)
-                .h(h)
-                .overflow_hidden()
-                .child(window)
-        };
-        let mut backdrop = vec![
-            ground(px(0.), px(0.), width, frame.top()),
-            ground(px(0.), frame.bottom(), width, height - frame.bottom()),
-            ground(px(0.), frame.top(), frame.left(), frame.size.height),
-            ground(
-                frame.right(),
-                frame.top(),
-                width - frame.right(),
-                frame.size.height,
-            ),
-        ];
-        if radius > 0. {
-            let radius = px(radius);
-            for top in [frame.top(), frame.bottom() - radius] {
-                let y = f32::from(top + radius / 2.) / f32::from(height).max(1.);
-                // A border's inner edge rounds by its outer radius less its width.
-                let ring = div()
-                    .absolute()
-                    .left(-radius)
-                    .top(frame.top() - radius - top)
-                    .w(frame.size.width + radius * 2.)
-                    .h(frame.size.height + radius * 2.)
-                    .rounded(radius * 2.)
-                    .border(radius)
-                    .border_color(self.window_fill_at(y));
-                let corners = div()
-                    .absolute()
-                    .left(frame.left())
-                    .top(top)
-                    .w(frame.size.width);
-                backdrop.push(corners.h(radius).overflow_hidden().child(ring));
-            }
-        }
-        backdrop
-    }
-
-    /// How wide the site's demo draws the reveal's panel in: as its window in the app, with room
-    /// for its spring past its place.
-    fn reveal_span(&self) -> f32 {
-        REVEAL_INSET + self.width() + REVEAL_OVERSHOOT
-    }
-
     /// The cards under the pages shown: a page's own in a split view, so the gaps between them
     /// show the window, with the focused page's glowing in its ring's colour. While a pane is
     /// being added, its card is there, empty.
@@ -5659,10 +5544,7 @@ impl Shell {
         let left = REVEAL_INSET - (REVEAL_INSET + self.width()) * (1. - self.reveal_out());
         // On the right, its window ends at the browser window's right edge, and the panel comes
         // out of that edge.
-        let span = match WEB {
-            true => self.reveal_span(),
-            false => f32::from(window.viewport_size().width),
-        };
+        let span = f32::from(window.viewport_size().width);
         let left = match self.right {
             true => span - left - self.width(),
             false => left,
@@ -5671,8 +5553,8 @@ impl Shell {
         let dragging = self.drag.is_some() || cx.has_active_drag();
         let edge = (self.revealed && self.reveal_motion.is_none() && !dragging)
             .then(|| self.sidebar_edge(true, cx));
-        // Unless a field in the panel has it. On the web the panel is in the shell's own window.
-        if !WEB && !self.reveal_focus.contains_focused(window, cx) {
+        // Unless a field in the panel has it.
+        if !self.reveal_focus.contains_focused(window, cx) {
             window.focus(&self.reveal_focus, cx);
         }
         let panel = div()
@@ -5738,9 +5620,8 @@ impl Shell {
             }))
             .child(self.reveal_listener(cx))
             // The mouse's back and forward buttons over the panel page the Spaces, as over the
-            // docked sidebar, its window hearing them as the browser window does; on the web the
-            // panel is in that window, which hears them already.
-            .children((!WEB).then(|| self.navigate_listener(cx)))
+            // docked sidebar, its window hearing them as the browser window does.
+            .child(self.navigate_listener(cx))
             .into_any_element();
         self.breath.arm(cx);
         panel

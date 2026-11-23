@@ -339,11 +339,6 @@ impl Install {
         self.add_on_windows(&Registry, address, token)
     }
 
-    #[cfg(not(any(unix, windows)))]
-    pub fn add(&self, _: &Path, _: &str) -> Result<(), String> {
-        Err(io::Error::from(io::ErrorKind::Unsupported).to_string())
-    }
-
     /// Add on Windows, with the user's PATH in `path`: the agent file, and in the installer's
     /// copy the folder on PATH, unless an entry names it already, which the agent file then
     /// records as the user's. A PATH that can't be read is never written.

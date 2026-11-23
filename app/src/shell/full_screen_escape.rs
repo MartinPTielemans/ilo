@@ -4,7 +4,7 @@
 //! never keeps the user in full screen (docs/ux-spec.md › Window full screen).
 
 use std::time::Duration;
-use web_time::Instant;
+use std::time::Instant;
 
 use gpui::Context;
 

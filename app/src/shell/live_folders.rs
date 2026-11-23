@@ -13,7 +13,7 @@ use std::time::Duration;
 use gpui::{
     AnyElement, Context, FontWeight, MouseButton, Role, SharedString, div, prelude::*, px, svg,
 };
-use web_time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use super::{
     FAVICON_DRAWN, FOLDER_INDENT, HOVERED, PLATE_INSET, ROW_PITCH, SECONDARY, Shell, Slot, Space,

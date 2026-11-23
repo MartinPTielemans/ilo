@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use web_time::{SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::extensions::Extension;
 use super::found::{Address, Found, FromProfile, Node, Page, Space, Tab};
@@ -83,17 +83,10 @@ impl From<std::io::Error> for ReadError {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
 impl From<rusqlite::Error> for ReadError {
     fn from(error: rusqlite::Error) -> ReadError {
         ReadError::Failed(error.to_string())
     }
-}
-
-/// The site's demo, on the web, has no other browsers' files, nor the SQLite their history is in.
-#[cfg(target_family = "wasm")]
-pub fn on_the_web() -> ReadError {
-    ReadError::Failed("the web has no files to read".into())
 }
 
 impl From<String> for ReadError {
@@ -487,7 +480,6 @@ impl Copy {
     }
 
     /// Opens the copy, which is the import's own, so SQLite can fold its log into it.
-    #[cfg(not(target_family = "wasm"))]
     pub fn open(&self) -> Result<rusqlite::Connection, ReadError> {
         Ok(rusqlite::Connection::open(&self.path)?)
     }

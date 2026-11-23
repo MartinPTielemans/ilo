@@ -19,7 +19,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
-use web_time::Instant;
+use std::time::Instant;
 
 use gpui::{
     AnyElement, Bounds, Context, DispatchPhase, Div, MouseButton, MouseDownEvent, MouseMoveEvent,

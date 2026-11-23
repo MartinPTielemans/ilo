@@ -1,15 +1,12 @@
 //! What a profile of Firefox, or of a browser made from it such as Zen or LibreWolf, holds: its
 //! bookmarks and history, both in its `places.sqlite`.
-// The web has no SQLite, so all of it but its stand-in `read` goes unused there.
-#![cfg_attr(target_family = "wasm", allow(dead_code, unused_imports))]
 
 use std::collections::HashMap;
 use std::path::Path;
-use web_time::SystemTime;
+use std::time::SystemTime;
 
 use super::found::{Node, Tab, opens_here};
 use super::read::{Kind, Read, ReadError, folder_name};
-#[cfg(not(target_family = "wasm"))]
 use super::{
     found::Page,
     read::{Copy, micros, pinned},
@@ -25,7 +22,6 @@ const FOLDERS: &[(&str, &str)] = &[
     ("mobile______", "Mobile Bookmarks"),
 ];
 
-#[cfg(not(target_family = "wasm"))]
 /// What of `picked` the profile at `path` has, its history since `since`. It reads a copy, as
 /// Firefox keeps the file locked while it runs.
 pub fn read(path: &Path, picked: &[Kind], since: SystemTime) -> Result<Read, ReadError> {
@@ -51,11 +47,6 @@ pub fn read(path: &Path, picked: &[Kind], since: SystemTime) -> Result<Read, Rea
     })
 }
 
-#[cfg(target_family = "wasm")]
-pub fn read(_: &Path, _: &[Kind], _: SystemTime) -> Result<Read, ReadError> {
-    Err(super::read::on_the_web())
-}
-
 /// A bookmark or folder, by the folder it's in.
 struct Entry {
     id: i64,
@@ -64,7 +55,6 @@ struct Entry {
     url: Option<String>,
 }
 
-#[cfg(not(target_family = "wasm"))]
 /// The profile's bookmarks as pinned tabs and folders, by read.rs's rules: the toolbar as the
 /// bar, then the menu, the other bookmarks and the phone's, each in a folder.
 pub fn bookmarks(db: &rusqlite::Connection) -> Result<Vec<Node>, ReadError> {
@@ -142,7 +132,6 @@ fn nodes(folder: i64, children: &HashMap<i64, Vec<Entry>>, depth: usize) -> Vec<
         .collect()
 }
 
-#[cfg(not(target_family = "wasm"))]
 /// The pages visited since `since`, the latest first, but for those Firefox hides, such as a
 /// frame's, and those that can't open here.
 pub fn history(db: &rusqlite::Connection, since: SystemTime) -> Result<Vec<Page>, ReadError> {
