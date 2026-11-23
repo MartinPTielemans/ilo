@@ -11,6 +11,7 @@
 #include "base/command_line.h"
 #include "base/functional/bind.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/no_destructor.h"
 #include "base/process/kill.h"
@@ -59,6 +60,7 @@
 #include "extensions/common/api/commands/commands_handler.h"
 #include "extensions/common/api/extension_action/action_info.h"
 #include "extensions/common/command.h"
+#include "extensions/common/event_args.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/manifest.h"
 #include "extensions/common/manifest_handlers/options_page_info.h"
@@ -889,15 +891,16 @@ bool RunExtensionCommand(content::WebContents* contents,
   if (auto* granter = extensions::ActiveTabPermissionGranter::FromWebContents(contents)) {
     granter->GrantIfRequested(extension);
   }
-  base::ListValue args;
-  args.Append(name);
+  auto args = base::MakeRefCounted<extensions::EventArgs>();
+  args->data.Append(name);
   // The commands API is only for the extension's privileged contexts.
-  args.Append(extensions::ExtensionTabUtil::CreateTabObject(
-                  contents,
-                  extensions::ExtensionTabUtil::GetScrubTabBehavior(
-                      extension, extensions::mojom::ContextType::kPrivilegedExtension, contents),
-                  extension)
-                  .ToValue());
+  args->data.Append(
+      extensions::ExtensionTabUtil::CreateTabObject(
+          contents,
+          extensions::ExtensionTabUtil::GetScrubTabBehavior(
+              extension, extensions::mojom::ContextType::kPrivilegedExtension, contents),
+          extension)
+          .ToValue());
   auto event = std::make_unique<extensions::Event>(extensions::events::COMMANDS_ON_COMMAND,
                                                    kOnCommand, std::move(args), profile);
   event->user_gesture = extensions::EventRouter::UserGestureState::kEnabled;
