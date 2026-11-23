@@ -448,7 +448,7 @@ expect '^browser: command redo via \(ui\|page\)$' "⇧⌘Z didn't redo Remove fr
 expect '^browser: favorites $' "⇧⌘Z left the tile"
 expect "^browser: today $a $left\$" "⇧⌘Z didn't put the tab at the top of Today: Today is \"$(today)\""
 # The rows slide down under the tab put back, and a press before they stop lands on the wrong one.
-expect '^browser: rows settled$' "the rows didn't settle after ⇧⌘Z"
+expect_after '^browser: rows settled$' "the rows didn't settle after ⇧⌘Z" "^browser: today $a $left\$"
 # Dragging moves tabs between the rows and the tiles. With no favorites, a Today row dragged over
 # the Space's name is drawn as a tile there, and dropped it's the first favorite.
 set -- $left
