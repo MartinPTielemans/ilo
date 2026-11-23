@@ -69,8 +69,11 @@ class Closer : public FileDialogCloser, public content::ServiceProcessHost::Obse
   }
 
   // Whether |window| is this run's dialog: a dialog box (#32770) that the field's browser window
-  // owns, in a UtilWin process. Chromium runs one shell dialog for a window at a time, and keeps
-  // that window disabled while it's up, so this is the one. Nothing else of the window is read.
+  // owns, in a UtilWin process. Nothing else of the window is read. Chromium keeps to one shell
+  // dialog a window only by a DCHECK, so a second dialog that window starts in the gap before the
+  // run's own shows (a page's file chooser, a download's Save As) can't be told apart, and
+  // whichever shows first closes as its Cancel would, leaving the run's up as it was before this,
+  // its answer heard by no one: left, as the gap is a fraction of a second and nothing is read.
   bool IsRuns(HWND window) const {
     wchar_t name[8] = {};
     if (::GetClassNameW(window, name, std::size(name)) != 6 || std::wcscmp(name, L"#32770") != 0 ||
