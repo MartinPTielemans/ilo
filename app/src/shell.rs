@@ -1710,8 +1710,10 @@ pub struct Shell {
     /// When the pointer last left the window across its edge from the strip, which its return to
     /// the strip within `REVEAL_BACK` counts as a move in the edge.
     reveal_left: Option<Instant>,
-    /// Whether the pointer's last move over the window went away from its sidebar-side edge.
-    reveal_inward: bool,
+    /// Since the pointer came over the window's view: how far from its sidebar-side edge the shell
+    /// last heard it, and whether that move went toward the edge or along it, from one heard
+    /// before it.
+    reveal_heard: Option<(f32, bool)>,
     /// The list's knob: whether it's the legacy one, as the system shows scroll bars always, and
     /// when the user last scrolled, for the overlay one.
     legacy_scroller: bool,
@@ -2279,7 +2281,7 @@ impl Shell {
             reveal_window: 0.,
             reveal_strip: None,
             reveal_left: None,
-            reveal_inward: false,
+            reveal_heard: None,
             legacy_scroller: false,
             scroller: Default::default(),
             pointer_on_card: false,
@@ -4465,6 +4467,7 @@ impl Shell {
                             // drag and not out across the edge, so its return after is a fresh
                             // one in (`pointer_left`).
                             shell.reveal_strip = None;
+                            shell.reveal_heard = None;
                             // GPUI's window is inside the browser window, so the browser resizes
                             // that. On X11 GPUI's own lets go of the pointer grab its press took,
                             // which would keep the window manager from taking the pointer.
