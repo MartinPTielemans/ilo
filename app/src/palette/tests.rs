@@ -1020,3 +1020,33 @@ fn a_two_colour_swatch_reads_as_its_main_colour() {
         );
     }
 }
+
+/// The pickers' card shows what's behind it only where the host blurs it: elsewhere, Linux's
+/// Wayland and every compositor that blurs no overlay, and Windows, it's opaque (#3676).
+#[test]
+fn the_pickers_card_is_opaque_where_nothing_blurs_what_is_behind_it() {
+    let bright = theme(3, 1., "automatic", 300., 1., 0.95, 1.);
+    for tone in [Tone::Dark, Tone::Light] {
+        for chosen in [None, Some(&bright)] {
+            let palette = Palette::of(chosen, tone);
+            assert!(
+                palette.card.a < 1.,
+                "{tone:?} {chosen:?}: the card isn't translucent"
+            );
+            assert_eq!(
+                palette.card_where(true),
+                palette.card,
+                "{tone:?} {chosen:?}: blurred"
+            );
+            let opaque = palette.card_where(false);
+            assert_eq!(
+                opaque.a, 1.,
+                "{tone:?} {chosen:?}: the card shows what's behind it"
+            );
+            assert_eq!(
+                opaque,
+                over(rgb(OVERLAY_DARK), palette.card, palette.card.a)
+            );
+        }
+    }
+}

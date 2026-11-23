@@ -56,6 +56,9 @@ unsafe extern "C" {
     // platform/mac/host.mm: where a window goes, centered on the main display or, with
     // BROWSER_DISPLAY=builtin, on the Mac's own.
     fn host_centered(width: f64, height: f64, x: *mut f64, y: *mut f64);
+    // platform/windows/host.cc: no border round the overlays, which here no host adopts.
+    #[cfg(target_os = "windows")]
+    fn host_preview_frameless();
 }
 
 // Two Spaces, so the switcher shows, the second in Dia's pink. The tabs are in the first, the top
@@ -2896,6 +2899,10 @@ fn preview_bar(mode: &str, at: Point<Pixels>, cx: &mut App) {
 
 fn main() {
     browser::log_every_line();
+    #[cfg(target_os = "windows")]
+    unsafe {
+        host_preview_frameless()
+    };
     gpui_platform::application()
         .with_assets(shell::Assets)
         .run(|cx| {
@@ -3293,6 +3300,49 @@ fn main() {
                                 ..Default::default()
                             };
                             shell.set_agent_question(Some(question), cx);
+                        }
+                        // =click with PREVIEW_AGENT_ASKS=click asks to click on the page, =long
+                        // with a long name and site, and =request asks a request's one change, so
+                        // the two cards' heads compare (#3836).
+                        let ask = |asks: &str, site: &str| browser::agents::Question {
+                            id: 1,
+                            agent: "Claude Code".into(),
+                            from: "claude-code".into(),
+                            what: format!("{asks} on {site}").into(),
+                            asks: asks.to_string().into(),
+                            why: "It looks like a payment or an order.".into(),
+                            site: site.to_string().into(),
+                            each_time: true,
+                            ..Default::default()
+                        };
+                        let asked = match std::env::var("PREVIEW_AGENT_ASKS").as_deref() {
+                            Ok("click") => {
+                                Some(ask("click \u{201c}Place order\u{201d}", "shop.example"))
+                            }
+                            Ok("long") => {
+                                let name = "click \u{201c}Place order and pay \u{a3}1,249.00 with \
+                                            the card ending 4417\u{201d}";
+                                Some(ask(name, "checkout.payments.northwind-outfitters.example"))
+                            }
+                            Ok("request") => Some(browser::agents::Question {
+                                what: "make a change on shop.example".into(),
+                                asks: "".into(),
+                                why: "Changes ask every time.".into(),
+                                changes: vec![browser::agents::request::Request {
+                                    method: "PATCH".into(),
+                                    url: "https://shop.example/api/cart".into(),
+                                    path: "/api/cart".into(),
+                                    headers: Vec::new(),
+                                    body: "{\"items\":[]}".into(),
+                                    what: "Empty the cart.".into(),
+                                }]
+                                .into(),
+                                ..ask("", "shop.example")
+                            }),
+                            _ => None,
+                        };
+                        if asked.is_some() {
+                            shell.set_agent_question(asked, cx);
                         }
                     }
                     let favorite = std::env::var("PREVIEW_FAVORITE")

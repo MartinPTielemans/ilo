@@ -3,7 +3,12 @@
 
 use gpui::{App, Context, SharedString};
 
-use super::{Command, Extension, Shell, menus::space_menu_label, trace};
+use super::{
+    Command, Extension, Shell,
+    command_names::{HIDE_SIDEBAR, PIN_TAB, SHOW_SIDEBAR, UNPIN_TAB},
+    menus::space_menu_label,
+    trace,
+};
 use crate::theme::Appearance;
 
 /// What the key window's menu bar shows that changes with it.
@@ -72,28 +77,29 @@ impl MenuBar {
 
     pub fn sidebar_title(&self) -> &'static str {
         if self.sidebar_hidden {
-            "Show Sidebar"
+            SHOW_SIDEBAR
         } else {
-            "Hide Sidebar"
+            HIDE_SIDEBAR
         }
     }
 
     /// Tabs' item for ⌘D, by the tab shown, as Arc's, which names both with none shown.
     pub fn pin_title(&self) -> &'static str {
         match self.pinned {
-            Some(true) => "Unpin Tab",
-            Some(false) => "Pin Tab",
-            None => "Pin/Unpin Tab",
+            Some(true) => UNPIN_TAB,
+            Some(false) => PIN_TAB,
+            None => Command::TogglePin.title(),
         }
     }
 
     /// View's item that collapses the pinned rows or expands them, by what it does now, after the
     /// sidebar's, as Arc's.
     pub fn pinned_item(&self) -> (&'static str, Command) {
-        match self.pinned_shut {
-            true => ("Expand Pinned Tabs", Command::ExpandPinned),
-            false => ("Collapse Pinned Tabs", Command::CollapsePinned),
-        }
+        let command = match self.pinned_shut {
+            true => Command::ExpandPinned,
+            false => Command::CollapsePinned,
+        };
+        (command.title(), command)
     }
 
     /// View › Developer's item for the page's Developer Mode, by what it would do, as the command
