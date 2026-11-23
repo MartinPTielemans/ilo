@@ -362,11 +362,19 @@ impl Shell {
             .overflow_y_scroll()
             .children(changes);
         let showing = agent_request::showing(cx) == Some(question.id);
+        let count = buttons(question).len();
         let see = div()
             .id("agent-request-see")
             .mt(px(SEE_TOP))
             .track_focus(&self.agent_request_see)
             .focus_visible(crate::settings_rows::ring(self.palette.accent.into()))
+            // Ringed as a stop of the card's keys, as its buttons are.
+            .when(self.agent_card_ring() == Some(count), |mut see| {
+                let style = std::mem::take(Styled::style(&mut see));
+                *Styled::style(&mut see) =
+                    crate::settings_rows::ring(self.palette.accent.into())(style);
+                see
+            })
             .rounded(px(SEE_RING))
             .text_color(self.palette.accent)
             .font_weight(FontWeight::MEDIUM)
@@ -384,7 +392,6 @@ impl Shell {
             })
             .on_click(cx.listener(|shell, _, window, cx| shell.see_whole_request(window, cx)));
         let escape = escape_mark(question);
-        let count = buttons(question).len();
         let buttons = buttons(question)
             .into_iter()
             .enumerate()
@@ -424,7 +431,7 @@ impl Shell {
 
     /// Shows the agent's request whole, beside its card, with the keyboard; Escape there gives it
     /// back to "See the whole request".
-    fn see_whole_request(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn see_whole_request(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(question) = self.agent_question() else {
             return;
         };

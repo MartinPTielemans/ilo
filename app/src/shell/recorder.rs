@@ -1508,6 +1508,10 @@ impl Browser for Recorder {
     }
 
     fn focus_ui(&self, _: &mut App) {
+        // Where the core keeps who has the keys, as on Linux, the UI has them now.
+        if self.page_keys.get().is_some() {
+            self.page_keys.set(Some(false));
+        }
         self.record("focus ui".into())
     }
 
@@ -1516,6 +1520,9 @@ impl Browser for Recorder {
     }
 
     fn focus_page(&self, _: &mut App) {
+        if self.page_keys.get().is_some() {
+            self.page_keys.set(Some(true));
+        }
         self.record("focus page".into())
     }
 

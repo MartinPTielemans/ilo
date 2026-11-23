@@ -2,9 +2,10 @@
 //! someone typing may never have seen it arrive: Focus Agent Question's key (⌥⇧⌘A on the Mac,
 //! Alt+Shift+A elsewhere, Chrome's Focus Inactive Popup) moves the keyboard to the card and rings
 //! its primary button, and only then do ↩ and Space press the ringed button, Tab and ⇧Tab move
-//! along the buttons, and Escape answers as the card's × does. The key again gives the keyboard
-//! back where it was and answers nothing. Only the user's keys come here: an agent's go to its page
-//! (keys.rs's tab_key_before_page).
+//! along the buttons and "See the whole request", and Escape answers as the card's × does. The key
+//! again gives the keyboard back where it was and answers nothing, as the window stopping being
+//! the active one does. Only the user's keys come here: an agent's go to its page (keys.rs's
+//! tab_key_before_page).
 
 use std::time::Duration;
 
@@ -96,15 +97,22 @@ enum Came {
 /// The keyboard on a card's buttons.
 pub(super) struct CardKeys {
     question: u64,
-    /// The ringed button, in `buttons`' order.
+    /// The card's buttons' labels as the keyboard came, so a card changing them under its id
+    /// rings its primary again.
+    labels: Vec<&'static str>,
+    /// The tab shown as the keyboard came: another one shown takes the keyboard to its page.
+    selected: u64,
+    /// The ringed stop: a button, by its place in `buttons`, or "See the whole request" as the
+    /// place after the last (`stops`).
     at: usize,
     came: Came,
-    /// When the keyboard came, then the last key that would have answered, whether it did or not.
+    /// When the keyboard came, then the last key that would have answered or moved the ring,
+    /// whether it did or not.
     last: Instant,
-    /// The frame still has to give the ringed button the keyboard.
+    /// The frame still has to give the ringed stop the keyboard.
     due: bool,
-    /// The frame still has to give the keyboard back, answering nothing.
-    leaving: bool,
+    /// The frame still has to give the keyboard back, answering nothing, and why.
+    leaving: Option<&'static str>,
     /// Says when `PROTECT` has passed since `last`, for the checks to wait on rather than count
     /// time themselves.
     _ready: Option<Task<()>>,
@@ -127,6 +135,14 @@ fn escape_does(question: &Question) -> Option<Does> {
         (Some(_), true) => Some(Does::Answer(Answer::Never)),
         (Some(_), false) => None,
     }
+}
+
+/// The button the keyboard rings first on `question`'s card, its primary: Always Allow, which
+/// reaches further than it looks, never is.
+fn primary(question: &Question) -> usize {
+    (buttons(question).iter())
+        .position(|button| button.look == Look::Primary)
+        .unwrap_or(0)
 }
 
 /// Where `question`'s card marks Escape, if Escape answers it.
@@ -185,18 +201,26 @@ pub(super) fn heard_title(title: &str) -> String {
     }
 }
 
-/// The card's key `A`, which `does` while a card's button has the keyboard by Focus Agent
+/// The card's key `A`, which `does` while a card's stop has the keyboard by Focus Agent
 /// Question, and is passed on otherwise.
 fn card_key<A: gpui::Action>(
-    does: fn(&mut Shell, &mut Context<Shell>),
+    does: fn(&mut Shell, &mut Window, &mut Context<Shell>),
     cx: &Context<Shell>,
 ) -> impl Fn(&A, &mut Window, &mut App) + 'static {
     cx.listener(move |shell, _: &A, window, cx| {
-        match shell.card_keys.is_some() && shell.on_card(window) {
-            true => does(shell, cx),
+        match shell.card_keys.is_some() && shell.card_focused(window).is_some() {
+            true => does(shell, window, cx),
             false => cx.propagate(),
         }
     })
+}
+
+/// The card's stops in the order they're drawn, so Tab's: "See the whole request" on a request's
+/// card, as `count`, the place after the last button, then the buttons.
+fn stops(question: &Question) -> Vec<usize> {
+    let count = buttons(question).len();
+    let see = (!question.changes.is_empty()).then_some(count);
+    see.into_iter().chain(0..count).collect()
 }
 
 /// Under the checks, once `PROTECT` has passed, says so while the keyboard is still on the card.
@@ -229,19 +253,23 @@ impl Shell {
     }
 
     fn focus_agent_question_from(&mut self, from_page: bool, cx: &mut Context<Self>) {
-        if let Some(keys) = &mut self.card_keys {
-            keys.leaving = true;
-            return cx.notify();
+        match &mut self.card_keys {
+            // From the page, the page had the keyboard, so the card's keys had ended with nothing
+            // telling the shell: the key gives the card the keyboard again.
+            Some(_) if from_page => self.card_keys = None,
+            Some(keys) => {
+                keys.leaving = Some("key");
+                return cx.notify();
+            }
+            None => {}
         }
         let Some(question) = self.agent_question() else {
             return;
         };
         let list = buttons(question);
-        // Always Allow, which reaches further than it looks, is never the first ringed.
-        let at = (list.iter())
-            .position(|button| button.look == Look::Primary)
-            .unwrap_or(0);
+        let at = primary(question);
         let id = question.id;
+        let labels = list.iter().map(|button| button.label).collect();
         // check.sh waits for this line.
         log!("browser: agent card keys on {id} {}", list[at].label);
         // From the command bar or a menu the page may have had the keyboard, as before Focus
@@ -251,6 +279,8 @@ impl Shell {
         self.take_keyboard(cx);
         self.card_keys = Some(CardKeys {
             question: id,
+            labels,
+            selected: self.selected,
             at,
             came: match page {
                 true => Came::Page,
@@ -258,7 +288,7 @@ impl Shell {
             },
             last: cx.background_executor().now(),
             due: true,
-            leaving: false,
+            leaving: None,
             _ready: ready(cx),
         });
         cx.notify();
@@ -284,14 +314,14 @@ impl Shell {
         true
     }
 
-    /// The window is the active one again: the protection starts over, as a key typed in the
-    /// other app or window, or on coming back, was never meant for the card.
-    pub(super) fn card_keys_active_again(&mut self, cx: &mut Context<Self>) {
-        let now = cx.background_executor().now();
-        let task = ready(cx);
+    /// The window stopped being the active one, as for another app or window: the card's keys end
+    /// and the keyboard goes back where it was, so coming back the user asks again with the key.
+    /// On the Mac and Linux GPUI says so; on Windows, where its window inside the frame hears no
+    /// activation, the host's word that the keyboard left for another app does (keyboard_left).
+    pub(super) fn card_keys_window_left(&mut self, cx: &mut Context<Self>) {
         if let Some(keys) = &mut self.card_keys {
-            keys.last = now;
-            keys._ready = task;
+            keys.leaving = Some("window");
+            cx.notify();
         }
     }
 
@@ -336,32 +366,68 @@ impl Shell {
         Some(format!("Press {} to answer.", spoken(key)))
     }
 
-    /// Before the frame's drawn: gives the ringed button the keyboard, and gives it back where it
-    /// came from once the card's answered, gone or covered, or the key asked. Something else taking
-    /// the keyboard, a click or a shortcut, ends the keys where they went.
+    /// Before the frame's drawn: gives the ringed stop the keyboard, and gives it back where it
+    /// came from once the card's answered, gone or covered, or the key asked, or the window's no
+    /// longer the active one. Something else taking the keyboard, a click, a shortcut or the page,
+    /// ends the keys where they went; an assistive app moving it to another stop moves the ring.
     pub(super) fn step_card_keys(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let showing = self.agent_question().map(|q| (q.id, buttons(q).len()));
-        let on_card = self.agent_card_buttons.iter().any(|h| h.is_focused(window));
+        let showing = self.agent_question().map(|q| {
+            let labels: Vec<_> = buttons(q).iter().map(|button| button.label).collect();
+            (q.id, labels, stops(q), primary(q))
+        });
+        let focused = self.card_focused(window);
+        let on_buttons = self.agent_card_buttons.iter().any(|h| h.is_focused(window));
+        // The page has the keyboard, which GPUI's focus doesn't follow: the shell's one judge of
+        // that, the core's word on Linux, else the host's that the page took it, or another tab
+        // shown, whose page takes it as it shows.
+        let page = self.page_has_keyboard(window, cx);
+        let selected = self.selected;
+        let now = cx.background_executor().now();
         let Some(keys) = &mut self.card_keys else {
             // A click gives a button the keyboard too. With the card gone no drawn element holds
             // it, and GPUI matches a key's bindings from the focused element, so the window takes
             // it, as from "See the whole request" (#3715).
-            if on_card && showing.is_none() {
+            if on_buttons && showing.is_none() {
                 window.focus(&self.focus_handle, cx);
             }
             return;
         };
         let why = match showing {
-            _ if keys.leaving => "key",
-            Some((id, count)) if id == keys.question && keys.at < count => {
+            _ if keys.leaving.is_some() => keys.leaving.unwrap_or("key"),
+            _ if !keys.due && (page || keys.selected != selected) => {
+                self.card_keys = None;
+                // check.sh waits for this line.
+                log!("browser: agent card keys left by page");
+                return cx.notify();
+            }
+            Some((id, labels, stops, first)) if id == keys.question => {
+                // The card changed its buttons under its id: its primary is ringed again, after
+                // the protection, as for a card just come.
+                if labels != keys.labels {
+                    keys.labels = labels;
+                    keys.at = first;
+                    keys.due = true;
+                    keys.last = now;
+                    keys._ready = ready(cx);
+                    log!("browser: agent card keys on {id} {}", keys.labels[first]);
+                }
+                if !stops.contains(&keys.at) {
+                    keys.at = first;
+                    keys.due = true;
+                }
                 if std::mem::take(&mut keys.due) {
                     if let Came::Ui(None) = keys.came {
                         keys.came = Came::Ui(window.focused(cx).filter(|focused| {
                             !self.agent_card_buttons.iter().any(|h| h == focused)
+                                && *focused != self.agent_request_see
                         }));
                     }
-                    window.focus(&self.agent_card_buttons[keys.at], cx);
-                } else if !on_card {
+                    let at = keys.at;
+                    let to = self.card_stop(at);
+                    window.focus(&to, cx);
+                } else if let Some(at) = focused.filter(|&at| at != keys.at) {
+                    self.card_ring_to(at, false, cx);
+                } else if focused.is_none() {
                     self.card_keys = None;
                     log!("browser: agent card keys left by focus");
                 }
@@ -374,7 +440,8 @@ impl Shell {
         };
         // check.sh waits for this line.
         log!("browser: agent card keys back by {why}");
-        if !on_card && !keys.due {
+        // The card gone, its stops are still focused until the keyboard goes back.
+        if !on_buttons && !self.agent_request_see.is_focused(window) && !keys.due {
             return;
         }
         match keys.came {
@@ -414,24 +481,37 @@ impl Shell {
         true
     }
 
-    fn card_press(&mut self, cx: &mut Context<Self>) {
+    /// ↩ or Space: presses the ringed stop, past the protection. Where the keyboard is on
+    /// another stop than the ringed one, as an assistive app's focus moves GPUI's without the
+    /// ring, it presses nothing: the ring moves to it, and the protection starts over, so the key
+    /// never answers a button other than the one the user hears.
+    fn card_press(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let focused = self.card_focused(window);
+        if let Some(at) = focused.filter(|&at| Some(at) != self.agent_card_ring()) {
+            log!("browser: agent card key pressed nothing, the keyboard on another stop");
+            return self.card_ring_to(at, false, cx);
+        }
         if !self.card_key_counts(cx) {
             return;
         }
         let Some(at) = self.agent_card_ring() else {
             return;
         };
-        let Some(button) = self
-            .agent_question()
-            .and_then(|q| buttons(q).get(at).copied())
-        else {
+        let Some(question) = self.agent_question() else {
+            return;
+        };
+        let Some(button) = buttons(question).get(at).copied() else {
+            if stops(question).contains(&at) {
+                log!("browser: agent card key pressed See the whole request");
+                self.see_whole_request(window, cx);
+            }
             return;
         };
         log!("browser: agent card key pressed {}", button.label);
         self.press_card(button.does, cx);
     }
 
-    fn card_leave(&mut self, cx: &mut Context<Self>) {
+    fn card_leave(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         if !self.card_key_counts(cx) {
             return;
         }
@@ -445,18 +525,50 @@ impl Shell {
         }
     }
 
-    fn card_move(&mut self, by: isize, cx: &mut Context<Self>) {
-        let count = self.agent_question().map_or(0, |q| buttons(q).len());
-        let Some(keys) = self.card_keys.as_mut().filter(|_| count > 0) else {
+    /// Tab and ⇧Tab: the ring to the next stop or the one before, round from the last to the
+    /// first.
+    fn card_move(&mut self, by: isize, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(stops) = self.agent_question().map(stops) else {
             return;
         };
-        keys.at = (keys.at as isize + by).rem_euclid(count as isize) as usize;
-        keys.due = true;
-        let (id, at) = (keys.question, keys.at);
-        if let Some(button) = self.agent_question().map(|q| buttons(q)[at]) {
-            log!("browser: agent card keys on {id} {}", button.label);
-        }
+        let Some(at) = self.agent_card_ring() else {
+            return;
+        };
+        let from = stops.iter().position(|&stop| stop == at).unwrap_or(0) as isize;
+        let to = stops[(from + by).rem_euclid(stops.len() as isize) as usize];
+        self.card_ring_to(to, true, cx);
+    }
+
+    /// The ring to the stop `at`, which the frame gives the keyboard if `due`, or which has it. A
+    /// key that would answer is ignored inside the protection after it, as after the keyboard
+    /// came: a key typed on as the ring moved would press a button the user hasn't heard.
+    fn card_ring_to(&mut self, at: usize, due: bool, cx: &mut Context<Self>) {
+        let now = cx.background_executor().now();
+        let task = ready(cx);
+        let Some(keys) = &mut self.card_keys else {
+            return;
+        };
+        keys.at = at;
+        keys.due = due;
+        keys.last = now;
+        keys._ready = task;
+        let id = keys.question;
+        let label = (self.agent_question())
+            .and_then(|q| buttons(q).get(at).map(|button| button.label))
+            .unwrap_or("See the whole request");
+        // check.sh waits for this line.
+        log!("browser: agent card keys on {id} {label}");
         cx.notify();
+    }
+
+    /// The handle of the card's stop `at`.
+    fn card_stop(&self, at: usize) -> FocusHandle {
+        match self.agent_card_buttons.get(at) {
+            Some(button) if self.agent_question().map_or(0, |q| buttons(q).len()) > at => {
+                button.clone()
+            }
+            _ => self.agent_request_see.clone(),
+        }
     }
 
     /// Which of the key chips `at`'s button shows, ↩ and ESC: those its row of the last frame had
@@ -702,19 +814,23 @@ impl Shell {
     ) -> E {
         card.when(self.card_keys.is_some(), |card| {
             card.key_context(CONTEXT)
-                .on_action(card_key::<CardPress>(|shell, cx| shell.card_press(cx), cx))
-                .on_action(card_key::<CardNext>(|shell, cx| shell.card_move(1, cx), cx))
-                .on_action(card_key::<CardBack>(
-                    |shell, cx| shell.card_move(-1, cx),
+                .on_action(card_key::<CardPress>(Shell::card_press, cx))
+                .on_action(card_key::<CardNext>(
+                    |shell, window, cx| shell.card_move(1, window, cx),
                     cx,
                 ))
-                .on_action(card_key::<CardLeave>(|shell, cx| shell.card_leave(cx), cx))
+                .on_action(card_key::<CardBack>(
+                    |shell, window, cx| shell.card_move(-1, window, cx),
+                    cx,
+                ))
+                .on_action(card_key::<CardLeave>(Shell::card_leave, cx))
         })
     }
 
-    /// Whether one of the card's buttons has GPUI's keyboard.
-    fn on_card(&self, window: &Window) -> bool {
-        self.agent_card_buttons.iter().any(|h| h.is_focused(window))
+    /// The card's stop with GPUI's keyboard, as `CardKeys::at` counts them.
+    fn card_focused(&self, window: &Window) -> Option<usize> {
+        let question = self.agent_question()?;
+        (stops(question).into_iter()).find(|&at| self.card_stop(at).is_focused(window))
     }
 }
 
@@ -854,6 +970,17 @@ mod tests {
     fn keyed(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<usize> {
         let handles = shell.read_with(cx, |shell, _| shell.agent_card_buttons.clone());
         cx.update(|window, _| handles.iter().position(|h| h.is_focused(window)))
+    }
+
+    /// The card's stop with GPUI's keyboard, a button by its place or "See the whole request"
+    /// as the place after the last.
+    fn stop(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<usize> {
+        let shell = shell.clone();
+        cx.update(|window, cx| shell.read(cx).card_focused(window))
+    }
+
+    fn ring(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<usize> {
+        shell.read_with(cx, |shell, _| shell.agent_card_ring())
     }
 
     fn answers(host: &Recorder) -> Vec<String> {
@@ -996,8 +1123,8 @@ mod tests {
     }
 
     /// On every card the keyboard lands on the primary button, never Always Allow; Tab and ⇧Tab
-    /// move along all the buttons, round from the last to the first; and ↩ presses the one ringed
-    /// as a click does.
+    /// move along all the stops as they're drawn, "See the whole request" on a request's card too,
+    /// round from the last to the first; and ↩ presses the one ringed as a click does.
     #[gpui::test]
     fn every_cards_buttons_by_tab(cx: &mut TestAppContext) {
         let (host, shell, cx) = window_with(cx);
@@ -1014,17 +1141,23 @@ mod tests {
                 "{card} rang another first"
             );
             assert_ne!(labels[primary], "Always Allow");
-            let mut at = primary;
-            for _ in 0..labels.len() {
+            let order = match card {
+                // "See the whole request" is drawn above the buttons, as the place after them.
+                "request" => vec![labels.len(), 0, 1],
+                _ => (0..labels.len()).collect(),
+            };
+            let mut place = order.iter().position(|&at| at == primary).unwrap();
+            for _ in 0..order.len() {
                 cx.simulate_keystrokes("tab");
                 cx.run_until_parked();
-                at = (at + 1) % labels.len();
-                assert_eq!(keyed(&shell, cx), Some(at), "{card} after tab");
+                place = (place + 1) % order.len();
+                assert_eq!(stop(&shell, cx), Some(order[place]), "{card} after tab");
             }
             cx.simulate_keystrokes("shift-tab");
             cx.run_until_parked();
-            at = (at + labels.len() - 1) % labels.len();
-            assert_eq!(keyed(&shell, cx), Some(at), "{card} after shift-tab");
+            place = (place + order.len() - 1) % order.len();
+            let at = order[place];
+            assert_eq!(stop(&shell, cx), Some(at), "{card} after shift-tab");
             host.take();
             wait(cx, PROTECT);
             cx.simulate_keystrokes("enter");
@@ -1455,27 +1588,42 @@ mod tests {
         assert_eq!(answers(&host), ["answer agent 7 Once"]);
     }
 
-    /// The window coming back to the front starts the protection over, as a key typed in another
-    /// window or app, or as it came back, was never meant for the card.
+    /// The window stopping being the active one, as for another app, ends the card's keys and
+    /// gives the keyboard back where it was, so a key typed there, or coming back, never reaches
+    /// the card: coming back, the user asks again with the key. On Windows the host's word that
+    /// the keyboard left for another app does it, as GPUI's window there hears no activation.
     #[gpui::test]
-    fn the_protection_starts_over_as_the_window_comes_back(cx: &mut TestAppContext) {
+    fn leaving_the_window_ends_the_cards_keys(cx: &mut TestAppContext) {
         let (host, shell, cx) = window_with(cx);
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
         ask(&shell, cx, question(7));
         from_page(&shell, cx, KEY);
         wait(cx, PROTECT);
+        host.take();
         cx.deactivate_window();
         cx.run_until_parked();
+        assert_eq!(ring(&shell, cx), None, "the ring outlived the window");
+        assert!(host.take().contains(&"focus page".to_string()));
         cx.update(|window, _| window.activate_window());
         cx.run_until_parked();
-        host.take();
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         assert_eq!(answers(&host), Vec::<String>::new());
-        assert_eq!(keyed(&shell, cx), Some(1), "the keyboard left the card");
+
+        // Windows: the keyboard left the frame with no page of ours taking it.
+        from_page(&shell, cx, KEY);
         wait(cx, PROTECT);
+        host.take();
+        shell.update_in(cx, |shell, window, cx| {
+            shell.keyboard_left(0, false, window, cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(ring(&shell, cx), None, "the ring outlived the app");
+        assert!(host.take().contains(&"focus page".to_string()));
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
-        assert_eq!(answers(&host), ["answer agent 7 Once"]);
+        assert_eq!(answers(&host), Vec::<String>::new());
     }
 
     /// A click in the page ends the card's keys as the host says the page took the keyboard,
@@ -1674,5 +1822,222 @@ mod tests {
             alert.label(),
             Some("On mail.example. Claude Code wants to click “Send”.")
         );
+    }
+
+    /// ↩ presses the stop GPUI's keyboard is on and the user hears, never another the ring was
+    /// on: an assistive app moving the focus to Never moves the ring there, ↩ straight after
+    /// answers nothing, and once the protection's passed ↩ answers Never.
+    #[gpui::test]
+    fn a_press_answers_only_the_stop_the_keyboard_is_on(cx: &mut TestAppContext) {
+        let (host, shell, cx) = window_with(cx);
+        ask(&shell, cx, question(7));
+        from_page(&shell, cx, KEY);
+        wait(cx, PROTECT);
+        host.take();
+        let never = shell.read_with(cx, |shell, _| shell.agent_card_buttons[0].clone());
+        // As the key comes before the frame after the move, and then after it.
+        cx.update(|window, cx| window.focus(&never, cx));
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(
+            answers(&host),
+            Vec::<String>::new(),
+            "↩ answered off the ring"
+        );
+        assert_eq!(
+            ring(&shell, cx),
+            Some(0),
+            "the ring didn't follow the keyboard"
+        );
+        let once = shell.read_with(cx, |shell, _| shell.agent_card_buttons[1].clone());
+        wait(cx, PROTECT);
+        cx.update(|window, cx| window.focus(&once, cx));
+        cx.run_until_parked();
+        assert_eq!(ring(&shell, cx), Some(1), "the frame didn't move the ring");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(
+            answers(&host),
+            Vec::<String>::new(),
+            "↩ inside the protection answered"
+        );
+        wait(cx, PROTECT);
+        cx.update(|window, cx| window.focus(&never, cx));
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        wait(cx, PROTECT);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(answers(&host), ["answer agent 7 Never"]);
+    }
+
+    /// The page taking the keyboard where GPUI's focus doesn't see it, as the core says on Linux
+    /// or another tab shown takes it to its page, ends the card's keys: no ring is left while ↩
+    /// goes to the page. The key from the page then rings the card again, with any keys the shell
+    /// still held taken as ended.
+    #[gpui::test]
+    fn the_page_taking_the_keyboard_unseen_ends_the_cards_keys(cx: &mut TestAppContext) {
+        let (host, shell, cx) = window_with(cx);
+        host.page_keys.set(Some(true));
+        ask(&shell, cx, question(7));
+        from_page(&shell, cx, KEY);
+        assert_eq!(ring(&shell, cx), Some(1));
+        host.page_keys.set(Some(true));
+        shell.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        assert_eq!(
+            ring(&shell, cx),
+            None,
+            "the ring stayed with the page's keyboard"
+        );
+        host.page_keys.set(None);
+
+        from_page(&shell, cx, KEY);
+        assert_eq!(ring(&shell, cx), Some(1));
+        shell.update(cx, |shell, cx| {
+            shell.set_tabs(
+                1,
+                Vec::new(),
+                vec![10, 11],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
+            shell.set_selected(11, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            ring(&shell, cx),
+            None,
+            "the ring stayed as another tab showed"
+        );
+
+        // Keys the shell still holds as the key comes from the page had ended unseen.
+        shell.update(cx, |shell, cx| shell.set_selected(10, cx));
+        from_page(&shell, cx, KEY);
+        host.take();
+        from_page(&shell, cx, KEY);
+        let did = host.take();
+        assert!(did.contains(&"focus ui".to_string()), "{did:?}");
+        assert!(!did.contains(&"focus page".to_string()), "{did:?}");
+        assert_eq!(keyed(&shell, cx), Some(1));
+    }
+
+    /// Tab and ⇧Tab start the protection over, as the keyboard coming does: ↩ straight after the
+    /// ring moved answers nothing, so a ↩ typed on never presses a button just ringed.
+    #[gpui::test]
+    fn moving_the_ring_starts_the_protection_over(cx: &mut TestAppContext) {
+        let (host, shell, cx) = window_with(cx);
+        ask(&shell, cx, question(7));
+        from_page(&shell, cx, KEY);
+        wait(cx, PROTECT);
+        host.take();
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(
+            answers(&host),
+            Vec::<String>::new(),
+            "↩ pressed Always Allow"
+        );
+        wait(cx, PROTECT);
+        cx.simulate_keystrokes("shift-tab");
+        cx.simulate_keystrokes("shift-tab");
+        cx.run_until_parked();
+        wait(cx, PROTECT);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(answers(&host), ["answer agent 7 Never"]);
+    }
+
+    /// A card that changes its buttons under its id, as the Agents can send it again changed,
+    /// rings its primary again after the protection, so the ring never stays on a place that's
+    /// now another button.
+    #[gpui::test]
+    fn a_card_changing_its_buttons_rings_its_primary_again(cx: &mut TestAppContext) {
+        let (host, shell, cx) = window_with(cx);
+        ask(&shell, cx, question(7));
+        from_page(&shell, cx, KEY);
+        wait(cx, PROTECT);
+        cx.simulate_keystrokes("shift-tab");
+        cx.run_until_parked();
+        assert_eq!(keyed(&shell, cx), Some(0));
+        wait(cx, PROTECT);
+        let changed = Question {
+            each_time: true,
+            ..question(7)
+        };
+        ask(&shell, cx, changed);
+        assert_eq!(keyed(&shell, cx), Some(1), "Allow isn't ringed");
+        assert_eq!(ring(&shell, cx), Some(1));
+        host.take();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(
+            answers(&host),
+            Vec::<String>::new(),
+            "↩ answered the changed card at once"
+        );
+        wait(cx, PROTECT);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(answers(&host), ["answer agent 7 Once"]);
+    }
+
+    /// Run() keeps no window from Focus Agent Question: a private window's and a Little ilo
+    /// window's filters let it through, so the key kept from the page always does what it says.
+    #[gpui::test]
+    fn every_window_runs_the_command(cx: &mut TestAppContext) {
+        use crate::shell::{commands::private_runs, little::little_runs};
+        assert!(private_runs(Command::FocusAgentQuestion));
+        assert!(little_runs(Command::FocusAgentQuestion));
+        let _ = cx;
+    }
+
+    /// With no card the command does nothing, from the page, the UI or the bar: the keyboard stays
+    /// and nothing is ringed.
+    #[gpui::test]
+    fn the_command_with_no_card_does_nothing(cx: &mut TestAppContext) {
+        let (host, shell, cx) = window_with(cx);
+        host.take();
+        for from in ["page", "ui", "command bar"] {
+            shell.update(cx, |shell, cx| {
+                shell.run(Command::FocusAgentQuestion, from, cx)
+            });
+            cx.run_until_parked();
+            let did = host.take();
+            assert!(
+                !did.iter().any(|d| d.starts_with("focus")),
+                "{from}: {did:?}"
+            );
+            assert_eq!(ring(&shell, cx), None, "{from}");
+        }
+    }
+
+    /// "See the whole request" is a stop of the card's keys: ↩ on it, past the protection, shows
+    /// the whole request, so the request can be read before it's allowed.
+    #[gpui::test]
+    fn see_is_a_stop_of_the_cards_keys(cx: &mut TestAppContext) {
+        let (_, shell, cx) = window_with(cx);
+        struct Shown;
+        impl crate::agent_request::Host for Shown {
+            fn show(&self, _: u64, _: f32, _: f32, _: f32) {}
+            fn set_height(&self, _: f32) {}
+            fn hide(&self) {}
+        }
+        let whole = cx.update(|_, cx| crate::agent_request::open(Rc::new(Shown), cx));
+        whole.expect("the whole request's window didn't open");
+        ask(&shell, cx, request(4));
+        from_page(&shell, cx, KEY);
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        assert_eq!(stop(&shell, cx), Some(2), "Tab from Allow didn't reach See");
+        assert_eq!(ring(&shell, cx), Some(2));
+        wait(cx, PROTECT);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let showing = cx.update(|_, cx| crate::agent_request::showing(cx));
+        assert_eq!(showing, Some(4), "↩ on See didn't show the whole request");
     }
 }

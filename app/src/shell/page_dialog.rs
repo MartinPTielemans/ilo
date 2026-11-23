@@ -260,7 +260,7 @@ impl Shell {
     /// Whether the page has the keyboard: as the core says where it keeps that, else since the
     /// host said the page took it, unless GPUI's focus has moved since, as the UI giving a field
     /// the keyboard moves it.
-    fn page_has_keyboard(&self, window: &Window, cx: &App) -> bool {
+    pub(super) fn page_has_keyboard(&self, window: &Window, cx: &App) -> bool {
         if let Some(page) = self.browser.page_has_keyboard(cx) {
             return page;
         }

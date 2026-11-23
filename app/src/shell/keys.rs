@@ -625,9 +625,7 @@ impl UserKeys {
     /// The keys that run `command` here, as Settings › Shortcuts shows them, a chip each, the one
     /// menus show first first (#3328). The ways one press is written (one_press) share a chip.
     pub fn shown_keys(&self, command: Command) -> Vec<Vec<&str>> {
-        let keys: Vec<&str> = (self.keys(command).into_iter())
-            .filter(|key| applies(key, OFF_THE_MAC))
-            .collect();
+        let keys = self.keys_on(command, OFF_THE_MAC);
         // Each key's chip, named by its first key, joined through any key between them, as ⇧⌘+
         // joins ⌘+ and ⇧⌘=.
         let mut chip: Vec<usize> = (0..keys.len()).collect();
@@ -670,7 +668,9 @@ impl UserKeys {
             .collect();
         let mut all: Vec<String> = Vec::new();
         let mut keys = Some(keys);
-        for key in self.keys(command) {
+        // Only the keys here: another platform's default kept in the user's list would run here
+        // as theirs, as ⌃⇧A did on the Mac once Focus Agent Question's key changed.
+        for key in self.keys_on(command, OFF_THE_MAC) {
             match replaced.iter().any(|each| each == key) {
                 true => all.extend(keys.take().unwrap_or_default()),
                 false => all.push(key.to_string()),
@@ -700,13 +700,27 @@ impl UserKeys {
     /// The first key that runs `command` on the Mac or off it, `off_the_mac`: not another
     /// platform's alone, as ⌥⇧⌘A, written first, would show as Ctrl+Alt+Shift+A off the Mac.
     fn first_key_on(&self, command: Command, off_the_mac: bool) -> Option<&str> {
-        (self.keys(command).into_iter()).find(|key| applies(key, off_the_mac))
+        self.keys_on(command, off_the_mac).into_iter().next()
+    }
+
+    /// The keys that run `command` on the Mac or off it, `off_the_mac`: its defaults there, or
+    /// every key the user gave it, as one recorded here is a key here whatever another platform
+    /// binds it to, as ⌃⇧A recorded on the Mac.
+    fn keys_on(&self, command: Command, off_the_mac: bool) -> Vec<&str> {
+        let set = self.is_set(command);
+        (self.keys(command).into_iter())
+            .filter(|key| set || applies(key, off_the_mac))
+            .collect()
     }
 
     /// The same keys one by one, for a tooltip's chips: ⇧, ⌘ and L for ⇧⌘L. None if no key runs
     /// `command`.
     pub fn chips(&self, command: Command) -> Vec<String> {
-        self.first_key_on(command, OFF_THE_MAC)
+        self.chips_on(command, OFF_THE_MAC)
+    }
+
+    fn chips_on(&self, command: Command, off_the_mac: bool) -> Vec<String> {
+        self.first_key_on(command, off_the_mac)
             .map(keystroke_keys)
             .unwrap_or_default()
     }
@@ -1092,6 +1106,37 @@ mod tests {
         let focus = Command::FocusAgentQuestion;
         assert_eq!(keys.label_on(focus, true).as_deref(), Some("Alt+Shift+A"));
         assert_eq!(keys.label_on(focus, false).as_deref(), Some("⌥⇧⌘A"));
+        assert_eq!(keys.chips_on(focus, true), keystroke_keys("ctrl-shift-a"));
+        assert_eq!(
+            keys.chips_on(focus, false),
+            keystroke_keys("alt-shift-cmd-a")
+        );
+    }
+
+    /// A key the user records is a key where they recorded it, though another platform's defaults
+    /// have it alone: ⌃⇧A given a command on the Mac runs it and shows, so Settings › Shortcuts has
+    /// its chip to remove.
+    #[test]
+    fn a_recorded_key_shows_where_it_runs() {
+        let mut keys = UserKeys::default();
+        let focus = Command::FocusAgentQuestion;
+        keys.set_key(focus, 0, vec!["ctrl-shift-a".into()])
+            .expect("the key was refused");
+        assert_eq!(keys.command_for("ctrl-shift-a", false), Some(focus));
+        assert_eq!(keys.shown_keys(focus), [["ctrl-shift-a"]]);
+        assert_eq!(keys.chips(focus), keystroke_keys("ctrl-shift-a"));
+    }
+
+    /// Changing a command's key keeps only the keys that apply here: another platform's default
+    /// isn't taken into the user's list, where it would run.
+    #[test]
+    fn a_changed_key_takes_no_other_platforms_key() {
+        let mut keys = UserKeys::default();
+        let focus = Command::FocusAgentQuestion;
+        keys.set_key(focus, 0, vec!["ctrl-alt-k".into()])
+            .expect("the key was refused");
+        assert_eq!(keys.keys(focus), ["ctrl-alt-k"]);
+        assert_eq!(keys.command_for("ctrl-shift-a", false), None);
     }
 
     /// The keys bound off the Mac alone run nothing from a Mac page, as from its UI: ⇧Esc there

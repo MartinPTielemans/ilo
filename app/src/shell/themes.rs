@@ -109,8 +109,8 @@ impl Shell {
             self.window_watches = vec![
                 cx.observe_window_appearance(window, |_, _, cx| cx.notify()),
                 cx.observe_window_activation(window, |shell, window, cx| {
-                    if window.is_window_active() {
-                        shell.card_keys_active_again(cx);
+                    if !window.is_window_active() {
+                        shell.card_keys_window_left(cx);
                     }
                     cx.notify()
                 }),
