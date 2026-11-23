@@ -693,6 +693,28 @@ expect_soon() {
   ran_out "$1" "$step"
   fail "$2"
 }
+# expect, for a line matching $1 logged after the first line since the last command matching $3,
+# which the app logs as it starts what $1 ends. One before it is from earlier: a glide nothing
+# waited for can end after the command is sent and before the app gets to it (#4059, #4067).
+expect_after() {
+  wait_begins
+  for _ in $(seq 100); do
+    logged_after "$1" "$3" && return 0
+    [ -z "${pid:-}" ] || kill -0 "$pid" 2>/dev/null || logged_after "$1" "$3" || {
+      ran_out "$1" "$step" exited
+      fail "the app exited: $2"
+    }
+    sleep 0.1
+  done
+  ran_out "$1" "$step"
+  fail "$2"
+}
+# A line matching $1 was logged after the first line matching $2 since the last command was sent.
+logged_after() {
+  local at
+  at=$(since | grep -n "$2" | head -1 | cut -d: -f1)
+  [ -n "$at" ] && since | tail -n +$((at + 1)) | grep -q "$1"
+}
 # A line matching $1 was logged after the last command was sent, or after command $2.
 logged() {
   sed -n "/^browser: drive ${2:-$step}: /,\$p" "$log" | grep -q "$1"
