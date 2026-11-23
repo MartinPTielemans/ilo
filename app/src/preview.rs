@@ -2730,6 +2730,8 @@ fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
         count,
     };
     talk.progress = "".into();
+    // It stands on its one page, beside it.
+    talk.tabs.truncate(1);
     talk.lines = match state.as_str() {
         "refused" => vec![
             done(0, before),
