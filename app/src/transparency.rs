@@ -156,6 +156,12 @@ fn keep_in(dir: String, cx: &mut App) {
     cx.set_global(Kept { level, dir });
 }
 
+/// Keeps the level in `dir` for a test elsewhere in the app, never the app's own folder.
+#[cfg(test)]
+pub(crate) fn kept_in(dir: String, cx: &mut App) {
+    keep_in(dir, cx)
+}
+
 /// The level the app is at.
 pub fn level(cx: &mut App) -> Transparency {
     if !cx.has_global::<Kept>() {

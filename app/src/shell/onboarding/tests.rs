@@ -11,17 +11,27 @@ use gpui::{
     point, px,
 };
 
-use super::{Drawn, END_FADE, INTRO_END, Level, OptIn, STEP_MOTION, STILL_END, STILL_FADE, Step};
+use super::{Drawn, END_FADE, INTRO_END, OptIn, STEP_MOTION, STILL_END, STILL_FADE, Step};
 use crate::account::{self, State, Status};
 use crate::import::ImportEvent;
 use crate::shell::{Folders, Shell, commands::Command, recorder::Recorder};
 use crate::theme::Theme;
 use crate::theme_picker::{SWATCHES, swatch_name};
 use crate::tokens::shell::onboarding::{IMPORT_HOLD, SKIP_MARGIN};
+use crate::transparency::{self, Transparency};
 
 /// A drawn shell showing one Space with no tab shown, as at a new profile's first launch, with the
 /// keyboard in the UI.
 fn first_window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
+    // The transparency step keeps its level where Settings does: here, a folder of the test's own.
+    let dir = std::env::temp_dir().join(format!(
+        "ilo-onboarding-{}-{}",
+        std::process::id(),
+        cx.test_function_name().unwrap_or("test")
+    ));
+    _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    cx.update(|cx| transparency::kept_in(dir.to_string_lossy().into_owned(), cx));
     let host = Rc::new(Recorder::default());
     let browser = host.clone();
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
@@ -57,7 +67,7 @@ fn glass_window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestConte
 }
 
 /// The level the transparency step shows.
-fn level(shell: &Entity<Shell>, cx: &VisualTestContext) -> Option<Level> {
+fn level(shell: &Entity<Shell>, cx: &VisualTestContext) -> Option<Transparency> {
     shell.read_with(cx, |shell, _| {
         shell.onboarding.as_ref().map(|onboarding| onboarding.level)
     })
@@ -1951,27 +1961,38 @@ fn the_arrows_move_the_transparency_pick(cx: &mut TestAppContext) {
         first.is_focused(window)
     });
     assert!(resting, "the keyboard rests on the picker");
-    assert_eq!(level(&shell, cx), Some(Level::Standard));
+    assert_eq!(level(&shell, cx), Some(Transparency::Standard));
     cx.simulate_keystrokes("left");
-    assert_eq!(level(&shell, cx), Some(Level::Less));
+    assert_eq!(
+        cx.update(|_, cx| transparency::level(cx)),
+        Transparency::Less,
+        "a pick applies at once, as Settings' does"
+    );
+    assert_eq!(level(&shell, cx), Some(Transparency::Less));
     cx.simulate_keystrokes("left up");
-    assert_eq!(level(&shell, cx), Some(Level::Less), "it stops at Less");
+    assert_eq!(
+        level(&shell, cx),
+        Some(Transparency::Less),
+        "it stops at Less"
+    );
     cx.simulate_keystrokes("right down down");
-    assert_eq!(level(&shell, cx), Some(Level::More), "and at More");
+    assert_eq!(level(&shell, cx), Some(Transparency::More), "and at More");
     cx.simulate_keystrokes("up");
-    assert_eq!(level(&shell, cx), Some(Level::Standard));
+    assert_eq!(level(&shell, cx), Some(Transparency::Standard));
 }
 
-/// ↩ goes on with the level shown; Esc and Skip go on with Standard, keeping nothing picked. Here
-/// it's the last step, so going on ends the flow.
+/// ↩ goes on with the level shown, kept; Esc and Skip go on with Standard, keeping nothing new.
+/// Here it's the last step, so going on ends the flow.
 #[gpui::test]
 fn return_keeps_the_level_and_skip_puts_standard_back(cx: &mut TestAppContext) {
     let (shell, cx, _) = glass_window(cx);
     for (go_on, kept) in [
-        ("enter", Level::More),
-        ("escape", Level::Standard),
-        ("skip", Level::Standard),
+        ("enter", Transparency::More),
+        ("escape", Transparency::Standard),
+        ("skip", Transparency::Standard),
     ] {
+        // A first run, at Standard.
+        cx.update(|_, cx| transparency::set(Transparency::Standard, cx));
         started(&shell, cx);
         skip_to(&shell, cx, Step::Transparency);
         later(&shell, cx, STEP_MOTION);
@@ -1990,6 +2011,7 @@ fn return_keeps_the_level_and_skip_puts_standard_back(cx: &mut TestAppContext) {
         let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
         assert!(ending.is_some(), "{go_on} went on from the last step");
         assert_eq!(level(&shell, cx), Some(kept), "{go_on}");
+        assert_eq!(cx.update(|_, cx| transparency::level(cx)), kept, "{go_on}");
         later(&shell, cx, END_FADE);
     }
 }
