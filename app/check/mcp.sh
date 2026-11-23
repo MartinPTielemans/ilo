@@ -2971,7 +2971,8 @@ CARD
 $1: the click didn't reach Show Tab"
     send type "$2"
     typed=no
-    await_more "^browser: title $opened_tab handed typed $2\$" 0 && typed=yes
+    # The field keeps the letters of the cases before.
+    await_more "^browser: title $opened_tab handed typed [a-z]*$2\$" 0 && typed=yes
     send state
     shown=$(tail -n +"$from" "$log" | grep -E '^browser: (task page [0-9]+ (watched|shown|back)|task space ([0-9]+ shown|left)|task area [0-9]+ (open|closed)|task [a-z0-9-]+ (shown|page [0-9]+))$' |
       sed 's/^browser: //' | tr '\n' ';')
