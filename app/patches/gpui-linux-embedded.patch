@@ -267,10 +267,10 @@ index 0000000000..a202ddef4e
 +}
 diff --git a/crates/gpui_linux/src/linux/overlay.rs b/crates/gpui_linux/src/linux/overlay.rs
 new file mode 100644
-index 0000000000..cd539b12ce
+index 0000000000..42c88b8f1a
 --- /dev/null
 +++ b/crates/gpui_linux/src/linux/overlay.rs
-@@ -0,0 +1,2330 @@
+@@ -0,0 +1,2341 @@
 +//! An embedder's overlays: windows GPUI opened with `show: false` that the embedder shows over its
 +//! own window, as a browser shows its command bar over its pages. Under Wayland one is a subsurface
 +//! of the embedder's surface, on X11 a window of its own over the embedder's. One shown
@@ -334,8 +334,8 @@ index 0000000000..cd539b12ce
 +    /// keys.
 +    presses: u64,
 +    outside: u64,
-+    /// It took them back since, with no input after.
-+    again: bool,
++    /// The times it took them back since the last input.
++    again: u8,
 +}
 +
 +/// Where the input focus went as it left an overlay that has the keys, as the display says.
@@ -438,7 +438,7 @@ index 0000000000..cd539b12ce
 +    /// On X11, whether this app is the window manager's active one, or no window manager says.
 +    static ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 +    /// On X11, each overlay that was given the keys in a showing: the presses there had been as it
-+    /// asked for them, and whether it asked again after the focus was taken back (`asks_again`).
++    /// asked for them, and how often it took them back since the user's last input (`asks_again`).
 +    static ASKED: RefCell<Vec<Asked>> = const { RefCell::new(Vec::new()) };
 +    /// On X11, the overlays the input focus left with the keys, until `Op::TakenBack` says why.
 +    static DECIDING: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
@@ -882,7 +882,7 @@ index 0000000000..cd539b12ce
 +            showing,
 +            presses: PRESSES.get(),
 +            outside: OUTSIDE_COUNT.get(),
-+            again: false,
++            again: 0,
 +        });
 +    });
 +    holds(view, true);
@@ -894,9 +894,10 @@ index 0000000000..cd539b12ce
 +/// overlay first maps, before it knows the window is this app's (#2943), and sway as it activates
 +/// that window again, raising it over the overlay (#3044). So the overlay takes them back if the
 +/// focus went to the window it shows over with no button down or pressed outside an overlay
-+/// since it last took them, and the app still active. It does once a loss: taken again with no
-+/// input from the user in between, it's left, as a window manager that keeps taking them won't
-+/// give them up and a second take would fight it. Any other way, the user left it.
++/// since it last took them, and the app still active. It does twice a loss, the map's and the
++/// activation's, as each comes once: taken a third time with no input from the user in between,
++/// it's left, as a window manager that keeps taking them won't give them up and another take
++/// would fight it. Any other way, the user left it.
 +#[allow(dead_code)]
 +pub(crate) fn asks_again(view: usize, showing: u64, taken: Taken) -> bool {
 +    let shown = SHOWN.with_borrow(|all| {
@@ -919,17 +920,15 @@ index 0000000000..cd539b12ce
 +        // A press outside the overlays, as on the page, is heard anywhere and in no overlay. Paired
 +        // by time, a press in one heard while it didn't hold the focus can't hide a later one.
 +        let outside = last_outside() > asked.outside;
-+        if (asked.again && asked.presses == PRESSES.get())
-+            || outside
-+            || taken.pressed
-+            || !taken.to_under
-+            || !taken.active
-+        {
++        if asked.presses != PRESSES.get() {
++            asked.again = 0;
++        }
++        if asked.again >= 2 || outside || taken.pressed || !taken.to_under || !taken.active {
 +            return false;
 +        }
 +        asked.presses = PRESSES.get();
 +        asked.outside = OUTSIDE_COUNT.get();
-+        asked.again = true;
++        asked.again += 1;
 +        true
 +    })
 +}
@@ -2262,7 +2261,7 @@ index 0000000000..cd539b12ce
 +
 +    #[cfg(feature = "x11")]
 +    #[test]
-+    fn an_overlay_whose_focus_is_taken_back_with_no_input_takes_it_once_a_loss() {
++    fn an_overlay_whose_focus_is_taken_back_with_no_input_takes_it_twice_a_loss() {
 +        let view = 21;
 +        let show = |showing| {
 +            SHOWN.with_borrow_mut(|all| {
@@ -2281,10 +2280,18 @@ index 0000000000..cd539b12ce
 +        };
 +        let taken = Taken { to_under: true, pressed: false, active: true };
 +        // Put back on the browser window with no input, as wlroots' Xwayland does at a first map
-+        // (#2943): it takes the keys back, and taken again with no input between, it's left.
++        // (#2943), then again as sway activates that window (#3044), with nothing between: it takes
++        // the keys back both times, and taken a third time with no input between, it's left.
 +        show(1);
 +        assert!(asks_again(view, 1, taken), "taken back with no input, it didn't take them again");
-+        assert!(!asks_again(view, 1, taken), "taken twice with no input between, it fought for them");
++        assert!(
++            asks_again(view, 1, taken),
++            "taken as it mapped and then as the window under it was activated, and it was left"
++        );
++        assert!(
++            !asks_again(view, 1, taken),
++            "taken thrice with no input between, it fought for them"
++        );
 +        // The user typing and clicking in it between, then sway activating the browser window
 +        // again (#3044): it takes them back each time.
 +        show(2);
@@ -2298,7 +2305,11 @@ index 0000000000..cd539b12ce
 +        pressed_button_anywhere(11);
 +        pressed_in_at(view, 11);
 +        assert!(asks_again(view, 2, taken), "taken again after a click in it, and it was left");
-+        assert!(!asks_again(view, 2, taken), "taken twice with no input between, it fought for them");
++        assert!(asks_again(view, 2, taken), "taken twice with no input between, and it was left");
++        assert!(
++            !asks_again(view, 2, taken),
++            "taken thrice with no input between, it fought for them"
++        );
 +        // A button pressed outside the overlays, as on the page: the user left.
 +        show(3);
 +        pressed_button_anywhere(20);
@@ -2326,7 +2337,7 @@ index 0000000000..cd539b12ce
 +        show(5);
 +        let elsewhere = Taken { to_under: false, ..taken };
 +        assert!(!asks_again(view, 5, elsewhere), "the focus went to another window, and it asked again");
-+        // Each of those left it, so with no input the showing asks again once.
++        // Each of those left it, so with no input the showing still takes them back.
 +        assert!(asks_again(view, 5, taken));
 +        // Through the focus leaving it: with no display to say where the focus went, it's left.
 +        focus_left(view, false, || false);
