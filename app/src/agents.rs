@@ -4766,8 +4766,6 @@ impl Agents {
         if !self.noted.first(&task, note) {
             return None;
         }
-        // check.sh reads this line.
-        log!("browser: agent {agent} given notes for {}", note.host);
         self.log_notes(agent, connection, entry, note);
         Some(note)
     }
