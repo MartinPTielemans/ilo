@@ -16,7 +16,7 @@
 # none_since straight after the input it's about (#2196).
 # The workflow lints the quarantine lists too (app/check/quarantine.sh), each night as well as on each change,
 # as a line goes stale with no change: one over 14 days old, or whose issue closed, fails it, and so
-# does an issue of a run red on main twice running that no line names a day on (#2197).
+# does an issue of a run red on main twice running that no line names an hour on (#2197).
 name: Check scripts
 
 on:
