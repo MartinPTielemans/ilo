@@ -4,7 +4,7 @@
 //! change reaches them at once.
 
 use std::time::Duration;
-use web_time::Instant;
+use std::time::Instant;
 
 use gpui::{
     Action, App, Global, KeyBinding, KeyBindingContextPredicate, Keystroke, Modifiers, NoAction,

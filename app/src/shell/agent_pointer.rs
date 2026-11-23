@@ -5,7 +5,7 @@
 //! clicks are never in its way, and it goes a moment after the agent's last action.
 
 use std::time::Duration;
-use web_time::Instant;
+use std::time::Instant;
 
 use gpui::{
     AnyElement, App, Bounds, Context, Pixels, Point, SharedString, Task, Window, div, point,

@@ -5,7 +5,3 @@ dist
 .DS_Store
 .taste-skill/
 .wrangler
-
-# The live interface, which the deploy takes from the newest release (.github/workflows/site.yml).
-public/demo/ilo_demo.js
-public/demo/ilo_demo_bg.wasm

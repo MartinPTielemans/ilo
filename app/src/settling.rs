@@ -5,7 +5,7 @@
 //! the question off, such as ×, escape or Not Now, works at once.
 
 use std::time::Duration;
-use web_time::Instant;
+use std::time::Instant;
 
 use gpui::{App, Task};
 
