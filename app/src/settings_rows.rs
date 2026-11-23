@@ -17,15 +17,17 @@ use crate::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
 use crate::tokens::palette::{ACCENT_HOVERED, ACCENT_PRESSED, DIALOG_LIGHT};
 use crate::tokens::radius;
 use crate::tokens::settings::{
-    BUTTON_GLYPH, CHECK_BOX, CHECK_GAP, CHECK_GLYPH, CHECK_RADIUS, CHECK_TICK, CHEVRONS,
-    CHEVRONS_ALPHA, CHEVRONS_END, CHIP, CHIP_FIXED, CHIP_FIXED_TEXT, CHIP_HEIGHT, CHIP_NONE_TEXT,
-    CHIP_PADDING, CHIP_RADIUS, CHIP_TEXT, CHIP_WIDTH, CONTROL, CONTROL_GAP, CONTROL_HEIGHT,
-    CONTROL_HOVERED, CONTROL_HOVERED_LIGHT, CONTROL_LIGHT, CONTROL_PADDING, CONTROL_PRESSED,
-    CONTROL_PRESSED_LIGHT, CONTROL_RADIUS, DETAIL, DETAIL_LINE, DETAIL_TOP, END_GAP, GLYPH,
-    GLYPH_OFF, GLYPH_ON, GLYPH_PLATE, GLYPH_PLATE_FILL, GLYPH_PLATE_GAP, GROUP, GROUP_LIGHT,
-    HEADING, KNOB, KNOB_ALPHA, KNOB_INSET, KNOB_SHADOW, KNOB_SHADOW_BLUR, KNOB_SHADOW_Y, LINE,
-    NAME, NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE, ON_PRESSED, ON_SWITCH_OFF, PADDING,
-    RESTORE_RADIUS, ROW_HEIGHT, ROW_X, SWITCH_HEIGHT, SWITCH_OFF, SWITCH_OFF_LIGHT, SWITCH_WIDTH,
+    BUTTON_GLYPH, CHECK_BOX, CHECK_GAP, CHECK_GLYPH, CHECK_RADIUS, CHEVRONS, CHEVRONS_ALPHA,
+    CHEVRONS_END, CHIP, CHIP_FIXED, CHIP_FIXED_TEXT, CHIP_HEIGHT, CHIP_NONE_TEXT, CHIP_PADDING,
+    CHIP_RADIUS, CHIP_TEXT, CHIP_WIDTH, CONTROL, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_HOVERED,
+    CONTROL_HOVERED_LIGHT, CONTROL_LIGHT, CONTROL_PADDING, CONTROL_PRESSED, CONTROL_PRESSED_LIGHT,
+    CONTROL_RADIUS, DETAIL, DETAIL_LINE, DETAIL_TOP, END_GAP, GLYPH, GLYPH_OFF, GLYPH_ON,
+    GLYPH_PLATE, GLYPH_PLATE_FILL, GLYPH_PLATE_GAP, GROUP, GROUP_LIGHT, GROUP_RIM,
+    GROUP_RING_LIGHT, GROUP_SHADOW_BLUR, GROUP_SHADOW_LIGHT, GROUP_SHADOW_Y, HEADING,
+    HEADING_LIGHT, KNOB, KNOB_ALPHA, KNOB_INSET, KNOB_SHADOW, KNOB_SHADOW_BLUR, KNOB_SHADOW_Y,
+    LINE, NAME, NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE, ON_PRESSED, ON_SWITCH_OFF,
+    PADDING, RESTORE_RADIUS, ROW_HEIGHT, ROW_X, SIDE_ROOM, SWITCH_HEIGHT, SWITCH_OFF,
+    SWITCH_OFF_LIGHT, SWITCH_WIDTH,
 };
 use crate::tokens::settings::{SENT_CHEVRON, SENT_GAP, SENT_INDENT, SENT_LABEL, SENT_LINES};
 use crate::tokens::shell::{KEYED, KEYED_RING};
@@ -344,8 +346,13 @@ pub struct Look {
     pub hovered: Rgba,
     pub pressed: Rgba,
     pub switch_off: Rgba,
-    /// A switch's knob while it's off. On, it's white on the accent.
+    /// A switch's knob while it's off.
     pub knob: Rgba,
+    /// What's on: a switch's track, a ticked box, a chosen radio. Settings' is neutral, the
+    /// text colour (#4092); a look on another view's ground takes that ground's accent.
+    pub on: Rgba,
+    /// A switch's knob on `on`, and the tick on a ticked box.
+    pub knob_on: Rgba,
     /// The plate a feature's glyph sits on, and the glyph while it's on.
     pub glyph_plate: Rgba,
     pub glyph: Rgba,
@@ -353,22 +360,28 @@ pub struct Look {
     pub heading: Rgba,
     /// A group's edge, where its fill alone wouldn't stand off the ground.
     pub edge: Option<Rgba>,
-    /// What's on, a switch's track or a box's tick, and the one button that does what the view
-    /// is for: the host's own green.
+    /// A group's shadow under it, where it's a plate lifted off the ground (Settings' light).
+    pub lifted: Option<Rgba>,
+    /// The one button that does what the view is for: the host's own green.
     pub accent: Rgba,
 }
 
 impl Look {
     /// Settings' own, on its card: the paper over the overlay's fill in dark, the ink over the
-    /// dialog's in light, as the window's other text is, and ilo's green, as the app's window
-    /// isn't a Space's (#319).
+    /// dialog's in light, as the window's other text is. Its controls are neutral, the text colour
+    /// where they're on (#4092), and its one main action ilo's green, as the app's window isn't a
+    /// Space's (#319). Its groups are the text colour over the card in dark, rimmed, and white
+    /// plates in light, ringed and lifted.
     pub fn settings(dark: bool) -> Look {
         let (card, base) = match dark {
             true => (rgb(OVERLAY_DARK), rgb(PAPER)),
             false => (rgb(DIALOG_LIGHT), rgb(INK)),
         };
         let pick = |dark_alpha: f32, light_alpha: f32| if dark { dark_alpha } else { light_alpha };
-        let surface = card.blend(base.opacity(pick(GROUP, GROUP_LIGHT)));
+        let surface = match dark {
+            true => card.blend(base.opacity(GROUP)),
+            false => card.blend(rgba(GROUP_LIGHT)),
+        };
         let mix = |amount: f32| surface.blend(base.opacity(amount));
         let switch_off = mix(pick(SWITCH_OFF, SWITCH_OFF_LIGHT));
         Look {
@@ -384,10 +397,16 @@ impl Look {
                 true => switch_off.blend(base.opacity(KNOB_ALPHA)),
                 false => gpui::white().into(),
             },
+            on: base,
+            knob_on: match dark {
+                true => rgb(INK),
+                false => gpui::white().into(),
+            },
             glyph_plate: mix(GLYPH_PLATE_FILL),
             glyph: mix(GLYPH_ON),
-            heading: card.blend(base.opacity(HEADING)),
-            edge: None,
+            heading: card.blend(base.opacity(pick(HEADING, HEADING_LIGHT))),
+            edge: Some(rgba(if dark { GROUP_RIM } else { GROUP_RING_LIGHT })),
+            lifted: (!dark).then(|| rgba(GROUP_SHADOW_LIGHT)),
             accent: rgb(NO_THEME_ACCENT),
         }
     }
@@ -407,10 +426,13 @@ impl Look {
             pressed: mix(ON_PRESSED),
             switch_off: mix(ON_SWITCH_OFF),
             knob: gpui::white().into(),
+            on: accent,
+            knob_on: gpui::white().into(),
             glyph_plate: mix(GLYPH_PLATE_FILL),
             glyph: mix(GLYPH_ON),
             heading: ink,
             edge: Some(line),
+            lifted: None,
             accent,
         }
     }
@@ -454,6 +476,15 @@ pub fn group_lined(look: &Look, rows: impl IntoIterator<Item = (gpui::Div, f32)>
         .rounded(px(radius::ROW))
         .bg(look.surface)
         .when_some(look.edge, |group, edge| group.border_1().border_color(edge))
+        .when_some(look.lifted, |group, shadow| {
+            group.shadow(vec![BoxShadow {
+                color: shadow.into(),
+                offset: point(px(0.), px(GROUP_SHADOW_Y)),
+                blur_radius: px(GROUP_SHADOW_BLUR),
+                spread_radius: px(0.),
+                inset: false,
+            }])
+        })
         .children(rows)
 }
 
@@ -467,7 +498,7 @@ pub fn frame() -> gpui::Div {
         .items_center()
 }
 
-/// A row's text: its name, and the line under it that says more, if any, which wraps.
+/// A row's text: its name, at medium, and the line under it that says more, if any, which wraps.
 pub fn text(look: &Look, name: impl Into<SharedString>, line: Option<SharedString>) -> gpui::Div {
     let line = line.map(|line| {
         div()
@@ -480,7 +511,12 @@ pub fn text(look: &Look, name: impl Into<SharedString>, line: Option<SharedStrin
     div()
         .flex_1()
         .min_w_0()
-        .child(div().truncate().child(name.into()))
+        .child(
+            div()
+                .truncate()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .child(name.into()),
+        )
         .children(line)
 }
 
@@ -574,6 +610,25 @@ pub fn detailed_row(
         .children(control.map(|c| end([c])))
 }
 
+/// A row whose control is drawn pictures (settings_pictures), such as Appearance: its name and
+/// `line`, and the pictures at its end, their ring's room outside the row's padding so the
+/// drawings keep to the row's edge (#4092).
+pub fn pictured(
+    look: &Look,
+    name: impl Into<SharedString>,
+    line: SharedString,
+    pictures: impl IntoElement,
+) -> gpui::Div {
+    frame().child(text(look, name, Some(line))).child(
+        div()
+            .flex_none()
+            .ml(px(END_GAP - SIDE_ROOM))
+            .my(px(-SIDE_ROOM))
+            .mr(px(-SIDE_ROOM))
+            .child(pictures),
+    )
+}
+
 /// A feature's glyph on its quiet plate, 12 before its name, quieter while it's off.
 pub fn glyph_plate(look: &Look, glyph: &'static str, on: bool) -> gpui::Div {
     let color = if on {
@@ -665,8 +720,9 @@ fn lit(look: &Look, control: gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::
 }
 
 /// A pop-up button `width` wide showing `label`, with its chevrons at its end, lit as a button is
-/// under the pointer and pressed while its menu is `open`. It opens on a press, as a pop-up
-/// button does, which its caller listens for.
+/// under the pointer and pressed while its menu is `open`. Its text stays at its start, where its
+/// menu puts the chosen item's. It opens on a press, as a pop-up button does, which its caller
+/// listens for.
 pub fn popup(look: &Look, label: impl Into<SharedString>, width: f32, open: bool) -> gpui::Div {
     let chevrons = svg()
         .flex_none()
@@ -719,7 +775,7 @@ pub fn switch(look: &Look, on: bool, slid: f32, accent: Rgba) -> impl IntoElemen
                 .size(px(KNOB))
                 .rounded_full()
                 .shadow(vec![shadow])
-                .bg(if on { gpui::white().into() } else { look.knob }),
+                .bg(if on { look.knob_on } else { look.knob }),
         )
 }
 
@@ -1066,7 +1122,7 @@ mod tests {
     fn the_quiet_text_reads_in_dark_and_light() {
         use crate::palette::contrast;
         use crate::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
-        use crate::tokens::settings::{FOOT_TEXT, SEARCH_HINT, SECTION_TEXT};
+        use crate::tokens::settings::{SEARCH_HINT, SECTION_TEXT};
         use crate::tokens::shell::library::LIBRARY_PLATE;
         for dark in [true, false] {
             let look = Look::settings(dark);
@@ -1085,7 +1141,10 @@ mod tests {
                 ("keys that can't change", chip(CHIP_FIXED, CHIP_FIXED_TEXT)),
                 ("None", chip(CHIP, CHIP_NONE_TEXT)),
                 ("a section", on(ground, SECTION_TEXT)),
-                ("Chromium settings", on(ground, FOOT_TEXT)),
+                (
+                    "Chromium settings and the groups' labels",
+                    on(ground, if dark { HEADING } else { HEADING_LIGHT }),
+                ),
                 ("Search", on(field, DETAIL)),
                 ("⌘F", on(field, SEARCH_HINT)),
             ];
@@ -1104,7 +1163,31 @@ mod tests {
         assert!(lum(dark.ink) > lum(dark.surface) && lum(light.ink) < lum(light.surface));
         assert!(!dark.light() && light.light());
         let on = Look::on(dark.surface, dark.ink, dark.accent);
-        assert!(dark.edge.is_none() && on.edge.is_some());
+        assert!(on.edge.is_some());
+    }
+
+    /// In Settings what's on is the text's colour, a switch's knob on it the card's, never the
+    /// green the main action keeps (#4092): it stands off the group as far as a name does, and its
+    /// knob reads on it at WCAG's 3:1 for a control. Off Settings' card, on is still the accent.
+    #[test]
+    fn whats_on_is_the_text_colour_not_the_green() {
+        for dark in [true, false] {
+            let look = Look::settings(dark);
+            assert_ne!(look.on, look.accent, "{dark}");
+            assert!(
+                contrast(&look, look.on) >= contrast(&look, look.ink) * 0.95,
+                "{dark}: on is quieter than a name"
+            );
+            let knob = crate::palette::contrast(look.knob_on, look.on);
+            assert!(knob >= 3., "{dark}: the knob reads at {knob}");
+            assert!(
+                look.lifted.is_some() != dark,
+                "only light's groups are lifted"
+            );
+        }
+        let settings = Look::settings(true);
+        let elsewhere = Look::on(settings.surface, settings.ink, settings.accent);
+        assert_eq!(elsewhere.on, settings.accent);
     }
 }
 
@@ -1256,7 +1339,7 @@ pub fn assistant_row(
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(self::mark(look, marked, look.accent, rgb(CHECK_TICK)))
+                    .child(self::mark(look, marked, look.on, look.knob_on))
                     .on_click(move |_, window, cx| act(Act::Mark, window, cx))
             };
             vec![more.into_any_element(), mark.into_any_element()]

@@ -29,7 +29,6 @@ impl Render for Pair {
                 rgb(INK),
                 false,
                 self.right,
-                Buttons::HERE,
                 window.is_a11y_active(),
                 self.logged.clone(),
                 move |side, _, cx| {
@@ -180,7 +179,6 @@ impl Render for Appearances {
                 &Look::settings(false),
                 rgb(INK),
                 self.chosen,
-                Buttons::HERE,
                 window.is_a11y_active(),
                 self.logged.clone(),
                 move |appearance, _, cx| {
