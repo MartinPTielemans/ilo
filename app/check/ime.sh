@@ -24,10 +24,10 @@
 #   syllable and start the next: the page's textarea composes 한글, backspace taking a letter off
 #   the syllable composing, and 안녕하세요, a digit committing each; under Wayland the bar composes
 #   안녕하세요; on X11 Settings' search hears 한 committed before ㄱ composes, over XIM.
-# - With an agent's card showing (#3869), the page composes "gh" and Enter commits it into the
-#   page, answering nothing; Focus Agent Question's key (Alt+Shift+A) and Enter at once give the
-#   card the keyboard and are ignored there, the key again gives the page the keyboard back, and
-#   the page composes "kl" again.
+# - With an agent's change stopped at Work on pages (#3869, #4086), which asks nothing and puts
+#   nothing over the page, the page composes "gh" and Enter commits it into the page, pressing
+#   nothing of ilo's; Focus Agent Question's key (Alt+Shift+A), which rings a button only where a
+#   task's conversation is drawn, is the page's there, and the page composes "kl" after it.
 # - no-keyboard: on Wayland with no keyboard on the seat, where activating the input method makes
 #   fcitx5's virtual keyboard the seat's first, with no keymap, the app lives on (#1138), and after
 #   another keyboard comes and goes.
@@ -144,8 +144,9 @@ if [ "${1:-}" = --steps ]; then
     await "title [0-9]* value abc$" "$at"
   fi
 
-  # An agent's card while the page composes (#3869): the agent, through its bridge, opens a tab of
-  # its own, in its Space, which no window shows, and asks to change something there.
+  # An agent's change stopped while the page composes (#3869, #4086): the agent, through its
+  # bridge, opens a tab of its own, in its Space, which no window shows, and sends a change there,
+  # which ilo refuses at once at Work on pages, asking nothing and putting nothing over the page.
   socket=$(sed -n 's/^browser: agents server on //p' "$LOG" | tail -1)
   [ -n "$socket" ] || fail "the agents' server didn't start for the run's agent"
   rm -f "$out/$mode-agent-in" "$out/$mode-agent-out"
@@ -169,32 +170,30 @@ if [ "${1:-}" = --steps ]; then
   await "loaded $agent_tab http://localhost:$AGENT_PORT/" 0
   at=$(mark)
   printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"request\",\"arguments\":{\"tab\":$agent_tab,\"requests\":[{\"method\":\"PUT\",\"path\":\"/note\",\"body\":{},\"what\":\"Replace the note.\"}]}}}" >&4
-  await "agent mcp-client asks " "$at"
-  q=$(tail -n "+$((at + 1))" "$LOG" | grep 'agent mcp-client asks ' | head -1 | cut -d' ' -f5 | tr -d :)
-  await "agent question $q at " "$at"
-  shot agent-card
-  # Enter that commits what the page composes is the page's, and answers nothing.
-  at=$(mark); click 330 40
-  await "title [0-9]* clicked abc$" "$at"
+  await "agent mcp-client stopped Request at Work on pages: localhost$" "$at"
+  stopped=$(agent_line) || fail "the browser didn't answer the agent's change"
+  case "$stopped" in
+    *"ilo stopped this: make a change on localhost."*) ;;
+    *) fail "the agent's change at Work on pages answered: $stopped" ;;
+  esac
+  shot agent-stopped
+  # Enter that commits what the page composes is the page's, and presses nothing of ilo's.
+  from=$(mark); click 330 40
+  await "title [0-9]* clicked abc$" "$from"
   at=$(mark); compose gh
   await "title [0-9]* composing abcgh$" "$at"
   key $'\n'
   await "title [0-9]* value abcgh$" "$at"
-  ! tail -n "+$((at + 1))" "$LOG" | grep -E "agent mcp-client answered $q |agent card keys on" ||
-    fail "Enter that committed the page's composition reached the agent's card"
-  # The card's key and Enter at once: the keyboard on the card, Enter ignored there. The key again
-  # gives the page back the keyboard, which composes there as before.
-  at=$(mark); key $'~A\n'
-  await "agent card keys on $q " "$at"
-  await "agent card key ignored, " "$at"
-  key '~A'
-  await "agent card keys back by key" "$at"
-  ! tail -n "+$((at + 1))" "$LOG" | grep "agent mcp-client answered $q " ||
-    fail "Focus Agent Question's key, or Enter straight after it, answered the agent's card"
-  at=$(mark); compose kl
+  # Focus Agent Question's key rings a button of ilo's line only where a task's conversation is
+  # drawn, which the user's page isn't: there it's the page's key, and the page composes after it
+  # as before.
+  at=$(mark); key '~A'
+  compose kl
   await "title [0-9]* composing abcghkl$" "$at"
   key $'\n'
   await "title [0-9]* value abcghkl$" "$at"
+  ! tail -n "+$((from + 1))" "$LOG" | grep -E "ilo keys on |ilo key pressed |task [^ ]* access " ||
+    fail "the page's composition, its Enter or Focus Agent Question's key from the page reached ilo's line"
   # The steps after take the textarea as it was.
   at=$(mark); key '^a'; key $'\b'; key abc
   await "title [0-9]* value abc$" "$at"
