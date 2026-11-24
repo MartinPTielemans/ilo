@@ -238,6 +238,9 @@ impl Shell {
             return;
         }
         window.focus(&focus, cx);
+        // GPUI's focus alone draws the caret, while the Mac sends a key to its window's first
+        // responder, which a click gives the UI by itself and this hold gives it without one.
+        self.hold_keyboard_for_page(cx);
         log!("browser: resting field has the keyboard");
     }
 
