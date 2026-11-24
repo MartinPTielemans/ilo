@@ -3,7 +3,7 @@
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use gpui::{AppContext as _, Entity, Modifiers, TestAppContext, VisualTestContext};
+use gpui::{AppContext as _, Entity, Modifiers, SharedString, TestAppContext, VisualTestContext};
 
 use super::{
     Card, Chip, Cli, Dot, Holds, Offer, PLATE_TOP, PageWord, chip, group_height, pages_room,
@@ -33,7 +33,6 @@ fn card(n: u64, dot: Dot) -> Card {
         word: Word::for_dot(dot),
         pages: Vec::new(),
         tier: Default::default(),
-        answers: Vec::new(),
         question: None,
         open: Vec::new(),
         page_steps: Vec::new(),
@@ -191,8 +190,9 @@ fn a_header_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     });
 }
 
-/// A page's row ends in one word: Reading where the task works in the page now, Done where it has
-/// moved on or finished, and Paused where the user holds the page or the task waits or stopped.
+/// A page's row ends in one word of five: Reading where the task works in the page now, Done where
+/// it has moved on or finished, Paused where the task waits or stopped, Needs you at the page it
+/// handed the user, and the bar's own title at one they took over.
 #[gpui::test]
 fn a_pages_row_says_one_word(cx: &mut TestAppContext) {
     let (shell, _, cx) = shell(cx);
@@ -207,7 +207,7 @@ fn a_pages_row_says_one_word(cx: &mut TestAppContext) {
         working.page_steps.clear();
         assert_eq!(shell.page_word(&working, 30), PageWord::Reading);
         let mut waits = card(2, Dot::Waiting);
-        waits.pages = vec![40];
+        waits.pages = vec![40, 41, 42];
         assert_eq!(shell.page_word(&waits, 40), PageWord::Paused);
         let mut done = card(3, Dot::Done);
         done.pages = vec![50];
@@ -216,10 +216,46 @@ fn a_pages_row_says_one_word(cx: &mut TestAppContext) {
         stopped.pages = vec![60];
         assert_eq!(shell.page_word(&stopped, 60), PageWord::Paused);
     });
+    // The page the task handed the user says it needs them there, in the task's own word for it,
+    // one they took over says they drive it, and its others say Paused. Once it works again, the
+    // page it handed them is Paused, and the one they took is still theirs.
+    shell.update(cx, |shell, cx| {
+        let status = crate::agents::Status {
+            agent: "task-2".into(),
+            name: "Claude".into(),
+            space: 102,
+            doing: SharedString::default(),
+            held: vec![(40, "Sign in".into()), (41, SharedString::default())],
+        };
+        shell.set_agent_status(vec![status], cx);
+    });
+    shell.read_with(cx, |shell, _| {
+        let mut waits = card(2, Dot::Waiting);
+        waits.pages = vec![40, 41, 42];
+        let words = |card: &Card| [40, 41, 42].map(|tab| shell.page_word(card, tab));
+        assert_eq!(
+            words(&waits),
+            [PageWord::NeedsYou, PageWord::Driving, PageWord::Paused]
+        );
+        let mut working = card(2, Dot::Working);
+        working.pages = vec![40, 41, 42];
+        working.page_steps = vec![(42, "Opening maat.pt".into())];
+        assert_eq!(
+            words(&working),
+            [PageWord::Paused, PageWord::Driving, PageWord::Reading]
+        );
+        // A page they took over is theirs whatever its task came to.
+        for dot in [Dot::Done, Dot::Ended] {
+            let mut over = card(2, dot);
+            over.pages = vec![40, 41, 42];
+            assert_eq!(shell.page_word(&over, 41), PageWord::Driving);
+        }
+    });
     assert_eq!(
         [PageWord::Reading, PageWord::Done, PageWord::Paused].map(PageWord::label),
         ["Reading", "Done", "Paused"]
     );
+    assert_eq!(PageWord::NeedsYou.label(), Word::NeedsYou.after_name());
 }
 
 /// The foot is the window's: a task asked from either Space shows in both, in the same place, and
@@ -522,7 +558,7 @@ fn clear_leaves_the_tasks(cx: &mut TestAppContext) {
 
 /// The one chip under a header is the user's own act, which has no page: Limit's Retry, or its
 /// assistant's fix. Its words sit on the title's column and its click does the act. Done's pages
-/// are rows now and an ask's answers are the task's view's, so neither makes a chip.
+/// are rows now and an ask is answered in the task's view, so neither makes a chip.
 #[gpui::test]
 fn the_chip_acts(cx: &mut TestAppContext) {
     let mut limit = card(4, Dot::Ended);
@@ -531,7 +567,6 @@ fn the_chip_acts(cx: &mut TestAppContext) {
     done.open = vec![(30, "maat.pt".into()), (31, "gulbenkian.pt".into())];
     let mut asks = card(6, Dot::Waiting);
     asks.asks = true;
-    asks.answers = vec!["Gulbenkian".into(), "MAAT".into()];
     assert_eq!((chip(&done), chip(&asks)), (None, None));
     assert_eq!(chip(&limit), Some(Chip::Retry));
     let mut failed = card(7, Dot::Ended);

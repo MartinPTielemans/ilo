@@ -320,10 +320,10 @@ impl Float {
         Float::FindBar,
     ];
 
-    /// Whether the host has its windows' material under it (host.h): the Mac's overlays and Site
-    /// Controls. The rest have none under them yet.
+    /// Whether the host has its windows' material under it (host.h): the Mac's overlays, Site
+    /// Controls and menus. The rest have none under them yet.
     pub fn over_material(self) -> bool {
-        window_material() && matches!(self, Float::SiteControls | Float::TabSwitcher)
+        window_material() && matches!(self, Float::Menu | Float::SiteControls | Float::TabSwitcher)
     }
 
     /// Its fill in a `tone` window, as drawn on this host.

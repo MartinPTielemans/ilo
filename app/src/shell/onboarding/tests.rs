@@ -2565,6 +2565,16 @@ fn the_sync_loop_carries_a_tab_across_and_a_favorite_back(cx: &mut TestAppContex
         inside(tab, phone),
         "the tab lands on the phone at {phone:?}, but it was at {tab:?}"
     );
+    // Its name keeps the row's inset on the right as on the left, and ends in the fade.
+    let icon = placed("phone-icon", cx).expect("the phone's row has its icon");
+    let name = placed("phone-name", cx).expect("the phone's row has its name");
+    let fade = placed("phone-fade", cx).expect("the name ends in a fade");
+    assert_eq!(
+        tab.right() - name.right(),
+        icon.left() - tab.left(),
+        "the name at {name:?} is inset as the icon at {icon:?} in the row at {tab:?}"
+    );
+    assert_eq!(fade.right(), name.right(), "the fade is at the name's end");
     held_at(&shell, cx, back + IMPORT_FADE + SYNC_CROSS + IMPORT_LAND);
     let sidebar = placed("sidebar", cx).expect("the loop's sidebar is drawn");
     let tile = placed("tile-back", cx).expect("the phone's favorite has come back");

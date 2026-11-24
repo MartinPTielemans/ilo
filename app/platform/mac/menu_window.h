@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,6 +30,11 @@ void host_show_menu_window(void* ui_view,
                            double top,
                            double width,
                            double height);
+
+// Puts the window's material under the menu's open panels, |count| of them in |panels| as left,
+// top, width, height and corner radius each, in points from the menu window's top left, in a
+// |light| or dark look. Asked after each show and as a submenu opens or closes.
+void host_set_menu_glass(const double* panels, size_t count, bool light);
 
 // Takes it away, giving the keyboard back to the window that had it.
 void host_hide_menu_window(void);
