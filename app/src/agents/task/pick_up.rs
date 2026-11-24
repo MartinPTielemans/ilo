@@ -708,6 +708,7 @@ impl Task {
             files: crate::agents::files::Given::default(),
             rising: None,
             rewalled: Vec::new(),
+            names: crate::agents::files::Names::default(),
         }
     }
 }

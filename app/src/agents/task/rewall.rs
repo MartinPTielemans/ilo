@@ -24,7 +24,7 @@ use crate::agents::files::Given;
 use crate::agents::lines;
 use crate::agents::runner::{Cli, Failure};
 use crate::agents::tier::{self, Tier};
-use crate::agents::wall::{self, Wall, WallFor, WallRefused};
+use crate::agents::wall::{self, Refusal, Wall, WallFor, WallRefused};
 
 /// What answers for `wall::put_up` in a test.
 #[cfg(test)]
@@ -121,6 +121,12 @@ impl Agents {
         }
         match self.put_up(agent, task.tier) {
             Ok(wall) => Some(Arc::new(wall)),
+            // The folder is no longer where it was: its grant ends (J6), and what else the task
+            // has goes inside a wall of its own.
+            Err(WallRefused::Refused(Refusal::Gone)) if task.files.folder.is_some() => {
+                self.folder_gone(agent);
+                self.wall_to_start(agent)
+            }
             Err(_) => {
                 self.without_files(agent);
                 None

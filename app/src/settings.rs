@@ -3789,6 +3789,7 @@ impl Settings {
             blocks.push(Block::Group(self.assistants(agents, cx)));
             blocks.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
             blocks.extend(self.access());
+            blocks.extend(self.on_this_computer(agents, cx));
         }
         // ⌘T's tasks and outside agents' sessions notify alike, so it's here while agents are on.
         // The Mac, Windows and Linux each post them (needs_you_host.rs).
@@ -3919,6 +3920,49 @@ impl Settings {
         vec![
             Block::Heading(heading.clone()),
             Block::Group(self.flashed(&heading, group(look, rows))),
+        ]
+    }
+
+    /// Files and folders (#4101): on a system that can't wall a task in with them, why they aren't
+    /// offered (X9), where a user who looks for them finds it; on one that can, each folder a
+    /// live task holds, with Revoke, which acts at once. The folders' group isn't drawn while no
+    /// task holds one.
+    fn on_this_computer(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
+        use agents::files::words;
+        let look = &self.look;
+        let model = agents.read(cx);
+        if !model.files_available() {
+            let why = line_row(look, words::NOT_AVAILABLE, None, Vec::new());
+            return vec![
+                Block::Heading(words::ON_THIS_COMPUTER.into()),
+                Block::Group(group(look, [why])),
+            ];
+        }
+        let rows: Vec<gpui::Div> = (model.folders_in_use().into_iter().enumerate())
+            .map(|(index, held)| {
+                let (agents, agent) = (agents.clone(), held.agent.clone());
+                let revoke = self
+                    .button(("agent-folder-revoke", index as u64), words::REVOKE)
+                    .relative()
+                    // By its place, never the folder's name, as this line is logged.
+                    .child(self.drawn(format!("revoke folder {index}")))
+                    .on_click(move |_, _, cx| {
+                        agents.update(cx, |agents, cx| agents.revoke_folder(&agent, cx))
+                    });
+                line_row(
+                    look,
+                    held.folder,
+                    Some(held.task),
+                    vec![revoke.into_any_element()],
+                )
+            })
+            .collect();
+        if rows.is_empty() {
+            return Vec::new();
+        }
+        vec![
+            Block::Heading(words::FOLDERS_IN_USE.into()),
+            Block::Group(group(look, rows)),
         ]
     }
 

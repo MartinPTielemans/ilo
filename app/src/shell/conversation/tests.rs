@@ -1227,6 +1227,34 @@ fn a_wall_that_wasnt_put_up_says_what_ilo_did_and_why(_: &mut TestAppContext) {
             "ilo stopped this task: ilo couldn't restart Claude without \u{201c}Trip\u{201d}",
             "\u{201c}Trip\u{201d}",
         ),
+        (
+            IloKind::Revoked {
+                folder: "Trip".into(),
+            },
+            "ilo \u{b7} You revoked \u{201c}Trip\u{201d}",
+            "\u{201c}Trip\u{201d}",
+        ),
+        (
+            IloKind::FolderGone {
+                folder: "Trip".into(),
+            },
+            "ilo revoked \u{201c}Trip\u{201d}: ilo couldn't find it",
+            "\u{201c}Trip\u{201d}",
+        ),
+        (
+            IloKind::NotCopied {
+                left: LeftOut::File("seats.pdf".into()),
+            },
+            "ilo started this task without \u{201c}seats.pdf\u{201d}: ilo couldn't copy it",
+            "\u{201c}seats.pdf\u{201d}",
+        ),
+        (
+            IloKind::NotCopied {
+                left: LeftOut::Files(3),
+            },
+            "ilo started this task without 3 files: ilo couldn't copy them",
+            "",
+        ),
     ];
     for (kind, whole, name) in cases {
         assert_eq!(
@@ -1252,7 +1280,9 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
     use super::words::head;
     use crate::agents::task::ilo::SignedInWith;
     // ilo's verbs. A new head that starts with another word fails here, to be read as a sentence.
-    const VERBS: [&str; 6] = ["stopped", "signed", "handed", "resumed", "started", "kept"];
+    const VERBS: [&str; 7] = [
+        "stopped", "signed", "handed", "resumed", "started", "kept", "revoked",
+    ];
     let every = [
         IloKind::Stopped {
             tab: 1,
@@ -1297,6 +1327,18 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
         IloKind::NotRestarted {
             folder: "Trip".into(),
         },
+        IloKind::Revoked {
+            folder: "Trip".into(),
+        },
+        IloKind::FolderGone {
+            folder: "Trip".into(),
+        },
+        IloKind::NotCopied {
+            left: LeftOut::File("seats.pdf".into()),
+        },
+        IloKind::NotCopied {
+            left: LeftOut::Files(3),
+        },
         IloKind::Resumed { tier: Tier::Work },
         IloKind::KeptHere,
         IloKind::Gone,
@@ -1328,6 +1370,9 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             | IloKind::StartedWithout { .. }
             | IloKind::KeptAt { .. }
             | IloKind::NotRestarted { .. }
+            | IloKind::Revoked { .. }
+            | IloKind::FolderGone { .. }
+            | IloKind::NotCopied { .. }
             | IloKind::Resumed { .. }
             | IloKind::KeptHere
             | IloKind::Gone

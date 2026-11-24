@@ -4,17 +4,19 @@
 //! keys it takes. Nothing of the tasks is read for the page's first frame, and the bar asks the
 //! core nothing until it's typed in.
 
-use std::{cell::Cell, rc::Rc};
+use std::{cell::Cell, path::PathBuf, rc::Rc};
 
 use gpui::{
     Bounds, BoxShadow, Context, Entity, FontWeight, Hsla, Pixels, SharedString, Subscription,
     Window, canvas, div, point, prelude::*, px, rgb, rgba, svg,
 };
 
+use crate::agents::files::{self, Picked, words as files_words};
 use crate::agents::task::{Card, Dot};
 use crate::agents::task::{Start, added_address, model_menu};
 use crate::agents::tier::{ANY_SITE, ONLY_ADDED, Tier};
-use crate::command_bar::{self, CommandBar, InPlaceKey, TaskAgent};
+use crate::agents::wall::Granted;
+use crate::command_bar::{self, CommandBar, Given, InPlaceKey, TaskAgent};
 use crate::palette::{Palette, Tone};
 use crate::shell::ShowStarted;
 use crate::tokens::shell::composer::*;
@@ -72,6 +74,12 @@ pub(in crate::shell) struct Resting {
     pub(in crate::shell) only_added: bool,
     /// Where the `+` chip was last drawn, which its menu hangs from.
     pub(in crate::shell) plus_chip: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The files the user attached and the folder they granted on the `+` menu, for the next
+    /// task alone, and the line saying the panel gave a folder ilo never gives. They go as the
+    /// level does.
+    pub(in crate::shell) files: Vec<PathBuf>,
+    pub(in crate::shell) folder: Option<Granted>,
+    pub(in crate::shell) refused: Option<SharedString>,
 }
 
 /// A page the user added: its tab, which its row in the menu is checked by, its address as it was
@@ -114,12 +122,25 @@ pub(super) fn model_words(agent: &TaskAgent, id: &str) -> String {
 }
 
 impl Resting {
-    /// The picks on Ask's line, which hold for the next task alone: its level, model and pages.
+    /// The picks on Ask's line, which hold for the next task alone: its level, model, pages,
+    /// files and folder.
     fn forget_picks(&mut self) {
         self.tier = Tier::default();
         self.model = None;
         self.pages.clear();
         self.only_added = false;
+        self.files.clear();
+        self.folder = None;
+        self.refused = None;
+    }
+
+    /// The files' chip and the folder's, in the order the field draws them after the pages.
+    fn given(&self) -> Vec<Given> {
+        let files = (!self.files.is_empty())
+            .then(|| Given::Files(files_words::files(self.files.len()).into()));
+        let folder = (self.folder.as_ref())
+            .map(|folder| Given::Folder(files::shown_name(folder.root()).into()));
+        files.into_iter().chain(folder).collect()
     }
 }
 
@@ -185,6 +206,9 @@ impl Shell {
             pages: Vec::new(),
             only_added: false,
             plus_chip: Rc::default(),
+            files: Vec::new(),
+            folder: None,
+            refused: None,
         });
         cx.on_next_frame(window, |shell, _, cx| {
             if let Some(resting) = &mut shell.resting {
@@ -261,13 +285,29 @@ impl Shell {
             InPlaceKey::Escape if on_ask => self.set_on_ask(false, window, cx),
             InPlaceKey::Escape => {}
             InPlaceKey::Run => self.run_composed(window, cx),
-            InPlaceKey::DropPage => {
-                if let Some(page) = self
-                    .resting
-                    .as_ref()
-                    .and_then(|resting| resting.pages.last())
-                {
+            // The last chip in the field goes: the folder, then the files one by one, then the
+            // pages.
+            InPlaceKey::DropChip => {
+                let Some(resting) = &self.resting else {
+                    return;
+                };
+                if resting.folder.is_some() {
+                    self.revoke_composer_folder(cx);
+                } else if let Some(file) = resting.files.last().cloned() {
+                    self.drop_file(file, cx);
+                } else if let Some(page) = resting.pages.last() {
                     self.toggle_page(page.tab, cx);
+                }
+            }
+            InPlaceKey::Given(at) => {
+                let Some(resting) = &self.resting else {
+                    return;
+                };
+                let clicked = window.mouse_position();
+                match resting.given().get(at) {
+                    Some(Given::Files(_)) => self.composer_files_menu(clicked, cx),
+                    Some(Given::Folder(_)) => self.composer_folder_menu(clicked, cx),
+                    None => {}
                 }
             }
         }
@@ -340,6 +380,10 @@ impl Shell {
             model,
             pages: resting.pages.iter().map(|page| page.url.clone()).collect(),
             only_added: resting.only_added,
+            files: Picked {
+                files: std::mem::take(&mut resting.files),
+                folder: resting.folder.take(),
+            },
         };
         resting.forget_picks();
         log!("browser: composer runs a task on {agent}");
@@ -419,15 +463,86 @@ impl Shell {
             .collect()
     }
 
-    /// Whether the `+` has anything to offer: a page of the Space's to add. Without one it's
-    /// disabled in its place.
-    pub(in crate::shell) fn plus_offers(&self) -> bool {
-        !self.pages_to_add().is_empty()
+    /// Whether the `+` has anything to offer: files and folders where this system can wall a
+    /// task in with them, or else a page of the Space's to add. Without either it's disabled in
+    /// its place.
+    pub(in crate::shell) fn plus_offers(&self, cx: &gpui::App) -> bool {
+        self.browser.files_available(cx) || !self.pages_to_add().is_empty()
     }
 
-    /// The `+` chip's menu: the Space's pages, those added checked. It's Add a Page's submenu once
-    /// files and folders join it, when the system can wall them off; till then a menu of one row
-    /// would be no menu, so `+` lists the pages itself. With none, the `+` is disabled.
+    /// The `+` chip's menu. Where this system can wall a task in with its files: Add Page, whose
+    /// submenu is the Space's pages, Add Files… and Add Folder…. Till then, the pages alone.
+    pub(in crate::shell) fn composer_plus_menu(
+        &mut self,
+        clicked: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.browser.files_available(cx) {
+            return self.pages_menu(clicked, cx);
+        }
+        let Some(resting) = &self.resting else {
+            return;
+        };
+        let chip = resting.plus_chip.get();
+        let added: Vec<u64> = resting.pages.iter().map(|page| page.tab).collect();
+        let pages = self.pages_to_add();
+        let none: MenuAction = Box::new(|_, _| {});
+        let mut items: Vec<(MenuEntry, MenuAction)> = vec![(
+            MenuEntry::new(files_words::ADD_PAGE, !pages.is_empty()),
+            none,
+        )];
+        for (tab, title) in pages {
+            let entry = MenuEntry {
+                page: true,
+                favicon: self.tabs.get(&tab).and_then(|tab| tab.favicon.clone()),
+                ..MenuEntry::named(title, true).checked(added.contains(&tab))
+            };
+            let pick: MenuAction = Box::new(move |shell, cx| shell.toggle_page(tab, cx));
+            items.push((entry.under(0), pick));
+        }
+        let add_files: MenuAction = Box::new(|shell, cx| shell.add_files(cx));
+        let add_folder: MenuAction = Box::new(|shell, cx| shell.add_folder(cx));
+        items.push((MenuEntry::new(files_words::ADD_FILES, true), add_files));
+        items.push((MenuEntry::new(files_words::ADD_FOLDER, true), add_folder));
+        self.show_menu(items, hung_under(chip, clicked), None, cx);
+    }
+
+    /// The attached files' chip's menu: each file by its name, checked, as a pick drops it.
+    pub(in crate::shell) fn composer_files_menu(
+        &mut self,
+        clicked: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(resting) = &self.resting else {
+            return;
+        };
+        let items: Vec<(MenuEntry, MenuAction)> = (resting.files.iter().cloned())
+            .map(|file| {
+                let entry = MenuEntry::named(files::shown_name(&file), true).checked(true);
+                let drop: MenuAction = Box::new(move |shell, cx| shell.drop_file(file, cx));
+                (entry, drop)
+            })
+            .collect();
+        self.show_menu(items, clicked, None, cx);
+    }
+
+    /// The folder's chip's menu: its one act, Revoke.
+    pub(in crate::shell) fn composer_folder_menu(
+        &mut self,
+        clicked: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        if !(self.resting.as_ref()).is_some_and(|resting| resting.folder.is_some()) {
+            return;
+        }
+        let revoke: MenuAction = Box::new(|shell, cx| shell.revoke_composer_folder(cx));
+        let items = vec![(MenuEntry::new(files_words::REVOKE, true), revoke)];
+        self.show_menu(items, clicked, None, cx);
+    }
+
+    /// The `+` chip's menu where files and folders aren't available: the Space's pages, those
+    /// added checked, as a menu of one row (Add Page) would be no menu. With none, the `+` is
+    /// disabled.
     pub(in crate::shell) fn pages_menu(
         &mut self,
         clicked: gpui::Point<Pixels>,
@@ -592,8 +707,10 @@ impl Shell {
             .flat_map(|resting| &resting.pages)
             .map(|page| (page.url.clone().into(), page.title.clone()))
             .collect();
+        let given = (self.resting.as_ref()).map_or_else(Vec::new, Resting::given);
         let field = bar.update(cx, |bar, cx| {
             bar.set_added(added, cx);
+            bar.set_given(given, cx);
             bar.field(fill, window, cx)
         });
         let on_ask = bar.read(cx).on_ask();
@@ -727,6 +844,7 @@ impl Shell {
     fn ask_line(&mut self, on_ask: bool, width: f32, cx: &mut Context<Self>) -> gpui::Div {
         let palette = self.palette;
         let line = div()
+            .relative()
             .w(px(width))
             .mt(px(LINE_TOP))
             .h(px(CHIP_HEIGHT))
@@ -757,6 +875,7 @@ impl Shell {
         let tier_chip = (self.resting.as_ref()).map(|resting| resting.tier_chip.clone());
         let model_chip = (self.resting.as_ref()).map(|resting| resting.model_chip.clone());
         let plus_chip = (self.resting.as_ref()).map(|resting| resting.plus_chip.clone());
+        let refused = (self.resting.as_ref()).and_then(|resting| resting.refused.clone());
         let assistant = (self.resting.as_ref()).and_then(|resting| {
             let agent = resting.bar.update(cx, |bar, cx| bar.assistant(cx))?;
             Some(model_words(
@@ -765,14 +884,14 @@ impl Shell {
             ))
         });
         // With nothing to add, the + stays in its place, disabled: no click that shows nothing.
-        let offers = self.plus_offers();
+        let offers = self.plus_offers(cx);
         line.child(
             chip()
                 .id("composer-plus")
                 .relative()
                 .when(offers, |chip| {
                     chip.on_click(cx.listener(|shell, event: &gpui::ClickEvent, _, cx| {
-                        shell.pages_menu(event.position(), cx)
+                        shell.composer_plus_menu(event.position(), cx)
                     }))
                 })
                 .children(plus_chip.as_ref().map(drawn_at))
@@ -802,6 +921,15 @@ impl Shell {
                 .children(model_chip.as_ref().map(drawn_at))
                 .child(assistant)
                 .child(glyph("icons/chevron-down.svg", CHIP_CHEVRON))
+        }))
+        // Under the line, so nothing on it moves.
+        .children(refused.map(|refused| {
+            div()
+                .absolute()
+                .top(px(CHIP_HEIGHT + LINE_TOP))
+                .left(px(CHIP_INSET))
+                .right(px(CHIP_INSET))
+                .child(refused)
         }))
     }
 

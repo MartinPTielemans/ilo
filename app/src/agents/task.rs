@@ -19,18 +19,20 @@ use futures::StreamExt;
 use gpui::{App, AppContext, Context, SharedString};
 use serde_json::Value;
 
-use super::files::Given;
+use super::files::{self, Given, Names, Never, Picked, never_grantable};
 use super::helpers::{self, Helpers};
 use super::ready::{Found, Ready};
 use super::runner::{self, Cli, Failure, Launch, Out, Process};
 use super::sign_in::Offer;
-use super::tier::{Sites, Stop, Tier};
+use super::tier::{Sites, StartedWith, Stop, Tier};
 use super::{Agents, Client, Question, ToolResult, notes, page, site, tools};
 use crate::shell::MenuEntry;
 
 pub mod ilo;
 mod pick_up;
+pub(super) mod revoke;
 pub(super) mod rewall;
+pub use revoke::FolderInUse;
 
 /// The answers an ask shows as buttons on the card, at most, and how long each may be.
 pub const ANSWERS: usize = 3;
@@ -396,6 +398,8 @@ pub struct Task {
     /// The files the user gave it (#4101), which its assistant then runs inside a wall for. None
     /// until a grant gives it some.
     pub(in crate::agents) files: Given,
+    /// What its files are shown by, in its conversation alone, as long as it has them.
+    pub(in crate::agents) names: super::files::Names,
     /// Its start inside a wall, until the system says the wall is up (rewall.rs).
     pub(super) rising: Option<rewall::Rising>,
     /// What came of each wall of its that wasn't put up, in order, each with the turn it came in
@@ -662,6 +666,8 @@ pub struct Start {
     pub pages: Vec<String>,
     /// Only the sites you add: the task may go only to the sites of the pages added.
     pub only_added: bool,
+    /// The files and the folder picked on the `+` menu (#4101), given at the start alone.
+    pub files: super::files::Picked,
 }
 
 /// The longest address a task gets for a page the user added: a page's over it isn't offered.
@@ -770,6 +776,9 @@ pub struct Tasks {
     /// The files the tasks a test starts are given, as a grant will give a task its own.
     #[cfg(test)]
     pub(super) files: Given,
+    /// Whether a test's system can wall a task in with its files.
+    #[cfg(test)]
+    pub(super) files_available: bool,
 }
 
 impl Agents {
@@ -1377,6 +1386,7 @@ impl Agents {
             model: picked,
             pages,
             only_added,
+            files: given,
         } = start.into();
         // Only an http(s) page is added, and only its address: the composer lists no other, and
         // nothing else is opened.
@@ -1458,21 +1468,121 @@ impl Agents {
             told: None,
             helpers: Helpers::of_task(self.helpers_on() && cli == Cli::Claude),
             files: self.files_at_start(),
+            names: self.names_at_start(),
             rising: None,
             rewalled: Vec::new(),
         };
         self.tasks.tasks.push(task);
         self.tokens_changed();
-        // The log keeps the tier it starts at, as it keeps a change of it.
-        let started = super::tier::started_logged(tier, pages.len());
-        self.note_on(&agent, 0, super::access::ACCESS_ACTION, "", &started, "");
         let task = self.task(&agent);
         let first = first_message(asked, task.and_then(|task| task.page.as_ref()));
         let first = with_added(first, task.map_or(&[], |task| &task.added));
-        self.launch(&agent, &first, cx);
-        self.wait_for_answer(&agent, cx);
+        self.start_with(&agent, first, given, cx);
         cx.notify();
         Some(agent)
+    }
+
+    /// Starts `agent`'s task with what the user picked on the `+`: the folder, if ilo may give
+    /// it, and ilo's copies of the files attached, made off the UI thread before its assistant
+    /// starts, as a file may be large. A system that can't wall a task in gives it neither.
+    fn start_with(&mut self, agent: &str, first: String, picked: Picked, cx: &mut Context<Self>) {
+        let never = Never::here(Some(self.tasks_dir()));
+        let folder = (picked.folder).filter(|folder| !never_grantable(folder.root(), &never));
+        let picked = match self.files_available() {
+            true => Picked { folder, ..picked },
+            false => Picked::default(),
+        };
+        if let Some(task) = self.task_mut(agent)
+            && (picked.folder.is_some() || !picked.files.is_empty())
+        {
+            task.files.folder = picked.folder.clone();
+            task.names = Names::of(&picked);
+        }
+        let with = StartedWith {
+            pages: self.task(agent).map_or(0, |task| task.added.len()),
+            folder: picked.folder.is_some(),
+            files: picked.files.len(),
+            left_out: false,
+        };
+        if picked.files.is_empty() {
+            self.log_start(agent, with);
+            self.launch(agent, &first, cx);
+            return self.wait_for_answer(agent, cx);
+        }
+        let into = self.attached_dir(agent);
+        let files = picked.files;
+        let copy = (cx.background_executor())
+            .spawn(async move { files::copy_attached(&files, &into).map(|()| into) });
+        let agent = agent.to_string();
+        cx.spawn(async move |agents, cx| {
+            let copied = copy.await.ok();
+            _ = agents.update(cx, |agents, cx| {
+                agents.attached(&agent, &first, with, copied, cx)
+            });
+        })
+        .detach();
+    }
+
+    /// The log keeps the tier `agent`'s task starts at, as it keeps a change of it, with what it
+    /// starts with once that's known: its files are counted after their copies are made.
+    fn log_start(&mut self, agent: &str, with: StartedWith) {
+        let Some(tier) = self.task(agent).map(|task| task.tier) else {
+            return;
+        };
+        let started = super::tier::started_logged(tier, with);
+        self.note_on(agent, 0, super::access::ACCESS_ACTION, "", &started, "");
+    }
+
+    /// Where ilo's copies of `agent`'s attached files are, beside its own folder and not in it,
+    /// as the assistant writes in its own and only reads these.
+    fn attached_dir(&self, agent: &str) -> PathBuf {
+        self.tasks_dir().join(format!("{agent} files"))
+    }
+
+    /// ilo's copies of `agent`'s attached files are made, or couldn't be: its assistant starts,
+    /// with them or without. A task stopped meanwhile starts nothing, and its copies go.
+    fn attached(
+        &mut self,
+        agent: &str,
+        first: &str,
+        with: StartedWith,
+        copied: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        let working = |task: &&mut Task| task.state == State::Working;
+        if self.task_mut(agent).filter(working).is_none() {
+            self.log_start(agent, with);
+            _ = std::fs::remove_dir_all(self.attached_dir(agent));
+            return;
+        }
+        let copied_none = copied.is_none();
+        match copied {
+            Some(into) => {
+                if let Some(task) = self.task_mut(agent) {
+                    task.files.attached = Some(into);
+                }
+            }
+            // Not silently: its line names what the task started without.
+            None => {
+                let files = Given {
+                    folder: None,
+                    attached: Some(self.attached_dir(agent)),
+                };
+                self.place_in(agent, super::lines::Happened::NotCopied { files });
+            }
+        }
+        let left_out = copied_none;
+        self.log_start(agent, StartedWith { left_out, ..with });
+        self.launch(agent, first, cx);
+        self.wait_for_answer(agent, cx);
+    }
+
+    /// Whether this system can wall a task in with its files, which the `+` offers them by.
+    pub fn files_available(&self) -> bool {
+        #[cfg(test)]
+        return self.tasks.files_available;
+        #[cfg(not(test))]
+        super::wall::available().is_ok()
     }
 
     /// While the task thinks, its CLI has NO_ANSWER to take its first step or say something,
@@ -1526,6 +1636,18 @@ impl Agents {
         return self.tasks.files.clone();
         #[cfg(not(test))]
         Given::default()
+    }
+
+    /// The names of `files_at_start`, as the system's panel would show them.
+    fn names_at_start(&self) -> Names {
+        #[cfg(test)]
+        return Names {
+            folder: (self.tasks.files.folder.as_ref())
+                .map(|folder| super::files::shown_name(folder.root())),
+            files: Vec::new(),
+        };
+        #[cfg(not(test))]
+        Names::default()
     }
 
     /// Starts the task's CLI with its first message.
@@ -2229,6 +2351,7 @@ impl Agents {
         _ = std::fs::remove_dir_all(dir.join(agent));
         _ = std::fs::remove_file(dir.join(format!("{agent}.json")));
         _ = std::fs::remove_file(dir.join(format!("{agent}.md")));
+        _ = std::fs::remove_dir_all(dir.join(format!("{agent} files")));
     }
 
     /// A task's call, as a step of its trace from when it came, or an outside agent's, as a step
@@ -2682,6 +2805,7 @@ impl Agents {
             told: None,
             helpers: Helpers::default(),
             files: Given::default(),
+            names: Default::default(),
             rising: None,
             rewalled: Vec::new(),
         });

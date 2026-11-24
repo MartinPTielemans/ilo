@@ -351,7 +351,8 @@ mod tests {
                 }
             }
         }
-        // This file's tests alone, until the panel's file joins the list by name.
-        assert_eq!(makers, ["wall.rs"]);
+        // The composer's panel, and this file's tests.
+        makers.sort();
+        assert_eq!(makers, ["folder_panel.rs", "wall.rs"]);
     }
 }

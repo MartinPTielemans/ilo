@@ -574,3 +574,169 @@ fn files_taken_back_from_a_task_at_rest_end_its_run(cx: &mut TestAppContext) {
     assert_eq!(walls.asked().len(), 1);
     assert_eq!(run.state(&agent, cx), State::Working);
 }
+
+/// A folder a live task holds, as Settings › Agents › Folders in use lists it: by the name the
+/// user saw, beside its task's title.
+fn in_use(run: &Run, cx: &mut TestAppContext) -> Vec<(String, String)> {
+    (run.agents).read_with(cx, |agents, _| {
+        (agents.folders_in_use().into_iter())
+            .map(|held| (held.folder.to_string(), held.agent.to_string()))
+            .collect()
+    })
+}
+
+/// Revoke takes a live task's folder at once: Folders in use no longer lists it, its assistant
+/// starts again without it, and the conversation alone says so by the folder's name (J2). The log
+/// has the act with no name in it.
+#[gpui::test]
+fn a_revoked_folder_goes_at_once_and_only_the_conversation_names_it(cx: &mut TestAppContext) {
+    use crate::agents::task::revoke::REVOKED_LOGGED;
+    let (run, walls, agent) = started("revoke", folder(), cx);
+    run.ran(1);
+    assert_eq!(in_use(&run, cx), [(FOLDER.to_string(), agent.clone())]);
+    (run.agents).update(cx, |agents, cx| agents.revoke_folder(&agent, cx));
+    assert_eq!(in_use(&run, cx), []);
+    assert!(!stands(&run, &agent, cx).1, "the task has no files left");
+    let (args, first) = run.ran(2);
+    assert!(!walled(&args), "{args:?}");
+    let told = crate::agents::task::revoke::revoked_told(true, false);
+    assert!(first.ends_with(&told), "{first}");
+    assert_eq!(
+        walls.asked().len(),
+        1,
+        "no wall for a task with nothing left"
+    );
+    let revoked = IloKind::Revoked {
+        folder: FOLDER.into(),
+    };
+    assert_eq!(lines(&run, &agent, cx), [revoked]);
+    // The log has its own words alone, never the folder's name or where it is.
+    let started = tier::started_logged(Tier::default(), Default::default());
+    assert_eq!(logged(&run, &agent, cx), [started.as_str(), REVOKED_LOGGED]);
+    // Nothing to revoke a second time, and no second line.
+    (run.agents).update(cx, |agents, cx| agents.revoke_folder(&agent, cx));
+    assert_eq!(lines(&run, &agent, cx).len(), 1);
+}
+
+/// A folder that's no longer where it was ends its grant at the task's start, and the task goes on
+/// without it, saying so once (J6) and not as a wall ilo couldn't put up.
+#[gpui::test]
+fn a_folder_gone_at_the_start_ends_its_grant_and_the_task_goes_on(cx: &mut TestAppContext) {
+    use crate::agents::wall::Refusal;
+    let run = Run::new("gone", cx);
+    let asked: Rc<RefCell<Vec<bool>>> = Rc::default();
+    let put_up: PutUp = {
+        let asked = asked.clone();
+        Rc::new(move |wall: &WallFor| {
+            asked.borrow_mut().push(wall.folder.is_some());
+            match wall.folder {
+                Some(_) => Err(WallRefused::Refused(Refusal::Gone)),
+                None => Ok(Wall::for_test(None)),
+            }
+        })
+    };
+    (run.agents).update(cx, |agents, _| {
+        agents.tasks.files = Given {
+            folder: Some(Granted::for_test()),
+            attached: Some(PathBuf::from("/nonexistent/attached")),
+        };
+        agents.tasks.wall = Some(put_up);
+    });
+    let agent = run.start(Cli::Claude, cx);
+    let (args, _) = run.ran(1);
+    // The attached copies still go inside a wall, without the folder.
+    assert_eq!(*asked.borrow(), [true, false]);
+    assert!(walled(&args), "{args:?}");
+    let gone = IloKind::FolderGone {
+        folder: FOLDER.into(),
+    };
+    assert_eq!(lines(&run, &agent, cx), [gone]);
+    assert_eq!(in_use(&run, cx), []);
+}
+
+/// Attached files ilo couldn't copy don't go silently: the task starts without them, its line
+/// names the one file (X6c), and the start's entry counts them and says they were left out.
+#[gpui::test]
+fn files_ilo_couldnt_copy_are_said_and_the_start_counts_them(cx: &mut TestAppContext) {
+    use crate::agents::files::Picked;
+    use crate::agents::task::{AskedOn, Start};
+    let run = Run::new("not-copied", cx);
+    (run.agents).update(cx, |agents, _| agents.tasks.files_available = true);
+    let missing = std::env::temp_dir().join("ilo-test-no-such-dir/seats.pdf");
+    let start = Start {
+        tier: Tier::default(),
+        model: None,
+        pages: Vec::new(),
+        only_added: false,
+        files: Picked {
+            files: vec![missing],
+            folder: None,
+        },
+    };
+    let page = Some(AskedOn {
+        url: "https://www.example.com/trains".into(),
+        title: "Trains to Lisbon".into(),
+    });
+    let agent = (run.agents)
+        .update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, ASKED, page, 1, start, cx)
+        })
+        .expect("started");
+    cx.run_until_parked();
+    run.ran(1);
+    let left = LeftOut::File("seats.pdf".into());
+    assert_eq!(lines(&run, &agent, cx), [IloKind::NotCopied { left }]);
+    let started = tier::started_logged(
+        Tier::default(),
+        tier::StartedWith {
+            files: 1,
+            left_out: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        started,
+        "Started at Work on pages · 1 file · files left out"
+    );
+    assert_eq!(logged(&run, &agent, cx), [started]);
+}
+
+/// What the assistant is told as its folder goes is one of the lead's texts exactly, and none
+/// names a folder, holds a path or gives a reason.
+#[test]
+fn a_revoked_folders_assistant_is_told_the_leads_words_alone() {
+    use crate::agents::task::revoke::revoked_told;
+    const REST: &str = "You can no longer read or change anything in it. Don't try to reach it \
+                        another way: carry on with the rest, and say what you couldn't finish. \
+                        Only the user can give a task a folder.";
+    const STILL: &str = " The files attached to this task are still there.";
+    let user = format!("The user revoked this task's folder. {REST}");
+    let ilo = format!("ilo revoked this task's folder. {REST}");
+    let forms = [
+        (revoked_told(true, false), user.clone()),
+        (revoked_told(true, true), format!("{user}{STILL}")),
+        (revoked_told(false, false), ilo.clone()),
+        (revoked_told(false, true), format!("{ilo}{STILL}")),
+    ];
+    for (told, text) in &forms {
+        assert_eq!(told, text);
+        assert!(
+            !told.contains('/') && !told.contains('\\'),
+            "a path in {told:?}"
+        );
+        assert!(
+            !told.contains('\u{201c}') && !told.contains('"'),
+            "a name in {told:?}"
+        );
+        for why in [
+            "moved",
+            "renamed",
+            "deleted",
+            "ejected",
+            "because",
+            "couldn't find",
+        ] {
+            assert!(!told.contains(why), "a reason in {told:?}");
+        }
+    }
+}

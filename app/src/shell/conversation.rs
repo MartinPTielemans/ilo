@@ -2107,6 +2107,8 @@ impl TalkView {
             } => "icons/folder.svg",
             IloKind::StartedWithout { .. } => "icons/file.svg",
             IloKind::NotRestarted { .. } => "icons/ban.svg",
+            IloKind::Revoked { .. } | IloKind::FolderGone { .. } => "icons/folder.svg",
+            IloKind::NotCopied { .. } => "icons/file.svg",
             IloKind::Resumed { .. } => "icons/play.svg",
             IloKind::KeptHere => "icons/save.svg",
             IloKind::Gone
