@@ -945,6 +945,7 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
+        steps: Vec::new(),
         retry: false,
         fix: None,
     };
@@ -1234,6 +1235,50 @@ fn the_strip_names_the_agent_as_its_card_does(cx: &mut TestAppContext) {
     assert_eq!(says(&shell, cx).0, "MCP client needs you");
 }
 
+/// While a task works on several pages, the strip under each says that page's own step, never
+/// another page's, and nothing under a page with no step yet; a task that says no page's steps
+/// has its card's words under its page, as it did (#4102).
+#[gpui::test]
+fn the_strip_under_a_page_says_that_pages_own_step(cx: &mut TestAppContext) {
+    use crate::agents::task::{Card, Dot};
+    let (shell, _host, cx) = shell_with_task(cx);
+    still(cx);
+    let card = |steps: &[(u64, &str)]| Card {
+        agent: "task-1".into(),
+        home: 1,
+        space: 3,
+        name: "Claude".into(),
+        replies: true,
+        title: "Find two seats".into(),
+        status: "Working · 2 helpers".into(),
+        asks: false,
+        dot: Dot::Working,
+        answers: Vec::new(),
+        question: None,
+        open: Vec::new(),
+        steps: (steps.iter())
+            .map(|(tab, step)| (*tab, step.to_string().into()))
+            .collect(),
+        retry: false,
+        fix: None,
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_task_cards(vec![card(&[])], cx);
+        shell.show_task("task-1".into(), cx);
+    });
+    let mut says = |steps: &[(u64, &str)], tab: u64| {
+        shell.update(cx, |shell, cx| {
+            shell.set_task_cards(vec![card(steps)], cx);
+            shell.task_strip_words(tab).1
+        })
+    };
+    let steps = [(30, "Reading tickets.example"), (31, "Clicking “Stalls”")];
+    assert_eq!(says(&steps, 30), steps[0].1);
+    assert_eq!(says(&steps, 31), steps[1].1);
+    assert_eq!(says(&steps[1..], 30), "");
+    assert_eq!(says(&[], 30), "Working · 2 helpers");
+}
+
 /// Quiet until it needs you (#1080): a card under the URL field only ever asks, so each has one
 /// primary, the answer its agent waits on; the strip under a page watched has one only while the
 /// user holds the page its card waits for, Hand Back, and none while the agent works, has done or
@@ -1412,6 +1457,7 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
+        steps: Vec::new(),
         retry: false,
         fix: None,
     };

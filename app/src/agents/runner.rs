@@ -106,6 +106,8 @@ pub struct Launch {
     pub instructions: String,
     /// The tools it may call, as the server lists them.
     pub tools: Vec<String>,
+    /// Whether it gets its helper tool (#4102), which only Claude's arguments read.
+    pub helpers: bool,
 }
 
 /// What a task's CLI says, as the reader thread hands it to the UI thread.
@@ -124,6 +126,21 @@ pub enum Out {
     Ended(Option<Failure>),
     /// The process has gone: its output closed. What it last said on stderr.
     Gone(String),
+    /// What its output tells of a helper (#4102), by the call of the task's that asked for it.
+    Helper { id: String, told: Helper },
+    /// Its CLI says a helper started, `deep` levels under the task, or 0 if it doesn't say how
+    /// deep: what ilo counts for the limit.
+    Started { deep: u64 },
+}
+
+/// What a task's output tells of one of its helpers, for its line in the conversation. A label:
+/// nothing ilo allows or refuses reads it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Helper {
+    /// The task asked for it.
+    Asked,
+    /// It calls one of the browser's tools on this tab.
+    On(u64),
 }
 
 /// Why a turn or a run ended badly.
@@ -396,9 +413,13 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
         "--verbose",
         // Its text as it writes it, which the conversation shows as it comes.
         "--include-partial-messages",
-        // None of its own tools: no shell, files, web fetch or search.
+        // None of its own tools: no shell, files, web fetch or search. With helpers on, the one
+        // that starts a helper.
         "--tools",
-        "",
+        match launch.helpers {
+            true => super::helpers::TOOLS[0],
+            false => "",
+        },
         // The browser's server alone, none of the user's.
         "--strict-mcp-config",
         "--mcp-config",
@@ -432,6 +453,9 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
         "--append-system-prompt-file".into(),
         instructions_file(launch).to_string_lossy().into_owned(),
     ]);
+    if launch.helpers {
+        args.extend(super::helpers::claude_args(&allowed));
+    }
     args
 }
 
@@ -451,6 +475,11 @@ pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    // A line with a parent is a helper's (#4102), never the task's: nothing it says, writes or
+    // thinks is the task's, shown or kept. It tells only which tabs the helper calls for.
+    if let Some(parent) = message.get("parent_tool_use_id").and_then(Value::as_str) {
+        return super::helpers::claude_read(parent, kind, message);
+    }
     if kind == "stream_event" {
         return claude_piece(message.get("event").unwrap_or(&Value::Null), turn);
     }
@@ -484,8 +513,10 @@ pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
                         _ => None,
                     }
                 })
+                .chain(super::helpers::asked(content.into_iter().flatten()))
                 .collect()
         }
+        "system" => super::helpers::started(message).into_iter().collect(),
         "rate_limit_event" => {
             let info = message.get("rate_limit_info").unwrap_or(&Value::Null);
             if info.get("status").and_then(Value::as_str) == Some("rejected") {

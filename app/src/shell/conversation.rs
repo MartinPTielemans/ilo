@@ -1094,8 +1094,8 @@ impl TalkView {
         // The area's own width as it last drew, the grid taking its inset but a gap each side.
         let area = (self.drawn_at.get()).map_or(self.viewport.width, |bounds| bounds.size.width);
         let room = f32::from(area) - 2. * PICTURE_GAP;
-        let columns = (((room + PICTURE_GAP) / (PICTURE_WIDTH + PICTURE_GAP)).floor())
-            .clamp(1., PICTURES_COLUMNS) as usize;
+        let (columns, wide) = grid_shape(room, tabs.len());
+        let high = wide * PICTURE_HEIGHT / PICTURE_WIDTH;
         let tiles: Vec<_> = (tabs.iter().enumerate())
             .map(|(index, (tab, site))| {
                 let tab = *tab;
@@ -1161,8 +1161,8 @@ impl TalkView {
                 });
                 let picture = div()
                     .relative()
-                    .w(px(PICTURE_WIDTH))
-                    .h(px(PICTURE_HEIGHT))
+                    .w(px(wide))
+                    .h(px(high))
                     .rounded(px(PICTURE_RADIUS))
                     .bg(look.palette.plate(gpui::rgba(KEYS_FILL).a))
                     .overflow_hidden()
@@ -1180,7 +1180,7 @@ impl TalkView {
                     });
                 let line = |words: SharedString, color: Hsla| {
                     div()
-                        .w(px(PICTURE_WIDTH))
+                        .w(px(wide))
                         .h(px(SITE))
                         .truncate()
                         .text_size(px(text::SMALL))
@@ -1239,7 +1239,7 @@ impl TalkView {
                 div()
                     .id(("conversation-page", tab))
                     .flex_none()
-                    .w(px(PICTURE_WIDTH))
+                    .w(px(wide))
                     .when(index % columns > 0, |tile| tile.ml(px(PICTURE_GAP)))
                     .mb(px(PICTURES_ROW_GAP))
                     .opacity(opacity)
@@ -1250,7 +1250,7 @@ impl TalkView {
                     .on_click(cx.listener(move |view, _, _, cx| view.watch(tab, cx)))
             })
             .collect();
-        let width = columns as f32 * PICTURE_WIDTH + (columns as f32 - 1.) * PICTURE_GAP;
+        let width = columns as f32 * wide + (columns as f32 - 1.) * PICTURE_GAP;
         div()
             .id("conversation-pages")
             .flex_1()
@@ -2100,7 +2100,7 @@ impl TalkView {
             _ => None,
         };
         let glyph = match &line.kind {
-            IloKind::Stopped { .. } => "icons/ban.svg",
+            IloKind::Stopped { .. } | IloKind::Helpers { .. } => "icons/ban.svg",
             IloKind::Yours { .. } => "icons/user.svg",
             IloKind::TabBack { .. } => "icons/undo-2.svg",
             IloKind::SignedIn { .. } => "icons/key-round.svg",
@@ -2823,6 +2823,19 @@ fn unpressed() -> gpui::Div {
         .top_0()
         .size_full()
         .block_mouse_except_scroll()
+}
+
+/// How many pictures a row of Pages holds in `room`, and how wide each is, for `pages` of them:
+/// as many at their full size as fit, up to `PICTURES_COLUMNS`. Where only one fits, three pages
+/// or more go two across, each half the room at the picture's own shape, so four pages beside a
+/// page aren't a column the user scrolls for the third (#4102).
+pub(super) fn grid_shape(room: f32, pages: usize) -> (usize, f32) {
+    let fit = (((room + PICTURE_GAP) / (PICTURE_WIDTH + PICTURE_GAP)).floor())
+        .clamp(1., PICTURES_COLUMNS) as usize;
+    match (fit, pages) {
+        (1, 3..) => (2, ((room - PICTURE_GAP) / 2.).floor().max(1.)),
+        _ => (fit, PICTURE_WIDTH),
+    }
 }
 
 /// What a page's picture says under its site: why the user holds it from the agent, `held`, as

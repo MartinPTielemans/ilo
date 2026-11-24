@@ -35,6 +35,7 @@ fn card() -> Card {
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
+        steps: Vec::new(),
         retry: false,
         fix: None,
     }
@@ -1315,7 +1316,8 @@ fn its_trace(talk: &mut Conversation) -> &mut Trace {
 }
 
 /// A task at work with helpers says how many on its Working line, one in its own form, in place
-/// of its steps; without one, and once its turn is over, the line counts its steps as it did.
+/// of its steps, and still once its turn is over, as its helpers' lines stay; without one, the
+/// line counts its steps as it did.
 #[test]
 fn a_working_line_counts_the_tasks_helpers() {
     let summary = |talk: &mut Conversation| {
@@ -1335,7 +1337,42 @@ fn a_working_line_counts_the_tasks_helpers() {
 
     let over = its_trace(&mut talk);
     (over.running, over.took) = (false, Some(41));
-    assert_eq!(summary(&mut talk), "Worked for 41 s · 1 step");
+    assert_eq!(summary(&mut talk), "Worked for 41 s · 4 helpers");
+}
+
+/// Pages' grid holds as many pictures across as fit at their full size, up to the most a row has.
+/// Where only one fits, as beside a page, three pages or more go two across, each half the room,
+/// so no one scrolls for the third; one page or two stay whole.
+#[test]
+fn three_pages_or_more_are_never_fewer_than_two_across() {
+    use super::grid_shape;
+    use crate::tokens::shell::conversation::{PICTURE_GAP, PICTURE_WIDTH, PICTURES_COLUMNS};
+
+    // Room for one picture and most of a second.
+    let one = PICTURE_WIDTH * 1.75;
+    for pages in [1, 2] {
+        assert_eq!(grid_shape(one, pages), (1, PICTURE_WIDTH), "{pages} pages");
+    }
+    for pages in [3, 4, 9] {
+        let (across, wide) = grid_shape(one, pages);
+        assert_eq!(across, 2, "{pages} pages");
+        assert!(wide < PICTURE_WIDTH, "{wide}");
+        let (row, spare) = (2. * wide + PICTURE_GAP, one - (2. * wide + PICTURE_GAP));
+        assert!(
+            row <= one && spare < 2.,
+            "the two don't fill the room: {row} of {one}"
+        );
+    }
+    // With room for more, each is whole however many there are.
+    let two = 2. * PICTURE_WIDTH + PICTURE_GAP;
+    assert_eq!(grid_shape(two, 4), (2, PICTURE_WIDTH));
+    let wide = (PICTURES_COLUMNS + 1.) * (PICTURE_WIDTH + PICTURE_GAP);
+    for pages in [1, 4] {
+        assert_eq!(
+            grid_shape(wide, pages),
+            (PICTURES_COLUMNS as usize, PICTURE_WIDTH)
+        );
+    }
 }
 
 /// Opened, as it is while it works, the Working line lists a line for each helper with the task's

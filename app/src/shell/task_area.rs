@@ -1019,7 +1019,16 @@ impl Shell {
         };
         let name = card.name.clone();
         match card.dot {
-            Dot::Working => (format!("{name} is working"), card.status.to_string()),
+            // The page's own step once the task works on several, never another page's.
+            Dot::Working => {
+                let own = (card.steps.iter()).find(|(each, _)| *each == tab);
+                let detail = match (card.steps.is_empty(), own) {
+                    (true, _) => card.status.to_string(),
+                    (false, Some((_, step))) => step.to_string(),
+                    (false, None) => String::new(),
+                };
+                (format!("{name} is working"), detail)
+            }
             // What it needs the user for, without the card's "Needs you", which the title says.
             Dot::Waiting => {
                 let lead = status_lead(&card.status);

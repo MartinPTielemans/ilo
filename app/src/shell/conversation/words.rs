@@ -29,6 +29,15 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         IloKind::TabBack { .. } => (format!("{agent} needs this tab back"), None),
         IloKind::SignedIn { site, .. } => ("signed in to".into(), Some(site.to_string())),
         IloKind::TierChanged { to, .. } => (format!("· You set this task to {}", to.label()), None),
+        // The helpers' limit (#4102), by the app's own count, each a whole sentence.
+        IloKind::Helpers { deep, .. } => (
+            match (*deep, crate::tokens::agents::helpers::MOST) {
+                (true, _) => format!("stopped {agent} from starting helpers under a helper"),
+                (false, 1) => format!("stopped {agent} from starting more than 1 helper"),
+                (false, most) => format!("stopped {agent} from starting more than {most} helpers"),
+            },
+            None,
+        ),
         IloKind::Resumed { tier } => (format!("resumed this task at {}", tier.label()), None),
         // Where the assistant is the subject, a middle dot sets ilo's mark off from the sentence.
         // A kept task takes a reply while the browser runs, and the words promise no more.
@@ -59,6 +68,7 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
             SignedInWith::Extension(name) => format!("With {name}."),
         }),
         IloKind::Yours { .. } | IloKind::TabBack { .. } | IloKind::TierChanged { .. } => None,
+        IloKind::Helpers { .. } => None,
         IloKind::KeptHere => Some(KEPT_IN.into()),
         IloKind::Resumed { .. } => None,
         IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing => None,
