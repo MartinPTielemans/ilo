@@ -366,6 +366,14 @@ source_set("tile_rule") {
   deps = [ "//base" ]
 }
 
+# Which Space a window shows at launch, apart so browser_core_unittests tests it alone (#4230).
+source_set("launch_space_rule") {
+  sources = [
+    "launch_space_rule.cc",
+    "launch_space_rule.h",
+  ]
+}
+
 # A Board's folder: its names, the pictures it keeps and its writes, apart so browser_core_unittests
 # tests them alone (#3073).
 source_set("board_store") {
@@ -972,6 +980,7 @@ source_set("browser_core") {
     ":sync_spaces_newer",
     ":sync_trouble",
     ":link_card_rule",
+    ":launch_space_rule",
     ":tile_rule",
     ":share_snapshot",
     ":shortcut_key",
@@ -1280,6 +1289,7 @@ test("browser_core_unittests") {
     "arrange_rule_unittest.cc",
     "focus_leaving_rule_unittest.cc",
     "tile_rule_unittest.cc",
+    "launch_space_rule_unittest.cc",
     "live_folder_rule_unittest.cc",
     "mojo_once_for_testing.h",
     "native_ad_block_lists_unittest.cc",
@@ -1350,6 +1360,7 @@ test("browser_core_unittests") {
     ":archive_rule",
     ":arrange_rule",
     ":focus_leaving_rule",
+    ":launch_space_rule",
     ":tile_rule",
     ":overlay_lend",
     ":live_folder_rule",
