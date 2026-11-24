@@ -284,9 +284,15 @@ with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(prefs, f)
 ' "$prefs" "$(native_path "$PWD/$out/downloads")"
   # Every run is sourced into this one shell, so a helper a run defines under a lib.sh name would
-  # replace lib.sh's for the runs after it.
+  # replace lib.sh's for the runs after it, and a run that sets the address of the check's site
+  # would start the runs after it on another (#4152).
+  shared="${site:-} ${port:-}"
   . "check/$run.sh"
   counted_nowhere
+  if [ "$shared" != " " ] && [ "${site:-} ${port:-}" != "$shared" ]; then
+    fail "the $run run changed \$site or \$port, which the runs after it read: $shared became ${site:-} ${port:-}"
+    site=${shared% *} port=${shared#* }
+  fi
   # On Windows GPUI lost a window's move, size or modifiers that came during an update (#1358).
   if windows && grep -q '^browser: gpui dropped ' "$log"; then
     fail "GPUI dropped updates that came during another: $(grep '^browser: gpui dropped ' "$log" |
