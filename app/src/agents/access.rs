@@ -224,7 +224,7 @@ impl Agents {
     }
 
     /// The user sets the sites the task `key` may use: on one that has ended, those its next reply
-    /// works on.
+    /// works on. The log keeps the change as it keeps a level's, by the menu's names and a count.
     pub fn set_sites(&mut self, key: &str, sites: Sites, cx: &mut Context<Self>) {
         let Some(task) = self.task_mut(key) else {
             return;
@@ -232,10 +232,16 @@ impl Agents {
         if task.sites == sites {
             return;
         }
+        let changed = tier::sites_logged(&task.sites, &sites);
         task.sites = sites;
         for stop in (task.stops.iter_mut()).filter(|stop| stop.why == Why::OtherSite) {
             stop.settled = true;
         }
+        let (agent, connection) = match &task.session {
+            Some(session) => (session.agent.clone(), session.connection),
+            None => (task.agent.clone(), 0),
+        };
+        self.note_on(&agent, connection, ACCESS_ACTION, "", &changed, "");
         cx.notify();
     }
 

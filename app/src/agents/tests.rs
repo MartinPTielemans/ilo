@@ -3348,6 +3348,26 @@ fn a_task_keeps_to_its_sites(cx: &mut TestAppContext) {
         stops(&agents, cx).is_empty(),
         "Any site left the refusal unsettled"
     );
+    // Each change of sites is in the log as a level's is, by count, never by address.
+    let changes = agents.read_with(cx, |agents, _| {
+        (agents.activity("claude-code"))
+            .filter(|entry| entry.action == super::access::ACCESS_ACTION)
+            .map(|entry| entry.target.to_string())
+            .filter(|target| target.contains("site"))
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        changes,
+        [
+            "Only the sites you add · 1 site → Any site",
+            "Any site → Only the sites you add · 1 site"
+        ],
+        "the log's entries for the task's sites, newest first"
+    );
+    assert!(
+        changes.iter().all(|change| !change.contains("example")),
+        "an entry named a site: {changes:?}"
+    );
     let _answer = open(cx);
     assert!(
         browser.tabs.borrow().iter().any(|tab| tab.0 == 30),
