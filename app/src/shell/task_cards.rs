@@ -1359,7 +1359,7 @@ impl Shell {
             .h(px(STATUS_LINE))
             .text_size(px(text::SMALL))
             .line_height(px(STATUS_LINE))
-            .text_color(self.palette.text(SECONDARY))
+            .text_color(self.palette.gray(SECONDARY))
             .truncate()
             .child(face.status.text.clone());
         let text = div()
@@ -1508,7 +1508,7 @@ impl Shell {
                     .flex()
                     .items_center()
                     .text_size(px(text::SMALL))
-                    .text_color(self.palette.text(SECONDARY))
+                    .text_color(self.palette.gray(SECONDARY))
                     .child(words)
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_hover(cx.listener(|shell, hovered: &bool, _, cx| {
@@ -1683,7 +1683,7 @@ impl Shell {
                 .opacity(alpha)
                 .text_size(px(text::SMALL))
                 .line_height(px(height))
-                .text_color(self.palette.text(STATUS));
+                .text_color(self.palette.gray(STATUS));
             let base = match lines {
                 1 => base.truncate(),
                 lines => base.line_clamp(lines).text_ellipsis(),

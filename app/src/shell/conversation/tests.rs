@@ -11,7 +11,9 @@ use gpui::{
 use super::Fold;
 
 use crate::agents::task::ilo::{IloButton, IloKind, IloLine};
-use crate::agents::task::{Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep};
+use crate::agents::task::{
+    Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep, Word,
+};
 use crate::agents::tier::{Tier, Why};
 use crate::shell::picture::PagePicture;
 use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
@@ -30,8 +32,11 @@ fn card() -> Card {
         replies: true,
         title: "Flight to Lisbon".into(),
         status: "Searching flights".into(),
+        steps: Vec::new(),
+        last_site: None,
         asks: false,
         dot: Dot::Working,
+        word: Word::for_dot(Dot::Working),
         question: None,
         open: Vec::new(),
         page_steps: Vec::new(),
@@ -894,7 +899,7 @@ fn the_reply_placeholder_follows_the_appearance(cx: &mut TestAppContext) {
             let reply = talk.view.read(cx).reply.read(cx).placeholder_hsla();
             (
                 reply,
-                gpui::Hsla::from(shell.palette.text(FORM_PLACEHOLDER)),
+                gpui::Hsla::from(shell.palette.gray(FORM_PLACEHOLDER)),
             )
         });
         assert_eq!(drawn, meant, "{appearance:?}'s placeholder");
@@ -923,6 +928,16 @@ fn a_held_pages_picture_says_why() {
         picture_status(Some(&"Sign in to github.com".into()), None),
         Some("Needs you · Sign in to github.com".into())
     );
+}
+
+/// Under a page's picture its site leads its step by weight, as the two are one size: the step is
+/// lighter than the site, and a hold, which asks for the user, is as heavy as the site.
+#[test]
+fn a_pages_step_is_lighter_than_its_site() {
+    use super::{Caption, caption_weight};
+    let site = caption_weight(Caption::Site);
+    assert!(caption_weight(Caption::Step) < site);
+    assert_eq!(caption_weight(Caption::Hold), site);
 }
 
 /// Task-1's conversation with ilo's line that it stopped Claude at Place order, under Work on
@@ -1569,6 +1584,25 @@ fn its_trace(talk: &mut Conversation) -> &mut Trace {
         Line::Trace(trace) => trace,
         line => panic!("{line:?}"),
     }
+}
+
+/// A stretch's summary line draws the one string its task's card writes, its dot between how long
+/// it worked and what it counts: under way and over, steps and helpers, one and several. A step's
+/// line has no dot before its note.
+#[test]
+fn a_stretchs_summary_line_draws_the_cards_string() {
+    use super::{TraceLine, summary_line};
+    for helpers in [0, 1, 4] {
+        let mut talk = with_helpers(helpers);
+        let trace = its_trace(&mut talk);
+        assert_eq!(summary_line(trace).text(), trace.line().as_ref());
+        (trace.running, trace.took) = (false, Some(41));
+        let drawn = summary_line(trace).text();
+        assert_eq!(drawn, trace.line().as_ref());
+        assert!(drawn.contains(" \u{b7} "), "{drawn}");
+    }
+    let step = TraceLine::new(Fold::Step(1), "Read".into(), "shop.example".into());
+    assert_eq!(step.text(), "Read shop.example");
 }
 
 /// A task at work with helpers says how many on its Working line, one in its own form, in place

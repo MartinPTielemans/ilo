@@ -30,8 +30,9 @@
 # page that hasn't drawn yet shows black, or white with View › Appearance on Light, and with
 # the window widened, the space a page hasn't drawn at its new size shows the page's own
 # background. In a check VM, the sidebar over grey backdrops is the window ilo reckons from its
-# material's and tints' tokens at the user's transparency level, Standard here, dark and then light, with the Mac's appearance, and View › Appearance turns the light window dark
-# and back. On the Mac, the Dock icon's dot takes the Space's color, and stays green with its switch
+# material's and tints' tokens at the user's transparency level, Standard here, on whatever desktop
+# picture is behind it, dark and then light with the Mac's appearance, and View › Appearance turns
+# the light window dark and back. On the Mac, the Dock icon's dot takes the Space's color, and stays green with its switch
 # in Settings › General off; on Windows, the taskbar button's dot does, read off a check VM's screen.
 # On a hosted Windows runner, at Windows' Text size 110 % the page view keeps its margins.
 
@@ -1595,13 +1596,20 @@ none_since '^browser: command new-tab' || fail "a double-click on the sidebar's 
 check_layout "after a double-click on the sidebar's edge"
 
 # The sidebar over a backdrop of black, grey 20, grey 60 and white (sRGB levels) is the window ilo
-# reckons within 3 levels (docs/ux-spec.md › Window material), in the Mac's dark appearance and then
-# its light one: the app logs what its palette makes there from the material's tokens, measured
-# over black, grey 128 and white, under the tint of the transparency level, Standard in a fresh
-# profile, with the black Space's shade and glow over that. The blur comes
-# from the window server, which a capture of the window alone leaves out, so this captures the
-# screen, and only a check VM's screen, and its appearance, are the check's to change: check.sh
-# runs it dark, and this turns it light for the light pass and back after.
+# reckons (docs/ux-spec.md › Window material), in the Mac's dark appearance and then its light one.
+# The app logs what its palette makes there from the material's tokens, measured over a window of
+# black, grey 128 and white on a black desktop with the Mac's desktop tinting on, its default,
+# under the tint of the transparency level, Standard in a fresh profile, with the black Space's
+# glow over that, which leaves the window's glass as it is. The desktop picture comes through the
+# backdrop window too and lifts all of it by about as much, and the check sets no picture, as
+# check.sh runs on the owner's Mac too.
+# So it holds what a picture can't move, each grey's rise over black, within 3 levels of the
+# reckoned rise, and the sidebar over black between the black desktop's and the most a picture
+# lifts it (the material's lift token), 3 either side. With desktop tinting off nothing lifts it,
+# and the material reads inside that range in both looks. The blur comes from the window server,
+# which a capture of the window alone leaves out, so this captures the screen, and only a check
+# VM's screen, and its appearance, are the check's to change: check.sh runs it dark, and this
+# turns it light for the light pass and back after.
 # Colours the Space black from the theme picker's field, which is black at its middle.
 black_space() {
   post rightclick 100 112
@@ -1687,6 +1695,7 @@ else
   # Each pass: its appearance, then each backdrop's grey.
   for pass in "dark 0 20 60 255" "light 0 20 60 255"; do
     tone=${pass%% *}
+    read_black=
     if [ "$tone" = light ]; then
       light_shots=", $out/light.png, $out/light-menu.png, $out/appearance-dark.png"
       appearance false || fail "System Events didn't turn the Mac light"
@@ -1714,27 +1723,35 @@ else
       sidebar=$(pixel "$shot" $(echo "$place" | awk '{ print ($1 + 60) / $5, ($2 + 450) / $6 }'))
       backdrop=$(pixel "$shot" $(echo "$place" |
         awk '{ x = $1 >= 50 ? $1 - 50 : $1 + $3 + 50; print x / $5, ($2 + 450) / $6 }'))
-      # What the app reckons the window there from its tokens, over black, grey 128 and white,
-      # last logged while this appearance is the window's; a grey between two of them reads as far
-      # between theirs, as everything over the material lies over it evenly.
-      reckons=$(sed -n 's/^browser: window reckons \([0-9]*\) \([0-9]*\) \([0-9]*\) at 60,450 in .*/\1 \2 \3/p' "$log" | tail -1)
-      [ "$(echo "$reckons" | wc -w)" -eq 3 ] || fail "the app didn't say what it reckons the window over grey"
-      line=$(echo "$reckons $place $sidebar $backdrop" | awk -v level="$level" '{
-        ours = ($10 + $11 + $12) / 3
-        seen = ($13 + $14 + $15) / 3
+      # What the app reckons the window there from its tokens, over black, grey 128 and white on
+      # a black desktop and over black at the most a picture lifts it, last logged while this
+      # appearance is the window's; a grey between two of them reads as far between theirs, as
+      # everything over the material lies over it evenly.
+      reckons=$(sed -n 's/^browser: window reckons \([0-9]*\) \([0-9]*\) \([0-9]*\) lifted \([0-9]*\) at 60,450 in .*/\1 \2 \3 \4/p' "$log" | tail -1)
+      [ "$(echo "$reckons" | wc -w)" -eq 4 ] || fail "the app didn't say what it reckons the window over grey"
+      [ "$level" = 0 ] || [ -n "$read_black" ] || fail "the sidebar wasn't read over black first"
+      line=$(echo "$reckons $place $sidebar $backdrop" | awk -v level="$level" -v black="${read_black:-0}" '{
+        ours = ($11 + $12 + $13) / 3
+        seen = ($14 + $15 + $16) / 3
         if (level <= 128) reckoned = $1 + ($2 - $1) * level / 128
         else reckoned = $2 + ($3 - $2) * (level - 128) / 127
-        printf "%.0f (reckoned %.0f), the backdrop read as %.0f", ours, reckoned, seen
-        if (ours - reckoned > 3 || reckoned - ours > 3) printf ", off"
+        if (level == 0) {
+          printf "%.0f (reckoned %.0f to %.0f), the backdrop read as %.0f", ours, $1, $4, seen
+          if (ours < $1 - 3 || ours > $4 + 3) printf ", off"
+        } else {
+          printf "%.0f, rising %.0f over black (reckoned %.0f), the backdrop read as %.0f", ours, ours - black, reckoned - $1, seen
+          if (ours - black - (reckoned - $1) > 3 || reckoned - $1 - (ours - black) > 3) printf ", off"
+        }
         if (seen - level > 2 || level - seen > 2) printf ", capture off"
       }')
+      [ "$level" != 0 ] || read_black=$(echo "$reckons $place $sidebar" | awk '{ printf "%.2f", ($11 + $12 + $13) / 3 }')
       echo "$tone material over $level: $line"
       case "$line" in *", off"* | *"capture off"*) off="$off $tone $level," ;; esac
       # The window reads lighter over white than over black, by about 60 in dark and 35 in light;
       # an opaque material, as Reduce Transparency draws it, reads the same over both.
       case $level in
-      0) over_black=${line%% *} ;;
-      255) [ $((${line%% *} - over_black)) -ge 10 ] || opaque="$opaque $tone," ;;
+      0) over_black=${line%%[ ,]*} ;;
+      255) [ $((${line%%[ ,]*} - over_black)) -ge 10 ] || opaque="$opaque $tone," ;;
       esac
       material="$material$tone over $level $line; "
     done
@@ -1757,7 +1774,7 @@ else
   if [ "${GITHUB_ACTIONS:-}" = true ]; then
     echo "skip: the sidebar against the window ilo reckons, as the hosted Mac's AppKit material isn't the one its tokens were measured over"
   else
-    [ -z "$off" ] || fail "the sidebar isn't the window ilo reckons from its tokens within 3 levels over grey${off%,}: $material"
+    [ -z "$off" ] || fail "the sidebar isn't the window ilo reckons from its tokens over grey${off%,}: $material"
   fi
   material="over grey ${material%; }"
 fi

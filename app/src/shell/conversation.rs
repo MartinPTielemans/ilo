@@ -292,6 +292,8 @@ impl Shell {
     /// An ended task's Start Again: the command bar opens as it does for a new tab, with what the
     /// task was first asked in its field, as an ask. Nothing is sent until the user sends it.
     pub fn ask_again(&mut self, asked: SharedString, cx: &mut Context<Self>) {
+        // It asks again at Work on pages, whatever the composer had picked.
+        self.forget_composer_tier();
         self.run(super::Command::NewTab, "start again", cx);
         self.browser.ask_again(asked, cx);
     }
@@ -325,7 +327,7 @@ impl Shell {
                     let stale = old.view.update(cx, |view, _| view.let_go());
                     self.stale_pictures.extend(stale);
                 }
-                let placeholder = self.palette.text(FORM_PLACEHOLDER);
+                let placeholder = self.palette.gray(FORM_PLACEHOLDER);
                 let reply = cx.new(|cx| {
                     (TextInput::new(format!("Reply to {name}"), cx).placeholder_color(placeholder))
                         .placeholder_after_caret()
@@ -979,7 +981,7 @@ impl TalkView {
                     .whitespace_nowrap()
                     .text_size(px(text::SMALL))
                     .line_height(px(META_LINE))
-                    .text_color(palette.text(STATUS))
+                    .text_color(palette.gray(STATUS))
                     .child(about),
             );
         // Talk and Pages N, once it has a page: one switch, its track a chip's shape, the view
@@ -1005,7 +1007,7 @@ impl TalkView {
                             .text_color(palette.text(TITLE))
                     })
                     .when(!on, |chip| {
-                        chip.text_color(palette.text(STATUS))
+                        chip.text_color(palette.gray(STATUS))
                             .hover(move |style| style.bg(palette.plate(STATE_HOVERED)))
                             .active(move |style| style.bg(palette.plate(STATE_PRESSED)))
                     })
@@ -1173,7 +1175,7 @@ impl TalkView {
                         .justify_center()
                         .gap(px(PICTURE_EMPTY_GAP))
                         .text_size(px(text::SMALL))
-                        .text_color(look.palette.text(STATUS))
+                        .text_color(look.palette.gray(STATUS))
                         .child(
                             svg()
                                 .path("icons/globe.svg")
@@ -1244,7 +1246,10 @@ impl TalkView {
                     .flex()
                     .items_center()
                     .children(sound)
-                    .child(line(site.clone(), look.palette.text(TITLE)));
+                    .child(
+                        line(site.clone(), look.palette.text(TITLE))
+                            .font_weight(caption_weight(Caption::Site)),
+                    );
                 let status = picture_status(held.as_ref(), step.filter(|_| working));
                 if let Some(words) = &status {
                     let mut said = self.said_logged.borrow_mut();
@@ -1255,11 +1260,11 @@ impl TalkView {
                     }
                 }
                 let status = status.map(|words| match held {
-                    Some(_) => {
-                        line(words, look.palette.text(TITLE)).font_weight(FontWeight::MEDIUM)
-                    }
+                    Some(_) => line(words, look.palette.text(TITLE))
+                        .font_weight(caption_weight(Caption::Hold)),
                     // The ring says it's working: no text is written in the working green.
-                    None => line(words, look.palette.text(SECONDARY)),
+                    None => line(words, look.palette.gray(SECONDARY))
+                        .font_weight(caption_weight(Caption::Step)),
                 });
                 div()
                     .id(("conversation-page", tab))
@@ -1529,9 +1534,8 @@ impl TalkView {
     fn trace(&self, trace: &Trace, look: &Look, cx: &mut Context<Self>) -> gpui::AnyElement {
         let fold = Fold::Trace(trace.key);
         let open = self.is_open(fold, trace.running);
-        let (title, steps) = trace.summary();
         let running = trace.running;
-        let mut line = TraceLine::new(fold, title, steps);
+        let mut line = summary_line(trace);
         line.chevron = Some(self.chevron(fold, open, look));
         line.rolled = self.motion.count(trace.key).cloned();
         self.crossfade(fold, &mut line, look);
@@ -1549,7 +1553,7 @@ impl TalkView {
                 TraceItem::Said(text) => {
                     let said = div()
                         .py(px((TRACE_LINE - TEXT_LINE) / 2.))
-                        .text_color(look.palette.text(SECONDARY))
+                        .text_color(look.palette.gray(SECONDARY))
                         .child(self.said("trace-said", (trace.key << 16) | index, text, &[], look));
                     nest.child(risen(
                         said.into_any_element(),
@@ -1741,7 +1745,7 @@ impl TalkView {
                     .pl(px(under))
                     .pt(px(OPEN_TOP))
                     .pb(px(OPEN_BELOW))
-                    .text_color(palette.text(SECONDARY))
+                    .text_color(palette.gray(SECONDARY))
                     .child(text.clone()),
             ),
             Opens::Picture(picture) => Some(
@@ -1771,7 +1775,7 @@ impl TalkView {
         let sub = (!step.under.is_empty()).then(|| {
             div()
                 .pl(px(under))
-                .text_color(palette.text(TRACE_NOTE))
+                .text_color(palette.gray(TRACE_NOTE))
                 .child(step.under.clone())
                 .into_any_element()
         });
@@ -1997,7 +2001,7 @@ impl TalkView {
                 .h(px(REPLY_HEIGHT))
                 .flex()
                 .items_center()
-                .text_color(look.palette.text(SECONDARY))
+                .text_color(look.palette.gray(SECONDARY))
                 .child(quiet);
         }
         // An ended task that takes no reply: ilo's line says why, with Start Again (#4105).
@@ -2172,7 +2176,7 @@ impl TalkView {
                 .pl(under)
                 .mt(px(NOTE_TOP))
                 .text_size(px(text::SMALL))
-                .text_color(palette.text(NOTE_INK))
+                .text_color(palette.gray(NOTE_INK))
                 .cursor_pointer()
                 .child(words)
                 .child(
@@ -2194,7 +2198,7 @@ impl TalkView {
                 .pl(under)
                 .mt(px(NOTE_TOP))
                 .text_size(px(text::SMALL))
-                .text_color(palette.text(NOTE_INK))
+                .text_color(palette.gray(NOTE_INK))
                 .child(note)
         });
         let row = (!buttons.is_empty()).then(|| {
@@ -2491,6 +2495,9 @@ struct TraceLine {
     chevron_alpha: f32,
     /// Its count of steps before the last came, and since when, which rolls up out of it.
     rolled: Option<(SharedString, Instant)>,
+    /// Its note follows its title as one string, a middle dot between them: a stretch's summary,
+    /// "Worked for 40 s · 4 steps", as its task's card writes it.
+    joined: bool,
 }
 
 impl TraceLine {
@@ -2510,7 +2517,39 @@ impl TraceLine {
             note_alpha: 1.,
             chevron_alpha: 1.,
             rolled: None,
+            joined: false,
         }
+    }
+
+    /// Its note's words as they draw after its title, the count apart from the rest as it rolls
+    /// by itself: after a middle dot on a line that's `joined`. Each part starts with its own
+    /// space, so the parts in a row read as one string.
+    fn note_parts(&self) -> [String; 3] {
+        let lead = if self.joined { " \u{b7}" } else { "" };
+        let space = if self.joined { " " } else { "" };
+        match self.note.split_once(' ') {
+            Some((count, rest)) => [lead.into(), format!("{space}{count}"), format!(" {rest}")],
+            None => [lead.into(), format!("{space}{}", self.note), String::new()],
+        }
+    }
+
+    /// The line's words as drawn, in one.
+    #[cfg(test)]
+    fn text(&self) -> String {
+        match self.note.is_empty() {
+            true => self.title.to_string(),
+            false if self.joined => format!("{}{}", self.title, self.note_parts().concat()),
+            false => format!("{} {}", self.title, self.note_parts().concat()),
+        }
+    }
+}
+
+/// A stretch's summary line: its title and what it counts, joined as one string.
+fn summary_line(trace: &Trace) -> TraceLine {
+    let (title, counted) = trace.summary();
+    TraceLine {
+        joined: true,
+        ..TraceLine::new(Fold::Trace(trace.key), title, counted)
     }
 }
 
@@ -2531,6 +2570,7 @@ impl From<Fold> for LineKey {
 /// line that opens has a plate hanging outside its text, which goes to the title's colour.
 fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
     let palette = look.palette;
+    let parts = line.note_parts();
     let TraceLine {
         key,
         glyph,
@@ -2546,7 +2586,10 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         note_alpha,
         chevron_alpha,
         rolled,
+        joined,
     } = line;
+    let [lead, count, rest] = parts;
+    let space = if joined { " " } else { "" };
     let (id, group): (ElementId, SharedString) = match key {
         LineKey::Ilo(key) => (("ilo", key).into(), format!("ilo-{key}").into()),
         LineKey::Fold(Fold::Trace(key)) => (("trace", key).into(), format!("trace-{key}").into()),
@@ -2564,7 +2607,7 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
     let note = if failed {
         red
     } else {
-        palette.text(TRACE_NOTE)
+        palette.gray(TRACE_NOTE)
     };
     let ilos = mark.is_some();
     let words = match (failed, shimmers) {
@@ -2611,23 +2654,25 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
                 glyph.with_transformation(Transformation::rotate(Radians(-FRAC_PI_2 * (1. - open))))
             })
     });
-    // A count that changed rolls its number, and the words after it stay.
+    // A count that changed rolls its number, and the words before and after it stay.
     let noted = !description.is_empty();
-    let description = match (rolled, description.split_once(' ')) {
-        (Some(was), Some((count, rest))) => div()
+    let description = match rolled {
+        Some((was, since)) if !rest.is_empty() => div()
             .flex_none()
             .flex()
+            .child(lead)
             .child(self::rolled(
-                count.to_string().into(),
-                Some(&was),
+                count.into(),
+                // The old count takes the new one's space before it, if it has one.
+                Some(&(format!("{space}{was}").into(), since)),
                 TRACE_LINE,
                 look,
             ))
-            .child(format!(" {rest}"))
+            .child(rest)
             .into_any_element(),
         _ => div()
             .flex_none()
-            .child(description.clone())
+            .child(format!("{lead}{count}{rest}"))
             .into_any_element(),
     };
     let hover = group.clone();
@@ -2691,16 +2736,29 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
                 .hover(move |style| style.bg(palette.plate(TRACE_HOVER)))
         })
         .children(glyph.map(|glyph| first(glyph.into_any_element())))
-        .child(title)
-        .when(noted, |line| {
-            line.child(first(
-                div()
-                    .flex_none()
-                    .opacity(note_alpha)
-                    .text_color(note)
-                    .child(description)
-                    .into_any_element(),
-            ))
+        .map(|line| {
+            let note = noted.then(|| {
+                first(
+                    div()
+                        .flex_none()
+                        .opacity(note_alpha)
+                        .text_color(note)
+                        .child(description)
+                        .into_any_element(),
+                )
+            });
+            match joined {
+                // One string: the note right after the title, its dot and spaces its own.
+                true => line.child(
+                    div()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .child(title)
+                        .children(note),
+                ),
+                false => line.child(title).children(note),
+            }
         })
         .children(chevron)
 }
@@ -2777,7 +2835,7 @@ impl Render for TalkView {
             return div().into_any_element();
         };
         // The reply's placeholder follows the appearance, as the lines drawn in `look` do (#1659).
-        let placeholder = look.palette.text(FORM_PLACEHOLDER);
+        let placeholder = look.palette.gray(FORM_PLACEHOLDER);
         (self.reply).update(cx, |reply, cx| reply.set_placeholder_color(placeholder, cx));
         self.settle_folds(now, still);
         // A shorter or narrower window keeps the newest line in view while the user reads at the
@@ -2945,6 +3003,24 @@ pub(super) fn picture_work(
     match pages.is_empty() {
         true => (on == Some(tab), running),
         false => (own.is_some() && !held, own.map(|(_, step)| step.clone())),
+    }
+}
+
+/// A line under a page's picture: its site, why the user holds it, or the agent's step there.
+#[derive(Clone, Copy)]
+enum Caption {
+    Site,
+    Hold,
+    Step,
+}
+
+/// The weight a page's picture sets a line under it in. Its site is the tile's title, in medium,
+/// and a hold asks for the user as loudly; the agent's step is regular under its site, as a line
+/// that names no weight is.
+fn caption_weight(line: Caption) -> FontWeight {
+    match line {
+        Caption::Site | Caption::Hold => FontWeight::MEDIUM,
+        Caption::Step => FontWeight::NORMAL,
     }
 }
 

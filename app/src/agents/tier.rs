@@ -275,6 +275,12 @@ pub fn changed_logged(from: Tier, to: Tier) -> String {
     format!("{} → {}", from.label(), to.label())
 }
 
+/// The activity log's words for the tier a task starts at, which its start's entry keeps as its
+/// target, as a change's keeps `changed_logged`.
+pub fn started_logged(tier: Tier) -> String {
+    format!("Starts at {}", tier.label())
+}
+
 /// The most of a page's text a line carries.
 pub const TEXT_MOST: usize = 80;
 

@@ -180,7 +180,7 @@ impl Step {
             // The sheet's first page (#4093): what the flow is, and that each step can be skipped.
             Step::Intro => (
                 concat!("Welcome to ", env!("APP_NAME"), "."),
-                "A good tool. A minute to make it yours, and every step can be skipped.",
+                "A good tool. A few steps to make it yours, and you can skip any of them.",
                 "Get Started",
             ),
             // The import view's own buttons are the step's.
@@ -401,6 +401,8 @@ pub(super) struct Onboarding {
     pub(super) drawing: bool,
     /// Where the step's button is drawn, once the step has settled (button_frame).
     pub(super) button: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Where the sheet's Skip is drawn, once the step has settled (skip_frame).
+    pub(super) skip: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// GPUI's clock, which the flow's motion and the intro's hold are timed by: the real one in the
     /// app, and in a test the one its timers run on, so the two never part (#3248).
     clock: gpui::BackgroundExecutor,
@@ -516,6 +518,7 @@ impl Shell {
             places: Places::default(),
             drawing: false,
             button: Rc::default(),
+            skip: Rc::default(),
             clock: cx.background_executor().clone(),
             since: cx.background_executor().now(),
             leaving: None,
@@ -1466,13 +1469,21 @@ impl Shell {
             .flatten()
             .map(|view| {
                 view.update(cx, |view, cx| view.set_look(look, cx));
-                embedded(view.into())
+                match sheet::on_sheet(step) {
+                    true => sheet::choice(gpui::AnyView::from(view)).into_any_element(),
+                    false => embedded(view.into()).into_any_element(),
+                }
             });
         // Under the step's Sign In, its server's line close by, as it names where Sign In goes.
         let signed_out = !button.is_empty();
         let account = account.map(|view| {
             view.update(cx, |view, cx| view.set_look(look, cx));
-            embedded(view.into()).when(signed_out, |body| body.mt(px(LINE_GAP)))
+            match sheet::on_sheet(step) {
+                true => sheet::choice(gpui::AnyView::from(view)).into_any_element(),
+                false => (embedded(view.into()))
+                    .when(signed_out, |body| body.mt(px(LINE_GAP)))
+                    .into_any_element(),
+            }
         });
         let drawn = (self.onboarding.as_ref())
             .map(|onboarding| (onboarding.button.clone(), onboarding.settled));
@@ -1538,6 +1549,10 @@ impl Shell {
             let left = self.sheet_left(step, t, still, (title, line), colors);
             let left = left
                 .children(swatches)
+                .children(import)
+                .children(favorites)
+                .children(engines)
+                .children(account)
                 .child(self.sheet_foot(step, button, colors, cx));
             let art = self.sheet_art(step, looped, colors);
             let dialog = |pane: gpui::Stateful<gpui::Div>| {
@@ -1672,7 +1687,9 @@ impl Shell {
 
     /// The search engines offered in the opt-ins' box, a row each of a radio's dot and the engine's
     /// name, the one picked filled in the green and its name medium. A click on a row picks it, and
-    /// the list is one stop for ⇥, its arrows moving the pick, as the swatches are.
+    /// the list is one stop for ⇥, its arrows moving the pick, as the swatches are. On the sheet the
+    /// green is its button's alone, so the pick is a tick in the ink at the row's end, and the box
+    /// is as wide as the sheet's left half.
     fn engine_rows(&self, colors: Colors, cx: &mut Context<Self>) -> gpui::AnyElement {
         let Some(onboarding) = self.onboarding.as_ref() else {
             return div().into_any_element();
@@ -1680,6 +1697,7 @@ impl Shell {
         let surface = colors.ground.blend(colors.ink(IMPORT_SURFACE));
         let look = Look::on(surface, colors.ink(1.), rgb(SIGNAL));
         let a11y = self.a11y;
+        let sheet = sheet::on_sheet(Step::SearchEngine);
         let rows = (onboarding.engines.0.iter().enumerate()).map(|(index, (_, name))| {
             let on = onboarding.engine == Some(index);
             let dot = div()
@@ -1689,14 +1707,20 @@ impl Shell {
                 .flex()
                 .items_center()
                 .justify_center()
-                .map(|dot| match on {
-                    true => dot.bg(rgb(SIGNAL)).child(
+                .map(|dot| match (on, sheet) {
+                    (true, false) => dot.bg(rgb(SIGNAL)).child(
                         div()
                             .size(px(ENGINE_DOT_CENTER))
                             .rounded_full()
                             .bg(rgb(PAPER)),
                     ),
-                    false => dot.border_1().border_color(colors.ink(QUIET)),
+                    (true, true) => dot.bg(colors.ink(1.)).child(
+                        div().size(px(ENGINE_DOT_CENTER)).rounded_full().bg(Rgba {
+                            a: 1.,
+                            ..colors.ground
+                        }),
+                    ),
+                    (false, _) => dot.border_1().border_color(colors.ink(QUIET)),
                 });
             let toggled = match on {
                 true => Toggled::True,
@@ -1719,6 +1743,7 @@ impl Shell {
                 .on_click(
                     cx.listener(move |shell, _, _, cx| shell.onboarding_pick_engine(index, cx)),
                 )
+                .when(sheet, |row| row.flex_row_reverse().justify_between())
                 .child(dot)
                 .child(
                     div()
@@ -1740,21 +1765,24 @@ impl Shell {
             })
             .focus_from_keys_only()
             .focus_visible(ring(colors.ink(1.)))
-            .mt(px(BUTTON_GAP))
-            .w(px(OPT_IN_WIDTH))
+            .map(|list| match sheet {
+                true => list.w_full(),
+                false => list.mt(px(BUTTON_GAP)).w(px(OPT_IN_WIDTH)),
+            })
             .text_size(px(crate::tokens::text::BODY))
             .text_color(look.ink)
             .into_any_element()
     }
 
-    /// The favorites offered, as the import view's tiles at its width, on the flow's ground, a
-    /// click ticking or unticking one. Tiles like the favorites they become say where they go.
+    /// The favorites offered, as the import view's tiles across the sheet's left half, scrolling
+    /// there above its foot, a click ticking or unticking one. Tiles like the favorites they become
+    /// say where they go.
     fn favorite_tiles(
         &self,
         colors: Colors,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Option<gpui::Div> {
+    ) -> Option<gpui::AnyElement> {
         let look = Look::on(
             colors.ground.blend(colors.ink(IMPORT_SURFACE)),
             colors.ink(1.),
@@ -1765,16 +1793,7 @@ impl Shell {
             view.set_look(look, cx);
             view.favorite_tiles(window, cx)
         })?;
-        Some(
-            div()
-                .mt(px(BUTTON_GAP))
-                .w(px(IMPORT_WIDTH))
-                .flex()
-                .flex_col()
-                .items_center()
-                .text_size(px(crate::tokens::text::BODY))
-                .child(div().w_full().child(tiles)),
-        )
+        Some(sheet::choice(tiles).into_any_element())
     }
 
     /// Skip, quiet at the window's bottom right, with Esc's chip.
@@ -1902,6 +1921,29 @@ fn button_frame(at: Rc<Cell<Option<Bounds<Pixels>>>>, settled: bool) -> impl Int
         move |bounds, _, _| {
             if settled {
                 at.set(Some(bounds));
+            }
+        },
+        |_, _, _, _| {},
+    )
+    .absolute()
+    .inset_0()
+}
+
+/// Keeps where the sheet's Skip is drawn once the step has `settled`, and logs where it is as each
+/// step settles and each time it moves, as "browser: onboarding skip at x y", for check.sh to click
+/// it there. A step coming forgets it, so each step logs its own.
+fn skip_frame(at: Rc<Cell<Option<Bounds<Pixels>>>>, settled: bool) -> impl IntoElement {
+    canvas(
+        move |bounds, _, _| {
+            if !settled {
+                at.set(None);
+            } else if at.replace(Some(bounds)) != Some(bounds) {
+                let centre = bounds.center();
+                log!(
+                    "browser: onboarding skip at {:.0} {:.0}",
+                    f32::from(centre.x),
+                    f32::from(centre.y)
+                );
             }
         },
         |_, _, _, _| {},

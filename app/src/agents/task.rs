@@ -481,9 +481,16 @@ pub struct Card {
     pub title: SharedString,
     /// The step it's on, such as "Opening gulbenkian.pt", what it waits for, or its result's line.
     pub status: SharedString,
+    /// Its last steps this turn, at most `CARD_STEPS`, oldest first, each as the conversation's
+    /// trace line says it (`tools::step_title`).
+    pub steps: Vec<SharedString>,
+    /// The site of the last page it was on, from its steps, or None before it reaches one.
+    pub last_site: Option<SharedString>,
     /// Whether the status is the agent's question, which may take two lines.
     pub asks: bool,
     pub dot: Dot,
+    /// Its state in one word, as every place that names it says it.
+    pub word: Word,
     /// A confirmation or a handoff of the task's, which the card asks instead of the windows'.
     pub question: Option<Question>,
     /// Done's tabs to open, each with its site, in the agent's order.
@@ -516,6 +523,68 @@ pub enum Dot {
     Done,
     /// A hollow ring: stopped, at its limit, or it couldn't go on.
     Ended,
+}
+
+/// A task's state in one word. Its card, the list of tasks, the Archive's rows and the strip under
+/// its page all name it from here, so no two of them say it differently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Word {
+    Working,
+    /// A question, a handoff or a refusal waits on the user.
+    NeedsYou,
+    Done,
+    /// The user stopped it.
+    Stopped,
+    /// Its assistant's program quit or broke.
+    Interrupted,
+    /// Its assistant is at its own usage limit.
+    AtLimit,
+}
+
+impl Word {
+    /// The word for `state`; `waits` says whether something of the task's waits on the user.
+    pub fn of(state: &State, waits: bool) -> Self {
+        match state {
+            State::Working if waits => Self::NeedsYou,
+            State::Working => Self::Working,
+            State::Asking { .. } => Self::NeedsYou,
+            State::Done { .. } => Self::Done,
+            State::Stopped => Self::Stopped,
+            State::Failed { .. } => Self::Interrupted,
+            State::Limit { .. } => Self::AtLimit,
+        }
+    }
+
+    /// After the assistant's name and a middle dot: "Claude · At limit".
+    pub fn after_name(self) -> &'static str {
+        match self {
+            Self::Working => "Working",
+            Self::NeedsYou => NEEDS_YOU,
+            Self::Done => "Done",
+            Self::Stopped => "Stopped",
+            Self::Interrupted => "Interrupted",
+            Self::AtLimit => "At limit",
+        }
+    }
+
+    /// The word of a card drawn without its task, as the tests and the preview draw them, for its
+    /// `dot`: an ended one says Stopped.
+    pub fn for_dot(dot: Dot) -> Self {
+        match dot {
+            Dot::Working => Self::Working,
+            Dot::Waiting => Self::NeedsYou,
+            Dot::Done => Self::Done,
+            Dot::Ended => Self::Stopped,
+        }
+    }
+
+    /// On its own, which names the assistant only when the limit is its: "Claude at limit".
+    pub fn alone(self, name: &str) -> SharedString {
+        match self {
+            Self::AtLimit => format!("{name} at limit").into(),
+            word => word.after_name().into(),
+        }
+    }
 }
 
 /// What the user does to a task from its card or its conversation.
@@ -649,11 +718,11 @@ impl Agents {
             .filter_map(|agent| self.task(agent))
             .filter(|task| task.dismissed && !task.deleted)
             .map(|task| {
-                let (words, dot) = match task.state {
-                    State::Done { .. } => ("Done", Dot::Done),
-                    State::Failed { .. } => ("Failed", Dot::Ended),
-                    _ => ("Stopped", Dot::Ended),
+                let dot = match task.state {
+                    State::Done { .. } => Dot::Done,
+                    _ => Dot::Ended,
                 };
+                let words = Word::of(&task.state, false).after_name();
                 let mut about = format!("{} · {words}", task.name);
                 if let Some(at) = task.ended.or(task.left) {
                     about = format!("{about} {}", super::local_time(seconds(at)));
@@ -788,17 +857,17 @@ impl Agents {
             true => progress(turn_steps(task).len(), tabs.len()),
             false => String::new(),
         };
+        // The state's word, whoever of the task's waits: the task itself or a helper. Done says
+        // when, and a limit when it resets if the assistant said; without that it's the word, as
+        // the name before it says whose limit it is.
         let about = match &task.state {
-            // What the card says, whoever of the task's waits: the task itself or a helper.
-            State::Working if self.waits_on_user(task) => NEEDS_YOU.to_string(),
-            State::Working => "Working".to_string(),
-            State::Asking { .. } => "Waiting for you".to_string(),
-            State::Done { .. } => match task.ended {
-                Some(at) => done_at(&super::local_time(seconds(at))),
-                None => "Done".to_string(),
-            },
-            State::Limit { resets } => limit_words(&task.name, resets),
-            State::Stopped | State::Failed { .. } => "Stopped".to_string(),
+            State::Done { .. } if let Some(at) = task.ended => {
+                done_at(&super::local_time(seconds(at)))
+            }
+            State::Limit { resets } if resets.is_some() => limit_words(&task.name, resets),
+            state => Word::of(state, self.waits_on_user(task))
+                .after_name()
+                .to_string(),
         };
         // A session's title is the agent's words or its sites, so the line under it leads with its
         // client's name, and its state goes on as a fact, in lower case (#3690).
@@ -987,8 +1056,11 @@ impl Agents {
             replies: task.session.is_none(),
             title: task.title.clone(),
             status,
+            steps: last_steps(task),
+            last_site: last_site(task),
             asks,
             dot,
+            word: Word::of(&task.state, dot == Dot::Waiting),
             question,
             open,
             page_steps: match task.state {
@@ -1169,14 +1241,15 @@ impl Agents {
     }
 
     /// Starts a task: `cli` does what the user `asked`, on `page` if it goes with it, from the
-    /// user's Space `home`. Returns its agent's id, or None if it couldn't start, which its card
-    /// says.
+    /// user's Space `home`, at `tier`: the user's own pick on the composer page's menu, else
+    /// Work on pages. Returns its agent's id, or None if it couldn't start, which its card says.
     pub fn start_task(
         &mut self,
         cli: Cli,
         asked: &str,
         page: Option<AskedOn>,
         home: u64,
+        tier: Tier,
         cx: &mut Context<Self>,
     ) -> Option<String> {
         let asked = asked.trim();
@@ -1222,7 +1295,7 @@ impl Agents {
             waiting: None,
             writing: None,
             named: None,
-            tier: Tier::default(),
+            tier,
             sites: Sites::default(),
             stops: Vec::new(),
             placed: Vec::new(),
@@ -1231,6 +1304,9 @@ impl Agents {
         };
         self.tasks.tasks.push(task);
         self.tokens_changed();
+        // The log keeps the tier it starts at, as it keeps a change of it.
+        let started = super::tier::started_logged(tier);
+        self.note_on(&agent, 0, super::access::ACCESS_ACTION, "", &started, "");
         let first = first_message(asked, self.task(&agent).and_then(|task| task.page.as_ref()));
         self.launch(&agent, &first, cx);
         self.wait_for_answer(&agent, cx);
@@ -3051,6 +3127,31 @@ fn first_words(result: &str) -> SharedString {
 pub const NEEDS_YOU: &str = "Needs you";
 /// A card's status while a refusal of its task's access is unsettled, before what it stopped.
 pub const STOPPED_AT: &str = "Stopped at";
+
+/// The most steps a card lists.
+pub const CARD_STEPS: usize = 3;
+
+/// A task's last steps this turn, oldest first, by the line that says the step it's on.
+fn last_steps(task: &Task) -> Vec<SharedString> {
+    let mut steps: Vec<SharedString> = (turn_steps(task).into_iter().take(CARD_STEPS))
+        .map(|step| tools::step_title(&step.did, tense(step)).into())
+        .collect();
+    steps.reverse();
+    steps
+}
+
+/// The site of the last page a task was on or went to, as its steps name it (`agents::site`), or
+/// None before it reaches one. An address it asked for that names no page isn't one.
+fn last_site(task: &Task) -> Option<SharedString> {
+    (task.trace.iter().rev())
+        .map(|step| &step.did)
+        .find(|did| {
+            let unresolved =
+                matches!(did.tool.as_str(), "open_tab" | "navigate") && did.text.is_empty();
+            !did.site.is_empty() && !unresolved
+        })
+        .map(|did| did.site.clone().into())
+}
 
 /// A task's status while it works, saying how far it has got by its own steps: "Step 5 · Clicking
 /// “Tickets”", the step of the turn it's on, else the last it took, counted among the turn's steps

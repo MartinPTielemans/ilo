@@ -19,7 +19,8 @@ use crate::theme::Theme;
 use crate::theme_picker::{SWATCHES, swatch_name};
 use crate::tokens::shell::onboarding::IMPORT_HOLD;
 use crate::tokens::shell::onboarding::loops::{
-    COLOR_AT, COLOR_SWIPE, PERIOD, SIDEBAR, WELCOME_AT, WELCOME_CLICK, WELCOME_MOVE,
+    COLOR_AT, COLOR_SWIPE, DEFAULT_AT, DEFAULT_OPEN, FAVORITES_CAME, IMPORT_CAME, PERIOD,
+    WELCOME_AT, WELCOME_CLICK, WELCOME_MOVE,
 };
 use crate::transparency::{self, Transparency};
 
@@ -95,7 +96,12 @@ fn started(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
 /// Goes on with Esc to `to`, as the user skipping each step before it does, from the welcome with
 /// Return, as its Esc skips the whole setup.
 fn skip_to(shell: &Entity<Shell>, cx: &mut VisualTestContext, to: Step) {
-    while let Some(at) = step(shell, cx).filter(|&step| step != to) {
+    // A flow that never comes to `to` fails rather than spins. Esc may take a few presses at a
+    // step, as the import's goes back inside it first, but never this many.
+    for _ in 0..32 {
+        let Some(at) = step(shell, cx).filter(|&step| step != to) else {
+            break;
+        };
         cx.simulate_keystrokes(if at == Step::Intro { "enter" } else { "escape" });
     }
     assert_eq!(step(shell, cx), Some(to));
@@ -277,39 +283,50 @@ fn reduce_motion_gives_the_still_welcome(cx: &mut TestAppContext) {
     );
 }
 
-/// A step's loop asks for frames only while its step shows: going on from it, ending the flow
-/// there, or going back from it to a step with none ends them.
+/// A step's loop plays only while its step shows: the next step's, going on or back, starts from
+/// its own beginning rather than where the one before was, and ending the flow ends them all.
 #[gpui::test]
 fn a_loop_draws_only_while_its_step_shows(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     let looping = |shell: &Entity<Shell>, cx: &VisualTestContext| {
         shell.read_with(cx, |shell, _| shell.onboarding_looping())
     };
+    // How long the loop shown has played.
+    let played = |shell: &Entity<Shell>, cx: &VisualTestContext| {
+        shell.read_with(cx, |shell, _| {
+            let onboarding = shell.onboarding.as_ref()?;
+            (onboarding.loop_since).map(|at| onboarding.secs_since(at))
+        })
+    };
     started(&shell, cx);
     later(&shell, cx, 2. * PERIOD);
     assert!(looping(&shell, cx), "the welcome's loop plays");
     assert!(asks_for_frames(&shell, cx), "and draws");
-    cx.simulate_keystrokes("enter");
+    skip_to(&shell, cx, Step::DefaultBrowser);
     later(&shell, cx, STEP_MOTION);
-    assert!(!looping(&shell, cx), "the import has none");
+    assert!(looping(&shell, cx), "the default browser's loop plays");
     assert!(
-        !asks_for_frames(&shell, cx),
-        "so nothing draws once it's in"
+        played(&shell, cx).is_some_and(|played| played <= STEP_MOTION),
+        "from its own start as its step came, not the welcome's: {:?}",
+        played(&shell, cx)
     );
-
     skip_to(&shell, cx, Step::Color);
-    later(&shell, cx, STEP_MOTION);
-    assert!(looping(&shell, cx), "the colour's loop plays");
+    later(&shell, cx, 2. * STEP_MOTION);
     click_back(cx);
     later(&shell, cx, STEP_MOTION);
-    assert!(!looping(&shell, cx), "Back leaves it");
-    assert!(!asks_for_frames(&shell, cx), "and its frames");
+    assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser));
+    assert!(
+        played(&shell, cx).is_some_and(|played| played <= STEP_MOTION),
+        "Back starts the step's loop again, not the colour's: {:?}",
+        played(&shell, cx)
+    );
 
     started(&shell, cx);
     later(&shell, cx, 1.);
     cx.simulate_keystrokes("escape");
     later(&shell, cx, END_FADE);
     assert_eq!(step(&shell, cx), None);
+    assert!(!asks_for_frames(&shell, cx), "an ended flow draws nothing");
 }
 
 /// Clicks the sheet's Back.
@@ -1456,7 +1473,10 @@ fn the_import_steps_words_follow_the_state_its_view_shows(cx: &mut TestAppContex
     assert_eq!(list.title, "Bring your stuff.");
     assert_eq!(
         list.line,
-        format!("From the browser you used. It all stays on {here}.")
+        format!(
+            "Spaces, pinned tabs, folders and favorites from the browser you used. It all \
+             stays on {here}."
+        )
     );
     assert_eq!(list.button.as_deref(), Some("Import from Arc"));
     assert_eq!(list.corner, Corner::Skip);
@@ -1759,6 +1779,9 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
     );
 
     skip_to(&shell, cx, Step::DefaultBrowser);
+    // On the sheet, ⇥ from the step's button goes round to Back, then Skip.
+    cx.simulate_keystrokes("tab");
+    assert_eq!(keyed(cx), Some((Role::Button, "Back".into())));
     cx.simulate_keystrokes("tab");
     assert_eq!(keyed(cx), Some((Role::Button, "Skip".into())));
     press("enter", cx);
@@ -2238,5 +2261,314 @@ fn the_cards_welcome_waits_under_the_flow_and_comes_as_it_fades(cx: &mut TestApp
     assert!(
         shown(&shell, cx) > 0.,
         "the card's welcome shows as the flow fades"
+    );
+}
+
+/// At the import on the sheet, Back goes back in its view where its state has somewhere to go back
+/// to, as Esc does: from a browser's choices to the list, keeping the step; from the list, to the
+/// step before.
+#[gpui::test]
+fn the_imports_back_goes_back_in_its_view_first(cx: &mut TestAppContext) {
+    use crate::import::tests::Browser;
+    let (shell, cx, view) = importing_from(Rc::new(Browser::new(None)), cx);
+    let drawn = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.drawn());
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(drawn(cx), Some("pick"), "↩ shows the browser's choices");
+    click_back(cx);
+    cx.run_until_parked();
+    assert_eq!(
+        drawn(cx),
+        Some("list"),
+        "Back in a browser's choices goes back to the list"
+    );
+    assert_eq!(step(&shell, cx), Some(Step::Import), "keeping the step");
+    click_back(cx);
+    cx.run_until_parked();
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Intro),
+        "Back at the list goes to the step before"
+    );
+}
+
+/// The import's loop lands the other browser's bookmarks and tabs in the small window's sidebar,
+/// the first within its first second and every one inside the sidebar, and its last frame, still,
+/// is what came.
+#[gpui::test]
+fn the_imports_loop_lands_each_in_the_sidebar(cx: &mut TestAppContext) {
+    use crate::import::tests::Browser;
+    let (shell, cx, _) = importing_from(Rc::new(Browser::new(None)), cx);
+    held_at(&shell, cx, 0.);
+    assert!(
+        placed("tile-0", cx).is_none(),
+        "nothing has landed as the loop starts"
+    );
+    held_at(&shell, cx, 1.);
+    assert!(
+        placed("tile-0", cx).is_some(),
+        "the first favorite lands in the loop's first second"
+    );
+    held_at(&shell, cx, IMPORT_CAME);
+    let sidebar = placed("sidebar", cx).expect("the loop's sidebar is drawn");
+    for name in [
+        "tile-0", "tile-1", "tile-2", "tile-3", "tab-0", "tab-1", "tab-2", "tab-3",
+    ] {
+        let part = placed(name, cx).unwrap_or_else(|| panic!("{name} has landed by then"));
+        assert!(
+            inside(part, sidebar),
+            "{name} lands inside the sidebar at {sidebar:?}, but it was at {part:?}"
+        );
+    }
+    held_at(&shell, cx, PERIOD);
+    assert!(
+        placed("came", cx).is_some() && placed("tab-3", cx).is_some(),
+        "the still last frame is what came"
+    );
+}
+
+/// The favorites step, from an import whose history offers `offered`, each ticked.
+fn at_favorites<'a>(
+    offered: &[&str],
+    cx: &'a mut TestAppContext,
+) -> (
+    Entity<Shell>,
+    &'a mut VisualTestContext,
+    Entity<crate::import::ImportView>,
+) {
+    let (shell, cx, _) = first_window(cx);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Import);
+    let view = shell
+        .read_with(cx, |shell, _| {
+            shell.importing.as_ref().map(|i| i.view.clone())
+        })
+        .expect("the import view");
+    let offered = (offered.iter())
+        .map(|&url| crate::import::found::Tab {
+            url: url.into(),
+            name: String::new(),
+        })
+        .collect();
+    view.update(cx, |view, _| view.offer(offered));
+    view.update(cx, |_, cx| {
+        cx.emit(ImportEvent::Started);
+        cx.emit(ImportEvent::Placed);
+    });
+    waited(cx, IMPORT_HOLD);
+    assert_eq!(step(&shell, cx), Some(Step::Favorites));
+    later(&shell, cx, STEP_MOTION);
+    (shell, cx, view)
+}
+
+/// The favorites step is on the sheet: its tiles on the left, which a click on one unticks, and
+/// its foot's Back, Skip and button.
+#[gpui::test]
+fn the_favorites_step_is_on_the_sheet(cx: &mut TestAppContext) {
+    let (shell, cx, view) = at_favorites(&["https://example.com/", "https://example.org/"], cx);
+    assert!(
+        super::sheet::on_sheet(Step::Favorites),
+        "the favorites step shows on the sheet"
+    );
+    let drawn = |name: &str, cx: &mut VisualTestContext| {
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| view.drawn_place(name))
+    };
+    let tile = drawn("import-favorite example.com", cx).expect("the first site's tile is drawn");
+    cx.simulate_click(tile, gpui::Modifiers::none());
+    cx.run_until_parked();
+    let ticked = shell.read_with(cx, |shell, cx| {
+        (shell.favorites_ticked(cx).into_iter())
+            .map(|tab| tab.url)
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        ticked,
+        ["https://example.org/"],
+        "a click on a tile on the sheet unticks it"
+    );
+    assert!(
+        placed("skip", cx).is_some() && placed("back", cx).is_some(),
+        "the sheet's foot has Back and Skip"
+    );
+}
+
+/// The favorites' loop ticks the sites in turn but the last, each ticked landing in the small
+/// window's sidebar as a tile, the first within its first second and none outside the sidebar;
+/// the last never lands, and the still last frame is what came.
+#[gpui::test]
+fn the_favorites_loop_lands_each_ticked_site_in_the_sidebar(cx: &mut TestAppContext) {
+    let (shell, cx, _) = at_favorites(&["https://example.com/"], cx);
+    held_at(&shell, cx, 0.);
+    assert!(
+        placed("tile-0", cx).is_none(),
+        "nothing has landed as the loop starts"
+    );
+    held_at(&shell, cx, 1.);
+    assert!(
+        placed("tile-0", cx).is_some(),
+        "the first ticked site lands in the loop's first second"
+    );
+    held_at(&shell, cx, FAVORITES_CAME);
+    let sidebar = placed("sidebar", cx).expect("the loop's sidebar is drawn");
+    for name in ["tile-0", "tile-1", "tile-2"] {
+        let part = placed(name, cx).unwrap_or_else(|| panic!("{name} has landed by then"));
+        assert!(
+            inside(part, sidebar),
+            "{name} lands inside the sidebar at {sidebar:?}, but it was at {part:?}"
+        );
+    }
+    held_at(&shell, cx, PERIOD);
+    assert!(
+        placed("came", cx).is_some() && placed("tile-2", cx).is_some(),
+        "the still last frame is what came"
+    );
+    assert!(
+        placed("tile-3", cx).is_none(),
+        "the site left unticked never lands"
+    );
+}
+
+/// The default browser's step is on the sheet, its button in the foot, and its loop's pointer
+/// clicks the other app's link, which then opens in the small window's sidebar as a new tab, with
+/// its page; nothing has opened as the loop starts, and the still last frame is the link open.
+#[gpui::test]
+fn the_default_browsers_loop_opens_the_link_as_a_tab(cx: &mut TestAppContext) {
+    use crate::tokens::shell::onboarding::loops::IMPORT_LAND;
+    let (shell, cx, _) = first_window(cx);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::DefaultBrowser);
+    later(&shell, cx, STEP_MOTION);
+    assert!(
+        super::sheet::on_sheet(Step::DefaultBrowser),
+        "the default browser's step shows on the sheet"
+    );
+    assert!(
+        placed("skip", cx).is_some() && placed("back", cx).is_some(),
+        "the sheet's foot has Back and Skip"
+    );
+    held_at(&shell, cx, 0.);
+    assert!(
+        placed("tab-new", cx).is_none(),
+        "nothing has opened as the loop starts"
+    );
+    let press = DEFAULT_AT + WELCOME_MOVE + WELCOME_CLICK;
+    held_at(&shell, cx, press);
+    let pointer = placed("pointer", cx).expect("the pointer is drawn");
+    let link = placed("link", cx).expect("the link is drawn");
+    assert!(
+        link.contains(&pointer.origin),
+        "the pointer's tip clicks the link at {link:?}, but it was at {pointer:?}"
+    );
+    held_at(&shell, cx, press + DEFAULT_OPEN + IMPORT_LAND);
+    let sidebar = placed("sidebar", cx).expect("the loop's sidebar is drawn");
+    let tab = placed("tab-new", cx).expect("the link has opened as a tab");
+    assert!(
+        inside(tab, sidebar),
+        "the new tab lands inside the sidebar at {sidebar:?}, but it was at {tab:?}"
+    );
+    held_at(&shell, cx, PERIOD);
+    assert!(
+        placed("tab-new", cx).is_some() && placed("page-new", cx).is_some(),
+        "the still last frame is the link open, its page shown"
+    );
+}
+
+/// The search engine's step is on the sheet, the engines in a box under its words, and its loop
+/// types a few words in the bar, then opens the results as a new tab in the small window's
+/// sidebar as the bar goes; nothing has opened while the words are typed, and the still last frame
+/// is the results.
+#[gpui::test]
+fn the_search_engines_loop_opens_the_words_typed_as_a_tab(cx: &mut TestAppContext) {
+    use crate::tokens::shell::onboarding::loops::{
+        IMPORT_FADE, IMPORT_LAND, SEARCH_AT, SEARCH_RETURN, SEARCH_TYPE,
+    };
+    let (shell, cx, host) = first_window(cx);
+    with_engines(&host);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::SearchEngine);
+    later(&shell, cx, STEP_MOTION);
+    assert!(
+        super::sheet::on_sheet(Step::SearchEngine),
+        "the search engine's step shows on the sheet"
+    );
+    assert!(
+        placed("skip", cx).is_some() && placed("back", cx).is_some(),
+        "the sheet's foot has Back and Skip"
+    );
+    let typed = SEARCH_AT + IMPORT_FADE + SEARCH_TYPE;
+    held_at(&shell, cx, typed);
+    assert!(placed("words", cx).is_some(), "the words are in the bar");
+    assert!(
+        placed("tab-new", cx).is_none(),
+        "nothing has opened while the words are typed"
+    );
+    held_at(&shell, cx, typed + SEARCH_RETURN + IMPORT_LAND);
+    let sidebar = placed("sidebar", cx).expect("the loop's sidebar is drawn");
+    let tab = placed("tab-new", cx).expect("↩ has opened the results as a tab");
+    assert!(
+        inside(tab, sidebar),
+        "the new tab lands inside the sidebar at {sidebar:?}, but it was at {tab:?}"
+    );
+    held_at(&shell, cx, PERIOD);
+    assert!(
+        placed("tab-new", cx).is_some() && placed("page-new", cx).is_some(),
+        "the still last frame is the results, their page shown"
+    );
+    assert!(placed("bar", cx).is_none(), "and the bar has gone");
+}
+
+/// The sync's step is on the sheet, and its loop carries a pinned tab from the small window to the
+/// phone under the lock, and a favorite added on the phone back to the window's sidebar; nothing
+/// is on the phone as the loop starts, and the still last frame has both landed.
+#[gpui::test]
+fn the_sync_loop_carries_a_tab_across_and_a_favorite_back(cx: &mut TestAppContext) {
+    use crate::tokens::shell::onboarding::loops::{IMPORT_FADE, IMPORT_LAND, SYNC_AT, SYNC_CROSS};
+    let (shell, cx, host) = first_window(cx);
+    host.sync_server.set(true);
+    synced(cx, Status::SignedOut, "https://sync.example.org");
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Account);
+    later(&shell, cx, STEP_MOTION);
+    assert!(
+        super::sheet::on_sheet(Step::Account),
+        "the sync's step shows on the sheet"
+    );
+    assert!(
+        placed("skip", cx).is_some() && placed("back", cx).is_some(),
+        "the sheet's foot has Back and Skip"
+    );
+    let [there, back] = SYNC_AT;
+    held_at(&shell, cx, 0.);
+    assert!(
+        placed("phone-tab", cx).is_none(),
+        "nothing is on the phone as the loop starts"
+    );
+    // Halfway across, the tab is at the lock.
+    held_at(&shell, cx, there + IMPORT_FADE + SYNC_CROSS / 2.);
+    let moving = placed("moving", cx).expect("the pinned tab is on its way");
+    let lock = placed("lock", cx).expect("the lock is drawn");
+    assert!(
+        moving.intersects(&lock),
+        "the tab crosses under the lock at {lock:?}, but it was at {moving:?}"
+    );
+    held_at(&shell, cx, there + IMPORT_FADE + SYNC_CROSS + IMPORT_LAND);
+    let phone = placed("phone", cx).expect("the phone is drawn");
+    let tab = placed("phone-tab", cx).expect("the tab has come to the phone");
+    assert!(
+        inside(tab, phone),
+        "the tab lands on the phone at {phone:?}, but it was at {tab:?}"
+    );
+    held_at(&shell, cx, back + IMPORT_FADE + SYNC_CROSS + IMPORT_LAND);
+    let sidebar = placed("sidebar", cx).expect("the loop's sidebar is drawn");
+    let tile = placed("tile-back", cx).expect("the phone's favorite has come back");
+    assert!(
+        inside(tile, sidebar),
+        "the favorite lands in the sidebar at {sidebar:?}, but it was at {tile:?}"
+    );
+    held_at(&shell, cx, PERIOD);
+    assert!(
+        placed("phone-tab", cx).is_some() && placed("tile-back", cx).is_some(),
+        "the still last frame has both landed"
     );
 }

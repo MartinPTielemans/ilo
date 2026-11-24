@@ -14,7 +14,7 @@ use std::{
 use browser::account::{self, Account};
 use browser::agents::task::ilo::{IloKind, IloLine, SignedInWith};
 use browser::agents::task::{
-    Card as TaskCard, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep,
+    Card as TaskCard, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep, Word,
 };
 use browser::agents::tier::{Tier, Why};
 use browser::boost_editor;
@@ -1707,6 +1707,17 @@ impl Browser for Fake {
     fn command_bar_open(&self, _: &App) -> bool {
         false
     }
+
+    fn command_bar_in_place(
+        &self,
+        window: &mut gpui::Window,
+        cx: &mut App,
+    ) -> gpui::Entity<command_bar::CommandBar> {
+        command_bar::in_place(Rc::new(PreviewBar), window, cx)
+    }
+
+    // The preview runs no tasks.
+    fn start_task(&self, _: &str, _: &str, _: u64, _: Tier, _: &mut App) {}
 
     fn field_window_typing(&self, _: &mut App) -> bool {
         false

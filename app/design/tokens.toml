@@ -908,17 +908,28 @@ tint-more = 0.44
 gray-text-less = 4.5
 gray-text = 3.0
 gray-text-more = 3.0
-# The HUD window's material alone, untinted, over a white, a grey and a black backdrop, as the
-# app draws it on a Mac with the tint off, measured from its window's pixels; the window's ground
-# over each is the tint's colour at its alpha over these.
-material-over-white = 0xacacac
-material-over-grey = 0x5e5e5e
+# The HUD window's material alone, untinted, over a window of white, grey 128 and black behind
+# it, on a black desktop, as the app draws it on a Mac with the tint off, measured from its
+# window's pixels: the darkest the window can be. The desktop picture comes through what's behind
+# as well, and a light one lifts the material over each by up to `material-lift` levels of 255 (13
+# over the check VM's own picture, 12 to 13 at every grey). These are the reads with the Mac's
+# desktop tinting on, the system's default; with it off there's no lift, and the material reads
+# between these and the lifted ones in both looks, so the same range holds it. The window's ground
+# over each is the tint's colour at its alpha over these; its lightest is over white, lifted.
+material-over-white = 0xa0a0a0
+material-over-grey = 0x585858
 material-over-black = 0x131313
+material-lift = 13.0
 # What stands in for the material where the window's look has to be opaque, under rows it covers
 # or in the reveal's panel over the page: the ground over grey at Standard. The palette works out
 # each level's from the tokens above; this one is for what reads it without a palette, and a test
 # holds it to the palette's.
 stand-in = 0x303030
+# What AppKit draws in the material's place with Reduce Transparency or Increase Contrast, at every
+# level: an opaque ground, nothing behind it showing through, so gray text on it holds what it does
+# at Less. The window background material's, from the VM's run 6, stands in until the VM reads the
+# HUD window's under those settings.
+material-solid = 0x333332
 # The Space's colour is a glow from the sidebar's foot, not a wash over the window (#4089): an
 # ellipse `glow-width` by `glow-height` (its radii) centred on the window's bottom left corner, the
 # main colour at `gradient-alpha` there, going in a straight line to nothing at `glow-fade` of the
@@ -944,10 +955,12 @@ dialog-dark = 0x2a2720
 light-tint-less = 0.83
 light-tint = 0.7
 light-tint-more = 0.58
-light-material-over-white = 0xf6f6f6
-light-material-over-grey = 0xb6b6b6
-light-material-over-black = 0x717171
+light-material-over-white = 0xe9e9e9
+light-material-over-grey = 0xb0b0b0
+light-material-over-black = 0x707070
+light-material-lift = 13.0
 light-stand-in = 0xebebeb
+light-material-solid = 0xffffff
 # What floats over the window at each level, for the transparency picker: the dark fill over the
 # window's material at these, beside the window's own tints.
 overlay-fill-less = 0.88
@@ -1487,7 +1500,9 @@ plate-inset = 8.0
 list-trail = 118.0
 folder-indent = 16.0
 # A dragged row's drop line is Arc's: 2 pt, from a ring 8 across, drawn with the same 2 pt,
-# whose left is 7 in from the plate's, to 2 before the plate's end (Arc 1.170 rec).
+# whose left is 7 in from the plate's, to 2 before the plate's end (Arc 1.170 rec), in the window's
+# ink at `drop` (Arc's white at 0.9 over the dark Space; the ink is ilo's, and shows on the light
+# window, where white doesn't).
 drop-line = 2.0
 drop-ring = 8.0
 drop-ring-x = 7.0
@@ -1496,7 +1511,7 @@ drop-line-end = 2.0
 # edges at the plate's radius less as much, filled as a hovered row (ours: Arc's preview isn't
 # measured).
 drop-slot-inset = 3.0
-drop = 0xffff_ffe6
+drop = 0.9
 plate-radius = 12.0
 # A row's host under its title, in `secondary` at text's small size, Arc's 11 pt (Arc 1.168): a
 # pinned tab's whose page left its pinned URL's host, and a tab's in Developer Mode. The two lines
@@ -1868,6 +1883,107 @@ button-keys-radius = 6.0
 # under the mark is set.
 hint-bottom = 40.0
 
+
+[shell.composer]
+# The page an empty Space rests on (#4140), as its drawing measures it on the window's ink. Its
+# field's row is level with ⌘T's bar's (`command_bar::centered_row_middle`) and the mark this far
+# over the field. The group moves up only as far as it needs to fit the card, never nearer its top
+# than `top`, which it keeps under the cards too.
+top = 40.0
+mark-gap = 26.0
+# The field: 540 wide, or what the card leaves inside its side gutters, 52 tall at radius 16. Its
+# words at 15 start 18 in, and the ⇥ chip and the switch end 9 in.
+field-width = 540.0
+field-gutter = 24.0
+field-height = 52.0
+field-radius = 16.0
+field-left = 18.0
+field-right = 9.0
+field-size = 15.0
+# Ink 0.085 inside a rim of white 0.09, over a close shadow and a far one. In the light look the
+# plate is opaque, the window's opaque ground under the address field's plate, so its shadow
+# doesn't show through it; its shadows are fainter, as a menu's are there, and its rim (and a
+# card's) is ink 0.09, as a white one doesn't show on a light window.
+field-fill = 0.085
+field-rim = 0xffff_ff17
+field-shadow-near = 0x0000_0033
+field-shadow-far = 0x0000_003d
+light-field-shadow-near = 0x0000_000f
+light-field-shadow-far = 0x0000_001d
+light-rim = 0.09
+# The ⇥ chip before the switch, 8 from it, at 0.6: 18 tall, 5 in, at the control radius, ink 0.1
+# under ink 0.7 at 11.
+key-gap = 8.0
+key-opacity = 0.6
+key-height = 18.0
+key-inset = 5.0
+key-radius = 6.0
+key-fill = 0.1
+key-ink = 0.7
+key-size = 11.0
+# The switch, Search | Ask: a 2-in track of ink 0.08, its parts 28 tall, 13 in at the control
+# radius, in ink 0.6, and the track concentric round them; the one it's on is ink 0.16 under full
+# ink, medium, in a rim of white 0.07.
+switch-inset = 2.0
+switch-radius = 8.0
+switch-fill = 0.08
+switch-height = 28.0
+switch-part-inset = 13.0
+switch-part-radius = 6.0
+switch-ink = 0.6
+switch-on = 0.16
+switch-on-rim = 0xffff_ff12
+switch-size = 12.0
+# Ask's line under the field: 524 wide, 7 under it, its chips 26 tall, 8 in, radius 6, at 12 in
+# ink 0.6. It keeps its room in Search, so nothing moves as the switch flips.
+line-width = 524.0
+line-top = 7.0
+chip-height = 26.0
+chip-inset = 8.0
+chip-radius = 6.0
+chip-gap = 6.0
+chip-ink = 0.6
+chip-size = 12.0
+chip-glyph = 14.0
+chip-chevron = 10.0
+# "Recent tasks", 600 wide, 14 semibold on an 18 line in full ink, 34 under the line and 12 over
+# the cards, 4 in.
+label-width = 600.0
+label-size = 14.0
+label-line = 18.0
+label-top = 34.0
+label-bottom = 12.0
+label-inset = 4.0
+# Up to three cards, 190 wide and 15 apart, radius 16, ink 0.065 in a rim of white 0.09.
+cards = 3
+card-width = 190.0
+card-gap = 15.0
+card-radius = 16.0
+card-fill = 0.065
+card-rim = 0xffff_ff17
+# A card's words: 110 tall, 11 over, 12 in, 10 under. Its state line at 10.5, 12 tall, ink 0.6,
+# its dot 6 and 6 from the words; the title semibold 7 under it and 7 over its steps; each step
+# 10.5 on a 15 line in ink 0.6, the one under way in full ink, after a 10 glyph 6 from its words.
+card-words = 110.0
+card-top = 11.0
+card-inset = 12.0
+card-bottom = 10.0
+state-size = 10.5
+state-height = 12.0
+state-ink = 0.6
+state-gap = 6.0
+dot = 6.0
+title-gap = 7.0
+step-size = 10.5
+step-line = 15.0
+step-ink = 0.6
+step-glyph = 10.0
+# The task's page under its words: 112 tall, 6 in from the card's sides and foot, concentric in it.
+page-height = 112.0
+page-inset = 6.0
+page-radius = 10.0
+page-fill = 0.05
+
 [shell.extensions]
 # The room the URL field keeps for the host before it shows fewer actions (Ardia).
 host-room = 84.0
@@ -2228,12 +2344,63 @@ pointer-fade = 0.3
 # once from each time here: 2nd, 3rd, then the 1st again. The press's ring grows and fades
 # over `press`; the tab and its page change on the press, as a tab switch does.
 welcome-at = [0.4, 3.4, 6.4]
+# Where across the sidebar the pointer presses a tab and rests on it: past the longest title.
+press-across = 0.8
 welcome-move = 0.8
 welcome-click = 0.2
 welcome-press = 0.5
 # The color's: the sidebar's rows swipe to the next Space from `at` over `swipe`, and back.
 color-at = [0.6, 5.0]
 color-swipe = 0.6
+# The import's: the other browser's strip over ilo's window, `strip-gap` above it. Its bookmarks
+# land as favorites from `at`'s first and its tabs as tabs from its second, one every `stagger`,
+# each over `land`, coming down `drop` into place as its strip's dims to `dim`. The Spaces' dots
+# come at `spaces` and what came at `came`, each over `fade`, and all of it goes over the loop's
+# last `out`. The favorites are `tile` tiles, `tile-gap` apart, from `tiles-top` down.
+strip-height = 58.0
+strip-gap = 14.0
+tile = 22.0
+tile-gap = 4.0
+tiles-top = 22.0
+import-at = [0.4, 2.2]
+import-stagger = 0.35
+import-land = 0.35
+import-drop = 6.0
+import-dim = 0.35
+import-spaces = 4.2
+import-came = 4.8
+import-fade = 0.4
+import-out = 0.6
+# The favorites': the sites the history visited most in a strip over ilo's window, as the import's
+# other browser is. From `at`, one every `stagger`, a site's tick fills and `tick` later it lands in
+# the sidebar as a tile, as the import's favorites land; the last site stays unticked and never
+# lands. What came is said at `came`; the import's land, drop, fade and out are theirs too.
+favorites-at = 0.6
+favorites-stagger = 0.7
+favorites-tick = 0.3
+favorites-came = 3.6
+# The default browser's: a message in another app over ilo's window, its link `default-link` in
+# from the message's corner. From `default-at` the pointer goes to the link over the welcome's
+# move, clicks it and fades, and `default-open` after the press the link lands in ilo's sidebar as
+# a new tab at the top, over the import's land and drop, taking the selected plate as its page
+# shows.
+default-link = [40.0, 34.0]
+default-at = 0.6
+default-open = 0.3
+# The search engine's: from `search-at` the bar comes up over the page, its corner `search-bar` in
+# from the window's, as the import's parts fade in; the words are typed over `search-type`, and
+# `search-return` later ↩ opens the results as a new tab, over the import's land and drop.
+search-at = 0.6
+search-bar = [40.0, 60.0]
+search-type = 1.4
+search-return = 0.5
+# The sync's: a phone `sync-phone` big, as round as the window, standing `sync-phone-out` past
+# the window's right edge. At the first of `sync-at` a tab is pinned, and it crosses to the
+# phone over `sync-cross`; at the second a favorite added on the phone crosses back the same way.
+sync-at = [0.6, 5.0]
+sync-cross = 1.2
+sync-phone = [76.0, 150.0]
+sync-phone-out = 48.0
 
 [shell.import]
 # Ours (#1673): while an import runs, each Space it makes is a card in its own colours, under the

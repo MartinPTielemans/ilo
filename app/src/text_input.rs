@@ -100,8 +100,8 @@ pub fn on_leave<T: 'static>(
 }
 
 /// The user went away from the field with the keyboard still in it: a press outside it, which
-/// moves the keyboard only where it lands on something that takes it, or its own menu closed by a
-/// press away from both or by the user going to another window or app.
+/// moves the keyboard only where it lands on something that takes it, or its own menu closed by
+/// the user going to another window or app. A press that only closes that menu isn't one.
 pub struct Away;
 
 impl EventEmitter<Away> for TextInput {}
@@ -934,11 +934,9 @@ impl TextInput {
         let chosen: Chosen = Box::new(move |closed, window, cx| {
             let away = field.update(cx, |field, _| {
                 field.menu_shown = false;
-                match closed {
-                    Closed::PressedAt(at) => !field.last_bounds.is_some_and(|it| it.contains(&at)),
-                    Closed::Left => true,
-                    Closed::Chose(_) | Closed::Otherwise => false,
-                }
+                // A press that closed the menu was spent on it, wherever it was, so the field goes
+                // on as it was: only the user leaving the window takes them away from it.
+                closed == Closed::Left
             });
             if let Some(action) = closed
                 .chosen()
