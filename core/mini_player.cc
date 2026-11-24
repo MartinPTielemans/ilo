@@ -133,9 +133,12 @@ class MiniPlayerWatch : public views::WidgetObserver {
     // it was born on, and off one another app has made full screen, unless it may join one
     // (SetCanAppearInExistingFullscreenSpaces) and is on every Space at all
     // (SetVisibleOnAllWorkspaces): the PiP window's InitParams set visible_on_all_workspaces, but
-    // only the Aura native widget reads it, so the Mac's window has neither until here.
+    // only the Aura native widget reads it, so the Mac's window has neither until here. The bits
+    // let the window stay, but only a move brings it to the Space active as it shows, as Chrome's
+    // own PiP moves it when its browser goes full screen.
     widget->SetCanAppearInExistingFullscreenSpaces(true);
     widget->SetVisibleOnAllWorkspaces(true);
+    widget->MoveToActiveFullscreenSpace();
 #endif
     // check.sh reads these lines.
     LogHandover("mini player shows", widget->GetWindowBoundsInScreen().size().ToString());
