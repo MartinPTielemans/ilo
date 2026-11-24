@@ -6,6 +6,7 @@ use gpui::TestAppContext;
 
 use super::*;
 use crate::agents::Question;
+use crate::agents::task::Word;
 
 #[derive(Default)]
 struct Recorder {
@@ -47,6 +48,7 @@ fn card(agent: &str, name: &str, dot: Dot) -> Card {
         last_site: None,
         asks: false,
         dot,
+        word: Word::for_dot(dot),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),

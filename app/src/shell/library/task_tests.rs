@@ -12,7 +12,7 @@ use super::{
     ARCHIVE_TOP, ARCHIVED_LEFT, ARCHIVED_PITCH, Archived, COLUMN_WIDTH, FILTER_WIDTH, FILTER_X,
     HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, Item, SEARCH_HEIGHT, SEARCH_TOP,
 };
-use crate::agents::task::{ArchivedTask, Card, Dot};
+use crate::agents::task::{ArchivedTask, Card, Dot, Word};
 use crate::shell::recorder::Recorder;
 use crate::shell::{Folders, Section, Shell};
 
@@ -51,6 +51,7 @@ fn card() -> Card {
         last_site: None,
         asks: false,
         dot: Dot::Done,
+        word: Word::for_dot(Dot::Done),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),

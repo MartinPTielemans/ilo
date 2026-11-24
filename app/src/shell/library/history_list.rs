@@ -188,7 +188,7 @@ pub(super) fn history_text(
             17.,
             palette.text(UNSELECTED_TITLE),
         ))
-        .child(text_line(about, text::SMALL, 15., palette.text(SECONDARY)))
+        .child(text_line(about, text::SMALL, 15., palette.gray(SECONDARY)))
 }
 
 /// The agent whose past task's tab visited `page`: one that recorded the page, and ran when it was
