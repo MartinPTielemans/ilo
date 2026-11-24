@@ -19,6 +19,7 @@ use gpui::{
 use gpui::{Role, Size, accesskit::Live, canvas};
 
 use crate::{
+    dismissal::{self, By, Close, Why},
     palette,
     shell::{self, Match},
     text_input::{self, PasteAndGo, PasteAndSearch, TextInput, without_javascript},
@@ -685,7 +686,7 @@ pub struct CommandBar {
     surface: Surface,
     /// At rest, while the page's switch is on Ask: what's typed is the task, which nothing
     /// suggests for, and ↩ hands it to the page.
-    composing: bool,
+    on_ask: bool,
     input: Entity<TextInput>,
     target: Target,
     /// What was typed, which the core was last asked to suggest for, when, and whether it was
@@ -941,7 +942,7 @@ fn new_bar(
         CommandBar {
             host,
             surface,
-            composing: false,
+            on_ask: false,
             input,
             target: Target::NewTab,
             asked: String::new(),
@@ -1211,10 +1212,8 @@ pub fn space_shown(tabs: Vec<shell::BarTab>, open_tabs: Vec<shell::BarTab>, cx: 
                 return false;
             }
             if let Target::Beside(_) = bar.target {
-                // The shell is in an update, which its dismissal would update again.
-                bar.open.set(false);
-                let host = bar.host.clone();
-                cx.defer(move |_| host.dismiss());
+                // Its split view isn't shown.
+                bar.close_later(Close::new(Why::FocusLeft, By::Code), cx);
                 return false;
             }
             // check.sh reads this line.
@@ -1262,10 +1261,8 @@ pub fn tab_shown(tab: u64, cx: &mut App) -> bool {
             match bar.target {
                 Target::Tab(edited) if edited != tab => {}
                 Target::Beside(with) if with != tab => {
-                    // The shell is in an update, which its dismissal would update again.
-                    bar.open.set(false);
-                    let host = bar.host.clone();
-                    cx.defer(move |_| host.dismiss());
+                    // Its split view isn't shown.
+                    bar.close_later(Close::new(Why::FocusLeft, By::Code), cx);
                     return false;
                 }
                 _ => return false,
@@ -1287,9 +1284,10 @@ pub fn tab_shown(tab: u64, cx: &mut App) -> bool {
 /// The user left the bar with a click outside it, or Esc.
 pub fn dismissed(cx: &mut App) {
     if let Some(window) = cx.try_global::<CommandBarWindow>().cloned() {
+        let close = Close::left(cx.active_window().is_none());
         window
             .update(cx, |bar, _, cx| {
-                bar.open.set(false);
+                bar.closed(close);
                 bar.end_ask(cx);
             })
             .ok();
@@ -1345,6 +1343,12 @@ pub fn page_favicon(url: &str, favicon: Option<Arc<Image>>, cx: &mut App) {
 /// Where the centred panel's top is, down a browser window `height` tall.
 pub fn centered_top(height: f32) -> f32 {
     height / 2. - ABOVE_MIDDLE
+}
+
+/// Where the middle of the centred bar's input row is, down a browser window `height` tall: the
+/// height the composer page's field rests at, so ⌘T's bar opens on it.
+pub fn centered_row_middle(height: f32) -> f32 {
+    centered_top(height) + HEIGHT / 2.
 }
 
 /// How tall the bar's window is with `rows` suggestions listed: the input, and under it, with its
@@ -1691,7 +1695,7 @@ impl CommandBar {
             return self.list_commands(text, window, cx);
         }
         // What an ask types is the task, which nothing suggests for.
-        if self.ask.is_some() || self.composing {
+        if self.ask.is_some() || self.on_ask {
             self.asked = text;
             return cx.notify();
         }
@@ -2207,7 +2211,7 @@ impl CommandBar {
 
     /// ↩ in an ask: closes the bar, then runs the task on the agent selected, whose card takes the
     /// slot; or opens Settings › Agents from its row.
-    fn run_ask(&mut self, index: usize, cx: &mut App) {
+    fn run_ask(&mut self, index: usize, by: By, cx: &mut App) {
         let Some(ask) = self.ask.as_ref() else { return };
         let page = ask.page.clone();
         let asked = self.input.read(cx).text().trim().to_string();
@@ -2220,7 +2224,7 @@ impl CommandBar {
                 // The host folds the bar into the slot its card fills, so the slot doesn't close
                 // first, and the bar doesn't hide on its own.
                 self.ask = None;
-                self.open.set(false);
+                self.closed(Close::new(Why::Chosen, by));
                 self.host.run_task(&id, &asked, page, cx);
             }
             Some(TaskRow::SetUp) => {
@@ -2228,7 +2232,7 @@ impl CommandBar {
                 // Ended here, or the next ⌘T ends it from inside the Shell's update, whose slot
                 // closing reads the Shell (#2459).
                 self.end_ask(cx);
-                self.close();
+                self.close(Close::new(Why::Chosen, by));
                 self.host.set_up_agents(cx);
             }
             _ => {}
@@ -2642,14 +2646,14 @@ impl CommandBar {
     fn go(&mut self, _: &Go, _: &mut Window, cx: &mut Context<Self>) {
         // ↩ while an input method composes is its own, to commit with, as AppKit's and Windows'
         // take it before the bar: one that passes it on doesn't make the bar go with half a word.
-        if self.input.read(cx).composing() {
+        if !dismissal::submits([&self.input], cx) {
             return;
         }
         // A task isn't logged: it's the user's words.
         if self.ask.is_some() {
-            return self.run_ask(self.selected, cx);
+            return self.run_ask(self.selected, By::Keyboard, cx);
         }
-        if self.composing {
+        if self.on_ask {
             return cx.emit(InPlaceKey::Run);
         }
         let text = self.input.read(cx).text().trim().to_string();
@@ -2666,7 +2670,7 @@ impl CommandBar {
             // check.sh reads this line.
             log!("browser: command bar reloads tab {tab}");
             let users = !self.host.agents_page(cx);
-            self.close();
+            self.close(Close::new(Why::Chosen, By::Keyboard));
             self.host.reload(tab);
             if users {
                 self.host.focus_page();
@@ -2675,12 +2679,12 @@ impl CommandBar {
         }
         // Before anything is typed, that's one of the Space's tabs.
         if self.chosen().is_some() {
-            self.take(self.selected, cx);
+            self.take(self.selected, By::Keyboard, cx);
             return;
         }
         // Before the suggestions for what's typed come, ↩ goes where the first of them will.
         if let Some(url) = self.typed_url(&text).filter(|_| !text.is_empty()) {
-            self.go_to(&url, cx);
+            self.go_to(&url, By::Keyboard, cx);
         }
     }
 
@@ -2689,7 +2693,7 @@ impl CommandBar {
     fn paste_and_go(&mut self, _: &PasteAndGo, _: &mut Window, cx: &mut Context<Self>) {
         pasted(cx, |bar, text, cx| {
             if let Some(url) = bar.typed_url(text) {
-                bar.go_to_typed(&url, text, cx);
+                bar.go_to_typed(&url, text, By::Keyboard, cx);
             }
         });
     }
@@ -2697,30 +2701,30 @@ impl CommandBar {
     /// Paste and Search: searches for the clipboard's text, even if it names a page, as ⇧⌘↩
     /// does for what's typed.
     fn paste_and_search(&mut self, _: &PasteAndSearch, _: &mut Window, cx: &mut Context<Self>) {
-        if self.lists_own() || self.commands.is_some() || self.ask.is_some() || self.composing {
+        if self.lists_own() || self.commands.is_some() || self.ask.is_some() || self.on_ask {
             return;
         }
         let site = self.site.as_ref().map(|site| site.keyword.clone());
         pasted(cx, move |bar, text, cx| {
             if let Some(url) = bar.host.search_url(site.as_deref(), text) {
-                bar.go_to(&url, cx);
+                bar.go_to(&url, By::Keyboard, cx);
             }
         });
     }
 
     /// Shows `url` where the bar shows the page chosen, and closes the bar.
-    fn go_to(&self, url: &str, cx: &mut App) {
-        self.go_to_typed(url, &self.typed(cx), cx);
+    fn go_to(&self, url: &str, by: By, cx: &mut App) {
+        self.go_to_typed(url, &self.typed(cx), by, cx);
     }
 
     /// As `go_to`, for `url` given as `typed`, which an http address written out keeps.
-    fn go_to_typed(&self, url: &str, typed: &str, cx: &mut App) {
+    fn go_to_typed(&self, url: &str, typed: &str, by: By, cx: &mut App) {
         // check.sh reads this line.
         log!("browser: command bar go {url}");
         // Asked before the page shows, which can take the window out of a task's area.
         let users = !self.host.agents_page(cx);
         self.show_page(url, typed, cx);
-        self.close();
+        self.close(Close::new(Why::Chosen, by));
         // The page takes the keyboard, as Chrome's address bar gives it, wherever it was before the
         // bar opened, such as in the UI over a Board. Chrome gives it only while its window is
         // active, which on the Mac and Windows the bar's own window was until it hid (#3453).
@@ -2749,7 +2753,7 @@ impl CommandBar {
         let command = self.chosen().is_some_and(Suggestion::named);
         command
             || self.ask.is_some()
-            || self.composing
+            || self.on_ask
             || matches!(self.target, Target::Beside(_))
             || self.lists_own()
     }
@@ -2780,7 +2784,7 @@ impl CommandBar {
         // check.sh reads this line.
         log!("browser: command bar window {url}");
         // The bar leaves its window first, which the new one then takes the keyboard from.
-        self.close();
+        self.close(Close::new(Why::Chosen, By::Keyboard));
         self.host.open_window(url, &self.typed(cx), cx);
     }
 
@@ -2798,7 +2802,7 @@ impl CommandBar {
     /// site search.
     fn go_dot_com(&mut self, _: &GoDotCom, window: &mut Window, cx: &mut Context<Self>) {
         match self.dot_com(cx) {
-            Some(url) => self.go_to(&url, cx),
+            Some(url) => self.go_to(&url, By::Keyboard, cx),
             None => self.go(&Go, window, cx),
         }
     }
@@ -2829,7 +2833,7 @@ impl CommandBar {
             .search_url(site, &typed)
             .filter(|_| !typed.is_empty())
         {
-            self.go_to(&url, cx);
+            self.go_to(&url, By::Keyboard, cx);
         }
     }
 
@@ -2970,17 +2974,17 @@ impl CommandBar {
     /// chosen. Beside a tab, its tab moves into the split view. A tab another window shows live
     /// brings that window forward with it, as Chrome's Switch to Tab does, rather than taking its
     /// page (Arc unrecorded). A sum's row copies its result.
-    fn take(&mut self, index: usize, cx: &mut App) {
+    fn take(&mut self, index: usize, by: By, cx: &mut App) {
         let Some(row) = self.rows.get(index) else {
             return;
         };
         if row.task.is_some() {
-            return self.run_ask(index, cx);
+            return self.run_ask(index, by, cx);
         }
         if let Some(result) = &row.result {
             // check.sh reads this line.
             log!("browser: command bar copies {result}");
-            self.close();
+            self.close(Close::new(Why::Chosen, by));
             self.host.copy(result, cx);
             return;
         }
@@ -2990,7 +2994,7 @@ impl CommandBar {
                 "browser: command bar shows setting {} › {name}",
                 section.name()
             );
-            self.close();
+            self.close(Close::new(Why::Chosen, by));
             self.host.show_setting(section, name, cx);
             return;
         }
@@ -3000,7 +3004,7 @@ impl CommandBar {
             shell::picked_in_bar(&row.text, command, cx);
             use shell::Command::{AddSplit, EditUrl, NewTab, SearchTabs};
             if !matches!(command, NewTab | SearchTabs | EditUrl | AddSplit) {
-                self.close();
+                self.close(Close::new(Why::Chosen, by));
                 shell::run_from_bar(command, cx);
                 return;
             }
@@ -3008,7 +3012,7 @@ impl CommandBar {
             // bar is done with the key, as it updates the bar's window, which this is in. The bar
             // moves there without going, as hidden and shown at once it would lose the keyboard
             // to the page on X11, and goes only if it didn't open.
-            self.open.set(false);
+            self.closed(Close::new(Why::Chosen, by));
             let host = (self.surface == Surface::Window).then(|| self.host.clone());
             cx.defer(move |cx| {
                 shell::run_from_bar(command, cx);
@@ -3023,9 +3027,9 @@ impl CommandBar {
         if row.archived != 0 && !matches!(self.target, Target::Beside(_)) {
             let (archived, url) = (row.archived, row.url.clone());
             if !self.host.restore_archived(archived, cx) {
-                return self.go_to(&url, cx);
+                return self.go_to(&url, by, cx);
             }
-            self.close();
+            self.close(Close::new(Why::Chosen, by));
             return;
         }
         match (row.tab, self.target) {
@@ -3034,14 +3038,14 @@ impl CommandBar {
                 log!("browser: command bar new tab {}", row.url);
                 let users = !self.host.agents_page(cx);
                 self.host.open_tab(&row.url, "", false);
-                self.close();
+                self.close(Close::new(Why::Chosen, by));
                 // A new document is a page the user went to, as go_to_typed's are.
                 if users {
                     self.host.focus_page();
                 }
                 return;
             }
-            (0, _) => return self.go_to(&row.url, cx),
+            (0, _) => return self.go_to(&row.url, by, cx),
             (tab, Target::Beside(with)) => {
                 log!("browser: command bar split with tab {tab}");
                 self.host.split(tab, with, cx);
@@ -3049,7 +3053,7 @@ impl CommandBar {
             (tab, _) => match self.host.tab_window(tab) {
                 Some(window) => {
                     log!("browser: command bar switch to tab {tab} in window {window}");
-                    self.close();
+                    self.close(Close::new(Why::Chosen, by));
                     return self.host.activate(window, tab, cx);
                 }
                 None => {
@@ -3058,7 +3062,7 @@ impl CommandBar {
                 }
             },
         }
-        self.close();
+        self.close(Close::new(Why::Chosen, by));
     }
 
     /// Selects the next row, or the one before, wrapping at the ends as Chrome does.
@@ -3110,12 +3114,46 @@ impl CommandBar {
         cx.notify();
     }
 
-    /// Hides the bar's window; a resting bar's page goes on to what was picked.
-    fn close(&self) {
-        self.open.set(false);
-        if self.surface == Surface::Window {
-            self.host.hide();
+    /// Closes the bar for `close` (#4108). The window's hides: for a choice as the host's hide,
+    /// which gives the keyboard back where it was unless the choice then gives it to a page; as
+    /// the user leaving it for Escape, its own key or close, or the keyboard or pointer gone
+    /// elsewhere; and not again when the host hid it as the user left it. A resting bar has no window: its field keeps the
+    /// keyboard, and its page goes on to what was picked.
+    fn close(&self, close: Close) {
+        self.closed(close);
+        if self.surface == Surface::InPlace {
+            return;
         }
+        match close.why {
+            Why::Chosen => self.host.hide(),
+            Why::Escape | Why::Toggled | Why::CloseCommand | Why::FocusLeft | Why::PointerLeft => {
+                self.host.dismiss()
+            }
+            Why::PressOutside | Why::WindowLeft => {}
+        }
+    }
+
+    /// The bar is closed for `close`, its window hidden by the host already or by what it's asked
+    /// next, such as folding into a task's slot. A resting bar stays open, as its field stays in
+    /// its page for the next thing typed.
+    fn closed(&self, close: Close) {
+        if self.surface == Surface::Window && self.open.replace(false) {
+            log!(
+                "browser: command bar closed: {:?} by {:?}",
+                close.why,
+                close.by
+            );
+        }
+    }
+
+    /// As `close`, once the update the bar is in is over: the Shell's, which the host's dismissal
+    /// would update again.
+    fn close_later(&self, close: Close, cx: &mut Context<Self>) {
+        self.closed(close);
+        let bar = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            bar.read_with(cx, |bar, _| bar.close(close)).ok();
+        });
     }
 
     /// While it shows, the keys are the bar's until the user leaves it (#1314). Chromium makes its
@@ -3159,14 +3197,18 @@ impl CommandBar {
         }
         // check.sh reads this line.
         log!("browser: command bar closes again on {}", run.0.name());
-        self.open.set(false);
         self.end_ask(cx);
-        self.host.dismiss();
+        self.close(Close::new(Why::Toggled, By::Keyboard));
     }
 
     /// Esc leaves the site search, the commands-only list or the ask first, then the bar. Out of a
     /// site search the bar is as it opened, as Arc's `postScopedSearchRestoration` (#1397).
     fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        // Esc while an input method composes is its own, to cancel with: it neither closes the bar
+        // nor leaves what's in it, nor, at rest, takes the page out of Ask.
+        let Some(close) = Close::escape_from([&self.input], cx) else {
+            return;
+        };
         if self.site_left(cx).is_some() {
             // check.sh reads this line.
             log!("browser: command bar leaves site search as it opened");
@@ -3176,10 +3218,7 @@ impl CommandBar {
             return;
         }
         match self.surface {
-            Surface::Window => {
-                self.open.set(false);
-                self.host.dismiss();
-            }
+            Surface::Window => self.close(close),
             Surface::InPlace => cx.emit(InPlaceKey::Escape),
         }
     }
@@ -3421,7 +3460,7 @@ impl CommandBar {
             // Arc keeps the plate under the pointer as the keys move the selection.
             .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
             .on_hover(cx.listener(move |bar, hovered: &bool, _, cx| bar.hover(index, *hovered, cx)))
-            .on_click(cx.listener(move |bar, _, _, cx| bar.take(index, cx)))
+            .on_click(cx.listener(move |bar, _, _, cx| bar.take(index, By::Pointer, cx)))
             .child(icon)
             .child(
                 div()
@@ -3639,23 +3678,29 @@ impl CommandBar {
         self.typed(cx)
     }
 
+    /// What its field says with nothing typed.
+    #[cfg(test)]
+    pub fn placeholder(&self, cx: &App) -> SharedString {
+        self.input.read(cx).placeholder().clone()
+    }
+
     /// Whether the page's switch is on Ask.
-    pub fn composing(&self) -> bool {
-        self.composing
+    pub fn on_ask(&self) -> bool {
+        self.on_ask
     }
 
     /// The page's switch went to Ask, or back to search, where the field says `placeholder`. In
-    /// the Ask nothing is suggested and the rows go; back in search, what's typed is asked for
-    /// again.
-    pub fn set_composing(
+    /// the Ask nothing is suggested and the rows go. Back in search, a task typed isn't sent for
+    /// suggestions until the user types again.
+    pub fn set_on_ask(
         &mut self,
-        composing: bool,
+        on_ask: bool,
         placeholder: SharedString,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if std::mem::replace(&mut self.composing, composing) != composing {
-            if composing {
+        if std::mem::replace(&mut self.on_ask, on_ask) != on_ask {
+            if on_ask {
                 // Its site search and commands-only list are the search's.
                 self.site_left(cx);
                 self.commands = None;
@@ -3668,8 +3713,8 @@ impl CommandBar {
                 });
                 self.set_rows(String::new(), Vec::new(), window, cx);
             } else {
-                let text = self.input.read(cx).text().to_string();
-                self.ask_for(text, window, cx);
+                // As asked already, so the next edit asks for what's typed then.
+                self.asked = self.input.read(cx).text().to_string();
             }
         }
         self.input
@@ -3704,6 +3749,37 @@ impl CommandBar {
             .child(div().flex_1().min_w_0().child(self.input.clone()))
             .children(self.a11y.then(|| self.announcer()))
             .into_any_element()
+    }
+
+    /// The assistant the page's Ask runs on: the first ready one the browser last learned, read as
+    /// the switch first goes to Ask, so nothing of tasks is read before. None while tasks are off,
+    /// over a private window, or while none is ready.
+    pub fn assistant(&mut self, cx: &App) -> Option<TaskAgent> {
+        if self.task_agents.is_none() {
+            self.task_agents = self.learned_agents(cx);
+        }
+        let agents = self.task_agents.as_ref()?;
+        (agents.agents.iter())
+            .find(|agent| agent.resets.is_none())
+            .cloned()
+    }
+
+    /// ↩ in the page's Ask: the assistant it runs on and what was typed, trimmed, and the field
+    /// empties for the next. None with nothing typed or no assistant ready, which leaves the field.
+    pub fn take_task(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<(SharedString, String)> {
+        let asked = self.input.read(cx).text().trim().to_string();
+        if !self.on_ask || asked.is_empty() {
+            return None;
+        }
+        let agent = self.assistant(cx)?;
+        self.asked.clear();
+        self.input
+            .update(cx, |input, cx| input.set_text("".into(), 0, window, cx));
+        Some((agent.id, asked))
     }
 
     /// At rest, the rows for what's typed, which the page drops under its field; none while there

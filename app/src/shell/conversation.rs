@@ -286,6 +286,8 @@ impl Shell {
     /// An ended task's Start Again: the command bar opens as it does for a new tab, with what the
     /// task was first asked in its field, as an ask. Nothing is sent until the user sends it.
     pub fn ask_again(&mut self, asked: SharedString, cx: &mut Context<Self>) {
+        // It asks again at Work on pages, whatever the composer had picked.
+        self.forget_composer_tier();
         self.run(super::Command::NewTab, "start again", cx);
         self.browser.ask_again(asked, cx);
     }

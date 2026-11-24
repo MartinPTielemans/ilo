@@ -30,6 +30,8 @@ fn card() -> Card {
         replies: true,
         title: "Flight to Lisbon".into(),
         status: "Searching flights".into(),
+        steps: Vec::new(),
+        last_site: None,
         asks: false,
         dot: Dot::Working,
         answers: Vec::new(),

@@ -7,8 +7,7 @@
 use std::time::Instant;
 
 use gpui::{
-    App, Context, FontWeight, MouseButton, Pixels, Point, Stateful, Window, div, prelude::*, px,
-    rgba,
+    Context, FontWeight, MouseButton, Pixels, Point, Stateful, Window, div, prelude::*, px, rgba,
 };
 
 use super::{
@@ -37,6 +36,8 @@ const MARK_DOT: f32 = 184.4 * MARK_SCALE;
 const MARK_DOT_GAP: f32 = 81.9 * MARK_SCALE;
 const MARK_STEM_WIDTH: f32 = 133.1 * MARK_SCALE;
 const MARK_STEM_HEIGHT: f32 = 358.4 * MARK_SCALE;
+/// How tall the mark is at its own size.
+const MARK_HEIGHT: f32 = MARK_DOT + MARK_DOT_GAP + MARK_STEM_HEIGHT;
 use crate::tokens::shell::empty::BUTTON_FILL;
 use crate::tokens::shell::empty::BUTTON_GAP;
 use crate::tokens::shell::empty::BUTTON_HEIGHT;
@@ -72,7 +73,8 @@ impl Shell {
 
     /// Starts the fade as the card comes to show no page, and ends it as a page shows, which ends
     /// the welcome for good. The fade runs on the executor's clock, which the tests move on.
-    pub(super) fn step_empty(&mut self, window: &mut Window, cx: &App) {
+    pub(super) fn step_empty(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.step_resting(window, cx);
         if self.selected != 0 {
             self.empty_since = None;
             self.empty_settled = false;
@@ -158,12 +160,32 @@ impl Shell {
 
     /// ilo's mark over the Space's name and the card's one line, the next step and its key,
     /// centred, while no page is shown, or the welcome on the first run. A click anywhere on the
-    /// card does what that key does: ⌘T's command bar, centred on the window.
-    pub(super) fn empty_card(&self, cx: &mut Context<Self>) -> Option<Stateful<gpui::Div>> {
+    /// card does what that key does: ⌘T's command bar, centred on the window. With the bar at
+    /// rest on it, the card is the composer page instead, and a click on it gives its field the
+    /// keyboard.
+    pub(super) fn empty_card(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Stateful<gpui::Div>> {
         if self.selected != 0 {
             return None;
         }
         let (frame, _) = self.page_frame(self.viewport);
+        if let Some(page) = self.composer_page(frame, window, cx) {
+            let opacity = self.empty_opacity(cx.background_executor().now());
+            return Some(
+                div()
+                    .id("empty-card")
+                    .absolute()
+                    .left(frame.left())
+                    .top(frame.top())
+                    .w(frame.size.width)
+                    .h(frame.size.height)
+                    .on_click(cx.listener(|shell, _, window, cx| shell.focus_resting(window, cx)))
+                    .child(page.opacity(opacity)),
+            );
+        }
         let sign = match self.welcome {
             true => welcome(&self.palette, cx),
             false => self.sign(cx),
@@ -334,5 +356,6 @@ fn welcome(palette: &Palette, cx: &mut Context<Shell>) -> gpui::Div {
         .child(button)
 }
 
+pub(super) mod composer;
 #[cfg(test)]
 mod tests;
