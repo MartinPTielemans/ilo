@@ -524,8 +524,16 @@ pub struct Card {
     /// Its last steps this turn, at most `CARD_STEPS`, oldest first, each as the conversation's
     /// trace line says it (`tools::step_title`).
     pub steps: Vec<SharedString>,
-    /// The site of the last page it was on, from its steps, or None before it reaches one.
-    pub last_site: Option<SharedString>,
+    /// The page whose tile Latest tasks' plate pictures: of its pages now, the last its steps
+    /// acted on, else its last; None with no page.
+    pub last_tab: Option<u64>,
+    /// Latest tasks' line under the title once it's over: a done task's answer's first line, a
+    /// stopped one's last finished step. None for the rest, and for a task a run before left,
+    /// whose answer and steps no run keeps.
+    pub line: Option<SharedString>,
+    /// When a task a run before left ended, which its card's head says after its word; None for
+    /// a task of this run.
+    pub ended_at: Option<SharedString>,
     /// Whether the status is the agent's question, which may take two lines.
     pub asks: bool,
     pub dot: Dot,
@@ -1176,6 +1184,7 @@ impl Agents {
             (State::Failed { why, .. }, _) => (why.clone(), Dot::Ended),
         };
         let open = self.open_tabs(task, cx);
+        let pages = self.pages(task, cx);
         // The core's auto-archive can take a task's page it never showed (window.cc), and a task
         // lives for one run, so its card says where they went rather than offer them.
         // A session's pages are its own to close, so it keeps its receipt (#3652).
@@ -1198,11 +1207,17 @@ impl Agents {
             title: task.title.clone(),
             status,
             steps: last_steps(task),
-            last_site: last_site(task),
+            last_tab: last_tab(task, &pages),
+            line: match &task.state {
+                State::Done { result, .. } => first_line(result),
+                State::Stopped => last_finished(task),
+                _ => None,
+            },
+            ended_at: None,
             asks,
             dot,
             word: Word::of(&task.state, dot == Dot::Waiting),
-            pages: self.pages(task, cx),
+            pages,
             tier: task.tier,
             question,
             open,
@@ -3431,21 +3446,33 @@ fn limit_words(name: &str, resets: &Option<SharedString>) -> String {
     }
 }
 
-/// A result's first words for its card's line: its first line of text, without the marks that
-/// make it a heading, a list's item or bold.
+/// A result's first words for its card's line: its first line of text, or "Finished" with none.
 fn first_words(result: &str) -> SharedString {
+    first_line(result).unwrap_or_else(|| "Finished".into())
+}
+
+/// A result's first line of text, without the marks that make it a heading, a list's item or
+/// bold, or None with no text.
+fn first_line(result: &str) -> Option<SharedString> {
     let line = (result.lines())
         .map(|line| {
             line.trim()
                 .trim_start_matches(['#', '>', '-', '*', ' '])
                 .trim_end_matches(['*', ' '])
         })
-        .find(|line| !line.is_empty());
-    match line {
-        Some(line) => page::clip(&line.replace("**", ""), 120).into(),
-        None => "Finished".into(),
-    }
+        .find(|line| !line.is_empty())?;
+    Some(page::clip(&line.replace("**", ""), 120).into())
 }
+
+/// A stopped task's last finished step, as its trace line says it, its thoughts left out. A step
+/// under way at Stop, or one that failed, never is one, so a card never says `Couldn't …` of it.
+fn last_finished(task: &Task) -> Option<SharedString> {
+    (task.trace.iter().rev())
+        .filter(|step| step.did.tool != "thought")
+        .find(|step| step.ended.is_some() && step.error.is_none())
+        .map(|step| tools::step_title(&step.did, tools::Tense::Done).into())
+}
+
 /// What a card's status leads with when a confirmation or a handoff waits on the user, the one
 /// status the card sets heavier (`status_lead`).
 pub const NEEDS_YOU: &str = "Needs you";
@@ -3464,17 +3491,12 @@ fn last_steps(task: &Task) -> Vec<SharedString> {
     steps
 }
 
-/// The site of the last page a task was on or went to, as its steps name it (`agents::site`), or
-/// None before it reaches one. An address it asked for that names no page isn't one.
-fn last_site(task: &Task) -> Option<SharedString> {
+/// Of a task's `pages` now, the last its steps acted on, else its last.
+fn last_tab(task: &Task, pages: &[u64]) -> Option<u64> {
     (task.trace.iter().rev())
-        .map(|step| &step.did)
-        .find(|did| {
-            let unresolved =
-                matches!(did.tool.as_str(), "open_tab" | "navigate") && did.text.is_empty();
-            !did.site.is_empty() && !unresolved
-        })
-        .map(|did| did.site.clone().into())
+        .filter_map(|step| step.did.tab)
+        .find(|tab| pages.contains(tab))
+        .or(pages.last().copied())
 }
 
 /// A task's status while it works, saying how far it has got by its own steps: "Step 5 · Clicking

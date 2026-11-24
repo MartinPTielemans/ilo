@@ -178,6 +178,14 @@ fn the_tasks_a_run_before_left_are_listed_by_their_profile(cx: &mut TestAppConte
     for card in &cards {
         assert!(card.replies && card.steps.is_empty() && card.pages.is_empty());
         assert_eq!(card.space, 0);
+        // Its head says when it ended, and no line follows: no run keeps its answer or steps.
+        assert!(card.ended_at.is_some(), "{} says no time", card.title);
+        assert_eq!(
+            (card.line.as_ref(), card.last_tab),
+            (None, None),
+            "{}",
+            card.title
+        );
     }
     assert!((next.agents).read_with(cx, |agents, cx| agents.shown_cards(cx).is_empty()));
 

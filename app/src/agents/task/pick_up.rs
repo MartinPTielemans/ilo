@@ -494,8 +494,14 @@ impl Agents {
                     return None;
                 }
                 *listed += 1;
+                // Its head says when it ended; no line follows, as no run keeps its answer or
+                // its steps.
                 Some(Card {
                     home: *home,
+                    line: None,
+                    ended_at: task
+                        .ended
+                        .map(|at| crate::agents::time_or_day(seconds(at)).into()),
                     ..self.card(task, cx)
                 })
             })

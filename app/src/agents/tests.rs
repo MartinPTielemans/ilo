@@ -8632,10 +8632,9 @@ mod tasks {
     }
 
     /// A card lists the task's last three steps this turn, oldest first, as the conversation's
-    /// trace lines say them, and names the site of the last page it was on; before its first
-    /// step it has none of either.
+    /// trace lines say them, and pictures its last page; before its first step it has neither.
     #[gpui::test]
-    fn a_card_lists_the_last_three_steps_and_names_the_last_site(cx: &mut TestAppContext) {
+    fn a_card_lists_the_last_three_steps_and_pictures_its_last_page(cx: &mut TestAppContext) {
         let (agents, _) = ready(None, cx);
         let agent = start(&agents, "Find two tickets", cx);
         agents.update(cx, |agents, _| {
@@ -8645,7 +8644,7 @@ mod tasks {
         });
         let card = card_of(&agents, cx);
         assert!(card.steps.is_empty(), "{:?}", card.steps);
-        assert_eq!(card.last_site, None);
+        assert_eq!(card.last_tab, None);
         for site in ["a.example", "b.example", "c.example", "d.example"] {
             let _ = call(&agents, &agent, "open_tab", json!({ "url": site }), cx);
         }
@@ -8661,14 +8660,19 @@ mod tasks {
             .map(SharedString::from)
             .to_vec()
         );
-        assert_eq!(card.last_site.as_deref(), Some("d.example"));
+        assert!(
+            card.last_tab.is_some(),
+            "no page pictured of {:?}",
+            card.pages
+        );
+        assert_eq!(card.last_tab, card.pages.last().copied());
     }
 
-    /// An address the browser didn't take names no page: its step's site is the agent's own
-    /// words, which the card's plate never shows. A task whose only open is one has no plate, and
-    /// one that reached a page before keeps that page's site.
+    /// Latest tasks' line under a card's title once its task is over: a done task's answer's first
+    /// line, and a stopped one's last finished step, never one under way at Stop nor one that
+    /// failed, or nothing.
     #[gpui::test]
-    fn an_address_the_browser_didnt_take_puts_no_site_on_the_card(cx: &mut TestAppContext) {
+    fn a_cards_line_is_the_answers_first_or_the_last_finished_step(cx: &mut TestAppContext) {
         let (agents, _) = ready(None, cx);
         let agent = start(&agents, "Find two tickets", cx);
         agents.update(cx, |agents, _| {
@@ -8676,25 +8680,46 @@ mod tasks {
             task.ended = None;
             task.state = State::Working;
         });
-        let words = "two tickets\0 for friday";
-        let _ = call(&agents, &agent, "open_tab", json!({ "url": words }), cx);
-        let card = card_of(&agents, cx);
-        assert!(
-            !card.steps.is_empty(),
-            "the open wasn't a step, so this tests nothing"
-        );
-        assert_eq!(card.last_site, None, "the plate shows the agent's words");
+        assert_eq!(card_of(&agents, cx).line, None, "a line while it works");
+        for site in ["a.example", "b.example", "c.example"] {
+            let _ = call(&agents, &agent, "open_tab", json!({ "url": site }), cx);
+        }
+        let stopped = |agents: &Entity<Agents>, cx: &mut TestAppContext| {
+            agents.update(cx, |agents, _| {
+                agents.task_mut(&agent).unwrap().state = State::Stopped;
+            });
+            card_of(agents, cx).line
+        };
+        // All three under way at Stop: none is a step it finished.
+        assert_eq!(stopped(&agents, cx), None);
+        agents.update(cx, |agents, _| {
+            let trace = &mut agents.task_mut(&agent).unwrap().trace;
+            let now = std::time::Instant::now();
+            trace[0].ended = Some(now);
+            trace[1].ended = Some(now);
+            trace[1].error = Some("Not found".into());
+        });
+        // The third was under way at Stop and the second failed, so the first is the last finished.
+        assert_eq!(stopped(&agents, cx).as_deref(), Some("Opened a.example"));
 
-        let _ = call(
-            &agents,
-            &agent,
-            "open_tab",
-            json!({ "url": "a.example" }),
-            cx,
-        );
-        let _ = call(&agents, &agent, "navigate", json!({ "url": words }), cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Done {
+                result: "## **Two seats** on Friday\nRow 12.".into(),
+                summary: Some("Found two seats".into()),
+                tabs: Vec::new(),
+            };
+        });
         let card = card_of(&agents, cx);
-        assert_eq!(card.last_site.as_deref(), Some("a.example"));
+        assert_eq!(card.line.as_deref(), Some("Two seats on Friday"));
+        assert_eq!(card.ended_at, None, "a task of this run says when it ended");
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Done {
+                result: "".into(),
+                summary: None,
+                tabs: Vec::new(),
+            };
+        });
+        assert_eq!(card_of(&agents, cx).line, None, "Finished says Done twice");
     }
 
     /// A Stopped line's step up and Any site reach the task through the user's press, as Stop
