@@ -418,6 +418,7 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         answers: Vec::new(),
         writing: false,
         tier: Default::default(),
+        only_added: false,
     };
     group_talk(&mut talk, &items);
     bench_task(&mut talk, items);
@@ -533,6 +534,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
     let stopped = |why, at: &str, count| IloKind::Stopped {
         tab,
         at: at.to_string().into(),
+        doing: format!("clicking \u{201c}{at}\u{201d}").into(),
         why,
         tier: Tier::Work,
         count,

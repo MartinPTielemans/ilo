@@ -2166,6 +2166,8 @@ impl command_bar::Host for PreviewBar {
         false
     }
 
+    fn look_for_agents(&self, _: &mut App) {}
+
     fn asking(&self, _: bool, _: &mut App) {}
 
     fn task_page(&self, _: &App) -> Option<(SharedString, SharedString)> {
@@ -2341,7 +2343,7 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
                     talk.tabs.truncate(count);
                     shell.set_conversation(Some(talk), cx);
                 }
-                shell.watch_task_page(tab, Bounds::default(), None, cx);
+                shell.watch_task_page(tab, Bounds::default(), None, false, cx);
                 shell.set_space(FIRST_TASK, cx);
                 shell.set_selected(tab, cx);
                 // A task that has ended is at work nowhere.

@@ -14,6 +14,8 @@ use crate::tooltip::{Anchor, Tip};
 /// in `asked`.
 pub(in crate::shell) struct RestingBar {
     pub(in crate::shell) asked: Rc<RefCell<Vec<String>>>,
+    /// A new profile's: no agent learned yet, as before the browser has looked for one.
+    pub(in crate::shell) unlearned: Rc<std::cell::Cell<bool>>,
 }
 
 impl RestingBar {
@@ -97,6 +99,12 @@ impl command_bar::Host for RestingBar {
     }
     fn task_agents(&self, _: &App) -> Option<TaskAgents> {
         self.ask("task agents".into());
+        if self.unlearned.get() {
+            return Some(TaskAgents {
+                agents: Vec::new(),
+                known: false,
+            });
+        }
         let claude = TaskAgent {
             id: "claude".into(),
             name: "Claude".into(),
@@ -117,6 +125,9 @@ impl command_bar::Host for RestingBar {
     }
     fn over_private(&self) -> bool {
         false
+    }
+    fn look_for_agents(&self, _: &mut App) {
+        self.ask("look for agents".into());
     }
     fn asking(&self, shown: bool, _: &mut App) {
         self.ask(format!("asking {shown}"));

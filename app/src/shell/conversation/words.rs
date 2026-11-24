@@ -14,6 +14,12 @@ pub const MARK: &str = "ilo";
 pub const TAKE_OVER: &str = "Take Over";
 pub const STOP: &str = "Stop";
 
+/// The live line while no step is under way: between steps, and after Hand Back or a change of
+/// access, until the next step starts.
+pub fn working(agent: &str) -> String {
+    format!("{agent} is working")
+}
+
 /// A line's words after the mark: ilo's own, then the name it takes from a page or a site, if it
 /// has one, which is drawn apart from them.
 pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
@@ -26,7 +32,12 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
             format!("stopped {agent} from going to"),
             Some(at.to_string()),
         ),
-        IloKind::Stopped { at, .. } => (format!("stopped {agent} at"), Some(at.to_string())),
+        // The refused step as it was under way, its control's name keeping its own quotes (B1).
+        IloKind::Stopped { doing, .. } if !doing.is_empty() => {
+            (format!("stopped {agent} from {doing}"), None)
+        }
+        // With no step traced to name, never a tool's own name or a raw argument (B1, 15:20Z).
+        IloKind::Stopped { .. } => (format!("stopped one of {agent}'s steps"), None),
         // With more than one page, it names the step's (O1).
         IloKind::Yours {
             site: Some(site), ..

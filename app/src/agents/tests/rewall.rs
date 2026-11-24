@@ -15,7 +15,7 @@ use crate::agents::task::ilo::{IloKind, IloLine, LeftOut, Reach};
 use crate::agents::task::rewall::{
     Change, LEFT_OUT_LOGGED, PutUp, Rewalled, STOPPED_FILES_LOGGED, STOPPED_FOLDER_LOGGED,
 };
-use crate::agents::task::{Line, State};
+use crate::agents::task::{Line, State, Who};
 use crate::agents::tier::{self, Tier};
 use crate::agents::wall::{Granted, Wall, WallFor, WallRefused};
 
@@ -89,8 +89,13 @@ fn run_of(run: &Run, agent: &str, cx: &mut TestAppContext) -> u32 {
 fn stands(run: &Run, agent: &str, cx: &mut TestAppContext) -> (Tier, bool, Vec<(usize, Rewalled)>) {
     (run.agents).read_with(cx, |agents, _| {
         let task = agents.task(agent).unwrap();
+        // The turn each came in, as the user's messages before it count it.
+        let turn = |after: usize| {
+            let before = task.messages.iter().take(after);
+            before.filter(|message| message.who == Who::User).count()
+        };
         let came = (task.rewalled.iter())
-            .map(|(turn, _, came)| (*turn, came.clone()))
+            .map(|came| (turn(came.after), came.what.clone()))
             .collect();
         (task.tier, task.files.any(), came)
     })
@@ -288,6 +293,38 @@ fn a_task_with_files_never_goes_on_with_a_kept_conversation(cx: &mut TestAppCont
     assert_eq!(stands(&run, &agent, cx), (Tier::Work, true, Vec::new()));
 }
 
+/// The same after the user's Stop, which leaves no run to send a reply to once that run has
+/// gone: the reply starts the task from its own words inside a wall put up anew, at the level it
+/// was stopped at, which nothing lowers as nothing of it was kept.
+#[gpui::test]
+fn a_reply_to_a_stopped_task_with_files_starts_it_inside_a_new_wall(cx: &mut TestAppContext) {
+    let (run, walls, agent) = started("stopped", folder(), cx);
+    run.ran(1);
+    set(&run, &agent, Tier::Full, cx);
+    run.ran(2);
+    let stopped = run_of(&run, &agent, cx);
+    (run.agents).update(cx, |agents, cx| agents.stop_task(&agent, cx));
+    assert_eq!(run.state(&agent, cx), State::Stopped);
+    run.said(&agent, Out::Gone(String::new()), cx);
+    assert_eq!(run_of(&run, &agent, cx), 0);
+    assert_eq!(run.state(&agent, cx), State::Stopped);
+    assert_eq!(walls.asked().len(), 2);
+
+    let reply = "Are there two together for Sunday too?";
+    (run.agents).update(cx, |agents, cx| agents.reply(&agent, reply, cx));
+    let (args, first) = run.ran(3);
+    assert_eq!(walls.asked().len(), 3);
+    assert_eq!(walls.asked().last(), Some(&(Tier::Full, true, false)));
+    starts_from_its_words(&args, &first, reply);
+    let now = run_of(&run, &agent, cx);
+    assert!(now != 0 && now != stopped);
+    assert_eq!(run.state(&agent, cx), State::Working);
+    assert_eq!(stands(&run, &agent, cx), (Tier::Full, true, Vec::new()));
+    // The run that was stopped was sent its stop and nothing of the reply.
+    let stopped = std::fs::read_to_string(beside(&run.program, "in.2")).unwrap();
+    assert!(!stopped.contains(reply), "{stopped}");
+}
+
 /// A reply to a task that ended at Full access takes it up lower (kept.rs). For a task with a
 /// folder that changes its wall: the run inside Full access's wall is over and is sent nothing
 /// of the reply, which starts one inside the lower level's wall from the task's own words. Its
@@ -385,9 +422,9 @@ fn a_start_whose_wall_isnt_put_up_says_what_it_started_without(cx: &mut TestAppC
     }
 }
 
-/// What came of a wall is kept with the turn it came in, as an ilo line's is, so its line stands
-/// where it happened: one refused after the user's reply is the next turn's, and the first's
-/// stays the first's.
+/// What came of a wall is kept with where it came among the task's messages and steps, as a
+/// refusal's line is, so its line stands where it happened: one refused after the user's reply is
+/// the next turn's and stands after the reply, and the first's stays before it.
 #[gpui::test]
 fn what_came_of_a_wall_is_kept_with_its_turn(cx: &mut TestAppContext) {
     let (run, walls, agent) = started("turns", folder(), cx);
@@ -403,6 +440,14 @@ fn what_came_of_a_wall_is_kept_with_its_turn(cx: &mut TestAppContext) {
     };
     let kept = stands(&run, &agent, cx).2;
     assert_eq!(kept, vec![(0, stays.clone()), (1, stays)]);
+    let stood: Vec<&str> = (run.talk(&agent, cx).lines.iter())
+        .filter_map(|line| match line {
+            Line::You(_) => Some("you"),
+            Line::Ilo(_) => Some("ilo"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stood, ["ilo", "you", "ilo"]);
 }
 
 /// A lower whose wall isn't put up still lowers the task, at once: it goes on at the new level

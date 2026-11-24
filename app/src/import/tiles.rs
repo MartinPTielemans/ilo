@@ -9,19 +9,16 @@ use gpui::{AnyElement, Div, FontWeight, div, prelude::*, px, relative, svg};
 
 use super::arrival::pose;
 use crate::settings_rows::Look;
+use crate::shell::swap::{arriving, going};
 use crate::tokens::radius;
 use crate::tokens::settings::ROW_X;
 use crate::tokens::shell::import::{
     BADGE, BADGE_INSET, CARD_GAP, TILE_HEIGHT, TILE_LETTER, TILE_NAME, TILE_NAME_GAP,
     TILE_NAME_LINE, TILE_PLATE, TILE_UNTICKED, TILES_PER_ROW,
 };
+// A badge changes as a glyph does, ux-spec's Glyph change, in `SWAP` all told.
+use crate::tokens::shell::swap::motion::SWAP;
 use crate::tokens::shell::task::motion::{CHIPS, CHIPS_STAGGER};
-
-/// A badge's change, as ux-spec's Glyph change: the old one fades out and shrinks to 0.6 over
-/// `LEAVE`, the new fades in over `COME` and grows from 0.8 over `SWAP`, all from one moment.
-const SWAP: f32 = 0.08;
-const LEAVE: f32 = 0.07;
-const COME: f32 = 0.04;
 
 /// A favorite offered, as its tile shows it.
 pub struct Tile {
@@ -145,16 +142,15 @@ fn badge(tile: &Tile, look: &Look, still: bool, now: Instant) -> Div {
             .justify_center()
             .child(mark)
     };
-    let left = (elapsed / LEAVE).clamp(0., 1.);
-    let come = (elapsed / COME).clamp(0., 1.);
-    let grown = (elapsed / SWAP).clamp(0., 1.);
+    let (old, old_scale) = going(elapsed);
+    let (new, new_scale) = arriving(elapsed);
     div()
         .relative()
         .size_full()
-        .when(left < 1., |badge| {
-            badge.child(mark(!tile.on, 1. - 0.4 * left, 1. - left))
+        .when(old > 0., |badge| {
+            badge.child(mark(!tile.on, old_scale, old))
         })
-        .child(mark(tile.on, 0.8 + 0.2 * grown, come))
+        .child(mark(tile.on, new_scale, new))
 }
 
 /// The tiles in rows of `tiles-per-row`, each a row's share wide less the gap. A single row is

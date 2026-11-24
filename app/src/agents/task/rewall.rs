@@ -26,7 +26,6 @@ use super::{State, Task, conversation};
 use crate::agents::Agents;
 use crate::agents::access::ACCESS_ACTION;
 use crate::agents::files::Given;
-use crate::agents::lines;
 use crate::agents::runner::{Cli, Failure};
 use crate::agents::tier::{self, Tier};
 use crate::agents::wall::{self, Wall, WallFor, WallRefused};
@@ -113,12 +112,26 @@ pub enum Rewalled {
     EndedLeft,
 }
 
+/// What came of a wall as its task keeps it: with how many of the task's messages and steps came
+/// before it, which place its line among them as a refusal's are placed (lines.rs), and when.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Came {
+    pub after: usize,
+    pub traced: usize,
+    pub appeared: Instant,
+    pub what: Rewalled,
+}
+
 impl Task {
-    /// Keeps what came of a wall that wasn't put up, with the turn under way and when, which
-    /// place its line.
-    fn rewalled(&mut self, came: Rewalled) {
-        self.rewalled
-            .push((lines::turn(self), Instant::now(), came));
+    /// Keeps what came of a wall that wasn't put up, after the messages and steps the task has
+    /// now.
+    fn rewalled(&mut self, what: Rewalled) {
+        self.rewalled.push(Came {
+            after: self.messages.len(),
+            traced: self.trace.len(),
+            appeared: Instant::now(),
+            what,
+        });
     }
 
     /// Its assistant couldn't be started again at `refused`, the level the user raised it to,

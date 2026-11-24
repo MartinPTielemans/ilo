@@ -33,15 +33,17 @@ fn row(run: &Run, id: &Id) -> Value {
     found.unwrap_or_default()
 }
 
-/// The Archive's tasks, the last to leave first: each one's task, title and the line under it.
+/// The Archive's tasks, the last to leave first: each one's task, title and the line under it,
+/// with its end said as Settings › Agents' list says it, which has no days over its rows.
 fn archive(run: &Run, cx: &mut TestAppContext) -> Vec<(String, String, String)> {
     (run.agents).read_with(cx, |agents, cx| {
         (agents.archived_tasks(cx).into_iter())
             .map(|task| {
+                let when = crate::agents::time_or_day((task.ended / 1000.) as u64);
                 (
                     task.agent.to_string(),
                     task.title.to_string(),
-                    task.about.to_string(),
+                    task.about_at(&when),
                 )
             })
             .collect()
@@ -468,7 +470,8 @@ fn a_task_its_agent_never_named_keeps_no_title(cx: &mut TestAppContext) {
 }
 
 /// Each end is kept as itself and reads its own word after the launch: done, stopped, failed and
-/// at its assistant's limit, whose reset isn't kept. A task still at work when the user quits is
+/// at its assistant's limit, whose reset isn't kept. A task still at work has the row of one that
+/// broke off, which is what it is if the browser goes with no quit, and when the user quits it's
 /// there as stopped. One at its limit takes Retry, which goes on with its conversation.
 #[gpui::test]
 fn each_end_comes_back_as_its_own_word(cx: &mut TestAppContext) {
@@ -509,7 +512,7 @@ fn each_end_comes_back_as_its_own_word(cx: &mut TestAppContext) {
             json!("failed"),
             json!("limit"),
             json!("stopped"),
-            Value::Null,
+            json!("failed"),
             json!("done")
         ]
     );
@@ -545,6 +548,242 @@ fn each_end_comes_back_as_its_own_word(cx: &mut TestAppContext) {
     act(&next, &limit, TaskAction::Retry, cx);
     let (args, _) = next.ran(6);
     assert_eq!(after(&args, "--resume"), Some(made[1].1.as_str()));
+}
+
+/// A task at work when the browser goes with no quit, as when it's killed, is there at the next
+/// launch as one that broke off: Interrupted, by the name its agent gave it, in its profile, and
+/// with its conversation, which nothing removed, so a reply takes it up. Its row is written at
+/// its start and when its agent names it, never at a step, and has what any row has: nothing
+/// asked, no address, no step. While it works it's in no list of past tasks.
+#[gpui::test]
+fn a_task_at_work_when_the_browser_went_comes_back_interrupted(cx: &mut TestAppContext) {
+    let run = Run::new("cut-off", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    let id = run.id(&agent, cx);
+    // From its start, before its agent has said a word.
+    let at_start = row(&run, &id);
+    assert_eq!(at_start["title"], json!(""));
+    assert_eq!(at_start["state"], json!("failed"));
+    name_it(&run, &agent, "Lisbon seats", cx);
+    let saved = rows(&run);
+    assert_eq!(saved.len(), 1);
+    let mut keys: Vec<&str> = (saved[0].as_object().unwrap().keys())
+        .map(String::as_str)
+        .collect();
+    keys.sort();
+    assert_eq!(keys, ["cli", "ended", "id", "profile", "state", "title"]);
+    assert_eq!(saved[0]["title"], json!("Lisbon seats"));
+    assert_eq!(saved[0]["state"], json!("failed"));
+    assert_eq!(saved[0]["profile"], json!("Default"));
+    // Its time is its start's.
+    assert_eq!(saved[0]["ended"], at_start["ended"]);
+    assert!(
+        saved[0]["ended"]
+            .as_u64()
+            .is_some_and(|at| at > 1_700_000_000)
+    );
+
+    // Nothing a task does at work writes the file: with the file out of the way, none is back.
+    let file = std::fs::read(index(&run)).unwrap();
+    std::fs::remove_file(index(&run)).unwrap();
+    let url = json!({ "url": "https://www.example.com/timetable" });
+    _ = call(&run.agents, &agent, "open_tab", url, cx);
+    cx.run_until_parked();
+    run.said(&agent, Out::Said("The 9:05 has two.".into()), cx);
+    name_it(&run, &agent, "Lisbon seats", cx);
+    assert!(!index(&run).exists(), "a step wrote the file");
+    std::fs::write(index(&run), &file).unwrap();
+    let text = String::from_utf8(file).unwrap();
+    for never in ["Find two seats", "Saturday", "example.com", "timetable"] {
+        assert!(!text.contains(never), "the file has {never:?}");
+    }
+    // At work it's a task, and no past one.
+    assert!(listed(&run, cx).is_empty());
+    assert!(archive(&run, cx).is_empty());
+
+    // No quit: the browser went while it worked.
+    let next = next(&run, cx);
+    assert!(next.purged(cx).is_empty());
+    assert!(next.folder(&id).exists());
+    assert_eq!(next.kept(cx), (1, 0));
+    let archived = archive(&next, cx);
+    assert_eq!(archived.len(), 1);
+    let (past, title, about) = archived[0].clone();
+    assert_eq!(title, "Lisbon seats");
+    assert!(about.starts_with("Claude · Interrupted "), "{about}");
+    assert_eq!(listed(&next, cx), archived);
+    assert_eq!(next.ilo_lines(&past, cx), [IloKind::KeptHere]);
+    assert!(next.browser.made.borrow().is_empty());
+    assert!(!started(&next, 2));
+
+    restore(&next, &past, cx);
+    reply(&next, &past, "And for Sunday?", cx);
+    let (args, first) = next.ran(2);
+    assert_eq!(after(&args, "--resume"), Some(id.as_str()));
+    assert_eq!(first, "And for Sunday?");
+    // Under way again, it's once more a task and no past one.
+    assert!(listed(&next, cx).is_empty());
+    assert!(archive(&next, cx).is_empty());
+    assert_eq!(rows(&next).len(), 1);
+    // A quit is the user's, and says stopped.
+    quit(&next, cx);
+    assert_eq!(row(&next, &id)["state"], json!("stopped"));
+    assert_eq!(row(&next, &id)["title"], json!("Lisbon seats"));
+}
+
+/// A task that had ended and is at work again, by a reply or by Retry, has the row of one that
+/// broke off from then, under the name it had: if the browser goes with no quit it comes back
+/// Interrupted, not as it ended before.
+#[gpui::test]
+fn a_task_taken_up_and_cut_off_comes_back_interrupted(cx: &mut TestAppContext) {
+    let run = Run::new("cut-off-again", cx);
+    let mut made = Vec::new();
+    for (at, name) in ["Lisbon seats", "Porto seats"].into_iter().enumerate() {
+        let agent = run.start(Cli::Claude, cx);
+        run.ran(at + 1);
+        name_it(&run, &agent, name, cx);
+        made.push((agent.clone(), run.id(&agent, cx)));
+    }
+    run.finish(&made[0].0, cx);
+    let resets = Failure::Limit(Some(1_900_000_000));
+    run.said(&made[1].0, Out::Ended(Some(resets)), cx);
+    quit(&run, cx);
+    let before: Vec<Value> = made.iter().map(|(_, id)| row(&run, id)).collect();
+    assert_eq!(before[0]["state"], json!("done"));
+    assert_eq!(before[1]["state"], json!("limit"));
+
+    let next = next(&run, cx);
+    let archived = archive(&next, cx);
+    let past = |title: &str| {
+        let found = archived.iter().find(|task| task.1 == title);
+        found.unwrap_or_else(|| panic!("no {title}")).0.clone()
+    };
+    let (done, limit) = (past("Lisbon seats"), past("Porto seats"));
+    restore(&next, &done, cx);
+    reply(&next, &done, "And for Sunday?", cx);
+    next.ran(3);
+    restore(&next, &limit, cx);
+    act(&next, &limit, TaskAction::Retry, cx);
+    next.ran(4);
+    for ((_, id), before) in made.iter().zip(&before) {
+        let now = row(&next, id);
+        assert_eq!(now["state"], json!("failed"));
+        assert_eq!(now["title"], before["title"]);
+        assert_eq!(now["profile"], before["profile"]);
+        assert!(now["ended"].as_u64() >= before["ended"].as_u64());
+    }
+
+    // No quit: the browser went while they worked.
+    let last = Run::again(next.profile.clone(), next.program.clone(), cx);
+    assert!(last.purged(cx).is_empty());
+    let archived = archive(&last, cx);
+    assert_eq!(archived.len(), 2);
+    for (_, title, about) in &archived {
+        assert!(
+            about.starts_with("Claude · Interrupted "),
+            "{title}: {about}"
+        );
+    }
+}
+
+/// Settings' Remove and Remove All take a task that broke off as any other: its row leaves the
+/// file at once and its conversation is asked of its assistant.
+#[gpui::test]
+fn remove_takes_a_task_that_broke_off_and_its_conversation(cx: &mut TestAppContext) {
+    let run = Run::new("cut-off-out", cx);
+    let mut made = Vec::new();
+    for (at, name) in ["Lisbon seats", "Porto seats"].into_iter().enumerate() {
+        let agent = run.start(Cli::Claude, cx);
+        run.ran(at + 1);
+        name_it(&run, &agent, name, cx);
+        made.push(run.id(&agent, cx));
+    }
+    // At work they keep their own, as their assistant is writing them.
+    (run.agents).update(cx, |agents, cx| agents.remove_kept_tasks(cx));
+    assert!(run.purged(cx).is_empty());
+    assert_eq!(rows(&run).len(), 2);
+
+    // No quit: the browser went while they worked.
+    let next = next(&run, cx);
+    let archived = archive(&next, cx);
+    assert_eq!(listed(&next, cx).len(), 2);
+    let lisbon = (archived.iter().find(|task| task.1 == "Lisbon seats"))
+        .unwrap()
+        .0
+        .clone();
+    (next.agents).update(cx, |agents, cx| agents.remove_kept_task(&lisbon, cx));
+    let alone = |id: &Id| json!({ "id": id.as_str(), "cli": "claude" });
+    assert_eq!(row(&next, &made[0]), alone(&made[0]));
+    assert_eq!(listed(&next, cx).len(), 1);
+    let folder = next.folder(&made[0]);
+    assert_eq!(
+        next.purged(cx),
+        ["purge", folder.to_str().unwrap(), "--yes"]
+    );
+    assert!(!folder.exists());
+    assert_eq!(row(&next, &made[0]), Value::Null);
+    assert_eq!(next.ilo_lines(&lisbon, cx).last(), Some(&IloKind::Gone));
+
+    (next.agents).update(cx, |agents, cx| agents.remove_kept_tasks(cx));
+    assert!(listed(&next, cx).is_empty());
+    next.purged(cx);
+    assert!(!index(&next).exists());
+    assert!(!next.folder(&made[1]).exists());
+    assert_eq!(next.kept(cx), (0, 0));
+}
+
+/// The conversation of a task deleted from the Archive goes at the next launch, with no quit
+/// between as with one: its row is its id alone, which is asked of its assistant.
+#[gpui::test]
+fn the_next_launch_removes_what_a_task_deleted_from_the_archive_kept(cx: &mut TestAppContext) {
+    let run = Run::new("launch", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    let id = run.id(&agent, cx);
+    run.finish(&agent, cx);
+    act(&run, &agent, TaskAction::Dismiss, cx);
+    act(&run, &agent, TaskAction::Delete, cx);
+    assert!(run.folder(&id).exists());
+    assert!(run.purged(cx).is_empty());
+
+    // No quit: the browser went.
+    let next = next(&run, cx);
+    assert!(archive(&next, cx).is_empty());
+    let folder = run.folder(&id);
+    assert_eq!(
+        next.purged(cx),
+        ["purge", folder.to_str().unwrap(), "--yes"]
+    );
+    assert!(!folder.exists());
+    assert_eq!(next.kept(cx), (0, 0));
+    assert!(!next.profile.join(kept::FOLDER).exists());
+}
+
+/// A private window starts no task, whichever way it was asked: every way ends in the one start,
+/// which is given the Space the window shows. Nothing is made for it, no assistant runs and
+/// nothing of it is kept, where the same words from a Space of the user's start one.
+#[gpui::test]
+fn a_private_window_starts_no_task_and_keeps_nothing(cx: &mut TestAppContext) {
+    let run = Run::new("private", cx);
+    run.browser.private.borrow_mut().push(9);
+    let asked = "Find two seats to Lisbon for Saturday";
+    let from_private = (run.agents).update(cx, |agents, cx| {
+        agents.start_task(Cli::Claude, asked, None, 9, Tier::default(), cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(from_private, None);
+    assert!((run.agents).read_with(cx, |agents, _| agents.tasks.tasks.is_empty()));
+    assert!(run.browser.made.borrow().is_empty());
+    assert!(!started(&run, 1));
+    assert!(!index(&run).exists());
+    assert_eq!(run.kept(cx), (0, 0));
+
+    let agent = start_in(&run, 1, cx);
+    run.ran(1);
+    assert_eq!(run.browser.made.borrow().len(), 1);
+    assert_eq!(rows(&run).len(), 1);
+    assert_eq!(run.state(&agent, cx), State::Working);
 }
 
 /// The Archive holds ten, so the ten that ended last come back and what the run before kept of

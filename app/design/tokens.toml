@@ -227,6 +227,8 @@ row-end = 12.0
 input-icon = 18.0
 input-text = 18.0
 input-line = 23.0
+# Between the chips before the input: a page's each, as the composer can add several.
+chip-gap = 6.0
 input-icon-x = 23.0
 input-text-x = 53.0
 # The hint after the input ends this far from the panel's side, 11 after the field.
@@ -650,6 +652,13 @@ recent-title-bar-height = 9.0
 recent-detail-bar-height = 7.0
 recent-bar-gap = 6.0
 
+[hover-card.motion]
+# Seconds: how long the pointer rests on a row before its card shows, how long the card stays
+# after the pointer leaves the row, and its fade (hover_card.rs says whose each is; #4108).
+dwell = 0.5
+leave = 0.15
+fade = 0.1
+
 [folder-preview]
 # Resting on a closed folder shows a searchable list of its tabs beside its row (Arc's Folder
 # Preview, #690). Arc 1.171's layout (outside measurement, #1405): 240 wide, the search 48 tall
@@ -682,6 +691,14 @@ age-size = 11.0
 age-line = 14.0
 title = 0.9
 hint = 0.55
+
+[folder-preview.motion]
+# Seconds: the rest on a folder's row before the preview shows, how soon it goes after the
+# pointer leaves both, and its coming in and going out (folder_preview.rs; #4108).
+dwell = 0.45
+leave = 0.04
+in = 0.09
+out = 0.08
 
 [link-preview]
 # Ours (the owner, 2026-11-02, #1373), as nothing of Arc's preview is recorded: a quick look over
@@ -731,6 +748,14 @@ rim = 0.5
 text-size = 11.0
 secondary = 0.6
 primary = 1.0
+
+[link-target.motion]
+# Seconds: the rest on a link before its target shows, how soon after one went the next shows
+# at once, its fade out, and the rest that shows the whole address (link_target.rs; #4108).
+delay = 0.15
+grace = 0.4
+fade-out = 0.12
+whole-after = 1.5
 
 [link-card]
 # ⇧ on a link grows its plate into a card of what the page says about itself (#3080), in the hover
@@ -1949,7 +1974,8 @@ switch-on = 0.16
 switch-on-rim = 0xffff_ff12
 switch-size = 12.0
 # Ask's line under the field: 524 wide, 7 under it, its chips 26 tall, 8 in, radius 6, at 12 in
-# ink 0.6. It keeps its room in Search, so nothing moves as the switch flips.
+# ink 0.6. It keeps its room in Search, so nothing moves as the switch flips. The + with nothing to
+# add stays in its place at 0.26, as the header's back does with nowhere to go.
 line-width = 524.0
 line-top = 7.0
 chip-height = 26.0
@@ -1957,6 +1983,7 @@ chip-inset = 8.0
 chip-radius = 6.0
 chip-gap = 6.0
 chip-ink = 0.6
+chip-disabled = 0.26
 chip-size = 12.0
 chip-glyph = 14.0
 chip-chevron = 10.0
@@ -2660,6 +2687,17 @@ check-box = 24.0
 # The check is Lucide's, so it draws at the icons' one stroke, `shell::assets::ICON_STROKE`.
 check-stroke = 2.25
 
+[shell.swap.motion]
+# Seconds, and the scales between: a glyph's change (ux-spec, Glyph change; Arc 1.170 rec at 2×,
+# reload into stop and back). From one moment, linearly, about the glyph's middle, the old one
+# fades out and shrinks to `shrunk` over `leave`, and the new one fades in over `come` and grows
+# from `small` over `swap`: the header's and the rows' glyphs, and an import tile's badge (#4108).
+swap = 0.08
+leave = 0.07
+come = 0.04
+shrunk = 0.6
+small = 0.8
+
 [shell.media.motion]
 # Seconds, on an ease-out: the design file has no motion, so tools/design-sync.md leaves this table
 # out. The stack opens and closes over `open` both ways (Arc 1.171), opening once the pointer has
@@ -2853,6 +2891,9 @@ header-bottom = 14.0
 picture-width = 326.0
 picture-height = 204.0
 picture-radius = 6.0
+# Each tile's edge: a hairline of the ink at this, inside its corners and over its picture, so a
+# tile holds its shape on the window in both looks.
+picture-rim = 0.14
 site = 16.0
 site-gap = 3.0
 # A page with no picture yet has only its favicon, or its site's globe, in its tile's middle at
@@ -3323,6 +3364,13 @@ chip-text-size = 11.0
 # #D2D3FC over a lip of #8486E3, their glyphs #1F2AFF. Ours (#319): the overlay's dark fill, Paper
 # text, Paper chips with Ink glyphs, over a lip of Paper at this on the fill.
 chip-lip-fill = 0.55
+
+[tooltip.motion]
+# Seconds: the rest before a tooltip shows, how soon after one went the next shows at once, and
+# its fade out (tooltip.rs says whose each is; #4108).
+delay = 1.6
+grace = 0.5
+fade-out = 0.27
 
 [transparency]
 # The Transparency picker (#4129), in Settings and the onboarding: three pictures across the row,
