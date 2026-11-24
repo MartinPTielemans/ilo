@@ -31,8 +31,8 @@ use browser::widevine::{self, Widevine, WidevineRow};
 use gpui::{
     AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, FontWeight,
     Global, Hsla, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, PathPromptOptions, Rgba,
-    SharedString, Subscription, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions, actions, canvas, div, point, prelude::*, px, rgb, rgba, size, svg,
+    SharedString, Subscription, Window, WindowHandle, WindowOptions, actions, canvas, div, point,
+    prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{bc, ns_view, platform, show_menu};
@@ -58,8 +58,8 @@ use browser::tokens::settings::{
     BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS, DETAIL,
     DETAIL_LINE, DETAIL_TOP, END_GAP, FIELD_PADDING, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME,
     GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE,
-    LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SENT_TUCK,
-    SHARE_TOP, SHORT_PADDING, SHORT_ROW, SIDE_ROOM, TEXT_X, TITLE, WIDTH,
+    LEDE_TOP, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SENT_TUCK, SHARE_TOP,
+    SHORT_PADDING, SHORT_ROW, SIDE_ROOM, TEXT_X, TITLE, WIDTH,
 };
 use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
 use browser::tokens::shell::{
@@ -287,6 +287,8 @@ pub struct Settings {
     /// it sent (#2326), and those of them showing every line.
     requests_opened: HashSet<u64>,
     requests_all: HashSet<u64>,
+    /// The site notes opened to read, by host (#4122).
+    notes_opened: HashSet<&'static str>,
 }
 
 /// Settings' dialog, which it draws in its own content, so there's nothing to show.
@@ -901,27 +903,12 @@ fn open(cx: &mut App) {
     }
     account::bind_keys(cx);
     settings_search::bind_keys(cx);
+    let bounds = Bounds::new(point(px(0.), px(0.)), size(px(WIDTH), px(HEIGHT)));
+    let title = Section::General.name().into();
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-            point(px(0.), px(0.)),
-            size(px(WIDTH), px(HEIGHT)),
-        ))),
-        // The column runs under the window's buttons, which sit where the browser window's do.
-        titlebar: Some(TitlebarOptions {
-            title: Some(Section::General.name().into()),
-            appears_transparent: true,
-            traffic_light_position: Some(point(px(12.), px(16.))),
-        }),
-        // Nor a title bar of the window manager's on Linux, where the UI draws the close button.
-        #[cfg(target_os = "linux")]
-        window_decorations: Some(gpui::WindowDecorations::Client),
-        kind: WindowKind::Normal,
         show: false,
         focus: false,
-        is_resizable: true,
-        is_minimizable: false,
-        window_min_size: Some(size(px(MIN_WIDTH), px(MIN_HEIGHT))),
-        ..Default::default()
+        ..browser::settings_column::window_options(bounds, title)
     };
     SHOWN_SECTION.set(Section::General.name());
     let window = cx.open_window(options, |window, cx| {
@@ -1145,6 +1132,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             autofill: HashMap::new(),
             asked: HashSet::new(),
             requests_opened: HashSet::new(),
+            notes_opened: HashSet::new(),
             requests_all: HashSet::new(),
             import: None,
             _import: None,
@@ -1833,14 +1821,19 @@ impl Settings {
             ],
         );
         // Transparency, directly under Appearance, where the window has glass to show through.
-        let transparency = browser::transparency::row(look, browser::transparency::has_glass(), cx)
-            .map(|div| Row {
-                div,
-                name: browser::transparency::NAME.into(),
-                line: Some(browser::transparency::ABOUT.into()),
-                keys: None,
-                nested: false,
-            });
+        let transparency = browser::transparency::row(
+            look,
+            browser::transparency::has_glass(),
+            self.drawn_logged.clone(),
+            cx,
+        )
+        .map(|div| Row {
+            div,
+            name: browser::transparency::NAME.into(),
+            line: Some(browser::transparency::ABOUT.into()),
+            keys: None,
+            nested: false,
+        });
         let mut looks = vec![pictured(look, "Appearance", appearance_line, appearances)];
         // On the Mac the system's Reduce Transparency is said under the group, so Page zoom
         // starts the next one.
@@ -3728,7 +3721,7 @@ impl Settings {
             blocks.push(Block::Under(foot(look, NO_ASSISTANT_OF_ITS_OWN)));
         }
         blocks.push(Block::Heading(APPS_THAT_CONNECT.into()));
-        // Another agent's How comes here.
+        // Another app's How to Connect comes here.
         let apps = SharedString::from(APPS_THAT_CONNECT);
         blocks.push(Block::Group(self.flashed(&apps, group(look, clients))));
         // Shown as Apps that connect are, whether agents are on or off: the command says they're
@@ -3738,6 +3731,7 @@ impl Settings {
             blocks.push(Block::Rows(vec![self.command_line(agents, cx)]));
         }
         blocks.extend(self.fenced_sites(agents, cx));
+        blocks.extend(self.site_notes(agents, accent, cx));
         // AppleScript is the Mac's alone.
         if cfg!(target_os = "macos") {
             blocks.extend(self.scripts(agents, accent, cx));
@@ -3763,7 +3757,12 @@ impl Settings {
                             true => agents::tools::Tense::Done,
                             false => agents::tools::Tense::Failed,
                         };
-                        agents::tools::step_title(&did, tense)
+                        let title = agents::tools::step_title(&did, tense);
+                        // The call's answer carried a site's notes (#4122).
+                        match entry.notes.is_empty() {
+                            true => title,
+                            false => agents::notes::logged(&title),
+                        }
                     };
                     let what = title(entry);
                     let refused = (entry.steps.iter().map(|step| &step.refused))
@@ -3921,6 +3920,49 @@ impl Settings {
             Block::Heading(fence::HEADING.into()),
             Block::Group(group(look, rows)),
             Block::Under(under),
+        ]
+    }
+
+    /// Site notes (#4122): the switch, then a row for each site ilo has a note for, which opens
+    /// to the note's own text, as the agent gets it. The list is the app's, so nothing adds to it.
+    fn site_notes(
+        &self,
+        agents: &Entity<Agents>,
+        accent: Rgba,
+        cx: &mut Context<Self>,
+    ) -> Vec<Block> {
+        use agents::notes;
+        let look = &self.look;
+        let on = agents.read(cx).notes_on();
+        let switch = {
+            let agents = agents.clone();
+            let set =
+                move |on, cx: &mut App| agents.update(cx, |agents, cx| agents.set_notes_on(on, cx));
+            self.toggle("agent site notes", notes::HEADING, on, set, accent, cx)
+        };
+        let line = match on {
+            true => notes::SWITCH_LINE,
+            false => notes::SWITCH_OFF_LINE,
+        };
+        let row = setting(look, notes::HEADING, Some(line.into()), vec![switch]);
+        let rows: Vec<gpui::Div> = (notes::NOTES.iter())
+            .map(|note| {
+                let host = note.host;
+                let opened = self.notes_opened.contains(host);
+                let toggle = cx.listener(move |settings, _, _, cx| {
+                    if !settings.notes_opened.remove(host) {
+                        settings.notes_opened.insert(host);
+                    }
+                    cx.notify();
+                });
+                let logged = self.drawn_logged.clone();
+                browser::settings_rows::site_note_row(look, note, opened, self.a11y, logged, toggle)
+            })
+            .collect();
+        vec![
+            Block::Rows(vec![row]),
+            Block::Group(group(look, rows)),
+            Block::Under(foot(look, notes::FOOT)),
         ]
     }
 
@@ -4264,8 +4306,10 @@ impl Settings {
     ) {
         let name = cli.assistant();
         let message = format!("Sign out of {name}?");
-        let detail =
-            format!("This signs {name} out everywhere you use it, not only for tasks here.");
+        let detail = format!(
+            "This signs {name} out everywhere you use it, not just in {}.",
+            env!("APP_NAME")
+        );
         let agents = agents.clone();
         let sign_out = move |cx: &mut App| {
             log!("browser: assistant sign-out {}", cli.id());
@@ -5507,15 +5551,15 @@ fn method(target: &str) -> &str {
     target.split(' ').next().unwrap_or_default()
 }
 
-/// Apps that connect's heading, which Another agent's How goes to.
+/// Apps that connect's heading, which Another app's How to Connect goes to.
 const APPS_THAT_CONNECT: &str = "Apps that connect";
 
 /// What Your assistant's rows never do, under them.
 const NO_ASSISTANT_OF_ITS_OWN: &str = concat!(
     env!("APP_NAME"),
-    " has no assistant of its own. You sign in on the assistant's own page, and ",
+    " has no assistant of its own. You sign in on your assistant's page, and ",
     env!("APP_NAME"),
-    " never sees or keeps the sign-in."
+    " never sees or keeps your login."
 );
 
 /// A line under a group that says more of it, in a row's line's grey, as Fenced sites' has.

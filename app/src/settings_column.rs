@@ -5,7 +5,8 @@
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, BoxShadow, MouseButton, Rgba, ScrollHandle, Window,
+    AnyElement, App, Bounds, BoxShadow, MouseButton, Pixels, Rgba, ScrollHandle, SharedString,
+    TitlebarOptions, Window, WindowBounds, WindowKind, WindowOptions,
     accesskit::{Orientation, Role},
     div, point,
     prelude::*,
@@ -17,14 +18,35 @@ use crate::settings_card::Follow;
 use crate::settings_rows::{drawn, named_button, ring};
 use crate::tokens::radius;
 use crate::tokens::settings::{
-    COLUMN, COLUMN_TOP, FOOT_BOTTOM, FOOT_GLYPH, FOOT_GLYPH_ALPHA, HEADING,
-    LABEL_BOTTOM, LABEL_LINE, LABEL_TOP, PLATE_GAP, SEARCH_DIMMED, SEARCH_GAP, SECTION_GLYPH,
-    SECTION_GLYPH_ALPHA, SECTION_GLYPH_GAP, SECTION_HOVERED, SECTION_SELECTED,
+    COLUMN, COLUMN_TOP, FOOT_BOTTOM, FOOT_GLYPH, FOOT_GLYPH_ALPHA, HEADING, LABEL_BOTTOM,
+    LABEL_LINE, LABEL_TOP, MIN_HEIGHT, MIN_WIDTH, PLATE_GAP, SEARCH_DIMMED, SEARCH_GAP,
+    SECTION_GLYPH, SECTION_GLYPH_ALPHA, SECTION_GLYPH_GAP, SECTION_HOVERED, SECTION_SELECTED,
     SECTION_SELECTED_GLYPH, SECTION_SELECTED_LIGHT, SECTION_SHADOW, SECTION_SHADOW_BLUR,
     SECTION_SHADOW_Y, SECTION_TEXT, SECTION_X,
 };
 use crate::tokens::shell::{PLATE_HEIGHT, PLATE_INSET};
 use crate::tokens::text::SMALL;
+
+/// Settings' window at `bounds`, titled `title`, as the app opens it and the preview shows it: the
+/// column runs under the window's buttons, which sit where the browser window's do, and off the Mac
+/// there's no title bar of the window manager's, as the UI draws the close button.
+pub fn window_options(bounds: Bounds<Pixels>, title: SharedString) -> WindowOptions {
+    WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        titlebar: Some(TitlebarOptions {
+            title: Some(title),
+            appears_transparent: true,
+            traffic_light_position: Some(point(px(12.), px(16.))),
+        }),
+        #[cfg(target_os = "linux")]
+        window_decorations: Some(gpui::WindowDecorations::Client),
+        kind: WindowKind::Normal,
+        is_resizable: true,
+        is_minimizable: false,
+        window_min_size: Some(gpui::size(px(MIN_WIDTH), px(MIN_HEIGHT))),
+        ..Default::default()
+    }
+}
 
 #[cfg(test)]
 mod tests;

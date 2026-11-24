@@ -175,7 +175,7 @@ fn a_card_shapes_to_its_question_and_its_chips() {
     assert_eq!(chips(&done)[0].label().as_ref(), "Open 3 pages");
     let mut failed = card(4, Dot::Ended);
     failed.fix = Some((Cli::Claude, Offer::SignIn));
-    assert_eq!(chips(&failed)[0].label().as_ref(), "Sign in to Claude Code");
+    assert_eq!(chips(&failed)[0].label().as_ref(), "Sign In to Claude Code");
     failed.fix = Some((Cli::Codex, Offer::Get));
     assert_eq!(chips(&failed)[0].label().as_ref(), "Get Codex");
 }

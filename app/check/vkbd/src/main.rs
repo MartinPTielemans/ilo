@@ -2,8 +2,8 @@
 //! sway seat has neither until a client makes one.
 //! - `vkbd <text>` types the text into the focused window through a virtual keyboard with the US
 //!   keymap xkbcli makes: lowercase and capital letters, digits, `- ; . / , = : @`, spaces,
-//!   newlines as Enter, tabs as Tab, ESC as Escape, BS as Backspace, and `^` for Ctrl with the next
-//!   key.
+//!   newlines as Enter, tabs as Tab, ESC as Escape, BS as Backspace, `^` for Ctrl with the next
+//!   key and `~` for Alt with it.
 //! - `vkbd --hold <seconds>` keeps a keyboard on the seat that long, as a desktop's is there all
 //!   along: with none left the compositor sends the app a keyboard leave.
 //! - `vkbd --click <x> <y>` clicks at that point of the 1280 by 800 output with a virtual pointer.
@@ -49,6 +49,7 @@ delegate_noop!(State: ZwlrVirtualPointerV1);
 const BUTTON_LEFT: u32 = 0x110;
 // Evdev's codes and xkb's modifier masks for the keys held with others.
 const CTRL: (u32, u32) = (29, 4);
+const ALT: (u32, u32) = (56, 8);
 const SHIFT: (u32, u32) = (42, 1);
 
 fn settle() -> Duration {
@@ -131,10 +132,14 @@ fn keyboard(text: Option<&str>, after: Duration) {
             queue.roundtrip(&mut State).unwrap();
             std::thread::sleep(Duration::from_millis(20));
         };
-        let mut ctrl = false;
+        let (mut ctrl, mut alt) = (false, false);
         for c in text.chars() {
             if c == '^' {
                 ctrl = true;
+                continue;
+            }
+            if c == '~' {
+                alt = true;
                 continue;
             }
             let (c, mut held) = match c {
@@ -145,6 +150,9 @@ fn keyboard(text: Option<&str>, after: Duration) {
             };
             if std::mem::take(&mut ctrl) {
                 held.push(CTRL);
+            }
+            if std::mem::take(&mut alt) {
+                held.push(ALT);
             }
             let code = code(c).unwrap_or_else(|| panic!("can't type {c:?}"));
             // Each modifier's key goes down with its mask, and up with the mask left.
