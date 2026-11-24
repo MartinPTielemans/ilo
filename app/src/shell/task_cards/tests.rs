@@ -8,6 +8,7 @@ use gpui::{
 };
 
 use super::{Card, Cli, Dot, Holds, Offer, Shape, chips, shape};
+use crate::agents::task::Word;
 use crate::shell::{Command, FOOTER_HEIGHT, Folders, PLATE_INSET, Shell, Slot, recorder::Recorder};
 use crate::tokens::shell::task::{GAP, HEIGHT};
 
@@ -20,8 +21,11 @@ fn card(n: u64, dot: Dot) -> Card {
         replies: true,
         title: "Find a flight to Lisbon".into(),
         status: "Searching flights".into(),
+        steps: Vec::new(),
+        last_site: None,
         asks: false,
         dot,
+        word: Word::for_dot(dot),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),

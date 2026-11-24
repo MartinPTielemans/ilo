@@ -930,7 +930,7 @@ fn escape_from_the_page_watched_steps_back(cx: &mut TestAppContext) {
 /// and Open once it left the user a tab.
 #[gpui::test]
 fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
-    use crate::agents::task::{Card, Dot};
+    use crate::agents::task::{Card, Dot, Word};
     let (shell, _, cx) = shell_with_task(cx);
     let card = |dot: Dot, status: &str| Card {
         agent: "task-1".into(),
@@ -940,8 +940,11 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         replies: true,
         title: "Find a flight".into(),
         status: status.to_string().into(),
+        steps: Vec::new(),
+        last_site: None,
         asks: false,
         dot,
+        word: Word::for_dot(dot),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
@@ -1003,6 +1006,19 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         shell.set_task_cards(vec![card(Dot::Ended, "Stopped")], cx)
     });
     assert_eq!(says(&shell, cx), ("Stopped".into(), "".into(), false));
+    // An ended task's strip says the one word its card does: why it ended, never "Stopped" for
+    // one the user didn't stop.
+    for (word, says_it) in [
+        (Word::Interrupted, "Interrupted"),
+        (Word::AtLimit, "Claude at limit"),
+    ] {
+        let ended = Card {
+            word,
+            ..card(Dot::Ended, "")
+        };
+        shell.update(cx, |shell, cx| shell.set_task_cards(vec![ended], cx));
+        assert_eq!(says(&shell, cx), (says_it.into(), "".into(), false));
+    }
 }
 
 /// While a task's page is watched, the URL field shows its address, and Copy URL, Copy URL as
@@ -1240,7 +1256,7 @@ fn the_strip_names_the_agent_as_its_card_does(cx: &mut TestAppContext) {
 /// has its card's words under its page, as it did (#4102).
 #[gpui::test]
 fn the_strip_under_a_page_says_that_pages_own_step(cx: &mut TestAppContext) {
-    use crate::agents::task::{Card, Dot};
+    use crate::agents::task::{Card, Dot, Word};
     let (shell, _host, cx) = shell_with_task(cx);
     still(cx);
     let card = |steps: &[(u64, &str)]| Card {
@@ -1253,6 +1269,7 @@ fn the_strip_under_a_page_says_that_pages_own_step(cx: &mut TestAppContext) {
         status: "Working · 2 helpers".into(),
         asks: false,
         dot: Dot::Working,
+        word: Word::for_dot(Dot::Working),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
@@ -1261,6 +1278,8 @@ fn the_strip_under_a_page_says_that_pages_own_step(cx: &mut TestAppContext) {
             .collect(),
         retry: false,
         fix: None,
+        steps: Vec::new(),
+        last_site: None,
     };
     shell.update(cx, |shell, cx| {
         shell.set_task_cards(vec![card(&[])], cx);
@@ -1288,7 +1307,7 @@ fn the_strip_under_a_page_says_that_pages_own_step(cx: &mut TestAppContext) {
 fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
     cx: &mut TestAppContext,
 ) {
-    use crate::agents::task::{Card, Dot};
+    use crate::agents::task::{Card, Dot, Word};
     use crate::shell::page_ends::StripStop;
     let (shell, host, cx) = shell_with_task(cx);
     still(cx);
@@ -1306,6 +1325,7 @@ fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
         status: "Needs you · Sign in".into(),
         asks: false,
         dot: Dot::Waiting,
+        word: Word::for_dot(Dot::Waiting),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
@@ -1314,6 +1334,8 @@ fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
             .collect(),
         retry: false,
         fix: None,
+        steps: Vec::new(),
+        last_site: None,
     };
     let held = |tab: u64| {
         vec![Status {
@@ -1523,7 +1545,7 @@ fn the_ring_never_enters_an_agents_page(cx: &mut TestAppContext) {
 
 /// A working task's card shown, its page watched as the agent acts there.
 fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
-    use crate::agents::task::{Card, Dot};
+    use crate::agents::task::{Card, Dot, Word};
     still(cx);
     let card = Card {
         agent: "task-1".into(),
@@ -1533,8 +1555,11 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         replies: true,
         title: "Find a flight".into(),
         status: "Clicking “Tickets”".into(),
+        steps: Vec::new(),
+        last_site: None,
         asks: false,
         dot: Dot::Working,
+        word: Word::for_dot(Dot::Working),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
