@@ -3396,12 +3396,13 @@ impl Settings {
             let (site, username) = passwords::lines(login);
             let login = login.clone();
             // Named by its login's key, so another's Remove never takes its name, and the keyboard
-            // with it, as a row goes (list_keys::removing).
+            // with it, as a row goes (list_keys::removing); hashed, as the key holds the username.
+            let named = {
+                use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+                BuildHasherDefault::<DefaultHasher>::default().hash_one(&login.key)
+            };
             let remove = self
-                .button(
-                    SharedString::from(format!("remove-login {}", login.key)),
-                    "Remove",
-                )
+                .button(("remove-login", named), "Remove")
                 .relative()
                 .child(self.drawn(format!("remove login {index}")))
                 .on_click(

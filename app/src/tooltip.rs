@@ -468,8 +468,12 @@ impl Tooltip {
             tooltip
                 .update(cx, |tooltip, cx| {
                     tooltip.wait = None;
-                    if tooltip.intent.due(cx.background_executor().now()) {
+                    let now = cx.background_executor().now();
+                    if tooltip.intent.due(now) {
                         tooltip.show(over, tip, anchor, cx)
+                    } else if let Some(left) = tooltip.intent.early(now) {
+                        // A timer that woke early waits out the rest.
+                        tooltip.wait_for((over, tip, anchor), left, cx)
                     }
                 })
                 .ok();

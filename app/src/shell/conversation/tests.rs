@@ -1438,3 +1438,151 @@ fn a_task_that_wasnt_kept_has_no_level_row(cx: &mut TestAppContext) {
 fn a_task_of_an_assistant_that_keeps_nothing_has_no_level_row(cx: &mut TestAppContext) {
     assert!(!level_chip_with(IloKind::KeepsNothing, cx));
 }
+
+/// Task-1's conversation as it works with `helpers` helpers (#4102), each reading its shop's
+/// page, and its own step under way after them.
+fn with_helpers(helpers: usize) -> Conversation {
+    let mut talk = conversation(1);
+    let items = (0..helpers)
+        .map(|at| TraceItem::Helper(step(10 + at, "Reading shop.example", true)))
+        .chain([TraceItem::Step(step(0, "Reading reviews.example", true))]);
+    talk.lines = vec![Line::Trace(Trace {
+        key: 0,
+        running: true,
+        took: None,
+        items: items.collect(),
+    })];
+    talk
+}
+
+/// The one trace of `talk`.
+fn its_trace(talk: &mut Conversation) -> &mut Trace {
+    match &mut talk.lines[0] {
+        Line::Trace(trace) => trace,
+        line => panic!("{line:?}"),
+    }
+}
+
+/// A task at work with helpers says how many on its Working line, one in its own form, in place
+/// of its steps; without one, and once its turn is over, the line counts its steps as it did.
+#[test]
+fn a_working_line_counts_the_tasks_helpers() {
+    let summary = |talk: &mut Conversation| {
+        let (title, counted) = its_trace(talk).summary();
+        format!("{title} · {counted}")
+    };
+    assert_eq!(summary(&mut with_helpers(4)), "Working · 4 helpers");
+    assert_eq!(summary(&mut with_helpers(1)), "Working · 1 helper");
+    assert_eq!(summary(&mut with_helpers(0)), "Working · 1 step");
+
+    // One of the four waits on the user and one has finished: each still has its line, so each
+    // still counts.
+    let mut talk = with_helpers(4);
+    its_trace(&mut talk).items[1] = TraceItem::Helper(step(11, "Read shop.example", false));
+    its_trace(&mut talk).items[2] = TraceItem::Helper(step(12, "Handed you shop.example", false));
+    assert_eq!(summary(&mut talk), "Working · 4 helpers");
+
+    let over = its_trace(&mut talk);
+    (over.running, over.took) = (false, Some(41));
+    assert_eq!(summary(&mut talk), "Worked for 41 s · 1 step");
+}
+
+/// Opened, as it is while it works, the Working line lists a line for each helper with the task's
+/// own steps, and folds them away with a press, as any trace's.
+#[gpui::test]
+fn a_working_line_opens_to_a_line_for_each_helper(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shown(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(with_helpers(4)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let draw = |cx: &mut VisualTestContext| {
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    };
+    let listed = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            view.is_open(Fold::Trace(0), true)
+                .then(|| view.heights.borrow()[&Fold::Trace(0)])
+        })
+    };
+    draw(cx);
+    assert_eq!(
+        listed(cx),
+        Some(5. * TRACE_LINE),
+        "four helpers' lines and the task's own step"
+    );
+
+    // A fifth line as a helper comes, and none goes as one finishes.
+    let mut talk = with_helpers(5);
+    its_trace(&mut talk).items[0] = TraceItem::Helper(step(10, "Read shop.example", false));
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    draw(cx);
+    assert_eq!(listed(cx), Some(6. * TRACE_LINE));
+
+    view.update(cx, |view, cx| view.toggle(Fold::Trace(0), true, cx));
+    draw(cx);
+    assert_eq!(listed(cx), None, "folded, it still listed them");
+}
+
+/// Beside its page, Take Over stands once on the lines, on the task's own step under way, which
+/// is on the page it takes: a helper's line under way has none, as its page is another.
+#[gpui::test]
+fn a_helpers_line_has_no_take_over(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_talk_beside(true, cx);
+        shell.set_conversation(Some(with_helpers(4)), cx);
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let chips = view.read_with(cx, |view, _| view.take_over_drawn.borrow().clone());
+    assert_eq!(chips.len(), 1, "{chips:?}");
+    host.take();
+    cx.simulate_click(chips[0].center(), Modifiers::none());
+    assert_eq!(host.take(), ["task task-1 TakeOver(30)"]);
+
+    // With only helpers under way, no line is the page's.
+    let mut talk = with_helpers(4);
+    its_trace(&mut talk).items.pop();
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let chips = view.read_with(cx, |view, _| view.take_over_drawn.borrow().len());
+    assert_eq!(chips, 0);
+}
+
+/// A helper's line under way shimmers as a step's does, so the view asks for frames while one
+/// works, though the task's own step has finished; under Reduce Motion, which the view asks
+/// `motion::still`, it holds; and a helper waiting on the user, or done, moves nothing.
+#[gpui::test]
+fn a_helpers_line_under_way_shimmers_unless_motion_is_reduced(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shown(cx);
+    let mut talk = with_helpers(4);
+    its_trace(&mut talk).items[4] = TraceItem::Step(step(0, "Read reviews.example", false));
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(talk.clone()), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let moving = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            let still = crate::motion::still(cx);
+            view.read(cx).moving(still)
+        })
+    };
+    // `shown` reduces motion.
+    assert!(!moving(cx), "a helper's line moved under Reduce Motion");
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    assert!(moving(cx), "a helper under way didn't shimmer");
+
+    // Three have finished and the fourth waits for the user to sign in.
+    for at in 0..3 {
+        its_trace(&mut talk).items[at] =
+            TraceItem::Helper(step(10 + at, "Read shop.example", false));
+    }
+    its_trace(&mut talk).items[3] = TraceItem::Helper(step(13, "Handed you shop.example", false));
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    assert!(!moving(cx), "nothing is under way");
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+}

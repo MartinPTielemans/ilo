@@ -230,6 +230,8 @@ pub struct TalkView {
     ilo_links: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     /// Where the level's chip under the reply field was drawn, if the last frame drew it.
     level_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Where the last frame drew Take Over on the lines: once, on the live line.
+    take_over_drawn: Rc<RefCell<Vec<Bounds<Pixels>>>>,
     landed: Rc<Cell<Option<Bounds<Pixels>>>>,
     drawn_at: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
@@ -353,6 +355,7 @@ impl Shell {
                     ilo_words_drawn: Rc::default(),
                     ilo_links: Rc::default(),
                     level_drawn: Rc::default(),
+                    take_over_drawn: Rc::default(),
                     landed: Rc::default(),
                     drawn_at: Rc::default(),
                 })
@@ -812,7 +815,7 @@ impl TalkView {
                     ));
                     (trace.items.iter())
                         .filter_map(|item| match item {
-                            TraceItem::Step(step) => Some(step),
+                            TraceItem::Step(step) | TraceItem::Helper(step) => Some(step),
                             TraceItem::Said(_) => None,
                         })
                         .collect()
@@ -1516,6 +1519,11 @@ impl TalkView {
         for (index, item) in trace.items.iter().enumerate() {
             nest = match item {
                 TraceItem::Step(step) => nest.children(self.step(step, true, look, cx)),
+                // A helper's line is a step's, without the live line's Take Over, which is the
+                // one page's the task stands on.
+                TraceItem::Helper(step) => {
+                    nest.children(self.step_line(step, true, false, look, cx))
+                }
                 TraceItem::Said(text) => {
                     let said = div()
                         .py(px((TRACE_LINE - TEXT_LINE) / 2.))
@@ -1605,12 +1613,13 @@ impl TalkView {
         let shimmers = self.shown.as_ref().is_some_and(|shown| {
             shown.lines.iter().any(|line| match line {
                 Line::Trace(trace) => {
+                    let under_way = |item: &TraceItem| match item {
+                        TraceItem::Step(step) | TraceItem::Helper(step) => step.running,
+                        TraceItem::Said(_) => false,
+                    };
                     trace.running
                         && self.is_open(Fold::Trace(trace.key), true)
-                        && trace
-                            .items
-                            .iter()
-                            .any(|item| matches!(item, TraceItem::Step(step) if step.running))
+                        && trace.items.iter().any(under_way)
                 }
                 Line::Thinking { failed, .. } => failed.is_none(),
                 Line::Step(step) => step.running,
@@ -1628,6 +1637,18 @@ impl TalkView {
         &self,
         step: &TraceStep,
         glyph: bool,
+        look: &Look,
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
+        self.step_line(step, glyph, glyph, look, cx)
+    }
+
+    /// As `step`, which may be the `live` line beside the page or, as a helper's, never is.
+    fn step_line(
+        &self,
+        step: &TraceStep,
+        glyph: bool,
+        live: bool,
         look: &Look,
         cx: &mut Context<Self>,
     ) -> Vec<gpui::AnyElement> {
@@ -1652,9 +1673,10 @@ impl TalkView {
         // unless the user stands on the page, whose strip has it.
         let live = (self.shown.as_ref())
             .filter(|shown| {
-                look.beside && !look.standing && glyph && step.running && shown.stoppable
+                look.beside && !look.standing && live && step.running && shown.stoppable
             })
             .and_then(|shown| shown.on);
+        let drawn = self.take_over_drawn.clone();
         let line = match live {
             None => line.into_any_element(),
             Some(tab) => div()
@@ -1668,6 +1690,17 @@ impl TalkView {
                         "conversation-take-over",
                         words::TAKE_OVER,
                         None,
+                    )
+                    .relative()
+                    .child(
+                        canvas(
+                            move |bounds, _, _| drawn.borrow_mut().push(bounds),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full(),
                     )
                     .on_click(
                         cx.listener(move |view, _, _, cx| view.act(TaskAction::TakeOver(tab), cx)),
@@ -2706,6 +2739,7 @@ impl Render for TalkView {
             self.scroll.scroll_to_bottom();
         }
         self.level_drawn.set(None);
+        self.take_over_drawn.borrow_mut().clear();
         let busy = self.motion.settle(now);
         self.follow_on(now);
         // What changes once it has shown moves.

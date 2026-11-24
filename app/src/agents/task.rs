@@ -193,18 +193,44 @@ impl Trace {
             .count()
     }
 
+    /// The helpers the task started in it (#4102), those that have finished too, as each one's
+    /// line stays.
+    pub fn helpers(&self) -> usize {
+        (self.items.iter())
+            .filter(|item| matches!(item, TraceItem::Helper(_)))
+            .count()
+    }
+
+    /// What its summary line counts: its helpers while it works with any, as each is on the
+    /// user's plan, else its steps.
+    pub fn counted(&self) -> (usize, Counted) {
+        match (self.took, self.helpers()) {
+            (None, helpers @ 1..) => (helpers, Counted::Helpers),
+            _ => (self.steps(), Counted::Steps),
+        }
+    }
+
     /// Its summary line's title and description.
     pub fn summary(&self) -> (SharedString, SharedString) {
-        let steps = match self.steps() {
-            1 => "1 step".to_string(),
-            count => format!("{count} steps"),
+        let counted = match self.counted() {
+            (1, Counted::Steps) => "1 step".to_string(),
+            (count, Counted::Steps) => format!("{count} steps"),
+            (1, Counted::Helpers) => "1 helper".to_string(),
+            (count, Counted::Helpers) => format!("{count} helpers"),
         };
         let title = match self.took {
             Some(seconds) => format!("Worked for {}", duration(seconds)),
             None => "Working".to_string(),
         };
-        (title.into(), steps.into())
+        (title.into(), counted.into())
     }
+}
+
+/// What a trace's summary line counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Counted {
+    Steps,
+    Helpers,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -212,6 +238,9 @@ pub enum TraceItem {
     Step(TraceStep),
     /// What the agent said as it worked, which isn't its turn's last message.
     Said(SharedString),
+    /// A helper the task started (#4102), as the step it's on: a step's line in ilo's own words
+    /// for the page the helper works on, never the helper's own text.
+    Helper(TraceStep),
 }
 
 /// A line of a trace: a step, in one sentence.
@@ -3197,7 +3226,7 @@ fn steps(lines: Vec<Line>) -> Vec<Line> {
     });
     (steps.filter_map(|item| match item {
         TraceItem::Step(step) => Some(Line::Step(step)),
-        TraceItem::Said(_) => None,
+        TraceItem::Said(_) | TraceItem::Helper(_) => None,
     }))
     .collect()
 }
