@@ -267,18 +267,30 @@ fn a_tab_is_quiet_while_it_shows_a_sign_in() {
 /// Claude Code's sign-in, as a stand-in script in the test's own folder says it ends.
 #[cfg(unix)]
 mod claude {
-    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
+    use std::process::{Command, Stdio};
 
     use super::*;
 
+    /// A stand-in `claude` running `script`, written by a shell of its own. Had this process
+    /// written it, another test's thread forking meanwhile would hand its child the open file
+    /// until that child ran its own program, and the stand-in wouldn't run then: "Text file
+    /// busy". Only the shell, which has ended, ever had it open for writing.
     fn stand_in(name: &str, script: &str) -> PathBuf {
         let folder =
             std::env::temp_dir().join(format!("ilo-sign-in-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         let program = folder.join("claude");
-        std::fs::write(&program, format!("#!/bin/sh\n{script}\n")).unwrap();
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut writer = Command::new("/bin/sh")
+            .args(["-c", r#"cat > "$1" && chmod 755 "$1""#, "sh"])
+            .arg(&program)
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut input = writer.stdin.take().unwrap();
+        write!(input, "#!/bin/sh\n{script}\n").unwrap();
+        drop(input);
+        assert!(writer.wait().unwrap().success(), "the stand-in wasn't written");
         program
     }
 
@@ -383,3 +395,4 @@ fn a_row_says_its_state_and_offers_what_comes_next() {
     let out = row(codex, Ready::SignedIn, None, Row::SigningOut);
     assert_eq!(out, says("Signing out…", Offer::Nothing));
 }
+
