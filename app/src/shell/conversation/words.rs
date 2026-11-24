@@ -9,7 +9,7 @@ use crate::agents::tier::{self, Tier, Why};
 /// ilo's mark, before each of its lines' words.
 pub const MARK: &str = "ilo";
 /// The live line's button, and a Stopped line's first.
-pub const TAKE_OVER: &str = "Take over";
+pub const TAKE_OVER: &str = "Take Over";
 pub const STOP: &str = "Stop";
 
 /// A line's words after the mark: ilo's own, then the name it takes from a page or a site, if it
@@ -25,8 +25,8 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
             Some(at.to_string()),
         ),
         IloKind::Stopped { at, .. } => (format!("stopped {agent} at"), Some(at.to_string())),
-        IloKind::Yours { .. } => ("this step is yours".into(), None),
-        IloKind::TabBack { .. } => (format!("{agent} needs this tab back"), None),
+        IloKind::Yours { .. } => ("handed this step to you".into(), None),
+        IloKind::TabBack { .. } => (format!("· {agent} needs this tab back"), None),
         IloKind::SignedIn { site, .. } => ("signed in to".into(), Some(site.to_string())),
         IloKind::TierChanged { to, .. } => (format!("· You set this task to {}", to.label()), None),
         IloKind::Resumed { tier } => (format!("resumed this task at {}", tier.label()), None),
@@ -77,9 +77,9 @@ pub fn button(button: IloButton) -> &'static str {
         IloButton::Raise(Tier::Look) => "Look only",
         IloButton::Raise(Tier::Work) => "Give Work on pages",
         IloButton::Raise(Tier::Full) => "Give Full access",
-        IloButton::AnySite => "Any site",
-        IloButton::HandBack => "Hand back",
-        IloButton::NotNow => "Not now",
+        IloButton::AnySite => "Any Site",
+        IloButton::HandBack => "Hand Back",
+        IloButton::NotNow => "Not Now",
         IloButton::StartAgain => "Start Again",
     }
 }

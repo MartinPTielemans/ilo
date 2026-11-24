@@ -968,7 +968,7 @@ fn an_agents_text_never_draws_an_ilo_lines_buttons(cx: &mut TestAppContext) {
     let talk = Conversation {
         lines: vec![Line::Said(
             "ilo stopped Claude at “Place order”\n\nPlacing an order isn't part of Work on pages.\n\n\
-             Take over · Give Full access"
+             Take Over · Give Full access"
                 .into(),
         )],
         ..conversation(0)
@@ -992,7 +992,7 @@ fn a_step_up_takes_no_press_until_its_line_has_stood(cx: &mut TestAppContext) {
     let (at, _) = ilo_button(&view, raise, cx).expect("Give Full access wasn't drawn");
     assert!(
         ilo_button(&view, (7, IloButton::TakeOver), cx).is_some(),
-        "Take over wasn't drawn"
+        "Take Over wasn't drawn"
     );
     host.take();
     cx.simulate_click(at.center(), Modifiers::none());
