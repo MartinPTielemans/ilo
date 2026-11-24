@@ -2634,9 +2634,13 @@ BC_EXPORT void bc_window_set_page_color(bc_id window, uint32_t color);
 
 // Puts the background colour of the tab's page, 0xRRGGBB in sRGB, in |color|, and returns true:
 // the colour its document draws behind its content, as the engine last reported it, never pixels
-// read from the page. False, with |color| as it was, if it has no single opaque one: none reported
-// yet, one that isn't opaque, or a page of the system's engine. A new page keeps the colour of the
-// one before it until its first paint, and a tab that isn't shown or has no page keeps its last.
+// read from the page. A document with no background of its own reports what it sits on: the
+// engine's canvas, white or the dark one of a page in a dark colour scheme, and for the core's
+// error page the window's page colour (bc_window_set_page_color), the only page that sits on it.
+// False, with |color| as it was, if it has no single opaque one: none reported yet, as for a tab
+// whose first page hasn't painted, one that isn't opaque, or a page of the system's engine. A new
+// page keeps the colour of the one before it until its first paint, and a tab that isn't shown or
+// has no page keeps its last.
 // It reads what the core keeps and asks the page nothing, so a tab switch costs no more for it.
 // Then tab_background_color_changed.
 BC_EXPORT bool bc_tab_background_color(bc_id tab, uint32_t* color);
