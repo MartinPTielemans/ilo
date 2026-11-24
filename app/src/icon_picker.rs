@@ -321,11 +321,7 @@ pub fn entity(cx: &App) -> Option<Entity<IconPicker>> {
 /// it, where `dismissed` hears of a close the host has made.
 pub fn leave(cx: &mut App) {
     if let Some(window) = cx.try_global::<IconPickerWindow>().map(|picker| picker.0) {
-        window
-            .update(cx, |picker, window, cx| {
-                picker.dismiss(&Dismiss, window, cx)
-            })
-            .ok();
+        window.update(cx, |picker, _, cx| picker.close(cx)).ok();
     }
 }
 
@@ -619,7 +615,15 @@ impl IconPicker {
         cx.notify();
     }
 
-    fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
+    /// Esc closes the picker, unless it was an input method's, composing in the search
+    /// (dismissal's rule).
+    fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        if crate::dismissal::Close::escape_from([&self.search.clone()], window, cx).is_some() {
+            self.close(cx);
+        }
+    }
+
+    fn close(&mut self, cx: &mut Context<Self>) {
         if self.picking.take().is_some() {
             // check.sh reads this line.
             log!("browser: icon picker dismissed");
@@ -628,9 +632,9 @@ impl IconPicker {
         }
     }
 
-    /// ↩ on the Emoji tab picks the emoji on the plate. While an input method composes, it's the
-    /// method's.
-    fn keep(&mut self, _: &Keep, _: &mut Window, cx: &mut Context<Self>) {
+    /// ↩ on the Emoji tab picks the emoji on the plate, unless it was an input method's,
+    /// composing in the search.
+    fn keep(&mut self, _: &Keep, window: &mut Window, cx: &mut Context<Self>) {
         let Some(picking) = self
             .picking
             .as_ref()
@@ -638,10 +642,11 @@ impl IconPicker {
         else {
             return;
         };
-        if let Some(item) = picking
-            .selected
-            .filter(|_| !self.search.read(cx).composing())
-        {
+        let selected = picking.selected;
+        if !crate::dismissal::submits([&self.search.clone()], window, cx) {
+            return;
+        }
+        if let Some(item) = selected {
             self.pick_emoji(item, cx);
         }
     }
