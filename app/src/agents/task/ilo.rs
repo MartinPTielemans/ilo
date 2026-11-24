@@ -52,6 +52,10 @@ pub enum IloKind {
     },
     /// The user changed the task's access.
     TierChanged { from: Tier, to: Tier },
+    /// ilo stopped the task's turn at its helpers' limit (#4102): it started more than a task
+    /// may, or with `deep`, a helper started one of its own. `tab` is the page the task stood on,
+    /// or 0 with none. The count its line says is the app's own.
+    Helpers { tab: u64, deep: bool },
     /// The user's reply took up the task after it had ended, at `tier`, which the app decided.
     Resumed { tier: Tier },
     /// The assistant keeps the task's conversation on the user's computer, said once per profile.
@@ -128,6 +132,10 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
         IloKind::Stopped { tier, .. } => std::iter::once(IloButton::TakeOver)
             .chain(tier.up().map(IloButton::Raise))
             .collect(),
+        // No level lifts the limit, so no step up stands under its line; with no page to take,
+        // nothing does.
+        IloKind::Helpers { tab: 0, .. } => Vec::new(),
+        IloKind::Helpers { .. } => vec![IloButton::TakeOver],
         IloKind::Yours { .. } => vec![IloButton::HandBack, IloButton::NotNow],
         IloKind::TabBack { .. } => vec![IloButton::HandBack],
         IloKind::SignedIn { .. } | IloKind::TierChanged { .. } => Vec::new(),
@@ -140,6 +148,7 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
 pub fn tab(kind: &IloKind) -> Option<u64> {
     match kind {
         IloKind::Stopped { tab, .. }
+        | IloKind::Helpers { tab, .. }
         | IloKind::Yours { tab }
         | IloKind::TabBack { tab }
         | IloKind::SignedIn { tab, .. } => Some(*tab),
