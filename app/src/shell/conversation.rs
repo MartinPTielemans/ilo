@@ -2042,7 +2042,7 @@ impl TalkView {
             IloKind::TierChanged { .. } => "icons/shield.svg",
             IloKind::Resumed { .. } => "icons/play.svg",
             IloKind::KeptHere => "icons/save.svg",
-            IloKind::Gone | IloKind::KeepsNothing => "icons/message-circle.svg",
+            IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing => "icons/message-circle.svg",
         };
         // Its words follow the mark closer than the line's gap.
         let mark = super::display_face::display_text(words::MARK, MARK_SIZE, TRACE_LINE, cx)

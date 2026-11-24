@@ -2696,7 +2696,7 @@ fn task_conversation(agent: SharedString) -> Conversation {
 /// PREVIEW_TASK=<state> (#4095's bench) shows the working task's conversation beside its page in
 /// one of the states ilo's own lines are made for, from made-up data: working, refused,
 /// off-limits, yours, tab-back, signed-in, raised or notes; or of a task that has ended (#4105):
-/// ended, ended-first, picked-up, gone or codex-ended.
+/// ended, ended-first, picked-up, gone, not-kept or codex-ended.
 fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
     let Ok(state) = std::env::var("PREVIEW_TASK") else {
         return;
@@ -2788,9 +2788,9 @@ fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             ]
         }
         // A task that has ended (#4105): with its reply field, the first one's line saying where
-        // the conversation lives, a reply that took it up, and the two lines that stand in the
+        // the conversation lives, a reply that took it up, and the three lines that stand in the
         // field's place.
-        "ended" | "ended-first" | "picked-up" | "gone" | "codex-ended" => {
+        "ended" | "ended-first" | "picked-up" | "gone" | "not-kept" | "codex-ended" => {
             let ended = state != "picked-up";
             if state == "codex-ended" {
                 talk.name = "Codex".into();
@@ -2815,6 +2815,7 @@ fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                     working(10, "Reading this page"),
                 ]),
                 "gone" => lines.push(line(100, IloKind::Gone)),
+                "not-kept" => lines.push(line(100, IloKind::NotKept)),
                 "codex-ended" => lines.push(line(100, IloKind::KeepsNothing)),
                 _ => {}
             }

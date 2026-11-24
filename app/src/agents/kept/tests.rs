@@ -217,13 +217,19 @@ fn a_removal_that_failed_removes_nothing_of_ilos_either() {
     // The id stays held, marked, and goes once a later try removes it.
     let mut kept = Kept::default();
     kept.hold("task-1", Cli::Claude, id.clone());
+    assert!(!kept.had("task-1"));
     assert_eq!(kept.removing(|_| true), [(id.clone(), Cli::Claude)]);
     assert_eq!(kept.removing(|_| true), [], "removed twice at once");
+    // Its task is left with none, having had one, until the task itself goes.
+    assert_eq!(kept.of("task-1"), None);
+    assert!(kept.had("task-1") && !kept.had("task-2"));
     kept.removed(&id, false);
     assert_eq!((kept.count(), kept.stuck()), (1, 1));
     assert_eq!(kept.removing(|_| true), [(id.clone(), Cli::Claude)]);
     kept.removed(&id, true);
     assert_eq!((kept.count(), kept.stuck()), (0, 0));
+    kept.forget("task-1");
+    assert!(!kept.had("task-1"));
 }
 
 #[cfg(unix)]

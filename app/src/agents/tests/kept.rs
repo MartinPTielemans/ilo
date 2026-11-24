@@ -362,7 +362,8 @@ fn a_reply_to_a_run_that_still_waits_takes_the_task_up_on_it(cx: &mut TestAppCon
 }
 
 /// Settings › Agents' switch off: a task's run keeps nothing, ilo holds no id and makes no folder,
-/// and the task, once done, says so where its reply field was, with Start Again.
+/// and the task, once done, says its assistant didn't keep the conversation where its reply field
+/// was, with Start Again: not that it no longer has one, which is for one that was kept.
 #[cfg(unix)]
 #[gpui::test]
 fn with_the_switch_off_a_run_keeps_nothing(cx: &mut TestAppContext) {
@@ -376,7 +377,13 @@ fn with_the_switch_off_a_run_keeps_nothing(cx: &mut TestAppContext) {
     assert!(!run.profile.join(kept::FOLDER).exists());
     assert_eq!(run.ran_in(1), run.profile.join("Tasks").join(&agent));
     run.finish(&agent, cx);
-    assert_eq!(run.ilo_lines(&agent, cx), [IloKind::Gone]);
+    assert_eq!(run.ilo_lines(&agent, cx), [IloKind::NotKept]);
+    let talk = run.talk(&agent, cx);
+    let Some(Line::Ilo(last)) = talk.lines.last() else {
+        panic!("ilo's line isn't last");
+    };
+    assert!(ilo::in_field(&last.kind));
+    assert_eq!(ilo::buttons(last), [IloButton::StartAgain]);
     // The switch is kept, and on again the next task's run is.
     let saved = std::fs::read_to_string(run.profile.join("agents.json")).unwrap();
     let saved: Value = serde_json::from_str(&saved).unwrap();
@@ -385,6 +392,8 @@ fn with_the_switch_off_a_run_keeps_nothing(cx: &mut TestAppContext) {
     run.start(Cli::Claude, cx);
     let (args, _) = run.ran(2);
     assert!(args.iter().any(|arg| arg == "--session-id"));
+    // The task that ended with the switch off still kept none, whatever the switch says now.
+    assert_eq!(run.ilo_lines(&agent, cx), [IloKind::NotKept]);
 }
 
 /// Codex keeps nothing, whatever the switch says: its task, stopped, says so where its reply
@@ -515,6 +524,8 @@ fn a_removal_that_failed_stays_listed_and_remove_all_tries_again(cx: &mut TestAp
     assert_eq!(run.kept(cx), (1, 0));
     assert!(!run.folder(&id).exists());
     assert!(run.folder(&at_work).exists());
+    // Its conversation was kept and is gone, which is what the task says: not that it kept none.
+    assert_eq!(run.ilo_lines(&agent, cx).last(), Some(&IloKind::Gone));
 }
 
 /// The conversations a run of the browser left go at the next launch, as its tasks went: by the

@@ -4180,10 +4180,10 @@ impl Settings {
         cx.notify();
     }
 
-    /// Keep finished tasks so you can reply: its switch, how many ilo holds a conversation's id
-    /// for, which isn't a promise each still takes a reply, and Remove All…, which asks first, as
-    /// nothing brings a conversation back. Turning it off offers the same. The line under it names
-    /// who keeps and who doesn't, from kept.rs's table.
+    /// Keep finished tasks: its switch, how many ilo holds a conversation's id for, which isn't a
+    /// promise each still takes a reply, and Remove All…, which asks first, as nothing brings a
+    /// conversation back. Turning it off offers the same. The line under it names who keeps none,
+    /// from kept.rs's table.
     fn kept_tasks(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> Row {
         let look = &self.look;
         let model = agents.read(cx);
@@ -4208,7 +4208,8 @@ impl Settings {
         let count = (kept > 0).then(|| {
             let said = match stuck {
                 0 => format!("{kept} kept"),
-                stuck => format!("{kept} kept · {stuck} couldn't be removed"),
+                // Every id held is counted, so those are among them.
+                stuck => format!("{kept} kept · {stuck} of them couldn't be removed"),
             };
             div().text_color(look.detail).child(said).into_any_element()
         });
@@ -4220,22 +4221,14 @@ impl Settings {
         });
         let line: Vec<String> = Cli::ALL
             .into_iter()
-            .map(|cli| match agents::kept::keeps(cli) {
-                agents::kept::Keeps::WhenWanted => format!(
-                    "{} clears old conversations by itself, so an old task may no longer take a \
-                     reply.",
-                    cli.name()
-                ),
-                agents::kept::Keeps::Never => {
-                    format!("{} doesn't keep finished tasks.", cli.name())
-                }
-            })
+            .filter(|cli| agents::kept::keeps(*cli) == agents::kept::Keeps::Never)
+            .map(|cli| format!("{} doesn't keep finished tasks.", cli.name()))
             .collect();
         let controls = count.into_iter().chain(remove).chain([switch]).collect();
         nested(setting(
             look,
             KEEP_TASKS,
-            Some(line.join(" ").into()),
+            (!line.is_empty()).then(|| line.join(" ").into()),
             controls,
         ))
     }
@@ -4249,13 +4242,25 @@ impl Settings {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let message = match kept {
-            1 => "Remove the finished task kept?".to_string(),
-            kept => format!("Remove the {kept} finished tasks kept?"),
+        let from = agents::kept::COMPUTER;
+        let (message, detail, action) = match kept {
+            1 => (
+                "Remove 1 finished task?".to_string(),
+                format!(
+                    "The conversation is removed from {from}. A task that is still working keeps \
+                     its own."
+                ),
+                "Remove",
+            ),
+            kept => (
+                format!("Remove {kept} finished tasks?"),
+                format!(
+                    "Their conversations are removed from {from}. A task that is still working \
+                     keeps its own."
+                ),
+                "Remove All",
+            ),
         };
-        let detail = "Their conversations are removed from this computer. A task still at work \
-                      keeps its own."
-            .to_string();
         let agents = agents.clone();
         let remove = move |cx: &mut App| {
             log!("browser: kept tasks removed from settings");
@@ -4266,7 +4271,7 @@ impl Settings {
             &self.dialog,
             message,
             detail,
-            "Remove All",
+            action,
             dialog::Return::Action,
             Box::new(remove),
             window,
@@ -4276,7 +4281,7 @@ impl Settings {
         {
             let _ = window;
             cx.spawn(async move |_, cx| {
-                if crate::ask(&message, &detail, &["Remove All", "Cancel"], true) == 0 {
+                if crate::ask(&message, &detail, &[action, "Cancel"], true) == 0 {
                     cx.update(remove);
                 }
             })
@@ -5562,8 +5567,9 @@ fn feature_row(
 /// Settings › Agents' switch that keeps finished tasks, and its button. A kept task takes a reply
 /// while the browser runs, and the name promises no more.
 const KEEP_TASKS: &str = concat!(
-    "Keep finished tasks so you can reply, until you quit ",
-    env!("APP_NAME")
+    "Keep finished tasks until you quit ",
+    env!("APP_NAME"),
+    ", so you can reply"
 );
 const REMOVE_ALL: &str = "Remove All…";
 

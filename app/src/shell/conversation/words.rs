@@ -2,6 +2,7 @@
 //! composer's row. One table, so a change of wording after the owner has used a build is an edit
 //! here (#4086). The tiers' names are the tier table's (agents/tier.rs).
 
+use crate::agents::kept;
 use crate::agents::task::ilo::{IloButton, IloKind, SignedInWith};
 use crate::agents::tier::{Tier, Why};
 
@@ -33,25 +34,18 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         // A kept task takes a reply while the browser runs, and the words promise no more.
         IloKind::KeptHere => (
             format!(
-                "· {agent} keeps this conversation on {COMPUTER} until you quit {}, so you can \
-                 reply.",
+                "· {agent} keeps this conversation on {} until you quit {}, so you can reply.",
+                kept::COMPUTER,
                 env!("APP_NAME")
             ),
             None,
         ),
         IloKind::Gone => (format!("· {agent} no longer has this conversation."), None),
+        IloKind::NotKept => (format!("· {agent} didn't keep this conversation."), None),
         IloKind::KeepsNothing => (format!("· {agent} doesn't keep finished tasks."), None),
     }
 }
 
-/// The user's computer, by the platform's own noun.
-const COMPUTER: &str = if cfg!(target_os = "macos") {
-    "your Mac"
-} else if cfg!(target_os = "windows") {
-    "your PC"
-} else {
-    "your computer"
-};
 /// Where the switch that keeps finished tasks is, under the line that says they're kept.
 const KEPT_IN: &str = "Settings › Agents";
 
@@ -70,7 +64,8 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
         }),
         IloKind::Yours { .. } | IloKind::TabBack { .. } | IloKind::TierChanged { .. } => None,
         IloKind::KeptHere => Some(KEPT_IN.into()),
-        IloKind::Resumed { .. } | IloKind::Gone | IloKind::KeepsNothing => None,
+        IloKind::Resumed { .. } => None,
+        IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing => None,
     }
 }
 

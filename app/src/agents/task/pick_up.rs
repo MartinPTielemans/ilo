@@ -149,8 +149,8 @@ impl Agents {
     /// ilo's lines in a kept task's log: over each reply that took it up, the access it came back
     /// at, and at its foot, once, where the conversation lives. Then, last, the line that stands
     /// in the reply field's place once a task is done or stopped and can't take a reply: its
-    /// assistant keeps none, or no longer has this one. An outside agent's session has none of
-    /// them.
+    /// assistant keeps none, didn't keep this one as the switch was off, or no longer has it. An
+    /// outside agent's session has none of them.
     pub(super) fn kept_lines(&self, task: &Task, lines: &mut Vec<Line>) {
         let Some(cli) = task.cli.filter(|_| task.session.is_none()) else {
             return;
@@ -194,7 +194,10 @@ impl Agents {
                 IN_FIELD,
                 match kept::keeps(cli) {
                     Keeps::Never => IloKind::KeepsNothing,
-                    Keeps::WhenWanted => IloKind::Gone,
+                    // Remove All took it from under the task.
+                    Keeps::WhenWanted if self.tasks.kept.had(&task.agent) => IloKind::Gone,
+                    // The task started while Settings' switch was off.
+                    Keeps::WhenWanted => IloKind::NotKept,
                 },
             )),
         }
@@ -203,11 +206,12 @@ impl Agents {
     /// `agent`'s task goes for good: what its assistant kept of it goes with it.
     pub(super) fn forget_kept(&mut self, agent: &str, cx: &mut Context<Self>) {
         self.tasks.picked_up.remove(agent);
-        let agent = agent.to_string();
+        let task = agent.to_string();
         self.remove_kept(
-            move |record| record.task.as_deref() == Some(agent.as_str()),
+            move |record| record.task.as_deref() == Some(task.as_str()),
             cx,
         );
+        self.tasks.kept.forget(agent);
     }
 
     /// Settings › Agents' Remove All: every finished task's conversation goes, and those an

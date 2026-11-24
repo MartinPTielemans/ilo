@@ -161,6 +161,16 @@ pub fn without(said: &str, id: &Id) -> String {
     said.replace(id.as_str(), "…")
 }
 
+/// The user's computer, by the platform's own noun, where the words say a conversation is kept
+/// or removed from.
+pub const COMPUTER: &str = if cfg!(target_os = "macos") {
+    "your Mac"
+} else if cfg!(target_os = "windows") {
+    "your PC"
+} else {
+    "your computer"
+};
+
 /// A kept conversation, beside its task.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Record {
@@ -192,6 +202,9 @@ pub struct Kept {
     pub off: bool,
     /// Whether a task's log has said where its conversation lives, which one says once.
     pub told: bool,
+    /// The tasks whose conversation was removed from under them, as Remove All does: each had
+    /// one, where a task that started with the switch off never did, and the two say so apart.
+    removed_from: Vec<String>,
 }
 
 impl Kept {
@@ -209,6 +222,16 @@ impl Kept {
     pub fn of(&self, task: &str) -> Option<&Record> {
         (self.records.iter())
             .find(|record| record.task.as_deref() == Some(task) && !record.removing)
+    }
+
+    /// Whether `task` had a conversation kept that has since been removed from under it.
+    pub fn had(&self, task: &str) -> bool {
+        self.removed_from.iter().any(|each| each == task)
+    }
+
+    /// `task` goes for good, so nothing is said of it again.
+    pub fn forget(&mut self, task: &str) {
+        self.removed_from.retain(|each| each != task);
     }
 
     pub fn of_mut(&mut self, task: &str) -> Option<&mut Record> {
@@ -239,13 +262,14 @@ impl Kept {
     /// The ids to remove of those `which` picks, each with its assistant, now marked as under way
     /// so none is taken up or removed twice meanwhile.
     pub fn removing(&mut self, which: impl Fn(&Record) -> bool) -> Vec<(Id, Cli)> {
+        let removed_from = &mut self.removed_from;
         (self.records.iter_mut())
             .filter(|record| !record.removing && which(record))
             .map(|record| {
                 record.removing = true;
                 record.stuck = false;
-                // Its task has gone, or goes with it.
-                record.task = None;
+                // Its task has gone, or is left with none.
+                removed_from.extend(record.task.take());
                 (record.id.clone(), record.cli)
             })
             .collect()

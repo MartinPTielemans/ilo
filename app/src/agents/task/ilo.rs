@@ -56,15 +56,22 @@ pub enum IloKind {
     Resumed { tier: Tier },
     /// The assistant keeps the task's conversation on the user's computer, said once per profile.
     KeptHere,
-    /// The assistant no longer has the task's conversation. In the reply field's place.
+    /// The assistant no longer has the task's conversation, which it kept. In the reply field's
+    /// place.
     Gone,
+    /// The assistant kept no conversation of the task, which ended while Settings' switch was
+    /// off. In the reply field's place.
+    NotKept,
     /// The assistant keeps no finished task's conversation. In the reply field's place.
     KeepsNothing,
 }
 
 /// Whether a line stands in the reply field's place, under the log, as the task takes no reply.
 pub fn in_field(kind: &IloKind) -> bool {
-    matches!(kind, IloKind::Gone | IloKind::KeepsNothing)
+    matches!(
+        kind,
+        IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing
+    )
 }
 
 /// What ilo signed in with.
@@ -124,7 +131,7 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
         IloKind::TabBack { .. } => vec![IloButton::HandBack],
         IloKind::SignedIn { .. } | IloKind::TierChanged { .. } => Vec::new(),
         IloKind::Resumed { .. } | IloKind::KeptHere => Vec::new(),
-        IloKind::Gone | IloKind::KeepsNothing => vec![IloButton::StartAgain],
+        IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing => vec![IloButton::StartAgain],
     }
 }
 
@@ -136,7 +143,8 @@ pub fn tab(kind: &IloKind) -> Option<u64> {
         | IloKind::TabBack { tab }
         | IloKind::SignedIn { tab, .. } => Some(*tab),
         IloKind::TierChanged { .. } => None,
-        IloKind::Resumed { .. } | IloKind::KeptHere | IloKind::Gone | IloKind::KeepsNothing => None,
+        IloKind::Resumed { .. } | IloKind::KeptHere => None,
+        IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing => None,
     }
 }
 
