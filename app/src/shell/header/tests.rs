@@ -773,13 +773,17 @@ fn developer_mode_puts_devtools_in_the_url_field(cx: &mut TestAppContext) {
     move_to(cx, &host, 100., 300.);
     shell.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
+    let named = move_to(cx, &host, 150., 64.);
+    assert!(
+        (named.iter()).any(|call| call == "tooltip Developer Tools ⌥⌘I"),
+        "{named:?}"
+    );
     host.take();
     cx.simulate_click(point(px(150.), px(64.)), Modifiers::none());
     let calls = host.take();
+    // The click ends the button's tooltip, and it doesn't come back at the release.
     assert!(
-        calls
-            .iter()
-            .any(|call| call == "tooltip Developer Tools ⌥⌘I"),
+        !(calls.iter()).any(|call| call == "tooltip Developer Tools ⌥⌘I"),
         "{calls:?}"
     );
     let calls: Vec<_> = calls
@@ -865,4 +869,47 @@ fn the_header_glyphs_dim_while_the_window_is_not_the_users(cx: &mut TestAppConte
     // Back, by a click in its page, which doesn't give GPUI's window the keys.
     set_main(true, cx);
     assert_eq!(alphas(cx), lit, "not lit once it's the user's again");
+}
+
+/// A click on the Library button ends its tooltip, and it doesn't come back until the pointer has
+/// left the button and returned: not at the release, which GPUI reports as the pointer coming onto
+/// the button again once it moved while held, and not a delay and a grace later either, over the
+/// Library the click opened.
+#[gpui::test]
+fn a_press_ends_a_buttons_tooltip_until_the_pointer_has_left(cx: &mut TestAppContext) {
+    let (shell, cx, host) = drawn_shell(cx);
+    let height = shell.read_with(cx, |shell, _| f32::from(shell.viewport.height));
+    let (x, y) = (
+        LIBRARY_BACK_INSET + NAV_SIZE / 2.,
+        height - FOOTER_HEIGHT / 2.,
+    );
+    let named = |calls: &[String]| {
+        calls
+            .iter()
+            .any(|call| call.starts_with("tooltip View Library"))
+    };
+    assert!(named(&move_to(cx, &host, x, y)));
+
+    host.take();
+    cx.simulate_mouse_down(point(px(x), px(y)), MouseButton::Left, Modifiers::none());
+    let held = point(px(x + 1.), px(y));
+    cx.simulate_mouse_move(held, Some(MouseButton::Left), Modifiers::none());
+    cx.simulate_mouse_up(held, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    let calls = host.take();
+    assert!(calls.iter().any(|call| call == "tooltip none"), "{calls:?}");
+    assert!(!named(&calls), "{calls:?}");
+    cx.executor()
+        .advance_clock(crate::tooltip::DELAY + crate::tooltip::GRACE);
+    cx.run_until_parked();
+    assert!(!named(&move_to(cx, &host, x + 2., y)));
+
+    // Off it, and back once the Library the click opened, which covers it, has closed.
+    move_to(cx, &host, 120., 300.);
+    shell.update(cx, |shell, cx| {
+        shell.close_library_now();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(named(&move_to(cx, &host, x, y)));
 }
