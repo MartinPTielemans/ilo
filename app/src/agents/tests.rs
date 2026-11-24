@@ -34,8 +34,10 @@ struct Made {
     cant_go: RefCell<bool>,
     /// The question each window shows, as the agents last told them.
     asked: RefCell<Option<Question>>,
-    /// The tabs the user holds from agents, as the core keeps them.
+    /// The tabs the user holds from agents, as the core keeps them, and each hand-back the core
+    /// was told of (bc_tab_hand_back), which forgives a failed sign-in at the tab's origin.
     held: RefCell<HashSet<u64>>,
+    handed_back: RefCell<Vec<u64>>,
     /// Each action the agents asked the core whether they may take (bc_agent_may_act).
     checked: RefCell<Vec<String>>,
     /// The app, which the core asks about the key press_key presses from inside bc_agent_page.
@@ -233,6 +235,7 @@ impl Browser for Made {
     }
 
     fn hand_back(&self, tab: u64) -> bool {
+        self.handed_back.borrow_mut().push(tab);
         self.held.borrow_mut().remove(&tab)
     }
 
@@ -3126,6 +3129,21 @@ fn a_handoff_not_handed_back_answers_after_15_minutes(cx: &mut TestAppContext) {
     agents.update(cx, |agents, cx| agents.hand_back(20, cx));
     assert!(browser.held.borrow().is_empty());
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "handed back");
+}
+
+/// Only the user's own Hand Back tells the core the tab is back, which forgives an agent's failed
+/// sign-in at its origin: a handoff timing out doesn't, however long it stays held.
+#[gpui::test]
+fn a_handoff_timing_out_hands_nothing_back(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let reason = json!({ "tab": 20, "reason": "Sign in to example.com" });
+    let handed = call(&agents, "claude-code", "hand_off", reason, cx);
+    cx.executor().advance_clock(HANDOFF_WAIT * 3);
+    assert!(handed.recv().unwrap().error);
+    assert!(browser.handed_back.borrow().is_empty(), "the timeout handed the tab back");
+
+    agents.update(cx, |agents, cx| agents.hand_back(20, cx));
+    assert_eq!(*browser.handed_back.borrow(), [20]);
 }
 
 /// What the user answered for good is listed, by site, and once revoked, one site or all, what
