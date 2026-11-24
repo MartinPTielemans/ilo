@@ -454,7 +454,7 @@ fn a_release_on_what_cant_be_chosen_leaves_the_menu_open() {
 fn the_log_tells_how_a_menu_closed_and_names_none_of_its_items() {
     let all = [
         Closing::Chose(0),
-        Closing::PressedAt(at(600., 400.)),
+        Closing::PressedOutside,
         Closing::Left,
         Closing::Escape,
         Closing::Shortcut,
@@ -482,19 +482,11 @@ fn the_log_tells_how_a_menu_closed_and_names_none_of_its_items() {
         assert_eq!(named, None, "the line names an item: {line}");
     }
     let answers: Vec<Closed> = all.iter().map(|closing| closing.closed()).collect();
-    assert_eq!(
-        answers[..3],
-        [
-            Closed::Chose(0),
-            Closed::PressedAt(at(600., 400.)),
-            Closed::Left
-        ]
-    );
-    assert!(
-        answers[3..]
-            .iter()
-            .all(|closed| *closed == Closed::Otherwise)
-    );
+    assert_eq!(answers[0], Closed::Chose(0));
+    assert_eq!(answers[2], Closed::Left);
+    for way in [1, 3, 4, 5, 6] {
+        assert_eq!(answers[way], Closed::Otherwise, "{:?}", all[way]);
+    }
 }
 
 #[test]
@@ -795,8 +787,8 @@ fn the_host_drives_the_menu_and_the_menu_closes_outside_its_update(cx: &mut Test
     cx.run_until_parked();
     assert_eq!(chosen.get(), Some(Closed::Left));
 
-    // A press outside it, which it takes, says where it landed in the browser window, so a field
-    // whose menu it was knows whether the user went away from it.
+    // A press outside it, which it takes, was spent on the menu: it answers as the menu's keys do,
+    // with nothing of where the press was, so whatever had the menu goes on as it was.
     let chosen = show_menu(cx);
     let page = point(px(60.), px(40.));
     let menu_at = host.shown.borrow().last().expect("no menu shown").0.origin;
@@ -805,7 +797,7 @@ fn the_host_drives_the_menu_and_the_menu_closes_outside_its_update(cx: &mut Test
             .update(|cx: &mut App| super::pointer(Pointer::Pressed, page - menu_at, cx))
     );
     cx.run_until_parked();
-    assert_eq!(chosen.get(), Some(Closed::PressedAt(page)));
+    assert_eq!(chosen.get(), Some(Closed::Otherwise));
 
     // A menu opened over one that shows takes its place and stays.
     show_menu(cx);

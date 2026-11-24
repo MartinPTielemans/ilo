@@ -255,11 +255,9 @@ pub type Chosen = Box<dyn FnOnce(Closed, &mut App)>;
 pub enum Closed {
     /// With the item at this index chosen.
     Chose(usize),
-    /// With a press outside it, at this point in the browser window's content.
-    PressedAt(Point<Pixels>),
     /// With the user gone to another window or app, or its browser window changed under it.
     Left,
-    /// With its keys, a shortcut or another menu taking its place.
+    /// With a press outside it, its keys, a shortcut or another menu taking its place.
     Otherwise,
 }
 
@@ -267,7 +265,7 @@ pub enum Closed {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Closing {
     Chose(usize),
-    PressedAt(Point<Pixels>),
+    PressedOutside,
     Left,
     Escape,
     Shortcut,
@@ -279,7 +277,6 @@ impl Closing {
     fn closed(self) -> Closed {
         match self {
             Closing::Chose(item) => Closed::Chose(item),
-            Closing::PressedAt(at) => Closed::PressedAt(at),
             Closing::Left => Closed::Left,
             _ => Closed::Otherwise,
         }
@@ -290,7 +287,7 @@ impl Closing {
     fn line(self, at: Point<Pixels>) -> String {
         let how = match self {
             Closing::Chose(_) => "picked",
-            Closing::PressedAt(_) => "pressed outside",
+            Closing::PressedOutside => "pressed outside",
             Closing::Left => "left",
             Closing::Escape => "escape",
             Closing::Shortcut => "shortcut",
@@ -1484,7 +1481,7 @@ impl ContextMenu {
                 // While a menu is open, a press outside it only closes it: the click goes no
                 // further. The one exception is a right press, which goes on to open the menu of
                 // what it's on, in this one's place.
-                self.close(Closing::PressedAt(at), cx);
+                self.close(Closing::PressedOutside, cx);
                 event == Pointer::Pressed
             }
             Pointer::Released => {
