@@ -134,6 +134,10 @@ void ShowTile(content::WebContents* contents,
 // again.
 void EndTile(content::WebContents* contents);
 
+// |contents|' page came in a view of its own, a page from another site committing, while it's a
+// tile: the view takes the page's own size again, which Chromium sized from the tile's.
+void TilePageChanged(content::WebContents* contents);
+
 // Draws |page|, which ShowPageIn shows, at |scale| of its frame's size about |about|, in the
 // frame's coordinates, and at |opacity|, without laying it out again, until the next call or
 // another page shown. Where it shows in the window, under the app's view; the Mac's page is in that

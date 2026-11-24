@@ -1579,6 +1579,8 @@ void ShowTile(content::WebContents*, void*, const gfx::Rect&, double) {}
 
 void EndTile(content::WebContents*) {}
 
+void TilePageChanged(content::WebContents*) {}
+
 void StretchOnResize(content::RenderWidgetHostView*, bool) {
   // shortcut: no stretch on Windows; the page shows its last frame unscaled until it redraws.
 }
