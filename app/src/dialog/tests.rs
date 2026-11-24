@@ -1273,3 +1273,132 @@ fn a_press_as_a_windows_dialog_leaves_reaches_what_is_under_it(cx: &mut TestAppC
         "a press as it left was lost to it"
     );
 }
+
+/// A window with a control that opens its own dialog, and a root, which Settings is on Linux.
+struct Opened {
+    dialog: Entity<Dialog>,
+    root: FocusHandle,
+    opener: Option<FocusHandle>,
+}
+
+impl Render for Opened {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .track_focus(&self.root)
+            .children((self.opener.as_ref()).map(|opener| div().size_full().track_focus(opener)))
+            .children(cover(&self.dialog, cx))
+    }
+}
+
+/// A window's own dialog gives the keyboard back to what opened it once it has gone, before its
+/// answer runs, so an answer that hands the keyboard on, as a login's Remove does to the row that
+/// takes its place, starts from the opener (#4108). If the opener has gone, the window has it.
+#[gpui::test]
+fn a_windows_own_dialog_gives_the_keyboard_back_before_its_answer(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let dialog = in_window(host.clone(), cx);
+        // As Settings' observer on Linux does.
+        let mut asked = false;
+        cx.observe_in(
+            &dialog,
+            window,
+            move |opened: &mut Opened, dialog, window, cx| {
+                let asks = asks(&dialog, cx);
+                if asked && !asks {
+                    give_back(&dialog, &opened.root, window, cx);
+                }
+                asked = asks;
+            },
+        )
+        .detach();
+        Opened {
+            dialog,
+            root: cx.focus_handle(),
+            opener: Some(cx.focus_handle()),
+        }
+    });
+    cx.simulate_resize(size(px(684.), px(650.)));
+    let focused = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            let opened = view.read(cx);
+            match () {
+                _ if (opened.opener.as_ref()).is_some_and(|opener| opener.is_focused(window)) => {
+                    "opener"
+                }
+                _ if opened.root.is_focused(window) => "root",
+                _ => "elsewhere",
+            }
+        })
+    };
+    let ask = |cx: &mut VisualTestContext| {
+        let answered = host.clone();
+        let window = cx.window_handle();
+        // Read as it answers, so the test holds no opener that went.
+        let opened = view.clone();
+        let remove = Box::new(move |cx: &mut App| {
+            let had = (window.update(cx, |_, window, cx| {
+                let opener = &opened.read(cx).opener;
+                (opener.as_ref()).is_some_and(|opener| opener.is_focused(window))
+            }))
+            .unwrap();
+            let at = if had {
+                "remove at the opener"
+            } else {
+                "remove"
+            };
+            answered.0.borrow_mut().push(at.into());
+        });
+        cx.update(|window, cx| {
+            let dialog = view.read(cx).dialog.clone();
+            let (message, detail) = ("Remove “example.com”?".into(), String::new());
+            ask_in(
+                &dialog,
+                message,
+                detail,
+                "Remove",
+                Return::Action,
+                remove,
+                window,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+    };
+    let leave = |cx: &mut VisualTestContext| {
+        cx.executor().advance_clock(Duration::from_secs_f32(MOVE));
+        cx.run_until_parked();
+    };
+    cx.update(|window, cx| {
+        let opener = view.read(cx).opener.clone().unwrap();
+        window.focus(&opener, cx);
+    });
+    ask(cx);
+    assert_eq!(
+        focused(cx),
+        "elsewhere",
+        "the dialog didn't take the keyboard"
+    );
+    cx.simulate_keystrokes("enter");
+    leave(cx);
+    assert_eq!(host.0.take(), ["show", "hide", "remove at the opener"]);
+    assert_eq!(focused(cx), "opener");
+    // Cancelled, the same.
+    ask(cx);
+    cx.simulate_keystrokes("escape");
+    leave(cx);
+    assert_eq!(host.0.take(), ["show", "hide"]);
+    assert_eq!(focused(cx), "opener");
+    // The opener went as it asked: the window takes the keyboard.
+    ask(cx);
+    view.update(cx, |opened, cx| {
+        opened.opener = None;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    leave(cx);
+    assert_eq!(host.0.take(), ["show", "hide"]);
+    assert_eq!(focused(cx), "root");
+}

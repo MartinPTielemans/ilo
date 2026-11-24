@@ -29,6 +29,7 @@ use gpui::{
 };
 
 use crate::{
+    dismissal::{By, Close, FocusReturn, Returned, Why},
     palette::{self, Float, STATE_PRESSED},
     settling::Settling,
     shell::cubic_bezier,
@@ -372,6 +373,9 @@ pub struct Dialog {
     host: Rc<dyn Host>,
     focus: FocusHandle,
     asked: Option<Asked>,
+    /// What had the keyboard in its window as the last question took it, and what of the
+    /// question's could have it since, for a window's own dialog to give back (`give_back`).
+    returns: Option<(FocusReturn, Vec<FocusHandle>)>,
     /// Chrome's question, waiting for the dialog that shows to go.
     next: Option<Request>,
     /// The account's, waiting the same way, after Chrome's.
@@ -483,6 +487,23 @@ pub fn ask_in(
     dialog.update(cx, |dialog, cx| {
         dialog.pose(None, question, confirmed, window, cx)
     });
+}
+
+/// A window's own `dialog` has gone: the keyboard goes back to what had it as the question asked,
+/// or to `fallback` once that's gone, while the dialog has it still. The dialog was modal, so
+/// whatever answered it, the user never left it, and every answer gives back as a choice does.
+/// Before the answer runs, as the window's view sees the dialog go, so an answer that hands the
+/// keyboard on, such as a row's Remove to the row that takes its place, hands it on from there.
+pub fn give_back(
+    dialog: &Entity<Dialog>,
+    fallback: &FocusHandle,
+    window: &mut Window,
+    cx: &mut App,
+) -> Returned {
+    let (returns, own) = (dialog.update(cx, |dialog, _| dialog.returns.take()))
+        .unwrap_or_else(|| (FocusReturn::default(), vec![dialog.read(cx).focus.clone()]));
+    let own: Vec<&FocusHandle> = own.iter().collect();
+    returns.give_back(Close::new(Why::Chosen, By::Code), &own, fallback, window, cx)
 }
 
 /// Whether a window's own `dialog` is asking, or leaving after the answer.
@@ -799,6 +820,7 @@ impl Dialog {
             host,
             focus: cx.focus_handle(),
             asked: None,
+            returns: None,
             next: None,
             next_account: None,
             next_page: None,
@@ -932,6 +954,10 @@ impl Dialog {
                 })
             })
             .collect();
+        let own = (fields.iter().map(|field| field.focus_handle(cx)))
+            .chain([self.focus.clone()])
+            .collect();
+        self.returns = Some((FocusReturn::remember(false, window, cx), own));
         match fields.first() {
             _ if rests => {}
             Some(field) => window.focus(&field.focus_handle(cx), cx),
