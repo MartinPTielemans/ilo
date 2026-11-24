@@ -49,7 +49,7 @@ const BASE: &str = include_str!("base.sb");
 /// What the assistant writes in its home to keep its sign-in: Codex replaces `auth.json` by a
 /// rename from a `.auth-` file beside it and takes the two locks; Claude Code keeps its sign-in in
 /// the Keychain and falls back to the one file. A refused sign-in save signs the user out.
-fn sign_in(cli: Cli) -> &'static [&'static str] {
+pub(super) fn sign_in(cli: Cli) -> &'static [&'static str] {
     match cli {
         Cli::Codex => &["auth.json", "auth.lock", "auth.json.lock"],
         Cli::Claude => &[".credentials.json"],

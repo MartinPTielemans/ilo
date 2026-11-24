@@ -231,6 +231,12 @@ impl Place {
         &self.tmp
     }
 
+    /// Removes a place nothing started in: its folder, then its mark.
+    pub fn discard(self) {
+        remove(&self.tmp);
+        remove(&self.tmp.with_extension("mark"));
+    }
+
     pub fn mark(&self) -> &Mark {
         &self.mark
     }
