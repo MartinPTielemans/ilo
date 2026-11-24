@@ -379,6 +379,9 @@ pub struct Task {
     pub sites: Sites,
     /// What ilo stopped, as its conversation shows each, oldest first.
     pub stops: Vec<Stop>,
+    /// ilo's other lines of what happened to it: its steps handed to the user, the tabs its
+    /// agent asked back and the changes of its access, oldest first.
+    pub(super) placed: Vec<super::lines::Placed>,
     /// What ilo tells its CLI with the user's next turn: a change of tier while it wasn't working.
     pub(super) told: Option<String>,
     /// While it's thinking, what ends the turn if its CLI never answers (NO_ANSWER). It goes as
@@ -508,8 +511,6 @@ pub struct Card {
     pub pages: Vec<u64>,
     /// Its access, which its group's line leads with at Full access.
     pub tier: Tier,
-    /// An ask's answers, as buttons.
-    pub answers: Vec<SharedString>,
     /// A confirmation or a handoff of the task's, which the card asks instead of the windows'.
     pub question: Option<Question>,
     /// Done's tabs to open, each with its site, in the agent's order.
@@ -612,7 +613,6 @@ pub enum TaskAction {
     Dismiss,
     /// ⇧⌘T or ⌘Z: the task named, or with none named, the last dismissed.
     Restore,
-    Answer(SharedString),
     Reply(SharedString),
     Retry,
     Stop,
@@ -822,18 +822,20 @@ impl Agents {
         action: TaskAction,
         cx: &mut Context<Self>,
     ) -> (Option<u64>, Option<String>) {
+        // Whether `action` asks more of the agent: a reply to its ask only lets it finish.
+        let answers = self.task(agent).is_some_and(|task| task.asking.is_some());
+        let asks = match action {
+            TaskAction::Reply(_) => !answers,
+            TaskAction::Retry => true,
+            _ => false,
+        };
         // A session's user talks to its agent where they started it.
         let session = self.task(agent).is_some_and(|task| task.session.is_some());
-        if session
-            && matches!(
-                action,
-                TaskAction::Answer(_) | TaskAction::Reply(_) | TaskAction::Retry
-            )
-        {
+        if session && asks {
             return (None, None);
         }
         // With tasks off nothing more is asked of a task; an answer still lets one finish.
-        if !self.tasks_on() && matches!(action, TaskAction::Reply(_) | TaskAction::Retry) {
+        if !self.tasks_on() && asks {
             return (None, None);
         }
         match action {
@@ -842,7 +844,6 @@ impl Agents {
                 let named = Some(agent).filter(|agent| !agent.is_empty());
                 return (None, self.restore_task(named, cx));
             }
-            TaskAction::Answer(answer) => self.answer_task(agent, &answer, cx),
             TaskAction::Reply(text) => self.reply(agent, &text, cx),
             TaskAction::Retry => self.retry_task(agent, cx),
             TaskAction::Stop => self.stop_task(agent, cx),
@@ -867,8 +868,9 @@ impl Agents {
                 }
                 self.take_over_stopped(agent, tab, cx)
             }
-            // The surface's other buttons, which the hand-off's step wires.
-            TaskAction::HandBack(_) | TaskAction::NotNow(_) => {}
+            // A step's line: the tab goes back to the agent, or stays the user's for now.
+            TaskAction::HandBack(tab) => self.hand_back(tab, cx),
+            TaskAction::NotNow(key) => self.not_now(agent, key, cx),
         }
         (None, None)
     }
@@ -912,6 +914,8 @@ impl Agents {
         }
         // ilo's line of each time it stopped the task at its helpers' limit (#4102).
         helpers::lines(task, &mut lines);
+        // ilo's lines of its refusals, its steps handed to the user and its changes of access.
+        self.ilo_lines(task, &mut lines, cx);
         // ilo's own lines of a task that can be replied to after it ended (#4105).
         self.kept_lines(task, &mut lines);
         let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
@@ -965,7 +969,7 @@ impl Agents {
         })
     }
 
-    /// Whether a confirmation or a handoff of the task's waits on the user.
+    /// Whether a step of the task's waits on the user.
     fn waits_on_user(&self, task: &Task) -> bool {
         self.task_question(task).is_some()
     }
@@ -975,27 +979,17 @@ impl Agents {
             Some(session) => (session.agent.as_str(), self.session_prompt(session)?),
             None => (task.agent.as_str(), self.first_prompt(&task.agent)?),
         };
-        (self.asking.iter().map(|asking| &asking.question))
-            .chain(
-                self.question()
-                    .as_ref()
-                    .filter(|question| question.handoff.is_some()),
-            )
-            .find(|question| question.from == from && question.id == first)
-            .cloned()
+        (self.question()).filter(|question| question.from == from && question.id == first)
     }
 
     /// The number of the first of the prompts a session's calls under way wait on: its client's
     /// other connections' calls wait on theirs.
     fn session_prompt(&self, session: &Session) -> Option<u64> {
         let ours = |agent: &str, call: u64| agent == session.agent && session.calls.contains(&call);
-        let confirmations = (self.asking.iter())
-            .filter(|asking| ours(&asking.act.agent, asking.act.call))
-            .map(|asking| asking.question.id);
-        let handoffs = (self.held.values())
+        (self.held.values())
             .filter(|held| held.reply.is_some() && ours(&held.agent, held.call))
-            .map(|held| held.question);
-        confirmations.chain(handoffs).min()
+            .map(|held| held.question)
+            .min()
     }
 
     /// The tab a task is on while it works: its agent's last, or a session's last step's, as its
@@ -1008,7 +1002,7 @@ impl Agents {
     }
 
     /// A task's pages: its Space's tabs, or of its client's Space, a session's own.
-    fn pages(&self, task: &Task, cx: &App) -> Vec<u64> {
+    pub(super) fn pages(&self, task: &Task, cx: &App) -> Vec<u64> {
         let tabs = self.browser.space_tab_ids(task.space, cx);
         match &task.session {
             Some(session) => session
@@ -1025,9 +1019,6 @@ impl Agents {
     /// wait on the user and its task's ask. Its calls on different tabs go at once (#1476), so
     /// several can ask together: the first shows, and the others wait their turn.
     pub(super) fn first_prompt(&self, agent: &str) -> Option<u64> {
-        let confirmations = (self.asking.iter())
-            .filter(|asking| asking.act.agent == agent)
-            .map(|asking| asking.question.id);
         let handoffs = (self.held.values())
             .filter(|held| held.agent == agent && held.reply.is_some())
             .map(|held| held.question);
@@ -1035,7 +1026,7 @@ impl Agents {
             .task(agent)
             .and_then(|task| task.asking.as_ref())
             .map(|(id, _)| *id);
-        confirmations.chain(handoffs).chain(ask).min()
+        handoffs.chain(ask).min()
     }
 
     /// Whether the task's ask is the prompt its agent shows.
@@ -1140,10 +1131,6 @@ impl Agents {
             word: Word::of(&task.state, dot == Dot::Waiting),
             pages: self.pages(task, cx),
             tier: task.tier,
-            answers: match &task.state {
-                State::Asking { answers, .. } if asks => answers.clone(),
-                _ => Vec::new(),
-            },
             question,
             open,
             page_steps: match task.state {
@@ -1416,6 +1403,7 @@ impl Agents {
             tier,
             sites: Sites::default(),
             stops: Vec::new(),
+            placed: Vec::new(),
             told: None,
             helpers: Helpers::of_task(self.helpers_on() && cli == Cli::Claude),
         };
@@ -1770,7 +1758,7 @@ impl Agents {
         }
         // A reply answers the ask waiting, as a button would.
         if self.task(agent).is_some_and(|task| task.asking.is_some()) {
-            return self.answer_task(agent, text, cx);
+            return self.answer_ask(agent, text, cx);
         }
         // One a run before left comes back in its own profile, or not at all (#4105).
         if !self.goes_on(agent) {
@@ -1807,8 +1795,8 @@ impl Agents {
         cx.notify();
     }
 
-    /// The user's answer to the task's ask.
-    pub fn answer_task(&mut self, agent: &str, answer: &str, cx: &mut Context<Self>) {
+    /// The user's reply to the task's ask, which answers it.
+    fn answer_ask(&mut self, agent: &str, answer: &str, cx: &mut Context<Self>) {
         let Some(task) = self.task_mut(agent) else {
             return;
         };
@@ -1822,8 +1810,7 @@ impl Agents {
         _ = reply.send(ToolResult::text(format!("The user answered: {answer}")));
         self.note(agent, 0, "answered", "", "");
         self.wait_for_answer(agent, cx);
-        // The agent's next prompt, if one waited its turn.
-        self.asked(cx);
+        cx.notify();
     }
 
     /// ⌘. or Stop: ends what the task is doing at once. A reply goes on from there.
@@ -2581,6 +2568,7 @@ impl Agents {
             tier: Tier::default(),
             sites: Sites::default(),
             stops: Vec::new(),
+            placed: Vec::new(),
             told: None,
             helpers: Helpers::default(),
         });
@@ -3280,7 +3268,6 @@ fn first_words(result: &str) -> SharedString {
 /// What a card's status leads with when a confirmation or a handoff waits on the user, the one
 /// status the card sets heavier (`status_lead`).
 pub const NEEDS_YOU: &str = "Needs you";
-pub const NEEDS_OK: &str = "Needs your OK";
 /// A card's status while a refusal of its task's access is unsettled, before what it stopped.
 pub const STOPPED_AT: &str = "Stopped at";
 
@@ -3453,26 +3440,17 @@ fn stopped(task: &Task) -> SharedString {
     }
 }
 
-/// The status while a confirmation or a handoff waits: what the user is needed for, after the
-/// words that say they are. A handoff says why, as the agent gave it; a confirmation, what the
-/// agent would do.
+/// The status while a step waits on the user: that it does, and why, as the agent gave it.
 fn needs_you(question: &Question) -> SharedString {
-    match question.handoff {
-        Some(_) if question.why.is_empty() => NEEDS_YOU.into(),
-        Some(_) => format!("{NEEDS_YOU} · {}", question.why.trim_end_matches('.')).into(),
-        // A request's changes: what the browser knows from their methods, never the agent's
-        // words, which the card above quotes as its.
-        None => match &question.changes[..] {
-            [] => format!("{NEEDS_OK} · {}", question.what).into(),
-            [one] => format!("{NEEDS_OK} · {}", one.kind().noun()).into(),
-            many => format!("{NEEDS_OK} · {} changes", many.len()).into(),
-        },
+    match question.why.is_empty() {
+        true => NEEDS_YOU.into(),
+        false => format!("{NEEDS_YOU} · {}", question.why.trim_end_matches('.')).into(),
     }
 }
 
 /// How much of a card's `status` leads it, set in the title's ink and heavier: the step count
-/// while it works ("Step 5"), and "Needs you" or "Needs your OK" while a confirmation or a handoff
-/// waits, the one state that asks for the user. Zero for the rest. By the words alone, as a status
+/// while it works ("Step 5"), and "Needs you" while a step waits on the
+/// user, the one state that asks for them. Zero for the rest. By the words alone, as a status
 /// rolling out has left its card's state behind.
 pub fn status_lead(status: &str) -> usize {
     let counts = (status.strip_prefix("Step "))
@@ -4043,45 +4021,4 @@ fn names_the_browser(name: &str) -> bool {
             .iter()
             .any(|browser| read.contains(&reads_as(browser)))
         || read == reads_as("browser")
-}
-
-#[cfg(test)]
-mod needs_you_tests {
-    use super::*;
-    use crate::agents::request::Request;
-
-    fn change(method: &str) -> Request {
-        Request {
-            method: method.into(),
-            url: "https://team.example.com/api/items/7".into(),
-            path: "/api/items/7".into(),
-            headers: Vec::new(),
-            body: String::new(),
-            what: "Tidy up the old draft.".into(),
-        }
-    }
-
-    /// A confirmation's status says what the agent would do; a request's, the kind of its one
-    /// change, or how many it has.
-    #[test]
-    fn a_waiting_status_says_what_the_ok_is_for() {
-        let order = Question {
-            what: "click “Place order” on shop.example".into(),
-            ..Question::default()
-        };
-        assert_eq!(
-            needs_you(&order).as_ref(),
-            "Needs your OK · click “Place order” on shop.example"
-        );
-        let one = Question {
-            changes: vec![change("DELETE")].into(),
-            ..Question::default()
-        };
-        assert_eq!(needs_you(&one).as_ref(), "Needs your OK · a delete");
-        let many = Question {
-            changes: vec![change("PATCH"), change("DELETE")].into(),
-            ..Question::default()
-        };
-        assert_eq!(needs_you(&many).as_ref(), "Needs your OK · 2 changes");
-    }
 }
