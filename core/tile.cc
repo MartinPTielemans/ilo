@@ -95,7 +95,7 @@ void ShowInCard(bc_id tab) {
 }
 
 void PageViewChanged(bc_id tab) {
-  if (!Rule().Holds(tab)) {
+  if (!Rule().InTile(tab)) {
     return;
   }
   if (content::WebContents* contents = Tab::FromId(tab)) {
@@ -104,7 +104,7 @@ void PageViewChanged(bc_id tab) {
 }
 
 bool Holds(bc_id tab) {
-  return Rule().Holds(tab);
+  return Rule().InTile(tab);
 }
 
 }  // namespace browser_core::tiles

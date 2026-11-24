@@ -49,6 +49,10 @@ class TileRule {
   // refused for. A tab it never held, or holds no more, as a closed one, is as Chromium has it.
   bool Holds(uint64_t tab) const;
 
+  // Whether |tab|'s page is in a tile's view, live or parked: a page committing there keeps the
+  // page's size, and the page's focus() and its menu are refused, as a live tile's are.
+  bool InTile(uint64_t tab) const;
+
   // The word the core's log line uses for |shown|.
   static const char* Name(Shown shown);
 

@@ -72,6 +72,10 @@ bool TileRule::Holds(uint64_t tab) const {
   return views_.contains(tab);
 }
 
+bool TileRule::InTile(uint64_t tab) const {
+  return Holds(tab) || Parked(tab);
+}
+
 // static
 const char* TileRule::Name(Shown shown) {
   switch (shown) {

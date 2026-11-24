@@ -116,6 +116,7 @@ TEST(TileRule, AnEndedTileIsParkedUntilATileHasItsPageAgain) {
   EXPECT_EQ(tiles.End(1), &kView);
   EXPECT_TRUE(tiles.Parked(1));
   EXPECT_FALSE(tiles.Holds(1));
+  EXPECT_TRUE(tiles.InTile(1));
   EXPECT_EQ(tiles.Show(1, &kOtherView, true, false, true), Shown::kNew);
   EXPECT_FALSE(tiles.Parked(1));
 }
@@ -128,6 +129,7 @@ TEST(TileRule, ACardAWindowOrThePageGoingTakesAParkedPage) {
   EXPECT_TRUE(tiles.Parked(1));
   EXPECT_EQ(tiles.Left(1), nullptr);
   EXPECT_FALSE(tiles.Parked(1));
+  EXPECT_FALSE(tiles.InTile(1));
   tiles.Show(1, &kView, true, false, true);
   tiles.End(1);
   EXPECT_EQ(tiles.ShowInCard(1), nullptr);

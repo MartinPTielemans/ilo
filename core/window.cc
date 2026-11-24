@@ -888,6 +888,13 @@ void Window::ActivateContents(content::WebContents* contents) {
             static_cast<unsigned long long>(tab));
     return;
   }
+  // Nor does the page of an agent's tab no window shows, which never had a tile: its focus() would
+  // take the user's window to the agent's Space.
+  if (IsAgentTab(contents) && !Showing(tab)) {
+    fprintf(stderr, "browser: agent's tab %llu refused focus (page)\n",
+            static_cast<unsigned long long>(tab));
+    return;
+  }
   // A tab the window shows already stays as it is: a notification's click brings its tab forward,
   // and the page's own window.focus() in its click handler then asks again (#685).
   if (Window* window = tab ? Holding(tab) : nullptr; window && window->selected_ != tab) {

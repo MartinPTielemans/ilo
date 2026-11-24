@@ -28,11 +28,11 @@ void EndTile(bc_id tab);
 // tile first.
 void ShowInCard(bc_id tab);
 
-// A page from another site committed in |tab|, in a view of its own: if it's a tile, the view
-// keeps the page's size.
+// A page from another site committed in |tab|, in a view of its own: if it's in a tile, live or
+// parked, the view keeps the page's size.
 void PageViewChanged(bc_id tab);
 
-// Whether |tab| is a tile, whose page's own asks to be activated are refused.
+// Whether |tab|'s page is in a tile, live or parked, whose own asks to be activated are refused.
 bool Holds(bc_id tab);
 
 }  // namespace browser_core::tiles
