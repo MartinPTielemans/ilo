@@ -239,6 +239,10 @@ impl command_bar::Host for Bar {
         .unwrap_or(false)
     }
 
+    fn look_for_agents(&self, cx: &mut App) {
+        agents_core::update(|agents, cx| agents.task_ask_shown(cx));
+    }
+
     fn asking(&self, shown: bool, cx: &mut App) {
         if shown {
             agents_core::update(|agents, cx| agents.task_ask_shown(cx));

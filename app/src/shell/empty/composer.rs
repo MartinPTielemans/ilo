@@ -288,6 +288,26 @@ impl Shell {
         cx.notify();
     }
 
+    /// What the browser knows of the assistants changed, as once it has looked for them: the
+    /// page's bar learns them again, and in Ask the field names the one it found.
+    pub(in crate::shell) fn assistants_learned(&mut self, cx: &mut Context<Self>) {
+        let Some(resting) = &self.resting else {
+            return;
+        };
+        let changed = resting.bar.update(cx, |bar, cx| {
+            let changed = bar.agents_changed(cx);
+            if changed && bar.on_ask() {
+                let assistant = bar.assistant(cx);
+                let name = assistant.as_ref().map(|agent| agent.name.as_ref());
+                bar.set_placeholder(ask_words(name), cx);
+            }
+            changed
+        });
+        if changed {
+            cx.notify();
+        }
+    }
+
     /// ↩ in Ask: what was typed runs as a task on the assistant, from this Space.
     fn run_composed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(resting) = &mut self.resting else {
@@ -311,6 +331,7 @@ impl Shell {
         resting.forget_picks();
         log!("browser: composer runs a task on {agent}");
         let home = self.space();
+        self.show_started = Some(home);
         self.browser.start_task(&agent, &asked, home, start, cx);
         cx.notify();
     }
@@ -376,9 +397,15 @@ impl Shell {
             .collect()
     }
 
+    /// Whether the `+` has anything to offer: a page of the Space's to add. Without one it's
+    /// disabled in its place.
+    pub(in crate::shell) fn plus_offers(&self) -> bool {
+        !self.pages_to_add().is_empty()
+    }
+
     /// The `+` chip's menu: the Space's pages, those added checked. It's Add a Page's submenu once
     /// files and folders join it, when the system can wall them off; till then a menu of one row
-    /// would be no menu, so `+` lists the pages itself. With none, it shows nothing.
+    /// would be no menu, so `+` lists the pages itself. With none, the `+` is disabled.
     pub(in crate::shell) fn pages_menu(
         &mut self,
         clicked: gpui::Point<Pixels>,
@@ -711,15 +738,21 @@ impl Shell {
                 &next_model(resting.model.as_ref(), &agent),
             ))
         });
+        // With nothing to add, the + stays in its place, disabled: no click that shows nothing.
+        let offers = self.plus_offers();
         line.child(
             chip()
                 .id("composer-plus")
                 .relative()
-                .on_click(cx.listener(|shell, event: &gpui::ClickEvent, _, cx| {
-                    shell.pages_menu(event.position(), cx)
-                }))
+                .when(offers, |chip| {
+                    chip.on_click(cx.listener(|shell, event: &gpui::ClickEvent, _, cx| {
+                        shell.pages_menu(event.position(), cx)
+                    }))
+                })
                 .children(plus_chip.as_ref().map(drawn_at))
-                .child(glyph("icons/plus.svg", CHIP_GLYPH)),
+                .child(glyph("icons/plus.svg", CHIP_GLYPH).when(!offers, |glyph| {
+                    glyph.text_color(palette.glyph(CHIP_DISABLED))
+                })),
         )
         .children(added.into_iter().map(|title| {
             chip()

@@ -1895,6 +1895,9 @@ pub struct Shell {
     agent_history: Vec<crate::agent_history::Past>,
     /// The task the Archive brought back, whose conversation opens once its card is back.
     show_restored: Option<SharedString>,
+    /// The Space whose composer just started a task: that task's view opens as its card comes in,
+    /// if the Space still shows no page.
+    show_started: Option<u64>,
     /// The task's conversation shown in the page's place, and whether its field takes the keyboard
     /// once drawn (Agent task).
     talk: Option<conversation::Talk>,
@@ -2362,6 +2365,7 @@ impl Shell {
             archived_tasks: Vec::new(),
             agent_history: Vec::new(),
             show_restored: None,
+            show_started: None,
             talk: None,
             focus_talk: false,
             agent_status: Vec::new(),

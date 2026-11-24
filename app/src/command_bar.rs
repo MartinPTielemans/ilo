@@ -567,6 +567,10 @@ pub trait Host {
     /// closes it. As it first shows in a run, the browser learns again which agents are ready, in
     /// the background, which `task_agents_changed` reports.
     fn asking(&self, shown: bool, cx: &mut App);
+    /// The page's switch went to Ask: as ⌘T's ask does as it first shows in a run, the browser
+    /// learns again which agents are ready, in the background, which `agents_changed` then gives
+    /// the page's bar.
+    fn look_for_agents(&self, cx: &mut App);
     /// The page the user is on, if it's a web page: its address and title, all of it that goes
     /// with an ask, as the agent never gets the user's tab.
     fn task_page(&self, cx: &App) -> Option<(SharedString, SharedString)>;
@@ -3710,6 +3714,7 @@ impl CommandBar {
     ) {
         if std::mem::replace(&mut self.on_ask, on_ask) != on_ask {
             if on_ask {
+                self.host.look_for_agents(cx);
                 // Its site search and commands-only list are the search's.
                 self.site_left(cx);
                 self.commands = None;
@@ -3771,6 +3776,28 @@ impl CommandBar {
         (agents.agents.iter())
             .find(|agent| agent.resets.is_none())
             .cloned()
+    }
+
+    /// What the browser knows of the agents changed, as after it learned which are ready: the
+    /// page's bar learns them again if it had, so Ask's assistant shows once one is found. Whether
+    /// they changed.
+    pub fn agents_changed(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.task_agents.is_none() {
+            return false;
+        }
+        let agents = self.learned_agents(cx);
+        if agents == self.task_agents {
+            return false;
+        }
+        self.task_agents = agents;
+        cx.notify();
+        true
+    }
+
+    /// What the page's field says while it's empty.
+    pub fn set_placeholder(&mut self, placeholder: SharedString, cx: &mut Context<Self>) {
+        self.input
+            .update(cx, |input, cx| input.set_placeholder(placeholder, cx));
     }
 
     /// ↩ in the page's Ask: the assistant it runs on and what was typed, trimmed, and the field

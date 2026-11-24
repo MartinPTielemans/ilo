@@ -141,6 +141,7 @@ pub fn send_agents(
             shell.set_agent_status(status.clone(), cx);
             shell.set_archived_tasks(archived.clone(), cx);
             shell.set_task_cards(cards.clone(), cx);
+            shell.assistants_learned(cx);
             // Only a window that still shows the task's conversation is sent it.
             if let Some((agent, made)) = talk
                 && shell.talk_agent() == Some(agent)

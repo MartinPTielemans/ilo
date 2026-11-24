@@ -7,12 +7,14 @@ use std::{
 
 use gpui::{Entity, Modifiers, Pixels, Point, TestAppContext, VisualTestContext, point, px};
 
+use crate::agents::task::{Card, Dot};
 use crate::agents::tier::Tier;
 use crate::command_bar::PLACEHOLDER_TEXT;
 use crate::shell::{
     Folders, Page, ROW_HEIGHT, SECONDARY, Shell, Slot,
     empty::{FADE, MARK_HEIGHT, composer::group_top},
     recorder::Recorder,
+    task_cards::tests::card,
 };
 
 /// A drawn shell showing one Space with Today tabs 1 and 2, and no tab shown, as a fresh window.
@@ -333,6 +335,64 @@ fn return_in_ask_starts_the_task(cx: &mut TestAppContext) {
     assert_eq!(typed, "");
 }
 
+/// ↩ in Ask opens the started task's view as its card comes in, as the Space has no page to stay
+/// on; a card of another Space's task opens nothing.
+#[gpui::test]
+fn return_in_ask_opens_the_started_task(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab");
+    cx.simulate_input("book a table");
+    cx.simulate_keystrokes("enter");
+    // The core makes the task's Space before its card comes, as the Agents do.
+    let started = card(2, Dot::Working);
+    host.space_agents
+        .borrow_mut()
+        .insert(started.space, started.agent.clone());
+    shell.update(cx, |shell, cx| {
+        let space = |id: u64, name: &str, agent: &str| {
+            let (name, agent) = (name.to_string().into(), agent.to_string().into());
+            (id, name, None, 0, "".into(), agent, "".into())
+        };
+        shell.set_spaces(
+            vec![
+                space(1, "Space", ""),
+                space(started.space, "Book a table", "Claude"),
+            ],
+            cx,
+        );
+        shell.set_tabs(
+            started.space,
+            Vec::new(),
+            vec![started.space * 10],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
+    });
+    let elsewhere = Card {
+        home: 2,
+        ..card(1, Dot::Working)
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_task_cards(vec![elsewhere.clone()], cx)
+    });
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.talk_agent()),
+        None,
+        "another Space's task opened"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.set_task_cards(vec![started, elsewhere], cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.talk_agent()),
+        Some("task-2".into()),
+        "the started task's view didn't open"
+    );
+}
+
 /// The level the next task starts at, as the chip on Ask's line shows it.
 fn tier(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Tier {
     shell.read_with(cx, |shell, _| shell.composer_tier())
@@ -551,6 +611,98 @@ fn add_a_page_gives_the_task_its_address_alone(cx: &mut TestAppContext) {
     assert_eq!(added(&shell, cx), 0, "the pages go with the run");
     let only = shell.read_with(cx, |shell, _| shell.resting.as_ref().unwrap().only_added);
     assert!(!only, "the next task may go to any site");
+}
+
+/// On a new profile, ilo hasn't looked for an assistant yet: the switch to Ask looks, as ⌘T's ask
+/// does, and once the browser has found one its chip is on Ask's line and the field names it.
+#[gpui::test]
+fn ask_on_a_new_profile_looks_for_the_assistant_and_shows_it(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    host.unlearned.set(true);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    host.resting.borrow_mut().clear();
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    let asked = host.resting.borrow().clone();
+    assert_eq!(
+        (asked.iter())
+            .filter(|call| *call == "look for agents")
+            .count(),
+        1,
+        "the switch to Ask looks for the assistants, once: {asked:?}"
+    );
+    let shown = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            let resting = shell.resting.as_ref().unwrap();
+            let placeholder = resting.bar.read(cx).placeholder(cx);
+            (resting.model_chip.get().is_some(), placeholder.to_string())
+        })
+    };
+    assert_eq!(
+        shown(&shell, cx),
+        (false, "Ask an assistant to do something".into()),
+        "none found yet"
+    );
+
+    // The browser found Claude, and the window is sent what it knows (send_agents).
+    host.unlearned.set(false);
+    shell.update(cx, |shell, cx| shell.assistants_learned(cx));
+    cx.run_until_parked();
+    assert_eq!(
+        shown(&shell, cx),
+        (true, "Ask Claude to do something".into()),
+        "the assistant's chip is there, and the field names it"
+    );
+}
+
+/// With no page of the Space's to add, the `+` is disabled in its place: there, and a click on it
+/// shows no menu. Once a page can be added the same click lists it.
+#[gpui::test]
+fn the_plus_with_nothing_to_add_is_disabled(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    let plus = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        let chip = shell.read_with(cx, |shell, _| {
+            (shell.resting.as_ref()).and_then(|resting| resting.plus_chip.get())
+        });
+        chip.expect("the + drawn on Ask's line, disabled or not")
+            .center()
+    };
+    let offers = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.plus_offers())
+    };
+    assert!(!offers(&shell, cx), "the Space's tabs have no page to add");
+    let at = plus(&shell, cx);
+    cx.simulate_click(at, Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        host.menus.borrow().is_empty() && host.entries.borrow().is_empty(),
+        "a click on the disabled + shows nothing"
+    );
+
+    shell.update(cx, |shell, cx| {
+        let page = Page {
+            url: "https://fieldbook.example/lakeside".into(),
+            ..Page::default()
+        };
+        shell.set_page(1, page, cx);
+        shell.set_title(1, "The Lakeside loop".into(), cx);
+    });
+    cx.run_until_parked();
+    assert!(offers(&shell, cx));
+    let at = plus(&shell, cx);
+    cx.simulate_click(at, Modifiers::none());
+    cx.run_until_parked();
+    let titles: Vec<String> = (host.entries.borrow().iter())
+        .map(|entry| entry.title.to_string())
+        .collect();
+    assert_eq!(
+        titles,
+        ["The Lakeside loop"],
+        "the same click lists the page"
+    );
 }
 
 /// A tab's address can carry a user name and password, which the task never gets; a page whose

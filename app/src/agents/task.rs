@@ -3293,13 +3293,15 @@ pub fn first_message(asked: &str, page: Option<&AskedOn>) -> String {
 }
 
 /// `first` with the addresses of the pages the user added, for the task to open in tabs of its own:
-/// their addresses alone, as the user's own tabs are never the task's.
-fn with_added(first: String, pages: &[String]) -> String {
+/// their addresses alone, as the user's own tabs are never the task's. Each is on a line of its own
+/// under the sentence, as an address may hold a comma or a bracket, which would read as the
+/// sentence's; a parsed address holds no line break (`added_address`).
+pub(super) fn with_added(first: String, pages: &[String]) -> String {
     match pages {
         [] => first,
         pages => format!(
-            "{first}\n\n(Pages I added, to open in tabs of your own: {}.)",
-            pages.join(", ")
+            "{first}\n\nPages I added, to open in tabs of your own:\n{}",
+            pages.join("\n")
         ),
     }
 }

@@ -310,9 +310,9 @@ pub fn changed_logged(from: Tier, to: Tier) -> String {
 /// count alone, never an address or title.
 pub fn started_logged(tier: Tier, added: usize) -> String {
     match added {
-        0 => format!("Starts at {}", tier.label()),
-        1 => format!("Starts at {} · 1 page", tier.label()),
-        added => format!("Starts at {} · {added} pages", tier.label()),
+        0 => format!("Started at {}", tier.label()),
+        1 => format!("Started at {} · 1 page", tier.label()),
+        added => format!("Started at {} · {added} pages", tier.label()),
     }
 }
 
