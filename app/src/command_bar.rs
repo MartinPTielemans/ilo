@@ -3116,8 +3116,8 @@ impl CommandBar {
 
     /// Closes the bar for `close` (#4108). The window's hides: for a choice as the host's hide,
     /// which gives the keyboard back where it was unless the choice then gives it to a page; as
-    /// the user leaving it for Escape, its own key or the keyboard gone elsewhere; and not again
-    /// when the host hid it as the user left it. A resting bar has no window: its field keeps the
+    /// the user leaving it for Escape, its own key or close, or the keyboard or pointer gone
+    /// elsewhere; and not again when the host hid it as the user left it. A resting bar has no window: its field keeps the
     /// keyboard, and its page goes on to what was picked.
     fn close(&self, close: Close) {
         self.closed(close);
@@ -3126,7 +3126,9 @@ impl CommandBar {
         }
         match close.why {
             Why::Chosen => self.host.hide(),
-            Why::Escape | Why::Toggled | Why::FocusLeft => self.host.dismiss(),
+            Why::Escape | Why::Toggled | Why::CloseCommand | Why::FocusLeft | Why::PointerLeft => {
+                self.host.dismiss()
+            }
             Why::PressOutside | Why::WindowLeft => {}
         }
     }
