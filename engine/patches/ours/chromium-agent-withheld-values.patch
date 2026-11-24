@@ -76,7 +76,7 @@ core's DevTools session keeps a value, in the renderer, and never sends it anywh
      needs_to_update_view_value_ = false;
 --- /dev/null
 +++ b/third_party/blink/renderer/core/html/forms/withheld_values.cc
-@@ -0,0 +1,232 @@
+@@ -0,0 +1,233 @@
 +// ilo: see withheld_values.h.
 +
 +#include "third_party/blink/renderer/core/html/forms/withheld_values.h"
@@ -150,7 +150,8 @@ core's DevTools session keeps a value, in the renderer, and never sends it anywh
 +  bool lost_open = false;
 +};
 +
-+using Records = HeapHashMap<WeakMember<const Document>, Member<WithheldRecord>>;
++// The GCed kind, which MakeGarbageCollected takes; HeapHashMap lives inside another object.
++using Records = GCedHeapHashMap<WeakMember<const Document>, Member<WithheldRecord>>;
 +
 +Records& AllRecords() {
 +  DEFINE_STATIC_LOCAL(Persistent<Records>, records, (MakeGarbageCollected<Records>()));
