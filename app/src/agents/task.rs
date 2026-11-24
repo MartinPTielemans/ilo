@@ -3842,6 +3842,38 @@ struct Stretch<'a> {
     key: Option<usize>,
     started: Option<Instant>,
     ended: Option<Instant>,
+    /// Its steps that waited on the user, from their start to their end, and the rest, which
+    /// worked: what it took counts the time the first alone filled as none (`worked`).
+    waits: Vec<(Instant, Instant)>,
+    busy: Vec<(Instant, Instant)>,
+}
+
+/// The tools whose step waits on the user from its start to its end: none of that is work.
+const WAIT_ON_USER: [&str; 4] = ["hand_off", "upload", "ask_for_tab", "ask"];
+
+/// How long a stretch from `started` to `ended` worked: all of it but the time only `waits`
+/// filled, while no step of `busy` ran. From the steps' own marks, never a timer.
+fn worked(
+    started: Instant,
+    ended: Instant,
+    waits: &[(Instant, Instant)],
+    busy: &[(Instant, Instant)],
+) -> std::time::Duration {
+    let mut marks: Vec<Instant> = (waits.iter().chain(busy))
+        .flat_map(|&(from, to)| [from, to])
+        .map(|mark| mark.clamp(started, ended))
+        .chain([started, ended])
+        .collect();
+    marks.sort();
+    marks.dedup();
+    let within = |spans: &[(Instant, Instant)], from: Instant, to: Instant| {
+        spans.iter().any(|&(start, end)| start <= from && to <= end)
+    };
+    let idle: std::time::Duration = (marks.windows(2))
+        .filter(|pair| within(waits, pair[0], pair[1]) && !within(busy, pair[0], pair[1]))
+        .map(|pair| pair[1] - pair[0])
+        .sum();
+    ended.saturating_duration_since(started) - idle
 }
 
 /// A step of a stretch, with its place in the task's trace, or what the agent said in it.
@@ -3893,6 +3925,10 @@ impl<'a> Stretch<'a> {
         );
         let end = step.ended.unwrap_or(step.started);
         self.ended = Some(self.ended.map_or(end, |ended| ended.max(end)));
+        match WAIT_ON_USER.contains(&step.did.tool.as_str()) {
+            true => self.waits.push((step.started, end)),
+            false => self.busy.push((step.started, end)),
+        }
         self.gathered.push(match helper {
             Some(helper) => Gathered::Helper(helper, key, step),
             None => Gathered::Step(key, step),
@@ -3916,6 +3952,10 @@ impl<'a> Stretch<'a> {
     fn flush(&mut self, lines: &mut Vec<Line>, running: bool, end: Option<Instant>) {
         let gathered = std::mem::take(&mut self.gathered);
         let (key, started, ended) = (self.key.take(), self.started.take(), self.ended.take());
+        let (waits, busy) = (
+            std::mem::take(&mut self.waits),
+            std::mem::take(&mut self.busy),
+        );
         let Some(key) = key else {
             lines.extend(gathered.into_iter().filter_map(|item| match item {
                 Gathered::Said(text) => Some(Line::Said(text)),
@@ -3962,11 +4002,7 @@ impl<'a> Stretch<'a> {
         let took = (!running).then(|| {
             let started = started.unwrap_or_else(Instant::now);
             let ended = ended.into_iter().chain(end).max().unwrap_or(started);
-            (ended
-                .saturating_duration_since(started)
-                .as_secs_f32()
-                .round() as u64)
-                .max(1)
+            (worked(started, ended, &waits, &busy).as_secs_f32().round() as u64).max(1)
         });
         lines.push(Line::Trace(Trace {
             key,
