@@ -114,6 +114,18 @@ void GiveKeyboardBack(views::Widget* window) {
 }
 #endif
 
+#if BUILDFLAG(IS_MAC)
+// Brings |window| to the Space active as a task of its own, after the show that made it: in the
+// show's task the move's MoveToActiveSpace would meet the show's own SetVisibleOnAllWorkspaces
+// setting CanJoinAllSpaces, a pair AppKit throws on. A weak pointer, so a window that closed
+// before the task moves nothing.
+void WidgetMoveToActiveFullscreenSpace(base::WeakPtr<views::Widget> window) {
+  if (window) {
+    window->MoveToActiveFullscreenSpace();
+  }
+}
+#endif
+
 // Tells the windows as the Mini Player takes the keyboard, which on Linux can come after the window
 // that let it go asked whether it had (MiniPlayerHasKeyboard). And logs it showing, and its first
 // frame on screen, on the clock of the tab switch that floated it (LogHandover).
@@ -131,14 +143,17 @@ class MiniPlayerWatch : public views::WidgetObserver {
 #if BUILDFLAG(IS_MAC)
     // Over another app's window in full screen, as Arc's is. The Mac keeps a window to the Space
     // it was born on, and off one another app has made full screen, unless it may join one
-    // (SetCanAppearInExistingFullscreenSpaces) and is on every Space at all
-    // (SetVisibleOnAllWorkspaces): the PiP window's InitParams set visible_on_all_workspaces, but
-    // only the Aura native widget reads it, so the Mac's window has neither until here. The bits
-    // let the window stay, but only a move brings it to the Space active as it shows, as Chrome's
-    // own PiP moves it when its browser goes full screen.
+    // (SetCanAppearInExistingFullscreenSpaces) and is on every Space at all: the PiP window's
+    // InitParams set visible_on_all_workspaces, but only the Aura native widget reads it, so the
+    // Mac's window gets the joining bits from its own show instead. Bits only let it stay; a
+    // window born while another app holds the active Space needs a move to land there, so one
+    // comes after the show's task. Not in it: the move holds MoveToActiveSpace until a later
+    // task restores the bits, and the show's own SetVisibleOnAllWorkspaces inside the same task
+    // would put CanJoinAllSpaces beside it, a pair AppKit refuses outright.
     widget->SetCanAppearInExistingFullscreenSpaces(true);
-    widget->SetVisibleOnAllWorkspaces(true);
-    widget->MoveToActiveFullscreenSpace();
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(&WidgetMoveToActiveFullscreenSpace,
+                                  widget->GetWeakPtr()));
 #endif
     // check.sh reads these lines.
     LogHandover("mini player shows", widget->GetWindowBoundsInScreen().size().ToString());
