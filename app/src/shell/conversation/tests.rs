@@ -17,6 +17,7 @@ use crate::agents::task::{
 use crate::agents::tier::{Tier, Why};
 use crate::shell::picture::PagePicture;
 use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
+use crate::text_input::TextInput;
 use crate::tokens::shell::conversation::ilo::TEXT_LINE as ILO_TEXT_LINE;
 use crate::tokens::shell::conversation::{INSET, SITE, SITE_GAP, TRACE_LINE};
 use crate::tokens::shell::task_area::BESIDE;
@@ -553,6 +554,31 @@ fn a_tile_turning_to_needs_you_comes_into_sight_once(cx: &mut TestAppContext) {
 /// the field keeps the keyboard and its text, and the tile that needs them is in sight.
 #[gpui::test]
 fn a_needs_you_page_never_covers_the_reply_field_in_use(cx: &mut TestAppContext) {
+    let reply = needs_you_beside_typing(
+        |reply, window, cx| reply.set_text("Two seats".into(), 9, window, cx),
+        cx,
+    );
+    assert_eq!(reply, "Two seats");
+}
+
+/// A composition under way is typing too, before the input method commits a word of it: a page
+/// opening then would take the keyboard mid-word. The field holds the marked text in its text.
+#[gpui::test]
+fn a_needs_you_page_never_covers_a_composition_under_way(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler;
+    let reply = needs_you_beside_typing(
+        |reply, window, cx| reply.replace_and_mark_text_in_range(None, "か", None, window, cx),
+        cx,
+    );
+    assert_eq!(reply, "か", "the composition was lost");
+}
+
+/// Types into the focused reply field with `type_in`, turns a tile to Needs you, checks ilo
+/// opened no page over the field and left it the keyboard, and gives back the field's text.
+fn needs_you_beside_typing(
+    type_in: impl FnOnce(&mut TextInput, &mut gpui::Window, &mut gpui::Context<TextInput>),
+    cx: &mut TestAppContext,
+) -> String {
     use crate::agents::Status;
     let waiting = Card {
         dot: Dot::Waiting,
@@ -579,9 +605,7 @@ fn a_needs_you_page_never_covers_the_reply_field_in_use(cx: &mut TestAppContext)
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
     let reply = view.read_with(cx, |view, _| view.reply.clone());
     cx.update(|window, cx| {
-        reply.update(cx, |reply, cx| {
-            reply.set_text("Two seats".into(), 9, window, cx)
-        });
+        reply.update(cx, |reply, cx| type_in(reply, window, cx));
         let handle = reply.read(cx).focus_handle(cx);
         window.focus(&handle, cx);
     });
@@ -612,10 +636,7 @@ fn a_needs_you_page_never_covers_the_reply_field_in_use(cx: &mut TestAppContext)
         cx.update(|window, _| handle.is_focused(window)),
         "the reply field lost the keyboard"
     );
-    assert_eq!(
-        reply.read_with(cx, |reply, _| reply.text().to_string()),
-        "Two seats"
-    );
+    reply.read_with(cx, |reply, _| reply.text().to_string())
 }
 
 /// A picture's click zooms its page out of it, at the picture's place and with its image; what
