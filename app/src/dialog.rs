@@ -1022,19 +1022,27 @@ impl Dialog {
         }
     }
 
-    /// The user pressed ↩: what the question says it answers.
-    fn confirm(&mut self, cx: &mut Context<Self>) {
+    /// The user pressed ↩: what the question says it answers, unless it was an input method's,
+    /// composing in a field (dismissal's rule).
+    fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(asked) = &self.asked else {
             return;
         };
-        // An input method takes ↩ to finish what it composes.
-        if asked.fields.iter().any(|field| field.read(cx).composing()) {
+        if !crate::dismissal::submits(&asked.fields, window, cx) {
             return;
         }
         match asked.question.on_return {
             Return::Action => self.answer(Answer::Action, cx),
             Return::Cancel => self.answer(Answer::Cancel, cx),
             Return::Nothing => {}
+        }
+    }
+
+    /// The user pressed Esc: Cancel, unless it was an input method's, composing in a field.
+    fn escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let fields = (self.asked.as_ref()).map_or(&[][..], |asked| &asked.fields[..]);
+        if crate::dismissal::Close::escape_from(fields, window, cx).is_some() {
+            self.answer(Answer::Cancel, cx);
         }
     }
 
@@ -1669,8 +1677,8 @@ impl Render for Dialog {
         });
         let root = focus_on_press(root, asked.focus_pane.clone().filter(|_| rests));
         let dim = if rests { REST_DIM_OPACITY } else { DIM_OPACITY };
-        root.on_action(cx.listener(|dialog, _: &Confirm, _, cx| dialog.confirm(cx)))
-            .on_action(cx.listener(|dialog, _: &Cancel, _, cx| dialog.answer(Answer::Cancel, cx)))
+        root.on_action(cx.listener(|dialog, _: &Confirm, window, cx| dialog.confirm(window, cx)))
+            .on_action(cx.listener(|dialog, _: &Cancel, window, cx| dialog.escape(window, cx)))
             .on_action(
                 cx.listener(|dialog, _: &NextField, window, cx| dialog.next_field(window, cx)),
             )
