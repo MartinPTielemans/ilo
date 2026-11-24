@@ -128,9 +128,10 @@ pub enum Out {
     Gone(String),
     /// What its output tells of a helper (#4102), by the call of the task's that asked for it.
     Helper { id: String, told: Helper },
-    /// Its CLI says a helper started, `deep` levels under the task, or 0 if it doesn't say how
-    /// deep: what ilo counts for the limit.
-    Started { deep: u64 },
+    /// Its CLI says a helper started, by the call of the task's that asked for it if it names
+    /// one, `deep` levels under the task, or 0 if it doesn't say how deep: what ilo counts for
+    /// the limit, and from when the helper shows.
+    Started { id: Option<String>, deep: u64 },
     /// Its output shows a helper ilo doesn't allow, which stops the task.
     NotAllowed(super::task::ilo::HelpersLimit),
     /// A run's first line lists its kinds of helper: whether each is ilo's.
@@ -146,6 +147,13 @@ pub enum Helper {
     Asked(String),
     /// It calls one of the browser's tools on this tab.
     On(u64),
+    /// It calls the browser's tool that opens a tab, which names none: the page is its own once
+    /// it's open.
+    Opens,
+    /// It calls a tool that names no tab.
+    Calls,
+    /// Its CLI says it ended, however it did.
+    Ended,
 }
 
 /// Why a turn or a run ended badly.
@@ -501,13 +509,14 @@ pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
         .and_then(Value::as_str)
         .unwrap_or_default();
     // A helper's start is counted whoever's line says so, the task's or a helper's own (#4102),
-    // and a run's first line says which kinds of helper it has.
-    let helpers = super::helpers::started(kind, message);
+    // its end is told as its start is, and a run's first line says which kinds of helper it has.
+    let helpers =
+        super::helpers::started(kind, message).or_else(|| super::helpers::ended(kind, message));
     if let Some(told) = helpers.or_else(|| super::helpers::kinds(kind, message)) {
         return vec![told];
     }
     // A line with a parent is a helper's, never the task's: nothing it says, writes or thinks is
-    // the task's, shown or kept. It tells only which tabs the helper calls for.
+    // the task's, shown or kept. It tells only that the helper calls a tool, and on which tab.
     if let Some(parent) = message.get("parent_tool_use_id").and_then(Value::as_str) {
         return super::helpers::claude_read(parent, kind, message);
     }
