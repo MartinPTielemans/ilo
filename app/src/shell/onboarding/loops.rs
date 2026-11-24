@@ -13,6 +13,7 @@ use crate::palette::{Palette, Tone};
 use crate::theme::Theme;
 use crate::tokens::palette::INK;
 use crate::tokens::shell::onboarding::loops as t;
+use crate::tokens::shell::onboarding::sheet;
 
 /// What keeps where a loop draws a part, by its name, for a test (Shell::place).
 pub(super) type Place<'a> = &'a dyn Fn(&'static str) -> Option<AnyElement>;
@@ -494,6 +495,12 @@ pub(super) fn search(t_: f32, colors: Colors, place: Place) -> impl IntoElement 
     // The words typed so far, a letter at a time over `search-type`.
     let typed = ((t_ - typing) / t::SEARCH_TYPE).clamp(0., 1.);
     let typed = &WORDS[..(typed * WORDS.len() as f32).floor() as usize];
+    // The sheet's own plate, opaque, as the page's card isn't: the rows under the bar's end
+    // don't show through it.
+    let plate = match tone(colors) {
+        Tone::Dark => sheet::FILL,
+        Tone::Light => sheet::LIGHT_FILL,
+    };
     let bar = (bar > 0.).then(|| {
         let [left, top] = t::SEARCH_BAR;
         div()
@@ -507,7 +514,7 @@ pub(super) fn search(t_: f32, colors: Colors, place: Place) -> impl IntoElement 
             .items_center()
             .gap(px(6.))
             .rounded(px(t::PLATE_RADIUS))
-            .bg(palette.page)
+            .bg(gpui::rgb(plate))
             .border_1()
             .border_color(palette.faint(0.2))
             .opacity(bar)

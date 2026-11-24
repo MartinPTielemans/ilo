@@ -223,8 +223,7 @@ impl Step {
             // needn't name it.
             Step::SearchEngine => (
                 "Pick a search engine.",
-                "What you type that isn't an address searches with it. You can change it later in \
-                 Settings.",
+                "You can change it later in Settings.",
                 "Continue",
             ),
             Step::Color => (
@@ -247,16 +246,11 @@ impl Step {
                  Settings has it too.",
                 "Sign In",
             ),
-            // Settings › Agents' heading and the line under its rows, word for word (C1), as
-            // the sheet adds no words of its own.
+            // Settings › Agents' heading, and the line the lead gave, as the sheet adds no words
+            // of its own.
             Step::Assistant => (
                 "Your assistant.",
-                concat!(
-                    env!("APP_NAME"),
-                    " has no assistant of its own. You sign in on your assistant's page, and ",
-                    env!("APP_NAME"),
-                    " never sees or keeps your login."
-                ),
+                "Tasks run on the assistant you already use.",
                 "Continue",
             ),
             Step::OptIns => (
