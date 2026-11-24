@@ -1752,7 +1752,7 @@ fn a_named_helpers_line_says_its_name_and_its_pages_word() {
     use crate::shell::task_cards::PageWord;
     let reading = step(10, "Reading shop.example", true);
     let name = gpui::SharedString::from("Northwick Home price");
-    for word in [PageWord::Reading, PageWord::Done, PageWord::Paused] {
+    for word in [PageWord::Working, PageWord::Done, PageWord::Paused] {
         let page = HelperPage {
             tab: 30,
             favicon: None,
@@ -1772,7 +1772,7 @@ fn a_named_helpers_line_says_its_name_and_its_pages_word() {
     let page = HelperPage {
         tab: 30,
         favicon: Some(favicon),
-        word: PageWord::Reading.label(),
+        word: PageWord::Working.label(),
     };
     let line = helper_line(&reading, &name, Some(&page)).expect("named");
     assert_eq!((line.glyph, line.icon.is_some()), (None, true));
