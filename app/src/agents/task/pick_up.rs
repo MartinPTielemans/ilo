@@ -417,7 +417,7 @@ impl Agents {
     }
 
     /// `agent`'s task goes for good: what its assistant kept of it goes with it.
-    pub(super) fn forget_kept(&mut self, agent: &str, cx: &mut Context<Self>) {
+    pub(in crate::agents) fn forget_kept(&mut self, agent: &str, cx: &mut Context<Self>) {
         self.tasks.picked_up.remove(agent);
         let task = agent.to_string();
         self.remove_kept(

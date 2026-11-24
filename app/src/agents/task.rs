@@ -198,7 +198,7 @@ impl Trace {
     /// line stays.
     pub fn helpers(&self) -> usize {
         (self.items.iter())
-            .filter(|item| matches!(item, TraceItem::Helper(_)))
+            .filter(|item| matches!(item, TraceItem::Helper { .. }))
             .count()
     }
 
@@ -251,9 +251,17 @@ pub enum TraceItem {
     Step(TraceStep),
     /// What the agent said as it worked, which isn't its turn's last message.
     Said(SharedString),
-    /// A helper the task started (#4102), as the step it's on: a step's line in ilo's own words
-    /// for the page the helper works on, never the helper's own text.
-    Helper(TraceStep),
+    /// A helper the task started (#4102), as one line. Nothing on it is the helper's own text or
+    /// what it found.
+    Helper {
+        /// The step it's on, in ilo's own words for the page it works on.
+        step: TraceStep,
+        /// The name its task gave it as it asked for it, the task's own words as its title is:
+        /// one line of plain text, cut short, held in memory alone. Empty if it gave none.
+        name: SharedString,
+        /// The page it works on, by its tab.
+        tab: Option<u64>,
+    },
 }
 
 /// A line of a trace: a step, in one sentence.
@@ -443,6 +451,11 @@ impl Task {
         if let Some(process) = self.process.as_mut() {
             process.interrupt();
         }
+    }
+
+    /// Ends its run: the process goes, and a message to the task starts another.
+    pub(super) fn end_run(&mut self) {
+        self.process = None;
     }
 
     /// Where the turn under way starts among its messages: after the user's last.
@@ -730,6 +743,14 @@ impl Agents {
 
     pub(super) fn task_mut(&mut self, agent: &str) -> Option<&mut Task> {
         self.tasks.tasks.iter_mut().find(|task| task.agent == agent)
+    }
+
+    /// `agent`'s run goes before the app hears it end, as a reply can find it: the next reply
+    /// starts a run of its own.
+    #[cfg(test)]
+    pub(super) fn run_of(&self, agent: &str) -> u32 {
+        let process = self.task(agent).and_then(|task| task.process.as_ref());
+        process.map_or(0, runner::Process::run)
     }
 
     /// `agent`'s run goes before the app hears it end, as a reply can find it: the next reply
@@ -1456,7 +1477,7 @@ impl Agents {
         helpers::ON
     }
 
-    fn launch(&mut self, agent: &str, first: &str, cx: &mut Context<Self>) {
+    pub(super) fn launch(&mut self, agent: &str, first: &str, cx: &mut Context<Self>) {
         let Some((task, Some(cli))) = self.task(agent).map(|task| (task, task.cli)) else {
             return;
         };
@@ -1508,6 +1529,10 @@ impl Agents {
             Ok(process) => {
                 if let Some(task) = self.task_mut(agent) {
                     task.process = Some(process);
+                    // Until its first line says which kinds of helper it has (#4102).
+                    let new = matches!(keep, super::kept::Keep::New(_));
+                    let had = (task.trace.len(), task.messages.len());
+                    task.helpers.run_started(first, new, had);
                 }
                 self.kept_started(agent, cli, &keep);
             }
@@ -1551,7 +1576,14 @@ impl Agents {
 
     /// What a task's CLI said.
     pub fn task_said(&mut self, event: runner::Event, cx: &mut Context<Self>) {
-        let runner::Event { agent, out } = event;
+        let runner::Event { agent, run, out } = event;
+        // A line of a run ilo ended as it started the task again isn't the task's (helpers.rs).
+        let under_way = (self.task(&agent))
+            .and_then(|task| task.process.as_ref())
+            .map(runner::Process::run);
+        if under_way.is_some_and(|under_way| under_way != run) {
+            return;
+        }
         // Whatever it said, it answered.
         if let Some(task) = self.task_mut(&agent) {
             task.waiting = None;
@@ -1617,7 +1649,9 @@ impl Agents {
                 });
             }
             Out::Helper { id, told } => self.helper_told(&agent, id, told, cx),
-            Out::Started { deep } => self.helper_started(&agent, deep),
+            Out::Started { deep } => self.helper_started(&agent, deep, cx),
+            Out::NotAllowed(limit) => self.helper_not_allowed(&agent, limit, cx),
+            Out::Kinds { ours } => self.helper_kinds(&agent, ours, cx),
             // The turn ilo interrupted at the helpers' limit ends, however its CLI says so. The
             // first since the user wrote, the task goes on in a new turn that starts with what
             // ilo tells it; the second, the turn ends as any does and the task waits for them.
@@ -1631,7 +1665,7 @@ impl Agents {
                     helpers::After::Told(told) => self.tell_task(&agent, told, true, cx),
                     helpers::After::Ends => {
                         let out = Out::Ended(None);
-                        self.task_said(runner::Event { agent, out }, cx)
+                        self.task_said(runner::Event { agent, run, out }, cx)
                     }
                 }
             }
@@ -3520,7 +3554,10 @@ pub fn fold(
         first += turn.len();
     }
     let mut lines = Vec::new();
-    let mut stretch = Stretch::default();
+    let mut stretch = Stretch {
+        helpers: Some(helpers),
+        ..Stretch::default()
+    };
     let mut steps = trace.iter().enumerate().peekable();
     for (index, message) in messages.iter().enumerate() {
         while let Some((key, step)) = steps.next_if(|(_, step)| step.after <= index) {
@@ -3556,7 +3593,7 @@ fn steps(lines: Vec<Line>) -> Vec<Line> {
     });
     (steps.filter_map(|item| match item {
         TraceItem::Step(step) => Some(Line::Step(step)),
-        TraceItem::Said(_) | TraceItem::Helper(_) => None,
+        TraceItem::Said(_) | TraceItem::Helper { .. } => None,
     }))
     .collect()
 }
@@ -3564,6 +3601,8 @@ fn steps(lines: Vec<Line>) -> Vec<Line> {
 /// The stretch of work a trace is made of, as it gathers.
 #[derive(Default)]
 struct Stretch<'a> {
+    /// The task's helpers, for the names it gave them.
+    helpers: Option<&'a Helpers>,
     gathered: Vec<Gathered<'a>>,
     key: Option<usize>,
     started: Option<Instant>,
@@ -3611,14 +3650,18 @@ impl<'a> Stretch<'a> {
                 Together::Steps(steps) => TraceItem::Step(trace_step(&steps)),
                 Together::Said(text) => TraceItem::Said(text),
                 // A helper's one line is the step it's on, in the place of its first.
-                Together::Helper(_, key, on) => TraceItem::Helper(helper_step(key, on)),
+                Together::Helper(helper, key, on) => TraceItem::Helper {
+                    step: helper_step(key, on),
+                    name: (self.helpers).map_or_else(SharedString::default, |all| all.name(helper)),
+                    tab: on.1.did.tab,
+                },
             })
             .collect();
         // A stretch that's over has nothing under way, a helper's line neither: what its
         // assistant does with helpers once a turn ends or is interrupted isn't ilo's to show.
         if !running {
             for item in &mut items {
-                if let TraceItem::Step(step) | TraceItem::Helper(step) = item {
+                if let TraceItem::Step(step) | TraceItem::Helper { step, .. } = item {
                     step.running = false;
                     if let Opens::Steps(steps) = &mut step.opens {
                         steps.iter_mut().for_each(|step| step.running = false);
