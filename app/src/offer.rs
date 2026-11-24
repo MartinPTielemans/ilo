@@ -384,17 +384,16 @@ impl OfferPrompt {
         cx.notify();
     }
 
-    /// Return saves, once an input method has committed what it was composing.
-    fn accept(&mut self, _: &Accept, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.input.read(cx).composing() {
+    /// Return saves, unless it was an input method's, composing in the field (dismissal's rule).
+    fn accept(&mut self, _: &Accept, window: &mut Window, cx: &mut Context<Self>) {
+        if crate::dismissal::submits([&self.input.clone()], window, cx) {
             self.answer(Answer::Accept, cx);
         }
     }
 
-    /// Escape declines, unless an input method is composing in the field, whose Escape it is
-    /// (dismissal's rule), as Return waits for it.
-    fn not_now(&mut self, _: &NotNow, _: &mut Window, cx: &mut Context<Self>) {
-        if crate::dismissal::Close::escape(self.input.read(cx).composing()).is_some() {
+    /// Escape declines, unless it was an input method's, composing in the field.
+    fn not_now(&mut self, _: &NotNow, window: &mut Window, cx: &mut Context<Self>) {
+        if crate::dismissal::Close::escape_from([&self.input.clone()], window, cx).is_some() {
             self.answer(Answer::NotNow, cx);
         }
     }
