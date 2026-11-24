@@ -746,6 +746,7 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   }
   // One the user took back from an agent before is the agent's now.
   browser_core::HandBack(tab);
+  browser_core::AgentPage::Watch(contents);
   return true;
 }
 
@@ -821,6 +822,7 @@ bc_id bc_agent_open_tab(const char* agent, const char* url) {
   const bc_id tab = browser_core::Tab::IdOf(contents);
   space->Add(tab, /*opener=*/0, /*foreground=*/false);
   browser_core::AgentActed(agent, tab);
+  browser_core::AgentPage::Watch(contents);
   if (browser_core::Host().tab_opened) {
     browser_core::Host().tab_opened(browser_core::Host().context, window->id(), tab, 0, false);
   }
@@ -913,9 +915,26 @@ void bc_agent_request(const char* agent,
                                      BC_AGENT_FAILURE_NOT_ITS_SPACE);
     return;
   }
-  browser_core::SendAgentRequest(*contents, request, method ? method : "", url ? url : "",
-                                 headers ? headers : "",
-                                 body && size ? std::string(body, size) : std::string());
+  // A call on the tab, so the page's one look comes first (AgentPage::Freeze).
+  browser_core::AgentPage::CreateForWebContents(contents);
+  browser_core::AgentPage::FromWebContents(contents)->Freeze(base::BindOnce(
+      [](base::WeakPtr<content::WebContents> contents, uint64_t request, std::string method,
+         std::string url, std::string headers, std::string body, bool withheld) {
+        if (withheld) {
+          browser_core::RefuseAgentRequest(request, browser_core::kWithheldPageRefusal,
+                                           BC_AGENT_FAILURE_WITHHELD_PAGE);
+          return;
+        }
+        if (!contents) {
+          browser_core::RefuseAgentRequest(request, "The tab isn't in the agent's own Space.",
+                                           BC_AGENT_FAILURE_NOT_ITS_SPACE);
+          return;
+        }
+        browser_core::SendAgentRequest(*contents, request, method, url, headers, body);
+      },
+      contents->GetWeakPtr(), request, std::string(method ? method : ""),
+      std::string(url ? url : ""), std::string(headers ? headers : ""),
+      body && size ? std::string(body, size) : std::string()));
 }
 
 uint64_t bc_tab_link_card(bc_id tab) {
@@ -2416,23 +2435,32 @@ void bc_tab_picture(bc_id id, uint64_t request, int width, int height) {
 }
 
 void bc_tab_read_text(bc_id id, uint64_t request) {
-  // A page showing what a sign-in filled gives none of its text, as a tab without its page.
+  // A tab without its page, or none, or one whose page is withheld: nothing to read, told from a
+  // task of its own.
+  const auto nothing = [](bc_id tab, uint64_t request) {
+    if (browser_core::Host().tab_text) {
+      browser_core::Host().tab_text(browser_core::Host().context, tab, request, nullptr);
+    }
+  };
   content::WebContents* contents =
       browser_core::PageWithheld(id) ? nullptr : browser_core::Tab::FromId(id);
-  if (contents) {
-    browser_core::PageText::GetOrCreateForWebContents(contents)->Read(request);
-  } else if (browser_core::Host().tab_text) {
-    // A tab without its page, or none: nothing to read, told from a task of its own.
+  if (!contents) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(
-                       [](bc_id tab, uint64_t request) {
-                         if (browser_core::Host().tab_text) {
-                           browser_core::Host().tab_text(browser_core::Host().context, tab,
-                                                         request, nullptr);
-                         }
-                       },
-                       id, request));
+        FROM_HERE, base::BindOnce(nothing, id, request));
+    return;
   }
+  // An agent's read, so the page's one look comes first (AgentPage::Freeze).
+  browser_core::AgentPage::CreateForWebContents(contents);
+  browser_core::AgentPage::FromWebContents(contents)->Freeze(base::BindOnce(
+      [](decltype(nothing) nothing, base::WeakPtr<content::WebContents> contents, bc_id tab,
+         uint64_t request, bool withheld) {
+        if (withheld || !contents) {
+          nothing(tab, request);
+          return;
+        }
+        browser_core::PageText::GetOrCreateForWebContents(contents.get())->Read(request);
+      },
+      nothing, contents->GetWeakPtr(), id, request));
 }
 
 void bc_tab_translate_read(bc_id id, uint64_t request) {

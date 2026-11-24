@@ -7,6 +7,10 @@
 
 #include "browser_core/public/browser_core.h"
 
+namespace content {
+class WebContents;
+}
+
 namespace url {
 class Origin;
 }
@@ -32,6 +36,11 @@ bool WithheldFromAgents(bc_id tab);
 // again, for the tab's life (WithheldHistory): agents may only navigate it elsewhere or close it
 // (BC_AGENT_FAILURE_WITHHELD_PAGE), and nothing reads its text.
 bool PageWithheld(bc_id tab);
+
+// |contents|' page showed, at an agent's first call since a password field held a value, that
+// value outside the field (AgentPage::Freeze): it's withheld as a sign-in withholds one, for as
+// long (PageWithheld).
+void WithholdShownPage(content::WebContents& contents);
 
 // What an agent hears for any other act in such a page.
 inline constexpr char kWithheldPageRefusal[] =

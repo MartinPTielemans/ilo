@@ -24,6 +24,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "browser_core/agent_autofill.h"
+#include "browser_core/agent_page.h"
 #include "browser_core/agent_session.h"
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
@@ -389,7 +390,7 @@ bool OffTheRecord(const Tab* tab) {
 }
 
 // |tab|, leaving a window, was seen until now.
-void Seen(bc_id tab) {
+void SeenUntilNow(bc_id tab) {
   if (Tab* seen = Tab::Get(tab)) {
     seen->set_last_seen(base::Time::Now());
     seen->LeftWindow();
@@ -2008,7 +2009,7 @@ void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
   std::vector<bc_id> panes = PanesWith(tab);
   for (bc_id pane : panes_) {
     if (!std::ranges::contains(panes, pane)) {
-      Seen(pane);
+      SeenUntilNow(pane);
     }
   }
   panes_ = std::move(panes);
@@ -2260,7 +2261,7 @@ void Window::ShowNothing() {
   selected_ = 0;
   waiting_ = 0;
   for (bc_id pane : std::exchange(panes_, {})) {
-    Seen(pane);
+    SeenUntilNow(pane);
   }
   shown_ = nullptr;
   SetLetGo(false);
@@ -3685,6 +3686,10 @@ void Window::ReportTabOpened(bc_id tab,
   }
   if (Space* space = SpaceForOpened(opener)) {
     space->Add(tab, opener, foreground);
+    // A page an agent's page opened is the agent's too, from its first.
+    if (space->agent()) {
+      AgentPage::Watch(Tab::FromId(tab));
+    }
     // Beside the page it came from, unless that page's split view is full.
     const bool split = split_with && space->Split(tab, split_with, Tab::PageUrl(Tab::FromId(tab)),
                                                   /*left=*/false);

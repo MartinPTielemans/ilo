@@ -12,6 +12,7 @@
 #include "base/base64.h"
 #include "base/containers/adapters.h"
 #include "base/containers/span.h"
+#include "base/barrier_callback.h"
 #include "base/functional/bind.h"
 #include "base/i18n/case_conversion.h"
 #include "base/json/json_reader.h"
@@ -761,6 +762,30 @@ void AgentPage::Run() {
   const bool history = action == BC_AGENT_PAGE_BACK || action == BC_AGENT_PAGE_FORWARD;
   if (!history && !IsWebPage()) {
     FailNotWebPage();
+    return;
+  }
+  // An agent's call looks once at what a password field held before anything is read or done; the
+  // core's own steps in a sign-in, which no agent asks for, don't.
+  if (action < 0) {
+    RunLooked(/*withheld=*/false);
+    return;
+  }
+  const uint64_t request = job_->request;
+  Freeze(base::BindOnce(
+      [](base::WeakPtr<AgentPage> page, uint64_t request, bool withheld) {
+        if (page && page->job_ && page->job_->request == request) {
+          page->RunLooked(withheld);
+        }
+      },
+      weak_factory_.GetWeakPtr(), request));
+}
+
+void AgentPage::RunLooked(bool withheld) {
+  const int action = job_->action;
+  const bool history = action == BC_AGENT_PAGE_BACK || action == BC_AGENT_PAGE_FORWARD;
+  // Taking the tab to another page is all an agent may do there, as api.cc's bc_agent_may_act says.
+  if (withheld && !history) {
+    Fail(kWithheldPageRefusal, BC_AGENT_FAILURE_WITHHELD_PAGE);
     return;
   }
   // An element in a frame that's gone, or now holds what isn't a web page's, is off limits.
@@ -2089,8 +2114,59 @@ void AgentPage::Paint(gfx::Rect source,
           std::move(done)));
 }
 
+void AgentPage::Freeze(base::OnceCallback<void(bool withheld)> then) {
+  std::vector<int> slots;
+  for (size_t slot = 0; slot < targets_.size(); ++slot) {
+    if (!slot || !targets_[slot].session.empty()) {
+      slots.push_back(static_cast<int>(slot));
+    }
+  }
+  // Before the first Send, which attaches the main frame's session.
+  if (slots.empty()) {
+    slots.push_back(0);
+  }
+  auto answered = base::BarrierCallback<bool>(
+      slots.size(),
+      base::BindOnce(
+          [](base::WeakPtr<AgentPage> page, base::OnceCallback<void(bool)> then,
+             std::vector<bool> shown) {
+            if (!page) {
+              return;
+            }
+            const bool shows = std::ranges::any_of(shown, std::identity());
+            if (shows) {
+              WithholdShownPage(page->GetWebContents());
+            }
+            std::move(then).Run(PageWithheld(Tab::IdOf(&page->GetWebContents())));
+          },
+          weak_factory_.GetWeakPtr(), std::move(then)));
+  for (const int slot : slots) {
+    // A session that couldn't answer counts as showing one, as the sign-in's look counts what it
+    // couldn't read.
+    Send("DOM.freezeWithheldValues", base::DictValue(),
+         base::BindOnce(
+             [](base::RepeatingCallback<void(bool)> answered, const base::DictValue* result) {
+               answered.Run(!result || result->FindBool("shows").value_or(true));
+             },
+             answered),
+         slot);
+  }
+}
+
+// static
+void AgentPage::Watch(content::WebContents* contents) {
+  if (!contents) {
+    return;
+  }
+  CreateForWebContents(contents);
+  AgentPage* page = FromWebContents(contents);
+  page->watching_ = true;
+  // Sending is what attaches, and DOM goes on with it.
+  page->Send("DOM.enable", base::DictValue(), base::DoNothing(), 0);
+}
+
 void AgentPage::Rest() {
-  if (!acted_ && !pictures_ && !job_ && jobs_.empty()) {
+  if (!acted_ && !watching_ && !pictures_ && !job_ && jobs_.empty()) {
     Detach();
   }
 }
@@ -3338,6 +3414,7 @@ void AgentPage::LetGo() {
   // What the agent typed is kept only to compare with while its session lasts.
   typed_.clear();
   acted_ = false;
+  watching_ = false;
   pictures_ = 0;
   wheel_.reset();
   wait_.Stop();
@@ -3392,6 +3469,10 @@ void AgentPage::Send(const char* method, base::DictValue params, Reply reply, in
     agent_host_ = std::move(host);
     targets_.assign(1, Target());
     AutoAttach(0);
+    // DOM on, in each frame's session as it comes, is what has the renderer keep what a password
+    // field holds for Freeze (chromium-agent-withheld-values.patch). DevTools turns it on again in
+    // a frame's new renderer before its page runs.
+    Send("DOM.enable", base::DictValue(), base::DoNothing(), 0);
   }
   if (slot < 0 || static_cast<size_t>(slot) >= targets_.size() ||
       (slot && targets_[slot].session.empty())) {
@@ -3498,6 +3579,7 @@ void AgentPage::Attached(const std::string& session, const base::DictValue& even
                          return;
                        }
                        page->AutoAttach(slot);
+                       page->Send("DOM.enable", base::DictValue(), base::DoNothing(), slot);
                        if (page->listening_) {
                          page->Send("Network.enable", Hearing(), base::DoNothing(), slot);
                        }

@@ -916,6 +916,10 @@ bool PageWithheld(bc_id tab) {
   return page && page->Shows(contents->GetPrimaryMainFrame()->GetLastCommittedURL());
 }
 
+void WithholdShownPage(content::WebContents& contents) {
+  WithheldPage::Withhold(contents, {});
+}
+
 void ForgiveSignInTries(const url::Origin& origin) {
   Tries().Forgive(origin);
 }

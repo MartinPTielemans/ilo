@@ -92,6 +92,18 @@ class AgentPage : public content::WebContentsObserver,
   // Forgets what the agent typed, so no field shows as holding it.
   void Forget();
 
+  // The one look at an agent's first call since a password field held a value: each of the tab's
+  // DevTools sessions asks its documents once whether they show, anywhere outside the field, what
+  // one of them held (chromium-agent-withheld-values.patch), and none is looked for again. Any yes,
+  // or a session that couldn't answer, withholds the page whole (WithholdShownPage), and |then|
+  // hears whether it's withheld now. A page with no such value answers at once.
+  void Freeze(base::OnceCallback<void(bool withheld)> then);
+
+  // |contents| came into an agent's Space: DevTools takes it now, with DOM on, so its page keeps
+  // what a password field holds from the first, not only from the agent's first act, until the
+  // agent's session with the tab ends.
+  static void Watch(content::WebContents* contents);
+
   // The agent's session with |tab| ended: its page stops drawing while hidden, and DevTools lets
   // it go. What's still asked is answered as an error.
   static void SessionEnded(bc_id tab);
@@ -187,6 +199,8 @@ class AgentPage : public content::WebContentsObserver,
   // Runs the next job once the one before has answered.
   void Next();
   void Run();
+  // Run's work, once the page's one look (Freeze) has answered.
+  void RunLooked(bool withheld);
   // Whether the tab's page is one agents may use, and if not, fails the job with why.
   bool IsWebPage();
   void FailNotWebPage();
@@ -501,6 +515,8 @@ class AgentPage : public content::WebContentsObserver,
   // Whether an agent acts on the page, from its first action until its session ends, and how many
   // pictures are under way, so a page only pictured lets DevTools go after.
   bool acted_ = false;
+  // Watch took the tab, which keeps DevTools until the session ends, acted on or not.
+  bool watching_ = false;
   int pictures_ = 0;
   // WhenIdle's.
   base::OnceClosure idle_;
