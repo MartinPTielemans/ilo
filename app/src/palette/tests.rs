@@ -1834,3 +1834,69 @@ fn the_shown_plate_is_never_the_fainter_where_its_title_keeps_its_bar() {
         }
     }
 }
+
+/// The Library's search field is a plate of the ink on the window, and its placeholder gray text
+/// on it: there it holds the level's bar for gray text in both looks, with a Space's colour and
+/// with none, over every point of the window over a black and a white backdrop.
+///
+/// But for one case, which is the window's and not the placeholder's: at Less, whose bar for gray
+/// text is text's own, a Space's colour can leave a dark window on which Paper itself is under
+/// that bar on a plate. There the placeholder is the ink whole, the most there is, and reads what
+/// a title on a plate under the pointer holds there (`failures_over`).
+///
+/// Only the look's own gray reads. With no Space colour the other look's, on the same field, is
+/// under every level's bar in both looks, almost the field's own colour, which is why the field
+/// takes its colours from the palette it's drawn with and keeps none.
+#[test]
+fn the_library_search_placeholder_reads_on_its_field_at_every_level() {
+    use crate::tokens::shell::library::{LIBRARY_PLATE, SEARCH_PLACEHOLDER};
+    const WHOLE_INK: f32 = 3.6;
+    let themes = grid(
+        &[0., 60., 120., 180., 240., 300.],
+        &[0.4, 1.],
+        &[0.2, 0.45, 0.8],
+        &[crate::theme::DEFAULT_INTENSITY],
+    );
+    // The least gray text of `ink` reads on `palette`'s field anywhere on its window.
+    let least = |palette: &Palette, ink: Hsla| {
+        let ink = Rgba::from(ink);
+        fine_window(palette)
+            .into_iter()
+            .map(|at| {
+                let field = over(at, palette.ink, LIBRARY_PLATE);
+                contrast(over(field, ink, ink.a), field)
+            })
+            .fold(f32::MAX, f32::min)
+    };
+    for level in Transparency::ALL {
+        set_transparency(level);
+        for theme in themes.iter().map(Some).chain([None]) {
+            for tone in [Tone::Dark, Tone::Light] {
+                let palette = Palette::of(theme, tone);
+                let gray = palette.gray(SEARCH_PLACEHOLDER);
+                let ratio = least(&palette, gray);
+                let whole = (level, tone) == (Transparency::Less, Tone::Dark)
+                    && theme.is_some()
+                    && gray.a >= 1.
+                    && ratio >= WHOLE_INK;
+                assert!(
+                    ratio >= gray_text(level) - 1e-4 || whole,
+                    "{level:?} {tone:?} {theme:?}: {ratio:.2} at {:.2} of the ink",
+                    gray.a
+                );
+            }
+        }
+        let (dark, light) = (
+            Palette::of(None, Tone::Dark),
+            Palette::of(None, Tone::Light),
+        );
+        for (palette, other) in [(&light, &dark), (&dark, &light)] {
+            let ratio = least(palette, other.gray(SEARCH_PLACEHOLDER));
+            assert!(
+                ratio < gray_text(level),
+                "{level:?} {:?}: the other look's gray reads {ratio:.2}",
+                palette.tone
+            );
+        }
+    }
+}
