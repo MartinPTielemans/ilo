@@ -25,6 +25,7 @@ use super::{
     NAV_RADIUS, SECONDARY, Shell, TITLE,
     agent_bar::stop_keys,
     browser::{Browser, Page},
+    live_tiles::LiveTiles,
     picture::{PagePicture, next_request},
     row_spring,
     task_cards::PageWord,
@@ -176,6 +177,13 @@ pub(super) struct Talk {
     view: Entity<TalkView>,
 }
 
+impl Talk {
+    /// Its pages leave their tiles, as a page watched over it hides it and it isn't drawn.
+    pub(super) fn end_tiles(&self, cx: &gpui::App) {
+        self.view.read(cx).tiles.end_all();
+    }
+}
+
 /// The view the page area draws.
 pub struct TalkView {
     shell: WeakEntity<Shell>,
@@ -191,6 +199,8 @@ pub struct TalkView {
     unpictured: Vec<u64>,
     /// Where each picture was drawn last, in the window, for its page to zoom out of.
     drawn: Rc<RefCell<Vec<(u64, Bounds<Pixels>)>>>,
+    /// Its pages, live in their pictures' places where the core can.
+    tiles: Rc<LiveTiles>,
     /// Where each picture was drawn when that was logged last.
     drawn_logged: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
     /// What each tile's word said when that was logged last.
@@ -407,6 +417,7 @@ impl Shell {
                     pictures: Vec::new(),
                     unpictured: Vec::new(),
                     drawn: Rc::default(),
+                    tiles: LiveTiles::new(self.browser.clone()),
                     drawn_logged: Rc::default(),
                     said_logged: RefCell::default(),
                     stop_logged: Rc::default(),
@@ -700,6 +711,7 @@ impl TalkView {
 
     /// Its pictures go, as it no longer shows, and are taken again when it does.
     fn let_go(&mut self) -> Vec<Arc<RenderImage>> {
+        self.tiles.end_all();
         self.stale = true;
         self.motion.reset();
         let pictures = std::mem::take(&mut self.pictures);
@@ -2961,6 +2973,11 @@ impl Render for TalkView {
         let wide =
             (self.drawn_at.get()).map_or(window.viewport_size().width, |area| area.size.width);
         let across = pages && f32::from(wide) < RAIL_BREAKPOINT;
+        // Its pages show live in their tiles where the core can (live_tiles.rs), but not under a
+        // page watched over them, which they'd draw over.
+        let held = look.behind
+            || (self.shell.upgrade())
+                .is_some_and(|shell| shell.read(cx).watched_task_page().is_some());
         let middle = shut(
             div()
                 .flex_1()
@@ -2991,7 +3008,10 @@ impl Render for TalkView {
                     .flex_none()
                     .w_full()
                     .mb(px(RAIL_GAP))
-                    .child(self.rail(true, &look, cx))
+                    .child(
+                        self.tiles
+                            .over(self.rail(true, &look, cx), self.drawn.clone(), held),
+                    )
             }))
             .child(middle)
             .child(shut(on_column(self.reply(&look, cx).into_any_element())))
@@ -3007,10 +3027,16 @@ impl Render for TalkView {
                 .w(px(RAIL_WIDTH))
                 .h_full()
                 .ml(px(RAIL_GAP))
-                .child(self.rail(false, &look, cx))
+                .flex()
+                .flex_col()
+                .child(
+                    self.tiles
+                        .over(self.rail(false, &look, cx), self.drawn.clone(), held),
+                )
         });
         if !pages {
             self.drawn.borrow_mut().clear();
+            self.tiles.end_all();
         }
         let column = div().size_full().flex().child(column).children(rail);
         let drawn = self.drawn_at.clone();
