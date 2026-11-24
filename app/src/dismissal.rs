@@ -64,6 +64,18 @@ impl Close {
         (!composing).then_some(Self::new(Why::Escape, By::Keyboard))
     }
 
+    /// The close of an overlay the host hid as the user left it: a press outside it, or, with no
+    /// window of the app active (`app_left`), leaving the app. The host hears that the user left,
+    /// not with what, so both are the pointer's.
+    pub fn left(app_left: bool) -> Self {
+        let why = if app_left {
+            Why::WindowLeft
+        } else {
+            Why::PressOutside
+        };
+        Self::new(why, By::Pointer)
+    }
+
     /// Whether this close gives the keyboard back to the surface's opener, rather than to the
     /// fallback: Escape and the surface's own key or command do, as they're how a user goes back
     /// to what they were doing.
