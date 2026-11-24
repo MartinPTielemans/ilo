@@ -1907,6 +1907,8 @@ pub struct Shell {
     /// page area shows of one (task_area.rs).
     task_spaces: Vec<Space>,
     task_area: Option<task_area::TaskArea>,
+    /// The task's view as it stood at a close of the window its pages haven't answered.
+    task_closing: Option<task_area::Closing>,
     /// The task Space the core shows while one of its pages is watched, else 0.
     task_core: u64,
     task_live_logged: Option<u64>,
@@ -2366,6 +2368,7 @@ impl Shell {
             agent_status: Vec::new(),
             task_spaces: Vec::new(),
             task_area: None,
+            task_closing: None,
             task_core: 0,
             task_live_logged: None,
             task_strip_drawn: Rc::default(),

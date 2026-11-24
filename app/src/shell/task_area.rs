@@ -22,8 +22,8 @@ use gpui::{
 };
 
 use super::{
-    CARD_INSET, Command, Folders, NAV_RADIUS, PagePicture, Palette, SECONDARY, SIDEBAR_WIDTH,
-    Shell, Space, SpaceEntry, TITLE, Theme,
+    CARD_INSET, Command, DialogKind, Folders, NAV_RADIUS, PagePicture, Palette, SECONDARY,
+    SIDEBAR_WIDTH, Shell, Space, SpaceEntry, TITLE, Theme,
     agent_bar::{Bar, bar_words, stop_keys},
     card,
     conversation::{page_chip, page_chip_keyed},
@@ -55,6 +55,17 @@ pub(super) struct TaskArea {
     /// The conversation, which the task draws.
     view: AnyView,
     page: Option<Watched>,
+}
+
+/// A task's view as it stood when the user asked the window to close or the browser to quit,
+/// which a page of theirs may still refuse (#4202). The core never says a close was refused: the
+/// page's question answered with staying is that word, and brings the view back.
+pub(super) struct Closing {
+    /// The page watched then, which went back to the conversation for the close.
+    watched: Option<Watched>,
+    /// The area, out of the window while a page of the user's asks whether to leave it: no
+    /// page's dialog is drawn over a task's conversation.
+    aside: Option<TaskArea>,
 }
 
 /// A task's page watched in the page area.
@@ -487,52 +498,72 @@ impl Shell {
         if let Some(old) = self.task_area.as_mut().and_then(|area| area.page.take()) {
             self.let_go_of_watch(old, true);
         }
-        // The page its agent has stays in its tile, which grows out of its picture; one the user
-        // holds, a handoff too, is theirs at once, as the window's page.
-        let held = self.task_page_held(tab);
-        let tile = tiles.and_then(|tiles| {
-            let was = tiles.lend(tab);
-            if held {
-                if was.is_some() {
-                    self.browser.end_tile(tab);
-                }
-                // A tile once it's handed back, where the core shows them.
-                return (was.is_some() || tiles.shown_any()).then_some(WatchTile {
-                    tiles,
-                    shown: false,
-                    placed: None,
-                    pressed: None,
-                });
-            }
-            let at = page_in(from);
-            if self.browser.show_tile(tab, at, TILE_RADIUS) {
-                return Some(WatchTile {
-                    tiles,
-                    shown: true,
-                    placed: Some((at, TILE_RADIUS)),
-                    pressed: None,
-                });
-            }
-            tiles.take_back(tab, was);
-            None
-        });
-        let tiled = tile.as_ref().is_some_and(|tile| tile.shown);
-        if let Some(area) = &mut self.task_area {
-            area.page = Some(Watched {
+        let tile = self.watch_tile(tab, from, tiles);
+        self.show_watched(
+            Watched {
                 tab,
                 thumb: from,
                 picture,
                 asked: false,
                 zoom,
                 tile,
+            },
+            cx,
+        );
+        true
+    }
+
+    /// The tile a watch of `tab` from `from` has, which `tiles` lend it, where the core shows them:
+    /// the page its agent has stays in its tile, which grows out of its picture; one the user
+    /// holds, a handoff too, is theirs at once, as the window's page, and a tile once handed back.
+    fn watch_tile(
+        &mut self,
+        tab: u64,
+        from: Bounds<Pixels>,
+        tiles: Option<Rc<LiveTiles>>,
+    ) -> Option<WatchTile> {
+        let tiles = tiles?;
+        let was = tiles.lend(tab);
+        if self.task_page_held(tab) {
+            if was.is_some() {
+                self.browser.end_tile(tab);
+            }
+            return (was.is_some() || tiles.shown_any()).then_some(WatchTile {
+                tiles,
+                shown: false,
+                placed: None,
+                pressed: None,
             });
+        }
+        let at = page_in(from);
+        if self.browser.show_tile(tab, at, TILE_RADIUS) {
+            return Some(WatchTile {
+                tiles,
+                shown: true,
+                placed: Some((at, TILE_RADIUS)),
+                pressed: None,
+            });
+        }
+        tiles.take_back(tab, was);
+        None
+    }
+
+    /// The area watches `page`, in place of the one it watched, and the core shows it: in its
+    /// tile, or as the window's page.
+    fn show_watched(&mut self, page: Watched, cx: &mut Context<Self>) {
+        let tab = page.tab;
+        let tiled = page.tile.as_ref().is_some_and(|tile| tile.shown);
+        if let Some(area) = &mut self.task_area
+            && let Some(old) = area.page.replace(page)
+        {
+            self.let_go_of_watch(old, true);
         }
         // check.sh reads this line.
         log!("browser: task page {tab} watched");
         if tiled {
             self.take_keyboard(cx);
             cx.notify();
-            return true;
+            return;
         }
         // Shown first, at the frame the user's page had out of the window, then laid out at its own
         // size there, so the user's page keeps its size.
@@ -543,7 +574,14 @@ impl Shell {
             _ => self.take_keyboard(cx),
         }
         cx.notify();
-        true
+    }
+
+    /// Lets go of a page no longer watched, kept for a close a page might refuse: its picture, and
+    /// its tile, if it still has one.
+    fn let_go_of(&mut self, page: Option<Watched>) {
+        if let Some(page) = page {
+            self.let_go_of_watch(page, true);
+        }
     }
 
     /// Whether the user holds `tab` from its agent: taken over, handed to them, or asked for.
@@ -563,16 +601,21 @@ impl Shell {
         {
             self.stale_pictures.push(picture.image());
         }
-        let Some(tile) = page.tile else {
-            return;
-        };
+        if let Some(tile) = page.tile {
+            self.give_back_tile(page.tab, tile, to_conversation);
+        }
+    }
+
+    /// `tab`'s tile, which a watch had, goes back to the conversation's tiles where it is, to move
+    /// to its picture or end, or ends with no conversation to go back to.
+    fn give_back_tile(&mut self, tab: u64, tile: WatchTile, to_conversation: bool) {
         let at = (tile.placed.filter(|_| tile.shown)).map(|(at, _)| at);
         if at.is_some() && !to_conversation {
-            self.browser.end_tile(page.tab);
-            log!("browser: task tile {} ended", page.tab);
-            return tile.tiles.take_back(page.tab, None);
+            self.browser.end_tile(tab);
+            log!("browser: task tile {tab} ended");
+            return tile.tiles.take_back(tab, None);
         }
-        tile.tiles.take_back(page.tab, at);
+        tile.tiles.take_back(tab, at);
     }
 
     /// The watched page's tile, if it has one.
@@ -928,6 +971,175 @@ impl Shell {
         cx.notify();
     }
 
+    /// The window is about to close, or the browser to quit, which the window's pages may still
+    /// refuse (#4202). The conversation stands, and a page of the task's watched goes back to it
+    /// first, kept for a refusal to bring back: the core shows the task's Space while one is
+    /// watched, and the session keeps for the window the Space the core shows. The same close
+    /// asked again keeps what the first kept: with its question up the view is aside already.
+    pub(super) fn about_to_close(&mut self, cx: &mut Context<Self>) {
+        let kept = self.task_closing.take();
+        if kept.as_ref().is_some_and(|kept| kept.aside.is_some()) {
+            self.task_closing = kept;
+            return;
+        }
+        let kept = kept.and_then(|kept| kept.watched);
+        if self.task_area.is_none() {
+            return self.let_go_of(kept);
+        }
+        let watched = match self.back_to_close(cx) {
+            // One watched since the first is the view as it stands.
+            Some(page) => {
+                self.let_go_of(kept);
+                Some(page)
+            }
+            None => kept,
+        };
+        self.task_closing = Some(Closing {
+            watched,
+            aside: None,
+        });
+        // A page of theirs that asked already, behind the conversation, asks now.
+        self.step_aside_to_ask(cx);
+        cx.notify();
+    }
+
+    /// The task's page watched goes back to its conversation at once for a close, and is
+    /// returned to keep unless it was on its way back already. The UI has the keyboard.
+    fn back_to_close(&mut self, cx: &mut Context<Self>) -> Option<Watched> {
+        let page = self.task_area.as_ref()?.page.as_ref()?;
+        // One on its way back into its thumbnail is no longer watched.
+        if matches!(page.zoom, Zoom::In(_)) {
+            self.leave_task_page_now(cx);
+        }
+        let mut watched = (self.task_area.as_mut()).and_then(|area| area.page.take());
+        // Its tile goes back to the conversation with it; a refused close lends it again.
+        if let Some(page) = &mut watched
+            && let Some(tile) = page.tile.take()
+        {
+            self.give_back_tile(page.tab, tile, true);
+        }
+        if watched.is_some() {
+            // check.sh waits for this line, as wherever a page watched goes back.
+            log!("browser: task page in its thumbnail");
+            self.show_users_page(cx);
+            self.retake_talk_pictures(cx);
+        }
+        self.take_keyboard(cx);
+        watched
+    }
+
+    /// A page of the user's asks whether to leave it while the window closes with a task's view
+    /// standing: the view steps aside, whole, and the window shows the page and its question as
+    /// with no task shown. Any other dialog of a user's page waits behind the area, as ever.
+    pub(super) fn step_aside_to_ask(&mut self, cx: &mut Context<Self>) {
+        let waits = (self.task_closing.as_ref()).is_some_and(|closing| closing.aside.is_none());
+        if !waits || self.task_area.is_none() {
+            return;
+        }
+        let tasks = |tab: &u64| {
+            (self.task_spaces.iter())
+                .any(|space| space.pinned.contains(tab) || space.today.contains(tab))
+        };
+        let asks = (self.page_dialogs.iter())
+            .any(|(tab, dialog)| dialog.kind == DialogKind::Leave && !tasks(tab));
+        if !asks {
+            return;
+        }
+        // A page of the task's the user watched since the close goes back first, as at the
+        // close: the question is asked on the user's page, which the core then shows.
+        if let Some(page) = self.back_to_close(cx) {
+            let kept =
+                (self.task_closing.as_mut()).and_then(|closing| closing.watched.replace(page));
+            self.let_go_of(kept);
+        }
+        let area = self.task_area.take();
+        if let Some(area) = &area {
+            log!(
+                "browser: task area {} aside for a page's question",
+                area.space
+            );
+        }
+        if let Some(closing) = &mut self.task_closing {
+            closing.aside = area;
+        }
+        self.lay_out_page(cx);
+        self.reshape_foot(cx);
+        cx.notify();
+    }
+
+    /// A page of the user's refused the close: the task's view is back as it stood, the page
+    /// watched with it, and the keyboard where the view has it.
+    pub(super) fn close_refused(&mut self, cx: &mut Context<Self>) {
+        let Some(Closing { watched, aside }) = self.task_closing.take() else {
+            return;
+        };
+        if let Some(area) = aside {
+            self.stand_again(area, cx);
+        }
+        let space = self.task_open();
+        match watched {
+            Some(page) if space.is_some_and(|space| self.task_tabs(space).contains(&page.tab)) => {
+                // In place at once, as it stood, in its tile again where the core shows them.
+                let tiles = self.talk.as_ref().map(|talk| talk.tiles(cx));
+                let tile = self.watch_tile(page.tab, page.thumb, tiles);
+                let page = Watched {
+                    zoom: Zoom::Rest,
+                    tile,
+                    ..page
+                };
+                self.show_watched(page, cx);
+            }
+            gone => {
+                self.let_go_of(gone);
+                if space.is_some() {
+                    self.take_keyboard(cx);
+                    // The reply field has the keyboard again, as when the conversation opened.
+                    self.focus_talk = true;
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// What the user does next is no answer to a close: the view kept for its refusal goes, and
+    /// one set aside is left as any is.
+    pub(super) fn forget_closing(&mut self, cx: &mut Context<Self>) {
+        let Some(Closing { watched, aside }) = self.task_closing.take() else {
+            return;
+        };
+        self.let_go_of(watched);
+        if let Some(area) = aside
+            && self.task_area.is_none()
+        {
+            self.task_area = Some(area);
+            self.drop_task_area(cx);
+        }
+    }
+
+    /// The area set aside takes the page area again, unless its task went meanwhile or another
+    /// has it.
+    fn stand_again(&mut self, area: TaskArea, cx: &mut Context<Self>) {
+        if self.task_area.is_some() {
+            return;
+        }
+        self.task_area = Some(area);
+        if self
+            .task_open()
+            .is_some_and(|space| self.task_space(space).is_none())
+        {
+            return self.drop_task_area(cx);
+        }
+        if let Some(space) = self.task_open() {
+            log!("browser: task area {space} back");
+        }
+        self.lay_out_page(cx);
+        self.reshape_foot(cx);
+        // The Agents send its conversation as it is now, as they sent none while it was aside.
+        if let Some(agent) = self.talk_agent() {
+            self.browser.show_task(agent, cx);
+        }
+    }
+
     /// Lays the page out for the area as it is, then has the core show the Space's page again, if
     /// it showed a task's: out of the window behind the conversation, at the card's size.
     fn show_users_page(&mut self, cx: &mut Context<Self>) {
@@ -985,8 +1197,9 @@ impl Shell {
     /// the strip's, as in an agent's Space, and Escape with the UI's keyboard and ⌘W step back.
     /// The page's own commands act on the task's page in place, the window's leave the area as it
     /// is, and the rest act on the user's Space, so they leave the area first: the core shows
-    /// the user's Space again before a tab opens in it. Quit leaves it once its quit is decided
-    /// (commands.rs), so the session keeps the user's Space and Cancel keeps the view.
+    /// the user's Space again before a tab opens in it. Quit, once its quit is decided, and
+    /// Close Window keep the conversation, which only the window's going takes, and a page that
+    /// refuses brings the view back whole (`about_to_close`).
     pub(super) fn run_in_task_area(
         &mut self,
         command: Command,
@@ -1080,12 +1293,13 @@ impl Shell {
             // cleared, leave the user where they were (#4202).
             | Command::Quit
             | Command::ClearArchive
+            // The core asks the window's pages before it closes, and theirs is the same Cancel.
+            | Command::CloseWindow
             // The agent's card shows over the area as over the user's Space.
             | Command::FocusAgentQuestion
             // The ring goes to the task shown, at the foot: its pages' rows are there only while
             // its view is.
             | Command::FocusSidebar => return false,
-            // Close Window too, so the session keeps the user's Space for the window.
             _ => {
                 self.leave_task_area(cx);
                 return false;
@@ -1100,10 +1314,6 @@ impl Shell {
     pub(super) fn task_step_back(&mut self, cx: &mut Context<Self>) {
         if self.watched_task_page().is_some() {
             return self.task_page_back(cx);
-        }
-        // From Pages, back to Talk first.
-        if self.talk_back_to_talk(cx) {
-            return;
         }
         self.close_task(cx);
     }
@@ -1188,6 +1398,12 @@ impl Shell {
                     .block_mouse_except_scroll()
                     .child(view),
             );
+        } else {
+            // Not drawn, it places none of its tiles, which the core ended as the window took the
+            // page: they're shown again once it's drawn.
+            if let Some(talk) = &self.talk {
+                talk.end_tiles(cx);
+            }
         }
         let Some(page) = &area.page else {
             // Drawn again, for another page, the strip is logged again.

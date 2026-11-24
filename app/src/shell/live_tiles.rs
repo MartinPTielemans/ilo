@@ -1,7 +1,8 @@
 //! A task's pages live in their pictures' places (#4115). Where the core can, as on the Mac, an
-//! agent's page shows in its picture's tile, drawing as the agent works, while the tile is wholly
-//! in view in the task's Pages; partly scrolled out, under a page watched over the conversation, or
-//! wherever the core says no, the picture the UI drew stays, as it does on Windows and Linux.
+//! agent's page shows in its picture in the task's rail, drawing as the agent works, while the
+//! picture is wholly in the rail's view; partly scrolled out, under a page watched over the
+//! conversation, or wherever the core says no, the picture the UI drew stays, as it does on Windows
+//! and Linux.
 //!
 //! The tile is the user's view alone. The core holds the rest (`bc_tab_show_tile`): the page takes
 //! no keyboard, focus or click from it, keeps its own size, and neither it nor its agent hears that
@@ -47,17 +48,17 @@ impl LiveTiles {
         })
     }
 
-    /// The pictures' grid, with its pages shown live in their tiles once it has drawn: `drawn`
+    /// The task's rail, with its pages shown live in their pictures once it has drawn: `drawn`
     /// says where each picture was drawn this frame, in the window. None is while `held`, as
     /// while a page is watched over the conversation, which a tile would draw over.
     pub(super) fn over(
         self: &Rc<Self>,
-        grid: impl IntoElement,
+        rail: impl IntoElement,
         drawn: Rc<RefCell<Vec<(u64, Bounds<Pixels>)>>>,
         held: bool,
     ) -> gpui::Div {
         let tiles = self.clone();
-        // Over the grid and drawn after it, at the grid's place, which scrolling doesn't move.
+        // Over the rail and drawn after it, at the rail's place, which scrolling doesn't move.
         let place = canvas(
             |_, _, _| {},
             move |area, _, _, _| tiles.place(&drawn.borrow(), area, held),
@@ -71,7 +72,7 @@ impl LiveTiles {
             .w_full()
             .flex()
             .flex_col()
-            .child(grid)
+            .child(rail)
             .child(place)
     }
 

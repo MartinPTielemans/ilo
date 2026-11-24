@@ -24,10 +24,11 @@ use self::motion::{Answered, Follow, Key, Landing, Motion, Run, eased, linear};
 use super::{
     NAV_RADIUS, SECONDARY, Shell, TITLE,
     agent_bar::stop_keys,
-    browser::Browser,
+    browser::{Browser, Page},
     live_tiles::LiveTiles,
     picture::{PagePicture, next_request},
     row_spring,
+    task_cards::PageWord,
 };
 use crate::agents::Status;
 use crate::agents::page::clip;
@@ -52,18 +53,19 @@ use crate::tokens::shell::conversation::{
     CHIPS_BELOW, CHIPS_TOP, CODE_FILL, COLUMN, HEADER_BOTTOM, INSET, ITEM_GAP, LINES_BELOW,
     LINK_LINE, LINK_UNDERLINE, LIST_MARKER, META_GAP, META_LINE, OPEN_BELOW, OPEN_TOP,
     PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG,
-    PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PARAGRAPH_GAP, PICTURE_EMPTY_GAP, PICTURE_EMPTY_GLYPH,
-    PICTURE_GAP, PICTURE_HEIGHT, PICTURE_RADIUS, PICTURE_WIDTH, PICTURES_COLUMNS, PICTURES_ROW_GAP,
-    RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP, REPLY_HEIGHT, REPLY_INSET, REPLY_KEY_END,
-    REPLY_RIM, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD, SITE, SITE_GAP, TEXT_LINE, TITLE_LINE, TOP,
-    TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH, TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER,
-    TRACE_INDENT, TRACE_LINE, TRACE_NOTE, TRACE_PICTURE_HEIGHT, TRACE_PICTURE_RADIUS,
-    TRACE_PICTURE_WIDTH, TRACE_RULE, TRACE_RULE_FILL, TRACE_RULE_X, TRACE_TITLE, VIEWS_GAP,
-    VIEWS_INSET, VIEWS_TRACK,
+    PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PARAGRAPH_GAP, PICTURE_EMPTY_GLYPH, PICTURE_HEIGHT,
+    PICTURE_RADIUS, PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP, REPLY_HEIGHT,
+    REPLY_INSET, REPLY_KEY_END, REPLY_RIM, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD, SITE_GAP,
+    TEXT_LINE, TITLE_LINE, TOP, TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH,
+    TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER, TRACE_INDENT, TRACE_LINE, TRACE_NOTE,
+    TRACE_PICTURE_HEIGHT, TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH, TRACE_RULE, TRACE_RULE_FILL,
+    TRACE_RULE_X, TRACE_TITLE,
 };
 use crate::tokens::shell::empty::KEYS_FILL;
-use crate::tokens::shell::task::STATUS;
 use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT};
+use crate::tokens::shell::task::{
+    RAIL_BREAKPOINT, RAIL_DOT, RAIL_FAVICON, RAIL_GAP, RAIL_HEAD, RAIL_WIDTH, STATUS,
+};
 use crate::tokens::text;
 use crate::tokens::toast::{
     CHIP_FILL, CHIP_GAP, CHIP_HEIGHT, CHIP_RADIUS, CHIP_X, KEY_COLOR, KEY_GAP,
@@ -172,6 +174,18 @@ pub(super) struct Talk {
     view: Entity<TalkView>,
 }
 
+impl Talk {
+    /// Its pages leave their tiles, as a page watched over it hides it and it isn't drawn.
+    pub(super) fn end_tiles(&self, cx: &gpui::App) {
+        self.view.read(cx).tiles.end_all();
+    }
+
+    /// The tiles its pages show live in, which a watch borrows one of.
+    pub(super) fn tiles(&self, cx: &gpui::App) -> Rc<LiveTiles> {
+        self.view.read(cx).tiles.clone()
+    }
+}
+
 /// The view the page area draws.
 pub struct TalkView {
     shell: WeakEntity<Shell>,
@@ -191,22 +205,20 @@ pub struct TalkView {
     tiles: Rc<LiveTiles>,
     /// Where each picture was drawn when that was logged last.
     drawn_logged: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
-    /// What each picture's status line said when that was logged last.
-    said_logged: RefCell<HashMap<u64, SharedString>>,
+    /// What each tile's word said when that was logged last.
+    said_logged: RefCell<HashMap<u64, &'static str>>,
     /// Where Stop was drawn when that was logged last.
     stop_logged: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// Where Pages N was drawn when that was logged last.
-    pages_logged: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Its pages changed while one was watched over it, so they're pictured again once it shows.
     stale: bool,
     /// Whether its step under way shimmered as it last drew, which check.sh hears of.
     shimmering: bool,
     /// Its lines, which keep the newest in view as they come while the user is at the end.
     scroll: ScrollHandle,
+    /// Its rail of pages, which brings a tile into sight once as its word turns to Needs you.
+    rail_scroll: ScrollHandle,
     /// The window's size as last drawn: a change keeps the lines at their end if they were.
     viewport: Size<Pixels>,
-    /// Pages rather than Talk: as the user last picked, else as the task first showed.
-    pages: Option<bool>,
     /// What the user opened or folded of its traces and their lines, which wins over what the
     /// trace would do by itself.
     opened: HashMap<Fold, bool>,
@@ -290,17 +302,6 @@ impl Shell {
     /// again.
     /// A click on the notification a task's need posted (needs_you): its card's click, which never
     /// puts the task away if it shows already, as the user came to it.
-    /// Esc on Pages: back to Talk, and whether it was there.
-    pub(super) fn talk_back_to_talk(&mut self, cx: &mut Context<Self>) -> bool {
-        let view = self.talk.as_ref().map(|talk| talk.view.clone());
-        view.is_some_and(|view| view.update(cx, |view, cx| view.back_to_talk(cx)))
-    }
-
-    /// The task's conversation shows Pages, its grid, rather than Talk.
-    pub fn talk_on_pages(&self, cx: &gpui::App) -> bool {
-        (self.talk.as_ref()).is_some_and(|talk| talk.view.read(cx).on_pages())
-    }
-
     /// An ended task's Start Again: the command bar opens as it does for a new tab, with what the
     /// task was first asked in its field, as an ask. Nothing is sent until the user sends it.
     pub fn ask_again(&mut self, asked: SharedString, cx: &mut Context<Self>) {
@@ -317,6 +318,8 @@ impl Shell {
     }
 
     pub fn show_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+        // A view set aside for a close's question is left for the one asked for now.
+        self.forget_closing(cx);
         let Some(card) = self.task_cards.iter().find(|card| card.agent == agent) else {
             return;
         };
@@ -359,12 +362,11 @@ impl Shell {
                     drawn_logged: Rc::default(),
                     said_logged: RefCell::default(),
                     stop_logged: Rc::default(),
-                    pages_logged: Rc::default(),
                     stale: false,
                     shimmering: false,
                     scroll: ScrollHandle::new(),
+                    rail_scroll: ScrollHandle::new(),
                     viewport: Size::default(),
-                    pages: None,
                     opened: HashMap::new(),
                     was_open: HashMap::new(),
                     folding: HashMap::new(),
@@ -609,17 +611,6 @@ impl TalkView {
                         set: at,
                     });
                 }
-            }
-            // It opens on Pages when the task has two pages or more, on Talk with fewer.
-            if self.pages.is_none() {
-                let pages = conversation.tabs.len() >= 2;
-                // check.sh reads this line.
-                log!(
-                    "browser: task {} opens on {}",
-                    self.agent,
-                    if pages { "pages" } else { "talk" }
-                );
-                self.pages = Some(pages);
             }
             self.shown = Some(conversation);
             cx.notify();
@@ -958,8 +949,8 @@ impl TalkView {
         )
     }
 
-    /// The task's title and, under it, what it runs on and where it is, with Stop ⌘. at its right
-    /// while it works or waits on the user.
+    /// The task's title and, under it, what it runs on and where it is, or how many pages it
+    /// works on. An outside agent's session has Stop ⌘. at its right.
     fn header(&self, look: &Look, cx: &mut Context<Self>) -> gpui::Div {
         let shown = self.shown.as_ref();
         let palette = look.palette;
@@ -968,23 +959,13 @@ impl TalkView {
         // Where it is rolls over as it changes, after what it runs on.
         let status = motion::status(&about).to_string();
         let runs = about[..about.len() - status.len()].to_string();
-        // How far it has got follows, as its steps come, without rolling: the status rolls only as
-        // the work's state changes.
-        let progress = shown
-            .map(|shown| shown.progress.clone())
-            .filter(|progress| !progress.is_empty());
         let about = div()
             .flex()
             .child(div().min_w_0().truncate().child(runs))
-            .child(rolled(status.into(), self.motion.status(), META_LINE, look))
-            .children(progress.map(|progress| {
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .child(format!("\u{a0}· {progress}"))
-            }));
-        // Beside the page, Stop is in the composer's row.
-        let stop = (!look.beside).then(|| self.stop(look, cx)).flatten();
+            .child(rolled(status.into(), self.motion.status(), META_LINE, look));
+        // A task's Stop is on the foot's line under its reply field; an outside agent's session
+        // has no field, so its Stop stays here.
+        let stop = (!self.replies).then(|| self.stop(look, cx)).flatten();
         let words = div()
             .flex_1()
             .min_w_0()
@@ -1009,70 +990,6 @@ impl TalkView {
                     .text_color(palette.gray(STATUS))
                     .child(about),
             );
-        // Talk and Pages N, once it has a page: one switch, its track a chip's shape, the view
-        // shown lifted on the selected tab's plate, so it reads as a switch and not as Stop's kind.
-        let count = shown.map_or(0, |shown| shown.tabs.len());
-        let views = (count > 0).then(|| {
-            let pages = self.on_pages();
-            let chip = |id: &'static str, words: SharedString, on: bool, to: bool| {
-                div()
-                    .id(id)
-                    .flex_none()
-                    .h_full()
-                    .px(px(CHIP_X - VIEWS_INSET))
-                    .flex()
-                    .items_center()
-                    .rounded(px(CHIP_RADIUS - VIEWS_INSET))
-                    .whitespace_nowrap()
-                    .text_size(px(text::BODY))
-                    .font_weight(FontWeight::MEDIUM)
-                    .when(on, |chip| {
-                        chip.bg(palette.selected(0.))
-                            .shadow(palette.selected_shadow(1.))
-                            .text_color(palette.text(TITLE))
-                    })
-                    .when(!on, |chip| {
-                        chip.text_color(palette.gray(STATUS))
-                            .hover(move |style| style.bg(palette.plate(STATE_HOVERED)))
-                            .active(move |style| style.bg(palette.plate(STATE_PRESSED)))
-                    })
-                    .child(words)
-                    .on_click(cx.listener(move |view, _, _, cx| view.show_pages(to, cx)))
-            };
-            div()
-                .flex_none()
-                .h(px(CHIP_HEIGHT))
-                .p(px(VIEWS_INSET))
-                .flex()
-                .gap(px(VIEWS_GAP))
-                .rounded(px(CHIP_RADIUS))
-                .bg(palette.plate(VIEWS_TRACK))
-                .child(chip("conversation-talk", "Talk".into(), !pages, false))
-                .child({
-                    let logged = self.pages_logged.clone();
-                    let at = canvas(
-                        move |bounds, _, _| {
-                            if logged.replace(Some(bounds)) != Some(bounds) {
-                                // check.sh reads this line, to click it.
-                                log!(
-                                    "browser: task pages at {:.0} {:.0} {:.0} {:.0}",
-                                    f32::from(bounds.origin.x),
-                                    f32::from(bounds.origin.y),
-                                    f32::from(bounds.size.width),
-                                    f32::from(bounds.size.height)
-                                );
-                            }
-                        },
-                        |_, _, _, _| {},
-                    )
-                    .absolute()
-                    .size_full();
-                    let words = format!("Pages {count}").into();
-                    chip("conversation-pages-chip", words, pages, true)
-                        .relative()
-                        .child(at)
-                })
-        });
         div()
             .flex_none()
             .mb(px(HEADER_BOTTOM))
@@ -1080,12 +997,11 @@ impl TalkView {
             .items_center()
             .gap(px(BUBBLE_X))
             .child(words)
-            .children(views)
             .children(stop)
     }
 
-    /// Stop ⌘., which comes and goes with the work it stops: at the header's end, or beside the
-    /// page at the composer's row's.
+    /// Stop ⌘., which comes and goes with the work it stops: at the end of a task's foot line, or
+    /// of an outside agent's header.
     fn stop(&self, look: &Look, cx: &mut Context<Self>) -> Option<gpui::Stateful<gpui::Div>> {
         let palette = look.palette;
         // Stop comes and goes with the work it stops.
@@ -1125,245 +1041,205 @@ impl TalkView {
         })
     }
 
-    /// Pages: its pages' pictures in a grid, up to three across as the area holds them, each over
-    /// its site, the agent's page ringed Signal while it works, with its step, and one the user
-    /// holds from the agent with why: "You're driving", or "Needs you · Sign in" (#1080). A pick zooms the
-    /// page out of its picture. The pictures are taken when the agent acts (`set_conversation`).
-    fn grid(&self, look: &Look, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+    /// The task's pages, a rail of tiles beside the conversation's column, or across under its
+    /// header where the area is narrow (`across`): each the page's row, its favicon, its title and
+    /// its word, over its picture at the page's own shape, cut at the tile's foot. Only the page ilo
+    /// acts in now is ringed. A click stands on the page; a tile never gives its page a key or a
+    /// click. The pictures are taken when the agent acts (`set_conversation`), and over each the
+    /// live page shows where it can (live_tiles.rs), at `drawn`.
+    fn rail(&self, across: bool, look: &Look, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         self.drawn.borrow_mut().clear();
-        let tabs = self
-            .shown
-            .as_ref()
-            .map(|shown| shown.tabs.clone())
-            .unwrap_or_default();
+        let palette = look.palette;
+        let tabs = (self.shown.as_ref()).map_or_else(Vec::new, |shown| shown.tabs.clone());
         let on = self.shown.as_ref().and_then(|shown| shown.on);
-        let step = self.running_step();
-        // Each page's own step, once the task works on several.
-        let pages = (self.shown.as_ref().zip(self.shell.upgrade()))
-            .map(|(shown, shell)| shell.read(cx).task_page_steps(&shown.agent).to_vec())
-            .unwrap_or_default();
-        // The area's own width as it last drew, the grid taking its inset but a gap each side.
-        let area = (self.drawn_at.get()).map_or(self.viewport.width, |bounds| bounds.size.width);
-        let room = f32::from(area) - 2. * PICTURE_GAP;
-        let (columns, wide) = grid_shape(room, tabs.len());
-        let high = wide * PICTURE_HEIGHT / PICTURE_WIDTH;
-        let tiles: Vec<_> = (tabs.iter().enumerate())
-            .map(|(index, (tab, site))| {
-                let tab = *tab;
-                let opacity = match self.motion.came(Key::Picture(tab)) {
-                    Some(since) if !look.still => eased(since, look.now, RISE),
-                    _ => 1.,
-                };
-                let image = (self.pictures.iter().find(|(each, ..)| *each == tab))
-                    .and_then(|(_, _, picture)| picture.as_ref().map(PagePicture::image));
-                let pictured = image.is_some();
-                let (drawn, logged) = (self.drawn.clone(), self.drawn_logged.clone());
-                let paint = canvas(
-                    |_, _, _| {},
-                    move |bounds, _, window, _| {
-                        drawn.borrow_mut().push((tab, bounds));
-                        if logged.borrow_mut().insert(tab, bounds) != Some(bounds) {
-                            // check.sh reads this line, to click the picture.
-                            log!(
-                                "browser: task picture {tab} at {:.0} {:.0} {:.0} {:.0}",
-                                f32::from(bounds.origin.x),
-                                f32::from(bounds.origin.y),
-                                f32::from(bounds.size.width),
-                                f32::from(bounds.size.height)
-                            );
-                        }
-                        if let Some(image) = image {
-                            let corners = Corners::all(px(PICTURE_RADIUS));
-                            window
-                                .paint_image(bounds, bounds, corners, image, 0, false)
-                                .ok();
-                        }
-                    },
-                )
-                .absolute()
-                .size_full();
-                // A page the user holds says why under its site, in the title's ink, where the
-                // agent's page has its step: the bar over the page says the same.
-                let held = (self.shell.upgrade()).and_then(|shell| shell.read(cx).held_why(tab));
-                let (working, step) = picture_work(tab, on, step.clone(), &pages, held.is_some());
-                // Until its picture comes, the tile says it has none yet, rather than show nothing,
-                // and once the core had none to give, that the next action takes one.
-                let empty = (!pictured).then(|| {
-                    let pending = !self.unpictured.contains(&tab);
-                    let name = self.shown.as_ref().map(|shown| shown.name.clone());
-                    div()
-                        .absolute()
+        let high = RAIL_WIDTH * PICTURE_HEIGHT / PICTURE_WIDTH;
+        let shell = self.shell.upgrade();
+        // Each page's own step while it works on several, as with helpers: every one is ringed.
+        let steps = match (&shell, &self.shown) {
+            (Some(shell), Some(shown)) => shell.read(cx).task_page_steps(&shown.agent).to_vec(),
+            _ => Vec::new(),
+        };
+        let tiles = tabs.iter().enumerate().map(|(index, (tab, site))| {
+            let tab = *tab;
+            let opacity = match self.motion.came(Key::Picture(tab)) {
+                Some(since) if !look.still => eased(since, look.now, RISE),
+                _ => 1.,
+            };
+            let image = (self.pictures.iter().find(|(each, ..)| *each == tab))
+                .and_then(|(_, _, picture)| picture.as_ref().map(PagePicture::image));
+            let (title, favicon, page, held, said) = match (&shell, &self.shown) {
+                (Some(shell), Some(shown)) => {
+                    let shell = shell.read(cx);
+                    let row = shell.tabs.get(&tab);
+                    let title = (row.map(|row| row.title.clone()))
+                        .filter(|title| !title.is_empty())
+                        .unwrap_or_else(|| site.clone());
+                    let favicon = row.and_then(|row| row.favicon.clone());
+                    // Its row at the sidebar's foot says the same word: both ask the one function.
+                    let card = shell
+                        .task_cards
+                        .iter()
+                        .find(|card| card.agent == shown.agent);
+                    let said = card.map(|card| shell.page_word(card, tab));
+                    (title, favicon, shell.page(tab), shell.held_why(tab), said)
+                }
+                _ => (site.clone(), None, Page::default(), None, None),
+            };
+            let acting = rings(tab, on, &steps, held.as_ref());
+            let pictured = image.is_some();
+            let (drawn, logged) = (self.drawn.clone(), self.drawn_logged.clone());
+            let paint = canvas(
+                |_, _, _| {},
+                move |bounds, _, window, _| {
+                    drawn.borrow_mut().push((tab, bounds));
+                    if logged.borrow_mut().insert(tab, bounds) != Some(bounds) {
+                        // check.sh reads this line, to click the picture.
+                        log!(
+                            "browser: task picture {tab} at {:.0} {:.0} {:.0} {:.0}",
+                            f32::from(bounds.origin.x),
+                            f32::from(bounds.origin.y),
+                            f32::from(bounds.size.width),
+                            f32::from(bounds.size.height)
+                        );
+                    }
+                    if let Some(image) = image {
+                        let corners = Corners::all(px(PICTURE_RADIUS));
+                        window
+                            .paint_image(bounds, bounds, corners, image, 0, false)
+                            .ok();
+                    }
+                },
+            )
+            .absolute()
+            .size_full();
+            let icon = |size: f32| {
+                let favicon = favicon.clone();
+                div().flex_none().size(px(size)).child(match favicon {
+                    Some(image) => img(image).size_full().into_any_element(),
+                    None => svg()
+                        .path("icons/globe.svg")
                         .size_full()
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        .justify_center()
-                        .gap(px(PICTURE_EMPTY_GAP))
-                        .text_size(px(text::SMALL))
-                        .text_color(look.palette.gray(STATUS))
-                        .child(
-                            svg()
-                                .path("icons/globe.svg")
-                                .size(px(PICTURE_EMPTY_GLYPH))
-                                .text_color(look.palette.text(SECONDARY)),
-                        )
-                        .child("No picture yet")
-                        .children((!pending).then(|| {
-                            let name = name.unwrap_or_else(|| "the agent".into());
-                            format!("Taken when {name} next acts here")
-                        }))
-                });
-                let picture = div()
-                    .relative()
-                    .w(px(wide))
-                    .h(px(high))
-                    .rounded(px(PICTURE_RADIUS))
-                    .bg(look.palette.plate(gpui::rgba(KEYS_FILL).a))
-                    .overflow_hidden()
-                    .children(empty)
-                    .child(paint)
-                    .when(working, |picture| {
-                        picture.child(
-                            div()
-                                .absolute()
-                                .size_full()
-                                .rounded(px(PICTURE_RADIUS))
-                                .border(px(RING))
-                                .border_color(rgb(SIGNAL)),
-                        )
-                    });
-                let line = |words: SharedString, color: Hsla| {
-                    div()
-                        .w(px(wide))
-                        .h(px(SITE))
-                        .truncate()
-                        .text_size(px(text::SMALL))
-                        .text_color(color)
-                        .child(words)
-                };
-                // While its page plays, its speaker before its site, crossed while it's muted, as an
-                // agent's tabs start: a click on it unmutes or mutes it, as a row's does (#1080).
-                let sound = (self.shell.upgrade())
-                    .map(|shell| shell.read(cx).page(tab))
-                    .filter(|page| page.audible)
-                    .map(|page| {
-                        let shell = self.shell.clone();
-                        div()
-                            .id(("conversation-page-sound", tab))
-                            .flex_none()
-                            .mr(px(SITE_GAP))
-                            .child(
-                                svg()
-                                    .path(super::rows::speaker_glyph(page.muted))
-                                    .size(px(text::SMALL + 1.))
-                                    .text_color(look.palette.text(SECONDARY)),
-                            )
-                            .on_click(move |_, _, cx| {
-                                cx.stop_propagation();
-                                shell
-                                    .update(cx, |shell, cx| shell.toggle_mute(tab, cx))
-                                    .ok();
-                            })
-                            .when(look.behind, |sound| sound.relative().child(unpressed()))
-                    });
-                let caption = div()
-                    .mt(px(SITE_GAP))
+                        .text_color(palette.text(SECONDARY))
+                        .into_any_element(),
+                })
+            };
+            // Until its picture comes the tile is blank but for its favicon.
+            let blank = (!pictured).then(|| {
+                div()
+                    .absolute()
+                    .size_full()
                     .flex()
                     .items_center()
-                    .children(sound)
-                    .child(
-                        line(site.clone(), look.palette.text(TITLE))
-                            .font_weight(caption_weight(Caption::Site)),
-                    );
-                let status = picture_status(held.as_ref(), step.filter(|_| working));
-                if let Some(words) = &status {
-                    let mut said = self.said_logged.borrow_mut();
-                    if said.get(&tab) != Some(words) {
-                        // check.sh reads this line.
-                        log!("browser: task picture {tab} says {words}");
-                        said.insert(tab, words.clone());
-                    }
-                }
-                let status = status.map(|words| match held {
-                    Some(_) => line(words, look.palette.text(TITLE))
-                        .font_weight(caption_weight(Caption::Hold)),
-                    // The ring says it's working: no text is written in the working green.
-                    None => line(words, look.palette.gray(SECONDARY))
-                        .font_weight(caption_weight(Caption::Step)),
+                    .justify_center()
+                    .child(icon(PICTURE_EMPTY_GLYPH))
+            });
+            let picture = div()
+                .relative()
+                .w(px(RAIL_WIDTH))
+                .h(px(high))
+                .rounded(px(PICTURE_RADIUS))
+                .bg(palette.plate(gpui::rgba(KEYS_FILL).a))
+                .overflow_hidden()
+                .children(blank)
+                .child(paint)
+                .when(acting, |picture| {
+                    picture.child(
+                        div()
+                            .absolute()
+                            .size_full()
+                            .rounded(px(PICTURE_RADIUS))
+                            .border(px(RING))
+                            .border_color(rgb(SIGNAL)),
+                    )
                 });
+            // While its page plays, its speaker before its title, crossed while it's muted, as
+            // an agent's tabs start: a click on it unmutes or mutes it, as a row's does (#1080).
+            let sound = page.audible.then(|| {
+                let shell = self.shell.clone();
                 div()
-                    .id(("conversation-page", tab))
+                    .id(("conversation-page-sound", tab))
                     .flex_none()
-                    .w(px(wide))
-                    .when(index % columns > 0, |tile| tile.ml(px(PICTURE_GAP)))
-                    .mb(px(PICTURES_ROW_GAP))
-                    .opacity(opacity)
-                    .cursor_pointer()
-                    .child(picture)
-                    .child(caption)
-                    .children(status)
-                    .on_click(cx.listener(move |view, _, _, cx| view.watch(tab, cx)))
-            })
-            .collect();
-        let width = columns as f32 * wide + (columns as f32 - 1.) * PICTURE_GAP;
-        div()
-            .id("conversation-pages")
-            .flex_1()
-            .min_h_0()
-            .w_full()
-            .overflow_y_scroll()
-            .flex()
-            .justify_center()
-            .child(
+                    .child(
+                        svg()
+                            .path(super::rows::speaker_glyph(page.muted))
+                            .size(px(RAIL_FAVICON))
+                            .text_color(palette.text(SECONDARY)),
+                    )
+                    .on_click(move |_, _, cx| {
+                        cx.stop_propagation();
+                        shell
+                            .update(cx, |shell, cx| shell.toggle_mute(tab, cx))
+                            .ok();
+                    })
+                    .when(look.behind, |sound| sound.relative().child(unpressed()))
+            });
+            let says = said.map_or("", PageWord::label);
+            if self.said_logged.borrow_mut().insert(tab, says) != Some(says) {
+                // check.sh reads this line.
+                log!("browser: task picture {tab} says {says}");
+                // Once, as it turns: a tile the user scrolls away again stays away.
+                if said == Some(PageWord::NeedsYou) {
+                    self.rail_scroll.scroll_to_item(index);
+                }
+            }
+            let word = said.map(|said| {
                 div()
-                    .w(px(width))
+                    .flex_none()
                     .flex()
-                    .flex_wrap()
-                    .content_start()
-                    .children(tiles),
-            )
-    }
-
-    /// The step under way, as its trace names it, for the agent's page's picture.
-    fn running_step(&self) -> Option<SharedString> {
-        let shown = self.shown.as_ref()?;
-        shown.lines.iter().rev().find_map(|line| match line {
-            Line::Trace(trace) => (trace.items.iter().rev()).find_map(|item| match item {
-                TraceItem::Step(step) if step.running => Some(step.title.clone()),
-                _ => None,
-            }),
-            Line::Step(step) if step.running => Some(step.title.clone()),
-            _ => None,
-        })
-    }
-
-    /// Whether Pages shows, rather than Talk: as the user picked, else Pages while the task had
-    /// two pages or more as it opened.
-    fn on_pages(&self) -> bool {
-        self.pages.unwrap_or(false)
-    }
-
-    /// The header's Talk or Pages.
-    fn show_pages(&mut self, pages: bool, cx: &mut Context<Self>) {
-        if self.pages != Some(pages) {
-            // check.sh reads this line.
-            log!(
-                "browser: task {} shows {}",
-                self.agent,
-                if pages { "pages" } else { "talk" }
-            );
-            self.pages = Some(pages);
-            cx.notify();
+                    .items_center()
+                    .gap(px(SITE_GAP))
+                    // A word that asks for the user is in the title's ink; the others are quiet.
+                    .text_color(match said {
+                        PageWord::NeedsYou | PageWord::Driving => palette.text(TITLE),
+                        _ => palette.gray(STATUS),
+                    })
+                    .when(said == PageWord::Working, |word| {
+                        word.child(div().size(px(RAIL_DOT)).rounded_full().bg(rgb(SIGNAL)))
+                    })
+                    .child(said.label())
+            });
+            let head = div()
+                .h(px(RAIL_HEAD))
+                .w(px(RAIL_WIDTH))
+                .flex()
+                .items_center()
+                .gap(px(SITE_GAP))
+                .text_size(px(text::SMALL))
+                .child(icon(RAIL_FAVICON))
+                .children(sound)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(palette.text(TITLE))
+                        .child(title),
+                )
+                .children(word);
+            div()
+                .id(("conversation-page", tab))
+                .flex_none()
+                .w(px(RAIL_WIDTH))
+                .flex()
+                .flex_col()
+                .gap(px(SITE_GAP))
+                .opacity(opacity)
+                .cursor_pointer()
+                .child(head)
+                .child(picture)
+                .on_click(cx.listener(move |view, _, _, cx| view.watch(tab, cx)))
+        });
+        let rail = div()
+            .id("conversation-pages")
+            .flex()
+            .gap(px(RAIL_GAP))
+            .track_scroll(&self.rail_scroll)
+            .children(tiles);
+        match across {
+            true => rail.w_full().overflow_x_scroll(),
+            false => rail.size_full().flex_col().overflow_y_scroll(),
         }
-    }
-
-    /// Esc on Pages goes back to Talk, and says whether it did.
-    pub(super) fn back_to_talk(&mut self, cx: &mut Context<Self>) -> bool {
-        let on = self.on_pages();
-        if on {
-            self.show_pages(false, cx);
-        }
-        on
     }
 
     /// What the agent said, as its Markdown marks it: its paragraphs and lists, with bold, italic,
@@ -2093,7 +1969,7 @@ impl TalkView {
             )
     }
 
-    /// The composer's row under the reply field, beside the page: the task's access on a chip,
+    /// The composer's row under the reply field: the task's access on a chip,
     /// which opens its menu (#4094), and Stop at the row's end.
     fn composer(&self, look: &Look, cx: &mut Context<Self>) -> gpui::Div {
         let palette = look.palette;
@@ -2994,7 +2870,7 @@ impl Render for TalkView {
             .px(px(TRACE_HANG))
             .pb(px(LINES_BELOW))
             .children(self.lines(&look, cx));
-        // The header and the reply field are the column's; Pages' grid takes the area's width.
+        // The header and the reply field are the column's.
         let on_column = |child: gpui::AnyElement| {
             div()
                 .w_full()
@@ -3007,57 +2883,78 @@ impl Render for TalkView {
             part.relative()
                 .when(look.behind, |part| part.child(unpressed()))
         };
-        let middle = match self.on_pages() {
-            true => {
-                // Its pages show live in their pictures where the core can (live_tiles.rs), but
-                // not under a page watched over them, which they'd draw over.
-                let held = look.behind
-                    || (self.shell.upgrade())
-                        .is_some_and(|shell| shell.read(cx).watched_task_page().is_some());
-                let grid = self.grid(&look, cx);
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .mx(px(PICTURE_GAP - INSET))
-                    .flex()
-                    .mb(px(REPLY_GAP))
-                    .child(self.tiles.over(grid, self.drawn.clone(), held))
-            }
-            false => {
-                self.tiles.end_all();
-                shut(
+        // The task's pages stand in a rail at the area's right edge, or, where the column at its
+        // least and the rail don't both fit, in a row under the header. With no page, no rail.
+        let pages = (self.shown.as_ref()).is_some_and(|shown| !shown.tabs.is_empty());
+        let wide =
+            (self.drawn_at.get()).map_or(window.viewport_size().width, |area| area.size.width);
+        let across = pages && f32::from(wide) < RAIL_BREAKPOINT;
+        // Its pages show live in their tiles where the core can (live_tiles.rs), but not under a
+        // page watched over them, which they'd draw over.
+        let held = look.behind
+            || (self.shell.upgrade())
+                .is_some_and(|shell| shell.read(cx).watched_task_page().is_some());
+        let middle = shut(
+            div()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .flex()
+                .justify_center()
+                .mb(px(REPLY_GAP))
+                .child(
                     div()
-                        .flex_1()
-                        .min_h_0()
-                        .w_full()
-                        .flex()
-                        .justify_center()
-                        .mb(px(REPLY_GAP))
-                        .child(
-                            div()
-                                .size_full()
-                                .max_w(px(COLUMN + 2. * TRACE_HANG))
-                                .child(lines),
-                        ),
-                )
-            }
-        };
+                        .size_full()
+                        .max_w(px(COLUMN + 2. * TRACE_HANG))
+                        .child(lines),
+                ),
+        );
         let column = div()
-            .size_full()
+            .flex_1()
+            .min_w_0()
+            .h_full()
             .flex()
             .flex_col()
             .text_size(px(text::BODY))
             .line_height(px(TEXT_LINE))
             .text_color(palette.text(TITLE))
             .child(shut(on_column(self.header(&look, cx).into_any_element())))
+            .children(across.then(|| {
+                div()
+                    .flex_none()
+                    .w_full()
+                    .mb(px(RAIL_GAP))
+                    .child(
+                        self.tiles
+                            .over(self.rail(true, &look, cx), self.drawn.clone(), held),
+                    )
+            }))
             .child(middle)
             .child(shut(on_column(self.reply(&look, cx).into_any_element())))
             // With ilo's line and Start Again in the field's place there is no level to set, so
             // the row goes with the field (#4105).
             .children(
-                (look.beside && self.in_field().is_none())
+                (self.replies && self.in_field().is_none())
                     .then(|| shut(on_column(self.composer(&look, cx).into_any_element()))),
             );
+        let rail = (pages && !across).then(|| {
+            div()
+                .flex_none()
+                .w(px(RAIL_WIDTH))
+                .h_full()
+                .ml(px(RAIL_GAP))
+                .flex()
+                .flex_col()
+                .child(
+                    self.tiles
+                        .over(self.rail(false, &look, cx), self.drawn.clone(), held),
+                )
+        });
+        if !pages {
+            self.drawn.borrow_mut().clear();
+            self.tiles.end_all();
+        }
+        let column = div().size_full().flex().child(column).children(rail);
         let drawn = self.drawn_at.clone();
         div()
             .id("conversation")
@@ -3100,67 +2997,20 @@ fn unpressed() -> gpui::Div {
         .block_mouse_except_scroll()
 }
 
-/// How many pictures a row of Pages holds in `room`, and how wide each is, for `pages` of them:
-/// as many at their full size as fit, up to `PICTURES_COLUMNS`. Where only one fits, three pages
-/// or more go two across, each half the room at the picture's own shape, so four pages beside a
-/// page aren't a column the user scrolls for the third (#4102).
-pub(super) fn grid_shape(room: f32, pages: usize) -> (usize, f32) {
-    let fit = (((room + PICTURE_GAP) / (PICTURE_WIDTH + PICTURE_GAP)).floor())
-        .clamp(1., PICTURES_COLUMNS) as usize;
-    match (fit, pages) {
-        (1, 3..) => (2, ((room - PICTURE_GAP) / 2.).floor().max(1.)),
-        _ => (fit, PICTURE_WIDTH),
-    }
-}
-
-/// Whether the task works on `tab`'s page, which rings its picture, and the step the picture says
-/// then. A task on one page works on the page it's `on`, at the step under way, `running`. One
-/// that works on several, `pages` having each one's own step, works on every page that has one
-/// and that the user doesn't hold: each says its own step, never another page's (#4102).
-pub(super) fn picture_work(
+/// Whether `tab`'s tile is ringed: ilo acts in its page now, and the user doesn't hold it (`held`).
+/// A task on one page acts in the page it's `on`; one on several, as with helpers, `steps` having
+/// each one's own step, acts in every page that has one, so more than one tile can be ringed.
+pub(super) fn rings(
     tab: u64,
     on: Option<u64>,
-    running: Option<SharedString>,
-    pages: &[(u64, SharedString)],
-    held: bool,
-) -> (bool, Option<SharedString>) {
-    let own = pages.iter().find(|(each, _)| *each == tab);
-    match pages.is_empty() {
-        true => (on == Some(tab), running),
-        false => (own.is_some() && !held, own.map(|(_, step)| step.clone())),
-    }
-}
-
-/// A line under a page's picture: its site, why the user holds it, or the agent's step there.
-#[derive(Clone, Copy)]
-enum Caption {
-    Site,
-    Hold,
-    Step,
-}
-
-/// The weight a page's picture sets a line under it in. Its site is the tile's title, in medium,
-/// and a hold asks for the user as loudly; the agent's step is regular under its site, as a line
-/// that names no weight is.
-fn caption_weight(line: Caption) -> FontWeight {
-    match line {
-        Caption::Site | Caption::Hold => FontWeight::MEDIUM,
-        Caption::Step => FontWeight::NORMAL,
-    }
-}
-
-/// What a page's picture says under its site: why the user holds it from the agent, `held`, as
-/// "You're driving" when they took it over or "Needs you · Sign in" when the agent asked them,
-/// else the agent's step while it works there.
-pub(super) fn picture_status(
+    steps: &[(u64, SharedString)],
     held: Option<&SharedString>,
-    step: Option<SharedString>,
-) -> Option<SharedString> {
-    match held {
-        Some(why) if why.is_empty() => Some("You're driving".into()),
-        Some(why) => Some(format!("Needs you · {why}").into()),
-        None => step,
-    }
+) -> bool {
+    let acts = match steps.is_empty() {
+        true => on == Some(tab),
+        false => steps.iter().any(|(each, _)| *each == tab),
+    };
+    acts && held.is_none()
 }
 
 #[cfg(test)]

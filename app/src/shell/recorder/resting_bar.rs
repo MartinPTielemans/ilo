@@ -102,6 +102,12 @@ impl command_bar::Host for RestingBar {
             name: "Claude".into(),
             glyph: "icons/terminal.svg",
             model: Some("Opus".into()),
+            model_id: "opus".into(),
+            default_row: "Claude Code's default".into(),
+            default_model: Some("Sonnet".into()),
+            models: [("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")]
+                .map(|(id, name)| (id.to_string(), name.to_string()))
+                .to_vec(),
             resets: None,
         };
         Some(TaskAgents {

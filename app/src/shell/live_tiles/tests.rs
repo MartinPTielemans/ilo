@@ -14,7 +14,7 @@ fn bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<Pixels> {
     Bounds::new(point(px(x), px(y)), size(px(width), px(height)))
 }
 
-/// The conversation's visible area, in the window.
+/// The rail's visible area, in the window.
 fn area() -> Bounds<Pixels> {
     bounds(100., 100., 600., 400.)
 }
