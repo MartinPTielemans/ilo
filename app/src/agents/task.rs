@@ -200,7 +200,7 @@ impl Trace {
     /// line stays.
     pub fn helpers(&self) -> usize {
         (self.items.iter())
-            .filter(|item| matches!(item, TraceItem::Helper(_)))
+            .filter(|item| matches!(item, TraceItem::Helper { .. }))
             .count()
     }
 
@@ -253,9 +253,17 @@ pub enum TraceItem {
     Step(TraceStep),
     /// What the agent said as it worked, which isn't its turn's last message.
     Said(SharedString),
-    /// A helper the task started (#4102), as the step it's on: a step's line in ilo's own words
-    /// for the page the helper works on, never the helper's own text.
-    Helper(TraceStep),
+    /// A helper the task started (#4102), as one line. Nothing on it is the helper's own text or
+    /// what it found.
+    Helper {
+        /// The step it's on, in ilo's own words for the page it works on.
+        step: TraceStep,
+        /// The name its task gave it as it asked for it, the task's own words as its title is:
+        /// one line of plain text, cut short, held in memory alone. Empty if it gave none.
+        name: SharedString,
+        /// The page it works on, by its tab.
+        tab: Option<u64>,
+    },
 }
 
 /// A line of a trace: a step, in one sentence.
@@ -1512,6 +1520,10 @@ impl Agents {
                     task.process = Some(process);
                     // What starts it again if its wall doesn't go up (rewall.rs).
                     task.rising = walled.then(|| rewall::Rising::of(first));
+                    // Until its first line says which kinds of helper it has (#4102).
+                    let new = matches!(keep, super::kept::Keep::New(_));
+                    let had = (task.trace.len(), task.messages.len());
+                    task.helpers.run_started(first, new, had);
                 }
                 self.kept_started(agent, cli, &keep);
                 true
@@ -1640,7 +1652,9 @@ impl Agents {
                 });
             }
             Out::Helper { id, told } => self.helper_told(&agent, id, told, cx),
-            Out::Started { deep } => self.helper_started(&agent, deep),
+            Out::Started { deep } => self.helper_started(&agent, deep, cx),
+            Out::NotAllowed(limit) => self.helper_not_allowed(&agent, limit, cx),
+            Out::Kinds { ours } => self.helper_kinds(&agent, ours, cx),
             // The turn ilo interrupted at the helpers' limit ends, however its CLI says so. The
             // first since the user wrote, the task goes on in a new turn that starts with what
             // ilo tells it; the second, the turn ends as any does and the task waits for them.
@@ -3562,7 +3576,10 @@ pub fn fold(
         first += turn.len();
     }
     let mut lines = Vec::new();
-    let mut stretch = Stretch::default();
+    let mut stretch = Stretch {
+        helpers: Some(helpers),
+        ..Stretch::default()
+    };
     let mut steps = trace.iter().enumerate().peekable();
     for (index, message) in messages.iter().enumerate() {
         while let Some((key, step)) = steps.next_if(|(_, step)| step.after <= index) {
@@ -3598,7 +3615,7 @@ fn steps(lines: Vec<Line>) -> Vec<Line> {
     });
     (steps.filter_map(|item| match item {
         TraceItem::Step(step) => Some(Line::Step(step)),
-        TraceItem::Said(_) | TraceItem::Helper(_) => None,
+        TraceItem::Said(_) | TraceItem::Helper { .. } => None,
     }))
     .collect()
 }
@@ -3606,6 +3623,8 @@ fn steps(lines: Vec<Line>) -> Vec<Line> {
 /// The stretch of work a trace is made of, as it gathers.
 #[derive(Default)]
 struct Stretch<'a> {
+    /// The task's helpers, for the names it gave them.
+    helpers: Option<&'a Helpers>,
     gathered: Vec<Gathered<'a>>,
     key: Option<usize>,
     started: Option<Instant>,
@@ -3653,14 +3672,18 @@ impl<'a> Stretch<'a> {
                 Together::Steps(steps) => TraceItem::Step(trace_step(&steps)),
                 Together::Said(text) => TraceItem::Said(text),
                 // A helper's one line is the step it's on, in the place of its first.
-                Together::Helper(_, key, on) => TraceItem::Helper(helper_step(key, on)),
+                Together::Helper(helper, key, on) => TraceItem::Helper {
+                    step: helper_step(key, on),
+                    name: (self.helpers).map_or_else(SharedString::default, |all| all.name(helper)),
+                    tab: on.1.did.tab,
+                },
             })
             .collect();
         // A stretch that's over has nothing under way, a helper's line neither: what its
         // assistant does with helpers once a turn ends or is interrupted isn't ilo's to show.
         if !running {
             for item in &mut items {
-                if let TraceItem::Step(step) | TraceItem::Helper(step) = item {
+                if let TraceItem::Step(step) | TraceItem::Helper { step, .. } = item {
                     step.running = false;
                     if let Opens::Steps(steps) = &mut step.opens {
                         steps.iter_mut().for_each(|step| step.running = false);

@@ -19,7 +19,7 @@ use super::{State, conversation};
 use crate::agents::Agents;
 use crate::agents::access::ACCESS_ACTION;
 use crate::agents::files::Given;
-use crate::agents::runner::Cli;
+use crate::agents::runner::{Cli, Failure};
 use crate::agents::tier::{self, Tier};
 use crate::agents::wall::{self, Wall, WallFor, WallRefused};
 
@@ -70,13 +70,17 @@ impl Agents {
     fn put_up(&self, agent: &str, level: Tier) -> Result<Wall, WallRefused> {
         let refused = || WallRefused::Failed("the task isn't one ilo runs".into());
         let task = self.task(agent).ok_or_else(refused)?;
-        let task_dir = self.tasks_dir().join(agent);
+        // Where its start puts them (`launch_in`): a task with files is never kept, so its
+        // folder is its own under the tasks'.
+        let dir = self.tasks_dir();
+        let (task_dir, config) = (dir.join(agent), dir.join(format!("{agent}.json")));
         let wall = WallFor {
             cli: task.cli.ok_or_else(refused)?,
             level,
             folder: task.files.folder.as_ref(),
             attached: task.files.attached.as_deref(),
             task_dir: &task_dir,
+            config: &config,
         };
         #[cfg(test)]
         if let Some(put_up) = &self.tasks.wall {
@@ -145,7 +149,14 @@ impl Agents {
                 self.without_files(agent);
                 rising.first
             }
-            None => conversation(task),
+            // No start of ilo's was rising: it couldn't start, as any start that can't.
+            None => {
+                let Some(cli) = task.cli else {
+                    return;
+                };
+                let why = format!("{} couldn't start.", cli.name());
+                return self.fail(agent, Failure::Other(why), cx);
+            }
         };
         if under_way {
             self.launch(agent, &first, cx);

@@ -204,7 +204,7 @@ impl Run {
     }
 
     /// Every file under the profile's folder but the stand-in's own, as text.
-    fn files(&self) -> Vec<(PathBuf, String)> {
+    pub(super) fn files(&self) -> Vec<(PathBuf, String)> {
         let (mut folders, mut files) = (vec![self.profile.clone()], Vec::new());
         while let Some(folder) = folders.pop() {
             for entry in std::fs::read_dir(&folder).unwrap() {
