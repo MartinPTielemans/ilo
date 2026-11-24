@@ -642,6 +642,7 @@ impl Task {
             tier: Tier::default(),
             sites: Sites::default(),
             stops: Vec::new(),
+            stopped_turns: Vec::new(),
             placed: Vec::new(),
             told: None,
             helpers: Helpers::of_task(helpers),

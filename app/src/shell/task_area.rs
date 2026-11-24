@@ -1258,12 +1258,6 @@ impl Shell {
         })
     }
 
-    /// Each of a task's pages' own step while it works on several, as its card has them.
-    pub(super) fn task_page_steps(&self, agent: &str) -> &[(u64, SharedString)] {
-        let card = self.task_cards.iter().find(|card| card.agent == agent);
-        card.map_or(&[][..], |card| &card.page_steps[..])
-    }
-
     /// Whether the task the area shows is at work on `tab`'s page, which the page's ring says:
     /// the page its agent is at work in, or once it works on several, each that has a step of
     /// its own.

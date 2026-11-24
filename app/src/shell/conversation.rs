@@ -791,6 +791,20 @@ impl TalkView {
         shell.read(cx).watched_task_page().map(|(_, tab)| tab)
     }
 
+    /// The level chip's menu, for the task shown: the Shell holds the window's menus.
+    fn tier_menu(&self, clicked: gpui::Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(shown) = &self.shown else {
+            return;
+        };
+        let (agent, tier, only) = (self.agent.clone(), shown.tier, shown.only_added);
+        let chip = self.level_drawn.get();
+        self.shell
+            .update(cx, |shell, cx| {
+                shell.task_tier_menu(agent, tier, only, chip, clicked, cx)
+            })
+            .ok();
+    }
+
     fn act(&self, action: TaskAction, cx: &mut Context<Self>) {
         let agent = self.agent.clone();
         self.shell
@@ -1056,14 +1070,8 @@ impl TalkView {
         self.drawn.borrow_mut().clear();
         let palette = look.palette;
         let tabs = (self.shown.as_ref()).map_or_else(Vec::new, |shown| shown.tabs.clone());
-        let on = self.shown.as_ref().and_then(|shown| shown.on);
         let high = RAIL_WIDTH * PICTURE_HEIGHT / PICTURE_WIDTH;
         let shell = self.shell.upgrade();
-        // Each page's own step while it works on several, as with helpers: every one is ringed.
-        let steps = match (&shell, &self.shown) {
-            (Some(shell), Some(shown)) => shell.read(cx).task_page_steps(&shown.agent).to_vec(),
-            _ => Vec::new(),
-        };
         let tiles = tabs.iter().enumerate().map(|(index, (tab, site))| {
             let tab = *tab;
             let opacity = match self.motion.came(Key::Picture(tab)) {
@@ -1072,7 +1080,7 @@ impl TalkView {
             };
             let image = (self.pictures.iter().find(|(each, ..)| *each == tab))
                 .and_then(|(_, _, picture)| picture.as_ref().map(PagePicture::image));
-            let (title, favicon, page, held, said) = match (&shell, &self.shown) {
+            let (title, favicon, page, mark) = match (&shell, &self.shown) {
                 (Some(shell), Some(shown)) => {
                     let shell = shell.read(cx);
                     let row = shell.tabs.get(&tab);
@@ -1085,12 +1093,15 @@ impl TalkView {
                         .task_cards
                         .iter()
                         .find(|card| card.agent == shown.agent);
-                    let said = card.map(|card| shell.page_word(card, tab));
-                    (title, favicon, shell.page(tab), shell.held_why(tab), said)
+                    let mark = card.map(|card| shell.page_mark(card, tab));
+                    (title, favicon, shell.page(tab), mark)
                 }
-                _ => (site.clone(), None, Page::default(), None, None),
+                _ => (site.clone(), None, Page::default(), None),
             };
-            let acting = rings(tab, on, &steps, held.as_ref());
+            let said = mark.map(|mark| mark.word);
+            // The outline, from the same answer as the word: the page the assistant is in, or
+            // the one that needs the user at a handoff.
+            let acting = mark.is_some_and(|mark| mark.outline);
             let pictured = image.is_some();
             let (drawn, logged) = (self.drawn.clone(), self.drawn_logged.clone());
             let paint = canvas(
@@ -1212,7 +1223,7 @@ impl TalkView {
                         PageWord::NeedsYou | PageWord::Driving => palette.text(TITLE),
                         _ => palette.gray(STATUS),
                     })
-                    .when(said == PageWord::Working, |word| {
+                    .when(said == PageWord::Working && acting, |word| {
                         word.child(div().size(px(RAIL_DOT)).rounded_full().bg(rgb(SIGNAL)))
                     })
                     .child(said.label())
@@ -2060,6 +2071,9 @@ impl TalkView {
         let drawn = self.level_drawn.clone();
         let chip = page_chip(palette, "conversation-tier", tier.label(), None)
             .relative()
+            .on_click(cx.listener(|view, event: &gpui::ClickEvent, _, cx| {
+                view.tier_menu(event.position(), cx)
+            }))
             .child(
                 svg()
                     .flex_none()
@@ -3068,22 +3082,6 @@ fn unpressed() -> gpui::Div {
         .top_0()
         .size_full()
         .block_mouse_except_scroll()
-}
-
-/// Whether `tab`'s tile is ringed: ilo acts in its page now, and the user doesn't hold it (`held`).
-/// A task on one page acts in the page it's `on`; one on several, as with helpers, `steps` having
-/// each one's own step, acts in every page that has one, so more than one tile can be ringed.
-pub(super) fn rings(
-    tab: u64,
-    on: Option<u64>,
-    steps: &[(u64, SharedString)],
-    held: Option<&SharedString>,
-) -> bool {
-    let acts = match steps.is_empty() {
-        true => on == Some(tab),
-        false => steps.iter().any(|(each, _)| *each == tab),
-    };
-    acts && held.is_none()
 }
 
 #[cfg(test)]

@@ -87,6 +87,7 @@ fn conversation(steps: usize) -> Conversation {
         answers: Vec::new(),
         writing: false,
         tier: Default::default(),
+        only_added: false,
     }
 }
 
@@ -1130,35 +1131,6 @@ fn the_reply_placeholder_follows_the_appearance(cx: &mut TestAppContext) {
     assert_eq!(colours[0], colours[2]);
 }
 
-/// The ring is on each tile ilo acts in now: on one page, the page it's on; on several, as with
-/// helpers, every page with a step of its own. Never another of the task's pages, nor one the user
-/// holds.
-#[test]
-fn the_ring_is_on_the_acted_tiles_only() {
-    use super::rings;
-    use gpui::SharedString;
-    let ringed = |on, steps: &[(u64, SharedString)], held: Option<u64>| -> Vec<u64> {
-        let why: SharedString = "".into();
-        [30, 31, 32, 33]
-            .into_iter()
-            .filter(|tab| rings(*tab, on, steps, (held == Some(*tab)).then_some(&why)))
-            .collect()
-    };
-    assert_eq!(ringed(Some(31), &[], None), [31]);
-    assert_eq!(ringed(None, &[], None), Vec::<u64>::new());
-    let helpers: Vec<(u64, SharedString)> = vec![
-        (30, "Reading tickets.example".into()),
-        (32, "Reading stalls.example".into()),
-        (33, "Reading boxoffice.example".into()),
-    ];
-    assert_eq!(ringed(Some(30), &helpers, None), [30, 32, 33]);
-    assert_eq!(
-        ringed(Some(30), &helpers, Some(33)),
-        [30, 32],
-        "the page the user drives"
-    );
-}
-
 /// Task-1's conversation with ilo's line that it stopped Claude at Place order, under Work on
 /// pages, drawn, and its view.
 fn stopped_at_order(
@@ -1838,6 +1810,77 @@ fn level_chip_with(kind: IloKind, cx: &mut TestAppContext) -> bool {
     view.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
     view.read_with(cx, |view, _| view.level_drawn.get().is_some())
+}
+
+/// The chip under the reply field says the task's own level, at Look only and at Full access,
+/// and a click on it opens the level's menu: names only, that level checked, where it may go and
+/// Settings. A pick there is the user's press on the task, the one way its level changes.
+#[gpui::test]
+fn the_level_chip_says_the_tasks_level_and_opens_its_menu(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    for tier in [Tier::Look, Tier::Full] {
+        shell.update(cx, |shell, cx| {
+            shell.set_talk_beside(true, cx);
+            shell.set_conversation(
+                Some(Conversation {
+                    tier,
+                    ..ended(IloKind::KeptHere)
+                }),
+                cx,
+            );
+        });
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        let chip = view.read_with(cx, |view, _| view.level_drawn.get());
+        let chip = chip.expect("the level chip drawn");
+        host.take();
+        cx.simulate_click(chip.center(), Modifiers::none());
+        cx.run_until_parked();
+        let rows: Vec<(String, bool)> = (host.menus.borrow().last().cloned())
+            .expect("a click on the chip showed no menu")
+            .into_iter()
+            .map(|(title, enabled)| (title.to_string(), enabled))
+            .collect();
+        let row = |title: &str, enabled: bool| (title.to_string(), enabled);
+        assert_eq!(
+            rows,
+            vec![
+                row("Look only", true),
+                row("Work on pages", true),
+                row("Full access", true),
+                row("", false),
+                row("Any site", true),
+                row("Only the sites you add", false),
+                row("", false),
+                row("Settings…", true),
+            ],
+            "the level menu's rows at {tier:?}"
+        );
+        let checked: Vec<bool> = host.entries.borrow().iter().map(|e| e.checked).collect();
+        let at = |each: Tier| tier == each;
+        assert_eq!(
+            checked,
+            [
+                at(Tier::Look),
+                at(Tier::Work),
+                at(Tier::Full),
+                false,
+                true,
+                false,
+                false,
+                false
+            ],
+            "the menu checks {tier:?}, the task's own level"
+        );
+    }
+    host.take();
+    cx.update(|_, cx| host.choose("Work on pages", cx));
+    assert_eq!(
+        host.take(),
+        vec!["task task-1 SetTier(Work)".to_string()],
+        "the pick is the user's press on the task"
+    );
 }
 
 /// A task that takes a reply keeps its level under the field, ended and picked up again too.

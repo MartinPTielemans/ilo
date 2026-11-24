@@ -147,8 +147,10 @@ pub struct Conversation {
     pub answers: Vec<SharedString>,
     /// Whether its last line is the message the agent is writing, which comes in as it's written.
     pub writing: bool,
-    /// Its access, which the composer's chip shows and changes.
+    /// Its access, which the chip under the reply field shows and its menu changes.
     pub tier: Tier,
+    /// Whether it may go only to the sites of the pages the user added.
+    pub only_added: bool,
 }
 
 /// A line of a task's conversation.
@@ -186,10 +188,17 @@ pub struct Trace {
 }
 
 impl Trace {
+    /// Its steps, not its rows: a row that's the same step on several tabs counts each.
     pub fn steps(&self) -> usize {
         (self.items.iter())
-            .filter(|item| matches!(item, TraceItem::Step(_)))
-            .count()
+            .map(|item| match item {
+                TraceItem::Step(step) => match &step.opens {
+                    Opens::Steps(each) => each.len().max(1),
+                    _ => 1,
+                },
+                _ => 0,
+            })
+            .sum()
     }
 
     /// The helpers the task started in it (#4102), those that have finished too, as each one's
@@ -379,6 +388,9 @@ pub struct Task {
     pub sites: Sites,
     /// What ilo stopped, as its conversation shows each, oldest first.
     pub stops: Vec<Stop>,
+    /// The turns the user stopped, each by how many of their messages came before its answer: a
+    /// stopped turn has no answer, so all it said stays in its stretch of work.
+    pub stopped_turns: Vec<usize>,
     /// ilo's other lines of what happened to it: its steps handed to the user, the tabs its
     /// agent asked back and the changes of its access, oldest first.
     pub(super) placed: Vec<super::lines::Placed>,
@@ -912,6 +924,7 @@ impl Agents {
             working,
             task.writing.as_ref(),
             &task.helpers,
+            &task.stopped_turns,
             // ilo's lines of its refusals, its steps handed to the user and its changes of access.
             self.ilo_lines(task, cx),
         );
@@ -980,8 +993,9 @@ impl Agents {
                 _ => Vec::new(),
             },
             writing: working && task.writing.as_ref().is_some_and(|writing| !writing.said),
-            // The tier model (#4086 step 2) keeps each task's own.
-            tier: Tier::default(),
+            // The chip under the reply field says the task's own level, the one its refusals read.
+            tier: task.tier,
+            only_added: matches!(task.sites, Sites::Only(_)),
         })
     }
 
@@ -1430,6 +1444,7 @@ impl Agents {
                 false => Sites::default(),
             },
             stops: Vec::new(),
+            stopped_turns: Vec::new(),
             placed: Vec::new(),
             told: None,
             helpers: Helpers::of_task(self.helpers_on() && cli == Cli::Claude),
@@ -1886,6 +1901,10 @@ impl Agents {
             cx.notify();
             return;
         }
+        let turn = (task.messages.iter())
+            .filter(|message| message.who == Who::User)
+            .count();
+        task.stopped_turns.push(turn);
         task.state = State::Stopped;
         task.end(SystemTime::now());
         if let Some(process) = task.process.as_mut() {
@@ -2627,6 +2646,7 @@ impl Agents {
             tier: Tier::default(),
             sites: Sites::default(),
             stops: Vec::new(),
+            stopped_turns: Vec::new(),
             placed: Vec::new(),
             told: None,
             helpers: Helpers::default(),
@@ -3591,6 +3611,7 @@ pub fn fold(
     working: bool,
     writing: Option<&Writing>,
     helpers: &Helpers,
+    stopped: &[usize],
     marks: Vec<Mark>,
 ) -> Vec<Line> {
     #[cfg(test)]
@@ -3607,13 +3628,14 @@ pub fn fold(
     let turns: Vec<&[Message]> = messages
         .split_inclusive(|message| message.who == Who::User)
         .collect();
-    for turn in &turns {
+    for (index, turn) in turns.iter().enumerate() {
         // A turn the user has written after is over, even as the next is under way.
         let turn_ended = ended || turn.last().is_some_and(|message| message.who == Who::User);
-        // The turn's last message: its result, else the last thing it said, once it's over.
+        // The turn's last message: its result, else the last thing it said, once it's over by
+        // itself. One the user stopped has no answer: what it said stays in its stretch.
         let last = (turn.iter().rposition(|message| message.who == Who::Result))
             .or_else(|| turn.iter().rposition(|message| message.who != Who::User))
-            .filter(|_| turn_ended);
+            .filter(|_| turn_ended && !stopped.contains(&index));
         for (at, message) in turn.iter().enumerate() {
             shown[first + at] = matches!(message.who, Who::User | Who::Asked) || Some(at) == last;
         }
