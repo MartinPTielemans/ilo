@@ -1129,3 +1129,50 @@ fn an_added_page_is_a_chip_in_the_field(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(chips(&shell, cx).is_empty(), "the run left the page's chip");
 }
+
+/// A private window starts no task, so its empty page offers none: Search alone, with no switch,
+/// no ⇥ key and no Ask with its line. A window of the profile's offers them.
+#[gpui::test]
+fn a_private_window_composes_no_task(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window_with_no_tab(cx);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.run_until_parked();
+    let shown = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            let shell = shell.read(cx);
+            let resting = shell.resting.as_ref().unwrap();
+            (shell.offers_tasks(), resting.bar.read(cx).on_ask())
+        })
+    };
+    assert_eq!(shown(&shell, cx), (true, false), "a profile's window");
+
+    shell.update(cx, |shell, _| shell.private = true);
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    assert_eq!(
+        shown(&shell, cx),
+        (false, false),
+        "⇥ went to Ask in a private window"
+    );
+    shell.update_in(cx, |shell, window, cx| shell.set_on_ask(true, window, cx));
+    cx.run_until_parked();
+    let drawn = shell.read_with(cx, |shell, _| {
+        let resting = shell.resting.as_ref().unwrap();
+        resting.tier_chip.get().is_some() || resting.plus_chip.get().is_some()
+    });
+    assert_eq!(
+        shown(&shell, cx),
+        (false, false),
+        "Ask's side opened in a private window"
+    );
+    assert!(!drawn, "Ask's line was drawn in a private window");
+
+    shell.update(cx, |shell, _| shell.private = false);
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    assert_eq!(
+        shown(&shell, cx),
+        (true, true),
+        "⇥ didn't go to Ask in a profile's window"
+    );
+}

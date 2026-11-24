@@ -279,6 +279,9 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if on_ask && !self.offers_tasks() {
+            return;
+        }
         let Some(resting) = &mut self.resting else {
             return;
         };
@@ -544,6 +547,12 @@ impl Shell {
         cx.notify();
     }
 
+    /// Whether the page offers Ask, its switch and its key. A private window starts no task, as
+    /// agents get no path into one, so it shows Search alone; it's sent no cards (`one_space`).
+    pub(in crate::shell) fn offers_tasks(&self) -> bool {
+        !self.private
+    }
+
     /// The page in the card at `frame`: the mark, the field, Ask's line and the recent tasks.
     pub(in crate::shell) fn composer_page(
         &mut self,
@@ -613,9 +622,11 @@ impl Shell {
             ])
             .text_size(px(FIELD_SIZE))
             .text_color(palette.text(1.))
-            .child(div().flex_1().min_w_0().flex().child(field))
-            .child(tab)
-            .child(self.switch(on_ask, cx));
+            .child(div().flex_1().min_w_0().flex().child(field));
+        let field = match self.offers_tasks() {
+            true => field.child(tab).child(self.switch(on_ask, cx)),
+            false => field,
+        };
         let cards: Vec<Card> = match painted {
             true => (self.task_cards.iter())
                 .filter(|card| card.replies)
