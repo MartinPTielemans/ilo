@@ -34,7 +34,7 @@ use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
 use crate::agents::task::{
     ArchivedTask, Card, Conversation, Dot, Line, Opens, TaskAction, Trace, TraceItem, TraceStep,
 };
-use crate::palette::{STATE_HOVERED, STATE_PRESSED};
+use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
 use crate::text_input::TextInput;
 use crate::tokens::command_bar::{CHIP as BAR_CHIP, HINT_KEY_RIM, HINT_KEY_X};
 use crate::tokens::find_bar::NOT_FOUND;
@@ -102,9 +102,9 @@ pub(super) fn page_chip_keyed(
         .items_center()
         .gap(px(KEY_GAP))
         .rounded(px(CHIP_RADIUS))
-        .bg(palette.plate(CHIP_FILL))
-        .hover(move |style| style.bg(palette.state(CHIP_FILL, STATE_HOVERED)))
-        .active(move |style| style.bg(palette.state(CHIP_FILL, STATE_PRESSED)))
+        .bg(palette.ground_plate(Ground::Chip, CHIP_FILL))
+        .hover(move |style| style.bg(palette.ground_state(Ground::Chip, CHIP_FILL, STATE_HOVERED)))
+        .active(move |style| style.bg(palette.ground_state(Ground::Chip, CHIP_FILL, STATE_PRESSED)))
         .whitespace_nowrap()
         .text_size(px(text::BODY))
         .font_weight(FontWeight::MEDIUM)
