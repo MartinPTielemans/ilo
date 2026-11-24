@@ -1915,8 +1915,10 @@ impl Shell {
             false => row,
         };
         let hover = self.palette.hovered_plate();
+        let pointed: SharedString = format!("task-page-{tab}").into();
         let row = row
             .id(("task-page", tab))
+            .group(pointed.clone())
             .when(!shown, |row| row.hover(move |style| style.bg(hover)));
         // The favicon is drawn in its box whole, as a row's is drawn smaller than its column.
         let icon = div()
@@ -1941,8 +1943,8 @@ impl Shell {
                 .rounded_full()
                 .bg(rgb(STATUS_AGENT))
         });
-        // A word in gray is at this, and on the shown row's plate in the gray that reads on one;
-        // one the user is needed at or drives is in the title's ink.
+        // A word in gray is at this, and on a plate, the shown row's or the one under the pointer,
+        // in the gray that reads on one; one the user is needed at or drives is in the title's ink.
         let gray = match word {
             PageWord::NeedsYou | PageWord::Driving => None,
             PageWord::Working => Some(PAGE_WORD_WORKING),
@@ -1953,6 +1955,9 @@ impl Shell {
             Some(alpha) if shown => self.palette.gray_on_plate(alpha),
             Some(alpha) => self.palette.gray(alpha),
         };
+        let on_plate = gray
+            .filter(|_| !shown)
+            .map(|alpha| self.palette.gray_on_plate(alpha));
         let state = div()
             .flex_none()
             .flex()
@@ -1960,6 +1965,9 @@ impl Shell {
             .gap(px(PAGE_DOT_GAP))
             .text_size(px(text::SMALL))
             .text_color(ink)
+            .when_some(on_plate, |state, ink| {
+                state.group_hover(pointed, move |style| style.text_color(ink))
+            })
             .children(dot)
             .child(word.label());
         let drawn = {

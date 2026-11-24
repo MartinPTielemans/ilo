@@ -1598,10 +1598,10 @@ fn gray_on_a_dark_plate_is_one_ink_that_reads_on_the_measured_card() {
 
 /// Gray text on a dark window's plate holds text's 4.5:1 by the plate's own ground, however much
 /// of a bright window comes through: on the foot's shown card's and shown page row's plate, at
-/// rest and under the pointer, and on the plate a card, the count or a page row has under the
-/// pointer, over every point of the window over a black and a white backdrop, with a Space's
-/// colour and with none, at every level. The plates take the palette's shade as the window's tint
-/// asks, so this follows the tint's tokens wherever they end.
+/// rest and under the pointer, over every point of the window over a black and a white backdrop,
+/// with a Space's colour and with none, at every level. The plates take the palette's shade as
+/// the window's tint asks, so this follows the tint's tokens wherever they end. The plate a card,
+/// the count or a page row has under the pointer is the next test's.
 ///
 /// What it knows is the palette's own account of the window: the material's measured greys under
 /// the tint, lifted as a desktop picture lifts it. At Standard with no colour that account's
@@ -1624,7 +1624,6 @@ fn gray_on_a_dark_plate_reads_over_a_bright_window_at_every_level() {
             let plates = [
                 ("shown", palette.shown(0.)),
                 ("shown, under the pointer", palette.shown(1.)),
-                ("hovered", palette.hovered_plate()),
             ];
             for at in fine_window(&palette) {
                 for (name, plate) in plates {
@@ -1642,16 +1641,41 @@ fn gray_on_a_dark_plate_reads_over_a_bright_window_at_every_level() {
     }
 }
 
-/// A plate under the pointer over a dark window that isn't a sidebar row's (a card's at the
-/// sidebar's foot, a row of the Space form) holds the title's ink at text's 4.5:1 over every point
-/// of the window over a black and a white backdrop, with a Space's colour and with none, at every
-/// level: it takes the shade a row's plate does, so it follows the window's tint wherever its
-/// tokens end. A light window's is the ink at the ladder's step as it was, where no shade is asked.
+/// A plate under the pointer over the window that isn't a sidebar row's (a card's at the sidebar's
+/// foot, a row of the Space form) holds two things at once, over every point of the window over a
+/// black and a white backdrop, at every level: it tells from the window, and the title on it
+/// reads, as a dark window's gray does, which is the title's ink there. With no Space colour both
+/// hold in both looks.
+///
+/// A Space's colour can leave a dark window too bright for both: the ink reads on the bare window
+/// at little over 4.5, and a plate that tells takes a fifth of that. There the title still reads,
+/// and a plate that doesn't tell has given all it has, its title within a step of its least. A
+/// light window's plate is the ink at the ladder's step, as it was, and with a Space's colour
+/// holds both over a white backdrop.
 ///
 /// As the test above, it knows the palette's own account of the window and no real material.
 #[test]
-fn a_plate_under_the_pointer_reads_over_a_bright_window_at_every_level() {
-    use crate::tokens::shell::HOVERED;
+fn a_plate_under_the_pointer_tells_and_its_title_reads_at_every_level() {
+    use crate::tokens::shell::{HOVERED, task::STATUS};
+    // 1.2 is what a dark window's plate has at Standard over a white backdrop, where it's plain to
+    // see; 4.2 is what a plate that tells leaves the title at More, where most comes through.
+    let (tells, at_more) = (1.2, 4.2);
+    // The least a plate tells and the least its title, and a dark window's gray, read over `window`.
+    let least = |palette: &Palette, window: &[Rgba]| {
+        let plate = Rgba::from(palette.hovered_plate());
+        let gray = Rgba::from(palette.gray_on_plate(STATUS));
+        window
+            .iter()
+            .fold((f32::MAX, f32::MAX), |(told, read), &at| {
+                let ground = over(at, plate, plate.a);
+                let title = contrast(palette.ink, ground);
+                let word = match palette.tone {
+                    Tone::Dark => contrast(over(ground, gray, gray.a), ground),
+                    Tone::Light => title,
+                };
+                (told.min(contrast(ground, at)), read.min(title).min(word))
+            })
+    };
     let themes = grid(
         &[0., 60., 120., 180., 240., 300.],
         &[0.4, 1.],
@@ -1660,20 +1684,50 @@ fn a_plate_under_the_pointer_reads_over_a_bright_window_at_every_level() {
     );
     for level in Transparency::ALL {
         set_transparency(level);
-        for theme in themes.iter().map(Some).chain([None]) {
-            let palette = Palette::of(theme, Tone::Dark);
-            let plate = Rgba::from(palette.hovered_plate());
-            for at in fine_window(&palette) {
-                let ground = over(at, plate, plate.a);
-                let ratio = contrast(palette.ink, ground);
-                assert!(
-                    ratio >= TEXT,
-                    "{level:?} {theme:?} on {:06x}: {ratio:.2}",
-                    hex(ground)
-                );
-            }
+        let reads = match level {
+            Transparency::More => at_more,
+            _ => TEXT,
+        };
+        for tone in [Tone::Dark, Tone::Light] {
+            let palette = Palette::of(None, tone);
+            let (told, read) = least(&palette, &fine_window(&palette));
+            assert!(
+                told >= tells,
+                "{level:?} {tone:?}: the plate tells at {told:.2}"
+            );
+            assert!(
+                read >= reads,
+                "{level:?} {tone:?}: its title reads {read:.2}"
+            );
         }
-        let light = Palette::of(None, Tone::Light);
-        assert_eq!(light.hovered_plate(), light.plate(HOVERED), "{level:?}");
+        for theme in &themes {
+            let dark = Palette::of(Some(theme), Tone::Dark);
+            let (told, read) = least(&dark, &fine_window(&dark));
+            assert!(
+                read >= reads,
+                "{level:?} {theme:?}: its title reads {read:.2}"
+            );
+            assert!(
+                told >= tells || read < reads + 0.2,
+                "{level:?} {theme:?}: the plate tells at {told:.2} with its title at {read:.2}"
+            );
+            let light = Palette::of(Some(theme), Tone::Light);
+            assert_eq!(
+                light.hovered_plate(),
+                light.plate(HOVERED),
+                "{level:?} {theme:?}"
+            );
+            // The window over a white backdrop is the second of each point's two.
+            let white: Vec<Rgba> = fine_window(&light).into_iter().skip(1).step_by(2).collect();
+            let (told, read) = least(&light, &white);
+            assert!(
+                told >= tells,
+                "{level:?} {theme:?} light: the plate tells at {told:.2}"
+            );
+            assert!(
+                read >= TEXT,
+                "{level:?} {theme:?} light: its title reads {read:.2}"
+            );
+        }
     }
 }
