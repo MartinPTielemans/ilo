@@ -1296,6 +1296,54 @@ fn the_focus_command_alone_brings_the_keys_to_an_ilo_lines_buttons(cx: &mut Test
     );
 }
 
+/// A line that comes after the ring was drawn on another line's button is never pressed by the
+/// key meant for the ringed one: the keys end, and nothing is pressed.
+#[gpui::test]
+fn a_line_arriving_after_the_ring_takes_no_press(cx: &mut TestAppContext) {
+    use super::ilo_keys::IloPress;
+    let (shell, host, view, cx) = stopped_at_order(cx);
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::FocusAgentQuestion, "ui", cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
+    let mut talk = view.read_with(cx, |view, _| view.shown.clone().unwrap());
+    talk.lines.push(Line::Ilo(IloLine {
+        key: 8,
+        kind: IloKind::Stopped {
+            tab: 30,
+            at: "Pay".into(),
+            why: Why::Message,
+            tier: Tier::Work,
+            count: 2,
+        },
+        settled: false,
+    }));
+    view.update(cx, |view, _| {
+        let keys = view.ilo_keys.as_mut().expect("the keys left the line");
+        keys.last -= crate::agents::tier::PROTECT * 2;
+        for (_, since) in view.ilo_drawn.borrow_mut().values_mut() {
+            *since -= std::time::Duration::from_secs(5);
+        }
+    });
+    host.take();
+    // The line comes and the key with it, before a frame draws the line, the ring still on line
+    // 7's button.
+    cx.update(|window, cx| {
+        shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+        view.update(cx, |view, cx| view.ilo_press(&IloPress, window, cx));
+    });
+    cx.run_until_parked();
+    let pressed: Vec<String> = (host.take().into_iter())
+        .filter(|line| line.contains("SetTier") || line.contains("TakeOver"))
+        .collect();
+    assert_eq!(pressed, Vec::<String>::new(), "the new line was pressed");
+    assert!(
+        view.read_with(cx, |view, _| view.ilo_keys.is_none()),
+        "the keys stayed on a line that changed under them"
+    );
+}
+
 /// The reply field's caret stands before its placeholder, not on its first letter; what's typed
 /// starts at the field's start, where the caret was.
 #[gpui::test]

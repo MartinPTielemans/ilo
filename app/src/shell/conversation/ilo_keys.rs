@@ -40,6 +40,8 @@ pub(super) struct IloKeys {
     pub(super) line: usize,
     /// The ringed button, by its place on the line.
     pub(super) at: usize,
+    /// The ringed button, which a press presses only while it's still at `at` on `line`.
+    button: IloButton,
     /// Whether the page had the keyboard, which gets it back.
     page: bool,
     /// What had it in the UI, which gets it back.
@@ -86,6 +88,7 @@ impl TalkView {
         self.ilo_keys = Some(IloKeys {
             line,
             at: 0,
+            button: buttons[0],
             page,
             was: None,
             last: Instant::now(),
@@ -131,6 +134,7 @@ impl TalkView {
             _ if keys.leaving.is_some() => keys.leaving.unwrap_or("key"),
             Some((line, _, buttons)) if line == keys.line => {
                 keys.at = keys.at.min(buttons.len() - 1);
+                keys.button = buttons[keys.at];
                 let ringed = &self.ilo_stops[keys.at];
                 if std::mem::take(&mut keys.due) {
                     keys.was = window.focused(cx);
@@ -181,31 +185,49 @@ impl TalkView {
         true
     }
 
+    /// The newest line offering anything, if it's still the one the keys are on, with the ringed
+    /// button still at its place. A line that came since the ring was drawn ends the keys, as the
+    /// user never saw its buttons ringed.
+    fn ringed_line(&mut self, cx: &mut Context<Self>) -> Option<(Option<u64>, Vec<IloButton>)> {
+        let keyed = self.keyed_line(self.beside(cx));
+        let keys = self.ilo_keys.as_ref()?;
+        match keyed {
+            Some((line, tab, buttons))
+                if line == keys.line && buttons.get(keys.at) == Some(&keys.button) =>
+            {
+                Some((tab, buttons))
+            }
+            _ => {
+                self.ilo_keys_leave("line", cx);
+                None
+            }
+        }
+    }
+
     pub(super) fn ilo_press(&mut self, _: &IloPress, _: &mut Window, cx: &mut Context<Self>) {
-        let (Some(at), Some((line, tab, buttons))) = (
-            self.ilo_keys.as_ref().map(|keys| keys.at),
-            self.keyed_line(self.beside(cx)),
-        ) else {
+        let Some((tab, _)) = self.ringed_line(cx) else {
             return;
         };
         if !self.ilo_key_counts() {
             return;
         }
-        if let Some(&button) = buttons.get(at) {
-            log!("browser: ilo key pressed {button:?}");
-            self.press_ilo((line, button), tab, cx);
-        }
+        let Some(keys) = &self.ilo_keys else {
+            return;
+        };
+        let (line, button) = (keys.line, keys.button);
+        log!("browser: ilo key pressed {button:?}");
+        self.press_ilo((line, button), tab, cx);
     }
 
     fn ilo_move(&mut self, by: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let count = (self.keyed_line(self.beside(cx))).map_or(0, |(_, _, buttons)| buttons.len());
+        let Some((_, buttons)) = self.ringed_line(cx) else {
+            return;
+        };
         let Some(keys) = &mut self.ilo_keys else {
             return;
         };
-        if count == 0 {
-            return;
-        }
-        keys.at = (keys.at as isize + by).rem_euclid(count as isize) as usize;
+        keys.at = (keys.at as isize + by).rem_euclid(buttons.len() as isize) as usize;
+        keys.button = buttons[keys.at];
         keys.last = Instant::now();
         window.focus(&self.ilo_stops[keys.at], cx);
         cx.notify();
