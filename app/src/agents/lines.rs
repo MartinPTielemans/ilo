@@ -142,10 +142,14 @@ pub(super) fn turn(task: &Task) -> usize {
 }
 
 impl Agents {
-    /// Puts `made` in the conversation of the task `agent`'s act on `connection`, for its call
-    /// `call`, is of.
+    /// Puts `made` in a task's conversation. A line about a page stands where the page is, in
+    /// the task under way that holds it, whichever of its client's connections asked; any other
+    /// in the task `agent`'s act on `connection`, for its call `call`, is of.
     pub(super) fn place(&mut self, agent: &str, connection: u64, call: u64, made: Happened) {
-        let key = (self.acting_task(agent, connection, call)).map(|task| task.agent.clone());
+        let held_by = made.tab().and_then(|tab| self.page_task(agent, tab));
+        let key = held_by
+            .or_else(|| self.acting_task(agent, connection, call))
+            .map(|task| task.agent.clone());
         if let Some(key) = key {
             self.place_in(&key, made);
         }

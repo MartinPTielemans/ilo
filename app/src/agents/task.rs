@@ -1136,13 +1136,17 @@ impl Agents {
         (self.question()).filter(|question| question.from == from && question.id == first)
     }
 
-    /// The number of the first of the prompts a session's calls under way wait on: its client's
-    /// other connections' calls wait on theirs.
+    /// The number of the first of the prompts that wait on the user for a session: a wait on a
+    /// page is of the session under way that holds the page, whichever of its client's
+    /// connections asked, as ilo's line of it is (`place`), and its own call's where none does.
     fn session_prompt(&self, session: &Session) -> Option<u64> {
-        let ours = |agent: &str, call: u64| agent == session.agent && session.calls.contains(&call);
-        (self.held.values())
-            .filter(|held| held.reply.is_some() && ours(&held.agent, held.call))
-            .map(|held| held.question)
+        let ours = |tab: u64, held: &super::Held| match self.page_task(&held.agent, tab) {
+            Some(task) => (task.session.as_ref()).is_some_and(|its| std::ptr::eq(its, session)),
+            None => held.agent == session.agent && session.calls.contains(&held.call),
+        };
+        (self.held.iter())
+            .filter(|&(&tab, held)| held.reply.is_some() && ours(tab, held))
+            .map(|(_, held)| held.question)
             .min()
     }
 
@@ -2583,8 +2587,9 @@ impl Agents {
     }
 
     /// The task under way of `agent`'s whose session holds the page `tab`, among that client's
-    /// sessions only. A tab that left its Space may still be listed: the core refuses a call on it
-    /// before anything read here shows.
+    /// sessions only: what ilo says and judges about a page is that task's, whichever of its
+    /// client's connections calls. A tab that left its Space may still be listed: the core
+    /// refuses a call on it before anything read here shows.
     pub(super) fn page_task(&self, agent: &str, tab: u64) -> Option<&Task> {
         (self.tasks.tasks.iter()).find(|task| {
             task.state == State::Working
@@ -2815,6 +2820,16 @@ impl Agents {
         }
         // Listing its tabs isn't work, and done with no task under way has none to end.
         if matches!(call.tool.as_str(), "list_tabs" | "done") {
+            return None;
+        }
+        // Nor is handing the user a page another of its client's sessions holds, or asking for
+        // it back: ilo's line of it stands in that session's conversation (`place`), and this
+        // connection's task starts with work of its own. A tab the core will refuse is none.
+        if matches!(call.tool.as_str(), "hand_off" | "ask_for_tab" | "upload")
+            && let Ok(Some(tab)) = tools::tab_argument(&call.arguments)
+            && self.page_task(&call.agent, tab).is_some()
+            && self.owns(&call.agent, tab, cx)
+        {
             return None;
         }
         self.tasks.next += 1;
