@@ -11,8 +11,9 @@ use super::*;
 use crate::agents::access::ACCESS_ACTION;
 use crate::agents::files::Given;
 use crate::agents::runner::{self, Cli, Out};
-use crate::agents::task::State;
-use crate::agents::task::rewall::{Change, PutUp, Rewalled};
+use crate::agents::task::ilo::{IloKind, IloLine, LeftOut};
+use crate::agents::task::rewall::{Change, PutUp, Rewalled, STOPPED_LOGGED, WITHOUT_FILES_LOGGED};
+use crate::agents::task::{Line, State};
 use crate::agents::tier::{self, Tier};
 use crate::agents::wall::{Granted, Wall, WallFor, WallRefused};
 
@@ -86,9 +87,29 @@ fn run_of(run: &Run, agent: &str, cx: &mut TestAppContext) -> u32 {
 fn stands(run: &Run, agent: &str, cx: &mut TestAppContext) -> (Tier, bool, Vec<(usize, Rewalled)>) {
     (run.agents).read_with(cx, |agents, _| {
         let task = agents.task(agent).unwrap();
-        (task.tier, task.files.any(), task.rewalled.clone())
+        let came = (task.rewalled.iter())
+            .map(|(turn, _, came)| (*turn, came.clone()))
+            .collect();
+        (task.tier, task.files.any(), came)
     })
 }
+
+/// What ilo's lines in the task's conversation say, in its order. Each is settled, as none of a
+/// wall's has a button.
+fn lines(run: &Run, agent: &str, cx: &mut TestAppContext) -> Vec<IloKind> {
+    (run.talk(agent, cx).lines.into_iter())
+        .filter_map(|line| match line {
+            Line::Ilo(IloLine { kind, settled, .. }) => {
+                assert!(settled, "{kind:?}");
+                Some(kind)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The name `folder()` is shown by.
+const FOLDER: &str = "folder";
 
 /// The changes of level the log has for the task, oldest first.
 fn logged(run: &Run, agent: &str, cx: &mut TestAppContext) -> Vec<String> {
@@ -303,6 +324,7 @@ fn a_raise_whose_wall_isnt_put_up_leaves_the_task_as_it_runs(cx: &mut TestAppCon
     let stays = Rewalled::Stays {
         at: Tier::Work,
         refused: Tier::Full,
+        files: folder(),
     };
     assert_eq!(
         stands(&run, &agent, cx),
@@ -311,6 +333,51 @@ fn a_raise_whose_wall_isnt_put_up_leaves_the_task_as_it_runs(cx: &mut TestAppCon
     assert_eq!((run_of(&run, &agent, cx), logged(&run, &agent, cx)), before);
     assert_eq!(run.state(&agent, cx), State::Working);
     assert_eq!(sent(&run, 1, 1).len(), 1);
+    // ilo's line says the level it stays at and the one it couldn't have, and no line says the
+    // user set it.
+    let kept = IloKind::KeptAt {
+        at: Tier::Work,
+        refused: Tier::Full,
+        folder: FOLDER.into(),
+    };
+    assert_eq!(lines(&run, &agent, cx), [kept]);
+}
+
+/// A start whose wall isn't put up goes on without its files: ilo's line says which folder it
+/// started without, and the log has the event with no name in it. Files the user attached have
+/// no name a line says yet, so theirs is the log's event alone.
+#[gpui::test]
+fn a_start_whose_wall_isnt_put_up_says_what_it_started_without(cx: &mut TestAppContext) {
+    for (name, files, said) in [
+        (
+            "start-folder",
+            folder(),
+            Some(LeftOut::Folder(FOLDER.into())),
+        ),
+        ("start-attached", attached(), None),
+    ] {
+        let (run, walls) = (Run::new(name, cx), Walls::default());
+        walls.refuses.set(true);
+        (run.agents).update(cx, |agents, _| {
+            agents.tasks.files = files;
+            agents.tasks.wall = Some(walls.maker());
+        });
+        let agent = run.start(Cli::Claude, cx);
+        let (args, _) = run.ran(1);
+        assert!(!walled(&args), "{args:?}");
+        assert!(!stands(&run, &agent, cx).1);
+        let said: Vec<IloKind> = (said.into_iter())
+            .map(|left| IloKind::StartedWithout { left })
+            .collect();
+        assert_eq!(lines(&run, &agent, cx), said, "{name}");
+        let logged = logged(&run, &agent, cx);
+        assert_eq!(
+            logged.last().map(String::as_str),
+            Some(WITHOUT_FILES_LOGGED)
+        );
+        let named = |text: &String| text.contains(FOLDER) || text.contains("nonexistent");
+        assert!(!logged.iter().any(named), "{logged:?}");
+    }
 }
 
 /// What came of a wall is kept with the turn it came in, as an ilo line's is, so its line stands
@@ -327,6 +394,7 @@ fn what_came_of_a_wall_is_kept_with_its_turn(cx: &mut TestAppContext) {
     let stays = Rewalled::Stays {
         at: Tier::Work,
         refused: Tier::Full,
+        files: folder(),
     };
     let kept = stands(&run, &agent, cx).2;
     assert_eq!(kept, vec![(0, stays.clone()), (1, stays)]);
@@ -355,6 +423,22 @@ fn a_lower_whose_wall_isnt_put_up_goes_on_without_its_files(cx: &mut TestAppCont
         (Tier::Look, false, vec![(0, without)])
     );
     assert_eq!(run.state(&agent, cx), State::Working);
+    // Under the line of the level the user set, ilo's of what the task went on without.
+    let lowered = IloKind::TierChanged {
+        from: Tier::Work,
+        to: Tier::Look,
+    };
+    let without = IloKind::StartedWithout {
+        left: LeftOut::Folder(FOLDER.into()),
+    };
+    assert_eq!(lines(&run, &agent, cx), [lowered, without]);
+    assert_eq!(
+        logged(&run, &agent, cx)[1..],
+        [
+            tier::changed_logged(Tier::Work, Tier::Look),
+            WITHOUT_FILES_LOGGED.to_string()
+        ]
+    );
     // With no files left, a change of level is any task's.
     walls.refuses.set(false);
     let asked = walls.asked().len();
@@ -382,6 +466,7 @@ fn a_raise_the_system_refuses_goes_back_to_its_level(cx: &mut TestAppContext) {
     let stays = Rewalled::Stays {
         at: Tier::Work,
         refused: Tier::Full,
+        files: folder(),
     };
     assert_eq!(
         stands(&run, &agent, cx),
@@ -458,6 +543,13 @@ fn files_taken_back_start_it_again_without_them(cx: &mut TestAppContext) {
     );
     assert_eq!(run_of(&run, &agent, cx), 0);
     assert!(matches!(run.state(&agent, cx), State::Failed { .. }));
+    // ilo's line says why it stopped, and the log has that it did, with no name in it.
+    let stopped = IloKind::NotRestarted {
+        folder: FOLDER.into(),
+    };
+    assert_eq!(lines(&run, &agent, cx), [stopped]);
+    let logged = logged(&run, &agent, cx);
+    assert_eq!(logged.last().map(String::as_str), Some(STOPPED_LOGGED));
 }
 
 /// Files taken back from a task that isn't at work end its run at once all the same, and its

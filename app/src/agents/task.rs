@@ -401,7 +401,7 @@ pub struct Task {
     /// What came of each wall of its that wasn't put up, in order, each with the turn it came in
     /// as an ilo line's is counted (lines.rs), so its line stands where it happened: what its
     /// lines about them are written from, by the conversation's words table.
-    pub(in crate::agents) rewalled: Vec<(usize, rewall::Rewalled)>,
+    pub(in crate::agents) rewalled: Vec<(usize, std::time::Instant, rewall::Rewalled)>,
 }
 
 /// The message an agent is writing as the turn's last, which shows under its trace as it comes,

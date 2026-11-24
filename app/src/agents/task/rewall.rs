@@ -9,9 +9,11 @@
 //! a higher level's leaves the task at the level it runs at; a start's or a lower level's lets the
 //! task go on without its files, which then needs no wall; and files taken back whose task can't
 //! be started again without them leave it stopped. Each is kept on the task (`Rewalled`) for the
-//! line that says it, whose words aren't here.
+//! line that says it (lines.rs), whose words aren't here. A task that goes on without its files,
+//! or stops for them, is in the activity log too, as an event with no file's name.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use gpui::Context;
 
@@ -54,11 +56,21 @@ pub enum Change {
     TookBack(Given),
 }
 
+/// The activity log's words for a task that went on without its files, and for one that stopped
+/// as it couldn't be started again without the files taken back. Its entry keeps them as its
+/// target, as a change of level's keeps `tier::changed_logged`: the event, and no file's name.
+pub const WITHOUT_FILES_LOGGED: &str = "Started without its files";
+pub const STOPPED_LOGGED: &str = "Stopped: couldn't restart without its files";
+
 /// What came of a wall that wasn't put up, with what its line names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rewalled {
-    /// The wall of `refused`, a higher level: the task stays at `at`, as it ran.
-    Stays { at: Tier, refused: Tier },
+    /// The wall of `refused`, a higher level: the task stays at `at`, as it ran, with `files`.
+    Stays {
+        at: Tier,
+        refused: Tier,
+        files: Given,
+    },
     /// Its wall at a start or at a lower level: the task goes on without `files`.
     WithoutFiles { files: Given },
     /// Its assistant couldn't be started again without `files`, which the user took back: the
@@ -67,9 +79,11 @@ pub enum Rewalled {
 }
 
 impl Task {
-    /// Keeps what came of a wall that wasn't put up, with the turn under way.
+    /// Keeps what came of a wall that wasn't put up, with the turn under way and when, which
+    /// place its line.
     fn rewalled(&mut self, came: Rewalled) {
-        self.rewalled.push((lines::turn(self), came));
+        self.rewalled
+            .push((lines::turn(self), Instant::now(), came));
     }
 }
 
@@ -121,6 +135,7 @@ impl Agents {
         };
         let files = std::mem::take(&mut task.files);
         task.rewalled(Rewalled::WithoutFiles { files });
+        self.note_on(agent, 0, ACCESS_ACTION, "", WITHOUT_FILES_LOGGED, "");
     }
 
     /// The system says `agent`'s assistant is inside its wall.
@@ -145,7 +160,8 @@ impl Agents {
                 ..
             }) => {
                 let refused = std::mem::replace(&mut task.tier, at);
-                task.rewalled(Rewalled::Stays { at, refused });
+                let files = task.files.clone();
+                task.rewalled(Rewalled::Stays { at, refused, files });
                 // What it was told of the raise is no longer so.
                 let first = conversation(task);
                 // The log had the raise, and has that it didn't hold.
@@ -199,6 +215,7 @@ impl Agents {
             let stays = Rewalled::Stays {
                 at: from,
                 refused: to,
+                files: task.files.clone(),
             };
             task.rewalled(stays);
         }
@@ -268,6 +285,7 @@ impl Agents {
                     && let Some(task) = self.task_mut(key)
                 {
                     task.rewalled(Rewalled::Stopped { files });
+                    self.note_on(key, 0, ACCESS_ACTION, "", STOPPED_LOGGED, "");
                 }
                 return self.wait_for_answer(key, cx);
             }
