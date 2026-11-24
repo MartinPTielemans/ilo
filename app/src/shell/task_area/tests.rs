@@ -127,6 +127,59 @@ fn frames(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (Bounds<Pixels>,
     })
 }
 
+/// Cancel puts back all the window says of the view in the update that brings the view back: the
+/// row with the sidebar's plate, the URL field's tab and the page in place, live. With a page
+/// watched that's before the core says it shows the task's Space, which it says a turn after
+/// it's asked: a frame drawn meanwhile had the page back in a window still the user's page's
+/// (#4202). What the core then says changes nothing.
+#[gpui::test]
+fn a_refused_close_puts_the_whole_window_back_in_one_update(cx: &mut TestAppContext) {
+    for watched in [false, true] {
+        let (shell, host, cx) = shell_with_task(cx);
+        match watched {
+            true => watching(&shell, &host, cx),
+            false => {
+                still(cx);
+                let view = conversation(cx);
+                shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+                draw(&shell, cx);
+            }
+        }
+        let says = |cx: &mut VisualTestContext| {
+            shell.read_with(cx, |shell, _| {
+                let plate = match shell.selected_row() {
+                    Some(crate::shell::Row::NewTab) => "the New Tab row".to_string(),
+                    Some(crate::shell::Row::Tab(row)) => format!("the row of tab {row}"),
+                    None => "no row".to_string(),
+                };
+                let field = shell.field_tab();
+                (plate, field, shell.task_shown(), shell.task_page_live())
+            })
+        };
+        let stood = says(cx);
+        assert_eq!(stood.3, watched.then_some(30));
+
+        close(&shell, &host, cx, false);
+        if watched {
+            core_shows_users(&shell, cx);
+        }
+        page_asks_to_stay(&shell, cx, 7);
+        assert_ne!(says(cx), stood, "the view never stepped aside");
+
+        answer(&shell, cx, 7, false);
+        assert_eq!(
+            says(cx),
+            stood,
+            "Cancel left part of the window as it was at the question (watched: {watched})"
+        );
+        if watched {
+            core_shows_task(&shell, cx, 30);
+            draw(&shell, cx);
+            assert_eq!(says(cx), stood);
+        }
+    }
+}
+
 fn away(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Pixels {
     shell.read_with(cx, |shell, _| {
         shell.viewport.width - shell.page_frame(shell.viewport).0.left()
