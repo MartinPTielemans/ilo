@@ -82,7 +82,20 @@ pub fn strengths(x: f32, y: f32, width: f32, height: f32, mirrored: bool) -> (f3
 /// absolutely placed in the window, which clips what of it a small window has no room for, over
 /// the window's ground and under everything else.
 pub fn glow(corner: Corner, mirrored: bool, color: Rgba, opacity: f32) -> gpui::Div {
+    glow_scaled(corner, mirrored, color, opacity, 1.)
+}
+
+/// The glow `scale` times its size, for a small picture of a window, as first run's loops
+/// draw one: the same picture, so the same kept colour serves both.
+pub fn glow_scaled(
+    corner: Corner,
+    mirrored: bool,
+    color: Rgba,
+    opacity: f32,
+    scale: f32,
+) -> gpui::Div {
     let (width, height) = corner.extent();
+    let (width, height) = (width * scale, height * scale);
     let layer = div().absolute().w(px(width)).h(px(height)).opacity(opacity);
     let layer = match corner.at_left(mirrored) {
         true => layer.left_0(),

@@ -334,3 +334,63 @@ fn the_back_windows_lines_tell_the_levels_apart_through_the_glass() {
 
 /// The least step between two levels' lines through the glass: 5 of 255.
 const STEP: f32 = 5. / 255.;
+
+/// The centred picker, as first run shows it, `width` wide, keeping how tall it's drawn.
+struct Centred {
+    chosen: Transparency,
+    width: f32,
+    height: Rc<std::cell::Cell<f32>>,
+}
+
+impl Render for Centred {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let height = self.height.clone();
+        let picker = picker(
+            self.chosen,
+            &Look::settings(true),
+            Rc::default(),
+            |_, _, _| {},
+        );
+        let measure = gpui::canvas(
+            move |bounds, _, _| height.set(f32::from(bounds.size.height)),
+            |_, _, _, _| {},
+        );
+        div().child(
+            div()
+                .relative()
+                .w(px(self.width))
+                .child(picker.centred())
+                .child(measure.absolute().inset_0()),
+        )
+    }
+}
+
+/// Centred, as first run has it, the picker is as tall at every level at any width: its line is
+/// as tall as the longest level's however each one wraps, so what's under it stays put as the
+/// pick changes.
+#[gpui::test]
+fn centred_it_is_as_tall_at_every_level_at_any_width(cx: &mut TestAppContext) {
+    let height = Rc::new(std::cell::Cell::new(0.));
+    let (view, cx) = cx.add_window_view(|_, _| Centred {
+        chosen: Transparency::Standard,
+        width: WIDTH,
+        height: height.clone(),
+    });
+    cx.simulate_resize(size(px(WIDTH + 2. * INSET), px(800.)));
+    for width in (200..=600).step_by(10) {
+        let heights = Transparency::ALL.map(|level| {
+            view.update(cx, |view, cx| {
+                view.chosen = level;
+                view.width = width as f32;
+                cx.notify();
+            });
+            cx.run_until_parked();
+            height.get()
+        });
+        assert!(heights[0] > 0., "the picker is drawn at {width}");
+        assert!(
+            heights.iter().all(|&each| each == heights[0]),
+            "at {width} wide, the levels' heights were {heights:?}"
+        );
+    }
+}
