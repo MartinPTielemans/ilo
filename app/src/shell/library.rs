@@ -1063,12 +1063,9 @@ impl Shell {
             Section::Boosts => "Search Boosts…",
             Section::Boards => "Search Boards…",
         };
-        let search = cx.new(|cx| {
-            TextInput::new(placeholder, cx)
-                .placeholder_color(self.palette.gray(SEARCH_PLACEHOLDER))
-                .caret_color(self.palette.accent)
-                .selection_color(self.palette.selection())
-        });
+        // Its colours are the panel's to give as it draws, since the field outlives a change of
+        // the window's look.
+        let search = cx.new(|cx| TextInput::new(placeholder, cx));
         let observe = cx.observe(&search, |shell, _, cx| shell.filter(false, cx));
         // Tab stops at the field, as at each of the Library's controls (keys.rs).
         let _ = search.read(cx).focus_handle(cx).tab_stop(true);
@@ -1958,6 +1955,14 @@ impl Shell {
             .w(px(1.))
             .bg(self.palette.faint(COLUMN_EDGE));
         let search = library.search.clone();
+        // The field stays as the window goes from dark to light or to a Space of another colour,
+        // so its placeholder, caret and selection are this frame's palette's, as the glyph's is:
+        // the gray of the look it was made in is close to the other look's field.
+        let placeholder = self.palette.gray(SEARCH_PLACEHOLDER);
+        let (caret, selection) = (self.palette.accent.into(), self.palette.selection());
+        search.update(cx, |search, _| {
+            search.set_colors(placeholder, caret, selection)
+        });
         // The Filter button takes the field's end, while there's something to filter, and the
         // field what it leaves of the row.
         let filtered = self.archive_filtered();
@@ -1998,7 +2003,7 @@ impl Shell {
                     .left(px(SEARCH_GLYPH_X))
                     .top(px((SEARCH_HEIGHT - SEARCH_GLYPH) / 2.))
                     .size(px(SEARCH_GLYPH))
-                    .text_color(self.palette.gray(SEARCH_PLACEHOLDER)),
+                    .text_color(placeholder),
             )
             .child(library.search.clone());
         let field = self.with_row_keys(field, cx);

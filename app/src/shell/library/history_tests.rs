@@ -574,6 +574,37 @@ fn a_click_on_a_past_tasks_row_opens_its_conversation(cx: &mut TestAppContext) {
     assert_eq!(shown(cx), None);
 }
 
+/// The search field's "Search History…" follows a switch between light and dark while the Library
+/// stays open, in the placeholder gray of the palette it's drawn in: a field that kept the gray of
+/// the look it opened in drew Paper on a light window's field, almost the field's own colour.
+#[gpui::test]
+fn the_search_placeholder_follows_the_appearance(cx: &mut TestAppContext) {
+    use crate::shell::Appearance;
+    use crate::tokens::shell::library::SEARCH_PLACEHOLDER;
+    let (shell, _, cx) = history(Vec::new(), cx);
+    let mut colours = Vec::new();
+    for appearance in [Appearance::Light, Appearance::Dark, Appearance::Light] {
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::Appearance(appearance), "ui", cx)
+        });
+        cx.run_until_parked();
+        let (drawn, meant) = shell.read_with(cx, |shell, cx| {
+            let field = shell.library.as_ref().expect("the Library").search.read(cx);
+            (
+                field.placeholder_hsla(),
+                shell.palette.gray(SEARCH_PLACEHOLDER),
+            )
+        });
+        assert_eq!(drawn, meant, "{appearance:?}'s placeholder");
+        colours.push(drawn);
+    }
+    assert_ne!(
+        colours[0], colours[1],
+        "light and dark drew the same placeholder"
+    );
+    assert_eq!(colours[0], colours[2]);
+}
+
 /// A search asks the browser for the pages with its words. Until it answers, the pages listed are
 /// searched as typed; its answer is the list, though a page's title doesn't hold the text as typed.
 #[gpui::test]
