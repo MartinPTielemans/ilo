@@ -1353,7 +1353,7 @@ fn ilos_line_wraps_its_whole_sentence_in_the_narrowest_conversation(cx: &mut Tes
         text_width(&laid.text().into(), text::BODY, FontWeight::NORMAL, &system)
     });
     assert!(
-        laid.text().ends_with("so you can reply."),
+        laid.text().ends_with("still has this conversation."),
         "not the whole sentence: {}",
         laid.text()
     );
