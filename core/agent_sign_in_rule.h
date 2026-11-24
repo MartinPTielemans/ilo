@@ -101,7 +101,9 @@ class WithheldHistory {
   // A main frame's navigation committed |url|. Returns whether the page shown now is withheld: it
   // is one of the pending ones', or it's the withheld document still, or its address is one.
   bool Committed(int64_t navigation, const GURL& url, bool same_document);
-  bool shown() const { return shown_; }
+  // Whether the tab showing |now| shows a withheld page, before Committed hears of its commit too:
+  // other observers of the same commit may ask first.
+  bool Shows(const GURL& now) const;
 
  private:
   std::set<GURL> addresses_;

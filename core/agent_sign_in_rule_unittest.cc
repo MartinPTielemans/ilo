@@ -187,7 +187,7 @@ TEST(AgentSignInRule, AWithheldPageIsWithheldWhereverItComesBackFrom) {
   WithheldHistory history;
   // The look held the login page, with the submit's navigation, 7, still under way.
   history.Withhold(login, {7});
-  EXPECT_TRUE(history.shown());
+  EXPECT_TRUE(history.Shows(login));
   EXPECT_TRUE(history.Committed(7, echo, /*same_document=*/false));
   // Away: the mark lifts.
   EXPECT_FALSE(history.Committed(8, other, false));
@@ -217,6 +217,18 @@ TEST(AgentSignInRule, ANavigationThatEndedUncommittedIsNoLongerTheWithheldPages)
   history.Withhold(GURL("https://shop.example.org/login"), {7});
   history.Ended(7);
   EXPECT_FALSE(history.Committed(7, GURL("https://shop.example.org/help"), false));
+}
+
+TEST(AgentSignInRule, AWithheldAddressIsWithheldBeforeItsCommitIsHeard) {
+  const GURL login("https://shop.example.org/login");
+  WithheldHistory history;
+  history.Withhold(login, {});
+  EXPECT_FALSE(history.Committed(1, GURL("https://shop.example.org/help"), false));
+  EXPECT_FALSE(history.Shows(GURL("https://shop.example.org/help")));
+  // Back to the login page: the tab's own observer, asking first, hears it withheld.
+  EXPECT_TRUE(history.Shows(GURL("https://shop.example.org/login#top")));
+  EXPECT_TRUE(history.Committed(2, login, false));
+  EXPECT_TRUE(history.Shows(login));
 }
 
 TEST(AgentSignInRule, ASubmitterSendingAFormElsewhereIsFound) {

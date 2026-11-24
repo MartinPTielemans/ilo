@@ -162,6 +162,10 @@ bool WithheldHistory::Committed(int64_t navigation, const GURL& url, bool same_d
   return shown_;
 }
 
+bool WithheldHistory::Shows(const GURL& now) const {
+  return shown_ || addresses_.contains(now.GetWithoutRef());
+}
+
 SignInTries::SignInTries() = default;
 SignInTries::~SignInTries() = default;
 

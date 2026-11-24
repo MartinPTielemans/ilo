@@ -286,7 +286,7 @@ class WithheldPage : public content::WebContentsUserData<WithheldPage>,
         std::set<int64_t>(pending.begin(), pending.end()));
   }
 
-  bool shown() const { return history_.shown(); }
+  bool Shows(const GURL& now) const { return history_.Shows(now); }
 
   // content::WebContentsObserver:
   void DidFinishNavigation(content::NavigationHandle* navigation) override {
@@ -908,7 +908,7 @@ bool WithheldFromAgents(bc_id tab) {
 bool PageWithheld(bc_id tab) {
   content::WebContents* contents = Tab::FromId(tab);
   const WithheldPage* page = contents ? WithheldPage::FromWebContents(contents) : nullptr;
-  return page && page->shown();
+  return page && page->Shows(contents->GetPrimaryMainFrame()->GetLastCommittedURL());
 }
 
 void ForgiveSignInTries(const url::Origin& origin) {
