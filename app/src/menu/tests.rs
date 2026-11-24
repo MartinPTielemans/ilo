@@ -11,8 +11,8 @@ use gpui::{
 
 use super::{
     CHECK, Closed, Closing, DETAIL_GAP, GAP, Key, Layout, Look, Outcome, PADDING, Pointer,
-    QUIET_RADIUS, RADIUS, ROW_X, Request, Swatch, Tracking, as_held, described, described_held,
-    key_of, lay_out, lay_out_over,
+    QUIET_RADIUS, RADIUS, ROW_X, Request, SUBMENU_REST, Swatch, Tracking, as_held, described,
+    described_held, key_of, lay_out, lay_out_over,
 };
 use crate::shell::MenuEntry;
 
@@ -538,13 +538,14 @@ fn on_its_way_to_the_submenu_the_pointer_crosses_other_rows_without_closing_it()
     );
 
     // Measured from the move, as a timer can fire a little early (#2158).
+    let rested = now + Duration::from_millis(30) + Duration::from_secs_f32(SUBMENU_REST);
     assert_eq!(
-        menu.rested(now + Duration::from_millis(320)),
+        menu.rested(rested - Duration::from_millis(10)),
         Some(Duration::from_millis(10)),
         "10 ms more to rest"
     );
     assert_eq!(menu.highlights(), [Some(5), None], "not yet");
-    assert_eq!(menu.rested(now + Duration::from_millis(330)), None);
+    assert_eq!(menu.rested(rested), None);
     assert_eq!(
         menu.highlights(),
         [Some(10)],
