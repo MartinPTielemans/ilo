@@ -2221,6 +2221,25 @@ welcome-press = 0.5
 # The color's: the sidebar's rows swipe to the next Space from `at` over `swipe`, and back.
 color-at = [0.6, 5.0]
 color-swipe = 0.6
+# The import's: the other browser's strip over ilo's window, `strip-gap` above it. Its bookmarks
+# land as favorites from `at`'s first and its tabs as tabs from its second, one every `stagger`,
+# each over `land`, coming down `drop` into place as its strip's dims to `dim`. The Spaces' dots
+# come at `spaces` and what came at `came`, each over `fade`, and all of it goes over the loop's
+# last `out`. The favorites are `tile` tiles, `tile-gap` apart, from `tiles-top` down.
+strip-height = 58.0
+strip-gap = 14.0
+tile = 22.0
+tile-gap = 4.0
+tiles-top = 22.0
+import-at = [0.4, 2.2]
+import-stagger = 0.35
+import-land = 0.35
+import-drop = 6.0
+import-dim = 0.35
+import-spaces = 4.2
+import-came = 4.8
+import-fade = 0.4
+import-out = 0.6
 
 [shell.import]
 # Ours (#1673): while an import runs, each Space it makes is a card in its own colours, under the
