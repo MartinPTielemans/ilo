@@ -308,6 +308,51 @@ fn a_withheld_page_and_the_account_reach_nothing_an_agent_reads_or_the_app_keeps
     assert!(!format!("{kept:?}").contains(ACCOUNT), "{kept:?}");
 }
 
+/// A read whose page's one look found it showing what a password field held (the core's freeze)
+/// comes back with no text and the tab withheld: the agent hears the core's refusal, as it does on
+/// every later call, and a tab without its page still says that instead.
+#[gpui::test]
+fn a_read_the_pages_look_withholds_answers_the_cores_refusal(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    hello(&agents, cx);
+    let answer = call(
+        &agents,
+        "claude-code",
+        "read_page",
+        json!({ "tab": 20 }),
+        cx,
+    );
+    let (tab, request) = *browser
+        .reads
+        .borrow()
+        .last()
+        .expect("its text asked of the core");
+    assert_eq!(tab, 20);
+    browser.withheld.borrow_mut().insert(20);
+    agents.update(cx, |agents, cx| agents.text_read(request, None, cx));
+    let refused = answer.recv().unwrap();
+    assert!(refused.error);
+    assert_eq!(refused.text, WITHHELD_REFUSAL);
+
+    browser.withheld.borrow_mut().remove(&20);
+    let answer = call(
+        &agents,
+        "claude-code",
+        "read_page",
+        json!({ "tab": 20 }),
+        cx,
+    );
+    let (_, request) = *browser
+        .reads
+        .borrow()
+        .last()
+        .expect("its text asked of the core");
+    agents.update(cx, |agents, cx| agents.text_read(request, None, cx));
+    let none = answer.recv().unwrap();
+    assert!(none.error);
+    assert_ne!(none.text, WITHHELD_REFUSAL);
+}
+
 /// The activity log and the 30-day record name the site a login was filled at, never its account.
 #[gpui::test]
 fn the_log_and_the_record_name_the_site_never_the_account(cx: &mut TestAppContext) {

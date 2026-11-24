@@ -1654,6 +1654,8 @@ impl Agents {
 
     /// The core's answer to the read `request`: the page's text, or None if it had none.
     pub fn text_read(&mut self, request: u64, text: Option<String>, cx: &mut Context<Self>) {
+        const NO_PAGE: &str =
+            "The tab has no page loaded: it loads once the user shows it. Try another tab.";
         let Some(Reading {
             agent,
             connection,
@@ -1692,9 +1694,18 @@ impl Agents {
                 };
                 ToolResult::noted(text, notes)
             }
-            (None, _, _) => ToolResult::error(
-                "The tab has no page loaded: it loads once the user shows it. Try another tab.",
-            ),
+            // The page's one look found it showing what a password field held (the core's
+            // AgentPage::Freeze), which withholds it: the core's refusal, in its words.
+            (None, _, _) if self.browser.withheld(id) => {
+                match self.browser.may_act(&agent, id, "read_page", cx) {
+                    Err((failure, why)) => ToolResult {
+                        kind: failure.kind(),
+                        ..ToolResult::error(why)
+                    },
+                    Ok(()) => ToolResult::error(NO_PAGE),
+                }
+            }
+            (None, _, _) => ToolResult::error(NO_PAGE),
         });
         self.advance(cx);
     }
