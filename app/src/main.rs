@@ -612,6 +612,9 @@ unsafe extern "C" fn started(_: *mut c_void) {
         });
         dock_dot::open(Rc::new(DockDot), cx);
         settings::read_switches(cx);
+        // The transparency level the window and what floats over it are drawn at, before the
+        // first window draws (#4128).
+        browser::transparency::level(cx);
         // The jump list's task off the Mac, which runs the browser for a new Little ilo window,
         // which the host writes as the first window opens, under its AppUserModelID.
         if let (Ok(title), Ok(switch)) = (
@@ -925,6 +928,7 @@ fn profile_dir() -> String {
 /// What the app gives the core to start with: Chromium's switches, from the arguments the process
 /// was `given`, and the callbacks.
 fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
+    browser::palette::set_window_material(unsafe { platform::host_has_window_material() });
     let profile = profile_dir();
     // The Flatpak's sandbox has no cameras: Chromium reaches one through PipeWire and the Camera
     // portal, which asks the user, rather than through a grant of every device (#3166). Without a
