@@ -1795,13 +1795,15 @@ impl Shell {
                     div(),
                     Rc::new(act),
                 )
+                .children(self.place(step, cli.id()))
             });
             let another = another_agent_name_row(&look, a11y, move |_, cx| {
                 let open = |shell: &mut Shell, cx: &mut Context<Shell>| {
                     shell.browser.agents_settings(cx);
                 };
                 shell.update(cx, open).ok();
-            });
+            })
+            .children(self.place(step, "another"));
             group(&look, rows.into_iter().chain([another]))
         });
         let rows = rows.or_else(|| {

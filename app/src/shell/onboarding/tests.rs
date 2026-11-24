@@ -2738,6 +2738,69 @@ fn the_assistant_step_looks_for_the_assistants_as_it_shows(cx: &mut TestAppConte
     assert_eq!(looks(), 2, "shown again, it looked again");
 }
 
+/// In the sheet's narrow half no assistant's name is cut by its button: each button is beside the
+/// whole name, or, where the row has no room for both, under it.
+#[gpui::test]
+fn the_assistants_names_are_whole_beside_or_over_their_buttons(cx: &mut TestAppContext) {
+    use crate::agents::ready::{Found, Ready};
+    use crate::agents::runner::Cli;
+    use crate::tokens::settings::{
+        CONTROL_GAP, END_GAP, GLYPH_PLATE, GLYPH_PLATE_GAP, PADDING, ROW_X,
+    };
+    let (shell, cx, host) = first_window(cx);
+    host.agents.set(Some(false));
+    let signed_out = Found {
+        ready: Ready::SignedOut,
+        ..Default::default()
+    };
+    let (agents, _) =
+        cx.update(|_, cx| crate::agents::tests::stand_in(vec![(Cli::Claude, signed_out)], cx));
+    cx.simulate_a11y_activation();
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Assistant);
+    later(&shell, cx, STEP_MOTION);
+    let lines = agents.read_with(cx, |agents, _| {
+        Cli::ALL.map(|cli| agents.assistant_row(cli).line)
+    });
+    assert_eq!(lines, ["Not signed in", "Not installed"]);
+
+    let scale = cx.update(|window, _| window.scale_factor());
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    let button = |label: &str| {
+        let node = (tree.nodes.iter())
+            .map(|(_, node)| node)
+            .find(|node| node.role() == Role::Button && node.label().as_deref() == Some(label))
+            .unwrap_or_else(|| panic!("no {label} button"));
+        let bounds = node.bounds().expect("a button has bounds");
+        (bounds.x0 as f32 / scale, bounds.y0 as f32 / scale)
+    };
+    let system = cx.update(|_, cx| gpui::WindowTextSystem::new(cx.text_system().clone()));
+    for (row, name, offer) in [
+        ("claude", "Claude Code", "Sign In to Claude Code"),
+        ("codex", "Codex", "Get Codex"),
+        ("another", "Another app", "How to Connect"),
+    ] {
+        let row = placed(row, cx).unwrap_or_else(|| panic!("{name}'s row wasn't drawn"));
+        let whole = crate::tooltip::text_width(
+            &name.into(),
+            crate::tokens::text::BODY,
+            gpui::FontWeight::MEDIUM,
+            &system,
+        );
+        let name_left = f32::from(row.left()) + ROW_X + GLYPH_PLATE + GLYPH_PLATE_GAP;
+        let (left, top) = button(offer);
+        let beside = left + 0.5 >= name_left + whole + END_GAP;
+        // Under is on a line of its own, below the name's, which is at least the glyph's height,
+        // not centred on a row its line made tall.
+        let under = top + 0.5 >= f32::from(row.top()) + PADDING + GLYPH_PLATE + CONTROL_GAP;
+        assert!(
+            beside || under,
+            "{offer} at ({left}, {top}) cuts {name}, {whole} wide from {name_left}, in its row at \
+             {row:?}"
+        );
+    }
+}
+
 /// The assistant's loop: one ask, three pages opened at once in the small window's sidebar, a
 /// price read from each in turn, then the answer; nothing is open as it starts, and its still
 /// last frame is the answer.
