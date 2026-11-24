@@ -6,7 +6,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 export PATH=$PWD/.deps/bin:$PATH
-out=.deps/src/out/Release
+# BUILD_OUT builds in another of the tree's out/ directories, such as a clone of Release for a
+# branch's engine, which leaves Release as the shipped build left it.
+out=.deps/src/out/${BUILD_OUT:-Release}
 if [ "${1:-}" = dev ]; then
   out=.deps/src/out/Dev
   shift
