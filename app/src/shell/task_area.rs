@@ -1093,6 +1093,12 @@ impl Shell {
                     .block_mouse_except_scroll()
                     .child(view),
             );
+        } else {
+            // Not drawn, it places none of its tiles, which the core ended as the window took the
+            // page: they're shown again once it's drawn.
+            if let Some(talk) = &self.talk {
+                talk.end_tiles(cx);
+            }
         }
         let Some(page) = &area.page else {
             // Drawn again, for another page, the strip is logged again.
