@@ -483,7 +483,7 @@ pub struct Card {
     pub open: Vec<(u64, SharedString)>,
     /// Each of its pages' own step of the turn under way, while it works on more than one: what
     /// the strip under a page says, never another page's (#4102).
-    pub steps: Vec<(u64, SharedString)>,
+    pub page_steps: Vec<(u64, SharedString)>,
     /// Limit's Retry.
     pub retry: bool,
     /// A failure's fix, its assistant's row's own button: Sign in to …, Cancel or Get ….
@@ -717,12 +717,7 @@ impl Agents {
             // Nor one meant for what was there before the helpers' limit's line appeared.
             TaskAction::SetTier(_) | TaskAction::AnySite
                 if (self.task(agent)).is_some_and(|task| task.helpers.just_stopped()) => {}
-            TaskAction::SetTier(tier) => {
-                if let Some(task) = self.task_mut(agent) {
-                    task.helpers.settle(None);
-                }
-                self.set_tier(agent, tier, cx)
-            }
+            TaskAction::SetTier(tier) => self.set_tier(agent, tier, cx),
             TaskAction::AnySite => self.set_sites(agent, Sites::Any, cx),
             TaskAction::TakeOver(tab) => {
                 if let Some(task) = self.task_mut(agent) {
@@ -1003,7 +998,7 @@ impl Agents {
             },
             question,
             open,
-            steps: match task.state {
+            page_steps: match task.state {
                 State::Working => page_steps(task),
                 _ => Vec::new(),
             },
@@ -1455,17 +1450,24 @@ impl Agents {
                     notes: None,
                 });
             }
-            Out::Helper { id, told } => self.helper_told(&agent, id, told),
+            Out::Helper { id, told } => self.helper_told(&agent, id, told, cx),
             Out::Started { deep } => self.helper_started(&agent, deep),
-            // The turn ilo interrupted at the helpers' limit ends, however its CLI says so, and
-            // the task goes on in a new turn that starts with what ilo tells it.
+            // The turn ilo interrupted at the helpers' limit ends, however its CLI says so. The
+            // first since the user wrote, the task goes on in a new turn that starts with what
+            // ilo tells it; the second, the turn ends as any does and the task waits for them.
             Out::Ended(_)
-                if let Some(told) = self
+                if let Some(after) = self
                     .task_mut(&agent)
                     .filter(|task| task.state == State::Working)
                     .and_then(|task| task.helpers.takes_end()) =>
             {
-                self.tell_task(&agent, told, true, cx);
+                match after {
+                    helpers::After::Told(told) => self.tell_task(&agent, told, true, cx),
+                    helpers::After::Ends => {
+                        let out = Out::Ended(None);
+                        self.task_said(runner::Event { agent, out }, cx)
+                    }
+                }
             }
             Out::Ended(None) => {
                 let Some(task) = self.task_mut(&agent) else {

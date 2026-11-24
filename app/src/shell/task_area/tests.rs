@@ -945,7 +945,7 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
-        steps: Vec::new(),
+        page_steps: Vec::new(),
         retry: false,
         fix: None,
     };
@@ -1256,7 +1256,7 @@ fn the_strip_under_a_page_says_that_pages_own_step(cx: &mut TestAppContext) {
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
-        steps: (steps.iter())
+        page_steps: (steps.iter())
             .map(|(tab, step)| (*tab, step.to_string().into()))
             .collect(),
         retry: false,
@@ -1457,7 +1457,7 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
-        steps: Vec::new(),
+        page_steps: Vec::new(),
         retry: false,
         fix: None,
     };

@@ -217,8 +217,7 @@ fn a_level_lowered_mid_turn_refuses_a_helpers_next_act(cx: &mut TestAppContext) 
 /// The limit is ilo's act. A task may start the most a task starts for each message of the
 /// user's; one more and ilo stops the turn with Stop's own request and says so in one line. The
 /// task isn't Stopped: once the interrupted turn ends, however its CLI says so, ilo tells it why
-/// and it goes on in a new turn to its end. Stopped again in that turn, the one line still
-/// stands.
+/// and it goes on in a new turn.
 #[gpui::test]
 fn past_the_most_ilo_stops_the_turn_and_the_task_goes_on(cx: &mut TestAppContext) {
     let (run, agent) = with_helpers("most", cx);
@@ -237,14 +236,9 @@ fn past_the_most_ilo_stops_the_turn_and_the_task_goes_on(cx: &mut TestAppContext
     let line = limit_line(&run, &agent, cx).expect("no line");
     let kind = IloKind::Helpers {
         tab: 0,
-        tier: Tier::Work,
         deep: false,
     };
     assert_eq!((&line.kind, line.settled), (&kind, false));
-    assert_eq!(
-        ilo::buttons(&line),
-        [IloButton::TakeOver, IloButton::Raise(Tier::Full)]
-    );
     // It works on: not Stopped, which only the user's stop is.
     assert_eq!(run.state(&agent, cx), State::Working);
     assert_eq!(card(&run, cx).dot, Dot::Working);
@@ -258,20 +252,47 @@ fn past_the_most_ilo_stops_the_turn_and_the_task_goes_on(cx: &mut TestAppContext
         told.contains(&format!("more than {MOST} helpers")),
         "{told}"
     );
-
-    // One more in the new turn is stopped as the first was, and the conversation has one line.
-    started(&run, &agent, 1, DEEP, cx);
-    sent(&run, "\"interrupt\"", 2);
-    run.said(&agent, Out::Ended(None), cx);
-    sent(&run, "ilo stopped your turn", 2);
-    let lines = run.ilo_lines(&agent, cx);
-    assert_eq!(lines.iter().filter(|each| **each == kind).count(), 1);
-
     run.said(&agent, Out::Said("Two seats at 9:05.".into()), cx);
     run.said(&agent, Out::Ended(None), cx);
     assert!(matches!(run.state(&agent, cx), State::Done { .. }));
-    // Ended, there's nothing left to take over or raise.
+    // Ended, there's nothing left to take over.
     assert!(limit_line(&run, &agent, cx).unwrap().settled);
+}
+
+/// The limit ends. Past it a second time since the user wrote, ilo stops that turn too and tells
+/// the task nothing: the turn ends there as any turn does, however its CLI says the interrupted
+/// one did, and the task waits for the user with its one line standing. So a task that keeps
+/// starting helpers gets two stops for a message of the user's and no turn after the second. The
+/// user's reply starts the count again.
+#[gpui::test]
+fn past_the_limit_again_the_turn_ends_and_the_task_waits_for_the_user(cx: &mut TestAppContext) {
+    let (run, agent) = with_helpers("again", cx);
+    started(&run, &agent, MOST + 1, DEEP, cx);
+    sent(&run, "\"interrupt\"", 1);
+    run.said(&agent, Out::Ended(None), cx);
+    sent(&run, "ilo stopped your turn", 1);
+
+    started(&run, &agent, 1, DEEP, cx);
+    sent(&run, "\"interrupt\"", 2);
+    // More that start while that interrupt lands ask for no third.
+    started(&run, &agent, 2, DEEP + 1, cx);
+    let interrupted = Failure::Other("Interrupted".into());
+    run.said(&agent, Out::Ended(Some(interrupted)), cx);
+    assert!(matches!(run.state(&agent, cx), State::Done { .. }));
+    let lines = run.ilo_lines(&agent, cx);
+    let limits = |kind: &&IloKind| matches!(kind, IloKind::Helpers { .. });
+    assert_eq!(lines.iter().filter(limits).count(), 1);
+
+    // The user writes: what the task was sent since has its one telling and its two stops.
+    (run.agents).update(cx, |agents, cx| agents.reply(&agent, "Go on.", cx));
+    let was = sent(&run, "Go on.", 1);
+    assert_eq!(was.matches("ilo stopped your turn").count(), 1, "{was}");
+    assert_eq!(was.matches("\"interrupt\"").count(), 2, "{was}");
+    started(&run, &agent, MOST, DEEP, cx);
+    assert_eq!(run.state(&agent, cx), State::Working);
+    started(&run, &agent, 1, DEEP, cx);
+    sent(&run, "\"interrupt\"", 3);
+    assert_eq!(run.ilo_lines(&agent, cx).iter().filter(limits).count(), 2);
 }
 
 /// A helper that starts one of its own is past the limit however few the task started: its CLI
@@ -294,12 +315,16 @@ fn a_helper_that_starts_its_own_is_stopped_too(cx: &mut TestAppContext) {
     assert_eq!(run.state(&agent, cx), State::Working);
 }
 
-/// The line's step up takes no press meant for what was there before it appeared, and once it
-/// has stood a moment, the user's press raises the task's access and settles it.
+/// No level lifts the limit, so its line has no step up: Take Over of the page the task stands on,
+/// which settles it, and with no page nothing. The line's arrival moves what's under the pointer,
+/// so a press that widens the task's access is taken only once the line has stood.
 #[gpui::test]
-fn the_limits_line_takes_a_raise_only_once_it_has_stood(cx: &mut TestAppContext) {
-    let (run, agent) = with_helpers("raise", cx);
+fn the_limits_line_offers_take_over_alone(cx: &mut TestAppContext) {
+    let (run, agent) = with_helpers("buttons", cx);
     started(&run, &agent, MOST + 1, DEEP, cx);
+    let none = limit_line(&run, &agent, cx).expect("no line");
+    assert_eq!(ilo::buttons(&none), []);
+
     let raise = |run: &Run, cx: &mut TestAppContext| {
         (run.agents).update(cx, |agents, cx| {
             agents.task_action(&agent, TaskAction::SetTier(Tier::Full), cx);
@@ -312,7 +337,40 @@ fn the_limits_line_takes_a_raise_only_once_it_has_stood(cx: &mut TestAppContext)
         over[0].appeared -= tier::PROTECT;
     });
     assert_eq!(raise(&run, cx), Tier::Full);
+    // A change of access isn't an answer to the limit.
+    assert!(!limit_line(&run, &agent, cx).unwrap().settled);
+
+    // A task on a page: its line takes that page over.
+    let (run, agent) = with_helpers("buttons-page", cx);
+    pages(&run, 1);
+    outline(&run, &agent, PAGES[0].0, cx);
+    started(&run, &agent, MOST + 1, DEEP, cx);
+    let line = limit_line(&run, &agent, cx).expect("no line");
+    assert_eq!(ilo::tab(&line.kind), Some(PAGES[0].0));
+    assert_eq!(ilo::buttons(&line), [IloButton::TakeOver]);
+    (run.agents).update(cx, |agents, cx| {
+        agents.task_action(&agent, TaskAction::TakeOver(PAGES[0].0), cx);
+    });
     assert!(limit_line(&run, &agent, cx).unwrap().settled);
+}
+
+/// A helper's label is only for a tab of the task's own: a number its lines name that isn't one
+/// then labels nothing, so naming numbers grows nothing ilo holds, and a step on that tab later
+/// is the task's own step.
+#[gpui::test]
+fn a_helper_is_labelled_only_by_the_tasks_own_tabs(cx: &mut TestAppContext) {
+    let (run, agent) = with_helpers("label", cx);
+    pages(&run, 1);
+    // The second page isn't the task's yet, and 20 never is.
+    helper(&run, &agent, "toolu_a", PAGES[1].0, cx);
+    helper(&run, &agent, "toolu_a", 20, cx);
+    helper(&run, &agent, "toolu_b", PAGES[0].0, cx);
+    pages(&run, 2);
+    let on = |tab: u64| json!({ "tab": tab });
+    let _a = call(&run.agents, &agent, "read_page", on(PAGES[1].0), cx);
+    let _b = call(&run.agents, &agent, "read_page", on(PAGES[0].0), cx);
+    let trace = live(&run, &agent, cx);
+    assert_eq!((trace.helpers(), trace.steps()), (1, 1));
 }
 
 /// A task's helpers show as a line each, the step each is on, in the place of its first: ilo's own
@@ -345,7 +403,7 @@ fn a_tasks_helpers_are_a_line_each_and_its_card_says_the_live_line(cx: &mut Test
         })
         .collect();
     let own = |tab: u64| {
-        let step = card.steps.iter().find(|(each, _)| *each == tab);
+        let step = card.page_steps.iter().find(|(each, _)| *each == tab);
         step.map(|(_, step)| step.clone())
             .expect("no step of its own")
     };
@@ -420,5 +478,5 @@ fn a_turn_that_ends_leaves_no_helpers_line_under_way(cx: &mut TestAppContext) {
     assert!(trace.took.is_some() && !trace.running);
     assert_eq!(trace.counted(), (2, Counted::Helpers));
     assert_eq!(under_way(&trace), 0);
-    assert_eq!(card(&run, cx).steps, []);
+    assert_eq!(card(&run, cx).page_steps, []);
 }

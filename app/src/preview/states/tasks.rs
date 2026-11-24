@@ -141,7 +141,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             }
             _ => Vec::new(),
         },
-        steps: Vec::new(),
+        page_steps: Vec::new(),
         retry: false,
         fix: None,
     };
@@ -433,19 +433,12 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             Line::Said("The stalls are on another page. A helper reads them while I go on.".into()),
             Line::Trace(helper_trace(1, false)),
         ],
-        // ilo stopped the task from starting a fifth: its line, with Take Over and the step up.
+        // ilo stopped the task from starting a fifth: its line, with Take Over alone.
         "helpers-limit" => vec![
             done(0, before),
             Line::Said(FOUR_SHOPS.into()),
             Line::Trace(helper_trace(HELPER_PAGES.len(), false)),
-            line(
-                100,
-                IloKind::Helpers {
-                    tab,
-                    tier: Tier::Work,
-                    deep: false,
-                },
-            ),
+            line(100, IloKind::Helpers { tab, deep: false }),
         ],
         // The turn ended with its helpers: the stretch is over, and no helper's line is under way.
         "helpers-ended" => {

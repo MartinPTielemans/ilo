@@ -475,8 +475,12 @@ pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    // A line with a parent is a helper's (#4102), never the task's: nothing it says, writes or
-    // thinks is the task's, shown or kept. It tells only which tabs the helper calls for.
+    // A helper's start is counted whoever's line says so, the task's or a helper's own (#4102).
+    if let Some(started) = super::helpers::started(kind, message) {
+        return vec![started];
+    }
+    // A line with a parent is a helper's, never the task's: nothing it says, writes or thinks is
+    // the task's, shown or kept. It tells only which tabs the helper calls for.
     if let Some(parent) = message.get("parent_tool_use_id").and_then(Value::as_str) {
         return super::helpers::claude_read(parent, kind, message);
     }
@@ -516,7 +520,6 @@ pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
                 .chain(super::helpers::asked(content.into_iter().flatten()))
                 .collect()
         }
-        "system" => super::helpers::started(message).into_iter().collect(),
         "rate_limit_event" => {
             let info = message.get("rate_limit_info").unwrap_or(&Value::Null);
             if info.get("status").and_then(Value::as_str) == Some("rejected") {

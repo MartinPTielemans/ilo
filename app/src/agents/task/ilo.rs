@@ -54,8 +54,8 @@ pub enum IloKind {
     TierChanged { from: Tier, to: Tier },
     /// ilo stopped the task's turn at its helpers' limit (#4102): it started more than a task
     /// may, or with `deep`, a helper started one of its own. `tab` is the page the task stood on,
-    /// or 0 with none, and `tier` its access then. The count its line says is the app's own.
-    Helpers { tab: u64, tier: Tier, deep: bool },
+    /// or 0 with none. The count its line says is the app's own.
+    Helpers { tab: u64, deep: bool },
     /// The user's reply took up the task after it had ended, at `tier`, which the app decided.
     Resumed { tier: Tier },
     /// The assistant keeps the task's conversation on the user's computer, said once per profile.
@@ -129,11 +129,13 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
             why: Why::OtherSite,
             ..
         } => vec![IloButton::TakeOver, IloButton::AnySite],
-        IloKind::Stopped { tier, .. } | IloKind::Helpers { tier, .. } => {
-            std::iter::once(IloButton::TakeOver)
-                .chain(tier.up().map(IloButton::Raise))
-                .collect()
-        }
+        IloKind::Stopped { tier, .. } => std::iter::once(IloButton::TakeOver)
+            .chain(tier.up().map(IloButton::Raise))
+            .collect(),
+        // No level lifts the limit, so no step up stands under its line; with no page to take,
+        // nothing does.
+        IloKind::Helpers { tab: 0, .. } => Vec::new(),
+        IloKind::Helpers { .. } => vec![IloButton::TakeOver],
         IloKind::Yours { .. } => vec![IloButton::HandBack, IloButton::NotNow],
         IloKind::TabBack { .. } => vec![IloButton::HandBack],
         IloKind::SignedIn { .. } | IloKind::TierChanged { .. } => Vec::new(),

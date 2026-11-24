@@ -165,3 +165,25 @@ fn only_the_browsers_tools_label_a_page() {
     let progress = serde_json::json!({ "type": "system", "subtype": "task_progress" });
     assert_eq!(claude_read(&progress, &mut Turn::default()), []);
 }
+
+/// A helper's start is counted whoever's line says so. One on a helper's own line, with a parent,
+/// says how deep it is, or without a depth is taken as a helper's helper, deeper than any may be;
+/// nothing else of a helper's `system` lines comes out.
+#[test]
+fn a_start_on_a_helpers_own_line_is_counted() {
+    let line = |depth: Option<u64>, subtype: &str| {
+        let mut line = serde_json::json!({ "type": "system", "subtype": subtype,
+            "parent_tool_use_id": "toolu_task_a" });
+        if let Some(depth) = depth {
+            line["spawn_depth"] = depth.into();
+        }
+        claude_read(&line, &mut Turn::default())
+    };
+    let deeper = u64::from(DEEP) + 1;
+    assert_eq!(line(None, "task_started"), [Out::Started { deep: deeper }]);
+    assert_eq!(line(Some(1), "task_started"), [Out::Started { deep: 1 }]);
+    assert_eq!(line(Some(1), "task_progress"), []);
+    // Only a `system` line starts one, whatever another's fields say.
+    let said = serde_json::json!({ "type": "assistant", "subtype": "task_started" });
+    assert_eq!(claude_read(&said, &mut Turn::default()), []);
+}

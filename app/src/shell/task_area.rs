@@ -1021,8 +1021,8 @@ impl Shell {
         match card.dot {
             // The page's own step once the task works on several, never another page's.
             Dot::Working => {
-                let own = (card.steps.iter()).find(|(each, _)| *each == tab);
-                let detail = match (card.steps.is_empty(), own) {
+                let own = (card.page_steps.iter()).find(|(each, _)| *each == tab);
+                let detail = match (card.page_steps.is_empty(), own) {
                     (true, _) => card.status.to_string(),
                     (false, Some((_, step))) => step.to_string(),
                     (false, None) => String::new(),

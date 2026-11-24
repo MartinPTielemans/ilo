@@ -25,7 +25,7 @@ fn card(n: u64, dot: Dot) -> Card {
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
-        steps: Vec::new(),
+        page_steps: Vec::new(),
         retry: false,
         fix: None,
     }
