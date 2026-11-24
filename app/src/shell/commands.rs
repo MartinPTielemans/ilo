@@ -1517,6 +1517,14 @@ impl Shell {
         if matches!(command, Command::Stop) && key && self.escape_unused(cx) {
             return;
         }
+        // With no page the Space rests on its field, which ⌘T and ⌘L give the keyboard rather than
+        // opening a bar over it. The other ways to a new tab (the sidebar's row, a new window,
+        // Start Again's ask) open the bar, as they did.
+        if matches!(command, Command::NewTab | Command::EditUrl) && key && self.keys_to_resting(cx)
+        {
+            self.leave_keys("new tab", cx);
+            return;
+        }
         // The command bar opens over the page, and the reveal's panel makes way for it.
         if matches!(
             command,
@@ -1724,7 +1732,16 @@ impl Shell {
                 }
                 return;
             }
-            Command::Quit => return self.browser.quit(cx),
+            Command::Quit => {
+                // A task's view stands while Quit asks, so Cancel leaves the window as it was
+                // (#4202). Once the quit is decided the area goes, and the core shows the user's
+                // Space again, which the session then keeps for the window.
+                let shell = cx.weak_entity();
+                let going = std::rc::Rc::new(move |cx: &mut App| {
+                    shell.update(cx, |shell, cx| shell.leave_task_area(cx)).ok();
+                });
+                return self.browser.quit(going, cx);
+            }
             Command::AddSplit => return self.add_pane(cx),
             Command::NewNote => return self.browser.new_note(self.space, None, cx),
             Command::NewBoard => return self.new_board(cx),
