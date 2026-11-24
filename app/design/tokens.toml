@@ -3063,10 +3063,10 @@ bright = 0xffffff
 bright-line-x = 14.0
 bright-line-y = 9.0
 bright-line-width = 34.0
-bright-line-height = 3.0
+bright-line-height = 4.0
 bright-line-gap = 8.0
-bright-line-first = 0xc9c7c1
-bright-line = 0xe3e1dc
+bright-line-first = 0x2a2823
+bright-line = 0x2a2823
 # ilo's window: 16 from the picture's left, 10 from its right, 22 down and past its foot, its top
 # corners round, with a hairline and a shadow under it.
 window-x = 16.0
