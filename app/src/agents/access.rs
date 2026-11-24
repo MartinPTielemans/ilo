@@ -212,6 +212,32 @@ impl Agents {
         cx.notify();
     }
 
+    /// Whether a refusal of the task `key`'s appeared too lately for a press on its line to be
+    /// meant for it.
+    pub(super) fn just_stopped(&self, key: &str) -> bool {
+        (self.task(key).into_iter().flat_map(|task| &task.stops))
+            .any(|stop| !stop.settled && stop.appeared.elapsed() < tier::PROTECT)
+    }
+
+    /// The user takes over `tab` from the task `key`'s line, as Take Over does: its refusals there
+    /// are settled and its access stays as it was.
+    pub(super) fn take_over_stopped(&mut self, key: &str, tab: u64, cx: &mut Context<Self>) {
+        let Some(task) = self.task_mut(key) else {
+            return;
+        };
+        for stop in (task.stops.iter_mut()).filter(|stop| stop.tab == tab) {
+            stop.settled = true;
+        }
+        let agent = match &task.session {
+            Some(session) => session.agent.clone(),
+            None => task.agent.clone(),
+        };
+        if tab != 0 {
+            self.take_over(&agent, tab, cx);
+        }
+        cx.notify();
+    }
+
     /// The task `key`'s refusals the user hasn't settled, oldest first.
     pub fn stops(&self, key: &str) -> Vec<Stop> {
         (self.task(key).into_iter())

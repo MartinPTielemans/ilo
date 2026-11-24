@@ -3073,6 +3073,70 @@ fn a_site_set_to_never_is_refused_at_every_tier_until_revoked(cx: &mut TestAppCo
     assert!(!page_done(&agents, &browser, clicked, shop_tree(), cx).error);
 }
 
+/// A press on a refusal's line just after it appears is taken as meant for what was there, and does
+/// nothing; one after that changes the task's access. Take over holds the tab and settles the
+/// refusal there, and the access stays as it was.
+#[gpui::test]
+fn a_refusals_buttons_wait_and_take_over_keeps_the_access(cx: &mut TestAppContext) {
+    use super::task::TaskAction;
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    page_done(&agents, &browser, answer, shop_tree(), cx);
+    let key = session_key(&agents, "claude-code", cx);
+    let coupon = |cx: &mut TestAppContext| {
+        let clicked = call(
+            &agents,
+            "claude-code",
+            "click",
+            json!({ "tab": 20, "ref": "e1" }),
+            cx,
+        );
+        let what = "click “Coupon” on example.com";
+        refused(
+            &agents,
+            &browser,
+            clicked,
+            what,
+            Why::Act,
+            "click “Coupon”",
+            cx,
+        );
+    };
+    let press = |action, cx: &mut TestAppContext| {
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&key, action, cx);
+        })
+    };
+    let tier =
+        |cx: &mut TestAppContext| agents.read_with(cx, |agents, _| agents.task(&key).unwrap().tier);
+    give(&agents, Tier::Look, cx);
+    coupon(cx);
+
+    press(TaskAction::SetTier(Tier::Work), cx);
+    press(TaskAction::AnySite, cx);
+    assert_eq!(
+        tier(cx),
+        Tier::Look,
+        "a press as the line appeared changed it"
+    );
+    assert_eq!(stops(&agents, cx).len(), 1);
+    agents.update(cx, |agents, _| {
+        for stop in &mut agents.task_mut(&key).unwrap().stops {
+            stop.appeared -= super::tier::PROTECT;
+        }
+    });
+    press(TaskAction::SetTier(Tier::Work), cx);
+    assert_eq!(tier(cx), Tier::Work);
+    assert!(stops(&agents, cx).is_empty());
+
+    give(&agents, Tier::Look, cx);
+    coupon(cx);
+    press(TaskAction::TakeOver(20), cx);
+    assert!(stops(&agents, cx).is_empty(), "Take over left the refusal");
+    assert_eq!(tier(cx), Tier::Look, "Take over changed the access");
+    assert!(agents.read_with(cx, |agents, _| agents.held.contains_key(&20)));
+}
+
 /// A task's Sites, set to the pages the user gave it, refuse a page on another site at every tier,
 /// and Any site settles the refusal and lets it go.
 #[gpui::test]

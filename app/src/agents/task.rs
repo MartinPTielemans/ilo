@@ -660,11 +660,14 @@ impl Agents {
             TaskAction::SignIn => self.sign_in_for_task(agent, cx),
             TaskAction::CancelSignIn => self.cancel_sign_in_for_task(agent),
             // A Stopped line's step up and the chip: the user's own press, the one way a tier
-            // or a task's Sites change.
+            // or a task's Sites change, but not a press meant for what was there before a
+            // refusal's line appeared.
+            TaskAction::SetTier(_) | TaskAction::AnySite if self.just_stopped(agent) => {}
             TaskAction::SetTier(tier) => self.set_tier(agent, tier, cx),
             TaskAction::AnySite => self.set_sites(agent, Sites::Any, cx),
+            TaskAction::TakeOver(tab) => self.take_over_stopped(agent, tab, cx),
             // The surface's other buttons, which the hand-off's step wires.
-            TaskAction::TakeOver(_) | TaskAction::HandBack(_) | TaskAction::NotNow(_) => {}
+            TaskAction::HandBack(_) | TaskAction::NotNow(_) => {}
         }
         (None, None)
     }

@@ -184,6 +184,11 @@ impl Sites {
     }
 }
 
+/// How long after a refusal's line appears a press on its step up or Any site is ignored, as an
+/// agent card's buttons ignore keys (agent_card_keys::PROTECT): a click meant for what was there
+/// lands on a button that has just come. Where a line moves is the view's to protect.
+pub const PROTECT: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// A refusal the user hasn't settled, which their task's conversation shows as ilo's line: the
 /// same one again counts on it, so retrying can't fill the conversation or press the user.
 #[derive(Clone, Debug, PartialEq)]
