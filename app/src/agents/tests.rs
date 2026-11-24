@@ -83,6 +83,9 @@ struct Made {
     /// agents asked of the core: the agent, the tab and the request.
     withheld: RefCell<HashSet<u64>>,
     saved_sign_ins: RefCell<Vec<(String, u64, u64)>>,
+    /// The user's Spaces outside the profile the others are in, "Default", each with the name of
+    /// its profile's folder.
+    profiles: RefCell<Vec<(u64, &'static str)>>,
 }
 
 impl Made {
@@ -424,6 +427,25 @@ impl Browser for Made {
     /// The user's Space is 1.
     fn user_space(&self, _: u64) -> u64 {
         1
+    }
+
+    fn space_profile(&self, space: u64) -> String {
+        let profiles = self.profiles.borrow();
+        let named = profiles.iter().find(|each| each.0 == space);
+        named.map_or("Default", |each| each.1).into()
+    }
+
+    /// The user's Space in "Default" is 1.
+    fn profile_space(&self, profile: &str) -> u64 {
+        let profiles = self.profiles.borrow();
+        let space = profiles.iter().find(|each| each.1 == profile);
+        space.map_or(u64::from(profile == "Default"), |each| each.0)
+    }
+
+    /// "Default" is always there; another is while a test lists it, with Space 0 for one that
+    /// has no Space of the user's.
+    fn has_profile(&self, profile: &str) -> bool {
+        profile == "Default" || self.profiles.borrow().iter().any(|each| each.1 == profile)
     }
 
     fn request(&self, _: &str, tab: u64, request: u64, sent: &request::Request) {
@@ -8324,6 +8346,18 @@ mod tasks {
         assert_eq!(card.status.as_ref(), "Claude hit its usage limit");
     }
 
+    /// A task that ended today says its time, and one from an earlier day its day, as a time
+    /// alone reads as today's.
+    #[test]
+    fn a_task_from_an_earlier_day_says_its_day() {
+        use chrono::{TimeZone, Utc};
+        let ended = Utc.with_ymd_and_hms(2026, 11, 21, 14, 5, 0).unwrap();
+        let that_night = Utc.with_ymd_and_hms(2026, 11, 21, 23, 59, 0).unwrap();
+        let next_day = Utc.with_ymd_and_hms(2026, 11, 22, 0, 1, 0).unwrap();
+        assert_eq!(crate::agents::time_or_day_on(ended, that_night), "14:05");
+        assert_eq!(crate::agents::time_or_day_on(ended, next_day), "21 Nov");
+    }
+
     /// The Archive lists the dismissed tasks, the last to leave the foot first, each with how it
     /// ended and when. Delete from Archive takes one out of the list and out of ⇧⌘T's reach, and
     /// ⌘Z's Undelete puts it back.
@@ -8361,7 +8395,7 @@ mod tasks {
                 .collect::<Vec<_>>(),
             [second.clone(), first.clone()]
         );
-        let at = crate::agents::local_time(1_700_000_000);
+        let at = crate::agents::time_or_day(1_700_000_000);
         assert_eq!(
             now[1],
             (first.clone(), format!("Claude · Done {at}"), Dot::Done)

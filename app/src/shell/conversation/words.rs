@@ -45,18 +45,14 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         ),
         IloKind::Resumed { tier } => (format!("resumed this task at {}", tier.label()), None),
         // Where the assistant is the subject, a middle dot sets ilo's mark off from the sentence.
-        // A kept task takes a reply while the browser runs, and the words promise no more.
-        IloKind::KeptHere => (
-            format!(
-                "· {agent} keeps this conversation on {} until you quit {}, so you can reply.",
-                kept::COMPUTER,
-                env!("APP_NAME")
-            ),
-            None,
-        ),
-        IloKind::Gone => (format!("· {agent} no longer has this conversation."), None),
+        // A kept task takes a reply after a quit too, so the words name no end; the reply field
+        // says reply, and Settings is where one is removed, so the line says neither.
+        IloKind::KeptHere => (format!("· {agent} still has this conversation."), None),
+        IloKind::Gone => (format!("· {}", kept::gone_words(agent)), None),
         IloKind::NotKept => (format!("· {agent} didn't keep this conversation."), None),
         IloKind::KeepsNothing => (format!("· {agent} doesn't keep finished tasks."), None),
+        IloKind::NoProfile => ("· This task's profile was deleted.".into(), None),
+        IloKind::NoSpace => ("· This task's profile has no Space left.".into(), None),
     }
 }
 
@@ -76,7 +72,7 @@ pub fn with_name(kind: &IloKind, own: &str, name: &str) -> String {
     }
 }
 
-/// Where the switch that keeps finished tasks is, under the line that says they're kept.
+/// Where Settings holds what a line's link points at.
 const KEPT_IN: &str = "Settings › Agents";
 
 /// The app's own quiet link under a line, which opens Settings where its words point and changes
@@ -102,9 +98,13 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
         }),
         IloKind::Yours { .. } | IloKind::TabBack { .. } | IloKind::TierChanged { .. } => None,
         IloKind::Helpers { .. } => None,
-        IloKind::KeptHere => Some(KEPT_IN.into()),
         IloKind::Resumed { .. } => None,
-        IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing => None,
+        IloKind::KeptHere
+        | IloKind::Gone
+        | IloKind::NotKept
+        | IloKind::KeepsNothing
+        | IloKind::NoProfile
+        | IloKind::NoSpace => None,
     }
 }
 

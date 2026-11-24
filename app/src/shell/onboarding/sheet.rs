@@ -18,7 +18,13 @@ pub(super) use crate::tokens::shell::onboarding::sheet::{
 pub(super) fn on_sheet(step: Step) -> bool {
     matches!(
         step,
-        Step::Intro | Step::Import | Step::Favorites | Step::DefaultBrowser | Step::Color
+        Step::Intro
+            | Step::Import
+            | Step::Favorites
+            | Step::DefaultBrowser
+            | Step::SearchEngine
+            | Step::Color
+            | Step::Account
     )
 }
 
@@ -264,6 +270,8 @@ impl Shell {
             Step::DefaultBrowser => {
                 loops::default_browser(looped, colors, &place).into_any_element()
             }
+            Step::SearchEngine => loops::search(looped, colors, &place).into_any_element(),
+            Step::Account => loops::sync(looped, colors, &place).into_any_element(),
             Step::Color => {
                 let picked = (self.onboarding.as_ref()).and_then(|onboarding| onboarding.picked);
                 let other = (picked.unwrap_or_default() + SWATCHES.len() / 2) % SWATCHES.len();

@@ -2269,7 +2269,7 @@ fn preview_tone() -> Option<Tone> {
 }
 
 /// PREVIEW_TASK_RING=<stop> (with PREVIEW_TASKS=open) watches the working task's page, and
-/// rings the stop named, as Tab from the window does: none, card, back, page, take-over or stop
+/// rings the stop named, as Tab from the window does: none, header, back, page, take-over or stop
 /// (#3220). PREVIEW_TASK's bench stands on its page the same way, with no ring.
 fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
     let bench = states::var_os("PREVIEW_TASK").is_some();
@@ -2279,17 +2279,17 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
     else {
         return;
     };
-    // Tabs after the strip's first stop, the task's card.
+    // Tabs after the strip's first stop, the task's header.
     let tabs = match stop.as_str() {
-        "card" => Some(0),
+        "header" => Some(0),
         "back" => Some(1),
         "page" => Some(2),
         "take-over" => Some(3),
         "stop" => Some(4),
         _ => None,
     };
-    // The bench's page is its conversation's.
-    let tab = FIRST_TASK + if bench { 200 } else { 300 };
+    // The task's first page, which its Space has from the start.
+    let tab = FIRST_TASK + 200;
     let agent: SharedString = format!("task-{FIRST_TASK}").into();
     cx.spawn(async move |cx| {
         // After the conversation the card's click opens.
@@ -2298,24 +2298,9 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
             .await;
         shell
             .update(cx, |shell, cx| {
-                let none = Folders::default();
-                // The task's pages: its one, or with helpers (#4102) each helper's, which are the
-                // task's own in its group at the sidebar's foot and on Pages.
-                let helpers = bench_helpers();
-                let pages = &HELPER_PAGES[..helpers.unwrap_or(1)];
-                let tabs: Vec<u64> = (tab..).take(pages.len()).collect();
-                shell.set_tabs(FIRST_TASK, Vec::new(), tabs.clone(), Vec::new(), none, cx);
-                for (&tab, &(title, url)) in tabs.iter().zip(pages) {
-                    shell.set_title(tab, title.into(), cx);
-                    let page = Page {
-                        url: url.into(),
-                        ..Default::default()
-                    };
-                    shell.set_page(tab, page, cx);
-                }
-                // The helpers' pages came after the conversation opened, on Talk, so it stays
-                // there with all four on Pages.
-                if let Some(count) = helpers.filter(|count| *count > 1) {
+                // The helpers' pages (#4102) came after the conversation opened, on Talk, so it
+                // stays there with all four on Pages.
+                if let Some(count) = bench_helpers().filter(|count| *count > 1) {
                     let mut talk = task_conversation(agent.clone());
                     talk.tabs = helper_tabs();
                     talk.tabs.truncate(count);
@@ -3115,32 +3100,36 @@ fn main() {
                         }
                     }
                     if let Some(tasks) = &tasks {
-                        let pages: Vec<u64> = (FIRST_TASK + 100..).take(TASK_PAGES.len()).collect();
-                        let none = Folders::default();
-                        shell.set_tabs(
-                            FIRST_TASK + 2,
-                            Vec::new(),
-                            pages.clone(),
-                            Vec::new(),
-                            none,
-                            cx,
-                        );
-                        for (&tab, (title, url)) in pages.iter().zip(TASK_PAGES) {
-                            shell.set_title(tab, title.into(), cx);
-                            shell.set_page(
-                                tab,
-                                Page {
-                                    url: url.into(),
-                                    ..Default::default()
-                                },
-                                cx,
-                            );
+                        // Each task's Space holds its pages, which its group lists.
+                        for (at, space) in (FIRST_TASK..).take(TASKS.len()).enumerate() {
+                            let pages = task_pages(at);
+                            let tabs = pages.iter().map(|&(tab, ..)| tab).collect();
+                            let none = Folders::default();
+                            shell.set_tabs(space, Vec::new(), tabs, Vec::new(), none, cx);
+                            for (tab, title, url) in pages {
+                                shell.set_title(tab, title.into(), cx);
+                                shell.set_page(
+                                    tab,
+                                    Page {
+                                        url: url.into(),
+                                        ..Default::default()
+                                    },
+                                    cx,
+                                );
+                            }
                         }
-                        shell.set_task_cards(task_cards(first_space), cx);
+                        let cards = task_cards(first_space);
+                        // The working task is at work in its first page.
+                        let working = cards.iter().find(|card| card.word == Word::Working);
+                        if let Some(card) = working {
+                            shell.agent_acted(card.agent.clone(), FIRST_TASK + 200, cx);
+                        }
+                        shell.set_task_cards(cards, cx);
                         // After the first frame, which sets the palette the reply field takes, as
-                        // a click on the card comes after it.
-                        if tasks == "open" {
-                            let (shown, agent) = (cx.weak_entity(), format!("task-{FIRST_TASK}"));
+                        // a click on the header comes after it.
+                        if let Some(at) = shown_task(tasks) {
+                            let agent = format!("task-{}", FIRST_TASK + at as u64);
+                            let shown = cx.weak_entity();
                             window.on_next_frame(move |_, cx| {
                                 shown
                                     .update(cx, |shell, cx| {
