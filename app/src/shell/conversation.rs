@@ -278,12 +278,31 @@ impl Shell {
         self.talk.as_ref()?.view.read(cx).thumb(tab)
     }
 
+    /// Where the conversation shown drew its reply field, for a test outside this file.
+    #[cfg(test)]
+    pub(super) fn reply_drawn(&self, cx: &gpui::App) -> Option<Bounds<Pixels>> {
+        self.talk.as_ref()?.view.read(cx).reply_drawn.get()
+    }
+
     /// The task whose conversation is kept for `space`'s area.
     pub(super) fn talk_in(&self, space: u64) -> Option<SharedString> {
         self.talk
             .as_ref()
             .filter(|talk| talk.space == space)
             .map(|talk| talk.agent.clone())
+    }
+
+    /// The task whose conversation is kept had no Space of its own, as one a run before left has
+    /// none until its run opens a page, and its card has one the window knows now: the Space.
+    pub(super) fn talk_takes_space(&mut self) -> Option<u64> {
+        let talk = self.talk.as_mut().filter(|talk| talk.space == 0)?;
+        let card = (self.task_cards.iter()).find(|card| card.agent == talk.agent)?;
+        let space = card.space;
+        let known = space != 0 && self.task_spaces.iter().any(|each| each.id == space);
+        known.then(|| {
+            talk.space = space;
+            space
+        })
     }
 
     /// The card's click: its conversation in the page area, or, shown already, the Space's tab

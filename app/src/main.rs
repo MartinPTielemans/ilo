@@ -367,10 +367,11 @@ fn open_saved_windows(cx: &mut App) {
     }
 }
 
-/// A window brought back in a Space an agent left, which this launch deletes once it has moved its
-/// tabs to the user's (`end_old_tasks`), as a run quit with no window left can't (#1676), shows the
-/// user's Space of its profile instead. The pages the launch opens then go there and stay in front,
-/// where they went to the agent's Space and the window then showed another tab.
+/// A window brought back in a Space an agent left, which this launch deletes, an outside agent's
+/// once it has moved its tabs to the user's (`end_old_tasks`), as a run quit with no window left
+/// can't (#1676), shows the user's Space of its profile instead. The pages the launch opens then go
+/// there and stay in front, where they went to the agent's Space and the window then showed
+/// another tab.
 fn leave_agent_space(window: bc::bc_id) {
     let shown = unsafe { bc::bc_window_space(window) };
     if shown == 0 || name(bc::bc_space_agent, shown).is_empty() {
