@@ -114,3 +114,39 @@ index 862e62a54b..44d5dfec34 100644
          });
          // SAFETY: Both pointee types are opaque views of the same Objective-C block pointer ABI.
          unsafe {
+diff --git a/crates/gpui_apple/src/text_system.rs b/crates/gpui_apple/src/text_system.rs
+index 3c0e17d63b..8beb9c23d3 100644
+--- a/crates/gpui_apple/src/text_system.rs
++++ b/crates/gpui_apple/src/text_system.rs
+@@ -161,7 +161,11 @@ impl PlatformTextSystem for AppleTextSystem {
+ 
+             let candidate_properties = candidates
+                 .iter()
+-                .map(|font_id| lock.fonts[font_id.0].properties())
++                .map(|font_id| {
++                    let mut properties = lock.fonts[font_id.0].properties();
++                    properties.weight = medium_at_500(properties.weight);
++                    properties
++                })
+                 .collect::<SmallVec<[_; 4]>>();
+ 
+             let ix = font_kit::matching::find_best_match(
+@@ -723,6 +727,18 @@ fn fontkit_weight(value: FontWeight) -> FontkitWeight {
+     FontkitWeight(value.0)
+ }
+ 
++/// A face's weight as the match reads it, for ilo: AppKit's medium is 0.23 on CoreText's scale and
++/// font-kit's table has 500 at 0.2, so it reads a medium face as about 530. A text asking for 500
++/// then found no face there, and CSS matching gave it the regular one. What font-kit reads between
++/// 500 and 600 is a medium, and stands at 500; a family with none still gives its regular.
++fn medium_at_500(weight: FontkitWeight) -> FontkitWeight {
++    if weight.0 > 500. && weight.0 < 600. {
++        FontkitWeight(500.)
++    } else {
++        weight
++    }
++}
++
+ fn fontkit_style(style: FontStyle) -> FontkitStyle {
+     match style {
+         FontStyle::Normal => FontkitStyle::Normal,

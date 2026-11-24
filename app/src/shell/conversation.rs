@@ -2965,9 +2965,9 @@ enum Caption {
     Step,
 }
 
-/// The weight a page's picture sets a line under it in. Its site is the tile's title and a hold
-/// asks for the user as loudly; the agent's step is regular under its site, which it has to say,
-/// as the panel's text is medium and a line that names no weight takes that.
+/// The weight a page's picture sets a line under it in. Its site is the tile's title, in medium,
+/// and a hold asks for the user as loudly; the agent's step is regular under its site, as a line
+/// that names no weight is.
 fn caption_weight(line: Caption) -> FontWeight {
     match line {
         Caption::Site | Caption::Hold => FontWeight::MEDIUM,

@@ -30,10 +30,10 @@ use browser::theme::Appearance;
 use browser::updates::{self, NightlyRow, Track, VersionRow};
 use browser::widevine::{self, Widevine, WidevineRow};
 use gpui::{
-    AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, FontWeight,
-    Global, Hsla, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, PathPromptOptions, Rgba,
-    SharedString, Subscription, Window, WindowHandle, WindowOptions, actions, canvas, div, point,
-    prelude::*, px, rgb, rgba, size, svg,
+    AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, Global, Hsla,
+    KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, PathPromptOptions, Rgba, SharedString,
+    Subscription, Window, WindowHandle, WindowOptions, actions, canvas, div, point, prelude::*, px,
+    rgb, rgba, size, svg,
 };
 
 use crate::{bc, ns_view, platform, show_menu};
@@ -1528,7 +1528,6 @@ impl Settings {
                 Block::Crumb(heading, inside) => {
                     let inside = div()
                         .text_color(self.look.detail)
-                        .font_weight(FontWeight::NORMAL)
                         .child(format!(" › {inside}"));
                     self.heading(heading)
                         .flex()
@@ -1560,7 +1559,6 @@ impl Settings {
             .child(self.card.mark(heading.clone()))
             .px(px(TEXT_X))
             .text_size(px(text::SMALL))
-            .font_weight(FontWeight::MEDIUM)
             .text_color(self.look.heading)
             .child(heading)
     }
