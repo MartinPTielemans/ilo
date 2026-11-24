@@ -95,6 +95,45 @@ fn escape_cancels(cx: &mut TestAppContext) {
     assert_eq!(asked(&host), ["cancel pair 10"]);
 }
 
+/// ↩ and esc while an input method composes in the PIN are the composition's: ↩ commits it and
+/// pairs nothing, esc drops it and cancels nothing; the next ↩ pairs.
+#[gpui::test]
+fn return_and_escape_while_composing_are_the_compositions(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let (shell, cx, host) = shell(cx);
+    shell.update(cx, |shell, cx| shell.set_pair(10, pair(PairKind::Pin), cx));
+    cx.run_until_parked();
+    cx.simulate_input("12");
+    let pin = shell.read_with(cx, |shell, _| shell.pairs[&10].pin.clone());
+    let compose = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            pin.update(cx, |pin, cx| {
+                pin.replace_and_mark_text_in_range(None, "３", None, window, cx)
+            })
+        });
+        cx.run_until_parked();
+    };
+    compose(cx);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        asked(&host),
+        Vec::<String>::new(),
+        "↩ paired while composing"
+    );
+    compose(cx);
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(
+        asked(&host),
+        Vec::<String>::new(),
+        "esc cancelled while composing"
+    );
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(asked(&host), ["pair 10 12３"]);
+}
+
 /// A device that asks only whether to pair, or whether its passkey matches, has no field, and Pair
 /// agrees, with no PIN.
 #[gpui::test]

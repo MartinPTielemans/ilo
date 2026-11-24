@@ -2299,6 +2299,10 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
                 shell.watch_task_page(tab, Bounds::default(), None, cx);
                 shell.set_space(FIRST_TASK, cx);
                 shell.set_selected(tab, cx);
+                // A task that has ended is at work nowhere.
+                if bench_ended().is_some() {
+                    return;
+                }
                 let status = browser::agents::Status {
                     agent: agent.clone(),
                     name: "Claude".into(),

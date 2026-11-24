@@ -706,6 +706,23 @@ impl Shell {
         }
     }
 
+    /// ↩ in the naming field keeps the name, unless it was an input method's, composing there
+    /// (dismissal's rule).
+    pub(super) fn return_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let field = self.renaming.as_ref().map(|renaming| renaming.name.clone());
+        if crate::dismissal::submits(&field, cx) {
+            self.keep_name(window, cx);
+        }
+    }
+
+    /// Esc in the naming field leaves the name as it was, unless it was an input method's.
+    pub(super) fn escape_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let field = self.renaming.as_ref().map(|renaming| renaming.name.clone());
+        if crate::dismissal::Close::escape_from(&field, cx).is_some() {
+            self.cancel_name(window, cx);
+        }
+    }
+
     pub(super) fn cancel_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(renaming) = self.renaming.take() {
             log!("browser: rename cancelled");
@@ -746,9 +763,9 @@ impl Shell {
             .items_center()
             .pr(px(PLATE_INSET))
             .key_context("Naming")
-            .on_action(cx.listener(|shell, _: &KeepName, window, cx| shell.keep_name(window, cx)))
+            .on_action(cx.listener(|shell, _: &KeepName, window, cx| shell.return_name(window, cx)))
             .on_action(
-                cx.listener(|shell, _: &CancelName, window, cx| shell.cancel_name(window, cx)),
+                cx.listener(|shell, _: &CancelName, window, cx| shell.escape_name(window, cx)),
             )
             .text_size(px(text::BODY))
             .text_color(self.palette.text(FORM_TEXT))
@@ -809,6 +826,35 @@ mod tests {
             "the field stayed"
         );
         assert_eq!(host.take_edits(), ["rename space 1 Work"]);
+    }
+
+    /// ↩ and esc while an input method composes in a Space's name are the composition's: ↩
+    /// commits it and renames nothing, esc drops it and leaves the field; the next ↩ renames.
+    #[gpui::test]
+    fn return_and_escape_while_composing_are_the_compositions(cx: &mut TestAppContext) {
+        use gpui::EntityInputHandler as _;
+        let (shell, cx, host) = renaming(cx);
+        cx.simulate_input("Work");
+        let field = shell.read_with(cx, |shell, _| shell.renaming.as_ref().unwrap().name.clone());
+        let compose = |cx: &mut VisualTestContext| {
+            cx.update(|window, cx| {
+                field.update(cx, |field, cx| {
+                    field.replace_and_mark_text_in_range(None, "ぴ", None, window, cx)
+                })
+            });
+            cx.run_until_parked();
+        };
+        compose(cx);
+        cx.simulate_keystrokes("enter");
+        assert!(host.take_edits().is_empty(), "↩ renamed while composing");
+        compose(cx);
+        cx.simulate_keystrokes("escape");
+        assert!(
+            shell.read_with(cx, |shell, _| shell.renaming.is_some()),
+            "esc left the field while composing"
+        );
+        cx.simulate_keystrokes("enter");
+        assert_eq!(host.take_edits(), ["rename space 1 Workぴ"]);
     }
 
     /// Space in a field of the sidebar is a space, the menu control's Space binding notwithstanding:

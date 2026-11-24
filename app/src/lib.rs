@@ -185,6 +185,7 @@ pub mod folder_preview;
 pub mod foot_bar;
 pub mod glow;
 pub mod hover_card;
+pub mod hover_intent;
 pub mod icon_picker;
 pub mod import;
 pub mod keyboard_ring;

@@ -413,7 +413,11 @@ impl Shell {
             .when(a11y, |form| form.role(Role::Form).aria_label("New Space"))
             .key_context("SpaceForm")
             .on_action(cx.listener(|shell, _: &CreateSpace, window, cx| {
-                shell.create_space(By::Keyboard, window, cx)
+                // Unless it was an input method's, composing in the name (dismissal's rule).
+                let name = shell.form().map(|form| form.name.clone());
+                if crate::dismissal::submits(&name, cx) {
+                    shell.create_space(By::Keyboard, window, cx)
+                }
             }))
             .absolute()
             .top_0()
@@ -728,6 +732,35 @@ mod tests {
             });
             assert_eq!(focused, (!moved, moved), "moved: {moved}");
         }
+    }
+
+    /// ↩ while an input method composes in the Space's name commits it and makes no Space; the
+    /// next ↩ makes it, with the name as committed.
+    #[gpui::test]
+    fn return_while_composing_makes_no_space(cx: &mut TestAppContext) {
+        use gpui::EntityInputHandler as _;
+        let (shell, cx, host) = form(cx);
+        host.take_edits();
+        let name = shell.read_with(cx, |shell, _| shell.form.as_ref().unwrap().name.clone());
+        cx.update(|window, cx| {
+            name.update(cx, |name, cx| {
+                name.replace_and_mark_text_in_range(None, "ぴ", None, window, cx)
+            })
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        assert!(
+            host.take_edits().is_empty(),
+            "↩ made the Space while composing"
+        );
+        assert!(
+            shell.read_with(cx, |shell, _| shell.form.is_some()),
+            "↩ closed the form while composing"
+        );
+        let typed = name.read_with(cx, |name, _| (name.text().to_string(), name.composing()));
+        assert!(!typed.1, "the composition went on");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(host.take_edits(), [format!("rename space 7 {}", typed.0)]);
     }
 
     /// ↩ makes the Space, and the form starts to leave.

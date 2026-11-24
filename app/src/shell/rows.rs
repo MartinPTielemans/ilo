@@ -1769,10 +1769,10 @@ impl Shell {
             return row
                 .key_context("Naming")
                 .on_action(
-                    cx.listener(|shell, _: &KeepName, window, cx| shell.keep_name(window, cx)),
+                    cx.listener(|shell, _: &KeepName, window, cx| shell.return_name(window, cx)),
                 )
                 .on_action(
-                    cx.listener(|shell, _: &CancelName, window, cx| shell.cancel_name(window, cx)),
+                    cx.listener(|shell, _: &CancelName, window, cx| shell.escape_name(window, cx)),
                 )
                 .text_color(self.palette.text(FORM_TEXT))
                 .pr(px(end + SPACE_DONE_WIDTH + 4.))
