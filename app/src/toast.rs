@@ -755,11 +755,13 @@ impl Render for Toast {
                             .size(px(CHIP_GLYPH))
                             .text_color(palette.ink),
                     ),
-                    // The key is fainter than the word it goes with.
-                    Label::Keyed(text, key) => chip
-                        .gap(px(KEY_GAP))
-                        .child(text.clone())
-                        .child(div().text_color(palette.text(KEY_COLOR)).child(key.clone())),
+                    // The key is fainter than the word it goes with, as far as a word on what
+                    // floats reads.
+                    Label::Keyed(text, key) => chip.gap(px(KEY_GAP)).child(text.clone()).child(
+                        div()
+                            .text_color(palette.on_overlay(KEY_COLOR))
+                            .child(key.clone()),
+                    ),
                 }
             })
             .collect();
