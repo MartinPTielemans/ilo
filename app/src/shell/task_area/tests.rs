@@ -529,8 +529,8 @@ fn a_click_on_the_conversation_while_the_page_goes_back_reaches_it(cx: &mut Test
 }
 
 /// Selecting any of the user's tabs, the one selected too, or another Space leaves the area and
-/// shows it, and so does a quit. The window's own commands, such as ⌘S, and Focus Agent Question
-/// leave the area as it is.
+/// shows it. The window's own commands, such as ⌘S, and Focus Agent Question leave the area as
+/// it is.
 #[gpui::test]
 fn selecting_a_tab_or_a_space_leaves_the_area(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);
@@ -578,12 +578,79 @@ fn selecting_a_tab_or_a_space_leaves_the_area(cx: &mut TestAppContext) {
     });
     assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
     core_shows_users(&shell, cx);
+}
 
-    // A quit keeps the user's Space in the session, as the core shows it again first.
+/// ⌘Q with a task's view shown asks first, and Cancel leaves the window as it was, the task's
+/// page watched still showing (#4202). Once the quit is decided the area goes and the core shows
+/// the user's Space again, which the session then keeps for the window.
+#[gpui::test]
+fn quit_leaves_the_tasks_view_until_the_quit_is_decided(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
     watching(&shell, &host, cx);
+    let shown = shell.read_with(cx, |shell, _| shell.task_shown());
+    assert!(shown.is_some());
     shell.update(cx, |shell, cx| shell.run(Command::Quit, "ui", cx));
+    assert_eq!(*host.app_asks.borrow(), ["quit"]);
+    // Cancel is the host never saying the quit goes ahead.
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        shown,
+        "the view closed before the answer"
+    );
+    assert!(
+        host.shown.borrow().is_empty(),
+        "the core was shown another Space before the answer"
+    );
+
+    let going = host.quit_going.borrow_mut().take();
+    let going = going.expect("Quit gave the host nothing to run once it's decided");
+    cx.update(|_, cx| going(cx));
     assert_eq!(*host.shown.borrow(), [1]);
     assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
+}
+
+/// Clear Archive with a task's view shown leaves it standing: with nothing to clear, while it
+/// asks, and once the archive is cleared (#4202).
+#[gpui::test]
+fn clear_archive_leaves_the_tasks_view(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    let shown = shell.read_with(cx, |shell, _| shell.task_shown());
+    assert!(shown.is_some());
+    shell.update(cx, |shell, cx| shell.run(Command::ClearArchive, "ui", cx));
+    assert!(host.confirming.borrow().is_none(), "an empty archive asked");
+    assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), shown);
+
+    shell.update(cx, |shell, cx| {
+        let tab = crate::shell::library::Archived {
+            id: 7,
+            url: "https://a.example/".into(),
+            title: "A".into(),
+            archived: 1000.,
+            little: false,
+        };
+        shell.set_archive(vec![tab], cx);
+        shell.run(Command::ClearArchive, "ui", cx);
+    });
+    let asked = host.confirming.borrow_mut().take();
+    let (message, _, confirmed) = asked.expect("Clear Archive didn't ask");
+    assert_eq!(message, "Clear the archive?");
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        shown,
+        "the view closed as it asked"
+    );
+    cx.update(|_, cx| confirmed(cx));
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        shown,
+        "the view closed as the archive cleared"
+    );
+    assert!(
+        host.shown.borrow().is_empty(),
+        "the core was shown another Space"
+    );
 }
 
 /// ⌘↩ on the page watched is the strip's Take Over while the agent drives it, which gives the
@@ -626,6 +693,65 @@ fn the_strip_takes_over_hands_back_and_stops(cx: &mut TestAppContext) {
         shell.read_with(cx, |shell, _| shell.task_shown()),
         Some((3, Some(30)))
     );
+}
+
+/// A page the user took over says so in the same words under it and at the end of its row at the
+/// sidebar's foot, while the task works on or waits for them elsewhere; the page it handed them
+/// has the bar's own title, which names the agent, and its row's own word.
+#[gpui::test]
+fn a_taken_over_pages_row_ends_in_its_bars_title(cx: &mut TestAppContext) {
+    use crate::agents::task::{Card, Dot, Word};
+    use crate::shell::task_cards::PageWord;
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    let card = |dot: Dot| Card {
+        agent: "task-1".into(),
+        home: 1,
+        space: 3,
+        name: "Claude".into(),
+        replies: true,
+        title: "Find a flight".into(),
+        status: SharedString::default(),
+        steps: Vec::new(),
+        last_site: None,
+        asks: false,
+        dot,
+        word: Word::for_dot(dot),
+        pages: vec![30, 31],
+        tier: Default::default(),
+        answers: Vec::new(),
+        question: None,
+        open: Vec::new(),
+        page_steps: Vec::new(),
+        retry: false,
+        fix: None,
+    };
+    let hold = |why: &str, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            let status = Status {
+                agent: "task-1".into(),
+                name: "Claude".into(),
+                space: 3,
+                doing: "Typed · flights.example".into(),
+                held: vec![(30, why.to_string().into())],
+            };
+            shell.set_agent_status(vec![status], cx);
+        });
+    };
+    hold("", cx);
+    for dot in [Dot::Working, Dot::Waiting] {
+        shell.read_with(cx, |shell, _| {
+            let row = shell.page_word(&card(dot), 30);
+            assert_eq!(row, PageWord::Driving);
+            assert_eq!(shell.task_strip_words(30).0, row.label());
+        });
+    }
+    hold("Sign in", cx);
+    shell.read_with(cx, |shell, _| {
+        let row = shell.page_word(&card(Dot::Waiting), 30);
+        assert_eq!(row, PageWord::NeedsYou);
+        assert_ne!(shell.task_strip_words(30).0, PageWord::Driving.label());
+    });
 }
 
 /// A press in the agent's page watched takes it over, as Take Over did, and the press is the page's
@@ -945,6 +1071,8 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         asks: false,
         dot,
         word: Word::for_dot(dot),
+        pages: Vec::new(),
+        tier: Default::default(),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
@@ -1270,6 +1398,8 @@ fn the_strip_under_a_page_says_that_pages_own_step(cx: &mut TestAppContext) {
         asks: false,
         dot: Dot::Working,
         word: Word::for_dot(Dot::Working),
+        pages: Vec::new(),
+        tier: Default::default(),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
@@ -1326,6 +1456,8 @@ fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
         asks: false,
         dot: Dot::Waiting,
         word: Word::for_dot(Dot::Waiting),
+        pages: Vec::new(),
+        tier: Default::default(),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
@@ -1487,7 +1619,7 @@ fn the_ring_never_enters_an_agents_page(cx: &mut TestAppContext) {
         draw(shell, cx);
         at(shell, cx)
     };
-    assert_eq!(at(&shell, cx), (false, Some(StripStop::Card)));
+    assert_eq!(at(&shell, cx), (false, Some(StripStop::Header(1))));
     let went: Vec<_> = (0..5).map(|_| tab(false, &shell, cx)).collect();
     assert_eq!(
         went,
@@ -1496,7 +1628,7 @@ fn the_ring_never_enters_an_agents_page(cx: &mut TestAppContext) {
             (false, Some(StripStop::Page)),
             (false, Some(StripStop::TakeOver)),
             (false, Some(StripStop::Stop)),
-            (false, Some(StripStop::Card)),
+            (false, Some(StripStop::Header(1))),
         ]
     );
     let back: Vec<_> = (0..5).map(|_| tab(true, &shell, cx)).collect();
@@ -1507,7 +1639,7 @@ fn the_ring_never_enters_an_agents_page(cx: &mut TestAppContext) {
             (false, Some(StripStop::TakeOver)),
             (false, Some(StripStop::Page)),
             (false, Some(StripStop::Back)),
-            (false, Some(StripStop::Card)),
+            (false, Some(StripStop::Header(1))),
         ]
     );
     // Shift+Tab from the window rings the last stop, Stop.
@@ -1560,6 +1692,8 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         asks: false,
         dot: Dot::Working,
         word: Word::for_dot(Dot::Working),
+        pages: Vec::new(),
+        tier: Default::default(),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
@@ -1588,21 +1722,27 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
     draw(shell, cx);
 }
 
-/// Return on the task's card does what a click on it does: the shown task's card closes its
-/// conversation, its page with it, and the ring leaves the strip.
+/// Return on the task's header does what a click on it does: with one of its pages watched it
+/// goes back to the task's view, and the ring leaves the strip.
 #[gpui::test]
-fn return_on_the_task_card_does_what_its_click_does(cx: &mut TestAppContext) {
+fn return_on_the_task_header_does_what_its_click_does(cx: &mut TestAppContext) {
     use crate::shell::page_ends::StripStop;
     let (shell, _, cx) = shell_with_task(cx);
     watching_working(&shell, cx);
     assert!(shell.update(cx, |shell, cx| shell.tab_into_strip(false, cx)));
     draw(&shell, cx);
     let stop = shell.read_with(cx, |shell, _| shell.keyed_strip);
-    assert_eq!(stop, Some(StripStop::Card));
-    shell.update(cx, |shell, cx| shell.key_strip_show(StripStop::Card, cx));
+    assert_eq!(stop, Some(StripStop::Header(1)));
+    shell.update(cx, |shell, cx| {
+        shell.key_strip_show(StripStop::Header(1), cx)
+    });
     draw(&shell, cx);
-    let (open, stop) = shell.read_with(cx, |shell, _| (shell.task_open(), shell.keyed_strip));
-    assert_eq!(open, None, "Return on the card left its conversation open");
+    let (shown, stop) = shell.read_with(cx, |shell, _| (shell.task_shown(), shell.keyed_strip));
+    assert_eq!(
+        shown,
+        Some((3, None)),
+        "Return on the header didn't go back to its task's view"
+    );
     assert_eq!(stop, None, "the ring stayed in the strip");
 }
 
@@ -1723,7 +1863,7 @@ fn take_over_shows_with_the_ring_on_the_tasks_stops_alone(cx: &mut TestAppContex
     assert!(!shows(&shell, cx), "Take Over shows with no ring");
     shell.update(cx, |shell, cx| shell.tab_into_strip(false, cx));
     let stops = [
-        StripStop::Card,
+        StripStop::Header(1),
         StripStop::Back,
         StripStop::Page,
         StripStop::TakeOver,
@@ -1879,4 +2019,75 @@ fn an_agents_split_never_shows_its_pages_dialogs(cx: &mut TestAppContext) {
         .filter(|call| call.starts_with("page dialog ") && call != "page dialog none")
         .collect();
     assert!(shown.is_empty(), "{shown:?}");
+}
+
+/// The task's view stands where a page stands (#4205): with the sidebar hidden, ⌥ alone brings it
+/// out over the view and sends it away again, the pointer moving along the window's edge brings
+/// it out, and ⌘S docks it, the view staying up throughout. With the conversation alone and with
+/// a page of the task's in place in it, in a narrow window and in full screen.
+#[gpui::test]
+fn the_hidden_sidebar_comes_out_over_a_tasks_view(cx: &mut TestAppContext) {
+    let cases = [
+        ("the conversation", false, false, false),
+        ("a page in place", true, false, false),
+        ("the conversation, narrow", false, true, false),
+        ("a page in place, narrow", true, true, false),
+        ("the conversation, full screen", false, false, true),
+        ("a page in place, full screen", true, false, true),
+    ];
+    for (case, page, narrow, full_screen) in cases {
+        let (shell, host, cx) = shell_with_task(cx);
+        still(cx);
+        if narrow {
+            cx.simulate_resize(size(px(560.), px(600.)));
+        }
+        if full_screen {
+            shell.update(cx, |shell, cx| shell.set_full_screen(true, cx));
+        }
+        match page {
+            true => watching(&shell, &host, cx),
+            false => {
+                let view = conversation(cx);
+                shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+                draw(&shell, cx);
+            }
+        }
+        let shown = shell.read_with(cx, |shell, _| shell.task_shown());
+        assert_eq!(shown, Some((3, page.then_some(30))), "{case}");
+        let toggle = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+            shell.update(cx, |shell, cx| shell.run(Command::ToggleSidebar, "key", cx));
+            draw(shell, cx);
+        };
+        let revealed = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+            shell.read_with(cx, |shell, _| shell.revealed)
+        };
+        toggle(&shell, cx);
+        assert!(
+            shell.read_with(cx, |shell, _| shell.sidebar_hidden),
+            "{case}: ⌘S didn't hide the sidebar"
+        );
+
+        shell.update(cx, |shell, cx| shell.option_tapped(cx));
+        assert!(revealed(&shell, cx), "{case}: ⌥ brought no sidebar out");
+        shell.update(cx, |shell, cx| shell.option_tapped(cx));
+        assert!(!revealed(&shell, cx), "{case}: ⌥ again left it out");
+
+        // Into the strip at the window's edge, then a few points along it, as the window hears it.
+        draw(&shell, cx);
+        cx.simulate_mouse_move(point(px(1.), px(300.)), None, gpui::Modifiers::none());
+        cx.simulate_mouse_move(point(px(1.), px(306.)), None, gpui::Modifiers::none());
+        cx.executor().advance_clock(crate::shell::REVEAL_WAIT * 2);
+        cx.run_until_parked();
+        assert!(
+            revealed(&shell, cx),
+            "{case}: the edge brought no sidebar out"
+        );
+
+        toggle(&shell, cx);
+        shell.read_with(cx, |shell, _| {
+            assert!(!shell.sidebar_hidden, "{case}: ⌘S didn't dock the sidebar");
+            assert!(!shell.reveal_shown(), "{case}: the reveal stayed out");
+            assert_eq!(shell.task_shown(), shown, "{case}: the task's view went");
+        });
+    }
 }

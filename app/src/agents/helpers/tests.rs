@@ -1,5 +1,5 @@
 //! What a task is started with, the switch off and on, and what ilo reads of helpers from Claude's
-//! output: the made-up lines of `claude-helpers-written.jsonl`, which no run recorded.
+//! output: the first message of the one recorded run, `claude-2.1.331-helpers.jsonl`.
 
 use std::path::PathBuf;
 
@@ -8,8 +8,9 @@ use serde_json::Value;
 use super::*;
 use crate::agents::runner::{Cli, Launch, Server, Turn, claude_args, claude_read};
 
-/// The helpers' lines, as written.
-const LINES: &str = include_str!("../runner/answers/claude-helpers-written.jsonl");
+/// The recorded run's first message: the task starts two helpers and its turn ends with both at
+/// work.
+const LINES: &str = include_str!("../runner/answers/claude-2.1.331-helpers.jsonl");
 
 fn launch(helpers: bool) -> Launch {
     Launch {
@@ -33,24 +34,50 @@ fn launch(helpers: bool) -> Launch {
     }
 }
 
-/// What the lines say, read as the task's output is.
-fn read() -> Vec<Out> {
-    let mut turn = Turn::default();
+/// The recorded lines, each as its JSON.
+fn lines() -> Vec<Value> {
     (LINES.lines())
-        .map(|line| serde_json::from_str::<Value>(line).expect("a line isn't JSON"))
-        .flat_map(|line| claude_read(&line, &mut turn))
+        .map(|line| serde_json::from_str(line).expect("a line isn't JSON"))
         .collect()
 }
 
-/// The switch is on only over a recorded run: while the lines say they were written, it's off.
+/// What the lines say, read as the task's output is.
+fn read() -> Vec<Out> {
+    let mut turn = Turn::default();
+    (lines().iter())
+        .flat_map(|line| claude_read(line, &mut turn))
+        .collect()
+}
+
+/// The switch is off while the assistant keeps kinds of helper that aren't ilo's: the recorded
+/// run was started as a task with helpers is, and its first line still lists them. One of them
+/// has the task's own tools.
 #[test]
-fn the_switch_is_off_while_no_run_is_recorded() {
-    let written = LINES.lines().next().unwrap().contains("\"_written\"");
+fn the_switch_is_off_while_the_assistant_keeps_kinds_of_its_own() {
+    let lines = lines();
     assert!(
-        written,
-        "the first line no longer says the lines are made up"
+        lines[0].get("_recorded").is_some(),
+        "the lines no longer say they were recorded"
     );
-    assert!(!ON, "helpers are on over lines no run recorded");
+    let init = (lines.iter())
+        .find(|line| line["subtype"] == "init")
+        .expect("no init line");
+    let kinds: Vec<&str> = (init["agents"].as_array().unwrap().iter())
+        .map(|kind| kind.as_str().unwrap())
+        .collect();
+    assert!(kinds.contains(&KIND), "{kinds:?}");
+    let own = kinds.iter().filter(|kind| **kind != KIND).count();
+    assert!(
+        own == 0 || !ON,
+        "helpers are on with {own} kinds that aren't ilo's"
+    );
+    // The helper tool is among its tools, under one of the names ilo knows it by.
+    let tools = init["tools"].as_array().unwrap();
+    assert!(
+        tools
+            .iter()
+            .any(|tool| TOOLS.contains(&tool.as_str().unwrap()))
+    );
 }
 
 /// With the switch off a task's assistant starts with the arguments it had before helpers, each
@@ -131,45 +158,91 @@ fn a_stopped_task_is_told_its_limit_as_a_sentence() {
     assert!(!deep.contains("You started"), "{deep}");
 }
 
-/// A helper's lines are never the task's: of two helpers that write, say, think and read, the
-/// task's output tells who asked for each, that each started and how deep, and the tab each
-/// calls for. Nothing a helper wrote, said, thought or was answered comes out, and the task's own
-/// words do.
+/// A helper's lines are never the task's. Of the two helpers the recorded task starts, its output
+/// tells who asked for each and that each started, one level under the task; what the helpers
+/// were answered doesn't come out, and the task's own words do. Each helper's first call opens its
+/// tab, which names none, so neither has a page for its label before the turn ends.
 #[test]
 fn a_helpers_lines_are_never_the_tasks() {
     let said = read();
-    let helper = |id: &str, told| Out::Helper {
-        id: id.into(),
-        told,
-    };
+    let asked: Vec<&str> = (said.iter())
+        .filter_map(|out| match out {
+            Out::Helper {
+                id,
+                told: Helper::Asked,
+            } => Some(id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(asked.len(), 2, "{asked:?}");
+    let starts: Vec<&Out> = (said.iter())
+        .filter(|out| matches!(out, Out::Started { .. }))
+        .collect();
     assert_eq!(
-        said,
-        [
-            Out::Said("I'll look at both shops at once.".into()),
-            Out::Calling,
-            Out::Calling,
-            helper("toolu_task_a", Helper::Asked),
-            helper("toolu_task_b", Helper::Asked),
-            Out::Started { deep: 1 },
-            Out::Started { deep: 1 },
-            helper("toolu_task_a", Helper::On(41)),
-            // A tab's id comes as a number or as its text.
-            helper("toolu_task_b", Helper::On(42)),
-            Out::Said("Two seats together in row 12 at tickets.example, 38 € each.".into()),
-            Out::Ended(None),
-        ]
+        starts,
+        [&Out::Started { deep: 1 }, &Out::Started { deep: 1 }]
     );
-    assert!(
-        LINES.matches("HELPER-").count() >= 5,
-        "the lines lost the helpers' words"
-    );
-    assert!(!format!("{said:?}").contains("HELPER-"));
+    // Each start names the call that asked for it, and each helper's lines name it as their parent.
+    let lines = lines();
+    for id in &asked {
+        let started = lines
+            .iter()
+            .any(|line| line["subtype"] == "task_started" && line["tool_use_id"] == *id);
+        assert!(started, "no start names {id}");
+        assert!(lines.iter().any(|line| line["parent_tool_use_id"] == *id));
+    }
+    let labelled = |out: &&Out| {
+        matches!(
+            out,
+            Out::Helper {
+                told: Helper::On(_),
+                ..
+            }
+        )
+    };
+    assert_eq!(said.iter().filter(labelled).count(), 0);
+
+    // What a helper was answered is in the lines and not in what the task said.
+    let answered = "Opened tab 7.";
+    assert!(LINES.contains(answered), "the lines lost a helper's answer");
+    assert!(!format!("{said:?}").contains(answered));
+    let last = "Now I'm waiting for the other two shops.";
+    let own = |out: &&Out| matches!(out, Out::Said(text) if text.ends_with(last));
+    assert_eq!(said.iter().filter(own).count(), 1);
+    assert_eq!(said.last(), Some(&Out::Ended(None)));
 }
 
 /// Only the browser's tools label a helper's page: a call of another tool with a `tab` of its own
-/// says nothing, and a start that doesn't say how deep counts as the task's own level.
+/// says nothing, and a start that doesn't say how deep counts as the task's own level. Nothing a
+/// helper writes, says or thinks comes out.
 #[test]
 fn only_the_browsers_tools_label_a_page() {
+    let helper = |told| Out::Helper {
+        id: "toolu_task_a".into(),
+        told,
+    };
+    // A tab's id comes as a number or as its text.
+    let calls = serde_json::json!({ "type": "assistant", "parent_tool_use_id": "toolu_task_a",
+        "message": { "content": [
+            { "type": "text", "text": "The seats page lists row 12." },
+            { "type": "thinking", "thinking": "The button is the second one." },
+            { "type": "tool_use", "id": "a", "name": "mcp__ilo__read_page", "input": { "tab": 41 } },
+            { "type": "tool_use", "id": "b", "name": "mcp__ilo__click",
+              "input": { "tab": "42", "ref": "e2" } },
+        ] } });
+    assert_eq!(
+        claude_read(&calls, &mut Turn::default()),
+        [helper(Helper::On(41)), helper(Helper::On(42))]
+    );
+    let writing = serde_json::json!({ "type": "stream_event", "parent_tool_use_id": "toolu_task_a",
+        "event": { "type": "content_block_delta",
+                   "delta": { "type": "text_delta", "text": "A helper is writing this" } } });
+    assert_eq!(claude_read(&writing, &mut Turn::default()), []);
+    let answered = serde_json::json!({ "type": "user", "parent_tool_use_id": "toolu_task_a",
+        "message": { "content": [
+            { "type": "tool_result", "tool_use_id": "a", "content": "Row 12, seats 4 and 5." },
+        ] } });
+    assert_eq!(claude_read(&answered, &mut Turn::default()), []);
     let other = serde_json::json!({ "type": "assistant", "parent_tool_use_id": "toolu_task_a",
         "message": { "content": [
             { "type": "tool_use", "id": "x", "name": "mcp__other__click", "input": { "tab": 41 } },

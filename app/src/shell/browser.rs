@@ -1034,6 +1034,8 @@ pub trait Browser {
     fn settings(&self, cx: &mut App);
     /// Opens the Settings window on Agents' Off limits list, scrolled to it.
     fn off_limits(&self, _cx: &mut App) {}
+    /// Opens the Settings window on Agents, for what first run's assistant step leaves to it.
+    fn agents_settings(&self, _cx: &mut App) {}
     /// Opens the Settings window on its Shortcuts tab.
     fn shortcuts(&self, cx: &mut App);
     /// Opens the Settings window on its About tab.
@@ -1073,7 +1075,10 @@ pub trait Browser {
     fn find_next(&self, tab: u64, forward: bool, cx: &mut App);
     /// Scrolls the tab's page to put its selection in the middle.
     fn jump_to_selection(&self, tab: u64, cx: &mut App);
-    fn quit(&self, cx: &mut App);
+    /// The user's Quit. A host that asks first calls `going` once the quit is decided and before
+    /// it quits, outside the shell's update, and never if the user cancels: what the shell does
+    /// only for a quit that happens.
+    fn quit(&self, going: Rc<dyn Fn(&mut App)>, cx: &mut App);
     /// Opens another window on the same Spaces, after this one's draw.
     fn new_window(&self, cx: &mut App);
     /// new_window, with a new profile's first launch playing in the new window, which shows no
