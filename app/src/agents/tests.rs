@@ -8275,6 +8275,68 @@ mod tasks {
         );
     }
 
+    /// After Stop no call of the task's is handled, one that waited its turn behind a slow page
+    /// included: each kind that can wait is answered as stopped, and nothing of it is run, shown
+    /// or kept. Once the task is at work again its calls go on (#4209).
+    #[gpui::test]
+    fn a_stopped_tasks_calls_are_answered_as_stopped(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Compare three shops", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        // A page that is slow to open holds its call, and in the server the calls behind it.
+        let shop = json!({ "url": "https://example.org/" });
+        let opening = call(&agents, &agent, "open_tab", shop.clone(), cx);
+        agents.update(cx, |agents, cx| agents.stop_task(&agent, cx));
+        let stopped = ToolResult::failed(tools::Kind::Stopped, STOPPED);
+        assert_eq!(opening.recv().unwrap(), stopped);
+
+        let seen = |cx: &mut TestAppContext| {
+            let card = card_of(&agents, cx);
+            let asked = (browser.made.borrow().len(), browser.pages.borrow().len());
+            let read = (
+                browser.reads.borrow().len(),
+                browser.asked.borrow().is_some(),
+            );
+            let card = (card.title, card.status, card.question.is_some());
+            (card, log(&agents, &agent, cx), asked, read)
+        };
+        let before = seen(cx);
+        for (tool, arguments) in [
+            ("title", json!({ "text": "Probe" })),
+            ("ask", json!({ "question": "Can you see this?" })),
+            (
+                "finish",
+                json!({ "result": "Compared them.", "summary": "Compared" }),
+            ),
+            ("open_tab", shop),
+            // Calls without a tab, which wait for every tab's calls before them.
+            ("snapshot", json!({})),
+            ("list_tabs", json!({})),
+        ] {
+            let answer = call(&agents, &agent, tool, arguments, cx);
+            assert_eq!(answer.recv().unwrap(), stopped, "{tool}");
+        }
+        assert_eq!(seen(cx), before);
+        let state = agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().state.clone());
+        assert_eq!(state, State::Stopped);
+
+        // At work again, as the user's next message sets it, it names itself.
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        let named = call(
+            &agents,
+            &agent,
+            "title",
+            json!({ "text": "Three shops" }),
+            cx,
+        );
+        assert!(!named.recv().unwrap().error);
+        assert_eq!(card_of(&agents, cx).title.as_ref(), "Three shops");
+    }
+
     #[gpui::test]
     fn dismissed_tasks_come_back(cx: &mut TestAppContext) {
         let (agents, browser) = ready(None, cx);
