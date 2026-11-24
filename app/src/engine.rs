@@ -2125,6 +2125,10 @@ impl Browser for Engine {
         settings::show_row(section, browser::agents::fence::HEADING.into(), cx);
     }
 
+    fn agents_settings(&self, cx: &mut App) {
+        settings::show_agents(cx);
+    }
+
     fn keep_sidebar_right(&self, right: bool, cx: &mut App) {
         settings::set_sidebar_right(right, cx);
     }
