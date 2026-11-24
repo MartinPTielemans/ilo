@@ -1440,3 +1440,36 @@ fn the_window_reckoned_over_greys_is_the_one_drawn() {
         }
     }
 }
+
+/// A dragged row's or Space's drop line shows on every point of the window, dark and light, with a
+/// Space's colour or none, at every level: a glyph's 3:1 against the window under it.
+#[test]
+fn the_drop_line_shows_on_either_window() {
+    for level in [
+        Transparency::Less,
+        Transparency::Standard,
+        Transparency::More,
+    ] {
+        set_transparency(level);
+        for tone in [Tone::Dark, Tone::Light] {
+            for theme in [
+                None,
+                Some(Theme::at(0., 0.)),
+                Some(Theme::of_color(0x5a2a9a)),
+            ] {
+                let palette = Palette::of(theme.as_ref(), tone);
+                let line = palette.drop_line();
+                let line = Rgba::from(line);
+                for at in fine_window(&palette) {
+                    let drawn = over(at, line, line.a);
+                    assert!(
+                        contrast(drawn, at) >= GLYPH,
+                        "{level:?} {tone:?} {:06x} on {:06x}",
+                        hex(drawn),
+                        hex(at)
+                    );
+                }
+            }
+        }
+    }
+}

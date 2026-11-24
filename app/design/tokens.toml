@@ -1491,7 +1491,9 @@ plate-inset = 8.0
 list-trail = 118.0
 folder-indent = 16.0
 # A dragged row's drop line is Arc's: 2 pt, from a ring 8 across, drawn with the same 2 pt,
-# whose left is 7 in from the plate's, to 2 before the plate's end (Arc 1.170 rec).
+# whose left is 7 in from the plate's, to 2 before the plate's end (Arc 1.170 rec), in the window's
+# ink at `drop` (Arc's white at 0.9 over the dark Space; the ink is ilo's, and shows on the light
+# window, where white doesn't).
 drop-line = 2.0
 drop-ring = 8.0
 drop-ring-x = 7.0
@@ -1500,7 +1502,7 @@ drop-line-end = 2.0
 # edges at the plate's radius less as much, filled as a hovered row (ours: Arc's preview isn't
 # measured).
 drop-slot-inset = 3.0
-drop = 0xffff_ffe6
+drop = 0.9
 plate-radius = 12.0
 # A row's host under its title, in `secondary` at text's small size, Arc's 11 pt (Arc 1.168): a
 # pinned tab's whose page left its pinned URL's host, and a tab's in Developer Mode. The two lines

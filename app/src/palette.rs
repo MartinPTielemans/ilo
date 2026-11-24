@@ -47,7 +47,7 @@ pub use crate::tokens::palette::{
 };
 use crate::tokens::shell::library::{COLUMN, LIBRARY_PLATE};
 use crate::tokens::shell::{CARD as PAGE_CARD, LIGHT_CARD as LIGHT_PAGE_CARD};
-use crate::tokens::shell::{LIGHT_UNPAINTED, UNPAINTED};
+use crate::tokens::shell::{DROP, LIGHT_UNPAINTED, UNPAINTED};
 use crate::transparency::Transparency;
 /// The ends of the scale each family's text runs toward, which the accent's search needs, and the
 /// ground a swatch's colours are judged on.
@@ -793,6 +793,11 @@ impl Palette {
     /// Behind selected text in a field: the accent, faint.
     pub fn selection(&self) -> Hsla {
         Hsla::from(self.accent).opacity(SELECTION)
+    }
+
+    /// Where a dragged row or Space would go: the ink, firm, so it shows on either window.
+    pub fn drop_line(&self) -> Hsla {
+        Hsla::from(self.ink).opacity(DROP)
     }
 
     /// Ink or Paper at `alpha`, or as much more as text needs to read on any theme.
