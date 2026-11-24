@@ -66,7 +66,7 @@ impl Shell {
                 let space = self.browser.create_space(&name, profile, after, cx);
                 let name = cx.new(|cx| {
                     TextInput::new("Space name", cx)
-                        .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
+                        .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
                 });
                 self.form = Some(SpaceForm {
                     space,
@@ -395,7 +395,7 @@ impl Shell {
                     .items_center()
                     .text_size(px(text::SMALL))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(self.palette.text(SECONDARY))
+                    .text_color(self.palette.gray(SECONDARY))
                     .child("Cancel")
                     // It brightens to the form's text under the pointer (ours: Arc's isn't
                     // recorded). Create Space doesn't change, as Arc's doesn't.

@@ -145,6 +145,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         last_site: (dot == Dot::Working).then(|| "encore.example".into()),
         asks: false,
         dot,
+        word: Word::for_dot(dot),
         answers: Vec::new(),
         question: None,
         open: match dot {
@@ -178,6 +179,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             title: "Claude Code".into(),
             status: status.into(),
             dot,
+            word: Word::for_dot(dot),
             open,
             ..card((FIRST_TASK, TASKS[0]))
         }];
@@ -196,6 +198,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             cards[0].status =
                 format!("{} · Sign in to {site}", browser::agents::task::NEEDS_YOU).into();
             cards[0].dot = Dot::Waiting;
+            cards[0].word = Word::NeedsYou;
         }
         (Some(count), false) => cards[0].status = helper_trace(count, false).line(),
         (None, _) => {}

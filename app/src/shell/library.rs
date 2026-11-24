@@ -1065,7 +1065,7 @@ impl Shell {
         };
         let search = cx.new(|cx| {
             TextInput::new(placeholder, cx)
-                .placeholder_color(self.palette.text(SEARCH_PLACEHOLDER))
+                .placeholder_color(self.palette.gray(SEARCH_PLACEHOLDER))
                 .caret_color(self.palette.accent)
                 .selection_color(self.palette.selection())
         });
@@ -1781,7 +1781,7 @@ impl Shell {
                     .top(key_drop(cx))
                     .font_weight(FontWeight::NORMAL)
                     .text_size(px(text::SMALL))
-                    .text_color(self.palette.text(SECONDARY))
+                    .text_color(self.palette.gray(SECONDARY))
                     .child(keystroke_label("ctrl-shift-e")),
             );
         let button = super::permission::card_button_as(
@@ -1926,7 +1926,7 @@ impl Shell {
             .absolute()
             .left(px(TITLE_X + past))
             .top(px(TITLE_CAP - cap_top(TITLE_SIZE, TITLE_LINE)))
-            .text_color(self.palette.text(SECTION_LABEL));
+            .text_color(self.palette.gray(SECTION_LABEL));
         let column = div()
             .absolute()
             .left(px(if right { width - COLUMN_WIDTH } else { -past }))
@@ -1997,7 +1997,7 @@ impl Shell {
                     .left(px(SEARCH_GLYPH_X))
                     .top(px((SEARCH_HEIGHT - SEARCH_GLYPH) / 2.))
                     .size(px(SEARCH_GLYPH))
-                    .text_color(self.palette.text(SEARCH_PLACEHOLDER)),
+                    .text_color(self.palette.gray(SEARCH_PLACEHOLDER)),
             )
             .child(library.search.clone());
         let field = self.with_row_keys(field, cx);
@@ -2063,7 +2063,7 @@ impl Shell {
                 .px(px(HEADING_X))
                 .text_center()
                 .text_size(px(text::SMALL))
-                .text_color(self.palette.text(SECONDARY))
+                .text_color(self.palette.gray(SECONDARY))
                 .child(div().relative().child(line).child(log_drawn))
                 // The list's own way to make its first Board, with the key that does it from
                 // anywhere (#3575); a search that matched nothing has nothing to make.
@@ -2718,7 +2718,7 @@ impl Shell {
                             .items_center()
                             .text_size(px(text::SMALL))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(self.palette.text(SECONDARY))
+                            .text_color(self.palette.gray(SECONDARY))
                             .child(heading),
                     )
                     .into_any_element();
@@ -2907,7 +2907,7 @@ impl Shell {
                                 task.about.clone(),
                                 text::SMALL,
                                 15.,
-                                self.palette.text(SECONDARY),
+                                self.palette.gray(SECONDARY),
                             )),
                     ),
             )
@@ -3033,7 +3033,7 @@ impl Shell {
                                 past.about().into(),
                                 text::SMALL,
                                 15.,
-                                self.palette.text(SECONDARY),
+                                self.palette.gray(SECONDARY),
                             )),
                     )
                     .child(close),
@@ -3096,7 +3096,7 @@ impl Shell {
             .py(px(3.))
             .rounded(px(ARCHIVED_RADIUS))
             .text_size(px(text::SMALL))
-            .text_color(self.palette.text(SECONDARY))
+            .text_color(self.palette.gray(SECONDARY))
             .hover(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED)))
             .child(label)
     }
@@ -3157,7 +3157,7 @@ impl Shell {
                                 past.page_about().into(),
                                 text::SMALL,
                                 15.,
-                                self.palette.text(SECONDARY),
+                                self.palette.gray(SECONDARY),
                             )),
                     )
                     .child(back),
@@ -3216,7 +3216,7 @@ impl Shell {
                         answer_words.into(),
                         text::SMALL,
                         15.,
-                        self.palette.text(SECONDARY),
+                        self.palette.gray(SECONDARY),
                     )),
             )
             .children(revoke)
@@ -3266,7 +3266,7 @@ impl Shell {
             ),
             None => (false, false),
         };
-        let secondary = self.palette.text(SECONDARY);
+        let secondary = self.palette.gray(SECONDARY);
         let head = div()
             .h(px(ARCHIVED_PITCH))
             .pl(px(ARCHIVED_LEFT))
@@ -3456,7 +3456,7 @@ impl Shell {
                                 about.into(),
                                 text::SMALL,
                                 15.,
-                                self.palette.text(SECONDARY),
+                                self.palette.gray(SECONDARY),
                             )),
                     ),
             )
@@ -3945,7 +3945,7 @@ impl Shell {
                     .justify_center()
                     .text_size(px(text::SMALL))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(self.palette.text(SECTION_LABEL))
+                    .text_color(self.palette.gray(SECTION_LABEL))
                     .child(label),
             )
             .child(log_drawn)
@@ -4030,7 +4030,7 @@ impl Shell {
                                 status,
                                 text::SMALL,
                                 15.,
-                                self.palette.text(SECONDARY),
+                                self.palette.gray(SECONDARY),
                             )),
                     )
                     .children(progress.map(|done| {
