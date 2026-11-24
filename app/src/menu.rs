@@ -244,6 +244,11 @@ pub trait Host {
     /// the window can't blend, they're only the open ones, which it shows alone, and it's shown
     /// again as a submenu opens or closes.
     fn show(&self, frame: Bounds<Pixels>, panels: &[Bounds<Pixels>]);
+    /// Puts the host's material under the open `panels`, each from the window's top left with its
+    /// corner's radius, in a `light` or dark look, where the host has one for the menu (#4090).
+    /// Asked after `show` and again as a submenu opens or closes, as the material goes under the
+    /// panels that show and not the room round them.
+    fn glass(&self, _panels: &[(Bounds<Pixels>, f32)], _light: bool) {}
     /// Takes it away, and gives the keyboard back to what had it.
     fn hide(&self);
     /// Whether the window blends with what's under it. One that can't, on X11 with no compositor,
@@ -1181,6 +1186,19 @@ impl Shown {
                 .collect(),
         }
     }
+
+    /// The open panels, from the host's window's top left, each with the radius it's drawn with:
+    /// square where the window can't blend.
+    fn glass(&self) -> Vec<(Bounds<Pixels>, f32)> {
+        let layout = &self.tracking.layout;
+        (self.tracking.open.iter())
+            .map(|open| {
+                let level = &layout.levels[open.level];
+                let at = Bounds::new(level.bounds.origin - layout.frame.origin, level.bounds.size);
+                (at, if self.blends { level.radii().0 } else { 0. })
+            })
+            .collect()
+    }
 }
 
 /// The menu's window's view.
@@ -1322,12 +1340,15 @@ pub fn show(request: Request, cx: &mut App) {
             drawn_open: Vec::new(),
             blends,
         };
-        let panels = shown.panels();
+        let (panels, glass, light) = (shown.panels(), shown.glass(), shown.look.light);
         menu.shown = Some(shown);
         window.focus(&menu.focus, cx);
         // After a hide that `close` asked for, so the new menu stays.
         let host = menu.host.clone();
-        cx.defer(move |_| host.show(frame, &panels));
+        cx.defer(move |_| {
+            host.show(frame, &panels);
+            host.glass(&glass, light);
+        });
         cx.notify();
     });
 }
@@ -1562,9 +1583,15 @@ impl ContextMenu {
         };
         let tracking = &shown.tracking;
         let open = tracking.open_submenus();
-        if !shown.blends && open != shown.logged_open {
+        if open != shown.logged_open {
             let (host, frame, panels) = (self.host.clone(), tracking.layout.frame, shown.panels());
-            cx.defer(move |_| host.show(frame, &panels));
+            let (blends, glass, light) = (shown.blends, shown.glass(), shown.look.light);
+            cx.defer(move |_| {
+                if !blends {
+                    host.show(frame, &panels);
+                }
+                host.glass(&glass, light);
+            });
         }
         let kept = open
             .iter()

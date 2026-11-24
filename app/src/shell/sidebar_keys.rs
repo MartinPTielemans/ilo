@@ -708,9 +708,9 @@ mod tests {
         assert_eq!(ringed(&shell, cx), (Some(31), Some(31)));
     }
 
-    /// Escape in the bar New Tab's shortcut opened from the ring leaves the window holding the
+    /// Escape in the bar return on New Tab's row opened from the ring leaves the window holding the
     /// keyboard, and Tab from there rings a row again: New Tab's, in an empty Space, which a screen
-    /// reader names.
+    /// reader names. (In an empty Space ⌘T gives the Space's field the keyboard instead, #4140.)
     #[gpui::test]
     fn escape_from_a_new_tab_leaves_tab_a_row_to_ring(cx: &mut TestAppContext) {
         let (shell, cx, host) = window(cx);
@@ -719,9 +719,9 @@ mod tests {
         cx.simulate_keystrokes("tab");
         cx.run_until_parked();
         assert_eq!(ringed(&shell, cx).0, Some(NEW_TAB));
-        cx.simulate_keystrokes("cmd-t");
+        cx.simulate_keystrokes("enter");
         cx.run_until_parked();
-        assert!(host.bar_open.take(), "the shortcut opened no new tab");
+        assert!(host.bar_open.take(), "return opened no new tab");
         shell.update(cx, |shell, cx| shell.command_bar_dismissed(cx));
         cx.run_until_parked();
         let root = cx.update(|window, cx| shell.read(cx).focus_handle.is_focused(window));

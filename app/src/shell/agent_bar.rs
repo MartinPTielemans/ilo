@@ -235,17 +235,18 @@ pub(super) fn stop_keys() -> String {
     keystroke_label(STOP_KEY)
 }
 
+/// The bar's title on a page the user took over, which its row at the sidebar's foot ends in too.
+pub(super) const DRIVING: &str = "You're driving";
+
 /// What the bar says, its title and the line under it, and the tab it's about.
 pub(super) fn bar_words(bar: &Bar) -> (String, String, u64) {
     match bar {
         Bar::Working {
             name, doing, tab, ..
         } => (format!("{name} is at work"), doing.to_string(), *tab),
-        Bar::Held { name, why, tab } if why.is_empty() => (
-            "You're driving".to_string(),
-            format!("{name} can't act here"),
-            *tab,
-        ),
+        Bar::Held { name, why, tab } if why.is_empty() => {
+            (DRIVING.to_string(), format!("{name} can't act here"), *tab)
+        }
         Bar::Held { name, why, tab } => (format!("{name} needs you"), why.to_string(), *tab),
     }
 }
