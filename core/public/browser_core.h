@@ -550,8 +550,8 @@ typedef enum bc_agent_failure {
   BC_AGENT_FAILURE_SIGNING_IN = 11,
   // The step is the user's, such as a sign-in only they may finish: the app hands them the tab.
   BC_AGENT_FAILURE_USER_STEP = 12,
-  // The tab shows a page withheld as it showed what a sign-in filled (bc_tab_withheld_from_agents):
-  // nothing but a navigation to another page, or closing the tab.
+  // The tab shows a withheld page (bc_tab_withheld_from_agents): nothing but a navigation to
+  // another page, or closing the tab.
   BC_AGENT_FAILURE_WITHHELD_PAGE = 13,
 } bc_agent_failure;
 
@@ -2237,11 +2237,13 @@ BC_EXPORT void bc_agent_sign_in(const char* agent, bc_id tab, uint64_t request);
 // Whether the core is signing |tab| in for an agent (bc_agent_sign_in), for the app to show.
 BC_EXPORT bool bc_tab_signing_in(bc_id tab);
 
-// Whether |tab|'s title and address are withheld from agents: while the core signs it in, and while
-// it shows a page a sign-in withheld because it showed what was filled. That's the page then, what
-// the submit was still loading, and for the tab's life any page at one of their addresses again,
-// by history, a reload, a redirect or a navigation. The app gives agents neither, in any answer
-// that names the tab (list_tabs, an outline's header, open_tab and navigate's answers), and keeps
+// Whether |tab|'s title and address are withheld from agents: while the core signs it in, from a
+// sign-in's fill or the user's hold until an agent's next call on the tab has taken the page's
+// look, and while it shows a withheld page: one a sign-in withheld because it showed what was
+// filled, or one whose look found it showing what a password field held. That's the page then, what
+// the submit was still loading, and for the tab's life any page at one of their addresses again, by
+// history, a reload, a redirect or a navigation. The app gives agents neither, in any answer that
+// names the tab (list_tabs, an outline's header, open_tab and navigate's answers), and keeps
 // neither in what it shows or keeps for agents. While such a page shows, the core refuses agents
 // every act on the tab but a navigation and closing it, with BC_AGENT_FAILURE_WITHHELD_PAGE, and
 // bc_tab_read_text gives none of its text.
@@ -3482,14 +3484,15 @@ BC_EXPORT void bc_tab_capture(bc_id tab, uint64_t request, bool full_page, bc_re
 // bc_tab_capture.
 BC_EXPORT void bc_tab_picture(bc_id tab, uint64_t request, int width, int height);
 
-// Reads the text of the tab's page as its accessibility tree has it, across its frames from
-// http(s) origins, a line for each block: what a screen reader reads, but no extension's frame and
-// no field's value, typed or autofilled, a password's
-// above all, nor the text of an editable region. Chromium builds the tree for this one read,
-// without running the page's JavaScript or turning accessibility on for the tab. A page that's
-// loading is read once it stops, or after 15 s. A tab without its page loaded has nothing to read.
-// Then tab_text with |request|, from a task of its own. Agents read pages through it, each read
-// checked with bc_agent_may_act first.
+// An agent's read, and only an agent's: nothing on the user's side calls it. Reads the text of the
+// tab's page as its accessibility tree has it, across its frames from http(s) origins, a line for
+// each block: what a screen reader reads, but no extension's frame and no field's value, typed or
+// autofilled, a password's above all, nor the text of an editable region. Chromium builds the tree
+// for this one read, without running the page's JavaScript or turning accessibility on for the tab.
+// A page that's loading is read once it stops, or after 15 s. Before reading, the page takes the
+// one look an agent's call takes, and a page that look withholds (bc_tab_withheld_from_agents),
+// like a tab without its page loaded, has nothing to read. Then tab_text with |request|, from a
+// task of its own. Each read is checked with bc_agent_may_act first.
 BC_EXPORT void bc_tab_read_text(bc_id tab, uint64_t request);
 
 // Gathers the text of the tab's page for the app to translate on the device: its title, then
