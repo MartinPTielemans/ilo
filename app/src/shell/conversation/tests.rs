@@ -1630,6 +1630,142 @@ fn a_line_arriving_after_the_ring_takes_no_press(cx: &mut TestAppContext) {
     );
 }
 
+/// What the checks wait on to press by key is the guard's own end: they're told only once a key
+/// on the ringed button would press, and once its line has moved under a button that widens they
+/// are told anew, again not before.
+#[gpui::test]
+fn the_checks_are_told_a_key_presses_only_at_the_guards_end(cx: &mut TestAppContext) {
+    use super::ilo_keys::{Tell, Told};
+    use std::time::{Duration, Instant};
+    let (shell, host, view, cx) = stopped_at_order(cx);
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::FocusAgentQuestion, "ui", cx)
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(1));
+    let guard = |view: &Entity<super::TalkView>, cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| view.ilo_guard())
+            .expect("no guard with the keys on a line")
+    };
+    // As if `protect` had passed since the keyboard came, and `stood` since the buttons were drawn.
+    let later = |view: &Entity<super::TalkView>, cx: &mut VisualTestContext, stood: Duration| {
+        view.update(cx, |view, _| {
+            view.ilo_keys.as_mut().unwrap().last -= crate::agents::tier::PROTECT * 2;
+            for (_, since) in view.ilo_drawn.borrow_mut().values_mut() {
+                *since -= stood;
+            }
+        });
+    };
+    let raised = |host: &Rc<Recorder>| host.take().iter().any(|line| line.contains("SetTier"));
+    let mut told = Told::default();
+    let long = Duration::from_secs(5);
+    host.take();
+
+    // The keyboard has been there long enough, the button hasn't stood: neither told nor pressed.
+    later(&view, cx, Duration::ZERO);
+    let first = guard(&view, cx);
+    assert!(matches!(
+        told.step(first, Instant::now(), false),
+        Tell::Wait(_)
+    ));
+    cx.simulate_keystrokes("enter");
+    assert!(!raised(&host), "a key pressed a button that hadn't stood");
+    later(&view, cx, long);
+    let stood = guard(&view, cx);
+    assert_eq!(told.step(stood, Instant::now(), false), Tell::Ready);
+    assert_eq!(
+        told.step(stood, Instant::now(), false),
+        Tell::Nothing,
+        "told twice of one guard"
+    );
+
+    // A line comes above it and the button moves: the guard starts anew, and so does the telling.
+    let mut talk = view.read_with(cx, |view, _| view.shown.clone().unwrap());
+    talk.lines
+        .insert(0, Line::Said("Two seats are left.".into()));
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(1));
+    let moved = guard(&view, cx);
+    assert_ne!(moved, stood, "the button didn't move with its line");
+    let Tell::Wait(end) = told.step(moved, Instant::now(), false) else {
+        panic!("told ready of a button that had just moved");
+    };
+    cx.simulate_keystrokes("enter");
+    assert!(!raised(&host), "a key pressed a button that had just moved");
+    // Its wait ends at the guard's end, and a moment short of it nothing is told.
+    let moved = guard(&view, cx);
+    let Tell::Wait(end_again) = told.step(moved, Instant::now(), false) else {
+        panic!("told ready after a key that came too soon");
+    };
+    assert!(end_again >= end, "a key didn't push the guard's end back");
+    let short = Duration::from_millis(2);
+    assert!(matches!(
+        told.step(moved, end_again - short, true),
+        Tell::Wait(_)
+    ));
+    assert_eq!(told.step(moved, end_again + short, true), Tell::Ready);
+    // And once that long has passed, the key presses.
+    later(&view, cx, long);
+    cx.simulate_keystrokes("enter");
+    assert!(raised(&host), "a key after the guard's end didn't press");
+}
+
+/// What the checks read to press a line's button is the line's key, the button's own name and its
+/// place: nothing the line says, which may be a page's words or a site, is in it.
+#[gpui::test]
+fn a_buttons_place_for_the_checks_holds_no_word_of_its_line(cx: &mut TestAppContext) {
+    use crate::agents::task::ilo;
+    let (_shell, _host, view, cx) = stopped_at_order(cx);
+    let order = view.read_with(cx, |view, _| {
+        (view.shown.as_ref().unwrap().lines.iter())
+            .find_map(|line| match line {
+                Line::Ilo(line) => Some(line.kind.clone()),
+                _ => None,
+            })
+            .expect("no ilo line")
+    });
+    // The same stop at another site's door, where the line says the site.
+    let mut site = order.clone();
+    if let IloKind::Stopped { at, why, .. } = &mut site {
+        *at = "seatmap.example".into();
+        *why = Why::OtherSite;
+    }
+    let yours = IloKind::Yours {
+        tab: 30,
+        site: Some("boxoffice.example".into()),
+    };
+    let bounds = gpui::Bounds::new(point(px(12.), px(340.)), gpui::size(px(96.), px(24.)));
+    for kind in [order, site, yours] {
+        let (own, name) = super::words::head(&kind, "Claude");
+        let said = format!("{own} {}", name.unwrap_or_default());
+        let line = IloLine {
+            key: 7,
+            kind,
+            settled: false,
+        };
+        let buttons = ilo::drawn(&line, Some(30));
+        assert!(!buttons.is_empty(), "{said}: no button to place");
+        for button in buttons {
+            let name = super::words::button(button);
+            let place = super::ilo_keys::place((7, button), bounds);
+            let rest = (place.strip_prefix("browser: ilo line 7 ")).expect("no line's key");
+            let (named, at) = rest.rsplit_once(" at ").expect("no place");
+            assert_eq!(named, name, "more than the button's name: {place}");
+            assert_eq!(at, "12 340 96 24");
+            for word in said.split(|each: char| !each.is_alphanumeric() && each != '.') {
+                let own = name.to_lowercase().contains(&word.to_lowercase());
+                assert!(
+                    word.len() < 4 || own || !place.contains(word),
+                    "“{word}” of “{said}” is in {place}"
+                );
+            }
+        }
+    }
+}
+
 /// The reply field's caret stands before its placeholder, not on its first letter; what's typed
 /// starts at the field's start, where the caret was.
 #[gpui::test]

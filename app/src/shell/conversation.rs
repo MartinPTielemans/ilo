@@ -2317,6 +2317,7 @@ impl TalkView {
                         let mut drawn = drawn.borrow_mut();
                         if drawn.get(&key).is_none_or(|(was, _)| *was != bounds) {
                             drawn.insert(key, (bounds, Instant::now()));
+                            log!("{}", ilo_keys::place(key, bounds));
                         }
                     },
                     |_, _, _, _| {},
