@@ -4283,18 +4283,8 @@ impl Settings {
                 .on_click(move |_, _, cx| ask_remove_kept(agents.clone(), kept, None, cx))
                 .into_any_element()
         });
-        let never = Cli::ALL
-            .into_iter()
-            .filter(|cli| agents::kept::keeps(*cli) == agents::kept::Keeps::Never)
-            .map(|cli| format!("{} doesn't keep finished tasks.", cli.name()));
-        let line: Vec<String> = [KEPT_WHERE.to_string()].into_iter().chain(never).collect();
         let controls = count.into_iter().chain(remove).chain([switch]).collect();
-        nested(setting(
-            look,
-            KEEP_TASKS,
-            Some(line.join(" ").into()),
-            controls,
-        ))
+        nested(setting(look, KEEP_TASKS, Some(KEPT_WHERE.into()), controls))
     }
 
     /// The finished tasks kept, the last to end first, each by its title and the Archive's own
@@ -4327,22 +4317,15 @@ impl Settings {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let from = agents::kept::COMPUTER;
         let (message, detail, action) = match kept {
             1 => (
                 "Remove 1 finished task?".to_string(),
-                format!(
-                    "The conversation is removed from {from}. A task that is still working keeps \
-                     its own."
-                ),
+                "The conversation is removed from this computer.".to_string(),
                 REMOVE,
             ),
             kept => (
                 format!("Remove {kept} finished tasks?"),
-                format!(
-                    "Their conversations are removed from {from}. A task that is still working \
-                     keeps its own."
-                ),
+                "Their conversations are removed from this computer.".to_string(),
                 "Remove All",
             ),
         };
@@ -5653,12 +5636,10 @@ fn feature_row(
 }
 
 /// Settings › Agents' switch that keeps finished tasks, what its line says is kept and where,
-/// and its buttons: a kept task's own, and the one for them all.
+/// and its buttons: a kept task's own, and the one for them all. An assistant that keeps none
+/// has no task in the list, which says it.
 const KEEP_TASKS: &str = "Keep finished tasks so you can reply";
-const KEPT_WHERE: &str = concat!(
-    env!("APP_NAME"),
-    " keeps each task's title on this computer. The conversation stays with your assistant."
-);
+const KEPT_WHERE: &str = "Titles only. The conversation stays with your assistant.";
 const REMOVE: &str = "Remove";
 const REMOVE_ALL: &str = "Remove All…";
 

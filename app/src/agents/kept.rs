@@ -181,16 +181,6 @@ pub fn gone_words(agent: &str) -> String {
     format!("{agent} no longer has this conversation.")
 }
 
-/// The user's computer, by the platform's own noun, where the words say a conversation is kept
-/// or removed from.
-pub const COMPUTER: &str = if cfg!(target_os = "macos") {
-    "your Mac"
-} else if cfg!(target_os = "windows") {
-    "your PC"
-} else {
-    "your computer"
-};
-
 /// How a task ended, as the file says it: the four its word tells apart (`task::Word`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum End {
