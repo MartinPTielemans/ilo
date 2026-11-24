@@ -36,14 +36,6 @@ pub(super) const ARROW_DOWN: &str = "icons/arrow-down.svg";
 pub(super) const UNDO: &str = "icons/undo-2.svg";
 /// No glyph, for one that comes and goes.
 pub(super) const NONE: &str = "";
-// Both glyphs move from the same moment, linearly, about the glyph's middle: the old one fades
-// out and shrinks to 0.6 over 70 ms, and the new one fades in over 40 ms and grows from 0.8 over
-// 80 (Arc 1.170 rec at 2×, reload into stop and back).
-const SWAP: f32 = 0.08;
-const LEAVE: f32 = 0.07;
-const COME: f32 = 0.04;
-const SHRUNK: f32 = 0.6;
-const SMALL: f32 = 0.8;
 // The check draws in 250 ms, ease-in-out (ours), while the link leaves as above.
 const CHECK_DRAW: f32 = 0.25;
 // Lucide's check in its 24 box, from its left end down to its point and up to its right end,
@@ -51,6 +43,8 @@ const CHECK_DRAW: f32 = 0.25;
 const CHECK_LINE: [(f32, f32); 3] = [(4., 12.), (9., 17.), (20., 6.)];
 use crate::tokens::shell::swap::CHECK_BOX;
 use crate::tokens::shell::swap::CHECK_STROKE;
+// A glyph's change, [shell.swap.motion]: an import tile's badge changes by it too.
+use crate::tokens::shell::swap::motion::{COME, LEAVE, SHRUNK, SMALL, SWAP};
 
 struct Swap {
     what: Swapped,
@@ -229,14 +223,17 @@ impl Swaps {
         };
         let coming = match path {
             CHECK => drawing_check(ease(elapsed / CHECK_DRAW), color).into_any_element(),
-            _ => glyph(path, coming(elapsed), SMALL + (1. - SMALL) * grown(elapsed)),
+            _ => {
+                let (opacity, scale) = arriving(elapsed);
+                glyph(path, opacity, scale)
+            }
         };
-        let gone = leaving(elapsed);
+        let (opacity, scale) = going(elapsed);
         div()
             .relative()
             .flex_none()
             .size(px(side))
-            .child(glyph(swap.from, 1. - gone, 1. - (1. - SHRUNK) * gone))
+            .child(glyph(swap.from, opacity, scale))
             .child(coming)
             .into_any_element()
     }
@@ -274,6 +271,17 @@ fn coming(elapsed: f32) -> f32 {
 /// How far the new glyph has grown, 0 to 1.
 fn grown(elapsed: f32) -> f32 {
     (elapsed / SWAP).clamp(0., 1.)
+}
+
+/// The old glyph's opacity and scale, `elapsed` seconds into its change.
+pub(crate) fn going(elapsed: f32) -> (f32, f32) {
+    let gone = leaving(elapsed);
+    (1. - gone, 1. - (1. - SHRUNK) * gone)
+}
+
+/// The new glyph's opacity and scale, `elapsed` seconds into its change.
+pub(crate) fn arriving(elapsed: f32) -> (f32, f32) {
+    (coming(elapsed), SMALL + (1. - SMALL) * grown(elapsed))
 }
 
 /// How far a change to `to` has come, `elapsed` seconds in, 0 to 1: the check drawn, or another
@@ -357,7 +365,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        COME, LEAVE, Page, SWAP, Swapped, Swaps, UNDO, check_line, coming, grown, leaving,
+        COME, LEAVE, Page, SHRUNK, SMALL, SWAP, Swapped, Swaps, UNDO, arriving, check_line, coming,
+        going, grown, leaving,
     };
 
     fn near(a: (f32, f32), b: (f32, f32)) -> bool {
@@ -395,6 +404,21 @@ mod tests {
         assert_eq!(coming(COME), 1.);
         assert!(leaving(COME) < 1. && grown(COME) < 1.);
         assert_eq!((leaving(LEAVE), grown(SWAP)), (1., 1.));
+    }
+
+    /// What a glyph and an import tile's badge both draw: the old one from whole to gone at
+    /// `SHRUNK`, the new one from nothing at `SMALL` to whole, in the change's own time.
+    #[test]
+    fn a_change_goes_from_whole_to_shrunk_and_from_small_to_whole() {
+        assert_eq!(going(0.), (1., 1.));
+        assert_eq!(going(LEAVE), (0., SHRUNK));
+        assert_eq!(arriving(0.), (0., SMALL));
+        assert_eq!(arriving(SWAP), (1., 1.));
+        // At `COME` the new one has faded in while the old one is still going and both still move.
+        let (old, old_scale) = going(COME);
+        let (new, new_scale) = arriving(COME);
+        assert!(0. < old && old < 1. && SHRUNK < old_scale && old_scale < 1.);
+        assert!(new == 1. && SMALL < new_scale && new_scale < 1.);
     }
 
     /// A page starting to load turns the reload of the tab shown into stop, but not a tab behind

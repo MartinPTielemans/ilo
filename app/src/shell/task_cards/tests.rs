@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use gpui::{AppContext as _, Entity, Modifiers, SharedString, TestAppContext, VisualTestContext};
 
 use super::{
-    Card, Chip, Cli, Dot, Holds, Offer, PLATE_TOP, PageWord, chip, group_height, pages_room,
-    state_line,
+    Card, Chip, Cli, Dot, Holds, Offer, PLATE_TOP, PageMark, PageWord, chip, group_height,
+    pages_room, state_line,
 };
 use crate::agents::task::Word;
 use crate::agents::tier::Tier;
@@ -17,7 +17,7 @@ use crate::shell::{
     recorder::Recorder,
 };
 
-fn card(n: u64, dot: Dot) -> Card {
+pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
     Card {
         agent: format!("task-{n}").into(),
         home: 1,
@@ -190,35 +190,50 @@ fn a_header_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     });
 }
 
-/// A page's row ends in one word of five: Working where the task works in the page now, Done where
-/// it has moved on or finished, Paused where the task waits or stopped, Needs you at the page it
-/// handed the user, and the bar's own title at one they took over.
+/// A page's word and its outline are one answer (`page_mark`), which the sidebar's row, the rail's
+/// tile and the card read. While its task works every page says Working and the outline alone
+/// marks the page it's in; Done only once the task is done; Paused where it waits, stopped or
+/// broke off; at a handoff the outline is on the page that needs the user; a page they took over
+/// says they drive it; a stopped or done task has no outline.
 #[gpui::test]
-fn a_pages_row_says_one_word(cx: &mut TestAppContext) {
+fn a_pages_word_and_outline_are_one_answer(cx: &mut TestAppContext) {
     let (shell, _, cx) = shell(cx);
+    let mark = |word, outline| PageMark { word, outline };
+    let (working_in, working, paused, done) = (
+        mark(PageWord::Working, true),
+        mark(PageWord::Working, false),
+        mark(PageWord::Paused, false),
+        mark(PageWord::Done, false),
+    );
     shell.read_with(cx, |shell, _| {
-        let mut working = card(1, Dot::Working);
-        working.pages = vec![30, 31];
-        working.page_steps = vec![(31, "Opening maat.pt".into())];
-        assert_eq!(shell.page_word(&working, 30), PageWord::Done);
-        assert_eq!(shell.page_word(&working, 31), PageWord::Working);
-        // With one page, that's the one it works in.
-        working.pages = vec![30];
-        working.page_steps.clear();
-        assert_eq!(shell.page_word(&working, 30), PageWord::Working);
+        let marks = |card: &Card| {
+            card.pages
+                .iter()
+                .map(|tab| shell.page_mark(card, *tab))
+                .collect::<Vec<_>>()
+        };
+        // Helpers on two of three pages: each has the outline, and all say Working.
+        let mut helpers = card(1, Dot::Working);
+        helpers.pages = vec![30, 31, 32];
+        helpers.page_steps = vec![(31, "Opening maat.pt".into()), (32, "Reading".into())];
+        assert_eq!(marks(&helpers), [working, working_in, working_in]);
+        // With one page, that is the one it is in.
+        let mut opened = card(1, Dot::Working);
+        opened.pages = vec![30];
+        assert_eq!(marks(&opened), [working_in]);
         let mut waits = card(2, Dot::Waiting);
         waits.pages = vec![40, 41, 42];
-        assert_eq!(shell.page_word(&waits, 40), PageWord::Paused);
-        let mut done = card(3, Dot::Done);
-        done.pages = vec![50];
-        assert_eq!(shell.page_word(&done, 50), PageWord::Done);
+        assert_eq!(marks(&waits), [paused; 3]);
+        let mut finished = card(3, Dot::Done);
+        finished.pages = vec![50, 51];
+        assert_eq!(marks(&finished), [done; 2]);
         let mut stopped = card(4, Dot::Ended);
         stopped.pages = vec![60];
-        assert_eq!(shell.page_word(&stopped, 60), PageWord::Paused);
+        assert_eq!(marks(&stopped), [paused]);
     });
-    // The page the task handed the user says it needs them there, in the task's own word for it,
-    // one they took over says they drive it, and its others say Paused. Once it works again, the
-    // page it handed them is Paused, and the one they took is still theirs.
+    // The page the task handed the user needs them there and has the outline; one they took over
+    // says they drive it; its others are Paused. Once it works again, the page it handed them is
+    // Paused, and the one they took is still theirs.
     shell.update(cx, |shell, cx| {
         let status = crate::agents::Status {
             agent: "task-2".into(),
@@ -230,25 +245,26 @@ fn a_pages_row_says_one_word(cx: &mut TestAppContext) {
         shell.set_agent_status(vec![status], cx);
     });
     shell.read_with(cx, |shell, _| {
+        let marks = |card: &Card| [40, 41, 42].map(|tab| shell.page_mark(card, tab));
+        let driving = mark(PageWord::Driving, false);
         let mut waits = card(2, Dot::Waiting);
         waits.pages = vec![40, 41, 42];
-        let words = |card: &Card| [40, 41, 42].map(|tab| shell.page_word(card, tab));
         assert_eq!(
-            words(&waits),
-            [PageWord::NeedsYou, PageWord::Driving, PageWord::Paused]
+            marks(&waits),
+            [mark(PageWord::NeedsYou, true), driving, paused]
         );
-        let mut working = card(2, Dot::Working);
-        working.pages = vec![40, 41, 42];
-        working.page_steps = vec![(42, "Opening maat.pt".into())];
-        assert_eq!(
-            words(&working),
-            [PageWord::Paused, PageWord::Driving, PageWord::Working]
-        );
-        // A page they took over is theirs whatever its task came to.
+        let mut working_again = card(2, Dot::Working);
+        working_again.pages = vec![40, 41, 42];
+        working_again.page_steps = vec![(42, "Opening maat.pt".into())];
+        assert_eq!(marks(&working_again), [paused, driving, working_in]);
         for dot in [Dot::Done, Dot::Ended] {
             let mut over = card(2, dot);
             over.pages = vec![40, 41, 42];
-            assert_eq!(shell.page_word(&over, 41), PageWord::Driving);
+            assert_eq!(shell.page_mark(&over, 41), driving);
+            assert!(
+                !marks(&over).iter().any(|mark| mark.outline),
+                "{dot:?} has an outline"
+            );
         }
     });
     assert_eq!(
@@ -1240,7 +1256,7 @@ fn a_page_rows_click_watches_its_page_and_nothing_else(cx: &mut TestAppContext) 
     draw(&shell, cx);
     host.take();
     shell.update(cx, |shell, cx| {
-        assert!(shell.watch_task_page(1011, row, None, cx));
+        assert!(shell.watch_task_page(1011, row, None, false, cx));
     });
     cx.run_until_parked();
     assert_eq!(asked, host.take());
@@ -1427,4 +1443,19 @@ fn an_ended_task_keeps_its_group_while_it_has_pages_open(cx: &mut TestAppContext
     shell.update(cx, |shell, cx| shell.set_task_cards(working(&[1020]), cx));
     shell.update(cx, |shell, cx| shell.set_task_cards(working(&[]), cx));
     assert!(folds(&shell, cx).is_empty());
+}
+
+/// A task asked from ⌘T over a page leaves the page: its card comes in at the foot, and no view
+/// takes the page's place.
+#[gpui::test]
+fn a_task_asked_over_a_page_leaves_the_page(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shell_with(cx, Vec::new());
+    shell.update(cx, |shell, cx| {
+        shell.set_task_cards(cards(&[(1, Dot::Working)]), cx)
+    });
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.talk_agent(), None, "a view took the page's place");
+        assert_eq!(shell.selected, 10, "the page went");
+        assert_eq!(shell.task_cards.len(), 1, "no card came in");
+    });
 }

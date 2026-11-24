@@ -224,6 +224,8 @@ pub struct Stop {
     /// What it stopped, as the step names it, such as a button's name: page text, plain and capped.
     pub at: String,
     pub site: String,
+    /// The refused step's under-way phrase, its first letter lowered (`IloKind::Stopped`).
+    pub doing: String,
     pub why: Why,
     pub tier: Tier,
     pub count: u32,
@@ -231,6 +233,8 @@ pub struct Stop {
     pub appeared: std::time::Instant,
     /// How many of the task's messages came before it, which places it among them.
     pub after: usize,
+    /// How many of the task's steps came before it, which places it among them.
+    pub traced: usize,
     /// Acted on, or passed: a change of tier, Take over, or the task's end.
     pub settled: bool,
 }
@@ -310,9 +314,9 @@ pub fn changed_logged(from: Tier, to: Tier) -> String {
 /// count alone, never an address or title.
 pub fn started_logged(tier: Tier, added: usize) -> String {
     match added {
-        0 => format!("Starts at {}", tier.label()),
-        1 => format!("Starts at {} · 1 page", tier.label()),
-        added => format!("Starts at {} · {added} pages", tier.label()),
+        0 => format!("Started at {}", tier.label()),
+        1 => format!("Started at {} · 1 page", tier.label()),
+        added => format!("Started at {} · {added} pages", tier.label()),
     }
 }
 

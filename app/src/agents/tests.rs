@@ -71,6 +71,8 @@ struct Made {
     /// The user's Spaces outside the profile the others are in, "Default", each with the name of
     /// its profile's folder.
     profiles: RefCell<Vec<(u64, &'static str)>>,
+    /// The Spaces that are a private window's own, as a test says.
+    private: RefCell<Vec<u64>>,
 }
 
 impl Made {
@@ -407,6 +409,10 @@ impl Browser for Made {
     /// has no Space of the user's.
     fn has_profile(&self, profile: &str) -> bool {
         profile == "Default" || self.profiles.borrow().iter().any(|each| each.1 == profile)
+    }
+
+    fn private_space(&self, space: u64) -> bool {
+        self.private.borrow().contains(&space)
     }
 
     fn request(&self, _: &str, tab: u64, request: u64, sent: &request::Request) {
@@ -7112,6 +7118,16 @@ mod tasks {
             ("Stopped at chase.com", Dot::Waiting)
         );
         assert!(card.question.is_none(), "a refusal asked");
+        // One state, one word: the conversation's header follows the card.
+        assert_eq!(
+            agents
+                .read_with(cx, |agents, cx| agents.conversation(&agent, cx))
+                .expect("its conversation")
+                .about
+                .as_ref(),
+            "Claude · Needs you",
+            "the header and the card say different things at a refusal"
+        );
         assert_eq!(shown(&agents, cx), None);
         browser
             .tabs
@@ -7444,6 +7460,89 @@ mod tasks {
     /// A task's calls are its conversation's trace, each titled by what it did and opening to what
     /// it saw or why it failed. What it typed shows, but never what it typed into a password
     /// field, though the field refused it.
+    /// ilo's line goes where it happened among the task's steps (#4132): the steps before a
+    /// refusal, its line, then the steps after, never every ilo line after the turn's work.
+    #[gpui::test]
+    fn an_ilo_line_stands_where_it_came_among_the_steps(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, TraceItem};
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Check my balance", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        browser
+            .tabs
+            .borrow_mut()
+            .push((30, 100, "Shop", "https://shop.example/basket"));
+        let snapshot = json!({ "tab": 30 });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "snapshot",
+            snapshot.clone(),
+            Some(shop_tree()),
+            cx,
+        );
+        let bank = json!({ "url": "https://www.chase.com/" });
+        assert!(traced(&agents, &browser, &agent, "open_tab", bank, None, cx).error);
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "snapshot",
+            snapshot,
+            Some(shop_tree()),
+            cx,
+        );
+        let lines = agents.read_with(cx, |agents, cx| {
+            agents.conversation(&agent, cx).unwrap().lines
+        });
+        let tools = |line: &Line| match line {
+            Line::Trace(trace) => (trace.items.iter())
+                .filter_map(|item| match item {
+                    TraceItem::Step(step) => Some(step.title.to_string()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+            Line::Ilo(_) => "ilo".into(),
+            other => format!("{other:?}"),
+        };
+        let order: Vec<String> = lines.iter().map(tools).collect();
+        assert_eq!(
+            order.len(),
+            3,
+            "the steps before the refusal, its line, the steps after: {order:?}"
+        );
+        assert_eq!(order[1], "ilo", "{order:?}");
+        assert!(
+            matches!(lines[2], Line::Trace(ref trace) if trace.running),
+            "{order:?}"
+        );
+        // The refused row stands alone in the refusal's red, and the line under it says why in
+        // the step's own under-way words (B1).
+        let Line::Trace(before) = &lines[0] else {
+            panic!("{order:?}")
+        };
+        let Some(TraceItem::Step(refused)) = before.items.last() else {
+            panic!("{order:?}")
+        };
+        assert!(refused.failed, "{order:?}");
+        assert_eq!(
+            refused.description.as_ref(),
+            "",
+            "the refused row keeps a tail"
+        );
+        let Line::Ilo(line) = &lines[1] else {
+            panic!("{order:?}")
+        };
+        let crate::agents::task::ilo::IloKind::Stopped { doing, .. } = &line.kind else {
+            panic!("{line:?}")
+        };
+        assert_eq!(doing.as_ref(), "opening chase.com");
+    }
+
     #[gpui::test]
     fn a_tasks_calls_are_its_trace_and_never_show_a_password(cx: &mut TestAppContext) {
         use crate::agents::task::{Line, Opens, TraceItem};
@@ -7667,7 +7766,7 @@ mod tasks {
             (None, ""),
             (Some(Kind::Stopped), "stopped"),
             (Some(Kind::SaidNo), "you said no"),
-            (Some(Kind::Outside), "outside its access"),
+            (Some(Kind::Outside), ""),
             (Some(Kind::Password), "password field"),
             (Some(Kind::NotWebPage), "not a web page"),
             (Some(Kind::NotFound), "not found"),
@@ -7697,7 +7796,16 @@ mod tasks {
             close: None,
             notes: None,
         };
-        let lines = fold(&[], &[failed], true, false, None, &Default::default());
+        let lines = fold(
+            &[],
+            &[failed],
+            true,
+            false,
+            None,
+            &Default::default(),
+            &[],
+            Vec::new(),
+        );
         let [Line::Trace(trace)] = lines.as_slice() else {
             panic!("{lines:?}")
         };
@@ -7741,7 +7849,16 @@ mod tasks {
                 close: None,
                 notes: None,
             };
-            let lines = fold(&[], &[failed], true, false, None, &Default::default());
+            let lines = fold(
+                &[],
+                &[failed],
+                true,
+                false,
+                None,
+                &Default::default(),
+                &[],
+                Vec::new(),
+            );
             let [Line::Trace(trace)] = lines.as_slice() else {
                 panic!("{lines:?}")
             };
@@ -7755,7 +7872,6 @@ mod tasks {
         let once = [
             ("The user stopped the agent.", Kind::Stopped),
             ("The user said no.", Kind::SaidNo),
-            ("ilo stopped this: click “Pay”.", Kind::Outside),
             ("That's a password field.", Kind::Password),
             ("Tab 30 isn't an http or https page.", Kind::NotWebPage),
             ("There's no element e12 in tab 30.", Kind::NotFound),
@@ -7927,7 +8043,16 @@ mod tasks {
         messages.push(message(Who::Agent, "Looking at MAAT first.", 3));
         trace.push(step("read_page", 2, 4, None));
 
-        let lines = fold(&messages, &trace, false, true, None, &Default::default());
+        let lines = fold(
+            &messages,
+            &trace,
+            false,
+            true,
+            None,
+            &Default::default(),
+            &[],
+            Vec::new(),
+        );
         let [Line::You(_), Line::Trace(working)] = lines.as_slice() else {
             panic!("{lines:?}")
         };
@@ -7943,7 +8068,16 @@ mod tasks {
 
         trace[1].ended = Some(at(6));
         messages.push(message(Who::Agent, "MAAT opens at 10:00.", 41));
-        let lines = fold(&messages, &trace, true, false, None, &Default::default());
+        let lines = fold(
+            &messages,
+            &trace,
+            true,
+            false,
+            None,
+            &Default::default(),
+            &[],
+            Vec::new(),
+        );
         let [Line::You(_), Line::Trace(worked), Line::Said(said)] = lines.as_slice() else {
             panic!("{lines:?}")
         };
@@ -7963,6 +8097,96 @@ mod tasks {
                 .iter()
                 .all(|item| !matches!(item, TraceItem::Step(step) if step.running))
         );
+    }
+
+    /// A turn the user stopped has no answer: all it said stays in its stretch of work. Only a
+    /// turn that ended by itself puts its last words outside, as its answer.
+    #[test]
+    fn a_stopped_turn_keeps_what_it_said_in_its_stretch() {
+        use crate::agents::task::{Line, Message, TraceItem, Traced, Who, fold};
+        let start = std::time::Instant::now();
+        let at = |seconds: u64| start + Duration::from_secs(seconds);
+        let message = |who, text: &str, seconds| Message {
+            who,
+            text: text.to_string().into(),
+            at: at(seconds),
+        };
+        let messages = vec![
+            message(Who::User, "A table for two", 0),
+            message(Who::Agent, "Looking at Tasca first.", 2),
+            message(Who::Agent, "Tasca has 8:00 free.", 4),
+        ];
+        let trace = vec![Traced {
+            call: 1,
+            did: tools::Did {
+                tool: "open_tab".into(),
+                site: "tasca.pt".into(),
+                ..Default::default()
+            },
+            after: 1,
+            started: at(1),
+            ended: Some(at(2)),
+            error: None,
+            kind: None,
+            picture: None,
+            close: None,
+            notes: None,
+        }];
+        let fold_with = |stopped: &[usize]| {
+            fold(
+                &messages,
+                &trace,
+                true,
+                false,
+                None,
+                &Default::default(),
+                stopped,
+                Vec::new(),
+            )
+        };
+        let by_itself = fold_with(&[]);
+        let [Line::You(_), Line::Trace(_), Line::Said(answer)] = by_itself.as_slice() else {
+            panic!("{by_itself:?}")
+        };
+        assert_eq!(answer.as_ref(), "Tasca has 8:00 free.");
+        let stopped = fold_with(&[1]);
+        let [Line::You(_), Line::Trace(worked)] = stopped.as_slice() else {
+            panic!("a stopped turn showed an answer: {stopped:?}")
+        };
+        let said: Vec<&str> = (worked.items.iter())
+            .filter_map(|item| match item {
+                TraceItem::Said(said) => Some(said.as_ref()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(said, ["Looking at Tasca first.", "Tasca has 8:00 free."]);
+    }
+
+    /// A stretch's count is of steps, not of its rows: a row that's the same step on several
+    /// tabs counts each.
+    #[test]
+    fn a_stretch_counts_steps_not_rows() {
+        use crate::agents::task::{Opens, Trace, TraceItem, TraceStep};
+        let step = |key, opens| TraceStep {
+            key,
+            glyph: "",
+            title: "Read 2 pages".into(),
+            description: "".into(),
+            running: false,
+            failed: false,
+            opens,
+            under: "".into(),
+        };
+        let trace = Trace {
+            key: 0,
+            running: false,
+            took: Some(4),
+            items: vec![TraceItem::Step(step(
+                0,
+                Opens::Steps(vec![step(1, Opens::Nothing), step(2, Opens::Nothing)]),
+            ))],
+        };
+        assert_eq!(trace.summary(), ("Worked for 4 s".into(), "2 steps".into()));
     }
 
     /// A reply leaves the turn before it as it was, its answer and how long it worked, as the
@@ -7997,9 +8221,27 @@ mod tasks {
             message(Who::User, "Museum hours", 0),
             message(Who::Result, "MAAT opens at 10:00.", 5),
         ];
-        let before = fold(&messages, &trace, true, false, None, &Default::default());
+        let before = fold(
+            &messages,
+            &trace,
+            true,
+            false,
+            None,
+            &Default::default(),
+            &[],
+            Vec::new(),
+        );
         messages.push(message(Who::User, "And on Sunday?", 9));
-        let lines = fold(&messages, &trace, false, true, None, &Default::default());
+        let lines = fold(
+            &messages,
+            &trace,
+            false,
+            true,
+            None,
+            &Default::default(),
+            &[],
+            Vec::new(),
+        );
         assert_eq!(lines[..before.len()], before[..], "{lines:?}");
         assert_eq!(lines.last(), Some(&Line::You("And on Sunday?".into())));
     }
@@ -8038,7 +8280,16 @@ mod tasks {
             at: at(0),
         }];
         let lines = |trace: &[Traced]| {
-            let lines = fold(&messages, trace, false, true, None, &Default::default());
+            let lines = fold(
+                &messages,
+                trace,
+                false,
+                true,
+                None,
+                &Default::default(),
+                &[],
+                Vec::new(),
+            );
             let [Line::You(_), Line::Trace(trace)] = lines.as_slice() else {
                 panic!("{lines:?}")
             };
@@ -8201,6 +8452,82 @@ mod tasks {
         }
     }
 
+    /// The conversation's level is the task's own: what it started at, Look only or Full access,
+    /// and after a raise from a refusal's button, the raised level, never a default of its own.
+    #[gpui::test]
+    fn the_conversation_says_the_tasks_own_level(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let level = |agent: &str, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, cx| {
+                agents.conversation(agent, cx).unwrap().tier
+            })
+        };
+        let mut started = Vec::new();
+        for tier in [Tier::Look, Tier::Full] {
+            let agent = agents
+                .update(cx, |agents, cx| {
+                    agents.start_task(Cli::Claude, "Check my balance", page(), 1, tier, cx)
+                })
+                .expect("started");
+            assert_eq!(level(&agent, cx), tier, "a task started at {tier:?}");
+            started.push(agent);
+        }
+
+        let agent = started.remove(0);
+        agents.update(cx, |agents, _| {
+            let task = agents.task_mut(&agent).unwrap();
+            task.ended = None;
+            task.state = State::Working;
+        });
+        browser
+            .tabs
+            .borrow_mut()
+            .push((30, 100, "Shop", "https://shop.example/basket"));
+        let tab = json!({ "tab": 30 });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "snapshot",
+            tab,
+            Some(shop_tree()),
+            cx,
+        );
+        let click = json!({ "tab": 30, "ref": "e1" });
+        assert!(traced(&agents, &browser, &agent, "click", click, None, cx).error);
+        assert_eq!(
+            level(&agent, cx),
+            Tier::Look,
+            "the refusal changed the level"
+        );
+        let raise = agents.read_with(cx, |agents, cx| {
+            (agents.conversation(&agent, cx).unwrap().lines.iter())
+                .filter_map(|line| match line {
+                    crate::agents::task::Line::Ilo(line) => Some(line.clone()),
+                    _ => None,
+                })
+                .flat_map(|line| crate::agents::task::ilo::buttons(&line))
+                .find_map(|button| match button {
+                    crate::agents::task::ilo::IloButton::Raise(tier) => Some(tier),
+                    _ => None,
+                })
+        });
+        let raise = raise.expect("the refusal's line has no raise");
+        agents.update(cx, |agents, _| {
+            for stop in &mut agents.task_mut(&agent).unwrap().stops {
+                stop.appeared -= super::tier::PROTECT;
+            }
+        });
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&agent, TaskAction::SetTier(raise), cx);
+        });
+        assert_eq!(
+            level(&agent, cx),
+            raise,
+            "the raise didn't reach the conversation"
+        );
+    }
+
     /// Pages the user added reach the task as their addresses, http(s) only; Only the pages you
     /// add limits it to their sites; and the start's entry gains their count, never an address.
     #[gpui::test]
@@ -8242,8 +8569,32 @@ mod tasks {
                 .filter(|entry| entry.action.as_ref() == crate::agents::access::ACCESS_ACTION)
                 .map(|entry| entry.target.to_string())
                 .collect();
-            assert_eq!(logged, ["Starts at Work on pages · 2 pages"]);
+            assert_eq!(logged, ["Started at Work on pages · 2 pages"]);
         });
+    }
+
+    /// The pages the user added reach the task each on a line of its own under the sentence, so an
+    /// address's comma or bracket is never read as the sentence's.
+    #[test]
+    fn each_added_address_is_a_line_of_its_own() {
+        use crate::agents::task::{added_address, with_added};
+        let pages: Vec<String> = ["https://a.example/x,y", "https://b.example/(z).)"]
+            .into_iter()
+            .map(|url| added_address(url).expect("an address the task may get"))
+            .collect();
+        let first = with_added("Plan a walk".into(), &pages);
+        assert_eq!(
+            first,
+            "Plan a walk\n\nPages I added, to open in tabs of your own:\n\
+             https://a.example/x,y\nhttps://b.example/(z).)"
+        );
+        for page in &pages {
+            assert!(
+                first.lines().any(|line| line == page),
+                "{page} on a line of its own"
+            );
+        }
+        assert_eq!(with_added("Plan a walk".into(), &[]), "Plan a walk");
     }
 
     /// An added page's address reaches the task without the user name and password a tab's
@@ -8653,8 +9004,23 @@ mod tasks {
         let ended = Utc.with_ymd_and_hms(2026, 11, 21, 14, 5, 0).unwrap();
         let that_night = Utc.with_ymd_and_hms(2026, 11, 21, 23, 59, 0).unwrap();
         let next_day = Utc.with_ymd_and_hms(2026, 11, 22, 0, 1, 0).unwrap();
-        assert_eq!(crate::agents::time_or_day_on(ended, that_night), "14:05");
-        assert_eq!(crate::agents::time_or_day_on(ended, next_day), "21 Nov");
+        assert_eq!(
+            crate::agents::time_or_day_on(ended, that_night, false),
+            "14:05"
+        );
+        assert_eq!(
+            crate::agents::time_or_day_on(ended, next_day, false),
+            "21 Nov"
+        );
+        // On the system's 12-hour clock it reads as History's page rows do.
+        assert_eq!(
+            crate::agents::time_or_day_on(ended, that_night, true),
+            "2:05 PM"
+        );
+        assert_eq!(
+            crate::agents::time_or_day_on(ended, next_day, true),
+            "21 Nov"
+        );
     }
 
     /// The Archive lists the dismissed tasks, the last to leave the foot first, each with how it
@@ -8727,9 +9093,8 @@ mod tasks {
         assert!(listed(&agents, cx).is_empty());
     }
 
-    /// At launch the Spaces a crash left go. A task's goes with its pages, which were never the
-    /// user's (#4105); an outside agent's, which a run before #1080 showed as a Space of the
-    /// user's, gives its tabs to the user's Space first (#1080).
+    /// At launch the Spaces a crash left go, each with its pages: a task's and an outside agent's
+    /// were never the user's, so a crash leaves no agent's page among the user's tabs (#4105).
     #[gpui::test]
     fn the_spaces_a_run_before_left_go_at_launch(cx: &mut TestAppContext) {
         let (agents, browser) = ready(None, cx);
@@ -8743,7 +9108,9 @@ mod tasks {
         let spaces: Vec<_> = (browser.tabs.borrow().iter())
             .map(|each| (each.0, each.1))
             .collect();
-        assert_eq!(spaces, [(20, 1), (10, 1)]);
+        // The agent's tab 20 and the task's tab 30 went with their Spaces: the user's own is all
+        // that's left.
+        assert_eq!(spaces, [(10, 1)]);
     }
 
     #[gpui::test]

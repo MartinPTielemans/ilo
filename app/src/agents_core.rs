@@ -356,6 +356,15 @@ impl Browser for Core {
         (ids(bc::bc_profiles).into_iter()).any(|each| profile_folder(each) == profile)
     }
 
+    fn private_space(&self, space: u64) -> bool {
+        space != 0
+            && WINDOWS.with_borrow(|windows| {
+                (windows.iter()).any(|window| {
+                    window.private && unsafe { bc::bc_window_space(window.id) } == space
+                })
+            })
+    }
+
     fn request(&self, agent: &str, tab: u64, request: u64, sent: &agents::request::Request) {
         let headers: String = (sent.headers.iter())
             .map(|(name, value)| format!("{name}: {value}\n"))
