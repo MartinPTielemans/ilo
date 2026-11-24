@@ -604,16 +604,32 @@ expect '^browser: history pointed closed [0-9][0-9]*$' \
   "the pointer on History's first row, the tab ⌘W closed, didn't point at it"
 ../tools/window-screenshot.sh "$pid" "$out/history-hover-closed.png" || fail "no window to capture"
 # The run's closed tabs come first, newest first, so its visited pages can start low on the list:
-# each row the window shows, down to its foot.
-visited_y=
+# each row the window shows, down to its foot. A run that crosses midnight lists its rows under two
+# days, and the pointer on the heading between points at none, which passes only there: where two
+# closed tabs' rows, as the app logs their places, are a step apart that isn't a whole number of
+# rows (#4154). Visited pages' rows log no place. The rows below move down by the heading, so the
+# next y is still on a row.
+visited_y= heading=
 for y in 167 223 279 335 391 447 503 559 615 671 727; do
   send move 300 $y
-  expect '^browser: history pointed \(closed\|visited\) [0-9][0-9]*$' \
+  expect '^browser: history pointed \(\(closed\|visited\) [0-9][0-9]*\|none\)$' \
     "the pointer on History's row at y $y didn't point at it"
-  if sed -n "/^browser: drive $step: /,\$p" "$log" | grep -q '^browser: history pointed visited '; then
-    visited_y=$y
-    break
-  fi
+  case $(since | grep '^browser: history pointed ' | tail -1) in
+    *" none")
+      places=$(grep '^browser: settings library archived [0-9]* at ' "$log" |
+        awk '{ at[$5] = $8 } END { for (id in at) print at[id] }' | sort -n | tr '\n' ' ')
+      [ -z "$heading" ] && echo "$places" | awk -v y="$y" '{
+        for (i = 2; i <= NF; i++) if ($i - $(i - 1) < pitch || !pitch) pitch = $i - $(i - 1)
+        for (i = 2; i <= NF; i++) if ($(i - 1) < y && y < $i && ($i - $(i - 1)) % pitch) found = 1
+      } END { exit !found }' ||
+        fail "the pointer on History's row at y $y didn't point at it, and no heading is there: closed tabs' rows are at $places"
+      heading=$y
+      ;;
+    *" visited "*)
+      visited_y=$y
+      break
+      ;;
+  esac
 done
 [ -n "$visited_y" ] || fail "History listed no visited page in the rows the window shows; they were: $(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: history pointed ' | cut -d' ' -f4- | tr '\n' ' ')"
 ../tools/window-screenshot.sh "$pid" "$out/history-hover-visited.png" || fail "no window to capture"
