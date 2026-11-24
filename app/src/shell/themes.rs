@@ -2,7 +2,7 @@
 //! as it's made and keeping it, and the window's colours and grain from it (docs/ux-spec.md ›
 //! Themes).
 
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
 use gpui::{App, Context, Global, Rgba, canvas, div, point, prelude::*, px, size};
 
@@ -16,6 +16,14 @@ use crate::{
     theme::{Appearance, GRAIN_TILE, INACTIVE_TEXTURE, Texture, Theme},
     theme_picker::{self, Changed},
 };
+
+/// What the window's reckoning was last logged from: its tint, its glows, its size and its side.
+type Reckoned = (Rgba, Rgba, Rgba, f32, f32, bool);
+
+thread_local! {
+    /// Compared each frame, so the reckoning is made and logged only when it changes.
+    static RECKONED: Cell<Option<Reckoned>> = const { Cell::new(None) };
+}
 
 /// The appearance View › Appearance chose for every window, which stands in for the system's
 /// where it isn't automatic. The user's preference: agents have no call to change it.
@@ -194,6 +202,9 @@ impl Shell {
             palette = palette.toward(&self.palette_of(beside), t);
         }
         self.palette = palette;
+        if beside.is_none() {
+            self.log_window_reckoning();
+        }
         let light = palette.tone == Tone::Light;
         if self.window_light != Some(light) {
             self.window_light = Some(light);
@@ -312,6 +323,35 @@ impl Shell {
             true => 1. - x,
             false => x,
         }
+    }
+
+    /// What the window's palette makes of the empty sidebar 60 points in and 450 down, where
+    /// check/window.sh reads it over a grey backdrop: the window over black, grey 128 and white, as
+    /// grey levels, logged when it changes. The check reads a grey between them as between these.
+    /// A frame that changes none of what it's reckoned from compares six values and does no more.
+    pub(super) fn log_window_reckoning(&self) {
+        let (width, height) = (
+            f32::from(self.viewport.width),
+            f32::from(self.viewport.height),
+        );
+        let palette = &self.palette;
+        let key = (
+            palette.tint,
+            palette.glow,
+            palette.far_glow,
+            width,
+            height,
+            self.right(),
+        );
+        if width <= 0. || height <= 0. || RECKONED.get() == Some(key) {
+            return;
+        }
+        RECKONED.set(Some(key));
+        let (foot, far) = glow::strengths(60., 450., width, height, self.right());
+        let [black, grey, white] = palette
+            .window_over_greys(foot, far)
+            .map(|at| ((at.r + at.g + at.b) / 3. * 255.).round() as u8);
+        log!("browser: window reckons {black} {grey} {white} at 60,450 in {width:.0}x{height:.0}");
     }
 
     /// The window's colour behind everything: the Space's glows from the sidebar's foot and the

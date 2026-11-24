@@ -76,7 +76,7 @@ const LIBRARY_BAND_STIFFNESS: f32 = 0.25;
 /// buttons: half a pixel at 2×, so their swap from the panel's copy can't be seen.
 const LIBRARY_REST_SLACK: f32 = 0.25;
 
-use crate::palette::{STATE_HOVERED, STATE_PRESSED};
+use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
 use crate::tokens::shell::library::COLUMN;
 use crate::tokens::shell::library::COLUMN_EDGE;
 use crate::tokens::shell::library::COLUMN_WIDTH;
@@ -2017,8 +2017,8 @@ impl Shell {
                 .justify_center()
                 .rounded(px(SEARCH_RADIUS))
                 .bg(self.palette.plate(LIBRARY_PLATE))
-                .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
-                .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+                .hover(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED)))
+                .active(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_PRESSED)))
                 .block_mouse_except_scroll()
                 .text_size(px(text::BODY))
                 .text_color(self.palette.text(FORM_TEXT))
@@ -2364,7 +2364,9 @@ impl Shell {
                     .absolute()
                     .inset_0()
                     .rounded(px(CARD_RADIUS))
-                    .group_hover("space-card", |style| style.bg(palette.plate(STATE_HOVERED)))
+                    .group_hover("space-card", |style| {
+                        style.bg(palette.ground_plate(Ground::Library, STATE_HOVERED))
+                    })
                     .can_drop(move |dragged, _, _| {
                         dragged
                             .downcast_ref::<CardTab>()
@@ -2801,8 +2803,12 @@ impl Shell {
                     .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
                         shell.point_history(Pointed::Closed(id), *hovered, cx)
                     }))
-                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
-                    .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+                    .hover(|style| {
+                        style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED))
+                    })
+                    .active(|style| {
+                        style.bg(self.palette.ground_plate(Ground::Library, STATE_PRESSED))
+                    })
                     .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
                         shell.open_archived(id, event.position(), event.modifiers(), cx)
                     }))
@@ -2857,8 +2863,12 @@ impl Shell {
                     .relative()
                     .rounded(px(ARCHIVED_RADIUS))
                     .block_mouse_except_scroll()
-                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
-                    .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+                    .hover(|style| {
+                        style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED))
+                    })
+                    .active(|style| {
+                        style.bg(self.palette.ground_plate(Ground::Library, STATE_PRESSED))
+                    })
                     .on_click(cx.listener(move |shell, _, _, cx| {
                         shell.restore_archived_task(agent.clone(), cx)
                     }))
@@ -2990,7 +3000,9 @@ impl Shell {
                     .size_full()
                     .relative()
                     .rounded(px(ARCHIVED_RADIUS))
-                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .hover(|style| {
+                        style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED))
+                    })
                     .children(drawn)
                     .on_click(cx.listener(move |shell, _, _, cx| shell.open_past_task(&opened, cx)))
                     .child(
@@ -3085,7 +3097,7 @@ impl Shell {
             .rounded(px(ARCHIVED_RADIUS))
             .text_size(px(text::SMALL))
             .text_color(self.palette.text(SECONDARY))
-            .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+            .hover(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED)))
             .child(label)
     }
 
@@ -3405,7 +3417,9 @@ impl Shell {
                     .size_full()
                     .relative()
                     .rounded(px(ARCHIVED_RADIUS))
-                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .hover(|style| {
+                        style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED))
+                    })
                     .when(!boost.on, |row| row.opacity(0.5))
                     .on_mouse_down(MouseButton::Left, cx.listener(menu(site.clone())))
                     .on_mouse_down(MouseButton::Right, cx.listener(menu(site.clone())))
