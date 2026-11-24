@@ -657,7 +657,6 @@ void ShowTile(content::WebContents* contents,
   if (!tile) {
     tile = [[BrowserCoreTileView alloc] initWithFrame:NSZeroRect];
     tile.wantsLayer = YES;
-    tile.autoresizingMask = NSViewNotSizable;
     NSView* scale = [[BrowserCoreTileScale alloc] initWithFrame:NSZeroRect];
     scale.autoresizingMask = NSViewNotSizable;
     [tile addSubview:scale];
@@ -667,6 +666,10 @@ void ShowTile(content::WebContents* contents,
   }
   if (tile.superview != holder) {
     [holder addSubview:tile];
+    // The app places a tile from the view's top and asks again only when that place changes,
+    // which a change of the window's height alone doesn't do, so the tile keeps its distance from
+    // the top: in an unflipped view, by a flexible bottom margin.
+    tile.autoresizingMask = holder.isFlipped ? NSViewNotSizable : NSViewMinYMargin;
   }
   RoundCorners(tile, corner_radius, kAllCorners);
   // A page taller than the tile at its width is cut at the tile's foot, whatever its corners.
