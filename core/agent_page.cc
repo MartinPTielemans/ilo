@@ -381,9 +381,8 @@ void Report(bc_id tab, uint64_t request, std::string text, bool error, bc_agent_
   }
 }
 
-// A hidden tab's renderer runs as a background process, which the OS starves while the agent's
-// typing waits on it (#3285). The vote follows the page to whichever process holds it, and goes
-// with the page if the tab closes first.
+}  // namespace
+
 base::ScopedClosureRunner LiftWhileWorking(content::WebContents& contents) {
   base::WeakPtr<performance_manager::PageNode> page =
       performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(&contents);
@@ -400,8 +399,6 @@ base::ScopedClosureRunner LiftWhileWorking(content::WebContents& contents) {
       },
       page));
 }
-
-}  // namespace
 
 bool IsWebFrame(content::RenderFrameHost* frame) {
   const std::string& scheme =

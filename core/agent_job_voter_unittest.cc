@@ -87,13 +87,34 @@ TEST_F(AgentJobVoterTest, EachJobLiftsAndEndsOnce) {
   EXPECT_EQ(tab.process->GetPriority(), Priority::kBestEffort);
 
   voter_->JobStarted(tab.page.get());
-  voter_->JobStarted(tab.page.get());
   voter_->JobEnded(tab.page.get());
   EXPECT_EQ(tab.process->GetPriority(), Priority::kBestEffort);
+  voter_->JobEnded(tab.page.get());
 
   voter_->JobStarted(tab.page.get());
   EXPECT_EQ(tab.process->GetPriority(), Priority::kUserVisible);
   voter_->JobEnded(tab.page.get());
+  EXPECT_EQ(tab.process->GetPriority(), Priority::kBestEffort);
+}
+
+// A read of the page is one of the agent's calls, as an act is (#4227): it gives the page the vote
+// as it starts and takes it at its answer. Under way beside an act in the same page, the page keeps
+// the vote until the last of them answers, and never ranks with the page the user is looking at.
+TEST_F(AgentJobVoterTest, AReadsCallGivesAndTakesBesideAnAct) {
+  MockSinglePageInSingleProcessGraph tab(graph());
+
+  voter_->JobStarted(tab.page.get());  // The read.
+  EXPECT_EQ(tab.process->GetPriority(), Priority::kUserVisible);
+  voter_->JobEnded(tab.page.get());  // Its answer.
+  EXPECT_EQ(tab.process->GetPriority(), Priority::kBestEffort);
+
+  voter_->JobStarted(tab.page.get());  // An act.
+  voter_->JobStarted(tab.page.get());  // A read, while the act works.
+  voter_->JobEnded(tab.page.get());    // The first answer.
+  EXPECT_EQ(tab.process->GetPriority(), Priority::kUserVisible)
+      << "the first answer took the vote from the call still under way";
+  voter_->JobEnded(tab.page.get());
+  EXPECT_EQ(tab.process->GetPriority(), Priority::kBestEffort);
 }
 
 // A page the user is looking at in the same process keeps it user-blocking, during the job and
@@ -149,10 +170,11 @@ TEST_F(AgentJobVoterTest, ACrashedRenderersReplacementIsLifted) {
   EXPECT_EQ(next_process->GetPriority(), Priority::kBestEffort);
 }
 
-// A tab closed mid-job takes its vote with its page. Otherwise the voting system's check that no
-// vote outlives its page stops the test.
+// A tab closed mid-job takes its vote with its page, however many jobs were under way in it.
+// Otherwise the voting system's check that no vote outlives its page stops the test.
 TEST_F(AgentJobVoterTest, ATabClosedMidJobTakesItsVote) {
   MockSinglePageInSingleProcessGraph tab(graph());
+  voter_->JobStarted(tab.page.get());
   voter_->JobStarted(tab.page.get());
 
   tab.frame.reset();

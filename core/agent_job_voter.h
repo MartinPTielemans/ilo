@@ -2,6 +2,7 @@
 #define BROWSER_CORE_AGENT_JOB_VOTER_H_
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <set>
 
@@ -42,7 +43,9 @@ class AgentJobVoter : public performance_manager::execution_context_priority::Pr
   // The voter on the browser's graph, or null before it's added and once the graph is gone.
   static AgentJobVoter* Get();
 
-  // A job starts working in |page|, or stops: it answered, or the agent's session ended.
+  // A job starts working in |page|, or stops: it answered, or the agent's session ended. A job is
+  // any of the agent's calls under way in the page, an act or a read, and several may be at once:
+  // the page has the vote from the first one's start to the last one's end.
   void JobStarted(const performance_manager::PageNode* page);
   void JobEnded(const performance_manager::PageNode* page);
 
@@ -67,7 +70,8 @@ class AgentJobVoter : public performance_manager::execution_context_priority::Pr
   void TakeVote(const performance_manager::PageNode* page);
 
   performance_manager::execution_context_priority::VotingChannel voting_channel_;
-  std::set<const performance_manager::PageNode*> working_;
+  // The jobs under way in each page that has one.
+  std::map<const performance_manager::PageNode*, int> working_;
   std::set<const performance_manager::PageNode*> user_loads_;
 };
 
