@@ -1448,17 +1448,19 @@ impl TalkView {
             nest = match item {
                 TraceItem::Step(step) => nest.children(self.step(step, true, look, cx)),
                 // A helper's line has no Take Over, which is the one page's the task stands on.
-                // Named by its task, it says that name and its page's word; else it's its step's.
                 TraceItem::Helper { step, name, tab } => {
                     let page = tab.and_then(|tab| look.helper_page(tab));
-                    match helper_line(step, name, page) {
-                        Some(mut line) => {
+                    match helper_row(step, name, page) {
+                        HelperRow::Known(mut line) => {
                             line.shimmers = step.running.then(|| look.shimmer(self.made));
                             self.crossfade(Fold::Step(step.key), &mut line, look);
                             let line = trace_line(look, line).into_any_element();
                             nest.child(risen(line, self.motion.came(Key::Step(step.key)), look))
                         }
-                        None => nest.children(self.step_line(step, true, false, look, cx)),
+                        HelperRow::Step => {
+                            nest.children(self.step_line(step, true, false, look, cx))
+                        }
+                        HelperRow::Nothing => nest,
                     }
                 }
                 TraceItem::Said(text) => {
@@ -2462,20 +2464,41 @@ impl TraceLine {
     }
 }
 
-/// A helper's line where its task named it (#4102): its page's favicon, that name, and at its end
-/// its page's word, the one its row in the sidebar ends with. Where the page has no favicon, its
-/// step's glyph. Nothing on it is the helper's own text or what it found. None for a helper its
-/// task gave no name, whose line is its step's.
+/// What a helper's item draws.
+enum HelperRow {
+    /// Its own line: the words it's known by, then its page's word.
+    Known(TraceLine),
+    /// Its step's line, as it's known by no words of its own.
+    Step,
+    /// No line yet: it has no name, no page with a title and no step, so it would be a glyph
+    /// alone. Its stretch's count is all that shows it until it has its first words.
+    Nothing,
+}
+
+fn helper_row(step: &TraceStep, name: &SharedString, page: Option<&HelperPage>) -> HelperRow {
+    match helper_line(step, name, page) {
+        Some(line) => HelperRow::Known(line),
+        None if step.title.is_empty() => HelperRow::Nothing,
+        None => HelperRow::Step,
+    }
+}
+
+/// The line of a helper known by words of its own (#4102): the name its task gave it, or with
+/// none its page's title, as the page's row in the sidebar says it. Its page's word follows, as
+/// that row ends, and its page's favicon stands in its step's glyph's place, which a page without
+/// one keeps. Nothing on it is the helper's own text or what it found. None for one with neither
+/// a name nor a titled page.
 fn helper_line(
     step: &TraceStep,
     name: &SharedString,
     page: Option<&HelperPage>,
 ) -> Option<TraceLine> {
-    if name.is_empty() {
-        return None;
-    }
+    let known = match name.is_empty() {
+        false => name.clone(),
+        true => (page.map(|page| page.title.clone())).filter(|title| !title.is_empty())?,
+    };
     let word = page.map_or("", |page| page.word);
-    let mut line = TraceLine::new(Fold::Step(step.key), name.clone(), word.into());
+    let mut line = TraceLine::new(Fold::Step(step.key), known, word.into());
     line.icon = page.and_then(|page| page.favicon.clone());
     line.glyph = line.icon.is_none().then_some(step.glyph);
     Some(line)
@@ -2741,10 +2764,11 @@ struct Look {
     standing: bool,
 }
 
-/// What a helper's line shows of its page: its favicon, and the word its row in the sidebar ends
-/// with.
+/// What a helper's line shows of its page: its title, which a helper its task gave no name is
+/// known by, its favicon, and the word its row in the sidebar ends with.
 struct HelperPage {
     tab: u64,
+    title: SharedString,
     favicon: Option<Arc<Image>>,
     word: &'static str,
 }
@@ -2776,6 +2800,8 @@ impl Shell {
         };
         let page = |tab: u64| HelperPage {
             tab,
+            title: (self.tabs.get(&tab))
+                .map_or_else(SharedString::default, |tab| tab.title.clone()),
             favicon: self.tabs.get(&tab).and_then(|tab| tab.favicon.clone()),
             word: self.page_word(card, tab).label(),
         };
