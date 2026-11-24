@@ -16,6 +16,10 @@ use super::*;
 /// The core's refusal of a tab the user holds.
 const HELD: &str = "The user has this tab until they hand it back. Ask for it with ask_for_tab.";
 
+/// The core's refusal of an act on a page a sign-in withheld (kWithheldPageRefusal).
+const WITHHELD_REFUSAL: &str =
+    "This tab's page shows what ilo filled when signing in. Go to another page first.";
+
 /// The user's Space 1 with the tab 10, on Wikipedia, and Claude Code's Space 2 with the tab 20, on
 /// example.com, once it has one.
 #[derive(Default)]
@@ -172,6 +176,12 @@ impl Browser for Made {
             .iter()
             .any(|each| each.0 == tab && each.1 == space && space != 0)
         {
+            // As the core: on a withheld page, only taking the tab elsewhere or closing it.
+            true if self.withheld.borrow().contains(&tab)
+                && !["back", "close_tab", "forward", "navigate"].contains(&action) =>
+            {
+                Err((Failure::WithheldPage, words(WITHHELD_REFUSAL)))
+            }
             true => Ok(()),
             false => Err((
                 Failure::NotItsSpace,
@@ -10364,6 +10374,7 @@ mod fenced;
 mod holds;
 mod kept;
 mod notes;
+mod saved_logins;
 mod sign_ins;
 mod uploads;
 

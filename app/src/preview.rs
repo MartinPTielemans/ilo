@@ -12,7 +12,7 @@ use std::{
 };
 
 use browser::account::{self, Account};
-use browser::agents::task::ilo::{IloKind, IloLine, SignedInWith};
+use browser::agents::task::ilo::{Account, IloKind, IloLine, SignedInWith};
 use browser::agents::task::{
     Card as TaskCard, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep,
 };
@@ -2767,7 +2767,7 @@ fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 IloKind::SignedIn {
                     tab,
                     site: "tickets.example".into(),
-                    with: SignedInWith::Saved("ada@example.com".into()),
+                    with: SignedInWith::Saved(Account::new("ada@example.com")),
                 },
             ),
             working(10, "Reading this page"),

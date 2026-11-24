@@ -1,0 +1,373 @@
+//! An agent's sign_in with a login the user saved (#4098), on a browser that makes up the core's
+//! answers: what the app checks before it asks the core, what the agent hears, and that neither
+//! the account nor a withheld page's title or address reaches what an agent reads or the app keeps.
+//! Every value is made up.
+
+use super::*;
+use crate::agents::task::Line;
+use crate::agents::task::ilo::{Account, IloKind, IloLine, SignedInWith};
+use crate::agents::tier::{self, Tier, Why};
+
+const ACCOUNT: &str = "made-up-account-4121@example.org";
+/// In the title and address of the page a sign-in's form went to, which the core withholds.
+const MARKER: &str = "made-up-marker-4121";
+/// What the core says of a sign-in that went, in its words, which name no account.
+const SIGNED: &str = "ilo filled the login saved for this site and sent the form. Read the page.";
+const USER_STEP: &str = "The site asks for a step only the user can take.";
+
+fn hello(agents: &Entity<Agents>, cx: &mut TestAppContext) {
+    let event = Event::Hello {
+        agent: "claude-code".into(),
+        connection: 1,
+        client: "claude-code".into(),
+    };
+    agents.update(cx, |agents, cx| agents.handle(event, cx));
+}
+
+fn bye(agents: &Entity<Agents>, cx: &mut TestAppContext) {
+    let closed = Event::Closed {
+        agent: "claude-code".into(),
+        connection: 1,
+    };
+    agents.update(cx, |agents, cx| agents.handle(closed, cx));
+    let bye = Event::Bye {
+        agent: "claude-code".into(),
+    };
+    agents.update(cx, |agents, cx| agents.handle(bye, cx));
+}
+
+fn sign_in(
+    agents: &Entity<Agents>,
+    tab: u64,
+    cx: &mut TestAppContext,
+) -> mpsc::Receiver<ToolResult> {
+    call(agents, "claude-code", "sign_in", json!({ "tab": tab }), cx)
+}
+
+/// The request of the last sign-in the core was asked for.
+fn asked(browser: &Made) -> u64 {
+    browser
+        .saved_sign_ins
+        .borrow()
+        .last()
+        .expect("a sign-in asked of the core")
+        .2
+}
+
+fn done(
+    agents: &Entity<Agents>,
+    request: u64,
+    signed_in: bool,
+    text: &str,
+    failure: Option<Failure>,
+    cx: &mut TestAppContext,
+) {
+    let text = text.to_string();
+    agents.update(cx, |agents, cx| {
+        agents.sign_in_done(request, signed_in, true, text, failure, cx)
+    });
+}
+
+/// Tab `tab`'s page is now `url`, titled `title`.
+fn at(browser: &Made, tab: u64, title: &str, url: &str) {
+    let (title, url): (&'static str, &'static str) = (
+        Box::leak(title.to_string().into_boxed_str()),
+        Box::leak(url.to_string().into_boxed_str()),
+    );
+    for each in (browser.tabs.borrow_mut().iter_mut()).filter(|each| each.0 == tab) {
+        (each.2, each.3) = (title, url);
+    }
+}
+
+/// Past Settings' switch, the Off limits list and the task's access, the core signs the tab in;
+/// the agent hears the core's words, and the log has the ask and the fill, neither with the account.
+#[gpui::test]
+fn a_sign_in_past_the_apps_checks_is_the_cores_in_its_words(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    assert!(
+        agents.read_with(cx, |agents, _| agents.sign_in_on()),
+        "on in a dev build"
+    );
+    let answer = sign_in(&agents, 20, cx);
+    assert!(browser.checked.borrow().contains(&"sign_in".to_string()));
+    let request = asked(&browser);
+    assert_eq!(browser.saved_sign_ins.borrow()[0].1, 20);
+    assert!(answer.try_recv().is_err(), "the call waits on the core");
+
+    agents.update(cx, |agents, cx| {
+        agents.signed_in("claude-code", 20, "example.com", ACCOUNT.into(), cx)
+    });
+    done(&agents, request, true, SIGNED, None, cx);
+    let answer = answer.recv().unwrap();
+    assert!(!answer.error);
+    assert_eq!(answer.text, SIGNED);
+    // Newest first, above the connection's own line.
+    let logged = log(&agents, "claude-code", cx)[..2].to_vec();
+    let actions: Vec<&str> = logged.iter().map(|(action, ..)| action.as_str()).collect();
+    assert_eq!(actions, ["filled_login", "sign_in"]);
+    assert!(
+        logged
+            .iter()
+            .all(|(_, site, refused)| site == "example.com" && refused.is_empty())
+    );
+
+    // Not signed in: an error, in the core's words.
+    let again = sign_in(&agents, 20, cx);
+    let words = "The site didn't take the login saved for it.";
+    done(&agents, asked(&browser), false, words, None, cx);
+    let again = again.recv().unwrap();
+    assert!(again.error);
+    assert_eq!(again.text, words);
+}
+
+/// Off in Settings, no sign-in reaches the core, and the agent hears it's the user's to change.
+#[gpui::test]
+fn sign_in_for_agents_off_asks_nothing_of_the_core(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    agents.update(cx, |agents, cx| agents.set_sign_in_on(false, cx));
+    let answer = sign_in(&agents, 20, cx).recv().unwrap();
+    assert!(answer.error);
+    assert_eq!(answer.kind, Some(tools::Kind::NeedsOk));
+    assert!(browser.saved_sign_ins.borrow().is_empty());
+    assert_eq!(log(&agents, "claude-code", cx)[0].0, "sign_in");
+    assert!(
+        !log(&agents, "claude-code", cx)[0].2.is_empty(),
+        "logged as refused"
+    );
+}
+
+/// A site on the Off limits list, and a bank's site above Work, are refused before the core.
+#[gpui::test]
+fn a_fenced_site_and_a_banks_are_refused_before_the_core(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    at(&browser, 20, "Forum", "https://forum.example.net/login");
+    agents.update(cx, |agents, cx| {
+        assert!(agents.fence("forum.example.net", cx).is_some());
+    });
+    let fenced = sign_in(&agents, 20, cx).recv().unwrap();
+    assert!(fenced.error);
+    assert_eq!(fenced.kind, Some(tools::Kind::NeedsOk));
+
+    at(&browser, 20, "My Bank", "https://www.mybank.example/login");
+    let bank = sign_in(&agents, 20, cx).recv().unwrap();
+    assert!(bank.error);
+    assert_ne!(bank.text, fenced.text);
+    assert!(browser.saved_sign_ins.borrow().is_empty());
+}
+
+/// Look never signs in, Work does but not on a bank's site, and Full does everywhere.
+#[test]
+fn signing_in_is_work_but_a_banks_is_full_access() {
+    for (tier, bank, above) in [
+        (Tier::Look, false, Some(Why::SignIn)),
+        (Tier::Look, true, Some(Why::SignInBank)),
+        (Tier::Work, false, None),
+        (Tier::Work, true, Some(Why::SignInBank)),
+        (Tier::Full, false, None),
+        (Tier::Full, true, None),
+    ] {
+        assert_eq!(
+            tier::sign_in_above(tier, bank),
+            above,
+            "{tier:?}, bank {bank}"
+        );
+    }
+}
+
+/// A step only the user can take hands them the tab, as a handoff does; the call waits, and its
+/// answer once they hand it back starts with the core's words. A tab the core holds already, as
+/// its page showed what was filled, is handed over as it is.
+#[gpui::test]
+fn the_users_step_hands_them_the_tab_and_answers_once_its_back(cx: &mut TestAppContext) {
+    for core_holds in [false, true] {
+        let (agents, browser, _) = connected(cx);
+        let answer = sign_in(&agents, 20, cx);
+        if core_holds {
+            browser.held.borrow_mut().insert(20);
+        }
+        let failure = Some(Failure::UserStep);
+        done(&agents, asked(&browser), false, USER_STEP, failure, cx);
+        assert!(browser.held.borrow().contains(&20));
+        assert!(answer.try_recv().is_err(), "waits for the user");
+        let actions: Vec<String> = (log(&agents, "claude-code", cx).into_iter())
+            .map(|(action, ..)| action)
+            .collect();
+        assert_eq!(actions[0], "hand_off");
+
+        agents.update(cx, |agents, cx| agents.hand_back(20, cx));
+        let answer = answer.recv().unwrap();
+        assert!(answer.text.starts_with(USER_STEP), "{}", answer.text);
+        assert!(!answer.error);
+        assert!(browser.held.borrow().is_empty());
+    }
+}
+
+/// The form went to a page the core withholds, whose title and address hold the marker. The host
+/// tells the app of the commit before the agent asks anything, and the answers are still
+/// withheld: each act is refused in the core's words, which say only to move the page on.
+/// Nothing the app keeps or shows for agents holds the marker: the 30-day record, the activity
+/// log, the card, the conversation or an answer. The account is the conversation's ilo line's
+/// alone.
+#[gpui::test]
+fn a_withheld_page_and_the_account_reach_nothing_an_agent_reads_or_the_app_keeps(
+    cx: &mut TestAppContext,
+) {
+    let (agents, browser, _) = connected(cx);
+    hello(&agents, cx);
+    // An outline of the sign-in page first, whose refs a later click or type could name.
+    let outline = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    page_done(&agents, &browser, outline, shop_tree(), cx);
+    let pages = browser.pages.borrow().len();
+    let answer = sign_in(&agents, 20, cx);
+    let request = asked(&browser);
+    agents.update(cx, |agents, cx| {
+        agents.signed_in("claude-code", 20, "example.com", ACCOUNT.into(), cx)
+    });
+    let url = format!("https://www.example.com/welcome?{MARKER}");
+    at(&browser, 20, &format!("Welcome {MARKER}"), &url);
+    browser.withheld.borrow_mut().insert(20);
+    agents.update(cx, |agents, _| agents.tab_at(20, &url));
+    done(&agents, request, true, SIGNED, None, cx);
+    let mut answers = vec![answer.recv().unwrap()];
+
+    let listed = call(&agents, "claude-code", "list_tabs", json!({}), cx)
+        .recv()
+        .unwrap();
+    assert!(listed.text.contains(WITHHELD), "{}", listed.text);
+    answers.push(listed);
+    let page_acts = [
+        ("read_page", json!({ "tab": 20 })),
+        ("snapshot", json!({ "tab": 20 })),
+        ("screenshot", json!({ "tab": 20 })),
+        ("click", json!({ "tab": 20, "ref": "e1" })),
+        ("type", json!({ "tab": 20, "ref": "e1", "text": "hello" })),
+        ("sign_in", json!({ "tab": 20 })),
+    ];
+    for (tool, arguments) in page_acts {
+        let refused = call(&agents, "claude-code", tool, arguments, cx)
+            .recv()
+            .unwrap();
+        assert!(refused.error, "{tool}");
+        assert_eq!(refused.text, WITHHELD_REFUSAL, "{tool}");
+        answers.push(refused);
+    }
+    assert_eq!(
+        browser.pages.borrow().len(),
+        pages,
+        "nothing reached the page"
+    );
+    assert!(browser.reads.borrow().is_empty(), "nothing read its text");
+    assert_eq!(browser.saved_sign_ins.borrow().len(), 1);
+    for answer in &answers {
+        assert!(!format!("{answer:?}").contains(MARKER), "{answer:?}");
+        assert!(!format!("{answer:?}").contains(ACCOUNT), "{answer:?}");
+    }
+
+    let shown = agents.read_with(cx, |agents, cx| {
+        let cards = agents.shown_cards(cx);
+        let talk = (cards.first()).and_then(|card| agents.conversation(&card.agent, cx));
+        (cards, talk)
+    });
+    let (cards, talk) = shown;
+    assert!(!cards.is_empty(), "its card");
+    let talk = talk.expect("its conversation");
+    assert!(!format!("{cards:?}").contains(MARKER), "{cards:?}");
+    assert!(!format!("{cards:?}").contains(ACCOUNT), "{cards:?}");
+    assert!(!format!("{talk:?}").contains(MARKER), "{talk:?}");
+    let filled = (talk.lines.iter()).find_map(|line| match line {
+        Line::Ilo(line) => match &line.kind {
+            IloKind::SignedIn {
+                with: SignedInWith::Saved(account),
+                site,
+                ..
+            } => Some((account.drawn().to_string(), site.to_string())),
+            _ => None,
+        },
+        _ => None,
+    });
+    assert_eq!(filled, Some((ACCOUNT.into(), "example.com".into())));
+
+    // Taking the tab to another page is what the agent may still do.
+    let to = json!({ "tab": 20, "url": "https://example.org/" });
+    drop(call(&agents, "claude-code", "navigate", to, cx));
+    assert_eq!(
+        browser.navigated.borrow().last().map(|(tab, _)| *tab),
+        Some(20)
+    );
+
+    let activity: Vec<Activity> = agents.read_with(cx, |agents, _| {
+        agents.activity("claude-code").cloned().collect()
+    });
+    assert!(!format!("{activity:?}").contains(MARKER), "{activity:?}");
+    assert!(!format!("{activity:?}").contains(ACCOUNT), "{activity:?}");
+
+    bye(&agents, cx);
+    let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+    assert!(!kept.is_empty(), "its 30-day record");
+    assert!(!format!("{kept:?}").contains(MARKER), "{kept:?}");
+    assert!(!format!("{kept:?}").contains(ACCOUNT), "{kept:?}");
+}
+
+/// The activity log and the 30-day record name the site a login was filled at, never its account.
+#[gpui::test]
+fn the_log_and_the_record_name_the_site_never_the_account(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    hello(&agents, cx);
+    let answer = sign_in(&agents, 20, cx);
+    agents.update(cx, |agents, cx| {
+        agents.signed_in("claude-code", 20, "example.com", ACCOUNT.into(), cx)
+    });
+    done(&agents, asked(&browser), true, SIGNED, None, cx);
+    answer.recv().unwrap();
+    let filled = |steps: Vec<(String, String)>| {
+        let found = steps
+            .into_iter()
+            .find(|(action, _)| action == "filled_login");
+        found.map(|(_, site)| site)
+    };
+    let logged = (log(&agents, "claude-code", cx).into_iter())
+        .map(|(action, site, _)| (action, site))
+        .collect();
+    assert_eq!(filled(logged).as_deref(), Some("example.com"));
+    let activity: Vec<Activity> = agents.read_with(cx, |agents, _| {
+        agents.activity("claude-code").cloned().collect()
+    });
+    assert!(!format!("{activity:?}").contains(ACCOUNT), "{activity:?}");
+
+    bye(&agents, cx);
+    let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+    let [(_, past)] = kept.as_slice() else {
+        panic!("one record: {kept:?}");
+    };
+    let steps = (past.steps.iter())
+        .map(|step| (step.action.to_string(), step.site.to_string()))
+        .collect();
+    assert_eq!(filled(steps).as_deref(), Some("example.com"));
+    assert!(!format!("{past:?}").contains(ACCOUNT), "{past:?}");
+}
+
+/// The account is for the user's line to draw and formats nowhere else: whatever logs, panics
+/// with or traces a line, its kind or the account itself prints no name, and it has no Display to
+/// print it with.
+#[test]
+fn the_account_formats_nowhere_but_the_users_line() {
+    let account = Account::new(ACCOUNT);
+    let kind = IloKind::SignedIn {
+        tab: 20,
+        site: "example.com".into(),
+        with: SignedInWith::Saved(account.clone()),
+    };
+    let line = IloLine {
+        key: 1,
+        kind: kind.clone(),
+        settled: false,
+    };
+    for formatted in [
+        format!("{account:?}"),
+        format!("{kind:?}"),
+        format!("{line:?}"),
+    ] {
+        assert!(!formatted.contains(ACCOUNT), "{formatted}");
+    }
+    assert_eq!(account.drawn(), ACCOUNT);
+}

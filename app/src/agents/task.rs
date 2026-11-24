@@ -1973,7 +1973,7 @@ impl Agents {
     }
 
     /// The card whose trace `agent`'s `call` goes in: its task's, or the session it came in.
-    fn tracer(&self, agent: &str, call: u64) -> Option<String> {
+    pub(super) fn tracer(&self, agent: &str, call: u64) -> Option<String> {
         let task = self.task(agent).or_else(|| self.session_of(agent, call))?;
         Some(task.agent.clone())
     }

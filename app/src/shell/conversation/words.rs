@@ -59,7 +59,7 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
             why => format!("{} isn't part of {}.", doing(*why), tier.label()),
         }),
         IloKind::SignedIn { with, .. } => Some(match with {
-            SignedInWith::Saved(account) => format!("With your saved login, {account}."),
+            SignedInWith::Saved(account) => format!("With your saved login, {}.", account.drawn()),
             SignedInWith::Extension(name) => format!("With {name}."),
         }),
         IloKind::Yours { .. } | IloKind::TabBack { .. } | IloKind::TierChanged { .. } => None,

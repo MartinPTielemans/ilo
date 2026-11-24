@@ -10,7 +10,7 @@ use gpui::{Context, SharedString};
 use serde_json::Value;
 
 use super::task::Line;
-use super::task::ilo::{IloKind, IloLine, SignedInWith};
+use super::task::ilo::{Account, IloKind, IloLine, SignedInWith};
 use super::tier::{self, Tier, Why};
 use super::{Agents, Failure, Held, Refused, ToolResult, held, page, site, tools};
 
@@ -27,11 +27,14 @@ pub const SWITCH_OFF_LINE: &str = "Off: ilo fills no saved login for an agent.";
 /// What the agent hears when the app doesn't ask the core.
 const OFF: &str = "Signing in for agents is off in Settings › Agents, which only the user changes.";
 const FENCED: &str = "This site is on the user's Off limits list, where ilo signs no agent in.";
-const LOOK: &str = "Signing in is above this task's access, Look only, which only the user changes.";
-const BANK: &str = "Signing in on a bank's site needs Full access, which only the user gives a task.";
+const LOOK: &str =
+    "Signing in is above this task's access, Look only, which only the user changes.";
+const BANK: &str =
+    "Signing in on a bank's site needs Full access, which only the user gives a task.";
 
 /// What the user's card says they're to do, when a sign-in is theirs.
-const YOURS: &str = "Sign in on this page: ilo couldn't do it for the agent. Then hand the tab back.";
+const YOURS: &str =
+    "Sign in on this page: ilo couldn't do it for the agent. Then hand the tab back.";
 
 /// A sign-in the core is doing, for the call that waits on it.
 pub(super) struct Signing {
@@ -107,7 +110,12 @@ impl Agents {
     /// the core refuses the tab, or its site is on the Off limits list or above the task's access.
     /// The core's refusal comes before the site's, so a tab whose page is withheld says nothing of
     /// where it is.
-    fn sign_in_refused(&mut self, agent: &str, tab: u64, cx: &mut Context<Self>) -> Option<Refused> {
+    fn sign_in_refused(
+        &mut self,
+        agent: &str,
+        tab: u64,
+        cx: &mut Context<Self>,
+    ) -> Option<Refused> {
         if !self.sign_in_on {
             return Some(Refused::of(tools::Kind::NeedsOk, OFF));
         }
@@ -141,7 +149,6 @@ impl Agents {
         let Some(signing) = self.signing.remove(&request) else {
             return;
         };
-        // check.sh reads this line.
         log!(
             "browser: agent {} sign-in in {} answered: signed in {signed_in}, submitted {submitted}",
             signing.agent,
@@ -211,23 +218,28 @@ impl Agents {
         account: String,
         cx: &mut Context<Self>,
     ) {
-        let signing = (self.signing.values()).find(|signing| signing.agent == agent && signing.tab == tab);
-        let (connection, call) = signing.map_or((self.holder(agent, tab), 0), |signing| {
-            (signing.connection, signing.call)
-        });
+        // Its call, whose id may be any number an MCP client picks, 0 included.
+        let signing = (self.signing.values())
+            .find(|signing| signing.agent == agent && signing.tab == tab)
+            .map(|signing| (signing.connection, signing.call));
+        let connection =
+            signing.map_or_else(|| self.holder(agent, tab), |(connection, _)| connection);
         self.note(agent, connection, "filled_login", site, "");
         cx.notify();
-        let Some(task) = self.task_mut(agent) else {
+        // A ⌘T task's by its agent, a connected client's by the session its call is in.
+        let Some((_, call)) = signing else {
             return;
         };
-        let Some(at) = (task.trace.iter()).rposition(|traced| call != 0 && traced.call == call)
-        else {
+        let Some(task) = (self.tracer(agent, call)).and_then(|key| self.task_mut(&key)) else {
+            return;
+        };
+        let Some(at) = (task.trace.iter()).rposition(|traced| traced.call == call) else {
             return;
         };
         let line = IloKind::SignedIn {
             tab,
             site: SharedString::from(site.to_string()),
-            with: SignedInWith::Saved(account.into()),
+            with: SignedInWith::Saved(Account::new(account)),
         };
         task.filled.push((at, line));
     }
@@ -237,13 +249,16 @@ impl Agents {
         // The last first, so each one's place still counts the lines before it.
         for (at, kind) in task.filled.iter().rev() {
             let holds = |line: &Line| match line {
-                Line::Trace(trace) => (trace.items.iter()).any(|item| {
-                    matches!(item, super::task::TraceItem::Step(step) if step.key == *at)
-                }),
+                Line::Trace(trace) => (trace.items.iter()).any(
+                    |item| matches!(item, super::task::TraceItem::Step(step) if step.key == *at),
+                ),
                 Line::Step(step) => step.key == *at,
                 _ => false,
             };
-            let place = lines.iter().position(holds).map_or(lines.len(), |found| found + 1);
+            let place = lines
+                .iter()
+                .position(holds)
+                .map_or(lines.len(), |found| found + 1);
             let line = IloLine {
                 key: FILLED + at,
                 kind: kind.clone(),
