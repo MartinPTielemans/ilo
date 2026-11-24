@@ -268,7 +268,7 @@ fn a_tab_is_quiet_while_it_shows_a_sign_in() {
 #[cfg(unix)]
 mod claude {
     use std::path::PathBuf;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
     use super::*;
 
@@ -281,7 +281,7 @@ mod claude {
             std::env::temp_dir().join(format!("ilo-sign-in-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         let program = folder.join("claude");
-        let mut writer = Command::new("/bin/sh")
+        let mut writer = crate::child::command("/bin/sh")
             .args(["-c", r#"cat > "$1" && chmod 755 "$1""#, "sh"])
             .arg(&program)
             .stdin(Stdio::piped())
@@ -290,7 +290,10 @@ mod claude {
         let mut input = writer.stdin.take().unwrap();
         write!(input, "#!/bin/sh\n{script}\n").unwrap();
         drop(input);
-        assert!(writer.wait().unwrap().success(), "the stand-in wasn't written");
+        assert!(
+            writer.wait().unwrap().success(),
+            "the stand-in wasn't written"
+        );
         program
     }
 
@@ -396,4 +399,3 @@ fn a_row_says_its_state_and_offers_what_comes_next() {
     let out = row(codex, Ready::SignedIn, None, Row::SigningOut);
     assert_eq!(out, says("Signing out…", Offer::Nothing));
 }
-
