@@ -202,7 +202,8 @@ impl Shell {
             palette = palette.toward(&self.palette_of(beside), t);
         }
         self.palette = palette;
-        if beside.is_none() {
+        // Only check/window.sh reads it, so a user's window does no work for it.
+        if beside.is_none() && crate::checked() {
             self.log_window_reckoning();
         }
         let light = palette.tone == Tone::Light;
@@ -328,7 +329,7 @@ impl Shell {
     /// What the window's palette makes of the empty sidebar 60 points in and 450 down, where
     /// check/window.sh reads it over a grey backdrop: the window over black, grey 128 and white, as
     /// grey levels, logged when it changes. The check reads a grey between them as between these.
-    /// A frame that changes none of what it's reckoned from compares six values and does no more.
+    /// Called only while the checks run the app.
     pub(super) fn log_window_reckoning(&self) {
         let (width, height) = (
             f32::from(self.viewport.width),
