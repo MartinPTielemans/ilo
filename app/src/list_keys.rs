@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{App, KeyDownEvent, Window};
 
-/// How long a pause starts type-ahead afresh, as the menu's does.
+/// How long a pause starts type-ahead afresh, in a list and in a menu (menu.rs) alike.
 const TYPE_RESET: Duration = Duration::from_millis(1000);
 
 /// The arrows a list steps by: ↑ and ↓ down a column, ← and → along a row. The other pair is left

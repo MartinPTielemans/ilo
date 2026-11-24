@@ -394,6 +394,9 @@ pub struct Task {
     /// The turns the user stopped, each by how many of their messages came before its answer: a
     /// stopped turn has no answer, so all it said stays in its stretch of work.
     pub stopped_turns: Vec<usize>,
+    /// The level it ended at, once the user has picked another in the level's menu since: the
+    /// pick is the level its next reply starts at, and this the one its wall was last put up at.
+    pub(super) picked_from: Option<Tier>,
     /// ilo's other lines of what happened to it: its steps handed to the user, the tabs its
     /// agent asked back and the changes of its access, oldest first.
     pub(super) placed: Vec<super::lines::Placed>,
@@ -411,10 +414,10 @@ pub struct Task {
     pub(in crate::agents) files: Given,
     /// Its start inside a wall, until the system says the wall is up (rewall.rs).
     pub(super) rising: Option<rewall::Rising>,
-    /// What came of each wall of its that wasn't put up, in order, each with the turn it came in
-    /// as an ilo line's is counted (lines.rs), so its line stands where it happened: what its
-    /// lines about them are written from, by the conversation's words table.
-    pub(in crate::agents) rewalled: Vec<(usize, rewall::Rewalled)>,
+    /// What came of each wall of its that wasn't put up, in order, each with where it came among
+    /// the task's messages and steps, so its line stands where it happened: what its lines about
+    /// them are written from, by the conversation's words table.
+    pub(in crate::agents) rewalled: Vec<rewall::Came>,
 }
 
 /// The message an agent is writing as the turn's last, which shows under its trace as it comes,
@@ -660,11 +663,16 @@ pub enum TaskAction {
     CancelSignIn,
     /// An ilo line's Take over: the tab is the user's.
     TakeOver(u64),
-    /// A Stopped line's step up, or the composer's tier chip, up or down: only the user's press
-    /// sets a task's access.
+    /// A Stopped line's step up: only the user's press sets a task's access.
     SetTier(Tier),
     /// A Sites line's Any site.
     AnySite,
+    /// The level the user picked in the level's menu, which they opened: nothing moved under the
+    /// pointer, so no guard holds it, and on a task that has ended it's the level its next reply
+    /// starts at.
+    PickTier(Tier),
+    /// The level's menu's Any site.
+    PickAnySite,
     /// An ilo line's Hand back: the tab goes back to the agent.
     HandBack(u64),
     /// A step's Not now, by its line's key.
@@ -944,15 +952,19 @@ impl Agents {
             TaskAction::Undelete => self.delete_task(agent, false, cx),
             TaskAction::SignIn => self.sign_in_for_task(agent, cx),
             TaskAction::CancelSignIn => self.cancel_sign_in_for_task(agent),
-            // A Stopped line's step up and the chip: the user's own press, the one way a tier
-            // or a task's Sites change, but not a press meant for what was there before a
-            // refusal's line appeared.
+            // A Stopped line's step up and the level's menu: the user's own press, the one way a
+            // tier or a task's Sites change. A line's button isn't pressed for what was there
+            // before a refusal's line appeared, nor once its task has ended.
             TaskAction::SetTier(_) | TaskAction::AnySite if self.just_stopped(agent) => {}
-            // Nor one meant for what was there before the helpers' limit's line appeared.
+            // Nor for what was there before the helpers' limit's line appeared.
             TaskAction::SetTier(_) | TaskAction::AnySite
                 if (self.task(agent)).is_some_and(|task| task.helpers.just_stopped()) => {}
-            TaskAction::SetTier(tier) => self.set_tier(agent, tier, cx),
-            TaskAction::AnySite => self.set_sites(agent, Sites::Any, cx),
+            TaskAction::SetTier(_) | TaskAction::AnySite
+                if (self.task(agent)).is_some_and(|task| task.ended.is_some()) => {}
+            TaskAction::SetTier(tier) | TaskAction::PickTier(tier) => {
+                self.set_tier(agent, tier, cx)
+            }
+            TaskAction::AnySite | TaskAction::PickAnySite => self.set_sites(agent, Sites::Any, cx),
             TaskAction::TakeOver(tab) => {
                 if let Some(task) = self.task_mut(agent) {
                     task.helpers.settle(Some(tab));
@@ -1514,6 +1526,7 @@ impl Agents {
             },
             stops: Vec::new(),
             stopped_turns: Vec::new(),
+            picked_from: None,
             placed: Vec::new(),
             told: None,
             helpers: Helpers::of_task(self.helpers_on() && cli == Cli::Claude),
@@ -1523,13 +1536,13 @@ impl Agents {
         };
         self.tasks.tasks.push(task);
         self.tokens_changed();
-        // The log keeps the tier it starts at, as it keeps a change of it.
-        let started = super::tier::started_logged(tier, pages.len());
-        self.note_on(&agent, 0, super::access::ACCESS_ACTION, "", &started, "");
+        // The log keeps the tier it starts at, as it keeps a change of it, and on the same row
+        // that it started without its files, which its wall's answer says (rewall.rs).
+        let wall = self.wall_to_begin(&agent, pages.len());
         let task = self.task(&agent);
         let first = first_message(asked, task.and_then(|task| task.page.as_ref()));
         let first = with_added(first, task.map_or(&[], |task| &task.added));
-        self.launch(&agent, &first, cx);
+        self.launch_in(&agent, &first, wall, cx);
         self.wait_for_answer(&agent, cx);
         cx.notify();
         Some(agent)
@@ -2278,7 +2291,7 @@ impl Agents {
             self.browser.delete_space(space, cx);
         }
         if let Some(dir) = &self.tasks.dir {
-            _ = std::fs::remove_dir_all(dir.join("Tasks"));
+            end_old_task_files(&dir.join("Tasks"));
         }
     }
 
@@ -2740,6 +2753,7 @@ impl Agents {
             sites: Sites::default(),
             stops: Vec::new(),
             stopped_turns: Vec::new(),
+            picked_from: None,
             placed: Vec::new(),
             told: None,
             helpers: Helpers::default(),
@@ -4347,4 +4361,38 @@ fn names_the_browser(name: &str) -> bool {
             .iter()
             .any(|browser| read.contains(&reads_as(browser)))
         || read == reads_as("browser")
+}
+
+/// The files of the tasks a run before left, but for the places walled tasks left, which are swept
+/// first (leftovers.rs). They're listed here, before any task can make one, and swept off the UI
+/// thread, as a sweep walks every process.
+fn end_old_task_files(tasks: &std::path::Path) {
+    use super::wall::leftovers;
+    let root = tasks.join(leftovers::ROOT);
+    let left = leftovers::left_in(&root);
+    if left.is_empty() {
+        _ = std::fs::remove_dir_all(tasks);
+        return;
+    }
+    for entry in std::fs::read_dir(tasks).into_iter().flatten().flatten() {
+        if entry.file_name() == leftovers::ROOT {
+            continue;
+        }
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => _ = std::fs::remove_dir_all(entry.path()),
+            Ok(_) => _ = std::fs::remove_file(entry.path()),
+            Err(_) => {}
+        }
+    }
+    _ = std::thread::Builder::new()
+        .name("task-leftovers".into())
+        .spawn(move || {
+            let cleaned = leftovers::clean_up(&root, &left);
+            log!(
+                "browser: walled tasks a run before left: {} ended, {} places removed, {} kept",
+                cleaned.ended,
+                cleaned.removed,
+                cleaned.kept
+            );
+        });
 }

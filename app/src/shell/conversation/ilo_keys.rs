@@ -5,16 +5,22 @@
 //! ringed button, Tab and ⇧Tab move along the line's buttons, and Escape, or the key again, gives
 //! the keyboard back where it was and presses nothing. A key that would press counts only PROTECT
 //! after the keyboard came and after the key before, so one typed on or held from what was there
-//! presses nothing.
+//! presses nothing. The keys are on a line only while the area draws its conversation: with a
+//! page of the task's watched over it, or another view in its place, they end and the command
+//! brings none, so no button is ringed, or pressed, out of sight.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use gpui::{App, Context, FocusHandle, Focusable, KeyBinding, Window, actions};
+use gpui::{
+    App, Bounds, Context, FocusHandle, Focusable, KeyBinding, Pixels, Task, Window, actions,
+};
 
+use super::super::agent_bar::Bar;
 use super::TalkView;
 use crate::agents::task::Line;
 use crate::agents::task::ilo::{self, IloButton};
 use crate::agents::tier::PROTECT;
+use crate::tokens::shell::conversation::ilo::ARM;
 
 actions!(ilo_keys, [IloPress, IloNext, IloBack, IloLeave]);
 
@@ -52,6 +58,106 @@ pub(super) struct IloKeys {
     due: bool,
     /// Why it's to go back, at the next frame: the key again, or the window left.
     leaving: Option<&'static str>,
+    /// Under the checks only: what they were told of the guard on the ringed button, and the wait
+    /// for its end.
+    told: Told,
+    wait: Option<Task<()>>,
+}
+
+/// What the checks read to press a line's button: the line's key, the button's own name and where
+/// it stands. Nothing of what the line says, which may be a page's words or a site (#4198).
+pub(super) fn place((line, button): (usize, IloButton), bounds: Bounds<Pixels>) -> String {
+    format!(
+        "browser: ilo line {line} {} at {:.0} {:.0} {:.0} {:.0}",
+        super::words::button(button),
+        f32::from(bounds.origin.x),
+        f32::from(bounds.origin.y),
+        f32::from(bounds.size.width),
+        f32::from(bounds.size.height)
+    )
+}
+
+/// What a key on the ringed button waits out before it presses: `ilo_key_counts`' PROTECT after
+/// the keyboard came or the key before, and for a button that widens, `press_ilo`'s moment its
+/// place has stood. The checks are told when it ends, from these same instants.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Guard {
+    last: Instant,
+    /// Only of a button that widens: since when it has stood where it is, none before it's drawn.
+    stood: Option<Option<Instant>>,
+}
+
+impl Guard {
+    /// `since` is when the button's place was last drawn anew.
+    pub(super) fn of(last: Instant, button: IloButton, since: Option<Instant>) -> Self {
+        Self {
+            last,
+            stood: button.widens().then_some(since),
+        }
+    }
+
+    /// Whether a key `now` would press: what the press itself asks, of the same clock.
+    fn passed(self, now: Instant) -> bool {
+        now.saturating_duration_since(self.last) >= PROTECT
+            && (self.stood).is_none_or(|stood| stood.is_some_and(|since| super::armed(since, now)))
+    }
+
+    /// When it ends, once the button is drawn.
+    fn ends(self) -> Option<Instant> {
+        let protect = self.last + PROTECT;
+        match self.stood {
+            None => Some(protect),
+            Some(since) => Some(protect.max(since? + Duration::from_secs_f32(ARM))),
+        }
+    }
+}
+
+/// What the checks were told of a guard: nothing of a new one until it ends, and once of each.
+#[derive(Default)]
+pub(super) struct Told {
+    of: Option<Guard>,
+    ready: bool,
+}
+
+#[derive(Debug, PartialEq)]
+pub(super) enum Tell {
+    /// The guard has ended: the checks are told so, once.
+    Ready,
+    /// It ends then, to be asked again.
+    Wait(Instant),
+    Nothing,
+}
+
+impl Told {
+    /// What to tell the checks of the `guard` as it is `now`, a frame after it was drawn or, with
+    /// `woke`, at the end of the wait for it. A guard that started anew, as the line moved or a
+    /// key came, is waited out anew.
+    pub(super) fn step(&mut self, guard: Guard, now: Instant, woke: bool) -> Tell {
+        let same = self.of == Some(guard);
+        if same && self.ready {
+            return Tell::Nothing;
+        }
+        self.of = Some(guard);
+        self.ready = guard.passed(now);
+        if self.ready {
+            return Tell::Ready;
+        }
+        // Its wait is running.
+        if same && !woke {
+            return Tell::Nothing;
+        }
+        match guard.ends() {
+            // A wait that ended a moment short of what the press asks is waited again.
+            Some(end) => Tell::Wait(end.max(now + Duration::from_millis(1))),
+            None => Tell::Nothing,
+        }
+    }
+}
+
+/// GPUI's focus left on a button the keys ended on (`ilo_keys_left`), which is no stop of the
+/// window's from the next frame: where it goes then, a field of the UI's or the window itself.
+pub(super) struct Left {
+    to: Option<FocusHandle>,
 }
 
 impl TalkView {
@@ -94,16 +200,57 @@ impl TalkView {
             last: Instant::now(),
             due: true,
             leaving: None,
+            told: Told::default(),
+            wait: None,
         });
         cx.notify();
         true
     }
 
     /// The keyboard went elsewhere, to the page or another window: the keys end where it went.
+    /// GPUI's focus is still on the button, and goes at the next frame where the key again would
+    /// give the keyboard back, without the keyboard: to the window itself where the page has it,
+    /// then or now, as a field of the UI's with the focus reads as typed in.
     pub(super) fn ilo_keys_left(&mut self, why: &'static str, cx: &mut Context<Self>) {
+        let Some(keys) = self.ilo_keys.take() else {
+            return;
+        };
+        log!("browser: ilo keys left by {why}");
+        let field = !keys.page && why != "page";
+        self.ilo_left = Some(Left {
+            to: field.then(|| keys.was.unwrap_or_else(|| self.reply.focus_handle(cx))),
+        });
+        cx.notify();
+    }
+
+    /// The area no longer draws the conversation, for `why`: the keys end, and only the key
+    /// brings them back. No frame of the conversation's follows, so the shell takes GPUI's focus
+    /// from the button (`Shell::step_ilo_keys_drawn`).
+    pub(super) fn ilo_keys_undrawn(&mut self, why: &'static str) {
         if self.ilo_keys.take().is_some() {
             log!("browser: ilo keys left by {why}");
-            cx.notify();
+        }
+        self.ilo_left = None;
+    }
+
+    /// Whether GPUI's focus is on one of the buttons' handles.
+    fn ilo_stop_focused(&self, window: &Window) -> bool {
+        self.ilo_stops.iter().any(|stop| stop.is_focused(window))
+    }
+
+    /// GPUI's focus goes from a button the keys ended on (`ilo_keys_left`): a focus on a handle
+    /// no frame draws hears no key of the window's, the Focus command's neither (#3869).
+    fn ilo_focus_left(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(left) = self.ilo_left.take() else {
+            return;
+        };
+        if !self.ilo_stop_focused(window) {
+            return;
+        }
+        match (left.to, self.shell.upgrade()) {
+            (Some(to), _) => window.focus(&to, cx),
+            (None, Some(shell)) => window.focus(&shell.read(cx).focus_handle.clone(), cx),
+            (None, None) => {}
         }
     }
 
@@ -126,6 +273,7 @@ impl TalkView {
     /// came from once its line offers nothing more, or the key asked. Something else taking the
     /// keyboard, a click or a shortcut, ends the keys where it went.
     pub(super) fn step_ilo_keys(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.ilo_focus_left(window, cx);
         let keyed = self.keyed_line(self.beside(cx));
         let Some(keys) = &mut self.ilo_keys else {
             return;
@@ -142,6 +290,10 @@ impl TalkView {
                 } else if !self.ilo_stops.iter().any(|stop| stop.is_focused(window)) {
                     self.ilo_keys = None;
                     log!("browser: ilo keys left by focus");
+                }
+                if crate::checked() {
+                    // Once this frame has drawn the buttons where they stand.
+                    cx.defer_in(window, |view, _, cx| view.tell_ilo_keys_ready(None, cx));
                 }
                 return;
             }
@@ -163,6 +315,42 @@ impl TalkView {
         match keys.was {
             Some(was) => window.focus(&was, cx),
             None => window.focus(&self.reply.focus_handle(cx), cx),
+        }
+    }
+
+    /// The guard on a key on the ringed button, as the last frame drew it.
+    pub(super) fn ilo_guard(&self) -> Option<Guard> {
+        let keys = self
+            .ilo_keys
+            .as_ref()
+            .filter(|keys| keys.leaving.is_none())?;
+        let drawn = self.ilo_drawn.borrow();
+        let since = drawn
+            .get(&(keys.line, keys.button))
+            .map(|(_, since)| *since);
+        Some(Guard::of(keys.last, keys.button, since))
+    }
+
+    /// Under the checks only, which wait on it rather than count: says when a key on the ringed
+    /// button presses, at the guard's own end and never before, and again for a guard that
+    /// started anew. `woke` is the guard whose wait ended.
+    fn tell_ilo_keys_ready(&mut self, woke: Option<Guard>, cx: &mut Context<Self>) {
+        let Some(guard) = self.ilo_guard() else {
+            return;
+        };
+        let Some(keys) = &mut self.ilo_keys else {
+            return;
+        };
+        match keys.told.step(guard, Instant::now(), woke == Some(guard)) {
+            Tell::Ready => log!("browser: ilo keys ready on {}", keys.line),
+            Tell::Wait(end) => {
+                let wait = end.saturating_duration_since(Instant::now());
+                keys.wait = Some(cx.spawn(async move |view, cx| {
+                    cx.background_executor().timer(wait).await;
+                    (view.update(cx, |view, cx| view.tell_ilo_keys_ready(Some(guard), cx))).ok();
+                }));
+            }
+            Tell::Nothing => {}
         }
     }
 
@@ -247,9 +435,21 @@ impl TalkView {
 }
 
 impl super::super::Shell {
-    /// Focus Agent Question: the keyboard to the newest ilo line of the conversation shown, or with
-    /// the keyboard on it already, back where it was. A held key's repeats do nothing, where the
-    /// host can tell them, as the key would otherwise go back and forth.
+    /// Whether the area draws the conversation kept: its task's is the view there, with no page
+    /// of the task's over it, or with one it stands beside.
+    fn talk_drawn(&self) -> bool {
+        (self.talk.as_ref()).is_some_and(|talk| self.task_open() == Some(talk.space))
+            && (self.task_page_drawn().is_none() || self.task_standing())
+    }
+
+    /// Focus Agent Question: the keyboard to the newest ilo line of the conversation the area
+    /// draws, or with the keyboard on it already, back where it was. A held key's repeats do
+    /// nothing, where the host can tell them, as the key would otherwise go back and forth.
+    ///
+    /// With a page of the task's watched over the conversation, no button is in sight to ring:
+    /// while the window has the keyboard the key goes back to the conversation as the strip's
+    /// Back does, to its reply field, and rings nothing; a page the user has, held from its agent
+    /// or with the keyboard, keeps the view and every key.
     pub(in crate::shell) fn focus_agent_question(&mut self, from: &str, cx: &mut Context<Self>) {
         if from == "ui" && self.browser.key_repeated() {
             return;
@@ -261,15 +461,23 @@ impl super::super::Shell {
         // either way, so the ring is never on a button the keys miss.
         let page = from == "page"
             || (self.browser.page_has_keyboard(cx)).unwrap_or(self.page_keyboard.is_some());
+        if !self.talk_drawn() {
+            let held = matches!(self.agent_bar(), Some(Bar::Held { .. }));
+            if let Some((_, tab)) = self.watched_task_page().filter(|_| !page && !held) {
+                log!("browser: focus key leaves task page {tab}");
+                self.task_page_back(cx);
+            }
+            return;
+        }
         let beside = self.watched_task_page().map(|(_, tab)| tab);
         if view.update(cx, |view, cx| view.focus_ilo(page, beside, cx)) {
             self.take_keyboard(cx);
         }
     }
 
-    /// Focus Agent Question's key from the page, kept from it only while a conversation shows:
-    /// the page gets it back otherwise, and no other key reaches a line from the page. A held
-    /// key's `repeat`s stay from the page and do nothing.
+    /// Focus Agent Question's key from the page, kept from it only while the area draws a
+    /// conversation, beside the page: the page gets it back otherwise, and no other key reaches
+    /// a line from the page. A held key's `repeat`s stay from the page and do nothing.
     pub fn run_ilo_page_key(
         &mut self,
         keystroke: &str,
@@ -277,7 +485,7 @@ impl super::super::Shell {
         cx: &mut Context<Self>,
     ) -> bool {
         use super::super::{commands::Command, keys::user_keys};
-        if self.talk.is_none()
+        if !self.talk_drawn()
             || user_keys(cx).command_for(keystroke, false) != Some(Command::FocusAgentQuestion)
         {
             return false;
@@ -286,6 +494,33 @@ impl super::super::Shell {
             self.run(Command::FocusAgentQuestion, "page", cx);
         }
         true
+    }
+
+    /// Before the frame's drawn: the keys on a line's buttons end once the area no longer draws
+    /// their conversation, as a page of the task's is watched over it or another view takes its
+    /// place, and GPUI's focus leaves the button for the window, as it leaves the reply field
+    /// there (`focus_talk`). Nothing keys the line again but the command.
+    pub(in crate::shell) fn step_ilo_keys_drawn(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(talk) = (self.talk.as_ref()).filter(|_| !self.talk_drawn()) else {
+            return;
+        };
+        let view = talk.view.read(cx);
+        let stray = view.ilo_stop_focused(window);
+        if view.ilo_keys.is_none() && view.ilo_left.is_none() && !stray {
+            return;
+        }
+        let why = match self.task_open() == Some(talk.space) {
+            true => "watch",
+            false => "area",
+        };
+        (talk.view.clone()).update(cx, |view, _| view.ilo_keys_undrawn(why));
+        if stray {
+            window.focus(&self.focus_handle, cx);
+        }
     }
 
     /// The page took the keyboard, which GPUI's focus doesn't follow: the line's keys end there.

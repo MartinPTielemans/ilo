@@ -156,19 +156,27 @@ impl Agents {
         }
         let was = task.state.clone();
         let said = replies(task);
-        let (ended_at, back) = (task.tier, kept::comes_back(task.tier));
+        // A level the user picked since it ended is the one the reply starts at, as the chip
+        // says; else the app decides from the one it ended at. Its wall was that one's.
+        let ended_at = task.picked_from.unwrap_or(task.tier);
+        let back = match task.picked_from {
+            Some(_) => task.tier,
+            None => kept::comes_back(task.tier),
+        };
+        let shown = task.tier;
         // One a run before left has no message of the user's until its first reply here.
         let after_a_quit = task.from_before() && said == 0;
         let Some(record) = self.tasks.kept.of_mut(agent).filter(|record| !record.gone) else {
             return;
         };
-        if back != ended_at || after_a_quit {
+        if back != shown || after_a_quit {
             record.resumed.push((said, back));
         }
         self.tasks.picked_up.insert(agent.to_string(), was);
         self.kept_under_way(agent);
         if let Some(task) = self.task_mut(agent) {
             task.tier = back;
+            task.picked_from = None;
         }
         log!("browser: task {agent} picked up");
         // The activity log's entry for it, under the task's own name.
@@ -747,6 +755,7 @@ impl Task {
             sites: Sites::default(),
             stops: Vec::new(),
             stopped_turns: Vec::new(),
+            picked_from: None,
             placed: Vec::new(),
             told: None,
             helpers: Helpers::of_task(helpers),
