@@ -364,6 +364,10 @@ impl Browser for Core {
         }
     }
 
+    fn has_profile(&self, profile: &str) -> bool {
+        (ids(bc::bc_profiles).into_iter()).any(|each| profile_folder(each) == profile)
+    }
+
     fn request(&self, agent: &str, tab: u64, request: u64, sent: &agents::request::Request) {
         let headers: String = (sent.headers.iter())
             .map(|(name, value)| format!("{name}: {value}\n"))

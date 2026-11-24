@@ -2122,9 +2122,11 @@ impl TalkView {
             IloKind::TierChanged { .. } => "icons/shield.svg",
             IloKind::Resumed { .. } => "icons/play.svg",
             IloKind::KeptHere => "icons/save.svg",
-            IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing | IloKind::NoProfile => {
-                "icons/message-circle.svg"
-            }
+            IloKind::Gone
+            | IloKind::NotKept
+            | IloKind::KeepsNothing
+            | IloKind::NoProfile
+            | IloKind::NoSpace => "icons/message-circle.svg",
         };
         let head = trace_line(
             look,

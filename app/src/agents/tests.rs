@@ -413,6 +413,12 @@ impl Browser for Made {
         space.map_or(u64::from(profile == "Default"), |each| each.0)
     }
 
+    /// "Default" is always there; another is while a test lists it, with Space 0 for one that
+    /// has no Space of the user's.
+    fn has_profile(&self, profile: &str) -> bool {
+        profile == "Default" || self.profiles.borrow().iter().any(|each| each.1 == profile)
+    }
+
     fn request(&self, _: &str, tab: u64, request: u64, sent: &request::Request) {
         self.requests
             .borrow_mut()

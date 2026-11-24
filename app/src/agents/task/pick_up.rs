@@ -16,7 +16,7 @@ use super::ilo::{IloKind, IloLine};
 use super::{KEPT, Line, State, Task, Who, seconds};
 use crate::agents::Agents;
 use crate::agents::helpers::Helpers;
-use crate::agents::kept::{self, Keep, Keeps};
+use crate::agents::kept::{self, Keep, Keeps, Nowhere};
 use crate::agents::runner::Cli;
 use crate::agents::tier::{Sites, Tier};
 
@@ -173,9 +173,13 @@ impl Agents {
             })
         };
         let record = self.tasks.kept.of(&task.agent);
-        // A task whose profile has gone has nowhere to work, however it ended.
-        if record.is_some_and(|record| record.nowhere) {
-            return lines.push(line(IN_FIELD, IloKind::NoProfile));
+        // A task with nowhere to work says why in the field's place, however it ended.
+        if let Some(why) = record.and_then(|record| record.nowhere) {
+            let kind = match why {
+                Nowhere::Deleted => IloKind::NoProfile,
+                Nowhere::NoSpace => IloKind::NoSpace,
+            };
+            return lines.push(line(IN_FIELD, kind));
         }
         // All a task a run before left has to show is its title, so where its messages would
         // begin it says where they are, however it ended.
@@ -280,9 +284,9 @@ impl Agents {
     }
 
     /// Whether `agent`'s task is one a run before left whose profile has no Space of the user's
-    /// any more: it has nowhere to work, so it takes no reply and no Retry.
+    /// any more, or is gone: it has nowhere to work, so it takes no reply and no Retry.
     pub(super) fn nowhere(&self, agent: &str) -> bool {
-        (self.tasks.kept.of(agent)).is_some_and(|record| record.nowhere)
+        (self.tasks.kept.of(agent)).is_some_and(|record| record.nowhere.is_some())
     }
 
     /// Before a reply or Retry reaches `agent`'s task: one a run before left takes its place
@@ -312,7 +316,14 @@ impl Agents {
             true => 0,
             false => self.browser.profile_space(&record.profile),
         };
-        record.nowhere = home == 0;
+        // Its pages go to the user's Space of its profile when it hands one over or ends, so a
+        // Space of its own made in a profile with none of theirs would leave them no place but
+        // another profile's, where each would open again without the sessions it worked in.
+        record.nowhere = match home {
+            0 if self.browser.has_profile(&record.profile) => Some(Nowhere::NoSpace),
+            0 => Some(Nowhere::Deleted),
+            _ => None,
+        };
         if home == 0 {
             home = self.browser.user_space(0);
         }
@@ -321,9 +332,10 @@ impl Agents {
         }
     }
 
-    /// The profiles there are, each by its folder's name, as the core says them whenever they
-    /// change. One that was there and has gone was deleted: the tasks asked in it go with it, by
-    /// the way Remove takes one, so no row waits for a profile that later gets the same folder.
+    /// The profiles there are, each by its folder's name, as the core says them whenever they or
+    /// the Spaces change. One that was there and has gone was deleted: the tasks asked in it go
+    /// with it, by the way Remove takes one, so no row waits for a profile that later gets the
+    /// same folder. A task with nowhere to work looks again, as its profile may have a Space now.
     pub fn profiles_are(&mut self, profiles: Vec<String>, cx: &mut Context<Self>) {
         // The core always has one, so none is a core with nothing to say yet.
         if profiles.is_empty() {
@@ -334,6 +346,16 @@ impl Agents {
             .cloned()
             .collect();
         self.tasks.profiles = profiles;
+        let nowhere: Vec<String> = (self.tasks.tasks.iter())
+            .filter(|task| self.nowhere(&task.agent))
+            .map(|task| task.agent.to_string())
+            .collect();
+        for agent in &nowhere {
+            self.place_past(agent);
+        }
+        if !nowhere.is_empty() {
+            cx.notify();
+        }
         if gone.is_empty() {
             return;
         }

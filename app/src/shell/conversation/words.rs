@@ -50,6 +50,7 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         IloKind::NotKept => (format!("· {agent} didn't keep this conversation."), None),
         IloKind::KeepsNothing => (format!("· {agent} doesn't keep finished tasks."), None),
         IloKind::NoProfile => ("· This task's profile was deleted.".into(), None),
+        IloKind::NoSpace => ("· This task's profile has no Space left.".into(), None),
     }
 }
 
@@ -96,7 +97,11 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
         IloKind::Helpers { .. } => None,
         IloKind::KeptHere => Some(KEPT_IN.into()),
         IloKind::Resumed { .. } => None,
-        IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing | IloKind::NoProfile => None,
+        IloKind::Gone
+        | IloKind::NotKept
+        | IloKind::KeepsNothing
+        | IloKind::NoProfile
+        | IloKind::NoSpace => None,
     }
 }
 

@@ -231,7 +231,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
 pub(crate) fn bench_ended() -> Option<&'static str> {
     match states::var("PREVIEW_TASK").ok()?.as_str() {
         "ended" | "ended-first" | "gone" | "not-kept" | "helpers-ended" => Some("Claude"),
-        "past" | "past-no-profile" => Some("Claude"),
+        "past" | "past-no-profile" | "past-no-space" => Some("Claude"),
         "codex-ended" => Some("Codex"),
         _ => None,
     }
@@ -312,7 +312,7 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
 /// one of the states ilo's own lines are made for, from made-up data: working, refused,
 /// off-limits, yours, tab-back, signed-in, raised or notes; or of a task that has ended (#4105):
 /// ended, ended-first, picked-up, gone, not-kept or codex-ended; or of one a run of the browser
-/// before left, brought back from the Archive: past, or past-no-profile; or of one with helpers
+/// before left, brought back from the Archive: past, past-no-profile or past-no-space; or of one with helpers
 /// (#4102): helpers, helper, helpers-limit or helpers-ended.
 pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
     let Ok(state) = states::var("PREVIEW_TASK") else {
@@ -440,9 +440,9 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
         }
         // A task a run of the browser before left (#4105), brought back from the Archive: all
         // there is of it is its title and how it ended, so where its messages would begin it says
-        // where they are, over its reply field; or, with its profile deleted, that, in the
-        // field's place. It ended on an earlier day, so it says the day.
-        "past" | "past-no-profile" => {
+        // where they are, over its reply field; or, with its profile deleted or left with no
+        // Space, that, in the field's place. It ended on an earlier day, so it says the day.
+        "past" | "past-no-profile" | "past-no-space" => {
             talk.title = "Concert tickets".into();
             talk.about = format!("{} · Done · 21 Nov", talk.name).into();
             talk.progress = "".into();
@@ -454,7 +454,8 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 100,
                 match state.as_str() {
                     "past" => IloKind::KeptHere,
-                    _ => IloKind::NoProfile,
+                    "past-no-profile" => IloKind::NoProfile,
+                    _ => IloKind::NoSpace,
                 },
             )]
         }

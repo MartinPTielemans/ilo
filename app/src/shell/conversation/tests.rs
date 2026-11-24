@@ -1093,6 +1093,7 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
         IloKind::NotKept,
         IloKind::KeepsNothing,
         IloKind::NoProfile,
+        IloKind::NoSpace,
         IloKind::Helpers {
             tab: 1,
             deep: false,
@@ -1113,6 +1114,7 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             | IloKind::NotKept
             | IloKind::KeepsNothing
             | IloKind::NoProfile
+            | IloKind::NoSpace
             | IloKind::Helpers { .. } => {}
         }
         let (own, _) = head(kind, "Claude");

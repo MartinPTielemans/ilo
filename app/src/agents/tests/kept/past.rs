@@ -458,6 +458,51 @@ fn a_past_task_comes_back_in_its_own_profile(cx: &mut TestAppContext) {
     );
 }
 
+/// A past task whose profile is still there with no Space of the user's left says that, not that
+/// the profile was deleted, in the reply field's place with Start Again alone, and takes no
+/// reply: its pages would have no Space of its profile to go to. Once the profile has a Space
+/// again, a reply picks the task up in it.
+#[gpui::test]
+fn a_past_task_whose_profile_has_no_space_left_says_so(cx: &mut TestAppContext) {
+    let run = Run::new("no-space", cx);
+    run.browser.profiles.borrow_mut().push((7, "Profile 2"));
+    let agent = start_in(&run, 7, cx);
+    run.ran(1);
+    let id = run.id(&agent, cx);
+    name_it(&run, &agent, "Lisbon seats", cx);
+    run.finish(&agent, cx);
+    quit(&run, cx);
+
+    // "Profile 2" is there, and its last Space was closed.
+    let next = next(&run, cx);
+    next.browser.profiles.borrow_mut().push((0, "Profile 2"));
+    let past = archive(&next, cx)[0].0.clone();
+    restore(&next, &past, cx);
+    let lines = next.talk(&past, cx).lines;
+    let [Line::Ilo(line)] = &lines[..] else {
+        panic!("{lines:?}");
+    };
+    assert_eq!(line.kind, IloKind::NoSpace);
+    assert!(ilo::in_field(&line.kind));
+    assert_eq!(ilo::buttons(line), [IloButton::StartAgain]);
+    reply(&next, &past, "And for Sunday?", cx);
+    cx.run_until_parked();
+    assert!(!started(&next, 2));
+
+    // A Space in it again, and the task is there to reply to, in that Space's profile.
+    *next.browser.profiles.borrow_mut() = vec![(9, "Profile 2")];
+    (next.agents).update(cx, |agents, cx| {
+        agents.profiles_are(vec!["Default".into(), "Profile 2".into()], cx)
+    });
+    assert_eq!(next.ilo_lines(&past, cx), [IloKind::KeptHere]);
+    reply(&next, &past, "And for Sunday?", cx);
+    let (args, _) = next.ran(2);
+    assert_eq!(after(&args, "--resume"), Some(id.as_str()));
+    (next.agents).read_with(cx, |agents, _| {
+        assert_eq!(agents.task(&past).unwrap().home, 9);
+    });
+}
+
 /// A past task whose profile is gone at launch has nowhere to work: brought back, it says so in
 /// the reply field's place and offers Start Again alone. No reply and no Retry starts a run for
 /// it in another profile's sessions. Settings still lists it, and Remove takes it out.

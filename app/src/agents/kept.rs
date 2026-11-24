@@ -102,6 +102,15 @@ pub enum Keep {
     Resume(Id),
 }
 
+/// Why a task a run before left has nowhere to work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Nowhere {
+    /// Its profile was deleted.
+    Deleted,
+    /// Its profile is there, with no Space of the user's left in it.
+    NoSpace,
+}
+
 /// Whether an assistant's runs can be kept.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Keeps {
@@ -231,9 +240,8 @@ pub struct Record {
     /// it from one run to the next where the core's number for it doesn't. Its task works in
     /// that profile's sessions and comes back in no other.
     pub profile: String,
-    /// Its profile has no Space of the user's, as when it was deleted before this launch: the
-    /// task has nowhere to work, so it takes no reply.
-    pub nowhere: bool,
+    /// Why its task has nowhere to work, if it hasn't, so it takes no reply.
+    pub nowhere: Option<Nowhere>,
     /// The access the task last ended at.
     pub tier: Tier,
     /// The assistant no longer has it: a reply found none.
@@ -302,7 +310,7 @@ impl Kept {
             id,
             past: None,
             profile: profile.to_string(),
-            nowhere: false,
+            nowhere: None,
             tier: Tier::default(),
             gone: false,
             resumed: Vec::new(),

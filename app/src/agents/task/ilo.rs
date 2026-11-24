@@ -71,13 +71,21 @@ pub enum IloKind {
     /// The profile the task was asked in was deleted, so it has nowhere to work: a task a run of
     /// the browser before left. In the reply field's place.
     NoProfile,
+    /// The profile the task was asked in has no Space of the user's left, so the task has
+    /// nowhere to work and its pages nowhere to go: a task a run of the browser before left. In
+    /// the reply field's place.
+    NoSpace,
 }
 
 /// Whether a line stands in the reply field's place, under the log, as the task takes no reply.
 pub fn in_field(kind: &IloKind) -> bool {
     matches!(
         kind,
-        IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing | IloKind::NoProfile
+        IloKind::Gone
+            | IloKind::NotKept
+            | IloKind::KeepsNothing
+            | IloKind::NoProfile
+            | IloKind::NoSpace
     )
 }
 
@@ -143,7 +151,11 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
         IloKind::TabBack { .. } => vec![IloButton::HandBack],
         IloKind::SignedIn { .. } | IloKind::TierChanged { .. } => Vec::new(),
         IloKind::Resumed { .. } | IloKind::KeptHere => Vec::new(),
-        IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing | IloKind::NoProfile => {
+        IloKind::Gone
+        | IloKind::NotKept
+        | IloKind::KeepsNothing
+        | IloKind::NoProfile
+        | IloKind::NoSpace => {
             vec![IloButton::StartAgain]
         }
     }
@@ -159,7 +171,11 @@ pub fn tab(kind: &IloKind) -> Option<u64> {
         | IloKind::SignedIn { tab, .. } => Some(*tab),
         IloKind::TierChanged { .. } => None,
         IloKind::Resumed { .. } | IloKind::KeptHere => None,
-        IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing | IloKind::NoProfile => None,
+        IloKind::Gone
+        | IloKind::NotKept
+        | IloKind::KeepsNothing
+        | IloKind::NoProfile
+        | IloKind::NoSpace => None,
     }
 }
 
