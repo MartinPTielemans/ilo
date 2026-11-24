@@ -339,6 +339,20 @@ impl menu::Host for MenuHost {
         unsafe { platform::host_show_menu_window(ui_view, in_reveal, left, top, width, height) };
     }
 
+    // The Mac's window has its material under the panels; the others' menus are opaque.
+    #[cfg(target_os = "macos")]
+    fn glass(&self, panels: &[(Bounds<Pixels>, f32)], light: bool) {
+        let flat: Vec<f64> = (panels.iter())
+            .flat_map(|(at, radius)| {
+                [at.origin.x, at.origin.y, at.size.width, at.size.height]
+                    .map(f64::from)
+                    .into_iter()
+                    .chain([f64::from(*radius)])
+            })
+            .collect();
+        unsafe { platform::host_set_menu_glass(flat.as_ptr(), panels.len(), light) };
+    }
+
     fn hide(&self) {
         unsafe { platform::host_hide_menu_window() };
     }
