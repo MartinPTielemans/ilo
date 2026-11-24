@@ -76,7 +76,7 @@ core's DevTools session keeps a value, in the renderer, and never sends it anywh
      needs_to_update_view_value_ = false;
 --- /dev/null
 +++ b/third_party/blink/renderer/core/html/forms/withheld_values.cc
-@@ -0,0 +1,208 @@
+@@ -0,0 +1,232 @@
 +// ilo: see withheld_values.h.
 +
 +#include "third_party/blink/renderer/core/html/forms/withheld_values.h"
@@ -102,6 +102,7 @@ core's DevTools session keeps a value, in the renderer, and never sends it anywh
 +#include "third_party/blink/renderer/platform/heap/member.h"
 +#include "third_party/blink/renderer/platform/heap/persistent.h"
 +#include "third_party/blink/renderer/platform/weborigin/kurl.h"
++#include "third_party/blink/renderer/platform/wtf/hash_set.h"
 +#include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
 +
 +namespace blink {
@@ -113,7 +114,8 @@ core's DevTools session keeps a value, in the renderer, and never sends it anywh
 +constexpr unsigned kAnywhere = 6;
 +constexpr wtf_size_t kMostFields = 16;
 +
-+// The last value a field held, and whether it's open: kept or changed since the last freeze.
++// The last value a field held, and whether it's open: kept or changed since the last freeze, to
++// one no freeze in the document looked for.
 +class WithheldValue final : public GarbageCollected<WithheldValue> {
 + public:
 +  WithheldValue(const HTMLInputElement& field, const String& value)
@@ -141,6 +143,11 @@ core's DevTools session keeps a value, in the renderer, and never sends it anywh
 +  }
 +
 +  HeapVector<Member<WithheldValue>> values;
++  // Every value a freeze looked for in the document: one held again, by any field, stays closed,
++  // so a page can't be made to look again and again for what it already showed or didn't.
++  HashSet<String> frozen;
++  // An open value went unlooked to make room, so the next freeze answers that it shows.
++  bool lost_open = false;
 +};
 +
 +using Records = HeapHashMap<WeakMember<const Document>, Member<WithheldRecord>>;
@@ -249,19 +256,32 @@ core's DevTools session keeps a value, in the renderer, and never sends it anywh
 +    record = MakeGarbageCollected<WithheldRecord>();
 +    AllRecords().Set(&document, record);
 +  }
++  const bool looked = record->frozen.Contains(value);
 +  for (auto& kept : record->values) {
 +    if (kept->field == &input) {
 +      if (kept->value != value) {
 +        kept->value = value;
-+        kept->open = true;
++        kept->open = !looked;
 +      }
 +      return;
 +    }
 +  }
 +  if (record->values.size() == kMostFields) {
-+    record->values.EraseAt(0);
++    // The oldest closed value goes, which |frozen| keeps; with none closed, the oldest open one,
++    // and the next freeze answers yes for it.
++    wtf_size_t drop = 0;
++    for (wtf_size_t i = 0; i < record->values.size(); ++i) {
++      if (!record->values[i]->open) {
++        drop = i;
++        break;
++      }
++    }
++    record->lost_open = record->lost_open || record->values[drop]->open;
++    record->values.EraseAt(drop);
 +  }
-+  record->values.push_back(MakeGarbageCollected<WithheldValue>(input, value));
++  auto* kept = MakeGarbageCollected<WithheldValue>(input, value);
++  kept->open = !looked;
++  record->values.push_back(kept);
 +}
 +
 +bool FreezeWithheldValues(Document& document) {
@@ -270,16 +290,20 @@ core's DevTools session keeps a value, in the renderer, and never sends it anywh
 +    return false;
 +  }
 +  WithheldRecord& record = *it->value;
-+  bool open = false;
++  bool open = record.lost_open;
 +  for (const auto& kept : record.values) {
 +    open = open || kept->open;
 +  }
 +  if (!open) {
 +    return false;
 +  }
-+  const bool shows = Walk(document, record);
++  const bool shows = record.lost_open || Walk(document, record);
++  record.lost_open = false;
 +  for (auto& kept : record.values) {
-+    kept->open = false;
++    if (kept->open) {
++      record.frozen.insert(kept->value);
++      kept->open = false;
++    }
 +  }
 +  return shows;
 +}
@@ -287,7 +311,7 @@ core's DevTools session keeps a value, in the renderer, and never sends it anywh
 +}  // namespace blink
 --- /dev/null
 +++ b/third_party/blink/renderer/core/html/forms/withheld_values.h
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,30 @@
 +// ilo: whether a document shows, anywhere outside the field, what one of its password fields held,
 +// for the core's agent (//browser_core/agent_page.cc). Kept only in an agent's tab, in the
 +// renderer: never sent anywhere, logged or put in a crash key.
@@ -305,13 +329,14 @@ core's DevTools session keeps a value, in the renderer, and never sends it anywh
 +
 +// Keeps |value| as the last that |input| held, if it is or was a password field and the core's
 +// DevTools session has DOM on in its frame, as it does in an agent's tab. A value kept or changed
-+// is open until the next FreezeWithheldValues. At most 16 fields a document, for as long as it
-+// lives.
++// is open until the next FreezeWithheldValues, unless a freeze already looked for it in the
++// document. At most 16 fields a document, for as long as it lives: past that a closed value makes
++// room, or else an open one, and the next freeze answers true for it.
 +void RecordWithheldValue(HTMLInputElement& input, const String& value);
 +
 +// Whether |document| shows, anywhere outside the field, one of its open values. Then none is
-+// looked for again until a field holds a new one. A document with no open value answers false at
-+// once.
++// looked for again in the document, whichever field holds it next. A document with no open value
++// answers false at once.
 +CORE_EXPORT bool FreezeWithheldValues(Document& document);
 +
 +}  // namespace blink
