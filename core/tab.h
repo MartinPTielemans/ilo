@@ -14,11 +14,13 @@
 #include "base/scoped_observation.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "base/time/time.h"
+#include "base/timer/timer.h"
 #include "browser_core/agent_job_voter.h"
 #include "browser_core/platform/system_page.h"
 #include "browser_core/protected_move_rule.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/session.h"
+#include "browser_core/tab_background.h"
 #include "chrome/browser/media/webrtc/media_stream_capture_indicator.h"
 #include "components/favicon/core/favicon_driver.h"
 #include "components/favicon/core/favicon_driver_observer.h"
@@ -250,6 +252,9 @@ class Tab : public content::WebContentsObserver,
   // The colour the tab's page shows until it draws its first frame, opaque. Each page view the tab
   // swaps in takes it too, which Chrome's views do on their own only off the Mac.
   void SetPageColor(SkColor color);
+  // The background colour of its page, 0xRRGGBB, as the engine last reported it, or none
+  // (bc_tab_background_color).
+  std::optional<uint32_t> BackgroundColor() const { return background_.color(); }
 
   // For g_browser_core_page_hung (//browser_core/hooks.h): |contents|'s page hasn't answered input
   // for Chrome's hang timeout. Its tab is BC_PAGE_HUNG until it answers, or until Wait or Reload.
@@ -344,6 +349,7 @@ class Tab : public content::WebContentsObserver,
   void TitleWasSet(content::NavigationEntry* entry) override;
   void DidToggleFullscreenModeForTab(bool entered_fullscreen, bool will_cause_resize) override;
   void DidUpdateAudioMutingState(bool muted) override;
+  void OnBackgroundColorChanged() override;
   void DidGetUserInteraction(const blink::WebInputEvent& event) override;
   void OnVisibilityChanged(content::Visibility visibility) override;
   void OnWebContentsFocused(content::RenderWidgetHost* render_widget_host) override;
@@ -437,6 +443,12 @@ class Tab : public content::WebContentsObserver,
   void HandBack(const GURL& url, base::FunctionRef<void()> load);
   // Tells the window, Site Controls and the app that the tab's page is now the other engine's.
   void EngineChanged();
+  // Keeps the background colour of the page the tab shows, and tells the app of a change if a
+  // window shows the tab.
+  void BackgroundChanged();
+  // The wait for a page to stop changing its background is over.
+  void BackgroundSettled();
+  void TellBackground(TabBackground::Step step);
   // Finds the favicon of the system page's URL among the profile's, as Chrome's driver can't.
   void FetchSystemPageFavicon();
   // Decodes the system page's own icon for its |document|, and shows it, and keeps it in the
@@ -510,6 +522,12 @@ class Tab : public content::WebContentsObserver,
   int net_error_ = 0;
   // The page base colour the tab last gave its pages, if not Chrome's.
   std::optional<SkColor> shown_on_;
+  // The background colour Chromium last reported for its page, which it reports again only once
+  // it differs, so a tab back from the system's engine has it from here.
+  std::optional<SkColor> reported_background_;
+  // The colour kept for the app, and the one wait for a page that keeps changing it.
+  TabBackground background_;
+  base::OneShotTimer background_wait_;
   std::unique_ptr<platform::SystemPage> system_page_;
   // How many system pages the tab has made, the last of them system_page_.
   int system_pages_ = 0;
