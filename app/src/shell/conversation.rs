@@ -39,6 +39,7 @@ use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
 use crate::text_input::TextInput;
 use crate::tokens::command_bar::{CHIP as BAR_CHIP, HINT_KEY_RIM, HINT_KEY_X};
 use crate::tokens::find_bar::NOT_FOUND;
+use crate::tokens::shell::HAIRLINE;
 use crate::tokens::shell::agent_pointer::{COLOR as SIGNAL, RING};
 use crate::tokens::shell::conversation::ilo::{
     ARM, BELOW as ILO_BELOW, BUTTONS_GAP, BUTTONS_TOP, COMPOSER_CHEVRON, COMPOSER_CHEVRON_GAP,
@@ -64,7 +65,6 @@ use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT};
 use crate::tokens::shell::task::{
     RAIL_BREAKPOINT, RAIL_DOT, RAIL_FAVICON, RAIL_GAP, RAIL_HEAD, RAIL_WIDTH, STATUS,
 };
-use crate::tokens::shell::{FORM_PLACEHOLDER, HAIRLINE};
 use crate::tokens::text;
 use crate::tokens::toast::{
     CHIP_FILL, CHIP_GAP, CHIP_HEIGHT, CHIP_RADIUS, CHIP_X, KEY_COLOR, KEY_GAP,
@@ -399,9 +399,10 @@ impl Shell {
                     let stale = old.view.update(cx, |view, _| view.let_go());
                     self.stale_pictures.extend(stale);
                 }
-                let placeholder = self.palette.gray(FORM_PLACEHOLDER);
+                // The reply's placeholder follows the appearance, as the lines do (#1659).
+                let colors = Self::form_colors(cx);
                 let reply = cx.new(|cx| {
-                    (TextInput::new(format!("Reply to {name}"), cx).placeholder_color(placeholder))
+                    (TextInput::new(format!("Reply to {name}"), cx).follows(colors))
                         .placeholder_after_caret()
                 });
                 let shell = cx.weak_entity();
@@ -3021,9 +3022,6 @@ impl Render for TalkView {
         }) else {
             return div().into_any_element();
         };
-        // The reply's placeholder follows the appearance, as the lines drawn in `look` do (#1659).
-        let placeholder = look.palette.gray(FORM_PLACEHOLDER);
-        (self.reply).update(cx, |reply, cx| reply.set_placeholder_color(placeholder, cx));
         self.settle_folds(now, still);
         // A shorter or narrower window keeps the newest line in view while the user reads at the
         // end, as the scroll keeps its distance from the top.

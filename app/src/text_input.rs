@@ -339,6 +339,34 @@ pub fn bind_keys_for(keys: Keys, cx: &mut App) {
     ]);
 }
 
+/// What a field draws its placeholder, its caret and its selection in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Colors {
+    pub placeholder: Hsla,
+    pub caret: Hsla,
+    pub selection: Hsla,
+}
+
+impl Default for Colors {
+    fn default() -> Self {
+        Colors {
+            placeholder: hsla(0., 0., 0., PLACEHOLDER),
+            caret: rgb(NO_THEME_ACCENT).into(),
+            selection: Hsla::from(rgb(NO_THEME_ACCENT)).opacity(SELECTION),
+        }
+    }
+}
+
+impl Colors {
+    /// A field whose owner gives its placeholder alone.
+    pub fn placeholder(placeholder: impl Into<Hsla>) -> Colors {
+        Colors {
+            placeholder: placeholder.into(),
+            ..Colors::default()
+        }
+    }
+}
+
 pub struct TextInput {
     focus_handle: FocusHandle,
     content: SharedString,
@@ -346,6 +374,9 @@ pub struct TextInput {
     placeholder_color: Hsla,
     caret_color: Hsla,
     selection_color: Hsla,
+    /// Where its colours come from as it draws, for a field that doesn't get them from its owner
+    /// each frame.
+    follows: Option<Box<dyn Fn(&App) -> Colors>>,
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
@@ -376,13 +407,15 @@ pub struct TextInput {
 
 impl TextInput {
     pub fn new(placeholder: impl Into<SharedString>, cx: &mut Context<Self>) -> Self {
+        let colors = Colors::default();
         Self {
             focus_handle: cx.focus_handle(),
             content: "".into(),
             placeholder: placeholder.into(),
-            placeholder_color: hsla(0., 0., 0., PLACEHOLDER),
-            caret_color: rgb(NO_THEME_ACCENT).into(),
-            selection_color: Hsla::from(rgb(NO_THEME_ACCENT)).opacity(SELECTION),
+            placeholder_color: colors.placeholder,
+            caret_color: colors.caret,
+            selection_color: colors.selection,
+            follows: None,
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
@@ -471,28 +504,31 @@ impl TextInput {
         self
     }
 
-    /// The placeholder's colour, for a field on a dark background.
-    pub fn placeholder_color(mut self, color: impl Into<Hsla>) -> Self {
-        self.placeholder_color = color.into();
+    /// Its colours are what `colors` says each time it draws. A field has no colours of its own
+    /// to be made with: it outlives a change of its window's look, light to dark or to a Space of
+    /// another colour, and the gray of the look it was made in is close to the other look's
+    /// ground. So `colors` reads the look where its owner keeps it, and holds none.
+    pub fn follows(mut self, colors: impl Fn(&App) -> Colors + 'static) -> Self {
+        self.follows = Some(Box::new(colors));
         self
     }
 
-    /// The placeholder's colour as the ground under the field changes, such as with the appearance.
-    pub fn set_placeholder_color(&mut self, color: impl Into<Hsla>, cx: &mut Context<Self>) {
-        let color = color.into();
-        if color != self.placeholder_color {
-            self.placeholder_color = color;
-            cx.notify();
-        }
-    }
-
-    /// The placeholder's colour now.
+    /// The placeholder's colour as it was last drawn or given.
     pub fn placeholder_hsla(&self) -> Hsla {
         self.placeholder_color
     }
 
-    /// The placeholder's, caret's and selection's colours, for an input whose ground and accent
-    /// change with the Space.
+    /// Its colours as they were last drawn or given.
+    pub fn colors(&self) -> Colors {
+        Colors {
+            placeholder: self.placeholder_color,
+            caret: self.caret_color,
+            selection: self.selection_color,
+        }
+    }
+
+    /// The placeholder's, caret's and selection's colours from an owner that gives them each time
+    /// it draws, before the field does, as the command bar does on its way to every frame.
     pub fn set_colors(&mut self, placeholder: Hsla, caret: Hsla, selection: Hsla) {
         (
             self.placeholder_color,
@@ -520,16 +556,6 @@ impl TextInput {
             true => CARET + CARET_GAP,
             false => px(0.),
         }
-    }
-
-    pub fn caret_color(mut self, color: impl Into<Hsla>) -> Self {
-        self.caret_color = color.into();
-        self
-    }
-
-    pub fn selection_color(mut self, color: impl Into<Hsla>) -> Self {
-        self.selection_color = color.into();
-        self
     }
 
     /// Starts with `text` in the field, all selected.
@@ -1663,6 +1689,10 @@ impl Element for TextElement {
 
 impl Render for TextInput {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Asked each frame, as its owner's look may have changed since the last.
+        if let Some(colors) = self.follows.as_ref().map(|colors| colors(cx)) {
+            self.set_colors(colors.placeholder, colors.caret, colors.selection);
+        }
         div()
             .id("text-input")
             // A text field called what its placeholder asks for, saying what's typed in it, while

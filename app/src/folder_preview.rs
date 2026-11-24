@@ -26,7 +26,7 @@ use crate::motion::ms;
 // Its times, as tokens (#4108).
 use crate::palette::{Palette, STATE_SELECTED};
 use crate::shell::KEY_CONTEXT;
-use crate::text_input::TextInput;
+use crate::text_input::{Colors, TextInput};
 use crate::tokens::folder_preview::motion;
 use crate::tokens::folder_preview::{
     AGE_LINE, AGE_SIZE, DIVIDER, DIVIDER_ALPHA, HINT, ICON, ICON_X, PADDING, RIM, ROW, ROW_FILL,
@@ -224,7 +224,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<FolderPrevi
         ..Default::default()
     };
     let window = cx.open_window(options, |_, cx| {
-        let search = cx.new(|cx| TextInput::new("Search", cx));
+        let search = cx.new(|cx| TextInput::new("Search", cx).follows(search_colors));
         cx.new(|cx| FolderPreview {
             host,
             focus: cx.focus_handle(),
@@ -395,11 +395,7 @@ impl FolderPreview {
         let (left, top) = place(rest.anchor, height);
         let found = (0..rest.items.len()).collect();
         let placeholder: SharedString = format!("Search {}", rest.name).into();
-        let palette = crate::palette::current(cx);
-        let (hint, ink) = (palette.on_overlay(HINT), palette.on_overlay(TITLE));
-        let selection = palette.plate(STATE_SELECTED);
         self.search.update(cx, |field, cx| {
-            field.set_colors(hint, ink, selection);
             field.set_placeholder(placeholder, cx);
             field.reset(SharedString::default(), window, cx);
         });
@@ -599,6 +595,16 @@ impl FolderPreview {
 }
 
 /// A tab's icon, at the row's icon size: its emoji, else its favicon, else the globe.
+/// The search field's colours as it draws, in the palette the rows draw in then.
+fn search_colors(cx: &App) -> Colors {
+    let palette = crate::palette::current(cx);
+    Colors {
+        placeholder: palette.on_overlay(HINT),
+        caret: palette.on_overlay(TITLE),
+        selection: palette.plate(STATE_SELECTED),
+    }
+}
+
 fn icon(palette: &Palette, icon: &Icon) -> AnyElement {
     match icon {
         Icon::Favicon(Some(favicon)) => img(favicon.clone()).size(px(ICON)).into_any_element(),
