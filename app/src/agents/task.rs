@@ -350,6 +350,15 @@ pub struct Traced {
     pub notes: Option<&'static str>,
 }
 
+impl Traced {
+    /// Whether it was under way when the user pressed Stop, which answered it as stopped: no step
+    /// that failed, and it leaves no line, in the trace or on a card, as a stopped turn has no
+    /// answer.
+    pub fn stopped(&self) -> bool {
+        self.kind == Some(tools::Kind::Stopped)
+    }
+}
+
 /// The page the user was on when they asked, which goes as its address and title only.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AskedOn {
@@ -3587,7 +3596,7 @@ fn page_steps(task: &Task) -> Vec<(u64, SharedString)> {
     let turn = task.turn();
     let steps = (task.trace.iter().enumerate().rev())
         .take_while(|(_, step)| step.after >= turn)
-        .filter(|(_, step)| step.did.tool != "thought");
+        .filter(|(_, step)| step.did.tool != "thought" && !step.stopped());
     let mut pages: Vec<(u64, SharedString)> = Vec::new();
     let mut over: Vec<u64> = Vec::new();
     for (key, step) in steps {
@@ -3638,7 +3647,7 @@ fn turn_steps(task: &Task) -> Vec<&Traced> {
     let turn = task.turn();
     (task.trace.iter().rev())
         .take_while(|step| step.after >= turn)
-        .filter(|step| step.did.tool != "thought")
+        .filter(|step| step.did.tool != "thought" && !step.stopped())
         .collect()
 }
 
@@ -3655,7 +3664,7 @@ fn lower_first(text: &str) -> String {
 /// left out.
 fn stopped(task: &Task) -> SharedString {
     match (task.trace.iter())
-        .filter(|step| step.did.tool != "thought")
+        .filter(|step| step.did.tool != "thought" && !step.stopped())
         .count()
     {
         0 => "Stopped".into(),
@@ -3918,6 +3927,9 @@ impl<'a> Stretch<'a> {
     }
 
     fn step(&mut self, key: usize, step: &'a Traced, helper: Option<usize>) {
+        if step.stopped() {
+            return;
+        }
         self.key.get_or_insert(key);
         self.started = Some(
             self.started
