@@ -196,7 +196,7 @@ pub fn open(
     let window = cx.open_window(options, |window, cx| {
         let input = cx.new(|cx| {
             TextInput::new("Username", cx)
-                .placeholder_color(look(cx).1.text(PLACEHOLDER))
+                .placeholder_color(look(cx).1.gray(PLACEHOLDER))
                 .caret_color(look(cx).1.accent)
                 .selection_color(look(cx).1.selection())
         });
@@ -469,7 +469,7 @@ impl Render for OfferPrompt {
         // opened.
         self.input.update(cx, |input, _| {
             input.set_colors(
-                palette.text(PLACEHOLDER),
+                palette.gray(PLACEHOLDER),
                 palette.accent.into(),
                 palette.selection(),
             )
@@ -552,7 +552,7 @@ impl Render for OfferPrompt {
             .when(offer.usernames.len() > 1, |row| row.pr_0().child(chevron));
         let password = row()
             .overflow_hidden()
-            .text_color(palette.text(DETAIL))
+            .text_color(palette.gray(DETAIL))
             .child("•".repeat(offer.password_length));
         // An address's first line, its name, then the rest on one; a card's name and last digits,
         // then its expiry.
@@ -572,7 +572,7 @@ impl Render for OfferPrompt {
             true => (username, password),
             false => (
                 line(first),
-                line(rest.join(", ").into()).text_color(palette.text(DETAIL)),
+                line(rest.join(", ").into()).text_color(palette.gray(DETAIL)),
             ),
         };
         let buttons = div()
@@ -616,7 +616,7 @@ impl Render for OfferPrompt {
                         div()
                             .text_size(px(text::SMALL))
                             .line_height(px(SITE_LINE))
-                            .text_color(palette.text(DETAIL))
+                            .text_color(palette.gray(DETAIL))
                             .truncate()
                             .child(offer.site),
                     )

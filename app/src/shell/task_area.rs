@@ -1072,7 +1072,7 @@ impl Shell {
                 format!("{name} finished"),
                 crate::agents::site(&self.page(tab).url).to_string(),
             ),
-            Dot::Ended => ("Stopped".to_string(), String::new()),
+            Dot::Ended => (card.word.alone(&name).to_string(), String::new()),
         }
     }
 
