@@ -24,12 +24,15 @@ use gpui::{
 
 use crate::elevation::{Level, WINDOW_MARGIN};
 use crate::hover_intent::{Intent, Next};
+use crate::motion::ms;
+// Its times, as tokens (#4108).
 use crate::palette::{
     Float, Palette, STATE_HOVERED, STATE_PRESSED, STATE_SELECTED, STATE_SELECTED_HOVERED,
 };
 use crate::recent::{List, Recent, Row as RecentRow};
 use crate::shell::{PagePicture, cubic_bezier, scaled::scaled, spring};
 use crate::tokens::folder_preview as rows;
+use crate::tokens::hover_card::motion;
 use crate::tokens::hover_card::{
     BUTTON, BUTTON_GAP, BUTTON_INSET, BUTTON_RADIUS, FAVICON, GLYPH, GLYPH_ALPHA, GROUND, HOST,
     HOST_SIZE, PADDING, PAUSED_GAP, PICTURE_DEFAULT, PICTURE_LEAST, PICTURE_MOST, PICTURE_RADIUS,
@@ -42,10 +45,10 @@ pub use crate::tokens::hover_card::{EDGE, GAP, WIDTH};
 
 /// How long the pointer rests on a row before its card shows: Dia's, sooner than the tooltip's
 /// delay (docs/ux-spec.md › Tooltip).
-pub const DWELL: Duration = Duration::from_millis(500);
+pub const DWELL: Duration = ms(motion::DWELL);
 /// How long the card stays after the pointer leaves its row, for the pointer to cross the gap onto
 /// it (ours).
-pub const LEAVE: Duration = Duration::from_millis(150);
+pub const LEAVE: Duration = ms(motion::LEAVE);
 /// The picture's box is as wide as the card inside its padding.
 pub const INNER: f32 = WIDTH - 2. * PADDING;
 /// The pixels the core scales a picture down to fit: the picture's box at its tallest, at the
@@ -72,7 +75,7 @@ const IN_RESPONSE: f32 = 0.25;
 const IN_DAMPING: f32 = 0.75;
 const OUT_RESPONSE: f32 = 0.2;
 const OUT_DAMPING: f32 = 0.6;
-pub const FADE: Duration = Duration::from_millis(100);
+pub const FADE: Duration = ms(motion::FADE);
 
 /// How big the card is drawn, from FROM to its size, and how opaque.
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -21,17 +21,17 @@ pub mod card;
 /// Ours (*interim*, Arc's isn't recorded): it waits this long with the pointer on a link, so a
 /// pointer crossing a page toward the sidebar shows nothing, and Chrome's 80 ms is a flash at each
 /// link it passes.
-pub const DELAY: Duration = Duration::from_millis(150);
+pub const DELAY: Duration = ms(motion::DELAY);
 /// How soon after the plate went the next link's shows at once, as the pointer crosses from one
 /// link to the next.
-pub const GRACE: Duration = Duration::from_millis(400);
+pub const GRACE: Duration = ms(motion::GRACE);
 /// It shows in a frame, as a hover fill does, and fades out over this, so the gap between two
 /// links that touch isn't a flicker.
 pub const FADE_IN: Duration = Duration::ZERO;
-pub const FADE_OUT: Duration = Duration::from_millis(120);
+pub const FADE_OUT: Duration = ms(motion::FADE_OUT);
 /// Arc's, from its release notes and help centre: the pointer resting on a link this long shows its
 /// whole address. Chrome's status bubble waits 1.6 s.
-pub const WHOLE_AFTER: Duration = Duration::from_millis(1500);
+pub const WHOLE_AFTER: Duration = ms(motion::WHOLE_AFTER);
 /// How often it asks whether the button is still down, while a press holds back what its window
 /// would do. No OS tells the UI of a release in a page, and the plate should follow it within a frame.
 pub const RELEASE_POLL: Duration = Duration::from_millis(16);
@@ -46,7 +46,9 @@ pub use crate::tokens::link_target::RESTING_WIDTH;
 pub use crate::tokens::link_target::WINDOW_WIDTH;
 pub const WINDOW_HEIGHT: f32 = CARD_ROOM + HEIGHT;
 use crate::elevation::{Level, WINDOW_MARGIN};
+use crate::motion::ms;
 use crate::tokens::link_target::PAD_X;
+// Its times, as tokens (#4108).
 use crate::tokens::link_target::PRIMARY;
 use crate::tokens::link_target::RADIUS;
 use crate::tokens::link_target::RIM;
@@ -54,6 +56,7 @@ use crate::tokens::link_target::RIM;
 /// the site it passes for stands out.
 use crate::tokens::link_target::SECONDARY;
 use crate::tokens::link_target::TEXT_SIZE;
+use crate::tokens::link_target::motion;
 const ELLIPSIS: &str = "…";
 /// A longer tail than the plate could ever show is cut before it's measured: a data: link can be
 /// a megabyte.
