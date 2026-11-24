@@ -20,6 +20,7 @@ pub mod clients;
 mod codex;
 pub mod command;
 pub mod fence;
+pub mod files;
 mod held;
 mod helpers;
 pub mod kept;
@@ -38,6 +39,7 @@ pub mod sign_in;
 pub mod task;
 pub mod tier;
 pub mod tools;
+pub mod wall;
 
 pub use server::address;
 
@@ -304,6 +306,15 @@ pub trait Browser {
     /// The user's Space a session's pages open into: the one the front window shows, if it's in
     /// the profile of `like`, an agent's Space, else the first of the user's in that profile.
     fn user_space(&self, like: u64) -> u64;
+    /// The name of the folder of `space`'s profile, "Default" or "Profile 2", which names the
+    /// profile from one run to the next where the core's number for it doesn't (bc_profile_dir).
+    /// Empty for a Space the core doesn't know.
+    fn space_profile(&self, space: u64) -> String;
+    /// The user's Space in the profile whose folder is named `profile`: the one the front window
+    /// shows, if it's in it, else the first of the user's in it, else 0.
+    fn profile_space(&self, profile: &str) -> u64;
+    /// Whether there is a profile whose folder is named `profile`.
+    fn has_profile(&self, profile: &str) -> bool;
     /// Sends `sent` from the page in the agent's `tab`, as the page's own script could, to its own
     /// site (bc_agent_request). Its answer comes to `Agents::request_done` with `request`.
     fn request(&self, agent: &str, tab: u64, request: u64, sent: &request::Request);
@@ -845,6 +856,8 @@ pub struct Agents {
     /// The site notes each task has had (#4122), and Settings › Agents' Site notes turned off.
     noted: notes::Given,
     notes_off: bool,
+    /// When a task's notification is posted, from Settings › Agents › Notifications.
+    notify: crate::needs_you::Notify,
     /// The log's last entry, by its id.
     logged: u64,
     /// The uploads waiting on the core's description of their file field, by request.
@@ -1047,6 +1060,7 @@ impl Agents {
             had: HashMap::new(),
             noted: notes::Given::default(),
             notes_off: false,
+            notify: Default::default(),
             logged: 0,
             downloading: HashMap::new(),
             grants: HashMap::new(),
@@ -1136,8 +1150,11 @@ impl Agents {
         self.tasks.kept.told = tasks.get("kept_told").and_then(Value::as_bool) == Some(true);
         // The conversations kept for the tasks of a run before go, as its tasks went (#4105): now
         // that the assistants found are known, as each removes its own.
-        self.remove_old_kept(cx);
+        self.take_old_kept(cx);
         self.notes_off = saved.get("notes").and_then(Value::as_bool) == Some(false);
+        self.notify = (tasks.get("notify").and_then(Value::as_str))
+            .and_then(crate::needs_you::Notify::from_id)
+            .unwrap_or_default();
         self.on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
         self.scripts = saved
             .get("scripts")
@@ -1175,6 +1192,18 @@ impl Agents {
     /// Whether Settings › Agents' Site notes is on, as it is unless the user turned it off.
     pub fn notes_on(&self) -> bool {
         !self.notes_off
+    }
+
+    /// When a task's notification is posted.
+    pub fn notify(&self) -> crate::needs_you::Notify {
+        self.notify
+    }
+
+    /// Settings › Agents' When to notify.
+    pub fn set_notify(&mut self, notify: crate::needs_you::Notify, cx: &mut Context<Self>) {
+        self.notify = notify;
+        self.save();
+        cx.notify();
     }
 
     /// Settings › Agents' Site notes. Off, no answer carries a site's notes from then on.
@@ -1622,6 +1651,20 @@ impl Agents {
             _ = call
                 .reply
                 .send(ToolResult::error("This agent isn't connected."));
+            return;
+        }
+        // A task the user stopped keeps its connection for their next message, so its calls still
+        // come: one that waited its turn in the server behind a slow page, or one its assistant
+        // made as it was interrupted. Each is answered as stopped, and nothing of it is run,
+        // shown or kept, until the user writes to the task again (#4209).
+        if (self.task(&call.agent)).is_some_and(|task| task.state == task::State::Stopped) {
+            log!(
+                "browser: agent {} call {} refused, as the user stopped it",
+                call.agent,
+                call.tool
+            );
+            let stopped = ToolResult::failed(tools::Kind::Stopped, STOPPED);
+            _ = call.reply.send(stopped);
             return;
         }
         self.trace_call(&call, cx);
@@ -5071,6 +5114,7 @@ impl Agents {
             "found": found,
             "keep": !self.tasks.kept.off,
             "kept_told": self.tasks.kept.told,
+            "notify": self.notify.id(),
         });
         let saved = json!({
             "on": self.on,
@@ -5650,6 +5694,28 @@ pub fn local_time(at: u64) -> String {
     };
     let soon = time.signed_duration_since(Local::now()) < chrono::Duration::hours(20);
     time.format(if soon { "%H:%M" } else { "%a %H:%M" })
+        .to_string()
+}
+
+/// When `at` was, in seconds since 1970, as a finished task says it: the time on the clock here
+/// if it was today, "13:31", else its day, "21 Nov", as a time alone reads as today's.
+pub fn time_or_day(at: u64) -> String {
+    use chrono::{Local, TimeZone};
+    match Local.timestamp_opt(at as i64, 0).single() {
+        Some(time) => time_or_day_on(time, Local::now()),
+        None => String::new(),
+    }
+}
+
+fn time_or_day_on<Zone: chrono::TimeZone>(
+    time: chrono::DateTime<Zone>,
+    now: chrono::DateTime<Zone>,
+) -> String
+where
+    Zone::Offset: std::fmt::Display,
+{
+    let today = time.date_naive() == now.date_naive();
+    time.format(if today { "%H:%M" } else { "%-d %b" })
         .to_string()
 }
 

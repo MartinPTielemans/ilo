@@ -1,14 +1,18 @@
-//! The window's agent tasks at the sidebar's foot, over its media players (Agent task): a plate
-//! each, of a player's shape and fill, oldest lowest, so the list's rows above never move as tasks
-//! come and go. The favicon's column holds the state's glyph; the title is a row's, over a status
-//! line where each step rolls in, the agent's question, or its result's line; its chips sit under
-//! that: Retry, its assistant's Sign in to … or Get …, or Open. ✕ shows under the pointer. Three show, waiting first,
-//! then working, then done, and a fourth plate says how many more there are and opens the foot to
-//! all of them. While ⌘T asks for a task, the foot holds an empty slot a plate tall, which the bar
-//! folds into and the card fills. The foot is the window's, as the players are, so switching Spaces
-//! never hides a task. It draws frames only while something on it moves: its plates' motion on the
-//! display's frames, and a working task's circling dot and shimmer on the loading dots' clock, so a
-//! foot at rest draws nothing.
+//! The window's agent tasks at the sidebar's foot, over its media players (Agent task): a group
+//! each, oldest lowest, so the list's rows above never move as tasks come and go. A group's header
+//! is a sidebar row: the favicon's column holds the state's glyph, the title is a row's, and the
+//! line under it says who works on the task and its state, in ilo's words. The pages of the task
+//! shown are rows under its header, one step in beside a hairline, each a favicon, the page's
+//! title and one word; the other groups are closed to their header. Nothing has a plate at rest:
+//! a header or a page's row takes the sidebar's two, under the pointer and on what the page area
+//! shows, so one thing in the sidebar is shown at a time. An act that is the user's and has no
+//! page, Retry or its assistant's Sign in to … or Get …, is one quiet chip under the header.
+//! ✕ shows under the pointer. Three show, waiting first, then working, then done, and a row over
+//! them says how many more there are and opens the foot to all of them. While ⌘T asks for a task,
+//! the foot holds an empty slot a row tall, which the bar folds into and the header fills. The foot
+//! is the window's, as the players are, so switching Spaces never hides a task. It draws frames
+//! only while something on it moves: its groups' motion on the display's frames, and a working
+//! task's circling dot and shimmer on the loading dots' clock, so a foot at rest draws nothing.
 
 mod glyph;
 mod motion;
@@ -29,34 +33,34 @@ use gpui::{
     prelude::*, px, rgb,
 };
 
+use super::agent_bar;
 use super::library::LIBRARY_BACK_INSET;
 use super::page_ends::StripStop;
 use super::{
     Edit, FAVICON_SIZE, FAVICON_X, FOOTER_HEIGHT, HOVERED, NAV, NAV_RADIUS, NAV_SIZE, PLATE_HEIGHT,
-    PLATE_INSET, PLATE_RADIUS, Palette, ROW_HEIGHT, SECONDARY, STATUS_AGENT, Shell, Slot, TILE,
-    TILE_RADIUS, TITLE, TITLE_END_INSET, TITLE_GAP, What, cubic_bezier, dashed_plate,
-    selected_plate, title,
+    PLATE_INSET, PLATE_RADIUS, ROW_HEIGHT, SECONDARY, STATUS_AGENT, Shell, Slot, TILE, TITLE,
+    TITLE_END_INSET, TITLE_GAP, What, cubic_bezier, dashed_plate, selected_plate, title,
 };
 use crate::agents::runner::Cli;
 use crate::agents::sign_in::Offer;
-use crate::agents::task::{Card, Dot, TaskAction, open_label, status_lead};
+use crate::agents::task::{Card, Dot, NEEDS_YOU, TaskAction, Word};
+use crate::agents::tier::Tier;
 use crate::palette::FIELD_PLATE as URL_FIELD;
-use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
-use crate::tokens::shell::MEDIA_BUTTON;
 use crate::tokens::shell::task::motion::{
     ARCHIVE, ARCHIVE_CLOSE, ARCHIVE_CLOSE_DELAY, ARCHIVE_CONTENT, ARCHIVE_EASE, ARCHIVE_HOLD,
-    ARCHIVE_LEAVE, ARCHIVE_OPEN, BUMP, BUMP_EASE, BUMP_GLYPH, BUMP_PEAK, BUMP_SCALE, CHIPS,
-    CHIPS_DELAY, CHIPS_RISE, CHIPS_STAGGER, CONTENT, CROSSFADE, FADE, FOLD, GHOST, GHOST_CONTENT,
-    GHOST_DELAY, GHOST_LAND, GHOST_STAGGER, HEIGHT as GROW, ROLL, ROLL_RISE, SHIMMER,
-    TITLE as TITLE_FADE,
+    ARCHIVE_LEAVE, ARCHIVE_OPEN, BUMP, BUMP_EASE, BUMP_GLYPH, BUMP_PEAK, BUMP_SCALE, CONTENT,
+    CROSSFADE, FADE, FOLD, GHOST, GHOST_CONTENT, GHOST_DELAY, GHOST_LAND, GHOST_STAGGER,
+    HEIGHT as GROW, ROLL, ROLL_RISE, SHIMMER, TITLE as TITLE_FADE,
 };
 use crate::tokens::shell::task::{
-    BOTTOM, CHIP_END, CHIP_GAP, CHIP_HEIGHT, CHIP_X, CHIPS_BOTTOM, CHIPS_TOP, FOOT_SHARE, GAP,
-    GHOST_RADIUS, GLYPH, GLYPH_TOP, HEIGHT, LINE, QUESTION_LINE, SHIMMER_FROM, SHIMMER_HIGH,
-    SHIMMER_REACH, SHIMMER_TO, SLOT_DASH, STATUS, STATUS_GAP, STATUS_LINE, STOPPED, TOP,
+    CHIP_HEIGHT, CHIP_X, FOOT_SHARE, GHOST_RADIUS, GLYPH, LINE, PAGE_DOT, PAGE_DOT_GAP, PAGE_END,
+    PAGE_FAVICON, PAGE_GAP, PAGE_HEIGHT, PAGE_INK, PAGE_RADIUS, PAGE_START, PAGE_TITLE, PAGE_WORD,
+    PAGE_WORD_WORKING, PAGES_BOTTOM, PAGES_GAP, PAGES_LINE, PAGES_LINE_INK, PAGES_TOP,
+    SHIMMER_FROM, SHIMMER_HIGH, SHIMMER_REACH, SHIMMER_TO, SLOT_DASH, STATUS, STATUS_GAP,
+    STATUS_LINE, STOPPED,
 };
+use crate::tokens::shell::{FAVICON_DRAWN, MEDIA_BUTTON};
 use crate::tokens::text;
-use crate::tooltip::text_width;
 use glyph::{Glyph, State};
 use motion::{Curve, Ease};
 
@@ -97,143 +101,134 @@ fn seconds(seconds: f32) -> Duration {
     Duration::from_secs_f32(seconds.max(0.))
 }
 
-/// The most tasks the foot shows before a plate says how many more there are, the slot counting
-/// as one, so the foot never takes more than four plates' room unless the user opens it.
+/// The most tasks the foot shows before a row says how many more there are, the slot counting as
+/// one, so the foot never holds more than four headers unless the user opens it.
 const MOST: usize = 3;
 
-/// The rows a card's chips wrap to, at most.
-const CHIP_ROWS: usize = 2;
-
-/// The column the title and the status start on, from the plate's left edge.
+/// The column the title and the state's line start on, from the header's plate's left edge.
 const COLUMN: f32 = FAVICON_X - PLATE_INSET + FAVICON_SIZE + TITLE_GAP;
 
-/// ✕'s inset from the plate's top and right edges, as a row's.
-const CLOSE_INSET: f32 = (ROW_HEIGHT - MEDIA_BUTTON) / 2.;
+/// A header's plate's top in its row, as a tab's row's.
+const PLATE_TOP: f32 = (ROW_HEIGHT - PLATE_HEIGHT) / 2.;
+
+/// The title's top in the header's plate, the two lines centred in it.
+const TEXT_TOP: f32 = (PLATE_HEIGHT - LINE - STATUS_GAP - STATUS_LINE) / 2.;
+
+/// ✕'s inset from the header's plate's top and right edges.
+const CLOSE_INSET: f32 = (PLATE_HEIGHT - MEDIA_BUTTON) / 2.;
 
 /// Where the title ends under the pointer, clear of ✕.
 const HOVER_END: f32 = CLOSE_INSET + MEDIA_BUTTON;
 
+/// The pages' hairline's left, from the sidebar's: under the middle of the favicon's column.
+const PAGES_X: f32 = FAVICON_X + FAVICON_SIZE / 2. - PAGES_LINE / 2.;
+
+/// The room the chip takes under its header.
+const CHIP_ROOM: f32 = PAGES_TOP + CHIP_HEIGHT + PAGES_BOTTOM;
+
 /// How long Open's pages may take to reach the list before their flight is let go.
 const OPENING_WAIT: Duration = Duration::from_secs(3);
 
-/// How a card lays out in the sidebar: its status's lines, and its chips, by their place in
-/// `chips`, row by row.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(super) struct Shape {
-    lines: usize,
-    rows: Vec<Vec<usize>>,
-}
-
-/// A chip on a card: its words, and what it does.
-#[derive(Clone, Debug, PartialEq)]
-enum Chip {
+/// The one chip under a header: an act that is the user's and has no page.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Chip {
     Retry,
     /// A failure's fix, its assistant's row's own button.
     Assistant(Cli, Offer),
-    Open(SharedString),
 }
 
 impl Chip {
-    fn label(&self) -> SharedString {
+    fn label(self) -> SharedString {
         match self {
             Chip::Retry => "Retry".into(),
-            Chip::Assistant(cli, offer) => offer.label(*cli).unwrap_or_default().into(),
-            Chip::Open(label) => label.clone(),
+            Chip::Assistant(cli, offer) => offer.label(cli).unwrap_or_default().into(),
         }
     }
 }
 
-/// A card's chips: Limit's Retry, a failure's fix from its assistant's row, or
-/// Done's Open <site> or Open 3 pages.
-fn chips(card: &Card) -> Vec<Chip> {
-    let mut chips: Vec<Chip> = Vec::new();
-    if card.retry {
-        chips.push(Chip::Retry);
-    }
-    if let Some((cli, offer)) = card.fix {
-        chips.push(Chip::Assistant(cli, offer));
-    }
-    if let Some(label) = open_label(&card.open) {
-        chips.push(Chip::Open(label));
-    }
-    chips
+/// A card's chip: a failure's fix from its assistant's row, else Limit's Retry.
+fn chip(card: &Card) -> Option<Chip> {
+    (card.fix.map(|(cli, offer)| Chip::Assistant(cli, offer))).or(card.retry.then_some(Chip::Retry))
 }
 
-/// How `card` lays out in a sidebar `width` wide, with `measure` giving how wide a text is at a
-/// size and weight. The agent's question takes a second line if it needs one. The chips wrap to
-/// two rows; past that, or with a chip wider than the room, none show, and the card's click
-/// opens the conversation, where they do. A chip of its own, such as Open, is cut to the room.
-fn shape(
-    card: &Card,
-    width: f32,
-    measure: &dyn Fn(&SharedString, f32, FontWeight) -> f32,
-) -> Shape {
-    let plate = width - 2. * PLATE_INSET;
-    let status = plate - COLUMN - TITLE_END_INSET;
-    let lines = match card.asks && measure(&card.status, text::SMALL, FontWeight::NORMAL) > status {
-        true => 2,
-        false => 1,
-    };
-    let room = plate - CHIP_END - (COLUMN - CHIP_X);
-    let chips = chips(card);
-    if chips.len() == 1 {
-        return Shape {
-            lines,
-            rows: vec![vec![0]],
-        };
-    }
-    let mut rows: Vec<Vec<usize>> = Vec::new();
-    let mut left = room;
-    for (index, chip) in chips.iter().enumerate() {
-        let wide = measure(&chip.label(), text::SMALL, FontWeight::MEDIUM).ceil() + 2. * CHIP_X;
-        if wide > room {
-            return Shape {
-                lines,
-                rows: Vec::new(),
-            };
-        }
-        match rows.last_mut() {
-            Some(row) if wide + CHIP_GAP <= left => {
-                row.push(index);
-                left -= wide + CHIP_GAP;
-            }
-            _ => {
-                rows.push(vec![index]);
-                left = room - wide;
-            }
-        }
-    }
-    if rows.len() > CHIP_ROWS {
-        rows.clear();
-    }
-    Shape { lines, rows }
+/// The room a card's chip takes under its header.
+fn chip_room(card: &Card) -> f32 {
+    chip(card).map_or(0., |_| CHIP_ROOM)
 }
 
-/// The status's height: a line, or the question's lines while it asks.
-fn status_height(asks: bool, lines: usize) -> f32 {
-    match asks {
-        true => lines as f32 * QUESTION_LINE,
-        false => STATUS_LINE,
-    }
-}
-
-/// How far down the plate a card's chips start.
-fn chips_top(asks: bool, lines: usize) -> f32 {
-    TOP + LINE + STATUS_GAP + status_height(asks, lines) + CHIPS_TOP
-}
-
-/// A plate's height for `card` in `shape`: its title, its status, and its chips.
-fn content_height(card: &Card, shape: &Shape) -> f32 {
-    let chips = match shape.rows.len() {
+/// The room `pages` rows take under a header.
+fn pages_room(pages: usize) -> f32 {
+    match pages {
         0 => 0.,
-        rows => CHIPS_TOP + rows as f32 * CHIP_HEIGHT + (rows - 1) as f32 * CHIP_GAP + CHIPS_BOTTOM,
-    };
-    TOP + LINE + STATUS_GAP + status_height(card.asks, shape.lines) + BOTTOM + chips
+        pages => PAGES_TOP + pages as f32 * PAGE_HEIGHT + PAGES_BOTTOM,
+    }
 }
 
-/// The room over a plate `height` tall, which shrinks with it as it comes or goes.
-fn gap(height: f32) -> f32 {
-    GAP * (height / HEIGHT).clamp(0., 1.)
+/// A group's height for `card`: its header's row, its chip, and, `open`, its pages' rows.
+fn group_height(card: &Card, open: bool) -> f32 {
+    let pages = if open {
+        pages_room(card.pages.len())
+    } else {
+        0.
+    };
+    ROW_HEIGHT + chip_room(card) + pages
+}
+
+/// The line under a header's title: who works on the task, or Full access where it has that, and
+/// its state, in ilo's words alone. The agent's own words are the title's (#3690). The state is
+/// the task's one word, in the fuller form its card has for it where that names the same state:
+/// "Stopped after 6 steps", a session's "Done · 10:42", "Working · 3 helpers".
+fn state_line(card: &Card) -> SharedString {
+    let fuller = match card.word {
+        Word::Stopped => card.status.starts_with("Stopped"),
+        Word::Done => !card.replies && card.status.starts_with("Done"),
+        Word::Working => card.status.starts_with("Working · "),
+        _ => false,
+    };
+    let state = match fuller {
+        true => card.status.as_ref(),
+        false => card.word.after_name(),
+    };
+    let lead = match card.tier {
+        Tier::Full => Tier::Full.label(),
+        _ => card.name.as_ref(),
+    };
+    format!("{lead} · {state}").into()
+}
+
+/// How much of a state's line is its lead, Full access, which is in the title's ink.
+fn state_lead(line: &str) -> usize {
+    let full = Tier::Full.label();
+    let leads = (line.strip_prefix(full)).is_some_and(|rest| rest.starts_with(" · "));
+    if leads { full.len() } else { 0 }
+}
+
+/// What a task's page is to it now, in the words every place that names the page says: the end of
+/// its row at the sidebar's foot, and its tile's head line.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum PageWord {
+    /// The task works in it now, which Signal's dot before the word says too.
+    Reading,
+    Done,
+    /// Its task waits for the user here: the page it handed them. In the title's ink, as the
+    /// glyph is while the task asks.
+    NeedsYou,
+    /// The user took it over: the bar's title on that page, in the title's ink too.
+    Driving,
+    /// Its task waits, stopped or broke off, or the user holds it for a task that went on.
+    Paused,
+}
+
+impl PageWord {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            PageWord::Reading => "Reading",
+            PageWord::Done => "Done",
+            PageWord::NeedsYou => NEEDS_YOU,
+            PageWord::Driving => agent_bar::DRIVING,
+            PageWord::Paused => "Paused",
+        }
+    }
 }
 
 /// Where a task ranks for a place in the foot: waiting on the user first, then working, then done
@@ -247,15 +242,27 @@ fn rank(dot: Dot) -> u8 {
 }
 
 /// The tasks of `cards` the foot shows, and how many more it has: all of them while it's opened or
-/// they fit beside the slot, else as many as do, by rank and newest first.
-fn choose(cards: &[&Card], all: bool, slot: bool) -> (Vec<SharedString>, usize) {
+/// they fit beside the slot, else as many as do, the one the page area shows first, so what's
+/// shown is always in the sidebar, then by rank and newest first.
+fn choose(
+    cards: &[&Card],
+    all: bool,
+    slot: bool,
+    shown: Option<&SharedString>,
+) -> (Vec<SharedString>, usize) {
     let room = MOST - usize::from(slot);
     let more = cards.len().saturating_sub(room);
     if all || more == 0 {
         return (cards.iter().map(|card| card.agent.clone()).collect(), more);
     }
     let mut ranked: Vec<&Card> = cards.to_vec();
-    ranked.sort_by_key(|card| (rank(card.dot), Reverse(number(&card.agent))));
+    ranked.sort_by_key(|card| {
+        (
+            Some(&card.agent) != shown,
+            rank(card.dot),
+            Reverse(number(&card.agent)),
+        )
+    });
     (
         ranked
             .into_iter()
@@ -295,12 +302,12 @@ fn shimmer(x: f32, width: f32, phase: f32) -> f32 {
     (1. - (x - middle).abs() / (SHIMMER_REACH * width)).max(0.)
 }
 
-/// What a plate at the foot holds.
+/// What a group at the foot holds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Holds {
     /// "3 more tasks", which opens the foot to all of them, or, opened, "Show less".
     More,
-    /// ⌘T's empty slot, which its task's card fills.
+    /// ⌘T's empty slot, which its task's header fills.
     Slot,
     Task(SharedString),
 }
@@ -316,191 +323,123 @@ impl Holds {
     }
 }
 
-/// A line of text, and the one it took over from, going since when, with the lines each took and
-/// whether each was a question.
+/// A line of text, and the one it took over from, going since when.
 struct Line {
     text: SharedString,
-    lines: usize,
-    asks: bool,
-    was: Option<(SharedString, usize, bool, Instant)>,
+    was: Option<(SharedString, Instant)>,
 }
 
 impl Line {
-    fn new(text: SharedString, lines: usize, asks: bool) -> Self {
-        Self {
-            text,
-            lines,
-            asks,
-            was: None,
-        }
+    fn new(text: SharedString) -> Self {
+        Self { text, was: None }
     }
 
     /// Takes `text`, the old one going from `now` if `animate`. Returns whether the words changed.
-    fn set(
-        &mut self,
-        text: SharedString,
-        lines: usize,
-        asks: bool,
-        now: Instant,
-        animate: bool,
-    ) -> bool {
+    fn set(&mut self, text: SharedString, now: Instant, animate: bool) -> bool {
         let changed = text != self.text;
         if changed {
             let old = std::mem::replace(&mut self.text, text);
-            self.was = animate.then_some((old, self.lines, self.asks, now));
+            self.was = animate.then_some((old, now));
         }
-        (self.lines, self.asks) = (lines, asks);
         changed
     }
 
     /// The old line and how far it has gone in `length` seconds, while it goes.
-    fn going(&self, now: Instant, length: f32) -> Option<(&SharedString, usize, bool, f32)> {
-        let (text, lines, asks, since) = self.was.as_ref()?;
+    fn going(&self, now: Instant, length: f32) -> Option<(&SharedString, f32)> {
+        let (text, since) = self.was.as_ref()?;
         let t = now.saturating_duration_since(*since).as_secs_f32() / length;
-        (t < 1.).then_some((text, *lines, *asks, t))
+        (t < 1.).then_some((text, t))
     }
 }
 
-/// Chips a card no longer has, fading where they were as the plate folds round them.
-struct Leaving {
-    chips: Vec<Chip>,
-    rows: Vec<Vec<usize>>,
-    top: f32,
-    since: Instant,
-}
-
-/// What a task's plate shows.
+/// What a task's group shows.
 struct Face {
     card: Card,
-    shape: Shape,
+    /// Whether its pages' rows show: its task is the one the page area shows.
+    open: bool,
     title: Line,
+    /// The state's line.
     status: Line,
-    chips: Vec<Chip>,
-    /// Since when its chips rise in, one after another.
-    chips_in: Option<Instant>,
-    chips_out: Option<Leaving>,
     glyph: Glyph,
-    /// The status's characters and the line's width, for the shimmer.
+    /// The state's line's characters and its width, for the shimmer.
     marks: Vec<(Range<usize>, f32)>,
     width: f32,
 }
 
 impl Face {
-    fn new(
-        card: &Card,
-        shape: Shape,
-        now: Instant,
-        still: bool,
-        system: &WindowTextSystem,
-    ) -> Self {
-        let (marks, width) = marks(&card.status, system);
+    fn new(card: &Card, open: bool, now: Instant, still: bool, system: &WindowTextSystem) -> Self {
+        let status = state_line(card);
+        let (marks, width) = marks(&status, system);
         Self {
-            title: Line::new(card.title.clone(), 1, false),
-            status: Line::new(card.status.clone(), shape.lines, card.asks),
-            chips: chips(card),
-            chips_in: None,
-            chips_out: None,
+            title: Line::new(card.title.clone()),
+            status: Line::new(status),
             glyph: Glyph::new(card.dot.into(), now, still),
             marks,
             width,
             card: card.clone(),
-            shape,
+            open,
         }
     }
 
-    /// Takes `card`'s changes: a new title crossfades, a new status rolls in, chips that go fade
-    /// where they were, unless Open sent them off already, and new ones rise in.
-    #[allow(clippy::too_many_arguments)]
+    /// Takes `card`'s changes: a new title crossfades and a new state rolls in.
     fn update(
         &mut self,
         card: &Card,
-        shape: Shape,
+        open: bool,
         now: Instant,
         still: bool,
         animate: bool,
-        opened: bool,
         system: &WindowTextSystem,
     ) {
-        self.title.set(card.title.clone(), 1, false, now, animate);
-        if self
-            .status
-            .set(card.status.clone(), shape.lines, card.asks, now, animate)
-        {
-            (self.marks, self.width) = marks(&card.status, system);
-        }
-        let chips = chips(card);
-        if chips != self.chips {
-            let old = std::mem::replace(&mut self.chips, chips);
-            let leaves = animate && !opened && !old.is_empty() && !self.shape.rows.is_empty();
-            self.chips_out = leaves.then(|| Leaving {
-                chips: old,
-                rows: self.shape.rows.clone(),
-                top: chips_top(self.card.asks, self.shape.lines),
-                since: now,
-            });
-            self.chips_in = (animate && !self.chips.is_empty()).then_some(now);
+        self.title.set(card.title.clone(), now, animate);
+        let status = state_line(card);
+        if self.status.set(status.clone(), now, animate) {
+            (self.marks, self.width) = marks(&status, system);
         }
         self.glyph.set(card.dot.into(), now, still);
         self.card = card.clone();
-        self.shape = shape;
-    }
-
-    /// How long its chips take to rise in, the last one's included.
-    fn chips_length(&self, still: bool) -> f32 {
-        match still {
-            true => CROSSFADE,
-            false => {
-                CHIPS_DELAY + self.chips.len().saturating_sub(1) as f32 * CHIPS_STAGGER + CHIPS
-            }
-        }
+        self.open = open;
     }
 
     fn moving(&self, now: Instant, still: bool) -> bool {
-        let since = |at: Instant| now.saturating_duration_since(at).as_secs_f32();
         let roll = if still { CROSSFADE } else { ROLL };
         let title = if still { CROSSFADE } else { TITLE_FADE };
-        let out = if still { CROSSFADE } else { CHIPS };
         self.title.going(now, title).is_some()
             || self.status.going(now, roll).is_some()
-            || self
-                .chips_in
-                .is_some_and(|at| since(at) < self.chips_length(still))
-            || self
-                .chips_out
-                .as_ref()
-                .is_some_and(|leaving| since(leaving.since) < out)
             || self.glyph.moving(now)
     }
 
-    /// Whether it draws on the loading dots' clock: its dot circling and its status shimmering.
+    /// Whether it draws on the loading dots' clock: its dot circling and its state shimmering.
     fn live(&self) -> bool {
         self.glyph.circling()
     }
 }
 
-/// A plate at the foot.
-struct Plate {
+/// A group at the foot: a task's header with its chip and its pages' rows, the count's row, or the
+/// slot.
+struct Group {
     holds: Holds,
-    /// Its height, which grows from nothing as it comes, to its content's as that changes, and to
-    /// nothing as it goes, and its opacity.
+    /// Its height, which grows from nothing as it comes, to its header's and its pages' as they
+    /// change, and to nothing as it goes, and its opacity.
     height: Ease,
     opacity: Ease,
-    /// Its fill and its content: the slot's are nothing until its card lands in it.
+    /// The landing plate's fill and its content: the slot's are nothing until the bar lands in it,
+    /// and the fill goes again as the header comes, as a header has no plate at rest.
     fill: Ease,
     content: Ease,
     leaving: bool,
-    /// Since when a copy of it flies into the Archive button, from where it was in the sidebar,
-    /// as it goes.
+    /// Since when a copy of its header flies into the Archive button, from where it was in the
+    /// sidebar, as it goes.
     archived: Option<(Instant, Bounds<Pixels>)>,
     face: Option<Face>,
 }
 
-impl Plate {
-    /// A plate coming in: from nothing, fading in, unless the window hasn't drawn its foot yet. A
+impl Group {
+    /// A group coming in: from nothing, fading in, unless the window hasn't drawn its foot yet. A
     /// slot comes as its dashes, with no fill.
     fn new(holds: Holds, now: Instant, still: bool, animate: bool) -> Self {
         let empty = holds == Holds::Slot;
-        let mut plate = Plate {
+        let mut group = Group {
             holds,
             height: Ease::rest(0.),
             opacity: Ease::rest(1.),
@@ -511,15 +450,15 @@ impl Plate {
             face: None,
         };
         if animate {
-            plate.opacity = Ease::rest(0.);
+            group.opacity = Ease::rest(0.);
             let (length, curve) = if still {
                 (CROSSFADE, Curve::Linear)
             } else {
                 (FADE, Curve::Ease)
             };
-            plate.opacity.go(1., now, length, 0., curve);
+            group.opacity.go(1., now, length, 0., curve);
         }
-        plate
+        group
     }
 
     /// Eases its height to `to`, at once if it shouldn't move.
@@ -583,16 +522,20 @@ impl Plate {
         }
     }
 
-    /// The room it takes at `now`, with the gap over it.
+    /// The room it takes at `now`: groups abut, as the list's rows do.
     fn room(&self, now: Instant) -> f32 {
-        let height = self.height.at(now);
-        height + gap(height)
+        self.height.at(now)
     }
 
     /// The room it will take once it's still.
     fn end_room(&self) -> f32 {
-        let height = self.height.end();
-        height + gap(height)
+        self.height.end()
+    }
+
+    /// The landing plate's fill at `now`, of a tile's, and how much of the slot's dashes show.
+    fn landing(&self, now: Instant) -> (f32, f32) {
+        let fill = self.fill.at(now);
+        (fill * (1. - self.content.at(now)), 1. - fill)
     }
 }
 
@@ -612,15 +555,15 @@ struct Opening {
     at: Instant,
 }
 
-/// The foot's plates and what moves on it.
+/// The foot's groups and what moves on it.
 pub(super) struct Foot {
     /// Top first.
-    plates: Vec<Plate>,
+    groups: Vec<Group>,
     /// ⌘T's ask shows over the window, so the foot holds its slot.
     slot: bool,
     /// The user opened the foot to every task.
     all: bool,
-    /// The plate under the pointer, by its key.
+    /// The header under the pointer, by its group's key.
     hovered: Option<u64>,
     /// The window has drawn its foot, so what changes on it from now on moves.
     primed: bool,
@@ -632,10 +575,11 @@ pub(super) struct Foot {
     folds: Vec<(SharedString, Instant)>,
     /// When the Archive button's glyph bumps, as a fold lands in it.
     bump: Option<Instant>,
-    /// Where each plate and each chip was last drawn in the window, for Open's pages' flight and
-    /// for check.sh, by the plate's key and the chip's place.
+    /// Where each header's plate was last drawn in the window, for its flight into the Archive and
+    /// for check.sh, by its group's key, and each page's row, by its tab, which its page zooms
+    /// out of where the task's view has no picture of it.
     plates_drawn: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
-    chips_drawn: Rc<RefCell<HashMap<(u64, usize), Bounds<Pixels>>>>,
+    rows_drawn: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
     /// Where each was last logged at rest, by its log name: a plate's last frame on its way can
     /// already be where it rests.
     rested: Rc<RefCell<HashMap<String, Bounds<Pixels>>>>,
@@ -644,14 +588,14 @@ pub(super) struct Foot {
     scroll: ScrollHandle,
     /// When the shimmer's sweeps began.
     epoch: Instant,
-    /// The plates as last logged.
+    /// The groups as last logged.
     logged: String,
 }
 
 impl Default for Foot {
     fn default() -> Self {
         Self {
-            plates: Vec::new(),
+            groups: Vec::new(),
             slot: false,
             all: false,
             hovered: None,
@@ -662,7 +606,7 @@ impl Default for Foot {
             folds: Vec::new(),
             bump: None,
             plates_drawn: Rc::default(),
-            chips_drawn: Rc::default(),
+            rows_drawn: Rc::default(),
             rested: Rc::default(),
             strip_open: Rc::default(),
             scroll: ScrollHandle::new(),
@@ -683,9 +627,17 @@ impl Shell {
             return;
         }
         let mut waits = false;
+        // An ended task kept its group for its pages: it goes as the last of them closes.
+        let mut emptied = Vec::new();
         for card in &cards {
             let was = self.task_cards.iter().find(|old| old.agent == card.agent);
             waits |= card.dot == Dot::Waiting && was.is_none_or(|was| was.dot != Dot::Waiting);
+            if card.finished()
+                && card.pages.is_empty()
+                && was.is_some_and(|was| was.finished() && !was.pages.is_empty())
+            {
+                emptied.push(card.agent.clone());
+            }
             if was.is_none_or(|was| (&was.status, was.dot) != (&card.status, card.dot)) {
                 // check.sh reads this line.
                 log!(
@@ -703,9 +655,9 @@ impl Shell {
         let fresh = |card: &&Card| !self.task_cards.iter().any(|old| old.agent == card.agent);
         let ran = self
             .foot
-            .plates
+            .groups
             .iter()
-            .any(|plate| plate.holds == Holds::Slot && !plate.leaving && plate.fill.end() > 0.);
+            .any(|group| group.holds == Holds::Slot && !group.leaving && group.fill.end() > 0.);
         let took = (ran && self.foot.slot)
             .then(|| {
                 cards
@@ -731,6 +683,9 @@ impl Shell {
         {
             self.close_task(cx);
         }
+        for agent in emptied {
+            self.fold_later(agent, 0.);
+        }
         self.sync_foot(took, cx);
         // The task the Archive brought back shows its conversation as its card comes back.
         if let Some(agent) = self.show_restored.take()
@@ -742,7 +697,7 @@ impl Shell {
     }
 
     /// ⌘T's ask shows over this window, or no longer does: the foot opens an empty slot for the
-    /// task's card, or closes it.
+    /// task's header, or closes it.
     pub fn set_ask_slot(&mut self, shown: bool, cx: &mut Context<Self>) {
         if shown == self.foot.slot {
             return;
@@ -753,60 +708,61 @@ impl Shell {
         cx.notify();
     }
 
-    /// The sidebar's width changed: the cards' text and chips wrap to it.
+    /// The page area shows another task's view, or none: that task's group opens to its pages and
+    /// the others close to their headers.
     pub(super) fn reshape_foot(&mut self, cx: &mut Context<Self>) {
         self.sync_foot(None, cx);
     }
 
-    /// The stopped ring's colour: the ink at `stopped`, under the floor text keeps, as it's a mark
-    /// beside words that say the task stopped.
-    fn stopped_ring(&self) -> Hsla {
-        Hsla::from(self.palette.ink).opacity(STOPPED)
+    /// The glyph's colours: Signal, a header's title's ink and its state line's, and the stopped
+    /// ring's, the ink at `stopped`, under the floor text keeps, as it's a mark beside words that
+    /// say the task stopped.
+    fn glyph_inks(&self) -> glyph::Inks {
+        glyph::Inks {
+            signal: rgb(STATUS_AGENT).into(),
+            title: self.palette.text(TITLE),
+            status: self.palette.gray(STATUS),
+            stopped: Hsla::from(self.palette.ink).opacity(STOPPED),
+        }
     }
 
-    /// A finished task's mark at rest, as its card shows it: Done's tick, or the grey ring of one
-    /// stopped or failed, in the glyph's box.
+    /// A finished task's mark at rest, as its header shows it: Done's tick, or the grey ring of
+    /// one stopped or failed, in the glyph's box.
     pub(super) fn status_mark(&self, dot: Dot) -> impl IntoElement + use<> {
         let now = clock();
         let drawn = Glyph::new(State::from(dot), now, true).drawn(now);
-        let signal: Hsla = rgb(STATUS_AGENT).into();
-        let stopped = self.stopped_ring();
+        let inks = self.glyph_inks();
         canvas(
             |_, _, _| {},
-            move |bounds, _, window, _| {
-                glyph::paint(&drawn, bounds, signal, stopped, false, window)
-            },
+            move |bounds, _, window, _| glyph::paint(&drawn, bounds, inks, false, window),
         )
         .size(px(GLYPH))
     }
 
-    /// The glyph of `agent`'s card as the foot draws it now, for the strip under its page watched to
-    /// lead with, so the two read as one: its card's at rest if the foot doesn't show it.
+    /// The glyph of `agent`'s header as the foot draws it now, for the strip under its page watched
+    /// to lead with, so the two read as one: its header's at rest if the foot doesn't show it.
     pub(super) fn task_glyph(&self, agent: &SharedString, dot: Dot) -> gpui::AnyElement {
         let now = clock();
-        let face = (self.foot.plates.iter())
-            .find(|plate| plate.holds == Holds::Task(agent.clone()) && !plate.leaving)
-            .and_then(|plate| plate.face.as_ref());
+        let face = (self.foot.groups.iter())
+            .find(|group| group.holds == Holds::Task(agent.clone()) && !group.leaving)
+            .and_then(|group| group.face.as_ref());
         let Some(face) = face else {
             return self.status_mark(dot).into_any_element();
         };
         let drawn = face.glyph.drawn(now);
-        let signal: Hsla = rgb(STATUS_AGENT).into();
-        let stopped = self.stopped_ring();
+        let inks = self.glyph_inks();
         canvas(
             |_, _, _| {},
-            move |bounds, _, window, _| {
-                glyph::paint(&drawn, bounds, signal, stopped, false, window)
-            },
+            move |bounds, _, window, _| glyph::paint(&drawn, bounds, inks, false, window),
         )
         .flex_none()
         .size(px(GLYPH))
         .into_any_element()
     }
 
-    /// Brings the plates to the cards and the slot: those no longer wanted fold away, new ones
-    /// grow in, and each task's plate takes its card's changes. `took` is the new card that fills
-    /// the slot's plate.
+    /// Brings the groups to the cards and the slot: those no longer wanted fold away, new ones
+    /// grow in, and each task's group takes its card's changes, open to its pages if its task is
+    /// the one the page area shows. `took` is the new card that fills the slot's group.
     fn sync_foot(&mut self, took: Option<SharedString>, cx: &mut Context<Self>) {
         let now = clock();
         let still = crate::motion::still(cx);
@@ -815,10 +771,10 @@ impl Shell {
         self.foot.still = still;
         let system = (self.text_system.take())
             .unwrap_or_else(|| WindowTextSystem::new(cx.text_system().clone()));
-        let width = self.width();
         let cards = self.task_cards.clone();
         let listed: Vec<&Card> = cards.iter().collect();
-        let (shown, more) = choose(&listed, self.foot.all, self.foot.slot);
+        let shown = self.talk_agent();
+        let (chosen, more) = choose(&listed, self.foot.all, self.foot.slot, shown.as_ref());
         if more == 0 {
             self.foot.all = false;
         }
@@ -829,96 +785,97 @@ impl Shell {
         if self.foot.slot {
             wanted.push(Holds::Slot);
         }
-        wanted.extend(shown.into_iter().map(Holds::Task));
+        wanted.extend(chosen.into_iter().map(Holds::Task));
         let foot = &mut self.foot;
         if let Some(agent) = took
             && wanted.contains(&Holds::Task(agent.clone()))
-            && let Some(plate) =
-                (foot.plates.iter_mut()).find(|plate| plate.holds == Holds::Slot && !plate.leaving)
+            && let Some(group) =
+                (foot.groups.iter_mut()).find(|group| group.holds == Holds::Slot && !group.leaving)
         {
-            plate.holds = Holds::Task(agent);
+            group.holds = Holds::Task(agent);
         }
-        for plate in &mut foot.plates {
-            match (wanted.contains(&plate.holds), plate.leaving) {
-                (false, false) => plate.leave(now, still, animate),
-                (true, true) => plate.stay(now, still),
+        for group in &mut foot.groups {
+            match (wanted.contains(&group.holds), group.leaving) {
+                (false, false) => group.leave(now, still, animate),
+                (true, true) => group.stay(now, still),
                 _ => {}
             }
         }
         for holds in &wanted {
-            if !foot.plates.iter().any(|plate| &plate.holds == holds) {
-                foot.plates
-                    .push(Plate::new(holds.clone(), now, still, animate));
+            if !foot.groups.iter().any(|group| &group.holds == holds) {
+                foot.groups
+                    .push(Group::new(holds.clone(), now, still, animate));
             }
         }
-        foot.plates.sort_by_key(|plate| Reverse(plate.holds.key()));
-        let opening = foot.opening.as_ref().map(|opening| opening.agent.clone());
-        let measure = |text: &SharedString, size: f32, weight: FontWeight| {
-            text_width(text, size, weight, &system)
-        };
-        for plate in foot.plates.iter_mut().filter(|plate| !plate.leaving) {
-            let Holds::Task(agent) = plate.holds.clone() else {
-                plate.grow(HEIGHT, now, moves);
+        foot.groups.sort_by_key(|group| Reverse(group.holds.key()));
+        for group in foot.groups.iter_mut().filter(|group| !group.leaving) {
+            let Holds::Task(agent) = group.holds.clone() else {
+                group.grow(ROW_HEIGHT, now, moves);
                 continue;
             };
-            let agent = &agent;
-            let Some(card) = cards.iter().find(|card| &card.agent == agent) else {
+            let Some(card) = cards.iter().find(|card| card.agent == agent) else {
                 continue;
             };
-            let shape = shape(card, width, &measure);
-            plate.grow(content_height(card, &shape), now, moves);
-            match &mut plate.face {
-                Some(face) => {
-                    let opened = opening.as_ref() == Some(agent)
-                        || foot.ghosts.iter().any(|ghost| &ghost.agent == agent);
-                    face.update(card, shape, now, still, animate, opened, &system);
-                }
-                None => plate.face = Some(Face::new(card, shape, now, still, &system)),
+            let open = shown.as_ref() == Some(&agent);
+            group.grow(group_height(card, open), now, moves);
+            match &mut group.face {
+                Some(face) => face.update(card, open, now, still, animate, &system),
+                None => group.face = Some(Face::new(card, open, now, still, &system)),
             }
             // A slot that the bar didn't fold into, such as a task an agent asked for, shows its
-            // card at once.
-            if plate.fill.end() == 0. {
+            // header at once.
+            if group.fill.end() == 0. {
                 let length = if animate { CONTENT } else { 0. };
-                plate.fill.go(1., now, length, 0., Curve::Ease);
-                plate.content.go(1., now, length, 0., Curve::Ease);
+                group.fill.go(1., now, length, 0., Curve::Ease);
+                group.content.go(1., now, length, 0., Curve::Ease);
             }
         }
         self.text_system = Some(system);
-        let plates: Vec<String> = (self.foot.plates.iter())
-            .filter(|plate| !plate.leaving)
-            .map(|plate| match &plate.holds {
+        let groups: Vec<String> = (self.foot.groups.iter())
+            .filter(|group| !group.leaving)
+            .map(|group| match &group.holds {
                 Holds::More => format!("more {more}"),
                 Holds::Slot => "slot".into(),
                 Holds::Task(agent) => agent.to_string(),
             })
             .collect();
-        let plates = plates.join(" ");
-        if plates != self.foot.logged {
+        let groups = groups.join(" ");
+        if groups != self.foot.logged {
             // check.sh reads this line.
             log!(
                 "browser: task foot {}",
-                if plates.is_empty() { "empty" } else { &plates }
+                if groups.is_empty() { "empty" } else { &groups }
             );
-            self.foot.logged = plates;
+            self.foot.logged = groups;
         }
     }
 
-    /// Where the media players end, over Restart to Update, the foot's plates over them.
+    /// Where the media players end, over Restart to Update, the foot's groups over them.
     pub(super) fn media_top(&self) -> f32 {
         self.over_safe_start() + self.update_banner_room() + self.media_room()
     }
 
-    /// The most room the opened foot takes before it scrolls: the closed foot never does.
+    /// The most room the foot takes before it scrolls, a share of the window's height.
+    fn foot_most(&self) -> f32 {
+        match f32::from(self.viewport.height) {
+            height if height > 0. => FOOT_SHARE * height,
+            _ => f32::INFINITY,
+        }
+    }
+
+    /// The room the foot is held to, while it is: opened to every task, or an open group's pages
+    /// taking it past its share. At rest closed, three headers never reach it.
     pub(super) fn foot_cap(&self) -> Option<f32> {
-        self.foot
-            .all
-            .then(|| FOOT_SHARE * f32::from(self.viewport.height))
+        let most = self.foot_most();
+        let live = (self.foot.groups.iter()).filter(|group| !group.leaving);
+        let total: f32 = live.map(Group::end_room).sum();
+        (self.foot.all || total > most).then_some(most)
     }
 
     /// The room the foot takes at `now`.
     fn foot_room(&self, now: Instant) -> f32 {
-        let total: f32 = self.foot.plates.iter().map(|plate| plate.room(now)).sum();
-        self.foot_cap().map_or(total, |cap| total.min(cap))
+        let total: f32 = self.foot.groups.iter().map(|group| group.room(now)).sum();
+        total.min(self.foot_most())
     }
 
     /// The room the foot takes now, which the list ends over.
@@ -935,62 +892,203 @@ impl Shell {
             && self.form().is_none()
     }
 
-    /// Whether the foot draws `agent`'s plate, where the ring can sit.
+    /// Whether the foot draws `agent`'s group, where the ring can sit.
     pub(super) fn foot_holds(&self, agent: &SharedString) -> bool {
         let task = Holds::Task(agent.clone());
         self.foot_drawn()
-            && (self.foot.plates.iter()).any(|plate| plate.holds == task && !plate.leaving)
+            && (self.foot.groups.iter()).any(|group| group.holds == task && !group.leaving)
     }
 
-    /// Whether a task's plate shows `agent`'s conversation.
-    fn foot_shows(&self, agent: &SharedString) -> bool {
-        self.talk_agent().as_ref() == Some(agent)
+    /// What in the foot the page area shows, the one thing there with the shown plate: the row of
+    /// the task's page watched, else the header of the task whose view shows. The list's own shown
+    /// row has no plate meanwhile (`shown_has_plate`), so the sidebar never shows two.
+    pub(super) fn shown_at_foot(&self) -> Option<StripStop> {
+        let agent = self.talk_agent()?;
+        Some(match self.watched_task_page() {
+            Some((_, tab)) => StripStop::Row(tab),
+            None => StripStop::Header(number(&agent)),
+        })
     }
 
-    /// Where ⌘T's bar folds to as it runs a task: the slot's plate as it will rest, in the window,
-    /// if the sidebar shows it, with its corners' radius and its fill.
+    /// The foot's stops for the keys' ring, top first: the count's row, and each task's header,
+    /// its chip and, where its group is open, its pages' rows. None while the sidebar doesn't
+    /// draw the foot, so the ring never sits where it can't be seen.
+    pub(super) fn foot_stops(&self) -> Vec<StripStop> {
+        if !self.foot_drawn() {
+            return Vec::new();
+        }
+        let mut stops = Vec::new();
+        for group in self.foot.groups.iter().filter(|group| !group.leaving) {
+            match (&group.holds, &group.face) {
+                (Holds::More, _) => stops.push(StripStop::More),
+                (Holds::Task(agent), Some(face)) => {
+                    let n = number(agent);
+                    stops.push(StripStop::Header(n));
+                    stops.extend(chip(&face.card).map(|_| StripStop::Chip(n)));
+                    if face.open {
+                        stops.extend(face.card.pages.iter().map(|&tab| StripStop::Row(tab)));
+                    }
+                }
+                _ => {}
+            }
+        }
+        stops
+    }
+
+    /// The task numbered `n`, as its header's stop names it.
+    fn foot_agent(&self, n: u64) -> Option<SharedString> {
+        (self.task_cards.iter())
+            .find(|card| number(&card.agent) == n)
+            .map(|card| card.agent.clone())
+    }
+
+    /// Return on one of the foot's stops: what a click on it does.
+    pub(super) fn key_foot_show(&mut self, stop: StripStop, cx: &mut Context<Self>) {
+        match stop {
+            StripStop::Header(n) => {
+                if let Some(agent) = self.foot_agent(n) {
+                    self.leave_strip("header", cx);
+                    log!("browser: command show-task via strip keys");
+                    self.show_group(agent, cx);
+                }
+            }
+            StripStop::Chip(n) => {
+                let card = self.task_cards.iter().find(|card| number(&card.agent) == n);
+                if let Some((agent, chip)) =
+                    card.and_then(|card| Some((card.agent.clone(), chip(card)?)))
+                {
+                    self.run_chip(agent, chip, cx);
+                }
+            }
+            // The ring stays on the row, whose page shows: the keys never go to an agent's page.
+            StripStop::Row(tab) => {
+                if self.watch_row(tab, cx) && self.agents_page_watched() {
+                    self.focus_keys = true;
+                }
+            }
+            StripStop::More => self.toggle_foot(cx),
+            _ => {}
+        }
+    }
+
+    /// A header's click: its task's view, which opens its group, and which a page of its watched
+    /// goes back to. On the header whose view shows, it puts the view away.
+    fn show_group(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+        if self.talk_agent().as_ref() == Some(&agent) && self.watched_task_page().is_some() {
+            return self.task_page_back(cx);
+        }
+        self.show_task(agent, cx);
+    }
+
+    /// A page's row's click: stands on that page, as its picture's click in the task's view does,
+    /// and nothing else. Says whether it did. The page zooms out of its picture there, or of its
+    /// row where the view has drawn none.
+    fn watch_row(&mut self, tab: u64, cx: &mut Context<Self>) -> bool {
+        if self
+            .watched_task_page()
+            .is_some_and(|(_, shown)| shown == tab)
+        {
+            return false;
+        }
+        let row = self.foot.rows_drawn.borrow().get(&tab).copied();
+        let (from, picture) =
+            (self.talk_thumb(tab, cx)).unwrap_or_else(|| (row.unwrap_or_default(), None));
+        self.watch_task_page(tab, from, picture, cx)
+    }
+
+    /// A chip's click: the user's own act on the task.
+    fn run_chip(&mut self, agent: SharedString, chip: Chip, cx: &mut Context<Self>) {
+        match chip {
+            Chip::Retry => self.browser.task(agent, TaskAction::Retry, cx),
+            Chip::Assistant(cli, Offer::Get) => {
+                log!("browser: assistant install page {} via sidebar", cli.id());
+                self.browser.open_page(cli.install_page(), cx);
+            }
+            Chip::Assistant(_, Offer::Cancel) => {
+                self.browser.task(agent, TaskAction::CancelSignIn, cx)
+            }
+            Chip::Assistant(..) => self.browser.task(agent, TaskAction::SignIn, cx),
+        }
+    }
+
+    /// What `tab` is to `card`'s task now, of the five words a task's page has: You're driving
+    /// where the user took it over, Needs you where its task waits for them at the page it handed
+    /// them, Reading where the task works in it now, Paused where its task waits, stopped or broke
+    /// off, or went on from a page it handed them, else Done. The row at the sidebar's foot ends
+    /// in it and a tile's head line says it, so a page reads the same in both.
+    pub(super) fn page_word(&self, card: &Card, tab: u64) -> PageWord {
+        match self.held_why(tab) {
+            // What the task asked of them there: a page they took over has none.
+            Some(asked) if asked.is_empty() => return PageWord::Driving,
+            Some(_) if card.word == Word::NeedsYou => return PageWord::NeedsYou,
+            Some(_) => return PageWord::Paused,
+            None => {}
+        }
+        match card.word {
+            Word::Working => {
+                // Its own step of the turn under way, where it works on more than one page.
+                let at = match card.page_steps.is_empty() {
+                    false => card.page_steps.iter().any(|(each, _)| *each == tab),
+                    true => card.pages.len() == 1 || self.agents_at.get(&card.agent) == Some(&tab),
+                };
+                if at {
+                    PageWord::Reading
+                } else {
+                    PageWord::Done
+                }
+            }
+            Word::Done => PageWord::Done,
+            Word::NeedsYou | Word::Stopped | Word::Interrupted | Word::AtLimit => PageWord::Paused,
+        }
+    }
+
+    /// Where ⌘T's bar folds to as it runs a task: the slot's plate as it will rest, a header's, in
+    /// the window, if the sidebar shows it, with its corners' radius and its fill.
     pub fn fold_target(&self) -> Option<(Bounds<Pixels>, f32, Hsla)> {
         if !self.foot_drawn() || !self.foot.slot {
             return None;
         }
-        let live = || self.foot.plates.iter().filter(|plate| !plate.leaving);
-        let index = live().position(|plate| plate.holds == Holds::Slot)?;
-        let total: f32 = live().map(Plate::end_room).sum();
-        let room = self.foot_cap().map_or(total, |cap| total.min(cap));
-        let above: f32 = live().take(index).map(Plate::end_room).sum();
+        let live = || self.foot.groups.iter().filter(|group| !group.leaving);
+        let index = live().position(|group| group.holds == Holds::Slot)?;
+        let total: f32 = live().map(Group::end_room).sum();
+        let room = total.min(self.foot_most());
+        let above: f32 = live().take(index).map(Group::end_room).sum();
         let scrolled = f32::from(self.foot.scroll.offset().y);
-        let top =
-            f32::from(self.viewport.height) - self.media_top() - room + scrolled + above + GAP;
+        let top = f32::from(self.viewport.height) - self.media_top() - room
+            + scrolled
+            + above
+            + PLATE_TOP;
         let origin = self.sidebar_origin.get();
         let bounds = Bounds::new(
             point(origin.x + px(PLATE_INSET), origin.y + px(top)),
-            gpui::size(px(self.width() - 2. * PLATE_INSET), px(HEIGHT)),
+            gpui::size(px(self.width() - 2. * PLATE_INSET), px(PLATE_HEIGHT)),
         );
-        Some((bounds, TILE_RADIUS, self.palette.plate(TILE)))
+        Some((bounds, PLATE_RADIUS, self.palette.plate(TILE)))
     }
 
     /// The bar has gone for the task: folded into the slot, whose fill takes over as it lands and
-    /// whose card fades in then, or, where it couldn't fold, hidden, and the card fades in at once.
+    /// goes as the header fades in then, or, where it couldn't fold, hidden, and the header fades
+    /// in at once.
     pub fn fold_started(&mut self, folded: bool, cx: &mut Context<Self>) {
         let now = clock();
         let still = crate::motion::still(cx);
-        let Some(plate) = (self.foot.plates.iter_mut())
-            .find(|plate| plate.holds == Holds::Slot && !plate.leaving)
+        let Some(group) = (self.foot.groups.iter_mut())
+            .find(|group| group.holds == Holds::Slot && !group.leaving)
         else {
             return;
         };
         match (folded, still) {
             (true, false) => {
-                plate.fill.go(1., now, 0., FOLD, Curve::Ease);
-                plate.content.go(1., now, CONTENT, FOLD, Curve::Ease);
+                group.fill.go(1., now, 0., FOLD, Curve::Ease);
+                group.content.go(1., now, CONTENT, FOLD, Curve::Ease);
             }
             (_, true) => {
-                plate.fill.go(1., now, CROSSFADE, 0., Curve::Linear);
-                plate.content.go(1., now, CROSSFADE, 0., Curve::Linear);
+                group.fill.go(1., now, CROSSFADE, 0., Curve::Linear);
+                group.content.go(1., now, CROSSFADE, 0., Curve::Linear);
             }
             (false, false) => {
-                plate.fill.go(1., now, CONTENT, 0., Curve::Ease);
-                plate.content.go(1., now, CONTENT, 0., Curve::Ease);
+                group.fill.go(1., now, CONTENT, 0., Curve::Ease);
+                group.content.go(1., now, CONTENT, 0., Curve::Ease);
             }
         }
         cx.notify();
@@ -1035,16 +1133,17 @@ impl Shell {
         {
             self.foot.bump = None;
         }
-        let before = self.foot.plates.len();
+        let before = self.foot.groups.len();
         self.foot
-            .plates
-            .retain(|plate| !(plate.leaving && !plate.moving(now, still)));
-        if self.foot.plates.len() != before {
+            .groups
+            .retain(|group| !(group.leaving && !group.moving(now, still)));
+        if self.foot.groups.len() != before {
             self.foot.plates_drawn.borrow_mut().clear();
+            self.foot.rows_drawn.borrow_mut().clear();
             self.foot.rested.borrow_mut().clear();
         }
-        for plate in &mut self.foot.plates {
-            plate.settle(now);
+        for group in &mut self.foot.groups {
+            group.settle(now);
         }
         if self.foot_moving(now) {
             window.request_animation_frame();
@@ -1066,18 +1165,18 @@ impl Shell {
                 .is_some_and(|start| now < start + seconds(BUMP))
             || self
                 .foot
-                .plates
+                .groups
                 .iter()
-                .any(|plate| plate.moving(now, still))
+                .any(|group| group.moving(now, still))
     }
 
     /// Whether a working task draws on the loading dots' clock.
     pub(super) fn foot_live(&self) -> bool {
-        let face = |plate: &Plate| plate.face.as_ref().is_some_and(Face::live);
+        let face = |group: &Group| group.face.as_ref().is_some_and(Face::live);
         self.foot
-            .plates
+            .groups
             .iter()
-            .any(|plate| !plate.leaving && face(plate))
+            .any(|group| !group.leaving && face(group))
     }
 
     /// Whether `tab`'s row waits for its page's flight to land, which draws it meanwhile.
@@ -1091,8 +1190,8 @@ impl Shell {
             || (self.foot.ghosts.iter()).any(|ghost| ghost.tab == tab && now < ghost.start + flight)
     }
 
-    /// Done's Open or the strip's: the pages go to Today, each flying there from `from`, the Open
-    /// that was clicked, in the window, as a row grows into its place.
+    /// The strip's Open: the page goes to Today, flying there from `from`, the Open that was
+    /// clicked, in the window, as a row grows into its place.
     pub(super) fn open_task_pages(
         &mut self,
         agent: SharedString,
@@ -1107,8 +1206,8 @@ impl Shell {
             Some(tab) => vec![tab],
             None => card.open.iter().map(|(tab, _)| *tab).collect(),
         };
-        // Its last page opened, a finished task has nothing left on its card, which folds into the
-        // Archive once its pages have landed.
+        // Its last page opened, a finished task has nothing left in its group, which folds into
+        // the Archive once its pages have landed.
         let last = card.open.iter().all(|(each, _)| tabs.contains(each));
         if card.finished() && last {
             self.fold_later(agent.clone(), 0.);
@@ -1159,19 +1258,18 @@ impl Shell {
     }
 
     /// The user left `agent`'s conversation: a finished task they've now seen folds into the
-    /// Archive, so the foot keeps only what's live or unread.
+    /// Archive, so the foot keeps only what's live or unread. One with pages still open keeps its
+    /// group until the last of them closes.
     pub(super) fn talk_left(&mut self, agent: SharedString, cx: &mut Context<Self>) {
-        if self
-            .task_cards
-            .iter()
-            .any(|card| card.agent == agent && card.finished())
+        if (self.task_cards.iter())
+            .any(|card| card.agent == agent && card.finished() && card.pages.is_empty())
         {
             self.fold_later(agent, ARCHIVE_LEAVE);
             cx.notify();
         }
     }
 
-    /// Folds `agent`'s card into the Archive `delay` seconds from now, or once its pages land.
+    /// Folds `agent`'s group into the Archive `delay` seconds from now, or once its pages land.
     fn fold_later(&mut self, agent: SharedString, delay: f32) {
         self.foot.folds.retain(|(each, _)| each != &agent);
         self.foot.folds.push((agent, clock() + seconds(delay)));
@@ -1210,7 +1308,7 @@ impl Shell {
     }
 
     /// A finished task the user has seen leaves the foot as ✕ takes it, which ⌘Z and ⇧⌘T bring
-    /// back: its plate goes at once and the plates above close its room, as a copy
+    /// back: its group goes at once and the groups above close its room, as a copy of its header
     /// flies into the Archive button, whose glyph bumps as it lands. Where the sidebar doesn't
     /// show it, or with motion reduced, it goes as ✕ has it go. Not while its conversation shows.
     pub(super) fn archive_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
@@ -1230,17 +1328,17 @@ impl Shell {
             .borrow()
             .get(&number(&agent))
             .copied();
-        let plate = (self.foot.plates.iter_mut())
-            .find(|plate| plate.holds == Holds::Task(agent.clone()) && !plate.leaving);
+        let group = (self.foot.groups.iter_mut())
+            .find(|group| group.holds == Holds::Task(agent.clone()) && !group.leaving);
         if flies
             && let Some(from) = from
-            && let Some(plate) = plate
+            && let Some(group) = group
         {
             let origin = self.sidebar_origin.get();
-            plate.archived = Some((now, Bounds::new(from.origin - origin, from.size)));
-            plate.leaving = true;
-            plate.opacity = Ease::rest(0.);
-            plate
+            group.archived = Some((now, Bounds::new(from.origin - origin, from.size)));
+            group.leaving = true;
+            group.opacity = Ease::rest(0.);
+            group
                 .height
                 .go(0., now, ARCHIVE_CLOSE, ARCHIVE_CLOSE_DELAY, Curve::Ease);
             self.foot.bump = Some(now + seconds(ARCHIVE));
@@ -1248,7 +1346,7 @@ impl Shell {
         log!("browser: task {agent} archived");
         self.dismiss_task(agent.clone(), cx);
         // The Agents take its card away; the foot doesn't wait for them, so a change meanwhile
-        // can't bring its plate back.
+        // can't bring its group back.
         self.task_cards.retain(|card| card.agent != agent);
         self.sync_foot(None, cx);
         cx.notify();
@@ -1283,9 +1381,9 @@ impl Shell {
         )
     }
 
-    /// The copies of finished tasks' plates on their way into the Archive button: each from its
-    /// plate's place to the button's box, its corners to the box's, its content fading at once and
-    /// its plate over the end of the flight.
+    /// The copies of finished tasks' headers on their way into the Archive button: each from its
+    /// header's place to the button's box, its corners to the box's, its content fading at once
+    /// and its plate over the end of the flight.
     pub(super) fn archive_flights(&self) -> Vec<AnyElement> {
         let now = clock();
         let to = Bounds::new(
@@ -1295,9 +1393,9 @@ impl Shell {
             ),
             gpui::size(px(NAV_SIZE), px(NAV_SIZE)),
         );
-        let flights = self.foot.plates.iter().filter_map(|plate| {
-            let (since, from) = plate.archived?;
-            let face = plate.face.as_ref()?;
+        let flights = self.foot.groups.iter().filter_map(|group| {
+            let (since, from) = group.archived?;
+            let face = group.face.as_ref()?;
             let gone = now.saturating_duration_since(since).as_secs_f32();
             let t = gone / ARCHIVE;
             if t >= 1. {
@@ -1316,13 +1414,14 @@ impl Shell {
                 false => 1. - (t - ARCHIVE_HOLD) / (1. - ARCHIVE_HOLD),
             };
             let content = 1. - (gone / ARCHIVE_CONTENT).min(1.);
+            // The copy has a tile's fill, as it's a thing on its way, not a row at rest.
             let flight = div()
                 .absolute()
                 .left(lerp(from.origin.x, to.origin.x))
                 .top(lerp(from.origin.y, to.origin.y))
                 .w(lerp(from.size.width, to.size.width))
                 .h(lerp(from.size.height, to.size.height))
-                .rounded(px(TILE_RADIUS + (NAV_RADIUS - TILE_RADIUS) * way))
+                .rounded(px(PLATE_RADIUS + (NAV_RADIUS - PLATE_RADIUS) * way))
                 .overflow_hidden()
                 .bg(self.palette.plate(TILE))
                 .opacity(opacity)
@@ -1332,7 +1431,7 @@ impl Shell {
         flights.collect()
     }
 
-    /// A plate's content as its copy takes it into the Archive: laid out at the plate's size,
+    /// A header's content as its copy takes it into the Archive: laid out at the header's size,
     /// clipped as the copy shrinks, at `alpha`, and taking no clicks.
     fn archived_face(
         &self,
@@ -1341,19 +1440,6 @@ impl Shell {
         alpha: f32,
         now: Instant,
     ) -> AnyElement {
-        let drawn = face.glyph.drawn(now);
-        let signal: Hsla = rgb(STATUS_AGENT).into();
-        let stopped = self.stopped_ring();
-        let glyph = canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| {
-                glyph::paint(&drawn, bounds, signal, stopped, false, window)
-            },
-        )
-        .absolute()
-        .left(px(FAVICON_X - PLATE_INSET + FAVICON_SIZE / 2. - GLYPH / 2.))
-        .top(px(GLYPH_TOP))
-        .size(px(GLYPH));
         let status = div()
             .mt(px(STATUS_GAP))
             .h(px(STATUS_LINE))
@@ -1366,7 +1452,7 @@ impl Shell {
             .absolute()
             .left(px(COLUMN))
             .right(px(TITLE_END_INSET))
-            .top(px(TOP))
+            .top(px(TEXT_TOP))
             .flex()
             .flex_col()
             .child(div().h(px(LINE)).flex().items_center().child(title(
@@ -1375,21 +1461,6 @@ impl Shell {
                 false,
             )))
             .child(status);
-        let rows = face.shape.rows.iter().map(|row| {
-            let row = (row.iter())
-                .filter_map(|&index| face.chips.get(index))
-                .map(|chip| card_chip(&self.palette, "task-chip-archived", chip.label()));
-            div().flex().gap(px(CHIP_GAP)).children(row)
-        });
-        let chips = div()
-            .absolute()
-            .top(px(chips_top(face.card.asks, face.shape.lines)))
-            .left(px(COLUMN - CHIP_X))
-            .right(px(CHIP_END))
-            .flex()
-            .flex_col()
-            .gap(px(CHIP_GAP))
-            .children(rows);
         div()
             .absolute()
             .left_0()
@@ -1397,23 +1468,22 @@ impl Shell {
             .w(from.size.width)
             .h(from.size.height)
             .opacity(alpha)
-            .child(glyph)
+            .child(self.header_glyph(face, false, now))
             .child(text)
-            .child(chips)
             .into_any_element()
     }
 
-    /// The foot, over the players, as tall as the room its plates take, scrolling once opened past
-    /// its share of the sidebar.
+    /// The foot, over the players, as tall as the room its groups take, scrolling past its share
+    /// of the sidebar.
     pub(super) fn task_foot(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.foot.plates.is_empty() {
+        if self.foot.groups.is_empty() {
             return None;
         }
         let now = clock();
         let room = self.foot_room(now);
-        let total: f32 = self.foot.plates.iter().map(|plate| plate.room(now)).sum();
-        let plates: Vec<AnyElement> = (self.foot.plates.iter())
-            .map(|plate| self.foot_plate(plate, now, cx))
+        let total: f32 = self.foot.groups.iter().map(|group| group.room(now)).sum();
+        let groups: Vec<AnyElement> = (self.foot.groups.iter())
+            .map(|group| self.foot_group(group, now, cx))
             .collect();
         let column = div()
             .id("task-foot")
@@ -1428,98 +1498,106 @@ impl Shell {
             true => column.overflow_y_scroll().track_scroll(&self.foot.scroll),
             false => column.overflow_hidden(),
         };
-        Some(column.children(plates).into_any_element())
+        Some(column.children(groups).into_any_element())
     }
 
-    /// A plate's box: its room, its corners and its opacity.
-    fn plate_box(&self, plate: &Plate, now: Instant) -> gpui::Div {
-        let height = plate.height.at(now);
-        // A slot not yet filled shows its place in dashes, which go as its fill comes.
-        let fill = plate.fill.at(now);
-        let dashes = (fill < 1.).then(|| {
-            let color = self.palette.glyph(SLOT_DASH);
-            dashed_plate(color.opacity(1. - fill), TILE_RADIUS)
-                .absolute()
-                .inset_0()
-        });
-        div()
+    /// A group: its room, clipped to it as it opens and closes, and what it holds.
+    fn foot_group(&self, group: &Group, now: Instant, cx: &mut Context<Self>) -> AnyElement {
+        let frame = div()
             .flex_none()
-            .mt(px(gap(height)))
-            .h(px(height))
-            .mx(px(PLATE_INSET))
+            .h(px(group.height.at(now)))
             .relative()
             .overflow_hidden()
-            .rounded(px(TILE_RADIUS))
-            .opacity(plate.opacity.at(now))
-            .children(dashes)
-    }
-
-    fn foot_plate(&self, plate: &Plate, now: Instant, cx: &mut Context<Self>) -> AnyElement {
-        let key = plate.holds.key();
-        let drawn = drawn_listener(
-            &self.foot.plates_drawn,
-            &self.foot.rested,
-            key,
-            !plate.moving(now, self.foot.still),
-        );
-        match (&plate.holds, &plate.face) {
-            (Holds::Task(_), Some(face)) => self.task_plate(plate, face, now, cx),
-            (Holds::More, _) => self.more_plate(plate, now, cx),
+            .opacity(group.opacity.at(now));
+        match (&group.holds, &group.face) {
+            (Holds::Task(_), Some(face)) => frame
+                .child(self.task_header(group, face, now, cx))
+                .children(self.task_chip(group, face, now, cx))
+                .children(self.task_pages(group, face, now, cx))
+                .into_any_element(),
+            (Holds::More, _) => frame
+                .child(self.more_row(group, now, cx))
+                .into_any_element(),
             // The slot: the bar's plate lands in it, and its fill takes over.
             _ => {
-                let fill = self.palette.plate(TILE).opacity(plate.fill.at(now));
-                self.plate_box(plate, now)
-                    .bg(fill)
-                    .child(drawn)
+                let key = group.holds.key();
+                let rest = !group.moving(now, self.foot.still);
+                let drawn = drawn_listener(&self.foot.plates_drawn, &self.foot.rested, key, rest);
+                let (fill, _) = group.landing(now);
+                frame
+                    .child(
+                        self.header_plate(group, now)
+                            .bg(self.palette.plate(TILE).opacity(fill))
+                            .child(drawn),
+                    )
                     .into_any_element()
             }
         }
     }
 
-    /// "3 more tasks", which opens the foot to every task, or, opened, "Show less".
-    fn more_plate(&self, plate: &Plate, now: Instant, cx: &mut Context<Self>) -> AnyElement {
+    /// A header's plate's box in its group, a tab's row's, with the slot's dashes while they show.
+    fn header_plate(&self, group: &Group, now: Instant) -> gpui::Div {
+        // A slot not yet filled shows its place in dashes, which go as its fill comes.
+        let (_, dashed) = group.landing(now);
+        let dashes = (dashed > 0.).then(|| {
+            let color = self.palette.glyph(SLOT_DASH);
+            dashed_plate(color.opacity(dashed), PLATE_RADIUS)
+                .absolute()
+                .inset_0()
+        });
+        div()
+            .absolute()
+            .top(px(PLATE_TOP))
+            .left(px(PLATE_INSET))
+            .right(px(PLATE_INSET))
+            .h(px(PLATE_HEIGHT))
+            .rounded(px(PLATE_RADIUS))
+            .children(dashes)
+    }
+
+    /// "3 more tasks", which opens the foot to every task, or, opened, "Show less": a row's words
+    /// on the title's column.
+    /// What the row over the headers says: how many tasks the three places leave out, counted in
+    /// headers whatever the open group's rows take, or the way back once they all show.
+    fn more_words(&self) -> SharedString {
         let listed = self.task_cards.len();
         let more = listed.saturating_sub(MOST - usize::from(self.foot.slot));
-        let words: SharedString = match (self.foot.all, more) {
+        match (self.foot.all, more) {
             (true, _) => "Show less".into(),
             (false, 1) => "1 more task".into(),
             (false, more) => format!("{more} more tasks").into(),
-        };
-        let hovered = self.foot.hovered == Some(Holds::More.key());
-        let fill = self
-            .palette
-            .plate(if hovered { HOVERED } else { TILE })
-            .opacity(plate.fill.at(now));
-        let drawn = drawn_listener(
-            &self.foot.plates_drawn,
-            &self.foot.rested,
-            Holds::More.key(),
-            !plate.moving(now, self.foot.still),
-        );
-        self.plate_box(plate, now)
-            .bg(fill)
+        }
+    }
+
+    fn more_row(&self, group: &Group, now: Instant, cx: &mut Context<Self>) -> AnyElement {
+        let words = self.more_words();
+        let key = Holds::More.key();
+        let hovered = self.foot.hovered == Some(key);
+        let rest = !group.moving(now, self.foot.still);
+        let drawn = drawn_listener(&self.foot.plates_drawn, &self.foot.rested, key, rest);
+        let row = self
+            .header_plate(group, now)
+            .when(hovered, |row| row.bg(self.palette.plate(HOVERED)))
+            .id("task-more");
+        // A stop is placed in the flow; this one keeps its plate's place in its row.
+        self.strip_stop(row, StripStop::More, words.clone(), PLATE_RADIUS)
+            .absolute()
+            .pl(px(COLUMN))
+            .flex()
+            .items_center()
+            .text_size(px(text::SMALL))
+            .text_color(self.palette.gray(SECONDARY))
             .child(drawn)
-            .child(
-                div()
-                    .id("task-more")
-                    .absolute()
-                    .inset_0()
-                    .pl(px(COLUMN))
-                    .flex()
-                    .items_center()
-                    .text_size(px(text::SMALL))
-                    .text_color(self.palette.gray(SECONDARY))
-                    .child(words)
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_hover(cx.listener(|shell, hovered: &bool, _, cx| {
-                        shell.hover_plate(Holds::More.key(), *hovered, cx);
-                    }))
-                    .on_click(cx.listener(|shell, _, _, cx| shell.toggle_foot(cx))),
-            )
+            .child(words)
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
+                shell.hover_header(key, *hovered, cx);
+            }))
+            .on_click(cx.listener(|shell, _, _, cx| shell.toggle_foot(cx)))
             .into_any_element()
     }
 
-    fn hover_plate(&mut self, key: u64, hovered: bool, cx: &mut Context<Self>) {
+    fn hover_header(&mut self, key: u64, hovered: bool, cx: &mut Context<Self>) {
         if hovered {
             self.foot.hovered = Some(key);
         } else if self.foot.hovered == Some(key) {
@@ -1528,54 +1606,56 @@ impl Shell {
         cx.notify();
     }
 
-    /// A task's plate: the glyph in the favicon's column, the title over the status, its chips
-    /// under that, and ✕ under the pointer.
-    fn task_plate(
+    /// A header's glyph, in the favicon's column of its plate. On the shown plate's fill, `lit`,
+    /// the ring is drawn brighter, to read as on the others.
+    fn header_glyph(&self, face: &Face, lit: bool, now: Instant) -> impl IntoElement + use<> {
+        let drawn = face.glyph.drawn(now);
+        let inks = self.glyph_inks();
+        let paint = move |bounds, _, window: &mut Window, _: &mut gpui::App| {
+            glyph::paint(&drawn, bounds, inks, lit, window)
+        };
+        canvas(|_, _, _| {}, paint)
+            .absolute()
+            .left(px(FAVICON_X - PLATE_INSET + FAVICON_SIZE / 2. - GLYPH / 2.))
+            .top(px((PLATE_HEIGHT - GLYPH) / 2.))
+            .size(px(GLYPH))
+    }
+
+    /// A task's header, a sidebar row: the glyph in the favicon's column, the title over the
+    /// state's line, and ✕ under the pointer. It has a plate only under the pointer and while
+    /// its task's view is what the page area shows.
+    fn task_header(
         &self,
-        plate: &Plate,
+        group: &Group,
         face: &Face,
         now: Instant,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let agent = face.card.agent.clone();
-        let key = plate.holds.key();
+        let key = group.holds.key();
         let still = self.foot.still;
         let hovered = self.foot.hovered == Some(key);
-        let fill = plate.fill.at(now);
-        let shown = self.foot_shows(&agent);
-        let plate_box = self.plate_box(plate, now);
-        // Its conversation shows, as a selected tab's page does.
-        let plate_box = match (shown, hovered) {
+        let shown = self.shown_at_foot() == Some(StripStop::Header(key));
+        let (landed, _) = group.landing(now);
+        let plate = self.header_plate(group, now);
+        let plate = match (shown, hovered) {
             (true, _) => selected_plate(
                 &self.palette,
-                plate_box,
-                fill,
+                plate,
+                group.fill.at(now),
                 f32::from(u8::from(hovered)),
                 false,
             ),
-            (false, true) => plate_box.bg(self.palette.plate(HOVERED).opacity(fill)),
-            (false, false) => plate_box.bg(self.palette.plate(TILE).opacity(fill)),
-        };
-        let glyph = {
-            let drawn = face.glyph.drawn(now);
-            let signal: Hsla = rgb(STATUS_AGENT).into();
-            let stopped = self.stopped_ring();
-            // On the selected plate's fill the ring is drawn brighter, to read as on the others.
-            let paint = move |bounds, _, window: &mut Window, _: &mut gpui::App| {
-                glyph::paint(&drawn, bounds, signal, stopped, shown, window)
-            };
-            canvas(|_, _, _| {}, paint)
-                .absolute()
-                .left(px(FAVICON_X - PLATE_INSET + FAVICON_SIZE / 2. - GLYPH / 2.))
-                .top(px(GLYPH_TOP))
-                .size(px(GLYPH))
+            (false, true) => plate.bg(self.palette.plate(HOVERED)),
+            // The bar's plate as it lands, which goes as the header comes.
+            (false, false) => plate.bg(self.palette.plate(TILE).opacity(landed)),
         };
         let end = if hovered { HOVER_END } else { TITLE_END_INSET };
         let text = div()
             .absolute()
             .left(px(COLUMN))
             .right(px(end))
-            .top(px(TOP))
+            .top(px(TEXT_TOP))
             .flex()
             .flex_col()
             .child(self.task_title(face, shown, now, still))
@@ -1583,14 +1663,12 @@ impl Shell {
         let content = div()
             .absolute()
             .inset_0()
-            .opacity(plate.content.at(now))
-            .child(glyph)
-            .child(text)
-            .children(self.task_chips(face, now, still, !plate.moving(now, still), cx))
-            .children(self.leaving_chips(face, now, still));
+            .opacity(group.content.at(now))
+            .child(self.header_glyph(face, shown, now))
+            .child(text);
         let close = hovered.then(|| {
             let agent = agent.clone();
-            self.media_button("task-close", number(&agent), "icons/x.svg")
+            self.media_button("task-close", key, "icons/x.svg")
                 .absolute()
                 .top(px(CLOSE_INSET))
                 .right(px(CLOSE_INSET))
@@ -1600,31 +1678,21 @@ impl Shell {
                     shell.dismiss_task(agent.clone(), cx);
                 }))
         });
-        let drawn = drawn_listener(
-            &self.foot.plates_drawn,
-            &self.foot.rested,
-            key,
-            !plate.moving(now, still),
-        );
-        let name: SharedString = format!("{}, {}", face.card.title, face.card.status).into();
-        // Its chips and ✕ take their own clicks before the plate does.
-        let plate = plate_box.id(("task-plate", key));
-        // The plate whose page shows is the ring's stop while it's watched.
-        let plate = match shown {
-            true => self.strip_stop(plate, StripStop::Card, name, TILE_RADIUS),
-            false => plate,
-        };
-        plate
+        let rest = !group.moving(now, still);
+        let drawn = drawn_listener(&self.foot.plates_drawn, &self.foot.rested, key, rest);
+        let name: SharedString = format!("{}, {}", face.card.title, face.status.text).into();
+        // ✕ takes its own click before the header does.
+        let header = plate.id(("task-plate", key));
+        self.strip_stop(header, StripStop::Header(key), name, PLATE_RADIUS)
+            .absolute()
             .child(drawn)
             .child(content)
             .children(close)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_hover(
-                cx.listener(move |shell, hovered: &bool, _, cx| {
-                    shell.hover_plate(key, *hovered, cx)
-                }),
-            )
-            .on_click(cx.listener(move |shell, _, _, cx| shell.show_task(agent.clone(), cx)))
+            .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
+                shell.hover_header(key, *hovered, cx)
+            }))
+            .on_click(cx.listener(move |shell, _, _, cx| shell.show_group(agent.clone(), cx)))
             .into_any_element()
     }
 
@@ -1647,7 +1715,7 @@ impl Shell {
                 .child(title(&self.palette, words, shown))
         };
         let (old, t) = match face.title.going(now, length) {
-            Some((old, _, _, t)) => (Some(line(old.clone(), 1. - t)), t),
+            Some((old, t)) => (Some(line(old.clone(), 1. - t)), t),
             None => (None, 1.),
         };
         div()
@@ -1657,8 +1725,9 @@ impl Shell {
             .child(line(face.title.text.clone(), t))
     }
 
-    /// The status: each new one rolling in from under the old, which goes up, or with motion
-    /// reduced crossfading. While the task works a highlight sweeps along it.
+    /// The state's line: each new one rolling in from under the old, which goes up, or with motion
+    /// reduced crossfading. While the task works a highlight sweeps along it. Full access, where
+    /// it leads, is in the title's ink, and no other colour.
     fn task_status(&self, face: &Face, now: Instant, still: bool) -> impl IntoElement + use<> {
         let length = if still { CROSSFADE } else { ROLL };
         let rise = if still { 0. } else { ROLL_RISE };
@@ -1666,15 +1735,13 @@ impl Shell {
         let room = self.width() - 2. * PLATE_INSET - COLUMN - TITLE_END_INSET;
         let phase =
             (now.saturating_duration_since(self.foot.epoch).as_secs_f32() / SHIMMER).fract();
-        let line = |words: SharedString,
-                    lines: usize,
-                    asks: bool,
-                    top: f32,
-                    alpha: f32,
-                    shimmers: bool| {
-            let height = if asks { QUESTION_LINE } else { STATUS_LINE };
-            // Its lead, how far the agent has got or that it needs the user, in the title's ink.
-            let lead = status_lead(&words);
+        let led = HighlightStyle {
+            color: Some(self.palette.text(TITLE)),
+            font_weight: Some(FontWeight::MEDIUM),
+            ..HighlightStyle::default()
+        };
+        let line = |words: SharedString, top: f32, alpha: f32, shimmers: bool| {
+            let lead = state_lead(&words);
             let base = div()
                 .absolute()
                 .left_0()
@@ -1682,21 +1749,19 @@ impl Shell {
                 .top(px(top))
                 .opacity(alpha)
                 .text_size(px(text::SMALL))
-                .line_height(px(height))
-                .text_color(self.palette.gray(STATUS));
-            let base = match lines {
-                1 => base.truncate(),
-                lines => base.line_clamp(lines).text_ellipsis(),
-            };
+                .line_height(px(STATUS_LINE))
+                .text_color(self.palette.gray(STATUS))
+                .truncate();
             match shimmers {
                 true => {
                     let width = face.width.min(room).max(1.);
                     let highlights = face.marks.iter().map(|(range, x)| {
-                        let led = range.end <= lead;
-                        let lit = if led { 1. } else { shimmer(*x, width, phase) };
-                        let highlight = HighlightStyle {
-                            font_weight: led.then_some(FontWeight::MEDIUM),
-                            ..self.palette.lit_highlight(STATUS, SHIMMER_HIGH, lit)
+                        let highlight = match range.end <= lead {
+                            true => led,
+                            false => {
+                                let lit = shimmer(*x, width, phase);
+                                self.palette.lit_highlight(STATUS, SHIMMER_HIGH, lit)
+                            }
                         };
                         (range.clone(), highlight)
                     });
@@ -1707,176 +1772,202 @@ impl Shell {
                     base.text_color(peak).child(styled)
                 }
                 false if lead > 0 => {
-                    let highlight = HighlightStyle {
-                        color: Some(self.palette.text(TITLE)),
-                        font_weight: Some(FontWeight::MEDIUM),
-                        ..HighlightStyle::default()
-                    };
-                    base.child(StyledText::new(words).with_highlights([(0..lead, highlight)]))
+                    base.child(StyledText::new(words).with_highlights([(0..lead, led)]))
                 }
                 false => base.child(words),
             }
         };
         let status = &face.status;
         let (old, t) = match status.going(now, length) {
-            Some((old, lines, asks, t)) => {
+            Some((old, t)) => {
                 let t = if still { t } else { motion::eased(t) };
-                (
-                    Some(line(old.clone(), lines, asks, -rise * t, 1. - t, false)),
-                    t,
-                )
+                (Some(line(old.clone(), -rise * t, 1. - t, false)), t)
             }
             None => (None, 1.),
         };
-        let lines = if status.asks { status.lines } else { 1 };
-        let words = status.text.clone();
         div()
             .relative()
             .mt(px(STATUS_GAP))
-            .h(px(status_height(status.asks, status.lines)))
+            .h(px(STATUS_LINE))
             .children(old)
-            .child(line(words, lines, status.asks, rise * (1. - t), t, working))
+            .child(line(status.text.clone(), rise * (1. - t), t, working))
     }
 
-    /// The card's chips, in the rows its shape gives them, the first one's words on the title's
-    /// column, each rising in after the one before as they come. Open hides as its pages fly.
-    fn task_chips(
+    /// The header's one chip, its words on the title's column: a row's text on the hovered plate,
+    /// not a button with a fill of its own.
+    fn task_chip(
         &self,
+        group: &Group,
         face: &Face,
         now: Instant,
-        still: bool,
-        rest: bool,
         cx: &mut Context<Self>,
-    ) -> Option<impl IntoElement + use<>> {
-        let shape = &face.shape;
-        if shape.rows.is_empty() {
-            return None;
-        }
-        let card = &face.card;
-        let n = number(&card.agent);
-        let flying = self
-            .foot
-            .opening
-            .as_ref()
-            .is_some_and(|opening| opening.agent == card.agent)
-            || self
-                .foot
-                .ghosts
-                .iter()
-                .any(|ghost| ghost.agent == card.agent);
-        let since = face
-            .chips_in
-            .map(|at| now.saturating_duration_since(at).as_secs_f32());
-        let rows = shape.rows.iter().map(|row| {
-            let row = row.iter().filter_map(|&index| {
-                let chip = face.chips.get(index)?.clone();
-                let (alpha, rise) = match since {
-                    None => (1., 0.),
-                    Some(since) if still => ((since / CROSSFADE).min(1.), 0.),
-                    Some(since) => {
-                        let t = ((since - CHIPS_DELAY - index as f32 * CHIPS_STAGGER) / CHIPS)
-                            .clamp(0., 1.);
-                        let t = motion::eased(t);
-                        (t, CHIPS_RISE * (1. - t))
-                    }
-                };
-                let alpha = if flying && matches!(chip, Chip::Open(_)) {
-                    0.
-                } else {
-                    alpha
-                };
-                let id = ("task-chip", n * 8 + index as u64);
-                let element = card_chip(&self.palette, id, chip.label())
-                    .relative()
-                    .top(px(rise))
-                    .opacity(alpha);
-                let drawn = drawn_listener_chip(
-                    &self.foot.chips_drawn,
-                    &self.foot.rested,
-                    (n, index),
-                    chip.label(),
-                    rest,
-                );
-                let element = element.child(drawn);
-                let agent = card.agent.clone();
-                let element = match chip {
-                    Chip::Retry => element.on_click(act(agent, TaskAction::Retry, cx)),
-                    Chip::Open(_) => {
-                        let chips = self.foot.chips_drawn.clone();
-                        element.on_click(cx.listener(move |shell, _, _, cx| {
-                            cx.stop_propagation();
-                            let from = chips.borrow().get(&(n, index)).copied();
-                            log!("browser: command open-task-pages via sidebar");
-                            shell.open_task_pages(agent.clone(), None, from, cx);
-                        }))
-                    }
-                    Chip::Assistant(cli, Offer::Get) => {
-                        element.on_click(cx.listener(move |shell, _, _, cx| {
-                            cx.stop_propagation();
-                            log!("browser: assistant install page {} via sidebar", cli.id());
-                            shell.browser.open_page(cli.install_page(), cx);
-                        }))
-                    }
-                    Chip::Assistant(_, Offer::Cancel) => {
-                        element.on_click(act(agent, TaskAction::CancelSignIn, cx))
-                    }
-                    Chip::Assistant(..) => element.on_click(act(agent, TaskAction::SignIn, cx)),
-                };
-                Some(element.on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()))
-            });
-            div().flex().gap(px(CHIP_GAP)).children(row)
-        });
+    ) -> Option<AnyElement> {
+        let chip = chip(&face.card)?;
+        let agent = face.card.agent.clone();
+        let n = number(&agent);
+        // Under the pointer the plate firms by a tile's fill.
+        let hover = self.palette.plate(HOVERED + TILE);
+        let button = div()
+            .id(("task-chip", n))
+            .flex_none()
+            .min_w_0()
+            .h(px(CHIP_HEIGHT))
+            .px(px(CHIP_X))
+            .flex()
+            .items_center()
+            .rounded(px(PAGE_RADIUS))
+            .bg(self.palette.plate(HOVERED))
+            .hover(move |style| style.bg(hover))
+            .text_size(px(text::SMALL))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(self.palette.text(TITLE));
+        let button = self
+            .strip_stop(button, StripStop::Chip(n), chip.label(), PAGE_RADIUS)
+            .child(div().truncate().child(chip.label()))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |shell, _, _, cx| {
+                cx.stop_propagation();
+                shell.run_chip(agent.clone(), chip, cx);
+            }));
         Some(
             div()
                 .absolute()
-                .top(px(chips_top(card.asks, shape.lines)))
-                .left(px(COLUMN - CHIP_X))
-                .right(px(CHIP_END))
+                .top(px(ROW_HEIGHT + PAGES_TOP))
+                .left(px(PLATE_INSET + COLUMN - CHIP_X))
+                .right(px(PLATE_INSET))
                 .flex()
-                .flex_col()
-                .gap(px(CHIP_GAP))
-                .children(rows),
+                .opacity(group.content.at(now))
+                .child(button)
+                .into_any_element(),
         )
     }
 
-    /// Chips the card no longer has, sinking and fading where they were.
-    fn leaving_chips(
+    /// The task's pages, a row each under its header, one step in beside a hairline: while its
+    /// group is open, and as it closes.
+    fn task_pages(
         &self,
+        group: &Group,
         face: &Face,
         now: Instant,
-        still: bool,
-    ) -> Option<impl IntoElement + use<>> {
-        let leaving = face.chips_out.as_ref()?;
-        let length = if still { CROSSFADE } else { CHIPS };
-        let t = now.saturating_duration_since(leaving.since).as_secs_f32() / length;
-        if t >= 1. {
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let card = &face.card;
+        if card.pages.is_empty() || !(face.open || group.height.moving(now)) {
             return None;
         }
-        let t = if still { t } else { motion::eased(t) };
-        let rise = if still { 0. } else { CHIPS_RISE * t };
-        let rows = leaving.rows.iter().map(|row| {
-            let row = (row.iter())
-                .filter_map(|&index| leaving.chips.get(index))
-                .map(|chip| card_chip(&self.palette, "task-chip-going", chip.label()));
-            div().flex().gap(px(CHIP_GAP)).children(row)
-        });
+        let line = div()
+            .absolute()
+            .left_0()
+            .top_0()
+            .bottom_0()
+            .w(px(PAGES_LINE))
+            .bg(self.palette.plate(PAGES_LINE_INK));
+        let rows: Vec<AnyElement> = (card.pages.iter())
+            .map(|&tab| self.page_row(card, tab, cx))
+            .collect();
         Some(
             div()
                 .absolute()
-                .top(px(leaving.top + rise))
-                .left(px(COLUMN - CHIP_X))
-                .right(px(CHIP_END))
-                .opacity(1. - t)
+                .top(px(ROW_HEIGHT + chip_room(card) + PAGES_TOP))
+                .left(px(PAGES_X))
+                .right(px(PLATE_INSET))
+                .pl(px(PAGES_LINE + PAGES_GAP))
                 .flex()
                 .flex_col()
-                .gap(px(CHIP_GAP))
-                .children(rows),
+                .opacity(group.content.at(now))
+                .child(line)
+                .children(rows)
+                .into_any_element(),
         )
     }
 
-    /// Open's pages on their way from the chip to their rows at the top of Today: each a chip's
-    /// plate growing into a row's hover plate, its favicon and title fading in, the row showing
-    /// as it lands.
+    /// A page's row: its favicon, its title and one word, with Signal's dot before the word while
+    /// the task works in it. It has a plate only under the pointer and while its page is what the
+    /// page area shows.
+    fn page_row(&self, card: &Card, tab: u64, cx: &mut Context<Self>) -> AnyElement {
+        let shown = self.shown_at_foot() == Some(StripStop::Row(tab));
+        let word = self.page_word(card, tab);
+        let working = word == PageWord::Reading;
+        let row = div()
+            .h(px(PAGE_HEIGHT))
+            .flex()
+            .items_center()
+            .gap(px(PAGE_GAP))
+            .pl(px(PAGE_START))
+            .pr(px(PAGE_END))
+            .rounded(px(PAGE_RADIUS));
+        let row = match shown {
+            true => selected_plate(&self.palette, row, 1., 0., false),
+            false => row,
+        };
+        let hover = self.palette.plate(HOVERED);
+        let row = row
+            .id(("task-page", tab))
+            .when(!shown, |row| row.hover(move |style| style.bg(hover)));
+        // The favicon is drawn in its box whole, as a row's is drawn smaller than its column.
+        let icon = div()
+            .flex_none()
+            .size(px(PAGE_FAVICON))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(self.tab_icon_sized(tab, PAGE_FAVICON * FAVICON_SIZE / FAVICON_DRAWN));
+        let name = self.title(tab);
+        let words = div()
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .text_size(px(PAGE_TITLE))
+            .text_color(self.palette.text(if shown { TITLE } else { PAGE_INK }))
+            .child(name.clone());
+        let dot = working.then(|| {
+            div()
+                .flex_none()
+                .size(px(PAGE_DOT))
+                .rounded_full()
+                .bg(rgb(STATUS_AGENT))
+        });
+        let state = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(PAGE_DOT_GAP))
+            .text_size(px(text::SMALL))
+            .text_color(match word {
+                PageWord::NeedsYou | PageWord::Driving => self.palette.text(TITLE),
+                PageWord::Reading => self.palette.gray(PAGE_WORD_WORKING),
+                PageWord::Done | PageWord::Paused => self.palette.gray(PAGE_WORD),
+            })
+            .children(dot)
+            .child(word.label());
+        let drawn = {
+            let rows = self.foot.rows_drawn.clone();
+            canvas(
+                move |bounds, _, _| {
+                    rows.borrow_mut().insert(tab, bounds);
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .inset_0()
+        };
+        let said: SharedString = format!("{name}, {}", word.label()).into();
+        self.strip_stop(row, StripStop::Row(tab), said, PAGE_RADIUS)
+            .child(drawn)
+            .child(icon)
+            .child(words)
+            .child(state)
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |shell, _, _, cx| {
+                cx.stop_propagation();
+                shell.watch_row(tab, cx);
+            }))
+            .into_any_element()
+    }
+
+    /// Open's pages on their way from the strip's Open to their rows at the top of Today: each a
+    /// chip's plate growing into a row's hover plate, its favicon and title fading in, the row
+    /// showing as it lands.
     pub(super) fn task_ghosts(&self) -> Vec<AnyElement> {
         let now = clock();
         let layout = self.layout();
@@ -1961,7 +2052,7 @@ impl Shell {
 }
 
 impl Shell {
-    /// Where `agent`'s plate was last drawn in the window.
+    /// Where `agent`'s header's plate was last drawn in the window.
     #[cfg(test)]
     pub(super) fn task_plate_drawn(&self, agent: &str) -> Option<Bounds<Pixels>> {
         self.foot.plates_drawn.borrow().get(&number(agent)).copied()
@@ -1976,7 +2067,7 @@ impl Shell {
     }
 }
 
-/// Records where a plate is drawn in the window, and logs it once it's at rest there.
+/// Records where a header's plate is drawn in the window, and logs it once it's at rest there.
 fn drawn_listener(
     drawn: &Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
     rested: &Rc<RefCell<HashMap<String, Bounds<Pixels>>>>,
@@ -2003,33 +2094,6 @@ fn drawn_listener(
     .inset_0()
 }
 
-/// Records where a chip is drawn in the window, for Open's pages' flight, and logs it at rest.
-fn drawn_listener_chip(
-    drawn: &Rc<RefCell<HashMap<(u64, usize), Bounds<Pixels>>>>,
-    rested: &Rc<RefCell<HashMap<String, Bounds<Pixels>>>>,
-    key: (u64, usize),
-    label: SharedString,
-    rest: bool,
-) -> impl IntoElement + use<> {
-    let (drawn, rested) = (drawn.clone(), rested.clone());
-    canvas(
-        move |bounds, _, _| {
-            drawn.borrow_mut().insert(key, bounds);
-            let name = format!("chip task-{} {label}", key.0);
-            if rest && rested.borrow_mut().insert(name, bounds) != Some(bounds) {
-                log!(
-                    "browser: task chip task-{} {label} at {}",
-                    key.0,
-                    logged(bounds)
-                );
-            }
-        },
-        |_, _, _, _| {},
-    )
-    .absolute()
-    .inset_0()
-}
-
 fn logged(bounds: Bounds<Pixels>) -> String {
     format!(
         "{:.0} {:.0} {:.0} {:.0}",
@@ -2038,31 +2102,6 @@ fn logged(bounds: Bounds<Pixels>) -> String {
         f32::from(bounds.size.width),
         f32::from(bounds.size.height)
     )
-}
-
-/// A chip on a card, the sidebar's scale: the URL field's plate at a control's corners, as wide
-/// as its words, cut to the room it has.
-pub(super) fn card_chip(
-    palette: &Palette,
-    id: impl Into<gpui::ElementId>,
-    label: SharedString,
-) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .flex_none()
-        .min_w_0()
-        .h(px(CHIP_HEIGHT))
-        .px(px(CHIP_X))
-        .flex()
-        .items_center()
-        .rounded(px(NAV_RADIUS))
-        .bg(palette.ground_plate(Ground::Field, URL_FIELD))
-        .hover(|style| style.bg(palette.ground_state(Ground::Field, URL_FIELD, STATE_HOVERED)))
-        .active(|style| style.bg(palette.ground_state(Ground::Field, URL_FIELD, STATE_PRESSED)))
-        .text_size(px(text::SMALL))
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(palette.text(TITLE))
-        .child(div().truncate().child(label))
 }
 
 /// A chip's click, which does `action` to the task.

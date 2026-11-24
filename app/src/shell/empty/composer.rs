@@ -29,7 +29,7 @@ pub(in crate::shell) const SEARCH_WORDS: &str = "Search or enter address";
 const SEARCH: &str = "Search";
 const ASK: &str = "Ask";
 /// Over the cards.
-const RECENT: &str = "Recent tasks";
+const LATEST: &str = "Latest tasks";
 
 /// What the field says in Ask, naming the assistant it runs on.
 fn ask_words(assistant: Option<&str>) -> SharedString {
@@ -46,11 +46,25 @@ pub(in crate::shell) struct Resting {
     _keys: Subscription,
     /// The page has drawn its first frame, from when it draws the tasks.
     painted: bool,
+    /// Whether the field is owed the keyboard, which it takes once, at the first frame that may
+    /// give it (`give_resting_keys`), so whatever the user moves the keyboard to after keeps it.
+    wants_keys: Owed,
     /// The level the next task starts at: the user's pick on Ask's line, in this view's memory
     /// alone. It's Work on pages again after a run, out of Ask, and in another Space.
     tier: Tier,
     /// The Space the pick was made in.
     space: u64,
+}
+
+/// Why the field is owed the keyboard, if it is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Owed {
+    No,
+    /// The Space came to show no page: the field takes the keyboard only from the window itself,
+    /// never from a field or form the user is in.
+    Shown,
+    /// ⌘T or ⌘L asked for it.
+    Asked,
 }
 
 impl Shell {
@@ -65,10 +79,12 @@ impl Shell {
         }
         let space = self.space();
         if let Some(resting) = &mut self.resting {
+            // Another Space empty too: its field is owed the keyboard, once the swipe settles.
             if resting.space != space {
                 (resting.tier, resting.space) = (Tier::default(), space);
+                resting.wants_keys = Owed::Shown;
             }
-            return;
+            return self.give_resting_keys(window, cx);
         }
         let bar = self.browser.command_bar_in_place(window, cx);
         let keys = cx.subscribe_in(&bar, window, |shell: &mut Shell, _, key, window, cx| {
@@ -81,6 +97,7 @@ impl Shell {
             bar,
             _keys: keys,
             painted: false,
+            wants_keys: Owed::Shown,
             tier: Tier::default(),
             space,
         });
@@ -91,6 +108,52 @@ impl Shell {
             }
         });
         log!("browser: resting field made");
+        self.give_resting_keys(window, cx);
+    }
+
+    /// ⌘T and ⌘L while the Space shows no page: the field takes the keyboard, and no bar opens
+    /// over it (#4140). Whether it did.
+    pub(in crate::shell) fn keys_to_resting(&mut self, cx: &mut Context<Self>) -> bool {
+        // The field stays until the next frame drops it, so a page shown since isn't one.
+        if self.selected != 0 || self.welcome {
+            return false;
+        }
+        let Some(resting) = &mut self.resting else {
+            return false;
+        };
+        resting.wants_keys = Owed::Asked;
+        cx.notify();
+        true
+    }
+
+    /// Gives the field the keyboard it's owed once the window is key, no overlay or Library is
+    /// over it and no swipe is moving the pages: an overlay keeps the keys it has, and the field
+    /// takes them only when the swipe to its Space has settled. Owed for being shown, it leaves
+    /// the keyboard where the user put it, as in a Space's name or its form.
+    fn give_resting_keys(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let still = self.swipe.is_none() && self.settle.is_none();
+        let free = window.is_window_active()
+            && !self.browser.command_bar_open(cx)
+            && self.library.is_none();
+        let root = self.focus_handle.clone();
+        let Some(resting) =
+            (self.resting.as_mut()).filter(|resting| resting.wants_keys != Owed::No)
+        else {
+            return;
+        };
+        if !(still && free) {
+            return;
+        }
+        let focus = resting.bar.read(cx).field_focus(cx);
+        let elsewhere = window
+            .focused(cx)
+            .is_some_and(|at| at != root && at != focus);
+        let owed = std::mem::replace(&mut resting.wants_keys, Owed::No);
+        if owed == Owed::Shown && elsewhere {
+            return;
+        }
+        window.focus(&focus, cx);
+        log!("browser: resting field has the keyboard");
     }
 
     /// Gives the resting field the keyboard, as a click on the page does.
@@ -305,7 +368,7 @@ impl Shell {
                     .text_size(px(LABEL_SIZE))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(palette.text(1.))
-                    .child(RECENT),
+                    .child(LATEST),
             )
             .child(
                 div()

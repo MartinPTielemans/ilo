@@ -68,6 +68,9 @@ struct Made {
     sign_in_pages: RefCell<Vec<(String, u64)>>,
     sign_in_closed: RefCell<Vec<(u64, u64)>>,
     no_sign_in_page: std::cell::Cell<bool>,
+    /// The user's Spaces outside the profile the others are in, "Default", each with the name of
+    /// its profile's folder.
+    profiles: RefCell<Vec<(u64, &'static str)>>,
 }
 
 impl Made {
@@ -207,8 +210,12 @@ impl Browser for Made {
         }
     }
 
-    /// A name with a dot is a site's, as the address bar takes it; other words are a search.
+    /// A name with a dot is a site's, as the address bar takes it; other words are a search. Text
+    /// with a NUL in it can't reach the core, which gives no address for it, as the app's does.
     fn url_for(&self, text: &str) -> Option<String> {
+        if text.contains('\0') {
+            return None;
+        }
         Some(match (text.contains("://"), text.contains('.')) {
             (true, _) => text.into(),
             (false, true) => format!("https://{text}/"),
@@ -381,6 +388,25 @@ impl Browser for Made {
     /// The user's Space is 1.
     fn user_space(&self, _: u64) -> u64 {
         1
+    }
+
+    fn space_profile(&self, space: u64) -> String {
+        let profiles = self.profiles.borrow();
+        let named = profiles.iter().find(|each| each.0 == space);
+        named.map_or("Default", |each| each.1).into()
+    }
+
+    /// The user's Space in "Default" is 1.
+    fn profile_space(&self, profile: &str) -> u64 {
+        let profiles = self.profiles.borrow();
+        let space = profiles.iter().find(|each| each.1 == profile);
+        space.map_or(u64::from(profile == "Default"), |each| each.0)
+    }
+
+    /// "Default" is always there; another is while a test lists it, with Space 0 for one that
+    /// has no Space of the user's.
+    fn has_profile(&self, profile: &str) -> bool {
+        profile == "Default" || self.profiles.borrow().iter().any(|each| each.1 == profile)
     }
 
     fn request(&self, _: &str, tab: u64, request: u64, sent: &request::Request) {
@@ -6435,6 +6461,92 @@ mod tasks {
         assert_eq!(card_of(&agents, cx).open, Vec::new());
     }
 
+    /// Beside a_sessions_title_is_never_where_ilo_or_the_user_speaks: a ⌘T task's title, which
+    /// its assistant may set, goes into its notification once, as its card caps it, on one line,
+    /// before the middle dot, and nothing else of the task goes with it: not its question, its
+    /// result, its site nor the user's ask.
+    #[gpui::test]
+    fn a_tasks_title_is_in_its_notification_once_and_nothing_else(cx: &mut TestAppContext) {
+        use crate::needs_you::{self, Host, Notify};
+        #[derive(Default)]
+        struct Posted(RefCell<Vec<(String, String)>>);
+        impl Host for Posted {
+            fn badge(&self, _: usize) {}
+            fn active(&self) -> bool {
+                false
+            }
+            fn notify(&self, _: u64, title: &str, body: &str) {
+                self.0.borrow_mut().push((title.into(), body.into()));
+            }
+        }
+        let (agents, browser) = ready(None, cx);
+        let posted = Rc::new(Posted::default());
+        cx.update(|cx| needs_you::open(posted.clone(), cx));
+        let agent = start(&agents, "Find a flight to Lisbon on shop.example", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        let follow = |cx: &mut TestAppContext| {
+            let cards = vec![card_of(&agents, cx)];
+            cx.update(|cx| needs_you::follow(&cards, Notify::Away, cx));
+        };
+        follow(cx);
+        let named = "Flights to Lisbon\nand a hotel near the river for the whole week";
+        let answer = call(&agents, &agent, "title", json!({ "text": named }), cx);
+        assert!(!answer.recv().unwrap().error);
+        let title = card_of(&agents, cx).title.to_string();
+        assert!(
+            title.len() < named.len() && !title.contains('\n'),
+            "{title:?}"
+        );
+        let asked = call(
+            &agents,
+            &agent,
+            "ask",
+            json!({ "question": "Which day?", "answers": ["Friday", "Saturday"] }),
+            cx,
+        );
+        follow(cx);
+        agents.update(cx, |agents, cx| agents.reply(&agent, "Saturday", cx));
+        asked.recv().unwrap();
+        follow(cx);
+        browser
+            .tabs
+            .borrow_mut()
+            .push((30, 100, "Checkout", "https://shop.example/checkout"));
+        let done =
+            json!({ "result": "Found a flight for €80.", "summary": "€80 flight", "tabs": [30] });
+        assert!(
+            !call(&agents, &agent, "finish", done, cx)
+                .recv()
+                .unwrap()
+                .error
+        );
+        follow(cx);
+
+        let posted = posted.0.take();
+        assert_eq!(
+            posted,
+            [
+                (format!("{title} · Needs you"), String::new()),
+                (format!("{title} · Done"), String::new()),
+            ]
+        );
+        for (words, body) in &posted {
+            assert_eq!(words.matches(title.as_str()).count(), 1, "{words}");
+            assert!(words.starts_with(&title) && body.is_empty(), "{words}");
+            for never in [
+                "Which day",
+                "Friday",
+                "€80",
+                "shop.example",
+                "Find a flight",
+            ] {
+                assert!(!words.contains(never), "{never} in {words}");
+            }
+        }
+    }
+
     /// Finish can leave the user several pages, each once in the agent's order. Open moves them
     /// all to the top of the Space it was asked in, in that order, the first to show; the strip's
     /// Open moves the page shown alone, and the card counts what's left.
@@ -8064,6 +8176,39 @@ mod tasks {
         assert_eq!(card.last_site.as_deref(), Some("d.example"));
     }
 
+    /// An address the browser didn't take names no page: its step's site is the agent's own
+    /// words, which the card's plate never shows. A task whose only open is one has no plate, and
+    /// one that reached a page before keeps that page's site.
+    #[gpui::test]
+    fn an_address_the_browser_didnt_take_puts_no_site_on_the_card(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Find two tickets", cx);
+        agents.update(cx, |agents, _| {
+            let task = agents.task_mut(&agent).unwrap();
+            task.ended = None;
+            task.state = State::Working;
+        });
+        let words = "two tickets\0 for friday";
+        let _ = call(&agents, &agent, "open_tab", json!({ "url": words }), cx);
+        let card = card_of(&agents, cx);
+        assert!(
+            !card.steps.is_empty(),
+            "the open wasn't a step, so this tests nothing"
+        );
+        assert_eq!(card.last_site, None, "the plate shows the agent's words");
+
+        let _ = call(
+            &agents,
+            &agent,
+            "open_tab",
+            json!({ "url": "a.example" }),
+            cx,
+        );
+        let _ = call(&agents, &agent, "navigate", json!({ "url": words }), cx);
+        let card = card_of(&agents, cx);
+        assert_eq!(card.last_site.as_deref(), Some("a.example"));
+    }
+
     /// A Stopped line's step up and Any site reach the task through the user's press, as Stop
     /// does, and a task outside its Sites goes on once the user has said any site.
     #[gpui::test]
@@ -8135,6 +8280,65 @@ mod tasks {
             card_of(&agents, cx).status.as_ref(),
             "Stopped after 2 steps"
         );
+    }
+
+    /// After Stop no call of the task's is handled, one that waited its turn behind a slow page
+    /// included: each kind that can wait is answered as stopped, and nothing of it is run, shown
+    /// or kept. Once the task is at work again its calls go on (#4209).
+    #[gpui::test]
+    fn a_stopped_tasks_calls_are_answered_as_stopped(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Compare three shops", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        // A page that is slow to open holds its call, and in the server the calls behind it.
+        let shop = json!({ "url": "https://example.org/" });
+        let opening = call(&agents, &agent, "open_tab", shop.clone(), cx);
+        agents.update(cx, |agents, cx| agents.stop_task(&agent, cx));
+        let stopped = ToolResult::failed(tools::Kind::Stopped, STOPPED);
+        assert_eq!(opening.recv().unwrap(), stopped);
+
+        let seen = |cx: &mut TestAppContext| {
+            let card = card_of(&agents, cx);
+            let asked = (browser.made.borrow().len(), browser.pages.borrow().len());
+            let read = browser.reads.borrow().len();
+            let card = (card.title, card.status, card.question.is_some());
+            (card, log(&agents, &agent, cx), asked, read)
+        };
+        let before = seen(cx);
+        for (tool, arguments) in [
+            ("title", json!({ "text": "Probe" })),
+            ("ask", json!({ "question": "Can you see this?" })),
+            (
+                "finish",
+                json!({ "result": "Compared them.", "summary": "Compared" }),
+            ),
+            ("open_tab", shop),
+            // Calls without a tab, which wait for every tab's calls before them.
+            ("snapshot", json!({})),
+            ("list_tabs", json!({})),
+        ] {
+            let answer = call(&agents, &agent, tool, arguments, cx);
+            assert_eq!(answer.recv().unwrap(), stopped, "{tool}");
+        }
+        assert_eq!(seen(cx), before);
+        let state = agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().state.clone());
+        assert_eq!(state, State::Stopped);
+
+        // At work again, as the user's next message sets it, it names itself.
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        let named = call(
+            &agents,
+            &agent,
+            "title",
+            json!({ "text": "Three shops" }),
+            cx,
+        );
+        assert!(!named.recv().unwrap().error);
+        assert_eq!(card_of(&agents, cx).title.as_ref(), "Three shops");
     }
 
     #[gpui::test]
@@ -8276,6 +8480,18 @@ mod tasks {
         assert_eq!(card.status.as_ref(), "Claude hit its usage limit");
     }
 
+    /// A task that ended today says its time, and one from an earlier day its day, as a time
+    /// alone reads as today's.
+    #[test]
+    fn a_task_from_an_earlier_day_says_its_day() {
+        use chrono::{TimeZone, Utc};
+        let ended = Utc.with_ymd_and_hms(2026, 11, 21, 14, 5, 0).unwrap();
+        let that_night = Utc.with_ymd_and_hms(2026, 11, 21, 23, 59, 0).unwrap();
+        let next_day = Utc.with_ymd_and_hms(2026, 11, 22, 0, 1, 0).unwrap();
+        assert_eq!(crate::agents::time_or_day_on(ended, that_night), "14:05");
+        assert_eq!(crate::agents::time_or_day_on(ended, next_day), "21 Nov");
+    }
+
     /// The Archive lists the dismissed tasks, the last to leave the foot first, each with how it
     /// ended and when. Delete from Archive takes one out of the list and out of ⇧⌘T's reach, and
     /// ⌘Z's Undelete puts it back.
@@ -8313,7 +8529,7 @@ mod tasks {
                 .collect::<Vec<_>>(),
             [second.clone(), first.clone()]
         );
-        let at = crate::agents::local_time(1_700_000_000);
+        let at = crate::agents::time_or_day(1_700_000_000);
         assert_eq!(
             now[1],
             (first.clone(), format!("Claude · Done {at}"), Dot::Done)
@@ -8425,20 +8641,20 @@ mod tasks {
             agents.set_on(true, cx);
             agents.set_task_model(Cli::Claude, "haiku", cx);
         });
-        // Till Claude lists its own, ilo's names for them, Default naming none.
+        // Till Claude lists its own, ilo's names for them, its default naming none.
         assert_eq!(
             model_menu(&agents, Cli::Claude, cx),
-            "Default, Opus, Sonnet, Haiku (checked)"
+            "Claude Code's default, Opus, Sonnet, Haiku (checked)"
         );
 
         *configs.looked.lock().unwrap() = vec![(Cli::Claude, listing(Some(listed)))];
         agents.update(cx, |agents, cx| agents.look_for_task_agents(cx));
         cx.run_until_parked();
-        // Its names in its order, Default saying which it is; Haiku is gone, so Default is chosen,
+        // Its names in its order, its default saying which it is; Haiku is gone, so that's chosen,
         // for the run too, and comes back if Claude lists it again.
         assert_eq!(
             model_menu(&agents, Cli::Claude, cx),
-            "Default [Opus] (checked), Opus, Fable, Sonnet"
+            "Claude Code's default [Opus] (checked), Opus, Fable, Sonnet"
         );
         agents.read_with(cx, |agents, _| {
             assert_eq!(agents.task_model(Cli::Claude), "");
@@ -8454,7 +8670,7 @@ mod tasks {
         cx.run_until_parked();
         assert_eq!(
             model_menu(&agents, Cli::Claude, cx),
-            "Default [Opus], Opus, Fable (checked), Sonnet"
+            "Claude Code's default [Opus], Opus, Fable (checked), Sonnet"
         );
         agents.read_with(cx, |agents, _| {
             assert_eq!(agents.task_model(Cli::Claude), "fable");
@@ -8464,11 +8680,44 @@ mod tasks {
             );
         });
 
-        // An empty list: Default alone.
+        // An empty list: its default alone.
         *configs.looked.lock().unwrap() = vec![(Cli::Claude, listing(Some(Models::default())))];
         agents.update(cx, |agents, cx| agents.look_for_task_agents(cx));
         cx.run_until_parked();
-        assert_eq!(model_menu(&agents, Cli::Claude, cx), "Default (checked)");
+        assert_eq!(
+            model_menu(&agents, Cli::Claude, cx),
+            "Claude Code's default (checked)"
+        );
+    }
+
+    /// The model a task runs with (`task_model`, what its launch passes) is one the Model menu
+    /// lists: anything else, typed or from a page, an agent or a file, is never set.
+    #[gpui::test]
+    fn a_model_is_set_only_from_the_list_its_menu_was_built_from(cx: &mut TestAppContext) {
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let agents = agents(&browser, &configs, None, cx);
+        agents.update(cx, |agents, cx| {
+            agents.set_on(true, cx);
+            agents.set_task_model(Cli::Claude, "sonnet", cx);
+            for unlisted in ["Sonnet", "opus --verbose", "claude-sonnet", " sonnet"] {
+                agents.set_task_model(Cli::Claude, unlisted, cx);
+            }
+            // Codex lists none till it's asked, so it runs on its own default.
+            agents.set_task_model(Cli::Codex, "sonnet", cx);
+        });
+        agents.read_with(cx, |agents, _| {
+            assert_eq!(agents.task_model(Cli::Claude), "sonnet");
+            assert_eq!(agents.task_model(Cli::Codex), "");
+        });
+        assert_eq!(
+            model_menu(&agents, Cli::Claude, cx),
+            "Claude Code's default, Opus, Sonnet (checked), Haiku"
+        );
+        // Its default passes no model.
+        agents.update(cx, |agents, cx| agents.set_task_model(Cli::Claude, "", cx));
+        agents.read_with(cx, |agents, _| {
+            assert_eq!(agents.task_model(Cli::Claude), "")
+        });
     }
 
     #[gpui::test]
@@ -10195,7 +10444,7 @@ mod sessions {
         let mut said = |asked: &str, cx: &mut TestAppContext| -> u64 {
             let question = shown(&agents, cx).unwrap_or_else(|| panic!("{asked} didn't ask"));
             let shown = cards(&agents, cx);
-            cx.update(|cx| needs_you::follow(&shown, cx));
+            cx.update(|cx| needs_you::follow(&shown, needs_you::Notify::Away, cx));
             let mut words = vec![question.agent.to_string(), question.why.to_string()];
             for card in &shown {
                 words.extend([card.name.to_string(), card.status.to_string()]);
@@ -10208,7 +10457,8 @@ mod sessions {
                 words.extend(strip.held.iter().map(|(_, why)| why.to_string()));
             }
             let posted = posted.0.borrow();
-            assert!(posted.len() > seen, "{asked} posted no notification");
+            // One notification a task for each state, so its first need posts and those after don't.
+            assert_eq!(posted.len() > seen, seen == 0, "{asked}: {posted:?}");
             words.extend(posted[seen..].iter().cloned());
             seen = posted.len();
             for word in words {

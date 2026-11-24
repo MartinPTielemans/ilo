@@ -361,6 +361,8 @@ impl Shell {
         log!("browser: task area {space} opens");
         log!("browser: task area {space} open");
         self.take_keyboard(cx);
+        // Its group at the sidebar's foot opens to its pages, and the one shown before closes.
+        self.reshape_foot(cx);
         cx.notify();
     }
 
@@ -618,6 +620,8 @@ impl Shell {
         let left = self.talk_in(area.space);
         self.talk_closed(cx);
         self.lay_out_page(cx);
+        // Its group at the sidebar's foot closes to its header.
+        self.reshape_foot(cx);
         if let Some(agent) = left {
             self.talk_left(agent, cx);
         }
@@ -701,7 +705,8 @@ impl Shell {
     /// the strip's, as in an agent's Space, and Escape with the UI's keyboard and ⌘W step back.
     /// The page's own commands act on the task's page in place, the window's leave the area as it
     /// is, and the rest act on the user's Space, so they leave the area first: the core shows
-    /// the user's Space again before a tab opens in it, or before the session keeps it at a quit.
+    /// the user's Space again before a tab opens in it. Quit leaves it once its quit is decided
+    /// (commands.rs), so the session keeps the user's Space and Cancel keeps the view.
     pub(super) fn run_in_task_area(
         &mut self,
         command: Command,
@@ -787,9 +792,16 @@ impl Shell {
             | Command::CheckForUpdates
             | Command::Appearance(_)
             | Command::CopyBuildInfo
+            // Each asks first, and what it asks about isn't the view: Cancel, and the Archive
+            // cleared, leave the user where they were (#4202).
+            | Command::Quit
+            | Command::ClearArchive
             // The agent's card shows over the area as over the user's Space.
-            | Command::FocusAgentQuestion => return false,
-            // Quit and Close Window too, so the session keeps the user's Space for the window.
+            | Command::FocusAgentQuestion
+            // The ring goes to the task shown, at the foot: its pages' rows are there only while
+            // its view is.
+            | Command::FocusSidebar => return false,
+            // Close Window too, so the session keeps the user's Space for the window.
             _ => {
                 self.leave_task_area(cx);
                 return false;

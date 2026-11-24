@@ -1,7 +1,7 @@
 //! ilo's own lines in a task's conversation: what the browser stopped, a step that's the user's, a
 //! tab the agent needs back, a sign-in ilo did and a change of the task's access. And of a task
 //! that has ended (#4105): that the user's reply took it up, and in the reply field's place, that
-//! its assistant no longer has the conversation or keeps none.
+//! its assistant no longer has the conversation or keeps none, or that its profile was deleted.
 //!
 //! An ilo line is its own kind of entry, never a message. Only the app makes one, from its own
 //! events: nothing an agent sends, no tool's argument and no page's text becomes one, so nothing
@@ -72,13 +72,24 @@ pub enum IloKind {
     NotKept,
     /// The assistant keeps no finished task's conversation. In the reply field's place.
     KeepsNothing,
+    /// The profile the task was asked in was deleted, so it has nowhere to work: a task a run of
+    /// the browser before left. In the reply field's place.
+    NoProfile,
+    /// The profile the task was asked in has no Space of the user's left, so the task has
+    /// nowhere to work and its pages nowhere to go: a task a run of the browser before left. In
+    /// the reply field's place.
+    NoSpace,
 }
 
 /// Whether a line stands in the reply field's place, under the log, as the task takes no reply.
 pub fn in_field(kind: &IloKind) -> bool {
     matches!(
         kind,
-        IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing
+        IloKind::Gone
+            | IloKind::NotKept
+            | IloKind::KeepsNothing
+            | IloKind::NoProfile
+            | IloKind::NoSpace
     )
 }
 
@@ -149,7 +160,13 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
         IloKind::TabBack { .. } => vec![IloButton::HandBack, IloButton::NotNow],
         IloKind::SignedIn { .. } | IloKind::TierChanged { .. } => Vec::new(),
         IloKind::Resumed { .. } | IloKind::KeptHere => Vec::new(),
-        IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing => vec![IloButton::StartAgain],
+        IloKind::Gone
+        | IloKind::NotKept
+        | IloKind::KeepsNothing
+        | IloKind::NoProfile
+        | IloKind::NoSpace => {
+            vec![IloButton::StartAgain]
+        }
     }
 }
 
@@ -176,7 +193,11 @@ pub fn tab(kind: &IloKind) -> Option<u64> {
         | IloKind::SignedIn { tab, .. } => Some(*tab),
         IloKind::TierChanged { .. } => None,
         IloKind::Resumed { .. } | IloKind::KeptHere => None,
-        IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing => None,
+        IloKind::Gone
+        | IloKind::NotKept
+        | IloKind::KeepsNothing
+        | IloKind::NoProfile
+        | IloKind::NoSpace => None,
     }
 }
 

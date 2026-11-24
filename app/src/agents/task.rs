@@ -491,6 +491,10 @@ pub struct Card {
     pub dot: Dot,
     /// Its state in one word, as every place that names it says it.
     pub word: Word,
+    /// Its pages now, in its Space's order: the rows of its group at the sidebar's foot.
+    pub pages: Vec<u64>,
+    /// Its access, which its group's line leads with at Full access.
+    pub tier: Tier,
     /// A confirmation or a handoff of the task's, which the card asks instead of the windows'.
     pub question: Option<Question>,
     /// Done's tabs to open, each with its site, in the agent's order.
@@ -657,6 +661,9 @@ pub struct Tasks {
     pub tasks: Vec<Task>,
     /// The finished tasks' conversations ilo holds an id for (kept.rs).
     pub kept: super::kept::Kept,
+    /// The profiles there are, each by its folder's name, as the core last said them: one that
+    /// goes from among them was deleted, and its kept tasks go with it.
+    pub(super) profiles: Vec<String>,
     /// The state each task was in when the user's reply took it up, which it goes back to if its
     /// assistant no longer has the conversation.
     pub(super) picked_up: HashMap<String, State>,
@@ -704,6 +711,15 @@ impl Agents {
         self.tasks.tasks.iter_mut().find(|task| task.agent == agent)
     }
 
+    /// `agent`'s run goes before the app hears it end, as a reply can find it: the next reply
+    /// starts a run of its own.
+    #[cfg(test)]
+    pub(super) fn run_went_unheard(&mut self, agent: &str) {
+        if let Some(task) = self.task_mut(agent) {
+            task.process = None;
+        }
+    }
+
     /// Every Space's task cards, newest first, for the windows to show at the top of each Today.
     pub fn shown_cards(&self, cx: &App) -> Vec<Card> {
         (self.tasks.tasks.iter().rev())
@@ -722,16 +738,7 @@ impl Agents {
                     State::Done { .. } => Dot::Done,
                     _ => Dot::Ended,
                 };
-                let words = Word::of(&task.state, false).after_name();
-                let mut about = format!("{} · {words}", task.name);
-                if let Some(at) = task.ended.or(task.left) {
-                    about = format!("{about} {}", super::local_time(seconds(at)));
-                }
-                match self.open_tabs(task, cx).len() {
-                    0 => {}
-                    1 => about.push_str(" · 1 page"),
-                    pages => about.push_str(&format!(" · {pages} pages")),
-                }
+                let about = self.about(task, cx);
                 let left = task
                     .left
                     .and_then(|at| at.duration_since(SystemTime::UNIX_EPOCH).ok());
@@ -745,6 +752,24 @@ impl Agents {
                 }
             })
             .collect()
+    }
+
+    /// What a finished task's row says under its title, in the Archive and in Settings › Agents'
+    /// list of the kept: who worked on it, how it ended and when, and the pages it still holds,
+    /// "Claude · Done 13:31 · 1 page". One that ended on an earlier day says the day instead,
+    /// "Claude · Done 21 Nov", as a time alone reads as today's.
+    pub(super) fn about(&self, task: &Task, cx: &App) -> String {
+        let words = Word::of(&task.state, false).after_name();
+        let mut about = format!("{} · {words}", task.name);
+        if let Some(at) = task.ended.or(task.left) {
+            about = format!("{about} {}", super::time_or_day(seconds(at)));
+        }
+        match self.open_tabs(task, cx).len() {
+            0 => {}
+            1 => about.push_str(" · 1 page"),
+            pages => about.push_str(&format!(" · {pages} pages")),
+        }
+        about
     }
 
     /// Does what the user did to `agent`'s task. Returns the tab Open moved into the user's
@@ -829,7 +854,8 @@ impl Agents {
         }
         // A turn the CLI hasn't answered says it's thinking from the moment it's sent, and if the
         // CLI goes or never answers, why, so nothing is left running.
-        if task.heard_nothing() {
+        // One a run before left has no turn here to say it of.
+        if task.heard_nothing() && !task.from_before() {
             let failed = match &task.state {
                 State::Working => Some(None),
                 State::Failed { why, .. } => Some(Some(why.trim_end_matches('.').to_string())),
@@ -862,7 +888,7 @@ impl Agents {
         // the name before it says whose limit it is.
         let about = match &task.state {
             State::Done { .. } if let Some(at) = task.ended => {
-                done_at(&super::local_time(seconds(at)))
+                done_at(&super::time_or_day(seconds(at)))
             }
             State::Limit { resets } if resets.is_some() => limit_words(&task.name, resets),
             state => Word::of(state, self.waits_on_user(task))
@@ -1061,6 +1087,8 @@ impl Agents {
             asks,
             dot,
             word: Word::of(&task.state, dot == Dot::Waiting),
+            pages: self.pages(task, cx),
+            tier: task.tier,
             question,
             open,
             page_steps: match task.state {
@@ -1193,6 +1221,7 @@ impl Agents {
     pub fn task_model_menu(&self, cli: Cli) -> (Vec<(String, String)>, Vec<MenuEntry>) {
         model_menu(
             self.task_model(cli),
+            &model_default(cli),
             self.task_default_model(cli),
             self.task_models(cli),
         )
@@ -1231,7 +1260,13 @@ impl Agents {
         Some(name.into())
     }
 
+    /// Sets the model `cli` runs tasks with, only one its Model menu lists, so nothing else, typed
+    /// or from a page, an agent or a file, is ever passed to the CLI as one.
     pub fn set_task_model(&mut self, cli: Cli, model: &str, cx: &mut Context<Self>) {
+        let listed = self.task_models(cli).iter().any(|(id, _)| id == model);
+        if !model.is_empty() && !listed {
+            return;
+        }
         match model.is_empty() {
             true => self.tasks.models.remove(&cli),
             false => self.tasks.models.insert(cli, model.to_string()),
@@ -1556,6 +1591,8 @@ impl Agents {
                     };
                     task.end(SystemTime::now());
                 }
+                // However it ended, and by the name it has now (#4105).
+                self.keep_ended(&agent);
             }
             // The turn the user stopped ends as an error; their stop is what the card says.
             Out::Ended(Some(_))
@@ -1573,6 +1610,8 @@ impl Agents {
                 task.process = None;
                 if gone {
                     log!("browser: task {agent} has no conversation kept");
+                    // Its row leaves the file, as it takes no reply any more (#4105).
+                    self.write_kept();
                     self.forget_waiting(&agent, None, cx);
                 } else if matches!(task.state, State::Working | State::Asking { .. }) {
                     let said = said.trim();
@@ -1621,6 +1660,7 @@ impl Agents {
             task.waiting = None;
             task.writing = None;
         }
+        self.keep_ended(agent);
         self.forget_waiting(agent, None, cx);
         // What's ready may have changed.
         self.look_for_task_agents(cx);
@@ -1636,6 +1676,10 @@ impl Agents {
         // A reply answers the ask waiting, as a button would.
         if self.task(agent).is_some_and(|task| task.asking.is_some()) {
             return self.answer_ask(agent, text, cx);
+        }
+        // One a run before left comes back in its own profile, or not at all (#4105).
+        if !self.goes_on(agent) {
+            return cx.notify();
         }
         // A reply to a task that has ended takes it up, if its conversation is kept (#4105).
         self.pick_up(agent);
@@ -1711,6 +1755,7 @@ impl Agents {
         if let Some(process) = task.process.as_mut() {
             process.interrupt();
         }
+        self.keep_ended(agent);
         self.stop_agent(agent, cx);
         cx.notify();
     }
@@ -1723,6 +1768,13 @@ impl Agents {
         if !matches!(task.state, State::Limit { .. }) {
             return;
         }
+        // One a run before left comes back in its own profile, or not at all (#4105).
+        if !self.goes_on(agent) {
+            return cx.notify();
+        }
+        let Some(task) = self.task_mut(agent) else {
+            return;
+        };
         task.state = State::Working;
         task.writing = None;
         let sent = task.process.as_mut().map(|process| process.say(RETRY));
@@ -1777,6 +1829,8 @@ impl Agents {
             "browser: task {agent} {}",
             if deleted { "deleted" } else { "undeleted" }
         );
+        // Its row leaves the file of the kept with it, and comes back with it (#4105).
+        self.keep_ended(agent);
         cx.notify();
     }
 
@@ -1797,6 +1851,8 @@ impl Agents {
             return None;
         }
         self.tasks.dismissed.retain(|each| *each != agent);
+        // One a run before left takes its place in its own profile (#4105).
+        self.place_past(&agent);
         let task = self.task_mut(&agent)?;
         task.dismissed = false;
         log!("browser: task {agent} restored");
@@ -1917,6 +1973,8 @@ impl Agents {
     /// clients'. With no window left, as when the last one closed on Windows or Linux, the core
     /// can't delete a Space (#1676), and the next launch deletes them, as after a crash.
     pub fn end_tasks(&mut self, spaces: bool, cx: &mut Context<Self>) {
+        // A task still at work is there to reply to after the quit, as one stopped (#4105).
+        self.keep_at_quit();
         let sessions = (self.tasks.tasks.iter())
             .filter(|task| task.session.is_some())
             .map(|task| task.agent.clone())
@@ -3024,6 +3082,7 @@ impl Agents {
                     tabs,
                 };
                 task.end(SystemTime::now());
+                self.keep_ended(agent);
                 self.note(agent, 0, "finish", &site, "");
                 _ = reply.send(ToolResult::text(
                     "Done. The user sees your result. Stop here.",
@@ -3786,15 +3845,27 @@ fn receipt(session: &Session, ended: &str) -> String {
     }
 }
 
-/// A CLI's Model menu, as its ids and items, with `chosen` checked: Default first, followed by the
-/// name of the model it is where the CLI says, then `models`.
+/// Settings › Agents' row under each assistant's: what its new tasks start with. Its name carries
+/// it, so it has no line.
+pub const MODEL: &str = "Model";
+/// Model's first choice, `{assistant}` its name: the assistant's own default, passing it no model.
+const MODEL_DEFAULT: &str = "{assistant}'s default";
+
+/// `cli`'s Model's first choice, as its pop-up and menu say it.
+pub fn model_default(cli: Cli) -> String {
+    MODEL_DEFAULT.replace("{assistant}", cli.assistant())
+}
+
+/// A CLI's Model menu, as its ids and items, with `chosen` checked: its own default first, as
+/// `first` says it, followed by the name of the model it is where the CLI says, then `models`.
 pub fn model_menu(
     chosen: &str,
+    first: &str,
     default: Option<&str>,
     models: Vec<(String, String)>,
 ) -> (Vec<(String, String)>, Vec<MenuEntry>) {
     let default = default.map(|name| SharedString::from(name.to_string()));
-    let mut all = vec![(String::new(), MenuEntry::label("Default").to_string())];
+    let mut all = vec![(String::new(), first.to_string())];
     all.extend(models);
     let items = (all.iter().enumerate())
         .map(|(at, (id, name))| {

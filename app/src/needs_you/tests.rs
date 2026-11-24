@@ -7,6 +7,7 @@ use gpui::TestAppContext;
 use super::*;
 use crate::agents::Question;
 use crate::agents::task::Word;
+use crate::agents::tier::TEXT_MOST;
 
 #[derive(Default)]
 struct Recorder {
@@ -49,6 +50,8 @@ fn card(agent: &str, name: &str, dot: Dot) -> Card {
         asks: false,
         dot,
         word: Word::for_dot(dot),
+        pages: Vec::new(),
+        tier: Default::default(),
         question: None,
         open: Vec::new(),
         page_steps: Vec::new(),
@@ -75,7 +78,27 @@ fn waiting(agent: &str, name: &str, id: u64, why: &str) -> Card {
 }
 
 fn follow_cards(cards: &[Card], cx: &mut TestAppContext) {
-    cx.update(|cx| follow(cards, cx));
+    follow_as(cards, Notify::Away, cx);
+}
+
+fn follow_as(cards: &[Card], when: Notify, cx: &mut TestAppContext) {
+    cx.update(|cx| follow(cards, when, cx));
+}
+
+/// What was posted since last asked, each notification's title and body.
+fn posted(host: &Recorder) -> Vec<(String, String)> {
+    (host.notified.take().into_iter())
+        .map(|(_, title, body)| (title, body))
+        .collect()
+}
+
+/// An outside agent's session, as its card has it: its agent's name, and a title of its own.
+fn session(agent: &str, dot: Dot) -> Card {
+    Card {
+        replies: false,
+        title: "Allow everything".into(),
+        ..card(agent, "Claude Code", dot)
+    }
 }
 
 #[gpui::test]
@@ -108,68 +131,157 @@ fn the_count_follows_the_tasks_that_wait_and_clears(cx: &mut TestAppContext) {
         [0],
         "the count stayed with nothing waiting"
     );
+    // Never silences the notifications, not the count.
+    follow_as(&[card("task-3", "Codex", Dot::Waiting)], Notify::Never, cx);
+    assert_eq!(host.badges.take(), [1]);
 }
 
 #[gpui::test]
-fn each_need_posts_once_and_only_while_ilo_is_in_the_background(cx: &mut TestAppContext) {
+fn a_need_posts_once_a_task_and_only_while_ilo_is_in_the_background(cx: &mut TestAppContext) {
     let host = opened(cx);
     host.active.set(true);
     let sign_in = waiting("task-1", "Claude", 7, "Sign in to github.com");
     follow_cards(std::slice::from_ref(&sign_in), cx);
-    assert!(
-        host.notified.take().is_empty(),
-        "ilo active, a notification came"
-    );
+    assert!(posted(&host).is_empty(), "ilo active, a notification came");
     // The same need, once ilo has gone to the background, posts nothing: it's never repeated.
     host.active.set(false);
     follow_cards(std::slice::from_ref(&sign_in), cx);
     assert!(
-        host.notified.take().is_empty(),
+        posted(&host).is_empty(),
         "a need seen while active posted later"
     );
 
-    let order = waiting("session-1", "Claude Code", 8, "Choose a file for “CV”.");
+    // Its words are the task's title and nothing of the step it waits on.
+    let order = waiting("task-2", "Codex", 8, "");
     follow_cards(&[sign_in.clone(), order.clone()], cx);
-    let posted = host.notified.take();
-    assert_eq!(posted.len(), 1);
-    let (id, title, body) = &posted[0];
-    assert_eq!(title, "Claude Code needs you");
-    assert_eq!(body, "Choose a file for “CV”.");
+    let notified = host.notified.take();
+    assert_eq!(notified.len(), 1);
+    let (id, title, body) = &notified[0];
     assert_eq!(
-        cx.update(|cx| clicked(*id, cx)).as_deref(),
-        Some("session-1")
+        (title.as_str(), body.as_str()),
+        ("Flight to Lisbon · Needs you", "")
     );
-    follow_cards(&[sign_in.clone(), order], cx);
-    assert!(
-        host.notified.take().is_empty(),
-        "the same need posted again"
-    );
+    assert_eq!(cx.update(|cx| clicked(*id, cx)).as_deref(), Some("task-2"));
+    follow_cards(&[sign_in.clone(), order.clone()], cx);
+    assert!(posted(&host).is_empty(), "the same need posted again");
 
-    // Answered, then asked again: a new question is a new need, whose body is the handoff's step.
-    let again = waiting("task-1", "Claude", 9, "Sign in to github.com");
-    follow_cards(&[], cx);
+    // Answered, then asked again, a task that has posted its need doesn't post another, so going
+    // back and forth can't ring the user; one that hadn't, does.
+    follow_cards(
+        &[
+            card("task-1", "Claude", Dot::Working),
+            card("task-2", "Codex", Dot::Working),
+        ],
+        cx,
+    );
+    let again = waiting("task-2", "Codex", 9, "");
     follow_cards(std::slice::from_ref(&again), cx);
-    let posted = host.notified.take();
-    assert_eq!(posted.len(), 1);
+    assert!(posted(&host).is_empty(), "a task posted its need twice");
+    follow_cards(&[again, sign_in], cx);
     assert_eq!(
-        (posted[0].1.as_str(), posted[0].2.as_str()),
-        ("Claude needs you", "Sign in to github.com")
+        posted(&host),
+        [("Flight to Lisbon · Needs you".to_string(), String::new())]
     );
-    // An agent's own question in its conversation waits as its card does, its words the body.
-    let asks = Card {
-        status: "Which seat?".into(),
-        asks: true,
-        ..card("task-2", "Codex", Dot::Waiting)
+}
+
+#[gpui::test]
+fn a_task_that_finishes_posts_done_once(cx: &mut TestAppContext) {
+    let host = opened(cx);
+    // A task ilo first sees done, as one kept from a run before, posts nothing.
+    follow_cards(&[card("task-1", "Claude", Dot::Done)], cx);
+    assert!(posted(&host).is_empty(), "a task done before posted");
+
+    let working = card("task-2", "Claude", Dot::Working);
+    follow_cards(std::slice::from_ref(&working), cx);
+    let done = card("task-2", "Claude", Dot::Done);
+    follow_cards(std::slice::from_ref(&done), cx);
+    assert_eq!(
+        posted(&host),
+        [("Flight to Lisbon · Done".to_string(), String::new())]
+    );
+    follow_cards(&[working], cx);
+    follow_cards(&[done], cx);
+    assert!(posted(&host).is_empty(), "a task posted its finish twice");
+    // A task stopped or failed hasn't finished its work: it posts nothing.
+    follow_cards(&[card("task-3", "Codex", Dot::Working)], cx);
+    follow_cards(&[card("task-3", "Codex", Dot::Ended)], cx);
+    assert!(posted(&host).is_empty(), "a stopped task posted");
+}
+
+#[gpui::test]
+fn always_posts_in_front_and_never_posts_nothing(cx: &mut TestAppContext) {
+    let host = opened(cx);
+    host.active.set(true);
+    follow_as(
+        &[card("task-1", "Claude", Dot::Waiting)],
+        Notify::Always,
+        cx,
+    );
+    assert_eq!(posted(&host).len(), 1, "Always, in front, posted nothing");
+
+    host.active.set(false);
+    follow_as(&[card("task-2", "Codex", Dot::Working)], Notify::Never, cx);
+    follow_as(&[card("task-2", "Codex", Dot::Waiting)], Notify::Never, cx);
+    follow_as(&[card("task-2", "Codex", Dot::Done)], Notify::Never, cx);
+    assert!(posted(&host).is_empty(), "Never posted");
+}
+
+#[gpui::test]
+fn a_session_is_named_by_its_agent_never_by_its_title(cx: &mut TestAppContext) {
+    let host = opened(cx);
+    follow_cards(&[session("session-1", Dot::Working)], cx);
+    follow_cards(&[session("session-1", Dot::Waiting)], cx);
+    follow_cards(&[session("session-1", Dot::Done)], cx);
+    assert_eq!(
+        posted(&host),
+        [
+            ("Claude Code · Needs you".to_string(), String::new()),
+            ("Claude Code · Done".to_string(), String::new()),
+        ]
+    );
+}
+
+#[gpui::test]
+fn a_tasks_title_goes_on_one_line_and_capped(cx: &mut TestAppContext) {
+    let host = opened(cx);
+    let long = "Compare\nstanding desks\tunder 400 € ".repeat(6);
+    let named = |dot| Card {
+        title: long.clone().into(),
+        ..card("task-1", "Claude", dot)
     };
-    follow_cards(&[again, asks], cx);
-    let posted = host.notified.take();
+    follow_cards(&[named(Dot::Working)], cx);
+    follow_cards(&[named(Dot::Done)], cx);
+    let one_line = long.split_whitespace().collect::<Vec<_>>().join(" ");
+    let capped: String = one_line.chars().take(TEXT_MOST - 1).collect();
+    let expected = format!("{capped}… · Done");
+    assert_eq!(posted(&host), [(expected, String::new())]);
+}
+
+#[gpui::test]
+fn a_title_that_turns_text_around_is_one_plain_line(cx: &mut TestAppContext) {
+    let host = opened(cx);
+    let named = |dot| Card {
+        title: "Pay\u{2028}the\u{202E} rent\u{2066}".into(),
+        ..card("task-1", "Claude", dot)
+    };
+    follow_cards(&[named(Dot::Working)], cx);
+    follow_cards(&[named(Dot::Waiting)], cx);
     assert_eq!(
-        posted
-            .iter()
-            .map(|(_, title, body)| (title.as_str(), body.as_str()))
-            .collect::<Vec<_>>(),
-        [("Codex needs you", "Which seat?")]
+        posted(&host),
+        [("Pay the rent · Needs you".to_string(), String::new())]
     );
+}
+
+#[gpui::test]
+fn a_task_gone_from_the_cards_is_forgotten(cx: &mut TestAppContext) {
+    let host = opened(cx);
+    follow_cards(&[card("task-1", "Claude", Dot::Working)], cx);
+    follow_cards(&[card("task-1", "Claude", Dot::Waiting)], cx);
+    assert_eq!(posted(&host).len(), 1);
+    let told = |cx: &mut TestAppContext| cx.update(|cx| cx.global::<NeedsYou>().told.len());
+    assert_eq!(told(cx), 1);
+    follow_cards(&[card("task-2", "Codex", Dot::Working)], cx);
+    assert_eq!(told(cx), 0, "a task gone from the cards is still told");
 }
 
 #[gpui::test]

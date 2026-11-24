@@ -907,8 +907,8 @@ impl Account {
                 div()
                     .pl(px(ROW_X))
                     .flex()
-                    // Under the step's button, centred as it is.
-                    .when(self.step, |line| line.pl_0().justify_center())
+                    // On first run's sheet, at the step's words' left edge.
+                    .when(self.step, |line| line.pl_0())
                     .text_size(px(text::SMALL))
                     .text_color(self.look.detail)
                     .child(format!("Server: {name} · "))
