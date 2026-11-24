@@ -1,8 +1,9 @@
 //! A walled task's rules (#4101), in the order the system reads them: Codex's base (base.sb),
 //! which refuses what nothing after it allows; the system's own reads (system.rs); the task's own
-//! folders and files; the assistant's program and its sign-in; the folders above each of those,
-//! for their names alone; the writes; the network; and last the mark. A folder's or a file's path
-//! is only ever a parameter, never in the text, so the text holds no name of the user's.
+//! folders and files; the assistant's program, ilo's bridge and the sign-in; the folders above
+//! each of those, for their names alone; the writes; the network; and last the mark. A folder's or
+//! a file's path is only ever a parameter, never in the text, so the text holds no name of the
+//! user's.
 //!
 //! In the system's rules a later line wins over an earlier one, so each deny below comes after the
 //! allows it narrows.
@@ -35,6 +36,8 @@ pub const TMP: &str = "TMP";
 pub const SOCKET: &str = "SOCKET";
 /// The folder the assistant's program is in.
 pub const PROGRAM_DIR: &str = "PROGRAM_DIR";
+/// ilo's MCP bridge, beside ilo's own executable, which the assistant runs to reach the socket.
+pub const BRIDGE: &str = "BRIDGE";
 
 /// The parameters naming the folders above every path the text names, one each.
 const UP: [&str; PARAMETERS_MAX] = [
@@ -321,6 +324,8 @@ pub fn text(shape: &Shape) -> String {
          (allow file-read* file-test-existence file-write* (subpath (param \"{TMP}\")))\n\
          (allow file-read* file-test-existence file-map-executable \
          (subpath (param \"{PROGRAM_DIR}\")))\n\
+         (allow file-read-data file-read-metadata file-test-existence \
+         (literal (param \"{BRIDGE}\")))\n\
          (allow file-read* file-test-existence {})\n",
         sign_in_filters(shape.cli).join(" ")
     ));
@@ -360,6 +365,7 @@ pub struct Paths<'a> {
     pub tmp: &'a Path,
     pub socket: &'a Path,
     pub program_dir: &'a Path,
+    pub bridge: &'a Path,
     pub cli_home: &'a Path,
     /// Claude Code's `~/.claude.json`, which Codex has none of.
     pub claude_config: Option<&'a Path>,
@@ -384,6 +390,7 @@ pub fn rules(cli: Cli, level: Tier, port: u16, paths: &Paths, mark: &Mark) -> io
         (TMP, paths.tmp.to_path_buf()),
         (SOCKET, paths.socket.to_path_buf()),
         (PROGRAM_DIR, paths.program_dir.to_path_buf()),
+        (BRIDGE, paths.bridge.to_path_buf()),
         (CLI_HOME, paths.cli_home.to_path_buf()),
     ]);
     if let Some(config) = paths.claude_config {

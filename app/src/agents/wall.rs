@@ -88,6 +88,8 @@ pub struct WallFor<'a> {
     pub program: &'a Path,
     /// ilo's MCP socket, which the assistant's bridge reaches.
     pub socket: &'a Path,
+    /// ilo's MCP bridge, as `bridge` finds it.
+    pub bridge: &'a Path,
     /// Where each walled task's place is made: `Tasks/.tmp`.
     pub places: &'a Path,
     /// The assistant's own home, `CODEX_HOME` or Claude Code's, and Claude Code's `.claude.json`.
@@ -110,6 +112,12 @@ pub fn cli_home(cli: Cli) -> (PathBuf, Option<PathBuf>) {
             None => (home.join(".claude"), Some(home.join(".claude.json"))),
         },
     }
+}
+
+/// ilo's MCP bridge, beside ilo's own executable: never from a variable, a setting or a task.
+pub fn bridge() -> Option<PathBuf> {
+    let program = std::env::current_exe().ok()?;
+    Some(program.with_file_name(super::bridge::NAME))
 }
 
 /// What a walled task may read of ilo's own: its folder, its MCP config and the instructions beside
@@ -233,6 +241,7 @@ pub fn put_up(task: &WallFor) -> Result<Wall, WallRefused> {
 /// Why a wall wasn't put up, each a sentence for the dev log that names no path and no count.
 const SIGN_IN_LINK: &str = "the assistant's sign-in is a link";
 const NO_PROGRAM: &str = "the assistant's program couldn't be resolved";
+const NO_BRIDGE: &str = "ilo's bridge isn't beside its program";
 const NO_PLACE: &str = "the task's place couldn't be made";
 const NO_LISTENER: &str = "the task's listener couldn't be started";
 const NOT_RESOLVED: &str = "a path the rules name couldn't be resolved";
@@ -255,6 +264,12 @@ fn build(task: &WallFor) -> Result<Wall, WallRefused> {
     }
     let program = std::fs::canonicalize(task.program).map_err(|_| failed(NO_PROGRAM))?;
     let program_dir = program.parent().ok_or_else(|| failed(NO_PROGRAM))?;
+    // A walled task with no bridge would start with no tools, so it starts without its files.
+    let bridge = (task.bridge.is_absolute())
+        .then(|| std::fs::canonicalize(task.bridge).ok())
+        .flatten()
+        .filter(|bridge| bridge.is_file())
+        .ok_or_else(|| failed(NO_BRIDGE))?;
     let place = leftovers::Place::make(task.places).map_err(|_| failed(NO_PLACE))?;
     let walled: Result<(Wall, listener::Listener), WallRefused> = (|| {
         let listener = listener::Listener::start(task.cli).map_err(|_| failed(NO_LISTENER))?;
@@ -266,6 +281,7 @@ fn build(task: &WallFor) -> Result<Wall, WallRefused> {
             tmp: place.tmp(),
             socket: task.socket,
             program_dir,
+            bridge: &bridge,
             cli_home: task.cli_home,
             claude_config: task.claude_config,
         };
@@ -365,6 +381,7 @@ mod tests {
             config: Path::new("/nonexistent/Tasks/task.json"),
             program: Path::new("/nonexistent/codex"),
             socket: Path::new("/nonexistent/Agents.sock"),
+            bridge: Path::new("/nonexistent/mcp-bridge"),
             places: Path::new("/nonexistent/Tasks/.tmp"),
             cli_home: Path::new("/nonexistent/home/.codex"),
             claude_config: None,
@@ -380,10 +397,11 @@ mod tests {
             let root =
                 std::env::temp_dir().join(format!("ilo-put-up-{name}-{}", std::process::id()));
             _ = std::fs::remove_dir_all(&root);
-            for folder in ["granted", "Tasks/task", "home/.codex", "bin"] {
+            for folder in ["granted", "Tasks/task", "home/.codex", "bin", "ilo"] {
                 std::fs::create_dir_all(root.join(folder)).unwrap();
             }
             std::fs::write(root.join("bin/codex"), "").unwrap();
+            std::fs::write(root.join("ilo/mcp-bridge"), "").unwrap();
             Made(std::fs::canonicalize(&root).unwrap())
         }
 
@@ -412,15 +430,17 @@ mod tests {
             "Agents.sock",
             "Tasks/.tmp",
             "home/.codex",
+            "ilo/mcp-bridge",
         ]
         .map(|path| made.at(path));
-        let [task_dir, config, program, socket, places, cli_home] = &paths;
+        let [task_dir, config, program, socket, places, cli_home, bridge] = &paths;
         build(&WallFor {
             folder: Some(granted),
             task_dir,
             config,
             program,
             socket,
+            bridge,
             places,
             cli_home,
             ..task(None, None)
@@ -473,6 +493,19 @@ mod tests {
             built(&made, &granted).unwrap_err(),
             WallRefused::Failed(rules::TOO_DEEP.into())
         );
+        assert_eq!(made.places(), 0);
+    }
+
+    #[test]
+    fn a_task_with_no_bridge_beside_ilo_isnt_walled_and_leaves_no_place() {
+        let made = Made::new("bridge");
+        let granted = Granted::picked(made.at("granted"));
+        std::fs::remove_file(made.at("ilo/mcp-bridge")).unwrap();
+        let no_bridge = WallRefused::Failed(NO_BRIDGE.into());
+        assert_eq!(built(&made, &granted).unwrap_err(), no_bridge);
+        // A folder by its name is no bridge either.
+        std::fs::create_dir(made.at("ilo/mcp-bridge")).unwrap();
+        assert_eq!(built(&made, &granted).unwrap_err(), no_bridge);
         assert_eq!(made.places(), 0);
     }
 

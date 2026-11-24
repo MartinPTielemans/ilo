@@ -315,6 +315,7 @@ fn every_parameter_is_one_of_the_named() {
         TMP,
         SOCKET,
         PROGRAM_DIR,
+        BRIDGE,
         CLI_HOME,
         CLAUDE_CONFIG,
         MARK,
@@ -472,6 +473,8 @@ fn the_rules_name_each_path_resolved_and_fit_the_launcher() {
         made("program"),
         made("home"),
     );
+    let bridge = made("ilo.app/Contents/MacOS").join("mcp-bridge");
+    std::fs::write(&bridge, "").unwrap();
     let place = Places::make(&folder.0.join("places")).unwrap();
     let config = folder.0.join("Tasks/task.json");
     let paths = Paths {
@@ -482,6 +485,7 @@ fn the_rules_name_each_path_resolved_and_fit_the_launcher() {
         tmp: &tmp,
         socket: &folder.0.join("Agents.sock"),
         program_dir: &program,
+        bridge: &bridge,
         cli_home: &home,
         claude_config: None,
     };
@@ -496,10 +500,11 @@ fn the_rules_name_each_path_resolved_and_fit_the_launcher() {
         .filter(|(key, _)| key.starts_with("UP_"))
         .map(|(_, path)| path)
         .collect();
-    // The test's own folder and each above it, and the two folders in it with something named.
+    // The test's own folder and each above it, and the folders in it with something named.
     assert!(ups.contains(&&root) && ups.contains(&&root.join("Tasks")));
     assert!(ups.contains(&&root.join("Tasks/.tmp")));
-    assert_eq!(ups.len(), root.ancestors().count() - 1 + 2);
+    assert!(ups.contains(&&root.join("ilo.app/Contents/MacOS")));
+    assert_eq!(ups.len(), root.ancestors().count() - 1 + 2 + 3);
     assert!(
         rules
             .text
@@ -529,6 +534,66 @@ fn the_rules_name_each_path_resolved_and_fit_the_launcher() {
     };
     let refused = rules_for(&paths, place.mark()).unwrap_err();
     assert_eq!(refused.to_string(), TOO_DEEP);
+}
+
+/// The bridge is read as the one file it is, by its parameter alone: no line reaches into ilo's
+/// bundle, and the folders above the bridge are their names alone.
+#[cfg(unix)]
+#[test]
+fn the_bridge_is_its_own_literal_and_nothing_of_the_bundle_is_a_subpath() {
+    let bridge_line = format!(
+        "(allow file-read-data file-read-metadata file-test-existence \
+         (literal (param \"{BRIDGE}\")))"
+    );
+    for shape in shapes() {
+        let text = text(&shape);
+        let named: Vec<&str> = (text.lines())
+            .filter(|line| line.contains(&format!("\"{BRIDGE}\"")))
+            .collect();
+        assert_eq!(named, [bridge_line.as_str()]);
+        assert!(!text.contains("Contents/MacOS") && !text.contains("mcp-bridge"));
+    }
+    let folder = Folder::new("bridge");
+    let made = |name: &str| {
+        let path = folder.0.join(name);
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    };
+    let (task, tmp, program, home) = (
+        made("Tasks/task"),
+        made("Tasks/.tmp/0123456789abcdef"),
+        made("program"),
+        made("home"),
+    );
+    let bundle = made("ilo.app");
+    let bridge = made("ilo.app/Contents/MacOS").join("mcp-bridge");
+    std::fs::write(&bridge, "").unwrap();
+    let place = Places::make(&folder.0.join("places")).unwrap();
+    let config = folder.0.join("Tasks/task.json");
+    let paths = Paths {
+        folder: None,
+        attached: None,
+        task_dir: &task,
+        config: &config,
+        tmp: &tmp,
+        socket: &folder.0.join("Agents.sock"),
+        program_dir: &program,
+        bridge: &bridge,
+        cli_home: &home,
+        claude_config: None,
+    };
+    let rules = rules_for(&paths, place.mark()).unwrap();
+    let bridge = std::fs::canonicalize(&bridge).unwrap();
+    let bundle = std::fs::canonicalize(&bundle).unwrap();
+    for (key, path) in &rules.params {
+        if *key == BRIDGE {
+            assert_eq!(path, &bridge);
+        } else if path.starts_with(&bundle) || bundle.starts_with(path) {
+            // The bundle's folders, and those above it, only ever by name.
+            assert!(key.starts_with("UP_"), "{key}");
+            assert!(!rules.text.contains(&format!("(subpath (param \"{key}\"))")));
+        }
+    }
 }
 
 fn rules_for(paths: &Paths, mark: &Mark) -> io::Result<Rules> {
@@ -565,6 +630,7 @@ fn a_shell_starts_inside_the_whole_text_and_has_its_folder_at_its_level() {
         tmp: &tmp,
         socket: &folder.0.join("Agents.sock"),
         program_dir: Path::new("/bin"),
+        bridge: Path::new("/bin/sh"),
         cli_home: &home,
         claude_config: None,
     };

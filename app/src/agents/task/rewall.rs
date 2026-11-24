@@ -88,6 +88,8 @@ impl Agents {
         // None resolves to nothing, so its wall isn't put up; its start then says it isn't there.
         let program = (found.and_then(|found| found.program.clone())).unwrap_or_default();
         let (cli_home, claude_config) = wall::cli_home(cli);
+        // None resolves to nothing too, so the start says it's without its files.
+        let bridge = wall::bridge().unwrap_or_default();
         let wall = WallFor {
             cli,
             level,
@@ -97,6 +99,7 @@ impl Agents {
             config: &config,
             program: &program,
             socket: &self.socket,
+            bridge: &bridge,
             places: &places,
             cli_home: &cli_home,
             claude_config: claude_config.as_deref(),
