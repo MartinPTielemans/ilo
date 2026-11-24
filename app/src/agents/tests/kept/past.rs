@@ -33,15 +33,17 @@ fn row(run: &Run, id: &Id) -> Value {
     found.unwrap_or_default()
 }
 
-/// The Archive's tasks, the last to leave first: each one's task, title and the line under it.
+/// The Archive's tasks, the last to leave first: each one's task, title and the line under it,
+/// with its end said as Settings › Agents' list says it, which has no days over its rows.
 fn archive(run: &Run, cx: &mut TestAppContext) -> Vec<(String, String, String)> {
     (run.agents).read_with(cx, |agents, cx| {
         (agents.archived_tasks(cx).into_iter())
             .map(|task| {
+                let when = crate::agents::time_or_day((task.ended / 1000.) as u64);
                 (
                     task.agent.to_string(),
                     task.title.to_string(),
-                    task.about.to_string(),
+                    task.about_at(&when),
                 )
             })
             .collect()

@@ -149,8 +149,10 @@ pub struct Conversation {
     pub answers: Vec<SharedString>,
     /// Whether its last line is the message the agent is writing, which comes in as it's written.
     pub writing: bool,
-    /// Its access, which the composer's chip shows and changes.
+    /// Its access, which the chip under the reply field shows and its menu changes.
     pub tier: Tier,
+    /// Whether it may go only to the sites of the pages the user added.
+    pub only_added: bool,
 }
 
 /// A line of a task's conversation.
@@ -188,10 +190,17 @@ pub struct Trace {
 }
 
 impl Trace {
+    /// Its steps, not its rows: a row that's the same step on several tabs counts each.
     pub fn steps(&self) -> usize {
         (self.items.iter())
-            .filter(|item| matches!(item, TraceItem::Step(_)))
-            .count()
+            .map(|item| match item {
+                TraceItem::Step(step) => match &step.opens {
+                    Opens::Steps(each) => each.len().max(1),
+                    _ => 1,
+                },
+                _ => 0,
+            })
+            .sum()
     }
 
     /// The helpers the task started in it (#4102), those that have finished too, as each one's
@@ -364,7 +373,8 @@ pub struct Task {
     /// Its steps, oldest first.
     pub trace: Vec<Traced>,
     pub dismissed: bool,
-    /// When it last left the foot for the Archive, which lists it by then. Kept in memory only.
+    /// When it last left the foot for the Archive, which a task with no end is listed by. Kept
+    /// in memory only.
     pub left: Option<SystemTime>,
     /// Deleted from the Archive: listed nowhere and out of ⇧⌘T's reach, until ⌘Z brings it back
     /// or it goes for good with the dismissed tasks past the last few.
@@ -381,6 +391,9 @@ pub struct Task {
     pub sites: Sites,
     /// What ilo stopped, as its conversation shows each, oldest first.
     pub stops: Vec<Stop>,
+    /// The turns the user stopped, each by how many of their messages came before its answer: a
+    /// stopped turn has no answer, so all it said stays in its stretch of work.
+    pub stopped_turns: Vec<usize>,
     /// ilo's other lines of what happened to it: its steps handed to the user, the tabs its
     /// agent asked back and the changes of its access, oldest first.
     pub(super) placed: Vec<super::lines::Placed>,
@@ -699,11 +712,34 @@ pub struct ArchivedTask {
     pub asked: SharedString,
     /// Done's tick, or Stopped's and Failed's grey dot, as its card had.
     pub dot: Dot,
-    /// Who worked on it, how it ended and when, and the pages it still holds:
-    /// "Claude · Done 13:31 · 1 page".
+    /// Who worked on it and how it ended, "Claude · Done".
     pub about: SharedString,
-    /// When it left the foot, in milliseconds since the Unix epoch, as the archive dates its tabs.
-    pub left: f64,
+    /// When it ended, or left the foot with no end, in milliseconds since the Unix epoch as the
+    /// archive dates its tabs, or 0 if nothing says. History lists it by then, under that day,
+    /// and says it as it says its pages' times (`about_at`).
+    pub ended: f64,
+    /// The pages it still holds, "1 page", or nothing.
+    pub pages: SharedString,
+}
+
+impl ArchivedTask {
+    /// What its row says under its title, with `when` it ended as the list it's in says a time:
+    /// "Claude · Done 13:31 · 1 page".
+    pub fn about_at(&self, when: &str) -> String {
+        about_at(&self.about, when, &self.pages)
+    }
+}
+
+/// A finished task's row under its title: who worked on it and how it ended, when, and the pages
+/// it still holds.
+fn about_at(about: &str, when: &str, pages: &str) -> String {
+    let mut about = about.to_string();
+    for (between, part) in [(" ", when), (" · ", pages)] {
+        if !part.is_empty() {
+            about = format!("{about}{between}{part}");
+        }
+    }
+    about
 }
 
 /// Open's words, for the tabs a task left the user: its site for one, and how many for several.
@@ -820,38 +856,45 @@ impl Agents {
                     State::Done { .. } => Dot::Done,
                     _ => Dot::Ended,
                 };
-                let about = self.about(task, cx);
-                let left = task
-                    .left
-                    .and_then(|at| at.duration_since(SystemTime::UNIX_EPOCH).ok());
+                let (about, pages) = self.about_parts(task, cx);
+                let since = |at: Option<SystemTime>| {
+                    at.and_then(|at| at.duration_since(SystemTime::UNIX_EPOCH).ok())
+                        .map_or(0., |since| since.as_secs_f64() * 1000.)
+                };
                 ArchivedTask {
                     agent: task.agent.clone().into(),
                     title: task.title.clone(),
                     asked: task.asked.clone(),
                     dot,
                     about: about.into(),
-                    left: left.map_or(0., |since| since.as_secs_f64() * 1000.),
+                    ended: since(task.ended.or(task.left)),
+                    pages: pages.into(),
                 }
             })
             .collect()
     }
 
-    /// What a finished task's row says under its title, in the Archive and in Settings › Agents'
-    /// list of the kept: who worked on it, how it ended and when, and the pages it still holds,
-    /// "Claude · Done 13:31 · 1 page". One that ended on an earlier day says the day instead,
-    /// "Claude · Done 21 Nov", as a time alone reads as today's.
+    /// What a finished task's row says under its title in Settings › Agents' list of the kept:
+    /// who worked on it, how it ended and when, and the pages it still holds, "Claude · Done 13:31
+    /// · 1 page". One that ended on an earlier day says the day instead, "Claude · Done 21 Nov",
+    /// as a time alone reads as today's in a list with no days over its rows. History's has them,
+    /// and says when as its pages' rows do (`ArchivedTask::about_at`).
     pub(super) fn about(&self, task: &Task, cx: &App) -> String {
+        let (about, pages) = self.about_parts(task, cx);
+        let when = (task.ended.or(task.left)).map(|at| super::time_or_day(seconds(at)));
+        about_at(&about, &when.unwrap_or_default(), &pages)
+    }
+
+    /// A finished task's row around when it ended: who worked on it and how it ended, "Claude ·
+    /// Done", and the pages it still holds, "1 page" or nothing.
+    fn about_parts(&self, task: &Task, cx: &App) -> (String, String) {
         let words = Word::of(&task.state, false).after_name();
-        let mut about = format!("{} · {words}", task.name);
-        if let Some(at) = task.ended.or(task.left) {
-            about = format!("{about} {}", super::time_or_day(seconds(at)));
-        }
-        match self.open_tabs(task, cx).len() {
-            0 => {}
-            1 => about.push_str(" · 1 page"),
-            pages => about.push_str(&format!(" · {pages} pages")),
-        }
-        about
+        let pages = match self.open_tabs(task, cx).len() {
+            0 => String::new(),
+            1 => "1 page".to_string(),
+            pages => format!("{pages} pages"),
+        };
+        (format!("{} · {words}", task.name), pages)
     }
 
     /// Does what the user did to `agent`'s task. Returns the tab Open moved into the user's
@@ -929,6 +972,9 @@ impl Agents {
             working,
             task.writing.as_ref(),
             &task.helpers,
+            &task.stopped_turns,
+            // ilo's lines of its refusals, its steps handed to the user and its changes of access.
+            self.ilo_lines(task, cx),
         );
         // A session's conversation is in its agent's terminal: here, only its steps, one by one.
         if task.session.is_some() {
@@ -954,14 +1000,12 @@ impl Agents {
         }
         // ilo's line of each time it stopped the task at its helpers' limit (#4102).
         helpers::lines(task, &mut lines);
-        // ilo's lines of its refusals, its steps handed to the user and its changes of access.
-        self.ilo_lines(task, &mut lines, cx);
         // ilo's own lines of a task that can be replied to after it ended (#4105).
         self.kept_lines(task, &mut lines);
         let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
             .map(|tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
             .collect();
-        // The state's word, whoever of the task's waits: the task itself or a helper. Done says
+        // The card's own word, so a refusal waiting on the user says Needs you in both. Done says
         // when, and a limit when it resets if the assistant said; without that it's the word, as
         // the name before it says whose limit it is.
         let about = match &task.state {
@@ -969,9 +1013,7 @@ impl Agents {
                 done_at(&super::time_or_day(seconds(at)))
             }
             State::Limit { resets } if resets.is_some() => limit_words(&task.name, resets),
-            state => Word::of(state, self.waits_on_user(task))
-                .after_name()
-                .to_string(),
+            _ => self.card(task, cx).word.after_name().to_string(),
         };
         // A session's title is the agent's words or its sites, so the line under it leads with its
         // client's name, and its state goes on as a fact, in lower case (#3690).
@@ -999,14 +1041,10 @@ impl Agents {
                 _ => Vec::new(),
             },
             writing: working && task.writing.as_ref().is_some_and(|writing| !writing.said),
-            // The tier model (#4086 step 2) keeps each task's own.
-            tier: Tier::default(),
+            // The chip under the reply field says the task's own level, the one its refusals read.
+            tier: task.tier,
+            only_added: matches!(task.sites, Sites::Only(_)),
         })
-    }
-
-    /// Whether a step of the task's waits on the user.
-    fn waits_on_user(&self, task: &Task) -> bool {
-        self.task_question(task).is_some()
     }
 
     fn task_question(&self, task: &Task) -> Option<Question> {
@@ -1460,6 +1498,7 @@ impl Agents {
                 false => Sites::default(),
             },
             stops: Vec::new(),
+            stopped_turns: Vec::new(),
             placed: Vec::new(),
             told: None,
             helpers: Helpers::of_task(self.helpers_on() && cli == Cli::Claude),
@@ -1945,6 +1984,10 @@ impl Agents {
             cx.notify();
             return;
         }
+        let turn = (task.messages.iter())
+            .filter(|message| message.who == Who::User)
+            .count();
+        task.stopped_turns.push(turn);
         task.state = State::Stopped;
         task.end(SystemTime::now());
         if let Some(process) = task.process.as_mut() {
@@ -2681,6 +2724,7 @@ impl Agents {
             tier: Tier::default(),
             sites: Sites::default(),
             stops: Vec::new(),
+            stopped_turns: Vec::new(),
             placed: Vec::new(),
             told: None,
             helpers: Helpers::default(),
@@ -3627,11 +3671,22 @@ thread_local! {
     pub(super) static FOLDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// An ilo line, and how many of its task's messages and steps came before it, which places it
+/// among them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Mark {
+    pub after: usize,
+    pub traced: usize,
+    pub line: ilo::IloLine,
+}
+
 /// A conversation's lines from its `messages` and its `trace`, oldest first. Each turn, from a
 /// message of the user's to the next, shows its questions and, once it has `ended`, its last
 /// message; the steps between those are a trace each, with what the agent said along the way in
 /// it. The last stretch is under way while the task is `working`, and what the agent is `writing`
 /// shows under it, as it comes and once it's whole, until the turn ends or a call takes it in.
+/// ilo's lines, `marks`, each go where it came among the messages and the steps, ending the
+/// stretch of steps before it.
 pub fn fold(
     messages: &[Message],
     trace: &[Traced],
@@ -3639,6 +3694,8 @@ pub fn fold(
     working: bool,
     writing: Option<&Writing>,
     helpers: &Helpers,
+    stopped: &[usize],
+    marks: Vec<Mark>,
 ) -> Vec<Line> {
     #[cfg(test)]
     FOLDS.with(|folds| folds.set(folds.get() + 1));
@@ -3654,13 +3711,14 @@ pub fn fold(
     let turns: Vec<&[Message]> = messages
         .split_inclusive(|message| message.who == Who::User)
         .collect();
-    for turn in &turns {
+    for (index, turn) in turns.iter().enumerate() {
         // A turn the user has written after is over, even as the next is under way.
         let turn_ended = ended || turn.last().is_some_and(|message| message.who == Who::User);
-        // The turn's last message: its result, else the last thing it said, once it's over.
+        // The turn's last message: its result, else the last thing it said, once it's over by
+        // itself. One the user stopped has no answer: what it said stays in its stretch.
         let last = (turn.iter().rposition(|message| message.who == Who::Result))
             .or_else(|| turn.iter().rposition(|message| message.who != Who::User))
-            .filter(|_| turn_ended);
+            .filter(|_| turn_ended && !stopped.contains(&index));
         for (at, message) in turn.iter().enumerate() {
             shown[first + at] = matches!(message.who, Who::User | Who::Asked) || Some(at) == last;
         }
@@ -3673,8 +3731,10 @@ pub fn fold(
     };
     let mut steps = trace.iter().enumerate().peekable();
     let mut began = helpers.began().peekable();
+    let mut marks = marks.into_iter().peekable();
     for (index, message) in messages.iter().enumerate() {
-        stretch.gather(&mut steps, &mut began, Some(index));
+        stretch.gather(&mut steps, &mut began, Some(index), &mut lines, &mut marks);
+        place(&mut lines, &mut stretch, &mut marks, trace.len(), index);
         if Some(index) == held {
             continue;
         }
@@ -3689,23 +3749,43 @@ pub fn fold(
             _ => Line::Said(message.text.clone()),
         });
     }
-    stretch.gather(&mut steps, &mut began, None);
+    stretch.gather(&mut steps, &mut began, None, &mut lines, &mut marks);
     stretch.flush(&mut lines, working, None);
     lines.extend(writing.map(|writing| Line::Said(writing.text.clone())));
+    lines.extend(marks.map(|mark| Line::Ilo(mark.line)));
     lines
+}
+
+/// ilo's lines that came before the step `key` of the trace and the message `index`, each where
+/// it came: the stretch of steps before it ends there.
+fn place(
+    lines: &mut Vec<Line>,
+    stretch: &mut Stretch,
+    marks: &mut Peekable<std::vec::IntoIter<Mark>>,
+    key: usize,
+    index: usize,
+) {
+    while let Some(mark) = marks.next_if(|mark| mark.traced <= key && mark.after <= index) {
+        stretch.flush(lines, false, None);
+        lines.push(Line::Ilo(mark.line));
+    }
 }
 
 /// A session's lines: its traces' steps, each a line of its own, newest last.
 fn steps(lines: Vec<Line>) -> Vec<Line> {
-    let steps = lines.into_iter().flat_map(|line| match line {
-        Line::Trace(trace) => trace.items,
-        _ => Vec::new(),
-    });
-    (steps.filter_map(|item| match item {
-        TraceItem::Step(step) => Some(Line::Step(step)),
-        TraceItem::Said(_) | TraceItem::Helper { .. } => None,
-    }))
-    .collect()
+    (lines.into_iter())
+        .flat_map(|line| match line {
+            Line::Trace(trace) => (trace.items.into_iter())
+                .filter_map(|item| match item {
+                    TraceItem::Step(step) => Some(Line::Step(step)),
+                    TraceItem::Said(_) | TraceItem::Helper { .. } => None,
+                })
+                .collect(),
+            // ilo's lines are a session's too.
+            Line::Ilo(line) => vec![Line::Ilo(line)],
+            _ => Vec::new(),
+        })
+        .collect()
 }
 
 /// The stretch of work a trace is made of, as it gathers.
@@ -3737,6 +3817,8 @@ impl<'a> Stretch<'a> {
         steps: &mut Peekable<impl Iterator<Item = (usize, &'a Traced)>>,
         began: &mut Peekable<impl Iterator<Item = helpers::Began>>,
         before: Option<usize>,
+        lines: &mut Vec<Line>,
+        marks: &mut Peekable<std::vec::IntoIter<Mark>>,
     ) {
         let due = |after: usize| before.is_none_or(|index| after <= index);
         loop {
@@ -3748,6 +3830,7 @@ impl<'a> Stretch<'a> {
                     began.next();
                 }
                 (Some((key, step)), _) => {
+                    place(lines, self, marks, key, before.unwrap_or(usize::MAX));
                     let helper = self.helpers.and_then(|all| all.of(key, step.did.tab));
                     self.step(key, step, helper);
                     steps.next();

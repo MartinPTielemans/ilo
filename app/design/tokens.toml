@@ -2891,6 +2891,9 @@ header-bottom = 14.0
 picture-width = 326.0
 picture-height = 204.0
 picture-radius = 6.0
+# Each tile's edge: a hairline of the ink at this, inside its corners and over its picture, so a
+# tile holds its shape on the window in both looks.
+picture-rim = 0.14
 site = 16.0
 site-gap = 3.0
 # A page with no picture yet has only its favicon, or its site's globe, in its tile's middle at
