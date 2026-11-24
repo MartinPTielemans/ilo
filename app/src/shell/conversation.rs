@@ -117,13 +117,15 @@ pub(super) fn page_chip_keyed(
 }
 
 /// Sends the windows' `shells` what the Agents show as they change: their status, the task cards,
-/// the tasks in the Archive and, to a window showing a task's conversation, that conversation, as
-/// `conversation` makes it for the task's agent. Each is made before any shell changes, since making one reads its pages
+/// the tasks in the Archive, those of them a run before left that Latest tasks lists (`kept`) and,
+/// to a window showing a task's conversation, that conversation, as `conversation` makes it for
+/// the task's agent. Each is made before any shell changes, since making one reads its pages
 /// from a shell (the core's `Browser::tab`), which can't be read while it's being changed.
 pub fn send_agents(
     status: Vec<Status>,
     cards: Vec<Card>,
     archived: Vec<ArchivedTask>,
+    kept: Vec<Card>,
     conversation: impl Fn(&str, &gpui::App) -> Option<Conversation>,
     shells: &[WeakEntity<Shell>],
     cx: &mut gpui::App,
@@ -140,6 +142,7 @@ pub fn send_agents(
         shell.update(cx, |shell, cx| {
             shell.set_agent_status(status.clone(), cx);
             shell.set_archived_tasks(archived.clone(), cx);
+            shell.set_kept_cards(kept.clone(), cx);
             shell.set_task_cards(cards.clone(), cx);
             // Only a window that still shows the task's conversation is sent it.
             if let Some((agent, made)) = talk
@@ -318,6 +321,48 @@ impl Shell {
     pub fn show_needed_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
         if self.talk_agent().as_ref() != Some(&agent) {
             self.show_task(agent, cx);
+        }
+    }
+
+    /// The tasks a run before left that haven't been brought back, the last to end first, each
+    /// with the user's Space of its profile for its home (`Agents::kept_cards`). They have no card
+    /// at the foot, which is for what's live or was opened in this run. A private window, which
+    /// offers no tasks, lists none.
+    pub fn set_kept_cards(&mut self, mut cards: Vec<Card>, cx: &mut Context<Self>) {
+        if self.one_space() {
+            cards.clear();
+        }
+        if cards != self.kept_cards {
+            self.kept_cards = cards;
+            cx.notify();
+        }
+    }
+
+    /// The composer's Latest tasks, at most `most`: the tasks the user talks to here, the newest
+    /// first, then those a run before left in the profile in front, which no other profile's
+    /// Space lists, as one comes back only in its own.
+    pub(super) fn latest_tasks(&self, most: usize) -> Vec<Card> {
+        let profile = |space: u64| {
+            let space = self.spaces.iter().find(|each| each.id == space);
+            space.map(|space| space.profile)
+        };
+        let here = self.shown_space().map(|space| space.profile);
+        let kept =
+            (self.kept_cards.iter()).filter(|card| here.is_some() && profile(card.home) == here);
+        (self.task_cards.iter())
+            .filter(|card| card.replies)
+            .chain(kept)
+            .take(most)
+            .cloned()
+            .collect()
+    }
+
+    /// A click on a card of Latest tasks: one a run before left comes back from the Archive with
+    /// its conversation open, as its row there brings it; any other shows its conversation.
+    pub(super) fn open_latest(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+        match self.kept_cards.iter().any(|card| card.agent == agent) {
+            true => self.restore_archived_task(agent, cx),
+            false => self.show_task(agent, cx),
         }
     }
 
