@@ -4,6 +4,7 @@
 
 #include "base/no_destructor.h"
 #include "browser_core/agent_autofill.h"
+#include "browser_core/agent_session.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/tab.h"
 #include "browser_core/tile_rule.h"
@@ -46,6 +47,12 @@ bool Show(bc_id tab, void* view, const gfx::Rect& frame, double corner_radius) {
   }
   switch (shown) {
     case TileRule::Shown::kNew:
+      // A page the user took over had their size, and once it's the agent's again it has its own
+      // before the tile shows it: one resize, as it's handed back, and none while it's a tile.
+      if (!IsHeld(tab)) {
+        Window::GiveAgentPageItsSize(contents);
+      }
+      [[fallthrough]];
     case TileRule::Shown::kFramed:
     case TileRule::Shown::kMoved:
       platform::ShowTile(contents, view, frame, corner_radius);
