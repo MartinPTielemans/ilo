@@ -5,7 +5,6 @@
 //! its window goes through `Host`; where it goes, what it says and when the pointer is near it are
 //! the shell's, which calls `plate` and `place`.
 
-use std::time::Instant;
 use std::{cell::Cell, ops::Range, rc::Rc, time::Duration};
 
 use gpui::{
@@ -14,6 +13,7 @@ use gpui::{
     WindowTextSystem, canvas, div, point, prelude::*, px, size,
 };
 
+use crate::hover_intent::{Intent, Next};
 use crate::{palette::Palette, tooltip};
 
 pub mod card;
@@ -296,8 +296,8 @@ pub struct LinkTarget {
     pending: Option<Pending>,
     /// The one-shot timer a plate waits on. Dropping it cancels it.
     wait: Option<Task<()>>,
-    /// When the plate last went.
-    went: Option<Instant>,
+    /// When the plate shows: after DELAY, or at once within GRACE of the last going.
+    intent: Intent,
     /// The plate went while a button was down, and its window waits for the release to go.
     hide_held: bool,
     /// Asks every RELEASE_POLL whether the button is up, while a press holds back the window.
@@ -350,7 +350,7 @@ pub fn open(
             drawn: None,
             pending: None,
             wait: None,
-            went: None,
+            intent: Intent::new(DELAY).with_grace(GRACE),
             hide_held: false,
             release: None,
             card: None,
@@ -388,23 +388,16 @@ pub fn show(window: u64, plate: Plate, frame: Bounds<Pixels>, side: Side, cx: &m
                 left,
                 top,
             });
-            let now = cx.background_executor().now();
-            let soon = target
-                .went
-                .is_some_and(|went| now.duration_since(went) < GRACE);
-            if target.shown.is_some() || soon {
-                target.wait = None;
-                target.reveal(cx);
-            } else if target.wait.is_none() {
-                target.wait = Some(cx.spawn(async move |target, cx| {
-                    cx.background_executor().timer(DELAY).await;
-                    target
-                        .update(cx, |target, cx| {
-                            target.wait = None;
-                            target.reveal(cx)
-                        })
-                        .ok();
-                }));
+            // A call while the plate waits changes what it shows, and where, and waits on.
+            if target.intent.is_waiting() {
+                return;
+            }
+            match target.intent.enter(cx.background_executor().now()) {
+                Next::Open => {
+                    target.wait = None;
+                    target.reveal(cx);
+                }
+                Next::Wait(delay) => target.wake_after(delay, cx),
             }
         })
         .ok();
@@ -506,6 +499,25 @@ pub fn over(cx: &App) -> Option<u64> {
 }
 
 impl LinkTarget {
+    /// Wakes after `delay` and reveals the plate once the pointer has rested its whole delay; a
+    /// wake that came early waits out the rest.
+    fn wake_after(&mut self, delay: Duration, cx: &mut Context<Self>) {
+        self.wait = Some(cx.spawn(async move |target, cx| {
+            cx.background_executor().timer(delay).await;
+            target
+                .update(cx, |target, cx| {
+                    target.wait = None;
+                    let now = cx.background_executor().now();
+                    if target.intent.due(now) {
+                        target.reveal(cx)
+                    } else if let Some(left) = target.intent.early(now) {
+                        target.wake_after(left, cx)
+                    }
+                })
+                .ok();
+        }));
+    }
+
     fn reveal(&mut self, cx: &mut Context<Self>) {
         if self.pending.is_some() && self.host.pressed() {
             return self.await_release(cx);
@@ -548,8 +560,11 @@ impl LinkTarget {
         self.wait = None;
         self.pending = None;
         self.close_card(cx);
+        if self.shown.is_none() {
+            self.intent.leave();
+        }
         if self.shown.take().is_some() {
-            self.went = Some(cx.background_executor().now());
+            self.intent.close(cx.background_executor().now());
             if self.host.pressed() {
                 self.hide_held = true;
                 return self.await_release(cx);

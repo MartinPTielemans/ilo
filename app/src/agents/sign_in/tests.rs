@@ -361,7 +361,7 @@ fn a_row_says_its_state_and_offers_what_comes_next() {
     let codex = Cli::Codex;
     assert_eq!(
         row(codex, Ready::Unknown, None, Row::Idle),
-        says("Looking…", Offer::Nothing)
+        says("Checking…", Offer::Nothing)
     );
     assert_eq!(
         row(codex, Ready::NotFound, None, Row::Idle),
@@ -388,7 +388,8 @@ fn a_row_says_its_state_and_offers_what_comes_next() {
     assert_eq!(failed, says("The sign-in didn't finish", Offer::TryAgain));
     // Claude Code's command asked for a code, which ilo never gives it.
     let code = row(Cli::Claude, Ready::SignedOut, None, Row::Failed(None));
-    assert_eq!(code.line, "Finish with “claude auth login” in a terminal");
+    assert_eq!(code.line, "Run claude auth login in a terminal");
+    assert_eq!(&code.line[code.command().unwrap()], CLAUDE_SIGN_IN);
     assert_eq!(code.offer, Offer::TryAgain);
     let not_out = row(codex, Ready::SignedIn, None, Row::Failed(None));
     assert_eq!(not_out, says("Couldn't sign out", Offer::SignedIn));

@@ -132,6 +132,12 @@ void host_set_window_title(void* ui_view, const char* title);
 // dark, its material 29 (docs/ux-spec.md › Window material).
 void host_set_window_light(void* ui_view, bool light);
 
+// Whether this host's windows have a material behind them, the page and the desktop blurred, that
+// the transparency level can drive: the browser window's and the overlays' (#4090). The Mac's do.
+// Linux's and Windows' windows are opaque (#3676), so the level isn't offered there and what
+// floats stays opaque. Fixed while the app runs.
+bool host_has_window_material(void);
+
 // Gives the whole app, its menus, alerts and pages, an appearance of its own, 1 light or 2 dark, in
 // place of the system's, or with 0 the system's again (View › Appearance).
 void host_set_app_appearance(int appearance);
@@ -247,15 +253,13 @@ double host_since_launch(void);
 void host_forget_window(void* ui_view);
 
 // The overlays: the command bar, the Space's icon and theme pickers, a closed folder's preview, the
-// Boost editor, the switcher a held ⌃Tab shows and the whole of an agent's request beside its
-// question. One shows at a time.
+// Boost editor and the switcher a held ⌃Tab shows. One shows at a time.
 #define HOST_COMMAND_BAR 0
 #define HOST_ICON_PICKER 1
 #define HOST_THEME_PICKER 2
 #define HOST_FOLDER_PREVIEW 3
 #define HOST_BOOST_EDITOR 4
 #define HOST_TAB_SWITCHER 5
-#define HOST_AGENT_REQUEST 6
 // The Site Controls take the same elevation call, though they aren't one of the overlays.
 #define HOST_SITE_CONTROLS 7
 

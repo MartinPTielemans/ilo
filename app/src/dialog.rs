@@ -29,6 +29,7 @@ use gpui::{
 };
 
 use crate::{
+    dismissal::{By, Close, FocusReturn, Returned, Why},
     palette::{self, Float, STATE_PRESSED},
     settling::Settling,
     shell::cubic_bezier,
@@ -299,6 +300,9 @@ struct Asked {
     settling: Settling,
     /// Once the user has answered, or Chrome took it back: when, and where the motion was.
     answered_at: Option<(Instant, Pose)>,
+    /// The press on the dim that cancelled it, until it's let go: that press is spent, and its
+    /// release never lands on what's under a window's own dialog.
+    cancelling_press: bool,
     _leave: Option<Task<()>>,
     /// The button under the pointer, and the one the last frame drew so.
     hovered: Option<&'static str>,
@@ -369,6 +373,9 @@ pub struct Dialog {
     host: Rc<dyn Host>,
     focus: FocusHandle,
     asked: Option<Asked>,
+    /// What had the keyboard in its window as the last question took it, and what of the
+    /// question's could have it since, for a window's own dialog to give back (`give_back`).
+    returns: Option<(FocusReturn, Vec<FocusHandle>)>,
     /// Chrome's question, waiting for the dialog that shows to go.
     next: Option<Request>,
     /// The account's, waiting the same way, after Chrome's.
@@ -482,14 +489,41 @@ pub fn ask_in(
     });
 }
 
+/// A window's own `dialog` has gone: the keyboard goes back to what had it as the question asked,
+/// or to `fallback` once that's gone, while the dialog has it still. The dialog was modal, so
+/// whatever answered it, the user never left it, and every answer gives back as a choice does.
+/// Before the answer runs, as the window's view sees the dialog go, so an answer that hands the
+/// keyboard on, such as a row's Remove to the row that takes its place, hands it on from there.
+pub fn give_back(
+    dialog: &Entity<Dialog>,
+    fallback: &FocusHandle,
+    window: &mut Window,
+    cx: &mut App,
+) -> Returned {
+    let (returns, own) = (dialog.update(cx, |dialog, _| dialog.returns.take()))
+        .unwrap_or_else(|| (FocusReturn::default(), vec![dialog.read(cx).focus.clone()]));
+    let own: Vec<&FocusHandle> = own.iter().collect();
+    returns.give_back(
+        Close::new(Why::Chosen, By::Code),
+        &own,
+        fallback,
+        window,
+        cx,
+    )
+}
+
 /// Whether a window's own `dialog` is asking, or leaving after the answer.
 pub fn asks(dialog: &Entity<Dialog>, cx: &App) -> bool {
     dialog.read(cx).asked.is_some()
 }
 
 /// What a window draws over all of its content while its own `dialog` asks: the dialog, which
-/// takes every click, as the window waits for the answer.
+/// takes every click as the window waits for the answer, and none once it's answered and
+/// leaving, so a press then reaches what's under it; the press that cancelled it, though, never
+/// does, as it's held.
 pub fn cover(dialog: &Entity<Dialog>, cx: &App) -> Option<AnyElement> {
+    let inert = (dialog.read(cx).asked.as_ref())
+        .is_some_and(|asked| asked.answered_at.is_some() && !asked.cancelling_press);
     asks(dialog, cx).then(|| {
         div()
             .id("dialog-cover")
@@ -497,7 +531,7 @@ pub fn cover(dialog: &Entity<Dialog>, cx: &App) -> Option<AnyElement> {
             .top_0()
             .left_0()
             .size_full()
-            .occlude()
+            .when(!inert, |cover| cover.occlude())
             .child(dialog.clone())
             .into_any_element()
     })
@@ -792,6 +826,7 @@ impl Dialog {
             host,
             focus: cx.focus_handle(),
             asked: None,
+            returns: None,
             next: None,
             next_account: None,
             next_page: None,
@@ -925,6 +960,10 @@ impl Dialog {
                 })
             })
             .collect();
+        let own = (fields.iter().map(|field| field.focus_handle(cx)))
+            .chain([self.focus.clone()])
+            .collect();
+        self.returns = Some((FocusReturn::remember(false, window, cx), own));
         match fields.first() {
             _ if rests => {}
             Some(field) => window.focus(&field.focus_handle(cx), cx),
@@ -947,6 +986,7 @@ impl Dialog {
             settled: false,
             settling: Settling::default(),
             answered_at: None,
+            cancelling_press: false,
             _leave: None,
             hovered: None,
             drawn_hover: None,
@@ -1022,19 +1062,27 @@ impl Dialog {
         }
     }
 
-    /// The user pressed ↩: what the question says it answers.
+    /// The user pressed ↩: what the question says it answers, unless it was an input method's,
+    /// composing in a field (dismissal's rule).
     fn confirm(&mut self, cx: &mut Context<Self>) {
         let Some(asked) = &self.asked else {
             return;
         };
-        // An input method takes ↩ to finish what it composes.
-        if asked.fields.iter().any(|field| field.read(cx).composing()) {
+        if !crate::dismissal::submits(&asked.fields, cx) {
             return;
         }
         match asked.question.on_return {
             Return::Action => self.answer(Answer::Action, cx),
             Return::Cancel => self.answer(Answer::Cancel, cx),
             Return::Nothing => {}
+        }
+    }
+
+    /// The user pressed Esc: Cancel, unless it was an input method's, composing in a field.
+    fn escape(&mut self, cx: &mut Context<Self>) {
+        let fields = (self.asked.as_ref()).map_or(&[][..], |asked| &asked.fields[..]);
+        if crate::dismissal::Close::escape_from(fields, cx).is_some() {
+            self.answer(Answer::Cancel, cx);
         }
     }
 
@@ -1597,11 +1645,12 @@ impl Render for Dialog {
         let width = asked
             .over
             .map_or(WIDTH, |(over, _)| card_width(over.size.width));
-        // The card occludes the dim under it, so it hears its own presses.
+        // The card occludes the dim under it, so it hears its own presses, until it's answered:
+        // leaving, it's inert.
         let card = focus_on_press(div(), asked.focus_pane.clone().filter(|_| rests))
             .id("dialog")
             // Clicks on the card stay on it, and one around it cancels.
-            .occlude()
+            .when(asked.answered_at.is_none(), |card| card.occlude())
             .relative()
             .child(drawn_into(&asked.check_drawn, |drawn, at| drawn.card = at))
             .top(px(-pose.raised))
@@ -1670,16 +1719,39 @@ impl Render for Dialog {
         let root = focus_on_press(root, asked.focus_pane.clone().filter(|_| rests));
         let dim = if rests { REST_DIM_OPACITY } else { DIM_OPACITY };
         root.on_action(cx.listener(|dialog, _: &Confirm, _, cx| dialog.confirm(cx)))
-            .on_action(cx.listener(|dialog, _: &Cancel, _, cx| dialog.answer(Answer::Cancel, cx)))
+            .on_action(cx.listener(|dialog, _: &Cancel, _, cx| dialog.escape(cx)))
             .on_action(
                 cx.listener(|dialog, _: &NextField, window, cx| dialog.next_field(window, cx)),
             )
             // A page waits for its answer, so a click on its card's dim does nothing.
             .when(!page, |root| {
+                let let_go = |dialog: &mut Self,
+                              _: &gpui::MouseUpEvent,
+                              _: &mut Window,
+                              cx: &mut Context<Self>| {
+                    if let Some(asked) =
+                        dialog.asked.as_mut().filter(|asked| asked.cancelling_press)
+                    {
+                        asked.cancelling_press = false;
+                        cx.notify();
+                    }
+                };
                 root.on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|dialog, _, _, cx| dialog.answer(Answer::Cancel, cx)),
+                    cx.listener(|dialog, _, _, cx| {
+                        let asking = |dialog: &Self| {
+                            (dialog.asked.as_ref()).is_some_and(|asked| asked.answered_at.is_none())
+                        };
+                        let was_asking = asking(dialog);
+                        dialog.answer(Answer::Cancel, cx);
+                        if let Some(asked) = dialog.asked.as_mut() {
+                            // Only the press that answered is spent.
+                            asked.cancelling_press = was_asking && asked.answered_at.is_some();
+                        }
+                    }),
                 )
+                .on_mouse_up(MouseButton::Left, cx.listener(let_go))
+                .on_mouse_up_out(MouseButton::Left, cx.listener(let_go))
             })
             // Over a tab's card, the dim has the card's corners.
             .rounded(px(radius))

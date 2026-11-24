@@ -5,7 +5,8 @@ use crate::tokens::text;
 use std::time::Instant;
 
 use gpui::{
-    AnyElement, Context, FontWeight, MouseButton, MouseDownEvent, Pixels, Point, Window,
+    AnyElement, Context, Focusable as _, FontWeight, MouseButton, MouseDownEvent, Pixels, Point,
+    Window,
     accesskit::{Action, HasPopup, Role},
     div, point,
     prelude::*,
@@ -22,6 +23,7 @@ use super::{
     FORM_THEME_TOP, FORM_TITLE_HEIGHT, FORM_TITLE_TOP, HOVERED, Naming, SECONDARY, Shell,
     SpaceForm,
 };
+use crate::dismissal::{By, Close, FocusReturn, Why};
 use crate::{text_input::TextInput, theme_picker};
 
 impl Shell {
@@ -64,7 +66,7 @@ impl Shell {
                 let space = self.browser.create_space(&name, profile, after, cx);
                 let name = cx.new(|cx| {
                     TextInput::new("Space name", cx)
-                        .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
+                        .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
                 });
                 self.form = Some(SpaceForm {
                     space,
@@ -95,8 +97,8 @@ impl Shell {
         cx.notify();
     }
 
-    /// Names the form's Space, if it has a name, and closes the form.
-    fn create_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Names the form's Space, if it has a name, and closes the form, by `by`.
+    fn create_space(&mut self, by: By, window: &mut Window, cx: &mut Context<Self>) {
         let Some(form) = self.form() else {
             return;
         };
@@ -106,36 +108,62 @@ impl Shell {
         }
         // check.sh waits for these lines.
         log!("browser: create space {} {name}", form.space);
-        let (space, tab) = (form.space, form.tab);
+        let (space, tab, field) = (form.space, form.tab, form.name.clone());
         self.browser.rename_space(space, &name, cx);
         if let Some(tab) = tab {
             self.move_to_space(tab, space, false, cx);
         }
         self.leaving_form = self.form.take().map(|form| (form, Instant::now()));
-        window.focus(&self.focus_handle, cx);
+        self.give_keyboard_back(&field, Close::new(Why::Chosen, by), window, cx);
         cx.notify();
     }
 
-    /// Shows the Space the form was opened from and deletes the form's.
-    pub(super) fn cancel_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(form) = self.close_form(window, cx) {
+    /// Shows the Space the form was opened from and deletes the form's, closed for `close`.
+    pub(super) fn cancel_space(
+        &mut self,
+        close: Close,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(form) = self.close_form(close, window, cx) {
             self.browser.delete_space(form.space, cx);
         }
     }
 
-    /// Shows the Space the form was opened from, and returns the form, whose Space is left for
-    /// the caller to delete.
+    /// Shows the Space the form was opened from, and returns the form, closed for `close`, whose
+    /// Space is left for the caller to delete.
     pub(super) fn close_form(
         &mut self,
+        close: Close,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<SpaceForm> {
         let form = self.form.take_if(|form| form.space == self.space)?;
         log!("browser: cancel space {}", form.space);
         self.show_space(form.from, cx);
-        window.focus(&self.focus_handle, cx);
+        self.give_keyboard_back(&form.name, close, window, cx);
         cx.notify();
         Some(form)
+    }
+
+    /// The form's way back for the keyboard, the shared one (dismissal): to the window, and only
+    /// while one of the form's fields, its name or the Profile row's, still has it. Nothing that
+    /// closes the form gives it back to what opened it, as it has no Escape and no key of its own
+    /// that closes it, so it remembers no opener.
+    fn give_keyboard_back(
+        &mut self,
+        name: &gpui::Entity<TextInput>,
+        close: Close,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let name = name.focus_handle(cx);
+        let profile = (self.renaming.as_ref())
+            .filter(|renaming| matches!(renaming.naming, Naming::Profile(_)))
+            .map(|renaming| renaming.name.focus_handle(cx));
+        let own: Vec<_> = std::iter::once(&name).chain(profile.as_ref()).collect();
+        let window_focus = self.focus_handle.clone();
+        FocusReturn::default().give_back(close, &own, &window_focus, window, cx);
     }
 
     /// The form shown, or the one a swipe cancelled, and where its page is while fingers or a
@@ -346,7 +374,9 @@ impl Shell {
                 })
             })
             .when(left.is_none(), |button| {
-                button.on_click(cx.listener(|shell, _, window, cx| shell.create_space(window, cx)))
+                button.on_click(
+                    cx.listener(|shell, _, window, cx| shell.create_space(By::Pointer, window, cx)),
+                )
             });
         let cancel = div()
             .absolute()
@@ -365,7 +395,7 @@ impl Shell {
                     .items_center()
                     .text_size(px(text::SMALL))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(self.palette.text(SECONDARY))
+                    .text_color(self.palette.gray(SECONDARY))
                     .child("Cancel")
                     // It brightens to the form's text under the pointer (ours: Arc's isn't
                     // recorded). Create Space doesn't change, as Arc's doesn't.
@@ -373,18 +403,22 @@ impl Shell {
                         button
                             .block_mouse_except_scroll()
                             .hover(|style| style.text_color(self.palette.text(FORM_TEXT)))
-                            .on_click(
-                                cx.listener(|shell, _, window, cx| shell.cancel_space(window, cx)),
-                            )
+                            .on_click(cx.listener(|shell, _, window, cx| {
+                                shell.cancel_space(Close::new(Why::Chosen, By::Pointer), window, cx)
+                            }))
                     }),
             );
         div()
             .id("space-form")
             .when(a11y, |form| form.role(Role::Form).aria_label("New Space"))
             .key_context("SpaceForm")
-            .on_action(
-                cx.listener(|shell, _: &CreateSpace, window, cx| shell.create_space(window, cx)),
-            )
+            .on_action(cx.listener(|shell, _: &CreateSpace, window, cx| {
+                // Unless it was an input method's, composing in the name (dismissal's rule).
+                let name = shell.form().map(|form| form.name.clone());
+                if crate::dismissal::submits(&name, cx) {
+                    shell.create_space(By::Keyboard, window, cx)
+                }
+            }))
             .absolute()
             .top_0()
             .w(px(self.width()))
@@ -666,6 +700,76 @@ mod tests {
             shell.read_with(cx, |shell, _| shell.form.is_none()),
             "the form stayed"
         );
+    }
+
+    /// Cancel pressed with the form's name typing: the form goes and the window has the keyboard.
+    /// Pressed once the keyboard has gone outside the window's elements, as it does to the page,
+    /// the form goes and leaves the keyboard there.
+    #[gpui::test]
+    fn cancel_gives_the_window_the_keyboard_only_while_the_form_has_it(cx: &mut TestAppContext) {
+        for moved in [false, true] {
+            let (shell, cx, _) = form(cx);
+            shell.update(cx, |shell, cx| {
+                shell.settle = None;
+                cx.notify();
+            });
+            cx.simulate_a11y_activation();
+            cx.run_until_parked();
+            if moved {
+                cx.update(|window, cx| window.blur(cx));
+                cx.run_until_parked();
+            }
+            let (cancel, _) = named(cx, Role::Button, "Cancel");
+            cx.simulate_a11y_action(cancel, Action::Click);
+            cx.run_until_parked();
+            assert!(
+                shell.read_with(cx, |shell, _| shell.form.is_none()),
+                "the form stayed"
+            );
+            let focused = cx.update(|window, cx| {
+                let shell = shell.read(cx).focus_handle.clone();
+                (shell.is_focused(window), window.focused(cx).is_none())
+            });
+            assert_eq!(focused, (!moved, moved), "moved: {moved}");
+        }
+    }
+
+    /// ↩ while an input method composes in the Space's name is the composition's: it makes no
+    /// Space and leaves the marked text for the method. Once the method has committed it, the
+    /// next ↩ makes the Space, with the name as committed.
+    #[gpui::test]
+    fn return_while_composing_makes_no_space(cx: &mut TestAppContext) {
+        use gpui::EntityInputHandler as _;
+        let (shell, cx, host) = form(cx);
+        host.take_edits();
+        let name = shell.read_with(cx, |shell, _| shell.form.as_ref().unwrap().name.clone());
+        cx.update(|window, cx| {
+            name.update(cx, |name, cx| {
+                name.replace_and_mark_text_in_range(None, "ぴ", None, window, cx)
+            })
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        assert!(
+            host.take_edits().is_empty(),
+            "↩ made the Space while composing"
+        );
+        assert!(
+            shell.read_with(cx, |shell, _| shell.form.is_some()),
+            "↩ closed the form while composing"
+        );
+        let typed = name.read_with(cx, |name, _| (name.text().to_string(), name.composing()));
+        assert!(typed.1, "↩ ended the composition");
+        cx.update(|window, cx| {
+            name.update(cx, |name, cx| {
+                name.replace_text_in_range(None, "ぴ", window, cx)
+            })
+        });
+        cx.run_until_parked();
+        let typed = name.read_with(cx, |name, _| (name.text().to_string(), name.composing()));
+        assert!(!typed.1);
+        cx.simulate_keystrokes("enter");
+        assert_eq!(host.take_edits(), [format!("rename space 7 {}", typed.0)]);
     }
 
     /// ↩ makes the Space, and the form starts to leave.

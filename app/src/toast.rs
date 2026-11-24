@@ -3,17 +3,23 @@
 //! the page's native view, so as the zoom HUD is, it's a window of its own that the host shows
 //! over the browser window's top right corner, as its child, and the mouse goes through it to the
 //! page, unless it has buttons, as Capture's does. What it asks of its window goes through `Host`.
+//!
+//! A timed toast is held by the pointer on its buttons, the keyboard in it and the app away, each
+//! by itself, and goes on with the time it had counted once none holds it (`hold`). A press in it
+//! answers it alone: it's a window of its own, so a dialog under it, or anything else open, stays.
 
 use std::time::Instant;
 use std::{cell::Cell, rc::Rc, time::Duration};
 
 use gpui::{
-    App, Bounds, ClickEvent, Context, FontWeight, Global, Pixels, Point, Role, SharedString, Task,
-    TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions, accesskit::Live, canvas, div, point, prelude::*, px, size, svg,
+    App, Bounds, ClickEvent, Context, FocusHandle, FontWeight, Global, Pixels, Point, Role,
+    SharedString, Subscription, Task, TitlebarOptions, Window, WindowBackgroundAppearance,
+    WindowBounds, WindowHandle, WindowKind, WindowOptions, accesskit::Live, canvas, div, point,
+    prelude::*, px, size, svg,
 };
 
-use crate::palette::{Float, Palette, STATE_HOVERED, STATE_PRESSED};
+use crate::hold::{Hold, Reason};
+use crate::palette::{Float, Ground, Palette, STATE_HOVERED, STATE_PRESSED};
 use crate::shell::{CARD_INSET, cubic_bezier, scaled::scaled_from_top, spring};
 
 // Arc's, measured at 2× (docs/ux-spec.md › Toast): 46.5 tall, 8 inside the card's top right
@@ -156,10 +162,9 @@ struct Shown {
     /// A key's chip after the text, and the words after it.
     key: Option<(SharedString, SharedString)>,
     buttons: Vec<Button>,
-    /// The pointer is over it, which keeps a toast with buttons until it leaves.
+    /// The pointer is over it, which holds a toast with buttons: one without lets the pointer
+    /// through to the page.
     hovered: bool,
-    /// Its time is up, and it leaves once the pointer does.
-    expired: bool,
     /// When its window was first on screen, where the motion starts.
     shown: Option<Instant>,
     /// When it was last asked for again while in place, which bumps it.
@@ -226,7 +231,17 @@ pub struct Toast {
     plate: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// What shows whenever no other toast does, until `hide_resting`, as while a trace records.
     resting: Option<(SharedString, Vec<Button>)>,
+    /// Its time, and what holds it, which outlives one toast: the next shows with the pointer
+    /// still on it or the app still away.
+    hold: Hold,
+    focus: FocusHandle,
+    _focus_watch: [Subscription; 2],
 }
+
+/// Whether the app isn't the active one, as the host last said, which holds a toast shown since.
+struct AppAway(bool);
+
+impl Global for AppAway {}
 
 struct ToastWindow(WindowHandle<Toast>);
 
@@ -260,14 +275,30 @@ pub fn open(
         window_background: WindowBackgroundAppearance::Transparent,
         ..Default::default()
     };
-    let window = cx.open_window(options, |_, cx| {
-        cx.new(|_| Toast {
-            host,
-            look: Box::new(look),
-            shown: None,
-            takes_clicks: false,
-            plate: Rc::default(),
-            resting: None,
+    let window = cx.open_window(options, |window, cx| {
+        cx.new(|cx| {
+            let focus = cx.focus_handle();
+            let focused = |toast: &mut Toast, window: &mut Window, cx: &mut Context<Toast>| {
+                let held = toast.focus.contains_focused(window, cx);
+                toast.hold(Reason::Focus, held, cx);
+            };
+            let _focus_watch = [
+                cx.on_focus_in(&focus, window, focused),
+                cx.on_focus_out(&focus, window, move |toast, _, window, cx| {
+                    focused(toast, window, cx)
+                }),
+            ];
+            Toast {
+                host,
+                look: Box::new(look),
+                shown: None,
+                takes_clicks: false,
+                plate: Rc::default(),
+                resting: None,
+                hold: Hold::default(),
+                focus,
+                _focus_watch,
+            }
         })
     });
     match window {
@@ -288,8 +319,8 @@ pub fn show(text: &str, key: Option<(&str, &str)>, time: Duration, cx: &mut App)
     present(text, None, key, Vec::new(), Some(time), false, None, cx);
 }
 
-/// Shows `text` with `buttons` after it, for `time` from now and for as long as the pointer is
-/// over it, in place of any toast showing.
+/// Shows `text` with `buttons` after it, for `time` from now, which stops while the pointer is on
+/// it, in place of any toast showing.
 pub fn show_with_buttons(text: &str, buttons: Vec<Button>, time: Duration, cx: &mut App) {
     present(text, None, None, buttons, Some(time), false, None, cx);
 }
@@ -445,6 +476,16 @@ pub fn hide_undo(cx: &mut App) {
         .ok();
 }
 
+/// The app has stopped being the active one, or is again: a timed toast waits for it, keeping the
+/// time it had counted.
+pub fn app_away(away: bool, cx: &mut App) {
+    cx.set_global(AppAway(away));
+    let Some(window) = cx.try_global::<ToastWindow>().map(|toast| toast.0) else {
+        return;
+    };
+    (window.update(cx, |toast, _, cx| toast.hold(Reason::AppAway, away, cx))).ok();
+}
+
 /// Shows how to leave full screen, as the window has gone full screen or another Space shows in
 /// it, in place of any toast showing.
 pub fn show_full_screen(cx: &mut App) {
@@ -500,13 +541,6 @@ fn present(
             };
             let logged = logged.unwrap_or(text);
             log!("browser: toast shown {logged}{words}{names}");
-            let timer = match time {
-                Some(time) => cx.spawn(async move |toast, cx| {
-                    cx.background_executor().timer(time).await;
-                    toast.update(cx, |toast, cx| toast.expire(cx)).ok();
-                }),
-                None => Task::ready(()),
-            };
             // One already in place stays there with the new words and time, and bumps, as nothing
             // else would show it was asked for again; one leaving comes back. Under Reduce Motion
             // it doesn't scale.
@@ -517,12 +551,17 @@ fn present(
                 log!("browser: toast bumped");
                 Instant::now()
             });
+            let hovered = shown.as_ref().is_some_and(|shown| shown.hovered);
+            let now = cx.background_executor().now();
+            let away = cx.try_global::<AppAway>().is_some_and(|away| away.0);
+            toast.hold.set(Reason::AppAway, away, now);
+            (toast.hold).set(Reason::Pointer, hovered && !buttons.is_empty(), now);
+            toast.hold.start(time, now);
             toast.shown = Some(Shown {
                 text: text.to_string().into(),
                 key: key.map(|(key, rest)| (key.to_string().into(), rest.to_string().into())),
                 buttons,
-                hovered: shown.as_ref().is_some_and(|shown| shown.hovered),
-                expired: false,
+                hovered,
                 shown: shown.and_then(|shown| shown.shown),
                 bumped,
                 leaving: None,
@@ -530,8 +569,9 @@ fn present(
                 full_screen,
                 held,
                 resting: false,
-                _timer: timer,
+                _timer: Task::ready(()),
             });
+            toast.wake_when_due(cx);
             toast.take_clicks(cx);
             toast.host.show();
             cx.notify();
@@ -552,16 +592,29 @@ impl Toast {
         }
     }
 
-    /// Its time is up: it leaves, unless the pointer is over its buttons, until it leaves them.
-    fn expire(&mut self, cx: &mut Context<Self>) {
-        let Some(shown) = &mut self.shown else {
+    /// `reason` holds the toast's time, or no longer does.
+    fn hold(&mut self, reason: Reason, held: bool, cx: &mut Context<Self>) {
+        self.hold.set(reason, held, cx.background_executor().now());
+        self.wake_when_due(cx);
+    }
+
+    /// One wake-up, where the toast's time ends and it leaves, in place of the one before: none
+    /// while it's held, so nothing runs then.
+    fn wake_when_due(&mut self, cx: &mut Context<Self>) {
+        let wake = self.hold.wake();
+        let Some(shown) = self.shown.as_mut().filter(|shown| shown.leaving.is_none()) else {
             return;
         };
-        if shown.hovered && !shown.buttons.is_empty() {
-            shown.expired = true;
-            return;
-        }
-        self.leave(cx);
+        shown._timer = match wake {
+            Some(wake) => cx.spawn(async move |toast, cx| {
+                let executor = cx.background_executor().clone();
+                executor
+                    .timer(wake.saturating_duration_since(executor.now()))
+                    .await;
+                toast.update(cx, |toast, cx| toast.leave(cx)).ok();
+            }),
+            None => Task::ready(()),
+        };
     }
 
     fn hover(&mut self, hovered: bool, cx: &mut Context<Self>) {
@@ -573,9 +626,8 @@ impl Toast {
             log!("browser: toast hovered {hovered}");
         }
         shown.hovered = hovered;
-        if !hovered && shown.expired {
-            self.leave(cx);
-        }
+        let held = hovered && !shown.buttons.is_empty();
+        self.hold(Reason::Pointer, held, cx);
     }
 
     fn press(&mut self, index: usize, position: Point<Pixels>, cx: &mut Context<Self>) {
@@ -632,7 +684,7 @@ impl Toast {
 
 impl Render for Toast {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let root = div().size_full().flex().justify_end().items_start();
+        let root = (div().size_full().flex().justify_end().items_start()).track_focus(&self.focus);
         let Some(shown) = &mut self.shown else {
             return root;
         };
@@ -670,9 +722,13 @@ impl Render for Toast {
                     .flex()
                     .items_center()
                     .rounded(px(CHIP_RADIUS))
-                    .bg(palette.plate(CHIP_FILL))
-                    .hover(move |style| style.bg(palette.state(CHIP_FILL, STATE_HOVERED)))
-                    .active(move |style| style.bg(palette.state(CHIP_FILL, STATE_PRESSED)))
+                    .bg(palette.ground_plate(Ground::Chip, CHIP_FILL))
+                    .hover(move |style| {
+                        style.bg(palette.ground_state(Ground::Chip, CHIP_FILL, STATE_HOVERED))
+                    })
+                    .active(move |style| {
+                        style.bg(palette.ground_state(Ground::Chip, CHIP_FILL, STATE_PRESSED))
+                    })
                     .font_weight(FontWeight::SEMIBOLD)
                     .when(a11y, |chip| {
                         let name = match &button.label {
@@ -753,7 +809,7 @@ impl Render for Toast {
                             .flex()
                             .items_center()
                             .rounded(px(CHIP_RADIUS))
-                            .bg(palette.plate(CHIP_FILL))
+                            .bg(palette.ground_plate(Ground::Chip, CHIP_FILL))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(key),
                     )

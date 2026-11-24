@@ -30,6 +30,7 @@ use gpui::{
 };
 use image::{Frame, RgbaImage};
 
+use crate::dismissal::{By, Close, Why};
 use crate::{
     boost_style::{
         self, ADJUST_STEP, Adjust, Case, Dot, Face, LARGEST, SIZE_STEP, SMALLEST, Style,
@@ -322,7 +323,9 @@ pub fn show(
 pub fn dismissed(cx: &mut App) {
     if let Some(window) = cx.try_global::<BoostEditorWindow>().map(|editor| editor.0) {
         window
-            .update(cx, |editor, window, cx| editor.close(window, cx))
+            .update(cx, |editor, window, cx| {
+                editor.close(Close::left(cx.active_window().is_none()), window, cx)
+            })
             .ok();
     }
 }
@@ -331,7 +334,9 @@ pub fn dismissed(cx: &mut App) {
 pub fn leave(cx: &mut App) {
     if let Some(window) = cx.try_global::<BoostEditorWindow>().map(|editor| editor.0) {
         window
-            .update(cx, |editor, window, cx| editor.hide(window, cx))
+            .update(cx, |editor, window, cx| {
+                editor.close(Close::new(Why::FocusLeft, By::Code), window, cx)
+            })
             .ok();
     }
 }
@@ -606,8 +611,8 @@ impl BoostEditor {
         theme_picker::card_x(self.editing.as_ref().is_some_and(|editing| editing.left))
     }
 
-    /// The host closed it, as a click outside does.
-    fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Closes it for `close`, hiding it unless the host already has, as the user left it.
+    fn close(&mut self, close: Close, window: &mut Window, cx: &mut Context<Self>) {
         let Some(editing) = self.editing.as_mut().filter(|editing| editing.open) else {
             return;
         };
@@ -617,17 +622,18 @@ impl BoostEditor {
         self.commit_rename(window, cx);
         self.release(cx);
         cx.notify();
-    }
-
-    /// Closes it and asks the host to hide it.
-    fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.editing.as_ref().is_some_and(|editing| editing.open) {
-            self.close(window, cx);
+        if !matches!(close.why, Why::PressOutside | Why::WindowLeft) {
             self.host.hide();
         }
     }
 
+    /// Escape: ends a rename, then closes the menu, then the editor, a layer at a time. While an
+    /// input method composes in the name, it's the composition's.
     fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        let renaming = (self.editing.as_ref()).and_then(|editing| editing.renaming.clone());
+        let Some(close) = Close::escape_from(&renaming, cx) else {
+            return;
+        };
         let Some(editing) = self.editing.as_mut().filter(|editing| editing.open) else {
             return;
         };
@@ -638,13 +644,18 @@ impl BoostEditor {
         } else {
             // check.sh reads this line.
             log!("browser: boost editor dismissed");
-            self.hide(window, cx);
+            self.close(close, window, cx);
         }
         cx.notify();
     }
 
+    /// ↩ keeps a rename, unless it was an input method's, composing in the name (dismissal's
+    /// rule).
     fn commit(&mut self, _: &Commit, window: &mut Window, cx: &mut Context<Self>) {
-        self.commit_rename(window, cx);
+        let renaming = (self.editing.as_ref()).and_then(|editing| editing.renaming.clone());
+        if crate::dismissal::submits(&renaming, cx) {
+            self.commit_rename(window, cx);
+        }
     }
 
     fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
@@ -704,7 +715,7 @@ impl BoostEditor {
         else {
             return;
         };
-        self.hide(window, cx);
+        self.close(Close::new(Why::Chosen, By::Pointer), window, cx);
         requested(request, cx);
     }
 

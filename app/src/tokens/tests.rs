@@ -120,8 +120,24 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "settings.share-space-radius",
     "settings.share-tile-radius",
     "mini-bar.radius",
+    // The Transparency picker's small ilo, at the drawing's scale (#4129).
+    "transparency.picture-radius",
+    "transparency.bright-radius",
+    "transparency.window-radius",
+    "transparency.row-radius",
+    "transparency.page-radius",
+    "transparency.menu-row-radius",
     // A card's recent rows, inside its picture's box (#3074).
     "hover-card.recent-row-radius",
+    // First run's sheet (#4093): its slot inset in its corner, the sheet's less the inset, and the
+    // loop's small window at the drawing's scale.
+    "shell.onboarding.sheet.slot-radius",
+    "shell.onboarding.loops.window-radius",
+    "shell.onboarding.loops.icon-radius",
+    "shell.onboarding.loops.bar-radius",
+    // The composer's switch round its parts, and a card's page inside the card (#4140).
+    "shell.composer.switch-radius",
+    "shell.composer.page-radius",
 ];
 
 #[test]
@@ -179,6 +195,14 @@ fn a_corner_inside_another_is_concentric() {
         hover_card::RECENT_ROW_RADIUS + hover_card::PADDING
     );
     assert_eq!(mini_bar::RADIUS, mini_bar::BUTTON_RADIUS + mini_bar::INSET);
+    assert_eq!(
+        shell::composer::SWITCH_RADIUS,
+        shell::composer::SWITCH_PART_RADIUS + shell::composer::SWITCH_INSET
+    );
+    assert_eq!(
+        shell::composer::CARD_RADIUS,
+        shell::composer::PAGE_RADIUS + shell::composer::PAGE_INSET
+    );
     assert_eq!(
         hover_card::RADIUS,
         hover_card::BUTTON_RADIUS + hover_card::BUTTON_INSET

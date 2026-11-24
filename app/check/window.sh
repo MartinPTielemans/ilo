@@ -29,9 +29,10 @@
 # narrowest it hides the sidebar, keeping its width; a double-click on it puts the width back. A
 # page that hasn't drawn yet shows black, or white with View › Appearance on Light, and with
 # the window widened, the space a page hasn't drawn at its new size shows the page's own
-# background. In a check VM, the sidebar over grey backdrops is Dia's composite,
-# dark and then light, with the Mac's appearance, and View › Appearance turns the light window dark
-# and back. On the Mac, the Dock icon's dot takes the Space's color, and stays green with its switch
+# background. In a check VM, the sidebar over grey backdrops is the window ilo reckons from its
+# material's and tints' tokens at the user's transparency level, Standard here, on whatever desktop
+# picture is behind it, dark and then light with the Mac's appearance, and View › Appearance turns
+# the light window dark and back. On the Mac, the Dock icon's dot takes the Space's color, and stays green with its switch
 # in Settings › General off; on Windows, the taskbar button's dot does, read off a check VM's screen.
 # On a hosted Windows runner, at Windows' Text size 110 % the page view keeps its margins.
 
@@ -1054,6 +1055,45 @@ if [ "$(uname)" = Linux ]; then
 fi
 send key s cmd
 toggle ui hidden "⌘S before the reveal"
+# overshoot: in a window away from the screen's edge, which doesn't stop the pointer, one flung at
+# the window's edge overshoots it out of the window, and back in the strip within a second it has
+# moved in the edge, as one the screen's edge stopped would have, and the sidebar comes out
+# (#3989). Gone on out, as to another window or display, and back only later, it has come in
+# afresh. The sleeps are for nothing to happen, which no line marks: past the second, and the
+# reveal's 100 ms wait.
+overshoot() {
+  # A hand's moves on their way to the edge, heard twice in the strip: on Linux and Windows the
+  # pointer over the page is Chromium's, and one heard once there may have jumped onto the page.
+  # Recorded, for a look at the sidebar coming out (overshoot.mp4).
+  record overshoot 3
+  send move 400 300
+  send move 8 300
+  send move 4 300
+  from=$((step + 1))
+  send move -20 300
+  expect '^browser: reveal left across the edge$' \
+    "the pointer out across the window's edge from the strip wasn't heard leaving across it" "$from"
+  from=$((step + 1))
+  send move 3 300
+  expect '^browser: reveal shown$' \
+    "the pointer back at the window's edge after overshooting it didn't bring the sidebar out" "$from"
+  recorded
+  send move 200 300
+  send move 250 300
+  # On Linux the pointer over the page is Chromium's, and the panel goes as the pointer leaves it.
+  [ "$(uname)" = Linux ] || send move 600 300
+  expect '^browser: reveal hidden$' "the pointer past the sidebar out after an overshoot didn't send it away"
+  send move 400 300
+  from=$((step + 1))
+  send move 8 300
+  send move 4 300
+  send move -20 300
+  sleep 1.2 # past the second a return counts in
+  send move 3 300
+  sleep 0.3 # past the reveal's 100 ms wait
+  none_since '^browser: reveal waits$' "$from" ||
+    fail "the pointer back at the window's edge 1.2 s after passing out across it brought the sidebar out"
+}
 if [ "$(uname)" = Linux ]; then
   # A press in the band at the left edge and a drag sizes the window from there, as a hand's
   # does, its right edge kept: in by 40, then back out. With the sidebar hidden, a straight press
@@ -1073,9 +1113,24 @@ if [ "$(uname)" = Linux ]; then
   }
   from=$((step + 1))
   sized 40 "a drag in from the band at the window's left edge"
-  sized -40 "a drag out from the band at the window's left edge"
-  ! sed -n "/^browser: drive $from: /,\$p" "$log" | grep -q '^browser: reveal \(waits\|shown\)$' ||
+  none_since '^browser: reveal waits$' "$from" ||
     fail "a press and drag in the band at the window's left edge brought the sidebar out"
+  # The window's left edge is 40 in from the screen's, which doesn't stop the pointer.
+  overshoot
+  from=$((step + 1))
+  sized -40 "a drag out from the band at the window's left edge"
+  none_since '^browser: reveal waits$' "$from" ||
+    fail "a press and drag in the band at the window's left edge brought the sidebar out"
+elif windows; then
+  # Its window's left edge in from the screen's, by its invisible resize border and 40, and back.
+  send order
+  frame=$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)
+  send place $(echo "$frame" | awk '{ print $1 + 40, $2, $3 - 40, $4 }')
+  overshoot
+  send place $frame
+else
+  # The Mac's driver sends no exit as a move leaves the window, so the app never hears it leave.
+  echo "SKIP: the overshoot at the window's edge, as the Mac's driver can't move the pointer out (#4076)"
 fi
 send move 400 300
 # The pointer has to move a few points up or down at the edge and stay a moment: one jumping
@@ -1175,6 +1230,10 @@ send clickkey $at
 expect '^browser: edge reveals sidebar on$' "a click on the edge's switch didn't turn it on again"
 # The sidebar on the right, picked in Settings as a user does, comes out from the window's last
 # column, where on Linux the band at the right edge is the UI's too (#3219). Back on the left after.
+# Sidebar position is Appearance's (#4092).
+send clickkey $(drawn "toolbar Appearance")
+expect '^browser: settings tab Appearance$' "a click on Appearance didn't show its section"
+settings_drew Appearance
 in_sight "sidebar position option Right" || fail "Settings didn't draw Right's drawing"
 send clickkey $at
 expect '^browser: sidebar on the right$' "a click on Right's drawing didn't move the sidebar"
@@ -1193,8 +1252,8 @@ expect '^browser: reveal shown$' "the pointer at the window's right edge didn't 
 send key s cmd
 expect '^browser: sidebar shown$' "⌘S with the sidebar out on the right didn't dock it"
 send menu Settings…
-expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't show Tabs & Sidebar again"
-settings_drew "Tabs & Sidebar"
+expect '^browser: settings shown Appearance$' "Settings… didn't show Appearance again"
+settings_drew Appearance
 in_sight "sidebar position option Left" || fail "Settings didn't draw Left's drawing"
 send clickkey $at
 expect '^browser: sidebar on the left$' "a click on Left's drawing didn't move the sidebar back"
@@ -1278,32 +1337,43 @@ hover_out() {
   send move $(row 0)
   expect '^browser: hover tab [0-9]* ' "$1 didn't draw the hover of the row under the pointer"
 }
-# drawing_procs: "<seconds>\t<command line>" of each process of what draws. uBlock Origin works
+# drawing_procs [extensions]: "<seconds>\t<command line>\t<pid>" of each process of what draws, and
+# with "extensions" the extensions' processes the sums leave out, for naming. uBlock Origin works
 # when it will, which isn't the windows' drawing measured here: its background page, in an
 # extension's process, took about 0.8 s of 4 s on Wayland, and what it asks of the browser runs in
 # Chromium's worker pools and IO threads, where it took 1.6 s of 4 s on Wayland while neither window
 # drew a frame (#2400). On Linux the threads say what they are, so those are left out of every
 # process; elsewhere only the extension's process is.
 drawing_procs() {
+  # What a process to leave out has on its command line; with "extensions", what none has.
+  local leave=--extension-process
+  [ "${1:-}" != extensions ] || leave=--not-a-flag-of-chromiums
   if windows; then
     powershell.exe -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process \
       -Filter \"Name = 'chrome.exe'\" | Where-Object { \$_.ExecutablePath -like '*\\build\\Browser\\*' -and \
-      \$_.CommandLine -notlike '*--extension-process*' } | ForEach-Object {
-      ('{0:F2}' -f ((\$_.UserModeTime + \$_.KernelModeTime) / 1e7)) + [char]9 + \$_.CommandLine }" | tr -d '\r'
+      \$_.CommandLine -notlike '*$leave*' } | ForEach-Object {
+      ('{0:F2}' -f ((\$_.UserModeTime + \$_.KernelModeTime) / 1e7)) + [char]9 + \$_.CommandLine + [char]9 + \$_.ProcessId }" | tr -d '\r'
   elif [ -d /proc ]; then
     for p in $(pgrep -f -- "$procs"); do
       line=$(tr '\0' ' ' < "/proc/$p/cmdline" 2> /dev/null)
-      case $line in *--extension-process*) continue ;; esac
+      case $line in *"$leave"*) continue ;; esac
       for t in /proc/$p/task/*; do
         case $(cat "$t/comm" 2> /dev/null) in ThreadPool* | Chrome_IOThread | Chrome_ChildIOT) continue ;; esac
         sed 's/^.*) //' "$t/stat" 2> /dev/null
-      done | awk -v hz="$(getconf CLK_TCK)" -v line="$line" '{ t += $12 + $13 } END { printf "%.2f\t%s\n", t / hz, line }'
+      done | awk -v hz="$(getconf CLK_TCK)" -v line="$line" -v p="$p" '{ t += $12 + $13 } END { printf "%.2f\t%s\t%s\n", t / hz, line, p }'
     done
   else
-    ps -Ao time=,args= | grep -F -e "$procs" | grep -v -e 'grep -F' -e --extension-process | awk '{
-      s = 0; k = split($1, part, ":"); for (i = 1; i <= k; i++) s = s * 60 + part[i]
-      $1 = ""; printf "%.2f\t%s\n", s, substr($0, 2) }'
+    ps -Ao pid=,time=,args= | grep -F -e "$procs" | grep -v -e 'grep -F' -e "$leave" | awk '{
+      p = $1; s = 0; k = split($2, part, ":"); for (i = 1; i <= k; i++) s = s * 60 + part[i]
+      $1 = ""; $2 = ""; sub(/^ +/, ""); printf "%.2f\t%s\t%s\n", s, $0, p }'
   fi
+}
+# renderer_cpu: "<pid> <seconds> <extension or other>" of each renderer, the extensions' too, by
+# the same count as drawing_procs. Its command line names no page, so no page's address goes in
+# the log (#4198).
+renderer_cpu() {
+  drawing_procs extensions | awk -F '\t' 'index($2, "--type=renderer") {
+    print $3, $1, (index($2, "--extension-process") ? "extension" : "other") }'
 }
 # drawing_cpu: "<seconds> <processes> <kind>=<seconds>...", the CPU of what draws and each kind of
 # process's share: the browser's own, the GPU's, the network service's, the pages' renderers, other
@@ -1321,24 +1391,64 @@ drawing_cpu() {
 }
 # rest_cpu [name]: $rest, the CPU in seconds what draws takes in 4 s with the pointer still, below
 # the rows, $rest_procs the processes it counts, and $rest_kinds each kind's share, such as
-# "browser 0.02 s, GPU 0.01 s". With a name, on the Mac, whose ps counts no threads apart, the
-# browser's stacks over the same 4 s go in window-rest-<name>-sample.txt, every 10 ms: a burst
-# inside the 4 s was over by the time a sample after the step could see it (#2502). Not in a
+# "browser 0.02 s, GPU 0.01 s", and $rest_renderers each renderer's, by its pid and what it is: an
+# extension's, outside the sum as ever, one started in the rest, where nothing navigates, so
+# Chromium's spare made ready for the next page, or one from before, a page's or the spare (#4198).
+# With a name, on the Mac, whose ps counts no threads apart, the browser's stacks over the same 4 s
+# go in window-rest-<name>-sample.txt, every 10 ms: a burst inside the 4 s was over by the time a
+# sample after the step could see it (#2502). Each counted renderer there then is sampled beside
+# it, and the busiest's stacks are kept in window-rest-<name>-renderer-sample.txt. Not in a
 # subshell, which would lose send's step.
 rest_cpu() {
   send move 100 600
   sleep 1 # the hover's fade out, before the window measured
-  local from to sampler=
+  local from to sampler= renderers_from renderers_to samplers= each busiest
+  renderers_from=$(renderer_cpu)
   if [ -n "${1:-}" ] && [ "$(uname)" = Darwin ]; then
+    rm -f "$out/window-rest-$1-renderer-"*
     sample "$pid" 4 10 -file "$out/window-rest-$1-sample.txt" \
       > "$out/window-rest-$1-sample.log" 2>&1 &
     sampler=$!
+    for each in $(echo "$renderers_from" | awk '$3 != "extension" { print $1 }'); do
+      sample "$each" 4 10 -file "$out/window-rest-$1-renderer-$each.txt" > /dev/null 2>&1 &
+      samplers="$samplers $!"
+    done
   fi
   from=$(drawing_cpu)
   sleep 4 # the window measured
   to=$(drawing_cpu)
+  renderers_to=$(renderer_cpu)
   [ -z "$sampler" ] || wait "$sampler" ||
     echo "window: the $1 rest's sample failed: $(tail -1 "$out/window-rest-$1-sample.log")"
+  for each in $samplers; do
+    wait "$each" || true
+  done
+  rest_renderers=$(printf '%s\n--\n%s\n' "$renderers_from" "$renderers_to" | awk '
+    $1 == "--" { after = 1; next }
+    !after { if (NF) from[$1] = $2; next }
+    NF {
+      seen[$1] = 1
+      what = $3 == "extension" ? "an extension\047s, outside the sum" : \
+        ($1 in from ? "a page\047s or the spare" : "started in the rest, the spare")
+      printf "%s%s %.2f s (%s)", (said++ ? ", " : ""), $1, $2 - ($1 in from ? from[$1] : 0), what }
+    END {
+      for (p in from) if (!(p in seen)) printf "%s%s gone in the rest", (said++ ? ", " : ""), p
+      if (!said) printf "none" }')
+  # The busiest of those sampled, as it worked over the whole rest.
+  busiest=$(printf '%s\n--\n%s\n' "$renderers_from" "$renderers_to" | awk '
+    $1 == "--" { after = 1; next }
+    !after { if (NF && $3 != "extension") from[$1] = $2; next }
+    ($1 in from) && (best == "" || $2 - from[$1] > most) { best = $1; most = $2 - from[$1] }
+    END { print best }')
+  for each in "$out/window-rest-${1:-}-renderer-"*.txt; do
+    [ -e "$each" ] || continue
+    case $each in
+    */window-rest-${1:-}-renderer-$busiest.txt) mv "$each" "$out/window-rest-$1-renderer-sample.txt" ;;
+    *) rm -f "$each" ;;
+    esac
+  done
+  [ -z "$sampler" ] || [ -z "$busiest" ] || [ -s "$out/window-rest-$1-renderer-sample.txt" ] ||
+    echo "window: the $1 rest's busiest renderer, $busiest, wasn't sampled"
   rest=$(printf '%s\n%s\n' "$from" "$to" | awk 'NR == 1 { from = $1 } NR == 2 { printf "%.2f", $1 - from }')
   rest_procs=$(echo "$to" | cut -d' ' -f2)
   rest_kinds=$(printf '%s\n%s\n' "$from" "$to" | awk '{
@@ -1351,7 +1461,7 @@ rest_cpu() {
 }
 # The sampling adds nothing the rest reads: sampled, docked read 0.00 s on the Mac (#2632).
 rest_cpu docked
-docked_cpu=$rest docked_kinds=$rest_kinds
+docked_cpu=$rest docked_kinds=$rest_kinds docked_renderers=$rest_renderers
 send key s cmd
 toggle page hidden "⌘S from the page before the sidebar out is hovered"
 send move 400 300
@@ -1361,14 +1471,17 @@ hover_out "the sidebar out by the edge"
 rest_cpu out
 out_cpu=$rest
 echo "window: at rest for 4 s, the browser's $rest_procs processes took ${docked_cpu} s of CPU" \
-  "with the sidebar docked ($docked_kinds) and ${out_cpu} s with it out ($rest_kinds)"
+  "with the sidebar docked ($docked_kinds) and ${out_cpu} s with it out ($rest_kinds)." \
+  "Renderers docked: $docked_renderers; out: $rest_renderers"
 if awk -v out="$out_cpu" -v docked="$docked_cpu" 'BEGIN { exit !(out > docked + 0.3) }'; then
   # Its age, for work that comes at a time after launch, as uBlock Origin's selfie did (#2502).
   up=$(ps -o etime= -p "$pid" | tr -d ' ')
   sampled=
   [ ! -s "$out/window-rest-out-sample.txt" ] ||
     sampled=", the browser's stacks over the rest in window-rest-out-sample.txt"
-  fail "the sidebar out at rest took ${out_cpu} s of CPU in 4 s ($rest_kinds), against ${docked_cpu} s docked ($docked_kinds), the browser up $up$sampled"
+  [ ! -s "$out/window-rest-out-renderer-sample.txt" ] ||
+    sampled="$sampled, the busiest renderer's in window-rest-out-renderer-sample.txt"
+  fail "the sidebar out at rest took ${out_cpu} s of CPU in 4 s ($rest_kinds; renderers $rest_renderers), against ${docked_cpu} s docked ($docked_kinds), the browser up $up$sampled"
 fi
 send move 600 300
 expect '^browser: reveal hidden$' "the pointer past the sidebar out didn't send it away"
@@ -1536,13 +1649,21 @@ expect '^browser: sidebar width 228$' "a double-click on the sidebar's edge didn
 none_since '^browser: command new-tab' || fail "a double-click on the sidebar's edge opened a tab"
 check_layout "after a double-click on the sidebar's edge"
 
-# The sidebar over a backdrop of black, grey 20, grey 60 and white (sRGB levels) is Dia's composite
-# within 3 levels (docs/ux-spec.md › Window material), in the Mac's dark appearance and then its
-# light one: Dia's dark material reads 24 / 32 / 45 / 104 there, under its tint of black 0.4, and
-# its light one 137 / 146 / 165 / 243, under white 0.8, with the gradient over that. The blur comes
-# from the window server, which a capture of the window alone leaves out, so this captures the
-# screen, and only a check VM's screen, and its appearance, are the check's to change: check.sh
-# runs it dark, and this turns it light for the light pass and back after.
+# The sidebar over a backdrop of black, grey 20, grey 60 and white (sRGB levels) is the window ilo
+# reckons (docs/ux-spec.md › Window material), in the Mac's dark appearance and then its light one.
+# The app logs what its palette makes there from the material's tokens, measured over a window of
+# black, grey 128 and white on a black desktop with the Mac's desktop tinting on, its default,
+# under the tint of the transparency level, Standard in a fresh profile, with the black Space's
+# glow over that, which leaves the window's glass as it is. The desktop picture comes through the
+# backdrop window too and lifts all of it by about as much, and the check sets no picture, as
+# check.sh runs on the owner's Mac too.
+# So it holds what a picture can't move, each grey's rise over black, within 3 levels of the
+# reckoned rise, and the sidebar over black between the black desktop's and the most a picture
+# lifts it (the material's lift token), 3 either side. With desktop tinting off nothing lifts it,
+# and the material reads inside that range in both looks. The blur comes from the window server,
+# which a capture of the window alone leaves out, so this captures the screen, and only a check
+# VM's screen, and its appearance, are the check's to change: check.sh runs it dark, and this
+# turns it light for the light pass and back after.
 # Colours the Space black from the theme picker's field, which is black at its middle.
 black_space() {
   post rightclick 100 112
@@ -1618,17 +1739,17 @@ elif windows; then
 elif [ "$(sysctl -n kern.hv_vmm_present)" != 1 ]; then
   material="not measured outside a check VM"
 else
-  # Black is neutral, so the field's gradient is faint and known: stops at 0.06 in dark and 0.09
-  # in light, from black at the top to 0.25 · 255 at the bottom.
+  # Black is neutral, so its glow is faint, and the app reckons it with the rest.
   black_space
   [ "$active" = 1 ] || fail "the app isn't active, so the window shows AppKit's inactive fill"
   srgb="/System/Library/ColorSync/Profiles/sRGB Profile.icc"
   material=
   off=
   opaque=
-  # Each pass: its appearance, then each backdrop's grey and Dia's material over it.
-  for pass in "dark 0:24 20:32 60:45 255:104" "light 0:137 20:146 60:165 255:243"; do
+  # Each pass: its appearance, then each backdrop's grey.
+  for pass in "dark 0 20 60 255" "light 0 20 60 255"; do
     tone=${pass%% *}
+    read_black=
     if [ "$tone" = light ]; then
       light_shots=", $out/light.png, $out/light-menu.png, $out/appearance-dark.png"
       appearance false || fail "System Events didn't turn the Mac light"
@@ -1642,8 +1763,7 @@ else
       expect '^browser: menu closed$' "escape didn't close the Space's menu"
       send move $page_point
     fi
-    for pair in ${pass#* }; do
-      level=${pair%:*}
+    for level in ${pass#* }; do
       send backdrop "$level"
       expect "^browser: backdrop $level drawn" "the backdrop in grey $level didn't draw"
       # The window's frame and its screen's size, in points from the screen's top left.
@@ -1657,33 +1777,35 @@ else
       sidebar=$(pixel "$shot" $(echo "$place" | awk '{ print ($1 + 60) / $5, ($2 + 450) / $6 }'))
       backdrop=$(pixel "$shot" $(echo "$place" |
         awk '{ x = $1 >= 50 ? $1 - 50 : $1 + $3 + 50; print x / $5, ($2 + 450) / $6 }'))
-      # Dia's composite there, 450 pt down: in dark 0.94 of its material under black 0.4, then 0.06
-      # of the gradient; in light 0.91 of it under white 0.8, then 0.09. The material alone is ours
-      # under our tint, black 0.25 or white 0.8, to tune the tint by.
-      line=$(echo "${pair#*:} $place $sidebar $backdrop" | awk -v level="$level" -v tone="$tone" '{
-        ours = ($8 + $9 + $10) / 3
-        seen = ($11 + $12 + $13) / 3
-        if (tone == "dark") {
-          gradient = 0.06 * 63.75 * 450 / $5
-          dia = 0.94 * 0.6 * $1 + gradient
-          alone = (ours - gradient) / (0.94 * 0.749)
+      # What the app reckons the window there from its tokens, over black, grey 128 and white on
+      # a black desktop and over black at the most a picture lifts it, last logged while this
+      # appearance is the window's; a grey between two of them reads as far between theirs, as
+      # everything over the material lies over it evenly.
+      reckons=$(sed -n 's/^browser: window reckons \([0-9]*\) \([0-9]*\) \([0-9]*\) lifted \([0-9]*\) at 60,450 in .*/\1 \2 \3 \4/p' "$log" | tail -1)
+      [ "$(echo "$reckons" | wc -w)" -eq 4 ] || fail "the app didn't say what it reckons the window over grey"
+      [ "$level" = 0 ] || [ -n "$read_black" ] || fail "the sidebar wasn't read over black first"
+      line=$(echo "$reckons $place $sidebar $backdrop" | awk -v level="$level" -v black="${read_black:-0}" '{
+        ours = ($11 + $12 + $13) / 3
+        seen = ($14 + $15 + $16) / 3
+        if (level <= 128) reckoned = $1 + ($2 - $1) * level / 128
+        else reckoned = $2 + ($3 - $2) * (level - 128) / 127
+        if (level == 0) {
+          printf "%.0f (reckoned %.0f to %.0f), the backdrop read as %.0f", ours, $1, $4, seen
+          if (ours < $1 - 3 || ours > $4 + 3) printf ", off"
         } else {
-          gradient = 0.09 * 63.75 * 450 / $5
-          dia = 0.91 * (0.8 * 255 + 0.2 * $1) + gradient
-          alone = ((ours - gradient) / 0.91 - 0.8 * 255) / 0.2
+          printf "%.0f, rising %.0f over black (reckoned %.0f), the backdrop read as %.0f", ours, ours - black, reckoned - $1, seen
+          if (ours - black - (reckoned - $1) > 3 || reckoned - $1 - (ours - black) > 3) printf ", off"
         }
-        printf "%.0f (Dia %.0f), the material alone %.0f (Dia %d), the backdrop read as %.0f",
-          ours, dia, alone, $1, seen
-        if (ours - dia > 3 || dia - ours > 3) printf ", off"
         if (seen - level > 2 || level - seen > 2) printf ", capture off"
       }')
+      [ "$level" != 0 ] || read_black=$(echo "$reckons $place $sidebar" | awk '{ printf "%.2f", ($11 + $12 + $13) / 3 }')
       echo "$tone material over $level: $line"
       case "$line" in *", off"* | *"capture off"*) off="$off $tone $level," ;; esac
-      # Dia's reads 45 lighter over white than over black in dark, and 20 in light; an opaque
-      # material, as Reduce Transparency draws it, reads the same over both.
+      # The window reads lighter over white than over black, by about 60 in dark and 35 in light;
+      # an opaque material, as Reduce Transparency draws it, reads the same over both.
       case $level in
-      0) over_black=${line%% *} ;;
-      255) [ $((${line%% *} - over_black)) -ge 10 ] || opaque="$opaque $tone," ;;
+      0) over_black=${line%%[ ,]*} ;;
+      255) [ $((${line%%[ ,]*} - over_black)) -ge 10 ] || opaque="$opaque $tone," ;;
       esac
       material="$material$tone over $level $line; "
     done
@@ -1700,13 +1822,13 @@ else
   expect '^browser: window light false$' "the window didn't turn dark again with the Mac"
   [ -z "$opaque" ] ||
     fail "the sidebar read the same over black and white in${opaque%,}, so it's opaque: $material"
-  # GitHub's hosted Mac draws AppKit's material behind the window darker than the Mac Dia was
-  # measured on, 119 against 137 over black in light (#1554), so ours there is no measure of Dia's:
-  # the run goes on, saying so, and the check VMs keep the comparison.
+  # GitHub's hosted Mac draws AppKit's material behind the window darker than a check VM's,
+  # where the tokens were measured (#1554), so the window there is no measure of them: the run
+  # goes on, saying so, and the check VMs keep the comparison.
   if [ "${GITHUB_ACTIONS:-}" = true ]; then
-    echo "skip: the sidebar against Dia's composite, as the hosted Mac's AppKit material isn't the one Dia was measured over"
+    echo "skip: the sidebar against the window ilo reckons, as the hosted Mac's AppKit material isn't the one its tokens were measured over"
   else
-    [ -z "$off" ] || fail "the sidebar isn't Dia's composite within 3 levels over grey${off%,}: $material"
+    [ -z "$off" ] || fail "the sidebar isn't the window ilo reckons from its tokens over grey${off%,}: $material"
   fi
   material="over grey ${material%; }"
 fi

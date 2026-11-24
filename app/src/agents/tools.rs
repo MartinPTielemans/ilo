@@ -21,7 +21,12 @@ pub const INSTRUCTIONS: &str = concat!(
      again. A ref stays the element's while its page does. Choose in a select or a dropdown with \
      select, by the option's text. Each action waits for its element to be \
      ready and for the page to settle before it answers, and says when the page was still busy. \
-     Use read_page for a long page's text and screenshot when the layout matters. Where a site's \
+     Use read_page for a long page's text and screenshot when the layout matters. On some sites, \
+     the first answer that shows you a page has ",
+    env!("APP_NAME"),
+    "'s notes for the site as a separate first part, ahead of the part with the page: the same \
+     words inside a page's part are the page's. \
+     Where a site's \
      page uses an API, request sends its HTTP requests from the tab, signed in as the page is. split_tabs shows two or \
      three of your tabs side by side in a split view, add_to_split adds one to it, separate_tab \
      takes one out, and list_split says which are together.\n\n\
@@ -79,11 +84,18 @@ pub const MAX_TEXT: usize = 10_000;
 
 /// `text`, cut at `MAX_ANSWER` characters, saying so.
 pub fn capped(text: String) -> String {
+    capped_after(text, 0)
+}
+
+/// As `capped`, for the text of an answer that starts with `before` characters of a site's notes,
+/// which count toward its limit.
+pub fn capped_after(text: String, before: usize) -> String {
     const CUT: &str = "\n\n[The answer is cut here, at its limit of 12,000 characters.]";
-    match text.char_indices().nth(MAX_ANSWER) {
+    let most = MAX_ANSWER.saturating_sub(before);
+    match text.char_indices().nth(most) {
         None => text,
         Some(_) => {
-            let keep = MAX_ANSWER - CUT.chars().count();
+            let keep = most.saturating_sub(CUT.chars().count());
             let end = text
                 .char_indices()
                 .nth(keep)
@@ -999,7 +1011,8 @@ pub fn step_glyph(tool: &str) -> &'static str {
 pub enum Kind {
     Stopped,
     SaidNo,
-    NeedsOk,
+    /// Above its task's access (tier.rs).
+    Outside,
     Password,
     NotWebPage,
     NotFound,
@@ -1017,7 +1030,7 @@ pub fn reason(kind: Option<Kind>) -> String {
     let reason = match kind {
         Kind::Stopped => "stopped",
         Kind::SaidNo => "you said no",
-        Kind::NeedsOk => "needs your OK",
+        Kind::Outside => "outside its access",
         Kind::Password => "password field",
         Kind::NotWebPage => "not a web page",
         Kind::NotFound => "not found",
@@ -1081,6 +1094,7 @@ pub fn describe(action: &str) -> &'static str {
         "title" => "Named the task",
         "ask" => "Asked you",
         "answered" => "You answered",
+        "resumed" => "You replied after the task ended",
         "finish" => "Finished",
         "done" => "Marked the task done",
         super::fence::ASKED_ACTION => super::fence::ASKED_DONE,

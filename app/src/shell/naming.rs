@@ -51,7 +51,7 @@ impl Shell {
         log!("browser: rename space {space}");
         let name = cx.new(|cx| {
             TextInput::new("Space name", cx)
-                .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
+                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
@@ -98,7 +98,7 @@ impl Shell {
         log!("browser: rename space {space} in library");
         let name = cx.new(|cx| {
             TextInput::new("Space name", cx)
-                .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
+                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
@@ -127,7 +127,7 @@ impl Shell {
         }
         let name = cx.new(|cx| {
             TextInput::new(placeholder, cx)
-                .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
+                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
                 .with_text(text)
         });
         self.renaming = Some(Renaming {
@@ -151,7 +151,7 @@ impl Shell {
         let url = self.browser.pinned_url(tab);
         let field = cx.new(|cx| {
             TextInput::new("Pinned URL", cx)
-                .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
+                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
                 .with_text(url.into())
         });
         self.renaming = Some(Renaming {
@@ -504,7 +504,7 @@ impl Shell {
     pub(super) fn name_folder(&mut self, folder: u64, name: SharedString, cx: &mut Context<Self>) {
         let name = cx.new(|cx| {
             TextInput::new("Folder name", cx)
-                .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
+                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
@@ -552,7 +552,7 @@ impl Shell {
         log!("browser: name board {tab}");
         let name = cx.new(|cx| {
             TextInput::new("Board name", cx)
-                .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
+                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
                 .with_text(BOARD.into())
         });
         self.renaming = Some(Renaming {
@@ -582,7 +582,7 @@ impl Shell {
     ) {
         let name = cx.new(|cx| {
             TextInput::new(name.clone(), cx)
-                .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
+                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
@@ -701,6 +701,25 @@ impl Shell {
         // Once the field is left, from where the focus has gone.
         if to_page {
             self.page_took_keyboard(window, cx);
+        } else {
+            self.card_keys_window_left("app", cx);
+        }
+    }
+
+    /// ↩ in the naming field keeps the name, unless it was an input method's, composing there
+    /// (dismissal's rule).
+    pub(super) fn return_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let field = self.renaming.as_ref().map(|renaming| renaming.name.clone());
+        if crate::dismissal::submits(&field, cx) {
+            self.keep_name(window, cx);
+        }
+    }
+
+    /// Esc in the naming field leaves the name as it was, unless it was an input method's.
+    pub(super) fn escape_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let field = self.renaming.as_ref().map(|renaming| renaming.name.clone());
+        if crate::dismissal::Close::escape_from(&field, cx).is_some() {
+            self.cancel_name(window, cx);
         }
     }
 
@@ -712,17 +731,18 @@ impl Shell {
     }
 
     /// Gives the keyboard back from the closed field: to the New Space form's name from its
-    /// Profile row, unless a click put it elsewhere, else to the window.
+    /// Profile row, else to the window, unless another element took it as the field closed, which
+    /// keeps it (dismissal's rule).
     fn leave_name(&mut self, renaming: &Renaming, window: &mut Window, cx: &mut Context<Self>) {
+        let keys = renaming.name.focus_handle(cx).is_focused(window);
+        let taken = !keys && window.focused(cx).is_some();
         match renaming.naming {
-            Naming::Profile(_) => {
-                self.focus_form = renaming.name.focus_handle(cx).is_focused(window);
-            }
+            Naming::Profile(_) => self.focus_form = keys,
+            _ if taken => log!("browser: field left the keyboard where it went"),
             // A Board New Board just made, its name kept or left with ↩ or esc, gives its page
             // the keyboard, where its first note's field waits for the first key (#3073's
             // condition 13). A press that took the keyboard elsewhere leaves it there.
             Naming::Tab(tab) if self.board_named.take() == Some(tab) => {
-                let keys = renaming.name.focus_handle(cx).is_focused(window);
                 window.focus(&self.focus_handle, cx);
                 if keys && tab == self.selected {
                     log!("browser: board {tab} has the keyboard");
@@ -744,9 +764,9 @@ impl Shell {
             .items_center()
             .pr(px(PLATE_INSET))
             .key_context("Naming")
-            .on_action(cx.listener(|shell, _: &KeepName, window, cx| shell.keep_name(window, cx)))
+            .on_action(cx.listener(|shell, _: &KeepName, window, cx| shell.return_name(window, cx)))
             .on_action(
-                cx.listener(|shell, _: &CancelName, window, cx| shell.cancel_name(window, cx)),
+                cx.listener(|shell, _: &CancelName, window, cx| shell.escape_name(window, cx)),
             )
             .text_size(px(text::BODY))
             .text_color(self.palette.text(FORM_TEXT))
@@ -807,6 +827,40 @@ mod tests {
             "the field stayed"
         );
         assert_eq!(host.take_edits(), ["rename space 1 Work"]);
+    }
+
+    /// ↩ and esc while an input method composes in a Space's name are the composition's: ↩
+    /// renames nothing, esc leaves the field, and both leave the marked text for the method. Once
+    /// the method has committed it, the next ↩ renames.
+    #[gpui::test]
+    fn return_and_escape_while_composing_are_the_compositions(cx: &mut TestAppContext) {
+        use gpui::EntityInputHandler as _;
+        let (shell, cx, host) = renaming(cx);
+        cx.simulate_input("Work");
+        let field = shell.read_with(cx, |shell, _| shell.renaming.as_ref().unwrap().name.clone());
+        // The input method marks "ぴ", or with Some ends its composition with that text.
+        let input_method = |commit: Option<&str>, cx: &mut VisualTestContext| {
+            cx.update(|window, cx| {
+                field.update(cx, |field, cx| match commit {
+                    None => field.replace_and_mark_text_in_range(None, "ぴ", None, window, cx),
+                    Some(text) => field.replace_text_in_range(None, text, window, cx),
+                })
+            });
+            cx.run_until_parked();
+        };
+        input_method(None, cx);
+        cx.simulate_keystrokes("enter");
+        assert!(host.take_edits().is_empty(), "↩ renamed while composing");
+        cx.simulate_keystrokes("escape");
+        assert!(
+            shell.read_with(cx, |shell, _| shell.renaming.is_some()),
+            "esc left the field while composing"
+        );
+        let marked = field.read_with(cx, |field, _| (field.text().to_string(), field.composing()));
+        assert_eq!(marked, ("Workぴ".into(), true));
+        input_method(Some("ぴ"), cx);
+        cx.simulate_keystrokes("enter");
+        assert_eq!(host.take_edits(), ["rename space 1 Workぴ"]);
     }
 
     /// Space in a field of the sidebar is a space, the menu control's Space binding notwithstanding:
