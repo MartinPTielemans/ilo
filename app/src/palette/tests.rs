@@ -1609,7 +1609,6 @@ fn gray_on_a_dark_plate_is_one_ink_that_reads_on_the_measured_card() {
 /// 469483355). A material that reads lighter than its account is the real app's to be measured on.
 #[test]
 fn gray_on_a_dark_plate_reads_over_a_bright_window_at_every_level() {
-    use crate::tokens::shell::HOVERED;
     use crate::tokens::shell::task::STATUS;
     let themes = grid(
         &[0., 60., 120., 180., 240., 300.],
@@ -1625,7 +1624,7 @@ fn gray_on_a_dark_plate_reads_over_a_bright_window_at_every_level() {
             let plates = [
                 ("shown", palette.shown(0.)),
                 ("shown, under the pointer", palette.shown(1.)),
-                ("hovered", palette.ground_plate(Ground::Hovered, HOVERED)),
+                ("hovered", palette.hovered_plate()),
             ];
             for at in fine_window(&palette) {
                 for (name, plate) in plates {
@@ -1640,5 +1639,41 @@ fn gray_on_a_dark_plate_reads_over_a_bright_window_at_every_level() {
                 }
             }
         }
+    }
+}
+
+/// A plate under the pointer over a dark window that isn't a sidebar row's (a card's at the
+/// sidebar's foot, a row of the Space form) holds the title's ink at text's 4.5:1 over every point
+/// of the window over a black and a white backdrop, with a Space's colour and with none, at every
+/// level: it takes the shade a row's plate does, so it follows the window's tint wherever its
+/// tokens end. A light window's is the ink at the ladder's step as it was, where no shade is asked.
+///
+/// As the test above, it knows the palette's own account of the window and no real material.
+#[test]
+fn a_plate_under_the_pointer_reads_over_a_bright_window_at_every_level() {
+    use crate::tokens::shell::HOVERED;
+    let themes = grid(
+        &[0., 60., 120., 180., 240., 300.],
+        &[0.4, 1.],
+        &[0.2, 0.45, 0.8],
+        &[crate::theme::DEFAULT_INTENSITY],
+    );
+    for level in Transparency::ALL {
+        set_transparency(level);
+        for theme in themes.iter().map(Some).chain([None]) {
+            let palette = Palette::of(theme, Tone::Dark);
+            let plate = Rgba::from(palette.hovered_plate());
+            for at in fine_window(&palette) {
+                let ground = over(at, plate, plate.a);
+                let ratio = contrast(palette.ink, ground);
+                assert!(
+                    ratio >= TEXT,
+                    "{level:?} {theme:?} on {:06x}: {ratio:.2}",
+                    hex(ground)
+                );
+            }
+        }
+        let light = Palette::of(None, Tone::Light);
+        assert_eq!(light.hovered_plate(), light.plate(HOVERED), "{level:?}");
     }
 }

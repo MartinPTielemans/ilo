@@ -992,6 +992,13 @@ impl Palette {
         self.ground_plate(Ground::Hovered, alpha)
     }
 
+    /// Any other plate under the pointer over the window, a card's at the sidebar's foot or a
+    /// form's row: the ink at the ladder's step in both looks, with the shade a row's plate takes
+    /// there, so what's written on it reads however much of a bright window comes through.
+    pub fn hovered_plate(&self) -> Hsla {
+        self.ground_plate(Ground::Hovered, crate::tokens::shell::HOVERED)
+    }
+
     /// The window where its foot's glow is `foot` of its full strength and the far one `far` of
     /// its, as it's seen over a black and over a white backdrop.
     pub fn window_at(&self, foot: f32, far: f32) -> [Rgba; 2] {

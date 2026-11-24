@@ -45,7 +45,7 @@ use crate::agents::runner::Cli;
 use crate::agents::sign_in::Offer;
 use crate::agents::task::{Card, Dot, NEEDS_YOU, TaskAction, Word};
 use crate::agents::tier::Tier;
-use crate::palette::{FIELD_PLATE as URL_FIELD, Ground};
+use crate::palette::FIELD_PLATE as URL_FIELD;
 use crate::tokens::shell::task::motion::{
     ARCHIVE, ARCHIVE_CLOSE, ARCHIVE_CLOSE_DELAY, ARCHIVE_CONTENT, ARCHIVE_EASE, ARCHIVE_HOLD,
     ARCHIVE_LEAVE, ARCHIVE_OPEN, BUMP, BUMP_EASE, BUMP_GLYPH, BUMP_PEAK, BUMP_SCALE, CONTENT,
@@ -1569,13 +1569,6 @@ impl Shell {
         }
     }
 
-    /// A card's, the count's or a page row's plate under the pointer: the ink at the foot's own
-    /// alpha, with the shade a sidebar row's plate takes there, so what's written on it reads
-    /// however much of a bright window comes through.
-    fn hovered_plate(&self) -> Hsla {
-        self.palette.ground_plate(Ground::Hovered, HOVERED)
-    }
-
     fn more_row(&self, group: &Group, now: Instant, cx: &mut Context<Self>) -> AnyElement {
         let words = self.more_words();
         let key = Holds::More.key();
@@ -1584,7 +1577,7 @@ impl Shell {
         let drawn = drawn_listener(&self.foot.plates_drawn, &self.foot.rested, key, rest);
         let row = self
             .header_plate(group, now)
-            .when(hovered, |row| row.bg(self.hovered_plate()))
+            .when(hovered, |row| row.bg(self.palette.hovered_plate()))
             .id("task-more");
         // A stop is placed in the flow; this one keeps its plate's place in its row.
         self.strip_stop(row, StripStop::More, words.clone(), PLATE_RADIUS)
@@ -1656,7 +1649,7 @@ impl Shell {
                 f32::from(u8::from(hovered)),
                 false,
             ),
-            (false, true) => plate.bg(self.hovered_plate()),
+            (false, true) => plate.bg(self.palette.hovered_plate()),
             // The bar's plate as it lands, which goes as the header comes.
             (false, false) => plate.bg(self.palette.plate(TILE).opacity(landed)),
         };
@@ -1921,7 +1914,7 @@ impl Shell {
             true => selected_plate(&self.palette, row, 1., 0., false),
             false => row,
         };
-        let hover = self.hovered_plate();
+        let hover = self.palette.hovered_plate();
         let row = row
             .id(("task-page", tab))
             .when(!shown, |row| row.hover(move |style| style.bg(hover)));
