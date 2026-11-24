@@ -457,3 +457,54 @@ fn the_account_formats_nowhere_but_the_users_line() {
     }
     assert_eq!(account.drawn(), ACCOUNT);
 }
+
+/// Only the user turns signing tasks in with saved logins on or off: outside tests, Settings is the
+/// one caller of set_sign_in_on, the switch is written only there and where the saved settings are
+/// read at launch, and no tool's name or description names it, so no handler can be asked for it.
+#[test]
+fn only_settings_turns_signing_tasks_in_on_or_off() {
+    fn sources(dir: &std::path::Path, found: &mut Vec<(String, String)>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            if path.is_dir() {
+                if name != "tests" {
+                    sources(&path, found);
+                }
+            } else if name.ends_with(".rs") && name != "tests.rs" {
+                let source = std::fs::read_to_string(&path).unwrap();
+                found.push((name, source));
+            }
+        }
+    }
+    let mut found = Vec::new();
+    sources(
+        &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut found,
+    );
+    let mut callers = Vec::new();
+    let mut writers = Vec::new();
+    for (file, source) in &found {
+        let calls = source.matches("set_sign_in_on(").count();
+        let defined = source.matches("fn set_sign_in_on(").count();
+        callers.extend(std::iter::repeat_n(file.clone(), calls - defined));
+        let writes = source.matches("self.sign_in_on =").count();
+        writers.extend(std::iter::repeat_n(file.clone(), writes));
+    }
+    assert_eq!(callers, ["settings.rs"]);
+    writers.sort();
+    assert_eq!(writers, ["agents.rs", "signing.rs"]);
+
+    for agent in ["claude-code", "codex", "task-1"] {
+        let listed = tools::list(agent).to_string().to_lowercase();
+        for word in ["setting", "sign_in_on", "sign tasks in", "switch"] {
+            assert!(!listed.contains(word), "{agent}'s tools say {word:?}");
+        }
+        for name in tools::names(agent) {
+            assert!(
+                !(name.contains("setting") || name.contains("switch")),
+                "{agent} has {name}"
+            );
+        }
+    }
+}
