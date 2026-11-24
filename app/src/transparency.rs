@@ -227,6 +227,7 @@ pub struct Picker {
     look: Look,
     logged: Drawn,
     pick: Pick,
+    centred: bool,
 }
 
 /// The picker at `chosen` in `look`. `logged` is Settings' (settings_rows::drawn), so check.sh can
@@ -242,6 +243,16 @@ pub fn picker(
         look: *look,
         logged,
         pick: Rc::new(pick),
+        centred: false,
+    }
+}
+
+impl Picker {
+    /// Its line centred under the pictures and as tall as the tallest level's, for a step where
+    /// everything is centred and what's under the picker mustn't move as the pick changes.
+    pub fn centred(mut self) -> Self {
+        self.centred = true;
+        self
     }
 }
 
@@ -252,6 +263,7 @@ impl RenderOnce for Picker {
             look,
             logged,
             pick,
+            centred,
         } = self;
         let a11y = window.is_a11y_active();
         let dark = !look.light();
@@ -286,8 +298,22 @@ impl RenderOnce for Picker {
         let line = detail_type()
             .mt(px(LINE_TOP))
             .mx(px(SIDE_ROOM))
-            .text_color(look.detail)
-            .child(chosen.line());
+            .text_color(look.detail);
+        let line = match centred {
+            false => line.child(chosen.line()),
+            // Every level's line in one cell, the others unseen, so the cell is the tallest's.
+            true => line
+                .grid()
+                .grid_cols(1)
+                .text_center()
+                .children(Transparency::ALL.map(|level| {
+                    div()
+                        .row_start(1)
+                        .col_start(1)
+                        .when(level != chosen, |line| line.invisible())
+                        .child(level.line())
+                })),
+        };
         div().child(group).child(line)
     }
 }

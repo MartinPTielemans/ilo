@@ -10,7 +10,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::time::Duration;
 use std::time::Instant;
 
 use gpui::{
@@ -22,11 +21,7 @@ use gpui::{
     px, rgb, size,
 };
 
-use super::{
-    Command, Shell, cubic_bezier,
-    display_face::{cap_top, display_text},
-    fade_at,
-};
+use super::{Command, Shell, cubic_bezier, display_face::display_text, fade_at};
 use crate::account::{self, Account, AccountEvent, Status};
 use crate::default_browser::{self, Os};
 use crate::import::{Corner, Guide, ImportEvent, ImportView, Look};
@@ -67,13 +62,12 @@ use crate::tokens::shell::onboarding::SWATCH_EDGE;
 use crate::tokens::shell::onboarding::SWATCH_GAP;
 use crate::tokens::shell::onboarding::SWATCH_PITCH;
 use crate::tokens::shell::onboarding::SWATCH_RING;
-use crate::tokens::shell::onboarding::TAGLINE_GAP;
-use crate::tokens::shell::onboarding::TAGLINE_LINE;
-use crate::tokens::shell::onboarding::TAGLINE_SIZE;
 use crate::tokens::shell::onboarding::TITLE_LINE;
 use crate::tokens::shell::onboarding::TITLE_SIZE;
-use crate::tokens::shell::onboarding::WORDMARK_SCALE;
 use crate::transparency::{self, Transparency};
+
+mod loops;
+mod sheet;
 
 /// The flow's steps, in the order they come.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -183,7 +177,12 @@ impl Step {
     /// The step's one message on `os`: its title, its line and its button's words.
     fn message(self, os: Os) -> (&'static str, gpui::SharedString, &'static str) {
         let (title, line, button) = match self {
-            Step::Intro => ("", "", ""),
+            // The sheet's first page (#4093): what the flow is, and that each step can be skipped.
+            Step::Intro => (
+                concat!("Welcome to ", env!("APP_NAME"), "."),
+                "A good tool. A minute to make it yours, and every step can be skipped.",
+                "Get Started",
+            ),
             // The import view's own buttons are the step's.
             Step::Import => (
                 "Bring your stuff.",
@@ -263,11 +262,8 @@ const RING: (f32, f32) = (0.48, 0.62);
 const DOT: (f32, f32) = (1.1, 0.24);
 const SIGNAL_IN: (f32, f32) = (1.34, 0.3);
 const TAGLINE_IN: (f32, f32) = (1.64, 0.4);
-/// The intro holds this long from its first frame, then the first step comes.
-const INTRO_END: f32 = 3.4;
-/// With Reduce Motion, the wordmark and its line fade in whole together, and hold.
+/// With Reduce Motion, the wordmark and its line fade in whole together.
 const STILL_FADE: f32 = 0.4;
-const STILL_END: f32 = 2.;
 /// A step comes in as the one before leaves, the icon picker's tabs' 200 ms ease-out.
 const STEP_MOTION: f32 = 0.2;
 /// The flow fades from over the first Space at the end, on the scroll edge's curve.
@@ -390,6 +386,8 @@ pub(super) struct Onboarding {
     /// ⇥'s stops at the step's button and at its corner's Skip or Back, which ↩ and Space press.
     continue_stop: gpui::FocusHandle,
     skip_stop: gpui::FocusHandle,
+    /// The sheet's Back, before its Skip.
+    back_stop: gpui::FocusHandle,
     /// The stop of the step's choice, where its keyboard rests as it comes: its swatches or its
     /// engines (onboarding_rest).
     first_stop: gpui::FocusHandle,
@@ -406,6 +404,13 @@ pub(super) struct Onboarding {
     pub(super) since: Instant,
     /// The step before, leaving as this one comes, and how far into it it was when it left.
     leaving: Option<(Step, f32)>,
+    /// That step was left with Back, so it leaves to the right and this one comes from the left.
+    backward: bool,
+    /// When the step's loop started, while it plays: only on a visible window, never with Reduce
+    /// Motion, and never as the flow ends (loops).
+    loop_since: Option<Instant>,
+    /// The loop held this many seconds in, for the preview's captures, asking for no frames.
+    held: Option<f32>,
     /// When the last step was left, for the flow's fade.
     pub(super) ending: Option<Instant>,
     /// Light or dark where check.sh says, else the window's.
@@ -416,8 +421,6 @@ pub(super) struct Onboarding {
     keys: Option<gpui::Subscription>,
     /// The flow has given the window's keyboard to the UI.
     keyboard: bool,
-    /// Wakes the window at the intro's end, which holds still until then.
-    hold: Option<gpui::Task<()>>,
     /// The account step's view, while the step is offered.
     account: Option<Signing>,
     /// The daily usage count's switch as turned at the opt-ins step, None while untouched: it's
@@ -502,6 +505,7 @@ impl Shell {
             focus: cx.focus_handle(),
             continue_stop: cx.focus_handle().tab_stop(true),
             skip_stop: cx.focus_handle().tab_stop(true),
+            back_stop: cx.focus_handle().tab_stop(true),
             first_stop: cx.focus_handle().tab_stop(true),
             focused_step: None,
             frames: Frames::default(),
@@ -509,6 +513,9 @@ impl Shell {
             clock: cx.background_executor().clone(),
             since: cx.background_executor().now(),
             leaving: None,
+            backward: false,
+            loop_since: None,
+            held: None,
             ending: None,
             light: appearance.and_then(|name| match name {
                 "light" => Some(true),
@@ -518,7 +525,6 @@ impl Shell {
             settled: false,
             keys: None,
             keyboard: false,
-            hold: None,
             account,
             count: None,
         });
@@ -622,6 +628,8 @@ impl Shell {
             );
             transparency::set(onboarding.before, cx);
         }
+        // Skipped, the colour the window was showing goes, as nothing was picked.
+        let unpainted = step == Step::Color && matches!(how, "escape" | "skip");
         // The count's switch is set as its step is left, whichever way: nothing is sent while the
         // step shows, and turned on and off again it's as it was (#2978).
         let count = (step == Step::OptIns)
@@ -652,12 +660,17 @@ impl Shell {
             Some(next) => {
                 let elapsed = onboarding.secs_since(onboarding.since);
                 onboarding.leaving = Some((step, elapsed));
+                onboarding.backward = false;
                 onboarding.step = next;
                 onboarding.since = onboarding.clock.now();
+                onboarding.loop_since = None;
                 onboarding.settled = false;
                 log!("browser: onboarding step {}", next.name());
             }
             None => onboarding.ending = Some(onboarding.clock.now()),
+        }
+        if unpainted {
+            self.onboarding_unpaint();
         }
         if let Some(on) = count.filter(|&on| self.browser.daily_count(cx) != Some(on)) {
             // check.sh reads this line; the first count, with first set, goes from here.
@@ -668,6 +681,81 @@ impl Shell {
             self.browser.set_daily_count(on, cx);
         }
         cx.notify();
+    }
+
+    /// Back to the step before the one shown, which comes from the left, `how` saying what did it
+    /// for check.sh. A colour shown but not kept goes.
+    fn onboarding_back(&mut self, how: &str, cx: &mut Context<Self>) {
+        let Some(onboarding) = self.onboarding.as_mut().filter(|o| o.ending.is_none()) else {
+            return;
+        };
+        let step = onboarding.step;
+        let at = onboarding.steps.iter().position(|&each| each == step);
+        let Some(before) = (at.and_then(|at| at.checked_sub(1)))
+            .and_then(|at| onboarding.steps.get(at))
+            .copied()
+        else {
+            return;
+        };
+        log!("browser: onboarding left {} via {how}", step.name());
+        let elapsed = onboarding.secs_since(onboarding.since);
+        onboarding.leaving = Some((step, elapsed));
+        onboarding.backward = true;
+        onboarding.step = before;
+        onboarding.since = onboarding.clock.now();
+        onboarding.loop_since = None;
+        onboarding.settled = false;
+        log!("browser: onboarding step {}", before.name());
+        if step == Step::Color {
+            self.onboarding_unpaint();
+        }
+        cx.notify();
+    }
+
+    /// The welcome's Skip Setup, and its Esc: the flow ends there, as it does after its last step,
+    /// with nothing set.
+    fn onboarding_skip_setup(&mut self, how: &str, cx: &mut Context<Self>) {
+        let Some(onboarding) = self.onboarding.as_mut().filter(|o| o.ending.is_none()) else {
+            return;
+        };
+        // check.sh reads these lines.
+        log!(
+            "browser: onboarding left {} via {how}",
+            onboarding.step.name()
+        );
+        log!("browser: onboarding skipped setup");
+        onboarding.ending = Some(onboarding.clock.now());
+        cx.notify();
+    }
+
+    /// The colour step's pick, shown on the window but not kept, goes.
+    fn onboarding_unpaint(&mut self) {
+        if self
+            .theme_preview
+            .is_some_and(|(space, _)| space == self.space)
+        {
+            self.theme_preview = None;
+        }
+    }
+
+    /// The step's loop is playing, and asking for frames.
+    #[cfg(test)]
+    pub(super) fn onboarding_looping(&self) -> bool {
+        (self.onboarding.as_ref()).is_some_and(|onboarding| onboarding.loop_since.is_some())
+    }
+
+    /// Holds the step's loop `at` seconds in, or lets it play from there with none, for the
+    /// preview's captures and frames.
+    pub fn onboarding_hold_loop(&mut self, at: Option<f32>, cx: &mut Context<Self>) {
+        if let Some(onboarding) = self.onboarding.as_mut() {
+            onboarding.held = at;
+            // The preview's frames start on this line.
+            log!(
+                "browser: onboarding loop {}",
+                if at.is_some() { "held" } else { "plays" }
+            );
+            cx.notify();
+        }
     }
 
     /// Turns the daily count's switch on at the opt-ins step, for the preview's captures.
@@ -925,14 +1013,21 @@ impl Shell {
     }
 
     fn onboarding_pick(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(onboarding) = self.onboarding.as_mut() {
-            onboarding.picked = Some(index.min(SWATCHES.len() - 1));
-            cx.notify();
+        let Some(onboarding) = self.onboarding.as_mut() else {
+            return;
+        };
+        let picked = index.min(SWATCHES.len() - 1);
+        onboarding.picked = Some(picked);
+        // The window shows it at once, as the theme picker does; Continue keeps it.
+        if onboarding.step == Step::Color {
+            let theme = Theme::of_color(SWATCHES[picked]);
+            self.theme_changed(self.space, theme, false, cx);
         }
+        cx.notify();
     }
 
-    /// A key in the window: any skips the intro, and in a step Esc skips it and return is its
-    /// button; at the colour step the arrows go along the swatches. A shortcut still does its own
+    /// A key in the window: in a step Esc skips it and return is its button, but at the welcome
+    /// Esc skips the whole setup; at the colour step the arrows go along the swatches. A shortcut still does its own
     /// thing first.
     fn onboarding_key(
         &mut self,
@@ -958,7 +1053,7 @@ impl Shell {
             return;
         }
         match (step, key.key.as_str()) {
-            (Step::Intro, _) => self.onboarding_next("key", cx),
+            (Step::Intro, "escape") => self.onboarding_skip_setup("escape", cx),
             (Step::Import, "escape") => self.import_escape("escape", cx),
             (_, "escape") => self.onboarding_next("escape", cx),
             // From none picked, → starts at the first and ← at the last.
@@ -1008,16 +1103,17 @@ impl Shell {
         }
     }
 
-    /// The keyboard is on the step's Skip, which takes ↩ and Space as its press.
+    /// The keyboard is on the step's Skip or Back, which take ↩ and Space as their press.
     fn onboarding_skip_keyed(&self, window: &Window) -> bool {
-        (self.onboarding.as_ref()).is_some_and(|onboarding| onboarding.skip_stop.is_focused(window))
+        (self.onboarding.as_ref()).is_some_and(|onboarding| {
+            onboarding.skip_stop.is_focused(window) || onboarding.back_stop.is_focused(window)
+        })
     }
 
-    /// The step shown has its button: all but the intro do, but the account's goes once it's
-    /// signing or signed in, and the import's in a state with none (import_guide).
+    /// The step shown has its button: all do, but the account's goes once it's signing or signed
+    /// in, and the import's in a state with none (import_guide).
     fn onboarding_has_button(&self, step: Step, cx: &gpui::App) -> bool {
         match step {
-            Step::Intro => false,
             Step::Import => (self.import_guide(cx))
                 .and_then(|guide| guide.button)
                 .is_some_and(|words| !words.is_empty()),
@@ -1032,8 +1128,7 @@ impl Shell {
     /// leaves it, and then drops the next step's arrival as already its place, saying nothing of it
     /// (#3498). The colour's and the engine's choice are the step, so it rests on them; any other
     /// rests on its button, the opt-ins' too, as a switch there is a yes to sending something that
-    /// a stray Space mustn't give. Only the intro and a step left with no control rest on their
-    /// dialog.
+    /// a stray Space mustn't give. Only a step left with no control rests on its dialog.
     fn onboarding_rest(&self, cx: &gpui::App) -> Option<gpui::FocusHandle> {
         let onboarding = self.onboarding.as_ref()?;
         Some(match onboarding.step {
@@ -1059,6 +1154,7 @@ impl Shell {
         let held = onboarding.focus.is_focused(window)
             || onboarding.continue_stop.is_focused(window)
             || onboarding.skip_stop.is_focused(window)
+            || onboarding.back_stop.is_focused(window)
             || onboarding.first_stop.is_focused(window);
         if (left && std::mem::take(&mut onboarding.on_switches))
             || (onboarding.ending.is_some() && held)
@@ -1104,6 +1200,7 @@ impl Shell {
                 || focus == onboarding.focus
                 || focus == onboarding.continue_stop
                 || focus == onboarding.skip_stop
+                || focus == onboarding.back_stop
                 || focus == onboarding.first_stop
         });
         if let Some(rest) = rest
@@ -1126,17 +1223,22 @@ impl Shell {
             // check.sh waits for this line before it captures the step.
             log!("browser: onboarding step {} settled", step.name());
         }
-        if step == Step::Intro && elapsed >= if still { STILL_END } else { INTRO_END } {
-            self.onboarding_next("time", cx);
-            return self.onboarding_layer(window, cx);
-        }
-        let onboarding = self.onboarding.as_mut()?;
         let motion = (elapsed / STEP_MOTION).min(1.);
         if motion >= 1. {
             onboarding.leaving = None;
         }
-        // Frames while something moves; the intro's hold waits on a timer instead.
+        // Frames while something moves, and while the step's loop plays (loops).
         let ending = onboarding.ending.map(|at| onboarding.secs_since(at));
+        let looping = loops::has_loop(step)
+            && !still
+            && ending.is_none()
+            && onboarding.held.is_none()
+            && window.is_visible();
+        match looping {
+            true => _ = *onboarding.loop_since.get_or_insert(onboarding.clock.now()),
+            false => onboarding.loop_since = None,
+        }
+        let played = (onboarding.loop_since).map(|at| onboarding.secs_since(at));
         let sliding = onboarding
             .switched
             .is_some_and(|(_, at)| onboarding.secs_since(at) < SLIDE);
@@ -1147,24 +1249,8 @@ impl Shell {
         {
             log!("browser: onboarding {} slid", opt_in.name());
         }
-        if !came || onboarding.leaving.is_some() || ending.is_some() || sliding {
+        if !came || onboarding.leaving.is_some() || ending.is_some() || sliding || looping {
             window.request_animation_frame();
-        } else if step == Step::Intro && onboarding.hold.is_none() {
-            let end = if still { STILL_END } else { INTRO_END };
-            let left = Duration::from_secs_f32((end - elapsed).max(0.));
-            onboarding.hold = Some(cx.spawn(async move |shell, cx| {
-                cx.background_executor().timer(left).await;
-                // A timer can end a little before the flow's clock does, as Windows' do (#1026),
-                // so the frame it wakes waits again for what's left.
-                shell
-                    .update(cx, |shell, cx| {
-                        if let Some(onboarding) = shell.onboarding.as_mut() {
-                            onboarding.hold = None;
-                        }
-                        cx.notify()
-                    })
-                    .ok();
-            }));
         }
         let light = onboarding.light.unwrap_or_else(|| {
             matches!(
@@ -1173,21 +1259,23 @@ impl Shell {
             )
         });
         let leaving = onboarding.leaving;
+        let backward = onboarding.backward;
         let colors = Colors::of(light);
         // The step comes from the right as the one before leaves to the left, but for a fade with
         // Reduce Motion. The intro, first, is simply there.
         let eased = ease_out(motion);
-        let shift = if still || leaving.is_none() {
-            0.
-        } else {
-            SHIFT
+        let shift = match (still || leaving.is_none(), backward) {
+            (true, _) => 0.,
+            (false, false) => SHIFT,
+            (false, true) => -SHIFT,
         };
+        let looped = onboarding.held.unwrap_or_else(|| loops::at(played, still));
         let coming = self
-            .step_content(step, elapsed, still, colors, window, cx)
+            .step_content(step, elapsed, looped, still, colors, window, cx)
             .left(px(shift * (1. - eased)))
             .opacity(if leaving.is_some() { eased } else { 1. });
         let gone = leaving.map(|(step, at)| {
-            self.step_content(step, at, still, colors, window, cx)
+            self.step_content(step, at, loops::at(None, true), still, colors, window, cx)
                 .left(px(-shift * eased))
                 .opacity(1. - eased)
         });
@@ -1199,10 +1287,11 @@ impl Shell {
                 .map_or(Corner::Skip, |guide| guide.corner),
             _ => Corner::Skip,
         };
-        let skip = (step != Step::Intro && !self.keeping_words(cx) && corner != Corner::None)
+        // A step on the sheet has its own in its foot.
+        let skip = (!sheet::on_sheet(step) && !self.keeping_words(cx) && corner != Corner::None)
             .then(|| self.skip_button(corner == Corner::Back, colors, cx));
         // The import under way, or what it brought, quiet at the bottom left once its step is left.
-        let import_line = (step != Step::Import && step != Step::Intro)
+        let import_line = (step != Step::Import && !sheet::on_sheet(step))
             .then(|| self.import_line(cx))
             .flatten()
             .map(|said| {
@@ -1219,12 +1308,15 @@ impl Shell {
             });
         let opacity = ending.map_or(1., |at| fade_at(1., 0., at, END_FADE));
         // At the transparency step the ground gives way to the window's own glass, at the level
-        // picked, so the whole window over what's behind it is the step's preview; it comes back
-        // as the step goes.
-        let glass = match (step, leaving) {
-            (Step::Transparency, _) => eased,
-            (_, Some((Step::Transparency, _))) => 1. - eased,
-            _ => 0.,
+        // picked, so the whole window over what's behind it is the step's preview; on the sheet,
+        // to the window itself, which the sheet floats over. It comes back as the step goes.
+        let bare = |step: Step| match step == Step::Transparency || sheet::on_sheet(step) {
+            true => 1.,
+            false => 0.,
+        };
+        let glass = match leaving {
+            Some((left, _)) => bare(left) + (bare(step) - bare(left)) * eased,
+            None => bare(step),
         };
         let ground = Rgba {
             a: colors.ground.a * (1. - glass),
@@ -1240,18 +1332,6 @@ impl Shell {
                 .bg(ground)
                 .occlude()
                 .opacity(opacity)
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|shell, _, _, cx| {
-                        if shell
-                            .onboarding
-                            .as_ref()
-                            .is_some_and(|o| o.step == Step::Intro)
-                        {
-                            shell.onboarding_next("click", cx);
-                        }
-                    }),
-                )
                 .children(gone)
                 .child(coming)
                 .children(skip)
@@ -1260,11 +1340,14 @@ impl Shell {
         )
     }
 
-    /// A step's message, centred in the window, `t` seconds into it.
+    /// A step's message, centred in the window, `t` seconds into it, its loop `looped` seconds
+    /// into its own.
+    #[allow(clippy::too_many_arguments)]
     fn step_content(
         &self,
         step: Step,
         t: f32,
+        looped: f32,
         still: bool,
         colors: Colors,
         window: &mut Window,
@@ -1281,33 +1364,6 @@ impl Shell {
         // the step leaving under it, still drawn as it slides, as nothing.
         let named = self.a11y
             && (self.onboarding.as_ref()).is_some_and(|onboarding| onboarding.step == step);
-        if step == Step::Intro {
-            let drawn = Drawn::at(t, still);
-            return layer.child(
-                div()
-                    .id("onboarding-intro")
-                    .when_some(
-                        (self.onboarding.as_ref()).map(|onboarding| onboarding.focus.clone()),
-                        |intro, focus| intro.track_focus(&focus),
-                    )
-                    .when(named, |intro| {
-                        intro
-                            .role(Role::Dialog)
-                            .aria_label(env!("APP_NAME"))
-                            .aria_description("a good tool.")
-                    })
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .child(wordmark(drawn, colors))
-                    .child(
-                        display_text("a good tool.", TAGLINE_SIZE, TAGLINE_LINE, cx)
-                            .mt(px(TAGLINE_GAP - cap_top(TAGLINE_SIZE, TAGLINE_LINE)))
-                            .text_color(colors.ink(QUIET))
-                            .opacity(drawn.tagline),
-                    ),
-            );
-        }
         let os = self
             .onboarding
             .as_ref()
@@ -1348,7 +1404,18 @@ impl Shell {
                 .onboarding
                 .as_ref()
                 .and_then(|onboarding| onboarding.picked);
-            swatch_row(picked, self.first_stop(step), colors, self.a11y, cx)
+            let (swatch, pitch) = match sheet::on_sheet(step) {
+                true => (sheet::SWATCH, sheet::SWATCH_PITCH),
+                false => (SWATCH, SWATCH_PITCH),
+            };
+            swatch_row(
+                picked,
+                self.first_stop(step),
+                (swatch, pitch),
+                colors,
+                self.a11y,
+                cx,
+            )
         });
         let chip = |keys: String, fill: Rgba| {
             div()
@@ -1446,10 +1513,36 @@ impl Shell {
                     with_alpha(PAPER, CHIP),
                 ))
                 .children(drawn.map(|(at, settled)| button_frame(at, settled)))
+                .when(sheet::on_sheet(step), sheet::go)
         });
         let focus = (self.onboarding.as_ref())
             .filter(|onboarding| onboarding.step == step)
             .map(|onboarding| onboarding.focus.clone());
+        if sheet::on_sheet(step) {
+            let title = display_text(title, sheet::TITLE_SIZE, sheet::TITLE_LINE, cx);
+            let left = self.sheet_left(step, t, still, (title, line), colors);
+            let left = left
+                .children(swatches)
+                .child(self.sheet_foot(step, button, colors, cx));
+            let art = self.sheet_art(step, looped, colors);
+            let dialog = |pane: gpui::Stateful<gpui::Div>| {
+                pane.when_some(focus, |content, focus| content.track_focus(&focus))
+                    .when(named, |content| {
+                        let (title, line) = said;
+                        content
+                            .role(Role::Dialog)
+                            .aria_label(title)
+                            .aria_description(line)
+                    })
+            };
+            return sheet::sheet(
+                colors,
+                ("onboarding-step", step as usize),
+                dialog,
+                left,
+                art,
+            );
+        }
         layer.child(
             div()
                 .id(("onboarding-step", step as usize))
@@ -1693,9 +1786,11 @@ impl Shell {
             shell
                 .update(cx, |shell, cx| shell.onboarding_transparency(level, cx))
                 .ok();
-        });
+        })
+        .centred();
         div()
             .id("onboarding-transparency")
+            .debug_selector(|| "onboarding-transparency".into())
             .when_some(self.first_stop(step), |slot, stop| slot.track_focus(&stop))
             .mt(px(BUTTON_GAP))
             .w(px(IMPORT_WIDTH))
@@ -1739,6 +1834,7 @@ impl Shell {
         let stop = (self.onboarding.as_ref()).map(|onboarding| onboarding.skip_stop.clone());
         div()
             .id("onboarding-skip")
+            .debug_selector(|| "onboarding-skip".into())
             .when(self.a11y, |control| {
                 named_button(control, if back { "Back" } else { "Skip" })
             })
@@ -1818,12 +1914,13 @@ fn opt_in_frame(
 fn swatch_row(
     picked: Option<usize>,
     first: Option<gpui::FocusHandle>,
+    (swatch, pitch): (f32, f32),
     colors: Colors,
     a11y: bool,
     cx: &mut Context<Shell>,
 ) -> impl IntoElement + use<> {
     // Each swatch's ring and the gap inside it, on both sides.
-    let ringed = SWATCH + 4. * SWATCH_RING;
+    let ringed = swatch + 4. * SWATCH_RING;
     div()
         .id("onboarding-swatches")
         .when(a11y, |row| row.role(Role::RadioGroup).aria_label("Colour"))
@@ -1835,7 +1932,7 @@ fn swatch_row(
         .focus_visible(ring(colors.ink(1.)))
         .mt(px(SWATCH_GAP))
         .flex()
-        .gap(px(SWATCH_PITCH - ringed))
+        .gap(px(pitch - ringed))
         .children(SWATCHES.iter().enumerate().map(|(index, &color)| {
             let ring = if picked == Some(index) {
                 colors.ink(1.)
@@ -1865,7 +1962,7 @@ fn swatch_row(
                 .on_click(cx.listener(move |shell, _, _, cx| shell.onboarding_pick(index, cx)))
                 .child(
                     div()
-                        .size(px(SWATCH))
+                        .size(px(swatch))
                         .rounded_full()
                         .bg(rgb(color))
                         .border_1()
@@ -1921,9 +2018,8 @@ const RING_AT: (f32, f32, f32, f32) = (171., 120., 38., 24.);
 /// Straight stretches a whole ring is drawn in.
 const RING_STRETCHES: usize = 96;
 
-/// The wordmark, `drawn` as far as it is, at the flow's size.
-fn wordmark(drawn: Drawn, colors: Colors) -> impl IntoElement {
-    let scale = WORDMARK_SCALE;
+/// The wordmark, `drawn` as far as it is, `scale` times its own units.
+fn wordmark(drawn: Drawn, colors: Colors, scale: f32) -> impl IntoElement {
     let ink = colors.ink(1.);
     let dot_color = mix(ink, rgb(SIGNAL), drawn.signal);
     canvas(

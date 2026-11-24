@@ -330,7 +330,8 @@ exec 3> "$out/drive"
 await '^browser: onboarding step intro settled$' || fail "the onboarding's intro didn't draw"
 judging=1
 spoken launch
-await '^browser: onboarding left intro ' || fail "the intro didn't go on by itself"
+send key return
+await '^browser: onboarding left intro via return$' || fail "Return didn't go on from the welcome"
 await '^browser: onboarding step [a-z-]* settled$' || fail "no step came after the intro"
 spoken "$(grep '^browser: onboarding step [a-z-]* settled$' "$log" | tail -1 | cut -d' ' -f4) step"
 press tab

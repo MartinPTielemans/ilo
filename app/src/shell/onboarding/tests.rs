@@ -11,13 +11,14 @@ use gpui::{
     point, px,
 };
 
-use super::{Drawn, END_FADE, INTRO_END, OptIn, STEP_MOTION, STILL_END, STILL_FADE, Step};
+use super::{Drawn, END_FADE, OptIn, STEP_MOTION, STILL_FADE, Step};
 use crate::account::{self, State, Status};
 use crate::import::ImportEvent;
 use crate::shell::{Folders, Shell, commands::Command, recorder::Recorder};
 use crate::theme::Theme;
 use crate::theme_picker::{SWATCHES, swatch_name};
-use crate::tokens::shell::onboarding::{IMPORT_HOLD, SKIP_MARGIN};
+use crate::tokens::shell::onboarding::IMPORT_HOLD;
+use crate::tokens::shell::onboarding::loops::PERIOD;
 use crate::transparency::{self, Transparency};
 
 /// A drawn shell showing one Space with no tab shown, as at a new profile's first launch, with the
@@ -89,10 +90,11 @@ fn started(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
-/// Goes on with Esc to `to`, as the user skipping each step before it does.
+/// Goes on with Esc to `to`, as the user skipping each step before it does, from the welcome with
+/// Return, as its Esc skips the whole setup.
 fn skip_to(shell: &Entity<Shell>, cx: &mut VisualTestContext, to: Step) {
-    while step(shell, cx).is_some_and(|step| step != to) {
-        cx.simulate_keystrokes("escape");
+    while let Some(at) = step(shell, cx).filter(|&step| step != to) {
+        cx.simulate_keystrokes(if at == Step::Intro { "enter" } else { "escape" });
     }
     assert_eq!(step(shell, cx), Some(to));
 }
@@ -105,11 +107,24 @@ fn waited(cx: &mut VisualTestContext, seconds: f32) {
     cx.run_until_parked();
 }
 
+/// Clicks the step's Skip, in the corner or in the sheet's foot.
+fn click_skip(cx: &mut VisualTestContext) {
+    let skip = cx.debug_bounds("onboarding-skip").expect("Skip is drawn");
+    cx.simulate_click(skip.center(), Modifiers::none());
+}
+
+/// Whether the window asks for another frame: what it asked for runs, and says how much it was.
+fn asks_for_frames(cx: &mut VisualTestContext) -> bool {
+    cx.run_until_parked();
+    cx.update(|window, cx| window.simulate_next_frame(cx)) > 0
+}
+
 fn later(shell: &Entity<Shell>, cx: &mut VisualTestContext, seconds: f32) {
     shell.update(cx, |shell, cx| {
         let onboarding = shell.onboarding.as_mut().expect("the flow shows");
         let back = |at: Instant| at - Duration::from_secs_f32(seconds);
         onboarding.since = back(onboarding.since);
+        onboarding.loop_since = onboarding.loop_since.map(back);
         onboarding.ending = onboarding.ending.map(back);
         cx.notify();
     });
@@ -189,95 +204,158 @@ fn the_flow_takes_the_keyboard_as_it_shows(cx: &mut TestAppContext) {
     let taken = |calls: Vec<String>| calls.iter().filter(|call| *call == "focus ui").count();
     assert_eq!(taken(host.take()), 1, "the flow's first frame takes it");
     later(&shell, cx, 0.5);
-    cx.simulate_keystrokes("a");
+    cx.simulate_keystrokes("enter");
     later(&shell, cx, STEP_MOTION);
     assert_eq!(taken(host.take()), 0, "the frames and steps after leave it");
 }
 
-/// Any key skips the intro to the first step, and so does a click anywhere.
+/// The welcome waits for the user, however long: another key or a click on the window leaves it
+/// be, Return or Get Started goes on, and Esc or Skip Setup ends the flow there, as its last step
+/// does.
 #[gpui::test]
-fn any_key_or_click_skips_the_intro(cx: &mut TestAppContext) {
+fn the_welcome_waits_then_goes_on_or_skips_the_setup(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     started(&shell, cx);
-    assert_eq!(step(&shell, cx), Some(Step::Intro));
+    later(&shell, cx, 3. * PERIOD);
     cx.simulate_keystrokes("a");
+    let corner = shell.read_with(cx, |shell, _| shell.page_frame(shell.viewport).0.origin);
+    cx.simulate_click(corner + point(px(4.), px(4.)), Modifiers::none());
+    assert_eq!(step(&shell, cx), Some(Step::Intro), "it waits");
+    cx.simulate_keystrokes("enter");
     assert_eq!(step(&shell, cx), Some(Step::Import));
 
-    started(&shell, cx);
-    let middle = shell.read_with(cx, |shell, _| shell.page_frame(shell.viewport).0.center());
-    cx.simulate_click(middle, Modifiers::none());
-    assert_eq!(step(&shell, cx), Some(Step::Import));
+    for leave in ["escape", "skip"] {
+        started(&shell, cx);
+        match leave {
+            "escape" => cx.simulate_keystrokes("escape"),
+            _ => click_skip(cx),
+        }
+        let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
+        assert!(ending.is_some(), "{leave} ends the flow at the welcome");
+        later(&shell, cx, END_FADE);
+        assert_eq!(step(&shell, cx), None, "{leave}");
+    }
 }
 
-/// Left alone, the intro holds once it's drawn, then the first step comes.
+/// With the system's Reduce Motion, the welcome's wordmark is the still one, all there once its
+/// words have faded in, and its loop is its last frame, asking for none.
 #[gpui::test]
-fn the_intro_goes_on_by_itself(cx: &mut TestAppContext) {
-    let (shell, cx, _) = first_window(cx);
-    started(&shell, cx);
-    later(&shell, cx, INTRO_END - 0.5);
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Intro),
-        "it holds after it's drawn"
-    );
-    later(&shell, cx, 0.5);
-    assert_eq!(step(&shell, cx), Some(Step::Import));
-}
-
-/// With the system's Reduce Motion, the intro is the still one, all there once its line has faded
-/// in, long before the drawn one's line comes, and goes on at its shorter end. Turned off while it
-/// shows, as the system says it changed, the intro holds until the full one's end.
-#[gpui::test]
-fn reduce_motion_gives_the_still_intro(cx: &mut TestAppContext) {
+fn reduce_motion_gives_the_still_welcome(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     cx.update(|_, cx| cx.set_reduce_motion(true));
     started(&shell, cx);
-    let settled = |shell: &Entity<Shell>, cx: &VisualTestContext| {
-        shell.read_with(cx, |shell, _| {
-            shell.onboarding.as_ref().is_some_and(|o| o.settled)
-        })
-    };
     later(&shell, cx, STILL_FADE);
+    let settled = shell.read_with(cx, |shell, _| {
+        shell.onboarding.as_ref().is_some_and(|o| o.settled)
+    });
     assert!(
-        settled(&shell, cx),
-        "the still intro is all there once its line fades in"
+        settled,
+        "the still welcome is all there once its words fade in"
     );
-    later(&shell, cx, STILL_END - STILL_FADE);
-    assert_eq!(step(&shell, cx), Some(Step::Import));
-
-    started(&shell, cx);
-    cx.update(|_, cx| cx.set_reduce_motion(false));
-    cx.run_until_parked();
-    later(&shell, cx, STILL_END);
-    assert_eq!(
-        step(&shell, cx),
-        Some(Step::Intro),
-        "it holds past the still one's end"
-    );
-    later(&shell, cx, INTRO_END - STILL_END);
-    assert_eq!(step(&shell, cx), Some(Step::Import));
+    assert!(!shell.read_with(cx, |shell, _| shell.onboarding_looping()));
+    assert!(!asks_for_frames(cx), "a still welcome draws no more frames");
 }
 
-/// The timer the intro holds on can wake the window before the end by the flow's own clock, as
-/// Windows' did (#1026); the intro then waits out what's left, with nothing else drawing it.
+/// A step's loop asks for frames only while its step shows: going on from it, ending the flow
+/// there, or going back from it to a step with none ends them.
 #[gpui::test]
-fn the_intro_goes_on_after_a_timer_that_wakes_it_early(cx: &mut TestAppContext) {
+fn a_loop_draws_only_while_its_step_shows(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
+    let looping = |shell: &Entity<Shell>, cx: &VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.onboarding_looping())
+    };
+    started(&shell, cx);
+    later(&shell, cx, 2. * PERIOD);
+    assert!(looping(&shell, cx), "the welcome's loop plays");
+    assert!(asks_for_frames(cx), "and draws");
+    cx.simulate_keystrokes("enter");
+    later(&shell, cx, STEP_MOTION);
+    assert!(!looping(&shell, cx), "the import has none");
+    assert!(!asks_for_frames(cx), "so nothing draws once it's in");
+
+    skip_to(&shell, cx, Step::Color);
+    later(&shell, cx, STEP_MOTION);
+    assert!(looping(&shell, cx), "the colour's loop plays");
+    click_back(cx);
+    later(&shell, cx, STEP_MOTION);
+    assert!(!looping(&shell, cx), "Back leaves it");
+    assert!(!asks_for_frames(cx), "and its frames");
+
+    started(&shell, cx);
+    later(&shell, cx, 1.);
+    cx.simulate_keystrokes("escape");
+    later(&shell, cx, END_FADE);
+    assert_eq!(step(&shell, cx), None);
+    assert!(!asks_for_frames(cx), "the flow ended draws nothing more");
+}
+
+/// Clicks the sheet's Back.
+fn click_back(cx: &mut VisualTestContext) {
+    let back = cx.debug_bounds("onboarding-back").expect("Back is drawn");
+    cx.simulate_click(back.center(), Modifiers::none());
+}
+
+/// Back goes to the step before, which comes again; the welcome has none.
+#[gpui::test]
+fn back_goes_to_the_step_before(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     started(&shell, cx);
-    later(&shell, cx, INTRO_END - 0.5);
-    // The hold's timer is set for the half second left; the flow's clock falls half a second
-    // behind it, as a timer that ends early leaves it.
-    shell.update(cx, |shell, _| {
-        let onboarding = shell.onboarding.as_mut().expect("the flow shows");
-        onboarding.since += Duration::from_secs_f32(0.5);
-    });
-    cx.executor().advance_clock(Duration::from_secs_f32(0.75));
     cx.run_until_parked();
-    assert_eq!(step(&shell, cx), Some(Step::Intro));
-    // What's left passes, and only the timer the woken frame set wakes the window.
-    cx.executor().advance_clock(Duration::from_secs_f32(0.5));
-    cx.run_until_parked();
-    assert_eq!(step(&shell, cx), Some(Step::Import));
+    assert!(
+        cx.debug_bounds("onboarding-back").is_none(),
+        "the welcome has no Back"
+    );
+    skip_to(&shell, cx, Step::Color);
+    later(&shell, cx, STEP_MOTION);
+    click_back(cx);
+    assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser));
+    let backward = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().backward);
+    assert!(backward, "it comes from the left");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Color),
+        "and goes on again as before"
+    );
+}
+
+/// A colour picked shows on the window at once, as the theme picker's does; Continue keeps it, and
+/// Skip, Esc or Back take it off again with nothing kept.
+#[gpui::test]
+fn a_colour_picked_shows_at_once_and_goes_unless_kept(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    let shown = |shell: &Entity<Shell>, cx: &VisualTestContext| {
+        shell.read_with(cx, |shell, _| {
+            shell.theme_of(1).map(|theme| theme.main_color())
+        })
+    };
+    for leave in ["escape", "skip", "back", "enter"] {
+        started(&shell, cx);
+        skip_to(&shell, cx, Step::Color);
+        later(&shell, cx, STEP_MOTION);
+        host.take();
+        cx.simulate_keystrokes("right");
+        assert_eq!(
+            shown(&shell, cx),
+            Some(SWATCHES[0]),
+            "{leave}: shown at once"
+        );
+        assert!(
+            !host.take().iter().any(|call| call.contains("space color")),
+            "{leave}: nothing kept while it shows"
+        );
+        match leave {
+            "skip" => click_skip(cx),
+            "back" => click_back(cx),
+            key => cx.simulate_keystrokes(key),
+        }
+        let kept = host.take().iter().any(|call| call.contains("space color"));
+        assert_eq!(kept, leave == "enter", "{leave}");
+        if leave != "enter" {
+            assert_eq!(shown(&shell, cx), None, "{leave} takes it off");
+        }
+        shell.update(cx, |shell, _| shell.onboarding = None);
+    }
 }
 
 /// Esc skips each step in turn, and after the last the flow fades out from over the first
@@ -286,7 +364,7 @@ fn the_intro_goes_on_after_a_timer_that_wakes_it_early(cx: &mut TestAppContext) 
 fn escape_goes_on_and_the_last_step_leaves_the_flow(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     started(&shell, cx);
-    cx.simulate_keystrokes("a");
+    cx.simulate_keystrokes("enter");
     for next in [Step::DefaultBrowser, Step::Color] {
         later(&shell, cx, STEP_MOTION);
         cx.simulate_keystrokes("escape");
@@ -324,12 +402,7 @@ fn return_and_skip_go_on_from_a_step(cx: &mut TestAppContext) {
         match go_on {
             "return" => cx.simulate_keystrokes("enter"),
             _ => {
-                let viewport = shell.read_with(cx, |shell, _| shell.viewport);
-                let skip = point(px(SKIP_MARGIN + 30.), px(SKIP_MARGIN + 10.));
-                cx.simulate_click(
-                    point(viewport.width - skip.x, viewport.height - skip.y),
-                    Modifiers::none(),
-                );
+                click_skip(cx);
             }
         }
         if next.is_some() {
@@ -746,12 +819,7 @@ fn skip_and_esc_leave_the_count_as_it_stands(cx: &mut TestAppContext) {
         match leave {
             "escape" => cx.simulate_keystrokes("escape"),
             _ => {
-                let viewport = shell.read_with(cx, |shell, _| shell.viewport);
-                let skip = point(px(SKIP_MARGIN + 30.), px(SKIP_MARGIN + 10.));
-                cx.simulate_click(
-                    point(viewport.width - skip.x, viewport.height - skip.y),
-                    Modifiers::none(),
-                );
+                click_skip(cx);
             }
         }
         let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
@@ -1052,7 +1120,7 @@ fn no_browser_found_leaves_the_import_out(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     host.no_browsers.set(true);
     started(&shell, cx);
-    cx.simulate_keystrokes("a");
+    cx.simulate_keystrokes("enter");
     assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser));
 }
 
@@ -1959,6 +2027,41 @@ fn the_preview_opens_the_flow_at_a_step_by_name_or_number(cx: &mut TestAppContex
     assert_eq!(at("7", cx), Some(Step::Transparency));
 }
 
+/// The step is as tall at every level, its line as tall as the tallest level's, so what's under the
+/// picker stays where it is as the pick changes.
+#[gpui::test]
+fn the_transparency_step_keeps_its_height_at_every_level(cx: &mut TestAppContext) {
+    let (shell, cx, _) = glass_window(cx);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Transparency);
+    later(&shell, cx, STEP_MOTION);
+    let height = |cx: &mut VisualTestContext| {
+        cx.run_until_parked();
+        let bounds = cx.debug_bounds("onboarding-transparency");
+        bounds.expect("the step's picker is drawn").size.height
+    };
+    let mut heights = vec![(level(&shell, cx), height(cx))];
+    for key in ["left", "right right"] {
+        cx.simulate_keystrokes(key);
+        heights.push((level(&shell, cx), height(cx)));
+    }
+    let levels: Vec<_> = heights.iter().map(|(level, _)| *level).collect();
+    assert_eq!(
+        levels,
+        [
+            Transparency::Standard,
+            Transparency::Less,
+            Transparency::More
+        ]
+        .map(Some),
+        "the arrows went through every level"
+    );
+    assert!(
+        heights.iter().all(|(_, each)| *each == heights[0].1),
+        "the step is as tall at every level: {heights:?}"
+    );
+}
+
 /// The keyboard rests on the picker, which shows Standard, and the arrows move the pick, stopping
 /// at either end.
 #[gpui::test]
@@ -2016,12 +2119,7 @@ fn return_keeps_the_level_and_skip_puts_standard_back(cx: &mut TestAppContext) {
         cx.simulate_keystrokes("right");
         match go_on {
             "skip" => {
-                let viewport = shell.read_with(cx, |shell, _| shell.viewport);
-                let skip = point(px(SKIP_MARGIN + 30.), px(SKIP_MARGIN + 10.));
-                cx.simulate_click(
-                    point(viewport.width - skip.x, viewport.height - skip.y),
-                    Modifiers::none(),
-                );
+                click_skip(cx);
             }
             key => cx.simulate_keystrokes(key),
         }
