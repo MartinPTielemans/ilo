@@ -11,10 +11,15 @@
 //! event, the index that has the keyboard (or the chosen one, for a radio group) and the count to
 //! `ListKeys::step`. On `Some`, stop propagation and act on the `Step`; on `None` let the key go
 //! on, as a key the list doesn't take must reach the shortcuts beyond it.
+//!
+//! When the row with the keyboard is removed, by the user, the app or an agent, the keyboard goes
+//! to the row that took its place: the next one, else the one before, as a closed tab's row gives
+//! it to the row that moves up into its place. A list composes that by passing its rows as they
+//! were and as they are to `took_place` as they change.
 
 use std::time::{Duration, Instant};
 
-use gpui::KeyDownEvent;
+use gpui::{App, KeyDownEvent, Window};
 
 /// How long a pause starts type-ahead afresh, as the menu's does.
 const TYPE_RESET: Duration = Duration::from_millis(1000);
@@ -192,6 +197,60 @@ impl TypeAhead {
     }
 }
 
+/// Where the keyboard goes as a list's rows change from `before` to `now`, from the row `keyed`:
+/// that row while it's still there, else the row that took its place, the first after it in
+/// `before` still there, else the last before it. None once no row it had is left, as when the
+/// whole list is new.
+pub fn took_place<T: PartialEq + Clone>(keyed: &T, before: &[T], now: &[T]) -> Option<T> {
+    if now.contains(keyed) {
+        return Some(keyed.clone());
+    }
+    let at = before.iter().position(|row| row == keyed)?;
+    let kept = |row: &&T| now.contains(row);
+    let after = before[at + 1..].iter().find(kept);
+    after
+        .or_else(|| before[..at].iter().rev().find(kept))
+        .cloned()
+}
+
+/// How a list's controls are named, which decides where the keyboard goes with a removed row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Named {
+    /// By the row's line, as a filter's Remove `("ad-block-filter-remove", index)` is: the row
+    /// after moves up into the removed one's line, and its control into that control's name and
+    /// the keyboard with it.
+    ByLine,
+    /// By the row itself, as a device's Remove is by the device's id.
+    ByRow,
+}
+
+/// A row's own control, such as its Remove, is removing `row` from `rows`, pressed from the keys
+/// (`from_keys`): hands the keyboard on to the same control of the row that takes its place, as
+/// `took_place` has it, before the row goes. A press with the pointer leaves the keyboard where it
+/// was, as such a control takes none. With no row left, the control that follows takes it.
+/// It moves by ⇥'s stops, so each row's control must be its row's only stop, as each of
+/// Settings' and the devices' Removes is; a row given a second stop needs its control found by
+/// the row instead.
+pub fn removing<T: PartialEq + Clone>(
+    row: &T,
+    rows: &[T],
+    named: Named,
+    from_keys: bool,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if !from_keys {
+        return;
+    }
+    let now: Vec<T> = rows.iter().filter(|each| *each != row).cloned().collect();
+    let at = |row: &T| rows.iter().position(|each| each == row);
+    match (took_place(row, rows, &now), named) {
+        (Some(took), _) if at(&took) < at(row) => window.focus_prev(cx),
+        (Some(_), Named::ByLine) => {}
+        (Some(_), Named::ByRow) | (None, _) => window.focus_next(cx),
+    }
+}
+
 /// `text` lowercased without its accents, for type-ahead.
 pub fn folded(text: &str) -> String {
     const ACCENTED: [(&str, char); 8] = [
@@ -346,6 +405,129 @@ mod tests {
         for expected in [2, 3, 0] {
             at = typing.find('e', now, at, &titles);
             assert_eq!(at, Some(expected));
+        }
+    }
+
+    /// The rule a list's keyboard follows as its rows go: the row that took the removed one's
+    /// place, the next, else the one before; nothing when no row it had is left.
+    #[test]
+    fn the_keyboard_goes_to_the_row_that_took_the_removed_ones_place() {
+        let rows = [1, 2, 3, 4];
+        assert_eq!(
+            took_place(&2, &rows, &[1, 3, 4]),
+            Some(3),
+            "the next row took its place"
+        );
+        assert_eq!(
+            took_place(&4, &rows, &[1, 2, 3]),
+            Some(3),
+            "the last row's went before it"
+        );
+        assert_eq!(
+            took_place(&2, &rows, &[1, 4]),
+            Some(4),
+            "two going together, the first after both"
+        );
+        assert_eq!(
+            took_place(&3, &rows, &[0, 1, 2, 3, 4]),
+            Some(3),
+            "a row added keeps it"
+        );
+        assert_eq!(
+            took_place(&2, &rows, &[9]),
+            None,
+            "a new list has nothing in its place"
+        );
+    }
+
+    /// A list of rows with a control each, named by line or by row as `named` says, as Settings'
+    /// Removes are.
+    struct Controls {
+        rows: Vec<u64>,
+        named: Named,
+        by_line: Vec<gpui::FocusHandle>,
+        by_row: std::collections::HashMap<u64, gpui::FocusHandle>,
+    }
+
+    impl gpui::Render for Controls {
+        fn render(
+            &mut self,
+            _: &mut Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use gpui::{InteractiveElement, ParentElement, Styled};
+            let controls = self.rows.iter().enumerate().map(|(line, row)| {
+                let focus = match self.named {
+                    Named::ByLine => &self.by_line[line],
+                    Named::ByRow => &self.by_row[row],
+                };
+                gpui::div().h(gpui::px(20.)).track_focus(focus)
+            });
+            gpui::div().size_full().children(controls)
+        }
+    }
+
+    /// A control ⇥ reaches, as each of Settings' is.
+    fn stop(cx: &mut gpui::App) -> gpui::FocusHandle {
+        cx.focus_handle().tab_index(0).tab_stop(true)
+    }
+
+    /// Where the keyboard is after `row`'s control removes it from the keys.
+    fn after_removing(named: Named, row: u64, cx: &mut gpui::TestAppContext) -> Option<u64> {
+        let (view, cx) = cx.add_window_view(|_, cx| Controls {
+            rows: vec![1, 2, 3],
+            named,
+            by_line: (0..3).map(|_| stop(cx)).collect(),
+            by_row: (1..=3).map(|row| (row, stop(cx))).collect(),
+        });
+        cx.update(|window, cx| {
+            let view = view.read(cx);
+            let at = view.rows.iter().position(|&each| each == row).unwrap();
+            let focus = match named {
+                Named::ByLine => view.by_line[at].clone(),
+                Named::ByRow => view.by_row[&row].clone(),
+            };
+            window.focus(&focus, cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let rows = view.read(cx).rows.clone();
+            removing(&row, &rows, named, true, window, cx);
+            view.update(cx, |view, cx| {
+                view.rows.retain(|&each| each != row);
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let view = view.read(cx);
+            let mut lines = view.rows.iter().enumerate();
+            lines
+                .find(|&(line, each)| match named {
+                    Named::ByLine => view.by_line[line].is_focused(window),
+                    Named::ByRow => view.by_row[each].is_focused(window),
+                })
+                .map(|(_, &each)| each)
+        })
+    }
+
+    /// A row's control removing it from the keys leaves the keyboard on the same control of the
+    /// row that took its place, however the list names its controls.
+    #[gpui::test]
+    fn a_removed_rows_control_hands_the_keyboard_to_the_row_in_its_place(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        for named in [Named::ByLine, Named::ByRow] {
+            assert_eq!(
+                after_removing(named, 2, cx),
+                Some(3),
+                "{named:?}: the next row"
+            );
+            assert_eq!(
+                after_removing(named, 3, cx),
+                Some(2),
+                "{named:?}: the last row's"
+            );
         }
     }
 }

@@ -181,6 +181,23 @@ fn the_dots_glide_to_their_new_places(cx: &mut TestAppContext) {
     );
 }
 
+/// Under Reduce Motion the dots don't glide: once the core reports the order, each is drawn in
+/// its new place.
+#[gpui::test]
+fn under_reduce_motion_the_dots_are_in_their_places_at_once(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window(cx);
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    let (first, second) = (dot(&shell, cx, 1), dot(&shell, cx, 2));
+    let to = first - point(px(12.), px(0.));
+    hold(cx, second, to);
+    let_go(cx, to);
+    report_gliding(&shell, cx, &[2, 1, 3]);
+    let drawn = shell.read_with(cx, |shell, _| {
+        [2, 1].map(|space| shell.space_slide(Along::Switcher, space))
+    });
+    assert_eq!(drawn, [0., 0.], "a dot glided under Reduce Motion");
+}
+
 /// A press, one move and the release, as the check's driver sends a drag: the move starts the
 /// drag, so none says where it is, and the release finds the gap itself.
 #[gpui::test]
