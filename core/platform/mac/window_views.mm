@@ -235,6 +235,19 @@
 }
 @end
 
+// Between a tile and its page: shows the page at its own size, scaled to the tile's width by this
+// view's bounds, as NSScrollView's magnification scales its document. AppKit keeps a view's bounds
+// through its own layout; a transform set on the page's layer, which AppKit owns, showed the page
+// unscaled (#4115).
+@interface BrowserCoreTileScale : NSView
+@end
+
+@implementation BrowserCoreTileScale
+- (BOOL)isFlipped {
+  return YES;
+}
+@end
+
 namespace browser_core::platform {
 
 namespace {
@@ -598,37 +611,28 @@ void DrawPageIn(views::Widget*, gfx::NativeView, float, const gfx::PointF&, floa
 
 namespace {
 
-// Scales |page|'s layer from the page's own size to |tile|'s width, its top-left at the tile's, so
-// the page is never laid out again for it. As scalePages does, where the transform puts it is
-// measured in the tile's layer, since AppKit keeps the layer's anchor point and which way up it is.
-void ScaleIntoTile(NSView* tile, NSView* page) {
-  CALayer* layer = page.layer;
-  CALayer* space = tile.layer;
-  if (!layer || !space) {
+// The tile holding |page|, which is in the tile's scale view, if it's in one.
+BrowserCoreTileView* TileOf(NSView* page) {
+  return base::apple::ObjCCast<BrowserCoreTileView>(page.superview.superview);
+}
+
+// Fits |page|'s own width to |tile|'s, from the tile's top-left, and the tile cuts it at its foot:
+// tile width over page width, the page never laid out again for it.
+void FitTile(NSView* tile, NSView* page) {
+  NSView* scale = page.superview;
+  const NSSize own = page.frame.size;
+  const NSSize shown = tile.bounds.size;
+  if (own.width <= 0 || shown.width <= 0) {
     return;
   }
-  auto in_tile = [space](CALayer* moved) { return [moved convertRect:moved.bounds toLayer:space]; };
-  [CATransaction begin];
-  [CATransaction setDisableActions:YES];
-  layer.transform = CATransform3DIdentity;
-  // At the tile's top-left, which is the tile layer's least y if it's the right way up.
-  const CGRect own = in_tile(layer);
-  const bool top_is_min = std::abs(CGRectGetMinY(own)) < 0.5;
-  auto top = [top_is_min](CGRect rect) {
-    return top_is_min ? CGRectGetMinY(rect) : CGRectGetMaxY(rect);
-  };
-  const double scale = CGRectGetWidth(own) > 0 ? NSWidth(tile.bounds) / CGRectGetWidth(own) : 1;
-  const CATransform3D scaled = CATransform3DMakeScale(scale, scale, 1);
-  layer.transform = scaled;
-  const CGRect at = in_tile(layer);
-  const double dx = CGRectGetMinX(own) - CGRectGetMinX(at);
-  const double dy = top(own) - top(at);
-  layer.transform = CATransform3DConcat(scaled, CATransform3DMakeTranslation(dx, dy, 0));
-  // A layer upside down to the tile's moves the other way.
-  if (std::abs(top(in_tile(layer)) - top(own)) > 0.5) {
-    layer.transform = CATransform3DConcat(scaled, CATransform3DMakeTranslation(dx, -dy, 0));
+  const NSRect frame = NSMakeRect(0, 0, shown.width, shown.height);
+  if (!NSEqualRects(scale.frame, frame)) {
+    scale.frame = frame;
   }
-  [CATransaction commit];
+  const NSSize bounds = NSMakeSize(own.width, shown.height * own.width / shown.width);
+  if (!NSEqualSizes(scale.bounds.size, bounds)) {
+    [scale setBoundsSize:bounds];
+  }
 }
 
 }  // namespace
@@ -648,30 +652,36 @@ void ShowTile(content::WebContents* contents,
   }
   // Before the page is in the tile's window, which it's never told it moved to.
   content::SetPageTile(contents, true);
-  BrowserCoreTileView* tile = base::apple::ObjCCast<BrowserCoreTileView>(page_view.superview);
+  BrowserCoreTileView* tile = TileOf(page_view);
   const bool placed = !tile || tile.superview != holder;
   if (!tile) {
     tile = [[BrowserCoreTileView alloc] initWithFrame:NSZeroRect];
     tile.wantsLayer = YES;
-    tile.autoresizingMask = NSViewNotSizable;
+    NSView* scale = [[BrowserCoreTileScale alloc] initWithFrame:NSZeroRect];
+    scale.autoresizingMask = NSViewNotSizable;
+    [tile addSubview:scale];
     Unhide(page_view, /*hidden=*/false);
     [page_view setFrameOrigin:NSZeroPoint];
-    [tile addSubview:page_view];
+    [scale addSubview:page_view];
   }
   if (tile.superview != holder) {
     [holder addSubview:tile];
+    // The app places a tile from the view's top and asks again only when that place changes,
+    // which a change of the window's height alone doesn't do, so the tile keeps its distance from
+    // the top: in an unflipped view, by a flexible bottom margin.
+    tile.autoresizingMask = holder.isFlipped ? NSViewNotSizable : NSViewMinYMargin;
   }
   RoundCorners(tile, corner_radius, kAllCorners);
+  // A page taller than the tile at its width is cut at the tile's foot, whatever its corners.
+  tile.layer.masksToBounds = YES;
   NSRect rect = frame.ToCGRect();
   if (!holder.isFlipped) {
     rect.origin.y = NSHeight(holder.bounds) - NSMaxY(rect);
   }
-  // The app calls again for each frame of a tile's motion, which mostly only moves it.
-  const bool resized = !NSEqualSizes(tile.frame.size, rect.size);
   tile.frame = rect;
-  if (placed || resized) {
-    ScaleIntoTile(tile, page_view);
-  }
+  FitTile(tile, page_view);
+  // Not for each frame of a tile's motion, which the app calls again for, since asking the window
+  // server about every window takes milliseconds.
   if (placed) {
     UpdateOcclusion(holder.window);
   }
@@ -679,10 +689,9 @@ void ShowTile(content::WebContents* contents,
 
 void EndTile(content::WebContents* contents) {
   NSView* page_view = contents->GetNativeView().GetNativeNSView();
-  if (BrowserCoreTileView* tile = base::apple::ObjCCast<BrowserCoreTileView>(page_view.superview)) {
+  if (BrowserCoreTileView* tile = TileOf(page_view)) {
     [page_view removeFromSuperview];
     [tile removeFromSuperview];
-    page_view.layer.transform = CATransform3DIdentity;
   }
   // Once it's out of the tile's window, so the page hears of the one it goes to next.
   content::SetPageTile(contents, false);

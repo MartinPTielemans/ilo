@@ -121,9 +121,10 @@ void ShowPageIn(views::Widget* widget,
 bool CanTile();
 
 // Shows |contents|' page in |view|, an NSView of the app's, at |frame| from its top-left, over what
-// the view draws, with corners of |corner_radius|: at the page's own size, scaled into the frame
-// by its layer, and taking no input there (content::SetPageTile). Called again, it moves to the
-// view and frame of that call. Only where CanTile.
+// the view draws, with corners of |corner_radius|: at the page's own size, scaled by the frame's
+// width over the page's from its top-left and cut at its foot, and taking no input there
+// (content::SetPageTile). Called again, it moves to the view and frame of that call. Only where
+// CanTile.
 void ShowTile(content::WebContents* contents,
               void* view,
               const gfx::Rect& frame,
