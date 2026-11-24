@@ -166,6 +166,7 @@ pub fn stored_in(dir: &str) -> Transparency {
 /// Keeps the level in `dir`, as the app keeps it in its profile's folder.
 fn keep_in(dir: String, cx: &mut App) {
     let level = stored_in(&dir);
+    crate::palette::set_transparency(level);
     cx.set_global(Kept { level, dir });
 }
 
@@ -192,6 +193,7 @@ pub fn set(level: Transparency, cx: &mut App) {
     }
     let kept = cx.global_mut::<Kept>();
     kept.level = level;
+    crate::palette::set_transparency(level);
     let path = format!("{}/{FILE}", kept.dir);
     _ = match level {
         Transparency::Standard => std::fs::remove_file(path),
@@ -210,10 +212,9 @@ pub fn row(look: &Look, glass: bool, logged: Drawn, cx: &mut App) -> Option<gpui
 }
 
 /// Whether ilo's window has a material behind it for the levels to show, and so the setting to
-/// pick one: the Mac's. Stands in until the host answers it itself, which the window lane (#4128)
-/// adds to the host; this goes then, and its callers ask the host.
+/// pick one: the host's answer (host_has_window_material), the Mac's yes.
 pub fn has_glass() -> bool {
-    cfg!(target_os = "macos")
+    crate::palette::window_material()
 }
 
 /// What the picker calls with the level picked, by a click or a key, when it isn't the one chosen.

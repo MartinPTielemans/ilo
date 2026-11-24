@@ -690,6 +690,12 @@ impl Account {
         cx.notify();
     }
 
+    /// The field open, the server's address or the recovery words, whose ↩ and esc are an input
+    /// method's while it composes there (dismissal's rule).
+    fn open_field(&self) -> Option<Entity<TextInput>> {
+        (self.server.as_ref().or(self.entering.as_ref())).map(|field| field.input.clone())
+    }
+
     fn leave_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // With no server, the field is the only way to name one, so it stays.
         let stays = self.no_server() && self.server.is_some();
@@ -949,16 +955,20 @@ impl Account {
                     .py(px(PADDING))
                     .key_context("AccountField")
                     .on_action(cx.listener(|account, _: &Keep, window, cx| {
+                        if !crate::dismissal::submits(&account.open_field(), cx) {
+                            return;
+                        }
                         match account.server.is_some() {
                             true => _ = account.keep_server(window, cx),
                             false => account.keep_words(cx),
                         }
                     }))
-                    .on_action(
-                        cx.listener(|account, _: &Leave, window, cx| {
+                    .on_action(cx.listener(|account, _: &Leave, window, cx| {
+                        let field = account.open_field();
+                        if crate::dismissal::Close::escape_from(&field, cx).is_some() {
                             account.leave_field(window, cx)
-                        }),
-                    )
+                        }
+                    }))
                     .child(self.place("field".into()))
                     .child(field.input.clone())],
             ))

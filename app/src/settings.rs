@@ -2734,11 +2734,16 @@ impl Settings {
             .rounded(px(CONTROL_RADIUS))
             .bg(look.control)
             .key_context("Naming")
-            .on_action(
-                cx.listener(|settings, _: &KeepName, window, cx| settings.add_filter(window, cx)),
-            )
+            .on_action(cx.listener(|settings, _: &KeepName, window, cx| {
+                if browser::dismissal::submits([&settings.filter.clone()], cx) {
+                    settings.add_filter(window, cx)
+                }
+            }))
             .on_action(cx.listener(|settings, _: &CancelName, window, cx| {
-                (settings.filter).update(cx, |field, cx| field.reset("".into(), window, cx));
+                let filter = settings.filter.clone();
+                if browser::dismissal::Close::escape_from([&filter], cx).is_some() {
+                    filter.update(cx, |field, cx| field.reset("".into(), window, cx));
+                }
             }))
             .child(self.drawn("filter field".into()))
             .child(self.filter.clone());
@@ -3126,10 +3131,16 @@ impl Settings {
                 Some(renaming) if renaming.profile == id => div()
                     .key_context("Naming")
                     .on_action(cx.listener(|settings, _: &KeepName, window, cx| {
-                        settings.keep_name(window, cx)
+                        let name = settings.renaming.as_ref().map(|r| r.name.clone());
+                        if browser::dismissal::submits(&name, cx) {
+                            settings.keep_name(window, cx)
+                        }
                     }))
                     .on_action(cx.listener(|settings, _: &CancelName, window, cx| {
-                        settings.cancel_name(window, cx)
+                        let name = settings.renaming.as_ref().map(|r| r.name.clone());
+                        if browser::dismissal::Close::escape_from(&name, cx).is_some() {
+                            settings.cancel_name(window, cx)
+                        }
                     }))
                     .child(renaming.name.clone()),
                 _ => div()
@@ -3862,26 +3873,30 @@ impl Settings {
             ));
         }
         if self.fence_adding {
-            let field =
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_w_0()
-                    .h(px(CONTROL_HEIGHT))
-                    .px(px(FIELD_PADDING))
-                    .flex()
-                    .items_center()
-                    .rounded(px(CONTROL_RADIUS))
-                    .bg(look.control)
-                    .key_context("Naming")
-                    .on_action(cx.listener(|settings, _: &KeepName, window, cx| {
+            let field = div()
+                .relative()
+                .flex_1()
+                .min_w_0()
+                .h(px(CONTROL_HEIGHT))
+                .px(px(FIELD_PADDING))
+                .flex()
+                .items_center()
+                .rounded(px(CONTROL_RADIUS))
+                .bg(look.control)
+                .key_context("Naming")
+                .on_action(cx.listener(|settings, _: &KeepName, window, cx| {
+                    if browser::dismissal::submits([&settings.fence_field.clone()], cx) {
                         settings.add_fence(window, cx)
-                    }))
-                    .on_action(cx.listener(|settings, _: &CancelName, window, cx| {
+                    }
+                }))
+                .on_action(cx.listener(|settings, _: &CancelName, window, cx| {
+                    let field = settings.fence_field.clone();
+                    if browser::dismissal::Close::escape_from([&field], cx).is_some() {
                         settings.close_fence(window, cx)
-                    }))
-                    .child(self.drawn("fence field".into()))
-                    .child(self.fence_field.clone());
+                    }
+                }))
+                .child(self.drawn("fence field".into()))
+                .child(self.fence_field.clone());
             let cancel = self
                 .button("agent-fence-cancel", "Cancel")
                 .relative()
@@ -5989,7 +6004,10 @@ impl Render for Settings {
             .on_action(|_: &NextControl, window, cx| window.focus_next(cx))
             .on_action(|_: &PreviousControl, window, cx| window.focus_prev(cx))
             .on_action(cx.listener(|settings, _: &EndSearch, window, cx| {
-                if !settings.end_search(window, cx) {
+                let search = settings.search.clone();
+                if browser::dismissal::Close::escape_from([&search], cx).is_some()
+                    && !settings.end_search(window, cx)
+                {
                     cx.propagate();
                 }
             }))
