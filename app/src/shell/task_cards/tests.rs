@@ -192,8 +192,8 @@ fn a_header_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
 
 /// A page's word and its outline are one answer (`page_mark`), which the sidebar's row, the rail's
 /// tile and the card read. While its task works every page says Working and the outline alone
-/// marks the page it's in; Done only once the task is done; Paused where it waits, stopped or
-/// broke off; at a handoff the outline is on the page that needs the user; a page they took over
+/// marks the page it's in; Done only once the task is done; Paused where it waits or broke off;
+/// Stopped on every page of a task the user stopped; at a handoff the outline is on the page that needs the user; a page they took over
 /// says they drive it; a stopped or done task has no outline.
 #[gpui::test]
 fn a_pages_word_and_outline_are_one_answer(cx: &mut TestAppContext) {
@@ -229,7 +229,7 @@ fn a_pages_word_and_outline_are_one_answer(cx: &mut TestAppContext) {
         assert_eq!(marks(&finished), [done; 2]);
         let mut stopped = card(4, Dot::Ended);
         stopped.pages = vec![60];
-        assert_eq!(marks(&stopped), [paused]);
+        assert_eq!(marks(&stopped), [mark(PageWord::Stopped, false)]);
     });
     // The page the task handed the user needs them there and has the outline; one they took over
     // says they drive it; its others are Paused. Once it works again, the page it handed them is
@@ -268,8 +268,15 @@ fn a_pages_word_and_outline_are_one_answer(cx: &mut TestAppContext) {
         }
     });
     assert_eq!(
-        [PageWord::Working, PageWord::Done, PageWord::Paused].map(PageWord::label),
-        ["Working", "Done", "Paused"]
+        [
+            PageWord::Working,
+            PageWord::Done,
+            PageWord::Paused,
+            PageWord::Stopped,
+            PageWord::Driving
+        ]
+        .map(PageWord::label),
+        ["Working", "Done", "Paused", "Stopped", "You're driving"]
     );
     assert_eq!(PageWord::NeedsYou.label(), Word::NeedsYou.after_name());
 }

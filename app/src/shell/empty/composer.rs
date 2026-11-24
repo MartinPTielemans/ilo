@@ -11,7 +11,7 @@ use gpui::{
     Window, canvas, div, point, prelude::*, px, rgb, rgba, svg,
 };
 
-use crate::agents::task::{Card, Dot};
+use crate::agents::task::{Card, Dot, Word};
 use crate::agents::task::{Start, TaskAction, added_address, model_menu};
 use crate::agents::tier::{ANY_SITE, ONLY_ADDED, Tier};
 use crate::command_bar::{self, CommandBar, InPlaceKey, TaskAgent};
@@ -844,7 +844,8 @@ impl Shell {
     }
 
     /// A recent task's card: its state, its title and its last steps, the one under way in full
-    /// ink (or its status, with no steps this turn), over a plate naming the site of its last
+    /// ink (or its status, with no steps this turn; a stopped task's last finished step alone,
+    /// or nothing), over a plate naming the site of its last
     /// page; a task that has reached none ends after its words. A click opens it.
     fn recent_card(
         &self,
@@ -863,6 +864,14 @@ impl Shell {
         });
         let working = card.dot == Dot::Working;
         let lines: Vec<(SharedString, bool)> = match card.steps.is_empty() {
+            // A stopped task says only its last finished step, or nothing after its title.
+            _ if card.word == Word::Stopped => (card
+                .steps
+                .last()
+                .cloned()
+                .map(|step| (step, false))
+                .into_iter())
+            .collect(),
             true => vec![(card.status.clone(), true)],
             false => {
                 let last = card.steps.len() - 1;

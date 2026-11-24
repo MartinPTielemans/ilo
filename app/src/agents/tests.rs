@@ -3245,6 +3245,65 @@ fn a_refusals_buttons_wait_and_take_over_keeps_the_access(cx: &mut TestAppContex
     assert!(agents.read_with(cx, |agents, _| agents.held.contains_key(&20)));
 }
 
+/// The live line reads what the card's word reads: a refused step waiting is Refused while the
+/// card says Needs you, the page the user took over is theirs, and a step handed to them is
+/// Handed, never Working.
+#[gpui::test]
+fn the_live_line_follows_the_cards_word(cx: &mut TestAppContext) {
+    use super::task::{Live, TaskAction, Word};
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    page_done(&agents, &browser, answer, shop_tree(), cx);
+    let key = session_key(&agents, "claude-code", cx);
+    let now = |cx: &mut TestAppContext| {
+        agents.read_with(cx, |agents, cx| {
+            let task = agents.task(&key).unwrap();
+            let live = agents.conversation(&key, cx).unwrap().live;
+            (live, agents.card(task, cx).word)
+        })
+    };
+    assert_eq!(now(cx), (Live::Working, Word::Working));
+
+    give(&agents, Tier::Look, cx);
+    let clicked = call(
+        &agents,
+        "claude-code",
+        "click",
+        json!({ "tab": 20, "ref": "e1" }),
+        cx,
+    );
+    let what = "click “Coupon” on example.com";
+    refused(
+        &agents,
+        &browser,
+        clicked,
+        what,
+        Why::Act,
+        "click “Coupon”",
+        cx,
+    );
+    assert_eq!(now(cx), (Live::Refused, Word::NeedsYou));
+
+    agents.update(cx, |agents, cx| {
+        agents.task_action(&key, TaskAction::TakeOver(20), cx)
+    });
+    assert_eq!(
+        now(cx).0,
+        Live::Yours {
+            tab: 20,
+            site: None
+        },
+        "the page the user took over, its task's only one"
+    );
+
+    agents.update(cx, |agents, cx| {
+        agents.task_action(&key, TaskAction::HandBack(20), cx)
+    });
+    let reason = json!({ "tab": 20, "reason": "Sign in to example.com" });
+    let _handed = call(&agents, "claude-code", "hand_off", reason, cx);
+    assert_eq!(now(cx), (Live::Handed, Word::NeedsYou));
+}
+
 /// A task's Sites, set to the pages the user gave it, refuse a page on another site at every tier,
 /// and Any site settles the refusal and lets it go.
 #[gpui::test]
@@ -7881,9 +7940,9 @@ mod tasks {
             assert!(step.failed);
             step.description.to_string()
         };
-        // What each error said that its word was read from, and its kind.
+        // What each error said that its word was read from, and its kind. A stopped step has no
+        // line to say it in (a_step_under_way_at_stop_leaves_no_line).
         let once = [
-            ("The user stopped the agent.", Kind::Stopped),
             ("The user said no.", Kind::SaidNo),
             ("That's a password field.", Kind::Password),
             ("Tab 30 isn't an http or https page.", Kind::NotWebPage),
@@ -8110,6 +8169,67 @@ mod tasks {
                 .iter()
                 .all(|item| !matches!(item, TraceItem::Step(step) if step.running))
         );
+    }
+
+    /// Worked for counts work alone: a step handed to the user, from its start to Hand Back, isn't,
+    /// unless another step of the stretch ran meanwhile.
+    #[test]
+    fn worked_for_leaves_out_the_time_a_step_waited_on_the_user() {
+        use crate::agents::task::{Line, Message, Traced, Who, fold};
+        let start = std::time::Instant::now();
+        let at = |seconds: u64| start + Duration::from_secs(seconds);
+        let message = |who, text: &str, seconds| Message {
+            who,
+            text: text.to_string().into(),
+            at: at(seconds),
+        };
+        let step = |tool: &str, started, ended: u64| Traced {
+            call: 1,
+            did: tools::Did {
+                tool: tool.into(),
+                site: "maat.pt".into(),
+                ..Default::default()
+            },
+            after: 1,
+            started: at(started),
+            ended: Some(at(ended)),
+            error: None,
+            kind: None,
+            picture: None,
+            close: None,
+            notes: None,
+        };
+        let took = |trace: &[Traced]| {
+            let messages = [
+                message(Who::User, "Museum hours", 0),
+                message(Who::Agent, "MAAT opens at 10:00.", 200),
+            ];
+            let lines = fold(
+                &messages,
+                trace,
+                true,
+                false,
+                None,
+                &Default::default(),
+                &[],
+                Vec::new(),
+            );
+            let [Line::You(_), Line::Trace(worked), Line::Said(_)] = lines.as_slice() else {
+                panic!("{lines:?}")
+            };
+            worked.summary().0
+        };
+        // 2 s open, 180 s at the user's sign-in, then 6 s more and its answer at 200 s.
+        let handed = [
+            step("open_tab", 0, 2),
+            step("hand_off", 3, 183),
+            step("read_page", 184, 190),
+        ];
+        assert_eq!(took(&handed), "Worked for 20 s");
+        // A step running while the handed one waits is work.
+        let mut meanwhile = handed.to_vec();
+        meanwhile.push(step("read_page", 10, 40));
+        assert_eq!(took(&meanwhile), "Worked for 50 s");
     }
 
     /// A turn the user stopped has no answer: all it said stays in its stretch of work. Only a
@@ -8780,6 +8900,83 @@ mod tasks {
         assert_eq!(
             card_of(&agents, cx).status.as_ref(),
             "Stopped after 2 steps"
+        );
+    }
+
+    /// A step under way when the user presses Stop isn't a step that failed: once its answer comes
+    /// back stopped it leaves no line, in the trace or on the card, and no count has it. The step
+    /// it finished before stays, the stopped card's last.
+    #[gpui::test]
+    fn a_step_under_way_at_stop_leaves_no_line(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, TraceItem, Word};
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Compare three shops", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        let answered = |kind: Option<tools::Kind>, cx: &mut TestAppContext| {
+            let error = kind.map(|_| STOPPED.to_string());
+            let event = Event::Answered {
+                agent: agent.clone(),
+                id: 0,
+                at: std::time::Instant::now(),
+                error,
+                kind,
+                image: None,
+                notes: None,
+            };
+            agents.update(cx, |agents, cx| agents.handle(event, cx));
+        };
+        let shop = |url: &str| json!({ "url": url });
+        let _opened = call(
+            &agents,
+            &agent,
+            "open_tab",
+            shop("https://example.org/"),
+            cx,
+        );
+        answered(None, cx);
+        let opening = call(
+            &agents,
+            &agent,
+            "open_tab",
+            shop("https://example.net/"),
+            cx,
+        );
+        agents.update(cx, |agents, cx| agents.stop_task(&agent, cx));
+        assert_eq!(
+            opening.recv().unwrap(),
+            ToolResult::failed(tools::Kind::Stopped, STOPPED)
+        );
+        answered(Some(tools::Kind::Stopped), cx);
+
+        let card = card_of(&agents, cx);
+        assert_eq!(card.word, Word::Stopped);
+        assert_eq!(card.status.as_ref(), "Stopped after 1 step");
+        assert_eq!(card.steps.len(), 1, "the card's steps: {:?}", card.steps);
+        let lines = agents.read_with(cx, |agents, cx| {
+            agents.conversation(&agent, cx).unwrap().lines
+        });
+        let titles: Vec<String> = (lines.iter())
+            .filter_map(|line| match line {
+                Line::Trace(trace) => Some(trace),
+                _ => None,
+            })
+            .flat_map(|trace| trace.items.iter())
+            .filter_map(|item| match item {
+                TraceItem::Step(step) => Some(step.title.to_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(titles.len(), 1, "the trace's steps: {titles:?}");
+        assert_eq!(
+            card.steps[0].as_ref(),
+            titles[0],
+            "the card's last step is the trace's"
+        );
+        assert!(
+            !titles[0].starts_with("Couldn't"),
+            "the stopped step was written as failed: {titles:?}"
         );
     }
 
