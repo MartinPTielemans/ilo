@@ -49,7 +49,7 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
             ),
             None,
         ),
-        IloKind::Gone => (format!("· {agent} no longer has this conversation."), None),
+        IloKind::Gone => (format!("· {}", kept::gone_words(agent)), None),
         IloKind::NotKept => (format!("· {agent} didn't keep this conversation."), None),
         IloKind::KeepsNothing => (format!("· {agent} doesn't keep finished tasks."), None),
     }

@@ -161,6 +161,12 @@ pub fn without(said: &str, id: &Id) -> String {
     said.replace(id.as_str(), "…")
 }
 
+/// What a task says when `agent` no longer has the conversation it kept: ilo's line in its reply
+/// field's place, and why a task that was to go on with it couldn't.
+pub fn gone_words(agent: &str) -> String {
+    format!("{agent} no longer has this conversation.")
+}
+
 /// The user's computer, by the platform's own noun, where the words say a conversation is kept
 /// or removed from.
 pub const COMPUTER: &str = if cfg!(target_os = "macos") {
