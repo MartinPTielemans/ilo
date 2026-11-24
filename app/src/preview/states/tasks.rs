@@ -324,6 +324,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
 pub(crate) fn bench_ended() -> Option<&'static str> {
     match states::var("PREVIEW_TASK").ok()?.as_str() {
         "ended" | "ended-first" | "gone" | "not-kept" | "helpers-ended" => Some("Claude"),
+        "past" | "past-no-profile" | "past-no-space" => Some("Claude"),
         "codex-ended" => Some("Codex"),
         _ => None,
     }
@@ -468,8 +469,9 @@ fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
 /// PREVIEW_TASK=<state> (#4095's bench) shows the working task's conversation beside its page in
 /// one of the states ilo's own lines are made for, from made-up data: working, refused,
 /// off-limits, yours, tab-back, signed-in, raised or notes; or of a task that has ended (#4105):
-/// ended, ended-first, picked-up, gone, not-kept or codex-ended; or of one with helpers (#4102):
-/// helpers, helper, helpers-limit or helpers-ended.
+/// ended, ended-first, picked-up, gone, not-kept or codex-ended; or of one a run of the browser
+/// before left, brought back from the Archive: past, past-no-profile or past-no-space; or of one with helpers
+/// (#4102): helpers, helper, helpers-limit or helpers-ended.
 pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
     let Ok(state) = states::var("PREVIEW_TASK") else {
         return;
@@ -593,6 +595,27 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 _ => {}
             }
             lines
+        }
+        // A task a run of the browser before left (#4105), brought back from the Archive: all
+        // there is of it is its title and how it ended, so where its messages would begin it says
+        // where they are, over its reply field; or, with its profile deleted or left with no
+        // Space, that, in the field's place. It ended on an earlier day, so it says the day.
+        "past" | "past-no-profile" | "past-no-space" => {
+            talk.title = "Concert tickets".into();
+            talk.about = format!("{} · Done · 21 Nov", talk.name).into();
+            talk.progress = "".into();
+            talk.asked = "".into();
+            talk.tabs.clear();
+            talk.on = None;
+            talk.stoppable = false;
+            vec![line(
+                100,
+                match state.as_str() {
+                    "past" => IloKind::KeptHere,
+                    "past-no-profile" => IloKind::NoProfile,
+                    _ => IloKind::NoSpace,
+                },
+            )]
         }
         // A task at work with four helpers (#4102), each on a page of its own: the stretch counts
         // them and opens to a line for each, a step's line in ilo's words for the helper's page.

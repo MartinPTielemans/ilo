@@ -345,6 +345,29 @@ impl Browser for Core {
         }
     }
 
+    fn space_profile(&self, space: u64) -> String {
+        profile_folder(unsafe { bc::bc_space_profile(space) })
+    }
+
+    fn profile_space(&self, profile: &str) -> u64 {
+        let users = |space: u64| {
+            space != 0
+                && name(bc::bc_space_agent, space).is_empty()
+                && profile_folder(unsafe { bc::bc_space_profile(space) }) == profile
+        };
+        let shown = unsafe { bc::bc_window_space(crate::front().0) };
+        match users(shown) {
+            true => shown,
+            false => (ids(bc::bc_spaces).into_iter())
+                .find(|&space| users(space))
+                .unwrap_or(0),
+        }
+    }
+
+    fn has_profile(&self, profile: &str) -> bool {
+        (ids(bc::bc_profiles).into_iter()).any(|each| profile_folder(each) == profile)
+    }
+
     fn request(&self, agent: &str, tab: u64, request: u64, sent: &agents::request::Request) {
         let headers: String = (sent.headers.iter())
             .map(|(name, value)| format!("{name}: {value}\n"))
@@ -517,6 +540,14 @@ pub fn start(cx: &mut App) {
         }
     })
     .detach();
+}
+
+/// The name of `profile`'s own folder, "Default" or "Profile 2", or nothing for one the core
+/// doesn't know. The core's number for a profile is new each run; its folder's name isn't.
+pub fn profile_folder(profile: u64) -> String {
+    (crate::bar_picks_host::folder(profile))
+        .and_then(|folder| Some(folder.file_name()?.to_string_lossy().into_owned()))
+        .unwrap_or_default()
 }
 
 /// Tells the Agents what the core reported, once the update the report came from, if any, is over.

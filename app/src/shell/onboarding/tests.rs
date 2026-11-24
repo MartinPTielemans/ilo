@@ -2473,3 +2473,102 @@ fn the_default_browsers_loop_opens_the_link_as_a_tab(cx: &mut TestAppContext) {
         "the still last frame is the link open, its page shown"
     );
 }
+
+/// The search engine's step is on the sheet, the engines in a box under its words, and its loop
+/// types a few words in the bar, then opens the results as a new tab in the small window's
+/// sidebar as the bar goes; nothing has opened while the words are typed, and the still last frame
+/// is the results.
+#[gpui::test]
+fn the_search_engines_loop_opens_the_words_typed_as_a_tab(cx: &mut TestAppContext) {
+    use crate::tokens::shell::onboarding::loops::{
+        IMPORT_FADE, IMPORT_LAND, SEARCH_AT, SEARCH_RETURN, SEARCH_TYPE,
+    };
+    let (shell, cx, host) = first_window(cx);
+    with_engines(&host);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::SearchEngine);
+    later(&shell, cx, STEP_MOTION);
+    assert!(
+        super::sheet::on_sheet(Step::SearchEngine),
+        "the search engine's step shows on the sheet"
+    );
+    assert!(
+        placed("skip", cx).is_some() && placed("back", cx).is_some(),
+        "the sheet's foot has Back and Skip"
+    );
+    let typed = SEARCH_AT + IMPORT_FADE + SEARCH_TYPE;
+    held_at(&shell, cx, typed);
+    assert!(placed("words", cx).is_some(), "the words are in the bar");
+    assert!(
+        placed("tab-new", cx).is_none(),
+        "nothing has opened while the words are typed"
+    );
+    held_at(&shell, cx, typed + SEARCH_RETURN + IMPORT_LAND);
+    let sidebar = placed("sidebar", cx).expect("the loop's sidebar is drawn");
+    let tab = placed("tab-new", cx).expect("↩ has opened the results as a tab");
+    assert!(
+        inside(tab, sidebar),
+        "the new tab lands inside the sidebar at {sidebar:?}, but it was at {tab:?}"
+    );
+    held_at(&shell, cx, PERIOD);
+    assert!(
+        placed("tab-new", cx).is_some() && placed("page-new", cx).is_some(),
+        "the still last frame is the results, their page shown"
+    );
+    assert!(placed("bar", cx).is_none(), "and the bar has gone");
+}
+
+/// The sync's step is on the sheet, and its loop carries a pinned tab from the small window to the
+/// phone under the lock, and a favorite added on the phone back to the window's sidebar; nothing
+/// is on the phone as the loop starts, and the still last frame has both landed.
+#[gpui::test]
+fn the_sync_loop_carries_a_tab_across_and_a_favorite_back(cx: &mut TestAppContext) {
+    use crate::tokens::shell::onboarding::loops::{IMPORT_FADE, IMPORT_LAND, SYNC_AT, SYNC_CROSS};
+    let (shell, cx, host) = first_window(cx);
+    host.sync_server.set(true);
+    synced(cx, Status::SignedOut, "https://sync.example.org");
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Account);
+    later(&shell, cx, STEP_MOTION);
+    assert!(
+        super::sheet::on_sheet(Step::Account),
+        "the sync's step shows on the sheet"
+    );
+    assert!(
+        placed("skip", cx).is_some() && placed("back", cx).is_some(),
+        "the sheet's foot has Back and Skip"
+    );
+    let [there, back] = SYNC_AT;
+    held_at(&shell, cx, 0.);
+    assert!(
+        placed("phone-tab", cx).is_none(),
+        "nothing is on the phone as the loop starts"
+    );
+    // Halfway across, the tab is at the lock.
+    held_at(&shell, cx, there + IMPORT_FADE + SYNC_CROSS / 2.);
+    let moving = placed("moving", cx).expect("the pinned tab is on its way");
+    let lock = placed("lock", cx).expect("the lock is drawn");
+    assert!(
+        moving.intersects(&lock),
+        "the tab crosses under the lock at {lock:?}, but it was at {moving:?}"
+    );
+    held_at(&shell, cx, there + IMPORT_FADE + SYNC_CROSS + IMPORT_LAND);
+    let phone = placed("phone", cx).expect("the phone is drawn");
+    let tab = placed("phone-tab", cx).expect("the tab has come to the phone");
+    assert!(
+        inside(tab, phone),
+        "the tab lands on the phone at {phone:?}, but it was at {tab:?}"
+    );
+    held_at(&shell, cx, back + IMPORT_FADE + SYNC_CROSS + IMPORT_LAND);
+    let sidebar = placed("sidebar", cx).expect("the loop's sidebar is drawn");
+    let tile = placed("tile-back", cx).expect("the phone's favorite has come back");
+    assert!(
+        inside(tile, sidebar),
+        "the favorite lands in the sidebar at {sidebar:?}, but it was at {tile:?}"
+    );
+    held_at(&shell, cx, PERIOD);
+    assert!(
+        placed("phone-tab", cx).is_some() && placed("tile-back", cx).is_some(),
+        "the still last frame has both landed"
+    );
+}

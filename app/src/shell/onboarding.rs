@@ -1478,7 +1478,12 @@ impl Shell {
         let signed_out = !button.is_empty();
         let account = account.map(|view| {
             view.update(cx, |view, cx| view.set_look(look, cx));
-            embedded(view.into()).when(signed_out, |body| body.mt(px(LINE_GAP)))
+            match sheet::on_sheet(step) {
+                true => sheet::choice(gpui::AnyView::from(view)).into_any_element(),
+                false => (embedded(view.into()))
+                    .when(signed_out, |body| body.mt(px(LINE_GAP)))
+                    .into_any_element(),
+            }
         });
         let drawn = (self.onboarding.as_ref())
             .map(|onboarding| (onboarding.button.clone(), onboarding.settled));
@@ -1546,6 +1551,8 @@ impl Shell {
                 .children(swatches)
                 .children(import)
                 .children(favorites)
+                .children(engines)
+                .children(account)
                 .child(self.sheet_foot(step, button, colors, cx));
             let art = self.sheet_art(step, looped, colors);
             let dialog = |pane: gpui::Stateful<gpui::Div>| {
@@ -1680,7 +1687,9 @@ impl Shell {
 
     /// The search engines offered in the opt-ins' box, a row each of a radio's dot and the engine's
     /// name, the one picked filled in the green and its name medium. A click on a row picks it, and
-    /// the list is one stop for ⇥, its arrows moving the pick, as the swatches are.
+    /// the list is one stop for ⇥, its arrows moving the pick, as the swatches are. On the sheet the
+    /// green is its button's alone, so the pick is a tick in the ink at the row's end, and the box
+    /// is as wide as the sheet's left half.
     fn engine_rows(&self, colors: Colors, cx: &mut Context<Self>) -> gpui::AnyElement {
         let Some(onboarding) = self.onboarding.as_ref() else {
             return div().into_any_element();
@@ -1688,6 +1697,7 @@ impl Shell {
         let surface = colors.ground.blend(colors.ink(IMPORT_SURFACE));
         let look = Look::on(surface, colors.ink(1.), rgb(SIGNAL));
         let a11y = self.a11y;
+        let sheet = sheet::on_sheet(Step::SearchEngine);
         let rows = (onboarding.engines.0.iter().enumerate()).map(|(index, (_, name))| {
             let on = onboarding.engine == Some(index);
             let dot = div()
@@ -1697,14 +1707,20 @@ impl Shell {
                 .flex()
                 .items_center()
                 .justify_center()
-                .map(|dot| match on {
-                    true => dot.bg(rgb(SIGNAL)).child(
+                .map(|dot| match (on, sheet) {
+                    (true, false) => dot.bg(rgb(SIGNAL)).child(
                         div()
                             .size(px(ENGINE_DOT_CENTER))
                             .rounded_full()
                             .bg(rgb(PAPER)),
                     ),
-                    false => dot.border_1().border_color(colors.ink(QUIET)),
+                    (true, true) => dot.bg(colors.ink(1.)).child(
+                        div().size(px(ENGINE_DOT_CENTER)).rounded_full().bg(Rgba {
+                            a: 1.,
+                            ..colors.ground
+                        }),
+                    ),
+                    (false, _) => dot.border_1().border_color(colors.ink(QUIET)),
                 });
             let toggled = match on {
                 true => Toggled::True,
@@ -1727,6 +1743,7 @@ impl Shell {
                 .on_click(
                     cx.listener(move |shell, _, _, cx| shell.onboarding_pick_engine(index, cx)),
                 )
+                .when(sheet, |row| row.flex_row_reverse().justify_between())
                 .child(dot)
                 .child(
                     div()
@@ -1748,8 +1765,10 @@ impl Shell {
             })
             .focus_from_keys_only()
             .focus_visible(ring(colors.ink(1.)))
-            .mt(px(BUTTON_GAP))
-            .w(px(OPT_IN_WIDTH))
+            .map(|list| match sheet {
+                true => list.w_full(),
+                false => list.mt(px(BUTTON_GAP)).w(px(OPT_IN_WIDTH)),
+            })
             .text_size(px(crate::tokens::text::BODY))
             .text_color(look.ink)
             .into_any_element()

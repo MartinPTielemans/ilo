@@ -2387,6 +2387,20 @@ favorites-came = 3.6
 default-link = [40.0, 34.0]
 default-at = 0.6
 default-open = 0.3
+# The search engine's: from `search-at` the bar comes up over the page, its corner `search-bar` in
+# from the window's, as the import's parts fade in; the words are typed over `search-type`, and
+# `search-return` later ↩ opens the results as a new tab, over the import's land and drop.
+search-at = 0.6
+search-bar = [40.0, 60.0]
+search-type = 1.4
+search-return = 0.5
+# The sync's: a phone `sync-phone` big, as round as the window, standing `sync-phone-out` past
+# the window's right edge. At the first of `sync-at` a tab is pinned, and it crosses to the
+# phone over `sync-cross`; at the second a favorite added on the phone crosses back the same way.
+sync-at = [0.6, 5.0]
+sync-cross = 1.2
+sync-phone = [76.0, 150.0]
+sync-phone-out = 48.0
 
 [shell.import]
 # Ours (#1673): while an import runs, each Space it makes is a card in its own colours, under the
