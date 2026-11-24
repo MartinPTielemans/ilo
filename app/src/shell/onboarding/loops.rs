@@ -5,7 +5,10 @@
 //! is kept. It plays only while its step shows on a visible window (Shell::onboarding_looping),
 //! from its first visible frame; with Reduce Motion it's its last frame, still.
 
-use gpui::{AnyElement, PathBuilder, canvas, div, point, prelude::*, px};
+use gpui::{
+    AnyElement, Hsla, PathBuilder, canvas, div, linear_color_stop, linear_gradient, point,
+    prelude::*, px,
+};
 
 use super::{Colors, Step, ease_in_out, ease_out};
 use crate::glow;
@@ -13,13 +16,25 @@ use crate::palette::{Palette, Tone};
 use crate::theme::Theme;
 use crate::tokens::palette::INK;
 use crate::tokens::shell::onboarding::loops as t;
+use crate::tokens::shell::onboarding::sheet;
 
 /// What keeps where a loop draws a part, by its name, for a test (Shell::place).
 pub(super) type Place<'a> = &'a dyn Fn(&'static str) -> Option<AnyElement>;
 
 /// The steps with a loop in their slot.
 pub(super) fn has_loop(step: Step) -> bool {
-    matches!(step, Step::Intro | Step::Import | Step::Color)
+    matches!(
+        step,
+        Step::Intro
+            | Step::Import
+            | Step::Favorites
+            | Step::DefaultBrowser
+            | Step::SearchEngine
+            | Step::Color
+            | Step::Account
+            | Step::Assistant
+            | Step::OptIns
+    )
 }
 
 /// Where a loop is `secs` after it started, or its last frame while `still`.
@@ -169,26 +184,7 @@ pub(super) fn import(t_: f32, colors: Colors, place: Place) -> impl IntoElement 
     // In ilo's sidebar, the favorites as tiles above the tabs, each coming down into place.
     let tiles = (0..BOOKMARKS.len()).filter_map(|index| {
         let landed = landed(bookmarks_at, index);
-        (landed > 0.).then(|| {
-            div()
-                .absolute()
-                .top(px(t::TILES_TOP - t::IMPORT_DROP * (1. - landed)))
-                .left(px(6. + index as f32 * (t::TILE + t::TILE_GAP)))
-                .size(px(t::TILE))
-                .rounded(px(t::PLATE_RADIUS))
-                .bg(palette.shown(0.))
-                .opacity(landed)
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    div()
-                        .size(px(7.))
-                        .rounded(px(t::ICON_RADIUS))
-                        .bg(palette.faint(0.3)),
-                )
-                .children(place(TILES[index]))
-        })
+        (landed > 0.).then(|| tile(index, landed, &palette).children(place(TILES[index])))
     });
     let rows = TABS.iter().enumerate().filter_map(|(index, &name)| {
         let landed = landed(tabs_at, index);
@@ -238,6 +234,808 @@ pub(super) fn import(t_: f32, colors: Colors, place: Place) -> impl IntoElement 
         .gap(px(t::STRIP_GAP))
         .child(other)
         .child(ilo)
+}
+
+/// The favorites': the sites the history visited most, in a strip over ilo's window, each ticked
+/// in turn but the last, and each ticked landing in the sidebar as a favorite's tile, as the
+/// import's do; then what came, said in the page. All of it goes again at the loop's end; its last
+/// frame, still, is what came, the last site unticked.
+pub(super) fn favorites(t_: f32, colors: Colors, place: Place) -> impl IntoElement {
+    const SITES: [&str; 4] = ["Weather", "Recipes", "Trails", "Forum"];
+    const TILES: [&str; 3] = ["tile-0", "tile-1", "tile-2"];
+    const TICKS: [&str; 4] = ["tick-0", "tick-1", "tick-2", "tick-3"];
+    let palette = Palette::of(None, tone(colors));
+    let out = match t_ >= t::PERIOD {
+        true => 0.,
+        false => ((t_ - (t::PERIOD - t::IMPORT_OUT)) / t::IMPORT_OUT).clamp(0., 1.),
+    };
+    // How far a part starting at `from` has come over `over`: none before it starts.
+    let come = |from: f32, over: f32| match t_ > from {
+        true => ease_out(((t_ - from) / over).min(1.)) * (1. - out),
+        false => 0.,
+    };
+    let ticked_at = |index: usize| t::FAVORITES_AT + index as f32 * t::FAVORITES_STAGGER;
+    let ticked = |index: usize| come(ticked_at(index), t::IMPORT_FADE);
+    let landed = |index: usize| come(ticked_at(index) + t::FAVORITES_TICK, t::IMPORT_LAND);
+    // A tick as the import's list draws one: an empty ring, filled in the ink once ticked.
+    let tick = |index: usize| {
+        let filled = match index < TILES.len() {
+            true => ticked(index),
+            false => 0.,
+        };
+        div()
+            .relative()
+            .flex_none()
+            .size(px(8.))
+            .rounded_full()
+            .border_1()
+            .border_color(palette.faint(0.4))
+            .child(
+                div()
+                    .absolute()
+                    .inset(px(-1.))
+                    .rounded_full()
+                    .bg(palette.text(0.75))
+                    .opacity(filled),
+            )
+            .children(place(TICKS[index]))
+    };
+    let sites = SITES.iter().enumerate().map(|(index, &name)| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .child(tick(index))
+            .child(
+                div()
+                    .size(px(7.))
+                    .rounded(px(t::ICON_RADIUS))
+                    .bg(palette.faint(0.3)),
+            )
+            .child(name)
+    });
+    let strip = div()
+        .flex_none()
+        .w(px(t::WINDOW_WIDTH))
+        .h(px(t::STRIP_HEIGHT))
+        .px(px(12.))
+        .flex()
+        .items_center()
+        .justify_between()
+        .overflow_hidden()
+        .rounded(px(t::WINDOW_RADIUS))
+        .bg(palette.page)
+        .border_1()
+        .border_color(palette.faint(0.12))
+        .text_size(px(t::TEXT_SIZE))
+        .text_color(palette.text(0.75))
+        .children(sites)
+        .children(place("strip"));
+    let tiles = (0..TILES.len()).filter_map(|index| {
+        let landed = landed(index);
+        (landed > 0.).then(|| tile(index, landed, &palette).children(place(TILES[index])))
+    });
+    let rows = ["Field notes", "Trail map"]
+        .iter()
+        .enumerate()
+        .map(|(index, name)| row(name, index, if index == 0 { 1. } else { 0. }, &palette));
+    let sidebar = column(div().children(tiles).children(rows), &[(1., 1.)], &palette)
+        .children(place("sidebar"));
+    let came = come(t::FAVORITES_CAME, t::IMPORT_FADE);
+    let said = (came > 0.).then(|| {
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(6.))
+            .opacity(came)
+            .text_size(px(t::TEXT_SIZE))
+            .text_color(palette.text(0.75))
+            .child(div().size(px(9.)).rounded_full().bg(palette.faint(0.5)))
+            .child("3 favorites added")
+            .children(place("came"))
+    });
+    let ilo = window(
+        &palette,
+        &[(palette, 1.)],
+        sidebar,
+        div().size_full().children(said),
+    )
+    .children(place("window"));
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(t::STRIP_GAP))
+        .child(strip)
+        .child(ilo)
+}
+
+/// The default browser's: a message in another app, its link clicked, and the link opening in
+/// ilo's window as a new tab at the top of the sidebar, selected, its page shown. The pointer
+/// goes once it has clicked, and the tab goes again at the loop's end; its last frame, still, is
+/// the link open in ilo.
+pub(super) fn default_browser(t_: f32, colors: Colors, place: Place) -> impl IntoElement {
+    const TABS: [&str; 2] = ["Field notes", "Recipes"];
+    let palette = Palette::of(None, tone(colors));
+    let out = match t_ >= t::PERIOD {
+        true => 0.,
+        false => ((t_ - (t::PERIOD - t::IMPORT_OUT)) / t::IMPORT_OUT).clamp(0., 1.),
+    };
+    // How far a part starting at `from` has come over `over`: none before it starts.
+    let come = |from: f32, over: f32| match t_ > from {
+        true => ease_out(((t_ - from) / over).min(1.)) * (1. - out),
+        false => 0.,
+    };
+    // The pointer, in the other app: from rest to the link, its press, then gone.
+    let [x, y] = t::DEFAULT_LINK;
+    let rest = (t::WINDOW_WIDTH - 70., 16.);
+    let moved = match t_ > t::DEFAULT_AT {
+        true => ease_in_out(((t_ - t::DEFAULT_AT) / t::WELCOME_MOVE).min(1.)),
+        false => 0.,
+    };
+    let pointer = lerp(rest, (x, y), moved);
+    let press = t::DEFAULT_AT + t::WELCOME_MOVE + t::WELCOME_CLICK;
+    let seen = (t_ / t::POINTER_FADE)
+        .min((press + t::WELCOME_PRESS + t::POINTER_FADE - t_) / t::POINTER_FADE)
+        .clamp(0., 1.);
+    let ring = (t_ >= press && t_ < press + t::WELCOME_PRESS).then(|| {
+        let grown = (t_ - press) / t::WELCOME_PRESS;
+        let side = 10. + 10. * ease_out(grown);
+        div()
+            .absolute()
+            .left(px(pointer.0 - side / 2.))
+            .top(px(pointer.1 - side / 2.))
+            .size(px(side))
+            .rounded_full()
+            .border_1()
+            .border_color(palette.faint(0.5 * (1. - grown)))
+    });
+    // The link, underlined, its corner `default-link` less half a line in from the message's.
+    let link = div()
+        .absolute()
+        .left(px(x - 12.))
+        .top(px(y - 5.))
+        .flex()
+        .flex_col()
+        .text_color(palette.text(0.9))
+        .child("trailmap.example")
+        .child(div().h(px(1.)).bg(palette.faint(0.5)))
+        .children(place("link"));
+    let other = div()
+        .relative()
+        .flex_none()
+        .w(px(t::WINDOW_WIDTH))
+        .h(px(t::STRIP_HEIGHT))
+        .rounded(px(t::WINDOW_RADIUS))
+        .bg(palette.page)
+        .border_1()
+        .border_color(palette.faint(0.12))
+        .text_size(px(t::TEXT_SIZE))
+        .text_color(palette.text(0.75))
+        .child(
+            div()
+                .absolute()
+                .left(px(12.))
+                .top(px(12.))
+                .size(px(10.))
+                .rounded_full()
+                .bg(palette.faint(0.3)),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(px(x - 12.))
+                .top(px(12.))
+                .child("Ana · the map for Saturday"),
+        )
+        .child(link)
+        .children(ring)
+        .child(arrow(pointer, colors, place).opacity(seen))
+        .children(place("other"));
+    // In ilo, the link lands as a new tab above the others, which make room, and takes the plate.
+    let opened = come(press + t::DEFAULT_OPEN, t::IMPORT_LAND);
+    let new = (opened > 0.).then(|| {
+        row("Trail map", 0, opened, &palette)
+            .top(px(t::ROWS_TOP - t::IMPORT_DROP * (1. - opened)))
+            .opacity(opened)
+            .children(place("tab-new"))
+    });
+    let rows = TABS.iter().enumerate().map(|(index, name)| {
+        let plate = if index == 0 { 1. - opened } else { 0. };
+        row(name, index, plate, &palette).top(px(t::ROWS_TOP + (index as f32 + opened) * t::ROW))
+    });
+    let sidebar = column(
+        div().children(new).children(rows),
+        &[(1., 1.), (0., 1.)],
+        &palette,
+    )
+    .children(place("sidebar"));
+    let pages = div()
+        .absolute()
+        .inset_0()
+        .child(page(0, &palette).opacity(1. - opened))
+        .child(
+            page(2, &palette)
+                .opacity(opened)
+                .children((opened > 0.).then(|| place("page-new")).flatten()),
+        );
+    let ilo = window(&palette, &[(palette, 1.)], sidebar, pages).children(place("window"));
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(t::STRIP_GAP))
+        .child(other)
+        .child(ilo)
+}
+
+/// The search engine's: the bar comes up over a page, a few words are typed in it, and ↩ opens
+/// the picked engine's results as a new tab at the top of the sidebar, selected, its page shown,
+/// as the bar goes. All of it goes again at the loop's end; its last frame, still, is the results.
+pub(super) fn search(t_: f32, colors: Colors, place: Place) -> impl IntoElement {
+    const TABS: [&str; 2] = ["Roadmap", "Budget 2027"];
+    const WORDS: &str = "largest city parks";
+    let palette = Palette::of(None, tone(colors));
+    let out = match t_ >= t::PERIOD {
+        true => 0.,
+        false => ((t_ - (t::PERIOD - t::IMPORT_OUT)) / t::IMPORT_OUT).clamp(0., 1.),
+    };
+    // How far a part starting at `from` has come over `over`: none before it starts.
+    let come = |from: f32, over: f32| match t_ > from {
+        true => ease_out(((t_ - from) / over).min(1.)) * (1. - out),
+        false => 0.,
+    };
+    let typing = t::SEARCH_AT + t::IMPORT_FADE;
+    let press = typing + t::SEARCH_TYPE + t::SEARCH_RETURN;
+    let bar = (come(t::SEARCH_AT, t::IMPORT_FADE) - come(press, t::IMPORT_FADE)).max(0.);
+    // The words typed so far, a letter at a time over `search-type`.
+    let typed = ((t_ - typing) / t::SEARCH_TYPE).clamp(0., 1.);
+    let typed = &WORDS[..(typed * WORDS.len() as f32).floor() as usize];
+    // The sheet's own plate, opaque, as the page's card isn't: the rows under the bar's end
+    // don't show through it.
+    let plate = match tone(colors) {
+        Tone::Dark => sheet::FILL,
+        Tone::Light => sheet::LIGHT_FILL,
+    };
+    let bar = (bar > 0.).then(|| {
+        let [left, top] = t::SEARCH_BAR;
+        div()
+            .absolute()
+            .left(px(left))
+            .right(px(left))
+            .top(px(top))
+            .h(px(t::ROW + 6.))
+            .px(px(8.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .rounded(px(t::PLATE_RADIUS))
+            .bg(gpui::rgb(plate))
+            .border_1()
+            .border_color(palette.faint(0.2))
+            .opacity(bar)
+            .text_size(px(t::TEXT_SIZE))
+            .text_color(palette.text(0.9))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(typed)
+                    .child(div().w(px(1.)).h(px(10.)).bg(palette.faint(0.6)))
+                    .children(place("words")),
+            )
+            .child(div().flex_1())
+            .child(
+                div()
+                    .px(px(4.))
+                    .rounded(px(t::ICON_RADIUS))
+                    .bg(palette.faint(0.12))
+                    .text_color(palette.text(0.6))
+                    .child("↩"),
+            )
+            .children(place("bar"))
+    });
+    // ↩ opens the results as a new tab above the others, which make room, and it takes the plate.
+    let opened = come(press, t::IMPORT_LAND);
+    let new = (opened > 0.).then(|| {
+        row("largest city parks", 0, opened, &palette)
+            .top(px(t::ROWS_TOP - t::IMPORT_DROP * (1. - opened)))
+            .opacity(opened)
+            .children(place("tab-new"))
+    });
+    let rows = TABS.iter().enumerate().map(|(index, name)| {
+        let plate = if index == 0 { 1. - opened } else { 0. };
+        row(name, index, plate, &palette).top(px(t::ROWS_TOP + (index as f32 + opened) * t::ROW))
+    });
+    let sidebar = column(
+        div().children(new).children(rows),
+        &[(1., 1.), (0., 1.)],
+        &palette,
+    )
+    .children(place("sidebar"));
+    let pages = div()
+        .absolute()
+        .inset_0()
+        .child(page(0, &palette).opacity(1. - opened))
+        .child(
+            page(1, &palette)
+                .opacity(opened)
+                .children((opened > 0.).then(|| place("page-new")).flatten()),
+        );
+    let shown = window(&palette, &[(palette, 1.)], sidebar, pages)
+        .children(bar)
+        .children(place("window"));
+    centred(shown)
+}
+
+/// The sync's: a tab pinned in ilo's window crosses to a phone beside it under a lock and shows in
+/// the phone's list; then a favorite added on the phone comes back the same way and lands in the
+/// window's sidebar as a favorite's tile. All of it goes again at the loop's end; its last frame,
+/// still, is both landed.
+pub(super) fn sync(t_: f32, colors: Colors, place: Place) -> impl IntoElement {
+    const TABS: [&str; 2] = ["Lakeside loop", "City parks"];
+    let palette = Palette::of(None, tone(colors));
+    let out = match t_ >= t::PERIOD {
+        true => 0.,
+        false => ((t_ - (t::PERIOD - t::IMPORT_OUT)) / t::IMPORT_OUT).clamp(0., 1.),
+    };
+    let come = |from: f32, over: f32| match t_ > from {
+        true => ease_out(((t_ - from) / over).min(1.)) * (1. - out),
+        false => 0.,
+    };
+    let [there, back] = t::SYNC_AT;
+    let [phone_width, phone_height] = t::SYNC_PHONE;
+    // The window and the phone, its right edge `sync-phone-out` past the window's, in one box.
+    let width = t::WINDOW_WIDTH + t::SYNC_PHONE_OUT;
+    let phone_left = width - phone_width;
+    let phone_top = (t::WINDOW_HEIGHT - phone_height) / 2.;
+    // Where the phone's list and its tiles are, in the box.
+    let phone_row = (phone_left + 6., phone_top + 52.);
+    let phone_tile = (phone_left + 8., phone_top + 24.);
+    let mac_tile = (6., t::TILES_TOP);
+    // Pinned, then carried across, the first tab's chip going from its row to the phone's list.
+    let pinned = come(there, t::IMPORT_FADE);
+    let crossing = |from: f32| match t_ > from {
+        true => ease_in_out(((t_ - from) / t::SYNC_CROSS).min(1.)),
+        false => 0.,
+    };
+    let across = crossing(there + t::IMPORT_FADE);
+    let home = crossing(back + t::IMPORT_FADE);
+    // The lock halfway along the way across, lit while something passes it.
+    let lock_at = lerp((t::SIDEBAR - 20., t::ROWS_TOP), phone_row, 0.5);
+    let passing = |gone: f32| (1. - 2. * (gone - 0.5).abs()).max(0.) * (1. - out);
+    let lit = passing(across).max(passing(home));
+    let lock = div()
+        .absolute()
+        .left(px(lock_at.0 - 5.))
+        .top(px(lock_at.1 - 8.))
+        .flex()
+        .flex_col()
+        .items_center()
+        .opacity(0.35 + 0.65 * lit)
+        .child(
+            div()
+                .w(px(6.))
+                .h(px(5.))
+                .rounded_t(px(t::BAR_RADIUS))
+                .border_1()
+                .border_b_0()
+                .border_color(palette.text(0.9)),
+        )
+        .child(
+            div()
+                .w(px(10.))
+                .h(px(8.))
+                .rounded(px(t::ICON_RADIUS))
+                .bg(palette.text(0.9)),
+        )
+        .children(place("lock"));
+    let chip = |name: &'static str, at: (f32, f32), seen: f32| {
+        div()
+            .absolute()
+            .left(px(at.0))
+            .top(px(at.1))
+            .h(px(16.))
+            .px(px(6.))
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .rounded(px(t::PLATE_RADIUS))
+            .bg(palette.page)
+            .border_1()
+            .border_color(palette.faint(0.2))
+            .opacity(seen)
+            .text_size(px(t::TEXT_SIZE))
+            .text_color(palette.text(0.75))
+            .child(
+                div()
+                    .size(px(7.))
+                    .rounded(px(t::ICON_RADIUS))
+                    .bg(palette.faint(0.3)),
+            )
+            .child(name)
+    };
+    let moving = (across > 0. && across < 1.).then(|| {
+        let from = (6., t::ROWS_TOP);
+        chip(TABS[0], lerp(from, phone_row, across), 1. - out).children(place("moving"))
+    });
+    let returning = (home > 0. && home < 1.).then(|| {
+        chip("Trails", lerp(phone_tile, mac_tile, home), 1. - out).children(place("returning"))
+    });
+    // ilo's window: the pin beside the first tab, and the tile that came back.
+    let pin = (pinned > 0.).then(|| {
+        div()
+            .absolute()
+            .top(px(t::ROWS_TOP + (t::ROW - 5.) / 2.))
+            .right(px(12.))
+            .size(px(5.))
+            .rounded_full()
+            .bg(palette.text(0.75))
+            .opacity(pinned)
+            .children(place("pin"))
+    });
+    let landed_back = come(back + t::IMPORT_FADE + t::SYNC_CROSS, t::IMPORT_LAND);
+    let tile_back =
+        (landed_back > 0.).then(|| tile(0, landed_back, &palette).children(place("tile-back")));
+    let rows = TABS
+        .iter()
+        .enumerate()
+        .map(|(index, name)| row(name, index, if index == 0 { 1. } else { 0. }, &palette));
+    let sidebar = column(
+        div().children(tile_back).children(rows).children(pin),
+        &[(1., 1.), (0., 1.)],
+        &palette,
+    )
+    .children(place("sidebar"));
+    let ilo = window(&palette, &[(palette, 1.)], sidebar, page(1, &palette))
+        .absolute()
+        .left_0()
+        .top_0()
+        .children(place("window"));
+    // The phone: a tile for the favorite added on it, then its list, where the tab lands.
+    let arrived = come(there + t::IMPORT_FADE + t::SYNC_CROSS, t::IMPORT_LAND);
+    let added = come(back, t::IMPORT_FADE);
+    let phone_rows = (arrived > 0.).then(|| {
+        // The row's colour over the phone's, which the name fades into where it doesn't fit.
+        let ground = Hsla::from(palette.underlay).blend(palette.shown(0.));
+        let name = div()
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .items_center()
+            .overflow_hidden()
+            .child(div().flex_none().whitespace_nowrap().child(TABS[0]))
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right_0()
+                    .w(px(t::SYNC_FADE))
+                    .bg(linear_gradient(
+                        90.,
+                        linear_color_stop(ground.opacity(0.), 0.),
+                        linear_color_stop(ground, 1.),
+                    ))
+                    .children(place("phone-fade")),
+            )
+            .children(place("phone-name"));
+        div()
+            .absolute()
+            .left(px(6.))
+            .right(px(6.))
+            .top(px(52. - t::IMPORT_DROP * (1. - arrived)))
+            .h(px(t::ROW))
+            .px(px(6.))
+            .flex()
+            .items_center()
+            .gap(px(5.))
+            .rounded(px(t::PLATE_RADIUS))
+            .bg(palette.shown(0.))
+            .opacity(arrived)
+            .text_size(px(t::TEXT_SIZE))
+            .text_color(palette.text(0.75))
+            .child(
+                div()
+                    .flex_none()
+                    .size(px(7.))
+                    .rounded(px(t::ICON_RADIUS))
+                    .bg(palette.faint(0.3))
+                    .children(place("phone-icon")),
+            )
+            .child(name)
+            .children(place("phone-tab"))
+    });
+    let phone_tile = (added > 0.).then(|| {
+        div()
+            .absolute()
+            .left(px(8.))
+            .top(px(24.))
+            .size(px(t::TILE))
+            .rounded(px(t::PLATE_RADIUS))
+            .bg(palette.shown(0.))
+            .opacity(added)
+            .children(place("phone-tile"))
+    });
+    let phone = div()
+        .absolute()
+        .left(px(phone_left))
+        .top(px(phone_top))
+        .w(px(phone_width))
+        .h(px(phone_height))
+        .overflow_hidden()
+        .rounded(px(t::WINDOW_RADIUS))
+        .bg(palette.underlay)
+        .border_1()
+        .border_color(palette.faint(0.2))
+        .child(
+            div()
+                .absolute()
+                .top(px(8.))
+                .left(px(phone_width / 2. - 12.))
+                .w(px(24.))
+                .h(px(5.))
+                .rounded_full()
+                .bg(palette.faint(0.3)),
+        )
+        .children(phone_tile)
+        .children(phone_rows)
+        .children(place("phone"));
+    let shown = div()
+        .relative()
+        .flex_none()
+        .w(px(width))
+        .h(px(t::WINDOW_HEIGHT))
+        .child(ilo)
+        .child(phone)
+        .child(lock)
+        .children(moving)
+        .children(returning);
+    centred(shown)
+}
+
+/// The assistant's: one ask over a small window, three shops' pages opened at once as tabs in its
+/// sidebar, a price read from each in turn, then the answer, the cheapest marked. All of it goes
+/// again at the loop's end; its last frame, still, is the answer.
+pub(super) fn assistant(t_: f32, colors: Colors, place: Place) -> impl IntoElement {
+    const SHOPS: [&str; 3] = ["Rivermart", "Pinecrest", "Northgear"];
+    const PRICES: [&str; 3] = ["$1,149", "$1,089", "$1,129"];
+    const CHEAPEST: usize = 1;
+    const TABS: [&str; 3] = ["tab-0", "tab-1", "tab-2"];
+    const READ: [&str; 3] = ["price-0", "price-1", "price-2"];
+    let palette = Palette::of(None, tone(colors));
+    let out = match t_ >= t::PERIOD {
+        true => 0.,
+        false => ((t_ - (t::PERIOD - t::IMPORT_OUT)) / t::IMPORT_OUT).clamp(0., 1.),
+    };
+    let come = |from: f32, over: f32| match t_ > from {
+        true => ease_out(((t_ - from) / over).min(1.)) * (1. - out),
+        false => 0.,
+    };
+    let asked = come(t::ASSISTANT_AT, t::IMPORT_FADE);
+    let opened = come(t::ASSISTANT_OPEN, t::IMPORT_LAND);
+    let answered = come(t::ASSISTANT_ANSWER, t::IMPORT_FADE);
+    // The three tabs land at once, the first shown.
+    let rows = (opened > 0.).then(|| {
+        SHOPS.iter().enumerate().map(move |(index, &name)| {
+            let top = t::ROWS_TOP + index as f32 * t::ROW - t::IMPORT_DROP * (1. - opened);
+            row(name, index, 0., &palette)
+                .top(px(top))
+                .opacity(opened)
+                .children(place(TABS[index]))
+        })
+    });
+    let sidebar = column(
+        div().children(rows.into_iter().flatten()),
+        &[(1., 1.), (0., 1.)],
+        &palette,
+    )
+    .children(place("sidebar"));
+    // The ask, as the task's own words at the page's top.
+    let ask = div()
+        .absolute()
+        .top(px(10.))
+        .left(px(10.))
+        .right(px(10.))
+        .h(px(t::ROW))
+        .px(px(8.))
+        .flex()
+        .items_center()
+        .rounded_full()
+        .bg(palette.faint(0.08))
+        .opacity(asked)
+        .text_size(px(t::TEXT_SIZE))
+        .text_color(palette.text(0.75))
+        .child("Find the best price for a Kestrel 14")
+        .children(place("ask"));
+    // The three pages side by side under it, each a price read from it in turn.
+    let pages = SHOPS.iter().enumerate().map(|(index, _)| {
+        let read = come(
+            t::ASSISTANT_READ + index as f32 * t::ASSISTANT_STAGGER,
+            t::IMPORT_FADE,
+        );
+        let best = index == CHEAPEST;
+        let price = (read > 0.).then(|| {
+            div()
+                .mt_auto()
+                .px(px(4.))
+                .rounded(px(t::ICON_RADIUS))
+                .border_1()
+                .border_color(palette.faint(if best { 0.6 * answered } else { 0. }))
+                .opacity(read)
+                .text_color(palette.text(0.9))
+                .child(PRICES[index])
+                .children(place(READ[index]))
+        });
+        div()
+            .flex_1()
+            .h_full()
+            .p(px(6.))
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .rounded(px(t::ICON_RADIUS))
+            .border_1()
+            .border_color(palette.faint(0.12))
+            .opacity(opened)
+            .child(
+                div()
+                    .h(px(26.))
+                    .rounded(px(t::BAR_RADIUS))
+                    .bg(palette.faint(0.1)),
+            )
+            .child(
+                div()
+                    .w(px(36.))
+                    .h(px(4.))
+                    .rounded(px(t::BAR_RADIUS))
+                    .bg(palette.faint(0.14)),
+            )
+            .children(price)
+    });
+    let shown = div()
+        .absolute()
+        .top(px(10. + t::ROW + 8.))
+        .left(px(10.))
+        .right(px(10.))
+        .h(px(84.))
+        .flex()
+        .gap(px(6.))
+        .text_size(px(t::TEXT_SIZE))
+        .children(pages);
+    // The answer under them.
+    let answer = (answered > 0.).then(|| {
+        div()
+            .absolute()
+            .left(px(10.))
+            .right(px(10.))
+            .bottom(px(12.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .opacity(answered)
+            .text_size(px(t::TEXT_SIZE))
+            .text_color(palette.text(0.9))
+            .child(div().size(px(9.)).rounded_full().bg(palette.faint(0.5)))
+            .child("Pinecrest has it for $1,089, the lowest of the three.")
+            .children(place("answer"))
+    });
+    let page = div().size_full().child(ask).child(shown).children(answer);
+    centred(window(&palette, &[(palette, 1.)], sidebar, page).children(place("window")))
+}
+
+/// Up to you's: today's count, as a card, filling in line by line with all it holds, then a week
+/// going by under it, a day at a time, one count each. All of it goes again at the loop's end; its
+/// last frame, still, is the card full and the week counted.
+pub(super) fn count(t_: f32, colors: Colors, place: Place) -> impl IntoElement {
+    const LINES: [(&str, &str); 5] = [
+        ("Version", "0.3.0, stable"),
+        ("System", "macOS 15.4"),
+        ("Chip", "Apple M3"),
+        ("First count", "No"),
+        ("First this week", "Yes"),
+    ];
+    const PLACES: [&str; 5] = ["line-0", "line-1", "line-2", "line-3", "line-4"];
+    const DAYS: [&str; 7] = [
+        "day-0", "day-1", "day-2", "day-3", "day-4", "day-5", "day-6",
+    ];
+    let palette = Palette::of(None, tone(colors));
+    let out = match t_ >= t::PERIOD {
+        true => 0.,
+        false => ((t_ - (t::PERIOD - t::IMPORT_OUT)) / t::IMPORT_OUT).clamp(0., 1.),
+    };
+    let come = |from: f32, over: f32| match t_ > from {
+        true => ease_out(((t_ - from) / over).min(1.)) * (1. - out),
+        false => 0.,
+    };
+    let lines = LINES.iter().enumerate().map(|(index, &(name, value))| {
+        let seen = come(
+            t::COUNT_AT + index as f32 * t::COUNT_STAGGER,
+            t::IMPORT_FADE,
+        );
+        div()
+            .flex()
+            .justify_between()
+            .opacity(seen)
+            .child(div().text_color(palette.text(0.6)).child(name))
+            .child(div().text_color(palette.text(0.9)).child(value))
+            .children((seen > 0.).then(|| place(PLACES[index])).flatten())
+    });
+    let card = div()
+        .w(px(t::COUNT_CARD))
+        .p(px(10.))
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .rounded(px(t::WINDOW_RADIUS))
+        .bg(palette.page)
+        .border_1()
+        .border_color(palette.faint(0.12))
+        .text_size(px(t::TEXT_SIZE))
+        .child(
+            div()
+                .flex()
+                .justify_between()
+                .child(div().text_color(palette.text(0.9)).child("Today's count"))
+                .child(div().text_color(palette.text(0.5)).child("sent once")),
+        )
+        .children(lines)
+        .children(place("card"));
+    // The week: a dot a day, each filled as its day's one count goes.
+    let days = (0..DAYS.len()).map(|day| {
+        let counted = come(t::COUNT_WEEK + day as f32 * t::COUNT_DAY, t::IMPORT_FADE);
+        div()
+            .size(px(t::DOT_SHOWN))
+            .rounded_full()
+            .bg(palette.faint(t::DOT_ALPHA + (1. - t::DOT_ALPHA) * counted))
+            .children((counted > 0.).then(|| place(DAYS[day])).flatten())
+    });
+    let week = div()
+        .flex()
+        .gap(px(t::DOT_GAP * 2.))
+        .opacity(1. - out)
+        .children(days)
+        .children(place("week"));
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(t::STRIP_GAP))
+        .child(card)
+        .child(week)
+}
+
+/// A favorite's tile at the sidebar's top, the `index`th, as far down into place as it has
+/// `landed`.
+fn tile(index: usize, landed: f32, palette: &Palette) -> gpui::Div {
+    div()
+        .absolute()
+        .top(px(t::TILES_TOP - t::IMPORT_DROP * (1. - landed)))
+        .left(px(6. + index as f32 * (t::TILE + t::TILE_GAP)))
+        .size(px(t::TILE))
+        .rounded(px(t::PLATE_RADIUS))
+        .bg(palette.shown(0.))
+        .opacity(landed)
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .size(px(7.))
+                .rounded(px(t::ICON_RADIUS))
+                .bg(palette.faint(0.3)),
+        )
 }
 
 /// The colour's: the window glows with the colour picked, or none, and the sidebar's rows swipe

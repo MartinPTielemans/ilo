@@ -66,7 +66,7 @@ impl Shell {
                 let space = self.browser.create_space(&name, profile, after, cx);
                 let name = cx.new(|cx| {
                     TextInput::new("Space name", cx)
-                        .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
+                        .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
                 });
                 self.form = Some(SpaceForm {
                     space,
@@ -395,7 +395,7 @@ impl Shell {
                     .items_center()
                     .text_size(px(text::SMALL))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(self.palette.text(SECONDARY))
+                    .text_color(self.palette.gray(SECONDARY))
                     .child("Cancel")
                     // It brightens to the form's text under the pointer (ours: Arc's isn't
                     // recorded). Create Space doesn't change, as Arc's doesn't.
@@ -882,7 +882,8 @@ mod tests {
     }
 
     /// While the form leaves, the keyboard is the Space's, as it is once the form has gone: ⌘T
-    /// opens the command bar for a new tab, and what's typed goes nowhere near the form's name.
+    /// gives the new Space's field the keyboard, as in any Space with no page (#4140), and what's
+    /// typed goes nowhere near the form's name.
     #[gpui::test]
     fn mid_leave_keys_go_to_the_space(cx: &mut TestAppContext) {
         let (shell, cx, host) = form(cx);
@@ -895,7 +896,24 @@ mod tests {
         assert_eq!(name, "Trips", "a key went to the leaving form");
         host.command_bars.take();
         cx.simulate_keystrokes("cmd-t");
-        assert_eq!(host.command_bars.take(), [None]);
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        assert!(host.command_bars.take().is_empty(), "⌘T opened a bar");
+        // It takes it once the new Space's page has settled.
+        shell.update(cx, |shell, cx| {
+            shell.settle = None;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let field = cx.update(|window, cx| {
+            let resting = shell
+                .read(cx)
+                .resting
+                .as_ref()
+                .expect("no field in the new Space");
+            resting.bar.read(cx).field_focus(cx).is_focused(window)
+        });
+        assert!(field, "⌘T left the new Space's field without the keyboard");
     }
 
     #[gpui::test]

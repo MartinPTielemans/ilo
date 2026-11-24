@@ -2,12 +2,15 @@
 //! its conversation says where it can't, and how what was kept goes. The assistant is a stand-in
 //! the tests write themselves, in a profile folder of their own: never the user's own.
 
+#[cfg(unix)]
+mod past;
+
 use super::*;
 use crate::agents::kept::{self, Id};
 use crate::agents::ready::{Found, Ready};
 use crate::agents::runner::{self, Cli, Out};
 use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
-use crate::agents::task::{AskedOn, Conversation, Line, State};
+use crate::agents::task::{AskedOn, Conversation, Line, State, Word};
 use crate::agents::tier::Tier;
 
 /// A stand-in for `claude`. A run of it writes what it was started with and where beside itself,
@@ -127,6 +130,7 @@ impl Run {
     pub(super) fn said(&self, agent: &str, out: Out, cx: &mut TestAppContext) {
         let event = runner::Event {
             agent: agent.into(),
+            run: (self.agents).read_with(cx, |agents, _| agents.run_of(agent)),
             out,
         };
         (self.agents).update(cx, |agents, cx| agents.task_said(event, cx));
@@ -200,7 +204,7 @@ impl Run {
     }
 
     /// Every file under the profile's folder but the stand-in's own, as text.
-    fn files(&self) -> Vec<(PathBuf, String)> {
+    pub(super) fn files(&self) -> Vec<(PathBuf, String)> {
         let (mut folders, mut files) = (vec![self.profile.clone()], Vec::new());
         while let Some(folder) = folders.pop() {
             for entry in std::fs::read_dir(&folder).unwrap() {
@@ -463,6 +467,47 @@ fn a_conversation_its_assistant_no_longer_has_says_so(cx: &mut TestAppContext) {
     assert_eq!(run.kept(cx), (0, 0));
 }
 
+/// A reply that reached a task still under way, whose run had gone, starts a run that finds the
+/// conversation gone. Nobody stopped that task: it's Interrupted, why is the line in its reply
+/// field's place, and with Start Again there, it takes no reply.
+#[cfg(unix)]
+#[gpui::test]
+fn a_task_under_way_whose_conversation_went_is_interrupted(cx: &mut TestAppContext) {
+    let run = Run::new("gone-under-way", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    let id = run.id(&agent, cx);
+    (run.agents).update(cx, |agents, _| agents.run_went_unheard(&agent));
+    (run.agents).update(cx, |agents, cx| agents.reply(&agent, "And for Sunday?", cx));
+    let (args, _) = run.ran(2);
+    assert!(args.iter().any(|arg| arg == id.as_str()), "{args:?}");
+    let said = format!("No conversation found with session ID: {}", id.as_str());
+    run.said(&agent, Out::Gone(said), cx);
+
+    let why = "Claude no longer has this conversation.";
+    assert_eq!(
+        run.state(&agent, cx),
+        State::Failed {
+            why: why.into(),
+            assistant: false,
+        }
+    );
+    let card = (run.agents).read_with(cx, |agents, cx| {
+        let mut cards = agents.shown_cards(cx).into_iter();
+        cards.find(|card| card.agent.as_ref() == agent).unwrap()
+    });
+    assert_eq!(card.word, Word::Interrupted);
+    assert_eq!(card.status.as_ref(), why);
+    let talk = run.talk(&agent, cx);
+    assert_eq!(talk.about.as_ref(), "Claude · Interrupted");
+    assert_eq!(run.ilo_lines(&agent, cx), [IloKind::Gone]);
+    let Some(Line::Ilo(last)) = talk.lines.last() else {
+        panic!("ilo's line isn't last");
+    };
+    assert!(ilo::in_field(&last.kind));
+    assert_eq!(ilo::buttons(last), [IloButton::StartAgain]);
+}
+
 /// Removing a task removes what its assistant kept of it: the assistant is asked for that task's
 /// folder alone, then the folder, the id and the file of ids go.
 #[cfg(unix)]
@@ -537,22 +582,24 @@ fn a_removal_that_failed_stays_listed_and_remove_all_tries_again(cx: &mut TestAp
     assert_eq!(run.ilo_lines(&agent, cx).last(), Some(&IloKind::Gone));
 }
 
-/// The conversations a run of the browser left go at the next launch, as its tasks went: by the
-/// ids in the file alone, each asked of its assistant.
+/// The conversation of a task that never ended, as a crash leaves it, goes at the next launch,
+/// as its task went: by the id in the file alone, asked of its assistant.
 #[cfg(unix)]
 #[gpui::test]
-fn the_next_launch_removes_what_the_run_before_kept(cx: &mut TestAppContext) {
+fn the_next_launch_removes_what_a_task_that_never_ended_kept(cx: &mut TestAppContext) {
     let run = Run::new("launch", cx);
     let agent = run.start(Cli::Claude, cx);
     run.ran(1);
     let id = run.id(&agent, cx);
-    run.finish(&agent, cx);
-    // Quit: its tasks end, and what was kept waits for the next launch.
-    (run.agents).update(cx, |agents, cx| agents.end_tasks(true, cx));
+    // No quit: the browser went while it worked.
     assert!(run.folder(&id).exists());
     assert!(run.purged(cx).is_empty());
 
     let next = Run::again(run.profile.clone(), run.program.clone(), cx);
+    assert!(
+        next.agents
+            .read_with(cx, |agents, cx| agents.archived_tasks(cx).is_empty())
+    );
     let folder = run.folder(&id);
     assert_eq!(
         next.purged(cx),
@@ -577,7 +624,7 @@ fn a_launch_with_no_file_of_ids_starts_and_spawns_nothing(cx: &mut TestAppContex
         let told = told.clone();
         cx.observe(&run.agents, move |_, _| told.set(told.get() + 1))
     });
-    (run.agents).update(cx, |agents, cx| agents.remove_old_kept(cx));
+    (run.agents).update(cx, |agents, cx| agents.take_old_kept(cx));
     assert!(!cx.executor().tick(), "the launch spawned something");
     assert_eq!(told.get(), 0);
     assert!(run.purged(cx).is_empty());

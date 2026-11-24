@@ -75,7 +75,7 @@ impl Shell {
     pub fn set_pair(&mut self, tab: u64, pair: Option<Pair>, cx: &mut Context<Self>) {
         match pair {
             Some(pair) => {
-                let placeholder = self.palette.text(FORM_PLACEHOLDER);
+                let placeholder = self.palette.gray(FORM_PLACEHOLDER);
                 let pin = cx.new(|cx| {
                     TextInput::new("PIN", cx)
                         .placeholder_color(placeholder)

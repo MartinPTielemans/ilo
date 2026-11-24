@@ -3,7 +3,7 @@
 //! here (#4086). The tiers' names are the tier table's (agents/tier.rs).
 
 use crate::agents::kept;
-use crate::agents::task::ilo::{IloButton, IloKind, SignedInWith};
+use crate::agents::task::ilo::{HelpersLimit as Limit, IloButton, IloKind, SignedInWith};
 use crate::agents::tier::{self, Tier, Why};
 
 /// ilo's mark, before each of its lines' words.
@@ -25,16 +25,25 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
             Some(at.to_string()),
         ),
         IloKind::Stopped { at, .. } => (format!("stopped {agent} at"), Some(at.to_string())),
+        // With more than one page, it names the step's (O1).
+        IloKind::Yours {
+            site: Some(site), ..
+        } => ("handed this step on".into(), Some(site.to_string())),
         IloKind::Yours { .. } => ("handed this step to you".into(), None),
         IloKind::TabBack { .. } => (format!("· {agent} needs this tab back"), None),
         IloKind::SignedIn { site, .. } => ("signed in to".into(), Some(site.to_string())),
         IloKind::TierChanged { to, .. } => (format!("· You set this task to {}", to.label()), None),
         // The helpers' limit (#4102), by the app's own count, each a whole sentence.
-        IloKind::Helpers { deep, .. } => (
-            match (*deep, crate::tokens::agents::helpers::MOST) {
-                (true, _) => format!("stopped {agent} when a helper started a helper of its own"),
-                (false, 1) => format!("stopped {agent} after it started more than 1 helper"),
-                (false, most) => {
+        IloKind::Helpers { limit, .. } => (
+            match (*limit, crate::tokens::agents::helpers::MOST) {
+                (Limit::Depth, _) => {
+                    format!("stopped {agent} when a helper started a helper of its own")
+                }
+                (Limit::Kind, _) => {
+                    format!("stopped {agent} after it started a helper ilo doesn't allow")
+                }
+                (Limit::Count, 1) => format!("stopped {agent} after it started more than 1 helper"),
+                (Limit::Count, most) => {
                     format!("stopped {agent} after it started more than {most} helpers")
                 }
             },
@@ -42,38 +51,44 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         ),
         IloKind::Resumed { tier } => (format!("resumed this task at {}", tier.label()), None),
         // Where the assistant is the subject, a middle dot sets ilo's mark off from the sentence.
-        // A kept task takes a reply while the browser runs, and the words promise no more.
-        IloKind::KeptHere => (
-            format!(
-                "· {agent} keeps this conversation on {} until you quit {}, so you can reply.",
-                kept::COMPUTER,
-                env!("APP_NAME")
-            ),
-            None,
-        ),
-        IloKind::Gone => (format!("· {agent} no longer has this conversation."), None),
+        // A kept task takes a reply after a quit too, so the words name no end; the reply field
+        // says reply, and Settings is where one is removed, so the line says neither.
+        IloKind::KeptHere => (format!("· {agent} still has this conversation."), None),
+        IloKind::Gone => (format!("· {}", kept::gone_words(agent)), None),
         IloKind::NotKept => (format!("· {agent} didn't keep this conversation."), None),
         IloKind::KeepsNothing => (format!("· {agent} doesn't keep finished tasks."), None),
+        IloKind::NoProfile => ("· This task's profile was deleted.".into(), None),
+        IloKind::NoSpace => ("· This task's profile has no Space left.".into(), None),
     }
 }
 
-/// A line's head as drawn: ilo's words `own`, then `name`. A page's own words are quoted, so they
-/// read as its; a site's name never is, as it's the app's to write.
-pub fn with_name(kind: &IloKind, own: &str, name: &str) -> String {
+/// A line's head as drawn: ilo's words `own`, with `name`, and where `name` stands in it. A
+/// page's own words are quoted, so they read as its; a site's name never is, as it's the app's to
+/// write.
+pub fn with_name(kind: &IloKind, own: &str, name: &str) -> (String, std::ops::Range<usize>) {
     let site = matches!(
         kind,
         IloKind::Stopped {
             why: Why::Fenced | Why::OtherSite,
             ..
         } | IloKind::SignedIn { .. }
+            | IloKind::Yours { .. }
     );
-    match site {
-        true => format!("{own} {name}"),
-        false => format!("{own} \u{201c}{name}\u{201d}"),
+    let start = own.len() + 1;
+    match (site, kind) {
+        (true, IloKind::Yours { .. }) => {
+            (format!("{own} {name} to you"), start..start + name.len())
+        }
+        (true, _) => (format!("{own} {name}"), start..start + name.len()),
+        (false, _) => {
+            let said = format!("{own} \u{201c}{name}\u{201d}");
+            let end = said.len();
+            (said, start..end)
+        }
     }
 }
 
-/// Where the switch that keeps finished tasks is, under the line that says they're kept.
+/// Where Settings holds what a line's link points at.
 const KEPT_IN: &str = "Settings › Agents";
 
 /// The app's own quiet link under a line, which opens Settings where its words point and changes
@@ -98,9 +113,13 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
         }),
         IloKind::Yours { .. } | IloKind::TabBack { .. } | IloKind::TierChanged { .. } => None,
         IloKind::Helpers { .. } => None,
-        IloKind::KeptHere => Some(KEPT_IN.into()),
         IloKind::Resumed { .. } => None,
-        IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing => None,
+        IloKind::KeptHere
+        | IloKind::Gone
+        | IloKind::NotKept
+        | IloKind::KeepsNothing
+        | IloKind::NoProfile
+        | IloKind::NoSpace => None,
     }
 }
 
@@ -118,6 +137,7 @@ pub fn button(button: IloButton) -> &'static str {
         IloButton::Raise(Tier::Full) => "Give Full access",
         IloButton::AnySite => "Any site",
         IloButton::HandBack => "Hand Back",
+        IloButton::ShowPage => "Show Page",
         IloButton::NotNow => "Not Now",
         IloButton::StartAgain => "Start Again",
     }

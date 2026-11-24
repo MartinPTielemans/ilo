@@ -8,7 +8,7 @@ fn handed_off(cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>, mpsc::Recei
     let (agents, browser, _) = connected(cx);
     let reason = json!({ "tab": 20, "reason": "Sign in to example.com" });
     let handed = call(&agents, "claude-code", "hand_off", reason, cx);
-    assert!(browser.asked.borrow().is_some(), "the handoff didn't ask");
+    assert!(shown(&agents, cx).is_some(), "the handoff didn't ask");
     (agents, browser, handed)
 }
 
@@ -31,7 +31,6 @@ fn a_handed_off_tab_that_closes_answers_the_handoff(cx: &mut TestAppContext) {
         .try_recv()
         .expect("the handoff still waits on a closed tab");
     assert!(answer.error && answer.text.starts_with("Tab 20 closed"));
-    assert_eq!(*browser.asked.borrow(), None);
     assert!(held_tabs(&agents, cx).is_empty(), "the bar still lists it");
     assert!(browser.held.borrow().is_empty(), "the core still holds it");
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "closed");
@@ -69,7 +68,7 @@ fn a_taken_tab_moved_to_the_users_space_answers_the_agents_ask(cx: &mut TestAppC
         asked.try_recv().is_err(),
         "the ask didn't wait for the user"
     );
-    assert!(browser.asked.borrow().is_some(), "the ask didn't show");
+    assert!(shown(&agents, cx).is_some(), "the ask didn't show");
 
     for tab in browser
         .tabs
@@ -85,7 +84,6 @@ fn a_taken_tab_moved_to_the_users_space_answers_the_agents_ask(cx: &mut TestAppC
         .try_recv()
         .expect("the ask still waits on a tab that moved");
     assert!(answer.error && answer.text.starts_with("The user moved tab 20"));
-    assert_eq!(*browser.asked.borrow(), None);
     assert!(held_tabs(&agents, cx).is_empty(), "the bar still lists it");
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "moved");
 }
@@ -114,7 +112,6 @@ fn an_agent_gone_during_a_handoff_leaves_the_tab_the_users(cx: &mut TestAppConte
         matches!(handed.try_recv(), Err(mpsc::TryRecvError::Disconnected)),
         "the call of an agent gone was kept or answered"
     );
-    assert_eq!(*browser.asked.borrow(), None);
     assert!(browser.held.borrow().contains(&20));
     assert_eq!(held_tabs(&agents, cx), [20]);
 

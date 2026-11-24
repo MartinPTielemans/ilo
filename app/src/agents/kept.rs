@@ -9,6 +9,11 @@
 //! or an outside client is told. Its `Debug` prints none of it, so a line written by mistake holds
 //! none either.
 //!
+//! A task that has ended is there to reply to after a quit too, so the file says of it what
+//! finds it again (`Past`, the owner's call): its title, how and when it ended, and its profile.
+//! Never what was asked, a page's address, a step, a file's name or the access it had. A row
+//! with an id alone is a conversation held only to be removed.
+//!
 //! A kept task runs in a folder of its own, `Kept tasks/<id>` under the profile's, which the
 //! assistant files the conversation by. Nothing is ever put in it: it outlives the task's run only
 //! so the conversation can be found again, and removed. Removing is the assistant's own
@@ -97,6 +102,15 @@ pub enum Keep {
     Resume(Id),
 }
 
+/// Why a task a run before left has nowhere to work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Nowhere {
+    /// Its profile was deleted.
+    Deleted,
+    /// Its profile is there, with no Space of the user's left in it.
+    NoSpace,
+}
+
 /// Whether an assistant's runs can be kept.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Keeps {
@@ -161,24 +175,69 @@ pub fn without(said: &str, id: &Id) -> String {
     said.replace(id.as_str(), "…")
 }
 
-/// The user's computer, by the platform's own noun, where the words say a conversation is kept
-/// or removed from.
-pub const COMPUTER: &str = if cfg!(target_os = "macos") {
-    "your Mac"
-} else if cfg!(target_os = "windows") {
-    "your PC"
-} else {
-    "your computer"
-};
+/// What a task says when `agent` no longer has the conversation it kept: ilo's line in its reply
+/// field's place, and why a task that was to go on with it couldn't.
+pub fn gone_words(agent: &str) -> String {
+    format!("{agent} no longer has this conversation.")
+}
+
+/// How a task ended, as the file says it: the four its word tells apart (`task::Word`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum End {
+    Done,
+    /// The user stopped it, or quit while it worked.
+    Stopped,
+    Failed,
+    /// At its assistant's limit. When that resets isn't kept.
+    Limit,
+}
+
+impl End {
+    const ALL: [End; 4] = [End::Done, End::Stopped, End::Failed, End::Limit];
+
+    fn id(self) -> &'static str {
+        match self {
+            End::Done => "done",
+            End::Stopped => "stopped",
+            End::Failed => "failed",
+            End::Limit => "limit",
+        }
+    }
+}
+
+/// The most of a title the file gives back, in characters: a name an agent gave is shorter, so
+/// only a file someone changed has more.
+const TITLE: usize = 80;
+
+/// What the file says of a task that has ended, beside its conversation's id: all a task is
+/// after a quit, until a reply takes it up.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Past {
+    /// The name its agent gave it (#3690), or empty if it gave none: what the user asked, which
+    /// names a task until then, is never kept.
+    pub title: String,
+    pub end: End,
+    /// When it ended, in seconds since 1970.
+    pub at: u64,
+}
 
 /// A kept conversation, beside its task.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Record {
     /// Its task, or None once the task went and the conversation couldn't be removed with it, or
-    /// for one an earlier run of the browser left.
+    /// for one an earlier run of the browser left, until `give` makes it a task again.
     pub task: Option<String>,
     pub cli: Cli,
     pub id: Id,
+    /// What the file says of its task, once it has ended and while it's listed: none for one
+    /// deleted from the Archive, which a quit then leaves to be removed.
+    pub past: Option<Past>,
+    /// The profile its task was asked in, by the name of the profile's own folder, which names
+    /// it from one run to the next where the core's number for it doesn't. Its task works in
+    /// that profile's sessions and comes back in no other.
+    pub profile: String,
+    /// Why its task has nowhere to work, if it hasn't, so it takes no reply.
+    pub nowhere: Option<Nowhere>,
     /// The access the task last ended at.
     pub tier: Tier,
     /// The assistant no longer has it: a reply found none.
@@ -240,11 +299,14 @@ impl Kept {
     }
 
     /// Holds `id` for `task`, new, or with no task for one an earlier run left.
-    fn hold_for(&mut self, task: Option<&str>, cli: Cli, id: Id) {
+    fn hold_for(&mut self, task: Option<&str>, cli: Cli, id: Id, profile: &str) {
         self.records.push(Record {
             task: task.map(String::from),
             cli,
             id,
+            past: None,
+            profile: profile.to_string(),
+            nowhere: None,
             tier: Tier::default(),
             gone: false,
             resumed: Vec::new(),
@@ -254,9 +316,36 @@ impl Kept {
         });
     }
 
-    /// Holds `id` for `task`, new.
-    pub fn hold(&mut self, task: &str, cli: Cli, id: Id) {
-        self.hold_for(Some(task), cli, id);
+    /// Holds `id` for `task`, new, asked in `profile`.
+    pub fn hold(&mut self, task: &str, cli: Cli, id: Id, profile: &str) {
+        self.hold_for(Some(task), cli, id, profile);
+    }
+
+    /// The tasks an earlier run of the browser left that ended, each by its conversation's id,
+    /// the last to end first: those `read` took that the file says more of than an id.
+    pub fn left(&self) -> Vec<(Id, Cli, Past)> {
+        // The last held first, so of two that ended in one second the later is the newer.
+        let mut left: Vec<_> = (self.records.iter().rev())
+            .filter(|record| record.task.is_none() && !record.removing)
+            .filter_map(|record| Some((record.id.clone(), record.cli, record.past.clone()?)))
+            .collect();
+        left.sort_by_key(|(.., past)| std::cmp::Reverse(past.at));
+        left
+    }
+
+    /// The conversation under `id`, which an earlier run left, is `task`'s from now: a task of
+    /// this run's.
+    pub fn give(&mut self, id: &Id, task: &str) {
+        for record in self.records.iter_mut().filter(|record| record.id == *id) {
+            record.task = Some(task.to_string());
+        }
+    }
+
+    /// The tasks whose conversation takes a reply: each one's that has ended and is listed.
+    pub fn listed(&self) -> impl Iterator<Item = &str> {
+        (self.records.iter())
+            .filter(|record| record.past.is_some() && !record.gone && !record.removing)
+            .filter_map(|record| record.task.as_deref())
     }
 
     /// The ids to remove of those `which` picks, each with its assistant, now marked as under way
@@ -288,31 +377,47 @@ impl Kept {
         }
     }
 
-    /// Takes the ids an earlier run of the browser left in `root`'s file: their tasks went with
-    /// that run, so they're held only to be removed. Whether there was a file: with none, the
-    /// look for it is all this does.
+    /// Takes what an earlier run of the browser left in `root`'s file, each with no task: one
+    /// that ended, with what the file says of it, for `left` and `give` to make a task of again,
+    /// and one with an id alone, held only to be removed. Whether there was a file: with none,
+    /// the look for it is all this does.
     pub fn read(&mut self, root: &Path) -> bool {
         let Ok(saved) = std::fs::read(root.join(INDEX)) else {
             return false;
         };
         let saved: Value = serde_json::from_slice(&saved).unwrap_or_default();
         for each in saved.as_array().into_iter().flatten() {
-            let id = each.get("id").and_then(Value::as_str).and_then(Id::parse);
-            let cli = (each.get("cli").and_then(Value::as_str))
-                .and_then(|cli| Cli::ALL.into_iter().find(|each| each.id() == cli));
+            let text = |key: &str| each.get(key).and_then(Value::as_str);
+            let id = text("id").and_then(Id::parse);
+            let cli =
+                text("cli").and_then(|cli| Cli::ALL.into_iter().find(|each| each.id() == cli));
             let (Some(id), Some(cli)) = (id, cli) else {
                 continue;
             };
             if self.records.iter().any(|record| record.id == id) {
                 continue;
             }
-            self.hold_for(None, cli, id);
+            // A folder's own name and nothing more: one with a path in it names no profile.
+            let profile = text("profile").filter(|name| !name.contains(['/', '\\']));
+            self.hold_for(None, cli, id, profile.unwrap_or_default());
+            let end =
+                text("state").and_then(|end| End::ALL.into_iter().find(|each| each.id() == end));
+            let at = each.get("ended").and_then(Value::as_u64);
+            if let (Some(end), Some(at), Some(record)) = (end, at, self.records.last_mut()) {
+                // One line of a title's length, as the app wrote it.
+                let title: String = (text("title").unwrap_or_default().chars())
+                    .filter(|each| !each.is_control())
+                    .take(TITLE)
+                    .collect();
+                record.past = Some(Past { title, end, at });
+            }
         }
         true
     }
 
-    /// Writes the ids held to `root`'s file, which only its owner can read, or removes the file
-    /// and the folder with none left.
+    /// Writes what's held to `root`'s file, which only its owner can read, or removes the file
+    /// and the folder with none left: each conversation's id and assistant, and of a task that
+    /// has ended and is listed, what `Past` holds and its profile.
     pub fn write(&self, root: &Path) {
         if self.records.is_empty() {
             _ = std::fs::remove_file(root.join(INDEX));
@@ -321,7 +426,17 @@ impl Kept {
             return;
         }
         let saved: Vec<Value> = (self.records.iter())
-            .map(|record| json!({ "id": record.id.as_str(), "cli": record.cli.id() }))
+            .map(|record| {
+                let mut row = json!({ "id": record.id.as_str(), "cli": record.cli.id() });
+                let listed = record.task.is_some() && !record.gone && !record.removing;
+                if let Some(past) = record.past.as_ref().filter(|_| listed) {
+                    row["title"] = json!(past.title);
+                    row["state"] = json!(past.end.id());
+                    row["ended"] = json!(past.at);
+                    row["profile"] = json!(record.profile);
+                }
+                row
+            })
             .collect();
         _ = std::fs::create_dir_all(root);
         _ = super::clients::write_private(
