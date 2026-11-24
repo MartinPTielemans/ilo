@@ -123,7 +123,8 @@ void SendAgentRequest(content::WebContents& contents,
                       std::string method,
                       const std::string& url,
                       const std::string& headers,
-                      std::string body) {
+                      std::string body,
+                      base::ScopedClosureRunner lift) {
   content::RenderFrameHost* frame = contents.GetPrimaryMainFrame();
   const url::Origin origin = frame->GetLastCommittedOrigin();
   // A page from a site, never an error page, the browser's or a sandboxed one, whose origins are
@@ -209,7 +210,13 @@ void SendAgentRequest(content::WebContents& contents,
   Sent()[request] = std::move(loader);
   sending->DownloadToString(
       frame->GetStoragePartition()->GetURLLoaderFactoryForBrowserProcess().get(),
-      base::BindOnce(&Answered, request), kMaxBody);
+      // The lift goes once the answer is told, or with the loader if none comes.
+      base::BindOnce(
+          [](base::ScopedClosureRunner lift, uint64_t request, std::optional<std::string> body) {
+            Answered(request, std::move(body));
+          },
+          std::move(lift), request),
+      kMaxBody);
 }
 
 }  // namespace browser_core

@@ -10,6 +10,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/process/process.h"
 #include "base/test/bind.h"
+#include "browser_core/agent_look_rule.h"
 #include "browser_core/agent_reply_limit.h"
 #include "components/performance_manager/graph/frame_node_impl.h"
 #include "components/performance_manager/graph/page_node_impl.h"
@@ -118,6 +119,46 @@ TEST_F(AgentJobVoterTest, AReadsCallGivesAndTakesBesideAnAct) {
   EXPECT_EQ(tab.process->GetPriority(), Priority::kUserVisible)
       << "the first answer took the vote from the call still under way";
   voter_->JobEnded(tab.page.get());
+  EXPECT_EQ(tab.process->GetPriority(), Priority::kBestEffort);
+}
+
+// A request's lift, as bc_agent_request holds it: taken at the call's entry, bound into the page's
+// look, and on to the request's answer. A look that ends without sending it drops it; beside an
+// act, the vote stays until the last of them answers.
+TEST_F(AgentJobVoterTest, ARequestIsLiftedFromItsEntryThroughItsLookToItsAnswer) {
+  MockSinglePageInSingleProcessGraph tab(graph());
+  base::OnceClosure answer;
+  const auto request = [&tab, &answer]() {
+    return base::BindOnce(
+        [](base::OnceClosure* answer, base::ScopedClosureRunner lift, LookEnd end) {
+          if (end == LookEnd::kClear) {
+            *answer = base::BindOnce([](base::ScopedClosureRunner) {}, std::move(lift));
+          }
+        },
+        base::Unretained(&answer), AgentJobVoter::Lift(tab.page->GetWeakPtr()));
+  };
+
+  base::OnceCallback<void(LookEnd)> look = request();
+  EXPECT_EQ(tab.process->GetPriority(), Priority::kUserVisible) << "not lifted at its entry";
+  std::move(look).Run(LookEnd::kClear);
+  EXPECT_EQ(tab.process->GetPriority(), Priority::kUserVisible) << "sent, and not answered yet";
+  std::move(answer).Run();
+  EXPECT_EQ(tab.process->GetPriority(), Priority::kBestEffort);
+
+  for (LookEnd end : {LookEnd::kUnchecked, LookEnd::kWithheld}) {
+    look = request();
+    std::move(look).Run(end);
+    EXPECT_FALSE(answer);
+    EXPECT_EQ(tab.process->GetPriority(), Priority::kBestEffort) << "a look that sent nothing";
+  }
+
+  base::ScopedClosureRunner act = AgentJobVoter::Lift(tab.page->GetWeakPtr());
+  look = request();
+  std::move(look).Run(LookEnd::kClear);
+  std::move(answer).Run();
+  EXPECT_EQ(tab.process->GetPriority(), Priority::kUserVisible)
+      << "the request's answer took the vote from the act still under way";
+  act.RunAndReset();
   EXPECT_EQ(tab.process->GetPriority(), Priority::kBestEffort);
 }
 

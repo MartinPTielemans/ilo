@@ -916,11 +916,15 @@ void bc_agent_request(const char* agent,
                                      BC_AGENT_FAILURE_NOT_ITS_SPACE);
     return;
   }
+  // Lifted from the call's entry, as a read and an act are, through the look to the request's
+  // answer (#4227). A look that ends without sending it drops it with its callback.
+  base::ScopedClosureRunner lift = browser_core::LiftWhileWorking(*contents);
   // A call on the tab, so the page's one look comes first (AgentPage::Freeze).
   browser_core::AgentPage::CreateForWebContents(contents);
   browser_core::AgentPage::FromWebContents(contents)->Freeze(base::BindOnce(
       [](base::WeakPtr<content::WebContents> contents, uint64_t request, std::string method,
-         std::string url, std::string headers, std::string body, browser_core::LookEnd end) {
+         std::string url, std::string headers, std::string body, base::ScopedClosureRunner lift,
+         browser_core::LookEnd end) {
         if (end == browser_core::LookEnd::kWithheld) {
           browser_core::RefuseAgentRequest(request, browser_core::kWithheldPageRefusal,
                                            BC_AGENT_FAILURE_WITHHELD_PAGE);
@@ -937,11 +941,12 @@ void bc_agent_request(const char* agent,
                                            BC_AGENT_FAILURE_NOT_ITS_SPACE);
           return;
         }
-        browser_core::SendAgentRequest(*contents, request, method, url, headers, body);
+        browser_core::SendAgentRequest(*contents, request, method, url, headers, body,
+                                       std::move(lift));
       },
       contents->GetWeakPtr(), request, std::string(method ? method : ""),
       std::string(url ? url : ""), std::string(headers ? headers : ""),
-      body && size ? std::string(body, size) : std::string()));
+      body && size ? std::string(body, size) : std::string(), std::move(lift)));
 }
 
 uint64_t bc_tab_link_card(bc_id tab) {
