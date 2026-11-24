@@ -1091,6 +1091,10 @@ impl TalkView {
             .unwrap_or_default();
         let on = self.shown.as_ref().and_then(|shown| shown.on);
         let step = self.running_step();
+        // Each page's own step, once the task works on several.
+        let pages = (self.shown.as_ref().zip(self.shell.upgrade()))
+            .map(|(shown, shell)| shell.read(cx).task_page_steps(&shown.agent).to_vec())
+            .unwrap_or_default();
         // The area's own width as it last drew, the grid taking its inset but a gap each side.
         let area = (self.drawn_at.get()).map_or(self.viewport.width, |bounds| bounds.size.width);
         let room = f32::from(area) - 2. * PICTURE_GAP;
@@ -1131,7 +1135,10 @@ impl TalkView {
                 )
                 .absolute()
                 .size_full();
-                let working = on == Some(tab);
+                // A page the user holds says why under its site, in the title's ink, where the
+                // agent's page has its step: the bar over the page says the same.
+                let held = (self.shell.upgrade()).and_then(|shell| shell.read(cx).held_why(tab));
+                let (working, step) = picture_work(tab, on, step.clone(), &pages, held.is_some());
                 // Until its picture comes, the tile says it has none yet, rather than show nothing,
                 // and once the core had none to give, that the next action takes one.
                 let empty = (!pictured).then(|| {
@@ -1218,10 +1225,7 @@ impl TalkView {
                     .items_center()
                     .children(sound)
                     .child(line(site.clone(), look.palette.text(TITLE)));
-                // A page the user holds says why under its site, in the title's ink, where the
-                // agent's page has its step: the bar over the page says the same.
-                let held = (self.shell.upgrade()).and_then(|shell| shell.read(cx).held_why(tab));
-                let status = picture_status(held.as_ref(), step.clone().filter(|_| working));
+                let status = picture_status(held.as_ref(), step.filter(|_| working));
                 if let Some(words) = &status {
                     let mut said = self.said_logged.borrow_mut();
                     if said.get(&tab) != Some(words) {
@@ -2835,6 +2839,24 @@ pub(super) fn grid_shape(room: f32, pages: usize) -> (usize, f32) {
     match (fit, pages) {
         (1, 3..) => (2, ((room - PICTURE_GAP) / 2.).floor().max(1.)),
         _ => (fit, PICTURE_WIDTH),
+    }
+}
+
+/// Whether the task works on `tab`'s page, which rings its picture, and the step the picture says
+/// then. A task on one page works on the page it's `on`, at the step under way, `running`. One
+/// that works on several, `pages` having each one's own step, works on every page that has one
+/// and that the user doesn't hold: each says its own step, never another page's (#4102).
+pub(super) fn picture_work(
+    tab: u64,
+    on: Option<u64>,
+    running: Option<SharedString>,
+    pages: &[(u64, SharedString)],
+    held: bool,
+) -> (bool, Option<SharedString>) {
+    let own = pages.iter().find(|(each, _)| *each == tab);
+    match pages.is_empty() {
+        true => (on == Some(tab), running),
+        false => (own.is_some() && !held, own.map(|(_, step)| step.clone())),
     }
 }
 

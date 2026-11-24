@@ -186,6 +186,16 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         (Some(count), false) => cards[0].status = helper_trace(count, false).line(),
         (None, _) => {}
     }
+    // Each helper's page has its own step, which the strip under it and its tile say.
+    if let Some(count) = bench_helpers().filter(|_| bench_ended().is_none()) {
+        let steps = helper_lines(count, bench_helper_waits(), true);
+        cards[0].page_steps = (helper_tabs().into_iter().zip(steps))
+            .filter_map(|((tab, _), step)| match step {
+                TraceItem::Helper(step) => Some((tab, step.title)),
+                _ => None,
+            })
+            .collect();
+    }
     // The bench's task that has ended (#4105) is done on its card too, which the strip under its
     // page and the page's ring follow, with the page it left the user.
     if let Some(name) = bench_ended() {
@@ -454,7 +464,11 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                     took: Some(52),
                     items: helper_lines(HELPER_PAGES.len(), false, false),
                 }),
-                Line::Said("Encore has two together in row 12 of the stalls, at 38 € each. The other three have none left.".into()),
+                Line::Said(
+                    "Two seats together in row 12 of the stalls are in your basket at \
+                     tickets.example, 38 € each. The other three shops have none left."
+                        .into(),
+                ),
             ]
         }
         // A step whose answer carried a site's notes (#4122), which the line under it says.

@@ -2320,8 +2320,10 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
                 // With helpers, the user holds the page one of them handed over for a sign-in.
                 let held = match bench_helper_waits() {
                     true => {
-                        let (tab, site) = helper_tabs().swap_remove(HELPER_WAITING);
-                        vec![(tab, format!("Sign in to {site}").into())]
+                        // What the helper asked of them, as it would word it: the page's tile
+                        // and strip have its site already.
+                        let (tab, _) = helper_tabs().swap_remove(HELPER_WAITING);
+                        vec![(tab, "Sign in".into())]
                     }
                     false => Vec::new(),
                 };

@@ -1340,6 +1340,39 @@ fn a_working_line_counts_the_tasks_helpers() {
     assert_eq!(summary(&mut talk), "Worked for 41 s · 4 helpers");
 }
 
+/// On Pages, a task on one page rings the page it's on, with the step under way. One that works
+/// on several rings every page that has a step of its own, each saying its own and never
+/// another's, but not the page the user holds, nor one with no step yet (#4102).
+#[test]
+fn every_page_a_task_works_on_is_ringed_with_its_own_step() {
+    use super::picture_work;
+    use gpui::SharedString;
+    let running: Option<SharedString> = Some("Clicking “Tickets”".into());
+    assert_eq!(
+        picture_work(1, Some(1), running.clone(), &[], false),
+        (true, running.clone())
+    );
+    assert!(!picture_work(2, Some(1), running.clone(), &[], false).0);
+
+    let pages: Vec<(u64, SharedString)> = vec![
+        (1, "Reading tickets.example".into()),
+        (2, "Reading stalls.example".into()),
+        (3, "Handing you boxoffice.example".into()),
+    ];
+    for (tab, step) in &pages[..2] {
+        let work = picture_work(*tab, Some(1), running.clone(), &pages, false);
+        assert_eq!(work, (true, Some(step.clone())), "page {tab}");
+    }
+    assert!(
+        !picture_work(3, Some(1), running.clone(), &pages, true).0,
+        "the held page"
+    );
+    assert_eq!(
+        picture_work(4, Some(1), running, &pages, false),
+        (false, None)
+    );
+}
+
 /// Pages' grid holds as many pictures across as fit at their full size, up to the most a row has.
 /// Where only one fits, as beside a page, three pages or more go two across, each half the room,
 /// so no one scrolls for the third; one page or two stay whole.
