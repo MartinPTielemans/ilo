@@ -35,7 +35,7 @@ pub const INSTRUCTIONS: &str = concat!(
      don't try again. You can never type into a password field: a sign-in, a 2FA prompt or a \
      CAPTCHA is the user's to do, so hand the tab to them with hand_off, and take a snapshot \
      once they hand it back, as its page will have changed. For a file field, call upload: the \
-     user chooses the file. The user can take a tab over too, \
+     user chooses the file in the page and hands the tab back. The user can take a tab over too, \
      on purpose: it's theirs until they hand it back. Carry on in your other tabs, and only \
      when the task can't go on without that one, ask for it with ask_for_tab, saying why. Use \
      run_steps for several actions in a row.\n\n\
@@ -66,7 +66,7 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
      answers when there are a few to pick from. It waits for their answer.\n\n\
      Never ask for a password, a one-time code or a card number in the conversation. A sign-in, \
      a 2FA prompt or a CAPTCHA is the user's to do: hand them the tab with hand_off. For a file \
-     field, call upload: the user chooses the file.\n\n\
+     field, call upload: the user chooses the file in the page and hands the tab back.\n\n\
      Never pay, and never place an order, book or send a message unless the user asked you to. \
      When the work ends on a page only the user may finish, such as a checkout, stop there.\n\n\
      When you're done, call finish with the result in a sentence or two, and its summary in one \
@@ -565,7 +565,7 @@ fn shared() -> Value {
         {
             "name": "upload",
             "title": "Upload a file",
-            "description": "Ask the user to choose a file for a file field: an input of type file, which the outline shows as a button, often named Choose File or Browse. The user chooses it in the browser and it goes into the field. You never get its name or path, only what the page then shows of it. This waits for the user. Use it rather than clicking the field: a click opens nothing in your tab.",
+            "description": "Hand the tab to the user to choose a file for a file field: an input of type file, which the outline shows as a button, often named Choose File or Browse. The user chooses it in the page and hands the tab back. You never get its name or path, only what the page then shows of it, so take a snapshot once it's back. This waits for the user. Use it rather than clicking the field: a click opens nothing in your tab.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

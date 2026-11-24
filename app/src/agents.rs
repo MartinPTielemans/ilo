@@ -3518,11 +3518,12 @@ impl Agents {
         self.act_in_page(agent, tab, request, PageAction::FileField, node, "");
     }
 
-    /// The core described the upload's file field, as JSON, or refused it with why: the card asks
-    /// the user for a file for it.
+    /// The core described the upload's file field, as JSON, or refused it with why: the step is
+    /// the user's, on the task's line, as a handoff is. They choose the file in the page itself,
+    /// and Hand Back tells the agent only that the tab came back, never what went in (#3656).
     fn file_field_described(
         &mut self,
-        mut act: Act,
+        act: Act,
         text: String,
         error: Option<Failure>,
         cx: &mut Context<Self>,
@@ -3540,45 +3541,53 @@ impl Agents {
         let field: Value = serde_json::from_str(&text).unwrap_or_default();
         // The core writes ids as JSON doubles, which Chromium's writer gives a ".0".
         let id = field.get("field").and_then(Value::as_f64).unwrap_or(0.0) as u64;
+        // The user picks the file with the page's own control, so the core's hold on it goes.
+        self.browser.file_field_drop(id);
         let label = field.get("label").and_then(Value::as_str).unwrap_or("");
-        // The page's words, kept inside the quotes they're shown in.
         let label = page::clip(&request::plain(label), 60);
-        let many = field.get("many").and_then(Value::as_bool).unwrap_or(false);
-        let site = match field.get("site").and_then(Value::as_str) {
-            Some(site) if !site.is_empty() => site.to_string(),
-            _ => host,
+        let files = match field.get("many").and_then(Value::as_bool) {
+            Some(true) => "files",
+            _ => "a file",
         };
-        let files = if many { "files" } else { "a file" };
-        // As on the tab's other actions, its card shows the site apart from the label (#3836):
-        // the browser's, the field frame's that gets the file, never the page's words.
-        act.say(&site, |on| match label.is_empty() {
-            true => format!("add {files} to a page{on}"),
-            false => format!("add {files} to “{label}”{on}"),
-        });
-        act.file = Some(FileField { id, label, many });
-        let agent = self.agent_name(&act.agent);
-        let question = Question {
-            id: self.next_request,
-            agent: agent.clone(),
-            from: act.agent.clone().into(),
-            what: act.what.clone().into(),
-            asks: act.asks.clone().into(),
-            why: format!("You choose the file. {agent} sees only what the page shows of it.")
-                .into(),
-            site: site.clone().into(),
-            each_time: true,
-            file: Some(FileAsk { field: id, many }),
-            ..Question::default()
+        let why = match label.is_empty() {
+            true => format!("Choose {files} for the page."),
+            false => format!("Choose {files} for “{label}”."),
         };
-        self.next_request += 1;
+        let Act {
+            agent,
+            connection,
+            call,
+            tab,
+            reply,
+            ..
+        } = act;
+        let (life, actions) = self.held_step(tab, held::Event::HandOff);
+        if life != held::Life::HandedOff || !self.browser.hand_off(&agent, tab) {
+            _ = reply.send(ToolResult::failed(
+                tools::Kind::Yours,
+                "The tab is the user's already.",
+            ));
+            return;
+        }
+        self.note(&agent, connection, "upload", &host, "");
         // check.sh reads this line.
-        log!(
-            "browser: agent {} asks {} upload {}",
-            act.agent,
-            question.id,
-            act.tab
-        );
-        self.put_question(question, site, act, cx);
+        log!("browser: agent {agent} hands off {tab}: {why}");
+        let question = self.next_request;
+        self.next_request += 1;
+        let held = Held {
+            agent,
+            connection,
+            call,
+            why,
+            question,
+            back: None,
+            reply: Some(reply),
+            timer: None,
+            sign_in: false,
+        };
+        self.held.insert(tab, held);
+        self.carry(tab, held::Event::HandOff, life, actions, cx);
+        cx.notify();
     }
 
     /// The user pressed the card's Choose File… for the question `id`: the system's file dialog
