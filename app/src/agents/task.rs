@@ -1871,7 +1871,7 @@ impl Agents {
             return cx.notify();
         }
         // A reply to a task that has ended takes it up, if its conversation is kept (#4105).
-        self.pick_up(agent);
+        self.pick_up(agent, cx);
         let resumes = self.resumes(agent);
         let Some(task) = self.task_mut(agent) else {
             return;

@@ -137,7 +137,7 @@ impl Run {
     }
 
     /// The task's turn ends well, with its answer.
-    fn finish(&self, agent: &str, cx: &mut TestAppContext) {
+    pub(super) fn finish(&self, agent: &str, cx: &mut TestAppContext) {
         self.said(agent, Out::Said("Two seats at 9:05, car 4.".into()), cx);
         self.said(agent, Out::Ended(None), cx);
         assert!(matches!(self.state(agent, cx), State::Done { .. }));
@@ -275,7 +275,8 @@ fn a_kept_task_runs_under_an_id_of_ilos_in_a_folder_of_its_own(cx: &mut TestAppC
 /// A reply to a task that ended takes it up: at Work on pages though it ended at Full access,
 /// which ilo's line over the reply says, by a run that goes on with the same conversation and is
 /// started with everything a new task's run is, since its assistant brings back no tool or
-/// permission by itself. The run is told the reply alone, as the assistant has what came before.
+/// permission by itself. The run is told the reply alone, as the assistant has what came before,
+/// under ilo's words about its access, which it last knew as Full access.
 #[cfg(unix)]
 #[gpui::test]
 fn a_reply_takes_an_ended_task_up_at_work_on_pages(cx: &mut TestAppContext) {
@@ -294,7 +295,8 @@ fn a_reply_takes_an_ended_task_up_at_work_on_pages(cx: &mut TestAppContext) {
 
     let (resumed, first) = run.ran(2);
     assert_eq!(after(&resumed, "--resume"), Some(id.as_str()));
-    assert_eq!(first, reply);
+    let lowered = tier::changed_turn(Tier::Full, Tier::Work);
+    assert_eq!(first, format!("{lowered}\n\n{reply}"));
     assert_eq!(run.ran_in(2), run.folder(&id));
     // Every flag of the access the app decided is passed again: a new task's own, which is Work
     // on pages' until Full access has flags of its own, and none it wasn't given.

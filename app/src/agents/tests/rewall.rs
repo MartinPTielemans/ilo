@@ -220,6 +220,44 @@ fn a_change_that_leaves_the_wall_as_it_is_ends_nothing(cx: &mut TestAppContext) 
     assert_eq!(stands(&run, &agent, cx), (Tier::Look, true, Vec::new()));
 }
 
+/// A reply to a task that ended at Full access takes it up lower (kept.rs), which is a change of
+/// level like the user's own: the run inside Full access's wall is over and is sent nothing of
+/// the reply, and the reply starts one inside the lower level's wall, with ilo's words about the
+/// change over it. No road gives a task both a folder and a kept conversation yet, so the folder
+/// is put on a kept task here.
+#[cfg(unix)]
+#[gpui::test]
+fn a_level_lowered_at_a_reply_starts_it_inside_the_lower_levels_wall(cx: &mut TestAppContext) {
+    let (run, walls) = (Run::new("reply", cx), Walls::default());
+    (run.agents).update(cx, |agents, _| agents.tasks.wall = Some(walls.maker()));
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    (run.agents).update(cx, |agents, _| {
+        agents.task_mut(&agent).unwrap().files = folder();
+    });
+    // The user gives it the highest access while it works, and it ends there.
+    set(&run, &agent, Tier::Full, cx);
+    run.ran(2);
+    assert_eq!(walls.asked(), [(Tier::Full, true, false)]);
+    let at_full = run_of(&run, &agent, cx);
+    run.finish(&agent, cx);
+    assert!(matches!(run.state(&agent, cx), State::Done { .. }));
+
+    let reply = "Are there two together for Sunday too?";
+    (run.agents).update(cx, |agents, cx| agents.reply(&agent, reply, cx));
+    let (args, first) = run.ran(3);
+    assert_eq!(walls.asked().last(), Some(&(Tier::Work, true, false)));
+    assert_eq!(walls.asked().len(), 2);
+    assert!(walled(&args), "{args:?}");
+    let lowered = tier::changed_turn(Tier::Full, Tier::Work);
+    assert!(first.ends_with(&format!("{lowered}\n\n{reply}")), "{first}");
+    assert_ne!(run_of(&run, &agent, cx), at_full);
+    assert_eq!(run.state(&agent, cx), State::Working);
+    assert_eq!(stands(&run, &agent, cx), (Tier::Work, true, Vec::new()));
+    // The run inside Full access's wall was sent what started it and no more.
+    assert_eq!(sent(&run, 2, 1).len(), 1);
+}
+
 /// A raise whose wall isn't put up changes nothing: the task runs on as it was, at its level,
 /// told nothing, and the log has no change.
 #[gpui::test]

@@ -13,12 +13,13 @@ use std::time::{Duration, SystemTime};
 use gpui::{App, AppContext, Context, SharedString};
 
 use super::ilo::{IloKind, IloLine};
+use super::rewall::Change;
 use super::{KEPT, Line, State, Task, Who, seconds};
 use crate::agents::Agents;
 use crate::agents::helpers::Helpers;
 use crate::agents::kept::{self, Keep, Keeps, Nowhere};
 use crate::agents::runner::Cli;
-use crate::agents::tier::{Sites, Tier};
+use crate::agents::tier::{self, Sites, Tier};
 
 /// The title of a task a run before left whose agent never named it: what was asked stood as
 /// its title, and isn't kept.
@@ -103,8 +104,10 @@ impl Agents {
     /// reply says so only where there's something to say: the task comes back at another access
     /// than it ended at, or it's one a run before left, whose assistant ilo starts again. A reply
     /// to a task done or stopped in this run, at the access it had, is the resume and has no line.
-    /// Nothing the assistant or a page says has a part in it.
-    pub(super) fn pick_up(&mut self, agent: &str) {
+    /// Nothing the assistant or a page says has a part in it. A lower access is a change of level
+    /// as the user's own is (rewall.rs): its assistant is told with the reply, and a run inside
+    /// the wall of the level it ended at is over.
+    pub(super) fn pick_up(&mut self, agent: &str, cx: &mut Context<Self>) {
         let Some(task) = self.task(agent) else {
             return;
         };
@@ -129,6 +132,13 @@ impl Agents {
         log!("browser: task {agent} picked up");
         // The activity log's entry for it, under the task's own name.
         self.note(agent, 0, "resumed", "", "");
+        if back != ended_at {
+            let change = Change::Level {
+                from: ended_at,
+                raised: None,
+            };
+            self.rewall(agent, change, tier::changed_turn(ended_at, back), cx);
+        }
     }
 
     /// `agent`'s run went, saying `said`. If it was to go on with a conversation its assistant no
