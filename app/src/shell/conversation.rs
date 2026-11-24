@@ -70,6 +70,7 @@ use crate::tokens::toast::{
 
 actions!(conversation, [SendReply, StopTask]);
 
+mod ilo_keys;
 mod markdown;
 mod motion;
 mod words;
@@ -153,6 +154,7 @@ pub fn send_agents(
 const KEY_CONTEXT: &str = "Conversation";
 
 pub fn bind_keys(cx: &mut gpui::App) {
+    ilo_keys::bind(cx);
     let keys = [super::keys::view_binding(
         "enter",
         Box::new(SendReply),
@@ -224,6 +226,10 @@ pub struct TalkView {
     ilo_drawn: Rc<RefCell<HashMap<(usize, IloButton), (Bounds<Pixels>, Instant)>>>,
     /// Whether the pointer rests on such a button, which holds the lines still as more come.
     ilo_hovered: Rc<Cell<bool>>,
+    /// The keyboard on a line's buttons, while the user's Focus command has it there, and the
+    /// buttons' handles, in their order on the line (ilo_keys.rs).
+    ilo_keys: Option<ilo_keys::IloKeys>,
+    ilo_stops: [gpui::FocusHandle; ilo_keys::MOST],
     /// Where each of ilo's lines' words were last drawn, and their layout, by its line.
     ilo_words_drawn: WordsDrawn,
     /// Where each ilo line's link was drawn, by the line's key.
@@ -321,9 +327,11 @@ impl Shell {
                 }
                 let placeholder = self.palette.text(FORM_PLACEHOLDER);
                 let reply = cx.new(|cx| {
-                    TextInput::new(format!("Reply to {name}"), cx).placeholder_color(placeholder)
+                    (TextInput::new(format!("Reply to {name}"), cx).placeholder_color(placeholder))
+                        .placeholder_after_caret()
                 });
                 let shell = cx.weak_entity();
+                let ilo_stops = std::array::from_fn(|_| cx.focus_handle());
                 cx.new(|_| TalkView {
                     shell,
                     agent: agent.clone(),
@@ -352,6 +360,8 @@ impl Shell {
                     answers_drawn: Rc::default(),
                     ilo_drawn: Rc::default(),
                     ilo_hovered: Rc::default(),
+                    ilo_keys: None,
+                    ilo_stops,
                     ilo_words_drawn: Rc::default(),
                     ilo_links: Rc::default(),
                     level_drawn: Rc::default(),
@@ -2195,7 +2205,8 @@ impl TalkView {
                 .flex_wrap()
                 .gap(px(BUTTONS_GAP))
                 .children(
-                    (buttons.into_iter()).map(|button| self.ilo_button(line, button, look, cx)),
+                    (buttons.into_iter().enumerate())
+                        .map(|(at, button)| self.ilo_button(line, (at, button), look, cx)),
                 )
         });
         div()
@@ -2215,11 +2226,18 @@ impl TalkView {
     fn ilo_button(
         &self,
         line: &IloLine,
-        button: IloButton,
+        (at, button): (usize, IloButton),
         look: &Look,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let key = (line.key, button);
+        // The Focus command's keyboard, on this line's buttons (ilo_keys.rs).
+        let keyed = self
+            .ilo_keys
+            .as_ref()
+            .is_some_and(|keys| keys.line == line.key);
+        let ringed = self.ilo_ring(line.key) == Some(at);
+        let stop = (keyed && at < ilo_keys::MOST).then(|| self.ilo_stops[at].clone());
         let tab = ilo::tab(&line.kind);
         let drawn = self.ilo_drawn.clone();
         let hovered = self.ilo_hovered.clone();
@@ -2245,6 +2263,14 @@ impl TalkView {
             )
             .when(button.widens(), |chip| {
                 chip.on_hover(move |over, _, _| hovered.set(*over))
+            })
+            .when_some(stop, |chip, stop| {
+                chip.track_focus(&stop).key_context(ilo_keys::CONTEXT)
+            })
+            .when(ringed, |mut chip| {
+                let style = chip.style();
+                *style = crate::keyboard_ring::ring(look.palette.ink)(style.clone());
+                chip
             })
             .on_click(cx.listener(move |view, _, _, cx| view.press_ilo(key, tab, cx)))
     }
@@ -2727,6 +2753,7 @@ impl Shell {
 
 impl Render for TalkView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.step_ilo_keys(window, cx);
         let now = Instant::now();
         let still = crate::motion::still(cx);
         let asked = self
@@ -2853,6 +2880,10 @@ impl Render for TalkView {
             .id("conversation")
             .key_context(KEY_CONTEXT)
             .on_action(cx.listener(|view, _: &SendReply, window, cx| view.send_reply(window, cx)))
+            .on_action(cx.listener(Self::ilo_press))
+            .on_action(cx.listener(Self::ilo_next))
+            .on_action(cx.listener(Self::ilo_back))
+            .on_action(cx.listener(Self::ilo_leave))
             .size_full()
             .bg(palette.page)
             .px(px(INSET))

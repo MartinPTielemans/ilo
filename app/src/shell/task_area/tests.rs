@@ -539,16 +539,8 @@ fn selecting_a_tab_or_a_space_leaves_the_area(cx: &mut TestAppContext) {
     assert!(shell.read_with(cx, |shell, _| shell.task_shown().is_some()));
     // Focus Agent Question too, from the page or the UI: the card shows over the area (#3869).
     shell.update(cx, |shell, cx| {
-        let asked = crate::agents::Question {
-            id: 9,
-            agent: "Claude".into(),
-            what: "download a file".into(),
-            ..Default::default()
-        };
-        shell.set_agent_question(Some(asked), cx);
         shell.run(Command::FocusAgentQuestion, "page", cx);
         shell.run(Command::FocusAgentQuestion, "ui", cx);
-        shell.set_agent_question(None, cx);
     });
     assert!(shell.read_with(cx, |shell, _| shell.task_shown().is_some()));
     host.take();
@@ -1364,41 +1356,8 @@ fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
 #[test]
 fn only_what_needs_the_user_has_a_primary() {
     use super::{StripChip, strip_chips};
-    use crate::agents::Question;
     use crate::agents::task::Dot;
-    use crate::shell::agent_question::buttons;
     use crate::shell::permission::Look;
-
-    let question = |handoff: Option<u64>, back: bool| Question {
-        id: 1,
-        agent: "Claude Code".into(),
-        from: "claude-code".into(),
-        what: "open bank.example".into(),
-        why: "It's a bank's site.".into(),
-        handoff,
-        back,
-        ..Default::default()
-    };
-    for (asked, primary) in [
-        (question(None, false), "Allow Once"),
-        (question(Some(30), false), "Show Tab"),
-        (question(Some(30), true), "Hand Back"),
-    ] {
-        let buttons = buttons(&asked);
-        let primaries: Vec<_> = (buttons.iter())
-            .filter(|button| button.look == Look::Primary)
-            .map(|button| button.label)
-            .collect();
-        assert_eq!(primaries, [primary], "{asked:?}");
-        assert_eq!(
-            buttons.last().map(|button| button.look),
-            Some(match asked.handoff {
-                Some(_) => Look::Primary,
-                None => Look::Text,
-            }),
-            "the primary is on the right, and Always Allow on a row of its own"
-        );
-    }
 
     let primaries = |held, dot, open| -> Vec<StripChip> {
         (strip_chips(held, dot, open, false).into_iter())

@@ -34,9 +34,7 @@ use crate::{
 
 mod access;
 mod agent_bar;
-mod agent_card_keys;
 mod agent_pointer;
-mod agent_question;
 #[cfg(test)]
 mod app_menu_tests;
 mod arrange;
@@ -1881,20 +1879,6 @@ pub struct Shell {
     /// The Cast dialog the core reports for the tab it's for (cast.rs).
     cast: Option<(u64, Cast)>,
     cast_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// What an agent asks the user first, in every window (agent_question.rs).
-    agent_question: Option<crate::agents::Question>,
-    agent_question_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// Each row of a card of several changes as it was drawn, its text and where the agent's mark
-    /// is in it, which the tests read.
-    #[cfg(test)]
-    agent_question_rows: RefCell<Vec<(gpui::TextLayout, std::ops::Range<usize>)>>,
-    /// The agent card's buttons, in its buttons' order, which Focus Agent Question gives the
-    /// keyboard (#3869).
-    agent_card_buttons: [FocusHandle; agent_card_keys::MOST_BUTTONS],
-    /// The room the agent card's key chips have, as last drawn.
-    agent_card_room: Rc<Cell<agent_card_keys::CardRoom>>,
-    /// The keyboard on the agent card's buttons, while it is.
-    card_keys: Option<agent_card_keys::CardKeys>,
     /// Every Space's agent tasks' cards, newest first, as the Agents last said (Agent task).
     task_cards: Vec<crate::agents::task::Card>,
     /// The window's tasks' plates at the sidebar's foot, and ⌘T's slot among them.
@@ -2367,13 +2351,6 @@ impl Shell {
             cast: None,
             cast_drawn: Rc::default(),
             question_settling: RefCell::default(),
-            agent_question: None,
-            agent_question_drawn: Rc::default(),
-            #[cfg(test)]
-            agent_question_rows: RefCell::default(),
-            agent_card_buttons: std::array::from_fn(|_| cx.focus_handle()),
-            agent_card_room: Rc::default(),
-            card_keys: None,
             task_cards: Vec::new(),
             foot: task_cards::Foot::default(),
             closed_task: None,
@@ -4624,7 +4601,6 @@ impl Render for Shell {
                 cx.defer_in(window, |shell, _, cx| shell.live_space_shown(cx));
             }
         }
-        self.step_card_keys(window, cx);
         self.lone_header = cx
             .try_global::<LoneSpaceHeader>()
             .is_some_and(|kept| kept.0);
@@ -5186,8 +5162,6 @@ impl Shell {
                     .children(self.pair_card(cx))
                     .children(self.cast_card(cx))
                     .children(self.task_foot(cx))
-                    // Over the tasks' plates, which a tall request's card reaches past (#3548).
-                    .children(self.agent_question_card(cx))
                     // Over the tasks' plates, which its open grows over.
                     .children(self.media_player_cards(cx))
                     // Over the players and the task's foot, which it opens over.

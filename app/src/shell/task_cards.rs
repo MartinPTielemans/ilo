@@ -39,7 +39,7 @@ use super::{
 };
 use crate::agents::runner::Cli;
 use crate::agents::sign_in::Offer;
-use crate::agents::task::{Card, Dot, TaskAction, foot_words, open_label, status_lead};
+use crate::agents::task::{Card, Dot, TaskAction, open_label, status_lead};
 use crate::palette::FIELD_PLATE as URL_FIELD;
 use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
 use crate::tokens::shell::MEDIA_BUTTON;
@@ -1729,7 +1729,7 @@ impl Shell {
             None => (None, 1.),
         };
         let lines = if status.asks { status.lines } else { 1 };
-        let words = foot_words(&status.text, face.width <= room * lines as f32);
+        let words = status.text.clone();
         div()
             .relative()
             .mt(px(STATUS_GAP))

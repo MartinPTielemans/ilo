@@ -641,15 +641,6 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_answer_permission(tab, answer as i32) };
     }
 
-    fn answer_agent(&self, question: u64, answer: browser::agents::Answer, _: &mut App) {
-        // After the shell's update, as the answer tells every window's shell the next question.
-        agents_core::update(move |agents, cx| agents.answer(question, answer, cx));
-    }
-
-    fn choose_agent_file(&self, question: u64, window: u64, _: &mut App) {
-        agents_core::update(move |agents, cx| agents.choose_file(question, window, cx));
-    }
-
     fn take_over(&self, agent: SharedString, tab: u64, _: &mut App) {
         agents_core::update(move |agents, cx| agents.take_over(&agent, tab, cx));
     }

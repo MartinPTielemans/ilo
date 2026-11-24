@@ -122,7 +122,11 @@ fn an_upload_hands_the_tab_to_the_user_naming_the_field(cx: &mut TestAppContext)
         ),
         (
             json!({ "field": 7.0, "label": "", "site": "example.com" }),
-            "Choose a file for the page.",
+            "Choose a file.",
+        ),
+        (
+            json!({ "field": 7.0, "label": "", "site": "example.com", "many": true }),
+            "Choose files.",
         ),
         // A label can't close its quotes or lay out lines of its own.
         (

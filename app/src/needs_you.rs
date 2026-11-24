@@ -118,19 +118,11 @@ fn need(card: &Card) -> Need {
 }
 
 /// The step the task waits on, as the notification's body: what a handoff asks the user to do,
-/// such as "Sign in to github.com", what a confirmation would do, or the agent's question.
+/// such as "Sign in to github.com", or the agent's question.
 fn body(card: &Card) -> String {
-    let Some(question) = &card.question else {
-        return card.status.to_string();
-    };
-    match question.handoff {
-        Some(_) => question.why.to_string(),
-        None => {
-            let mut what = question.what.chars();
-            what.next()
-                .map(|first| first.to_uppercase().chain(what).collect())
-                .unwrap_or_default()
-        }
+    match &card.question {
+        Some(question) => question.why.to_string(),
+        None => card.status.to_string(),
     }
 }
 
