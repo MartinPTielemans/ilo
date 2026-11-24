@@ -141,8 +141,9 @@ pub enum Out {
 /// nothing ilo allows or refuses reads it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Helper {
-    /// The task asked for it.
-    Asked,
+    /// The task asked for it, by the name it gave it: one line of plain text, cut short, or
+    /// empty.
+    Asked(String),
     /// It calls one of the browser's tools on this tab.
     On(u64),
 }

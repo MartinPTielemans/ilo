@@ -52,7 +52,7 @@ fn clicked(run: &Run) -> Vec<u64> {
 
 /// The task's output says it asked for the helper `id`, whose lines name `tab`.
 fn helper(run: &Run, agent: &str, id: &str, tab: u64, cx: &mut TestAppContext) {
-    for told in [Helper::Asked, Helper::On(tab)] {
+    for told in [Helper::Asked(format!("Shop {id}")), Helper::On(tab)] {
         let id = id.to_string();
         run.said(agent, Out::Helper { id, told }, cx);
     }
@@ -536,7 +536,7 @@ fn a_tasks_helpers_are_a_line_each_and_its_card_says_the_live_line(cx: &mut Test
     // Each helper's line is its last step, which is its page's own on the card.
     let lines: Vec<_> = (trace.items.iter())
         .map(|item| match item {
-            crate::agents::task::TraceItem::Helper(step) => step.title.clone(),
+            crate::agents::task::TraceItem::Helper { step, .. } => step.title.clone(),
             other => panic!("not a helper's line: {other:?}"),
         })
         .collect();
@@ -548,6 +548,26 @@ fn a_tasks_helpers_are_a_line_each_and_its_card_says_the_live_line(cx: &mut Test
     assert_eq!(lines, [own(PAGES[0].0), own(PAGES[1].0)]);
     assert_ne!(lines[0], lines[1]);
     assert!(lines[1].contains("stalls.example"), "{lines:?}");
+    // Each line has the name its task gave the helper and the page it works on, for its favicon
+    // and its word. The name is held in memory alone: no file of the profile's has it.
+    let named: Vec<_> = (trace.items.iter())
+        .filter_map(|item| match item {
+            crate::agents::task::TraceItem::Helper { name, tab, .. } => Some((name.as_ref(), *tab)),
+            _ => None,
+        })
+        .collect();
+    let wanted = [
+        ("Shop toolu_a", Some(PAGES[0].0)),
+        ("Shop toolu_b", Some(PAGES[1].0)),
+    ];
+    assert_eq!(named, wanted);
+    run.said(&agent, Out::Ended(None), cx);
+    cx.run_until_parked();
+    let files = run.files();
+    assert!(!files.is_empty(), "nothing was kept to look in");
+    for (path, text) in files {
+        assert!(!text.contains("Shop toolu_"), "{}", path.display());
+    }
 }
 
 /// A card is made again whenever any task changes, so one of a task with helpers at work costs no
@@ -614,7 +634,7 @@ fn a_task_with_a_helper_waiting_says_it_needs_you(cx: &mut TestAppContext) {
     let trace = live(&run, &agent, cx);
     let helpers: Vec<_> = (trace.items.iter())
         .filter_map(|item| match item {
-            crate::agents::task::TraceItem::Helper(step) => Some(step),
+            crate::agents::task::TraceItem::Helper { step, .. } => Some(step),
             _ => None,
         })
         .collect();
@@ -640,7 +660,7 @@ fn a_turn_that_ends_leaves_no_helpers_line_under_way(cx: &mut TestAppContext) {
     let under_way = |trace: &Trace| {
         (trace.items.iter())
             .filter(
-                |item| matches!(item, crate::agents::task::TraceItem::Helper(step) if step.running),
+                |item| matches!(item, crate::agents::task::TraceItem::Helper { step, .. } if step.running),
             )
             .count()
     };

@@ -24,7 +24,7 @@
 
 use std::time::Instant;
 
-use gpui::{App, Context};
+use gpui::{App, Context, SharedString};
 use serde_json::{Value, json};
 
 use super::runner::{Helper, Out, SERVER};
@@ -200,7 +200,8 @@ pub fn claude_read(parent: &str, kind: &str, message: &Value) -> Vec<Out> {
 }
 
 /// The helpers a message of the task's own asks for, from its blocks: each call of the helper
-/// tool, by its id, which a helper's lines name as their parent. One asked for as another kind
+/// tool, by its id, which a helper's lines name as their parent, and by the name the task gave it
+/// (the call's `description`), for its line. One asked for as another kind
 /// than ilo's, as none, or for the background isn't allowed, which the line says before the
 /// helper starts.
 pub fn asked<'a>(blocks: impl Iterator<Item = &'a Value>) -> impl Iterator<Item = Out> {
@@ -215,9 +216,10 @@ pub fn asked<'a>(blocks: impl Iterator<Item = &'a Value>) -> impl Iterator<Item 
             if !ours || background {
                 return Some(Out::NotAllowed(Limit::Kind));
             }
+            let name = block.pointer("/input/description").and_then(Value::as_str);
             Some(Out::Helper {
                 id: block.get("id")?.as_str()?.to_string(),
-                told: Helper::Asked,
+                told: Helper::Asked(name.map(tier::plain).unwrap_or_default()),
             })
         })
 }
@@ -289,6 +291,8 @@ pub(super) enum After {
 struct Seen {
     /// The call that asked for it.
     id: String,
+    /// The name its task gave it, for its line: the task's own words, as its title is.
+    name: SharedString,
     /// How long the task's trace was as it was asked for, and as the user wrote next: its steps
     /// are between them.
     from: usize,
@@ -333,6 +337,11 @@ impl Helpers {
                 && seen.until.is_none_or(|until| key < until)
                 && seen.tabs.contains(&tab)
         })
+    }
+
+    /// The name its task gave a helper of `of`'s numbering, or empty.
+    pub fn name(&self, helper: usize) -> SharedString {
+        (self.seen.get(helper)).map_or_else(SharedString::default, |seen| seen.name.clone())
     }
 
     /// The user wrote, when the task's trace was `trace` long: the helpers so far are over, the
@@ -446,13 +455,14 @@ impl Agents {
         let trace = task.trace.len();
         let seen = &mut task.helpers.seen;
         match told {
-            Helper::Asked if seen.iter().all(|seen| seen.id != id) => seen.push(Seen {
+            Helper::Asked(name) if seen.iter().all(|seen| seen.id != id) => seen.push(Seen {
                 id,
+                name: name.into(),
                 from: trace,
                 until: None,
                 tabs: Vec::new(),
             }),
-            Helper::Asked => {}
+            Helper::Asked(_) => {}
             Helper::On(tab) => {
                 // A tab is one helper's: the first whose lines name it.
                 let taken = |seen: &Seen| seen.until.is_none() && seen.tabs.contains(&tab);

@@ -213,7 +213,7 @@ pub(super) enum PageWord {
 }
 
 impl PageWord {
-    fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             PageWord::Reading => "Reading",
             PageWord::Done => "Done",

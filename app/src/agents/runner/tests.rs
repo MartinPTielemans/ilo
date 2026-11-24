@@ -36,7 +36,7 @@ fn read(lines: &[Value]) -> Vec<Out> {
 
 /// What ilo sets on a CLI's process, by name.
 fn set(launch: &Launch) -> Vec<(String, String)> {
-    let mut command = std::process::Command::new(&launch.program);
+    let mut command = crate::child::command(&launch.program);
     environment(&mut command, launch);
     (command.get_envs())
         .filter_map(|(name, value)| {
@@ -205,12 +205,14 @@ fn claudes_text_is_said_its_thinking_is_a_thought_and_its_tool_calls_are_neither
         ] } }),
         json!({ "type": "result", "subtype": "success", "is_error": false, "result": "Found one." }),
     ]);
-    let Out::Thought { text, .. } = &outs[0] else {
+    // Its first line lists no kind of helper, which is read as one that isn't ilo's (helpers.rs).
+    assert_eq!(outs[0], Out::Kinds { ours: false });
+    let Out::Thought { text, .. } = &outs[1] else {
         panic!("{outs:?}")
     };
     assert_eq!(text, "Hmm.");
     assert_eq!(
-        outs[1..],
+        outs[2..],
         [
             Out::Said("Looking for flights.".into()),
             Out::Calling,

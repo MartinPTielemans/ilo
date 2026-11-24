@@ -110,6 +110,14 @@ pub(crate) const HELPER_PAGES: [(&str, &str); 4] = [
 /// What the bench's task says before it starts its four helpers.
 const FOUR_SHOPS: &str = "Four shops sell Saturday's stalls. I'll look at all four at once.";
 
+/// What the bench's task named each of its helpers, as an assistant does: its own words.
+const HELPER_NAMES: [&str; 4] = [
+    "Stalls at Tickets",
+    "Stalls at Stalls",
+    "Stalls at Box Office",
+    "Stalls at Encore",
+];
+
 /// Which of `HELPER_PAGES` waits on the user's sign-in.
 pub(crate) const HELPER_WAITING: usize = 2;
 
@@ -133,8 +141,8 @@ pub(crate) fn bench_helper_waits() -> bool {
 /// one that handed its page to the user. None is `running` once the turn is over.
 fn helper_lines(count: usize, waits: bool, running: bool) -> Vec<TraceItem> {
     let sites = helper_tabs();
-    let helper = |at: usize, tool: &str, did: &str, running| {
-        TraceItem::Helper(TraceStep {
+    let helper = |at: usize, tool: &str, did: &str, running| TraceItem::Helper {
+        step: TraceStep {
             key: 10 + at,
             glyph: browser::agents::tools::step_glyph(tool),
             title: format!("{did} {}", sites[at].1).into(),
@@ -143,7 +151,9 @@ fn helper_lines(count: usize, waits: bool, running: bool) -> Vec<TraceItem> {
             failed: false,
             opens: Opens::Nothing,
             under: "".into(),
-        })
+        },
+        name: HELPER_NAMES[at].into(),
+        tab: Some(sites[at].0),
     };
     (0..count)
         .map(|at| match (at == HELPER_WAITING && waits, running) {
@@ -274,7 +284,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         let steps = helper_lines(count, bench_helper_waits(), true);
         cards[0].page_steps = (helper_tabs().into_iter().zip(steps))
             .filter_map(|((tab, _), step)| match step {
-                TraceItem::Helper(step) => Some((tab, step.title)),
+                TraceItem::Helper { step, .. } => Some((tab, step.title)),
                 _ => None,
             })
             .collect();
@@ -650,7 +660,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 100,
                 IloKind::Helpers {
                     tab,
-                    limit: HelpersLimit::Count,
+                    limit: browser::agents::task::ilo::HelpersLimit::Count,
                 },
             ),
         ],

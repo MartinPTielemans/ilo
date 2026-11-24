@@ -181,16 +181,19 @@ fn a_stopped_task_is_told_its_limit_as_a_sentence() {
 #[test]
 fn a_helpers_lines_are_never_the_tasks() {
     let said = read();
-    let asked: Vec<&str> = (said.iter())
+    let asked: Vec<(&str, &str)> = (said.iter())
         .filter_map(|out| match out {
             Out::Helper {
                 id,
-                told: Helper::Asked,
-            } => Some(id.as_str()),
+                told: Helper::Asked(name),
+            } => Some((id.as_str(), name.as_str())),
             _ => None,
         })
         .collect();
-    assert_eq!(asked.len(), 2, "{asked:?}");
+    // Each by the name the task gave it, which its line says.
+    let names: Vec<&str> = asked.iter().map(|(_, name)| *name).collect();
+    assert_eq!(names, ["Northwick Home price", "Pell & Marrow price"]);
+    let asked: Vec<&str> = asked.iter().map(|(id, _)| *id).collect();
     let starts: Vec<&Out> = (said.iter())
         .filter(|out| matches!(out, Out::Started { .. } | Out::NotAllowed(_)))
         .collect();
@@ -339,12 +342,28 @@ fn a_helper_asked_for_as_another_kind_isnt_allowed() {
         ] } }),
         )
     };
-    let asked = Out::Helper {
+    let asked = |name: &str| Out::Helper {
         id: "toolu_a".into(),
-        told: Helper::Asked,
+        told: Helper::Asked(name.into()),
     };
     let ours = serde_json::json!({ "subagent_type": KIND, "prompt": "One shop." });
-    assert_eq!(asks(ours), [Out::Calling, asked]);
+    assert_eq!(asks(ours), [Out::Calling, asked("")]);
+    // The name it gives a helper is one line of plain text, cut short: it stands on a line of
+    // the conversation, where it can't run on, break the line or turn its words around.
+    let long = format!("Shop\none\u{202e} price {}", "x".repeat(200));
+    let named = serde_json::json!({ "subagent_type": KIND, "description": long });
+    let [
+        _,
+        Out::Helper {
+            told: Helper::Asked(name),
+            ..
+        },
+    ] = &asks(named)[..]
+    else {
+        panic!("not asked for");
+    };
+    assert!(name.starts_with("Shop one price x"), "{name}");
+    assert_eq!(name.chars().count(), tier::TEXT_MOST);
     let refused = [Out::Calling, Out::NotAllowed(Limit::Kind)];
     for input in [
         serde_json::json!({ "subagent_type": "general-purpose", "prompt": "One shop." }),
