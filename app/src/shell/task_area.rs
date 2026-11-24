@@ -59,6 +59,10 @@ struct Watched {
     /// Whether `picture` is one this window asked for, and so its own to let go of.
     asked: bool,
     zoom: Zoom,
+    /// The picture of the page as it is, asked as it went back, which takes the place of the one
+    /// it shrinks with when it comes. The zoom never waits on it: a core that doesn't answer
+    /// leaves the page shrinking with the picture it had (#4247).
+    back: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -67,8 +71,6 @@ enum Zoom {
     Out(Instant),
     /// In place, filling the area.
     Rest,
-    /// Going back, waiting for the picture asked with this request, of the page as it is.
-    Asked(u64),
     /// Into the thumbnail since then, the Space's page shown again out of the window.
     In(Instant),
 }
@@ -79,7 +81,7 @@ impl Zoom {
         let seconds = |start: Instant| now.saturating_duration_since(start).as_secs_f32();
         match self {
             Zoom::Out(start) => cubic_bezier(0., 0., 0.58, 1., (seconds(start) / OPEN).min(1.)),
-            Zoom::Rest | Zoom::Asked(_) => 1.,
+            Zoom::Rest => 1.,
             Zoom::In(start) => {
                 1. - cubic_bezier(0.42, 0., 1., 1., (seconds(start) / CLOSE).min(1.))
             }
@@ -395,6 +397,7 @@ impl Shell {
                 picture,
                 asked: false,
                 zoom,
+                back: None,
             });
         }
         // check.sh reads this line.
@@ -411,8 +414,8 @@ impl Shell {
         true
     }
 
-    /// Back to the conversation: the page shrinks into its thumbnail, from a picture of it as it
-    /// is now.
+    /// Back to the conversation: the page shrinks into its thumbnail at once, with the picture it
+    /// has until one of it as it is now comes.
     pub fn task_page_back(&mut self, cx: &mut Context<Self>) {
         let still = cx.reduce_motion();
         let Some(page) = self.task_area.as_mut().and_then(|area| area.page.as_mut()) else {
@@ -420,7 +423,7 @@ impl Shell {
         };
         let tab = page.tab;
         match page.zoom {
-            Zoom::Asked(_) | Zoom::In(_) => return,
+            Zoom::In(_) => return,
             // Turned around on its way out, it goes back from where it is, with the picture it came
             // with.
             Zoom::Out(_) if !still => {
@@ -434,8 +437,11 @@ impl Shell {
             }
             _ => {
                 let request = next_request();
-                page.zoom = Zoom::Asked(request);
+                page.back = Some(request);
+                page.zoom = Zoom::In(Instant::now());
+                // Asked before the page leaves the window, which the core's copy holds it in.
                 self.browser.page_picture(tab, request, cx);
+                self.show_task_page_away(cx);
             }
         }
         // check.sh reads this line.
@@ -487,7 +493,7 @@ impl Shell {
     pub(super) fn task_page_live(&self) -> Option<u64> {
         let area = self.task_area.as_ref()?;
         let page = area.page.as_ref()?;
-        let live = matches!(page.zoom, Zoom::Rest | Zoom::Asked(_)) && self.task_core == area.space;
+        let live = page.zoom == Zoom::Rest && self.task_core == area.space;
         live.then_some(page.tab)
     }
 
@@ -540,9 +546,9 @@ impl Shell {
         };
         let live = self.task_core == area.space;
         match page.zoom {
-            Zoom::Rest | Zoom::Asked(_) if live && self.page_fullscreen => card,
-            Zoom::Rest | Zoom::Asked(_) if live => watched(card),
-            Zoom::Out(_) | Zoom::Rest | Zoom::Asked(_) => pushed(watched(card), away),
+            Zoom::Rest if live && self.page_fullscreen => card,
+            Zoom::Rest if live => watched(card),
+            Zoom::Out(_) | Zoom::Rest => pushed(watched(card), away),
             Zoom::In(_) => pushed(card, away),
         }
     }
@@ -617,7 +623,7 @@ impl Shell {
     }
 
     /// The core answers `request` with a picture of a task's page going back, and says whether the
-    /// request was the area's.
+    /// request was the area's. The page already shrinks, and shrinks on with it.
     pub(super) fn task_pictured(
         &mut self,
         request: u64,
@@ -627,17 +633,16 @@ impl Shell {
         let Some(page) = self.task_area.as_mut().and_then(|area| area.page.as_mut()) else {
             return false;
         };
-        if page.zoom != Zoom::Asked(request) {
+        if page.back != Some(request) {
             return false;
         }
+        page.back = None;
         if let Some(picture) = picture {
             if let Some(old) = page.picture.replace(picture).filter(|_| page.asked) {
                 self.stale_pictures.push(old.image());
             }
             page.asked = true;
         }
-        page.zoom = Zoom::In(Instant::now());
-        self.show_task_page_away(cx);
         cx.notify();
         true
     }
@@ -796,7 +801,7 @@ impl Shell {
                     retake = true;
                 }
                 Zoom::Out(_) | Zoom::In(_) => window.request_animation_frame(),
-                Zoom::Rest | Zoom::Asked(_) => {}
+                Zoom::Rest => {}
             }
         }
         if retake {

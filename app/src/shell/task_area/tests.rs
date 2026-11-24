@@ -3,6 +3,7 @@
 
 use std::{
     rc::Rc,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -14,7 +15,7 @@ use gpui::{
 
 use super::{Zoom, pushed, watched};
 use crate::agents::Status;
-use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
+use crate::shell::{Command, Folders, Page, PagePicture, Shell, recorder::Recorder};
 
 /// The user's Space 1 with tabs 10 and 11, shown with 10, Claude Code's own Space 2 with tab 20,
 /// Space 3 of the task task-1, run by Claude Code, with tabs 30 and 31, and the user's empty
@@ -148,6 +149,15 @@ fn core_shows_users(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         shell.set_space(1, cx);
         shell.set_selected(tab, cx);
     });
+}
+
+/// The picture the watched page asked for as it went back, until it comes.
+fn back(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<u64> {
+    shell.read_with(cx, |shell, _| {
+        (shell.task_area.as_ref())
+            .and_then(|area| area.page.as_ref())
+            .and_then(|page| page.back)
+    })
 }
 
 /// The watched page's zoom.
@@ -426,7 +436,7 @@ fn a_tasks_sign_in_waits_while_the_user_types(cx: &mut TestAppContext) {
 }
 
 /// With motion, the page zooms out of its thumbnail, laid out out of the window till it's in
-/// place, and back into it from a picture of it as it is.
+/// place, and back into it at once, a picture of it as it is taking the old one's place.
 #[gpui::test]
 fn a_tasks_page_zooms_out_of_its_thumbnail_and_back(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);
@@ -459,16 +469,29 @@ fn a_tasks_page_zooms_out_of_its_thumbnail_and_back(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.task_page_back(cx));
     let calls = host.take();
     assert_eq!(calls, ["picture 30", "focus ui"]);
-    let Zoom::Asked(request) = zoom(&shell, cx) else {
-        panic!("{:?}", zoom(&shell, cx));
-    };
     assert!(
-        host.shown.borrow().is_empty(),
-        "the page stays till its picture comes"
+        matches!(zoom(&shell, cx), Zoom::In(_)),
+        "it zooms back in at once"
     );
-    shell.update(cx, |shell, cx| shell.page_pictured(request, None, cx));
-    assert_eq!(*host.shown.borrow(), [1]);
-    assert!(matches!(zoom(&shell, cx), Zoom::In(_)), "it zooms back in");
+    assert_eq!(
+        *host.shown.borrow(),
+        [1],
+        "the Space's page didn't wait on the picture"
+    );
+    let request = back(&shell, cx).expect("no picture of the page as it is was asked");
+    let now = PagePicture::from_bgra(vec![0; 8 * 6 * 4], 8, 6).unwrap();
+    let image = now.image();
+    shell.update(cx, |shell, cx| shell.page_pictured(request, Some(now), cx));
+    assert!(
+        shell.read_with(cx, |shell, _| {
+            let page = shell.task_area.as_ref().unwrap().page.as_ref().unwrap();
+            page.picture
+                .as_ref()
+                .is_some_and(|picture| Arc::ptr_eq(&picture.image(), &image))
+        }),
+        "the picture of the page as it is didn't take the old one's place"
+    );
+    assert_eq!(back(&shell, cx), None);
     set_zoom(&shell, cx, Zoom::In(begun));
     core_shows_users(&shell, cx);
     draw(&shell, cx);
@@ -480,6 +503,79 @@ fn a_tasks_page_zooms_out_of_its_thumbnail_and_back(cx: &mut TestAppContext) {
     );
     set_zoom(&shell, cx, Zoom::In(over));
     draw(&shell, cx);
+    assert!(shell.read_with(cx, |shell, _| {
+        shell.task_area.as_ref().unwrap().page.is_none()
+    }));
+}
+
+/// A conversation that counts the frames that draw it.
+struct Counted(Rc<std::cell::Cell<u32>>);
+
+impl Render for Counted {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        self.0.set(self.0.get() + 1);
+        div().size_full()
+    }
+}
+
+/// Escape from a page in place draws the conversation on the next frame and the page goes back
+/// into its thumbnail, though the core never answers the picture it asked for, as a core on
+/// Wayland didn't (#4247). One that answers once it's back is nothing to the area.
+#[gpui::test]
+fn escape_goes_back_without_waiting_on_the_pages_picture(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    let frames = Rc::new(std::cell::Cell::new(0));
+    let counted = frames.clone();
+    let view: AnyView = cx.update(|_, cx| cx.new(|_| Counted(counted)).into());
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx));
+    core_shows_task(&shell, cx, 30);
+    set_zoom(
+        &shell,
+        cx,
+        Zoom::Out(Instant::now() - Duration::from_secs(1)),
+    );
+    draw(&shell, cx);
+    draw(&shell, cx);
+    assert_eq!(zoom(&shell, cx), Zoom::Rest);
+    let before = frames.get();
+    draw(&shell, cx);
+    assert_eq!(
+        frames.get(),
+        before,
+        "the conversation drew under the page in place"
+    );
+    host.take();
+
+    shell.update(cx, |shell, cx| shell.run(Command::Stop, "ui", cx));
+    assert!(host.take().contains(&"picture 30".to_string()));
+    let request = back(&shell, cx).expect("no picture asked");
+    draw(&shell, cx);
+    assert!(
+        frames.get() > before,
+        "the conversation waited on the page's picture"
+    );
+    assert!(shell.read_with(cx, |shell, _| shell.task_page_going_back()));
+
+    set_zoom(
+        &shell,
+        cx,
+        Zoom::In(Instant::now() - Duration::from_secs(1)),
+    );
+    draw(&shell, cx);
+    assert!(
+        shell.read_with(cx, |shell, _| shell
+            .task_area
+            .as_ref()
+            .unwrap()
+            .page
+            .is_none()),
+        "the page never went back into its thumbnail"
+    );
+    let late = PagePicture::from_bgra(vec![0; 4 * 4], 2, 2);
+    shell.update(cx, |shell, cx| shell.page_pictured(request, late, cx));
     assert!(shell.read_with(cx, |shell, _| {
         shell.task_area.as_ref().unwrap().page.is_none()
     }));
