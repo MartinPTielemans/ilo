@@ -494,10 +494,15 @@ impl Group {
         }
     }
 
-    /// Comes back as it went, its copy on the way to the Archive gone.
-    fn stay(&mut self, now: Instant, still: bool) {
+    /// Comes back as it went, its copy on the way to the Archive gone, at once if it shouldn't
+    /// move.
+    fn stay(&mut self, now: Instant, still: bool, animate: bool) {
         self.leaving = false;
         self.archived = None;
+        if !animate {
+            self.opacity = Ease::rest(1.);
+            return;
+        }
         let (length, curve) = if still {
             (CROSSFADE, Curve::Linear)
         } else {
@@ -742,6 +747,13 @@ impl Shell {
         self.sync_foot(None, cx);
     }
 
+    /// The page area has a task's view back as it stood, after a close a page refused: the foot
+    /// is as it stood too, at once. The view comes back with no motion, so a group opening with
+    /// the foot's was a view over a group whose pages' rows weren't there yet (#4202).
+    pub(super) fn restore_foot(&mut self, cx: &mut Context<Self>) {
+        self.bring_foot(None, false, cx);
+    }
+
     /// The glyph's colours: Signal, a header's title's ink and its state line's, and the stopped
     /// ring's, the ink at `stopped`, under the floor text keeps, as it's a mark beside words that
     /// say the task stopped.
@@ -792,9 +804,14 @@ impl Shell {
     /// grow in, and each task's group takes its card's changes, open to its pages if its task is
     /// the one the page area shows. `took` is the new card that fills the slot's group.
     fn sync_foot(&mut self, took: Option<SharedString>, cx: &mut Context<Self>) {
+        // What changes on a foot the window has drawn moves.
+        self.bring_foot(took, self.foot.primed, cx);
+    }
+
+    /// `sync_foot`, with what changes moving only if `animate`: else all of it is there at once.
+    fn bring_foot(&mut self, took: Option<SharedString>, animate: bool, cx: &mut Context<Self>) {
         let now = clock();
         let still = crate::motion::still(cx);
-        let animate = self.foot.primed;
         let moves = animate && !still;
         self.foot.still = still;
         let system = (self.text_system.take())
@@ -825,7 +842,7 @@ impl Shell {
         for group in &mut foot.groups {
             match (wanted.contains(&group.holds), group.leaving) {
                 (false, false) => group.leave(now, still, animate),
-                (true, true) => group.stay(now, still),
+                (true, true) => group.stay(now, still, animate),
                 _ => {}
             }
         }
