@@ -1065,6 +1065,22 @@ impl ImportView {
         self.suggested = Some(tabs);
     }
 
+    /// Where it last logged `name` drawn, the point check.sh clicks, for a test outside it.
+    #[cfg(test)]
+    pub(crate) fn drawn_place(&self, name: &str) -> Option<gpui::Point<gpui::Pixels>> {
+        let infix = format!(" {name} at ");
+        let lines = self.drawn_at.borrow();
+        let line = (lines.lines().iter().rev()).find_map(|line| {
+            let at = line.find(&infix)?;
+            Some(line[at + infix.len()..].to_string())
+        })?;
+        let (x, y) = line.split_once(' ')?;
+        Some(gpui::point(
+            gpui::px(x.parse().ok()?),
+            gpui::px(y.parse().ok()?),
+        ))
+    }
+
     /// The step last drawn, as check.sh reads it from the log.
     #[cfg(test)]
     pub(crate) fn drawn(&self) -> Option<&'static str> {
