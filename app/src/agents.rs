@@ -3369,7 +3369,7 @@ impl Agents {
             true => Some(OTHER_SITE),
             false => why,
         };
-        let tier = self.tier_of(&act.agent, act.connection, act.call);
+        let tier = (self.judged_task(&act)).map_or(tier::Tier::default(), |task| task.tier);
         // A site the user answered Never for this agent stays refused at every tier until they
         // revoke it, while Settings still lists it (#4086 step 3 moves these to Off limits).
         let why = Self::why_of(&act, &site, why).map(|why| match why {

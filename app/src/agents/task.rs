@@ -2504,6 +2504,17 @@ impl Agents {
         })
     }
 
+    /// The task under way of `agent`'s whose session holds the page `tab`, among that client's
+    /// sessions only. A tab that left its Space may still be listed: the core refuses a call on it
+    /// before anything read here shows.
+    pub(super) fn page_task(&self, agent: &str, tab: u64) -> Option<&Task> {
+        (self.tasks.tasks.iter()).find(|task| {
+            task.state == State::Working
+                && (task.session.as_ref())
+                    .is_some_and(|session| session.agent == agent && session.tabs.contains(&tab))
+        })
+    }
+
     /// Tells the task `key` ilo runs what ilo has to say, `text`, which is ilo's own: now if it's
     /// working or `now` is set, which starts it on a turn, else with the user's next turn.
     pub(super) fn tell_task(&mut self, key: &str, text: String, now: bool, cx: &mut Context<Self>) {
