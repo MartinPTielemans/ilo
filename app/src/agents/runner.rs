@@ -6,6 +6,7 @@
 //! Claude Code runs in print mode with stream-json both ways, so a reply is one more line on its
 //! stdin. Codex runs as `codex app-server`, which speaks newline JSON-RPC (see codex.rs).
 
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Stdio};
@@ -135,9 +136,10 @@ pub enum Out {
     Walled(Result<(), WallRefused>),
     /// What its output tells of a helper (#4102), by the call of the task's that asked for it.
     Helper { id: String, told: Helper },
-    /// Its CLI says a helper started, `deep` levels under the task, or 0 if it doesn't say how
-    /// deep: what ilo counts for the limit.
-    Started { deep: u64 },
+    /// Its CLI says a helper started, by the call of the task's that asked for it if it names
+    /// one, `deep` levels under the task, or 0 if it doesn't say how deep: what ilo counts for
+    /// the limit, and from when the helper shows.
+    Started { id: Option<String>, deep: u64 },
     /// Its output shows a helper ilo doesn't allow, which stops the task.
     NotAllowed(super::task::ilo::HelpersLimit),
     /// A run's first line lists its kinds of helper: whether each is ilo's.
@@ -153,6 +155,13 @@ pub enum Helper {
     Asked(String),
     /// It calls one of the browser's tools on this tab.
     On(u64),
+    /// It calls the browser's tool that opens a tab, which names none: the page is its own once
+    /// it's open.
+    Opens,
+    /// It calls a tool that names no tab.
+    Calls,
+    /// Its CLI says it ended, however it did.
+    Ended,
 }
 
 /// Why a turn or a run ended badly.
@@ -425,16 +434,60 @@ fn keep_tail(mut from: impl Read, said: &Mutex<String>) {
 /// What the CLI's process is started with beyond the browser's own environment, each set on the
 /// process, so ilo's value is the one it reads.
 fn environment(command: &mut std::process::Command, launch: &Launch) {
+    command.envs(sets(launch));
+}
+
+/// Every variable a start of `launch` sets, with its value: the one account of them, which
+/// `environment` puts on the process. Each name is in `kept` for its CLI.
+pub fn sets(launch: &Launch) -> Vec<(&'static str, OsString)> {
+    let mut sets: Vec<(&'static str, OsString)> = Vec::new();
     if let Some(path) = &launch.path {
-        command.env("PATH", path);
+        sets.push((PATH, path.into()));
     }
     // The token reaches the bridge through Codex's environment, and through Claude's config.
     if launch.cli == Cli::Codex {
-        command.env(super::bridge::TOKEN, &launch.server.token);
+        sets.push((super::bridge::TOKEN, (&launch.server.token).into()));
     }
     // With helpers, what leaves the assistant ilo's kind of helper alone (#4102).
     if launch.helpers {
-        command.envs(super::helpers::ENV);
+        sets.extend(super::helpers::ENV.map(|(name, value)| (name, value.into())));
+    }
+    // Inside a wall Claude Code keeps nothing of its own in the user's folders, which the wall
+    // denies it: no history of what it was asked, no memory, no copies of the files it changes,
+    // no update of itself and no report of its use. Its temporary files go in the wall's folder
+    // for them.
+    if let (Cli::Claude, Some(wall)) = (launch.cli, &launch.wall) {
+        sets.extend(CLAUDE_WALLED.map(|name| (name, "1".into())));
+        if let Some(tmp) = wall.tmp() {
+            sets.push((CLAUDE_TMP, tmp.into()));
+        }
+    }
+    sets
+}
+
+const PATH: &str = "PATH";
+/// What a walled Claude Code is started with, each on.
+const CLAUDE_WALLED: [&str; 5] = [
+    "CLAUDE_CODE_SKIP_PROMPT_HISTORY",
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
+    "CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING",
+    "DISABLE_UPDATES",
+    "DISABLE_TELEMETRY",
+];
+/// Where a walled Claude Code keeps its temporary files: the wall's folder for them.
+const CLAUDE_TMP: &str = "CLAUDE_CODE_TMPDIR";
+
+/// Every name a start of `cli` may set on its process, walled or not: what a wall's launcher is
+/// told to keep of the runner's, beside the wall's own names. A wall drops every name it isn't
+/// told (wall/launch.rs), so one set and not listed here would never arrive, and nothing would
+/// say so: `sets` answers from these alone, which a test holds.
+pub fn kept(cli: Cli) -> Vec<&'static str> {
+    match cli {
+        Cli::Claude => {
+            let helpers = super::helpers::ENV.map(|(name, _)| name);
+            [&[PATH, CLAUDE_TMP][..], &CLAUDE_WALLED[..], &helpers[..]].concat()
+        }
+        Cli::Codex => vec![PATH, super::bridge::TOKEN],
     }
 }
 
@@ -524,8 +577,16 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
     if launch.helpers {
         args.extend(super::helpers::claude_args(&allowed));
     }
+    // Inside ilo's wall its own sandbox is off: the wall is what holds it. No settings file is
+    // read, so this is its only setting.
+    if launch.wall.is_some() {
+        args.extend(["--settings".into(), WALLED_SETTINGS.into()]);
+    }
     args
 }
+
+/// A walled Claude Code's settings.
+const WALLED_SETTINGS: &str = r#"{"sandbox":{"enabled":false}}"#;
 
 /// What a turn of Claude's has shown so far that its result needs: a limit it hit.
 #[derive(Default)]
@@ -544,13 +605,14 @@ pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
         .and_then(Value::as_str)
         .unwrap_or_default();
     // A helper's start is counted whoever's line says so, the task's or a helper's own (#4102),
-    // and a run's first line says which kinds of helper it has.
-    let helpers = super::helpers::started(kind, message);
+    // its end is told as its start is, and a run's first line says which kinds of helper it has.
+    let helpers =
+        super::helpers::started(kind, message).or_else(|| super::helpers::ended(kind, message));
     if let Some(told) = helpers.or_else(|| super::helpers::kinds(kind, message)) {
         return vec![told];
     }
     // A line with a parent is a helper's, never the task's: nothing it says, writes or thinks is
-    // the task's, shown or kept. It tells only which tabs the helper calls for.
+    // the task's, shown or kept. It tells only that the helper calls a tool, and on which tab.
     if let Some(parent) = message.get("parent_tool_use_id").and_then(Value::as_str) {
         return super::helpers::claude_read(parent, kind, message);
     }

@@ -84,12 +84,52 @@ pub fn assistant_row(
     let line: SharedString = shown.line.clone().into();
     let text = match shown.command() {
         Some(command) => commanded(look, name, line, command).into_any_element(),
-        None => text(look, name, Some(line)).into_any_element(),
+        None => named(name, Some(lined(look).child(line))).into_any_element(),
     };
-    frame()
-        .child(glyph_plate(look, cli.glyph(), true))
+    wrapping(look, cli.glyph(), text, controls)
+}
+
+/// An assistant's row, or another app's: its glyph, its name and line, then its controls at the
+/// end. Where the row has no room for the whole name beside them, as first run's half of the
+/// sheet has none beside Sign In to Claude Code, the controls go under it, at the row's end, so a
+/// name is never cut.
+fn wrapping(
+    look: &Look,
+    glyph: &'static str,
+    text: impl IntoElement,
+    controls: Vec<gpui::AnyElement>,
+) -> gpui::Div {
+    let any = !controls.is_empty();
+    let lead = div()
+        .flex_auto()
+        .min_w_0()
+        .flex()
+        .items_center()
+        .child(glyph_plate(look, glyph, true))
         .child(text)
-        .when(!controls.is_empty(), |row| row.child(end(controls)))
+        .when(any, |lead| lead.mr(px(END_GAP)));
+    frame()
+        .flex_wrap()
+        .gap_y(px(CONTROL_GAP))
+        .child(lead)
+        .when(any, |row| row.child(end(controls).ml_auto()))
+}
+
+/// A row's name and the line under it, for `wrapping`. Only the name asks for room: the line,
+/// which wraps, takes the width the name's leaves it.
+fn named(name: impl Into<SharedString>, line: Option<gpui::Div>) -> gpui::Div {
+    let name: SharedString = name.into();
+    let selector = name.clone();
+    div()
+        .flex_auto()
+        .min_w_0()
+        .child(name_of(name).debug_selector(move || format!("row-name {selector}")))
+        .children(line.map(|line| line.w_0().min_w_full()))
+}
+
+/// A row's line, in its grey, under its name.
+fn lined(look: &Look) -> gpui::Div {
+    detail_type().mt(px(DETAIL_TOP)).text_color(look.detail)
 }
 
 /// A row's text whose line has a command in it, set in the face a terminal shows it in, which only
@@ -134,13 +174,11 @@ impl RenderOnce for Commanded {
         ]
         .into_iter()
         .filter(|run| run.len > 0);
-        text(&self.look, self.name, None).child(
-            div()
-                .mt(px(DETAIL_TOP))
-                .text_size(px(SMALL))
-                .line_height(px(DETAIL_LINE))
-                .text_color(self.look.detail)
-                .child(gpui::StyledText::new(self.line).with_runs(runs.collect())),
+        named(
+            self.name,
+            Some(
+                lined(&self.look).child(gpui::StyledText::new(self.line).with_runs(runs.collect())),
+            ),
         )
     }
 }
@@ -152,14 +190,31 @@ pub fn another_agent_row(
     a11y: bool,
     how: impl Fn(&mut gpui::Window, &mut gpui::App) + 'static,
 ) -> gpui::Div {
+    another_app(look, a11y, how, Some("Any app that uses MCP".into()))
+}
+
+/// First run's Another app: its name alone, centred on the row's height, and How to Connect.
+pub fn another_agent_name_row(
+    look: &Look,
+    a11y: bool,
+    how: impl Fn(&mut gpui::Window, &mut gpui::App) + 'static,
+) -> gpui::Div {
+    another_app(look, a11y, how, None)
+}
+
+fn another_app(
+    look: &Look,
+    a11y: bool,
+    how: impl Fn(&mut gpui::Window, &mut gpui::App) + 'static,
+    line: Option<SharedString>,
+) -> gpui::Div {
     let how = stop_button(look, "assistant-another-how", "How to Connect", a11y)
         .on_click(move |_, window, cx| how(window, cx));
-    frame()
-        .child(glyph_plate(look, "icons/cable.svg", true))
-        .child(text(
-            look,
-            "Another app",
-            Some("Any app that uses MCP".into()),
-        ))
-        .child(end([how.into_any_element()]))
+    let line = line.map(|line| lined(look).child(line));
+    wrapping(
+        look,
+        "icons/cable.svg",
+        named("Another app", line),
+        vec![how.into_any_element()],
+    )
 }

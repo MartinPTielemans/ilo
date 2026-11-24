@@ -40,7 +40,6 @@ use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
 use crate::text_input::TextInput;
 use crate::tokens::command_bar::{CHIP as BAR_CHIP, HINT_KEY_RIM, HINT_KEY_X};
 use crate::tokens::find_bar::NOT_FOUND;
-use crate::tokens::shell::FORM_PLACEHOLDER;
 use crate::tokens::shell::agent_pointer::{COLOR as SIGNAL, RING};
 use crate::tokens::shell::conversation::ilo::{
     ARM, BELOW as ILO_BELOW, BUTTONS_GAP, BUTTONS_TOP, COMPOSER_CHEVRON, COMPOSER_CHEVRON_GAP,
@@ -54,9 +53,9 @@ use crate::tokens::shell::conversation::{
     LINK_LINE, LINK_UNDERLINE, LIST_MARKER, META_GAP, META_LINE, OPEN_BELOW, OPEN_TOP,
     PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG,
     PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PARAGRAPH_GAP, PICTURE_EMPTY_GLYPH, PICTURE_HEIGHT,
-    PICTURE_RADIUS, PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP, REPLY_HEIGHT,
-    REPLY_INSET, REPLY_KEY_END, REPLY_RIM, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD, SITE_GAP,
-    TEXT_LINE, TITLE_LINE, TOP, TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH,
+    PICTURE_RADIUS, PICTURE_RIM, PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP,
+    REPLY_HEIGHT, REPLY_INSET, REPLY_KEY_END, REPLY_RIM, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD,
+    SITE_GAP, TEXT_LINE, TITLE_LINE, TOP, TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH,
     TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER, TRACE_INDENT, TRACE_LINE, TRACE_NOTE,
     TRACE_PICTURE_HEIGHT, TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH, TRACE_RULE, TRACE_RULE_FILL,
     TRACE_RULE_X, TRACE_TITLE,
@@ -66,6 +65,7 @@ use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT};
 use crate::tokens::shell::task::{
     RAIL_BREAKPOINT, RAIL_DOT, RAIL_FAVICON, RAIL_GAP, RAIL_HEAD, RAIL_WIDTH, STATUS,
 };
+use crate::tokens::shell::{FORM_PLACEHOLDER, HAIRLINE};
 use crate::tokens::text;
 use crate::tokens::toast::{
     CHIP_FILL, CHIP_GAP, CHIP_HEIGHT, CHIP_RADIUS, CHIP_X, KEY_COLOR, KEY_GAP,
@@ -118,13 +118,15 @@ pub(super) fn page_chip_keyed(
 }
 
 /// Sends the windows' `shells` what the Agents show as they change: their status, the task cards,
-/// the tasks in the Archive and, to a window showing a task's conversation, that conversation, as
-/// `conversation` makes it for the task's agent. Each is made before any shell changes, since making one reads its pages
+/// the tasks in the Archive, those of them a run before left that Latest tasks lists (`kept`) and,
+/// to a window showing a task's conversation, that conversation, as `conversation` makes it for
+/// the task's agent. Each is made before any shell changes, since making one reads its pages
 /// from a shell (the core's `Browser::tab`), which can't be read while it's being changed.
 pub fn send_agents(
     status: Vec<Status>,
     cards: Vec<Card>,
     archived: Vec<ArchivedTask>,
+    kept: Vec<Card>,
     conversation: impl Fn(&str, &gpui::App) -> Option<Conversation>,
     shells: &[WeakEntity<Shell>],
     cx: &mut gpui::App,
@@ -141,7 +143,9 @@ pub fn send_agents(
         shell.update(cx, |shell, cx| {
             shell.set_agent_status(status.clone(), cx);
             shell.set_archived_tasks(archived.clone(), cx);
+            shell.set_kept_cards(kept.clone(), cx);
             shell.set_task_cards(cards.clone(), cx);
+            shell.assistants_learned(cx);
             // Only a window that still shows the task's conversation is sent it.
             if let Some((agent, made)) = talk
                 && shell.talk_agent() == Some(agent)
@@ -176,8 +180,9 @@ pub(super) struct Talk {
 
 impl Talk {
     /// Its pages leave their tiles, as a page watched over it hides it and it isn't drawn.
-    pub(super) fn end_tiles(&self, cx: &gpui::App) {
-        self.view.read(cx).tiles.end_all();
+    pub(super) fn end_tiles(&self, cx: &mut gpui::App) {
+        let tiles = self.view.read(cx).tiles.clone();
+        tiles.end_all(cx);
     }
 
     /// The tiles its pages show live in, which a watch borrows one of.
@@ -251,6 +256,9 @@ pub struct TalkView {
     ilo_links: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     /// Where the level's chip under the reply field was drawn, if the last frame drew it.
     level_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Whether the user was typing in the reply field as the last frame drew, the field having
+    /// the keyboard and words in it: a page ilo opens by itself mustn't cover those.
+    typing: bool,
     /// Where the last frame drew Take Over on the lines: once, on the live line.
     take_over_drawn: Rc<RefCell<Vec<Bounds<Pixels>>>>,
     landed: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -290,12 +298,31 @@ impl Shell {
         self.talk.as_ref()?.view.read(cx).thumb(tab)
     }
 
+    /// Where the conversation shown drew its reply field, for a test outside this file.
+    #[cfg(test)]
+    pub(super) fn reply_drawn(&self, cx: &gpui::App) -> Option<Bounds<Pixels>> {
+        self.talk.as_ref()?.view.read(cx).reply_drawn.get()
+    }
+
     /// The task whose conversation is kept for `space`'s area.
     pub(super) fn talk_in(&self, space: u64) -> Option<SharedString> {
         self.talk
             .as_ref()
             .filter(|talk| talk.space == space)
             .map(|talk| talk.agent.clone())
+    }
+
+    /// The task whose conversation is kept had no Space of its own, as one a run before left has
+    /// none until its run opens a page, and its card has one the window knows now: the Space.
+    pub(super) fn talk_takes_space(&mut self) -> Option<u64> {
+        let talk = self.talk.as_mut().filter(|talk| talk.space == 0)?;
+        let card = (self.task_cards.iter()).find(|card| card.agent == talk.agent)?;
+        let space = card.space;
+        let known = space != 0 && self.task_spaces.iter().any(|each| each.id == space);
+        known.then(|| {
+            talk.space = space;
+            space
+        })
     }
 
     /// The card's click: its conversation in the page area, or, shown already, the Space's tab
@@ -314,6 +341,48 @@ impl Shell {
     pub fn show_needed_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
         if self.talk_agent().as_ref() != Some(&agent) {
             self.show_task(agent, cx);
+        }
+    }
+
+    /// The tasks a run before left that haven't been brought back, the last to end first, each
+    /// with the user's Space of its profile for its home (`Agents::kept_cards`). They have no card
+    /// at the foot, which is for what's live or was opened in this run. A private window, which
+    /// offers no tasks, lists none.
+    pub fn set_kept_cards(&mut self, mut cards: Vec<Card>, cx: &mut Context<Self>) {
+        if self.one_space() {
+            cards.clear();
+        }
+        if cards != self.kept_cards {
+            self.kept_cards = cards;
+            cx.notify();
+        }
+    }
+
+    /// The composer's Latest tasks, at most `most`: the tasks the user talks to here, the newest
+    /// first, then those a run before left in the profile in front, which no other profile's
+    /// Space lists, as one comes back only in its own.
+    pub(super) fn latest_tasks(&self, most: usize) -> Vec<Card> {
+        let profile = |space: u64| {
+            let space = self.spaces.iter().find(|each| each.id == space);
+            space.map(|space| space.profile)
+        };
+        let here = self.shown_space().map(|space| space.profile);
+        let kept =
+            (self.kept_cards.iter()).filter(|card| here.is_some() && profile(card.home) == here);
+        (self.task_cards.iter())
+            .filter(|card| card.replies)
+            .chain(kept)
+            .take(most)
+            .cloned()
+            .collect()
+    }
+
+    /// A click on a card of Latest tasks: one a run before left comes back from the Archive with
+    /// its conversation open, as its row there brings it; any other shows its conversation.
+    pub(super) fn open_latest(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+        match self.kept_cards.iter().any(|card| card.agent == agent) {
+            true => self.restore_archived_task(agent, cx),
+            false => self.show_task(agent, cx),
         }
     }
 
@@ -382,6 +451,7 @@ impl Shell {
                     ilo_words_drawn: Rc::default(),
                     ilo_links: Rc::default(),
                     level_drawn: Rc::default(),
+                    typing: false,
                     take_over_drawn: Rc::default(),
                     landed: Rc::default(),
                     drawn_at: Rc::default(),
@@ -632,10 +702,16 @@ impl TalkView {
         picture: &Option<PagePicture>,
         cx: &mut Context<Self>,
     ) -> Option<Vec<Arc<RenderImage>>> {
+        // One a tile's end asked for stands from then, unless the conversation asked again since.
+        let at_end = self.tiles.asked_at_end(request);
         let entry = self
             .pictures
             .iter_mut()
-            .find(|(_, each, _)| *each == request)?;
+            .find(|(tab, each, _)| *each == request || (at_end == Some(*tab) && *each < request));
+        let Some(entry) = entry else {
+            return at_end.map(|_| picture.iter().map(PagePicture::image).collect());
+        };
+        entry.1 = request;
         let tab = entry.0;
         self.unpictured.retain(|each| *each != tab);
         let Some(picture) = picture else {
@@ -652,7 +728,7 @@ impl TalkView {
 
     /// Its pictures go, as it no longer shows, and are taken again when it does.
     fn let_go(&mut self) -> Vec<Arc<RenderImage>> {
-        self.tiles.end_all();
+        self.tiles.let_go();
         self.stale = true;
         self.motion.reset();
         let pictures = std::mem::take(&mut self.pictures);
@@ -785,6 +861,20 @@ impl TalkView {
         shell.read(cx).watched_task_page().map(|(_, tab)| tab)
     }
 
+    /// The level chip's menu, for the task shown: the Shell holds the window's menus.
+    fn tier_menu(&self, clicked: gpui::Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(shown) = &self.shown else {
+            return;
+        };
+        let (agent, tier, only) = (self.agent.clone(), shown.tier, shown.only_added);
+        let chip = self.level_drawn.get();
+        self.shell
+            .update(cx, |shell, cx| {
+                shell.task_tier_menu(agent, tier, only, chip, clicked, cx)
+            })
+            .ok();
+    }
+
     fn act(&self, action: TaskAction, cx: &mut Context<Self>) {
         let agent = self.agent.clone();
         self.shell
@@ -818,7 +908,7 @@ impl TalkView {
         let tiles = Some(self.tiles.clone());
         self.shell
             .update(cx, |shell, cx| {
-                shell.watch_task_page_from(tab, from, picture, tiles, cx)
+                shell.watch_task_page_from(tab, from, picture, false, tiles, cx)
             })
             .ok();
     }
@@ -1051,14 +1141,8 @@ impl TalkView {
         self.drawn.borrow_mut().clear();
         let palette = look.palette;
         let tabs = (self.shown.as_ref()).map_or_else(Vec::new, |shown| shown.tabs.clone());
-        let on = self.shown.as_ref().and_then(|shown| shown.on);
         let high = RAIL_WIDTH * PICTURE_HEIGHT / PICTURE_WIDTH;
         let shell = self.shell.upgrade();
-        // Each page's own step while it works on several, as with helpers: every one is ringed.
-        let steps = match (&shell, &self.shown) {
-            (Some(shell), Some(shown)) => shell.read(cx).task_page_steps(&shown.agent).to_vec(),
-            _ => Vec::new(),
-        };
         let tiles = tabs.iter().enumerate().map(|(index, (tab, site))| {
             let tab = *tab;
             let opacity = match self.motion.came(Key::Picture(tab)) {
@@ -1067,7 +1151,7 @@ impl TalkView {
             };
             let image = (self.pictures.iter().find(|(each, ..)| *each == tab))
                 .and_then(|(_, _, picture)| picture.as_ref().map(PagePicture::image));
-            let (title, favicon, page, held, said) = match (&shell, &self.shown) {
+            let (title, favicon, page, mark) = match (&shell, &self.shown) {
                 (Some(shell), Some(shown)) => {
                     let shell = shell.read(cx);
                     let row = shell.tabs.get(&tab);
@@ -1080,12 +1164,15 @@ impl TalkView {
                         .task_cards
                         .iter()
                         .find(|card| card.agent == shown.agent);
-                    let said = card.map(|card| shell.page_word(card, tab));
-                    (title, favicon, shell.page(tab), shell.held_why(tab), said)
+                    let mark = card.map(|card| shell.page_mark(card, tab));
+                    (title, favicon, shell.page(tab), mark)
                 }
-                _ => (site.clone(), None, Page::default(), None, None),
+                _ => (site.clone(), None, Page::default(), None),
             };
-            let acting = rings(tab, on, &steps, held.as_ref());
+            let said = mark.map(|mark| mark.word);
+            // The outline, from the same answer as the word: the page the assistant is in, or
+            // the one that needs the user at a handoff.
+            let acting = mark.is_some_and(|mark| mark.outline);
             let pictured = image.is_some();
             let (drawn, logged) = (self.drawn.clone(), self.drawn_logged.clone());
             let paint = canvas(
@@ -1142,6 +1229,14 @@ impl TalkView {
                 .overflow_hidden()
                 .children(blank)
                 .child(paint)
+                .child(
+                    div()
+                        .absolute()
+                        .size_full()
+                        .rounded(px(PICTURE_RADIUS))
+                        .border(px(HAIRLINE))
+                        .border_color(palette.plate(PICTURE_RIM)),
+                )
                 .when(acting, |picture| {
                     picture.child(
                         div()
@@ -1177,9 +1272,23 @@ impl TalkView {
             if self.said_logged.borrow_mut().insert(tab, says) != Some(says) {
                 // check.sh reads this line.
                 log!("browser: task picture {tab} says {says}");
-                // Once, as it turns: a tile the user scrolls away again stays away.
+                // Once, as it turns: a tile the user scrolls away again stays away, and its page
+                // opens as itself unless the user has put another of the task's pages there.
+                // Nor while the user types in the reply field the page would cover: the tile in
+                // sight is enough, and the field keeps the keyboard and what's in it.
                 if said == Some(PageWord::NeedsYou) {
                     self.rail_scroll.scroll_to_item(index);
+                    let (shell, typing) = (self.shell.clone(), self.typing);
+                    cx.defer(move |cx| {
+                        shell
+                            .update(cx, |shell, cx| {
+                                let covers = !shell.talk_beside;
+                                if shell.watched_task_page().is_none() && !(typing && covers) {
+                                    shell.watch_row(tab, true, cx);
+                                }
+                            })
+                            .ok();
+                    });
                 }
             }
             let word = said.map(|said| {
@@ -1193,7 +1302,7 @@ impl TalkView {
                         PageWord::NeedsYou | PageWord::Driving => palette.text(TITLE),
                         _ => palette.gray(STATUS),
                     })
-                    .when(said == PageWord::Working, |word| {
+                    .when(said == PageWord::Working && acting, |word| {
                         word.child(div().size(px(RAIL_DOT)).rounded_full().bg(rgb(SIGNAL)))
                     })
                     .child(said.label())
@@ -1447,17 +1556,19 @@ impl TalkView {
             nest = match item {
                 TraceItem::Step(step) => nest.children(self.step(step, true, look, cx)),
                 // A helper's line has no Take Over, which is the one page's the task stands on.
-                // Named by its task, it says that name and its page's word; else it's its step's.
                 TraceItem::Helper { step, name, tab } => {
                     let page = tab.and_then(|tab| look.helper_page(tab));
-                    match helper_line(step, name, page) {
-                        Some(mut line) => {
+                    match helper_row(step, name, page) {
+                        HelperRow::Known(mut line) => {
                             line.shimmers = step.running.then(|| look.shimmer(self.made));
                             self.crossfade(Fold::Step(step.key), &mut line, look);
                             let line = trace_line(look, line).into_any_element();
                             nest.child(risen(line, self.motion.came(Key::Step(step.key)), look))
                         }
-                        None => nest.children(self.step_line(step, true, false, look, cx)),
+                        HelperRow::Step => {
+                            nest.children(self.step_line(step, true, false, look, cx))
+                        }
+                        HelperRow::Nothing => nest,
                     }
                 }
                 TraceItem::Said(text) => {
@@ -1969,6 +2080,66 @@ impl TalkView {
             )
     }
 
+    /// The live line over the reply field while the task works: the step under way, else
+    /// `{assistant} is working`, never a finished or refused step, with Take Over at its end
+    /// while the agent is on a page. Beside the page, the trace's own step line is it, and on the
+    /// page the strip has Take Over.
+    fn live(&self, look: &Look, cx: &mut Context<Self>) -> Option<gpui::Stateful<gpui::Div>> {
+        let shown = (self.shown.as_ref()).filter(|shown| shown.stoppable)?;
+        if look.beside || look.standing {
+            return None;
+        }
+        let palette = look.palette;
+        let step = under_way(&shown.lines);
+        let words: SharedString = match step {
+            Some(step) => step.title.clone(),
+            None => words::working(&shown.name).into(),
+        };
+        let text = match (step.is_some(), look.shimmer(self.made)) {
+            (true, Some(phase)) => shimmering(&palette, words, phase).into_any_element(),
+            _ => div()
+                .text_color(palette.text(TRACE_TITLE))
+                .child(words)
+                .into_any_element(),
+        };
+        let drawn = self.take_over_drawn.clone();
+        let take_over = shown.on.map(|tab| {
+            page_chip(palette, "conversation-take-over", words::TAKE_OVER, None)
+                .relative()
+                .child(
+                    canvas(
+                        move |bounds, _, _| drawn.borrow_mut().push(bounds),
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+                )
+                .on_click(
+                    cx.listener(move |view, _, _, cx| view.act(TaskAction::TakeOver(tab), cx)),
+                )
+        });
+        Some(
+            div()
+                .id("conversation-live")
+                .flex_none()
+                .mb(px(COMPOSER_TOP))
+                .flex()
+                .items_center()
+                .gap(px(BUBBLE_X))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .child(text),
+                )
+                .children(take_over),
+        )
+    }
+
     /// The composer's row under the reply field: the task's access on a chip,
     /// which opens its menu (#4094), and Stop at the row's end.
     fn composer(&self, look: &Look, cx: &mut Context<Self>) -> gpui::Div {
@@ -1981,6 +2152,9 @@ impl TalkView {
         let drawn = self.level_drawn.clone();
         let chip = page_chip(palette, "conversation-tier", tier.label(), None)
             .relative()
+            .on_click(cx.listener(|view, event: &gpui::ClickEvent, _, cx| {
+                view.tier_menu(event.position(), cx)
+            }))
             .child(
                 svg()
                     .flex_none()
@@ -2461,20 +2635,41 @@ impl TraceLine {
     }
 }
 
-/// A helper's line where its task named it (#4102): its page's favicon, that name, and at its end
-/// its page's word, the one its row in the sidebar ends with. Where the page has no favicon, its
-/// step's glyph. Nothing on it is the helper's own text or what it found. None for a helper its
-/// task gave no name, whose line is its step's.
+/// What a helper's item draws.
+enum HelperRow {
+    /// Its own line: the words it's known by, then its page's word.
+    Known(TraceLine),
+    /// Its step's line, as it's known by no words of its own.
+    Step,
+    /// No line yet: it has no name, no page with a title and no step, so it would be a glyph
+    /// alone. Its stretch's count is all that shows it until it has its first words.
+    Nothing,
+}
+
+fn helper_row(step: &TraceStep, name: &SharedString, page: Option<&HelperPage>) -> HelperRow {
+    match helper_line(step, name, page) {
+        Some(line) => HelperRow::Known(line),
+        None if step.title.is_empty() => HelperRow::Nothing,
+        None => HelperRow::Step,
+    }
+}
+
+/// The line of a helper known by words of its own (#4102): the name its task gave it, or with
+/// none its page's title, as the page's row in the sidebar says it. Its page's word follows, as
+/// that row ends, and its page's favicon stands in its step's glyph's place, which a page without
+/// one keeps. Nothing on it is the helper's own text or what it found. None for one with neither
+/// a name nor a titled page.
 fn helper_line(
     step: &TraceStep,
     name: &SharedString,
     page: Option<&HelperPage>,
 ) -> Option<TraceLine> {
-    if name.is_empty() {
-        return None;
-    }
+    let known = match name.is_empty() {
+        false => name.clone(),
+        true => (page.map(|page| page.title.clone())).filter(|title| !title.is_empty())?,
+    };
     let word = page.map_or("", |page| page.word);
-    let mut line = TraceLine::new(Fold::Step(step.key), name.clone(), word.into());
+    let mut line = TraceLine::new(Fold::Step(step.key), known, word.into());
     line.icon = page.and_then(|page| page.favicon.clone());
     line.glyph = line.icon.is_none().then_some(step.glyph);
     Some(line)
@@ -2740,10 +2935,11 @@ struct Look {
     standing: bool,
 }
 
-/// What a helper's line shows of its page: its favicon, and the word its row in the sidebar ends
-/// with.
+/// What a helper's line shows of its page: its title, which a helper its task gave no name is
+/// known by, its favicon, and the word its row in the sidebar ends with.
 struct HelperPage {
     tab: u64,
+    title: SharedString,
     favicon: Option<Arc<Image>>,
     word: &'static str,
 }
@@ -2775,6 +2971,8 @@ impl Shell {
         };
         let page = |tab: u64| HelperPage {
             tab,
+            title: (self.tabs.get(&tab))
+                .map_or_else(SharedString::default, |tab| tab.title.clone()),
             favicon: self.tabs.get(&tab).and_then(|tab| tab.favicon.clone()),
             word: self.page_word(card, tab).label(),
         };
@@ -2798,6 +2996,8 @@ fn helper_tabs(lines: &[Line]) -> Vec<u64> {
 
 impl Render for TalkView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let reply = self.reply.read(cx);
+        self.typing = reply.focus_handle(cx).is_focused(window) && !reply.text().is_empty();
         self.step_ilo_keys(window, cx);
         let now = Instant::now();
         let still = crate::motion::still(cx);
@@ -2930,6 +3130,12 @@ impl Render for TalkView {
                     )
             }))
             .child(middle)
+            .children(
+                (self.replies && self.in_field().is_none())
+                    .then(|| self.live(&look, cx))
+                    .flatten()
+                    .map(|live| shut(on_column(live.into_any_element()))),
+            )
             .child(shut(on_column(self.reply(&look, cx).into_any_element())))
             // With ilo's line and Start Again in the field's place there is no level to set, so
             // the row goes with the field (#4105).
@@ -2952,7 +3158,7 @@ impl Render for TalkView {
         });
         if !pages {
             self.drawn.borrow_mut().clear();
-            self.tiles.end_all();
+            self.tiles.end_all(cx);
         }
         let column = div().size_full().flex().child(column).children(rail);
         let drawn = self.drawn_at.clone();
@@ -2997,21 +3203,19 @@ fn unpressed() -> gpui::Div {
         .block_mouse_except_scroll()
 }
 
-/// Whether `tab`'s tile is ringed: ilo acts in its page now, and the user doesn't hold it (`held`).
-/// A task on one page acts in the page it's `on`; one on several, as with helpers, `steps` having
-/// each one's own step, acts in every page that has one, so more than one tile can be ringed.
-pub(super) fn rings(
-    tab: u64,
-    on: Option<u64>,
-    steps: &[(u64, SharedString)],
-    held: Option<&SharedString>,
-) -> bool {
-    let acts = match steps.is_empty() {
-        true => on == Some(tab),
-        false => steps.iter().any(|(each, _)| *each == tab),
-    };
-    acts && held.is_none()
-}
-
 #[cfg(test)]
 mod tests;
+
+/// The step under way at the end of a task's lines, if one is: the last trace's last step while
+/// it runs, or a session's last step line. A step that ended or was refused isn't.
+fn under_way(lines: &[Line]) -> Option<&TraceStep> {
+    let step = match lines.last()? {
+        Line::Trace(trace) => match trace.items.last()? {
+            TraceItem::Step(step) => step,
+            _ => return None,
+        },
+        Line::Step(step) => step,
+        _ => return None,
+    };
+    (step.running && !step.failed).then_some(step)
+}

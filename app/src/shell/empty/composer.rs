@@ -12,7 +12,7 @@ use gpui::{
 };
 
 use crate::agents::task::{Card, Dot};
-use crate::agents::task::{Start, added_address, model_menu};
+use crate::agents::task::{Start, TaskAction, added_address, model_menu};
 use crate::agents::tier::{ANY_SITE, ONLY_ADDED, Tier};
 use crate::command_bar::{self, CommandBar, InPlaceKey, TaskAgent};
 use crate::palette::{Palette, Tone};
@@ -260,6 +260,15 @@ impl Shell {
             InPlaceKey::Escape if on_ask => self.set_on_ask(false, window, cx),
             InPlaceKey::Escape => {}
             InPlaceKey::Run => self.run_composed(window, cx),
+            InPlaceKey::DropPage => {
+                if let Some(page) = self
+                    .resting
+                    .as_ref()
+                    .and_then(|resting| resting.pages.last())
+                {
+                    self.toggle_page(page.tab, cx);
+                }
+            }
         }
     }
 
@@ -270,6 +279,9 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if on_ask && !self.offers_tasks() {
+            return;
+        }
         let Some(resting) = &mut self.resting else {
             return;
         };
@@ -286,6 +298,26 @@ impl Shell {
         });
         log!("browser: composer on {}", if on_ask { ASK } else { SEARCH });
         cx.notify();
+    }
+
+    /// What the browser knows of the assistants changed, as once it has looked for them: the
+    /// page's bar learns them again, and in Ask the field names the one it found.
+    pub(in crate::shell) fn assistants_learned(&mut self, cx: &mut Context<Self>) {
+        let Some(resting) = &self.resting else {
+            return;
+        };
+        let changed = resting.bar.update(cx, |bar, cx| {
+            let changed = bar.agents_changed(cx);
+            if changed && bar.on_ask() {
+                let assistant = bar.assistant(cx);
+                let name = assistant.as_ref().map(|agent| agent.name.as_ref());
+                bar.set_placeholder(ask_words(name), cx);
+            }
+            changed
+        });
+        if changed {
+            cx.notify();
+        }
     }
 
     /// ↩ in Ask: what was typed runs as a task on the assistant, from this Space.
@@ -311,6 +343,7 @@ impl Shell {
         resting.forget_picks();
         log!("browser: composer runs a task on {agent}");
         let home = self.space();
+        self.show_started = Some(home);
         self.browser.start_task(&agent, &asked, home, start, cx);
         cx.notify();
     }
@@ -376,9 +409,15 @@ impl Shell {
             .collect()
     }
 
+    /// Whether the `+` has anything to offer: a page of the Space's to add. Without one it's
+    /// disabled in its place.
+    pub(in crate::shell) fn plus_offers(&self) -> bool {
+        !self.pages_to_add().is_empty()
+    }
+
     /// The `+` chip's menu: the Space's pages, those added checked. It's Add a Page's submenu once
     /// files and folders join it, when the system can wall them off; till then a menu of one row
-    /// would be no menu, so `+` lists the pages itself. With none, it shows nothing.
+    /// would be no menu, so `+` lists the pages itself. With none, the `+` is disabled.
     pub(in crate::shell) fn pages_menu(
         &mut self,
         clicked: gpui::Point<Pixels>,
@@ -495,6 +534,44 @@ impl Shell {
         self.show_menu(items, hung_under(chip, clicked), None, cx);
     }
 
+    /// The level chip's menu under a task's reply field, as the composer's: names only, the
+    /// task's level checked, where it may go, and Settings. Only the user's pick here changes the
+    /// task's level, through the press its refusal's button makes; there's no agent path to it. A
+    /// running task can widen to any site but not narrow to the sites added, which it never had.
+    pub(in crate::shell) fn task_tier_menu(
+        &mut self,
+        agent: SharedString,
+        current: Tier,
+        only: bool,
+        chip: Option<Bounds<Pixels>>,
+        clicked: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let press = |action: TaskAction| -> MenuAction {
+            let agent = agent.clone();
+            Box::new(move |shell, cx| shell.browser.task(agent, action, cx))
+        };
+        let mut items: Vec<(MenuEntry, MenuAction)> = (Tier::ALL.into_iter())
+            .map(|tier| {
+                (
+                    MenuEntry::named(tier.label(), true).checked(tier == current),
+                    press(TaskAction::SetTier(tier)),
+                )
+            })
+            .collect();
+        let none: fn() -> MenuAction = || Box::new(|_, _| {});
+        items.push((MenuEntry::line(), none()));
+        items.push((
+            MenuEntry::named(ANY_SITE, true).checked(!only),
+            press(TaskAction::AnySite),
+        ));
+        items.push((MenuEntry::named(ONLY_ADDED, only).checked(only), none()));
+        items.push((MenuEntry::line(), none()));
+        let settings: MenuAction = Box::new(|shell, cx| shell.browser.agent_access(cx));
+        items.push((MenuEntry::new(SETTINGS, true), settings));
+        self.show_menu(items, hung_under(chip, clicked), None, cx);
+    }
+
     /// The user's pick on the level menu, while the field is in Ask.
     pub(in crate::shell) fn pick_tier(&mut self, tier: Tier, cx: &mut Context<Self>) {
         let Some(resting) = &mut self.resting else {
@@ -506,6 +583,12 @@ impl Shell {
         resting.tier = tier;
         log!("browser: composer level {}", tier.label());
         cx.notify();
+    }
+
+    /// Whether the page offers Ask, its switch and its key. A private window starts no task, as
+    /// agents get no path into one, so it shows Search alone; it's sent no cards (`one_space`).
+    pub(in crate::shell) fn offers_tasks(&self) -> bool {
+        !self.private
     }
 
     /// The page in the card at `frame`: the mark, the field, Ask's line and the recent tasks.
@@ -532,7 +615,15 @@ impl Shell {
                 FIELD_SHADOW_FAR,
             ),
         };
-        let field = bar.update(cx, |bar, cx| bar.field(fill, window, cx));
+        // The pages added are chips in the field, before what's typed, as ⌘T's ask has its page.
+        let added: Vec<_> = (self.resting.iter())
+            .flat_map(|resting| &resting.pages)
+            .map(|page| (page.url.clone().into(), page.title.clone()))
+            .collect();
+        let field = bar.update(cx, |bar, cx| {
+            bar.set_added(added, cx);
+            bar.field(fill, window, cx)
+        });
         let on_ask = bar.read(cx).on_ask();
         // A narrow window keeps the field inside the card's gutters.
         let field_width = FIELD_WIDTH.min(width - 2. * FIELD_GUTTER).max(0.);
@@ -569,15 +660,13 @@ impl Shell {
             ])
             .text_size(px(FIELD_SIZE))
             .text_color(palette.text(1.))
-            .child(div().flex_1().min_w_0().flex().child(field))
-            .child(tab)
-            .child(self.switch(on_ask, cx));
+            .child(div().flex_1().min_w_0().flex().child(field));
+        let field = match self.offers_tasks() {
+            true => field.child(tab).child(self.switch(on_ask, cx)),
+            false => field,
+        };
         let cards: Vec<Card> = match painted {
-            true => (self.task_cards.iter())
-                .filter(|card| card.replies)
-                .take(CARDS as usize)
-                .cloned()
-                .collect(),
+            true => self.latest_tasks(CARDS as usize),
             false => Vec::new(),
         };
         let row = command_bar::centered_row_middle(f32::from(self.viewport.height))
@@ -660,7 +749,8 @@ impl Shell {
             .child(part(ASK, on_ask, cx))
     }
 
-    /// Ask's line under the field: add a page, the task's access, and the assistant and its model.
+    /// Ask's line under the field: add a page, the task's access, and the assistant and its model,
+    /// which a page added leaves where they are, as its chip is in the field.
     /// It keeps its room in Search, so nothing moves as the switch flips.
     fn ask_line(&mut self, on_ask: bool, width: f32, cx: &mut Context<Self>) -> gpui::Div {
         let palette = self.palette;
@@ -695,15 +785,6 @@ impl Shell {
         let tier_chip = (self.resting.as_ref()).map(|resting| resting.tier_chip.clone());
         let model_chip = (self.resting.as_ref()).map(|resting| resting.model_chip.clone());
         let plus_chip = (self.resting.as_ref()).map(|resting| resting.plus_chip.clone());
-        let added: Vec<SharedString> = (self.resting.as_ref())
-            .map(|resting| {
-                resting
-                    .pages
-                    .iter()
-                    .map(|page| page.title.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
         let assistant = (self.resting.as_ref()).and_then(|resting| {
             let agent = resting.bar.update(cx, |bar, cx| bar.assistant(cx))?;
             Some(model_words(
@@ -711,22 +792,22 @@ impl Shell {
                 &next_model(resting.model.as_ref(), &agent),
             ))
         });
+        // With nothing to add, the + stays in its place, disabled: no click that shows nothing.
+        let offers = self.plus_offers();
         line.child(
             chip()
                 .id("composer-plus")
                 .relative()
-                .on_click(cx.listener(|shell, event: &gpui::ClickEvent, _, cx| {
-                    shell.pages_menu(event.position(), cx)
-                }))
+                .when(offers, |chip| {
+                    chip.on_click(cx.listener(|shell, event: &gpui::ClickEvent, _, cx| {
+                        shell.pages_menu(event.position(), cx)
+                    }))
+                })
                 .children(plus_chip.as_ref().map(drawn_at))
-                .child(glyph("icons/plus.svg", CHIP_GLYPH)),
+                .child(glyph("icons/plus.svg", CHIP_GLYPH).when(!offers, |glyph| {
+                    glyph.text_color(palette.glyph(CHIP_DISABLED))
+                })),
         )
-        .children(added.into_iter().map(|title| {
-            chip()
-                .min_w_0()
-                .flex_shrink(1.)
-                .child(div().min_w_0().truncate().child(title))
-        }))
         .child(
             chip()
                 .id("composer-tier")
@@ -817,7 +898,7 @@ impl Shell {
             .border_color(rim(&palette, CARD_RIM))
             .overflow_hidden()
             .text_size(px(text::BODY))
-            .on_click(cx.listener(move |shell, _, _, cx| shell.show_task(agent.clone(), cx)))
+            .on_click(cx.listener(move |shell, _, _, cx| shell.open_latest(agent.clone(), cx)))
             .child(
                 div()
                     .h(px(CARD_WORDS))

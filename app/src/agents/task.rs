@@ -9,6 +9,7 @@
 //! any a crash left.
 
 use std::collections::{HashMap, VecDeque};
+use std::iter::Peekable;
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
@@ -18,6 +19,7 @@ use futures::StreamExt;
 use gpui::{App, AppContext, Context, SharedString};
 use serde_json::Value;
 
+use super::files::Given;
 use super::helpers::{self, Helpers};
 use super::ready::{Found, Ready};
 use super::runner::{self, Cli, Failure, Launch, Out, Process};
@@ -28,6 +30,7 @@ use crate::shell::MenuEntry;
 
 pub mod ilo;
 mod pick_up;
+pub(super) mod rewall;
 
 /// The answers an ask shows as buttons on the card, at most, and how long each may be.
 pub const ANSWERS: usize = 3;
@@ -146,8 +149,10 @@ pub struct Conversation {
     pub answers: Vec<SharedString>,
     /// Whether its last line is the message the agent is writing, which comes in as it's written.
     pub writing: bool,
-    /// Its access, which the composer's chip shows and changes.
+    /// Its access, which the chip under the reply field shows and its menu changes.
     pub tier: Tier,
+    /// Whether it may go only to the sites of the pages the user added.
+    pub only_added: bool,
 }
 
 /// A line of a task's conversation.
@@ -185,10 +190,17 @@ pub struct Trace {
 }
 
 impl Trace {
+    /// Its steps, not its rows: a row that's the same step on several tabs counts each.
     pub fn steps(&self) -> usize {
         (self.items.iter())
-            .filter(|item| matches!(item, TraceItem::Step(_)))
-            .count()
+            .map(|item| match item {
+                TraceItem::Step(step) => match &step.opens {
+                    Opens::Steps(each) => each.len().max(1),
+                    _ => 1,
+                },
+                _ => 0,
+            })
+            .sum()
     }
 
     /// The helpers the task started in it (#4102), those that have finished too, as each one's
@@ -378,6 +390,9 @@ pub struct Task {
     pub sites: Sites,
     /// What ilo stopped, as its conversation shows each, oldest first.
     pub stops: Vec<Stop>,
+    /// The turns the user stopped, each by how many of their messages came before its answer: a
+    /// stopped turn has no answer, so all it said stays in its stretch of work.
+    pub stopped_turns: Vec<usize>,
     /// ilo's other lines of what happened to it: its steps handed to the user, the tabs its
     /// agent asked back and the changes of its access, oldest first.
     pub(super) placed: Vec<super::lines::Placed>,
@@ -390,6 +405,15 @@ pub struct Task {
     pub(super) writing: Option<Writing>,
     /// What ilo holds of its helpers (#4102), which it has only if it started with the switch on.
     pub(super) helpers: Helpers,
+    /// The files the user gave it (#4101), which its assistant then runs inside a wall for. None
+    /// until a grant gives it some.
+    pub(in crate::agents) files: Given,
+    /// Its start inside a wall, until the system says the wall is up (rewall.rs).
+    pub(super) rising: Option<rewall::Rising>,
+    /// What came of each wall of its that wasn't put up, in order, each with the turn it came in
+    /// as an ilo line's is counted (lines.rs), so its line stands where it happened: what its
+    /// lines about them are written from, by the conversation's words table.
+    pub(in crate::agents) rewalled: Vec<(usize, rewall::Rewalled)>,
 }
 
 /// The message an agent is writing as the turn's last, which shows under its trace as it comes,
@@ -752,6 +776,12 @@ pub struct Tasks {
     /// Helpers for the tasks a test starts, whatever the switch says.
     #[cfg(test)]
     pub(super) helpers: bool,
+    /// What answers for `wall::put_up` in a test, which no system does yet.
+    #[cfg(test)]
+    pub(super) wall: Option<rewall::PutUp>,
+    /// The files the tasks a test starts are given, as a grant will give a task its own.
+    #[cfg(test)]
+    pub(super) files: Given,
 }
 
 impl Agents {
@@ -911,6 +941,9 @@ impl Agents {
             working,
             task.writing.as_ref(),
             &task.helpers,
+            &task.stopped_turns,
+            // ilo's lines of its refusals, its steps handed to the user and its changes of access.
+            self.ilo_lines(task, cx),
         );
         // A session's conversation is in its agent's terminal: here, only its steps, one by one.
         if task.session.is_some() {
@@ -936,14 +969,12 @@ impl Agents {
         }
         // ilo's line of each time it stopped the task at its helpers' limit (#4102).
         helpers::lines(task, &mut lines);
-        // ilo's lines of its refusals, its steps handed to the user and its changes of access.
-        self.ilo_lines(task, &mut lines, cx);
         // ilo's own lines of a task that can be replied to after it ended (#4105).
         self.kept_lines(task, &mut lines);
         let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
             .map(|tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
             .collect();
-        // The state's word, whoever of the task's waits: the task itself or a helper. Done says
+        // The card's own word, so a refusal waiting on the user says Needs you in both. Done says
         // when, and a limit when it resets if the assistant said; without that it's the word, as
         // the name before it says whose limit it is.
         let about = match &task.state {
@@ -951,9 +982,7 @@ impl Agents {
                 done_at(&super::time_or_day(seconds(at)))
             }
             State::Limit { resets } if resets.is_some() => limit_words(&task.name, resets),
-            state => Word::of(state, self.waits_on_user(task))
-                .after_name()
-                .to_string(),
+            _ => self.card(task, cx).word.after_name().to_string(),
         };
         // A session's title is the agent's words or its sites, so the line under it leads with its
         // client's name, and its state goes on as a fact, in lower case (#3690).
@@ -981,14 +1010,10 @@ impl Agents {
                 _ => Vec::new(),
             },
             writing: working && task.writing.as_ref().is_some_and(|writing| !writing.said),
-            // The tier model (#4086 step 2) keeps each task's own.
-            tier: Tier::default(),
+            // The chip under the reply field says the task's own level, the one its refusals read.
+            tier: task.tier,
+            only_added: matches!(task.sites, Sites::Only(_)),
         })
-    }
-
-    /// Whether a step of the task's waits on the user.
-    fn waits_on_user(&self, task: &Task) -> bool {
-        self.task_question(task).is_some()
     }
 
     fn task_question(&self, task: &Task) -> Option<Question> {
@@ -1369,6 +1394,12 @@ impl Agents {
         if asked.is_empty() || !self.tasks_on() {
             return None;
         }
+        // A private window starts no task, whichever way it was asked: agents get no path into
+        // one, and nothing of what's asked there is kept.
+        if self.browser.private_space(home) {
+            log!("browser: no task from a private window");
+            return None;
+        }
         self.tasks.next += 1;
         let agent = format!("task-{}", self.tasks.next);
         // check.sh reads this line.
@@ -1436,9 +1467,13 @@ impl Agents {
                 false => Sites::default(),
             },
             stops: Vec::new(),
+            stopped_turns: Vec::new(),
             placed: Vec::new(),
             told: None,
             helpers: Helpers::of_task(self.helpers_on() && cli == Cli::Claude),
+            files: self.files_at_start(),
+            rising: None,
+            rewalled: Vec::new(),
         };
         self.tasks.tasks.push(task);
         self.tokens_changed();
@@ -1489,35 +1524,53 @@ impl Agents {
         self.fail(agent, Failure::Other(why), cx);
     }
 
-    /// Starts the task's CLI with its first message.
-    /// Whether a task that starts now gets its assistant's helper tool: the switch, which a test
-    /// turns on for its own tasks.
+    /// Whether a task that starts now gets its assistant's helper tool: the switch. A test's
+    /// tasks have what the test says, on or off, whatever the switch is.
     fn helpers_on(&self) -> bool {
         #[cfg(test)]
-        if self.tasks.helpers {
-            return true;
-        }
-        helpers::ON
+        let said = Some(self.tasks.helpers);
+        #[cfg(not(test))]
+        let said = None;
+        said.unwrap_or(helpers::ON)
     }
 
+    /// The files a task that starts now has: none, until a grant gives a task its own.
+    fn files_at_start(&self) -> Given {
+        #[cfg(test)]
+        return self.tasks.files.clone();
+        #[cfg(not(test))]
+        Given::default()
+    }
+
+    /// Starts the task's CLI with its first message.
     pub(super) fn launch(&mut self, agent: &str, first: &str, cx: &mut Context<Self>) {
+        // A task with files starts inside its wall, or without them (rewall.rs).
+        let wall = self.wall_to_start(agent);
+        self.launch_in(agent, first, wall, cx);
+    }
+
+    /// Starts `agent`'s assistant inside `wall`, or with None as a task with no files starts.
+    pub(super) fn launch_in(
+        &mut self,
+        agent: &str,
+        first: &str,
+        wall: Option<Arc<super::wall::Wall>>,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some((task, Some(cli))) = self.task(agent).map(|task| (task, task.cli)) else {
-            return;
+            return false;
         };
         let found = self.tasks.found.get(&cli).cloned().unwrap_or_default();
         let Some(program) = found.program.clone() else {
-            return self.fail(
+            self.fail(
                 agent,
                 Failure::Other(format!("{} isn't installed.", cli.name())),
                 cx,
             );
+            return false;
         };
-        let dir = self
-            .tasks
-            .dir
-            .clone()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("Tasks");
+        let dir = self.tasks_dir();
+        let walled = wall.is_some();
         let mut args = self.bridge.clone();
         args.push(self.socket.to_string_lossy().into_owned());
         let command = args.remove(0);
@@ -1546,19 +1599,22 @@ impl Agents {
             },
             tools: tools::names(agent),
             helpers: task.helpers.on,
-            wall: None,
+            wall,
         };
         let events = self.task_events(cx);
         match Process::start_kept(&launch, &keep, agent, first, events) {
             Ok(process) => {
                 if let Some(task) = self.task_mut(agent) {
                     task.process = Some(process);
+                    // What starts it again if its wall doesn't go up (rewall.rs).
+                    task.rising = walled.then(|| rewall::Rising::of(first));
                     // Until its first line says which kinds of helper it has (#4102).
                     let new = matches!(keep, super::kept::Keep::New(_));
                     let had = (task.trace.len(), task.messages.len());
                     task.helpers.run_started(first, new, had);
                 }
                 self.kept_started(agent, cli, &keep);
+                true
             }
             Err(error) => {
                 // The folder made for a conversation that never began.
@@ -1571,8 +1627,15 @@ impl Agents {
                     Failure::Other(format!("{} couldn't start.", cli.name())),
                     cx,
                 );
+                false
             }
         }
+    }
+
+    /// The folder the tasks' own folders are in.
+    pub(super) fn tasks_dir(&self) -> PathBuf {
+        let dir = self.tasks.dir.clone();
+        dir.unwrap_or_else(std::env::temp_dir).join("Tasks")
     }
 
     /// Where the tasks' processes hand their output, which wakes the UI only as they say something.
@@ -1610,7 +1673,7 @@ impl Agents {
         }
         // Its assistant is inside its wall, which is no answer of the assistant's.
         if out == Out::Walled(Ok(())) {
-            return;
+            return self.walled_in(&agent);
         }
         // Whatever it said, it answered.
         if let Some(task) = self.task_mut(&agent) {
@@ -1677,7 +1740,7 @@ impl Agents {
                 });
             }
             Out::Helper { id, told } => self.helper_told(&agent, id, told, cx),
-            Out::Started { deep } => self.helper_started(&agent, deep, cx),
+            Out::Started { id, deep } => self.helper_started(&agent, id, deep, cx),
             Out::NotAllowed(limit) => self.helper_not_allowed(&agent, limit, cx),
             Out::Kinds { ours } => self.helper_kinds(&agent, ours, cx),
             // The turn ilo interrupted at the helpers' limit ends, however its CLI says so. The
@@ -1730,17 +1793,15 @@ impl Agents {
                     .task(&agent)
                     .is_some_and(|task| task.state == State::Stopped) => {}
             // Nothing started, so nothing of the task's is behind a wall that isn't up. Its
-            // launcher goes with the process, and the Gone that follows finds the task failed.
+            // launcher goes with the process, and the task goes on as the table says of a wall
+            // refused (rewall.rs): its run before went with it, so the Gone that follows is
+            // another run's and changes nothing.
             Out::Walled(Err(refused)) => {
                 log!("browser: task {agent} wasn't walled in: {refused:?}");
-                let cli = self.task_mut(&agent).and_then(|task| {
-                    task.process = None;
-                    task.cli
-                });
-                if let Some(cli) = cli {
-                    let why = format!("{} couldn't start.", cli.name());
-                    self.fail(&agent, Failure::Other(why), cx);
+                if let Some(task) = self.task_mut(&agent) {
+                    task.end_run();
                 }
+                self.wall_refused(&agent, cx);
             }
             Out::Gone(said) => {
                 // Its assistant no longer has the conversation it was to go on with, or what it
@@ -1767,7 +1828,7 @@ impl Agents {
     }
 
     /// The task can't go on: its card says why, and what fixes it.
-    fn fail(&mut self, agent: &str, failure: Failure, cx: &mut Context<Self>) {
+    pub(super) fn fail(&mut self, agent: &str, failure: Failure, cx: &mut Context<Self>) {
         let Some(cli) = self.task(agent).and_then(|task| task.cli) else {
             return;
         };
@@ -1824,7 +1885,7 @@ impl Agents {
             return cx.notify();
         }
         // A reply to a task that has ended takes it up, if its conversation is kept (#4105).
-        self.pick_up(agent);
+        self.pick_up(agent, cx);
         let resumes = self.resumes(agent);
         let Some(task) = self.task_mut(agent) else {
             return;
@@ -1892,6 +1953,10 @@ impl Agents {
             cx.notify();
             return;
         }
+        let turn = (task.messages.iter())
+            .filter(|message| message.who == Who::User)
+            .count();
+        task.stopped_turns.push(turn);
         task.state = State::Stopped;
         task.end(SystemTime::now());
         if let Some(process) = task.process.as_mut() {
@@ -1923,6 +1988,8 @@ impl Agents {
         if let Some(cli) = task.cli {
             self.tasks.limits.remove(&cli);
         }
+        // At work again: the file's row for a kept task says so (pick_up.rs).
+        self.kept_under_way(agent);
         if !matches!(sent, Some(Ok(()))) {
             let first = match self.resumes(agent) {
                 true => RETRY.to_string(),
@@ -2144,35 +2211,24 @@ impl Agents {
     }
 
     /// At launch: the Spaces a run before left of its tasks and outside agents, as a crash does,
-    /// and before #1080 a quit of an outside agent's, which the user saw as a Space of theirs, each
-    /// give their tabs to the top of the user's Space in its profile, as Open or Keep would, then
-    /// go. A crash showed no receipt, so the user chose neither Keep nor Dismiss, and of the two
-    /// only Keep can be undone: the tabs close to the archive as any do (#1080).
+    /// and a quit with no window left (#1676). Each goes with its pages, as at any quit: an
+    /// agent's pages were never the user's tabs, and ilo makes none of them the user's by itself,
+    /// which only the user does. They stay among the profile's visited pages in History, and a
+    /// task is in the Archive to reply to if its assistant kept it (#4105).
     pub fn end_old_tasks(&mut self, cx: &mut Context<Self>) {
-        let left = (self
-            .browser
-            .task_spaces()
-            .into_iter()
-            .map(|space| (space, None)))
-        .chain(Client::ALL.into_iter().filter_map(|client| {
+        for space in self.browser.task_spaces() {
+            log!("browser: deleting space {space} of a task before");
+            self.browser.delete_space(space, cx);
+        }
+        for client in Client::ALL {
             let space = self.browser.agent_space(client.id());
-            (space != 0).then_some((space, Some(client)))
-        }))
-        .collect::<Vec<_>>();
-        for (space, client) in left {
-            let home = self.browser.user_space(space);
-            // Each goes to the top, so the last goes first.
-            for tab in self.browser.space_tab_ids(space, cx).into_iter().rev() {
-                self.browser.move_tab(tab, home, cx);
+            if space == 0 {
+                continue;
             }
-            // check.sh reads these lines.
-            match client {
-                Some(client) => log!(
-                    "browser: deleting space {space} of agent {} before",
-                    client.id()
-                ),
-                None => log!("browser: deleting space {space} of a task before"),
-            }
+            log!(
+                "browser: deleting space {space} of agent {} before",
+                client.id()
+            );
             self.browser.delete_space(space, cx);
         }
         if let Some(dir) = &self.tasks.dir {
@@ -2213,6 +2269,13 @@ impl Agents {
             cx,
         );
         self.trace(&key, call.id, did, call.at, cx);
+        // A page opened while the task's helpers work may be one of theirs (#4102).
+        if tool == "open_tab"
+            && let Some(task) = self.task_mut(&key).filter(|task| task.helpers.on)
+            && let Some(at) = task.trace.len().checked_sub(1)
+        {
+            task.helpers.opens_at(at);
+        }
     }
 
     /// A step of the run `call` on `tab`, starting now, which ends the step before it.
@@ -2359,6 +2422,8 @@ impl Agents {
         match named {
             Ok(()) => {
                 self.note(agent, connection, "title", "", "");
+                // A kept task's row in the file has its name from now (pick_up.rs).
+                self.kept_named(agent);
                 _ = reply.send(ToolResult::text(match kept == text {
                     true => "The task has its name.".to_string(),
                     false => format!("The task has its name: “{kept}”."),
@@ -2628,16 +2693,27 @@ impl Agents {
             tier: Tier::default(),
             sites: Sites::default(),
             stops: Vec::new(),
+            stopped_turns: Vec::new(),
             placed: Vec::new(),
             told: None,
             helpers: Helpers::default(),
+            files: Given::default(),
+            rising: None,
+            rewalled: Vec::new(),
         });
         cx.notify();
         Some(key)
     }
 
-    /// The agent's call `call` opened `tab`, which is a page of its session's.
+    /// The agent's call `call` opened `tab`, which is a page of its session's, or the page of
+    /// the helper of a task's that asked for it (#4102).
     pub(super) fn opened(&mut self, agent: &str, call: u64, tab: u64) {
+        if let Some(task) = self.task_mut(agent).filter(|task| task.helpers.on) {
+            let opens = |step: &Traced| step.call == call && step.did.tool == "open_tab";
+            if let Some(at) = task.trace.iter().rposition(opens) {
+                task.helpers.opened(at, tab);
+            }
+        }
         let Some(key) = self.session_of(agent, call).map(|task| task.agent.clone()) else {
             return;
         };
@@ -3278,19 +3354,21 @@ pub fn first_message(asked: &str, page: Option<&AskedOn>) -> String {
 }
 
 /// `first` with the addresses of the pages the user added, for the task to open in tabs of its own:
-/// their addresses alone, as the user's own tabs are never the task's.
-fn with_added(first: String, pages: &[String]) -> String {
+/// their addresses alone, as the user's own tabs are never the task's. Each is on a line of its own
+/// under the sentence, as an address may hold a comma or a bracket, which would read as the
+/// sentence's; a parsed address holds no line break (`added_address`).
+pub(super) fn with_added(first: String, pages: &[String]) -> String {
     match pages {
         [] => first,
         pages => format!(
-            "{first}\n\n(Pages I added, to open in tabs of your own: {}.)",
-            pages.join(", ")
+            "{first}\n\nPages I added, to open in tabs of your own:\n{}",
+            pages.join("\n")
         ),
     }
 }
 
 /// The conversation so far, for a new run of a task whose CLI went.
-fn conversation(task: &Task) -> String {
+pub(super) fn conversation(task: &Task) -> String {
     let mut text = with_added(first_message(&task.asked, task.page.as_ref()), &task.added);
     for message in &task.messages {
         let who = if message.who == Who::User {
@@ -3402,17 +3480,19 @@ fn working(task: &Task) -> SharedString {
 }
 
 /// How many helpers the stretch under way of a working task has, which its conversation's live
-/// line counts: those the steps since the last message that ends a stretch, the user's or a
-/// question of the task's, are labelled as. A card is made again whenever any task changes, so
-/// it counts them from those steps alone, as it reads its own step, and never folds the
-/// conversation (`fold`), whose live line a test holds it to.
+/// line counts: those its CLI said started since the last message that ends a stretch, the
+/// user's or a question of the task's, each from its start and whether it has ended or not, and
+/// those the steps since are labelled as. A card is made again whenever any task changes, so it
+/// counts them from those alone, as it reads its own step, and never folds the conversation
+/// (`fold`), whose live line a test holds it to.
 fn helpers_under_way(task: &Task) -> usize {
     if !task.helpers.on || task.state != State::Working {
         return 0;
     }
     let ends = |message: &Message| matches!(message.who, Who::User | Who::Asked);
     let from = (task.messages.iter().rposition(ends)).map_or(0, |at| at + 1);
-    let mut helpers: Vec<usize> = Vec::new();
+    let began = task.helpers.began().filter(|began| began.after >= from);
+    let mut helpers: Vec<usize> = began.map(|began| began.helper).collect();
     for (key, step) in (task.trace.iter().enumerate().rev()).take_while(|(_, s)| s.after >= from) {
         if let Some(helper) = task.helpers.of(key, step.did.tab)
             && !helpers.contains(&helper)
@@ -3424,15 +3504,27 @@ fn helpers_under_way(task: &Task) -> usize {
 }
 
 /// Each page's own last step of the turn under way, newest first, once the turn's steps are on
-/// more than one page or the task has helpers: else the task's step is its one page's.
+/// more than one page or the task has helpers: else the task's step is its one page's. A page a
+/// helper opened has that step from when it's open, and one whose last step was a helper's has
+/// none once that helper has ended, as nothing works in it.
 fn page_steps(task: &Task) -> Vec<(u64, SharedString)> {
+    let turn = task.turn();
+    let steps = (task.trace.iter().enumerate().rev())
+        .take_while(|(_, step)| step.after >= turn)
+        .filter(|(_, step)| step.did.tool != "thought");
     let mut pages: Vec<(u64, SharedString)> = Vec::new();
-    for step in turn_steps(task) {
-        let Some(tab) = step.did.tab else {
+    let mut over: Vec<u64> = Vec::new();
+    for (key, step) in steps {
+        let Some(tab) = step.did.tab.or_else(|| task.helpers.opened_at(key)) else {
             continue;
         };
-        if pages.iter().all(|(each, _)| *each != tab) {
-            pages.push((tab, tools::step_title(&step.did, tense(step)).into()));
+        if pages.iter().any(|(each, _)| *each == tab) || over.contains(&tab) {
+            continue;
+        }
+        let helper = task.helpers.of(key, Some(tab));
+        match helper.is_some_and(|helper| task.helpers.ended(helper)) {
+            true => over.push(tab),
+            false => pages.push((tab, tools::step_title(&step.did, tense(step)).into())),
         }
     }
     match pages.len() {
@@ -3548,11 +3640,22 @@ thread_local! {
     pub(super) static FOLDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// An ilo line, and how many of its task's messages and steps came before it, which places it
+/// among them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Mark {
+    pub after: usize,
+    pub traced: usize,
+    pub line: ilo::IloLine,
+}
+
 /// A conversation's lines from its `messages` and its `trace`, oldest first. Each turn, from a
 /// message of the user's to the next, shows its questions and, once it has `ended`, its last
 /// message; the steps between those are a trace each, with what the agent said along the way in
 /// it. The last stretch is under way while the task is `working`, and what the agent is `writing`
 /// shows under it, as it comes and once it's whole, until the turn ends or a call takes it in.
+/// ilo's lines, `marks`, each go where it came among the messages and the steps, ending the
+/// stretch of steps before it.
 pub fn fold(
     messages: &[Message],
     trace: &[Traced],
@@ -3560,6 +3663,8 @@ pub fn fold(
     working: bool,
     writing: Option<&Writing>,
     helpers: &Helpers,
+    stopped: &[usize],
+    marks: Vec<Mark>,
 ) -> Vec<Line> {
     #[cfg(test)]
     FOLDS.with(|folds| folds.set(folds.get() + 1));
@@ -3575,13 +3680,14 @@ pub fn fold(
     let turns: Vec<&[Message]> = messages
         .split_inclusive(|message| message.who == Who::User)
         .collect();
-    for turn in &turns {
+    for (index, turn) in turns.iter().enumerate() {
         // A turn the user has written after is over, even as the next is under way.
         let turn_ended = ended || turn.last().is_some_and(|message| message.who == Who::User);
-        // The turn's last message: its result, else the last thing it said, once it's over.
+        // The turn's last message: its result, else the last thing it said, once it's over by
+        // itself. One the user stopped has no answer: what it said stays in its stretch.
         let last = (turn.iter().rposition(|message| message.who == Who::Result))
             .or_else(|| turn.iter().rposition(|message| message.who != Who::User))
-            .filter(|_| turn_ended);
+            .filter(|_| turn_ended && !stopped.contains(&index));
         for (at, message) in turn.iter().enumerate() {
             shown[first + at] = matches!(message.who, Who::User | Who::Asked) || Some(at) == last;
         }
@@ -3593,10 +3699,11 @@ pub fn fold(
         ..Stretch::default()
     };
     let mut steps = trace.iter().enumerate().peekable();
+    let mut began = helpers.began().peekable();
+    let mut marks = marks.into_iter().peekable();
     for (index, message) in messages.iter().enumerate() {
-        while let Some((key, step)) = steps.next_if(|(_, step)| step.after <= index) {
-            stretch.step(key, step, helpers.of(key, step.did.tab));
-        }
+        stretch.gather(&mut steps, &mut began, Some(index), &mut lines, &mut marks);
+        place(&mut lines, &mut stretch, &mut marks, trace.len(), index);
         if Some(index) == held {
             continue;
         }
@@ -3611,25 +3718,43 @@ pub fn fold(
             _ => Line::Said(message.text.clone()),
         });
     }
-    for (key, step) in steps {
-        stretch.step(key, step, helpers.of(key, step.did.tab));
-    }
+    stretch.gather(&mut steps, &mut began, None, &mut lines, &mut marks);
     stretch.flush(&mut lines, working, None);
     lines.extend(writing.map(|writing| Line::Said(writing.text.clone())));
+    lines.extend(marks.map(|mark| Line::Ilo(mark.line)));
     lines
+}
+
+/// ilo's lines that came before the step `key` of the trace and the message `index`, each where
+/// it came: the stretch of steps before it ends there.
+fn place(
+    lines: &mut Vec<Line>,
+    stretch: &mut Stretch,
+    marks: &mut Peekable<std::vec::IntoIter<Mark>>,
+    key: usize,
+    index: usize,
+) {
+    while let Some(mark) = marks.next_if(|mark| mark.traced <= key && mark.after <= index) {
+        stretch.flush(lines, false, None);
+        lines.push(Line::Ilo(mark.line));
+    }
 }
 
 /// A session's lines: its traces' steps, each a line of its own, newest last.
 fn steps(lines: Vec<Line>) -> Vec<Line> {
-    let steps = lines.into_iter().flat_map(|line| match line {
-        Line::Trace(trace) => trace.items,
-        _ => Vec::new(),
-    });
-    (steps.filter_map(|item| match item {
-        TraceItem::Step(step) => Some(Line::Step(step)),
-        TraceItem::Said(_) | TraceItem::Helper { .. } => None,
-    }))
-    .collect()
+    (lines.into_iter())
+        .flat_map(|line| match line {
+            Line::Trace(trace) => (trace.items.into_iter())
+                .filter_map(|item| match item {
+                    TraceItem::Step(step) => Some(Line::Step(step)),
+                    TraceItem::Said(_) | TraceItem::Helper { .. } => None,
+                })
+                .collect(),
+            // ilo's lines are a session's too.
+            Line::Ilo(line) => vec![Line::Ilo(line)],
+            _ => Vec::new(),
+        })
+        .collect()
 }
 
 /// The stretch of work a trace is made of, as it gathers.
@@ -3649,9 +3774,41 @@ enum Gathered<'a> {
     Said(SharedString),
     /// A step labelled as a helper's (#4102), by which of the task's helpers.
     Helper(usize, usize, &'a Traced),
+    /// A helper started, which shows from then.
+    Began(usize),
 }
 
 impl<'a> Stretch<'a> {
+    /// Takes in what came before the message at `before`, or all that's left: each step, and
+    /// each helper from where it started among them (#4102).
+    fn gather(
+        &mut self,
+        steps: &mut Peekable<impl Iterator<Item = (usize, &'a Traced)>>,
+        began: &mut Peekable<impl Iterator<Item = helpers::Began>>,
+        before: Option<usize>,
+        lines: &mut Vec<Line>,
+        marks: &mut Peekable<std::vec::IntoIter<Mark>>,
+    ) {
+        let due = |after: usize| before.is_none_or(|index| after <= index);
+        loop {
+            let step = steps.peek().copied().filter(|(_, step)| due(step.after));
+            let helper = began.peek().filter(|began| due(began.after));
+            match (step, helper) {
+                (step, Some(helper)) if step.is_none_or(|(key, _)| helper.from <= key) => {
+                    self.began(helper);
+                    began.next();
+                }
+                (Some((key, step)), _) => {
+                    place(lines, self, marks, key, before.unwrap_or(usize::MAX));
+                    let helper = self.helpers.and_then(|all| all.of(key, step.did.tab));
+                    self.step(key, step, helper);
+                    steps.next();
+                }
+                (None, _) => break,
+            }
+        }
+    }
+
     fn step(&mut self, key: usize, step: &'a Traced, helper: Option<usize>) {
         self.key.get_or_insert(key);
         self.started = Some(
@@ -3666,6 +3823,17 @@ impl<'a> Stretch<'a> {
         });
     }
 
+    /// A helper started in it, whose line stands here whether or not a step of its own follows.
+    fn began(&mut self, began: &helpers::Began) {
+        self.key.get_or_insert(helpers::BEGAN + began.helper);
+        self.started = Some(
+            self.started
+                .map_or(began.at, |started| started.min(began.at)),
+        );
+        self.ended = Some(self.ended.map_or(began.at, |ended| ended.max(began.at)));
+        self.gathered.push(Gathered::Began(began.helper));
+    }
+
     /// The stretch as its lines: a trace, or with no steps, what the agent said, as itself. It's
     /// `running` if it's the stretch under way, and ends at the agent's message `end`, if one ends
     /// it.
@@ -3675,7 +3843,7 @@ impl<'a> Stretch<'a> {
         let Some(key) = key else {
             lines.extend(gathered.into_iter().filter_map(|item| match item {
                 Gathered::Said(text) => Some(Line::Said(text)),
-                Gathered::Step(..) | Gathered::Helper(..) => None,
+                Gathered::Step(..) | Gathered::Helper(..) | Gathered::Began(_) => None,
             }));
             return;
         };
@@ -3683,12 +3851,24 @@ impl<'a> Stretch<'a> {
             .map(|item| match item {
                 Together::Steps(steps) => TraceItem::Step(trace_step(&steps)),
                 Together::Said(text) => TraceItem::Said(text),
-                // A helper's one line is the step it's on, in the place of its first.
-                Together::Helper(helper, key, on) => TraceItem::Helper {
-                    step: helper_step(key, on),
-                    name: (self.helpers).map_or_else(SharedString::default, |all| all.name(helper)),
-                    tab: on.1.did.tab,
-                },
+                // A helper's one line is the step it's on, where it started or in the place of
+                // its first. Its page is that step's, the one the step opened, or before it has
+                // a step, the one it opened or named.
+                Together::Helper { helper, key, on } => {
+                    let all = self.helpers;
+                    let page = |key: usize| all.and_then(|all| all.opened_at(key));
+                    TraceItem::Helper {
+                        step: match on {
+                            Some(on) => helper_step(key, on),
+                            None => helper_began(key, all.is_some_and(|all| !all.ended(helper))),
+                        },
+                        name: all.map_or_else(SharedString::default, |all| all.name(helper)),
+                        tab: match on {
+                            Some((at, step)) => step.did.tab.or_else(|| page(at)),
+                            None => all.and_then(|all| all.page(helper)),
+                        },
+                    }
+                }
             })
             .collect();
         // A stretch that's over has nothing under way, a helper's line neither: what its
@@ -3725,8 +3905,13 @@ impl<'a> Stretch<'a> {
 enum Together<'a> {
     Steps(Vec<(usize, &'a Traced)>),
     Said(SharedString),
-    /// A helper's steps as one line (#4102): which helper, its first step's place, and its last.
-    Helper(usize, usize, (usize, &'a Traced)),
+    /// A helper as one line (#4102): which helper, the line's key, which is its own from where
+    /// it started and else its first step's place, and the step it's on, if it has one yet.
+    Helper {
+        helper: usize,
+        key: usize,
+        on: Option<(usize, &'a Traced)>,
+    },
 }
 
 /// A stretch's lines, in which a turn's same step on several tabs is one (#1476), as an agent
@@ -3746,14 +3931,31 @@ fn together(gathered: Vec<Gathered<'_>>) -> Vec<Together<'_>> {
                 from = lines.len();
                 continue;
             }
-            Gathered::Helper(helper, key, step) => {
+            Gathered::Helper(helper, at, step) => {
                 let line = lines.iter_mut().find_map(|line| match line {
-                    Together::Helper(each, _, on) if *each == helper => Some(on),
+                    Together::Helper {
+                        helper: each, on, ..
+                    } if *each == helper => Some(on),
                     _ => None,
                 });
                 match line {
-                    Some(on) => *on = (key, step),
-                    None => lines.push(Together::Helper(helper, key, (key, step))),
+                    Some(on) => *on = Some((at, step)),
+                    None => lines.push(Together::Helper {
+                        helper,
+                        key: at,
+                        on: Some((at, step)),
+                    }),
+                }
+                continue;
+            }
+            Gathered::Began(helper) => {
+                let has = |line: &Together| matches!(line, Together::Helper { helper: each, .. } if *each == helper);
+                if !lines.iter().any(has) {
+                    lines.push(Together::Helper {
+                        helper,
+                        key: helpers::BEGAN + helper,
+                        on: None,
+                    });
                 }
                 continue;
             }
@@ -3803,6 +4005,21 @@ fn helper_step(key: usize, on: (usize, &Traced)) -> TraceStep {
             ..line
         },
         false => line,
+    }
+}
+
+/// The line of a helper that has started and has no step yet, `running` until its CLI says it
+/// ended. It says nothing of its own: its task's name for it stands on it.
+fn helper_began(key: usize, running: bool) -> TraceStep {
+    TraceStep {
+        key,
+        glyph: tools::step_glyph(""),
+        title: SharedString::default(),
+        description: SharedString::default(),
+        running,
+        failed: false,
+        opens: Opens::Nothing,
+        under: SharedString::default(),
     }
 }
 
