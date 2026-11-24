@@ -33,6 +33,7 @@ use gpui::{
     prelude::*, px, rgb,
 };
 
+use super::ShowStarted;
 use super::agent_bar;
 use super::library::LIBRARY_BACK_INSET;
 use super::page_ends::StripStop;
@@ -45,7 +46,7 @@ use crate::agents::runner::Cli;
 use crate::agents::sign_in::Offer;
 use crate::agents::task::{Card, Dot, NEEDS_YOU, TaskAction, Word};
 use crate::agents::tier::Tier;
-use crate::palette::{FIELD_PLATE as URL_FIELD, Ground};
+use crate::palette::FIELD_PLATE as URL_FIELD;
 use crate::tokens::shell::task::motion::{
     ARCHIVE, ARCHIVE_CLOSE, ARCHIVE_CLOSE_DELAY, ARCHIVE_CONTENT, ARCHIVE_EASE, ARCHIVE_HOLD,
     ARCHIVE_LEAVE, ARCHIVE_OPEN, BUMP, BUMP_EASE, BUMP_GLYPH, BUMP_PEAK, BUMP_SCALE, CONTENT,
@@ -493,10 +494,15 @@ impl Group {
         }
     }
 
-    /// Comes back as it went, its copy on the way to the Archive gone.
-    fn stay(&mut self, now: Instant, still: bool) {
+    /// Comes back as it went, its copy on the way to the Archive gone, at once if it shouldn't
+    /// move.
+    fn stay(&mut self, now: Instant, still: bool, animate: bool) {
         self.leaving = false;
         self.archived = None;
+        if !animate {
+            self.opacity = Ease::rest(1.);
+            return;
+        }
         let (length, curve) = if still {
             (CROSSFADE, Curve::Linear)
         } else {
@@ -708,15 +714,16 @@ impl Shell {
         }
         // The composer's ↩ shows the task it started, as its Space has no page to stay on; ⌘T's
         // ask over a page leaves the page, and its card comes in at the foot.
-        if let Some(home) = self.show_started
-            && let Some(card) = self
-                .task_cards
-                .iter()
-                .find(|card| card.home == home && !was.contains(&card.agent))
-        {
+        let started = |card: &&Card| match &self.show_started {
+            Some(ShowStarted::Asked(home)) => card.home == *home && !was.contains(&card.agent),
+            Some(ShowStarted::Task(agent)) => card.agent == *agent,
+            None => false,
+        };
+        if let Some(card) = self.task_cards.iter().find(started) {
+            let (agent, home) = (card.agent.clone(), card.home);
             self.show_started = None;
             if self.selected == 0 && self.space() == home && self.talk_agent().is_none() {
-                self.show_task(card.agent.clone(), cx);
+                self.show_task(agent, cx);
             }
         }
         cx.notify();
@@ -738,6 +745,13 @@ impl Shell {
     /// the others close to their headers.
     pub(super) fn reshape_foot(&mut self, cx: &mut Context<Self>) {
         self.sync_foot(None, cx);
+    }
+
+    /// The page area has a task's view back as it stood, after a close a page refused: the foot
+    /// is as it stood too, at once. The view comes back with no motion, so a group opening with
+    /// the foot's was a view over a group whose pages' rows weren't there yet (#4202).
+    pub(super) fn restore_foot(&mut self, cx: &mut Context<Self>) {
+        self.bring_foot(None, false, cx);
     }
 
     /// The glyph's colours: Signal, a header's title's ink and its state line's, and the stopped
@@ -790,9 +804,14 @@ impl Shell {
     /// grow in, and each task's group takes its card's changes, open to its pages if its task is
     /// the one the page area shows. `took` is the new card that fills the slot's group.
     fn sync_foot(&mut self, took: Option<SharedString>, cx: &mut Context<Self>) {
+        // What changes on a foot the window has drawn moves.
+        self.bring_foot(took, self.foot.primed, cx);
+    }
+
+    /// `sync_foot`, with what changes moving only if `animate`: else all of it is there at once.
+    fn bring_foot(&mut self, took: Option<SharedString>, animate: bool, cx: &mut Context<Self>) {
         let now = clock();
         let still = crate::motion::still(cx);
-        let animate = self.foot.primed;
         let moves = animate && !still;
         self.foot.still = still;
         let system = (self.text_system.take())
@@ -823,7 +842,7 @@ impl Shell {
         for group in &mut foot.groups {
             match (wanted.contains(&group.holds), group.leaving) {
                 (false, false) => group.leave(now, still, animate),
-                (true, true) => group.stay(now, still),
+                (true, true) => group.stay(now, still, animate),
                 _ => {}
             }
         }
@@ -1602,13 +1621,6 @@ impl Shell {
         }
     }
 
-    /// A card's, the count's or a page row's plate under the pointer: the ink at the foot's own
-    /// alpha, with the shade a sidebar row's plate takes there, so what's written on it reads
-    /// however much of a bright window comes through.
-    fn hovered_plate(&self) -> Hsla {
-        self.palette.ground_plate(Ground::Hovered, HOVERED)
-    }
-
     fn more_row(&self, group: &Group, now: Instant, cx: &mut Context<Self>) -> AnyElement {
         let words = self.more_words();
         let key = Holds::More.key();
@@ -1617,7 +1629,7 @@ impl Shell {
         let drawn = drawn_listener(&self.foot.plates_drawn, &self.foot.rested, key, rest);
         let row = self
             .header_plate(group, now)
-            .when(hovered, |row| row.bg(self.hovered_plate()))
+            .when(hovered, |row| row.bg(self.palette.hovered_plate()))
             .id("task-more");
         // A stop is placed in the flow; this one keeps its plate's place in its row.
         self.strip_stop(row, StripStop::More, words.clone(), PLATE_RADIUS)
@@ -1689,7 +1701,7 @@ impl Shell {
                 f32::from(u8::from(hovered)),
                 false,
             ),
-            (false, true) => plate.bg(self.hovered_plate()),
+            (false, true) => plate.bg(self.palette.hovered_plate()),
             // The bar's plate as it lands, which goes as the header comes.
             (false, false) => plate.bg(self.palette.plate(TILE).opacity(landed)),
         };
@@ -1956,9 +1968,11 @@ impl Shell {
             true => selected_plate(&self.palette, row, 1., 0., false),
             false => row,
         };
-        let hover = self.hovered_plate();
+        let hover = self.palette.hovered_plate();
+        let pointed: SharedString = format!("task-page-{tab}").into();
         let row = row
             .id(("task-page", tab))
+            .group(pointed.clone())
             .when(!shown, |row| row.hover(move |style| style.bg(hover)));
         // The favicon is drawn in its box whole, as a row's is drawn smaller than its column.
         let icon = div()
@@ -1983,8 +1997,8 @@ impl Shell {
                 .rounded_full()
                 .bg(rgb(STATUS_AGENT))
         });
-        // A word in gray is at this, and on the shown row's plate in the gray that reads on one;
-        // one the user is needed at or drives is in the title's ink.
+        // A word in gray is at this, and on a plate, the shown row's or the one under the pointer,
+        // in the gray that reads on one; one the user is needed at or drives is in the title's ink.
         let gray = match word {
             PageWord::NeedsYou | PageWord::Driving => None,
             PageWord::Working => Some(PAGE_WORD_WORKING),
@@ -1995,6 +2009,9 @@ impl Shell {
             Some(alpha) if shown => self.palette.gray_on_plate(alpha),
             Some(alpha) => self.palette.gray(alpha),
         };
+        let on_plate = gray
+            .filter(|_| !shown)
+            .map(|alpha| self.palette.gray_on_plate(alpha));
         let state = div()
             .flex_none()
             .flex()
@@ -2002,6 +2019,9 @@ impl Shell {
             .gap(px(PAGE_DOT_GAP))
             .text_size(px(text::SMALL))
             .text_color(ink)
+            .when_some(on_plate, |state, ink| {
+                state.group_hover(pointed, move |style| style.text_color(ink))
+            })
             .children(dot)
             .child(word.label());
         let drawn = {

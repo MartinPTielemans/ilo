@@ -234,6 +234,8 @@ pub struct TalkView {
     /// buttons' handles, in their order on the line (ilo_keys.rs).
     ilo_keys: Option<ilo_keys::IloKeys>,
     ilo_stops: [gpui::FocusHandle; ilo_keys::MOST],
+    /// GPUI's focus still on a button whose keys ended, for the next frame to take from it.
+    ilo_left: Option<ilo_keys::Left>,
     /// Where each of ilo's lines' words were last drawn, and their layout, by its line.
     ilo_words_drawn: WordsDrawn,
     /// Where each ilo line's link was drawn, by the line's key.
@@ -373,6 +375,8 @@ impl Shell {
     pub fn show_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
         // A view set aside for a close's question is left for the one asked for now.
         self.forget_closing(cx);
+        // A conversation opened leaves the empty page the composer's start would have opened.
+        self.show_started = None;
         let Some(card) = self.task_cards.iter().find(|card| card.agent == agent) else {
             return;
         };
@@ -431,6 +435,7 @@ impl Shell {
                     ilo_hovered: Rc::default(),
                     ilo_keys: None,
                     ilo_stops,
+                    ilo_left: None,
                     ilo_words_drawn: Rc::default(),
                     ilo_links: Rc::default(),
                     level_drawn: Rc::default(),
@@ -558,6 +563,7 @@ impl Shell {
     /// takes it back while a page watched covers the field: GPUI sends the keys of a field that
     /// isn't drawn to no binding of ours, so Esc stepped back from nothing.
     pub(super) fn focus_talk(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.step_ilo_keys_drawn(window, cx);
         let Some(talk) = &self.talk else { return };
         let view = talk.view.read(cx);
         let (reply, replies) = (view.reply.focus_handle(cx), view.takes_reply());
@@ -705,6 +711,7 @@ impl TalkView {
 
     /// Its pictures go, as it no longer shows, and are taken again when it does.
     fn let_go(&mut self) -> Vec<Arc<RenderImage>> {
+        self.ilo_keys_undrawn("area");
         self.stale = true;
         self.motion.reset();
         let pictures = std::mem::take(&mut self.pictures);
@@ -2179,7 +2186,9 @@ impl TalkView {
         let name = name.map(|name| clip(&name, QUOTED_CHARS as usize));
         let (said, highlights) = match &name {
             Some(name) => {
-                let (said, quoted) = words::with_name(&line.kind, &own, name);
+                let (mut said, quoted) = words::with_name(&line.kind, &own, name);
+                // What its sentence says after the name.
+                said.extend(words::tail(&line.kind, agent));
                 let style = HighlightStyle {
                     color: Some(palette.text(TITLE)),
                     ..Default::default()
@@ -2193,11 +2202,23 @@ impl TalkView {
             _ => None,
         };
         let glyph = match &line.kind {
-            IloKind::Stopped { .. } | IloKind::Helpers { .. } => "icons/ban.svg",
+            // A task ilo stopped has the one glyph, whatever it stopped it over.
+            IloKind::Stopped { .. }
+            | IloKind::Helpers { .. }
+            | IloKind::NotRestarted { .. }
+            | IloKind::NotRaised { .. } => "icons/ban.svg",
             IloKind::Yours { .. } => "icons/user.svg",
             IloKind::TabBack { .. } => "icons/undo-2.svg",
             IloKind::SignedIn { .. } => "icons/key-round.svg",
-            IloKind::TierChanged { .. } => "icons/shield.svg",
+            IloKind::TierChanged { .. } | IloKind::KeptAt { .. } | IloKind::SetBack { .. } => {
+                "icons/shield.svg"
+            }
+            IloKind::StartedWithout {
+                left: ilo::LeftOut::Folder(_),
+            } => "icons/folder.svg",
+            IloKind::StartedWithout { .. } => "icons/file.svg",
+            IloKind::LeftRunning { .. } => "icons/circle-alert.svg",
+            IloKind::EndedLeft => "icons/check.svg",
             IloKind::Resumed { .. } => "icons/play.svg",
             IloKind::KeptHere => "icons/save.svg",
             IloKind::Gone
@@ -2317,6 +2338,7 @@ impl TalkView {
                         let mut drawn = drawn.borrow_mut();
                         if drawn.get(&key).is_none_or(|(was, _)| *was != bounds) {
                             drawn.insert(key, (bounds, Instant::now()));
+                            log!("{}", ilo_keys::place(key, bounds));
                         }
                     },
                     |_, _, _, _| {},
