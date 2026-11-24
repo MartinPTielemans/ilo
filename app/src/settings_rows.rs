@@ -1305,14 +1305,22 @@ pub fn site_note_row(
     let head = frame()
         .child(text(look, note.name, Some(note.about.into())))
         .child(end([read.into_any_element()]));
+    // A line each, as the note's text has them: a part's name in a row's name's ink, its
+    // sentences grey under it, so an open note reads as its three parts.
     let words = opened.then(|| {
+        let lines = note.text.trim_end().lines().map(|line| {
+            let ink = match crate::agents::notes::PARTS.contains(&line) {
+                true => look.ink,
+                false => look.detail,
+            };
+            div().min_h(px(DETAIL_LINE)).text_color(ink).child(line)
+        });
         div()
             .px(px(ROW_X))
             .pb(px(PADDING))
             .text_size(px(SMALL))
             .line_height(px(DETAIL_LINE))
-            .text_color(look.detail)
-            .child(note.text.trim_end())
+            .children(lines)
     });
     div().child(head).children(words)
 }
