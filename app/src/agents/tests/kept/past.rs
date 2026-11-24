@@ -93,6 +93,78 @@ fn started(run: &Run, at: usize) -> bool {
     beside(&run.program, &format!("args.{at}")).exists()
 }
 
+/// That its assistant still has a task's conversation is said only where the messages of a task
+/// a run before left would begin. One at work, or done or stopped in this run, has its messages
+/// there and no such line; after a quit all there is of it is that line.
+#[gpui::test]
+fn only_a_task_brought_back_says_its_assistant_still_has_it(cx: &mut TestAppContext) {
+    let run = Run::new("still-has", cx);
+    let done = run.start(Cli::Claude, cx);
+    run.ran(1);
+    assert_eq!(run.ilo_lines(&done, cx), []);
+    name_it(&run, &done, "Lisbon seats", cx);
+    run.finish(&done, cx);
+    assert_eq!(run.ilo_lines(&done, cx), []);
+    assert!(!run.talk(&done, cx).lines.is_empty());
+    let stopped = run.start(Cli::Claude, cx);
+    run.ran(2);
+    name_it(&run, &stopped, "Porto seats", cx);
+    act(&run, &stopped, TaskAction::Stop, cx);
+    assert_eq!(run.ilo_lines(&stopped, cx), []);
+
+    quit(&run, cx);
+    let next = next(&run, cx);
+    let past = archive(&next, cx);
+    assert_eq!(past.len(), 2);
+    for (past, ..) in &past {
+        assert_eq!(next.talk(past, cx).lines.len(), 1);
+        assert_eq!(next.ilo_lines(past, cx), [IloKind::KeptHere]);
+    }
+}
+
+/// For the shell's test of the same road (shell/library/history_tests.rs): a task named `title`
+/// ended Done with a page open, and the browser quit with no window left, which leaves the task's
+/// Space as a crash does. The next launch finds the Space and its page, and gives none of it to
+/// the user. That launch's agents, and the task there.
+pub(crate) fn after_a_quit(title: &str, cx: &mut TestAppContext) -> (Entity<Agents>, String) {
+    let run = Run::new("road", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    name_it(&run, &agent, title, cx);
+    opens_a_page(&run.agents, &agent, cx);
+    run.finish(&agent, cx);
+    let space = (run.agents).read_with(cx, |agents, _| agents.task(&agent).unwrap().space);
+    let in_space = |browser: &Made, space: u64| -> Vec<_> {
+        let tabs = browser.tabs.borrow();
+        tabs.iter().filter(|tab| tab.1 == space).copied().collect()
+    };
+    let pages = in_space(&run.browser, space);
+    assert_eq!(pages.len(), 1);
+    (run.agents).update(cx, |agents, cx| agents.end_tasks(false, cx));
+    assert!(run.browser.deleted.borrow().is_empty());
+
+    let next = next(&run, cx);
+    let users = in_space(&next.browser, 1);
+    next.browser.task_spaces.borrow_mut().push(space);
+    next.browser.tabs.borrow_mut().extend(pages);
+    // An outside agent's Space is another matter (#1080), and none was left.
+    next.browser.agent_spaces.borrow_mut().clear();
+    (next.agents).update(cx, |agents, cx| agents.end_old_tasks(cx));
+    assert_eq!(*next.browser.deleted.borrow(), [space]);
+    assert_eq!(in_space(&next.browser, 1), users);
+    assert!(in_space(&next.browser, space).is_empty());
+    let past = archive(&next, cx)[0].0.clone();
+    (next.agents, past)
+}
+
+/// The task's agent opens a page, as its `open_tab` tool does. The task's Space after.
+pub(crate) fn opens_a_page(agents: &Entity<Agents>, agent: &str, cx: &mut TestAppContext) -> u64 {
+    let url = json!({ "url": "https://www.example.com/timetable" });
+    _ = call(agents, agent, "open_tab", url, cx);
+    cx.run_until_parked();
+    agents.read_with(cx, |agents, _| agents.task(agent).unwrap().space)
+}
+
 /// The file says of a task that has ended its conversation's id, its assistant, the name its
 /// agent gave it, how and when it ended and its profile: never what was asked, the page it was
 /// asked on, a step, or what its agent said. After a quit the next launch lists it in the Archive
@@ -205,6 +277,11 @@ fn a_finished_task_is_there_after_a_quit_and_takes_a_reply(cx: &mut TestAppConte
             .unwrap()
             .contains("Sunday")
     );
+    // The next reply, in the run that brought it back, is the resume: ilo's line stays the one.
+    reply(&next, &past, "And Monday?", cx);
+    let lines = next.ilo_lines(&past, cx);
+    let resumed = |kind: &&IloKind| matches!(kind, IloKind::Resumed { .. });
+    assert_eq!(lines.iter().filter(resumed).count(), 1, "{lines:?}");
 }
 
 /// A past task whose assistant no longer has its conversation, found by the reply: the reply never

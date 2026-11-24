@@ -196,8 +196,11 @@ impl Shell {
     /// The task Spaces changed: one the page area shows that's gone takes the area with it.
     /// A task's Space the window shows, as one a launch brings back, gives way to the user's.
     pub(super) fn task_spaces_changed(&mut self, cx: &mut Context<Self>) {
+        if self.area_takes_space() {
+            self.reshape_foot(cx);
+        }
         let area = self.task_area.as_ref();
-        let gone = area.is_some_and(|area| self.task_space(area.space).is_none());
+        let gone = area.is_some_and(|area| self.space_went(area.space));
         if gone {
             self.leave_task_area(cx);
         }
@@ -208,6 +211,27 @@ impl Shell {
 
     pub(super) fn task_space(&self, space: u64) -> Option<&Space> {
         self.task_spaces.iter().find(|each| each.id == space)
+    }
+
+    /// Whether `space` was a task's and is gone. A task a run before left has none, 0, until its
+    /// run opens a page, and one with nowhere to work never has: its conversation shows without.
+    fn space_went(&self, space: u64) -> bool {
+        space != 0 && self.task_space(space).is_none()
+    }
+
+    /// The task whose conversation the area shows had no Space and has one now: the area is that
+    /// Space's from here, set aside for a close's question or not. Says whether it took one.
+    pub(super) fn area_takes_space(&mut self) -> bool {
+        let Some(space) = self.talk_takes_space() else {
+            return false;
+        };
+        let aside = (self.task_closing.as_mut()).and_then(|closing| closing.aside.as_mut());
+        for area in self.task_area.iter_mut().chain(aside) {
+            if area.space == 0 {
+                area.space = space;
+            }
+        }
+        true
     }
 
     /// The task's tabs, pinned then Today, for its thumbnails.
@@ -341,7 +365,7 @@ impl Shell {
     /// the Space's tab, at once, as a tab switch is. Another task's conversation shown is replaced
     /// where it is, as is another session's of the same agent, whose Space it shares.
     pub fn open_task(&mut self, space: u64, view: AnyView, cx: &mut Context<Self>) {
-        if self.task_space(space).is_none() {
+        if self.space_went(space) {
             log!("browser: no task space {space}");
             return;
         }
@@ -816,10 +840,7 @@ impl Shell {
             return;
         }
         self.task_area = Some(area);
-        if self
-            .task_open()
-            .is_some_and(|space| self.task_space(space).is_none())
-        {
+        if self.task_open().is_some_and(|space| self.space_went(space)) {
             return self.drop_task_area(cx);
         }
         if let Some(space) = self.task_open() {
