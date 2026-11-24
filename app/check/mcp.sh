@@ -2896,6 +2896,75 @@ PY
     fail "the agent's picture showed the user's typing, which it may not: $typed_red red pixels"
   call close_tab "{\"tab\":$fields_tab}" > /dev/null
 
+  # withheld value shown again: a withheld field's value reads withheld wherever the page shows
+  # it again.
+  withheld_refusal="error: This tab's page shows what ilo filled when signing in. Go to another page first."
+  page_of() { # name, title, body
+    printf '%s' "<!doctype html><meta charset=utf-8><title>loading</title>
+<script src=painted.js></script>
+$3
+<script>painted(() => document.title = '$2');</script>" > "$out/site/$1.html"
+  }
+  page_of shown-again 'shown again' "<input aria-label=First type=password value='Pl4nt-s3cret 1/x'>
+<p>Your password is Pl4nt-s3cret 1/x</p>"
+  page_of shown-second 'shown second' "<input aria-label=First type=password value='S3cond-pl4nted'>
+<ul><li>Kept: F1rst-pl4nted<li>Kept: S3cond-pl4nted</ul>"
+  page_of not-shown 'not shown' "<input aria-label=First type=password value='Typ3d-by-agent'>
+<textarea aria-label=Echo oninput=\"echo.textContent = 'Echo: ' + this.value\"></textarea>
+<p id=echo>Echo:</p>"
+  page_of shown-later 'shown later' "<input aria-label=First type=password value='L4ter-c0py'>
+<button onclick=\"later.textContent = 'Later: ' + document.querySelector('[aria-label=First]').value\">Show</button>
+<p id=later>Later:</p>"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/agent.html\"}")
+  shown_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$shown_tab" ] || fail "withheld value shown again: open_tab answered: $opened"
+  go_shown() { # page, title
+    went=$(call navigate "{\"tab\":$shown_tab,\"url\":\"127.0.0.1:$port/$1.html\"}")
+    await_log "^browser: title $shown_tab $2\$" "withheld value shown again: $1 didn't paint"
+  }
+  go_shown shown-again 'shown again'
+  for tool in read_page snapshot read_page screenshot; do
+    answer=$(call "$tool" "{\"tab\":$shown_tab}")
+    [ "$answer" = "$withheld_refusal" ] ||
+      fail "withheld value shown again: step 1, $tool answered: $answer"
+  done
+  first_refusal=$answer
+  go_shown shown-second 'shown second'
+  answer=$(call read_page "{\"tab\":$shown_tab}")
+  [ "$answer" = "$first_refusal" ] ||
+    fail "withheld value shown again: step 2 answered: $answer"
+  go_shown not-shown 'not shown'
+  outline=$(call snapshot "{\"tab\":$shown_tab}")
+  case "$outline" in
+    error:*) fail "withheld value shown again: step 3 answered: $outline" ;;
+  esac
+  echo_ref=$(printf '%s\n' "$outline" | sed -n 's/.*- textbox "Echo" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+  [ -n "$echo_ref" ] || fail "withheld value shown again: step 3 had no ref for Echo: $outline"
+  call type "{\"tab\":$shown_tab,\"ref\":\"$echo_ref\",\"text\":\"Typ3d-by-agent\"}" > /dev/null
+  typed=$(call read_page "{\"tab\":$shown_tab}")
+  call type "{\"tab\":$shown_tab,\"ref\":\"$echo_ref\",\"text\":\"Other-w0rds-xy\"}" > /dev/null
+  other=$(call read_page "{\"tab\":$shown_tab}")
+  case "$typed" in
+    *"Echo: Typ3d-by-agent"*) ;;
+    *) fail "withheld value shown again: step 3 read: $typed" ;;
+  esac
+  [ "${typed//Typ3d-by-agent/TEXT}" = "${other//Other-w0rds-xy/TEXT}" ] ||
+    fail "withheld value shown again: step 3 read two ways: $typed // $other"
+  go_shown shown-later 'shown later'
+  answer=$(call read_page "{\"tab\":$shown_tab}")
+  case "$answer" in
+    error:* | *L4ter-c0py*) fail "withheld value shown again: step 4 answered: $answer" ;;
+  esac
+  outline=$(call snapshot "{\"tab\":$shown_tab}")
+  show_ref=$(printf '%s\n' "$outline" | sed -n 's/.*- button "Show" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+  call click "{\"tab\":$shown_tab,\"ref\":\"$show_ref\"}" > /dev/null
+  answer=$(call read_page "{\"tab\":$shown_tab}")
+  case "$answer" in
+    *"Later: L4ter-c0py"*) ;;
+    *) fail "withheld value shown again: step 4 read: $answer" ;;
+  esac
+  call close_tab "{\"tab\":$shown_tab}" > /dev/null
+
   # It opens a page in its Space, clicks its link, scrolls a long page and takes a screenshot.
   opened=$(call open_tab "{\"url\":\"localhost:$port/agent.html\"}")
   case "$opened" in
