@@ -102,12 +102,11 @@ impl Shell {
         keys.closed = (open && !self.library_open).then(|| Close::new(Why::Toggled, by(from)));
     }
 
-    /// Escape closes the Library, giving the keyboard back as its key does, unless an input method
-    /// is composing in its field, whose Escape it is.
+    /// Escape closes the Library, giving the keyboard back as its key does, unless it was an input
+    /// method's, composing in its field (dismissal's rule).
     pub(in crate::shell) fn escape_library(&mut self, cx: &mut Context<Self>) {
-        let composing =
-            (self.library.as_ref()).is_some_and(|library| library.search.read(cx).composing());
-        let Some(close) = Close::escape(composing) else {
+        let search = (self.library.as_ref()).map(|library| library.search.clone());
+        let Some(close) = Close::escape_from(&search, cx) else {
             return;
         };
         self.library_keys.closed = Some(close);
@@ -850,8 +849,8 @@ mod tests {
         assert!(focused_page(&host), "escape didn't give the page it back");
     }
 
-    /// Escape while an input method composes in the search field is the composition's: the Library
-    /// stays open, its field keeping the keyboard, and the next Escape closes it.
+    /// Escape while an input method composes in the search field is the composition's, which it
+    /// drops: the Library stays open, its field keeping the keyboard, and the next Escape closes it.
     #[gpui::test]
     fn escape_while_composing_keeps_the_library(cx: &mut TestAppContext) {
         use gpui::EntityInputHandler as _;
@@ -874,10 +873,9 @@ mod tests {
             "escape closed it"
         );
         assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
-        cx.update(|window, cx| {
-            search.update(cx, |search, cx| {
-                search.replace_text_in_range(None, "p", window, cx)
-            })
+        search.read_with(cx, |search, _| {
+            assert!(!search.composing(), "the composition went on");
+            assert_eq!(search.text(), "", "escape kept what was composed");
         });
         cx.simulate_keystrokes("escape");
         shell.update(cx, |shell, _| settle(shell));
