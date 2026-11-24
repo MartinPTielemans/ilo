@@ -37,6 +37,8 @@ fn card() -> Card {
         asks: false,
         dot: Dot::Working,
         word: Word::for_dot(Dot::Working),
+        pages: Vec::new(),
+        tier: Default::default(),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
@@ -1092,6 +1094,8 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
         IloKind::Gone,
         IloKind::NotKept,
         IloKind::KeepsNothing,
+        IloKind::NoProfile,
+        IloKind::NoSpace,
         IloKind::Helpers {
             tab: 1,
             deep: false,
@@ -1111,6 +1115,8 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             | IloKind::Gone
             | IloKind::NotKept
             | IloKind::KeepsNothing
+            | IloKind::NoProfile
+            | IloKind::NoSpace
             | IloKind::Helpers { .. } => {}
         }
         let (own, _) = head(kind, "Claude");
@@ -1349,7 +1355,7 @@ fn ilos_line_wraps_its_whole_sentence_in_the_narrowest_conversation(cx: &mut Tes
         text_width(&laid.text().into(), text::BODY, FontWeight::NORMAL, &system)
     });
     assert!(
-        laid.text().ends_with("so you can reply."),
+        laid.text().ends_with("still has this conversation."),
         "not the whole sentence: {}",
         laid.text()
     );

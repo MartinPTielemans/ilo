@@ -378,6 +378,15 @@ pub trait Browser {
     /// The user's Space a session's pages open into: the one the front window shows, if it's in
     /// the profile of `like`, an agent's Space, else the first of the user's in that profile.
     fn user_space(&self, like: u64) -> u64;
+    /// The name of the folder of `space`'s profile, "Default" or "Profile 2", which names the
+    /// profile from one run to the next where the core's number for it doesn't (bc_profile_dir).
+    /// Empty for a Space the core doesn't know.
+    fn space_profile(&self, space: u64) -> String;
+    /// The user's Space in the profile whose folder is named `profile`: the one the front window
+    /// shows, if it's in it, else the first of the user's in it, else 0.
+    fn profile_space(&self, profile: &str) -> u64;
+    /// Whether there is a profile whose folder is named `profile`.
+    fn has_profile(&self, profile: &str) -> bool;
     /// Sends `sent` from the page in the agent's `tab`, as the page's own script could, to its own
     /// site (bc_agent_request). Its answer comes to `Agents::request_done` with `request`.
     fn request(&self, agent: &str, tab: u64, request: u64, sent: &request::Request);
@@ -1237,7 +1246,7 @@ impl Agents {
         self.tasks.kept.told = tasks.get("kept_told").and_then(Value::as_bool) == Some(true);
         // The conversations kept for the tasks of a run before go, as its tasks went (#4105): now
         // that the assistants found are known, as each removes its own.
-        self.remove_old_kept(cx);
+        self.take_old_kept(cx);
         self.notes_off = saved.get("notes").and_then(Value::as_bool) == Some(false);
         self.on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
         self.scripts = saved
@@ -6010,6 +6019,28 @@ pub fn local_time(at: u64) -> String {
     };
     let soon = time.signed_duration_since(Local::now()) < chrono::Duration::hours(20);
     time.format(if soon { "%H:%M" } else { "%a %H:%M" })
+        .to_string()
+}
+
+/// When `at` was, in seconds since 1970, as a finished task says it: the time on the clock here
+/// if it was today, "13:31", else its day, "21 Nov", as a time alone reads as today's.
+pub fn time_or_day(at: u64) -> String {
+    use chrono::{Local, TimeZone};
+    match Local.timestamp_opt(at as i64, 0).single() {
+        Some(time) => time_or_day_on(time, Local::now()),
+        None => String::new(),
+    }
+}
+
+fn time_or_day_on<Zone: chrono::TimeZone>(
+    time: chrono::DateTime<Zone>,
+    now: chrono::DateTime<Zone>,
+) -> String
+where
+    Zone::Offset: std::fmt::Display,
+{
+    let today = time.date_naive() == now.date_naive();
+    time.format(if today { "%H:%M" } else { "%-d %b" })
         .to_string()
 }
 

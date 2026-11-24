@@ -263,6 +263,15 @@ impl Shell {
         (self.task_open() == Some(talk.space)).then(|| talk.agent.clone())
     }
 
+    /// Where the conversation shown drew `tab`'s picture last, and the picture.
+    pub(super) fn talk_thumb(
+        &self,
+        tab: u64,
+        cx: &gpui::App,
+    ) -> Option<(Bounds<Pixels>, Option<PagePicture>)> {
+        self.talk.as_ref()?.view.read(cx).thumb(tab)
+    }
+
     /// The task whose conversation is kept for `space`'s area.
     pub(super) fn talk_in(&self, space: u64) -> Option<SharedString> {
         self.talk
@@ -773,6 +782,16 @@ impl TalkView {
         self.shell
             .update(cx, |shell, cx| shell.browser.task(agent, action, cx))
             .ok();
+    }
+
+    /// Where `tab`'s picture was drawn last, in the window, and the picture if it came: what its
+    /// page zooms out of when its row at the sidebar's foot is clicked, as from a click here.
+    fn thumb(&self, tab: u64) -> Option<(Bounds<Pixels>, Option<PagePicture>)> {
+        let drawn = self.drawn.borrow();
+        let (_, from) = drawn.iter().find(|(each, _)| *each == tab)?;
+        let picture = (self.pictures.iter().find(|(each, ..)| *each == tab))
+            .and_then(|(_, _, picture)| picture.clone());
+        Some((*from, picture))
     }
 
     /// A picture's click: its page zooms out of it to fill the area.
@@ -2127,7 +2146,11 @@ impl TalkView {
             IloKind::TierChanged { .. } => "icons/shield.svg",
             IloKind::Resumed { .. } => "icons/play.svg",
             IloKind::KeptHere => "icons/save.svg",
-            IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing => "icons/message-circle.svg",
+            IloKind::Gone
+            | IloKind::NotKept
+            | IloKind::KeepsNothing
+            | IloKind::NoProfile
+            | IloKind::NoSpace => "icons/message-circle.svg",
         };
         let head = trace_line(
             look,

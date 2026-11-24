@@ -49,6 +49,8 @@ fn card(agent: &str, name: &str, dot: Dot) -> Card {
         asks: false,
         dot,
         word: Word::for_dot(dot),
+        pages: Vec::new(),
+        tier: Default::default(),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
