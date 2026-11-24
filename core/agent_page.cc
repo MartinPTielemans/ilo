@@ -30,6 +30,7 @@
 #include "base/time/time.h"
 #include "browser_core/agent_file_field.h"
 #include "browser_core/agent_job_voter.h"
+#include "browser_core/agent_session.h"
 #include "browser_core/agent_sign_in.h"
 #include "browser_core/agent_sign_in_rule.h"
 #include "browser_core/agent_splash_rule.h"
@@ -694,7 +695,14 @@ void AgentPage::Forget() {
 void AgentPage::SessionEnded(bc_id tab) {
   content::WebContents* contents = Tab::FromId(tab);
   if (AgentPage* page = contents ? AgentPage::FromWebContents(contents) : nullptr) {
+    page->LookUnheard();
     page->LetGo();
+  }
+  // A tab the user holds from an agent keeps what its password fields hold while they have it, as
+  // the agent's next look after the hand back looks for it there.
+  const Space* space = Space::Holding(tab);
+  if (contents && IsHeld(tab) && space && space->agent()) {
+    Watch(contents);
   }
 }
 
@@ -2125,6 +2133,7 @@ void AgentPage::Freeze(base::OnceCallback<void(bool withheld)> then) {
   if (slots.empty()) {
     slots.push_back(0);
   }
+  looking_ = true;
   auto answered = base::BarrierCallback<bool>(
       slots.size(),
       base::BindOnce(
@@ -2133,6 +2142,8 @@ void AgentPage::Freeze(base::OnceCallback<void(bool withheld)> then) {
             if (!page) {
               return;
             }
+            page->looking_ = false;
+            page->look_first_ = false;
             const bool shows = std::ranges::any_of(shown, std::identity());
             if (shows) {
               WithholdShownPage(page->GetWebContents());
@@ -2142,15 +2153,48 @@ void AgentPage::Freeze(base::OnceCallback<void(bool withheld)> then) {
           weak_factory_.GetWeakPtr(), std::move(then)));
   for (const int slot : slots) {
     // A session that couldn't answer counts as showing one, as the sign-in's look counts what it
-    // couldn't read.
+    // couldn't read; but a frame's session that ended while asked had its document go, which
+    // shows nothing now (an ad frame a page removes). The page's own, slot 0, never counts so.
     Send("DOM.freezeWithheldValues", base::DictValue(),
          base::BindOnce(
-             [](base::RepeatingCallback<void(bool)> answered, const base::DictValue* result) {
+             [](base::WeakPtr<AgentPage> page, int slot, std::string session,
+                base::RepeatingCallback<void(bool)> answered, const base::DictValue* result) {
+               if (!result && slot && page &&
+                   (static_cast<size_t>(slot) >= page->targets_.size() ||
+                    page->targets_[slot].session != session)) {
+                 answered.Run(false);
+                 return;
+               }
                answered.Run(!result || result->FindBool("shows").value_or(true));
              },
+             weak_factory_.GetWeakPtr(), slot,
+             static_cast<size_t>(slot) < targets_.size() ? targets_[slot].session : std::string(),
              answered),
          slot);
   }
+}
+
+void AgentPage::LookUnheard() {
+  // The renderer may have looked, and closed what it looked for, with its answer lost: so it
+  // counts as a yes.
+  if (std::exchange(looking_, false)) {
+    WithholdShownPage(GetWebContents());
+  }
+}
+
+// static
+void AgentPage::LookFirst(content::WebContents* contents) {
+  if (!contents) {
+    return;
+  }
+  CreateForWebContents(contents);
+  FromWebContents(contents)->look_first_ = true;
+}
+
+// static
+bool AgentPage::LooksFirst(content::WebContents* contents) {
+  const AgentPage* page = contents ? FromWebContents(contents) : nullptr;
+  return page && page->look_first_;
 }
 
 // static
@@ -2166,7 +2210,7 @@ void AgentPage::Watch(content::WebContents* contents) {
 }
 
 void AgentPage::Rest() {
-  if (!acted_ && !watching_ && !pictures_ && !job_ && jobs_.empty()) {
+  if (!acted_ && !watching_ && !pictures_ && !job_ && jobs_.empty() && !looking_) {
     Detach();
   }
 }
@@ -3327,6 +3371,8 @@ void AgentPage::EndWaiting(std::string why, std::optional<std::string> unstarted
   // answered would otherwise run into the job after this one. Dropped, a picture under way
   // answers that there's none.
   base::flat_map<int, std::pair<int, Reply>> owed = std::exchange(replies_, {});
+  // A look whose answer is dropped with them withholds the page (LookUnheard).
+  LookUnheard();
   // The jobs queued behind it would each send to a page that can't answer while its dialog is up,
   // and wait out the limit in turn, so they end now with their own answer, after this one's.
   std::deque<Job> queued = unstarted ? std::exchange(jobs_, {}) : std::deque<Job>();

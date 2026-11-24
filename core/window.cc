@@ -1616,6 +1616,8 @@ void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent) {
   // the agent started in it, which would land in the user's page.
   if (from->agent()) {
     EndTabSession(tab, BC_AGENT_SESSION_RELEASED);
+    // One the agent never acted in has no session to end, and DevTools watched it all the same.
+    AgentPage::SessionEnded(tab);
   }
   if (kept.is_valid()) {
     // Its place was among the old Space's tabs, so it gets one at the top of the new one's.

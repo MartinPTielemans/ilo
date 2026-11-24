@@ -96,8 +96,16 @@ class AgentPage : public content::WebContentsObserver,
   // DevTools sessions asks its documents once whether they show, anywhere outside the field, what
   // one of them held (chromium-agent-withheld-values.patch), and none is looked for again. Any yes,
   // or a session that couldn't answer, withholds the page whole (WithholdShownPage), and |then|
-  // hears whether it's withheld now. A page with no such value answers at once.
+  // hears whether it's withheld now; a frame's session that ended while asked answers no. A page
+  // with no such value answers at once. A renderer that never answers is the job's AgentReplyLimit,
+  // and a look that limit ends withholds the page too (LookUnheard).
   void Freeze(base::OnceCallback<void(bool withheld)> then);
+
+  // The user holds |contents|' tab, or a sign-in filled its page: what it has a password field
+  // hold since may show in its title or address, which agents don't get (WithheldFromAgents) until
+  // the tab's next look has answered (LooksFirst).
+  static void LookFirst(content::WebContents* contents);
+  static bool LooksFirst(content::WebContents* contents);
 
   // |contents| came into an agent's Space: DevTools takes it now, with DOM on, so its page keeps
   // what a password field holds from the first, not only from the agent's first act, until the
@@ -383,6 +391,9 @@ class AgentPage : public content::WebContentsObserver,
   // Ends the job, which its page's dialog or the limit stopped waiting on, with |why|, and with
   // |unstarted| the jobs queued behind it.
   void EndWaiting(std::string why, std::optional<std::string> unstarted);
+  // Freeze's look is dropped unanswered, as when the job ends at its limit or the session ends:
+  // the page is withheld.
+  void LookUnheard();
   // Gives the answer kept while a download started, as none took its action.
   void AnswerHeld();
   // FindField's job: the field its selector finds, then with |submit| Enter in it.
@@ -517,6 +528,10 @@ class AgentPage : public content::WebContentsObserver,
   bool acted_ = false;
   // Watch took the tab, which keeps DevTools until the session ends, acted on or not.
   bool watching_ = false;
+  // Freeze's look is out, its answers not all in.
+  bool looking_ = false;
+  // LookFirst's: the tab's title and address wait for the next look.
+  bool look_first_ = false;
   int pictures_ = 0;
   // WhenIdle's.
   base::OnceClosure idle_;

@@ -133,6 +133,7 @@ std::string RefusedAction(std::string_view action) {
 
 void Hold(bc_id tab) {
   Held().insert(tab);
+  AgentPage::LookFirst(Tab::FromId(tab));
   // Chrome kept its saved logins from the agent's page, which is the user's now.
   FillForUser(tab);
 }

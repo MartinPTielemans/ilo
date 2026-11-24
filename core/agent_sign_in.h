@@ -29,7 +29,8 @@ void StartAgentSignIn(const std::string& agent, bc_id tab, uint64_t request);
 // Whether the core is signing |tab| in for an agent: no agent may act in it until that answers.
 bool SigningIn(bc_id tab);
 
-// bc_tab_withheld_from_agents: signing in, or showing a page a sign-in withheld (PageWithheld).
+// bc_tab_withheld_from_agents: signing in, showing a withheld page (PageWithheld), or held or
+// filled since the tab's last look (AgentPage::LookFirst).
 bool WithheldFromAgents(bc_id tab);
 
 // Whether |tab| shows a page a sign-in withheld as it showed what was filled, or one at its address
@@ -44,7 +45,8 @@ void WithholdShownPage(content::WebContents& contents);
 
 // What an agent hears for any other act in such a page.
 inline constexpr char kWithheldPageRefusal[] =
-    "This tab's page shows what ilo filled when signing in. Go to another page first.";
+    "ilo won't give you this tab's page: it may show what a password field on it held. Go to "
+    "another page in this tab, or work in your other tabs.";
 
 // The user handed back a tab at |origin|: every agent's sign-in there that submitted and didn't
 // sign in is forgiven, and agents may try it again. Ending a session forgives nothing.

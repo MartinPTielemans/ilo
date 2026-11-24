@@ -572,6 +572,7 @@ class SignIn : public content::WebContentsUserData<SignIn>,
       return;
     }
     if (next == 0) {
+      AgentPage::LookFirst(&GetWebContents());
       // The document never goes into the back-forward cache, where a page kept with the filled
       // fields would come back as it was, past the emptying. Its report string, which pages read
       // through the NotRestoredReasons API, says nothing.
@@ -907,7 +908,8 @@ bool SigningIn(bc_id tab) {
 
 bool WithheldFromAgents(bc_id tab) {
   content::WebContents* contents = Tab::FromId(tab);
-  return contents && (SignIn::FromWebContents(contents) || PageWithheld(tab));
+  return contents && (SignIn::FromWebContents(contents) || PageWithheld(tab) ||
+                      AgentPage::LooksFirst(contents));
 }
 
 bool PageWithheld(bc_id tab) {

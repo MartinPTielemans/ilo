@@ -18,6 +18,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "browser_core/agent_autofill.h"
+#include "browser_core/agent_page.h"
 #include "browser_core/arrange.h"
 #include "browser_core/autofill_menu.h"
 #include "browser_core/boosts.h"
@@ -776,6 +777,11 @@ content::WebContents* Tab::Wake(Window& window) {
     Attach(contents);
   }
   DCHECK_EQ(web_contents(), contents);
+  // An agent's tab brought back at launch or after it slept is watched from its page's first, as
+  // one given to the agent is (AgentPage::Watch).
+  if (const Space* space = Space::Holding(id_); space && space->agent()) {
+    AgentPage::Watch(contents);
+  }
   const bool muted = std::exchange(unloaded_, std::nullopt)->muted;
   if (muted) {
     SetMuted(true);
