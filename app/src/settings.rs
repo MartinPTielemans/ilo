@@ -3790,9 +3790,9 @@ impl Settings {
                 )
             };
             Row {
-                div: sign_in_row(look, sign_in_on, switch),
+                div: sign_in_row(look, switch),
                 name: signing::HEADING.into(),
-                line: Some(signing::switch_line(sign_in_on).into()),
+                line: Some(signing::SWITCH_LINE.into()),
                 keys: None,
                 nested: false,
             }
@@ -5639,14 +5639,13 @@ fn line_row(
         .when(!controls.is_empty(), |row| row.child(end(controls)))
 }
 
-/// The switch that lets tasks be signed in with the user's saved logins (#4098), its name and the
-/// line for where it stands, with `switch`, the caller's stop_switch, whose click calls
-/// Agents::set_sign_in_on: one component, which Settings › Agents and first run's assistant step
-/// both draw.
-pub fn sign_in_row(look: &RowLook, on: bool, switch: AnyElement) -> gpui::Div {
+/// The switch that lets tasks be signed in with the user's saved logins (#4098), its name and its
+/// one line, with `switch`, the caller's stop_switch, whose click calls Agents::set_sign_in_on:
+/// one component, which Settings › Agents and first run's assistant step both draw.
+pub fn sign_in_row(look: &RowLook, switch: AnyElement) -> gpui::Div {
     use agents::signing;
-    let line = signing::switch_line(on);
-    line_row(look, signing::HEADING, Some(line.into()), vec![switch])
+    let line = signing::SWITCH_LINE.into();
+    line_row(look, signing::HEADING, Some(line), vec![switch])
 }
 
 /// A feature's row, or a thing's in a list: its glyph on its quiet plate before its name.

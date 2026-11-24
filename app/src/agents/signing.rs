@@ -18,22 +18,10 @@ use super::{Act, Agents, Failure, Held, Refused, ToolResult, act_of, held, page,
 /// Settings or first run: off until then, in every build.
 pub(super) const KEY: &str = "sign_in_chosen";
 
-/// The switch's words (N1, N2, N3), which Settings › Agents and first run's assistant step both
-/// draw with it (settings::sign_in_row).
+/// The switch's name (N1) and its one line (N2), on or off, which Settings › Agents and first
+/// run's assistant step both draw with it (settings::sign_in_row).
 pub const HEADING: &str = "Sign tasks in with your saved logins";
-pub const SWITCH_LINE: &str = "At Work on pages and Full access, ilo fills in your saved login \
-    and sends the form when a task asks to sign in on that login's site. Your assistant never \
-    sees the login. A page that misleads a task can get the task signed in to any site you have \
-    a login saved for.";
-pub const SWITCH_OFF_LINE: &str = "Off: a task that reaches a sign-in hands that step to you.";
-
-/// The line beside the switch, for where it stands.
-pub fn switch_line(on: bool) -> &'static str {
-    match on {
-        true => SWITCH_LINE,
-        false => SWITCH_OFF_LINE,
-    }
-}
+pub const SWITCH_LINE: &str = "Your assistant never sees the login.";
 
 /// What the agent hears while Settings' switch is off.
 const OFF: &str =
