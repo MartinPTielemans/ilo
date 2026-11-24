@@ -19,6 +19,8 @@ use super::{
     ShownPageDialog, browser::WindowButton,
 };
 
+mod resting_bar;
+
 /// What the core shares between its windows, as it keeps them: the Spaces deleted and the archive's
 /// removals, 25 of each at most, the newest last. Clears are each window's own.
 #[derive(Default)]
@@ -57,6 +59,8 @@ pub(super) struct Recorder {
     /// This window's Clears, by id, the last ten.
     cleared: RefCell<Vec<u64>>,
     calls: RefCell<Vec<String>>,
+    /// What the window's resting bars asked of the core, in order (#4140).
+    pub(super) resting: Rc<RefCell<Vec<String>>>,
     /// How many detents the trackpad was asked for.
     pub(super) detents: Cell<usize>,
     /// How many tabs and folders it was asked to move.
@@ -1854,6 +1858,22 @@ impl Browser for Recorder {
 
     fn command_bar_open(&self, _: &App) -> bool {
         self.bar_open.get()
+    }
+
+    fn command_bar_in_place(
+        &self,
+        window: &mut gpui::Window,
+        cx: &mut App,
+    ) -> gpui::Entity<crate::command_bar::CommandBar> {
+        self.record("command bar in place".into());
+        let host = resting_bar::RestingBar {
+            asked: self.resting.clone(),
+        };
+        crate::command_bar::in_place(Rc::new(host), window, cx)
+    }
+
+    fn start_task(&self, agent: &str, asked: &str, home: u64, _: &mut App) {
+        self.record(format!("start task {agent} {asked} from {home}"));
     }
 
     fn field_window_typing(&self, _: &mut App) -> bool {

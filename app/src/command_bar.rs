@@ -19,6 +19,7 @@ use gpui::{
 use gpui::{Role, Size, accesskit::Live, canvas};
 
 use crate::{
+    dismissal::{self, Close},
     palette,
     shell::{self, Match},
     text_input::{self, PasteAndGo, PasteAndSearch, TextInput, without_javascript},
@@ -685,7 +686,7 @@ pub struct CommandBar {
     surface: Surface,
     /// At rest, while the page's switch is on Ask: what's typed is the task, which nothing
     /// suggests for, and ↩ hands it to the page.
-    composing: bool,
+    on_ask: bool,
     input: Entity<TextInput>,
     target: Target,
     /// What was typed, which the core was last asked to suggest for, when, and whether it was
@@ -941,7 +942,7 @@ fn new_bar(
         CommandBar {
             host,
             surface,
-            composing: false,
+            on_ask: false,
             input,
             target: Target::NewTab,
             asked: String::new(),
@@ -1691,7 +1692,7 @@ impl CommandBar {
             return self.list_commands(text, window, cx);
         }
         // What an ask types is the task, which nothing suggests for.
-        if self.ask.is_some() || self.composing {
+        if self.ask.is_some() || self.on_ask {
             self.asked = text;
             return cx.notify();
         }
@@ -2642,14 +2643,14 @@ impl CommandBar {
     fn go(&mut self, _: &Go, _: &mut Window, cx: &mut Context<Self>) {
         // ↩ while an input method composes is its own, to commit with, as AppKit's and Windows'
         // take it before the bar: one that passes it on doesn't make the bar go with half a word.
-        if self.input.read(cx).composing() {
+        if !dismissal::submits([&self.input], cx) {
             return;
         }
         // A task isn't logged: it's the user's words.
         if self.ask.is_some() {
             return self.run_ask(self.selected, cx);
         }
-        if self.composing {
+        if self.on_ask {
             return cx.emit(InPlaceKey::Run);
         }
         let text = self.input.read(cx).text().trim().to_string();
@@ -2697,7 +2698,7 @@ impl CommandBar {
     /// Paste and Search: searches for the clipboard's text, even if it names a page, as ⇧⌘↩
     /// does for what's typed.
     fn paste_and_search(&mut self, _: &PasteAndSearch, _: &mut Window, cx: &mut Context<Self>) {
-        if self.lists_own() || self.commands.is_some() || self.ask.is_some() || self.composing {
+        if self.lists_own() || self.commands.is_some() || self.ask.is_some() || self.on_ask {
             return;
         }
         let site = self.site.as_ref().map(|site| site.keyword.clone());
@@ -2749,7 +2750,7 @@ impl CommandBar {
         let command = self.chosen().is_some_and(Suggestion::named);
         command
             || self.ask.is_some()
-            || self.composing
+            || self.on_ask
             || matches!(self.target, Target::Beside(_))
             || self.lists_own()
     }
@@ -3167,6 +3168,11 @@ impl CommandBar {
     /// Esc leaves the site search, the commands-only list or the ask first, then the bar. Out of a
     /// site search the bar is as it opened, as Arc's `postScopedSearchRestoration` (#1397).
     fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        // At rest, Esc while an input method composes is its own, to cancel with, never the
+        // page's way out of Ask.
+        if self.surface == Surface::InPlace && Close::escape_from([&self.input], cx).is_none() {
+            return;
+        }
         if self.site_left(cx).is_some() {
             // check.sh reads this line.
             log!("browser: command bar leaves site search as it opened");
@@ -3639,23 +3645,28 @@ impl CommandBar {
         self.typed(cx)
     }
 
+    /// What its field says with nothing typed.
+    pub fn placeholder(&self, cx: &App) -> SharedString {
+        self.input.read(cx).placeholder().clone()
+    }
+
     /// Whether the page's switch is on Ask.
-    pub fn composing(&self) -> bool {
-        self.composing
+    pub fn on_ask(&self) -> bool {
+        self.on_ask
     }
 
     /// The page's switch went to Ask, or back to search, where the field says `placeholder`. In
-    /// the Ask nothing is suggested and the rows go; back in search, what's typed is asked for
-    /// again.
-    pub fn set_composing(
+    /// the Ask nothing is suggested and the rows go. Back in search, a task typed isn't sent for
+    /// suggestions until the user types again.
+    pub fn set_on_ask(
         &mut self,
-        composing: bool,
+        on_ask: bool,
         placeholder: SharedString,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if std::mem::replace(&mut self.composing, composing) != composing {
-            if composing {
+        if std::mem::replace(&mut self.on_ask, on_ask) != on_ask {
+            if on_ask {
                 // Its site search and commands-only list are the search's.
                 self.site_left(cx);
                 self.commands = None;
@@ -3668,8 +3679,8 @@ impl CommandBar {
                 });
                 self.set_rows(String::new(), Vec::new(), window, cx);
             } else {
-                let text = self.input.read(cx).text().to_string();
-                self.ask_for(text, window, cx);
+                // As asked already, so the next edit asks for what's typed then.
+                self.asked = self.input.read(cx).text().to_string();
             }
         }
         self.input
@@ -3704,6 +3715,37 @@ impl CommandBar {
             .child(div().flex_1().min_w_0().child(self.input.clone()))
             .children(self.a11y.then(|| self.announcer()))
             .into_any_element()
+    }
+
+    /// The assistant the page's Ask runs on: the first ready one the browser last learned, read as
+    /// the switch first goes to Ask, so nothing of tasks is read before. None while tasks are off,
+    /// over a private window, or while none is ready.
+    pub fn assistant(&mut self, cx: &App) -> Option<TaskAgent> {
+        if self.task_agents.is_none() {
+            self.task_agents = self.learned_agents(cx);
+        }
+        let agents = self.task_agents.as_ref()?;
+        (agents.agents.iter())
+            .find(|agent| agent.resets.is_none())
+            .cloned()
+    }
+
+    /// ↩ in the page's Ask: the assistant it runs on and what was typed, trimmed, and the field
+    /// empties for the next. None with nothing typed or no assistant ready, which leaves the field.
+    pub fn take_task(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<(SharedString, String)> {
+        let asked = self.input.read(cx).text().trim().to_string();
+        if !self.on_ask || asked.is_empty() {
+            return None;
+        }
+        let agent = self.assistant(cx)?;
+        self.asked.clear();
+        self.input
+            .update(cx, |input, cx| input.set_text("".into(), 0, window, cx));
+        Some((agent.id, asked))
     }
 
     /// At rest, the rows for what's typed, which the page drops under its field; none while there

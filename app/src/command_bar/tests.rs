@@ -4197,11 +4197,24 @@ impl Resting {
     }
 
     /// The page's switch goes to Ask, or back to search.
-    fn compose(&mut self, composing: bool) {
+    fn switch(&mut self, on_ask: bool) {
         (self.window)
             .update(&mut self.cx, |rest, window, cx| {
                 rest.bar.update(cx, |bar, cx| {
-                    bar.set_composing(composing, "placeholder".into(), window, cx)
+                    bar.set_on_ask(on_ask, "placeholder".into(), window, cx)
+                })
+            })
+            .unwrap();
+        self.cx.run_until_parked();
+    }
+
+    /// The input method composing `text` in the field, in place of what it composed before.
+    fn compose(&mut self, text: &str) {
+        (self.window)
+            .update(&mut self.cx, |rest, window, cx| {
+                let input = rest.bar.read(cx).input.clone();
+                input.update(cx, |input, cx| {
+                    input.replace_and_mark_text_in_range(None, text, None, window, cx)
                 })
             })
             .unwrap();
@@ -4286,7 +4299,7 @@ fn a_resting_bar_hands_tab_and_escape_to_its_page(cx: &mut TestAppContext) {
 }
 
 /// In the page's Ask, what's typed is the task: nothing is suggested, the rows go, and ↩ hands it
-/// to the page. Back in search, it's asked for again.
+/// to the page. Back in search, the task isn't sent for suggestions until the user types again.
 #[gpui::test]
 fn a_resting_bar_in_the_ask_suggests_nothing_and_hands_return_on(cx: &mut TestAppContext) {
     let mut rest = Resting::new(cx);
@@ -4296,14 +4309,64 @@ fn a_resting_bar_in_the_ask_suggests_nothing_and_hands_return_on(cx: &mut TestAp
         .update(|cx| suggested("ex".into(), vec![page("https://example.com/")], cx));
     rest.cx.run_until_parked();
     rest.asked();
-    rest.compose(true);
+    rest.switch(true);
     assert_eq!(rest.rows(), Vec::<String>::new());
     rest.type_text("plain");
     assert_eq!(rest.asked(), Vec::<String>::new());
     rest.keys("enter");
     assert_eq!(*rest.keys.borrow(), [InPlaceKey::Run]);
-    rest.compose(false);
-    assert_eq!(rest.asked(), ["explain"]);
+    rest.switch(false);
+    assert_eq!(
+        rest.asked(),
+        Vec::<String>::new(),
+        "the task went for suggestions"
+    );
+    rest.type_text("s");
+    assert_eq!(rest.asked(), ["explains"]);
+}
+
+/// ↩ that commits Japanese the input method composes in the Ask is the input method's: the page
+/// isn't handed a Run with half a word, and the next ↩ hands it on.
+#[gpui::test]
+fn return_committing_japanese_in_the_ask_runs_nothing(cx: &mut TestAppContext) {
+    let mut rest = Resting::new(cx);
+    rest.switch(true);
+    rest.compose("よやく");
+    rest.keys("enter");
+    assert_eq!(
+        *rest.keys.borrow(),
+        Vec::<InPlaceKey>::new(),
+        "↩ while composing ran"
+    );
+    (rest.window)
+        .update(&mut rest.cx, |rest, window, cx| {
+            let input = rest.bar.read(cx).input.clone();
+            input.update(cx, |input, cx| {
+                input.replace_text_in_range(None, "予約", window, cx)
+            })
+        })
+        .unwrap();
+    rest.cx.run_until_parked();
+    rest.keys("enter");
+    assert_eq!(*rest.keys.borrow(), [InPlaceKey::Run]);
+}
+
+/// Esc while the input method composes in the Ask cancels the composition and nothing else: the
+/// page's switch stays on Ask.
+#[gpui::test]
+fn escape_while_composing_in_the_ask_stays_in_it(cx: &mut TestAppContext) {
+    let mut rest = Resting::new(cx);
+    rest.switch(true);
+    rest.compose("よやく");
+    rest.keys("escape");
+    assert_eq!(
+        *rest.keys.borrow(),
+        Vec::<InPlaceKey>::new(),
+        "Esc while composing left"
+    );
+    rest.compose("");
+    rest.keys("escape");
+    assert_eq!(*rest.keys.borrow(), [InPlaceKey::Escape]);
 }
 
 /// At rest the field doesn't take the keyboard back: a control of the page that takes it keeps it.

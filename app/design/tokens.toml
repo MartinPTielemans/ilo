@@ -1853,6 +1853,96 @@ button-keys-radius = 6.0
 # under the mark is set.
 hint-bottom = 40.0
 
+
+[shell.composer]
+# The page an empty Space rests on (#4140), as its drawing measures it on the window's ink: the mark
+# this far under the card's top, and the field this far under the mark.
+top = 40.0
+mark-gap = 26.0
+# The field: 540 wide, or what the card leaves inside its side gutters, 52 tall at radius 16. Its
+# words at 15 start 18 in, and the ⇥ chip and the switch end 9 in.
+field-width = 540.0
+field-gutter = 24.0
+field-height = 52.0
+field-radius = 16.0
+field-left = 18.0
+field-right = 9.0
+field-size = 15.0
+# Ink 0.085 inside a rim of white 0.09, over a close shadow and a far one.
+field-fill = 0.085
+field-rim = 0xffff_ff17
+field-shadow-near = 0x0000_0033
+field-shadow-far = 0x0000_003d
+# The ⇥ chip before the switch, 8 from it, at 0.6: 18 tall, 5 in, radius 5, ink 0.1 under ink 0.7
+# at 11.
+key-gap = 8.0
+key-opacity = 0.6
+key-height = 18.0
+key-inset = 5.0
+key-radius = 5.0
+key-fill = 0.1
+key-ink = 0.7
+key-size = 11.0
+# The switch, Search | Ask: a 2-in track of ink 0.08 at radius 9, its parts 28 tall, 13 in at
+# radius 7, in ink 0.6; the one it's on is ink 0.16 under full ink, medium, in a rim of white 0.07.
+switch-inset = 2.0
+switch-radius = 9.0
+switch-fill = 0.08
+switch-height = 28.0
+switch-part-inset = 13.0
+switch-part-radius = 7.0
+switch-ink = 0.6
+switch-on = 0.16
+switch-on-rim = 0xffff_ff12
+switch-size = 12.0
+# Ask's line under the field: 524 wide, 7 under it, its chips 26 tall, 8 in, radius 6, at 12 in
+# ink 0.6. It keeps its room in Search, so nothing moves as the switch flips.
+line-width = 524.0
+line-top = 7.0
+chip-height = 26.0
+chip-inset = 8.0
+chip-radius = 6.0
+chip-gap = 6.0
+chip-ink = 0.6
+chip-size = 12.0
+chip-glyph = 14.0
+chip-chevron = 10.0
+# "Recent tasks", 600 wide, 14 semibold in full ink, 34 under the line and 12 over the cards, 4 in.
+label-width = 600.0
+label-size = 14.0
+label-top = 34.0
+label-bottom = 12.0
+label-inset = 4.0
+# Up to three cards, 190 wide and 15 apart, radius 16, ink 0.065 in a rim of white 0.09.
+cards = 3
+card-width = 190.0
+card-gap = 15.0
+card-radius = 16.0
+card-fill = 0.065
+card-rim = 0xffff_ff17
+# A card's words: 110 tall, 11 over, 12 in, 10 under. Its state line at 10.5, 12 tall, ink 0.6,
+# its dot 6 and 6 from the words; the title semibold 7 under it and 7 over its steps; each step
+# 10.5 on a 15 line in ink 0.6, the one under way in full ink, after a 10 glyph 6 from its words.
+card-words = 110.0
+card-top = 11.0
+card-inset = 12.0
+card-bottom = 10.0
+state-size = 10.5
+state-height = 12.0
+state-ink = 0.6
+state-gap = 6.0
+dot = 6.0
+title-gap = 7.0
+step-size = 10.5
+step-line = 15.0
+step-ink = 0.6
+step-glyph = 10.0
+# The task's page under its words: 112 tall, 6 in from the card's sides and foot, radius 11.
+page-height = 112.0
+page-inset = 6.0
+page-radius = 11.0
+page-fill = 0.05
+
 [shell.extensions]
 # The room the URL field keeps for the host before it shows fewer actions (Ardia).
 host-room = 84.0

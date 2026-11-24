@@ -76,9 +76,19 @@ fn the_line_shows_only_while_no_tab_is_selected(cx: &mut TestAppContext) {
     assert!(shell.read_with(cx, |shell, _| shell.empty_since.is_some()));
 }
 
-/// A click anywhere on the empty card opens the command bar as ⌘T does, centred on the window.
+/// Whether the field the empty card rests on has the keyboard.
+fn field_focused(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> bool {
+    cx.update(|window, cx| {
+        let shell = shell.read(cx);
+        let resting = shell.resting.as_ref().expect("no field on the empty card");
+        resting.bar.read(cx).field_focus(cx).is_focused(window)
+    })
+}
+
+/// A click anywhere on the empty card gives its field the keyboard and opens no command bar
+/// (#4140): the field is where ⌘T's bar was.
 #[gpui::test]
-fn a_click_on_the_empty_card_opens_the_command_bar(cx: &mut TestAppContext) {
+fn a_click_on_the_empty_card_gives_its_field_the_keyboard(cx: &mut TestAppContext) {
     let (shell, cx, host) = window_with_no_tab(cx);
     let frame = shell.read_with(cx, |shell, _| shell.page_frame(shell.viewport).0);
     let corner = Point::new(
@@ -86,14 +96,15 @@ fn a_click_on_the_empty_card_opens_the_command_bar(cx: &mut TestAppContext) {
         frame.bottom() - gpui::px(20.),
     );
     for at in [middle(&shell, cx), corner] {
-        host.bar_open.set(false);
+        cx.update(|window, cx| window.blur(cx));
+        assert!(!field_focused(&shell, cx));
         cx.simulate_click(at, Modifiers::none());
-        assert_eq!(host.command_bars.take(), [None], "a click at {at:?}");
+        assert!(field_focused(&shell, cx), "a click at {at:?}");
+        assert!(
+            host.command_bars.take().is_empty(),
+            "a click at {at:?} opened the bar"
+        );
     }
-    assert!(
-        shell.read_with(cx, |shell, _| shell.new_tab),
-        "New Tab takes the selected plate"
-    );
 }
 
 /// With a tab selected the same place is the page's, so the card takes no click.
@@ -104,29 +115,6 @@ fn a_page_shown_takes_the_card_away(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.simulate_click(middle(&shell, cx), Modifiers::none());
     assert!(host.command_bars.take().is_empty());
-}
-
-/// With the bar open, a click on the card only closes it: the host has closed the bar at the press,
-/// and the app reports so after, so the release mustn't open it again. Once the report is in, the
-/// next click opens it.
-#[gpui::test]
-fn a_click_on_the_card_with_the_bar_open_only_closes_it(cx: &mut TestAppContext) {
-    let (shell, cx, host) = window_with_no_tab(cx);
-    let at = middle(&shell, cx);
-    cx.simulate_click(at, Modifiers::none());
-    assert_eq!(host.command_bars.take().len(), 1);
-
-    cx.simulate_click(at, Modifiers::none());
-    assert!(
-        host.command_bars.take().is_empty(),
-        "the click opened the bar it closed"
-    );
-
-    // The app's report, which the click's press came before.
-    host.bar_open.set(false);
-    shell.update(cx, |shell, cx| shell.command_bar_dismissed(cx));
-    cx.simulate_click(at, Modifiers::none());
-    assert_eq!(host.command_bars.take().len(), 1, "the next click opens it");
 }
 
 /// The sidebar's New Tab row and its URL field open the bar as the card does, so a click on either
@@ -243,4 +231,101 @@ fn the_welcome_opens_a_new_tab(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.simulate_click(middle(&shell, cx), Modifiers::none());
     assert_eq!(host.command_bars.take(), [None]);
+}
+
+/// Whether the empty card's field is on Ask, and what it says with nothing typed.
+fn switch(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (bool, String) {
+    cx.update(|_, cx| {
+        let resting = shell
+            .read(cx)
+            .resting
+            .as_ref()
+            .expect("no field on the empty card");
+        let bar = resting.bar.read(cx);
+        (bar.on_ask(), bar.placeholder(cx).to_string())
+    })
+}
+
+/// The empty card's field is made with the card's first frame and asks the core nothing for it:
+/// no suggestion, no assistant, no task, until the user types or flips to Ask (#4140).
+#[gpui::test]
+fn the_empty_card_rests_on_a_field_that_asks_nothing(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    assert!(host.take().contains(&"command bar in place".to_string()));
+    assert_eq!(*host.resting.borrow(), Vec::<String>::new());
+    assert_eq!(
+        switch(&shell, cx),
+        (false, "Search or enter address".into())
+    );
+}
+
+/// A page shown drops the field, and no key the user presses after reaches it or the core through
+/// it; with no page again the card rests on a new one.
+#[gpui::test]
+fn a_page_shown_drops_the_field(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    shell.update(cx, |shell, cx| shell.set_selected(1, cx));
+    cx.run_until_parked();
+    assert!(shell.read_with(cx, |shell, _| shell.resting.is_none()));
+    cx.simulate_input("ex");
+    assert_eq!(
+        *host.resting.borrow(),
+        Vec::<String>::new(),
+        "a key reached the dropped field"
+    );
+    host.take();
+    shell.update(cx, |shell, cx| shell.set_selected(0, cx));
+    cx.run_until_parked();
+    assert!(shell.read_with(cx, |shell, _| shell.resting.is_some()));
+    assert!(host.take().contains(&"command bar in place".to_string()));
+}
+
+/// ⇥ flips the field to Ask, naming the assistant, and back; Esc in Ask goes back to Search, and
+/// in Search does nothing, leaving the card as it is.
+#[gpui::test]
+fn tab_flips_the_field_and_escape_goes_back_to_search(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window_with_no_tab(cx);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab");
+    assert_eq!(
+        switch(&shell, cx),
+        (true, "Ask Claude to do something".into())
+    );
+    cx.simulate_keystrokes("tab");
+    assert_eq!(switch(&shell, cx).0, false);
+    cx.simulate_keystrokes("tab escape");
+    assert_eq!(
+        switch(&shell, cx),
+        (false, "Search or enter address".into())
+    );
+    cx.simulate_keystrokes("escape");
+    assert_eq!(switch(&shell, cx).0, false);
+    assert!(
+        field_focused(&shell, cx),
+        "Esc in Search let the keyboard go"
+    );
+    assert!(shell.read_with(cx, |shell, _| shell.resting.is_some()));
+}
+
+/// ↩ in Ask starts what was typed as a task on the assistant, from the card's Space, and empties
+/// the field; with nothing typed it starts nothing.
+#[gpui::test]
+fn return_in_ask_starts_the_task(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab enter");
+    host.take();
+    cx.simulate_input("book a table");
+    cx.simulate_keystrokes("enter");
+    assert!(
+        host.take()
+            .contains(&"start task claude book a table from 1".to_string()),
+        "no task started"
+    );
+    let typed = cx.update(|_, cx| {
+        let resting = shell.read(cx).resting.as_ref().unwrap();
+        resting.bar.read(cx).typed_text(cx)
+    });
+    assert_eq!(typed, "");
 }
