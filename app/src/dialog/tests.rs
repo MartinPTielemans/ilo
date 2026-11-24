@@ -1402,3 +1402,29 @@ fn a_windows_own_dialog_gives_the_keyboard_back_before_its_answer(cx: &mut TestA
     assert_eq!(host.0.take(), ["show", "hide"]);
     assert_eq!(focused(cx), "root");
 }
+
+/// Escape goes to the topmost layer (#4108): the field's menu over a page's prompt, closed by its
+/// keys (as its Escape closes it), closes alone, and the next Escape cancels the prompt.
+#[gpui::test]
+fn escape_in_a_fields_menu_closes_the_menu_and_the_next_the_dialog(cx: &mut TestAppContext) {
+    let mut dialog = Asking::page(page_question(vec![field("Ada", false)], None), cx);
+    let shown: Rc<RefCell<Option<crate::text_input::Chosen>>> = Rc::default();
+    let menu = shown.clone();
+    dialog.cx.update(|_, cx| {
+        cx.set_global(crate::text_input::FieldMenu(Rc::new(
+            move |_, _, _, _, chosen, _| *menu.borrow_mut() = Some(chosen),
+        )))
+    });
+    dialog.keys("shift-f10");
+    let chosen = (shown.take()).expect("⇧F10 showed no field's menu");
+    dialog
+        .cx
+        .update(|window, cx| chosen(crate::menu::Closed::Otherwise, window, cx));
+    assert_eq!(
+        dialog.calls(),
+        ["show over 100"],
+        "the prompt closed with its field's menu"
+    );
+    dialog.keys("escape");
+    assert_eq!(dialog.calls(), left(&[], "cancel Ada"));
+}
