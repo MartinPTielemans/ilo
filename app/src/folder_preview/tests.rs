@@ -155,6 +155,20 @@ impl Preview {
         cx.run_until_parked();
     }
 
+    /// The input method ends what it composes in the search, as it does when it takes the key
+    /// itself: committing `text` in its place, or with `text` empty dropping it.
+    fn end_composition(&self, text: &str, cx: &mut TestAppContext) {
+        use gpui::EntityInputHandler as _;
+        self.window
+            .update(cx, |preview, window, cx| {
+                preview.search.update(cx, |search, cx| {
+                    search.replace_text_in_range(None, text, window, cx)
+                })
+            })
+            .unwrap();
+        cx.run_until_parked();
+    }
+
     /// What the search holds, and whether an input method composes there.
     fn search(&self, cx: &mut TestAppContext) -> (String, bool) {
         self.window
@@ -343,8 +357,8 @@ fn return_at_once_shows_the_first_tab(cx: &mut TestAppContext) {
     assert_eq!(*preview.chose.borrow(), [11]);
 }
 
-/// ↩ while an input method composes in the search commits what it composed and shows no tab;
-/// the next ↩ shows one.
+/// ↩ while an input method composes in the search is the composition's: it shows no tab and leaves
+/// the marked text for the method. Once the method has ended it, the next ↩ shows one.
 #[gpui::test]
 fn return_while_composing_shows_nothing(cx: &mut TestAppContext) {
     let preview = open_preview(cx);
@@ -359,13 +373,15 @@ fn return_while_composing_shows_nothing(cx: &mut TestAppContext) {
         preview.showing(cx).is_some(),
         "↩ closed the preview while composing"
     );
-    assert_eq!(preview.search(cx), ("ぴ".into(), false));
-    preview.keys("backspace enter", cx);
+    assert_eq!(preview.search(cx), ("ぴ".into(), true));
+    preview.end_composition("", cx);
+    preview.keys("enter", cx);
     assert_eq!(*preview.chose.borrow(), [11]);
 }
 
-/// Esc while an input method composes in the search drops what it composed and closes nothing;
-/// the next Esc closes the preview.
+/// Esc while an input method composes in the search is the composition's: it closes nothing and
+/// leaves the marked text for the method. Once the method has dropped it, the next Esc closes the
+/// preview.
 #[gpui::test]
 fn escape_while_composing_closes_nothing(cx: &mut TestAppContext) {
     let preview = open_preview(cx);
@@ -376,7 +392,8 @@ fn escape_while_composing_closes_nothing(cx: &mut TestAppContext) {
         preview.host.0.take().is_empty(),
         "esc closed the preview while composing"
     );
-    assert_eq!(preview.search(cx), ("".into(), false));
+    assert_eq!(preview.search(cx), ("ぴ".into(), true));
+    preview.end_composition("", cx);
     preview.keys("escape", cx);
     assert_eq!(preview.host.0.take(), ["hide"]);
 }

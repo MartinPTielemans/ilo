@@ -849,8 +849,9 @@ mod tests {
         assert!(focused_page(&host), "escape didn't give the page it back");
     }
 
-    /// Escape while an input method composes in the search field is the composition's, which it
-    /// drops: the Library stays open, its field keeping the keyboard, and the next Escape closes it.
+    /// Escape while an input method composes in the search field is the composition's: the Library
+    /// stays open, its field keeping the keyboard and the marked text, and once the method has
+    /// dropped it, the next Escape closes the Library.
     #[gpui::test]
     fn escape_while_composing_keeps_the_library(cx: &mut TestAppContext) {
         use gpui::EntityInputHandler as _;
@@ -874,9 +875,15 @@ mod tests {
         );
         assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
         search.read_with(cx, |search, _| {
-            assert!(!search.composing(), "the composition went on");
-            assert_eq!(search.text(), "", "escape kept what was composed");
+            assert!(search.composing(), "escape ended the composition");
+            assert_eq!(search.text(), "ぴ");
         });
+        cx.update(|window, cx| {
+            search.update(cx, |search, cx| {
+                search.replace_text_in_range(None, "", window, cx)
+            })
+        });
+        cx.run_until_parked();
         cx.simulate_keystrokes("escape");
         shell.update(cx, |shell, _| settle(shell));
         cx.run_until_parked();
