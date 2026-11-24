@@ -3575,9 +3575,8 @@ impl CommandBar {
     }
 
     /// The chip before the input that names the mode it's in, if it's in one (`mode_name`).
-    fn mode_chip(&self, cx: &App) -> Option<gpui::Div> {
+    fn mode_chip(&self, palette: &palette::Palette) -> Option<gpui::Div> {
         let name = self.mode_name()?;
-        let palette = palette::current(cx);
         let page = self.ask.as_ref().and_then(|ask| ask.page.as_ref());
         let favicon = page.map(|(url, _)| self.favicon(url, CHIP_FAVICON, palette.ink.into()));
         // A site search with a colour of its own is in it.
@@ -3701,7 +3700,7 @@ impl CommandBar {
             .min_w_0()
             .flex()
             .items_center()
-            .children(self.mode_chip(cx))
+            .children(self.mode_chip(&palette))
             .child(div().flex_1().min_w_0().child(self.input.clone()))
             .children(self.a11y.then(|| self.announcer()))
             .into_any_element()
@@ -3818,7 +3817,7 @@ impl Render for CommandBar {
                                 .text_size(px(text_size))
                                 .line_height(px(INPUT_LINE))
                                 .child(self.input_icon(cx))
-                                .children(self.mode_chip(cx))
+                                .children(self.mode_chip(&palette))
                                 .child(div().flex_1().min_w_0().child(self.input.clone()))
                                 .children(self.site_hint(cx)),
                         )
