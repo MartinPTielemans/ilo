@@ -1053,6 +1053,12 @@ typedef struct bc_host {
   // 2×, or null and 0 once a page that has none has loaded. While a page loads, the tab keeps the
   // favicon it had until the new page's arrives.
   void (*tab_favicon_changed)(void* context, bc_id tab, const uint8_t* png, size_t size);
+  // The background colour of the tab's page changed (bc_tab_background_color): |color|, 0xRRGGBB
+  // in sRGB, if |has_color|, else it has no single opaque one. Only for a tab a window shows: the
+  // others keep theirs for bc_tab_background_color to read once they're shown. While a page keeps
+  // changing its background, as one that animates it does, the first change comes at once and the
+  // next once it has stopped, so such a page draws nothing of the UI's per frame.
+  void (*tab_background_color_changed)(void* context, bc_id tab, bool has_color, uint32_t color);
   // The pages bc_tab_history asked for, back from the tab's or, if |forward|, forward of it,
   // nearest first, |count| of them.
   void (*tab_history)(void* context, bc_id tab, bool forward, const bc_history_entry* entries,
@@ -2625,6 +2631,15 @@ BC_EXPORT void bc_window_set_focus_color(bc_id window, uint32_t color);
 
 // What the window's pages show until they draw their first frame, in place of white, 0xRRGGBB.
 BC_EXPORT void bc_window_set_page_color(bc_id window, uint32_t color);
+
+// Puts the background colour of the tab's page, 0xRRGGBB in sRGB, in |color|, and returns true:
+// the colour its document draws behind its content, as the engine last reported it, never pixels
+// read from the page. False, with |color| as it was, if it has no single opaque one: none reported
+// yet, one that isn't opaque, or a page of the system's engine. A new page keeps the colour of the
+// one before it until its first paint, and a tab that isn't shown or has no page keeps its last.
+// It reads what the core keeps and asks the page nothing, so a tab switch costs no more for it.
+// Then tab_background_color_changed.
+BC_EXPORT bool bc_tab_background_color(bc_id tab, uint32_t* color);
 
 // Whether the app is moving the window's page frame on its own, as the sidebar hides or shows or
 // the gap in a split view drags: each step is a new size for the pages. Chrome shows a page that
