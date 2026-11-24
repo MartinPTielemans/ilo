@@ -2,6 +2,7 @@
 //! composer's row. One table, so a change of wording after the owner has used a build is an edit
 //! here (#4086). The tiers' names are the tier table's (agents/tier.rs).
 
+use crate::agents::kept;
 use crate::agents::task::ilo::{IloButton, IloKind, SignedInWith};
 use crate::agents::tier::{self, Tier, Why};
 
@@ -46,7 +47,7 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
             format!("· {agent} keeps this conversation on this computer, so you can reply."),
             None,
         ),
-        IloKind::Gone => (format!("· {agent} no longer has this conversation."), None),
+        IloKind::Gone => (format!("· {}", kept::gone_words(agent)), None),
         IloKind::NotKept => (format!("· {agent} didn't keep this conversation."), None),
         IloKind::KeepsNothing => (format!("· {agent} doesn't keep finished tasks."), None),
         IloKind::NoProfile => ("· This task's profile was deleted.".into(), None),

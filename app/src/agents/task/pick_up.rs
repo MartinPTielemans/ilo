@@ -127,9 +127,10 @@ impl Agents {
     }
 
     /// `agent`'s run went, saying `said`. If it was to go on with a conversation its assistant no
-    /// longer has, the task is as it was before the reply, which never reached it, and its
-    /// conversation says so in the reply field's place. Returns whether that's what happened, and
-    /// what it said with the conversation's id out of it, for the log.
+    /// longer has, the task is as it was before the reply, which never reached it, or failed if the
+    /// reply came while it was under way, and its conversation says so in the reply field's place.
+    /// Returns whether that's what happened, and what it said with the conversation's id out of
+    /// it, for the log.
     pub(super) fn kept_gone(&mut self, agent: &str, said: &str) -> (bool, String) {
         let Some(record) = self.tasks.kept.of_mut(agent) else {
             return (false, said.to_string());
@@ -149,7 +150,13 @@ impl Agents {
             {
                 task.messages.pop();
             }
-            task.state = was.unwrap_or(State::Stopped);
+            // A task picked up goes back to how it ended. One the reply reached while under way
+            // ends here, though nobody stopped it.
+            let why = kept::gone_words(&task.name);
+            task.state = was.unwrap_or(State::Failed {
+                why: why.into(),
+                assistant: false,
+            });
             task.waiting = None;
             task.writing = None;
         }
@@ -158,9 +165,9 @@ impl Agents {
 
     /// ilo's lines in a kept task's log: over each reply that took it up, the access it came back
     /// at, and at its foot, once, where the conversation lives. Then, last, the line that stands
-    /// in the reply field's place once a task is done or stopped and can't take a reply: its
-    /// assistant keeps none, didn't keep this one as the switch was off, or no longer has it. An
-    /// outside agent's session has none of them.
+    /// in the reply field's place once a task is done, stopped, or failed as its conversation went,
+    /// and can't take a reply: its assistant keeps none, didn't keep this one as the switch was
+    /// off, or no longer has it. An outside agent's session has none of them.
     pub(super) fn kept_lines(&self, task: &Task, lines: &mut Vec<Line>) {
         let Some(cli) = task.cli.filter(|_| task.session.is_none()) else {
             return;
@@ -200,13 +207,19 @@ impl Agents {
             }
         }
         // One that couldn't go on keeps its field: at its assistant's limit it waits for Retry,
-        // and failed, for what fixes it. Not one a run before left whose conversation has gone:
+        // and failed, for what fixes it, unless what failed is that its conversation is gone,
+        // which no reply mends. Nor does one a run before left whose conversation has gone:
         // nothing of it is here to go on with, however it ended.
         // And with no profile folder nothing is kept or looked for, so a task takes a reply as it
         // did before any was.
+        let gone = record.is_some_and(|record| record.gone);
         let lost = task.from_before() && !record.is_some_and(|record| !record.gone);
-        let over = lost || matches!(task.state, State::Done { .. } | State::Stopped);
-        if !over || self.kept_root().is_none() {
+        let ended = match task.state {
+            State::Done { .. } | State::Stopped => true,
+            State::Failed { .. } => gone,
+            _ => false,
+        };
+        if !(lost || ended) || self.kept_root().is_none() {
             return;
         }
         match record {

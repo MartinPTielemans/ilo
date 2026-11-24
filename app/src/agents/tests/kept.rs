@@ -10,7 +10,7 @@ use crate::agents::kept::{self, Id};
 use crate::agents::ready::{Found, Ready};
 use crate::agents::runner::{self, Cli, Out};
 use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
-use crate::agents::task::{AskedOn, Conversation, Line, State};
+use crate::agents::task::{AskedOn, Conversation, Line, State, Word};
 use crate::agents::tier::Tier;
 
 /// A stand-in for `claude`. A run of it writes what it was started with and where beside itself,
@@ -464,6 +464,47 @@ fn a_conversation_its_assistant_no_longer_has_says_so(cx: &mut TestAppContext) {
     (run.agents).update(cx, |agents, cx| agents.drop_task(&agent, cx));
     assert_eq!(run.purged(cx).len(), 3);
     assert_eq!(run.kept(cx), (0, 0));
+}
+
+/// A reply that reached a task still under way, whose run had gone, starts a run that finds the
+/// conversation gone. Nobody stopped that task: it's Interrupted, why is the line in its reply
+/// field's place, and with Start Again there, it takes no reply.
+#[cfg(unix)]
+#[gpui::test]
+fn a_task_under_way_whose_conversation_went_is_interrupted(cx: &mut TestAppContext) {
+    let run = Run::new("gone-under-way", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    let id = run.id(&agent, cx);
+    (run.agents).update(cx, |agents, _| agents.run_went_unheard(&agent));
+    (run.agents).update(cx, |agents, cx| agents.reply(&agent, "And for Sunday?", cx));
+    let (args, _) = run.ran(2);
+    assert!(args.iter().any(|arg| arg == id.as_str()), "{args:?}");
+    let said = format!("No conversation found with session ID: {}", id.as_str());
+    run.said(&agent, Out::Gone(said), cx);
+
+    let why = "Claude no longer has this conversation.";
+    assert_eq!(
+        run.state(&agent, cx),
+        State::Failed {
+            why: why.into(),
+            assistant: false,
+        }
+    );
+    let card = (run.agents).read_with(cx, |agents, cx| {
+        let mut cards = agents.shown_cards(cx).into_iter();
+        cards.find(|card| card.agent.as_ref() == agent).unwrap()
+    });
+    assert_eq!(card.word, Word::Interrupted);
+    assert_eq!(card.status.as_ref(), why);
+    let talk = run.talk(&agent, cx);
+    assert_eq!(talk.about.as_ref(), "Claude · Interrupted");
+    assert_eq!(run.ilo_lines(&agent, cx), [IloKind::Gone]);
+    let Some(Line::Ilo(last)) = talk.lines.last() else {
+        panic!("ilo's line isn't last");
+    };
+    assert!(ilo::in_field(&last.kind));
+    assert_eq!(ilo::buttons(last), [IloButton::StartAgain]);
 }
 
 /// Removing a task removes what its assistant kept of it: the assistant is asked for that task's

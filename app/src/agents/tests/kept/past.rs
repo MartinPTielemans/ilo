@@ -207,6 +207,49 @@ fn a_finished_task_is_there_after_a_quit_and_takes_a_reply(cx: &mut TestAppConte
     );
 }
 
+/// A past task whose assistant no longer has its conversation, found by the reply: the reply never
+/// reached it and it wasn't under way, so it stays ended as it was, under its own word and not
+/// Interrupted, with the line that says so in the reply field's place and Start Again alone. Its
+/// row leaves the file, and it takes no second reply.
+#[gpui::test]
+fn a_past_task_whose_conversation_went_stays_as_it_ended(cx: &mut TestAppContext) {
+    let run = Run::new("past-gone", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    let id = run.id(&agent, cx);
+    name_it(&run, &agent, "Lisbon seats", cx);
+    run.finish(&agent, cx);
+    quit(&run, cx);
+    let next = next(&run, cx);
+    let past = archive(&next, cx)[0].0.clone();
+    restore(&next, &past, cx);
+    reply(&next, &past, "And for Sunday?", cx);
+    let (args, _) = next.ran(2);
+    assert_eq!(after(&args, "--resume"), Some(id.as_str()));
+    let said = format!("No conversation found with session ID: {}", id.as_str());
+    next.said(&past, Out::Gone(said), cx);
+
+    assert!(matches!(next.state(&past, cx), State::Done { .. }));
+    let talk = next.talk(&past, cx);
+    assert!(talk.about.starts_with("Claude · Done"), "{}", talk.about);
+    assert_eq!(next.ilo_lines(&past, cx), [IloKind::Gone]);
+    assert_eq!(
+        talk.lines.len(),
+        1,
+        "the reply that never reached it stayed"
+    );
+    let Some(Line::Ilo(last)) = talk.lines.last() else {
+        panic!("ilo's line isn't last");
+    };
+    assert!(ilo::in_field(&last.kind));
+    assert_eq!(ilo::buttons(last), [IloButton::StartAgain]);
+    assert_eq!(row(&next, &id)["title"], Value::Null);
+    assert!(listed(&next, cx).is_empty());
+    reply(&next, &past, "Hello?", cx);
+    cx.run_until_parked();
+    assert!(!started(&next, 3));
+}
+
 /// What the user asked names a task until its agent names it, and is never kept: the file has no
 /// title for one its agent never named, which the next launch lists as untitled.
 #[gpui::test]

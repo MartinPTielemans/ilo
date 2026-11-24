@@ -707,6 +707,15 @@ impl Agents {
         self.tasks.tasks.iter_mut().find(|task| task.agent == agent)
     }
 
+    /// `agent`'s run goes before the app hears it end, as a reply can find it: the next reply
+    /// starts a run of its own.
+    #[cfg(test)]
+    pub(super) fn run_went_unheard(&mut self, agent: &str) {
+        if let Some(task) = self.task_mut(agent) {
+            task.process = None;
+        }
+    }
+
     /// Every Space's task cards, newest first, for the windows to show at the top of each Today.
     pub fn shown_cards(&self, cx: &App) -> Vec<Card> {
         (self.tasks.tasks.iter().rev())
