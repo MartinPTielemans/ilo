@@ -2,7 +2,7 @@
 //! someone typing may never have seen it arrive: Focus Agent Question's key (⌥⇧⌘A on the Mac,
 //! Alt+Shift+A elsewhere, Chrome's Focus Inactive Popup) moves the keyboard to the card and rings
 //! its primary button, and only then do ↩ and Space press the ringed button, Tab and ⇧Tab move
-//! along the buttons and "See the whole request", and Escape answers as the card's × does. The key
+//! along the buttons, and Escape answers as the card's × does. The key
 //! again gives the keyboard back where it was and answers nothing, as the window stopping being
 //! the active one does. Only the user's keys come here: an agent's go to its page (keys.rs's
 //! tab_key_before_page).
@@ -100,8 +100,7 @@ pub(super) struct CardKeys {
     labels: Vec<&'static str>,
     /// The tab shown as the keyboard came: another one shown takes the keyboard to its page.
     selected: u64,
-    /// The ringed stop: a button, by its place in `buttons`, or "See the whole request" as the
-    /// place after the last (`stops`).
+    /// The ringed stop: a button, by its place in `buttons`.
     at: usize,
     came: Came,
     /// When the keyboard came, then the last key that would have answered or moved the ring,
@@ -219,12 +218,9 @@ fn card_key<A: gpui::Action>(
     })
 }
 
-/// The card's stops in the order they're drawn, so Tab's: "See the whole request" on a request's
-/// card, as `count`, the place after the last button, then the buttons.
+/// The card's stops in the order they're drawn, so Tab's: its buttons.
 fn stops(question: &Question) -> Vec<usize> {
-    let count = buttons(question).len();
-    let see = (!question.changes.is_empty()).then_some(count);
-    see.into_iter().chain(0..count).collect()
+    (0..buttons(question).len()).collect()
 }
 
 /// Under the checks, once `PROTECT` has passed, says so while the keyboard is still on the card.
@@ -425,7 +421,7 @@ impl Shell {
         let Some(keys) = &mut self.card_keys else {
             // A click gives a button the keyboard too. With the card gone no drawn element holds
             // it, and GPUI matches a key's bindings from the focused element, so the window takes
-            // it, as from "See the whole request" (#3715).
+            // it (#3715).
             if on_buttons && showing.is_none() {
                 window.focus(&self.focus_handle, cx);
             }
@@ -457,7 +453,6 @@ impl Shell {
                     if let Came::Ui(None) = keys.came {
                         keys.came = Came::Ui(window.focused(cx).filter(|focused| {
                             !self.agent_card_buttons.iter().any(|h| h == focused)
-                                && *focused != self.agent_request_see
                         }));
                     }
                     let at = keys.at;
@@ -479,7 +474,7 @@ impl Shell {
         // check.sh waits for this line.
         log!("browser: agent card keys back by {why}");
         // The card gone, its stops are still focused until the keyboard goes back.
-        if !on_buttons && !self.agent_request_see.is_focused(window) && !keys.due {
+        if !on_buttons && !keys.due {
             return;
         }
         match keys.came {
@@ -539,10 +534,6 @@ impl Shell {
             return;
         };
         let Some(button) = buttons(question).get(at).copied() else {
-            if stops(question).contains(&at) {
-                log!("browser: agent card key pressed See the whole request");
-                self.see_whole_request(window, cx);
-            }
             return;
         };
         log!("browser: agent card key pressed {}", button.label);
@@ -593,7 +584,7 @@ impl Shell {
         let id = keys.question;
         let label = (self.agent_question())
             .and_then(|q| buttons(q).get(at).map(|button| button.label))
-            .unwrap_or("See the whole request");
+            .unwrap_or_default();
         // check.sh waits for this line.
         log!("browser: agent card keys on {id} {label}");
         cx.notify();
@@ -601,12 +592,7 @@ impl Shell {
 
     /// The handle of the card's stop `at`.
     fn card_stop(&self, at: usize) -> FocusHandle {
-        match self.agent_card_buttons.get(at) {
-            Some(button) if self.agent_question().map_or(0, |q| buttons(q).len()) > at => {
-                button.clone()
-            }
-            _ => self.agent_request_see.clone(),
-        }
+        self.agent_card_buttons[at].clone()
     }
 
     /// Which of the key chips `at`'s button shows, ↩ and ESC: those its row of the last frame had
@@ -842,9 +828,8 @@ impl Shell {
     }
 
     /// The card's element taking its keys while one of its buttons has them through Focus Agent
-    /// Question. Otherwise, as with "See the whole request" or a button a press gave the
-    /// keyboard, its keys are what they'd be without the card's: a key answers a button only
-    /// through these.
+    /// Question. Otherwise, as with a button a press gave the keyboard, its keys are what they'd
+    /// be without the card's: a key answers a button only through these.
     pub(super) fn card_keys_on<E: gpui::InteractiveElement + FluentBuilder>(
         &self,
         card: E,
@@ -1010,8 +995,7 @@ mod tests {
         cx.update(|window, _| handles.iter().position(|h| h.is_focused(window)))
     }
 
-    /// The card's stop with GPUI's keyboard, a button by its place or "See the whole request"
-    /// as the place after the last.
+    /// The card's stop with GPUI's keyboard, a button by its place.
     fn stop(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Option<usize> {
         let shell = shell.clone();
         cx.update(|window, cx| shell.read(cx).card_focused(window))
@@ -1161,8 +1145,7 @@ mod tests {
     }
 
     /// On every card the keyboard lands on the primary button, never Always Allow; Tab and ⇧Tab
-    /// move along all the stops as they're drawn, "See the whole request" on a request's card too,
-    /// round from the last to the first; and ↩ presses the one ringed as a click does.
+    /// move along all the stops as they're drawn, round from the last to the first; and ↩ presses the one ringed as a click does.
     #[gpui::test]
     fn every_cards_buttons_by_tab(cx: &mut TestAppContext) {
         let (host, shell, cx) = window_with(cx);
@@ -1179,11 +1162,7 @@ mod tests {
                 "{card} rang another first"
             );
             assert_ne!(labels[primary], "Always Allow");
-            let order = match card {
-                // "See the whole request" is drawn above the buttons, as the place after them.
-                "request" => vec![labels.len(), 0, 1],
-                _ => (0..labels.len()).collect(),
-            };
+            let order: Vec<usize> = (0..labels.len()).collect();
             let mut place = order.iter().position(|&at| at == primary).unwrap();
             for _ in 0..order.len() {
                 cx.simulate_keystrokes("tab");
@@ -2191,31 +2170,5 @@ mod tests {
             );
             assert_eq!(ring(&shell, cx), None, "{from}");
         }
-    }
-
-    /// "See the whole request" is a stop of the card's keys: ↩ on it, past the protection, shows
-    /// the whole request, so the request can be read before it's allowed.
-    #[gpui::test]
-    fn see_is_a_stop_of_the_cards_keys(cx: &mut TestAppContext) {
-        let (_, shell, cx) = window_with(cx);
-        struct Shown;
-        impl crate::agent_request::Host for Shown {
-            fn show(&self, _: u64, _: f32, _: f32, _: f32) {}
-            fn set_height(&self, _: f32) {}
-            fn hide(&self) {}
-        }
-        let whole = cx.update(|_, cx| crate::agent_request::open(Rc::new(Shown), cx));
-        whole.expect("the whole request's window didn't open");
-        ask(&shell, cx, request(4));
-        from_page(&shell, cx, KEY);
-        cx.simulate_keystrokes("tab");
-        cx.run_until_parked();
-        assert_eq!(stop(&shell, cx), Some(2), "Tab from Allow didn't reach See");
-        assert_eq!(ring(&shell, cx), Some(2));
-        wait(cx, PROTECT);
-        cx.simulate_keystrokes("enter");
-        cx.run_until_parked();
-        let showing = cx.update(|_, cx| crate::agent_request::showing(cx));
-        assert_eq!(showing, Some(4), "↩ on See didn't show the whole request");
     }
 }
