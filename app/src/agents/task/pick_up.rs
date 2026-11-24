@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime};
 use gpui::{App, AppContext, Context, SharedString};
 
 use super::ilo::{IloKind, IloLine};
-use super::{KEPT, Line, State, Task, Who, seconds};
+use super::{Card, KEPT, Line, State, Task, Who, seconds};
 use crate::agents::Agents;
 use crate::agents::helpers::Helpers;
 use crate::agents::kept::{self, Keep, Keeps, Nowhere};
@@ -402,6 +402,45 @@ impl Agents {
             .map(|task| {
                 let agent = SharedString::from(task.agent.clone());
                 (agent, task.title.clone(), self.about(task, cx).into())
+            })
+            .collect()
+    }
+
+    /// The tasks a run before left that haven't been brought back, the last to end first, as the
+    /// composer's Latest tasks lists them until one is opened: each as its card, which has its
+    /// title and how it ended and no more, and for its home the user's Space of the profile it was
+    /// asked in, by which a window lists those of the profile in front alone. One whose
+    /// conversation takes no reply, or whose profile has no Space of the user's, is in the
+    /// Archive alone. Made from what a launch already holds: nothing is read for it, and no tool
+    /// of an agent's reaches it.
+    pub fn kept_cards(&self, cx: &App) -> Vec<Card> {
+        let mut left: Vec<&Task> = (self.tasks.kept.listed())
+            .filter_map(|agent| self.task(agent))
+            .filter(|task| task.from_before() && task.home == 0)
+            .filter(|task| task.dismissed && !task.deleted)
+            .collect();
+        left.sort_by_key(|task| std::cmp::Reverse(task.ended));
+        // Each profile is asked for its Space once.
+        let mut spaces: Vec<(&str, u64)> = Vec::new();
+        (left.into_iter())
+            .filter_map(|task| {
+                let profile = self.tasks.kept.of(&task.agent)?.profile.as_str();
+                let known = spaces.iter().find(|(each, _)| *each == profile);
+                let home = match known {
+                    Some((_, home)) => *home,
+                    None => {
+                        let home = match profile.is_empty() {
+                            true => 0,
+                            false => self.browser.profile_space(profile),
+                        };
+                        spaces.push((profile, home));
+                        home
+                    }
+                };
+                (home != 0).then(|| Card {
+                    home,
+                    ..self.card(task, cx)
+                })
             })
             .collect()
     }
