@@ -478,6 +478,11 @@ pub struct Card {
     pub title: SharedString,
     /// The step it's on, such as "Opening gulbenkian.pt", what it waits for, or its result's line.
     pub status: SharedString,
+    /// Its last steps this turn, at most `CARD_STEPS`, oldest first, each as the conversation's
+    /// trace line says it (`tools::step_title`).
+    pub steps: Vec<SharedString>,
+    /// The site of the last page it was on, from its steps, or None before it reaches one.
+    pub last_site: Option<SharedString>,
     /// Whether the status is the agent's question, which may take two lines.
     pub asks: bool,
     pub dot: Dot,
@@ -996,6 +1001,8 @@ impl Agents {
             replies: task.session.is_none(),
             title: task.title.clone(),
             status,
+            steps: last_steps(task),
+            last_site: last_site(task),
             asks,
             dot,
             answers: match &task.state {
@@ -1182,14 +1189,15 @@ impl Agents {
     }
 
     /// Starts a task: `cli` does what the user `asked`, on `page` if it goes with it, from the
-    /// user's Space `home`. Returns its agent's id, or None if it couldn't start, which its card
-    /// says.
+    /// user's Space `home`, at `tier`: the user's own pick on the composer page's menu, else
+    /// Work on pages. Returns its agent's id, or None if it couldn't start, which its card says.
     pub fn start_task(
         &mut self,
         cli: Cli,
         asked: &str,
         page: Option<AskedOn>,
         home: u64,
+        tier: Tier,
         cx: &mut Context<Self>,
     ) -> Option<String> {
         let asked = asked.trim();
@@ -1235,7 +1243,7 @@ impl Agents {
             waiting: None,
             writing: None,
             named: None,
-            tier: Tier::default(),
+            tier,
             sites: Sites::default(),
             stops: Vec::new(),
             told: None,
@@ -1243,6 +1251,9 @@ impl Agents {
         };
         self.tasks.tasks.push(task);
         self.tokens_changed();
+        // The log keeps the tier it starts at, as it keeps a change of it.
+        let started = super::tier::started_logged(tier);
+        self.note_on(&agent, 0, super::access::ACCESS_ACTION, "", &started, "");
         let first = first_message(asked, self.task(&agent).and_then(|task| task.page.as_ref()));
         self.launch(&agent, &first, cx);
         self.wait_for_answer(&agent, cx);
@@ -3064,6 +3075,31 @@ pub const NEEDS_YOU: &str = "Needs you";
 pub const NEEDS_OK: &str = "Needs your OK";
 /// A card's status while a refusal of its task's access is unsettled, before what it stopped.
 pub const STOPPED_AT: &str = "Stopped at";
+
+/// The most steps a card lists.
+pub const CARD_STEPS: usize = 3;
+
+/// A task's last steps this turn, oldest first, by the line that says the step it's on.
+fn last_steps(task: &Task) -> Vec<SharedString> {
+    let mut steps: Vec<SharedString> = (turn_steps(task).into_iter().take(CARD_STEPS))
+        .map(|step| tools::step_title(&step.did, tense(step)).into())
+        .collect();
+    steps.reverse();
+    steps
+}
+
+/// The site of the last page a task was on or went to, as its steps name it (`agents::site`), or
+/// None before it reaches one. An address it asked for that names no page isn't one.
+fn last_site(task: &Task) -> Option<SharedString> {
+    (task.trace.iter().rev())
+        .map(|step| &step.did)
+        .find(|did| {
+            let unresolved =
+                matches!(did.tool.as_str(), "open_tab" | "navigate") && did.text.is_empty();
+            !did.site.is_empty() && !unresolved
+        })
+        .map(|did| did.site.clone().into())
+}
 
 /// A task's status while it works, saying how far it has got by its own steps: "Step 5 · Clicking
 /// “Tickets”", the step of the turn it's on, else the last it took, counted among the turn's steps

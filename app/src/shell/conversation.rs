@@ -286,6 +286,8 @@ impl Shell {
     /// An ended task's Start Again: the command bar opens as it does for a new tab, with what the
     /// task was first asked in its field, as an ask. Nothing is sent until the user sends it.
     pub fn ask_again(&mut self, asked: SharedString, cx: &mut Context<Self>) {
+        // It asks again at Work on pages, whatever the composer had picked.
+        self.forget_composer_tier();
         self.run(super::Command::NewTab, "start again", cx);
         self.browser.ask_again(asked, cx);
     }
@@ -2965,9 +2967,9 @@ enum Caption {
     Step,
 }
 
-/// The weight a page's picture sets a line under it in. Its site is the tile's title and a hold
-/// asks for the user as loudly; the agent's step is regular under its site, which it has to say,
-/// as the panel's text is medium and a line that names no weight takes that.
+/// The weight a page's picture sets a line under it in. Its site is the tile's title, in medium,
+/// and a hold asks for the user as loudly; the agent's step is regular under its site, as a line
+/// that names no weight is.
 fn caption_weight(line: Caption) -> FontWeight {
     match line {
         Caption::Site | Caption::Hold => FontWeight::MEDIUM,

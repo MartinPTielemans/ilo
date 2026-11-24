@@ -19,7 +19,7 @@ pub(super) type Place<'a> = &'a dyn Fn(&'static str) -> Option<AnyElement>;
 
 /// The steps with a loop in their slot.
 pub(super) fn has_loop(step: Step) -> bool {
-    matches!(step, Step::Intro | Step::Color)
+    matches!(step, Step::Intro | Step::Import | Step::Color)
 }
 
 /// Where a loop is `secs` after it started, or its last frame while `still`.
@@ -80,12 +80,164 @@ pub(super) fn welcome(t_: f32, colors: Colors, place: Place) -> impl IntoElement
                 .border_color(palette.faint(0.5 * (1. - grown)))
         });
     let weights = [(palette, 1.)];
-    let sidebar = column(div().children(rows), &weights, &palette);
+    let sidebar = column(div().children(rows), &[(1., 1.), (0., 1.)], &palette);
     let shown = window(&palette, &weights, sidebar, page(shown, &palette))
         .children(place("window"))
         .children(ring)
         .child(arrow(pointer, colors, place).opacity(seen));
     centred(shown)
+}
+
+/// The import's: another browser's window above ilo's, its bookmarks and then its tabs dimming
+/// one by one as each lands in ilo's sidebar, the bookmarks as favorites and the tabs as tabs,
+/// then the dots of the Spaces that came and what came, said in the page. All of it goes again
+/// at the loop's end, so it starts as it began; its last frame, still, is what came.
+pub(super) fn import(t_: f32, colors: Colors, place: Place) -> impl IntoElement {
+    const BOOKMARKS: [&str; 4] = ["Calendar", "Mail", "Wave", "Code"];
+    const TABS: [&str; 4] = ["Roadmap", "Budget", "Lakeside", "Parks"];
+    const TILES: [&str; 4] = ["tile-0", "tile-1", "tile-2", "tile-3"];
+    const ROWS: [&str; 4] = ["tab-0", "tab-1", "tab-2", "tab-3"];
+    let palette = Palette::of(None, tone(colors));
+    // How far the loop's end has taken it all away again; none in the still last frame.
+    let out = match t_ >= t::PERIOD {
+        true => 0.,
+        false => ((t_ - (t::PERIOD - t::IMPORT_OUT)) / t::IMPORT_OUT).clamp(0., 1.),
+    };
+    let [bookmarks_at, tabs_at] = t::IMPORT_AT;
+    // How far the `index`th of a kind starting at `start` has landed.
+    // How far a part starting at `from` has come over `over`: none before it starts, as the
+    // easing's first step is a hair over nothing.
+    let come = |from: f32, over: f32| match t_ > from {
+        true => ease_out(((t_ - from) / over).min(1.)) * (1. - out),
+        false => 0.,
+    };
+    let landed =
+        |start: f32, index: usize| come(start + index as f32 * t::IMPORT_STAGGER, t::IMPORT_LAND);
+    let seen = |start: f32| come(start, t::IMPORT_FADE);
+    // In the other browser, each dims as it lands.
+    let dimmed = |landed: f32| 1. - (1. - t::IMPORT_DIM) * landed;
+    let chip = |name: &'static str, landed: f32| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .opacity(dimmed(landed))
+            .child(
+                div()
+                    .size(px(7.))
+                    .rounded(px(t::ICON_RADIUS))
+                    .bg(palette.faint(0.3)),
+            )
+            .child(name)
+    };
+    let tabs = TABS.iter().enumerate().map(|(index, &name)| {
+        chip(name, landed(tabs_at, index))
+            .h(px(16.))
+            .px(px(6.))
+            .rounded(px(t::PLATE_RADIUS))
+            .bg(palette.faint(if index == 0 { 0.1 } else { 0. }))
+    });
+    let bookmarks = (BOOKMARKS.iter().enumerate())
+        .map(|(index, &name)| chip(name, landed(bookmarks_at, index)));
+    let lights = (0..3).map(|_| div().size(px(6.)).rounded_full().bg(palette.faint(0.22)));
+    let other = div()
+        .flex_none()
+        .w(px(t::WINDOW_WIDTH))
+        .h(px(t::STRIP_HEIGHT))
+        .px(px(10.))
+        .flex()
+        .flex_col()
+        .justify_center()
+        .gap(px(6.))
+        .overflow_hidden()
+        .rounded(px(t::WINDOW_RADIUS))
+        .bg(palette.page)
+        .border_1()
+        .border_color(palette.faint(0.12))
+        .text_size(px(t::TEXT_SIZE))
+        .text_color(palette.text(0.75))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.))
+                .children(lights)
+                .child(div().ml(px(6.)).flex().gap(px(2.)).children(tabs)),
+        )
+        .child(div().flex().gap(px(12.)).pl(px(6.)).children(bookmarks))
+        .children(place("other"));
+    // In ilo's sidebar, the favorites as tiles above the tabs, each coming down into place.
+    let tiles = (0..BOOKMARKS.len()).filter_map(|index| {
+        let landed = landed(bookmarks_at, index);
+        (landed > 0.).then(|| {
+            div()
+                .absolute()
+                .top(px(t::TILES_TOP - t::IMPORT_DROP * (1. - landed)))
+                .left(px(6. + index as f32 * (t::TILE + t::TILE_GAP)))
+                .size(px(t::TILE))
+                .rounded(px(t::PLATE_RADIUS))
+                .bg(palette.shown(0.))
+                .opacity(landed)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .size(px(7.))
+                        .rounded(px(t::ICON_RADIUS))
+                        .bg(palette.faint(0.3)),
+                )
+                .children(place(TILES[index]))
+        })
+    });
+    let rows = TABS.iter().enumerate().filter_map(|(index, &name)| {
+        let landed = landed(tabs_at, index);
+        (landed > 0.).then(|| {
+            let top = t::ROWS_TOP + index as f32 * t::ROW - t::IMPORT_DROP * (1. - landed);
+            row(name, index, 0., &palette)
+                .top(px(top))
+                .opacity(landed)
+                .children(place(ROWS[index]))
+        })
+    });
+    // The Spaces that came with them, a dot each beside the one shown.
+    let spaces = seen(t::IMPORT_SPACES);
+    let dots = [(1., 1.), (0., spaces), (0., spaces)];
+    let sidebar =
+        column(div().children(tiles).children(rows), &dots, &palette).children(place("sidebar"));
+    // What came, said in the page as the import's Done says it.
+    let came = seen(t::IMPORT_CAME);
+    let said = (came > 0.).then(|| {
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(6.))
+            .opacity(came)
+            .text_size(px(t::TEXT_SIZE))
+            .text_color(palette.text(0.75))
+            .child(div().size(px(9.)).rounded_full().bg(palette.faint(0.5)))
+            .child("4 favorites, 4 tabs, 3 Spaces")
+            .children(place("came"))
+    });
+    let ilo = window(
+        &palette,
+        &[(palette, 1.)],
+        sidebar,
+        div().size_full().children(said),
+    )
+    .children(place("window"));
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(t::STRIP_GAP))
+        .child(other)
+        .child(ilo)
 }
 
 /// The colour's: the window glows with the colour picked, or none, and the sidebar's rows swipe
@@ -144,7 +296,8 @@ pub(super) fn colour(
         .inset_0()
         .child(page(0, &palettes[0]).opacity(1. - across))
         .child(page(1, &palettes[1]).opacity(across));
-    let sidebar = column(rows, &weights, &near).children(place("sidebar"));
+    let dots = [(1. - across, 1.), (across, 1.)];
+    let sidebar = column(rows, &dots, &near).children(place("sidebar"));
     let shown = window(&near, &weights, sidebar, pages).children(place("window"));
     centred(shown)
 }
@@ -157,27 +310,20 @@ fn tone(colors: Colors) -> Tone {
     }
 }
 
-/// The sidebar's column: its rows, clipped to it, and at its foot a dot for each Space, as big and
-/// as strong as its Space shows. A window of one Space has a second for the Space it would swipe
-/// to, as the real foot does.
-fn column(rows: impl IntoElement, weights: &[(Palette, f32)], palette: &Palette) -> gpui::Div {
-    let shown = |index: usize| match weights.len() {
-        1 => {
-            if index == 0 {
-                1.
-            } else {
-                0.
-            }
-        }
-        _ => weights.get(index).map_or(0., |(_, weight)| *weight),
-    };
-    let dots = (0..2).map(|index| {
-        let weight = shown(index);
-        div()
-            .size(px(t::DOT + (t::DOT_SHOWN - t::DOT) * weight))
-            .rounded_full()
-            .bg(palette.faint(t::DOT_ALPHA + (1. - t::DOT_ALPHA) * weight))
-    });
+/// The sidebar's column: its rows, clipped to it, and at its foot a dot for each Space, `dots`,
+/// as big and as strong as its Space shows, and as much there as the loop has it. A window of one
+/// Space has a second for the Space it would swipe to, as the real foot does.
+fn column(rows: impl IntoElement, dots: &[(f32, f32)], palette: &Palette) -> gpui::Div {
+    let dots = dots
+        .iter()
+        .filter(|(_, there)| *there > 0.)
+        .map(|&(shown, there)| {
+            div()
+                .size(px(t::DOT + (t::DOT_SHOWN - t::DOT) * shown))
+                .rounded_full()
+                .bg(palette.faint(t::DOT_ALPHA + (1. - t::DOT_ALPHA) * shown))
+                .opacity(there)
+        });
     div()
         .absolute()
         .top_0()

@@ -1711,6 +1711,17 @@ impl Browser for Fake {
         false
     }
 
+    fn command_bar_in_place(
+        &self,
+        window: &mut gpui::Window,
+        cx: &mut App,
+    ) -> gpui::Entity<command_bar::CommandBar> {
+        command_bar::in_place(Rc::new(PreviewBar), window, cx)
+    }
+
+    // The preview runs no tasks.
+    fn start_task(&self, _: &str, _: &str, _: u64, _: Tier, _: &mut App) {}
+
     fn field_window_typing(&self, _: &mut App) -> bool {
         false
     }

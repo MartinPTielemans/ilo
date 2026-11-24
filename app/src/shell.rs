@@ -1570,6 +1570,9 @@ pub struct Shell {
     empty_settled: bool,
     /// The first run's welcome takes the empty card until a page shows (set_welcome).
     welcome: bool,
+    /// The command bar an empty Space's card rests on, made as the card comes to show no page and
+    /// dropped as a page shows (#4140).
+    resting: Option<empty::composer::Resting>,
     /// A new profile's first launch, or Help › Welcome to ilo, over the window while it shows.
     onboarding: Option<onboarding::Onboarding>,
     /// The first launch's import, made at its first step and kept for the window's life, so an
@@ -2221,6 +2224,7 @@ impl Shell {
             card_back: None,
             empty_settled: false,
             welcome: false,
+            resting: None,
             onboarding: None,
             importing: None,
             in_hint: false,
@@ -4958,6 +4962,7 @@ impl Render for Shell {
         let bare = self.onboarding_bare();
         let normal = normal && !bare;
         let task_area = task_area.filter(|_| !bare);
+        let empty_card = self.empty_card(window, cx);
         let (under, sidebar, over, edge) = match bare {
             true => (None, None, None, None),
             false => (under, sidebar, over, edge),
@@ -5045,7 +5050,7 @@ impl Render for Shell {
                             .flatten(),
                     )
                     .children(self.picture_element(cx))
-                    .children(self.empty_card(cx))
+                    .children(empty_card)
                     .children(self.crash_cards(self.page_frame(self.viewport).0, cx))
                     .children(self.pane_gaps(cx))
                     .children(self.pane_handles(cx))
