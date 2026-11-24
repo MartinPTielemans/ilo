@@ -11,7 +11,9 @@ use gpui::{
 use super::Fold;
 
 use crate::agents::task::ilo::{IloButton, IloKind, IloLine};
-use crate::agents::task::{Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep};
+use crate::agents::task::{
+    Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep, Word,
+};
 use crate::agents::tier::{Tier, Why};
 use crate::shell::picture::PagePicture;
 use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
@@ -30,8 +32,11 @@ fn card() -> Card {
         replies: true,
         title: "Flight to Lisbon".into(),
         status: "Searching flights".into(),
+        steps: Vec::new(),
+        last_site: None,
         asks: false,
         dot: Dot::Working,
+        word: Word::for_dot(Dot::Working),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),

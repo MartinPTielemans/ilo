@@ -1923,6 +1923,32 @@ impl Browser for Engine {
         command_bar::is_open(cx)
     }
 
+    fn command_bar_in_place(
+        &self,
+        window: &mut gpui::Window,
+        cx: &mut App,
+    ) -> gpui::Entity<command_bar::CommandBar> {
+        // It's typed in only while its window is the one in front, which the host acts on.
+        command_bar::in_place(Rc::new(command_bar_host::Bar), window, cx)
+    }
+
+    fn start_task(
+        &self,
+        agent: &str,
+        asked: &str,
+        home: u64,
+        tier: browser::agents::tier::Tier,
+        _: &mut App,
+    ) {
+        let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
+            return;
+        };
+        let asked = asked.to_string();
+        agents_core::update(move |agents, cx| {
+            agents.start_task(cli, &asked, None, home, tier, cx);
+        });
+    }
+
     fn field_window_typing(&self, cx: &mut App) -> bool {
         find_bar::typing(self.window, cx)
             || offer::typing(self.window, cx)

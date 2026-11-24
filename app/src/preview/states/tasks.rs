@@ -25,6 +25,13 @@ pub(crate) const TASKS: [(&str, &str, Dot); 3] = [
 ];
 
 /// The pages the done task left the user, each with its site.
+/// The working task's last three steps, as its trace lines say them.
+const WORKING_STEPS: [&str; 3] = [
+    "Opened encore.example",
+    "Read encore.example",
+    "Clicking “Tickets”",
+];
+
 pub(crate) const TASK_PAGES: [(&str, &str); 3] = [
     ("Booking · Taberna", "https://taberna.example/booking"),
     ("Menu · Taberna", "https://taberna.example/menu"),
@@ -129,8 +136,16 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         replies: true,
         title: title.into(),
         status: status.into(),
+        // The working task's last steps and the page it's on, which its plate on the composer
+        // page names.
+        steps: match dot {
+            Dot::Working => WORKING_STEPS.map(SharedString::from).to_vec(),
+            _ => Vec::new(),
+        },
+        last_site: (dot == Dot::Working).then(|| "encore.example".into()),
         asks: false,
         dot,
+        word: Word::for_dot(dot),
         answers: Vec::new(),
         question: None,
         open: match dot {
@@ -164,6 +179,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             title: "Claude Code".into(),
             status: status.into(),
             dot,
+            word: Word::for_dot(dot),
             open,
             ..card((FIRST_TASK, TASKS[0]))
         }];
@@ -182,6 +198,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             cards[0].status =
                 format!("{} · Sign in to {site}", browser::agents::task::NEEDS_YOU).into();
             cards[0].dot = Dot::Waiting;
+            cards[0].word = Word::NeedsYou;
         }
         (Some(count), false) => cards[0].status = helper_trace(count, false).line(),
         (None, _) => {}
