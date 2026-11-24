@@ -1648,10 +1648,10 @@ fn gray_on_a_dark_plate_reads_over_a_bright_window_at_every_level() {
 /// hold in both looks.
 ///
 /// A Space's colour can leave a dark window too bright for both: the ink reads on the bare window
-/// at little over 4.5, and a plate that tells takes a fifth of that. There the title still reads,
-/// and a plate that doesn't tell has given all it has, its title within a step of its least. A
-/// light window's plate is the ink at the ladder's step, as it was, and with a Space's colour
-/// holds both over a white backdrop.
+/// at little over 4.5, and a plate that tells takes a fifth of that. There the plate still tells,
+/// on every colour, and its title, under the pointer alone, reads what that leaves. A light
+/// window's plate is the ink at the ladder's step, as it was, and with a Space's colour holds
+/// both over a white backdrop.
 ///
 /// As the test above, it knows the palette's own account of the window and no real material.
 #[test]
@@ -1660,6 +1660,9 @@ fn a_plate_under_the_pointer_tells_and_its_title_reads_at_every_level() {
     // 1.2 is what a dark window's plate has at Standard over a white backdrop, where it's plain to
     // see; 4.2 is what a plate that tells leaves the title at More, where most comes through.
     let (tells, at_more) = (1.2, 4.2);
+    // A Space's colour is fitted so the ink reads on the bare window at 4.5, and a plate that
+    // tells is at most a step past its aim over that, 1.25: 4.5 over 1.25 is the title's least.
+    let on_a_colour = 3.6;
     // The least a plate tells and the least its title, and a dark window's gray, read over `window`.
     let least = |palette: &Palette, window: &[Rgba]| {
         let plate = Rgba::from(palette.hovered_plate());
@@ -1704,12 +1707,12 @@ fn a_plate_under_the_pointer_tells_and_its_title_reads_at_every_level() {
             let dark = Palette::of(Some(theme), Tone::Dark);
             let (told, read) = least(&dark, &fine_window(&dark));
             assert!(
-                read >= reads,
-                "{level:?} {theme:?}: its title reads {read:.2}"
+                told >= tells,
+                "{level:?} {theme:?}: the plate tells at {told:.2}"
             );
             assert!(
-                told >= tells || read < reads + 0.2,
-                "{level:?} {theme:?}: the plate tells at {told:.2} with its title at {read:.2}"
+                read >= on_a_colour,
+                "{level:?} {theme:?}: its title reads {read:.2}"
             );
             let light = Palette::of(Some(theme), Tone::Light);
             assert_eq!(

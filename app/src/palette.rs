@@ -83,9 +83,6 @@ pub const GLYPH: f32 = 3.;
 pub const TELLS: f32 = 1.2;
 /// A plate aims past TELLS, so rounding to 8 bits can't take it under.
 const TELLS_AIM: f32 = 1.22;
-/// The title on a plate under the pointer at More, where a white backdrop comes through most and
-/// a plate that tells leaves text less than its 4.5:1: it may read down to this there.
-pub const POINTED_TEXT_MORE: f32 = 4.2;
 /// The steps a shade falls by where its plate has to tell: finer than SHADE_STEP, as each one it
 /// loses is taken from the text on it.
 const TELLS_STEP: f32 = 0.01;
@@ -712,9 +709,8 @@ impl Palette {
 
     /// The shade of a plate under the pointer that isn't a row's: a row's there, or as much of
     /// it, in finer steps, as leaves the plate telling from every point of the window. Where the
-    /// window is bright and shows much through, the two pull apart: the plate gives up shade to
-    /// be seen while its title still reads, at text's 4.5:1 or at More POINTED_TEXT_MORE, and no
-    /// further, so on a window too bright for both it's the plate that goes unseen. A light
+    /// window is bright, at More or in a Space's colour, the two pull apart, and the plate is
+    /// seen first: its title, under the pointer alone, reads what that leaves it. A light
     /// window's takes none.
     fn solve_pointed(&self, window: &Window) -> f32 {
         // A light window's is the ink at its step: its rows' shade is worked out for a row's
@@ -724,33 +720,22 @@ impl Palette {
         }
         let plain = window.samples(self.layer_alpha);
         let tint = self.tone.tint_color();
-        let plate = |at: Rgba, shade: f32| {
-            over(
-                over(at, self.ink, crate::tokens::shell::HOVERED),
-                tint,
-                shade,
-            )
-        };
         let tells = |shade: f32| {
-            plain
-                .iter()
-                .all(|&at| contrast(plate(at, shade), at) >= TELLS_AIM)
-        };
-        let least = match transparency() {
-            Transparency::More => POINTED_TEXT_MORE,
-            _ => TEXT,
-        };
-        let reads = |shade: f32| {
-            plain
-                .iter()
-                .all(|&at| contrast(self.ink, plate(at, shade)) >= least + BETWEEN)
+            plain.iter().all(|&at| {
+                let plate = over(
+                    over(at, self.ink, crate::tokens::shell::HOVERED),
+                    tint,
+                    shade,
+                );
+                contrast(plate, at) >= TELLS_AIM
+            })
         };
         let row = self.ground_shades[Ground::Hovered as usize];
         let steps = (row / TELLS_STEP).round() as i32;
         (1..=steps)
             .rev()
             .map(|step| row.min(step as f32 * TELLS_STEP))
-            .find(|&shade| tells(shade) || !reads((shade - TELLS_STEP).max(0.)))
+            .find(|&shade| tells(shade))
             .unwrap_or(0.)
     }
 
