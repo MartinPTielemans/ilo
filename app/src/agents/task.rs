@@ -18,6 +18,7 @@ use futures::StreamExt;
 use gpui::{App, AppContext, Context, SharedString};
 use serde_json::Value;
 
+use super::files::Given;
 use super::helpers::{self, Helpers};
 use super::ready::{Found, Ready};
 use super::runner::{self, Cli, Failure, Launch, Out, Process};
@@ -28,6 +29,7 @@ use crate::shell::MenuEntry;
 
 pub mod ilo;
 mod pick_up;
+pub(super) mod rewall;
 
 /// The answers an ask shows as buttons on the card, at most, and how long each may be.
 pub const ANSWERS: usize = 3;
@@ -377,6 +379,14 @@ pub struct Task {
     pub(super) writing: Option<Writing>,
     /// What ilo holds of its helpers (#4102), which it has only if it started with the switch on.
     pub(super) helpers: Helpers,
+    /// The files the user gave it (#4101), which its assistant then runs inside a wall for. None
+    /// until a grant gives it some.
+    pub(in crate::agents) files: Given,
+    /// Its start inside a wall, until the system says the wall is up (rewall.rs).
+    pub(super) rising: Option<rewall::Rising>,
+    /// What came of each wall of its that wasn't put up, in order: what its lines about them are
+    /// written from, by the conversation's words table.
+    pub(in crate::agents) rewalled: Vec<rewall::Rewalled>,
 }
 
 /// The message an agent is writing as the turn's last, which shows under its trace as it comes,
@@ -440,6 +450,11 @@ impl Task {
         if let Some(process) = self.process.as_mut() {
             process.interrupt();
         }
+    }
+
+    /// Ends its run: the process goes, and a message to the task starts another.
+    pub(super) fn end_run(&mut self) {
+        self.process = None;
     }
 
     /// Where the turn under way starts among its messages: after the user's last.
@@ -696,6 +711,12 @@ pub struct Tasks {
     /// Helpers for the tasks a test starts, whatever the switch says.
     #[cfg(test)]
     pub(super) helpers: bool,
+    /// What answers for `wall::put_up` in a test, which no system does yet.
+    #[cfg(test)]
+    pub(super) wall: Option<rewall::PutUp>,
+    /// The files the tasks a test starts are given, as a grant will give a task its own.
+    #[cfg(test)]
+    pub(super) files: Given,
 }
 
 impl Agents {
@@ -709,6 +730,14 @@ impl Agents {
 
     pub(super) fn task_mut(&mut self, agent: &str) -> Option<&mut Task> {
         self.tasks.tasks.iter_mut().find(|task| task.agent == agent)
+    }
+
+    /// `agent`'s run goes before the app hears it end, as a reply can find it: the next reply
+    /// starts a run of its own.
+    #[cfg(test)]
+    pub(super) fn run_of(&self, agent: &str) -> u32 {
+        let process = self.task(agent).and_then(|task| task.process.as_ref());
+        process.map_or(0, runner::Process::run)
     }
 
     /// `agent`'s run goes before the app hears it end, as a reply can find it: the next reply
@@ -1348,6 +1377,9 @@ impl Agents {
             stops: Vec::new(),
             told: None,
             helpers: Helpers::of_task(self.helpers_on() && cli == Cli::Claude),
+            files: self.files_at_start(),
+            rising: None,
+            rewalled: Vec::new(),
         };
         self.tasks.tasks.push(task);
         self.tokens_changed();
@@ -1407,24 +1439,42 @@ impl Agents {
         helpers::ON
     }
 
-    fn launch(&mut self, agent: &str, first: &str, cx: &mut Context<Self>) {
+    /// The files a task that starts now has: none, until a grant gives a task its own.
+    fn files_at_start(&self) -> Given {
+        #[cfg(test)]
+        return self.tasks.files.clone();
+        #[cfg(not(test))]
+        Given::default()
+    }
+
+    pub(super) fn launch(&mut self, agent: &str, first: &str, cx: &mut Context<Self>) {
+        // A task with files starts inside its wall, or without them (rewall.rs).
+        let wall = self.wall_to_start(agent);
+        self.launch_in(agent, first, wall, cx);
+    }
+
+    /// Starts `agent`'s assistant inside `wall`, or with None as a task with no files starts.
+    pub(super) fn launch_in(
+        &mut self,
+        agent: &str,
+        first: &str,
+        wall: Option<Arc<super::wall::Wall>>,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some((task, Some(cli))) = self.task(agent).map(|task| (task, task.cli)) else {
-            return;
+            return false;
         };
         let found = self.tasks.found.get(&cli).cloned().unwrap_or_default();
         let Some(program) = found.program.clone() else {
-            return self.fail(
+            self.fail(
                 agent,
                 Failure::Other(format!("{} isn't installed.", cli.name())),
                 cx,
             );
+            return false;
         };
-        let dir = self
-            .tasks
-            .dir
-            .clone()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("Tasks");
+        let dir = self.tasks_dir();
+        let walled = wall.is_some();
         let mut args = self.bridge.clone();
         args.push(self.socket.to_string_lossy().into_owned());
         let command = args.remove(0);
@@ -1453,15 +1503,18 @@ impl Agents {
             },
             tools: tools::names(agent),
             helpers: task.helpers.on,
-            wall: None,
+            wall,
         };
         let events = self.task_events(cx);
         match Process::start_kept(&launch, &keep, agent, first, events) {
             Ok(process) => {
                 if let Some(task) = self.task_mut(agent) {
                     task.process = Some(process);
+                    // What starts it again if its wall doesn't go up (rewall.rs).
+                    task.rising = walled.then(|| rewall::Rising::of(first));
                 }
                 self.kept_started(agent, cli, &keep);
+                true
             }
             Err(error) => {
                 // The folder made for a conversation that never began.
@@ -1474,8 +1527,15 @@ impl Agents {
                     Failure::Other(format!("{} couldn't start.", cli.name())),
                     cx,
                 );
+                false
             }
         }
+    }
+
+    /// The folder the tasks' own folders are in.
+    pub(super) fn tasks_dir(&self) -> PathBuf {
+        let dir = self.tasks.dir.clone();
+        dir.unwrap_or_else(std::env::temp_dir).join("Tasks")
     }
 
     /// Where the tasks' processes hand their output, which wakes the UI only as they say something.
@@ -1503,10 +1563,17 @@ impl Agents {
 
     /// What a task's CLI said.
     pub fn task_said(&mut self, event: runner::Event, cx: &mut Context<Self>) {
-        let runner::Event { agent, out } = event;
+        let runner::Event { agent, run, out } = event;
+        // A line of a run ilo ended as it started the task again isn't the task's (helpers.rs).
+        let under_way = (self.task(&agent))
+            .and_then(|task| task.process.as_ref())
+            .map(runner::Process::run);
+        if under_way.is_some_and(|under_way| under_way != run) {
+            return;
+        }
         // Its assistant is inside its wall, which is no answer of the assistant's.
         if out == Out::Walled(Ok(())) {
-            return;
+            return self.walled_in(&agent);
         }
         // Whatever it said, it answered.
         if let Some(task) = self.task_mut(&agent) {
@@ -1587,7 +1654,7 @@ impl Agents {
                     helpers::After::Told(told) => self.tell_task(&agent, told, true, cx),
                     helpers::After::Ends => {
                         let out = Out::Ended(None);
-                        self.task_said(runner::Event { agent, out }, cx)
+                        self.task_said(runner::Event { agent, run, out }, cx)
                     }
                 }
             }
@@ -1624,17 +1691,15 @@ impl Agents {
                     .task(&agent)
                     .is_some_and(|task| task.state == State::Stopped) => {}
             // Nothing started, so nothing of the task's is behind a wall that isn't up. Its
-            // launcher goes with the process, and the Gone that follows finds the task failed.
+            // launcher goes with the process, and the task goes on as the table says of a wall
+            // refused (rewall.rs): its run before went with it, so the Gone that follows is
+            // another run's and changes nothing.
             Out::Walled(Err(refused)) => {
                 log!("browser: task {agent} wasn't walled in: {refused:?}");
-                let cli = self.task_mut(&agent).and_then(|task| {
-                    task.process = None;
-                    task.cli
-                });
-                if let Some(cli) = cli {
-                    let why = format!("{} couldn't start.", cli.name());
-                    self.fail(&agent, Failure::Other(why), cx);
+                if let Some(task) = self.task_mut(&agent) {
+                    task.end_run();
                 }
+                self.wall_refused(&agent, cx);
             }
             Out::Gone(said) => {
                 // Its assistant no longer has the conversation it was to go on with, or what it
@@ -1661,7 +1726,7 @@ impl Agents {
     }
 
     /// The task can't go on: its card says why, and what fixes it.
-    fn fail(&mut self, agent: &str, failure: Failure, cx: &mut Context<Self>) {
+    pub(super) fn fail(&mut self, agent: &str, failure: Failure, cx: &mut Context<Self>) {
         let Some(cli) = self.task(agent).and_then(|task| task.cli) else {
             return;
         };
@@ -2523,6 +2588,9 @@ impl Agents {
             stops: Vec::new(),
             told: None,
             helpers: Helpers::default(),
+            files: Given::default(),
+            rising: None,
+            rewalled: Vec::new(),
         });
         cx.notify();
         Some(key)
@@ -3170,7 +3238,7 @@ pub fn first_message(asked: &str, page: Option<&AskedOn>) -> String {
 }
 
 /// The conversation so far, for a new run of a task whose CLI went.
-fn conversation(task: &Task) -> String {
+pub(super) fn conversation(task: &Task) -> String {
     let mut text = first_message(&task.asked, task.page.as_ref());
     for message in &task.messages {
         let who = if message.who == Who::User {

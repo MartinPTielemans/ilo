@@ -92,6 +92,9 @@ pub struct Wall {
     /// What starts a program inside it, or None for a task with no files, whose program starts
     /// as it always has.
     launcher: Option<launch::Launcher>,
+    /// The task's own folder for temporary files, which put_up makes for it alone, or None
+    /// until it makes one.
+    tmp: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for Wall {
@@ -111,6 +114,34 @@ impl Wall {
     pub fn started(&self) -> SystemTime {
         self.started
     }
+
+    /// Where the assistant inside keeps its temporary files, which its start is told (runner.rs).
+    pub fn tmp(&self) -> Option<&Path> {
+        self.tmp.as_deref()
+    }
+
+    /// A wall as put_up answers one for a task with files, for a test of what starts inside it:
+    /// no launcher, so the test's stand-in starts as any program, and no folder's name.
+    #[cfg(test)]
+    pub(crate) fn for_test(tmp: Option<PathBuf>) -> Wall {
+        Wall {
+            folder: None,
+            started: SystemTime::now(),
+            launcher: None,
+            tmp,
+        }
+    }
+}
+
+impl Granted {
+    /// A folder granted in a test of what a task with one does, which is nowhere: the folder
+    /// panel alone grants a real one.
+    #[cfg(test)]
+    pub(crate) fn for_test() -> Granted {
+        Granted {
+            root: PathBuf::from("/nonexistent/folder"),
+        }
+    }
 }
 
 /// Puts the wall up for a task's start, a raise or a take-back. A task with no files needs none and
@@ -121,6 +152,7 @@ pub fn put_up(task: &WallFor) -> Result<Wall, WallRefused> {
             folder: None,
             started: SystemTime::now(),
             launcher: None,
+            tmp: None,
         });
     }
     available().map_err(WallRefused::Unavailable)?;
@@ -198,6 +230,7 @@ mod tests {
             folder: Some(PathBuf::from("/nonexistent/Private Letters")),
             started: SystemTime::now(),
             launcher: None,
+            tmp: None,
         };
         let printed = format!("{wall:?}");
         assert!(printed.contains("folder: true"), "{printed}");

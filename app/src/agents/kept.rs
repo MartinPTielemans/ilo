@@ -132,9 +132,11 @@ pub const fn keeps(cli: Cli) -> Keeps {
 }
 
 /// What a new run of `cli` keeps. `wanted` is why it would be kept at all: today Settings ›
-/// Agents' switch alone. The runner is told only what comes of it, never the reason.
-pub fn decide(cli: Cli, wanted: bool) -> Keep {
-    match (keeps(cli), wanted) {
+/// Agents' switch alone. A `walled` run, a task's with files, keeps nothing whatever is wanted:
+/// its assistant can't write where it keeps conversations. The runner is told only what comes
+/// of it, never the reason.
+pub fn decide(cli: Cli, wanted: bool, walled: bool) -> Keep {
+    match (keeps(cli), wanted && !walled) {
         (Keeps::WhenWanted, true) => Keep::New(Id::new()),
         (Keeps::WhenWanted, false) | (Keeps::Never, _) => Keep::Nothing,
     }

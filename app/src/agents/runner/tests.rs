@@ -679,3 +679,129 @@ for line in sys.stdin:
         result = {}
     sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}) + "\n"); sys.stdout.flush()
 "#;
+
+/// What a start of `launch` sets on its process, by name, as `environment` puts it there.
+fn started_with(launch: &Launch) -> Vec<(String, String)> {
+    let mut command = crate::child::command(&launch.program);
+    environment(&mut command, launch);
+    (command.get_envs())
+        .filter_map(|(name, value)| {
+            let text = |text: &std::ffi::OsStr| text.to_string_lossy().into_owned();
+            Some((text(name), text(value?)))
+        })
+        .collect()
+}
+
+/// A start inside a wall, as put_up answers one for a task with files.
+fn walled(cli: Cli, tmp: Option<&str>) -> Launch {
+    Launch {
+        wall: Some(Arc::new(Wall::for_test(tmp.map(PathBuf::from)))),
+        ..launch(cli)
+    }
+}
+
+/// A start with no wall is as it was: the PATH alone, and no setting of Claude Code's own.
+/// Inside a wall Claude Code is started with each knob that keeps its own files out of the
+/// user's folders, its temporary files in the wall's folder for them, and its own sandbox off
+/// (#4101). It keeps no conversation there, as on any run that isn't kept.
+#[test]
+fn only_a_walled_claude_is_started_with_the_walls_knobs() {
+    let plain = launch(Cli::Claude);
+    let path = ("PATH".to_string(), "/usr/local/bin:/usr/bin".to_string());
+    assert_eq!(started_with(&plain), [path]);
+    assert!(!claude_args(&plain).iter().any(|arg| arg == "--settings"));
+
+    let inside = walled(Cli::Claude, Some("/nonexistent/tmp"));
+    let set = started_with(&inside);
+    for name in [
+        "CLAUDE_CODE_SKIP_PROMPT_HISTORY",
+        "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
+        "CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING",
+        "DISABLE_UPDATES",
+        "DISABLE_TELEMETRY",
+    ] {
+        let on = (name.to_string(), "1".to_string());
+        assert!(set.contains(&on), "{name} isn't on: {set:?}");
+    }
+    let tmp = ("CLAUDE_CODE_TMPDIR".to_string(), "/nonexistent/tmp".into());
+    assert!(set.contains(&tmp), "{set:?}");
+    let args = claude_args(&inside);
+    let at = (args.iter().position(|arg| arg == "--settings")).expect("no --settings");
+    let settings: Value = serde_json::from_str(&args[at + 1]).unwrap();
+    assert_eq!(settings, json!({ "sandbox": { "enabled": false } }));
+    assert!(args.iter().any(|arg| arg == "--no-session-persistence"));
+
+    // A wall with no folder for them names none, and Codex's start is as it was.
+    let set = started_with(&walled(Cli::Claude, None));
+    assert!(!set.iter().any(|(name, _)| name == "CLAUDE_CODE_TMPDIR"));
+    assert_eq!(
+        started_with(&walled(Cli::Codex, None)),
+        started_with(&launch(Cli::Codex))
+    );
+}
+
+/// Every name a start sets on its process is one the wall's launcher is told to keep: the wall
+/// drops every other on the way, and nothing would say so. The list itself is one the launcher
+/// takes: no name twice, and no more than it reads.
+#[test]
+fn every_name_a_start_sets_is_in_the_kept_list() {
+    for cli in Cli::ALL {
+        let names = kept(cli);
+        let mut once = names.clone();
+        once.sort();
+        once.dedup();
+        assert_eq!(once.len(), names.len(), "{cli:?} keeps a name twice");
+        assert!(names.len() <= crate::agents::wall::launch::KEPT_MAX);
+        let starts = [
+            launch(cli),
+            walled(cli, None),
+            walled(cli, Some("/nonexistent/tmp")),
+        ];
+        for start in starts {
+            for (name, _) in started_with(&start) {
+                assert!(names.contains(&name.as_str()), "{name} is set and not kept");
+            }
+        }
+    }
+}
+
+/// Inside a wall told to keep the runner's names, a program has each name the start set and no
+/// name outside the list, whatever the browser's own environment holds and whatever else is
+/// set on the command.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_walled_start_carries_no_name_outside_the_list() {
+    use crate::agents::wall::launch::Rules;
+    let rules = Rules {
+        text: "(version 1)(allow default)".into(),
+        params: Vec::new(),
+    };
+    let names = kept(Cli::Claude);
+    let wall = Arc::new(Wall::inside(None, &rules, &names).unwrap());
+    let start = Launch {
+        wall: Some(wall.clone()),
+        ..launch(Cli::Claude)
+    };
+    let mut command = wall.command(std::path::Path::new("/usr/bin/env"));
+    environment(&mut command, &start);
+    command
+        .env("ILO_NOT_KEPT", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let (mut child, rising) = wall.start(&mut command).unwrap();
+    drop(child.stdin.take());
+    assert_eq!(rising.expect("a walled start").risen(), Ok(()));
+    let output = child.wait_with_output().unwrap();
+    let out = String::from_utf8_lossy(&output.stdout);
+    // Names alone are read: a value is never the test's to print.
+    let has: Vec<&str> = (out.lines())
+        .filter_map(|line| line.split('=').next())
+        .collect();
+    for name in &has {
+        assert!(names.contains(name), "{name} reached the program");
+    }
+    for (name, _) in started_with(&start) {
+        assert!(has.contains(&name.as_str()), "{name} was set and lost");
+    }
+}

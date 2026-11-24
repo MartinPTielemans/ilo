@@ -68,7 +68,11 @@ impl Agents {
         let keep = match self.tasks.kept.of(agent) {
             Some(record) if record.gone => Keep::Nothing,
             Some(record) => Keep::Resume(record.id.clone()),
-            None => kept::decide(cli, self.keeps_tasks()),
+            None => {
+                // A task with files runs where its assistant can keep no conversation (wall.rs).
+                let walled = self.task(agent).is_some_and(|task| task.files.any());
+                kept::decide(cli, self.keeps_tasks(), walled)
+            }
         };
         let folder = match &keep {
             Keep::Nothing => None,
@@ -629,6 +633,8 @@ impl Task {
             stops: Vec::new(),
             told: None,
             helpers: Helpers::of_task(helpers),
+            files: crate::agents::files::Given::default(),
+            raised_from: None,
         }
     }
 }
