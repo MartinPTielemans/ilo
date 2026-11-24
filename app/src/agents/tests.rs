@@ -71,6 +71,8 @@ struct Made {
     /// The user's Spaces outside the profile the others are in, "Default", each with the name of
     /// its profile's folder.
     profiles: RefCell<Vec<(u64, &'static str)>>,
+    /// The Spaces that are a private window's own, as a test says.
+    private: RefCell<Vec<u64>>,
 }
 
 impl Made {
@@ -407,6 +409,10 @@ impl Browser for Made {
     /// has no Space of the user's.
     fn has_profile(&self, profile: &str) -> bool {
         profile == "Default" || self.profiles.borrow().iter().any(|each| each.1 == profile)
+    }
+
+    fn private_space(&self, space: u64) -> bool {
+        self.private.borrow().contains(&space)
     }
 
     fn request(&self, _: &str, tab: u64, request: u64, sent: &request::Request) {
@@ -8653,8 +8659,23 @@ mod tasks {
         let ended = Utc.with_ymd_and_hms(2026, 11, 21, 14, 5, 0).unwrap();
         let that_night = Utc.with_ymd_and_hms(2026, 11, 21, 23, 59, 0).unwrap();
         let next_day = Utc.with_ymd_and_hms(2026, 11, 22, 0, 1, 0).unwrap();
-        assert_eq!(crate::agents::time_or_day_on(ended, that_night), "14:05");
-        assert_eq!(crate::agents::time_or_day_on(ended, next_day), "21 Nov");
+        assert_eq!(
+            crate::agents::time_or_day_on(ended, that_night, false),
+            "14:05"
+        );
+        assert_eq!(
+            crate::agents::time_or_day_on(ended, next_day, false),
+            "21 Nov"
+        );
+        // On the system's 12-hour clock it reads as History's page rows do.
+        assert_eq!(
+            crate::agents::time_or_day_on(ended, that_night, true),
+            "2:05 PM"
+        );
+        assert_eq!(
+            crate::agents::time_or_day_on(ended, next_day, true),
+            "21 Nov"
+        );
     }
 
     /// The Archive lists the dismissed tasks, the last to leave the foot first, each with how it
@@ -8727,9 +8748,8 @@ mod tasks {
         assert!(listed(&agents, cx).is_empty());
     }
 
-    /// At launch the Spaces a crash left go. A task's goes with its pages, which were never the
-    /// user's (#4105); an outside agent's, which a run before #1080 showed as a Space of the
-    /// user's, gives its tabs to the user's Space first (#1080).
+    /// At launch the Spaces a crash left go, each with its pages: a task's and an outside agent's
+    /// were never the user's, so a crash leaves no agent's page among the user's tabs (#4105).
     #[gpui::test]
     fn the_spaces_a_run_before_left_go_at_launch(cx: &mut TestAppContext) {
         let (agents, browser) = ready(None, cx);
@@ -8743,7 +8763,9 @@ mod tasks {
         let spaces: Vec<_> = (browser.tabs.borrow().iter())
             .map(|each| (each.0, each.1))
             .collect();
-        assert_eq!(spaces, [(20, 1), (10, 1)]);
+        // The agent's tab 20 and the task's tab 30 went with their Spaces: the user's own is all
+        // that's left.
+        assert_eq!(spaces, [(10, 1)]);
     }
 
     #[gpui::test]

@@ -1387,6 +1387,12 @@ impl Agents {
         if asked.is_empty() || !self.tasks_on() {
             return None;
         }
+        // A private window starts no task, whichever way it was asked: agents get no path into
+        // one, and nothing of what's asked there is kept.
+        if self.browser.private_space(home) {
+            log!("browser: no task from a private window");
+            return None;
+        }
         self.tasks.next += 1;
         let agent = format!("task-{}", self.tasks.next);
         // check.sh reads this line.
@@ -1970,6 +1976,8 @@ impl Agents {
         if let Some(cli) = task.cli {
             self.tasks.limits.remove(&cli);
         }
+        // At work again: the file's row for a kept task says so (pick_up.rs).
+        self.kept_under_way(agent);
         if !matches!(sent, Some(Ok(()))) {
             let first = match self.resumes(agent) {
                 true => RETRY.to_string(),
@@ -2191,12 +2199,10 @@ impl Agents {
     }
 
     /// At launch: the Spaces a run before left of its tasks and outside agents, as a crash does,
-    /// and a quit with no window left (#1676). A task's goes with its pages, as at any quit: they
-    /// were never the user's, and the task is in the Archive to reply to if its assistant kept it
-    /// (#4105). An outside agent's, which before #1080 the user saw as a Space of theirs, gives
-    /// its tabs to the top of the user's Space in its profile, as Keep would, then goes: a crash
-    /// showed no receipt, so the user chose neither Keep nor Dismiss, and of the two only Keep can
-    /// be undone, as the tabs close to the archive as any do (#1080).
+    /// and a quit with no window left (#1676). Each goes with its pages, as at any quit: an
+    /// agent's pages were never the user's tabs, and ilo makes none of them the user's by itself,
+    /// which only the user does. They stay among the profile's visited pages in History, and a
+    /// task is in the Archive to reply to if its assistant kept it (#4105).
     pub fn end_old_tasks(&mut self, cx: &mut Context<Self>) {
         for space in self.browser.task_spaces() {
             log!("browser: deleting space {space} of a task before");
@@ -2206,11 +2212,6 @@ impl Agents {
             let space = self.browser.agent_space(client.id());
             if space == 0 {
                 continue;
-            }
-            let home = self.browser.user_space(space);
-            // Each goes to the top, so the last goes first.
-            for tab in self.browser.space_tab_ids(space, cx).into_iter().rev() {
-                self.browser.move_tab(tab, home, cx);
             }
             log!(
                 "browser: deleting space {space} of agent {} before",
@@ -2409,6 +2410,8 @@ impl Agents {
         match named {
             Ok(()) => {
                 self.note(agent, connection, "title", "", "");
+                // A kept task's row in the file has its name from now (pick_up.rs).
+                self.kept_named(agent);
                 _ = reply.send(ToolResult::text(match kept == text {
                     true => "The task has its name.".to_string(),
                     false => format!("The task has its name: “{kept}”."),
