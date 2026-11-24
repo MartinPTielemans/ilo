@@ -938,9 +938,9 @@ dialog-dark = 0x2a2720
 light-tint-less = 0.83
 light-tint = 0.7
 light-tint-more = 0.58
-light-material-over-white = 0xf5f5f4
-light-material-over-grey = 0xbcbcbb
-light-material-over-black = 0x7c7c7c
+light-material-over-white = 0xf6f6f6
+light-material-over-grey = 0xb6b6b6
+light-material-over-black = 0x717171
 light-stand-in = 0xebebeb
 # What floats over the window at each level, for the transparency picker: the dark fill over the
 # window's material at these, beside the window's own tints.
