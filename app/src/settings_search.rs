@@ -302,10 +302,15 @@ pub fn typed(input: &Entity<TextInput>, cx: &App) -> String {
     input.read(cx).committed()
 }
 
-/// Esc's part, once `Close::escape_from` has left it the key: empties the field, so the section
-/// shows again. False when it was empty, for Esc to go on to whatever else takes it.
+/// Esc's part, once `Close::escape_from` has left it the key, and the clear button's: empties the
+/// field, so the section shows again. False when it was empty, for Esc to go on to whatever else
+/// takes it, and while an input method composes there: emptying the field would drop the marked
+/// text without telling the method, which would type its next word into the emptied field. A
+/// press reaches here composing only where the method didn't end its composition at the press,
+/// as the Mac's does.
 pub fn end(input: &Entity<TextInput>, window: &mut Window, cx: &mut App) -> bool {
-    if input.read(cx).text().is_empty() {
+    let input_read = input.read(cx);
+    if input_read.text().is_empty() || input_read.composing() {
         return false;
     }
     input.update(cx, |input, cx| input.reset("".into(), window, cx));

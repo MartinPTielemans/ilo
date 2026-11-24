@@ -404,7 +404,7 @@ impl FindBar {
     }
 
     /// ↩ and ⇧↩ find the next match and the one before, unless it was an input method's,
-    /// composing in the field. ⌘G and ⇧⌘G are the same actions, and commit a composition alike.
+    /// composing in the field. ⌘G and ⇧⌘G are the same actions, and wait for a composition alike.
     fn find_key(&mut self, forward: bool, cx: &mut Context<Self>) {
         if browser::dismissal::submits([&self.input.clone()], cx) {
             self.find_next(forward, cx);

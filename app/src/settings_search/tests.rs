@@ -404,11 +404,20 @@ fn a_composition_finds_nothing_until_it_commits(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(
         field_text(&view, cx),
-        "pip",
-        "Esc while composing didn't drop the composition, or ended the search"
+        "pipあ",
+        "Esc ended the search while composing"
     );
-    assert!(!input.read_with(cx, |input, _| input.composing()));
+    assert!(
+        input.read_with(cx, |input, _| input.composing()),
+        "Esc ended the composition"
+    );
     assert!(!drew(&view, "page", cx));
+    cx.update(|window, cx| {
+        input.update(cx, |input, cx| {
+            input.replace_text_in_range(None, "", window, cx)
+        })
+    });
+    cx.run_until_parked();
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     assert_eq!(

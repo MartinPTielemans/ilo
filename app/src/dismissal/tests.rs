@@ -191,8 +191,24 @@ fn compose(host: &Entity<Host>, cx: &mut VisualTestContext) -> Entity<TextInput>
     field
 }
 
-/// Escape while an input method composes drops the composition and closes nothing; the next
-/// Escape closes the panel.
+/// The input method ends its composition as it does when it takes the key itself: committing
+/// `text` in its place, or with `text` empty dropping it.
+fn end_composition(field: &Entity<TextInput>, text: &str, cx: &mut VisualTestContext) {
+    cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_text_in_range(None, text, window, cx)
+        })
+    });
+    cx.run_until_parked();
+}
+
+/// What the field shows, and whether it's still marked.
+fn marked(field: &Entity<TextInput>, cx: &mut VisualTestContext) -> (String, bool) {
+    field.read_with(cx, |field, _| (field.text().to_string(), field.composing()))
+}
+
+/// Escape while an input method composes is the composition's: the panel stays and the marked
+/// text is left for the method. Once the method has dropped it, the next Escape closes the panel.
 #[gpui::test]
 fn escape_while_an_input_method_composes_closes_nothing(cx: &mut TestAppContext) {
     let (host, cx) = opened(cx);
@@ -203,26 +219,31 @@ fn escape_while_an_input_method_composes_closes_nothing(cx: &mut TestAppContext)
         host.read_with(cx, |host, _| host.open.is_some()),
         "the panel closed"
     );
-    field.read_with(cx, |field, _| {
-        assert!(!field.composing(), "the composition went on");
-        assert_eq!(field.text(), "", "Escape kept what was composed");
-    });
+    assert_eq!(
+        marked(&field, cx),
+        ("ぴ".into(), true),
+        "Escape ended the composition"
+    );
+    end_composition(&field, "", cx);
     cx.simulate_keystrokes("escape");
     assert_eq!(closes(&host, cx).0, [Close::new(Why::Escape, By::Keyboard)]);
 }
 
-/// Return while an input method composes commits what it composed and submits nothing; the next
-/// Return submits it.
+/// Return while an input method composes is the composition's: nothing is submitted and the
+/// marked text is left for the method. Once the method has committed it, the next Return submits.
 #[gpui::test]
-fn return_while_an_input_method_composes_commits_and_submits_nothing(cx: &mut TestAppContext) {
+fn return_while_an_input_method_composes_submits_nothing(cx: &mut TestAppContext) {
     let (host, cx) = opened(cx);
     let field = compose(&host, cx);
     cx.simulate_keystrokes("enter");
     assert_eq!(host.read_with(cx, |host, _| host.submitted), 0);
-    field.read_with(cx, |field, _| {
-        assert!(!field.composing(), "the composition went on");
-        assert_eq!(field.text(), "ぴ", "Return dropped what was composed");
-    });
+    assert_eq!(
+        marked(&field, cx),
+        ("ぴ".into(), true),
+        "Return ended the composition"
+    );
+    end_composition(&field, "ぴ", cx);
+    assert_eq!(marked(&field, cx), ("ぴ".into(), false));
     cx.simulate_keystrokes("enter");
     assert_eq!(host.read_with(cx, |host, _| host.submitted), 1);
     assert!(

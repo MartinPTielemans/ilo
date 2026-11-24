@@ -205,40 +205,72 @@ fn compose(prompt: &mut Prompt) -> gpui::Entity<crate::text_input::TextInput> {
     })
 }
 
-/// Escape while an input method composes in the field is the composition's, which it drops: the
-/// offer stays, and the next Escape declines.
+/// The input method ends what it composes in `field`, as it does when it takes the key itself:
+/// committing `text` in its place, or with `text` empty dropping it.
+fn end_composition(
+    prompt: &mut Prompt,
+    field: &gpui::Entity<crate::text_input::TextInput>,
+    text: &str,
+) {
+    use gpui::EntityInputHandler as _;
+    prompt.cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_text_in_range(None, text, window, cx)
+        })
+    });
+}
+
+/// What the field shows, and whether it's still marked.
+fn marked(prompt: &Prompt, field: &gpui::Entity<crate::text_input::TextInput>) -> (String, bool) {
+    field.read_with(&prompt.cx, |field, _| {
+        (field.text().to_string(), field.composing())
+    })
+}
+
+/// Escape while an input method composes in the field is the composition's: the offer stays and
+/// the marked text is left for the method. Once the method has dropped it, the next Escape
+/// declines.
 #[gpui::test]
 fn escape_while_composing_declines_nothing(cx: &mut TestAppContext) {
     let mut prompt = Prompt::new(cx);
     prompt.offered(1, Some(offer(Kind::Save, &["check@example.test"])));
     prompt.calls();
     let field = compose(&mut prompt);
+    let composed = marked(&prompt, &field);
+    assert!(composed.1);
     prompt.keys("escape");
     assert!(prompt.calls().is_empty(), "escape declined while composing");
-    let (composing, typed) = field.read_with(&prompt.cx, |field, _| {
-        (field.composing(), field.text().to_string())
-    });
-    assert!(!composing, "the composition went on");
-    assert!(!typed.contains('ぴ'), "escape kept what was composed");
+    assert_eq!(
+        marked(&prompt, &field),
+        composed,
+        "escape ended the composition"
+    );
+    end_composition(&mut prompt, &field, "");
+    let (typed, _) = marked(&prompt, &field);
     prompt.keys("escape");
     assert_eq!(prompt.calls(), [format!("NotNow 1 {typed}"), "hide".into()]);
 }
 
-/// Return while an input method composes in the field commits what it composed and saves
-/// nothing; the next Return saves the username with it.
+/// Return while an input method composes in the field is the composition's: nothing is saved and
+/// the marked text is left for the method. Once the method has committed it, the next Return saves
+/// the username with it.
 #[gpui::test]
 fn return_while_composing_saves_nothing(cx: &mut TestAppContext) {
     let mut prompt = Prompt::new(cx);
     prompt.offered(1, Some(offer(Kind::Save, &["check@example.test"])));
     prompt.calls();
     let field = compose(&mut prompt);
+    let composed = marked(&prompt, &field);
     prompt.keys("enter");
     assert!(prompt.calls().is_empty(), "return saved while composing");
-    let (composing, typed) = field.read_with(&prompt.cx, |field, _| {
-        (field.composing(), field.text().to_string())
-    });
-    assert!(!composing, "the composition went on");
-    assert!(typed.contains('ぴ'), "return dropped what was composed");
+    assert_eq!(
+        marked(&prompt, &field),
+        composed,
+        "return ended the composition"
+    );
+    end_composition(&mut prompt, &field, "ぴ");
+    let (typed, composing) = marked(&prompt, &field);
+    assert!(!composing && typed.contains('ぴ'));
     prompt.keys("enter");
     assert_eq!(prompt.calls(), [format!("Accept 1 {typed}"), "hide".into()]);
 }
