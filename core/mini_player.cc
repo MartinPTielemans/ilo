@@ -128,6 +128,12 @@ class MiniPlayerWatch : public views::WidgetObserver {
     if (!visible) {
       return;
     }
+#if BUILDFLAG(IS_MAC)
+    // Over another app's window in full screen, as Arc's is: Chrome puts the window on every
+    // Space, and the Mac keeps it off the Space another app has made full screen unless it may
+    // join one.
+    widget->SetCanAppearInExistingFullscreenSpaces(true);
+#endif
     // check.sh reads these lines.
     LogHandover("mini player shows", widget->GetWindowBoundsInScreen().size().ToString());
     if (ui::Compositor* compositor = widget->GetCompositor()) {

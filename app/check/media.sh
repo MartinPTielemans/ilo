@@ -1343,6 +1343,33 @@ if x11_other_app || wayland || windows || [ "$(uname)" = Darwin ]; then
       fail "another app's window didn't open and take the keyboard: $(cat "$out/other-window.log")"
   fi
   expect '^browser: menu window hidden$' "the menu stayed open as another app took the keyboard"
+  # Over the other app's window in full screen, as Arc's Mini Player is: the Mac keeps a window
+  # off the Space another app has made full screen unless it may join one, and the core tells the
+  # Mini Player's window it may. The capture lists only what is drawn on screen, so without the
+  # core's word there is no Mini Player to take.
+  if [ "$(uname)" = Darwin ] && engine_has ../core/mini_player.cc; then
+    echo "fullscreen" >&7
+    for _ in $(seq 100); do grep -q '^fullscreen$' "$out/other-window.log" && break; sleep 0.1; done
+    grep -q '^fullscreen$' "$out/other-window.log" ||
+      fail "another app's window didn't go full screen: $(cat "$out/other-window.log")"
+    send pip
+    at=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: pip at ' | cut -d' ' -f4-)
+    [ -n "$at" ] ||
+      fail "the driver found no Mini Player over the other app's full-screen window: $(grep '^browser: pip ' "$log" | tail -1)"
+    FRAME="$at" ../tools/window-screenshot.sh "$pid" \
+      "$out/mini-player-over-full-screen.png" floating ||
+      fail "no Mini Player over the other app's full-screen window"
+    over=$(lightness "$out/mini-player-over-full-screen.png")
+    [ "$over" -ge 170 ] ||
+      fail "the Mini Player over the other app's full-screen window was dark over its video, at $over where the video is about 204"
+    echo "media: the Mini Player kept its place over the other app's full-screen window, at lightness $over"
+    echo "windowed" >&7
+    for _ in $(seq 100); do grep -q '^windowed$' "$out/other-window.log" && break; sleep 0.1; done
+    grep -q '^windowed$' "$out/other-window.log" ||
+      fail "another app's window didn't leave full screen: $(cat "$out/other-window.log")"
+  elif [ "$(uname)" = Darwin ]; then
+    echo "skip: the Mini Player over the other app's full-screen window: an engine older than its core keeps it off that Space."
+  fi
   if windows; then
     touch "$out/cover-front"
   elif [ "$(uname)" = Darwin ]; then
