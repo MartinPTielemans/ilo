@@ -36,6 +36,8 @@ const MARK_DOT: f32 = 184.4 * MARK_SCALE;
 const MARK_DOT_GAP: f32 = 81.9 * MARK_SCALE;
 const MARK_STEM_WIDTH: f32 = 133.1 * MARK_SCALE;
 const MARK_STEM_HEIGHT: f32 = 358.4 * MARK_SCALE;
+/// How tall the mark is at its own size.
+const MARK_HEIGHT: f32 = MARK_DOT + MARK_DOT_GAP + MARK_STEM_HEIGHT;
 use crate::tokens::shell::empty::BUTTON_FILL;
 use crate::tokens::shell::empty::BUTTON_GAP;
 use crate::tokens::shell::empty::BUTTON_HEIGHT;
@@ -167,8 +169,7 @@ impl Shell {
             return None;
         }
         let (frame, _) = self.page_frame(self.viewport);
-        let width = f32::from(frame.size.width);
-        if let Some(page) = self.composer_page(width, window, cx) {
+        if let Some(page) = self.composer_page(frame, window, cx) {
             let opacity = self.empty_opacity(cx.background_executor().now());
             return Some(
                 div()

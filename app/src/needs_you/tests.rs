@@ -43,6 +43,8 @@ fn card(agent: &str, name: &str, dot: Dot) -> Card {
         replies: true,
         title: "Flight to Lisbon".into(),
         status: "Searching flights".into(),
+        steps: Vec::new(),
+        last_site: None,
         asks: false,
         dot,
         answers: Vec::new(),

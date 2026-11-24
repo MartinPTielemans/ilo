@@ -1345,6 +1345,12 @@ pub fn centered_top(height: f32) -> f32 {
     height / 2. - ABOVE_MIDDLE
 }
 
+/// Where the middle of the centred bar's input row is, down a browser window `height` tall: the
+/// height the composer page's field rests at, so ⌘T's bar opens on it.
+pub fn centered_row_middle(height: f32) -> f32 {
+    centered_top(height) + HEIGHT / 2.
+}
+
 /// How tall the bar's window is with `rows` suggestions listed: the input, and under it, with its
 /// line, up to five rows.
 pub fn height(rows: usize) -> f32 {

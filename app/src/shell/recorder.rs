@@ -1872,8 +1872,18 @@ impl Browser for Recorder {
         crate::command_bar::in_place(Rc::new(host), window, cx)
     }
 
-    fn start_task(&self, agent: &str, asked: &str, home: u64, _: &mut App) {
-        self.record(format!("start task {agent} {asked} from {home}"));
+    fn start_task(
+        &self,
+        agent: &str,
+        asked: &str,
+        home: u64,
+        tier: crate::agents::tier::Tier,
+        _: &mut App,
+    ) {
+        self.record(format!(
+            "start task {agent} {asked} from {home} at {}",
+            tier.label()
+        ));
     }
 
     fn field_window_typing(&self, _: &mut App) -> bool {

@@ -1855,8 +1855,10 @@ hint-bottom = 40.0
 
 
 [shell.composer]
-# The page an empty Space rests on (#4140), as its drawing measures it on the window's ink: the mark
-# this far under the card's top, and the field this far under the mark.
+# The page an empty Space rests on (#4140), as its drawing measures it on the window's ink. Its
+# field's row is level with ⌘T's bar's (`command_bar::centered_row_middle`) and the mark this far
+# over the field. The group moves up only as far as it needs to fit the card, never nearer its top
+# than `top`, which it keeps under the cards too.
 top = 40.0
 mark-gap = 26.0
 # The field: 540 wide, or what the card leaves inside its side gutters, 52 tall at radius 16. Its
@@ -1868,11 +1870,17 @@ field-radius = 16.0
 field-left = 18.0
 field-right = 9.0
 field-size = 15.0
-# Ink 0.085 inside a rim of white 0.09, over a close shadow and a far one.
+# Ink 0.085 inside a rim of white 0.09, over a close shadow and a far one. In the light look the
+# plate is opaque, the window's opaque ground under the address field's plate, so its shadow
+# doesn't show through it; its shadows are fainter, as a menu's are there, and its rim (and a
+# card's) is ink 0.09, as a white one doesn't show on a light window.
 field-fill = 0.085
 field-rim = 0xffff_ff17
 field-shadow-near = 0x0000_0033
 field-shadow-far = 0x0000_003d
+light-field-shadow-near = 0x0000_000f
+light-field-shadow-far = 0x0000_001d
+light-rim = 0.09
 # The ⇥ chip before the switch, 8 from it, at 0.6: 18 tall, 5 in, at the control radius, ink 0.1
 # under ink 0.7 at 11.
 key-gap = 8.0
@@ -1908,9 +1916,11 @@ chip-ink = 0.6
 chip-size = 12.0
 chip-glyph = 14.0
 chip-chevron = 10.0
-# "Recent tasks", 600 wide, 14 semibold in full ink, 34 under the line and 12 over the cards, 4 in.
+# "Recent tasks", 600 wide, 14 semibold on an 18 line in full ink, 34 under the line and 12 over
+# the cards, 4 in.
 label-width = 600.0
 label-size = 14.0
+label-line = 18.0
 label-top = 34.0
 label-bottom = 12.0
 label-inset = 4.0

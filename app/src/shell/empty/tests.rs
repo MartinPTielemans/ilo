@@ -7,9 +7,12 @@ use std::{
 
 use gpui::{Entity, Modifiers, Pixels, Point, TestAppContext, VisualTestContext, point, px};
 
+use crate::agents::tier::Tier;
 use crate::command_bar::PLACEHOLDER_TEXT;
 use crate::shell::{
-    Folders, Page, ROW_HEIGHT, SECONDARY, Shell, Slot, empty::FADE, recorder::Recorder,
+    Folders, Page, ROW_HEIGHT, SECONDARY, Shell, Slot,
+    empty::{FADE, MARK_HEIGHT, composer::group_top},
+    recorder::Recorder,
 };
 
 /// A drawn shell showing one Space with Today tabs 1 and 2, and no tab shown, as a fresh window.
@@ -320,7 +323,7 @@ fn return_in_ask_starts_the_task(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     assert!(
         host.take()
-            .contains(&"start task claude book a table from 1".to_string()),
+            .contains(&"start task claude book a table from 1 at Work on pages".to_string()),
         "no task started"
     );
     let typed = cx.update(|_, cx| {
@@ -328,4 +331,161 @@ fn return_in_ask_starts_the_task(cx: &mut TestAppContext) {
         resting.bar.read(cx).typed_text(cx)
     });
     assert_eq!(typed, "");
+}
+
+/// The level the next task starts at, as the chip on Ask's line shows it.
+fn tier(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Tier {
+    shell.read_with(cx, |shell, _| shell.composer_tier())
+}
+
+/// The user's pick on the level menu, as its item does.
+fn pick(shell: &Entity<Shell>, tier: Tier, cx: &mut VisualTestContext) {
+    shell.update(cx, |shell, cx| shell.pick_tier(tier, cx));
+}
+
+/// A task starts at the level picked for it, and the next at Work on pages: the pick holds for one
+/// run. The chip shows the level each ↩ starts at.
+#[gpui::test]
+fn a_run_after_a_run_starts_at_work_on_pages(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab");
+    assert_eq!(tier(&shell, cx), Tier::Work);
+    pick(&shell, Tier::Full, cx);
+    assert_eq!(tier(&shell, cx), Tier::Full);
+    host.take();
+    cx.simulate_input("book a table");
+    cx.simulate_keystrokes("enter");
+    assert!(
+        host.take()
+            .contains(&"start task claude book a table from 1 at Full access".to_string()),
+        "the task didn't start at the level picked"
+    );
+    assert_eq!(tier(&shell, cx), Tier::Work, "the pick outlived its run");
+    cx.simulate_input("and a taxi");
+    cx.simulate_keystrokes("enter");
+    assert!(
+        host.take()
+            .contains(&"start task claude and a taxi from 1 at Work on pages".to_string()),
+        "the next task didn't start at Work on pages"
+    );
+}
+
+/// Out of Ask the pick goes: Ask → Search → Ask reads Work on pages, and in Search there's no
+/// level to pick.
+#[gpui::test]
+fn ask_then_search_then_ask_reads_work_on_pages(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window_with_no_tab(cx);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab");
+    pick(&shell, Tier::Look, cx);
+    cx.simulate_keystrokes("tab tab");
+    assert_eq!(tier(&shell, cx), Tier::Work, "⇥ to Search kept the pick");
+    pick(&shell, Tier::Full, cx);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(tier(&shell, cx), Tier::Work, "Esc to Search kept the pick");
+    pick(&shell, Tier::Full, cx);
+    assert_eq!(tier(&shell, cx), Tier::Work, "a pick in Search took");
+}
+
+/// A pick doesn't survive the user leaving the page: a page shown, or another Space.
+#[gpui::test]
+fn a_pick_doesnt_survive_leaving_and_coming_back(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window_with_no_tab(cx);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab");
+    pick(&shell, Tier::Full, cx);
+    shell.update(cx, |shell, cx| shell.set_selected(1, cx));
+    cx.run_until_parked();
+    shell.update(cx, |shell, cx| shell.set_selected(0, cx));
+    cx.run_until_parked();
+    assert_eq!(tier(&shell, cx), Tier::Work, "a page shown kept the pick");
+
+    shell.update(cx, |shell, cx| {
+        shell.set_spaces(
+            vec![
+                (1, "Space".into(), None, 0, "".into(), "".into(), "".into()),
+                (2, "Other".into(), None, 0, "".into(), "".into(), "".into()),
+            ],
+            cx,
+        )
+    });
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab");
+    pick(&shell, Tier::Full, cx);
+    for space in [2, 1] {
+        shell.update(cx, |shell, cx| {
+            shell.set_space(space, cx);
+            shell.set_tabs(
+                space,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+    }
+    assert_eq!(tier(&shell, cx), Tier::Work, "another Space kept the pick");
+}
+
+/// The pick lives in the page's memory alone: nothing the shell asks of the core while it's
+/// picked, saving included, carries it, and a run's start is the only call that does.
+#[gpui::test]
+fn nothing_of_a_pick_is_saved(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab");
+    host.take();
+    pick(&shell, Tier::Full, cx);
+    shell.update(cx, |shell, cx| shell.set_selected(1, cx));
+    cx.run_until_parked();
+    let calls = host.take();
+    assert!(
+        !calls.iter().any(|call| call.contains(Tier::Full.label())),
+        "a call carried the pick: {calls:?}"
+    );
+}
+
+/// The field's row rests level with ⌘T's bar's, and the group moves up only as far as it needs to
+/// fit the card, never nearer its top than `TOP`.
+#[test]
+fn the_field_rests_where_the_bar_opens_and_rises_only_to_fit() {
+    use crate::tokens::shell::composer::{FIELD_HEIGHT, MARK_GAP, TOP};
+    let row = crate::command_bar::centered_row_middle(800.) - 40.;
+    let top = group_top(row, 720., false, false);
+    let field = top + MARK_HEIGHT + MARK_GAP;
+    assert!(
+        (field + FIELD_HEIGHT / 2. - row).abs() < 1e-3,
+        "the field's middle is at {}, the bar's row's at {row}",
+        field + FIELD_HEIGHT / 2.
+    );
+    // A card 560 tall has room for the field there, but not for the cards under it.
+    let cards = group_top(row, 560., true, true);
+    assert!(cards < top, "the cards didn't lift the group");
+    assert!(group_top(row, 400., true, true) == TOP, "it went above TOP");
+    assert_eq!(
+        group_top(row, 2000., true, true),
+        top,
+        "a tall card moved it"
+    );
+}
+
+/// An ended task's Start Again asks again at Work on pages, whatever the composer had picked.
+#[gpui::test]
+fn start_again_asks_at_work_on_pages(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab");
+    pick(&shell, Tier::Full, cx);
+    host.take();
+    shell.update(cx, |shell, cx| {
+        shell.ask_again("Find two tickets".into(), cx)
+    });
+    assert!(
+        host.take()
+            .contains(&"ask again Find two tickets".to_string())
+    );
+    assert_eq!(tier(&shell, cx), Tier::Work);
 }

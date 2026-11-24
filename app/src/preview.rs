@@ -1720,7 +1720,7 @@ impl Browser for Fake {
     }
 
     // The preview runs no tasks.
-    fn start_task(&self, _: &str, _: &str, _: u64, _: &mut App) {}
+    fn start_task(&self, _: &str, _: &str, _: u64, _: Tier, _: &mut App) {}
 
     fn field_window_typing(&self, _: &mut App) -> bool {
         false
