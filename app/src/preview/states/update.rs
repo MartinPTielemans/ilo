@@ -13,7 +13,7 @@ pub(crate) fn preview_update(update: &str, cx: &mut App) {
         fn follow(&self, _: Track, _: &mut App) {}
     }
     updates::start(Updater::Own, std::rc::Rc::new(Made), cx);
-    let off = std::env::var("PREVIEW_UPDATE_CHECKS").is_ok_and(|checks| checks == "off");
+    let off = states::var("PREVIEW_UPDATE_CHECKS").is_ok_and(|checks| checks == "off");
     updates::checks(Some(!off), cx);
     let version = Some("0.1.5".into());
     let stage = match update.trim_end_matches("-open") {

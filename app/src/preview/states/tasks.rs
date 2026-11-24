@@ -73,7 +73,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
     let mut cards: Vec<TaskCard> = (FIRST_TASK..).zip(TASKS).map(card).collect();
     // PREVIEW_SESSION=working, done or open shows an outside agent's card alone: at work after it
     // closed its last page, done with nothing open, and done with its page to open (#3652).
-    if let Ok(which) = std::env::var("PREVIEW_SESSION") {
+    if let Ok(which) = states::var("PREVIEW_SESSION") {
         let (status, dot, open) = match which.as_str() {
             "working" => ("Step 4 · Closed example.com", Dot::Working, Vec::new()),
             "open" => {
@@ -95,7 +95,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
     }
     // PREVIEW_TASK_STEP=long gives the working task a step line too long for a narrow window's
     // strip.
-    if std::env::var("PREVIEW_TASK_STEP").as_deref() == Ok("long") {
+    if states::var("PREVIEW_TASK_STEP").as_deref() == Ok("long") {
         cards[0].status =
             "Step 3 · Comparing the seats in rows 12 to 18 for two on the aisle".into();
     }
@@ -180,7 +180,7 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
 /// off-limits, yours, tab-back, signed-in, raised or notes; or of a task that has ended (#4105):
 /// ended, ended-first, picked-up, gone, not-kept or codex-ended.
 pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
-    let Ok(state) = std::env::var("PREVIEW_TASK") else {
+    let Ok(state) = states::var("PREVIEW_TASK") else {
         return;
     };
     let tab = FIRST_TASK + 200;

@@ -39,7 +39,7 @@ pub(crate) enum CommandLine {
 pub(crate) fn preview_pictures(shown: Pictures, cx: &mut App) {
     use browser::tokens::settings::{HEIGHT, WIDTH};
     // PREVIEW_SETTINGS_WIDTH=<points> narrows the window, to Settings' least for one.
-    let width = std::env::var("PREVIEW_SETTINGS_WIDTH")
+    let width = states::var("PREVIEW_SETTINGS_WIDTH")
         .ok()
         .and_then(|width| width.parse().ok())
         .unwrap_or(WIDTH);

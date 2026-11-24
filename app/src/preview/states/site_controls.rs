@@ -15,7 +15,7 @@ pub(crate) fn preview_site() -> Site {
             choices: choices.to_vec(),
         };
     // PREVIEW_CONNECTION=not-secure shows a page over plain http, and =internal the browser's own.
-    let (site, connection, summary) = match std::env::var("PREVIEW_CONNECTION").as_deref() {
+    let (site, connection, summary) = match states::var("PREVIEW_CONNECTION").as_deref() {
         Ok("not-secure") => ("en.wikipedia.org", Connection::NotSecure, "Not secure"),
         Ok("internal") => ("ilo", Connection::Internal, "ilo"),
         _ => (
@@ -65,18 +65,18 @@ pub(crate) fn preview_site() -> Site {
         developer_mode: Some(false),
         // PREVIEW_BOOST=on or off gives the site a Boost, which shows its row.
         boostable: true,
-        boost: match std::env::var("PREVIEW_BOOST").as_deref() {
+        boost: match states::var("PREVIEW_BOOST").as_deref() {
             Ok("on") => Some(true),
             Ok("off") => Some(false),
             _ => None,
         },
         // PREVIEW_ARRANGEMENT=nofit or changed: what Site Controls says of the Boost's arrangement.
-        arrangement_misfits: (std::env::var("PREVIEW_ARRANGEMENT").as_deref() == Ok("nofit"))
+        arrangement_misfits: (states::var("PREVIEW_ARRANGEMENT").as_deref() == Ok("nofit"))
             .then(|| "1 change no longer fits".into()),
-        arrangement_off: (std::env::var("PREVIEW_ARRANGEMENT").as_deref() == Ok("changed"))
+        arrangement_off: (states::var("PREVIEW_ARRANGEMENT").as_deref() == Ok("changed"))
             .then(|| "Changed outside ilo, off".into()),
         // PREVIEW_RECENT=on or off: the switch for what's recent in the site's cards (#3074).
-        recent: match std::env::var("PREVIEW_RECENT").as_deref() {
+        recent: match states::var("PREVIEW_RECENT").as_deref() {
             Ok("on") => Some(true),
             Ok("off") => Some(false),
             _ => None,

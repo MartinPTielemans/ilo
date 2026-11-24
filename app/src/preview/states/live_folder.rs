@@ -5,7 +5,7 @@ use crate::*;
 /// What the preview's Live Folder fetches, as PREVIEW_LIVE_FOLDER asks: made-up pull requests,
 /// the mock's (#2979), or with `signed-out` that answer. With `failed`, the next fetch fails.
 pub(crate) fn live_stand_in() -> LiveAnswer {
-    if std::env::var("PREVIEW_LIVE_FOLDER").as_deref() == Ok("signed-out") {
+    if states::var("PREVIEW_LIVE_FOLDER").as_deref() == Ok("signed-out") {
         return LiveAnswer::SignedOut;
     }
     let item = |list, repo: &str, number, title: &str, state| LiveItem {

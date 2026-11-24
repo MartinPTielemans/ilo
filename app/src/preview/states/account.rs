@@ -8,7 +8,7 @@ pub(crate) fn preview_account(state: &str, cx: &mut App) {
     use browser::tokens::settings::{HEIGHT, WIDTH};
     account::bind_keys(cx);
     // PREVIEW_SIZE=<width>x<height> as for the browser's window, Settings' own size by default.
-    let (width, height) = std::env::var("PREVIEW_SIZE")
+    let (width, height) = states::var("PREVIEW_SIZE")
         .ok()
         .and_then(|size| {
             let (width, height) = size.split_once('x')?;
@@ -16,7 +16,7 @@ pub(crate) fn preview_account(state: &str, cx: &mut App) {
         })
         .unwrap_or((WIDTH, HEIGHT));
     // PREVIEW_SCROLL=<points> scrolls the card that far down once it's drawn.
-    let scroll: f32 = std::env::var("PREVIEW_SCROLL")
+    let scroll: f32 = states::var("PREVIEW_SCROLL")
         .ok()
         .and_then(|points| points.parse().ok())
         .unwrap_or(0.);
@@ -34,7 +34,7 @@ pub(crate) fn preview_account(state: &str, cx: &mut App) {
     };
     let no_server = state == "no-server";
     // PREVIEW_SERVER=<address> signs in to a server of the user's, which the line names by its host.
-    let own = std::env::var("PREVIEW_SERVER").ok();
+    let own = states::var("PREVIEW_SERVER").ok();
     let state = State {
         status,
         problem: None,
@@ -214,7 +214,7 @@ impl account::Host for PreviewAccount {
     // PREVIEW_SYNC=never, offline, server-error, refused, sign-in, throttled, stopped or update
     // shows that line, else synced at 15:04.
     fn activity(&self) -> account::Activity {
-        let shown = std::env::var("PREVIEW_SYNC").unwrap_or_default();
+        let shown = states::var("PREVIEW_SYNC").unwrap_or_default();
         let trouble = match shown.as_str() {
             "offline" => Some(account::Trouble::Offline),
             "server-error" => Some(account::Trouble::ServerError),
