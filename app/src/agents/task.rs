@@ -1454,6 +1454,7 @@ impl Agents {
             },
             tools: tools::names(agent),
             helpers: task.helpers.on,
+            wall: None,
         };
         let events = self.task_events(cx);
         match Process::start_kept(&launch, &keep, agent, first, events) {
@@ -1513,6 +1514,10 @@ impl Agents {
             .and_then(|task| task.process.as_ref())
             .map(runner::Process::run);
         if under_way.is_some_and(|under_way| under_way != run) {
+            return;
+        }
+        // Its assistant is inside its wall, which is no answer of the assistant's.
+        if out == Out::Walled(Ok(())) {
             return;
         }
         // Whatever it said, it answered.
@@ -1626,6 +1631,25 @@ impl Agents {
                     .task(&agent)
                     .is_some_and(|task| task.state == State::Stopped) => {}
             Out::Ended(Some(failure)) => self.fail(&agent, failure, cx),
+            Out::Walled(Ok(())) => {}
+            // The start the user stopped: their stop ended its launcher, and is what the card says.
+            Out::Walled(Err(_))
+                if self
+                    .task(&agent)
+                    .is_some_and(|task| task.state == State::Stopped) => {}
+            // Nothing started, so nothing of the task's is behind a wall that isn't up. Its
+            // launcher goes with the process, and the Gone that follows finds the task failed.
+            Out::Walled(Err(refused)) => {
+                log!("browser: task {agent} wasn't walled in: {refused:?}");
+                let cli = self.task_mut(&agent).and_then(|task| {
+                    task.process = None;
+                    task.cli
+                });
+                if let Some(cli) = cli {
+                    let why = format!("{} couldn't start.", cli.name());
+                    self.fail(&agent, Failure::Other(why), cx);
+                }
+            }
             Out::Gone(said) => {
                 // Its assistant no longer has the conversation it was to go on with, or what it
                 // said goes to the log without the conversation's id.

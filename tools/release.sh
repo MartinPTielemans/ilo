@@ -70,6 +70,7 @@ done
 sign "$framework"
 sign "$app/Contents/MacOS/mcp-bridge"
 sign "$app/Contents/MacOS/ilo-command"
+sign "$app/Contents/MacOS/wall-launcher"
 # Sparkle's installer and its window, then Sparkle, as Sparkle's documentation signs them.
 sparkle=$app/Contents/Frameworks/Sparkle.framework
 if [ -d "$sparkle" ]; then
