@@ -1781,3 +1781,44 @@ fn a_rows_plate_under_the_pointer_is_the_one_a_card_has_on_a_dark_window() {
         }
     }
 }
+
+/// The plate of what's shown is never the fainter of the two beside a plate under the pointer. On
+/// a dark window with no Space colour, at Less and at Standard, it tells from the window at TELLS
+/// at least and no less than a row's plate under the pointer does, at rest and under the pointer
+/// itself, and its title keeps its bar, on every point of the window over both backdrops.
+///
+/// Where the window leaves less than both take, at More and with a Space's colour, one of the two
+/// has to give, and this holds neither of them to it.
+#[test]
+fn the_shown_plate_is_never_the_fainter_where_its_title_keeps_its_bar() {
+    for level in [Transparency::Less, Transparency::Standard] {
+        set_transparency(level);
+        let palette = Palette::of(None, Tone::Dark);
+        let window = fine_window(&palette);
+        // The least `plate` tells from the window, and the least the ink reads on it.
+        let least = |plate: Hsla| {
+            let plate = Rgba::from(plate);
+            window
+                .iter()
+                .fold((f32::MAX, f32::MAX), |(told, read), &at| {
+                    let ground = over(at, plate, plate.a);
+                    (
+                        told.min(contrast(ground, at)),
+                        read.min(contrast(palette.ink, ground)),
+                    )
+                })
+        };
+        let (pointed, _) = least(palette.hovered_row());
+        for hover in [0., 1.] {
+            let (told, read) = least(palette.shown(hover));
+            assert!(
+                told >= TELLS.max(pointed),
+                "{level:?} hover {hover}: the shown plate tells at {told:.2}, one under the pointer at {pointed:.2}"
+            );
+            assert!(
+                read >= TEXT,
+                "{level:?} hover {hover}: its title reads {read:.2}"
+            );
+        }
+    }
+}
