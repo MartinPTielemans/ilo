@@ -7,14 +7,17 @@
 //! after the keyboard came and after the key before, so one typed on or held from what was there
 //! presses nothing.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use gpui::{App, Context, FocusHandle, Focusable, KeyBinding, Window, actions};
+use gpui::{
+    App, Bounds, Context, FocusHandle, Focusable, KeyBinding, Pixels, Task, Window, actions,
+};
 
 use super::TalkView;
 use crate::agents::task::Line;
 use crate::agents::task::ilo::{self, IloButton};
 use crate::agents::tier::PROTECT;
+use crate::tokens::shell::conversation::ilo::ARM;
 
 actions!(ilo_keys, [IloPress, IloNext, IloBack, IloLeave]);
 
@@ -52,6 +55,100 @@ pub(super) struct IloKeys {
     due: bool,
     /// Why it's to go back, at the next frame: the key again, or the window left.
     leaving: Option<&'static str>,
+    /// Under the checks only: what they were told of the guard on the ringed button, and the wait
+    /// for its end.
+    told: Told,
+    wait: Option<Task<()>>,
+}
+
+/// What the checks read to press a line's button: the line's key, the button's own name and where
+/// it stands. Nothing of what the line says, which may be a page's words or a site (#4198).
+pub(super) fn place((line, button): (usize, IloButton), bounds: Bounds<Pixels>) -> String {
+    format!(
+        "browser: ilo line {line} {} at {:.0} {:.0} {:.0} {:.0}",
+        super::words::button(button),
+        f32::from(bounds.origin.x),
+        f32::from(bounds.origin.y),
+        f32::from(bounds.size.width),
+        f32::from(bounds.size.height)
+    )
+}
+
+/// What a key on the ringed button waits out before it presses: `ilo_key_counts`' PROTECT after
+/// the keyboard came or the key before, and for a button that widens, `press_ilo`'s moment its
+/// place has stood. The checks are told when it ends, from these same instants.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Guard {
+    last: Instant,
+    /// Only of a button that widens: since when it has stood where it is, none before it's drawn.
+    stood: Option<Option<Instant>>,
+}
+
+impl Guard {
+    /// `since` is when the button's place was last drawn anew.
+    pub(super) fn of(last: Instant, button: IloButton, since: Option<Instant>) -> Self {
+        Self {
+            last,
+            stood: button.widens().then_some(since),
+        }
+    }
+
+    /// Whether a key `now` would press: what the press itself asks, of the same clock.
+    fn passed(self, now: Instant) -> bool {
+        now.saturating_duration_since(self.last) >= PROTECT
+            && (self.stood).is_none_or(|stood| stood.is_some_and(|since| super::armed(since, now)))
+    }
+
+    /// When it ends, once the button is drawn.
+    fn ends(self) -> Option<Instant> {
+        let protect = self.last + PROTECT;
+        match self.stood {
+            None => Some(protect),
+            Some(since) => Some(protect.max(since? + Duration::from_secs_f32(ARM))),
+        }
+    }
+}
+
+/// What the checks were told of a guard: nothing of a new one until it ends, and once of each.
+#[derive(Default)]
+pub(super) struct Told {
+    of: Option<Guard>,
+    ready: bool,
+}
+
+#[derive(Debug, PartialEq)]
+pub(super) enum Tell {
+    /// The guard has ended: the checks are told so, once.
+    Ready,
+    /// It ends then, to be asked again.
+    Wait(Instant),
+    Nothing,
+}
+
+impl Told {
+    /// What to tell the checks of the `guard` as it is `now`, a frame after it was drawn or, with
+    /// `woke`, at the end of the wait for it. A guard that started anew, as the line moved or a
+    /// key came, is waited out anew.
+    pub(super) fn step(&mut self, guard: Guard, now: Instant, woke: bool) -> Tell {
+        let same = self.of == Some(guard);
+        if same && self.ready {
+            return Tell::Nothing;
+        }
+        self.of = Some(guard);
+        self.ready = guard.passed(now);
+        if self.ready {
+            return Tell::Ready;
+        }
+        // Its wait is running.
+        if same && !woke {
+            return Tell::Nothing;
+        }
+        match guard.ends() {
+            // A wait that ended a moment short of what the press asks is waited again.
+            Some(end) => Tell::Wait(end.max(now + Duration::from_millis(1))),
+            None => Tell::Nothing,
+        }
+    }
 }
 
 impl TalkView {
@@ -94,6 +191,8 @@ impl TalkView {
             last: Instant::now(),
             due: true,
             leaving: None,
+            told: Told::default(),
+            wait: None,
         });
         cx.notify();
         true
@@ -143,6 +242,10 @@ impl TalkView {
                     self.ilo_keys = None;
                     log!("browser: ilo keys left by focus");
                 }
+                if crate::checked() {
+                    // Once this frame has drawn the buttons where they stand.
+                    cx.defer_in(window, |view, _, cx| view.tell_ilo_keys_ready(None, cx));
+                }
                 return;
             }
             _ => "line",
@@ -163,6 +266,42 @@ impl TalkView {
         match keys.was {
             Some(was) => window.focus(&was, cx),
             None => window.focus(&self.reply.focus_handle(cx), cx),
+        }
+    }
+
+    /// The guard on a key on the ringed button, as the last frame drew it.
+    pub(super) fn ilo_guard(&self) -> Option<Guard> {
+        let keys = self
+            .ilo_keys
+            .as_ref()
+            .filter(|keys| keys.leaving.is_none())?;
+        let drawn = self.ilo_drawn.borrow();
+        let since = drawn
+            .get(&(keys.line, keys.button))
+            .map(|(_, since)| *since);
+        Some(Guard::of(keys.last, keys.button, since))
+    }
+
+    /// Under the checks only, which wait on it rather than count: says when a key on the ringed
+    /// button presses, at the guard's own end and never before, and again for a guard that
+    /// started anew. `woke` is the guard whose wait ended.
+    fn tell_ilo_keys_ready(&mut self, woke: Option<Guard>, cx: &mut Context<Self>) {
+        let Some(guard) = self.ilo_guard() else {
+            return;
+        };
+        let Some(keys) = &mut self.ilo_keys else {
+            return;
+        };
+        match keys.told.step(guard, Instant::now(), woke == Some(guard)) {
+            Tell::Ready => log!("browser: ilo keys ready on {}", keys.line),
+            Tell::Wait(end) => {
+                let wait = end.saturating_duration_since(Instant::now());
+                keys.wait = Some(cx.spawn(async move |view, cx| {
+                    cx.background_executor().timer(wait).await;
+                    (view.update(cx, |view, cx| view.tell_ilo_keys_ready(Some(guard), cx))).ok();
+                }));
+            }
+            Tell::Nothing => {}
         }
     }
 
