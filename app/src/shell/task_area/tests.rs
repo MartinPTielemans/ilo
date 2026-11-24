@@ -1587,6 +1587,38 @@ fn take_over_shows_with_the_ring_on_the_tasks_stops_alone(cx: &mut TestAppContex
     assert!(!shows(&shell, cx), "Take Over shows once the ring leaves");
 }
 
+/// Standing on a working task's page, its conversation beside it, the ring goes only to the strip's
+/// stops it draws: Stop is the composer's there, so the ring never sits on one nobody can see.
+#[gpui::test]
+fn standing_on_the_page_the_ring_rings_only_what_the_strip_draws(cx: &mut TestAppContext) {
+    use crate::shell::page_ends::{STOPS_DRAWN, StripStop};
+    let (shell, _, cx) = shell_with_task(cx);
+    watching_working(&shell, cx);
+    shell.update(cx, |shell, cx| shell.set_talk_beside(true, cx));
+    set_zoom(&shell, cx, Zoom::Rest);
+    assert!(shell.read_with(cx, |shell, _| shell.task_standing()));
+    shell.update(cx, |shell, cx| shell.tab_into_strip(false, cx));
+    let mut rung = Vec::new();
+    while let Some(stop) = shell.read_with(cx, |shell, _| shell.keyed_strip) {
+        // Round once.
+        if rung.contains(&stop) {
+            break;
+        }
+        STOPS_DRAWN.with(|drawn| drawn.borrow_mut().clear());
+        draw(&shell, cx);
+        assert!(
+            STOPS_DRAWN.with(|drawn| drawn.borrow().contains_key(&stop)),
+            "the ring is on {stop:?}, which the strip doesn't draw beside the conversation"
+        );
+        rung.push(stop);
+        shell.update(cx, |shell, cx| shell.key_tab(false, cx));
+    }
+    assert!(
+        rung.contains(&StripStop::TakeOver),
+        "the ring missed Take Over: {rung:?}"
+    );
+}
+
 /// A press on the card of the agent's page watched whose renderer died, its Reload for one, is the
 /// user acting on the agent's tab: it takes the tab over, as a press in its page does, and the
 /// Reload still loads the page again (#3433).
