@@ -17,8 +17,8 @@ use std::time::Instant;
 
 use super::{
     ARCHIVED_FAVICON_X, ARCHIVED_LEFT, ARCHIVED_PITCH, ARCHIVED_PLATE, ARCHIVED_RADIUS,
-    ARCHIVED_RIGHT, ARCHIVED_TEXT_X, Item, MenuEntry, Only, POINTED_ROW, SECONDARY, STATE_HOVERED,
-    STATE_PRESSED, Section, Shell, UNSELECTED_TITLE, favicon, host, text, text_line,
+    ARCHIVED_RIGHT, ARCHIVED_TEXT_X, Item, MenuEntry, Only, POINTED_ROW, SECONDARY, STATE_PRESSED,
+    Section, Shell, UNSELECTED_TITLE, favicon, host, text, text_line,
 };
 use crate::agent_history::{self, Past};
 use crate::shell::access::Accessible;
@@ -512,7 +512,8 @@ impl Shell {
                     .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
                         shell.point_history(Pointed::Visited(index), *hovered, cx)
                     }))
-                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .group(POINTED_ROW)
+                    .hover(|style| style.bg(self.palette.hovered_plate()))
                     .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
                     .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
                         shell.open_visited(open.clone(), event.position(), event.modifiers(), cx)
