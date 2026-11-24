@@ -3873,26 +3873,30 @@ impl Settings {
             ));
         }
         if self.fence_adding {
-            let field =
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_w_0()
-                    .h(px(CONTROL_HEIGHT))
-                    .px(px(FIELD_PADDING))
-                    .flex()
-                    .items_center()
-                    .rounded(px(CONTROL_RADIUS))
-                    .bg(look.control)
-                    .key_context("Naming")
-                    .on_action(cx.listener(|settings, _: &KeepName, window, cx| {
+            let field = div()
+                .relative()
+                .flex_1()
+                .min_w_0()
+                .h(px(CONTROL_HEIGHT))
+                .px(px(FIELD_PADDING))
+                .flex()
+                .items_center()
+                .rounded(px(CONTROL_RADIUS))
+                .bg(look.control)
+                .key_context("Naming")
+                .on_action(cx.listener(|settings, _: &KeepName, window, cx| {
+                    if browser::dismissal::submits([&settings.fence_field.clone()], cx) {
                         settings.add_fence(window, cx)
-                    }))
-                    .on_action(cx.listener(|settings, _: &CancelName, window, cx| {
+                    }
+                }))
+                .on_action(cx.listener(|settings, _: &CancelName, window, cx| {
+                    let field = settings.fence_field.clone();
+                    if browser::dismissal::Close::escape_from([&field], cx).is_some() {
                         settings.close_fence(window, cx)
-                    }))
-                    .child(self.drawn("fence field".into()))
-                    .child(self.fence_field.clone());
+                    }
+                }))
+                .child(self.drawn("fence field".into()))
+                .child(self.fence_field.clone());
             let cancel = self
                 .button("agent-fence-cancel", "Cancel")
                 .relative()
