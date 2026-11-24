@@ -63,13 +63,6 @@ pub struct Launcher {
     handoff: Vec<u8>,
 }
 
-impl std::fmt::Debug for Launcher {
-    /// Nothing of the rules or their paths, as a Wall's Debug may reach a log.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Launcher")
-    }
-}
-
 fn failed(sentence: &str) -> WallRefused {
     WallRefused::Failed(sentence.into())
 }

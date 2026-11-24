@@ -8131,6 +8131,34 @@ mod tasks {
     }
 
     #[gpui::test]
+    fn a_wall_that_does_not_go_up_fails_a_task_but_not_one_the_user_stopped(
+        cx: &mut TestAppContext,
+    ) {
+        let (agents, _) = ready(None, cx);
+        let refused = || {
+            let ended = "the launcher ended before the program started";
+            Out::Walled(Err(crate::agents::wall::WallRefused::Failed(ended.into())))
+        };
+        let state = |agents: &Entity<Agents>, agent: &str, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| agents.task(agent).unwrap().state.clone())
+        };
+        let agent = start(&agents, "Tidy my notes", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        said(&agents, &agent, refused(), cx);
+        assert!(matches!(state(&agents, &agent, cx), State::Failed { .. }));
+        // Stop while the wall goes up ends the launcher, which then says nothing started.
+        let agent = start(&agents, "Tidy my letters", cx);
+        agents.update(cx, |agents, cx| {
+            agents.task_mut(&agent).unwrap().state = State::Working;
+            agents.stop_task(&agent, cx);
+        });
+        said(&agents, &agent, refused(), cx);
+        assert_eq!(state(&agents, &agent, cx), State::Stopped);
+    }
+
+    #[gpui::test]
     fn dismissed_tasks_come_back(cx: &mut TestAppContext) {
         let (agents, browser) = ready(None, cx);
         let first = start(&agents, "One", cx);

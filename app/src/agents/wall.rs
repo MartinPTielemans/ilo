@@ -84,7 +84,6 @@ pub enum Refusal {
 
 /// The wall a task's assistant runs inside: the runner starts the assistant in it, and it's held
 /// for the run and dropped with the process.
-#[derive(Debug)]
 pub struct Wall {
     /// The granted folder, or None for a task with no folder.
     folder: Option<PathBuf>,
@@ -93,6 +92,15 @@ pub struct Wall {
     /// What starts a program inside it, or None for a task with no files, whose program starts
     /// as it always has.
     launcher: Option<launch::Launcher>,
+}
+
+impl std::fmt::Debug for Wall {
+    /// Whether it has a folder and never which, as what holds a Wall may reach a log (#3656).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Wall")
+            .field("folder", &self.folder.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Wall {
@@ -182,6 +190,18 @@ mod tests {
             attached,
             task_dir: Path::new("/nonexistent/task"),
         }
+    }
+
+    #[test]
+    fn a_wall_printed_names_no_folder() {
+        let wall = Wall {
+            folder: Some(PathBuf::from("/nonexistent/Private Letters")),
+            started: SystemTime::now(),
+            launcher: None,
+        };
+        let printed = format!("{wall:?}");
+        assert!(printed.contains("folder: true"), "{printed}");
+        assert!(!printed.contains("nonexistent") && !printed.contains("Letters"));
     }
 
     #[test]

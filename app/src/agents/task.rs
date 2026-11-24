@@ -1581,6 +1581,11 @@ impl Agents {
                     .is_some_and(|task| task.state == State::Stopped) => {}
             Out::Ended(Some(failure)) => self.fail(&agent, failure, cx),
             Out::Walled(Ok(())) => {}
+            // The start the user stopped: their stop ended its launcher, and is what the card says.
+            Out::Walled(Err(_))
+                if self
+                    .task(&agent)
+                    .is_some_and(|task| task.state == State::Stopped) => {}
             // Nothing started, so nothing of the task's is behind a wall that isn't up. Its
             // launcher goes with the process, and the Gone that follows finds the task failed.
             Out::Walled(Err(refused)) => {
