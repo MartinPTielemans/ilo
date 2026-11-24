@@ -242,8 +242,7 @@ impl Step {
             // Its button only while signed out; the view's own buttons are the step's after.
             Step::Account => (
                 "Your Spaces on every computer.",
-                "Spaces, bookmarks and passwords sync encrypted end to end, and \
-                 Settings has it too.",
+                "Spaces, bookmarks and passwords, encrypted end to end.",
                 "Sign In",
             ),
             // Settings › Agents' heading, and the line the lead gave, as the sheet adds no words

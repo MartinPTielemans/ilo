@@ -5,7 +5,10 @@
 //! is kept. It plays only while its step shows on a visible window (Shell::onboarding_looping),
 //! from its first visible frame; with Reduce Motion it's its last frame, still.
 
-use gpui::{AnyElement, PathBuilder, canvas, div, point, prelude::*, px};
+use gpui::{
+    AnyElement, Hsla, PathBuilder, canvas, div, linear_color_stop, linear_gradient, point,
+    prelude::*, px,
+};
 
 use super::{Colors, Step, ease_in_out, ease_out};
 use crate::glow;
@@ -700,6 +703,32 @@ pub(super) fn sync(t_: f32, colors: Colors, place: Place) -> impl IntoElement {
     let arrived = come(there + t::IMPORT_FADE + t::SYNC_CROSS, t::IMPORT_LAND);
     let added = come(back, t::IMPORT_FADE);
     let phone_rows = (arrived > 0.).then(|| {
+        // The row's colour over the phone's, which the name fades into where it doesn't fit.
+        let ground = Hsla::from(palette.underlay).blend(palette.shown(0.));
+        let name = div()
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .items_center()
+            .overflow_hidden()
+            .child(div().flex_none().whitespace_nowrap().child(TABS[0]))
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right_0()
+                    .w(px(t::SYNC_FADE))
+                    .bg(linear_gradient(
+                        90.,
+                        linear_color_stop(ground.opacity(0.), 0.),
+                        linear_color_stop(ground, 1.),
+                    ))
+                    .children(place("phone-fade")),
+            )
+            .children(place("phone-name"));
         div()
             .absolute()
             .left(px(6.))
@@ -717,11 +746,13 @@ pub(super) fn sync(t_: f32, colors: Colors, place: Place) -> impl IntoElement {
             .text_color(palette.text(0.75))
             .child(
                 div()
+                    .flex_none()
                     .size(px(7.))
                     .rounded(px(t::ICON_RADIUS))
-                    .bg(palette.faint(0.3)),
+                    .bg(palette.faint(0.3))
+                    .children(place("phone-icon")),
             )
-            .child(TABS[0])
+            .child(name)
             .children(place("phone-tab"))
     });
     let phone_tile = (added > 0.).then(|| {
