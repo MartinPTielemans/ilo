@@ -5,9 +5,9 @@
 //! The window is translucent, Dia's measured composite (check/window.sh), so what's behind it
 //! shows through, and a theme is the user's, anything the picker makes. So what's drawn over it
 //! is chosen against the window's every point over a black and a white backdrop, the extremes:
-//! the ink's alphas are floored where they'd fade, a theme the ink can't read on takes the least
-//! shade of the tint's colour that lets it read, and the accent is the main colour moved in OKLab
-//! lightness, its hue kept, until it reads everywhere it's drawn. A dark window draws Paper over
+//! the ink's alphas are floored where they'd fade, a theme the ink can't read on lies fainter by
+//! the least steps that let it read, never darkening the window's glass, and the accent is the
+//! main colour moved in OKLab lightness, its hue kept, until it reads everywhere it's drawn. A dark window draws Paper over
 //! its material under black, a light one Ink under white. It's worked out once when a
 //! Space's theme changes, never while drawing. The tests sweep the picker's output and hold every
 //! component to WCAG's minimums.
@@ -72,7 +72,7 @@ const CLEAR: Rgba = Rgba {
     b: 0.,
     a: 0.,
 };
-/// The shade's steps, from none up.
+/// The steps a plate's shade rises by from none, and a theme's alpha falls by.
 const SHADE_STEP: f32 = 0.05;
 /// WCAG's minimums: text, and glyphs, boundaries and focus rings.
 pub const TEXT: f32 = 4.5;
@@ -120,7 +120,7 @@ impl Tone {
         }
     }
 
-    /// The colour the window's material lies under, and a theme the ink can't read on is shaded
+    /// The colour the window's material lies under, and a plate the ink can't read on is shaded
     /// toward.
     fn tint_color(self) -> Rgba {
         match self {
@@ -376,8 +376,7 @@ impl Float {
 pub struct Palette {
     /// Whether the window is dark or light.
     pub tone: Tone,
-    /// Black or white over the window's material: the tone's tint, and the theme's shade over
-    /// that.
+    /// Black or white over the window's material at the tone's tint, with a theme or without.
     pub tint: Rgba,
     /// The window's ground where it has to be opaque, under rows it covers or in the reveal's
     /// panel over the page.
@@ -392,9 +391,6 @@ pub struct Palette {
     /// The tab shown's colour: the Space's main colour, or the colour nearest it at its hue on
     /// which the ink reads; none without a theme, which takes the selected plate.
     pub shown: Option<Rgba>,
-    /// The tint's colour over the tint for a theme the ink can't read on over a backdrop; 0 for
-    /// most, and always without a theme.
-    pub shade: f32,
     /// The text and glyphs' colour, Paper on a dark window and Ink on a light one.
     pub ink: Rgba,
     /// The least alpha at which `ink` reads as text, and as a glyph, on the window and its
@@ -437,7 +433,7 @@ pub struct Palette {
 
 /// A plate primary text sits on over the window. The window stays as see-through as the user's
 /// transparency level says, and each of these takes the least shade at which its text reads,
-/// its own, as `fit` shades a theme's window (#4090).
+/// its own (#4090).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ground {
     /// The selected row's plate.
@@ -502,10 +498,10 @@ impl Palette {
             return Palette::untinted(tone);
         };
         let window = Window::of(theme, tone);
-        let (shade, layer_alpha) = window.fit();
+        let layer_alpha = window.fit();
         let main = rgb(theme.main_color());
-        let shown = solve_shown(main, tone, &window.samples(shade, layer_alpha));
-        let mut palette = Palette::with(shade, layer_alpha, &window, Some(shown));
+        let shown = solve_shown(main, tone, &window.samples(layer_alpha));
+        let mut palette = Palette::with(layer_alpha, &window, Some(shown));
         palette.glow = Rgba {
             a: layer_alpha,
             ..main
@@ -526,11 +522,11 @@ impl Palette {
         }
     }
 
-    /// No theme: the tinted material alone, never shaded, and ilo green, as light as it has to
+    /// No theme: the tinted material alone, and ilo green, as light as it has to
     /// be to read on it, as the accent.
     fn untinted(tone: Tone) -> Palette {
         let window = Window::of_none(tone);
-        let palette = Palette::with(0., 0., &window, None);
+        let palette = Palette::with(0., &window, None);
         let accent = palette.solve_accent(rgb(NO_THEME_ACCENT), &window);
         let section_glyph = palette.solve_section_glyph(accent, &window);
         let swatch = Swatch::of(None, &window);
@@ -543,22 +539,21 @@ impl Palette {
         }
     }
 
-    fn with(shade: f32, layer_alpha: f32, window: &Window, shown: Option<Rgba>) -> Palette {
+    fn with(layer_alpha: f32, window: &Window, shown: Option<Rgba>) -> Palette {
         let tone = window.tone;
         let ink = tone.ink();
         let (overlay, dialog) = tone.overlays();
         let mut palette = Palette {
             tone,
             tint: Rgba {
-                a: 1. - (1. - tone.tint()) * (1. - shade),
+                a: tone.tint(),
                 ..tone.tint_color()
             },
-            underlay: over(tone.stand_in(), tone.tint_color(), shade),
+            underlay: tone.stand_in(),
             layer_alpha,
             glow: CLEAR,
             far_glow: CLEAR,
             shown,
-            shade,
             ink,
             text_floor: 0.,
             glyph_floor: 0.,
@@ -602,10 +597,10 @@ impl Palette {
         palette
     }
 
-    /// The window at every point checked over both backdrops, shaded, with grain moving it
+    /// The window at every point checked over both backdrops, with grain moving it
     /// toward the ink; and under the selected, hovered and field plates.
     fn grounds(&self, window: &Window) -> Vec<Rgba> {
-        self.grounds_on(&window.samples(self.shade, self.layer_alpha), window.grain)
+        self.grounds_on(&window.samples(self.layer_alpha), window.grain)
     }
 
     /// `plain`, with `grain` moving it toward the ink, and under the selected, hovered and field
@@ -681,7 +676,7 @@ impl Palette {
     /// reads on it in every state over every point of the window: none where it reads already.
     fn solve_ground(&self, ground: Ground, window: &Window) -> f32 {
         let (colour, alphas) = self.ground_plates(ground);
-        let plain = window.samples(self.shade, self.layer_alpha);
+        let plain = window.samples(self.layer_alpha);
         let tint = self.tone.tint_color();
         let reads = |shade: f32| {
             alphas.iter().all(|&alpha| {
@@ -758,7 +753,6 @@ impl Palette {
                 (Some(from), Some(to)) => Some(mix(from, to)),
                 _ => near.shown,
             },
-            shade: self.shade + (other.shade - self.shade) * t,
             ink: mix(self.ink, other.ink),
             text_floor: self.text_floor.max(other.text_floor),
             glyph_floor: self.glyph_floor.max(other.glyph_floor),
@@ -991,7 +985,7 @@ impl Palette {
     /// its, as it's seen over a black and over a white backdrop.
     pub fn window_at(&self, foot: f32, far: f32) -> [Rgba; 2] {
         let glow = self.glow_at(foot, far);
-        grounds(self.tone, self.shade).map(|ground| over(ground, glow, glow.a))
+        self.tone.grounds().map(|ground| over(ground, glow, glow.a))
     }
 
     /// The window over a grey backdrop at black, grey 128 and white, the three its material was
@@ -1009,7 +1003,9 @@ impl Palette {
     /// The window where its theme's colour is `layer`, translucent, over a black and over a
     /// white backdrop: what a mark on it is judged against.
     pub fn over_backdrops(&self, layer: Hsla) -> [Rgba; 2] {
-        grounds(self.tone, self.shade).map(|ground| Hsla::from(ground).blend(layer).to_rgb())
+        self.tone
+            .grounds()
+            .map(|ground| Hsla::from(ground).blend(layer).to_rgb())
     }
 
     /// The hairline ring a swatch of `theme`'s colours needs on `behind`, opaque: Ink or Paper,
@@ -1036,7 +1032,7 @@ impl Palette {
         let window = theme.map_or(Window::of_none(self.tone), |theme| {
             Window::of(theme, self.tone)
         });
-        window.samples(self.shade, self.layer_alpha)
+        window.samples(self.layer_alpha)
     }
 
     /// The pickers' card as they draw it: translucent where the host blurs what's behind a
@@ -1063,7 +1059,7 @@ impl Palette {
     /// opaque, until its hint and its segments' labels read on it over every point of the window.
     fn solve_card(&self, window: &Window) -> Rgba {
         let (measured, opaque) = (rgba(CARD), rgb(OVERLAY_DARK));
-        let behind = window.samples(self.shade, self.layer_alpha);
+        let behind = window.samples(self.layer_alpha);
         let steps = (1. / SHADE_STEP).round() as i32;
         let toward = |t: f32| Rgba {
             r: measured.r + (opaque.r - measured.r) * t,
@@ -1088,7 +1084,7 @@ impl Palette {
     /// against the window, the overlays, a Library section's plate and a split target, and its
     /// label reads on it; with as much of its chroma as the gamut there allows. Grey, at worst.
     fn solve_accent(&self, main: Rgba, window: &Window) -> Rgba {
-        let plain = window.samples(self.shade, self.layer_alpha);
+        let plain = window.samples(self.layer_alpha);
         let section: Vec<Rgba> = plain
             .iter()
             .map(|&at| over(at, self.ink, SECTION_PLATE))
@@ -1115,7 +1111,7 @@ impl Palette {
     /// The accent, or the colour nearest it at its hue, that reads at 3:1 on the Library's column
     /// under the selected section's plate, everywhere on the window.
     fn solve_section_glyph(&self, accent: Rgba, window: &Window) -> Rgba {
-        let selected: Vec<Rgba> = (window.samples(self.shade, self.layer_alpha).iter())
+        let selected: Vec<Rgba> = (window.samples(self.layer_alpha).iter())
             .map(|&at| over(over(at, self.ink, COLUMN), self.ink, LIBRARY_PLATE))
             .collect();
         let passes = |c: Rgba| {
@@ -1388,12 +1384,12 @@ impl Window {
         }
     }
 
-    /// The window at every point checked over both backdrops: its ground under the tint's colour
-    /// at `shade`, with the foot's glow at `alpha` at its centre and the far one with it, each
-    /// anywhere from none to full.
-    fn samples(&self, shade: f32, alpha: f32) -> Vec<Rgba> {
+    /// The window at every point checked over both backdrops: its ground, with the foot's glow
+    /// at `alpha` at its centre and the far one with it, each anywhere from none to full.
+    fn samples(&self, alpha: f32) -> Vec<Rgba> {
         let far_alpha = self.far_at(alpha);
-        grounds(self.tone, shade)
+        self.tone
+            .grounds()
             .into_iter()
             .flat_map(|ground| {
                 FOOT.iter().flat_map(move |&foot| {
@@ -1420,34 +1416,26 @@ impl Window {
         self.swatch.clone()
     }
 
-    /// The least shade, in steps, at which the ink reads on the window and the selected and
-    /// hovered plates over both backdrops, and the end of the scale the ink runs toward stands out
-    /// on the whole window, so an accent always exists; and the theme's alpha, its own. Where even
-    /// a full shade doesn't do, as a pale third colour lying over the other two can't, the theme's
-    /// alpha drops by the least steps that do. A ground of the tint's colour alone always reads.
-    fn fit(&self) -> (f32, f32) {
+    /// The theme's alpha, its own, or lower by the least steps at which the ink reads as text on
+    /// the window over both backdrops, grain and all, and the end of the scale the ink runs toward
+    /// stands out on the whole window, so an accent always exists. The colour only adds its glow:
+    /// the window keeps the glass it has without a theme, never shaded toward the tint (#4090),
+    /// and a plate the ink can't read on takes its own shade (`solve_ground`). With no glow left
+    /// it's the window without a theme, which reads.
+    fn fit(&self) -> f32 {
         let (ink, end) = (self.tone.ink(), self.tone.end());
-        let (selected, selected_alpha, _) = self.tone.selected();
-        let reads = |shade: f32, alpha: f32| {
-            self.samples(shade, alpha).iter().all(|&at| {
+        let reads = |alpha: f32| {
+            self.samples(alpha).iter().all(|&at| {
                 let grained = over(at, ink, GRAIN_SHIFT * self.grain);
-                contrast(end, at) >= GLYPH + BETWEEN
-                    && contrast(ink, grained) >= TEXT + BETWEEN
-                    && contrast(ink, over(at, selected, selected_alpha)) >= TEXT + BETWEEN
-                    && [SELECTED_PLATE, HOVERED_PLATE]
-                        .iter()
-                        .all(|&plate| contrast(ink, over(at, ink, plate)) >= TEXT + BETWEEN)
+                contrast(end, at) >= GLYPH + BETWEEN && contrast(ink, grained) >= TEXT + BETWEEN
             })
         };
         let steps = (1. / SHADE_STEP).round() as i32;
-        let shaded = (0..=steps).map(|step| (step as f32 * SHADE_STEP, self.alpha));
-        let faded = (0..steps)
+        (0..=steps)
             .rev()
-            .map(|step| (1., self.alpha * step as f32 * SHADE_STEP));
-        shaded
-            .chain(faded)
-            .find(|&(shade, alpha)| reads(shade, alpha))
-            .unwrap_or((1., 0.))
+            .map(|step| self.alpha * step as f32 * SHADE_STEP)
+            .find(|&alpha| reads(alpha))
+            .unwrap_or(0.)
     }
 }
 
@@ -1479,13 +1467,6 @@ fn layer_alpha(theme: &Theme, tone: Tone) -> f32 {
     };
     let at = |intensity: f32| INTENSITY_FLOOR + INTENSITY_SPAN * intensity;
     alpha * at(theme.intensity) / at(DEFAULT_INTENSITY)
-}
-
-/// The window's tinted material over a black and over a white backdrop, under the tint's colour
-/// at `shade`.
-fn grounds(tone: Tone, shade: f32) -> [Rgba; 2] {
-    tone.grounds()
-        .map(|ground| over(ground, tone.tint_color(), shade))
 }
 
 /// The least contrast gray text holds at `level`, from the table beside the window's tints;

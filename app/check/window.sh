@@ -1600,8 +1600,9 @@ check_layout "after a double-click on the sidebar's edge"
 # The app logs what its palette makes there from the material's tokens, measured over a window of
 # black, grey 128 and white on a black desktop with the Mac's desktop tinting on, its default,
 # under the tint of the transparency level, Standard in a fresh profile, with the black Space's
-# shade and glow over that. The desktop picture comes through the backdrop window too and lifts all
-# of it by about as much, and the check sets no picture, as check.sh runs on the owner's Mac too.
+# glow over that, which leaves the window's glass as it is. The desktop picture comes through the
+# backdrop window too and lifts all of it by about as much, and the check sets no picture, as
+# check.sh runs on the owner's Mac too.
 # So it holds what a picture can't move, each grey's rise over black, within 3 levels of the
 # reckoned rise, and the sidebar over black between the black desktop's and the most a picture
 # lifts it (the material's lift token), 3 either side. With desktop tinting off nothing lifts it,

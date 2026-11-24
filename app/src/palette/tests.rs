@@ -573,10 +573,7 @@ fn sweep(themes: &[Theme]) -> Vec<String> {
 #[test]
 fn no_theme_is_the_measured_window_and_ilo_green_with_ink() {
     let palette = Palette::of(None, Tone::Dark);
-    assert_eq!(
-        (palette.tint.a, palette.shade, palette.layer_alpha),
-        (TINT, 0., 0.)
-    );
+    assert_eq!((palette.tint.a, palette.layer_alpha), (TINT, 0.));
     // #289054 reads 2.7:1 on the window over a white backdrop, so ilo green, lighter, at its hue.
     assert_eq!(hex(palette.accent), 0x78d999);
     assert_eq!(hex(palette.accent_label), INK);
@@ -587,8 +584,8 @@ fn no_theme_is_the_measured_window_and_ilo_green_with_ink() {
         set_transparency(level);
         let palette = Palette::of(None, Tone::Dark);
         assert_eq!(
-            (palette.tint.a, palette.shade, palette.layer_alpha),
-            (level.tint(true), 0., 0.),
+            (palette.tint.a, palette.layer_alpha),
+            (level.tint(true), 0.),
             "{level:?}: the window is never shaded"
         );
         assert_eq!(
@@ -605,13 +602,12 @@ fn no_theme_is_the_measured_window_and_ilo_green_with_ink() {
 fn a_light_window_is_white_over_the_material_with_ink() {
     let palette = Palette::of(None, Tone::Light);
     assert_eq!(
-        (palette.tint, palette.shade, palette.layer_alpha),
+        (palette.tint, palette.layer_alpha),
         (
             Rgba {
                 a: LIGHT_TINT,
                 ..WHITE
             },
-            0.,
             0.
         )
     );
@@ -628,48 +624,86 @@ fn a_light_window_is_white_over_the_material_with_ink() {
     set_transparency(Transparency::Standard);
     let violet = Palette::of(Some(&Theme::of_color(0x5a2a9a)), Tone::Light);
     assert_eq!(
-        (violet.shade, violet.layer_alpha),
-        (0., LIGHT_GRADIENT_ALPHA)
+        (violet.tint, violet.layer_alpha),
+        (palette.tint, LIGHT_GRADIENT_ALPHA)
     );
 }
 
-/// A theme lies over the window as a Space's colour did before themes, and only a theme too light
-/// for Paper over a white backdrop is shaded, by the least step that lets it read.
+/// A theme lies over the window as a Space's colour did before themes, on the glass the window
+/// has without one, never shaded (#4090), and only a theme the ink can't read on lies fainter, by
+/// the least step that lets it read.
 #[test]
-fn the_window_is_shaded_only_where_paper_needs_it() {
-    // check/window.sh's black Space: neutral, and two steps shaded, since the HUD window's
-    // material under `tint` is too light for Paper's selected plate over white without them.
+fn a_theme_only_fades_where_the_ink_needs_it() {
+    // check/window.sh's black Space: neutral, its own alpha, on the window without a theme.
+    let none = Palette::of(None, Tone::Dark);
     let black = Palette::of(Some(&Theme::at(0., 0.)), Tone::Dark);
-    let shade = 2. * SHADE_STEP;
     assert_eq!(
-        (black.tint.a, black.shade, black.layer_alpha),
-        (
-            1. - (1. - TINT) * (1. - shade),
-            shade,
-            NEUTRAL_GRADIENT_ALPHA
-        )
+        (black.tint, black.underlay, black.layer_alpha),
+        (none.tint, none.underlay, NEUTRAL_GRADIENT_ALPHA)
     );
     let violet = Palette::of(Some(&Theme::of_color(0x5a2a9a)), Tone::Dark);
-    assert_eq!((violet.shade, violet.layer_alpha), (shade, GRADIENT_ALPHA));
-    // Blue lightens to #9AC3FF down the window, too light for Paper's plates over white.
-    let pale = Theme::of_color(0x1a79ff);
+    assert_eq!(
+        (violet.tint, violet.layer_alpha),
+        (none.tint, GRADIENT_ALPHA)
+    );
+    // The picker's palest swatch, too light for Paper at its own alpha over white.
+    let pale = Theme::of_color(0xf0eae5);
     let palette = Palette::of(Some(&pale), Tone::Dark);
-    assert!(palette.shade > 0., "the blue isn't shaded");
-    let less = Palette {
-        shade: palette.shade - SHADE_STEP,
-        ..palette
-    };
+    let window = Window::of(&pale, Tone::Dark);
+    assert_eq!(palette.tint, none.tint, "the pale theme shades the window");
+    assert!(
+        palette.layer_alpha < window.alpha,
+        "the pale theme isn't faded"
+    );
     let paper = rgb(PAPER);
-    let fails = less
-        .window_samples(Some(&pale))
+    let fails = window
+        .samples(palette.layer_alpha + window.alpha * SHADE_STEP)
         .iter()
-        .any(|&at| contrast(paper, over(at, paper, SELECTED_PLATE)) < TEXT + BETWEEN);
-    assert!(fails, "a step less shade would have read");
+        .any(|&at| {
+            contrast(paper, over(at, paper, GRAIN_SHIFT * pale.grain)) < TEXT + BETWEEN
+                || contrast(Tone::Dark.end(), at) < GLYPH + BETWEEN
+        });
+    assert!(fails, "a step less fade would have read");
+}
+
+/// A Space's colour changes only its glows: away from them, its window is the window without a
+/// theme, the same tint over the same material, in both looks and at every transparency level, so
+/// it's as see-through as the user's level says (#4090).
+#[test]
+fn a_themed_window_has_the_glass_of_one_without() {
+    let themes = grid(
+        &[0., 60., 120., 180., 240., 300.],
+        &[0., 0.4, 1.],
+        &[0., 0.2, 0.45, 0.6, 0.8, 1.],
+        &[0., crate::theme::DEFAULT_INTENSITY, 1.],
+    );
+    for level in Transparency::ALL {
+        set_transparency(level);
+        for tone in [Tone::Dark, Tone::Light] {
+            let none = Palette::of(None, tone);
+            for theme in &themes {
+                let palette = Palette::of(Some(theme), tone);
+                assert_eq!(
+                    (palette.tint, palette.underlay),
+                    (none.tint, none.underlay),
+                    "{level:?} {tone:?} {}",
+                    theme.to_text()
+                );
+                assert_eq!(
+                    palette.window_at(0., 0.),
+                    none.window_at(0., 0.),
+                    "{level:?} {tone:?} {}",
+                    theme.to_text()
+                );
+            }
+        }
+    }
+    set_transparency(Transparency::Standard);
 }
 
 /// The pickers' card takes the least step from Arc's measured grey toward the dark overlay at
-/// which its text reads, two steps over the black Space and four with no theme on the HUD window's
-/// material, and Capture's menu, ilo's menu's panel, reads in both looks: its glyphs, in the
+/// which its text reads, four on the HUD window's material, over the black Space as with no theme,
+/// as a theme leaves the window's glass as it is (#4090), and Capture's menu, ilo's menu's panel, reads in both looks: its glyphs, in the
 /// secondary colour, at 3:1, and its field's words, in the label's, as text on the field's tint of
 /// the line colour.
 #[test]
@@ -677,8 +711,8 @@ fn the_pickers_card_and_captures_menu_read() {
     let black = Palette::of(Some(&Theme::at(0., 0.)), Tone::Dark);
     assert_eq!(
         (hex(black.card), black.card.a),
-        (0x444443, 0.6082353),
-        "two steps from the measured grey over the black Space"
+        (0x403f3e, 0.65176475),
+        "four steps from the measured grey over the black Space"
     );
     let none = Palette::of(None, Tone::Dark).card;
     assert_eq!(
@@ -944,15 +978,13 @@ fn full_sweep() {
     let palettes: Vec<Palette> = (themes.iter())
         .flat_map(|t| [Tone::Dark, Tone::Light].map(|tone| Palette::of(Some(t), tone)))
         .collect();
-    let shaded = palettes.iter().filter(|p| p.shade > 0.).count();
-    let most = palettes.iter().map(|p| p.shade).fold(0., f32::max);
     let card = palettes.iter().filter(|p| p.card != rgba(CARD)).count();
     let faded = (themes.iter().flat_map(|t| [t, t]))
         .zip(&palettes)
         .filter(|(t, p)| p.layer_alpha < layer_alpha(t, p.tone) - 1e-6)
         .count();
     eprintln!(
-        "{} themes, {shaded} shaded (at most {most}), {faded} faded, {card} with a darker card, {} failing",
+        "{} themes, {faded} faded, {card} with a darker card, {} failing",
         themes.len(),
         failed.len()
     );
