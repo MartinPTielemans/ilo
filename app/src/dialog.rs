@@ -503,7 +503,13 @@ pub fn give_back(
     let (returns, own) = (dialog.update(cx, |dialog, _| dialog.returns.take()))
         .unwrap_or_else(|| (FocusReturn::default(), vec![dialog.read(cx).focus.clone()]));
     let own: Vec<&FocusHandle> = own.iter().collect();
-    returns.give_back(Close::new(Why::Chosen, By::Code), &own, fallback, window, cx)
+    returns.give_back(
+        Close::new(Why::Chosen, By::Code),
+        &own,
+        fallback,
+        window,
+        cx,
+    )
 }
 
 /// Whether a window's own `dialog` is asking, or leaving after the answer.
