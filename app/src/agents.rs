@@ -1269,7 +1269,8 @@ impl Agents {
         // that the assistants found are known, as each removes its own.
         self.remove_old_kept(cx);
         self.notes_off = saved.get("notes").and_then(Value::as_bool) == Some(false);
-        self.sign_in_on = (saved.get("sign_in").and_then(Value::as_bool)).unwrap_or(signing::STARTS_ON);
+        self.sign_in_on =
+            (saved.get("sign_in").and_then(Value::as_bool)).unwrap_or(signing::STARTS_ON);
         self.on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
         self.scripts = saved
             .get("scripts")

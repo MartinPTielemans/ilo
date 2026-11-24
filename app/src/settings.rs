@@ -3738,7 +3738,14 @@ impl Settings {
                 let set = move |on, cx: &mut App| {
                     agents.update(cx, |agents, cx| agents.set_sign_in_on(on, cx))
                 };
-                self.toggle("agent sign-in", signing::HEADING, sign_in_on, set, accent, cx)
+                self.toggle(
+                    "agent sign-in",
+                    signing::HEADING,
+                    sign_in_on,
+                    set,
+                    accent,
+                    cx,
+                )
             };
             let line = match sign_in_on {
                 true => signing::SWITCH_LINE,
@@ -3746,7 +3753,11 @@ impl Settings {
             };
             setting(look, signing::HEADING, Some(line.into()), vec![switch])
         });
-        let rows = [master].into_iter().chain(tasks).chain(keeps).chain(sign_in);
+        let rows = [master]
+            .into_iter()
+            .chain(tasks)
+            .chain(keeps)
+            .chain(sign_in);
         let mut blocks = vec![Block::Rows(rows.collect())];
         if tasks_on {
             blocks.push(Block::Heading("Your assistant".into()));

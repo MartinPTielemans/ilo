@@ -461,9 +461,7 @@ pub unsafe extern "C" fn agent_sign_in_done(
 ) {
     let text = unsafe { string(text) };
     let failure = (failure != 0).then(|| failure_of(failure));
-    update(move |agents, cx| {
-        agents.sign_in_done(request, signed_in, submitted, text, failure, cx)
-    });
+    update(move |agents, cx| agents.sign_in_done(request, signed_in, submitted, text, failure, cx));
 }
 
 /// A string the core passes, for as long as the call: empty for none.
