@@ -88,12 +88,6 @@ impl Close {
         Self { why, by }
     }
 
-    /// Escape's close, or none while an input method is `composing` in the surface's field:
-    /// Escape there ends the composition, and the surface stays.
-    pub fn escape(composing: bool) -> Option<Self> {
-        (!composing).then_some(Self::new(Why::Escape, By::Keyboard))
-    }
-
     /// Escape's close, or none while an input method composes in one of the surface's `fields`:
     /// Escape there drops the composition, and the surface stays.
     pub fn escape_from<'a>(
