@@ -190,7 +190,7 @@ fn a_header_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     });
 }
 
-/// A page's row ends in one word of five: Reading where the task works in the page now, Done where
+/// A page's row ends in one word of five: Working where the task works in the page now, Done where
 /// it has moved on or finished, Paused where the task waits or stopped, Needs you at the page it
 /// handed the user, and the bar's own title at one they took over.
 #[gpui::test]
@@ -201,11 +201,11 @@ fn a_pages_row_says_one_word(cx: &mut TestAppContext) {
         working.pages = vec![30, 31];
         working.page_steps = vec![(31, "Opening maat.pt".into())];
         assert_eq!(shell.page_word(&working, 30), PageWord::Done);
-        assert_eq!(shell.page_word(&working, 31), PageWord::Reading);
+        assert_eq!(shell.page_word(&working, 31), PageWord::Working);
         // With one page, that's the one it works in.
         working.pages = vec![30];
         working.page_steps.clear();
-        assert_eq!(shell.page_word(&working, 30), PageWord::Reading);
+        assert_eq!(shell.page_word(&working, 30), PageWord::Working);
         let mut waits = card(2, Dot::Waiting);
         waits.pages = vec![40, 41, 42];
         assert_eq!(shell.page_word(&waits, 40), PageWord::Paused);
@@ -242,7 +242,7 @@ fn a_pages_row_says_one_word(cx: &mut TestAppContext) {
         working.page_steps = vec![(42, "Opening maat.pt".into())];
         assert_eq!(
             words(&working),
-            [PageWord::Paused, PageWord::Driving, PageWord::Reading]
+            [PageWord::Paused, PageWord::Driving, PageWord::Working]
         );
         // A page they took over is theirs whatever its task came to.
         for dot in [Dot::Done, Dot::Ended] {
@@ -252,8 +252,8 @@ fn a_pages_row_says_one_word(cx: &mut TestAppContext) {
         }
     });
     assert_eq!(
-        [PageWord::Reading, PageWord::Done, PageWord::Paused].map(PageWord::label),
-        ["Reading", "Done", "Paused"]
+        [PageWord::Working, PageWord::Done, PageWord::Paused].map(PageWord::label),
+        ["Working", "Done", "Paused"]
     );
     assert_eq!(PageWord::NeedsYou.label(), Word::NeedsYou.after_name());
 }

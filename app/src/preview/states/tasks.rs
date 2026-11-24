@@ -388,7 +388,6 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         name: "Claude".into(),
         title: title.into(),
         about: "Claude · Working".into(),
-        progress: "step 3 · 4 pages".into(),
         asked: "Find two tickets for Saturday's concert, in the stalls".into(),
         page: None,
         lines: vec![Line::Trace(Trace {
@@ -435,7 +434,6 @@ fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
         Word::Done => format!("{} · Done at 14:02", card.name).into(),
         word => format!("{} · {}", card.name, word.after_name()).into(),
     };
-    talk.progress = "".into();
     talk.tabs = (pages.iter().map(|&(tab, _, url)| (tab, site(url)))).collect();
     talk.on = None;
     talk.stoppable = card.word == Word::NeedsYou;
@@ -528,7 +526,6 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
         tier: Tier::Work,
         count,
     };
-    talk.progress = "".into();
     // It stands on its one page, beside it.
     talk.tabs.truncate(1);
     talk.lines = match state.as_str() {
@@ -633,7 +630,6 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
         "past" | "past-no-profile" | "past-no-space" => {
             talk.title = "Concert tickets".into();
             talk.about = format!("{} · Done · 21 Nov", talk.name).into();
-            talk.progress = "".into();
             talk.asked = "".into();
             talk.tabs.clear();
             talk.on = None;

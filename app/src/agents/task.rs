@@ -129,9 +129,6 @@ pub struct Conversation {
     pub title: SharedString,
     /// The agent, its model and where the task is, under the title: "Claude · Haiku · Working".
     pub about: SharedString,
-    /// How far it has got while it works, after where it is, from its own steps: "step 5 · 4
-    /// pages", or empty.
-    pub progress: SharedString,
     /// What was asked, and the page it was asked on, by its title.
     pub asked: SharedString,
     pub page: Option<AskedOn>,
@@ -879,10 +876,6 @@ impl Agents {
         let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
             .map(|tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
             .collect();
-        let progress = match task.state == State::Working && !self.waits_on_user(task) {
-            true => progress(turn_steps(task).len(), tabs.len()),
-            false => String::new(),
-        };
         // The state's word, whoever of the task's waits: the task itself or a helper. Done says
         // when, and a limit when it resets if the assistant said; without that it's the word, as
         // the name before it says whose limit it is.
@@ -907,7 +900,6 @@ impl Agents {
             name: task.name.clone(),
             title: task.title.clone(),
             about: about.into(),
-            progress: progress.into(),
             asked: task.asked.clone(),
             page: task.page.clone(),
             lines,
@@ -3325,22 +3317,6 @@ fn lower_first(text: &str) -> String {
         .next()
         .map(|first| first.to_lowercase().chain(chars).collect())
         .unwrap_or_default()
-}
-
-/// The header's progress while the task works: its steps this turn and its pages, each left out
-/// while there are none.
-fn progress(steps: usize, pages: usize) -> String {
-    let steps = (steps > 0).then(|| format!("step {steps}"));
-    let pages = match pages {
-        0 => None,
-        1 => Some("1 page".to_string()),
-        pages => Some(format!("{pages} pages")),
-    };
-    steps
-        .into_iter()
-        .chain(pages)
-        .collect::<Vec<_>>()
-        .join(" · ")
 }
 
 /// A stopped task's status: how far it got before the user stopped it, by its steps, its thoughts

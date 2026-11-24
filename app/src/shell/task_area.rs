@@ -817,10 +817,6 @@ impl Shell {
         if self.watched_task_page().is_some() {
             return self.task_page_back(cx);
         }
-        // From Pages, back to Talk first.
-        if self.talk_back_to_talk(cx) {
-            return;
-        }
         self.close_task(cx);
     }
 
