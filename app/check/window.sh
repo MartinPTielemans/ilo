@@ -1229,6 +1229,10 @@ send clickkey $at
 expect '^browser: edge reveals sidebar on$' "a click on the edge's switch didn't turn it on again"
 # The sidebar on the right, picked in Settings as a user does, comes out from the window's last
 # column, where on Linux the band at the right edge is the UI's too (#3219). Back on the left after.
+# Sidebar position is Appearance's (#4092).
+send clickkey $(drawn "toolbar Appearance")
+expect '^browser: settings tab Appearance$' "a click on Appearance didn't show its section"
+settings_drew Appearance
 in_sight "sidebar position option Right" || fail "Settings didn't draw Right's drawing"
 send clickkey $at
 expect '^browser: sidebar on the right$' "a click on Right's drawing didn't move the sidebar"
@@ -1247,8 +1251,8 @@ expect '^browser: reveal shown$' "the pointer at the window's right edge didn't 
 send key s cmd
 expect '^browser: sidebar shown$' "⌘S with the sidebar out on the right didn't dock it"
 send menu Settings…
-expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't show Tabs & Sidebar again"
-settings_drew "Tabs & Sidebar"
+expect '^browser: settings shown Appearance$' "Settings… didn't show Appearance again"
+settings_drew Appearance
 in_sight "sidebar position option Left" || fail "Settings didn't draw Left's drawing"
 send clickkey $at
 expect '^browser: sidebar on the left$' "a click on Left's drawing didn't move the sidebar back"
