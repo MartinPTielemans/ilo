@@ -1418,6 +1418,7 @@ impl Agents {
             },
             tools: tools::names(agent),
             helpers: task.helpers.on,
+            wall: None,
         };
         let events = self.task_events(cx);
         match Process::start_kept(&launch, &keep, agent, first, events) {
@@ -1468,6 +1469,10 @@ impl Agents {
     /// What a task's CLI said.
     pub fn task_said(&mut self, event: runner::Event, cx: &mut Context<Self>) {
         let runner::Event { agent, out } = event;
+        // Its assistant is inside its wall, which is no answer of the assistant's.
+        if out == Out::Walled(Ok(())) {
+            return;
+        }
         // Whatever it said, it answered.
         if let Some(task) = self.task_mut(&agent) {
             task.waiting = None;
@@ -1575,6 +1580,20 @@ impl Agents {
                     .task(&agent)
                     .is_some_and(|task| task.state == State::Stopped) => {}
             Out::Ended(Some(failure)) => self.fail(&agent, failure, cx),
+            Out::Walled(Ok(())) => {}
+            // Nothing started, so nothing of the task's is behind a wall that isn't up. Its
+            // launcher goes with the process, and the Gone that follows finds the task failed.
+            Out::Walled(Err(refused)) => {
+                log!("browser: task {agent} wasn't walled in: {refused:?}");
+                let cli = self.task_mut(&agent).and_then(|task| {
+                    task.process = None;
+                    task.cli
+                });
+                if let Some(cli) = cli {
+                    let why = format!("{} couldn't start.", cli.name());
+                    self.fail(&agent, Failure::Other(why), cx);
+                }
+            }
             Out::Gone(said) => {
                 // Its assistant no longer has the conversation it was to go on with, or what it
                 // said goes to the log without the conversation's id.

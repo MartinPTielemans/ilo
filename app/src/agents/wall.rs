@@ -1,8 +1,8 @@
 //! The wall a task's assistant runs inside when the task has files (#4101): the system holds the
 //! level of files::allows around the assistant's whole process, so the assistant's own checks
 //! aren't what keeps it in. The app grants nothing until put_up answers that the wall is up, and a
-//! task whose wall can't be put up doesn't start with its files. No system has the launcher yet, so
-//! every answer here is no.
+//! task whose wall can't be put up doesn't start with its files. The Mac has its launcher
+//! (launch.rs), which nothing starts through yet, so every answer here is still no.
 //!
 //! Which refusals reach ilo, for the line that names them: a command the assistant asks ilo about
 //! first (Codex under an approval policy that asks, Claude Code's permission prompt) is refused by
@@ -17,6 +17,8 @@ use std::time::SystemTime;
 
 use super::runner::Cli;
 use super::tier::Tier;
+
+pub mod launch;
 
 /// Why this system can't wall a task in, for the menu's file and folder rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,6 +90,9 @@ pub struct Wall {
     folder: Option<PathBuf>,
     /// When it went up: the task's own links are the ones made, moved or retargeted since.
     started: SystemTime,
+    /// What starts a program inside it, or None for a task with no files, whose program starts
+    /// as it always has.
+    launcher: Option<launch::Launcher>,
 }
 
 impl Wall {
@@ -107,6 +112,7 @@ pub fn put_up(task: &WallFor) -> Result<Wall, WallRefused> {
         return Ok(Wall {
             folder: None,
             started: SystemTime::now(),
+            launcher: None,
         });
     }
     available().map_err(WallRefused::Unavailable)?;
