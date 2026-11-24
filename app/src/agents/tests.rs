@@ -3290,6 +3290,54 @@ fn a_handoff_not_handed_back_answers_after_15_minutes(cx: &mut TestAppContext) {
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "handed back");
 }
 
+/// A hand-off is its tab's alone: two tabs handed off at once are both the user's, and each
+/// call is answered when its own tab comes back, handed back in the other order.
+#[gpui::test]
+fn two_tabs_handed_off_at_once_come_back_in_either_order(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    (browser.tabs.borrow_mut()).push((21, 2, "Example Org", "https://www.example.org/"));
+    let first = json!({ "tab": 20, "reason": "Sign in to example.com" });
+    let first = call(&agents, "claude-code", "hand_off", first, cx);
+    let second = json!({ "tab": 21, "reason": "Sign in to example.org" });
+    let second = call(&agents, "claude-code", "hand_off", second, cx);
+    if let Ok(answer) = second.try_recv() {
+        panic!("tab 21's hand-off was answered before it was handed back: {answer:?}");
+    }
+    assert_eq!(
+        browser
+            .held
+            .borrow()
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>(),
+        [20, 21].into(),
+        "a second tab's hand-off waited for the first's"
+    );
+
+    agents.update(cx, |agents, cx| agents.hand_back(21, cx));
+    cx.run_until_parked();
+    assert!(
+        !second.recv().unwrap().error,
+        "tab 21's call wasn't answered"
+    );
+    assert!(
+        first.try_recv().is_err(),
+        "tab 20's call was answered by tab 21's hand-back"
+    );
+    assert!(
+        browser.held.borrow().contains(&20),
+        "tab 20 left the user with tab 21"
+    );
+
+    agents.update(cx, |agents, cx| agents.hand_back(20, cx));
+    cx.run_until_parked();
+    assert!(
+        !first.recv().unwrap().error,
+        "tab 20's call wasn't answered"
+    );
+    assert!(browser.held.borrow().is_empty());
+}
+
 /// The core's report of a download the page in tab `tab` started, held, as the answer to
 /// `request`.
 fn download_started(
