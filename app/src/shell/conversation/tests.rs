@@ -209,7 +209,8 @@ fn a_needs_notification_opens_its_task(cx: &mut TestAppContext) {
     let mut waits = card();
     waits.dot = Dot::Waiting;
     waits.status = "Which seat?".into();
-    cx.update(|_, cx| crate::needs_you::follow(&[waits], cx));
+    let when = crate::needs_you::Notify::Away;
+    cx.update(|_, cx| crate::needs_you::follow(&[waits], when, cx));
     let agent = cx
         .update(|_, cx| crate::needs_you::clicked(1, cx))
         .expect("its task");
