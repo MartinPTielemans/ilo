@@ -203,6 +203,13 @@ fn state_lead(line: &str) -> usize {
     if leads { full.len() } else { 0 }
 }
 
+/// A task's page's word and whether it has the outline, as `Shell::page_mark` says.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct PageMark {
+    pub word: PageWord,
+    pub outline: bool,
+}
+
 /// What a task's page is to it now, in the words every place that names the page says: the end of
 /// its row at the sidebar's foot, and its tile's head line.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -981,7 +988,7 @@ impl Shell {
             }
             // The ring stays on the row, whose page shows: the keys never go to an agent's page.
             StripStop::Row(tab) => {
-                if self.watch_row(tab, cx) && self.agents_page_watched() {
+                if self.watch_row(tab, false, cx) && self.agents_page_watched() {
                     self.focus_keys = true;
                 }
             }
@@ -1001,8 +1008,8 @@ impl Shell {
 
     /// A page's row's click: stands on that page, as its picture's click in the task's view does,
     /// and nothing else. Says whether it did. The page zooms out of its picture there, or of its
-    /// row where the view has drawn none.
-    fn watch_row(&mut self, tab: u64, cx: &mut Context<Self>) -> bool {
+    /// row where the view has drawn none. `by_ilo` when ilo opens it by itself, as at a handoff.
+    pub(super) fn watch_row(&mut self, tab: u64, by_ilo: bool, cx: &mut Context<Self>) -> bool {
         if self
             .watched_task_page()
             .is_some_and(|(_, shown)| shown == tab)
@@ -1012,7 +1019,7 @@ impl Shell {
         let row = self.foot.rows_drawn.borrow().get(&tab).copied();
         let (from, picture) =
             (self.talk_thumb(tab, cx)).unwrap_or_else(|| (row.unwrap_or_default(), None));
-        self.watch_task_page(tab, from, picture, cx)
+        self.watch_task_page(tab, from, picture, by_ilo, cx)
     }
 
     /// A chip's click: the user's own act on the task.
@@ -1030,35 +1037,42 @@ impl Shell {
         }
     }
 
-    /// What `tab` is to `card`'s task now, of the five words a task's page has: You're driving
-    /// where the user took it over, Needs you where its task waits for them at the page it handed
-    /// them, Working where the task works in it now, Paused where its task waits, stopped or broke
-    /// off, or went on from a page it handed them, else Done. The row at the sidebar's foot ends
-    /// in it and a tile's head line says it, so a page reads the same in both.
-    pub(super) fn page_word(&self, card: &Card, tab: u64) -> PageWord {
+    /// What `tab` is to `card`'s task now: its word, of the five a task's page has, and whether
+    /// it has the outline. The row at the sidebar's foot, a tile in the rail and the card all read
+    /// this one answer, so a page's word and its outline never disagree. While the task works,
+    /// each of its pages says Working and the outline alone marks the one it's in; Done is a
+    /// page's word only once the task is done, as a page it left may be come back to. At a handoff
+    /// the outline is on the page that needs the user. A page the user took over is theirs, one it
+    /// handed them and went on from is Paused, as are a stopped task's; a stopped or done task has
+    /// no outline.
+    pub(super) fn page_mark(&self, card: &Card, tab: u64) -> PageMark {
+        let mark = |word, outline| PageMark { word, outline };
         match self.held_why(tab) {
             // What the task asked of them there: a page they took over has none.
-            Some(asked) if asked.is_empty() => return PageWord::Driving,
-            Some(_) if card.word == Word::NeedsYou => return PageWord::NeedsYou,
-            Some(_) => return PageWord::Paused,
+            Some(asked) if asked.is_empty() => return mark(PageWord::Driving, false),
+            Some(_) if card.word == Word::NeedsYou => return mark(PageWord::NeedsYou, true),
+            Some(_) => return mark(PageWord::Paused, false),
             None => {}
         }
         match card.word {
             Word::Working => {
                 // Its own step of the turn under way, where it works on more than one page.
-                let at = match card.page_steps.is_empty() {
+                let in_it = match card.page_steps.is_empty() {
                     false => card.page_steps.iter().any(|(each, _)| *each == tab),
                     true => card.pages.len() == 1 || self.agents_at.get(&card.agent) == Some(&tab),
                 };
-                if at {
-                    PageWord::Working
-                } else {
-                    PageWord::Done
-                }
+                mark(PageWord::Working, in_it)
             }
-            Word::Done => PageWord::Done,
-            Word::NeedsYou | Word::Stopped | Word::Interrupted | Word::AtLimit => PageWord::Paused,
+            Word::Done => mark(PageWord::Done, false),
+            Word::NeedsYou | Word::Stopped | Word::Interrupted | Word::AtLimit => {
+                mark(PageWord::Paused, false)
+            }
         }
+    }
+
+    /// `tab`'s word, from `page_mark`.
+    pub(super) fn page_word(&self, card: &Card, tab: u64) -> PageWord {
+        self.page_mark(card, tab).word
     }
 
     /// Where ⌘T's bar folds to as it runs a task: the slot's plate as it will rest, a header's, in
@@ -1926,8 +1940,10 @@ impl Shell {
     /// page area shows.
     fn page_row(&self, card: &Card, tab: u64, cx: &mut Context<Self>) -> AnyElement {
         let shown = self.shown_at_foot() == Some(StripStop::Row(tab));
-        let word = self.page_word(card, tab);
-        let working = word == PageWord::Working;
+        let mark = self.page_mark(card, tab);
+        let word = mark.word;
+        // Signal's dot is on the page the task is in, where the outline is.
+        let working = word == PageWord::Working && mark.outline;
         let row = div()
             .h(px(PAGE_HEIGHT))
             .flex()
@@ -2008,7 +2024,7 @@ impl Shell {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |shell, _, _, cx| {
                 cx.stop_propagation();
-                shell.watch_row(tab, cx);
+                shell.watch_row(tab, false, cx);
             }))
             .into_any_element()
     }
