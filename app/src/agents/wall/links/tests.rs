@@ -70,13 +70,21 @@ impl Drop for Folders {
 }
 
 /// The clock exactly, since these links are made tens of milliseconds either side of the start.
-const EXACT: Limits = Limits {
-    slack: Duration::ZERO,
-    ..LIMITS
-};
+fn exact(_: &OwnedFd) -> Option<Duration> {
+    Some(Duration::ZERO)
+}
+
+/// A filesystem whose change times can't be trusted.
+fn untrusted(_: &OwnedFd) -> Option<Duration> {
+    None
+}
 
 fn walk(wall: &Wall) -> Walked {
-    outside(wall, EXACT)
+    outside_with(wall, LIMITS, exact)
+}
+
+fn walk_to(wall: &Wall, limits: Limits) -> Walked {
+    outside_with(wall, limits, exact)
 }
 
 fn listed(walked: &Walked) -> Vec<&str> {
@@ -176,19 +184,19 @@ fn the_walk_stops_short_and_says_so() {
     let wall = folders.start();
     folders.link("away", &folders.outside);
 
-    let at_the_cap = outside(
+    let at_the_cap = walk_to(
         &wall,
         Limits {
             entries: 100,
-            ..EXACT
+            ..LIMITS
         },
     );
     assert_eq!(at_the_cap.stopped, Some(Stop::Entries));
-    let out_of_time = outside(
+    let out_of_time = walk_to(
         &wall,
         Limits {
             time: Duration::ZERO,
-            ..EXACT
+            ..LIMITS
         },
     );
     assert_eq!(out_of_time.stopped, Some(Stop::Time));
@@ -228,7 +236,7 @@ fn delete_removes_only_the_listed_links() {
     let only = [walked.links[0].clone()];
 
     assert_eq!(
-        remove(&wall, &only, EXACT),
+        remove_with(&wall, &only, exact),
         Removed {
             removed: 1,
             left: 0
@@ -262,7 +270,7 @@ fn a_link_changed_since_the_walk_is_left() {
     folders.link("sub", "elsewhere/sub");
 
     assert_eq!(
-        remove(&wall, &walked.links, EXACT),
+        remove_with(&wall, &walked.links, exact),
         Removed {
             removed: 0,
             left: 4
@@ -294,7 +302,7 @@ fn delete_takes_nothing_the_walk_could_not_have_listed() {
         link(""),
     ];
     assert_eq!(
-        remove(&wall, &named, EXACT),
+        remove_with(&wall, &named, exact),
         Removed {
             removed: 0,
             left: 4
@@ -311,4 +319,137 @@ fn a_task_with_no_folder_has_no_links() {
         started: SystemTime::now(),
     };
     assert_eq!(walk(&wall), Walked::default());
+}
+
+#[test]
+fn a_folder_it_cannot_read_is_counted_with_its_path() {
+    let folders = Folders::new();
+    folders.dir("open");
+    let wall = folders.start();
+    folders.link("open/away", &folders.outside);
+    folders.dir("locked");
+    folders.link("locked/away", &folders.outside);
+    fs::set_permissions(folders.at("locked"), fs::Permissions::from_mode(0o000)).unwrap();
+
+    let walked = walk(&wall);
+    assert_eq!(listed(&walked), ["open/away"]);
+    assert_eq!(walked.unread, 1);
+    assert_eq!(walked.first_unread.as_deref(), Some(Path::new("locked")));
+}
+
+#[test]
+fn a_folder_deeper_than_the_walk_goes_is_counted_not_passed_over() {
+    let folders = Folders::new();
+    folders.dir("a/b/c/d");
+    let wall = folders.start();
+    folders.link("a/b/c/d/away", &folders.outside);
+    folders.link("a/also-deep", &folders.outside);
+
+    // The folder itself, a and b are held open; c would be the fourth.
+    let walked = walk_to(&wall, Limits { depth: 3, ..LIMITS });
+    assert_eq!(listed(&walked), ["a/also-deep"]);
+    assert_eq!(walked.unread, 1);
+    assert_eq!(walked.first_unread.as_deref(), Some(Path::new("a/b/c")));
+    assert_eq!(listed(&walk(&wall)), ["a/also-deep", "a/b/c/d/away"]);
+}
+
+#[test]
+fn a_folder_that_cannot_be_opened_is_its_own_answer() {
+    let folders = Folders::new();
+    let mut wall = folders.start();
+    wall.folder = Some(folders.at("removed"));
+    let walked = walk(&wall);
+    assert!(walked.root_unread);
+    assert_eq!((walked.unread, walked.first_unread), (0, None));
+}
+
+/// Each way of not seeing the whole folder is an answer of its own, never "nothing found".
+#[test]
+fn no_give_up_reads_as_a_clean_walk() {
+    let folders = Folders::new();
+    folders.dir("locked/b");
+    folders.file("one");
+    folders.file("two");
+    let mut wall = folders.start();
+    fs::set_permissions(folders.at("locked"), fs::Permissions::from_mode(0o000)).unwrap();
+    let unread = walk(&wall);
+    fs::set_permissions(folders.at("locked"), fs::Permissions::from_mode(0o755)).unwrap();
+    let stopped = walk_to(
+        &wall,
+        Limits {
+            entries: 1,
+            ..LIMITS
+        },
+    );
+    wall.folder = Some(folders.at("removed"));
+    let root_unread = walk(&wall);
+
+    for walked in [unread, stopped, root_unread] {
+        assert!(walked.links.is_empty());
+        assert_ne!(walked, Walked::default());
+    }
+}
+
+#[test]
+fn a_folder_on_another_device_is_not_walked() {
+    let stand_in = |device| {
+        // SAFETY: a plain C struct, for which all zeroes is a value.
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        stat.st_dev = device;
+        stat
+    };
+    assert!(same_device(&stand_in(7), &stand_in(7)));
+    assert!(!same_device(&stand_in(7), &stand_in(8)));
+}
+
+#[test]
+fn only_the_systems_own_disks_have_change_times_to_trust() {
+    assert_eq!(slack_by_name(b"apfs"), Some(Duration::from_millis(100)));
+    for name in [
+        &b"hfs"[..],
+        b"smbfs",
+        b"nfs",
+        b"msdos",
+        b"exfat",
+        b"macfuse",
+    ] {
+        assert_eq!(
+            slack_by_name(name),
+            None,
+            "{}",
+            String::from_utf8_lossy(name)
+        );
+    }
+    #[cfg(target_os = "linux")]
+    {
+        #[allow(clippy::unnecessary_cast)]
+        let (ext4, nfs, fuse) = (
+            libc::EXT4_SUPER_MAGIC as u32,
+            libc::NFS_SUPER_MAGIC as u32,
+            libc::FUSE_SUPER_MAGIC as u32,
+        );
+        assert_eq!(slack_by_number(ext4), Some(Duration::from_secs(1)));
+        assert_eq!((slack_by_number(nfs), slack_by_number(fuse)), (None, None));
+    }
+}
+
+#[test]
+fn with_no_change_time_to_trust_every_leaving_link_is_listed_and_delete_takes_none() {
+    let folders = Folders::new();
+    folders.link("users", &folders.outside);
+    let wall = folders.start();
+    folders.link("away", &folders.outside);
+
+    let walked = outside_with(&wall, LIMITS, untrusted);
+    assert!(walked.every_leaving);
+    assert_eq!(listed(&walked), ["away", "users"]);
+    assert_eq!(
+        remove_with(&wall, &walked.links, untrusted),
+        Removed {
+            removed: 0,
+            left: 2
+        }
+    );
+    assert!(fs::symlink_metadata(folders.at("users")).is_ok());
+    assert!(fs::symlink_metadata(folders.at("away")).is_ok());
 }

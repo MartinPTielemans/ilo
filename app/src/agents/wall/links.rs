@@ -1,7 +1,12 @@
 //! The links a task left in its granted folder that lead out of it, and the user's Delete Links
 //! (#4101). Both read the folder's directories and its links and nothing else: no file is opened,
 //! no link is followed, and nothing outside the folder is read. A link's target is resolved by
-//! reading the chain of links it names, from the folder down.
+//! reading the chain of links it names, from the folder down. What the walk couldn't read it says,
+//! so it never answers "nothing found" for a folder it didn't wholly see.
+//!
+//! A link is the task's by its own change time alone. A folder of the user's that the task moves
+//! within the granted folder keeps its links' times, so a relative link in it that now leads out
+//! isn't listed: a known gap, and nothing follows such a link out for a task either way.
 
 use std::ffi::{CStr, CString, OsStr, OsString};
 use std::io;
@@ -18,16 +23,20 @@ pub(super) struct Limits {
     /// Entries read before the walk stops, so a huge folder can't hold the task's end.
     pub entries: usize,
     pub time: Duration,
-    /// How far before the task's start a link's change time still counts as the task's: a
-    /// filesystem keeps it by a coarse clock, a jiffy behind on Linux and to the second on HFS+.
-    pub slack: Duration,
+    /// Folders held open at once, so a deep folder can't use up the app's handles: one deeper
+    /// isn't read, and counts as unread.
+    pub depth: usize,
 }
 
 pub(super) const LIMITS: Limits = Limits {
     entries: 1_000_000,
     time: Duration::from_secs(30),
-    slack: Duration::from_secs(1),
+    depth: 64,
 };
+
+/// How far before the task's start a link's change time still counts as the task's on the folder's
+/// filesystem, or None where its change times can't tell the task's links from the user's.
+type Trust = fn(&OwnedFd) -> Option<Duration>;
 
 /// Links read through before a chain counts as a loop: the kernel's own limit.
 const HOPS: usize = 40;
@@ -48,35 +57,62 @@ enum Kind {
     Other,
 }
 
+/// A folder on the way down, with a handle held to it.
+struct Open {
+    dir: OwnedFd,
+    at: Vec<OsString>,
+    names: std::vec::IntoIter<(OsString, Option<Kind>)>,
+    /// Already counted as unread, for an entry in it the walk couldn't look at.
+    unread: bool,
+}
+
+impl Open {
+    fn not_wholly_read(&mut self, walked: &mut Walked) {
+        if !self.unread {
+            self.unread = true;
+            count_unread(walked, &self.at);
+        }
+    }
+}
+
+fn count_unread(walked: &mut Walked, at: &[OsString]) {
+    walked.unread += 1;
+    if walked.first_unread.is_none() {
+        walked.first_unread = Some(at.iter().collect());
+    }
+}
+
 pub(super) fn outside(wall: &Wall, limits: Limits) -> Walked {
+    #[cfg(target_os = "macos")]
+    let _policy = dataless::left_in_the_cloud();
+    outside_with(wall, limits, filesystem_slack)
+}
+
+fn outside_with(wall: &Wall, limits: Limits, trust: Trust) -> Walked {
     let mut walked = Walked::default();
     let Some(root_path) = wall.folder() else {
         return walked;
     };
-    let (Ok(root), Ok(walk_root)) = (open_root(root_path), open_root(root_path)) else {
+    let opened = (|| -> io::Result<_> {
+        let (root, walk_root) = (open_root(root_path)?, open_root(root_path)?);
+        Ok((stat_of(&root)?, entries(&walk_root)?, root, walk_root))
+    })();
+    let Ok((root_stat, names, root, walk_root)) = opened else {
+        walked.root_unread = true;
         return walked;
     };
-    walked.every_leaving = !change_times_trusted(&root);
-    let since = wall
-        .started()
-        .checked_sub(limits.slack)
-        .unwrap_or(UNIX_EPOCH);
+    let slack = trust(&root);
+    walked.every_leaving = slack.is_none();
+    let since = since(wall, slack);
     let began = Instant::now();
     let mut seen = 0;
 
     // Depth first, holding a handle only to each directory on the way down.
-    struct Open {
-        dir: OwnedFd,
-        at: Vec<OsString>,
-        names: std::vec::IntoIter<(OsString, Option<Kind>)>,
-    }
-    let Ok(names) = entries(&walk_root) else {
-        return walked;
-    };
     let mut open = vec![Open {
         dir: walk_root,
         at: Vec::new(),
         names: names.into_iter(),
+        unread: false,
     }];
     while let Some(top) = open.last_mut() {
         let Some((name, kind)) = top.names.next() else {
@@ -93,42 +129,68 @@ pub(super) fn outside(wall: &Wall, limits: Limits) -> Walked {
             break;
         }
         let Ok(c_name) = c_string(&name) else {
+            top.not_wholly_read(&mut walked);
             continue;
         };
         let dir = top.dir.as_raw_fd();
-        let kind = match kind {
-            Some(kind) => kind,
-            None => match lstat_at(dir, &c_name) {
-                Ok(stat) => kind_of(&stat),
-                Err(_) => continue,
-            },
+        let kind = match kind
+            .map(Ok)
+            .unwrap_or_else(|| lstat_at(dir, &c_name).map(|s| kind_of(&s)))
+        {
+            Ok(kind) => kind,
+            Err(error) if gone(&error) => continue,
+            Err(_) => {
+                top.not_wholly_read(&mut walked);
+                continue;
+            }
         };
         match kind {
             Kind::Dir => {
-                let Ok(sub) = open_dir(dir, &c_name) else {
-                    continue;
-                };
-                let Ok(names) = entries(&sub) else {
-                    continue;
-                };
                 let mut at = top.at.clone();
                 at.push(name);
+                if open.len() >= limits.depth {
+                    count_unread(&mut walked, &at);
+                    continue;
+                }
+                let sub = open_dir(dir, &c_name).and_then(|sub| Ok((stat_of(&sub)?, sub)));
+                let names = match sub {
+                    Err(error) if gone(&error) => continue,
+                    Ok((stat, sub)) if same_device(&root_stat, &stat) => {
+                        entries(&sub).map(|names| (sub, names))
+                    }
+                    _ => Err(io::Error::from(io::ErrorKind::Unsupported)),
+                };
+                let Ok((sub, names)) = names else {
+                    count_unread(&mut walked, &at);
+                    continue;
+                };
                 open.push(Open {
                     dir: sub,
                     at,
                     names: names.into_iter(),
+                    unread: false,
                 });
             }
             Kind::Link => {
-                let Ok(stat) = lstat_at(dir, &c_name) else {
-                    continue;
+                let stat = match lstat_at(dir, &c_name) {
+                    Ok(stat) => stat,
+                    Err(error) if gone(&error) => continue,
+                    Err(_) => {
+                        top.not_wholly_read(&mut walked);
+                        continue;
+                    }
                 };
                 if kind_of(&stat) != Kind::Link || (!walked.every_leaving && changed(&stat) < since)
                 {
                     continue;
                 }
-                let Ok(target) = read_link_at(dir, &c_name) else {
-                    continue;
+                let target = match read_link_at(dir, &c_name) {
+                    Ok(target) => target,
+                    Err(error) if gone(&error) => continue,
+                    Err(_) => {
+                        top.not_wholly_read(&mut walked);
+                        continue;
+                    }
                 };
                 if leads(&root, root_path, &top.at, &target) == Leads::Outside {
                     let path: PathBuf = top.at.iter().chain([&name]).collect();
@@ -142,21 +204,44 @@ pub(super) fn outside(wall: &Wall, limits: Limits) -> Walked {
     walked
 }
 
-pub(super) fn remove(wall: &Wall, links: &[LeavingLink], limits: Limits) -> Removed {
-    let root = wall
-        .folder()
-        .and_then(|path| Some((path, open_root(path).ok()?)))
+/// Removed between the directory's listing and the look at it: nothing there to read.
+fn gone(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(libc::ENOENT)
+}
+
+/// Whether the walk goes into a folder it opened: not one on another device, a disk or share
+/// mounted inside the folder, whose change times and links are another filesystem's.
+fn same_device(root: &libc::stat, folder: &libc::stat) -> bool {
+    root.st_dev == folder.st_dev
+}
+
+fn since(wall: &Wall, slack: Option<Duration>) -> SystemTime {
+    let slack = slack.unwrap_or(Duration::ZERO);
+    wall.started().checked_sub(slack).unwrap_or(UNIX_EPOCH)
+}
+
+/// Between its checks and the unlink, an entry swapped in under the same name in the same folder
+/// would be removed in the link's place: never a folder, and never anything outside the folder. A
+/// touch of the user's own link during the task, a change of its mode or times or a hard link to
+/// it, makes it the task's by its change time; Delete then removes that link, never its target.
+pub(super) fn remove(wall: &Wall, links: &[LeavingLink]) -> Removed {
+    #[cfg(target_os = "macos")]
+    let _policy = dataless::left_in_the_cloud();
+    remove_with(wall, links, filesystem_slack)
+}
+
+fn remove_with(wall: &Wall, links: &[LeavingLink], trust: Trust) -> Removed {
+    let root = wall.folder().and_then(|path| {
+        let root = open_root(path).ok()?;
         // A list of every leaving link is the user's own links too, so it deletes none.
-        .filter(|(_, root)| change_times_trusted(root));
-    let since = wall
-        .started()
-        .checked_sub(limits.slack)
-        .unwrap_or(UNIX_EPOCH);
+        let slack = trust(&root)?;
+        Some((path, root, since(wall, Some(slack))))
+    });
     let mut removed = Removed::default();
     for link in links {
         let gone = root
             .as_ref()
-            .is_some_and(|(path, root)| remove_one(root, path, since, link).is_ok());
+            .is_some_and(|(path, root, since)| remove_one(root, path, *since, link).is_ok());
         match gone {
             true => removed.removed += 1,
             false => removed.left += 1,
@@ -282,13 +367,13 @@ fn by_parts(mut depth: usize, rest: &[OsString]) -> Leads {
     Leads::Inside
 }
 
-/// Whether the folder's filesystem keeps a link's own change time, so the task's links can be told
-/// from the user's: the system's own disks, never a shared, removable or user-space one.
-fn change_times_trusted(root: &OwnedFd) -> bool {
+/// The folder's filesystem's slack, by its name on the Mac and its number on Linux; any other
+/// system trusts none.
+fn filesystem_slack(root: &OwnedFd) -> Option<Duration> {
     let mut stat = MaybeUninit::<libc::statfs>::uninit();
     // SAFETY: an open handle, and room for the answer.
     if unsafe { libc::fstatfs(root.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
-        return false;
+        return None;
     }
     // SAFETY: fstatfs succeeded, so it filled the answer.
     let stat = unsafe { stat.assume_init() };
@@ -296,25 +381,51 @@ fn change_times_trusted(root: &OwnedFd) -> bool {
     {
         // SAFETY: the system ends the name with a NUL.
         let name = unsafe { CStr::from_ptr(stat.f_fstypename.as_ptr()) };
-        matches!(name.to_bytes(), b"apfs" | b"hfs")
+        slack_by_name(name.to_bytes())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     {
-        // ext2/3/4, btrfs, xfs, tmpfs, f2fs, zfs, overlay, bcachefs.
-        const TRUSTED: [u32; 9] = [
-            0xEF53,
-            0x9123_683E,
-            0x5846_5342,
-            0x0102_1994,
-            0xF2F5_2010,
-            0x2FC1_2FC1,
-            0x794C_7630,
-            0xCA45_1A4E,
-            0x0000_EF51,
-        ];
         #[allow(clippy::unnecessary_cast)]
-        TRUSTED.contains(&(stat.f_type as u32))
+        slack_by_number(stat.f_type as u32)
     }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = stat;
+        None
+    }
+}
+
+/// The Mac's: APFS keeps a link's change time in nanoseconds by the clock the app reads, so a
+/// tenth of a second covers it. HFS+ keeps whole seconds, so a link the user made in the second
+/// before the task can't be told from the task's, and it isn't trusted; nor is a shared,
+/// removable or user-space filesystem.
+#[cfg(any(target_os = "macos", test))]
+fn slack_by_name(name: &[u8]) -> Option<Duration> {
+    (name == b"apfs").then_some(Duration::from_millis(100))
+}
+
+/// Linux's: ext2/3/4, btrfs, xfs, tmpfs, f2fs, zfs, overlay and bcachefs, never a shared or
+/// user-space one. An ext4 with small inodes keeps whole seconds and statfs can't tell it from
+/// one with large, so a second covers it, and the kernel's coarse clock with it.
+#[cfg(target_os = "linux")]
+fn slack_by_number(number: u32) -> Option<Duration> {
+    // Not in libc.
+    const ZFS: u32 = 0x2FC1_2FC1;
+    const BCACHEFS: u32 = 0xCA45_1A4E;
+    const EXT2_OLD: u32 = 0xEF51;
+    #[allow(clippy::unnecessary_cast)]
+    const TRUSTED: [u32; 9] = [
+        libc::EXT4_SUPER_MAGIC as u32,
+        libc::BTRFS_SUPER_MAGIC as u32,
+        libc::XFS_SUPER_MAGIC as u32,
+        libc::TMPFS_MAGIC as u32,
+        libc::F2FS_SUPER_MAGIC as u32,
+        libc::OVERLAYFS_SUPER_MAGIC as u32,
+        ZFS,
+        BCACHEFS,
+        EXT2_OLD,
+    ];
+    TRUSTED.contains(&number).then_some(Duration::from_secs(1))
 }
 
 fn changed(stat: &libc::stat) -> SystemTime {
@@ -457,6 +568,55 @@ fn read_link_at(dir: RawFd, name: &CStr) -> io::Result<PathBuf> {
     }
     target.truncate(read);
     Ok(PathBuf::from(OsString::from_vec(target)))
+}
+
+fn stat_of(fd: &OwnedFd) -> io::Result<libc::stat> {
+    let mut stat = MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: an open handle and room for the answer.
+    if unsafe { libc::fstat(fd.as_raw_fd(), stat.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: fstat succeeded, so it filled the answer.
+    Ok(unsafe { stat.assume_init() })
+}
+
+/// While the walk runs, the Mac doesn't fetch a folder's contents that are only in the cloud just
+/// to list them: such a folder won't open then, and counts as unread. Unmeasured: no Mac run has
+/// walked one yet.
+#[cfg(target_os = "macos")]
+mod dataless {
+    use libc::c_int;
+
+    // From the SDK's sys/resource.h, which libc doesn't bind.
+    const MATERIALIZE_DATALESS_FILES: c_int = 3;
+    const THREAD: c_int = 1;
+    const OFF: c_int = 1;
+
+    unsafe extern "C" {
+        fn getiopolicy_np(iotype: c_int, scope: c_int) -> c_int;
+        fn setiopolicy_np(iotype: c_int, scope: c_int, policy: c_int) -> c_int;
+    }
+
+    /// The walking thread's policy as it was, put back as the walk ends.
+    pub(super) struct LeftInTheCloud(Option<c_int>);
+
+    pub(super) fn left_in_the_cloud() -> LeftInTheCloud {
+        // SAFETY: the calling thread's own policy.
+        let was = unsafe { getiopolicy_np(MATERIALIZE_DATALESS_FILES, THREAD) };
+        // SAFETY: as above.
+        let set =
+            was >= 0 && unsafe { setiopolicy_np(MATERIALIZE_DATALESS_FILES, THREAD, OFF) } == 0;
+        LeftInTheCloud(set.then_some(was))
+    }
+
+    impl Drop for LeftInTheCloud {
+        fn drop(&mut self) {
+            if let Some(was) = self.0 {
+                // SAFETY: the calling thread's own policy, as it read before the walk.
+                unsafe { setiopolicy_np(MATERIALIZE_DATALESS_FILES, THREAD, was) };
+            }
+        }
+    }
 }
 
 #[cfg(test)]

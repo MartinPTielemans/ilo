@@ -138,6 +138,15 @@ pub struct Walked {
     /// Set when no change time could be trusted or the system's change record dropped some, so the
     /// list is every leaving link in the folder, offered to reveal only and never to delete.
     pub every_leaving: bool,
+    /// Folders the walk couldn't wholly read: one it couldn't open or list, deeper than it goes, on
+    /// another device, or holding an entry it couldn't look at. Each counts once.
+    pub unread: usize,
+    /// The first of them, relative to the folder, for the reveal. It is the user's own folder
+    /// layout, so it stays in memory for the line: never a log line, the 30-day file or an
+    /// agent's answer.
+    pub first_unread: Option<PathBuf>,
+    /// Set when the folder itself couldn't be opened as the task ended, so nothing in it was read.
+    pub root_unread: bool,
     /// Set when the walk stopped short, so the line says it checked part of the folder.
     pub stopped: Option<Stop>,
 }
@@ -151,7 +160,8 @@ pub struct Removed {
 
 /// The links the task made, moved or retargeted that leave its folder: once, as the task ends,
 /// off the UI thread, never on a timer or while the task runs. It reads directories and links only
-/// (links.rs), and stops at a million entries or 30 s, saying so.
+/// (links.rs), and stops at a million entries or 30 s, saying so, and at 64 folders deep, counting
+/// what's deeper as unread.
 #[cfg(unix)]
 pub fn links_outside(wall: &Wall) -> Walked {
     links::outside(wall, links::LIMITS)
@@ -168,7 +178,7 @@ pub fn links_outside(_: &Wall) -> Walked {
 /// folder keeps no change time to trust, the list was every leaving link, and it deletes none.
 #[cfg(unix)]
 pub fn remove_links(wall: &Wall, links: &[LeavingLink]) -> Removed {
-    self::links::remove(wall, links, self::links::LIMITS)
+    self::links::remove(wall, links)
 }
 
 #[cfg(not(unix))]
