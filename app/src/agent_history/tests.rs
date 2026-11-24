@@ -128,7 +128,6 @@ fn one_entry_deletes_alone() {
 /// Its row says its agent, when it ended, what it did that had consequences, and its pages.
 #[test]
 fn a_row_says_what_its_receipt_did() {
-    let about = past("task-1", 1_000_000).about();
-    assert!(about.starts_with("Claude Code · "), "{about}");
-    assert!(about.ends_with(" · 1 order placed · 1 page"), "{about}");
+    let about = past("task-1", 1_000_000).about("Tue 21:05");
+    assert_eq!(about, "Claude Code · Tue 21:05 · 1 order placed · 1 page");
 }

@@ -3,9 +3,9 @@
 //! (crate::safe_start), and this card, over the footer and under the update banner, says so in
 //! every window until the launch ends: what happened, what's off, that pages aren't ad-blocked
 //! meanwhile if Settings blocks ads, Turn Back On, which restarts into a normal launch with the
-//! windows and tabs, and Extensions…, for the extension that may be the cause. Those two are an
-//! agent task card's chips, one under the other at every width, so the foot's cards read as one
-//! family and the card doesn't reflow as the sidebar's width changes. It has no ×: the hold lasts
+//! windows and tabs, and Extensions…, for the extension that may be the cause. Those two are
+//! chips, one under the other at every width, so the card doesn't reflow as the sidebar's width
+//! changes. It has no ×: the hold lasts
 //! the launch whatever the user does, so the card does too. Agents get none of it.
 
 use gpui::{
@@ -14,9 +14,11 @@ use gpui::{
 };
 
 use super::{
-    FOOTER_HEIGHT, PRESSED, Shell, TITLE_END_INSET, access::Accessible, permission::card_listener,
-    task_cards::card_chip,
+    FOOTER_HEIGHT, NAV_RADIUS, PRESSED, Palette, Shell, TITLE_END_INSET, access::Accessible,
+    permission::card_listener,
 };
+use crate::palette::FIELD_PLATE as URL_FIELD;
+use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
 use crate::tokens::shell::task::{CHIP_END, CHIP_GAP, CHIP_HEIGHT, CHIP_X, CHIPS_TOP};
 use crate::tokens::shell::{
     FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, PLATE_INSET, PLATE_RADIUS, SAFE_START_DETAIL_LINE,
@@ -214,7 +216,7 @@ impl Shell {
                     .mt(px(DETAIL_TOP))
                     .text_size(px(text::SMALL))
                     .line_height(px(SAFE_START_DETAIL_LINE))
-                    .text_color(self.palette.text(SECONDARY))
+                    .text_color(self.palette.gray(SECONDARY))
                     .child(detail(shape.ad_blocking)),
             );
         let room = chips_room(self.width() - 2. * PLATE_INSET);
@@ -281,6 +283,31 @@ impl Shell {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
         )
     }
+}
+
+/// A chip on the card, the sidebar's scale: the URL field's plate at a control's corners, as wide
+/// as its words, cut to the room it has.
+fn card_chip(
+    palette: &Palette,
+    id: impl Into<gpui::ElementId>,
+    label: SharedString,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .min_w_0()
+        .h(px(CHIP_HEIGHT))
+        .px(px(CHIP_X))
+        .flex()
+        .items_center()
+        .rounded(px(NAV_RADIUS))
+        .bg(palette.ground_plate(Ground::Field, URL_FIELD))
+        .hover(|style| style.bg(palette.ground_state(Ground::Field, URL_FIELD, STATE_HOVERED)))
+        .active(|style| style.bg(palette.ground_state(Ground::Field, URL_FIELD, STATE_PRESSED)))
+        .text_size(px(text::SMALL))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(palette.text(crate::tokens::shell::TITLE))
+        .child(div().truncate().child(label))
 }
 
 #[cfg(test)]

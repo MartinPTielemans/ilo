@@ -868,6 +868,39 @@ fn a_click_on_the_cards_dim_leaves_a_pages_question(cx: &mut TestAppContext) {
     assert_eq!(dialog.calls(), left(&[], "cancel "));
 }
 
+/// A prompt's field stays as the window under the card goes from dark to light and back, and draws
+/// in the palette the card draws in each time, not in the one it was made in.
+#[gpui::test]
+fn a_prompts_field_follows_the_look(cx: &mut TestAppContext) {
+    use crate::palette::{Palette, Tone as Look};
+    let mut dialog = Asking::page(page_question(vec![field("", false)], None), cx);
+    let window = dialog.cx.read(|cx| cx.global::<DialogWindow>().0);
+    let mut colours = Vec::new();
+    for look in [Look::Light, Look::Dark, Look::Light] {
+        let palette = Palette::of(None, look);
+        dialog.cx.update(|window, cx| {
+            palette::set_current(palette, cx);
+            window.refresh();
+        });
+        dialog.cx.run_until_parked();
+        let drawn = window
+            .read_with(&dialog.cx, |dialog, cx| {
+                let asked = dialog.asked.as_ref().expect("the question stays");
+                asked.fields[0].read(cx).colors()
+            })
+            .expect("the dialog's window");
+        let meant = Colors {
+            placeholder: palette.on_overlay(FIELD_PLACEHOLDER),
+            caret: palette.accent.into(),
+            selection: palette.selection(),
+        };
+        assert_eq!(drawn, meant, "{look:?}");
+        colours.push(drawn);
+    }
+    assert_ne!(colours[0], colours[1], "light and dark drew the same field");
+    assert_eq!(colours[0], colours[2]);
+}
+
 #[gpui::test]
 fn a_prompt_answers_what_was_typed(cx: &mut TestAppContext) {
     let mut dialog = Asking::page(page_question(vec![field("Ada", false)], None), cx);
@@ -875,6 +908,90 @@ fn a_prompt_answers_what_was_typed(cx: &mut TestAppContext) {
     dialog.cx.simulate_input("Grace");
     dialog.keys("enter");
     assert_eq!(dialog.calls(), left(&["show over 100"], "accept Grace"));
+}
+
+/// An input method composes "ぴ" in the prompt's field, or with `commit` ends its composition as it
+/// does when it takes the key itself: committing `commit` in its place, or with it empty dropping
+/// it. Returns what the field shows, and whether it's marked.
+fn input_method(dialog: &mut Asking, commit: Option<&str>) -> (String, bool) {
+    use gpui::EntityInputHandler as _;
+    // The test's window is the dialog's.
+    let shown = dialog.cx.update(|window, cx| {
+        let dialog = window
+            .root::<Dialog>()
+            .flatten()
+            .expect("the dialog's view");
+        let field = dialog.read(cx).asked.as_ref().unwrap().fields[0].clone();
+        field.update(cx, |field, cx| {
+            match commit {
+                None => field.replace_and_mark_text_in_range(None, "ぴ", None, window, cx),
+                Some(text) => field.replace_text_in_range(None, text, window, cx),
+            }
+            (field.text().to_string(), field.composing())
+        })
+    });
+    dialog.cx.run_until_parked();
+    shown
+}
+
+/// What the prompt's field shows, and whether it's marked.
+fn marked(dialog: &mut Asking) -> (String, bool) {
+    dialog.cx.update(|window, cx| {
+        let dialog = window
+            .root::<Dialog>()
+            .flatten()
+            .expect("the dialog's view");
+        let field = dialog.read(cx).asked.as_ref().unwrap().fields[0].read(cx);
+        (field.text().to_string(), field.composing())
+    })
+}
+
+/// ↩ while an input method composes in a prompt's field is the composition's: it answers nothing
+/// and leaves the marked text for the method. Once the method has committed it, the next ↩
+/// answers with it.
+#[gpui::test]
+fn return_while_composing_answers_nothing(cx: &mut TestAppContext) {
+    let mut dialog = Asking::page(page_question(vec![field("", false)], None), cx);
+    dialog.cx.simulate_input("a");
+    input_method(&mut dialog, None);
+    dialog.keys("enter");
+    assert_eq!(
+        dialog.calls(),
+        ["show over 100"],
+        "↩ answered while composing"
+    );
+    assert_eq!(
+        marked(&mut dialog),
+        ("aぴ".into(), true),
+        "↩ ended the composition"
+    );
+    input_method(&mut dialog, Some("ぴ"));
+    dialog.keys("enter");
+    assert_eq!(dialog.calls(), left(&[], "accept aぴ"));
+}
+
+/// Esc while an input method composes in a prompt's field is the composition's: it cancels
+/// nothing and leaves the marked text for the method. Once the method has dropped it, the next Esc
+/// cancels.
+#[gpui::test]
+fn escape_while_composing_cancels_nothing(cx: &mut TestAppContext) {
+    let mut dialog = Asking::page(page_question(vec![field("", false)], None), cx);
+    dialog.cx.simulate_input("a");
+    input_method(&mut dialog, None);
+    dialog.keys("escape");
+    assert_eq!(
+        dialog.calls(),
+        ["show over 100"],
+        "esc cancelled while composing"
+    );
+    assert_eq!(
+        marked(&mut dialog),
+        ("aぴ".into(), true),
+        "esc ended the composition"
+    );
+    input_method(&mut dialog, Some(""));
+    dialog.keys("escape");
+    assert_eq!(dialog.calls(), left(&[], "cancel a"));
 }
 
 #[gpui::test]
@@ -974,6 +1091,8 @@ fn the_checkbox_answers_with_a_click(cx: &mut TestAppContext) {
 struct Covered {
     dialog: Entity<Dialog>,
     host: Rc<Recorder>,
+    /// Whether what's under hears a bare release as well as a click.
+    hears_releases: bool,
 }
 
 impl Render for Covered {
@@ -985,6 +1104,12 @@ impl Render for Covered {
                 div()
                     .id("under")
                     .size_full()
+                    .when(self.hears_releases, |under| {
+                        let host = host.clone();
+                        under.on_mouse_up(gpui::MouseButton::Left, move |_, _, _| {
+                            host.0.borrow_mut().push("under up".into())
+                        })
+                    })
                     .on_click(move |_, _, _| host.0.borrow_mut().push("under".into())),
             )
             .children(cover(&self.dialog, cx))
@@ -998,6 +1123,7 @@ fn a_windows_own_dialog_covers_it_until_it_has_gone(cx: &mut TestAppContext) {
     let (view, cx) = cx.add_window_view(|_, cx| Covered {
         dialog: in_window(host.clone(), cx),
         host: host.clone(),
+        hears_releases: false,
     });
     cx.simulate_resize(size(px(684.), px(650.)));
     let ask = |cx: &mut VisualTestContext| {
@@ -1127,4 +1253,211 @@ fn the_checkbox_label_wraps_inside_the_card(cx: &mut TestAppContext) {
         (middle - first_line).abs() < px(0.5),
         "the box's middle is at {middle:?}, the first line's at {first_line:?}"
     );
+}
+
+/// A window's own dialog takes every press while it asks, and none once it's answered and
+/// leaving: a press then reaches what's under it, as a layer animating out is inert (#4108). The
+/// press that cancelled it stays spent until it's let go, so not even its release lands.
+#[gpui::test]
+fn a_press_as_a_windows_dialog_leaves_reaches_what_is_under_it(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let (view, cx) = cx.add_window_view(|_, cx| Covered {
+        dialog: in_window(host.clone(), cx),
+        host: host.clone(),
+        hears_releases: true,
+    });
+    cx.simulate_resize(size(px(684.), px(650.)));
+    cx.update(|window, cx| {
+        let dialog = view.read(cx).dialog.clone();
+        let (message, detail) = ("Remove “example.com”?".into(), String::new());
+        let removed = Box::new(|_: &mut App| {});
+        ask_in(
+            &dialog,
+            message,
+            detail,
+            "Remove",
+            Return::Action,
+            removed,
+            window,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let leaving = |cx: &mut VisualTestContext| cx.update(|_, cx| asks(&view.read(cx).dialog, cx));
+    // A press around the card cancels; held and let go, neither half reaches the window.
+    let around = point(px(342.), px(30.));
+    cx.simulate_mouse_down(around, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert!(leaving(cx), "the dialog had gone before it was let go");
+    cx.simulate_mouse_up(around, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        host.0.take(),
+        ["show"],
+        "the cancelling press reached the window"
+    );
+    // A press as it leaves, where the card still is, goes to the window.
+    assert!(leaving(cx), "the dialog had gone before the press");
+    cx.simulate_click(point(px(342.), px(325.)), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        host.0.take(),
+        ["under", "under up"],
+        "a press as it left was lost to it"
+    );
+}
+
+/// A window with a control that opens its own dialog, and a root, which Settings is on Linux.
+struct Opened {
+    dialog: Entity<Dialog>,
+    root: FocusHandle,
+    opener: Option<FocusHandle>,
+}
+
+impl Render for Opened {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .track_focus(&self.root)
+            .children((self.opener.as_ref()).map(|opener| div().size_full().track_focus(opener)))
+            .children(cover(&self.dialog, cx))
+    }
+}
+
+/// A window's own dialog gives the keyboard back to what opened it once it has gone, before its
+/// answer runs, so an answer that hands the keyboard on, as a login's Remove does to the row that
+/// takes its place, starts from the opener (#4108). If the opener has gone, the window has it.
+#[gpui::test]
+fn a_windows_own_dialog_gives_the_keyboard_back_before_its_answer(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        let dialog = in_window(host.clone(), cx);
+        // As Settings' observer on Linux does.
+        let mut asked = false;
+        cx.observe_in(
+            &dialog,
+            window,
+            move |opened: &mut Opened, dialog, window, cx| {
+                let asks = asks(&dialog, cx);
+                if asked && !asks {
+                    give_back(&dialog, &opened.root, window, cx);
+                }
+                asked = asks;
+            },
+        )
+        .detach();
+        Opened {
+            dialog,
+            root: cx.focus_handle(),
+            opener: Some(cx.focus_handle()),
+        }
+    });
+    cx.simulate_resize(size(px(684.), px(650.)));
+    let focused = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            let opened = view.read(cx);
+            match () {
+                _ if (opened.opener.as_ref()).is_some_and(|opener| opener.is_focused(window)) => {
+                    "opener"
+                }
+                _ if opened.root.is_focused(window) => "root",
+                _ => "elsewhere",
+            }
+        })
+    };
+    let ask = |cx: &mut VisualTestContext| {
+        let answered = host.clone();
+        let window = cx.window_handle();
+        // Read as it answers, so the test holds no opener that went.
+        let opened = view.clone();
+        let remove = Box::new(move |cx: &mut App| {
+            let had = (window.update(cx, |_, window, cx| {
+                let opener = &opened.read(cx).opener;
+                (opener.as_ref()).is_some_and(|opener| opener.is_focused(window))
+            }))
+            .unwrap();
+            let at = if had {
+                "remove at the opener"
+            } else {
+                "remove"
+            };
+            answered.0.borrow_mut().push(at.into());
+        });
+        cx.update(|window, cx| {
+            let dialog = view.read(cx).dialog.clone();
+            let (message, detail) = ("Remove “example.com”?".into(), String::new());
+            ask_in(
+                &dialog,
+                message,
+                detail,
+                "Remove",
+                Return::Action,
+                remove,
+                window,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+    };
+    let leave = |cx: &mut VisualTestContext| {
+        cx.executor().advance_clock(Duration::from_secs_f32(MOVE));
+        cx.run_until_parked();
+    };
+    cx.update(|window, cx| {
+        let opener = view.read(cx).opener.clone().unwrap();
+        window.focus(&opener, cx);
+    });
+    ask(cx);
+    assert_eq!(
+        focused(cx),
+        "elsewhere",
+        "the dialog didn't take the keyboard"
+    );
+    cx.simulate_keystrokes("enter");
+    leave(cx);
+    assert_eq!(host.0.take(), ["show", "hide", "remove at the opener"]);
+    assert_eq!(focused(cx), "opener");
+    // Cancelled, the same.
+    ask(cx);
+    cx.simulate_keystrokes("escape");
+    leave(cx);
+    assert_eq!(host.0.take(), ["show", "hide"]);
+    assert_eq!(focused(cx), "opener");
+    // The opener went as it asked: the window takes the keyboard.
+    ask(cx);
+    view.update(cx, |opened, cx| {
+        opened.opener = None;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    leave(cx);
+    assert_eq!(host.0.take(), ["show", "hide"]);
+    assert_eq!(focused(cx), "root");
+}
+
+/// Escape goes to the topmost layer (#4108): the field's menu over a page's prompt, closed by its
+/// keys (as its Escape closes it), closes alone, and the next Escape cancels the prompt.
+#[gpui::test]
+fn escape_in_a_fields_menu_closes_the_menu_and_the_next_the_dialog(cx: &mut TestAppContext) {
+    let mut dialog = Asking::page(page_question(vec![field("Ada", false)], None), cx);
+    let shown: Rc<RefCell<Option<crate::text_input::Chosen>>> = Rc::default();
+    let menu = shown.clone();
+    dialog.cx.update(|_, cx| {
+        cx.set_global(crate::text_input::FieldMenu(Rc::new(
+            move |_, _, _, _, chosen, _| *menu.borrow_mut() = Some(chosen),
+        )))
+    });
+    dialog.keys("shift-f10");
+    let chosen = (shown.take()).expect("⇧F10 showed no field's menu");
+    dialog
+        .cx
+        .update(|window, cx| chosen(crate::menu::Closed::Otherwise, window, cx));
+    assert_eq!(
+        dialog.calls(),
+        ["show over 100"],
+        "the prompt closed with its field's menu"
+    );
+    dialog.keys("escape");
+    assert_eq!(dialog.calls(), left(&[], "cancel Ada"));
 }

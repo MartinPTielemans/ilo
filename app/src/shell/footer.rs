@@ -187,13 +187,21 @@ impl Shell {
                 // Under the pointer it grows as far again past its squeezed size.
                 let room = cell + SPACE_SWATCH_HOVERED - SPACE_SWATCH;
                 let hovered = squeezed(SPACE_SWATCH_HOVERED, room);
-                (self
-                    .palette_of(id)
-                    .swatch
-                    .draw(squeezed(size, cell), behind))
-                .when(!shown, |swatch| {
-                    swatch.group_hover("space", |style| style.size(px(hovered)))
-                })
+                // The Space shown's is the only dot in colour, its swatch, or the ink without one;
+                // the others' are the ink, quiet, firmer under the pointer.
+                match (shown, self.space_theme(id).is_some()) {
+                    (true, true) => self
+                        .palette_of(id)
+                        .swatch
+                        .draw(squeezed(size, cell), behind),
+                    (true, false) => dot(squeezed(size, cell), self.palette.glyph(1.)),
+                    (false, _) => dot(squeezed(size, cell), self.palette.glyph(SPACE_OTHER))
+                        .group_hover("space", |style| {
+                            style
+                                .size(px(hovered))
+                                .bg(self.palette.glyph(SPACE_HOVERED))
+                        }),
+                }
                 .into_any_element()
             }
             // The Space shown's in its accent, as its dot is in its colour, or the ink without
@@ -401,4 +409,9 @@ mod tests {
         );
         assert!(others < hovered && hovered < 1.);
     }
+}
+
+/// A plain round dot `size` across in `color`.
+fn dot(size: f32, color: gpui::Hsla) -> gpui::Div {
+    div().size(px(size)).flex_none().rounded_full().bg(color)
 }

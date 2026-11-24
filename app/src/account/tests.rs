@@ -295,6 +295,74 @@ fn change_takes_the_servers_address(cx: &mut TestAppContext) {
     );
 }
 
+/// The address's field stays as Settings goes from dark to light and back, and draws in the look
+/// the page has each time, not in the one it was made in.
+#[gpui::test]
+fn the_servers_field_follows_the_look(cx: &mut TestAppContext) {
+    let mut tab = shown(state(Status::SignedOut), cx);
+    tab.click("change-server");
+    let mut colours = Vec::new();
+    for dark in [false, true, false] {
+        let look = Look::settings(dark);
+        tab.account
+            .update(tab.cx, |account, cx| account.set_look(look, cx));
+        tab.cx.run_until_parked();
+        let drawn = tab.account.read_with(tab.cx, |account, cx| {
+            let field = account.server.as_ref().expect("the field stays");
+            field.input.read(cx).colors()
+        });
+        assert_eq!(drawn, look.field(), "dark {dark}");
+        colours.push(drawn);
+    }
+    assert_ne!(colours[0], colours[1], "light and dark drew the same field");
+    assert_eq!(colours[0], colours[2]);
+}
+
+/// ↩ and esc while an input method composes in the server's address are the composition's: ↩
+/// keeps no address, esc leaves the field open, and both leave the marked text for the method.
+/// Once the method has committed it, the next ↩ keeps the address.
+#[gpui::test]
+fn return_and_escape_while_composing_are_the_compositions(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let mut tab = shown(state(Status::SignedOut), cx);
+    tab.click("change-server");
+    tab.type_text("https://ilo.example.");
+    let field = tab
+        .account
+        .read_with(tab.cx, |account, _| account.open_field().unwrap());
+    tab.cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_and_mark_text_in_range(None, "ぴ", None, window, cx)
+        })
+    });
+    tab.cx.run_until_parked();
+    let marked = |tab: &mut Shown| {
+        field.read_with(tab.cx, |field, _| {
+            (field.text().to_string(), field.composing())
+        })
+    };
+    tab.keys("enter");
+    assert!(
+        tab.host.take().is_empty(),
+        "↩ kept the address while composing"
+    );
+    tab.keys("escape");
+    let open = tab
+        .account
+        .read_with(tab.cx, |account, _| account.server.is_some());
+    assert!(open, "esc left the field while composing");
+    assert_eq!(marked(&mut tab), ("https://ilo.example.ぴ".into(), true));
+    tab.cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_text_in_range(None, "ぴ", window, cx)
+        })
+    });
+    tab.cx.run_until_parked();
+    assert_eq!(marked(&mut tab), ("https://ilo.example.ぴ".into(), false));
+    tab.keys("enter");
+    assert_eq!(tab.host.take(), ["server https://ilo.example.ぴ"]);
+}
+
 /// A build that names no server, before the user has named one, asks for the address in place of
 /// a server it can't reach: the field is open, Sign In signs in to what's typed there, and the
 /// field stays until the core has the server, as nothing else could name one.

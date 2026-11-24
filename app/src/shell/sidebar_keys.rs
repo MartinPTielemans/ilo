@@ -73,6 +73,13 @@ impl Shell {
         if !self.dock(cx) && self.sidebar_hidden {
             self.toggle_sidebar(cx);
         }
+        // A task shown is at the foot: its header, or the row of its page watched.
+        let at_foot = self.shown_at_foot();
+        if let Some(stop) = at_foot.filter(|stop| self.foot_stops().contains(stop)) {
+            self.take_keyboard(cx);
+            self.focus_keys = true;
+            return self.key_strip(stop, cx);
+        }
         let rows = self.key_rows();
         let shown =
             Some(self.row_of(self.selected)).filter(|row| *row != NEW_TAB && rows.contains(row));
@@ -87,8 +94,8 @@ impl Shell {
     /// Tab and Shift+Tab with the window itself holding the keyboard, no field, row or page
     /// having it, ring a row as Focus Sidebar does. Otherwise they'd go nowhere, and the first
     /// keys a screen-reader user tries would say nothing (#3237).
-    /// With a task's page watched they ring the strip under it instead, as Focus Sidebar would
-    /// leave the page for the user's Space (page_ends.rs).
+    /// With a task's page watched they ring the strip under it instead, whose ring that page is
+    /// in (page_ends.rs).
     pub(super) fn tab_in(&mut self, reverse: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.onboarding.is_some() || !self.focus_handle.is_focused(window) {
             return cx.propagate();
@@ -121,11 +128,39 @@ impl Shell {
             }
             return;
         }
+        // The foot's stops go on from the list's last row: each task's header, its chip and its
+        // pages' rows. With a task's page watched the list's rows aren't stops, so Up ends at the
+        // foot's first.
+        let foot = self.foot_stops();
+        if let Some(at) = (self.keyed_strip).and_then(|stop| foot.iter().position(|&s| s == stop)) {
+            let last = self.key_rows().last().copied();
+            match (down, at.checked_sub(1)) {
+                (true, _) => {
+                    if let Some(&next) = foot.get(at + 1) {
+                        self.key_strip(next, cx);
+                    }
+                }
+                (false, Some(before)) => self.key_strip(foot[before], cx),
+                (false, None) => {
+                    if let Some(row) = last.filter(|_| self.watched_task_page().is_none()) {
+                        self.key_row(row, cx);
+                    }
+                }
+            }
+            return;
+        }
         let Some(keyed) = self.keyed else {
             return cx.propagate();
         };
         let rows = self.key_rows();
-        let next = match rows.iter().position(|&row| row == keyed) {
+        let at = rows.iter().position(|&row| row == keyed);
+        if down
+            && at.is_some_and(|at| at + 1 == rows.len())
+            && let Some(&stop) = foot.first()
+        {
+            return self.key_strip(stop, cx);
+        }
+        let next = match at {
             Some(at) if down => rows.get(at + 1),
             Some(at) => at.checked_sub(1).and_then(|at| rows.get(at)),
             // Its row went, closed or folded away.
@@ -210,13 +245,18 @@ impl Shell {
         let goes = self.today().contains(&row);
         log!("browser: command close-tab via sidebar keys");
         self.close_tab(row, true, cx);
-        if !goes {
-            return;
+        if goes {
+            // Ahead of the core's word that it's gone, which `took_place` would answer the same.
+            let left: Vec<u64> = rows.iter().copied().filter(|&each| each != row).collect();
+            self.key_took_place(row, &rows, &left, cx);
         }
-        let at = rows.iter().position(|&each| each == row);
-        let after = at.and_then(|at| rows.get(at + 1));
-        match after.or_else(|| at.and_then(|at| rows.get(at.checked_sub(1)?))) {
-            Some(&next) => self.key_row(next, cx),
+    }
+
+    /// The ring's row `row` went from `before`, leaving `now`: the ring goes to the row that took
+    /// its place (list_keys' rule), or ends with none left.
+    fn key_took_place(&mut self, row: u64, before: &[u64], now: &[u64], cx: &mut Context<Self>) {
+        match crate::list_keys::took_place(&row, before, now) {
+            Some(next) => self.key_row(next, cx),
             None => self.leave_keys("close", cx),
         }
     }
@@ -296,9 +336,22 @@ impl Shell {
             self.leave_strip("sidebar", cx);
             self.leave_menu_keys("sidebar", cx);
         }
-        // The strip's stop went with its page, or as its chips changed.
+        // The ring's row went, closed by the user, the app or an agent, or folded away.
+        if let Some(keyed) = self.keyed {
+            let rows = self.key_rows();
+            if !rows.contains(&keyed) {
+                let before = std::mem::take(&mut self.keyed_rows);
+                self.key_took_place(keyed, &before, &rows, cx);
+            }
+            self.keyed_rows = rows;
+        } else {
+            self.keyed_rows.clear();
+        }
+        // The strip's stop went with its page, or as its chips changed, or the foot's with its
+        // task or as its group closed.
         if let Some(stop) = self.keyed_strip
             && !self.ring_stops().contains(&Some(stop))
+            && !self.foot_stops().contains(&stop)
         {
             self.leave_strip("strip", cx);
         }
@@ -655,9 +708,9 @@ mod tests {
         assert_eq!(ringed(&shell, cx), (Some(31), Some(31)));
     }
 
-    /// Escape in the bar New Tab's shortcut opened from the ring leaves the window holding the
+    /// Escape in the bar return on New Tab's row opened from the ring leaves the window holding the
     /// keyboard, and Tab from there rings a row again: New Tab's, in an empty Space, which a screen
-    /// reader names.
+    /// reader names. (In an empty Space ⌘T gives the Space's field the keyboard instead, #4140.)
     #[gpui::test]
     fn escape_from_a_new_tab_leaves_tab_a_row_to_ring(cx: &mut TestAppContext) {
         let (shell, cx, host) = window(cx);
@@ -666,9 +719,9 @@ mod tests {
         cx.simulate_keystrokes("tab");
         cx.run_until_parked();
         assert_eq!(ringed(&shell, cx).0, Some(NEW_TAB));
-        cx.simulate_keystrokes("cmd-t");
+        cx.simulate_keystrokes("enter");
         cx.run_until_parked();
-        assert!(host.bar_open.take(), "the shortcut opened no new tab");
+        assert!(host.bar_open.take(), "return opened no new tab");
         shell.update(cx, |shell, cx| shell.command_bar_dismissed(cx));
         cx.run_until_parked();
         let root = cx.update(|window, cx| shell.read(cx).focus_handle.is_focused(window));
@@ -1008,6 +1061,61 @@ mod tests {
         cx.update(|_, cx| host.choose("Archive Tab", cx));
         cx.run_until_parked();
         assert!(host.take().contains(&"close 21".to_owned()));
+    }
+
+    /// The ringed row closed by the app or an agent, not the keys, gives the ring to the row that
+    /// took its place: the next, else the one before (#4108).
+    #[gpui::test]
+    fn a_ringed_row_closed_elsewhere_gives_the_ring_to_the_row_in_its_place(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, cx, _) = window(cx);
+        let today = |tabs: Vec<u64>, shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+            shell.update(cx, |shell, cx| {
+                shell.set_tabs(1, vec![10, 11], tabs, Vec::new(), Folders::default(), cx)
+            });
+            cx.run_until_parked();
+        };
+        today(vec![20, 21, 22], &shell, cx);
+        shell.update(cx, |shell, cx| shell.run(Command::FocusSidebar, "ui", cx));
+        cx.run_until_parked();
+        assert_eq!(ringed(&shell, cx).0, Some(20));
+        today(vec![21, 22], &shell, cx);
+        assert_eq!(
+            ringed(&shell, cx),
+            (Some(21), Some(21)),
+            "the next row didn't take it"
+        );
+        cx.simulate_keystrokes("down");
+        today(vec![21], &shell, cx);
+        assert_eq!(
+            ringed(&shell, cx).0,
+            Some(21),
+            "the last row's ring went nowhere"
+        );
+        cx.simulate_keystrokes("down");
+        assert_eq!(
+            ringed(&shell, cx).0,
+            Some(21),
+            "the ring didn't stop at the end"
+        );
+    }
+
+    /// A choice in the ringed row's menu that leaves the row gives the keyboard back to it: the
+    /// user is still where they were (#4108).
+    #[gpui::test]
+    fn a_choice_in_the_ringed_rows_menu_leaves_the_ring_on_it(cx: &mut TestAppContext) {
+        let (shell, cx, host) = window(cx);
+        shell.update(cx, |shell, cx| shell.run(Command::FocusSidebar, "ui", cx));
+        cx.run_until_parked();
+        cx.simulate_keystrokes("down shift-f10");
+        cx.update(|_, cx| host.choose("Duplicate", cx));
+        cx.run_until_parked();
+        assert_eq!(ringed(&shell, cx).0, Some(21));
+        assert!(
+            cx.update(|window, cx| shell.read(cx).sidebar_keys.is_focused(window)),
+            "the ring's row lost the keyboard"
+        );
     }
 
     /// A press anywhere, or the sidebar hiding, ends the ring.

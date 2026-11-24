@@ -641,15 +641,6 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_answer_permission(tab, answer as i32) };
     }
 
-    fn answer_agent(&self, question: u64, answer: browser::agents::Answer, _: &mut App) {
-        // After the shell's update, as the answer tells every window's shell the next question.
-        agents_core::update(move |agents, cx| agents.answer(question, answer, cx));
-    }
-
-    fn choose_agent_file(&self, question: u64, window: u64, _: &mut App) {
-        agents_core::update(move |agents, cx| agents.choose_file(question, window, cx));
-    }
-
     fn take_over(&self, agent: SharedString, tab: u64, _: &mut App) {
         agents_core::update(move |agents, cx| agents.take_over(&agent, tab, cx));
     }
@@ -675,6 +666,10 @@ impl Browser for Engine {
                 unsafe { bc::bc_window_select(window, tab) };
             }
         });
+    }
+
+    fn ask_again(&self, asked: SharedString, cx: &mut App) {
+        with_overlays(move |cx| command_bar::ask_again(asked, cx), cx);
     }
 
     fn show_task(&self, _: SharedString, _: &mut App) {
@@ -1919,6 +1914,39 @@ impl Browser for Engine {
         command_bar::is_open(cx)
     }
 
+    fn command_bar_in_place(
+        &self,
+        window: &mut gpui::Window,
+        cx: &mut App,
+    ) -> gpui::Entity<command_bar::CommandBar> {
+        // It's typed in only while its window is the one in front, which the host acts on.
+        command_bar::in_place(Rc::new(command_bar_host::Bar), window, cx)
+    }
+
+    fn start_task(
+        &self,
+        agent: &str,
+        asked: &str,
+        home: u64,
+        start: browser::agents::task::Start,
+        _: &mut App,
+    ) {
+        let (agent, asked, window) = (agent.to_string(), asked.to_string(), self.window);
+        agents_core::update(move |agents, cx| {
+            let cli = browser::agents::runner::Cli::from_id(&agent);
+            let started = cli.and_then(|cli| agents.start_task(cli, &asked, None, home, start, cx));
+            // The composer's ↩ opens the view of the task it started alone, or of none.
+            let shell = WINDOWS.with_borrow(|windows| {
+                (windows.iter().find(|w| w.id == window)).and_then(|w| w.shell.upgrade())
+            });
+            if let Some(shell) = shell {
+                shell.update(cx, |shell, _| {
+                    shell.composed_started(started.map(Into::into))
+                });
+            }
+        });
+    }
+
     fn field_window_typing(&self, cx: &mut App) -> bool {
         find_bar::typing(self.window, cx)
             || offer::typing(self.window, cx)
@@ -2088,6 +2116,20 @@ impl Browser for Engine {
 
     fn settings(&self, cx: &mut App) {
         settings::show(cx);
+    }
+
+    fn off_limits(&self, cx: &mut App) {
+        let section = browser::settings_column::Section::Agents;
+        settings::show_row(section, browser::agents::fence::HEADING.into(), cx);
+    }
+
+    fn agent_access(&self, cx: &mut App) {
+        let section = browser::settings_column::Section::Agents;
+        settings::show_row(section, browser::agents::tier::ACCESS.into(), cx);
+    }
+
+    fn agents_settings(&self, cx: &mut App) {
+        settings::show_agents(cx);
     }
 
     fn keep_sidebar_right(&self, right: bool, cx: &mut App) {
@@ -2475,14 +2517,19 @@ impl Browser for Engine {
 
     /// Asks first, as Arc does, unless the user said not to. Only the user's Quit asks: a quit from
     /// the Dock or at logout doesn't come here.
-    fn quit(&self, cx: &mut App) {
+    fn quit(&self, going: Rc<dyn Fn(&mut App)>, cx: &mut App) {
         // Once the shell that asked is done, as it reads the shell. Chromium's quit is posted, so
         // comes after.
         cx.defer(save_launch_picture);
         // With no window to ask over, there's nothing open to lose.
         if !unsafe { bc::bc_warn_before_quitting() } || front().1.is_null() {
-            return quit_because("the user's Quit, which had nothing to ask");
+            // Deferred, as `going` updates the shell that asked.
+            return cx.defer(move |cx| {
+                going(cx);
+                quit_because("the user's Quit, which had nothing to ask");
+            });
         }
+        let also_going = going.clone();
         let question = dialog::Question {
             icon: None,
             message: concat!("Quit ", env!("APP_NAME"), "?").into(),
@@ -2493,10 +2540,11 @@ impl Browser for Engine {
             tone: dialog::Tone::Accent,
             also: Some((
                 "Quit, and don’t ask again".into(),
-                Box::new(|_| {
+                Box::new(move |cx| {
                     // check.sh waits for this line.
                     log!("browser: warn before quitting off");
                     unsafe { bc::bc_set_warn_before_quitting(false) };
+                    also_going(cx);
                     quit_because("the user's Quit, answered");
                 }),
             )),
@@ -2506,8 +2554,10 @@ impl Browser for Engine {
         };
         // A Quit as the window comes on screen, before its overlays are made, asks too (#905):
         // with no dialog to ask in, pose would drop it and the app would never quit.
-        let quit =
-            Box::new(|_: Vec<String>, _: &mut App| quit_because("the user's Quit, answered"));
+        let quit = Box::new(move |_: Vec<String>, cx: &mut App| {
+            going(cx);
+            quit_because("the user's Quit, answered");
+        });
         with_overlays(move |cx| dialog::pose(None, question, quit, cx), cx);
     }
 }

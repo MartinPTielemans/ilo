@@ -34,6 +34,15 @@ impl Client {
     /// The clients under Apps that connect.
     pub const APPS: [Client; 3] = [Client::ClaudeCode, Client::Codex, Client::Other];
 
+    /// The CLI that is this client, which Your assistant's row looks for.
+    pub fn cli(self) -> Option<super::runner::Cli> {
+        match self {
+            Client::ClaudeCode => Some(super::runner::Cli::Claude),
+            Client::Codex => Some(super::runner::Cli::Codex),
+            Client::Other | Client::Command => None,
+        }
+    }
+
     /// The id of its agent, which its Space and the core know it by.
     pub fn id(self) -> &'static str {
         match self {
@@ -108,6 +117,21 @@ pub trait Clients: Send + Sync {
     fn look_for_task_cli(&self, cli: super::runner::Cli) -> super::ready::Found {
         super::ready::look(cli)
     }
+    /// Starts `cli`'s own sign-in, as `found` runs it, which tells `heard` what it hears. No
+    /// default, so no test's stand-in can fall through to this computer's CLIs (#4100).
+    fn start_sign_in(
+        &self,
+        cli: super::runner::Cli,
+        found: &super::ready::Found,
+        heard: futures::channel::mpsc::UnboundedSender<super::sign_in::Heard>,
+    ) -> std::io::Result<Box<dyn super::sign_in::Session>>;
+    /// Signs `cli` out as its own command does, everywhere it's used, or says why it couldn't, in
+    /// its words where `sign_in::said` keeps them. Blocks: runs the CLI.
+    fn sign_out(
+        &self,
+        cli: super::runner::Cli,
+        found: &super::ready::Found,
+    ) -> Result<(), Option<String>>;
 }
 
 /// The configs in the user's home.
@@ -178,6 +202,25 @@ impl Clients for System {
             Ok(install) => install.on_path(&super::cli::Registry),
             Err(_) => true,
         }
+    }
+
+    fn start_sign_in(
+        &self,
+        cli: super::runner::Cli,
+        found: &super::ready::Found,
+        heard: futures::channel::mpsc::UnboundedSender<super::sign_in::Heard>,
+    ) -> std::io::Result<Box<dyn super::sign_in::Session>> {
+        let program = (found.program.as_deref()).ok_or(std::io::ErrorKind::NotFound)?;
+        super::sign_in::start(cli, program, found.path.as_deref(), heard)
+    }
+
+    fn sign_out(
+        &self,
+        cli: super::runner::Cli,
+        found: &super::ready::Found,
+    ) -> Result<(), Option<String>> {
+        let program = found.program.as_deref().ok_or(None)?;
+        super::sign_in::sign_out(cli, program, found.path.as_deref())
     }
 }
 

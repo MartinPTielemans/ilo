@@ -14,8 +14,10 @@
 # held at the card's top (a page that fits never scrolls, #2102), and the URL
 # field's translate mark lit under the pointer, light and dark (#2112), the foot bar with two lines
 # over the page's bottom, as pointing's, whose keys read as this system's menus write them (#2380),
-# Settings › Agents' Model menu for Claude, Sonnet chosen, and for Codex, on Default, Default naming
-# its model, light and dark (#2455), and the safe-start card at the sidebar's foot, light and dark,
+# Settings › Agents' Model menu for Claude, Sonnet chosen, and for Codex, on its own default, which
+# names its model, light and dark (#2455), and its Model rows, one assistant signed in and one not,
+# then Access and Notifications under them, light and dark (#4100), and the safe-start card at the
+# sidebar's foot, light and dark,
 # and in the narrowest sidebar with ad blocking off (#2345), a Live Folder of made-up pull
 # requests, open light and dark, closed with its count, signed out and after a failed refresh,
 # light and dark, with its tooltip then, the Space's menu with Live Folders open, light and dark,
@@ -29,7 +31,8 @@
 # with a page to open, light and dark (#3652), and Settings › Agents with the ilo command's row not
 # there, there, and in a folder the shell doesn't search, light and dark, and its two longest
 # lines in Settings' narrowest window, and a Flatpak's, not there and there with the line to run
-# on the host, light and dark and in the narrowest window (#3667). The preview's Linux host places no window, so sway
+# on the host, light and dark and in the narrowest window (#3667), and first run's sheet at its welcome and its
+# colour, light and dark, each loop held a moment in, with frames of each playing on Wayland (#4093). The preview's Linux host places no window, so sway
 # puts Site Controls, the icon picker and the tooltip in the middle rather than where the Mac's host
 # would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
@@ -110,6 +113,10 @@ screens=(
   "session-open-dark|drawn at|PREVIEW_TASKS=1 PREVIEW_SESSION=open PREVIEW_APPEARANCE=dark"
   "command-line-off-light|settings ilo-command|PREVIEW_COMMAND_LINE=off PREVIEW_APPEARANCE=light"
   "command-line-off-dark|settings ilo-command|PREVIEW_COMMAND_LINE=off PREVIEW_APPEARANCE=dark"
+  "onboarding-welcome-light|onboarding step intro settled|PREVIEW_ONBOARDING=light PREVIEW_ONBOARDING_STEP=1 PREVIEW_ONBOARDING_LOOP=2.2 PREVIEW_APPEARANCE=light"
+  "onboarding-welcome-dark|onboarding step intro settled|PREVIEW_ONBOARDING=dark PREVIEW_ONBOARDING_STEP=1 PREVIEW_ONBOARDING_LOOP=2.2 PREVIEW_APPEARANCE=dark"
+  "onboarding-color-light|onboarding step color settled|PREVIEW_ONBOARDING=light PREVIEW_ONBOARDING_STEP=6 PREVIEW_ONBOARDING_PICK=4 PREVIEW_ONBOARDING_LOOP=0.3 PREVIEW_APPEARANCE=light"
+  "onboarding-color-dark|onboarding step color settled|PREVIEW_ONBOARDING=dark PREVIEW_ONBOARDING_STEP=6 PREVIEW_ONBOARDING_PICK=4 PREVIEW_ONBOARDING_LOOP=0.3 PREVIEW_APPEARANCE=dark"
   "command-line-on-light|settings ilo-command|PREVIEW_COMMAND_LINE=on PREVIEW_APPEARANCE=light"
   "command-line-on-dark|settings ilo-command|PREVIEW_COMMAND_LINE=on PREVIEW_APPEARANCE=dark"
   "command-line-unsearched-light|settings ilo-command|PREVIEW_COMMAND_LINE=unsearched PREVIEW_APPEARANCE=light"
@@ -120,6 +127,12 @@ screens=(
   "command-line-flatpak-on-light|settings ilo-command|PREVIEW_COMMAND_LINE=flatpak-on PREVIEW_APPEARANCE=light"
   "command-line-flatpak-on-dark|settings ilo-command|PREVIEW_COMMAND_LINE=flatpak-on PREVIEW_APPEARANCE=dark"
   "command-line-flatpak-on-narrow|settings ilo-command|PREVIEW_COMMAND_LINE=flatpak-on PREVIEW_APPEARANCE=light PREVIEW_SETTINGS_WIDTH=720"
+  "assistants-start-light|settings assistant rows|PREVIEW_ASSISTANTS=start PREVIEW_APPEARANCE=light"
+  "assistants-start-dark|settings assistant rows|PREVIEW_ASSISTANTS=start PREVIEW_APPEARANCE=dark"
+  "assistants-signed-in-light|settings assistant rows|PREVIEW_ASSISTANTS=signed-in PREVIEW_APPEARANCE=light"
+  "assistants-signed-in-dark|settings assistant rows|PREVIEW_ASSISTANTS=signed-in PREVIEW_APPEARANCE=dark"
+  "assistants-models-light|settings assistant rows|PREVIEW_ASSISTANTS=models PREVIEW_APPEARANCE=light"
+  "assistants-models-dark|settings assistant rows|PREVIEW_ASSISTANTS=models PREVIEW_APPEARANCE=dark"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;
@@ -198,6 +211,37 @@ if [ "${systems[0]}" = wayland ]; then
       'live folder 9000 answered' "$preview" > "$out/wayland/live-folder-press-frames.log" 2>&1); then
     missing+=("wayland/live-folder-press-frames")
   fi
+  # Each first-run loop held at its start until the sheet is still, then a whole turn of it from
+  # the line it logs as it plays, named as the press's are (#4093).
+  # shellcheck disable=SC2016 # headless.sh runs it, with LOG its program's log.
+  play='set -e
+    ms() { date +%s%3N; }
+    ! grep -q "^browser: onboarding loop plays$" "$LOG" || { echo "played before the first frame" >&2; exit 1; }
+    start=$(ms) played= n=0
+    while [ -z "$played" ] || [ $(($(ms) - played)) -lt 10500 ]; do
+      [ $(($(ms) - start)) -lt 20000 ] || { echo "no loop playing in 20 s" >&2; exit 1; }
+      grim "$FRAMES/frame-$n.png"
+      echo "$n $(ms)" >> "$FRAMES/times"
+      n=$((n + 1))
+      [ -n "$played" ] || ! grep -q "^browser: onboarding loop plays$" "$LOG" || played=$(ms)
+    done
+    first=$(head -1 "$FRAMES/times" | cut -d" " -f2)
+    while read -r i at; do
+      mv "$FRAMES/frame-$i.png" "$FRAMES/$(printf %05d $((at - first))).png"
+    done < "$FRAMES/times"
+    echo $((played - first)) > "$FRAMES/plays"
+    rm "$FRAMES/times"'
+  for loop in welcome:1:intro color:6:color; do
+    IFS=: read -r name number step <<<"$loop"
+    frames=$out/wayland/onboarding-$name-frames
+    mkdir -p "$frames"
+    if ! (export PREVIEW_SIZE=1280x800 PREVIEW_ONBOARDING=dark PREVIEW_ONBOARDING_STEP=$number \
+      PREVIEW_ONBOARDING_PICK=4 PREVIEW_APPEARANCE=dark PREVIEW_ONBOARDING_LOOP=0,8000 FRAMES="$frames" &&
+      timeout 90 "$here/headless.sh" --moving 400 --then "$play" "$frames/start.png" \
+        "onboarding step $step settled" "$preview" > "$frames.log" 2>&1); then
+      missing+=("wayland/onboarding-$name-frames")
+    fi
+  done
 fi
 "${montage[@]}" -font "$face" -pointsize 20 -fill white -background '#101010' -tile 2x \
   -geometry +12+12 "${tiles[@]}" "$out/sheet.png"

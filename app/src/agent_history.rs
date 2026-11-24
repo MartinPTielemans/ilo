@@ -38,6 +38,8 @@ pub struct Step {
     pub target: String,
     pub url: String,
     pub sent: Vec<Sent>,
+    /// The access its task had as it was judged, by its name, or empty for a step kept before.
+    pub tier: String,
 }
 
 /// A past task or session, as its receipt showed it.
@@ -64,8 +66,9 @@ pub struct Past {
 }
 
 impl Past {
-    /// What its row says under its title: "Claude Code · 14:02 · 1 order placed · 3 pages".
-    pub fn about(&self) -> String {
+    /// What its row says under its title, with `when` it ended as the list it's in says a time:
+    /// "Claude Code · 14:02 · 1 order placed · 3 pages".
+    pub fn about(&self, when: &str) -> String {
         let count = |n: usize, one: &str, many: &str| match n {
             0 => None,
             1 => Some(format!("1 {one}")),
@@ -73,7 +76,7 @@ impl Past {
         };
         let parts = [
             Some(self.agent.clone()).filter(|agent| !agent.is_empty()),
-            Some(crate::agents::local_time(self.ended)),
+            Some(when.to_string()).filter(|when| !when.is_empty()),
             count(self.orders, "order placed", "orders placed"),
             count(self.messages, "message sent", "messages sent"),
             count(self.pages.len(), "page", "pages"),
@@ -84,7 +87,7 @@ impl Past {
     /// What its page says under its title: "Claude Code · 12 min · 14:02 · 1 order placed · 3
     /// pages", as its row with how long it ran.
     pub fn page_about(&self) -> String {
-        let about = self.about();
+        let about = self.about(&crate::agents::local_time(self.ended));
         match about
             .strip_prefix(&self.agent)
             .filter(|_| !self.agent.is_empty())
@@ -136,6 +139,9 @@ impl Past {
                     kept["url"] = json!(step.url);
                     kept["sent"] = json!(sent);
                 }
+                if !step.tier.is_empty() {
+                    kept["tier"] = json!(step.tier);
+                }
                 kept
             })
             .collect();
@@ -186,6 +192,7 @@ impl Past {
                 target: field("target").unwrap_or_default(),
                 url: field("url").unwrap_or_default(),
                 sent,
+                tier: field("tier").unwrap_or_default(),
             })
         })
         .collect();

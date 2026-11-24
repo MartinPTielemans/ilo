@@ -30,6 +30,7 @@ use gpui::{
 };
 use image::{Frame, RgbaImage};
 
+use crate::dismissal::{By, Close, Why};
 use crate::{
     boost_style::{
         self, ADJUST_STEP, Adjust, Case, Dot, Face, LARGEST, SIZE_STEP, SMALLEST, Style,
@@ -38,7 +39,7 @@ use crate::{
     palette::{self, Palette},
     settings_rows::{self, Look},
     shell::KEY_CONTEXT,
-    text_input::TextInput,
+    text_input::{Colors, TextInput},
     theme_picker::{self, At},
 };
 
@@ -322,7 +323,9 @@ pub fn show(
 pub fn dismissed(cx: &mut App) {
     if let Some(window) = cx.try_global::<BoostEditorWindow>().map(|editor| editor.0) {
         window
-            .update(cx, |editor, window, cx| editor.close(window, cx))
+            .update(cx, |editor, window, cx| {
+                editor.close(Close::left(cx.active_window().is_none()), window, cx)
+            })
             .ok();
     }
 }
@@ -331,7 +334,9 @@ pub fn dismissed(cx: &mut App) {
 pub fn leave(cx: &mut App) {
     if let Some(window) = cx.try_global::<BoostEditorWindow>().map(|editor| editor.0) {
         window
-            .update(cx, |editor, window, cx| editor.hide(window, cx))
+            .update(cx, |editor, window, cx| {
+                editor.close(Close::new(Why::FocusLeft, By::Code), window, cx)
+            })
             .ok();
     }
 }
@@ -606,8 +611,8 @@ impl BoostEditor {
         theme_picker::card_x(self.editing.as_ref().is_some_and(|editing| editing.left))
     }
 
-    /// The host closed it, as a click outside does.
-    fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Closes it for `close`, hiding it unless the host already has, as the user left it.
+    fn close(&mut self, close: Close, window: &mut Window, cx: &mut Context<Self>) {
         let Some(editing) = self.editing.as_mut().filter(|editing| editing.open) else {
             return;
         };
@@ -617,17 +622,18 @@ impl BoostEditor {
         self.commit_rename(window, cx);
         self.release(cx);
         cx.notify();
-    }
-
-    /// Closes it and asks the host to hide it.
-    fn hide(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.editing.as_ref().is_some_and(|editing| editing.open) {
-            self.close(window, cx);
+        if !matches!(close.why, Why::PressOutside | Why::WindowLeft) {
             self.host.hide();
         }
     }
 
+    /// Escape: ends a rename, then closes the menu, then the editor, a layer at a time. While an
+    /// input method composes in the name, it's the composition's.
     fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        let renaming = (self.editing.as_ref()).and_then(|editing| editing.renaming.clone());
+        let Some(close) = Close::escape_from(&renaming, cx) else {
+            return;
+        };
         let Some(editing) = self.editing.as_mut().filter(|editing| editing.open) else {
             return;
         };
@@ -638,13 +644,18 @@ impl BoostEditor {
         } else {
             // check.sh reads this line.
             log!("browser: boost editor dismissed");
-            self.hide(window, cx);
+            self.close(close, window, cx);
         }
         cx.notify();
     }
 
+    /// ↩ keeps a rename, unless it was an input method's, composing in the name (dismissal's
+    /// rule).
     fn commit(&mut self, _: &Commit, window: &mut Window, cx: &mut Context<Self>) {
-        self.commit_rename(window, cx);
+        let renaming = (self.editing.as_ref()).and_then(|editing| editing.renaming.clone());
+        if crate::dismissal::submits(&renaming, cx) {
+            self.commit_rename(window, cx);
+        }
     }
 
     fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
@@ -704,7 +715,7 @@ impl BoostEditor {
         else {
             return;
         };
-        self.hide(window, cx);
+        self.close(Close::new(Why::Chosen, By::Pointer), window, cx);
         requested(request, cx);
     }
 
@@ -816,10 +827,18 @@ impl BoostEditor {
                     .clone()
                     .unwrap_or_else(|| editing.site.clone())
                     .into();
-                let palette = editing.palette;
+                // The editor's palette as the field draws, the one its other text is drawn in.
+                let editor = cx.weak_entity();
+                let colors = move |cx: &App| {
+                    let editing = editor
+                        .upgrade()
+                        .and_then(|editor| editor.read(cx).editing.as_ref());
+                    let palette = editing.map_or_else(Palette::default, |editing| editing.palette);
+                    Colors::placeholder(palette.on_overlay(DIM))
+                };
                 let input = cx.new(|cx| {
                     TextInput::new("Boost name", cx)
-                        .placeholder_color(palette.on_overlay(DIM))
+                        .follows(colors)
                         .spoken("Boost name")
                 });
                 input.update(cx, |input, cx| input.reset(name, window, cx));
@@ -1502,23 +1521,10 @@ impl Render for BoostEditor {
 
         // The name's menu, ilo's own menu's look, inside the card.
         let menu = editing.menu.then(|| {
-            let tone = palette::current(cx).tone;
-            let (fill, rim, label, destructive) = match tone {
-                palette::Tone::Dark => (
-                    menu::DARK_FILL,
-                    menu::DARK_RIM,
-                    menu::DARK_LABEL,
-                    menu::DARK_DESTRUCTIVE,
-                ),
-                palette::Tone::Light => (
-                    menu::LIGHT_FILL,
-                    menu::LIGHT_RIM,
-                    menu::LIGHT_LABEL,
-                    menu::LIGHT_DESTRUCTIVE,
-                ),
-            };
-            let accent = palette.accent;
-            let accent_label = palette.accent_label;
+            let light = palette::current(cx).tone == palette::Tone::Light;
+            let look = crate::menu::Look::plain(light).palette();
+            let (rim, label, destructive) = (look.rim, look.label, look.destructive);
+            let lit = crate::menu::Highlight::plate(light);
             let items = ITEMS
                 .iter()
                 .enumerate()
@@ -1542,22 +1548,19 @@ impl Render for BoostEditor {
                             true => row
                                 .bg(gpui::rgba(menu::DESTRUCTIVE_FILL))
                                 .text_color(gpui::rgba(menu::DESTRUCTIVE_LABEL)),
-                            false => row.bg(accent).text_color(accent_label),
+                            false => row.bg(lit.fill).text_color(lit.label),
                         })
                         .child(title)
                 });
-            div()
+            let panel = div()
                 .id("boost-menu")
                 .when(a11y, |menu| menu.role(Role::Menu))
                 .absolute()
                 .left(card_x(MENU_LEFT))
                 .top(px(MENU_TOP))
                 .w(px(menu::MIN_WIDTH))
-                .h(px(menu_height()))
-                .rounded(px(menu::RADIUS))
-                .bg(gpui::rgba(fill))
-                .border_1()
-                .border_color(gpui::rgba(rim))
+                .h(px(menu_height()));
+            crate::menu::glass(panel, light, menu::RADIUS, true)
                 .child(
                     div()
                         .absolute()

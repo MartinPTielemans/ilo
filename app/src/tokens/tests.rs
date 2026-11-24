@@ -108,7 +108,11 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "shell.split-targets.half-glyph-radius",
     "shell.extensions.badge-radius",
     "shell.recent-downloads.preview-radius",
+    // The menu's glass, concentric round its rows as the rework's mocks draw it (#4090).
     "menu.radius",
+    "menu.row-radius",
+    "menu.quiet-radius",
+    "menu.quiet-row-radius",
     // A drawing of the window, its corners and its page card's at the drawing's scale (#2407).
     "settings.side-radius",
     "settings.side-page-radius",
@@ -116,8 +120,24 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "settings.share-space-radius",
     "settings.share-tile-radius",
     "mini-bar.radius",
+    // The Transparency picker's small ilo, at the drawing's scale (#4129).
+    "transparency.picture-radius",
+    "transparency.bright-radius",
+    "transparency.window-radius",
+    "transparency.row-radius",
+    "transparency.page-radius",
+    "transparency.menu-row-radius",
     // A card's recent rows, inside its picture's box (#3074).
     "hover-card.recent-row-radius",
+    // First run's sheet (#4093): its slot inset in its corner, the sheet's less the inset, and the
+    // loop's small window at the drawing's scale.
+    "shell.onboarding.sheet.slot-radius",
+    "shell.onboarding.loops.window-radius",
+    "shell.onboarding.loops.icon-radius",
+    "shell.onboarding.loops.bar-radius",
+    // The composer's switch round its parts, and a card's page inside the card (#4140).
+    "shell.composer.switch-radius",
+    "shell.composer.page-radius",
 ];
 
 #[test]
@@ -176,6 +196,14 @@ fn a_corner_inside_another_is_concentric() {
     );
     assert_eq!(mini_bar::RADIUS, mini_bar::BUTTON_RADIUS + mini_bar::INSET);
     assert_eq!(
+        shell::composer::SWITCH_RADIUS,
+        shell::composer::SWITCH_PART_RADIUS + shell::composer::SWITCH_INSET
+    );
+    assert_eq!(
+        shell::composer::CARD_RADIUS,
+        shell::composer::PAGE_RADIUS + shell::composer::PAGE_INSET
+    );
+    assert_eq!(
         hover_card::RADIUS,
         hover_card::BUTTON_RADIUS + hover_card::BUTTON_INSET
     );
@@ -203,9 +231,9 @@ fn a_corner_inside_another_is_concentric() {
         (toast::RADIUS - toast::CHIP_RADIUS - inset).abs() < 0.5,
         "{inset}"
     );
-    // ilo's menu: its rows are controls, and its panel is theirs and its padding.
-    assert_eq!(menu::ROW_RADIUS, radius::CONTROL);
-    assert_eq!(menu::RADIUS, radius::CONTROL + menu::PADDING);
+    // ilo's menu: its panel is its rows' corner and its padding, quiet rows or not.
+    assert_eq!(menu::RADIUS, menu::ROW_RADIUS + menu::PADDING);
+    assert_eq!(menu::QUIET_RADIUS, menu::QUIET_ROW_RADIUS + menu::PADDING);
     // A pill's corners are half its height.
     assert_eq!(extensions::BADGE_RADIUS, extensions::BADGE_HEIGHT / 2.);
 }

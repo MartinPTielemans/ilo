@@ -16,7 +16,7 @@ use gpui::{
     Focusable, FontWeight, HitboxBehavior, Hsla, Image, ListAlignment, ListState, Modifiers,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point,
     RenderImage, Role, SharedString, Stateful, StyledText, Subscription, WeakEntity, Window,
-    canvas, div, img, linear_color_stop, linear_gradient, list, prelude::*, px, relative, svg,
+    canvas, div, img, list, prelude::*, px, relative, svg,
 };
 
 use super::{
@@ -76,7 +76,7 @@ const LIBRARY_BAND_STIFFNESS: f32 = 0.25;
 /// buttons: half a pixel at 2×, so their swap from the panel's copy can't be seen.
 const LIBRARY_REST_SLACK: f32 = 0.25;
 
-use crate::palette::{STATE_HOVERED, STATE_PRESSED};
+use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
 use crate::tokens::shell::library::COLUMN;
 use crate::tokens::shell::library::COLUMN_EDGE;
 use crate::tokens::shell::library::COLUMN_WIDTH;
@@ -450,6 +450,8 @@ pub(super) struct Library {
     /// Spaces' keyboard, which has no search field, and the card its ring is on, by its Space.
     cards: gpui::FocusHandle,
     keyed_card: Option<u64>,
+    /// The cards' Spaces as the ring last saw them, for the card that takes a gone one's place.
+    cards_seen: Vec<u64>,
     /// The row the field's keys ring, by its line in `items` and, in Media, its tile's column, and
     /// where it was last drawn, for return to open it from there as a click does.
     keyed_row: Option<(usize, usize)>,
@@ -522,11 +524,26 @@ impl Only {
 }
 
 /// Where the ring goes as the list's lines change under it: the same line, where it is now, else
-/// none.
+/// the row that took its place (`list_keys::took_place`), else none.
 fn rekeyed(library: &Library, items: &[Item]) -> Option<(usize, usize)> {
     let (line, column) = library.keyed_row?;
     let item = library.items.get(line)?;
-    let at = items.iter().position(|each| each == item)?;
+    if let Some(at) = items.iter().position(|each| each == item) {
+        return Some((at, column));
+    }
+    // Headings, Clear and a past page's sites take no ring, so none takes its place.
+    let rows = |items: &[Item]| -> Vec<Item> {
+        let rings = |each: &&Item| {
+            *each == item || !matches!(each, Item::Heading(_) | Item::Clear | Item::PastSite(_))
+        };
+        items.iter().filter(rings).copied().collect()
+    };
+    let took = crate::list_keys::took_place(item, &rows(&library.items), &rows(items))?;
+    let at = items.iter().position(|each| *each == took)?;
+    let column = match took {
+        Item::Media(tiles) => tiles.iter().position(Option::is_some)?,
+        _ => 0,
+    };
     Some((at, column))
 }
 
@@ -573,6 +590,13 @@ enum Medium {
 const FIELD: &str = "space-field";
 
 impl Shell {
+    /// Whether the Library's search field has the keyboard, for tests outside the Library.
+    #[cfg(test)]
+    pub(in crate::shell) fn library_search_keys(&self, window: &Window, cx: &App) -> bool {
+        (self.library.as_ref())
+            .is_some_and(|library| library.search.focus_handle(cx).is_focused(window))
+    }
+
     /// The archive changed, all of it, newest first.
     pub fn set_archive(&mut self, archive: Vec<Archived>, cx: &mut Context<Self>) {
         // A tab closed since a task was dismissed is what ⇧⌘T reopens: the core's to reopen, as
@@ -1039,12 +1063,9 @@ impl Shell {
             Section::Boosts => "Search Boosts…",
             Section::Boards => "Search Boards…",
         };
-        let search = cx.new(|cx| {
-            TextInput::new(placeholder, cx)
-                .placeholder_color(self.palette.text(SEARCH_PLACEHOLDER))
-                .caret_color(self.palette.accent)
-                .selection_color(self.palette.selection())
-        });
+        // Its colours are the panel's to give as it draws, since the field outlives a change of
+        // the window's look.
+        let search = cx.new(|cx| TextInput::new(placeholder, cx));
         let observe = cx.observe(&search, |shell, _, cx| shell.filter(false, cx));
         // Tab stops at the field, as at each of the Library's controls (keys.rs).
         let _ = search.read(cx).focus_handle(cx).tab_stop(true);
@@ -1066,6 +1087,7 @@ impl Shell {
             _search: observe,
             cards: cx.focus_handle().tab_stop(true),
             keyed_card: None,
+            cards_seen: Vec::new(),
             keyed_row: None,
             row_drawn: Rc::default(),
             new_board_drawn: Rc::default(),
@@ -1287,8 +1309,9 @@ impl Shell {
                     .filter(|(_, task)| {
                         query.is_empty() || found(&task.title) || found(&task.asked)
                     })
-                    .filter(|(_, task)| shown(task.left))
-                    .map(|(index, task)| (Item::Task(index), task.left));
+                    // By its end, so the time its row says is its heading's day's.
+                    .filter(|(_, task)| shown(task.ended))
+                    .map(|(index, task)| (Item::Task(index), task.ended));
                 let mut listed: Vec<_> = tabs.chain(tasks).collect();
                 // Closed tabs say they were Little ilo's while some of the others' are listed.
                 let little = |little: bool| {
@@ -1470,7 +1493,7 @@ impl Shell {
 
     /// The task `agent` comes back from the Archive, as ⇧⌘T brings it: its card to the foot, with
     /// its conversation open, and the Library closes.
-    fn restore_archived_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+    pub(super) fn restore_archived_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
         // check.sh waits for this line.
         log!("browser: restore archived task {agent}");
         self.show_restored = Some(agent.clone());
@@ -1756,7 +1779,7 @@ impl Shell {
                     .top(key_drop(cx))
                     .font_weight(FontWeight::NORMAL)
                     .text_size(px(text::SMALL))
-                    .text_color(self.palette.text(SECONDARY))
+                    .text_color(self.palette.gray(SECONDARY))
                     .child(keystroke_label("ctrl-shift-e")),
             );
         let button = super::permission::card_button_as(
@@ -1901,7 +1924,7 @@ impl Shell {
             .absolute()
             .left(px(TITLE_X + past))
             .top(px(TITLE_CAP - cap_top(TITLE_SIZE, TITLE_LINE)))
-            .text_color(self.palette.text(SECTION_LABEL));
+            .text_color(self.palette.gray(SECTION_LABEL));
         let column = div()
             .absolute()
             .left(px(if right { width - COLUMN_WIDTH } else { -past }))
@@ -1932,6 +1955,14 @@ impl Shell {
             .w(px(1.))
             .bg(self.palette.faint(COLUMN_EDGE));
         let search = library.search.clone();
+        // The field stays as the window goes from dark to light or to a Space of another colour,
+        // so its placeholder, caret and selection are this frame's palette's, as the glyph's is:
+        // the gray of the look it was made in is close to the other look's field.
+        let placeholder = self.palette.gray(SEARCH_PLACEHOLDER);
+        let (caret, selection) = (self.palette.accent.into(), self.palette.selection());
+        search.update(cx, |search, _| {
+            search.set_colors(placeholder, caret, selection)
+        });
         // The Filter button takes the field's end, while there's something to filter, and the
         // field what it leaves of the row.
         let filtered = self.archive_filtered();
@@ -1972,7 +2003,7 @@ impl Shell {
                     .left(px(SEARCH_GLYPH_X))
                     .top(px((SEARCH_HEIGHT - SEARCH_GLYPH) / 2.))
                     .size(px(SEARCH_GLYPH))
-                    .text_color(self.palette.text(SEARCH_PLACEHOLDER)),
+                    .text_color(placeholder),
             )
             .child(library.search.clone());
         let field = self.with_row_keys(field, cx);
@@ -1992,8 +2023,8 @@ impl Shell {
                 .justify_center()
                 .rounded(px(SEARCH_RADIUS))
                 .bg(self.palette.plate(LIBRARY_PLATE))
-                .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
-                .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+                .hover(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED)))
+                .active(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_PRESSED)))
                 .block_mouse_except_scroll()
                 .text_size(px(text::BODY))
                 .text_color(self.palette.text(FORM_TEXT))
@@ -2038,7 +2069,7 @@ impl Shell {
                 .px(px(HEADING_X))
                 .text_center()
                 .text_size(px(text::SMALL))
-                .text_color(self.palette.text(SECONDARY))
+                .text_color(self.palette.gray(SECONDARY))
                 .child(div().relative().child(line).child(log_drawn))
                 // The list's own way to make its first Board, with the key that does it from
                 // anywhere (#3575); a search that matched nothing has nothing to make.
@@ -2207,13 +2238,8 @@ impl Shell {
         let shell = cx.weak_entity();
         // The card is the Space's window, opaque, so it's drawn in the Space's own palette.
         let palette = self.palette_of(id);
-        let underlay = Hsla::from(palette.underlay);
-        let window_at = |y: f32| underlay.blend(Hsla::from(self.space_color_at(id, 0.5, y)));
-        let fill = linear_gradient(
-            180.,
-            linear_color_stop(window_at(0.), 0.),
-            linear_color_stop(window_at(1.), 1.),
-        );
+        let height = f32::from(self.viewport.height);
+        let glow = self.foot_glow(id, CARD_WIDTH, height, CARD_RADIUS);
         let rows = space.card_lines().into_iter().map(|line| match line {
             Line::Divider => {
                 let clear = still_clear(&palette, space.clears_last(space.shown));
@@ -2282,7 +2308,7 @@ impl Shell {
             }
         });
         let rows: Vec<_> = rows.collect();
-        let field = self.card_field(space, &palette, window_at(0.), cx);
+        let field = self.card_field(space, &palette, Hsla::from(palette.underlay), cx);
         // The ••• at the card's foot (Arc) opens the Space's menu, as the sidebar's does, with the
         // pointer on the card. Its press stops there, so the card sees no click to pick the Space.
         let half = URL_BUTTON_SIZE / 2.;
@@ -2323,7 +2349,8 @@ impl Shell {
             .h_full()
             .overflow_hidden()
             .rounded(px(CARD_RADIUS))
-            .bg(fill)
+            .bg(palette.underlay)
+            .child(glow)
             .shadow(Level::Resting.shadow())
             .block_mouse_except_scroll()
             .on_click(cx.listener(move |shell, _, _, cx| shell.pick_space(id, cx)))
@@ -2343,7 +2370,9 @@ impl Shell {
                     .absolute()
                     .inset_0()
                     .rounded(px(CARD_RADIUS))
-                    .group_hover("space-card", |style| style.bg(palette.plate(STATE_HOVERED)))
+                    .group_hover("space-card", |style| {
+                        style.bg(palette.ground_plate(Ground::Library, STATE_HOVERED))
+                    })
                     .can_drop(move |dragged, _, _| {
                         dragged
                             .downcast_ref::<CardTab>()
@@ -2695,7 +2724,7 @@ impl Shell {
                             .items_center()
                             .text_size(px(text::SMALL))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(self.palette.text(SECONDARY))
+                            .text_color(self.palette.gray(SECONDARY))
                             .child(heading),
                     )
                     .into_any_element();
@@ -2780,8 +2809,12 @@ impl Shell {
                     .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
                         shell.point_history(Pointed::Closed(id), *hovered, cx)
                     }))
-                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
-                    .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+                    .hover(|style| {
+                        style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED))
+                    })
+                    .active(|style| {
+                        style.bg(self.palette.ground_plate(Ground::Library, STATE_PRESSED))
+                    })
                     .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
                         shell.open_archived(id, event.position(), event.modifiers(), cx)
                     }))
@@ -2808,6 +2841,18 @@ impl Shell {
             .into_any_element()
     }
 
+    /// What a task's row says under its title: who worked on it and how it ended, when, as the
+    /// rows of the day it's listed under say when, and the pages it still holds.
+    fn archived_task_about(&self, task: &ArchivedTask) -> String {
+        let when = match &self.library {
+            Some(library) if task.ended > 0. => {
+                history_when(task.ended, library.starts, crate::clock::twelve_hour())
+            }
+            _ => String::new(),
+        };
+        task.about_at(&when)
+    }
+
     /// A task's line in the archive, as a tab's: its card's mark in the favicon's place, its title
     /// over its CLI, how it ended and when. A click brings its card back with its conversation
     /// open, and a right-click shows its menu.
@@ -2821,6 +2866,7 @@ impl Shell {
         } else {
             task.title.clone()
         };
+        let about = SharedString::from(self.archived_task_about(task));
         let mark = self.status_mark(task.dot);
         let menu_agent = agent.clone();
         div()
@@ -2836,8 +2882,12 @@ impl Shell {
                     .relative()
                     .rounded(px(ARCHIVED_RADIUS))
                     .block_mouse_except_scroll()
-                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
-                    .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+                    .hover(|style| {
+                        style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED))
+                    })
+                    .active(|style| {
+                        style.bg(self.palette.ground_plate(Ground::Library, STATE_PRESSED))
+                    })
                     .on_click(cx.listener(move |shell, _, _, cx| {
                         shell.restore_archived_task(agent.clone(), cx)
                     }))
@@ -2873,10 +2923,10 @@ impl Shell {
                                 self.palette.text(UNSELECTED_TITLE),
                             ))
                             .child(text_line(
-                                task.about.clone(),
+                                about,
                                 text::SMALL,
                                 15.,
-                                self.palette.text(SECONDARY),
+                                self.palette.gray(SECONDARY),
                             )),
                     ),
             )
@@ -2935,6 +2985,13 @@ impl Shell {
             crate::settings_rows::drawn(format!("library past {id}"), library.drawn.clone())
         });
         let group: SharedString = format!("past-{index}").into();
+        // When it ended, as History's rows say when, under the same headings.
+        let when = (self.library.as_ref()).map(|library| {
+            // The Library's times are milliseconds.
+            let ended = past.ended as f64 * 1000.;
+            history_when(ended, library.starts, crate::clock::twelve_hour())
+        });
+        let about = SharedString::from(past.about(&when.unwrap_or_default()));
         let mark = self.status_mark(crate::agents::task::Dot::Done);
         let close = div()
             .id(("past-delete", index))
@@ -2969,7 +3026,9 @@ impl Shell {
                     .size_full()
                     .relative()
                     .rounded(px(ARCHIVED_RADIUS))
-                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .hover(|style| {
+                        style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED))
+                    })
                     .children(drawn)
                     .on_click(cx.listener(move |shell, _, _, cx| shell.open_past_task(&opened, cx)))
                     .child(
@@ -2997,10 +3056,10 @@ impl Shell {
                                 self.palette.text(UNSELECTED_TITLE),
                             ))
                             .child(text_line(
-                                past.about().into(),
+                                about,
                                 text::SMALL,
                                 15.,
-                                self.palette.text(SECONDARY),
+                                self.palette.gray(SECONDARY),
                             )),
                     )
                     .child(close),
@@ -3063,8 +3122,8 @@ impl Shell {
             .py(px(3.))
             .rounded(px(ARCHIVED_RADIUS))
             .text_size(px(text::SMALL))
-            .text_color(self.palette.text(SECONDARY))
-            .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+            .text_color(self.palette.gray(SECONDARY))
+            .hover(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED)))
             .child(label)
     }
 
@@ -3124,7 +3183,7 @@ impl Shell {
                                 past.page_about().into(),
                                 text::SMALL,
                                 15.,
-                                self.palette.text(SECONDARY),
+                                self.palette.gray(SECONDARY),
                             )),
                     )
                     .child(back),
@@ -3183,7 +3242,7 @@ impl Shell {
                         answer_words.into(),
                         text::SMALL,
                         15.,
-                        self.palette.text(SECONDARY),
+                        self.palette.gray(SECONDARY),
                     )),
             )
             .children(revoke)
@@ -3233,7 +3292,7 @@ impl Shell {
             ),
             None => (false, false),
         };
-        let secondary = self.palette.text(SECONDARY);
+        let secondary = self.palette.gray(SECONDARY);
         let head = div()
             .h(px(ARCHIVED_PITCH))
             .pl(px(ARCHIVED_LEFT))
@@ -3384,7 +3443,9 @@ impl Shell {
                     .size_full()
                     .relative()
                     .rounded(px(ARCHIVED_RADIUS))
-                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .hover(|style| {
+                        style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED))
+                    })
                     .when(!boost.on, |row| row.opacity(0.5))
                     .on_mouse_down(MouseButton::Left, cx.listener(menu(site.clone())))
                     .on_mouse_down(MouseButton::Right, cx.listener(menu(site.clone())))
@@ -3421,7 +3482,7 @@ impl Shell {
                                 about.into(),
                                 text::SMALL,
                                 15.,
-                                self.palette.text(SECONDARY),
+                                self.palette.gray(SECONDARY),
                             )),
                     ),
             )
@@ -3910,7 +3971,7 @@ impl Shell {
                     .justify_center()
                     .text_size(px(text::SMALL))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(self.palette.text(SECTION_LABEL))
+                    .text_color(self.palette.gray(SECTION_LABEL))
                     .child(label),
             )
             .child(log_drawn)
@@ -3955,14 +4016,20 @@ impl Shell {
                 .text_color(self.palette.text(SECONDARY)))
             .into_any_element(),
         };
+        // Over the window, so the plate anything has under the pointer there, and the gray on it.
+        let (lit, on_plate) = (
+            self.palette.hovered_plate(),
+            self.palette.gray_on_plate(SECONDARY),
+        );
         div()
             .h(px(ARCHIVED_PITCH))
             .pl(px(ARCHIVED_LEFT))
             .pr(px(ARCHIVED_RIGHT))
             .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
             .child(
-                self.download_row(div().id(("download", id)), id, "row", cx)
+                self.download_row(div().id(("download", id)), id, "row", lit, cx)
                     .map(|plate| self.library_row(plate, Item::Download(index), 0, ARCHIVED_RADIUS))
+                    .group(POINTED_ROW)
                     .block_mouse_except_scroll()
                     .size_full()
                     .relative()
@@ -3991,12 +4058,12 @@ impl Shell {
                                 17.,
                                 self.palette.text(UNSELECTED_TITLE),
                             ))
-                            .child(text_line(
-                                status,
-                                text::SMALL,
-                                15.,
-                                self.palette.text(SECONDARY),
-                            )),
+                            .child(
+                                text_line(status, text::SMALL, 15., self.palette.gray(SECONDARY))
+                                    .group_hover(POINTED_ROW, move |style| {
+                                        style.text_color(on_plate)
+                                    }),
+                            ),
                     )
                     .children(progress.map(|done| {
                         div()
@@ -4020,13 +4087,15 @@ impl Shell {
     }
 
     /// What a download's row does, in the Library or the Library button's recent downloads, with
-    /// its plate lit under the pointer: a press that can drag the file out, a click that opens a
-    /// finished file or shows a held one's menu, and a right-click that shows the menu.
+    /// its plate `lit` under the pointer, which is as its ground asks, the window or a fill: a
+    /// press that can drag the file out, a click that opens a finished file or shows a held one's
+    /// menu, and a right-click that shows the menu.
     pub(super) fn download_row(
         &self,
         row: Stateful<Div>,
         id: u64,
         source: &'static str,
+        lit: Hsla,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let Some(download) = self.downloads.iter().find(|each| each.id == id) else {
@@ -4036,7 +4105,7 @@ impl Shell {
         // GPUI never hears the release that ends the system's drag, and would keep the row
         // pressed.
         let dragged = matches!(self.download_press, Some((pressed, _, true)) if pressed == id);
-        row.hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+        row.hover(move |style| style.bg(lit))
             .when(!dragged, |row| {
                 row.active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
             })
@@ -4259,7 +4328,13 @@ impl Shell {
             .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
             // A button has one hover handler, so this one also carries the tooltip's.
             .on_hover(cx.listener(move |shell, hovered: &bool, window, cx| {
-                shell.hover_button(command, TipSide::Beside, *hovered, cx);
+                shell.hover_button(
+                    command,
+                    TipSide::Beside,
+                    *hovered,
+                    window.mouse_position(),
+                    cx,
+                );
                 shell.hover_recent_downloads(false, *hovered, window, cx)
             }))
             .on_click(cx.listener(move |shell, _, _, cx| shell.run(command, "sidebar", cx)))
@@ -4401,6 +4476,10 @@ fn panel_at_rest(edge: f32, width: f32) -> bool {
 pub(super) fn library_band(way: f32) -> f32 {
     super::band(way, LIBRARY_BAND, LIBRARY_BAND_STIFFNESS)
 }
+
+/// What a Library row over the window is named as a group, so the gray words on it take a plate's
+/// gray while the pointer is on the row.
+pub(super) const POINTED_ROW: &str = "library-row";
 
 /// A line of a row's text, cut short with an ellipsis.
 fn text_line(text: SharedString, size: f32, height: f32, color: Hsla) -> gpui::Div {

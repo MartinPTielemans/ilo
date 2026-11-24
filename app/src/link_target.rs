@@ -5,7 +5,6 @@
 //! its window goes through `Host`; where it goes, what it says and when the pointer is near it are
 //! the shell's, which calls `plate` and `place`.
 
-use std::time::Instant;
 use std::{cell::Cell, ops::Range, rc::Rc, time::Duration};
 
 use gpui::{
@@ -14,6 +13,7 @@ use gpui::{
     WindowTextSystem, canvas, div, point, prelude::*, px, size,
 };
 
+use crate::hover_intent::{Intent, Next};
 use crate::{palette::Palette, tooltip};
 
 pub mod card;
@@ -21,17 +21,17 @@ pub mod card;
 /// Ours (*interim*, Arc's isn't recorded): it waits this long with the pointer on a link, so a
 /// pointer crossing a page toward the sidebar shows nothing, and Chrome's 80 ms is a flash at each
 /// link it passes.
-pub const DELAY: Duration = Duration::from_millis(150);
+pub const DELAY: Duration = ms(motion::DELAY);
 /// How soon after the plate went the next link's shows at once, as the pointer crosses from one
 /// link to the next.
-pub const GRACE: Duration = Duration::from_millis(400);
+pub const GRACE: Duration = ms(motion::GRACE);
 /// It shows in a frame, as a hover fill does, and fades out over this, so the gap between two
 /// links that touch isn't a flicker.
 pub const FADE_IN: Duration = Duration::ZERO;
-pub const FADE_OUT: Duration = Duration::from_millis(120);
+pub const FADE_OUT: Duration = ms(motion::FADE_OUT);
 /// Arc's, from its release notes and help centre: the pointer resting on a link this long shows its
 /// whole address. Chrome's status bubble waits 1.6 s.
-pub const WHOLE_AFTER: Duration = Duration::from_millis(1500);
+pub const WHOLE_AFTER: Duration = ms(motion::WHOLE_AFTER);
 /// How often it asks whether the button is still down, while a press holds back what its window
 /// would do. No OS tells the UI of a release in a page, and the plate should follow it within a frame.
 pub const RELEASE_POLL: Duration = Duration::from_millis(16);
@@ -46,7 +46,9 @@ pub use crate::tokens::link_target::RESTING_WIDTH;
 pub use crate::tokens::link_target::WINDOW_WIDTH;
 pub const WINDOW_HEIGHT: f32 = CARD_ROOM + HEIGHT;
 use crate::elevation::{Level, WINDOW_MARGIN};
+use crate::motion::ms;
 use crate::tokens::link_target::PAD_X;
+// Its times, as tokens (#4108).
 use crate::tokens::link_target::PRIMARY;
 use crate::tokens::link_target::RADIUS;
 use crate::tokens::link_target::RIM;
@@ -54,6 +56,7 @@ use crate::tokens::link_target::RIM;
 /// the site it passes for stands out.
 use crate::tokens::link_target::SECONDARY;
 use crate::tokens::link_target::TEXT_SIZE;
+use crate::tokens::link_target::motion;
 const ELLIPSIS: &str = "…";
 /// A longer tail than the plate could ever show is cut before it's measured: a data: link can be
 /// a megabyte.
@@ -296,8 +299,8 @@ pub struct LinkTarget {
     pending: Option<Pending>,
     /// The one-shot timer a plate waits on. Dropping it cancels it.
     wait: Option<Task<()>>,
-    /// When the plate last went.
-    went: Option<Instant>,
+    /// When the plate shows: after DELAY, or at once within GRACE of the last going.
+    intent: Intent,
     /// The plate went while a button was down, and its window waits for the release to go.
     hide_held: bool,
     /// Asks every RELEASE_POLL whether the button is up, while a press holds back the window.
@@ -350,7 +353,7 @@ pub fn open(
             drawn: None,
             pending: None,
             wait: None,
-            went: None,
+            intent: Intent::new(DELAY).with_grace(GRACE),
             hide_held: false,
             release: None,
             card: None,
@@ -388,23 +391,16 @@ pub fn show(window: u64, plate: Plate, frame: Bounds<Pixels>, side: Side, cx: &m
                 left,
                 top,
             });
-            let now = cx.background_executor().now();
-            let soon = target
-                .went
-                .is_some_and(|went| now.duration_since(went) < GRACE);
-            if target.shown.is_some() || soon {
-                target.wait = None;
-                target.reveal(cx);
-            } else if target.wait.is_none() {
-                target.wait = Some(cx.spawn(async move |target, cx| {
-                    cx.background_executor().timer(DELAY).await;
-                    target
-                        .update(cx, |target, cx| {
-                            target.wait = None;
-                            target.reveal(cx)
-                        })
-                        .ok();
-                }));
+            // A call while the plate waits changes what it shows, and where, and waits on.
+            if target.intent.is_waiting() {
+                return;
+            }
+            match target.intent.enter(cx.background_executor().now()) {
+                Next::Open => {
+                    target.wait = None;
+                    target.reveal(cx);
+                }
+                Next::Wait(delay) => target.wake_after(delay, cx),
             }
         })
         .ok();
@@ -506,6 +502,25 @@ pub fn over(cx: &App) -> Option<u64> {
 }
 
 impl LinkTarget {
+    /// Wakes after `delay` and reveals the plate once the pointer has rested its whole delay; a
+    /// wake that came early waits out the rest.
+    fn wake_after(&mut self, delay: Duration, cx: &mut Context<Self>) {
+        self.wait = Some(cx.spawn(async move |target, cx| {
+            cx.background_executor().timer(delay).await;
+            target
+                .update(cx, |target, cx| {
+                    target.wait = None;
+                    let now = cx.background_executor().now();
+                    if target.intent.due(now) {
+                        target.reveal(cx)
+                    } else if let Some(left) = target.intent.early(now) {
+                        target.wake_after(left, cx)
+                    }
+                })
+                .ok();
+        }));
+    }
+
     fn reveal(&mut self, cx: &mut Context<Self>) {
         if self.pending.is_some() && self.host.pressed() {
             return self.await_release(cx);
@@ -548,8 +563,11 @@ impl LinkTarget {
         self.wait = None;
         self.pending = None;
         self.close_card(cx);
+        if self.shown.is_none() {
+            self.intent.leave();
+        }
         if self.shown.take().is_some() {
-            self.went = Some(cx.background_executor().now());
+            self.intent.close(cx.background_executor().now());
             if self.host.pressed() {
                 self.hide_held = true;
                 return self.await_release(cx);

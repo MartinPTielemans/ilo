@@ -13,6 +13,7 @@ use std::rc::Rc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::list_keys::Named;
 use gpui::{
     App, Bounds, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
     Global, KeyBinding, Pixels, Render, SharedString, Window, actions, canvas, div, prelude::*, px,
@@ -628,11 +629,11 @@ impl Account {
 
     fn change_server(&mut self, cx: &mut Context<Self>) {
         let server = self.state.server.clone();
+        let colors = crate::settings_rows::field_colors(cx, |account: &Self| account.look);
         let input = cx.new(|cx| {
             TextInput::new("https://", cx)
                 .spoken("Sync Server Address")
-                .placeholder_color(self.look.detail)
-                .caret_color(self.look.ink)
+                .follows(colors)
                 .with_text(server)
         });
         self.server = Some(Field {
@@ -667,11 +668,11 @@ impl Account {
         if self.state.status == Status::Pairing {
             self.host.cancel();
         }
+        let colors = crate::settings_rows::field_colors(cx, |account: &Self| account.look);
         let input = cx.new(|cx| {
             TextInput::new("24 words", cx)
                 .spoken("Recovery Words")
-                .placeholder_color(self.look.detail)
-                .caret_color(self.look.ink)
+                .follows(colors)
         });
         self.entering = Some(Field {
             input,
@@ -688,6 +689,12 @@ impl Account {
         let words = field.input.read(cx).text().to_owned();
         field.refused = !self.host.enter_recovery_words(&words);
         cx.notify();
+    }
+
+    /// The field open, the server's address or the recovery words, whose ↩ and esc are an input
+    /// method's while it composes there (dismissal's rule).
+    fn open_field(&self) -> Option<Entity<TextInput>> {
+        (self.server.as_ref().or(self.entering.as_ref())).map(|field| field.input.clone())
     }
 
     fn leave_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -900,8 +907,8 @@ impl Account {
                 div()
                     .pl(px(ROW_X))
                     .flex()
-                    // Under the step's button, centred as it is.
-                    .when(self.step, |line| line.pl_0().justify_center())
+                    // On first run's sheet, at the step's words' left edge.
+                    .when(self.step, |line| line.pl_0())
                     .text_size(px(text::SMALL))
                     .text_color(self.look.detail)
                     .child(format!("Server: {name} · "))
@@ -949,16 +956,20 @@ impl Account {
                     .py(px(PADDING))
                     .key_context("AccountField")
                     .on_action(cx.listener(|account, _: &Keep, window, cx| {
+                        if !crate::dismissal::submits(&account.open_field(), cx) {
+                            return;
+                        }
                         match account.server.is_some() {
                             true => _ = account.keep_server(window, cx),
                             false => account.keep_words(cx),
                         }
                     }))
-                    .on_action(
-                        cx.listener(|account, _: &Leave, window, cx| {
+                    .on_action(cx.listener(|account, _: &Leave, window, cx| {
+                        let field = account.open_field();
+                        if crate::dismissal::Close::escape_from(&field, cx).is_some() {
                             account.leave_field(window, cx)
-                        }),
-                    )
+                        }
+                    }))
                     .child(self.place("field".into()))
                     .child(field.input.clone())],
             ))
@@ -1198,6 +1209,10 @@ impl Account {
                 .child(div().flex_none().child(sign_out)),
         );
 
+        let removable: Vec<_> = (self.devices.iter().flatten())
+            .filter(|device| !device.current)
+            .map(|device| device.id.clone())
+            .collect();
         let devices = self.devices.iter().flatten().map(|device| {
             let control = match device.current {
                 true => div()
@@ -1212,6 +1227,16 @@ impl Account {
                             cx.notify();
                         };
                     let spoken = format!("Remove {}", device.name);
+                    // From the keys, the keyboard goes on to the Remove of the device that takes
+                    // its place (list_keys' rule).
+                    let (gone, listed) = (device.id.clone(), removable.clone());
+                    let hand_on = move |_: &mut Self,
+                                        click: &gpui::ClickEvent,
+                                        window: &mut Window,
+                                        cx: &mut Context<Self>| {
+                        let keys = click.is_keyboard();
+                        crate::list_keys::removing(&gone, &listed, Named::ByRow, keys, window, cx)
+                    };
                     self.button_said(
                         format!("remove {}", device.id),
                         "Remove",
@@ -1219,6 +1244,7 @@ impl Account {
                         cx,
                         remove,
                     )
+                    .on_click(cx.listener(hand_on))
                     .into_any_element()
                 }
             };
@@ -1294,29 +1320,21 @@ impl Account {
             Choice::Settings => "Sync Settings",
             Choice::Extensions => "Sync Extensions",
         };
-        stop_switch(
-            &self.look,
-            name,
-            spoken,
-            on,
-            slid,
-            self.look.accent,
-            self.a11y,
-        )
-        .on_click(cx.listener(move |account, _, _, cx| {
-            // check.sh waits for this line.
-            log!("browser: sync {name} {}", if on { "off" } else { "on" });
-            // It slides now; the core's word that it took the choice follows.
-            match what {
-                Choice::Settings => account.state.settings = !on,
-                Choice::Extensions => account.state.extensions = !on,
-            }
-            account.host.choose(what, !on);
-            account.switched = Some((what, crate::motion::start(cx)));
-            cx.notify();
-        }))
-        .child(self.place(format!("switch {name}")))
-        .into_any_element()
+        stop_switch(&self.look, name, spoken, on, slid, self.look.on, self.a11y)
+            .on_click(cx.listener(move |account, _, _, cx| {
+                // check.sh waits for this line.
+                log!("browser: sync {name} {}", if on { "off" } else { "on" });
+                // It slides now; the core's word that it took the choice follows.
+                match what {
+                    Choice::Settings => account.state.settings = !on,
+                    Choice::Extensions => account.state.extensions = !on,
+                }
+                account.host.choose(what, !on);
+                account.switched = Some((what, crate::motion::start(cx)));
+                cx.notify();
+            }))
+            .child(self.place(format!("switch {name}")))
+            .into_any_element()
     }
 
     /// Delete Account, under the rest while signed in, with or without the secret: someone who

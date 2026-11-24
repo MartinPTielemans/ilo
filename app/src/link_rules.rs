@@ -7,8 +7,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
-    App, ClickEvent, Context, Entity, Focusable, Hsla, MouseButton, Pixels, Point, SharedString,
-    Subscription, Window, canvas, div, point, prelude::*, px, rgb, svg,
+    App, ClickEvent, Context, Entity, Focusable, MouseButton, Pixels, Point, SharedString,
+    Subscription, Window, canvas, div, point, prelude::*, px, svg,
 };
 
 use crate::settings_rows::{
@@ -16,7 +16,6 @@ use crate::settings_rows::{
 };
 use crate::shell::MenuEntry;
 use crate::text_input::TextInput;
-use crate::tokens::palette::{NO_THEME_ACCENT, SELECTION};
 use crate::tokens::settings::{
     ADD_X, BUTTON_GLYPH, BUTTONS_TOP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS,
     FIELD_PADDING, GROUP_GAP, ROW_X, RULE_CONDITION, RULE_GAP, RULE_SPACE, SHORT_PADDING,
@@ -437,25 +436,17 @@ impl LinkRulesView {
             return;
         }
         self.look = look;
-        let selection = Hsla::from(rgb(NO_THEME_ACCENT)).opacity(SELECTION);
-        for field in &self.fields {
-            field.update(cx, |field, cx| {
-                field.set_colors(look.detail.into(), look.ink.into(), selection);
-                cx.notify();
-            });
-        }
         cx.notify();
     }
 
     /// A field for each rule, holding its text, whose typing changes the rule.
     fn make_fields(&mut self, cx: &mut Context<Self>) {
-        let look = self.look;
         self.fields = (self.rules.rules.iter().enumerate())
             .map(|(index, rule)| {
+                let colors = crate::settings_rows::field_colors(cx, |rules: &Self| rules.look);
                 cx.new(|cx| {
                     TextInput::new("example.com", cx)
-                        .placeholder_color(look.detail)
-                        .caret_color(look.ink)
+                        .follows(colors)
                         .with_text(rule.text.clone().into())
                         .spoken(rule_name(index, "Text"))
                 })

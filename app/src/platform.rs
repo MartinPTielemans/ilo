@@ -23,6 +23,7 @@ pub fn keeps_passkeys() -> bool {
 }
 
 unsafe extern "C" {
+    pub fn host_has_window_material() -> bool;
     #[cfg(target_os = "macos")]
     pub fn host_set_scripting(scripting: *const host_scripting);
     // Apple's Translation (platform/mac/translate.swift): the user's language, where the Mac
@@ -372,6 +373,8 @@ unsafe extern "C" {
         width: f64,
         height: f64,
     );
+    #[cfg(target_os = "macos")]
+    pub fn host_set_menu_glass(panels: *const f64, count: usize, light: bool);
     pub fn host_hide_menu_window();
     pub fn host_menu_area(ui_view: *mut c_void, in_reveal: bool, area: *mut f64);
     pub fn host_show_site_controls(
