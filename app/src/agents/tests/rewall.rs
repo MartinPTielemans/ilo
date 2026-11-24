@@ -929,7 +929,7 @@ fn a_folders_name_is_in_ilos_line_and_nowhere_else(cx: &mut TestAppContext) {
     // Each line, made as its test above makes it, with the runs of its task that started
     // outside a wall.
     type Makes = fn(&Run, &Walls, &str, &mut TestAppContext) -> (IloKind, Vec<usize>);
-    let cases: [(&str, bool, Makes); 4] = [
+    let cases: [(&str, bool, Makes); 5] = [
         ("named-start", true, |_, _, _, _| {
             let left = LeftOut::Folder(NAME.into());
             (IloKind::StartedWithout { left }, vec![1])
@@ -968,6 +968,16 @@ fn a_folders_name_is_in_ilos_line_and_nowhere_else(cx: &mut TestAppContext) {
             });
             let left = LeftOut::Folder(NAME.into());
             (IloKind::NotRestarted { left }, Vec::new())
+        }),
+        // The user's Revoke (J2): its assistant, started again with nothing left to wall, is told
+        // without the name.
+        ("named-revoked", false, |run, _, agent, cx| {
+            run.ran(1);
+            (run.agents).update(cx, |agents, cx| agents.revoke_folder(agent, cx));
+            let revoked = IloKind::Revoked {
+                folder: NAME.into(),
+            };
+            (revoked, vec![2])
         }),
     ];
     let mut notified = 0;
@@ -1053,5 +1063,5 @@ fn a_folders_name_is_in_ilos_line_and_nowhere_else(cx: &mut TestAppContext) {
             assert!(!names(word), "{name}: {word}");
         }
     }
-    assert_eq!(notified, 3);
+    assert_eq!(notified, 4);
 }

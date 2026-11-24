@@ -3788,7 +3788,8 @@ impl Settings {
             blocks.push(Block::Group(self.assistants(agents, cx)));
             blocks.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
             blocks.extend(self.access());
-            blocks.extend(self.on_this_computer(agents, cx));
+            blocks.extend(self.files_not_here(agents, cx));
+            blocks.extend(self.folders_in_use(agents, cx));
         }
         // ⌘T's tasks and outside agents' sessions notify alike, so it's here while agents are on.
         // The Mac, Windows and Linux each post them (needs_you_host.rs).
@@ -3921,20 +3922,30 @@ impl Settings {
         ]
     }
 
-    /// Files and folders (#4101): on a system that can't wall a task in with them, why they aren't
-    /// offered (X9), where a user who looks for them finds it; on one that can, each folder a
-    /// live task holds, with Revoke, which acts at once. The folders' group isn't drawn while no
-    /// task holds one.
-    fn on_this_computer(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
+    /// Files and folders (#4101) on a system that can't wall a task in with them: why they aren't
+    /// offered (X9), under its own heading, where a user who looks for them finds it. A block of
+    /// its own, which leans on no other row, so it can move as Settings is regrouped.
+    fn files_not_here(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
+        use agents::files::words;
+        if agents.read(cx).files_available() {
+            return Vec::new();
+        }
+        let why = line_row(&self.look, words::NOT_AVAILABLE, None, Vec::new());
+        vec![
+            Block::Heading(words::ON_THIS_COMPUTER.into()),
+            Block::Group(group(&self.look, [why])),
+        ]
+    }
+
+    /// Each folder a live task holds (#4101), with Revoke, which acts at once, under its own
+    /// heading; not drawn while no task holds one, nor where files aren't available. A block of
+    /// its own, which leans on no other row, so it can move as Settings is regrouped.
+    fn folders_in_use(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
         use agents::files::words;
         let look = &self.look;
         let model = agents.read(cx);
         if !model.files_available() {
-            let why = line_row(look, words::NOT_AVAILABLE, None, Vec::new());
-            return vec![
-                Block::Heading(words::ON_THIS_COMPUTER.into()),
-                Block::Group(group(look, [why])),
-            ];
+            return Vec::new();
         }
         let rows: Vec<gpui::Div> = (model.folders_in_use().into_iter().enumerate())
             .map(|(index, held)| {
