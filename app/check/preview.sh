@@ -131,11 +131,11 @@ asked_preview() {
 # press closes the dim's surface, which empties its pointer region as it leaves, so the release
 # reaches the surface only by the display server's implicit grab. The row must not click.
 open_from_bar "http://localhost:$port/preview-target.html"
-# The browser window's dialog: ⌘Q asks, and a press on its dim cancels it.
+# The browser window's dialog: ⌘Q asks, and a press on its dim, left of its card, cancels it.
 post key q cmd
 expect "^browser: dialog shown Quit $app_name?\$" "probe: ⌘Q didn't ask before quitting"
 expect '^browser: dialog settled$' "probe: the quit dialog didn't settle"
-send press $page_point
+send press $dim_point
 probe_pressed=$step
 send dragto $(row 1)
 send release $(row 1)
