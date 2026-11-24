@@ -11337,6 +11337,7 @@ pub(crate) mod kept;
 #[cfg(unix)]
 mod lines;
 mod notes;
+#[cfg(unix)]
 mod rewall;
 mod sign_ins;
 mod uploads;
