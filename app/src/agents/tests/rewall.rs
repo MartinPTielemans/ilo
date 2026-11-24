@@ -220,24 +220,58 @@ fn a_change_that_leaves_the_wall_as_it_is_ends_nothing(cx: &mut TestAppContext) 
     assert_eq!(stands(&run, &agent, cx), (Tier::Look, true, Vec::new()));
 }
 
-/// A reply to a task that ended at Full access takes it up lower (kept.rs), which is a change of
-/// level like the user's own: the run inside Full access's wall is over and is sent nothing of
-/// the reply, and the reply starts one inside the lower level's wall, with ilo's words about the
-/// change over it. No road gives a task both a folder and a kept conversation yet, so the folder
-/// is put on a kept task here.
-#[cfg(unix)]
-#[gpui::test]
-fn a_level_lowered_at_a_reply_starts_it_inside_the_lower_levels_wall(cx: &mut TestAppContext) {
-    let (run, walls) = (Run::new("reply", cx), Walls::default());
+/// A kept task that is given a folder, which no road does yet and the test does by hand.
+fn kept_with_a_folder(name: &str, cx: &mut TestAppContext) -> (Run, Walls, String) {
+    let (run, walls) = (Run::new(name, cx), Walls::default());
     (run.agents).update(cx, |agents, _| agents.tasks.wall = Some(walls.maker()));
     let agent = run.start(Cli::Claude, cx);
-    run.ran(1);
+    let (args, _) = run.ran(1);
+    assert!(after(&args, "--session-id").is_some(), "{args:?}");
     (run.agents).update(cx, |agents, _| {
         agents.task_mut(&agent).unwrap().files = folder();
     });
+    (run, walls, agent)
+}
+
+/// A start inside a wall from the task's own words, with `reply` the last of them: it goes on
+/// with no conversation and keeps none, and ilo's words about a change of level aren't in it.
+fn starts_from_its_words(args: &[String], first: &str, reply: &str) {
+    assert!(walled(args), "{args:?}");
+    assert_eq!(after(args, "--resume"), None);
+    assert_eq!(after(args, "--session-id"), None);
+    assert!(first.contains(ASKED), "{first}");
+    assert!(first.contains(&format!("Me: {reply}")), "{first}");
+    assert!(!first.contains("changed this task's access"), "{first}");
+}
+
+/// A task with files never goes on with a conversation its assistant kept, which it can't reach
+/// inside a wall: a reply after its run went starts it from its own words.
+#[cfg(unix)]
+#[gpui::test]
+fn a_task_with_files_never_goes_on_with_a_kept_conversation(cx: &mut TestAppContext) {
+    let (run, walls, agent) = kept_with_a_folder("unkept", cx);
+    run.finish(&agent, cx);
+    run.said(&agent, Out::Gone(String::new()), cx);
+    let reply = "Are there two together for Sunday too?";
+    (run.agents).update(cx, |agents, cx| agents.reply(&agent, reply, cx));
+    let (args, first) = run.ran(2);
+    assert_eq!(walls.asked(), [(Tier::Work, true, false)]);
+    starts_from_its_words(&args, &first, reply);
+    assert_eq!(stands(&run, &agent, cx), (Tier::Work, true, Vec::new()));
+}
+
+/// A reply to a task that ended at Full access takes it up lower (kept.rs). For a task with a
+/// folder that changes its wall: the run inside Full access's wall is over and is sent nothing
+/// of the reply, which starts one inside the lower level's wall from the task's own words. Its
+/// assistant is told nothing of the access, as at any reply that takes a task up.
+#[cfg(unix)]
+#[gpui::test]
+fn a_level_lowered_at_a_reply_starts_it_inside_the_lower_levels_wall(cx: &mut TestAppContext) {
+    let (run, walls, agent) = kept_with_a_folder("reply", cx);
     // The user gives it the highest access while it works, and it ends there.
     set(&run, &agent, Tier::Full, cx);
-    run.ran(2);
+    let (args, _) = run.ran(2);
+    assert_eq!(after(&args, "--resume"), None);
     assert_eq!(walls.asked(), [(Tier::Full, true, false)]);
     let at_full = run_of(&run, &agent, cx);
     run.finish(&agent, cx);
@@ -248,9 +282,7 @@ fn a_level_lowered_at_a_reply_starts_it_inside_the_lower_levels_wall(cx: &mut Te
     let (args, first) = run.ran(3);
     assert_eq!(walls.asked().last(), Some(&(Tier::Work, true, false)));
     assert_eq!(walls.asked().len(), 2);
-    assert!(walled(&args), "{args:?}");
-    let lowered = tier::changed_turn(Tier::Full, Tier::Work);
-    assert!(first.ends_with(&format!("{lowered}\n\n{reply}")), "{first}");
+    starts_from_its_words(&args, &first, reply);
     assert_ne!(run_of(&run, &agent, cx), at_full);
     assert_eq!(run.state(&agent, cx), State::Working);
     assert_eq!(stands(&run, &agent, cx), (Tier::Work, true, Vec::new()));

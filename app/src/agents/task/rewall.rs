@@ -205,6 +205,19 @@ impl Agents {
         wall.map(Some).ok_or(())
     }
 
+    /// The run the task `key` has is over, as the wall it's inside is no longer the task's.
+    /// Whatever starts it next starts it inside the wall of the level it then has.
+    pub(super) fn wall_outgrown(&mut self, key: &str, cx: &mut Context<Self>) {
+        let Some(task) = self.task_mut(key) else {
+            return;
+        };
+        task.end_run();
+        task.rising = None;
+        // What that run asked goes unanswered with it, so no answer to it is the next run's act.
+        task.asking = None;
+        self.forget_waiting(key, None, cx);
+    }
+
     /// The task `key`, which ilo runs, after `change`, with ilo's words about it for its
     /// assistant, `told`. With its wall as it was the change is told as any task's is. Otherwise
     /// its run ends here, before anything is asked of the system, so no change waits on the
@@ -230,11 +243,7 @@ impl Agents {
             return self.tell_task(key, told, raise, cx);
         }
         let now = raise || matches!(task.state, State::Working | State::Asking { .. });
-        task.end_run();
-        task.rising = None;
-        // What that run asked goes unanswered with it, so no answer to it is the next run's act.
-        task.asking = None;
-        self.forget_waiting(key, None, cx);
+        self.wall_outgrown(key, cx);
         let Some(task) = self.task_mut(key) else {
             return;
         };

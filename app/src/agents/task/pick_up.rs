@@ -13,13 +13,12 @@ use std::time::{Duration, SystemTime};
 use gpui::{App, AppContext, Context, SharedString};
 
 use super::ilo::{IloKind, IloLine};
-use super::rewall::Change;
 use super::{KEPT, Line, State, Task, Who, seconds};
 use crate::agents::Agents;
 use crate::agents::helpers::Helpers;
 use crate::agents::kept::{self, Keep, Keeps, Nowhere};
 use crate::agents::runner::Cli;
-use crate::agents::tier::{self, Sites, Tier};
+use crate::agents::tier::{Sites, Tier};
 
 /// The title of a task a run before left whose agent never named it: what was asked stood as
 /// its title, and isn't kept.
@@ -66,14 +65,13 @@ impl Agents {
         let Some(root) = self.kept_root() else {
             return (Keep::Nothing, None);
         };
+        // A task with files runs where its assistant can keep no conversation, and reach none
+        // it kept (wall.rs).
+        let walled = self.walled(agent);
         let keep = match self.tasks.kept.of(agent) {
-            Some(record) if record.gone => Keep::Nothing,
+            Some(record) if record.gone || walled => Keep::Nothing,
             Some(record) => Keep::Resume(record.id.clone()),
-            None => {
-                // A task with files runs where its assistant can keep no conversation (wall.rs).
-                let walled = self.task(agent).is_some_and(|task| task.files.any());
-                kept::decide(cli, self.keeps_tasks(), walled)
-            }
+            None => kept::decide(cli, self.keeps_tasks(), walled),
         };
         let folder = match &keep {
             Keep::Nothing => None,
@@ -93,10 +91,16 @@ impl Agents {
         self.tasks.kept.write(&root);
     }
 
+    /// Whether `agent`'s task has files, and so runs inside a wall.
+    fn walled(&self, agent: &str) -> bool {
+        self.task(agent).is_some_and(|task| task.files.any())
+    }
+
     /// Whether `agent`'s next run goes on with a conversation its assistant kept, and so takes
-    /// only what's new as its first message.
+    /// only what's new as its first message. A task with files never does: it starts from its
+    /// own words, whatever was kept of it.
     pub(super) fn resumes(&self, agent: &str) -> bool {
-        (self.tasks.kept.of(agent)).is_some_and(|record| !record.gone)
+        !self.walled(agent) && (self.tasks.kept.of(agent)).is_some_and(|record| !record.gone)
     }
 
     /// The user replies to `agent`'s task: if it had ended and its conversation is kept, the reply
@@ -104,9 +108,9 @@ impl Agents {
     /// reply says so only where there's something to say: the task comes back at another access
     /// than it ended at, or it's one a run before left, whose assistant ilo starts again. A reply
     /// to a task done or stopped in this run, at the access it had, is the resume and has no line.
-    /// Nothing the assistant or a page says has a part in it. A lower access is a change of level
-    /// as the user's own is (rewall.rs): its assistant is told with the reply, and a run inside
-    /// the wall of the level it ended at is over.
+    /// Nothing the assistant or a page says has a part in it, and its assistant is told nothing
+    /// of the access: ilo's own check holds it. A run inside a wall the lower access changes is
+    /// over, so the reply starts one inside the new level's (rewall.rs).
     pub(super) fn pick_up(&mut self, agent: &str, cx: &mut Context<Self>) {
         let Some(task) = self.task(agent) else {
             return;
@@ -132,12 +136,9 @@ impl Agents {
         log!("browser: task {agent} picked up");
         // The activity log's entry for it, under the task's own name.
         self.note(agent, 0, "resumed", "", "");
-        if back != ended_at {
-            let change = Change::Level {
-                from: ended_at,
-                raised: None,
-            };
-            self.rewall(agent, change, tier::changed_turn(ended_at, back), cx);
+        let same = (self.task(agent)).is_none_or(|task| task.files.same_rules(ended_at, back));
+        if !same {
+            self.wall_outgrown(agent, cx);
         }
     }
 
