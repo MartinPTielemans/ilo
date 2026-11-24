@@ -894,11 +894,12 @@ paper = 0xf3f0e8
 tint-less = 0.64
 tint = 0.52
 tint-more = 0.44
-# The material alone, untinted, over a white, a grey and a black backdrop (run 5); the window's
-# ground over each is the tint's colour at its alpha over these, which run 6 measured to the hex.
-material-over-white = 0xadacac
-material-over-grey = 0x646464
-material-over-black = 0x1f1f1f
+# The HUD window's material alone, untinted, over a white, a grey and a black backdrop, as the
+# app draws it on a Mac with the tint off, measured from its window's pixels; the window's ground
+# over each is the tint's colour at its alpha over these.
+material-over-white = 0xacacac
+material-over-grey = 0x5e5e5e
+material-over-black = 0x131313
 # What stands in for the material where the window's look has to be opaque, under rows it covers
 # or in the reveal's panel over the page: the ground over grey at Standard. The palette works out
 # each level's from the tokens above; this one is for what reads it without a palette, and a test
