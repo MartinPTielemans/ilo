@@ -228,6 +228,9 @@ pub enum Named {
 /// (`from_keys`): hands the keyboard on to the same control of the row that takes its place, as
 /// `took_place` has it, before the row goes. A press with the pointer leaves the keyboard where it
 /// was, as such a control takes none. With no row left, the control that follows takes it.
+/// It moves by ⇥'s stops, so each row's control must be its row's only stop, as each of
+/// Settings' and the devices' Removes is; a row given a second stop needs its control found by
+/// the row instead.
 pub fn removing<T: PartialEq + Clone>(
     row: &T,
     rows: &[T],
