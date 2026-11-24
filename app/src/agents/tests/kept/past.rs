@@ -397,6 +397,28 @@ fn a_finished_task_is_there_after_a_quit_and_takes_a_reply(cx: &mut TestAppConte
     assert_eq!(lines.iter().filter(resumed).count(), 1, "{lines:?}");
 }
 
+/// Full access picked on a task that has ended isn't kept across a quit: brought back, it takes a
+/// reply at Work on pages at most, as any does.
+#[gpui::test]
+fn full_access_picked_on_an_ended_task_isnt_kept_across_a_quit(cx: &mut TestAppContext) {
+    let run = Run::new("picked-quit", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    run.finish(&agent, cx);
+    act(&run, &agent, TaskAction::PickTier(Tier::Full), cx);
+    let tier = |run: &Run, agent: &str, cx: &mut TestAppContext| {
+        (run.agents).read_with(cx, |agents, _| agents.task(agent).unwrap().tier)
+    };
+    assert_eq!(tier(&run, &agent, cx), Tier::Full);
+    quit(&run, cx);
+    let next = next(&run, cx);
+    let past = archive(&next, cx)[0].0.clone();
+    restore(&next, &past, cx);
+    reply(&next, &past, "And for Sunday?", cx);
+    next.ran(2);
+    assert_eq!(tier(&next, &past, cx), Tier::Work);
+}
+
 /// A past task whose assistant no longer has its conversation, found by the reply: the reply never
 /// reached it and it wasn't under way, so it stays ended as it was, under its own word and not
 /// Interrupted, with the line that says so in the reply field's place and Start Again alone. Its
