@@ -41,7 +41,7 @@ use crate::agents::runner::Cli;
 use crate::agents::sign_in::Offer;
 use crate::agents::task::{Card, Dot, TaskAction, foot_words, open_label, status_lead};
 use crate::palette::FIELD_PLATE as URL_FIELD;
-use crate::palette::{STATE_HOVERED, STATE_PRESSED};
+use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
 use crate::tokens::shell::MEDIA_BUTTON;
 use crate::tokens::shell::task::motion::{
     ARCHIVE, ARCHIVE_CLOSE, ARCHIVE_CLOSE_DELAY, ARCHIVE_CONTENT, ARCHIVE_EASE, ARCHIVE_HOLD,
@@ -2061,9 +2061,9 @@ pub(super) fn card_chip(
         .flex()
         .items_center()
         .rounded(px(NAV_RADIUS))
-        .bg(palette.plate(URL_FIELD))
-        .hover(|style| style.bg(palette.state(URL_FIELD, STATE_HOVERED)))
-        .active(|style| style.bg(palette.state(URL_FIELD, STATE_PRESSED)))
+        .bg(palette.ground_plate(Ground::Field, URL_FIELD))
+        .hover(|style| style.bg(palette.ground_state(Ground::Field, URL_FIELD, STATE_HOVERED)))
+        .active(|style| style.bg(palette.ground_state(Ground::Field, URL_FIELD, STATE_PRESSED)))
         .text_size(px(text::SMALL))
         .font_weight(FontWeight::MEDIUM)
         .text_color(palette.text(TITLE))

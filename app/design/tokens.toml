@@ -894,6 +894,14 @@ paper = 0xf3f0e8
 tint-less = 0.64
 tint = 0.52
 tint-more = 0.44
+# What text holds over the window's worst backdrop at each level: primary text (titles, a field's
+# own text, a button's label, a chip's key) the palette's 4.5:1 at all three, and gray text
+# (placeholders, section labels, a row's detail) these, as the page shows through more. Where
+# primary text misses it, the plate right under it takes the least shade of the tint that brings
+# it back (#4090).
+gray-text-less = 4.5
+gray-text = 3.0
+gray-text-more = 3.0
 # The HUD window's material alone, untinted, over a white, a grey and a black backdrop, as the
 # app draws it on a Mac with the tint off, measured from its window's pixels; the window's ground
 # over each is the tint's colour at its alpha over these.

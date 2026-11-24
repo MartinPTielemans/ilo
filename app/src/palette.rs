@@ -388,6 +388,42 @@ pub struct Palette {
     pub card: Rgba,
     /// The Space's mark.
     pub swatch: Swatch,
+    /// Each ground's shade, by `Ground`: the least step of the tint's colour over its plate at
+    /// which the ink reads on it in every state, worked out with the palette.
+    pub ground_shades: [f32; Ground::ALL.len()],
+}
+
+/// A plate primary text sits on over the window. The window stays as see-through as the user's
+/// transparency level says, and each of these takes the least shade at which its text reads,
+/// its own, as `fit` shades a theme's window (#4090).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ground {
+    /// The selected row's plate.
+    Selected,
+    /// The tab shown's plate in the Space's colour.
+    Shown,
+    /// A sidebar row's plate under the pointer.
+    Hovered,
+    /// A Library row's or card's plate under the pointer or pressed.
+    Library,
+    /// The URL field, and a button drawn as one.
+    Field,
+    /// The offer's buttons.
+    Offer,
+    /// A toast's or a page's key chip.
+    Chip,
+}
+
+impl Ground {
+    pub const ALL: [Ground; 7] = [
+        Ground::Selected,
+        Ground::Shown,
+        Ground::Hovered,
+        Ground::Library,
+        Ground::Field,
+        Ground::Offer,
+        Ground::Chip,
+    ];
 }
 
 /// A Space's mark: its theme's colours as a small swatch (#320), lying as the window's gradient
@@ -494,6 +530,7 @@ impl Palette {
             page: tone.page(),
             card: rgba(CARD),
             swatch: Swatch::of(None, window),
+            ground_shades: [0.; Ground::ALL.len()],
         };
         // Text and glyphs on an overlay read on it and on a control's plate under the pointer.
         let under = state_alpha(OVERLAY_REST, STATE_HOVERED);
@@ -504,6 +541,12 @@ impl Palette {
         palette.overlay_floor = least_alpha(ink, &overlays, TEXT + BETWEEN);
         palette.overlay_glyph_floor = least_alpha(ink, &overlays, GLYPH + BETWEEN);
         palette.card = palette.solve_card(window);
+        let mut shades = Ground::ALL.map(|ground| palette.solve_ground(ground, window));
+        // A row's plate under the pointer lies beside the selected row's and the tab shown's, and
+        // takes at least their shade, or the selected row could end the darker of the two.
+        let beside = shades[Ground::Selected as usize].max(shades[Ground::Shown as usize]);
+        shades[Ground::Hovered as usize] = shades[Ground::Hovered as usize].max(beside);
+        palette.ground_shades = shades;
         let grounds = palette.grounds(window);
         palette.text_floor = least_alpha(ink, &grounds, TEXT + BETWEEN);
         palette.glyph_floor = least_alpha(ink, &grounds, GLYPH + BETWEEN);
@@ -532,6 +575,102 @@ impl Palette {
             grounds.extend(plain.iter().map(|&at| over(at, self.ink, plate)));
         }
         grounds
+    }
+
+    /// The colour of `ground`'s plate and its alphas in each state it's drawn in.
+    fn ground_plates(&self, ground: Ground) -> (Rgba, Vec<f32>) {
+        use crate::tokens::shell::{HOVERED, LIGHT_HOVERED, TILE};
+        let pressable = |rest: f32| {
+            vec![
+                rest,
+                state_alpha(rest, STATE_HOVERED),
+                state_alpha(rest, STATE_PRESSED),
+            ]
+        };
+        let ink = self.ink;
+        match ground {
+            Ground::Selected => {
+                let (colour, rest, under) = self.tone.selected();
+                // A dark window's selected plate keeps its strength under the pointer (`shown`).
+                match self.tone {
+                    Tone::Dark => (colour, vec![rest]),
+                    Tone::Light => (colour, vec![rest, under]),
+                }
+            }
+            Ground::Shown => match self.shown {
+                Some(colour) => {
+                    let (rest, under) = self.tone.shown();
+                    (colour, vec![rest, under])
+                }
+                None => (ink, Vec::new()),
+            },
+            Ground::Hovered => (
+                ink,
+                vec![match self.tone {
+                    Tone::Dark => HOVERED,
+                    Tone::Light => LIGHT_HOVERED,
+                }],
+            ),
+            Ground::Library => (ink, vec![STATE_HOVERED, STATE_PRESSED]),
+            Ground::Field => {
+                let mut alphas = pressable(FIELD_PLATE);
+                // The URL field brightens under the pointer as a tile does.
+                alphas.push(state_alpha(TILE, STATE_HOVERED));
+                (ink, alphas)
+            }
+            Ground::Offer => (ink, pressable(crate::tokens::offer::PLATE)),
+            Ground::Chip => (ink, pressable(crate::tokens::toast::CHIP_FILL)),
+        }
+    }
+
+    /// The least shade, in steps, of the tint's colour over `ground`'s plate at which the ink
+    /// reads on it in every state over every point of the window: none where it reads already.
+    fn solve_ground(&self, ground: Ground, window: &Window) -> f32 {
+        let (colour, alphas) = self.ground_plates(ground);
+        let plain = window.samples(self.shade, self.layer_alpha);
+        let tint = self.tone.tint_color();
+        let reads = |shade: f32| {
+            alphas.iter().all(|&alpha| {
+                plain.iter().all(|&at| {
+                    let ground = over(over(at, colour, alpha), tint, shade);
+                    contrast(self.ink, ground) >= TEXT + BETWEEN
+                })
+            })
+        };
+        let steps = (1. / SHADE_STEP).round() as i32;
+        (0..=steps)
+            .map(|step| step as f32 * SHADE_STEP)
+            .find(|&shade| reads(shade))
+            .unwrap_or(1.)
+    }
+
+    /// `plate` drawn on `ground`: with the ground's shade of the tint's colour over it, as one
+    /// colour at one alpha, so it's drawn as one fill. A plate not drawn takes no shade.
+    pub fn on_ground(&self, ground: Ground, plate: Hsla) -> Hsla {
+        let shade = self.ground_shades[ground as usize];
+        if shade == 0. || plate.a == 0. {
+            return plate;
+        }
+        let (p, tint) = (plate.to_rgb(), self.tone.tint_color());
+        let a = 1. - (1. - p.a) * (1. - shade);
+        let mix = |plate: f32, tint: f32| (plate * p.a * (1. - shade) + tint * shade) / a;
+        Rgba {
+            r: mix(p.r, tint.r),
+            g: mix(p.g, tint.g),
+            b: mix(p.b, tint.b),
+            a,
+        }
+        .into()
+    }
+
+    /// A plate of the ink at `alpha` drawn on `ground`.
+    pub fn ground_plate(&self, ground: Ground, alpha: f32) -> Hsla {
+        self.on_ground(ground, self.plate(alpha))
+    }
+
+    /// A control's fill on `ground` in `state`, over its resting plate `rest`.
+    pub fn ground_state(&self, ground: Ground, rest: f32, state: f32) -> Hsla {
+        self.on_ground(ground, self.state(rest, state))
     }
 
     /// This palette `t` of the way to `other`'s, as the window's colour goes from one Space's to
@@ -579,6 +718,10 @@ impl Palette {
             page: mix(self.page, other.page),
             card: near.card,
             swatch: near.swatch,
+            ground_shades: std::array::from_fn(|ground| {
+                let (from, to) = (self.ground_shades[ground], other.ground_shades[ground]);
+                from + (to - from) * t
+            }),
         }
     }
 
@@ -699,7 +842,10 @@ impl Palette {
     /// The selected row's plate, `hover` of the way to its fill under the pointer.
     pub fn selected(&self, hover: f32) -> Hsla {
         let (color, rest, under) = self.tone.selected();
-        Hsla::from(color).opacity(rest + (under - rest) * hover)
+        self.on_ground(
+            Ground::Selected,
+            Hsla::from(color).opacity(rest + (under - rest) * hover),
+        )
     }
 
     /// The tab shown's plate, `hover` of the way to its fill under the pointer: the Space's colour,
@@ -714,7 +860,10 @@ impl Palette {
             };
         };
         let (rest, under) = self.tone.shown();
-        Hsla::from(color).opacity(rest + (under - rest) * hover)
+        self.on_ground(
+            Ground::Shown,
+            Hsla::from(color).opacity(rest + (under - rest) * hover),
+        )
     }
 
     /// What lifts the tab shown's plate off a light window, at `opacity`: the selected plate's,
@@ -764,10 +913,11 @@ impl Palette {
 
     /// A sidebar row's plate under the pointer, the only one a row has but the tab shown's.
     pub fn hovered_row(&self) -> Hsla {
-        self.plate(match self.tone {
+        let alpha = match self.tone {
             Tone::Dark => crate::tokens::shell::HOVERED,
             Tone::Light => crate::tokens::shell::LIGHT_HOVERED,
-        })
+        };
+        self.ground_plate(Ground::Hovered, alpha)
     }
 
     /// The window where its foot's glow is `foot` of its full strength and the far one `far` of
