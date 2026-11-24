@@ -366,6 +366,10 @@ Menu g_menu;
 // The thread hooks that watch the pointer and the keys while the menu shows.
 HHOOK g_menu_mouse_hook = nullptr;
 HHOOK g_menu_key_hook = nullptr;
+// The button (its virtual key) whose press the menu took, or 0. A press outside closes the menu
+// and goes no further, and the menu is hidden by the time that button comes up, so the mouse hook
+// stays on until it does.
+int g_press_taken = 0;
 
 void KeyboardFromHidden(HWND hwnd);
 void TakePointer(HWND hwnd, uint16_t actions);
@@ -2295,11 +2299,75 @@ void WatchOwner(HWND root) {
   SetWindowSubclass(root, OwnerProc, kOwner, 0);
 }
 
+// The virtual key of the button a press or release |message| is of, from the hook's |data| for an
+// X button, or 0.
+int ButtonOf(WPARAM message, DWORD data) {
+  switch (message) {
+    case WM_LBUTTONDOWN:
+    case WM_NCLBUTTONDOWN:
+    case WM_LBUTTONUP:
+    case WM_NCLBUTTONUP:
+      return VK_LBUTTON;
+    case WM_RBUTTONDOWN:
+    case WM_NCRBUTTONDOWN:
+    case WM_RBUTTONUP:
+    case WM_NCRBUTTONUP:
+      return VK_RBUTTON;
+    case WM_MBUTTONDOWN:
+    case WM_NCMBUTTONDOWN:
+    case WM_MBUTTONUP:
+    case WM_NCMBUTTONUP:
+      return VK_MBUTTON;
+    case WM_XBUTTONDOWN:
+    case WM_NCXBUTTONDOWN:
+    case WM_XBUTTONUP:
+    case WM_NCXBUTTONUP:
+      return HIWORD(data) == XBUTTON2 ? VK_XBUTTON2 : VK_XBUTTON1;
+  }
+  return 0;
+}
+
+bool IsButtonUp(WPARAM message) {
+  return message == WM_LBUTTONUP || message == WM_NCLBUTTONUP || message == WM_RBUTTONUP ||
+         message == WM_NCRBUTTONUP || message == WM_MBUTTONUP || message == WM_NCMBUTTONUP ||
+         message == WM_XBUTTONUP || message == WM_NCXBUTTONUP;
+}
+
+void RemoveMenuMouseHook() {
+  if (g_menu_mouse_hook) {
+    UnhookWindowsHookEx(g_menu_mouse_hook);
+    g_menu_mouse_hook = nullptr;
+  }
+}
+
+// The rest of a click whose press the menu took, with the menu hidden since: its drag and its
+// release go no further either, as a page that heard them would have half of the click that closed
+// the menu. The hook comes off with that release, or with the next press.
+bool TakenPressEnds(WPARAM message, int button) {
+  if (!g_press_taken) {
+    return false;
+  }
+  const bool moved = message == WM_MOUSEMOVE || message == WM_NCMOUSEMOVE;
+  if (moved) {
+    return true;
+  }
+  const bool released = button == g_press_taken && IsButtonUp(message);
+  // Or another press, after a release that went where this thread didn't hear it.
+  if (released || (button && !IsButtonUp(message))) {
+    g_press_taken = 0;
+    RemoveMenuMouseHook();
+  }
+  return released;
+}
+
 // Every pointer event in the app, before the window under the pointer hears it: the menu takes
 // what's on it, so a press outside closes it and goes no further (a right-press outside passes
 // through, to open that window's own menu), as the Mac's local monitor does.
-bool MenuTakesPointer(WPARAM message, POINT pt) {
-  if (Shows(g_menu.life) && g_menu.pointer) {
+bool MenuTakesPointer(WPARAM message, POINT pt, int button) {
+  if (!Shows(g_menu.life)) {
+    return TakenPressEnds(message, button);
+  }
+  if (g_menu.pointer) {
     int kind = -1;
     switch (message) {
       case WM_MOUSEMOVE:
@@ -2344,6 +2412,12 @@ bool MenuTakesPointer(WPARAM message, POINT pt) {
       if (taken && kind == 3) {
         ReleaseCapture();
       }
+      if (kind == 1 || kind == 2) {
+        g_press_taken = taken ? button : 0;
+      } else if (kind == 3 && button == g_press_taken) {
+        g_press_taken = 0;
+        return true;
+      }
       return taken;
     }
   }
@@ -2352,13 +2426,20 @@ bool MenuTakesPointer(WPARAM message, POINT pt) {
 
 LRESULT CALLBACK MenuMouse(int code, WPARAM wparam, LPARAM lparam) {
   if (code == HC_ACTION && DesktopPointerHeard()) {
-    const POINT pt = reinterpret_cast<MOUSEHOOKSTRUCT*>(lparam)->pt;
+    const auto* hook = reinterpret_cast<MOUSEHOOKSTRUCTEX*>(lparam);
+    const POINT pt = hook->pt;
     const bool moved = wparam == WM_MOUSEMOVE || wparam == WM_NCMOUSEMOVE;
+    // A taken press's button that came up where this thread didn't hear it, over another app.
+    if (moved && g_press_taken && !Shows(g_menu.life) && !(GetKeyState(g_press_taken) & 0x8000)) {
+      g_press_taken = 0;
+      RemoveMenuMouseHook();
+      return CallNextHookEx(nullptr, code, wparam, lparam);
+    }
     if (moved && g_menu.resting && pt.x == g_menu.rest.x && pt.y == g_menu.rest.y) {
       return 1;
     }
     g_menu.resting = g_menu.resting && !moved;
-    if (MenuTakesPointer(wparam, pt)) {
+    if (MenuTakesPointer(wparam, pt, ButtonOf(wparam, hook->mouseData))) {
       return 1;
     }
   }
@@ -2400,11 +2481,11 @@ void InstallMenuHooks() {
   }
 }
 
-// Taken off once the menu hides, so an idle browser isn't woken by the pointer or keys.
+// Taken off once the menu hides, so an idle browser isn't woken by the pointer or keys: the mouse
+// hook once the button whose press the menu took is up too (TakenPressEnds).
 void RemoveMenuHooks() {
-  if (g_menu_mouse_hook) {
-    UnhookWindowsHookEx(g_menu_mouse_hook);
-    g_menu_mouse_hook = nullptr;
+  if (!g_press_taken) {
+    RemoveMenuMouseHook();
   }
   if (g_menu_key_hook) {
     UnhookWindowsHookEx(g_menu_key_hook);
@@ -6120,7 +6201,7 @@ bool host_drive_pointer(unsigned message, long x, long y) {
   if (message == WM_MOUSEMOVE && g_mouse_hook) {
     PointerMoved(point);
   }
-  return g_menu_mouse_hook && MenuTakesPointer(message, point);
+  return g_menu_mouse_hook && MenuTakesPointer(message, point, ButtonOf(message, 0));
 }
 
 bool host_drive_key(unsigned vk, long lparam) {
