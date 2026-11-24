@@ -159,7 +159,6 @@ pub mod account;
 pub mod ad_block;
 pub mod address_wrap;
 pub mod agent_history;
-pub mod agent_request;
 pub mod agents;
 pub mod boards;
 pub mod boost_editor;

@@ -180,7 +180,7 @@ impl Step {
             // The sheet's first page (#4093): what the flow is, and that each step can be skipped.
             Step::Intro => (
                 concat!("Welcome to ", env!("APP_NAME"), "."),
-                "A good tool. A minute to make it yours, and every step can be skipped.",
+                "A good tool. A few steps to make it yours, and you can skip any of them.",
                 "Get Started",
             ),
             // The import view's own buttons are the step's.

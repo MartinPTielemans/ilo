@@ -2228,6 +2228,8 @@ pointer-fade = 0.3
 # once from each time here: 2nd, 3rd, then the 1st again. The press's ring grows and fades
 # over `press`; the tab and its page change on the press, as a tab switch does.
 welcome-at = [0.4, 3.4, 6.4]
+# Where across the sidebar the pointer presses a tab and rests on it: past the longest title.
+press-across = 0.8
 welcome-move = 0.8
 welcome-click = 0.2
 welcome-press = 0.5
@@ -2312,7 +2314,7 @@ change-gap = 6.0
 # each `change-top` below the last, numbered in a `number` column `number-gap` before the sentence.
 # An action on the page's question has the tab's site as that head, its sentence `change-alone-top`
 # under it (#3836).
-# "See the whole request" sits `see-top` below why it asks.
+# Why it asks sits `see-top` below the changes.
 facts-top = 4.0
 facts-line = 15.0
 change-alone-top = 2.0
@@ -2320,35 +2322,6 @@ change-top = 8.0
 number = 10.0
 number-gap = 6.0
 see-top = 10.0
-# The corners of the keyboard's ring around "See the whole request", which is a link's words.
-see-ring = 4.0
-# The whole request beside the card (#3548), over the page: `whole-width` wide, its sections
-# `whole-section` apart, each `whole-gap` under its label, its line under its title `whole-lead`
-# below it, the cookies' note `whole-note` below the headers, and kept `whole-inside` inside the
-# window, `whole-least` tall at least, and `whole-opening` tall until it has measured what it
-# shows, before it's on screen. A header's name is `whole-name` wide, `whole-name-gap`
-# before its value. An arrow key scrolls it `whole-step`.
-whole-width = 520.0
-whole-padding = 16.0
-whole-section = 14.0
-whole-gap = 3.0
-whole-lead = 2.0
-whole-note = 6.0
-whole-inside = 16.0
-whole-least = 120.0
-whole-opening = 400.0
-whole-name = 150.0
-whole-name-gap = 10.0
-whole-step = 40.0
-# What the agent wrote whole (an address, a header's value, a body) is set in a monospaced face on
-# a plate of its own, the ink at `whole-plate`, `whole-block` inside it with a control's corners,
-# so nothing in it can pass for the overlay's own labels. Its escapes are in the detail on a plate
-# of their own, the ink at `whole-escape`, so they're told from typed text without colour too.
-whole-plate = 0.06
-whole-escape = 0.14
-whole-block = 6.0
-# The line round its plate, as the other overlays' rims.
-whole-rim = 0.5
 
 [shell.boost]
 # Ours (#2347): the Boost card's list of what Arrange moved, between its words and its buttons.

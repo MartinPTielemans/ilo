@@ -36,8 +36,10 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         IloKind::Helpers { deep, .. } => (
             match (*deep, crate::tokens::agents::helpers::MOST) {
                 (true, _) => format!("stopped {agent} when a helper started a helper of its own"),
-                (false, 1) => format!("stopped {agent} for starting more than 1 helper"),
-                (false, most) => format!("stopped {agent} for starting more than {most} helpers"),
+                (false, 1) => format!("stopped {agent} after it started more than 1 helper"),
+                (false, most) => {
+                    format!("stopped {agent} after it started more than {most} helpers")
+                }
             },
             None,
         ),

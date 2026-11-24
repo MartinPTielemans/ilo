@@ -100,10 +100,17 @@ pub(super) fn colour(
 ) -> impl IntoElement {
     const SPACES: [[&str; 3]; 2] = [["Inbox", "Notes", "Map"], ["Studio", "Sketches", "Palette"]];
     let tone = tone(colors);
-    let palettes = [
-        Palette::of(picked.map(Theme::of_color).as_ref(), tone),
-        Palette::of(Some(&Theme::of_color(other)), tone),
-    ];
+    let next = Palette::of(Some(&Theme::of_color(other)), tone);
+    // With nothing picked, the Space has the ground a color gives it and no glow, as the window
+    // behind has, rather than the untinted material, lighter than its page in the dark.
+    let first = match picked {
+        Some(color) => Palette::of(Some(&Theme::of_color(color)), tone),
+        None => Palette {
+            underlay: next.underlay,
+            ..Palette::of(None, tone)
+        },
+    };
+    let palettes = [first, next];
     let [there, back] = t::COLOR_AT;
     let swiped = |start: f32| ease_in_out(((t_ - start) / t::COLOR_SWIPE).clamp(0., 1.));
     let across = swiped(there) - swiped(back);
@@ -340,10 +347,11 @@ fn page(index: usize, palette: &Palette) -> gpui::Div {
         .child(body)
 }
 
-/// The middle of the `index`th row's name, where the pointer presses it, in the window.
+/// Where the pointer presses the `index`th row and rests on it, in the window: on the row past
+/// its name's end, so it covers none of it.
 fn row_point(index: usize) -> (f32, f32) {
     (
-        t::SIDEBAR * 0.45,
+        t::SIDEBAR * t::PRESS_ACROSS,
         t::ROWS_TOP + (index as f32 + 0.5) * t::ROW,
     )
 }
