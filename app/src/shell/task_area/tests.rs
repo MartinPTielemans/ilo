@@ -529,8 +529,8 @@ fn a_click_on_the_conversation_while_the_page_goes_back_reaches_it(cx: &mut Test
 }
 
 /// Selecting any of the user's tabs, the one selected too, or another Space leaves the area and
-/// shows it, and so does a quit. The window's own commands, such as ⌘S, and Focus Agent Question
-/// leave the area as it is.
+/// shows it. The window's own commands, such as ⌘S, and Focus Agent Question leave the area as
+/// it is.
 #[gpui::test]
 fn selecting_a_tab_or_a_space_leaves_the_area(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);
@@ -578,12 +578,79 @@ fn selecting_a_tab_or_a_space_leaves_the_area(cx: &mut TestAppContext) {
     });
     assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
     core_shows_users(&shell, cx);
+}
 
-    // A quit keeps the user's Space in the session, as the core shows it again first.
+/// ⌘Q with a task's view shown asks first, and Cancel leaves the window as it was, the task's
+/// page watched still showing (#4202). Once the quit is decided the area goes and the core shows
+/// the user's Space again, which the session then keeps for the window.
+#[gpui::test]
+fn quit_leaves_the_tasks_view_until_the_quit_is_decided(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
     watching(&shell, &host, cx);
+    let shown = shell.read_with(cx, |shell, _| shell.task_shown());
+    assert!(shown.is_some());
     shell.update(cx, |shell, cx| shell.run(Command::Quit, "ui", cx));
+    assert_eq!(*host.app_asks.borrow(), ["quit"]);
+    // Cancel is the host never saying the quit goes ahead.
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        shown,
+        "the view closed before the answer"
+    );
+    assert!(
+        host.shown.borrow().is_empty(),
+        "the core was shown another Space before the answer"
+    );
+
+    let going = host.quit_going.borrow_mut().take();
+    let going = going.expect("Quit gave the host nothing to run once it's decided");
+    cx.update(|_, cx| going(cx));
     assert_eq!(*host.shown.borrow(), [1]);
     assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
+}
+
+/// Clear Archive with a task's view shown leaves it standing: with nothing to clear, while it
+/// asks, and once the archive is cleared (#4202).
+#[gpui::test]
+fn clear_archive_leaves_the_tasks_view(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    let shown = shell.read_with(cx, |shell, _| shell.task_shown());
+    assert!(shown.is_some());
+    shell.update(cx, |shell, cx| shell.run(Command::ClearArchive, "ui", cx));
+    assert!(host.confirming.borrow().is_none(), "an empty archive asked");
+    assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), shown);
+
+    shell.update(cx, |shell, cx| {
+        let tab = crate::shell::library::Archived {
+            id: 7,
+            url: "https://a.example/".into(),
+            title: "A".into(),
+            archived: 1000.,
+            little: false,
+        };
+        shell.set_archive(vec![tab], cx);
+        shell.run(Command::ClearArchive, "ui", cx);
+    });
+    let asked = host.confirming.borrow_mut().take();
+    let (message, _, confirmed) = asked.expect("Clear Archive didn't ask");
+    assert_eq!(message, "Clear the archive?");
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        shown,
+        "the view closed as it asked"
+    );
+    cx.update(|_, cx| confirmed(cx));
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        shown,
+        "the view closed as the archive cleared"
+    );
+    assert!(
+        host.shown.borrow().is_empty(),
+        "the core was shown another Space"
+    );
 }
 
 /// ⌘↩ on the page watched is the strip's Take Over while the agent drives it, which gives the
