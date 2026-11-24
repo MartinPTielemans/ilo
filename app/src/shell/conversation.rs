@@ -42,8 +42,8 @@ use crate::tokens::shell::FORM_PLACEHOLDER;
 use crate::tokens::shell::agent_pointer::{COLOR as SIGNAL, RING};
 use crate::tokens::shell::conversation::ilo::{
     ARM, BELOW as ILO_BELOW, BUTTONS_GAP, BUTTONS_TOP, COMPOSER_CHEVRON, COMPOSER_CHEVRON_GAP,
-    COMPOSER_TOP, GLYPH as ILO_GLYPH, INK as ILO_INK, MARK as MARK_SIZE, MARK_GAP, NOTE_INK,
-    NOTE_TOP, QUOTED_CHARS, TEXT_LINE as ILO_TEXT_LINE, TEXT_TOP,
+    COMPOSER_TOP, GLYPH as ILO_GLYPH, INK as ILO_INK, NOTE_INK, NOTE_TOP, QUOTED_CHARS,
+    TEXT_LINE as ILO_TEXT_LINE, TEXT_TOP,
 };
 use crate::tokens::shell::conversation::motion::{CHEVRON, LAND, PICK_FADE, RISE, STEPS_FADE};
 use crate::tokens::shell::conversation::{
@@ -224,6 +224,10 @@ pub struct TalkView {
     ilo_drawn: Rc<RefCell<HashMap<(usize, IloButton), (Bounds<Pixels>, Instant)>>>,
     /// Whether the pointer rests on such a button, which holds the lines still as more come.
     ilo_hovered: Rc<Cell<bool>>,
+    /// Where each of ilo's lines' words were last drawn, and their layout, by its line.
+    ilo_words_drawn: WordsDrawn,
+    /// Where the level's chip under the reply field was drawn, if the last frame drew it.
+    level_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     landed: Rc<Cell<Option<Bounds<Pixels>>>>,
     drawn_at: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
@@ -344,6 +348,8 @@ impl Shell {
                     answers_drawn: Rc::default(),
                     ilo_drawn: Rc::default(),
                     ilo_hovered: Rc::default(),
+                    ilo_words_drawn: Rc::default(),
+                    level_drawn: Rc::default(),
                     landed: Rc::default(),
                     drawn_at: Rc::default(),
                 })
@@ -1749,6 +1755,9 @@ impl TalkView {
         self.ilo_drawn
             .borrow_mut()
             .retain(|key, _| buttons.contains(key));
+        (self.ilo_words_drawn.borrow_mut()).retain(|key, _| {
+            (shown.lines.iter()).any(|line| matches!(line, Line::Ilo(line) if line.key == *key))
+        });
         if !buttons.iter().any(|(_, button)| button.widens()) {
             self.ilo_hovered.set(false);
         }
@@ -1986,14 +1995,24 @@ impl TalkView {
             .as_ref()
             .map(|shown| shown.tier)
             .unwrap_or_default();
-        let chip = page_chip(palette, "conversation-tier", tier.label(), None).child(
-            svg()
-                .flex_none()
-                .ml(px(COMPOSER_CHEVRON_GAP - KEY_GAP))
-                .path("icons/chevron-down.svg")
-                .size(px(COMPOSER_CHEVRON))
-                .text_color(palette.glyph(CHIP_KEY)),
-        );
+        let drawn = self.level_drawn.clone();
+        let chip = page_chip(palette, "conversation-tier", tier.label(), None)
+            .relative()
+            .child(
+                svg()
+                    .flex_none()
+                    .ml(px(COMPOSER_CHEVRON_GAP - KEY_GAP))
+                    .path("icons/chevron-down.svg")
+                    .size(px(COMPOSER_CHEVRON))
+                    .text_color(palette.glyph(CHIP_KEY)),
+            )
+            .child(
+                canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+            );
         div()
             .mt(px(COMPOSER_TOP))
             .flex()
@@ -2016,6 +2035,14 @@ impl TalkView {
         let palette = look.palette;
         let ink = palette.text(ILO_INK);
         let (own, name) = words::head(&line.kind, agent);
+        // ilo's mark is the first word of what it says, in the display face, so its words wrap
+        // under it: an ilo line has one left edge, its mark's.
+        let mark = 0..words::MARK.len();
+        let own = format!("{} {own}", words::MARK);
+        let marked = HighlightStyle {
+            font_weight: Some(FontWeight::MEDIUM),
+            ..Default::default()
+        };
         // A page's words are cut short and quoted, in the title's ink, so they read as a name.
         let name = name.map(|name| clip(&name, QUOTED_CHARS as usize));
         let (said, highlights) = match &name {
@@ -2026,9 +2053,9 @@ impl TalkView {
                     color: Some(palette.text(TITLE)),
                     ..Default::default()
                 };
-                (said, vec![(quoted, style)])
+                (said, vec![(mark.clone(), marked), (quoted, style)])
             }
-            None => (own, Vec::new()),
+            None => (own, vec![(mark.clone(), marked)]),
         };
         let count = match &line.kind {
             IloKind::Stopped { count, .. } => words::count(*count),
@@ -2044,17 +2071,13 @@ impl TalkView {
             IloKind::KeptHere => "icons/save.svg",
             IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing => "icons/message-circle.svg",
         };
-        // Its words follow the mark closer than the line's gap.
-        let mark = super::display_face::display_text(words::MARK, MARK_SIZE, TRACE_LINE, cx)
-            .flex_none()
-            .mr(px(MARK_GAP - TRACE_GAP))
-            .into_any_element();
         let head = trace_line(
             look,
             TraceLine {
                 glyph: Some(glyph),
-                mark: Some(mark),
+                mark: Some((mark, super::display_face::family(cx))),
                 highlights,
+                words_drawn: Some((line.key, self.ilo_words_drawn.clone())),
                 ..TraceLine::new(
                     LineKey::Ilo(line.key),
                     said.into(),
@@ -2129,7 +2152,11 @@ impl TalkView {
                     },
                     |_, _, _, _| {},
                 )
+                // At the chip's own corner: with no place given it would start inside the
+                // chip's padding.
                 .absolute()
+                .top_0()
+                .left_0()
                 .size_full(),
             )
             .when(button.widens(), |chip| {
@@ -2311,6 +2338,9 @@ fn steps(lines: &[Line]) -> usize {
         .sum()
 }
 
+/// Where the words of ilo's lines were drawn and how they were laid out, by line.
+type WordsDrawn = Rc<RefCell<HashMap<usize, (Bounds<Pixels>, gpui::TextLayout)>>>;
+
 /// A line of a trace as it draws: its glyph, its title, what it took or why it failed, and how
 /// open its chevron is if it opens. The step under way's title `shimmers`, as far through its pass
 /// as it says, or under Reduce Motion, holds at the title's colour. What changed on it fades or
@@ -2318,11 +2348,14 @@ fn steps(lines: &[Line]) -> usize {
 struct TraceLine {
     key: LineKey,
     glyph: Option<&'static str>,
-    /// ilo's mark before its words, which makes it one of ilo's lines: its glyph and words in
-    /// ilo's ink and size.
-    mark: Option<gpui::AnyElement>,
+    /// ilo's mark, the first word of its title, and the display face's family it's set in, which
+    /// makes it one of ilo's lines: its glyph and words in ilo's ink and size, its words wrapping
+    /// under its mark.
+    mark: Option<(std::ops::Range<usize>, SharedString)>,
     /// Its words' parts set apart, as an ilo line's name from a page.
     highlights: Vec<(std::ops::Range<usize>, HighlightStyle)>,
+    /// Where its words were drawn goes here, by its line.
+    words_drawn: Option<(usize, WordsDrawn)>,
     failed: bool,
     title: SharedString,
     note: SharedString,
@@ -2342,6 +2375,7 @@ impl TraceLine {
             glyph: None,
             mark: None,
             highlights: Vec::new(),
+            words_drawn: None,
             failed: false,
             title,
             note,
@@ -2377,6 +2411,7 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         glyph,
         mark,
         highlights,
+        words_drawn,
         failed,
         title,
         note: description,
@@ -2427,6 +2462,18 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
             .size(px(size))
             .text_color(color)
     });
+    // One of ilo's lines wraps its words and never cuts them (#4105), so what stands beside them
+    // keeps to their first line, which is where a trace's one line is.
+    let first = |part: gpui::AnyElement| match ilos {
+        true => div()
+            .flex_none()
+            .h(px(TRACE_LINE))
+            .flex()
+            .items_center()
+            .child(part)
+            .into_any_element(),
+        false => part,
+    };
     let opens = chevron.is_some();
     let chevron = chevron.map(|open| {
         svg()
@@ -2459,9 +2506,16 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
             .into_any_element(),
     };
     let hover = group.clone();
+    let mut laid = None;
     let title = div()
         .min_w_0()
-        .truncate()
+        .map(|title| match ilos {
+            true => title
+                .relative()
+                .py(px((TRACE_LINE - ILO_TEXT_LINE) / 2.))
+                .line_height(px(ILO_TEXT_LINE)),
+            false => title.truncate(),
+        })
         .opacity(alpha)
         .text_color(words)
         // A shimmering title is lit by its shimmer, under the pointer too.
@@ -2471,37 +2525,57 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         )
         .child(match shimmers {
             Some(Some(phase)) => shimmering(&palette, title, phase),
-            _ => StyledText::new(title).with_highlights(highlights),
-        });
+            _ => {
+                let text = StyledText::new(title)
+                    .with_highlights(highlights)
+                    .with_font_family_overrides(mark);
+                laid = Some(text.layout().clone());
+                text
+            }
+        })
+        .children(words_drawn.zip(laid).map(|((key, drawn), laid)| {
+            canvas(
+                move |bounds, _, _| _ = drawn.borrow_mut().insert(key, (bounds, laid)),
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+        }));
     div()
         .id(id)
         .group(group)
         .flex_none()
         .max_w_full()
-        .h(px(TRACE_LINE))
-        // Its plate hangs outside its text, which ilo's lines, which don't open, have none of.
-        .when(!ilos, |line| line.ml(px(-TRACE_HANG)).px(px(TRACE_HANG)))
         .flex()
-        .items_center()
         .gap(px(TRACE_GAP))
         .rounded(px(NAV_RADIUS))
-        .whitespace_nowrap()
+        .map(|line| match ilos {
+            true => line.min_h(px(TRACE_LINE)).items_start(),
+            // Its plate hangs outside its text, which ilo's lines, which don't open, have none of.
+            false => line
+                .h(px(TRACE_LINE))
+                .ml(px(-TRACE_HANG))
+                .px(px(TRACE_HANG))
+                .items_center()
+                .whitespace_nowrap(),
+        })
         .when(opens, |line| {
             line.cursor_pointer()
                 .hover(move |style| style.bg(palette.plate(TRACE_HOVER)))
         })
-        .children(glyph)
-        // ilo's mark stays whole before its words, which truncate.
-        .children(mark)
+        .children(glyph.map(|glyph| first(glyph.into_any_element())))
         .child(title)
         .when(noted, |line| {
-            line.child(
+            line.child(first(
                 div()
                     .flex_none()
                     .opacity(note_alpha)
                     .text_color(note)
-                    .child(description),
-            )
+                    .child(description)
+                    .into_any_element(),
+            ))
         })
         .children(chevron)
 }
@@ -2586,6 +2660,7 @@ impl Render for TalkView {
         if std::mem::replace(&mut self.viewport, viewport) != viewport && self.at_end() {
             self.scroll.scroll_to_bottom();
         }
+        self.level_drawn.set(None);
         let busy = self.motion.settle(now);
         self.follow_on(now);
         // What changes once it has shown moves.
@@ -2667,8 +2742,10 @@ impl Render for TalkView {
             .child(shut(on_column(self.header(&look, cx).into_any_element())))
             .child(middle)
             .child(shut(on_column(self.reply(&look, cx).into_any_element())))
+            // With ilo's line and Start Again in the field's place there is no level to set, so
+            // the row goes with the field (#4105).
             .children(
-                look.beside
+                (look.beside && self.in_field().is_none())
                     .then(|| shut(on_column(self.composer(&look, cx).into_any_element()))),
             );
         let drawn = self.drawn_at.clone();

@@ -11,8 +11,8 @@ use serde_json::Value;
 
 use super::task::Line;
 use super::task::ilo::{Account, IloKind, IloLine, SignedInWith};
-use super::tier::{self, Tier, Why};
-use super::{Agents, Failure, Held, Refused, ToolResult, held, page, site, tools};
+use super::tier::{self, Why};
+use super::{Act, Agents, Failure, Held, Refused, ToolResult, act_of, held, page, site, tools};
 
 /// Whether Sign in for agents is on until the user changes it: in a dev build, not yet in the
 /// owner's daily one, which waits on their word.
@@ -24,13 +24,8 @@ pub const SWITCH_LINE: &str = "A page that steers an agent can get it signed in 
     have a login saved for. It is filled only on that site, and the agent never sees it.";
 pub const SWITCH_OFF_LINE: &str = "Off: ilo fills no saved login for an agent.";
 
-/// What the agent hears when the app doesn't ask the core.
+/// What the agent hears while Settings' switch is off.
 const OFF: &str = "Signing in for agents is off in Settings › Agents, which only the user changes.";
-const FENCED: &str = "This site is on the user's Off limits list, where ilo signs no agent in.";
-const LOOK: &str =
-    "Signing in is above this task's access, Look only, which only the user changes.";
-const BANK: &str =
-    "Signing in on a bank's site needs Full access, which only the user gives a task.";
 
 /// What the user's card says they're to do, when a sign-in is theirs.
 const YOURS: &str =
@@ -65,7 +60,9 @@ impl Agents {
         cx.notify();
     }
 
-    /// The agent's sign_in: past the app's checks, the core signs the tab in.
+    /// The agent's sign_in: past Settings' switch, the core's own refusal, the Off limits list,
+    /// the task's Sites and its access, the core signs the tab in. The core's refusal comes before
+    /// the site's, so a tab whose page is withheld says nothing of where it is.
     pub(super) fn sign_in_call(
         &mut self,
         agent: &str,
@@ -78,18 +75,31 @@ impl Agents {
         let Some(tab) = self.tab_for(agent, connection, arguments, &reply, cx) else {
             return;
         };
-        let refused = self.sign_in_refused(agent, tab, cx);
         // Empty for a withheld tab, as Browser::tab gives it.
         let at = site(&self.browser.tab(tab, cx).url);
-        let logged = (refused.as_ref()).map_or(String::new(), |refused| {
-            self.log_words(tab, &refused.why, cx)
-        });
-        self.note(agent, connection, "sign_in", &at, &logged);
-        cx.notify();
-        if let Some(refused) = refused {
-            _ = reply.send(refused.into());
-            return;
+        let act = Act {
+            action: "sign_in",
+            what: "sign in with the user's saved login".into(),
+            ..act_of(agent, connection, call, tab, reply)
+        };
+        if !self.sign_in_on {
+            return self.refuse(act, &at, Refused::of(tools::Kind::Outside, OFF), cx);
         }
+        if let Err(refused) = self.may_act(agent, tab, "sign_in", cx) {
+            return self.refuse(act, &at, refused, cx);
+        }
+        let host = site(&self.browser.shown(tab, cx).url);
+        let tier = self.tier_of(agent, connection, call);
+        let why = match tier::sign_in_why(page::opening_risk(&host).is_some()) {
+            _ if self.fence_of(&host).is_some() => Some(Why::Fenced),
+            _ if self.off_sites(&act, cx) => Some(Why::OtherSite),
+            why => Some(why).filter(|why| !tier.allows(*why)),
+        };
+        if let Some(why) = why {
+            return self.stopped(act, host, why, tier, cx);
+        }
+        self.note(agent, connection, "sign_in", &at, "");
+        cx.notify();
         self.current.insert((agent.into(), connection), tab);
         let request = self.next_request;
         self.next_request += 1;
@@ -100,38 +110,10 @@ impl Agents {
             connection,
             call,
             tab,
-            reply,
+            reply: act.reply,
         };
         self.signing.insert(request, signing);
         self.browser.sign_in(agent, tab, request);
-    }
-
-    /// Why the app doesn't ask the core to sign `agent` in on `tab`, or None: the switch is off,
-    /// the core refuses the tab, or its site is on the Off limits list or above the task's access.
-    /// The core's refusal comes before the site's, so a tab whose page is withheld says nothing of
-    /// where it is.
-    fn sign_in_refused(
-        &mut self,
-        agent: &str,
-        tab: u64,
-        cx: &mut Context<Self>,
-    ) -> Option<Refused> {
-        if !self.sign_in_on {
-            return Some(Refused::of(tools::Kind::NeedsOk, OFF));
-        }
-        if let Err(refused) = self.may_act(agent, tab, "sign_in", cx) {
-            return Some(refused);
-        }
-        let host = site(&self.browser.shown(tab, cx).url);
-        if self.fence_of(&host).is_some() {
-            return Some(Refused::of(tools::Kind::NeedsOk, FENCED));
-        }
-        let bank = page::opening_risk(&host).is_some();
-        // Every task's own, once the tier model keeps it (#4086 step 2).
-        match tier::sign_in_above(Tier::default(), bank)? {
-            Why::SignInBank => Some(Refused::of(tools::Kind::NeedsOk, BANK)),
-            _ => Some(Refused::of(tools::Kind::NeedsOk, LOOK)),
-        }
     }
 
     /// The core's answer to the sign-in `request`, in its words, which never name an account:

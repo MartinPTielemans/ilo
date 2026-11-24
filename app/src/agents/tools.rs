@@ -1030,7 +1030,8 @@ pub fn step_glyph(tool: &str) -> &'static str {
 pub enum Kind {
     Stopped,
     SaidNo,
-    NeedsOk,
+    /// Above its task's access (tier.rs).
+    Outside,
     Password,
     NotWebPage,
     NotFound,
@@ -1048,7 +1049,7 @@ pub fn reason(kind: Option<Kind>) -> String {
     let reason = match kind {
         Kind::Stopped => "stopped",
         Kind::SaidNo => "you said no",
-        Kind::NeedsOk => "needs your OK",
+        Kind::Outside => "outside its access",
         Kind::Password => "password field",
         Kind::NotWebPage => "not a web page",
         Kind::NotFound => "not found",

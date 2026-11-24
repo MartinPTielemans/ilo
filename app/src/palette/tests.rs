@@ -1,5 +1,6 @@
 use super::*;
 use crate::theme::Appearance;
+use crate::tokens::palette::{LIGHT_TINT, TINT};
 
 /// A theme as the design sweep (#320) names one: `count` colours, the main one at `hue` degrees,
 /// HSL `saturation` and `lightness` (its distance from the field's centre).
@@ -536,8 +537,8 @@ fn sweep(themes: &[Theme]) -> Vec<String> {
         .collect()
 }
 
-/// A Space with no theme has the measured window, black 0.25 over the material and nothing more,
-/// and ilo green made to read with Ink on it, and everything passes.
+/// A Space with no theme has the measured window, black at `tint` over the material and nothing
+/// more, and ilo green made to read with Ink on it, and everything passes.
 #[test]
 fn no_theme_is_the_measured_window_and_ilo_green_with_ink() {
     let palette = Palette::of(None, Tone::Dark);
@@ -546,7 +547,7 @@ fn no_theme_is_the_measured_window_and_ilo_green_with_ink() {
         (TINT, 0., 0.)
     );
     // #289054 reads 2.7:1 on the window over a white backdrop, so ilo green, lighter, at its hue.
-    assert_eq!(hex(palette.accent), 0x57b97a);
+    assert_eq!(hex(palette.accent), 0x78d999);
     assert_eq!(hex(palette.accent_label), INK);
     assert!(contrast(palette.accent_label, palette.accent) >= TEXT);
     // #0B8045 with Paper, the value #319 first had, is under 4.5.
@@ -584,14 +585,20 @@ fn a_light_window_is_white_over_the_material_with_ink() {
 /// for Paper over a white backdrop is shaded, by the least step that lets it read.
 #[test]
 fn the_window_is_shaded_only_where_paper_needs_it() {
-    // check/window.sh's black Space, measured against Dia's composite: neutral, unshaded.
+    // check/window.sh's black Space: neutral, and two steps shaded, since the HUD window's
+    // material under `tint` is too light for Paper's selected plate over white without them.
     let black = Palette::of(Some(&Theme::at(0., 0.)), Tone::Dark);
+    let shade = 2. * SHADE_STEP;
     assert_eq!(
         (black.tint.a, black.shade, black.layer_alpha),
-        (TINT, 0., NEUTRAL_GRADIENT_ALPHA)
+        (
+            1. - (1. - TINT) * (1. - shade),
+            shade,
+            NEUTRAL_GRADIENT_ALPHA
+        )
     );
     let violet = Palette::of(Some(&Theme::of_color(0x5a2a9a)), Tone::Dark);
-    assert_eq!((violet.shade, violet.layer_alpha), (0., GRADIENT_ALPHA));
+    assert_eq!((violet.shade, violet.layer_alpha), (shade, GRADIENT_ALPHA));
     // Blue lightens to #9AC3FF down the window, too light for Paper's plates over white.
     let pale = Theme::of_color(0x1a79ff);
     let palette = Palette::of(Some(&pale), Tone::Dark);
@@ -608,21 +615,24 @@ fn the_window_is_shaded_only_where_paper_needs_it() {
     assert!(fails, "a step less shade would have read");
 }
 
-/// The pickers' card keeps Arc's measured grey where its text reads, and Capture's menu, ilo's
-/// menu's panel, reads in both looks: its glyphs, in the secondary colour, at 3:1, and its field's
-/// words, in the label's, as text on the field's tint of the line colour.
+/// The pickers' card takes the least step from Arc's measured grey toward the dark overlay at
+/// which its text reads, two steps over the black Space and four with no theme on the HUD window's
+/// material, and Capture's menu, ilo's menu's panel, reads in both looks: its glyphs, in the
+/// secondary colour, at 3:1, and its field's words, in the label's, as text on the field's tint of
+/// the line colour.
 #[test]
 fn the_pickers_card_and_captures_menu_read() {
     let black = Palette::of(Some(&Theme::at(0., 0.)), Tone::Dark);
     assert_eq!(
-        hex(black.card),
-        hex(rgba(CARD)),
-        "the measured grey over the black Space"
+        (hex(black.card), black.card.a),
+        (0x444443, 0.6082353),
+        "two steps from the measured grey over the black Space"
     );
+    let none = Palette::of(None, Tone::Dark).card;
     assert_eq!(
-        Palette::of(None, Tone::Dark).card,
-        rgba(CARD),
-        "the measured grey with no theme"
+        (hex(none), none.a),
+        (0x403f3e, 0.65176475),
+        "four steps from the measured grey with no theme"
     );
     let lay = |at: Rgba, colour: u32| over(at, rgb(colour >> 8), (colour & 0xff) as f32 / 255.);
     for light in [false, true] {
@@ -644,9 +654,10 @@ fn the_pickers_card_and_captures_menu_read() {
     }
 }
 
-/// With no theme over a white backdrop, ilo green reads under 3:1 on the Library's column under
-/// the selected section's plate, so that glyph alone takes the nearest colour at its hue that
-/// reads, and the accent stays. An accent that reads there is the glyph's colour as it is.
+/// The selected Library section's glyph is the accent where the accent reads on the Library's
+/// column under the section's plate, and otherwise, alone, the nearest colour at its hue that
+/// reads, the accent staying. With no theme on the HUD window's material, ilo green, made to
+/// read with Ink, reads there as it is.
 #[test]
 fn the_selected_library_section_glyph_reads_without_moving_the_accent() {
     use crate::tokens::shell::library::{COLUMN, LIBRARY_PLATE};
@@ -660,12 +671,13 @@ fn the_selected_library_section_glyph_reads_without_moving_the_accent() {
             .map(|&at| contrast(c, at))
             .fold(f32::MAX, f32::min)
     };
-    assert_eq!(hex(none.accent), 0x57b97a);
+    assert_eq!(hex(none.accent), 0x78d999);
     assert!(
-        worst(none.accent) < GLYPH,
-        "ilo green reads there: {:.2}",
+        worst(none.accent) >= GLYPH + BETWEEN,
+        "ilo green doesn't read there: {:.2}",
         worst(none.accent)
     );
+    assert_eq!(none.section_glyph, none.accent);
     assert!(worst(none.section_glyph) >= GLYPH + BETWEEN);
     let (hue, glyph_hue) = (Hsla::from(none.accent).h, Hsla::from(none.section_glyph).h);
     assert!(
@@ -803,12 +815,12 @@ fn a_pressed_accent_goes_darker_than_hovered() {
     }
     assert_eq!(
         hex(Palette::of(None, Tone::Dark).accent_pressed().to_rgb()),
-        0x469462
+        0x60ae7a
     );
 }
 
 /// A filled button under the pointer goes 0.9 darker, whatever its label (the owner, 2026-10-26):
-/// the dialog's OK on ilo green from #57B97A to #4EA76E, not lighter.
+/// the dialog's OK on ilo green from #78D999 to #6CC38A, not lighter.
 #[test]
 fn a_hovered_accent_goes_darker() {
     let themes = grid(
@@ -835,8 +847,8 @@ fn a_hovered_accent_goes_darker() {
         }
     }
     let green = Palette::of(None, Tone::Dark);
-    assert_eq!(hex(green.accent), 0x57b97a);
-    assert_eq!(hex(green.accent_hovered().to_rgb()), 0x4ea76e);
+    assert_eq!(hex(green.accent), 0x78d999);
+    assert_eq!(hex(green.accent_hovered().to_rgb()), 0x6cc38a);
 }
 
 /// The find bar's caret is ilo green on its dark fill, whatever the Space's theme.
@@ -1133,46 +1145,64 @@ fn secondary_text_unlifted() {
     }
 }
 
-/// What floats holds #4090's floor wherever it's drawn: text at 0.6 of its ink reads at 4.5:1 on
-/// its fill, frosted over a white page, a black page, a photo's colours and the window's dark
-/// grounds (#4089), and opaque. A blur averages what's behind it, so each is a flat colour at
-/// worst.
+/// What the HUD window's material, which what floats lies on, makes of a white page, a mid grey
+/// one, a black one and a photo, untinted, in each look: run 6 in the VM (#4087), as captured.
+const MATERIAL_DARK: [u32; 4] = [0xadacac, 0x646464, 0x1f1f1f, 0x733e50];
+const MATERIAL_LIGHT: [u32; 4] = [0xf5f5f4, 0xbcbcbb, 0x7c7c7c, 0xcf98ab];
+
+/// What AppKit draws in the material's place with Reduce Transparency or Increase Contrast, an
+/// opaque ground, dark and light. Run 6's window background material stands in until the VM reads
+/// the HUD window's under those settings.
+const OPAQUE_MATERIAL_DARK: u32 = 0x333332;
+const OPAQUE_MATERIAL_LIGHT: u32 = 0xffffff;
+
+fn material(tone: Tone) -> [u32; 4] {
+    match tone {
+        Tone::Dark => MATERIAL_DARK,
+        Tone::Light => MATERIAL_LIGHT,
+    }
+}
+
+/// The lowest contrast of `surface`'s ink at `strength`, at `level` in `tone`, over `grounds`.
+fn least_on(
+    surface: Float,
+    tone: Tone,
+    level: Transparency,
+    grounds: &[u32],
+    strength: f32,
+) -> f32 {
+    let fill = surface.fill_at(tone, Some(level));
+    let text = surface.ink(tone);
+    grounds
+        .iter()
+        .map(|&behind| {
+            let ground = over(rgb(behind), fill, fill.a);
+            contrast(over(ground, text, strength), ground)
+        })
+        .fold(f32::MAX, f32::min)
+}
+
+/// Each transparency level holds its rule over what the material makes of any page (#4090). Less
+/// holds the floor before levels, text at 0.6 of the ink at 4.5:1 over a white, grey and black
+/// page. Standard and More hold text at full strength at 4.5:1 and at 0.6 at 3:1 over all of them
+/// and a photo.
 #[test]
-fn what_floats_holds_text_at_six_tenths_over_any_page() {
-    let behind = [
-        // A white page, a black one and a grey one.
-        0xffffff,
-        0x000000,
-        0x808080,
-        // A photo: the mocks' sky, sun, field and water, skin, and the primaries.
-        0xf4a98a,
-        0xfff6d6,
-        0x2c5647,
-        0x9fd0f0,
-        0xe0ac8f,
-        0xff0000,
-        0x00ff00,
-        0x0000ff,
-        // The window's dark grounds over black, mid grey and white (#4089), as a menu lies over
-        // the sidebar as well as the page, and the light window's.
-        0x0a0a0b,
-        0x242426,
-        0x3f3f40,
-        0xd8d8d8,
-        0xfcfcfc,
-    ];
+fn each_transparency_level_holds_its_rule_over_any_page() {
     let mut failures = Vec::new();
     for surface in Float::ALL {
         for tone in [Tone::Dark, Tone::Light] {
-            for blurred in [true, false] {
-                let fill = surface.fill_where(tone, blurred);
-                let text = surface.ink(tone);
-                for page in behind {
-                    let ground = over(rgb(page), fill, fill.a);
-                    let ratio = contrast(over(ground, text, 0.6), ground);
-                    if ratio < TEXT {
+            // One drawn dark in both looks lies on the dark material.
+            let grounds = material(surface.tone(tone));
+            for level in Transparency::ALL {
+                let rules: &[(&[u32], f32, f32)] = match level {
+                    Transparency::Less => &[(&grounds[..3], 0.6, TEXT)],
+                    _ => &[(&grounds, 1., TEXT), (&grounds, 0.6, 3.)],
+                };
+                for &(on, strength, floor) in rules {
+                    let ratio = least_on(surface, tone, level, on, strength);
+                    if ratio < floor {
                         failures.push(format!(
-                            "{surface:?} {tone:?} blurred {blurred} over {page:06x}: {ratio:.2}"
+                            "{surface:?} {tone:?} {level:?} at {strength}: {ratio:.2}"
                         ));
                     }
                 }
@@ -1182,26 +1212,77 @@ fn what_floats_holds_text_at_six_tenths_over_any_page() {
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
-/// Each surface is translucent only where its host blurs under it, and opaque elsewhere.
+/// Each level shows more of what's behind than the one before, and the dark and light fills step
+/// together, so the user's choice reads the same in both looks.
 #[test]
-fn what_floats_is_frosted_only_over_a_blur() {
+fn each_transparency_level_shows_more_than_the_one_before() {
     for surface in Float::ALL {
         for tone in [Tone::Dark, Tone::Light] {
+            let alphas = Transparency::ALL.map(|level| surface.fill_at(tone, Some(level)).a);
             assert!(
-                surface.fill_where(tone, true).a < 1.,
-                "{surface:?} {tone:?}"
-            );
-            assert_eq!(
-                surface.fill_where(tone, false).a,
-                1.,
-                "{surface:?} {tone:?}"
-            );
-            let (frosted, opaque) = (surface.fill_where(tone, true), surface.fill(tone));
-            assert_eq!(
-                (frosted.r, frosted.g, frosted.b),
-                (opaque.r, opaque.g, opaque.b),
-                "{surface:?} {tone:?}: the same colour"
+                alphas.windows(2).all(|pair| pair[0] > pair[1]),
+                "{surface:?} {tone:?}: {alphas:?}"
             );
         }
+    }
+}
+
+/// Reduce Transparency and Increase Contrast win at every level: AppKit draws an opaque ground
+/// in the material's place, and text at 0.6 of the ink holds 4.5:1 on any level's fill over it.
+#[test]
+fn reduce_transparency_wins_at_every_level() {
+    for surface in Float::ALL {
+        for tone in [Tone::Dark, Tone::Light] {
+            let ground = match surface.tone(tone) {
+                Tone::Dark => OPAQUE_MATERIAL_DARK,
+                Tone::Light => OPAQUE_MATERIAL_LIGHT,
+            };
+            for level in Transparency::ALL {
+                let ratio = least_on(surface, tone, level, &[ground], 0.6);
+                assert!(ratio >= TEXT, "{surface:?} {tone:?} {level:?}: {ratio:.2}");
+            }
+        }
+    }
+}
+
+/// With no material under it, what floats is opaque, its colour at every level, so text at 0.6
+/// of its ink holds 4.5:1 on any page.
+#[test]
+fn what_floats_is_opaque_with_no_material_under_it() {
+    for surface in Float::ALL {
+        for tone in [Tone::Dark, Tone::Light] {
+            let opaque = surface.fill_at(tone, None);
+            assert_eq!(opaque.a, 1., "{surface:?} {tone:?}");
+            for level in Transparency::ALL {
+                let frosted = surface.fill_at(tone, Some(level));
+                assert_eq!(
+                    (frosted.r, frosted.g, frosted.b),
+                    (opaque.r, opaque.g, opaque.b),
+                    "{surface:?} {tone:?} {level:?}: the same colour"
+                );
+            }
+            let ratio = contrast(over(opaque, surface.ink(tone), 0.6), opaque);
+            assert!(ratio >= TEXT, "{surface:?} {tone:?}: {ratio:.2}");
+        }
+    }
+}
+
+#[test]
+fn the_window_takes_the_users_level_and_shows_more_of_what_is_behind_it_at_each_step() {
+    for tone in [Tone::Dark, Tone::Light] {
+        let tints = Transparency::ALL.map(|level| {
+            set_transparency(level);
+            Palette::of(None, tone).tint.a
+        });
+        set_transparency(Transparency::Standard);
+        assert!(
+            tints.windows(2).all(|step| step[0] > step[1]),
+            "{tone:?}: {tints:?}, from Less to More"
+        );
+        assert_eq!(
+            tints[1],
+            Palette::of(None, tone).tint.a,
+            "{tone:?}: Standard is the window as it was"
+        );
     }
 }

@@ -452,3 +452,29 @@ fn the_window_is_opaque_where_nothing_blurs_what_is_behind_it(cx: &mut TestAppCo
         });
     }
 }
+
+/// The window's tint is drawn at the user's transparency level, and draws again as soon as it's
+/// set, as the first run's step promises (#4128).
+#[gpui::test]
+fn the_window_draws_again_at_each_transparency_level(cx: &mut TestAppContext) {
+    use crate::transparency::{self, Transparency};
+    let dir = std::env::temp_dir().join(format!("ilo-themes-level-{}", std::process::id()));
+    _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    cx.update(|cx| transparency::kept_in(dir.to_string_lossy().into_owned(), cx));
+    let (shell, cx) = shell(None, None, cx);
+    let tint = |level, cx: &mut VisualTestContext| {
+        cx.update(|_, cx| transparency::set(level, cx));
+        cx.run_until_parked();
+        shell.update(cx, |shell, _| shell.palette.tint.a)
+    };
+    let standard = tint(Transparency::Standard, cx);
+    let more = tint(Transparency::More, cx);
+    let less = tint(Transparency::Less, cx);
+    assert!(
+        less > standard && standard > more,
+        "{less} {standard} {more}"
+    );
+    assert_eq!(tint(Transparency::Standard, cx), standard, "and back");
+    _ = std::fs::remove_dir_all(&dir);
+}

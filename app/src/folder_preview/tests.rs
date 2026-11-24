@@ -142,6 +142,43 @@ impl Preview {
         visual.run_until_parked();
     }
 
+    /// An input method composes "ぴ" in the search.
+    fn compose(&self, cx: &mut TestAppContext) {
+        use gpui::EntityInputHandler as _;
+        self.window
+            .update(cx, |preview, window, cx| {
+                preview.search.update(cx, |search, cx| {
+                    search.replace_and_mark_text_in_range(None, "ぴ", None, window, cx)
+                })
+            })
+            .unwrap();
+        cx.run_until_parked();
+    }
+
+    /// The input method ends what it composes in the search, as it does when it takes the key
+    /// itself: committing `text` in its place, or with `text` empty dropping it.
+    fn end_composition(&self, text: &str, cx: &mut TestAppContext) {
+        use gpui::EntityInputHandler as _;
+        self.window
+            .update(cx, |preview, window, cx| {
+                preview.search.update(cx, |search, cx| {
+                    search.replace_text_in_range(None, text, window, cx)
+                })
+            })
+            .unwrap();
+        cx.run_until_parked();
+    }
+
+    /// What the search holds, and whether an input method composes there.
+    fn search(&self, cx: &mut TestAppContext) -> (String, bool) {
+        self.window
+            .read_with(cx, |preview, cx| {
+                let search = preview.search.read(cx);
+                (search.text().to_string(), search.composing())
+            })
+            .unwrap()
+    }
+
     fn type_in(&self, text: &str, cx: &mut TestAppContext) {
         let mut visual = VisualTestContext::from_window(self.window.into(), cx);
         visual.simulate_input(text);
@@ -318,6 +355,47 @@ fn return_at_once_shows_the_first_tab(cx: &mut TestAppContext) {
     preview.shown(1, cx);
     preview.keys("enter", cx);
     assert_eq!(*preview.chose.borrow(), [11]);
+}
+
+/// ↩ while an input method composes in the search is the composition's: it shows no tab and leaves
+/// the marked text for the method. Once the method has ended it, the next ↩ shows one.
+#[gpui::test]
+fn return_while_composing_shows_nothing(cx: &mut TestAppContext) {
+    let preview = open_preview(cx);
+    preview.shown(1, cx);
+    preview.compose(cx);
+    preview.keys("enter", cx);
+    assert!(
+        preview.chose.borrow().is_empty(),
+        "↩ showed a tab while composing"
+    );
+    assert!(
+        preview.showing(cx).is_some(),
+        "↩ closed the preview while composing"
+    );
+    assert_eq!(preview.search(cx), ("ぴ".into(), true));
+    preview.end_composition("", cx);
+    preview.keys("enter", cx);
+    assert_eq!(*preview.chose.borrow(), [11]);
+}
+
+/// Esc while an input method composes in the search is the composition's: it closes nothing and
+/// leaves the marked text for the method. Once the method has dropped it, the next Esc closes the
+/// preview.
+#[gpui::test]
+fn escape_while_composing_closes_nothing(cx: &mut TestAppContext) {
+    let preview = open_preview(cx);
+    preview.shown(1, cx);
+    preview.compose(cx);
+    preview.keys("escape", cx);
+    assert!(
+        preview.host.0.take().is_empty(),
+        "esc closed the preview while composing"
+    );
+    assert_eq!(preview.search(cx), ("ぴ".into(), true));
+    preview.end_composition("", cx);
+    preview.keys("escape", cx);
+    assert_eq!(preview.host.0.take(), ["hide"]);
 }
 
 #[gpui::test]

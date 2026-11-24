@@ -13,6 +13,7 @@
 //! user first, in a card in each window: once, always or never on that site, for that agent.
 //! Settings › Agents and the agent's Space's menu list what the user answered for good, to revoke.
 
+mod access;
 pub mod bridge;
 pub mod cli;
 pub mod clients;
@@ -843,6 +844,8 @@ pub struct Activity {
     pub sent: Vec<request::Sent>,
     /// What the agent said a request does, in its own words, without their secrets (#3548).
     pub said: SharedString,
+    /// The access of the task it's of as it was judged, by its name, or empty for none.
+    pub tier: SharedString,
     /// The site whose notes its answer carried (#4122), by its note's name, or empty.
     pub notes: SharedString,
 }
@@ -1763,9 +1766,8 @@ impl Agents {
         }
     }
 
-    /// A call on a tab that came to a fenced site without an open the user allowed asks them
-    /// first, as an open there does, and goes as it came once they let the tab stay (#3724).
-    /// Every other call goes on, as it is.
+    /// A call on a tab that came to a site the user put off limits (#3724), or one outside its
+    /// task's Sites, is refused, as an open there is. Every other call goes on, as it is.
     fn fence_call(&mut self, call: Call, cx: &mut Context<Self>) -> Option<Call> {
         if !FENCE_ASKS.contains(&call.tool.as_str()) {
             return Some(call);
@@ -1790,7 +1792,7 @@ impl Agents {
         let Some((site, entry)) =
             (self.came_to(tab, cx)).and_then(|site| Some((site.clone(), self.fence_of(&site)?)))
         else {
-            return Some(call);
+            return self.sites_call(call, tab, cx);
         };
         let reply = call.reply.clone();
         let mut act = act_of(&call.agent, call.connection, call.id, tab, reply);
@@ -2345,11 +2347,11 @@ impl Agents {
                     fenced: Fenced::No,
                     reply,
                 };
-                // Reads go; changes ask every time, never a grant's to answer.
+                // Reads go; changes go as the task's access allows.
                 match (act.what.is_empty(), fenced) {
                     (true, _) => self.run(act, cx),
-                    (false, true) => self.ask_first(act, host, FENCED, cx),
-                    (false, false) => self.ask_first(act, host, CHANGES_ASK, cx),
+                    (false, true) => self.check(act, host, Some(FENCED), cx),
+                    (false, false) => self.check(act, host, Some(CHANGES_ASK), cx),
                 }
             }
             "sign_in" => self.sign_in_call(&agent, connection, id, &arguments, reply, cx),
@@ -2387,8 +2389,7 @@ impl Agents {
         }
     }
 
-    /// Starts the run's next step, which answers it through `advance`, or answers the run if the
-    /// step asks the user first, which a run doesn't wait for.
+    /// Starts the run's next step, which answers it through `advance`.
     fn next_step(&mut self, mut run: Run, cx: &mut Context<Self>) {
         let Some(step) = run.steps.pop_front() else {
             return;
@@ -2411,7 +2412,6 @@ impl Agents {
         if tool == "wait" || tool == "check" {
             return self.wait(run, &step, reply, cx);
         }
-        let asked = self.asking.len();
         self.stepping = Some((run.agent.clone(), run.connection));
         let show = run.show_now();
         self.page_tool(
@@ -2426,21 +2426,6 @@ impl Agents {
             cx,
         );
         self.stepping = None;
-        if self.asking.len() > asked {
-            let Asking { act, .. } = self.asking.pop().unwrap();
-            self.asked(cx);
-            let n = run.done.len() + 1;
-            let answer = format!(
-                "Step {n} would {}, which asks the user first, so the run stopped there. Do it on \
-                 its own, as {tool}, for the user to answer.{}",
-                act.what,
-                run_so_far(&run.done)
-            );
-            _ = run
-                .reply
-                .send(ToolResult::failed(tools::Kind::NeedsOk, answer));
-            return;
-        }
         self.runs.push(run);
     }
 
@@ -3482,8 +3467,8 @@ impl Agents {
         url
     }
 
-    /// Runs the action, unless what it does on `site` asks the user first (`why`): then it waits
-    /// for the user's answer, or the one they gave for good.
+    /// Runs the action, unless what it does on `site` (`why`, what once asked the user first) is
+    /// above its task's access: then it's refused at once (access.rs).
     fn check(
         &mut self,
         mut act: Act,
@@ -3491,82 +3476,26 @@ impl Agents {
         why: Option<&'static str>,
         cx: &mut Context<Self>,
     ) {
-        let Some(why) = why else {
-            return self.run(act, cx);
+        act.did = why.and_then(Did::of);
+        // The task's Sites come first: no tier lifts them, as none lifts a fence.
+        let why = match why != Some(FENCED) && self.off_sites(&act, cx) {
+            true => Some(OTHER_SITE),
+            false => why,
         };
-        act.did = Did::of(why);
-        // A payment asks every time, as a request's changes do (#1439): what the user allowed for
-        // good covers opening a site and sending on it, as they gave it, and never spending. Nor
-        // does it pass a site the user fenced (#3724). A Never for the site still refuses either.
-        let granted = (self.grants.get(&self.answers_of(&act.agent)))
-            .and_then(|sites| sites.get(&site))
-            .copied()
-            .filter(|may| !may || (why != page::ORDER && why != FENCED));
-        match granted {
-            Some(true) => self.run(act, cx),
-            Some(false) => {
-                self.refuse(act, &site, Refused::of(tools::Kind::SaidNo, SAID_NEVER), cx)
-            }
-            None => self.ask_first(act, site, why, cx),
+        let tier = self.tier_of(&act.agent, act.connection, act.call);
+        // A site the user answered Never for this agent stays refused at every tier until they
+        // revoke it, while Settings still lists it (#4086 step 3 moves these to Off limits).
+        let why = Self::why_of(&act, &site, why).map(|why| match why {
+            tier::Why::Fenced | tier::Why::OtherSite => why,
+            _ if self.said_never(&act.agent, &site) => tier::Why::Never,
+            _ => why,
+        });
+        match why {
+            Some(why) if !tier.allows(why) => self.stopped(act, site, why, tier, cx),
+            // What the tier allowed has its answer: a request's changes go with it.
+            _ if act.action == "request" => self.send(act, true, cx),
+            _ => self.run(act, cx),
         }
-    }
-
-    /// Asks the user before the action on `site`, `why`, and waits for their answer.
-    fn ask_first(&mut self, act: Act, site: String, why: &'static str, cx: &mut Context<Self>) {
-        // A tab not the agent's is the core's to refuse, without a question; and if the core would
-        // allow it, `send_next` refuses its changes as unanswered.
-        let space = self.browser.agent_space(&act.agent);
-        if act.tab != 0
-            && !self
-                .tabs_seen(space, cx)
-                .iter()
-                .any(|tab| tab.id == act.tab)
-        {
-            return self.run(act, cx);
-        }
-        let changes = (act.requests.iter())
-            .filter(|each| each.changes())
-            .cloned()
-            .collect();
-        // A fenced site's question is the user's own, and says so. A request's asks as a request's
-        // changes do, every time with no Never, as requests keep no answer for good.
-        let fenced = why == FENCED;
-        let question = Question {
-            id: self.next_request,
-            agent: self.agent_name(&act.agent),
-            from: act.agent.clone().into(),
-            what: act.what.clone().into(),
-            asks: act.asks.clone().into(),
-            why: match fenced {
-                true => fence::why(&site).into(),
-                false => why.into(),
-            },
-            changes,
-            site: site.clone().into(),
-            each_time: why == page::ORDER || (fenced && act.action == "request"),
-            fenced: fenced && act.action != "request",
-            ..Question::default()
-        };
-        if fenced {
-            let agent = act.agent.clone();
-            self.note_on(
-                &agent,
-                act.connection,
-                fence::ASKED_ACTION,
-                &site,
-                &act.what,
-                "",
-            );
-        }
-        self.next_request += 1;
-        // check.sh reads this line.
-        log!(
-            "browser: agent {} asks {}: {}",
-            act.agent,
-            question.id,
-            act.what
-        );
-        self.put_question(question, site, act, cx);
     }
 
     /// Puts the question to the user, for ASK_WAIT at most.
@@ -4106,7 +4035,7 @@ impl Agents {
 
     /// Answers the action with why it's refused, which the log has.
     fn refuse(&mut self, act: Act, site: &str, refused: Refused, cx: &mut Context<Self>) {
-        let Refused { why, kind } = refused;
+        let Refused { why, kind, told } = refused;
         let why = why.as_str();
         if act.download != 0 {
             self.browser.answer_download(act.download, false);
@@ -4127,6 +4056,7 @@ impl Agents {
         }
         cx.notify();
         let answer = match why {
+            _ if told.is_some() => told.unwrap(),
             SAID_NO => format!("The user said no: you can't {}. Don't try again.", act.what),
             NO_ANSWER => format!(
                 "The user didn't answer in 5 minutes, so you can't {} now. Ask them where you \
@@ -4308,10 +4238,14 @@ impl Agents {
             let cleared = self.cleared.get(&tab).map(|cleared| &cleared.entry);
             (cleared != Some(&entry)).then(|| host.clone())
         });
-        if let Some(site) = fenced {
-            _ = reply.send(ToolResult::text(fence::download(&site)));
-            reply = mpsc::channel().0;
-        }
+        let why = match fenced {
+            Some(site) => {
+                _ = reply.send(ToolResult::text(fence::download(&site)));
+                reply = mpsc::channel().0;
+                FENCED
+            }
+            None => DOWNLOADS,
+        };
         // A download is the open's whole answer, so its yes ends here unless the tab got there.
         self.settle(tab, cx);
         if tab_empty {
@@ -4343,7 +4277,7 @@ impl Agents {
             fenced: Fenced::No,
             reply,
         };
-        self.check(act, host, Some(DOWNLOADS), cx);
+        self.check(act, host, Some(why), cx);
     }
 
     /// Lets the download the user said yes to go on. Its end answers, or a while if it's slow.
@@ -5042,8 +4976,8 @@ impl Agents {
                     Refused::new(gone.why(tab))
                 }
                 _ => Refused {
-                    why,
                     kind: failure.kind(),
+                    ..Refused::new(why)
                 },
             })?;
         // Only once the tab is known to be the agent's, so another's page says nothing.
@@ -5051,7 +4985,7 @@ impl Agents {
             // Not even which dialog, on a fenced site the tab came to (#3724).
             Some(&(kind, _)) if action != "close_tab" => match self.came_to(tab, cx) {
                 Some(site) => Err(Refused::of(
-                    tools::Kind::NeedsOk,
+                    tools::Kind::Outside,
                     fence::refused(tab, &site),
                 )),
                 None => Err(Refused {
@@ -5256,7 +5190,7 @@ impl Agents {
                 if self.opened.contains(&tab) {
                     ""
                 } else {
-                    ", once the user says yes"
+                    ", if this task's access allows that for a tab you didn't open"
                 }
             )),
             Closed::Refused => Err("The tab isn't in the agent's own Space.".into()),
@@ -5417,6 +5351,7 @@ impl Agents {
             url: SharedString::from(url.to_string()),
             sent,
             said: SharedString::from(said.to_string()),
+            tier: self.tier_of(agent, connection, 0).label().into(),
             notes: SharedString::default(),
         };
         self.logged = entry.id;
@@ -5607,6 +5542,8 @@ impl Failure {
 pub struct Refused {
     pub why: String,
     pub kind: Option<tools::Kind>,
+    /// What the agent hears, where it isn't `why`, which the log keeps for the user.
+    pub told: Option<String>,
 }
 
 impl Refused {
@@ -5614,6 +5551,7 @@ impl Refused {
         Refused {
             why: why.into(),
             kind: None,
+            told: None,
         }
     }
 
@@ -5735,8 +5673,8 @@ fn showing_dialog(tab: u64, kind: DialogKind, opened: bool) -> String {
     let close = match opened {
         true => "close_tab closes the tab, and the dialog with it",
         false => {
-            "close_tab with discard: true closes the tab, and the dialog with it, once the user \
-             says yes, as you didn't open it"
+            "close_tab with discard: true closes the tab, and the dialog with it, if this task's \
+             access allows that for a tab you didn't open"
         }
     };
     format!(
@@ -5922,6 +5860,8 @@ const UNSAVED: &str = "Its page may have unsaved changes, which closing it loses
 const SAID_NEVER: &str = "You said never on this site.";
 /// Why an action asks on a site the user fenced, which fence.rs words for the card.
 const FENCED: &str = "fenced";
+/// Why an act is refused on a site outside its task's Sites, as FENCED is a stand-in.
+const OTHER_SITE: &str = "other site";
 /// The tools whose call on a tab that came to a fenced site asks first: each reads or acts on its
 /// page. Leaving it, closing it, handing it to the user and arranging tabs don't.
 const FENCE_ASKS: [&str; 10] = [

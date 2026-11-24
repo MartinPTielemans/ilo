@@ -198,43 +198,6 @@ static NSPasteboardType const kTabDragType = @"dev.ilo.browser.tab";
 }
 @end
 
-namespace {
-
-// Takes the tint and the extra saturation off |layer| and the layers in it, leaving the blur, as
-// GPUI's blurred window background does (crates/gpui_macos/src/window.rs).
-void StripTint(CALayer* layer) {
-  layer.backgroundColor = nil;
-  if ([layer.className isEqualToString:@"CAChameleonLayer"]) {
-    layer.hidden = YES;
-    return;
-  }
-  NSPredicate* saturating = [NSPredicate predicateWithBlock:^BOOL(id filter, NSDictionary*) {
-    return ![[filter description] containsString:@"Saturat"];
-  }];
-  if (layer.filters) {
-    layer.filters = [layer.filters filteredArrayUsingPredicate:saturating];
-  }
-  for (CALayer* sublayer in layer.sublayers) {
-    StripTint(sublayer);
-  }
-}
-
-}  // namespace
-
-// What's behind the window, blurred, without the material's tint, for the command bar's fill to
-// tint (docs/ux-spec.md › Command bar). With Reduce Transparency, AppKit's opaque fill stays.
-@interface HostBlurView : NSVisualEffectView
-@end
-
-@implementation HostBlurView
-- (void)updateLayer {
-  [super updateLayer];
-  if (!NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceTransparency) {
-    StripTint(self.layer);
-  }
-}
-@end
-
 // An overlay's shadow, round it by the shadow's reach. Near the browser window's top that reaches
 // past the screen's, and AppKit would keep it below the menu bar, away from the overlay, its
 // cut-out showing the page under the overlay's bottom edge (#2075). It goes where the host puts it,
@@ -416,7 +379,7 @@ struct Overlay {
   const char* name;
   NSWindow* window = nil;
   NSView* view = nil;
-  HostBlurView* blur = nil;
+  NSVisualEffectView* blur = nil;
   // The browser it shows over.
   Browser* over = nullptr;
   // The window of Chromium's over the page that had the keyboard as it showed, such as a tab's
@@ -1215,16 +1178,19 @@ void PlaceOverlayShadow(Overlay& overlay) {
   CGPathRelease(shape);
 }
 
-// Puts the blur under the overlay's view and makes its shadow's window.
+// Puts the window's material under the overlay's view and makes its shadow's window.
 void AddBlurAndShadow(Overlay& overlay) {
   // The UI draws the overlay's shape, translucent, over the blur, and the shadow is its own
   // window. A titled window would draw its edge at the window's full size.
   overlay.window.styleMask = NSWindowStyleMaskBorderless;
   overlay.window.hasShadow = NO;
-  overlay.blur = [[HostBlurView alloc] initWithFrame:overlay.view.frame];
+  // One glass with the window (#4090): the HUD window's material, its tint kept, under the UI's
+  // fill at the transparency level. AppKit makes it opaque with Reduce Transparency or Increase
+  // Contrast, as it does the window's.
+  overlay.blur = [[NSVisualEffectView alloc] initWithFrame:overlay.view.frame];
   overlay.blur.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   overlay.blur.blendingMode = NSVisualEffectBlendingModeBehindWindow;
-  overlay.blur.material = NSVisualEffectMaterialUnderWindowBackground;
+  overlay.blur.material = NSVisualEffectMaterialHUDWindow;
   overlay.blur.state = NSVisualEffectStateActive;
   MaskOverlayBlur(overlay);
   [overlay.view.superview addSubview:overlay.blur
@@ -1260,6 +1226,14 @@ void AddBlurAndShadow(Overlay& overlay) {
   overlay.outline_layer.shadowOffset = CGSizeZero;
   [holder addSublayer:overlay.outline_layer];
   [shadow_view.layer addSublayer:holder];
+}
+
+// Gives the overlay's material the look of the window it shows over, dark or light, which the UI's
+// fill over it is drawn for.
+void MatchWindowLook(Overlay& overlay, Browser* browser) {
+  if (overlay.blur && browser && browser->material) {
+    overlay.blur.appearance = browser->material.appearance;
+  }
 }
 
 // Puts the overlays showing over |browser| above |window|, one of its child windows.
@@ -2389,7 +2363,19 @@ void host_set_window_light(void* ui_view, bool light) {
   Browser* browser = BrowserWithView(ui_view);
   if (browser && browser->material) {
     SetWindowMaterialLight(browser->material, light);
+    for (Overlay& overlay : g_overlays) {
+      if (overlay.shown && overlay.over == browser) {
+        MatchWindowLook(overlay, browser);
+      }
+    }
+    if (g_site_controls_shown && g_site_controls_over == browser) {
+      MatchWindowLook(g_site_controls_overlay, browser);
+    }
   }
+}
+
+bool host_has_window_material(void) {
+  return true;
 }
 
 void host_set_app_appearance(int appearance) {
@@ -3207,6 +3193,7 @@ void host_show_overlay(int index,
     host_hide_overlay(index);
     overlay->shown = true;
     overlay->over = browser;
+    MatchWindowLook(*overlay, browser);
     NSWindow* key = NSApp.keyWindow;
     overlay->keyboard_from = IsTabDialogOf(key, browser) ? key : nil;
     HoldKeys(overlay->window);
@@ -4005,6 +3992,7 @@ void host_show_site_controls(void* ui_view, double left, double top, double widt
     }
     NSWindow* window = browser->window;
     Overlay& overlay = g_site_controls_overlay;
+    MatchWindowLook(overlay, browser);
     [g_site_controls setFrame:NSMakeRect(0, 0, width, height) display:NO];
     PlaceSiteControls();
     [g_site_controls_view.layer setNeedsDisplay];

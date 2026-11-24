@@ -6,7 +6,7 @@
 use super::*;
 use crate::agents::task::Line;
 use crate::agents::task::ilo::{Account, IloKind, IloLine, SignedInWith};
-use crate::agents::tier::{self, Tier, Why};
+use crate::agents::tier::Tier;
 
 const ACCOUNT: &str = "made-up-account-4121@example.org";
 /// In the title and address of the page a sign-in's form went to, which the core withholds.
@@ -127,7 +127,7 @@ fn sign_in_for_agents_off_asks_nothing_of_the_core(cx: &mut TestAppContext) {
     agents.update(cx, |agents, cx| agents.set_sign_in_on(false, cx));
     let answer = sign_in(&agents, 20, cx).recv().unwrap();
     assert!(answer.error);
-    assert_eq!(answer.kind, Some(tools::Kind::NeedsOk));
+    assert_eq!(answer.kind, Some(tools::Kind::Outside));
     assert!(browser.saved_sign_ins.borrow().is_empty());
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "sign_in");
     assert!(
@@ -136,42 +136,42 @@ fn sign_in_for_agents_off_asks_nothing_of_the_core(cx: &mut TestAppContext) {
     );
 }
 
-/// A site on the Off limits list, and a bank's site above Work, are refused before the core.
+/// The task's access decides as for any act, before the core: a site on the Off limits list at
+/// every tier, a bank's site above Work on pages, and any site at Look only. Full access signs in
+/// on a bank's site.
 #[gpui::test]
-fn a_fenced_site_and_a_banks_are_refused_before_the_core(cx: &mut TestAppContext) {
+fn the_tasks_access_and_the_off_limits_list_decide_before_the_core(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
+    hello(&agents, cx);
+    let asked_of_core = || browser.saved_sign_ins.borrow().len();
     at(&browser, 20, "Forum", "https://forum.example.net/login");
     agents.update(cx, |agents, cx| {
         assert!(agents.fence("forum.example.net", cx).is_some());
     });
     let fenced = sign_in(&agents, 20, cx).recv().unwrap();
     assert!(fenced.error);
-    assert_eq!(fenced.kind, Some(tools::Kind::NeedsOk));
+    assert_eq!(fenced.kind, Some(tools::Kind::Outside));
 
     at(&browser, 20, "My Bank", "https://www.mybank.example/login");
     let bank = sign_in(&agents, 20, cx).recv().unwrap();
     assert!(bank.error);
+    assert_eq!(bank.kind, Some(tools::Kind::Outside));
     assert_ne!(bank.text, fenced.text);
-    assert!(browser.saved_sign_ins.borrow().is_empty());
-}
+    assert_eq!(asked_of_core(), 0);
 
-/// Look never signs in, Work does but not on a bank's site, and Full does everywhere.
-#[test]
-fn signing_in_is_work_but_a_banks_is_full_access() {
-    for (tier, bank, above) in [
-        (Tier::Look, false, Some(Why::SignIn)),
-        (Tier::Look, true, Some(Why::SignInBank)),
-        (Tier::Work, false, None),
-        (Tier::Work, true, Some(Why::SignInBank)),
-        (Tier::Full, false, None),
-        (Tier::Full, true, None),
-    ] {
-        assert_eq!(
-            tier::sign_in_above(tier, bank),
-            above,
-            "{tier:?}, bank {bank}"
-        );
-    }
+    let key = agents.read_with(cx, |agents, cx| agents.shown_cards(cx)[0].agent.to_string());
+    agents.update(cx, |agents, cx| agents.set_tier(&key, Tier::Full, cx));
+    let full = sign_in(&agents, 20, cx);
+    assert_eq!(asked_of_core(), 1, "Full access signs in on a bank's site");
+    done(&agents, asked(&browser), true, SIGNED, None, cx);
+    assert!(!full.recv().unwrap().error);
+
+    agents.update(cx, |agents, cx| agents.set_tier(&key, Tier::Look, cx));
+    at(&browser, 20, "Example Domain", "https://www.example.com/");
+    let look = sign_in(&agents, 20, cx).recv().unwrap();
+    assert!(look.error);
+    assert_eq!(look.kind, Some(tools::Kind::Outside));
+    assert_eq!(asked_of_core(), 1);
 }
 
 /// A step only the user can take hands them the tab, as a handoff does; the call waits, and its

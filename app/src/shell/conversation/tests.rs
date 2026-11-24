@@ -3,7 +3,10 @@
 
 use std::rc::Rc;
 
-use gpui::{Entity, Focusable, Modifiers, TestAppContext, VisualTestContext, point, px};
+use gpui::{
+    Entity, Focusable, FontWeight, Modifiers, TestAppContext, VisualTestContext, WindowTextSystem,
+    point, px,
+};
 
 use super::Fold;
 
@@ -12,8 +15,11 @@ use crate::agents::task::{Card, Conversation, Dot, Line, Opens, Trace, TraceItem
 use crate::agents::tier::{Tier, Why};
 use crate::shell::picture::PagePicture;
 use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
-use crate::tokens::shell::conversation::{SITE, SITE_GAP};
+use crate::tokens::shell::conversation::ilo::TEXT_LINE as ILO_TEXT_LINE;
+use crate::tokens::shell::conversation::{INSET, SITE, SITE_GAP, TRACE_LINE};
+use crate::tokens::shell::task_area::BESIDE;
 use crate::tokens::text;
+use crate::tooltip::text_width;
 
 fn card() -> Card {
     Card {
@@ -1092,4 +1098,194 @@ fn a_task_that_takes_no_reply_offers_start_again_in_its_fields_place(cx: &mut Te
     });
     cx.run_until_parked();
     assert!(view.read_with(cx, |view, _| view.takes_reply()));
+}
+
+/// Task-1's conversation, done, with one of ilo's lines of `kind` at its end.
+fn ended(kind: IloKind) -> Conversation {
+    Conversation {
+        lines: vec![
+            Line::Said("Two seats at 9:05, car 4.".into()),
+            Line::Ilo(IloLine {
+                key: 7,
+                kind,
+                settled: false,
+            }),
+        ],
+        stoppable: false,
+        ..conversation(0)
+    }
+}
+
+/// Where the words of ilo's line 7 were drawn and how they were laid out, and where the
+/// conversation was, once it has drawn again.
+fn ilo_words(
+    view: &Entity<super::TalkView>,
+    cx: &mut VisualTestContext,
+) -> (
+    gpui::Bounds<gpui::Pixels>,
+    gpui::TextLayout,
+    gpui::Bounds<gpui::Pixels>,
+) {
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        let (words, laid) =
+            (view.ilo_words_drawn.borrow().get(&7).cloned()).expect("ilo's line wasn't drawn");
+        (words, laid, view.drawn_at.get().unwrap())
+    })
+}
+
+/// Narrows the window until the conversation is no wider than the panel beside a page, the
+/// narrowest it gets.
+fn narrowest(view: &Entity<super::TalkView>, cx: &mut VisualTestContext) {
+    let (_, _, area) = ilo_words(view, cx);
+    let size = cx.update(|window, _| window.viewport_size());
+    let narrow = px(BESIDE) - px(1.);
+    cx.simulate_resize(gpui::size(
+        size.width - (area.size.width - narrow),
+        size.height,
+    ));
+    let (_, _, area) = ilo_words(view, cx);
+    assert!(
+        area.size.width <= px(BESIDE),
+        "the conversation is {:?} wide, wider than the panel beside a page",
+        area.size.width
+    );
+}
+
+/// One of ilo's lines wraps and is never cut (#4105): in a conversation as narrow as the panel
+/// beside a page, the line that says a conversation is kept lays its whole sentence out on more
+/// lines, inside the column.
+#[gpui::test]
+fn ilos_line_wraps_its_whole_sentence_in_the_narrowest_conversation(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let show = |kind: IloKind, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            shell.set_conversation(Some(ended(kind)), cx)
+        });
+    };
+    // Words that fit are one line, as tall as a trace's.
+    show(IloKind::KeepsNothing, cx);
+    let (short, _, _) = ilo_words(&view, cx);
+    assert_eq!(f32::from(short.size.height), TRACE_LINE);
+
+    show(IloKind::KeptHere, cx);
+    narrowest(&view, cx);
+    let (wrapped, laid, area) = ilo_words(&view, cx);
+    let whole = cx.update(|_, cx| {
+        let system = WindowTextSystem::new(cx.text_system().clone());
+        text_width(&laid.text().into(), text::BODY, FontWeight::NORMAL, &system)
+    });
+    assert!(
+        laid.text().ends_with("so you can reply."),
+        "not the whole sentence: {}",
+        laid.text()
+    );
+    assert!(
+        wrapped.left() >= area.left() + px(INSET) && wrapped.right() <= area.right() - px(INSET),
+        "ilo's words at {wrapped:?} leave the column of {area:?}"
+    );
+    let lines =
+        ((f32::from(wrapped.size.height) - (TRACE_LINE - ILO_TEXT_LINE)) / ILO_TEXT_LINE).round();
+    assert!(lines >= 2., "ilo's words stayed on one line: {wrapped:?}");
+    assert!(
+        lines * f32::from(wrapped.size.width) >= whole,
+        "{lines} lines of {:?} don't hold the sentence, {whole} long",
+        wrapped.size.width
+    );
+}
+
+/// An ilo line has one left edge, its mark's (#4105): in the narrowest conversation the line its
+/// words wrap to starts under the mark, and its buttons start there too.
+#[gpui::test]
+fn ilos_wrapped_line_and_its_buttons_start_under_its_mark(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let stopped = IloKind::Stopped {
+        tab: 30,
+        at: "Place the order for both of the seats".into(),
+        why: Why::Order,
+        tier: Tier::Work,
+        count: 1,
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(ended(stopped)), cx)
+    });
+    narrowest(&view, cx);
+    let (words, laid, _) = ilo_words(&view, cx);
+    let text = laid.text();
+    assert!(
+        text.starts_with(super::words::MARK),
+        "ilo's mark isn't the first of its words: {text}"
+    );
+    let mark = laid.position_for_index(0).unwrap();
+    assert_eq!(
+        mark.x,
+        words.left(),
+        "the mark isn't at its words' left edge"
+    );
+    let line = laid.line_height();
+    // The character at the mark's left edge, a line down: the first of the wrapped line.
+    let wrapped = laid
+        .index_for_position(point(mark.x, mark.y + line * 1.5))
+        .expect("ilo's words didn't wrap under its mark");
+    assert!(wrapped > super::words::MARK.len(), "{wrapped} of {text}");
+    // The tests' text system sets every character one advance wide, so the wrapped line's second
+    // character is as far from its start as the mark's second is from the mark's.
+    let step = |from: usize| from + text[from..].chars().next().unwrap().len_utf8();
+    let (in_mark, in_wrapped) = (
+        laid.position_for_index(step(0)).unwrap(),
+        laid.position_for_index(step(wrapped)).unwrap(),
+    );
+    assert_eq!(
+        in_wrapped.y,
+        mark.y + line,
+        "not on the line under the mark"
+    );
+    assert_eq!(
+        in_wrapped.x, in_mark.x,
+        "the wrapped line doesn't start at the mark's left edge"
+    );
+    let (button, _) = ilo_button(&view, (7, IloButton::TakeOver), cx).expect("no Take Over");
+    assert_eq!(button.left(), mark.x, "its buttons don't start under ilo");
+}
+
+/// Whether the level's chip under the reply field is drawn for task-1's conversation, done, with
+/// ilo's line of `kind` at its end, beside the page it watched.
+fn level_chip_with(kind: IloKind, cx: &mut TestAppContext) -> bool {
+    let (shell, _host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    shell.update(cx, |shell, cx| {
+        shell.set_talk_beside(true, cx);
+        shell.set_conversation(Some(ended(kind)), cx);
+    });
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| view.level_drawn.get().is_some())
+}
+
+/// A task that takes a reply keeps its level under the field, ended and picked up again too.
+#[gpui::test]
+fn a_task_that_takes_a_reply_keeps_its_level_under_the_field(cx: &mut TestAppContext) {
+    assert!(level_chip_with(IloKind::KeptHere, cx));
+}
+
+/// With ilo's line and Start Again in the field's place there's no level to set, so the row under
+/// the field goes too (#4105): for a conversation the assistant no longer has,
+#[gpui::test]
+fn a_task_whose_conversation_is_gone_has_no_level_row(cx: &mut TestAppContext) {
+    assert!(!level_chip_with(IloKind::Gone, cx));
+}
+
+/// for one that ended while Settings' switch was off,
+#[gpui::test]
+fn a_task_that_wasnt_kept_has_no_level_row(cx: &mut TestAppContext) {
+    assert!(!level_chip_with(IloKind::NotKept, cx));
+}
+
+/// and for an assistant that keeps no finished task.
+#[gpui::test]
+fn a_task_of_an_assistant_that_keeps_nothing_has_no_level_row(cx: &mut TestAppContext) {
+    assert!(!level_chip_with(IloKind::KeepsNothing, cx));
 }
