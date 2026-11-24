@@ -3,7 +3,9 @@
 //! here (#4086). The tiers' names are the tier table's (agents/tier.rs).
 
 use crate::agents::kept;
-use crate::agents::task::ilo::{HelpersLimit as Limit, IloButton, IloKind, LeftOut, SignedInWith};
+use crate::agents::task::ilo::{
+    HelpersLimit as Limit, IloButton, IloKind, LeftOut, Reach, SignedInWith,
+};
 use crate::agents::tier::{self, Tier, Why};
 
 /// ilo's mark, before each of its lines' words.
@@ -11,6 +13,12 @@ pub const MARK: &str = "ilo";
 /// The live line's button, and a Stopped line's first.
 pub const TAKE_OVER: &str = "Take Over";
 pub const STOP: &str = "Stop";
+
+/// The live line while no step is under way: between steps, and after Hand Back or a change of
+/// access, until the next step starts.
+pub fn working(agent: &str) -> String {
+    format!("{agent} is working")
+}
 
 /// A line's words after the mark: ilo's own, then the name it takes from a page or a site, if it
 /// has one, which is drawn apart from them.
@@ -24,7 +32,12 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
             format!("stopped {agent} from going to"),
             Some(at.to_string()),
         ),
-        IloKind::Stopped { at, .. } => (format!("stopped {agent} at"), Some(at.to_string())),
+        // The refused step as it was under way, its control's name keeping its own quotes (B1).
+        IloKind::Stopped { doing, .. } if !doing.is_empty() => {
+            (format!("stopped {agent} from {doing}"), None)
+        }
+        // With no step traced to name, never a tool's own name or a raw argument (B1, 15:20Z).
+        IloKind::Stopped { .. } => (format!("stopped one of {agent}'s steps"), None),
         // With more than one page, it names the step's (O1).
         IloKind::Yours {
             site: Some(site), ..
@@ -68,10 +81,49 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
             ),
             Some(folder.to_string()),
         ),
-        IloKind::NotRestarted { folder } => (
-            format!("stopped this task: ilo couldn't restart {agent} without"),
+        IloKind::SetBack { at, folder, .. } => (
+            format!(
+                "set this task back to {}: ilo couldn't limit {agent} to",
+                at.label()
+            ),
             Some(folder.to_string()),
         ),
+        IloKind::NotRestarted {
+            left: LeftOut::Folder(name) | LeftOut::File(name),
+        } => (
+            format!("stopped this task: ilo couldn't restart {agent} without"),
+            Some(name.to_string()),
+        ),
+        IloKind::NotRestarted {
+            left: LeftOut::Files(files),
+        } => (
+            format!("stopped this task: ilo couldn't restart {agent} without your {files} files"),
+            None,
+        ),
+        IloKind::NotRaised { refused } => (
+            format!(
+                "stopped this task: ilo couldn't restart {agent} at {}",
+                refused.label()
+            ),
+            None,
+        ),
+        // What a run left running (#4101): what it can still reach, and what ends it.
+        IloKind::LeftRunning {
+            reach: Reach::Folder(folder) | Reach::Both(folder),
+        } => (
+            format!("couldn't end everything {agent} started: what's left can still reach"),
+            Some(folder.to_string()),
+        ),
+        IloKind::LeftRunning {
+            reach: Reach::Files,
+        } => (
+            format!(
+                "couldn't end everything {agent} started: what's left can still reach this \
+                 task's files{RESTART_ENDS}"
+            ),
+            None,
+        ),
+        IloKind::EndedLeft => (format!("ended what {agent} had left running"), None),
         // The user is the subject, as of a change of level.
         IloKind::Revoked { folder } => ("\u{b7} You revoked".into(), Some(folder.to_string())),
         IloKind::FolderGone { folder } => ("revoked".into(), Some(folder.to_string())),
@@ -124,6 +176,9 @@ pub fn with_name(kind: &IloKind, own: &str, name: &str) -> (String, std::ops::Ra
     }
 }
 
+/// How the line of what a run left running ends: what the user can do about it.
+const RESTART_ENDS: &str = ". Restarting this computer ends it.";
+
 /// What a line says after its name, to its sentence's end, if anything.
 pub fn tail(kind: &IloKind, agent: &str) -> Option<String> {
     match kind {
@@ -133,7 +188,15 @@ pub fn tail(kind: &IloKind, agent: &str) -> Option<String> {
         IloKind::StartedWithout {
             left: LeftOut::File(_),
         } => Some(format!(": ilo couldn't limit {agent} to that file")),
-        IloKind::KeptAt { refused, .. } => Some(format!(" at {}", refused.label())),
+        IloKind::KeptAt { refused, .. } | IloKind::SetBack { refused, .. } => {
+            Some(format!(" at {}", refused.label()))
+        }
+        IloKind::LeftRunning {
+            reach: Reach::Folder(_),
+        } => Some(RESTART_ENDS.into()),
+        IloKind::LeftRunning {
+            reach: Reach::Both(_),
+        } => Some(format!(" and this task's files{RESTART_ENDS}")),
         IloKind::FolderGone { .. } => Some(": ilo couldn't find it".into()),
         IloKind::NotCopied {
             left: LeftOut::File(_) | LeftOut::Folder(_),
@@ -169,7 +232,11 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
         IloKind::Helpers { .. } => None,
         IloKind::StartedWithout { .. }
         | IloKind::KeptAt { .. }
+        | IloKind::SetBack { .. }
         | IloKind::NotRestarted { .. }
+        | IloKind::NotRaised { .. }
+        | IloKind::LeftRunning { .. }
+        | IloKind::EndedLeft
         | IloKind::Revoked { .. }
         | IloKind::FolderGone { .. }
         | IloKind::NotCopied { .. } => None,

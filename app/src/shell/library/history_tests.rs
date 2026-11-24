@@ -379,8 +379,9 @@ fn task() -> crate::agents::task::ArchivedTask {
         title: "Lisbon museum hours".into(),
         asked: "Which museums in Lisbon open on Monday?".into(),
         dot: crate::agents::task::Dot::Done,
-        about: "Claude · Done 13:31 · 1 page".into(),
-        left: at(9, 13),
+        about: "Claude · Done".into(),
+        ended: at(9, 13),
+        pages: "1 page".into(),
     }
 }
 
@@ -942,6 +943,40 @@ fn row_times_follow_the_systems_clock() {
     assert_eq!(history_when(week, starts, true), "Tue 9:05 PM");
     assert_eq!(history_when(week, starts, false), "Tue 21:05");
     assert_eq!(history_when(at(1, 14), starts, true), "1 Nov");
+}
+
+/// A task is listed under the day it ended, whenever it left the foot, so the time its row says
+/// is its heading's day's, as the pages' rows around it: last night's task is under Yesterday
+/// with its time alone, though the user dismissed it this morning.
+#[gpui::test]
+fn a_task_is_listed_under_the_day_it_ended(cx: &mut TestAppContext) {
+    let minute = 5. * 60. * 1000.;
+    let (shell, host, cx) = history(vec![closed(5, "news", at(13, 9), false)], cx);
+    host.day_starts
+        .set([at(13, 0), at(12, 0), at(9, 0), at(2, 0)]);
+    let last_night = super::ArchivedTask {
+        ended: at(12, 23) + minute,
+        ..task()
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_archived_tasks(vec![last_night], cx)
+    });
+    cx.run_until_parked();
+    let listed = shell.read_with(cx, |shell, _| {
+        let library = shell.library.as_ref().unwrap();
+        let named = library.items.iter().map(|item| match item {
+            Item::Heading(heading) => heading.to_string(),
+            Item::Task(index) => shell.archived_task_about(&shell.archived_tasks[*index]),
+            _ => "a tab".to_string(),
+        });
+        named.collect::<Vec<_>>()
+    });
+    let time = match crate::clock::twelve_hour() {
+        true => "11:05 PM",
+        false => "23:05",
+    };
+    let row = format!("Claude · Done {time} · 1 page");
+    assert_eq!(listed, ["Today", "a tab", "Yesterday", row.as_str()]);
 }
 
 /// What the Library's row ring is on, as `items` names it.

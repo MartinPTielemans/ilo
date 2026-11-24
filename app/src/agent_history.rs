@@ -66,8 +66,9 @@ pub struct Past {
 }
 
 impl Past {
-    /// What its row says under its title: "Claude Code · 14:02 · 1 order placed · 3 pages".
-    pub fn about(&self) -> String {
+    /// What its row says under its title, with `when` it ended as the list it's in says a time:
+    /// "Claude Code · 14:02 · 1 order placed · 3 pages".
+    pub fn about(&self, when: &str) -> String {
         let count = |n: usize, one: &str, many: &str| match n {
             0 => None,
             1 => Some(format!("1 {one}")),
@@ -75,7 +76,7 @@ impl Past {
         };
         let parts = [
             Some(self.agent.clone()).filter(|agent| !agent.is_empty()),
-            Some(crate::agents::local_time(self.ended)),
+            Some(when.to_string()).filter(|when| !when.is_empty()),
             count(self.orders, "order placed", "orders placed"),
             count(self.messages, "message sent", "messages sent"),
             count(self.pages.len(), "page", "pages"),
@@ -86,7 +87,7 @@ impl Past {
     /// What its page says under its title: "Claude Code · 12 min · 14:02 · 1 order placed · 3
     /// pages", as its row with how long it ran.
     pub fn page_about(&self) -> String {
-        let about = self.about();
+        let about = self.about(&crate::agents::local_time(self.ended));
         match about
             .strip_prefix(&self.agent)
             .filter(|_| !self.agent.is_empty())

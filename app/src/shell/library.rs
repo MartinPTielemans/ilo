@@ -1312,8 +1312,9 @@ impl Shell {
                     .filter(|(_, task)| {
                         query.is_empty() || found(&task.title) || found(&task.asked)
                     })
-                    .filter(|(_, task)| shown(task.left))
-                    .map(|(index, task)| (Item::Task(index), task.left));
+                    // By its end, so the time its row says is its heading's day's.
+                    .filter(|(_, task)| shown(task.ended))
+                    .map(|(index, task)| (Item::Task(index), task.ended));
                 let mut listed: Vec<_> = tabs.chain(tasks).collect();
                 // Closed tabs say they were Little ilo's while some of the others' are listed.
                 let little = |little: bool| {
@@ -2835,6 +2836,18 @@ impl Shell {
             .into_any_element()
     }
 
+    /// What a task's row says under its title: who worked on it and how it ended, when, as the
+    /// rows of the day it's listed under say when, and the pages it still holds.
+    fn archived_task_about(&self, task: &ArchivedTask) -> String {
+        let when = match &self.library {
+            Some(library) if task.ended > 0. => {
+                history_when(task.ended, library.starts, crate::clock::twelve_hour())
+            }
+            _ => String::new(),
+        };
+        task.about_at(&when)
+    }
+
     /// A task's line in the archive, as a tab's: its card's mark in the favicon's place, its title
     /// over its CLI, how it ended and when. A click brings its card back with its conversation
     /// open, and a right-click shows its menu.
@@ -2848,6 +2861,7 @@ impl Shell {
         } else {
             task.title.clone()
         };
+        let about = SharedString::from(self.archived_task_about(task));
         let mark = self.status_mark(task.dot);
         let menu_agent = agent.clone();
         div()
@@ -2904,7 +2918,7 @@ impl Shell {
                                 self.palette.text(UNSELECTED_TITLE),
                             ))
                             .child(text_line(
-                                task.about.clone(),
+                                about,
                                 text::SMALL,
                                 15.,
                                 self.palette.gray(SECONDARY),
@@ -2966,6 +2980,13 @@ impl Shell {
             crate::settings_rows::drawn(format!("library past {id}"), library.drawn.clone())
         });
         let group: SharedString = format!("past-{index}").into();
+        // When it ended, as History's rows say when, under the same headings.
+        let when = (self.library.as_ref()).map(|library| {
+            // The Library's times are milliseconds.
+            let ended = past.ended as f64 * 1000.;
+            history_when(ended, library.starts, crate::clock::twelve_hour())
+        });
+        let about = SharedString::from(past.about(&when.unwrap_or_default()));
         let mark = self.status_mark(crate::agents::task::Dot::Done);
         let close = div()
             .id(("past-delete", index))
@@ -3030,7 +3051,7 @@ impl Shell {
                                 self.palette.text(UNSELECTED_TITLE),
                             ))
                             .child(text_line(
-                                past.about().into(),
+                                about,
                                 text::SMALL,
                                 15.,
                                 self.palette.gray(SECONDARY),

@@ -34,6 +34,7 @@ use crate::agents::task::{Card, Dot, TaskAction, status_lead};
 use crate::link_preview::{CLOSE, OPEN};
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
 use crate::tokens::shell::agent_pointer::{COLOR, RING};
+use crate::tokens::shell::conversation::ilo::ARM;
 use crate::tokens::shell::permission::LINE;
 use crate::tokens::shell::task::STATUS;
 use crate::tokens::shell::task_area::{
@@ -72,6 +73,12 @@ struct Watched {
     /// Whether `picture` is one this window asked for, and so its own to let go of.
     asked: bool,
     zoom: Zoom,
+    /// Whether ilo opened it by itself, as at a handoff, rather than the user: it never takes the
+    /// keyboard, and until ARM has passed (`guarded`) it stays out of the window behind its
+    /// picture, so a click meant for what stood there a moment ago never reaches the page.
+    by_ilo: bool,
+    /// Held behind its picture since ilo opened it, till a timer of ARM lets it in place.
+    guarded: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -428,6 +435,7 @@ impl Shell {
         tab: u64,
         from: Bounds<Pixels>,
         picture: Option<PagePicture>,
+        by_ilo: bool,
         cx: &mut Context<Self>,
     ) -> bool {
         let Some(area) = &self.task_area else {
@@ -448,6 +456,8 @@ impl Shell {
                 picture,
                 asked: false,
                 zoom,
+                by_ilo,
+                guarded: by_ilo,
             },
             cx,
         );
@@ -456,7 +466,7 @@ impl Shell {
 
     /// The area watches `page`, in place of the one it watched, and the core shows it.
     fn show_watched(&mut self, page: Watched, cx: &mut Context<Self>) {
-        let tab = page.tab;
+        let (tab, page_by_ilo) = (page.tab, page.by_ilo);
         if let Some(area) = &mut self.task_area {
             let old = area.page.replace(page);
             self.let_go_of(old);
@@ -465,9 +475,32 @@ impl Shell {
         log!("browser: task page {tab} watched");
         // Shown first, at the frame the user's page had out of the window, then laid out at its own
         // size there, so the user's page keeps its size.
+        let by_ilo = page_by_ilo;
         self.browser.select(tab, cx);
         self.lay_out_page(cx);
         match self.agent_bar() {
+            // A page ilo opened by itself leaves the keyboard where it was, in the reply field
+            // too: the user's first click in the page gives it the keyboard, once it's in place.
+            _ if by_ilo => {
+                cx.spawn(async move |shell, cx| {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_secs_f32(ARM))
+                        .await;
+                    shell
+                        .update(cx, |shell, cx| {
+                            let page = (shell.task_area.as_mut())
+                                .and_then(|area| area.page.as_mut())
+                                .filter(|page| page.tab == tab && page.guarded);
+                            if let Some(page) = page {
+                                page.guarded = false;
+                                shell.lay_out_page(cx);
+                                cx.notify();
+                            }
+                        })
+                        .ok();
+                })
+                .detach();
+            }
             Some(Bar::Held { tab: held, .. }) if held == tab => self.browser.focus_page(cx),
             _ => self.take_keyboard(cx),
         }
@@ -562,7 +595,9 @@ impl Shell {
     pub(super) fn task_page_live(&self) -> Option<u64> {
         let area = self.task_area.as_ref()?;
         let page = area.page.as_ref()?;
-        let live = matches!(page.zoom, Zoom::Rest | Zoom::Asked(_)) && self.task_core == area.space;
+        let live = matches!(page.zoom, Zoom::Rest | Zoom::Asked(_))
+            && self.task_core == area.space
+            && !page.guarded;
         live.then_some(page.tab)
     }
 
@@ -633,6 +668,7 @@ impl Shell {
         };
         let live = self.task_core == area.space;
         let part = self.page_part(card);
+        let live = live && !page.guarded;
         match page.zoom {
             Zoom::Rest | Zoom::Asked(_) if live && self.page_fullscreen => card,
             Zoom::Rest | Zoom::Asked(_) if live => watched(part),
@@ -797,16 +833,22 @@ impl Shell {
             self.stand_again(area, cx);
         }
         let space = self.task_open();
-        match watched {
-            Some(page) if space.is_some_and(|space| self.task_tabs(space).contains(&page.tab)) => {
+        match (watched, space) {
+            (Some(page), Some(space)) if self.task_tabs(space).contains(&page.tab) => {
+                // The core shows the task's Space from this call on, and says so a turn later.
+                // The window doesn't wait to hear it: a frame drawn meanwhile had the page back
+                // and the sidebar, the URL field and the strip still the user's page's (#4202).
+                self.task_core = space;
                 // In place at once, as it stood.
                 let page = Watched {
                     zoom: Zoom::Rest,
+                    by_ilo: false,
+                    guarded: false,
                     ..page
                 };
                 self.show_watched(page, cx);
             }
-            gone => {
+            (gone, _) => {
                 self.let_go_of(gone);
                 if space.is_some() {
                     self.take_keyboard(cx);
@@ -901,7 +943,7 @@ impl Shell {
         let Some(page) = self.task_area.as_mut().and_then(|area| area.page.as_mut()) else {
             return;
         };
-        if matches!(page.zoom, Zoom::Out(_)) {
+        if matches!(page.zoom, Zoom::Out(_)) && !page.guarded {
             page.zoom = Zoom::Rest;
             cx.notify();
         }
@@ -1218,12 +1260,6 @@ impl Shell {
             Dot::Waiting if elsewhere => Dot::Working,
             dot => dot,
         })
-    }
-
-    /// Each of a task's pages' own step while it works on several, as its card has them.
-    pub(super) fn task_page_steps(&self, agent: &str) -> &[(u64, SharedString)] {
-        let card = self.task_cards.iter().find(|card| card.agent == agent);
-        card.map_or(&[][..], |card| &card.page_steps[..])
     }
 
     /// Whether the task the area shows is at work on `tab`'s page, which the page's ring says:

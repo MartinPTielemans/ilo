@@ -175,21 +175,30 @@ impl Shell {
                 .mb(px(t::MARK_UNDER))
                 .child(wordmark(drawn, colors, t::MARK_SCALE))
         });
+        // A step with no line has its title alone, as far above what follows as a line would be.
+        let line = (!line.is_empty()).then(|| {
+            div()
+                .mb(px(t::LINE_UNDER))
+                .text_size(px(t::LINE_SIZE))
+                .line_height(px(t::LINE_LINE))
+                .text_color(colors.ink(t::LINE_QUIET))
+                .child(line)
+        });
+        let under = match line {
+            Some(_) => t::TITLE_UNDER,
+            None => t::LINE_UNDER,
+        };
         let words = div()
             .flex()
             .flex_col()
             .opacity(if welcome { drawn.tagline } else { 1. })
-            .child(title.mb(px(t::TITLE_UNDER)).text_color(colors.ink(1.)))
-            .child(
-                div()
-                    .mb(px(t::LINE_UNDER))
-                    .text_size(px(t::LINE_SIZE))
-                    .line_height(px(t::LINE_LINE))
-                    .text_color(colors.ink(t::LINE_QUIET))
-                    .child(line),
-            );
+            .child(title.mb(px(under)).text_color(colors.ink(1.)))
+            .children(line);
+        // No taller than the sheet's half, so a choice taller than its room scrolls in it and the
+        // foot stays where every step has it.
         div()
             .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
             .child(pager(count, at, colors))

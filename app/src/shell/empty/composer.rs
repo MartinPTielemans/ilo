@@ -13,7 +13,7 @@ use gpui::{
 
 use crate::agents::files::{self, Picked, words as files_words};
 use crate::agents::task::{Card, Dot};
-use crate::agents::task::{Start, added_address, model_menu};
+use crate::agents::task::{Start, TaskAction, added_address, model_menu};
 use crate::agents::tier::{ANY_SITE, ONLY_ADDED, Tier};
 use crate::agents::wall::Granted;
 use crate::command_bar::{self, CommandBar, Given, InPlaceKey, TaskAgent};
@@ -656,6 +656,44 @@ impl Shell {
         let settings: MenuAction = Box::new(|shell, cx| shell.browser.agent_access(cx));
         items.push((MenuEntry::new(SETTINGS, true), settings));
         let chip = (self.resting.as_ref()).and_then(|resting| resting.tier_chip.get());
+        self.show_menu(items, hung_under(chip, clicked), None, cx);
+    }
+
+    /// The level chip's menu under a task's reply field, as the composer's: names only, the
+    /// task's level checked, where it may go, and Settings. Only the user's pick here changes the
+    /// task's level, through the press its refusal's button makes; there's no agent path to it. A
+    /// running task can widen to any site but not narrow to the sites added, which it never had.
+    pub(in crate::shell) fn task_tier_menu(
+        &mut self,
+        agent: SharedString,
+        current: Tier,
+        only: bool,
+        chip: Option<Bounds<Pixels>>,
+        clicked: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let press = |action: TaskAction| -> MenuAction {
+            let agent = agent.clone();
+            Box::new(move |shell, cx| shell.browser.task(agent, action, cx))
+        };
+        let mut items: Vec<(MenuEntry, MenuAction)> = (Tier::ALL.into_iter())
+            .map(|tier| {
+                (
+                    MenuEntry::named(tier.label(), true).checked(tier == current),
+                    press(TaskAction::SetTier(tier)),
+                )
+            })
+            .collect();
+        let none: fn() -> MenuAction = || Box::new(|_, _| {});
+        items.push((MenuEntry::line(), none()));
+        items.push((
+            MenuEntry::named(ANY_SITE, true).checked(!only),
+            press(TaskAction::AnySite),
+        ));
+        items.push((MenuEntry::named(ONLY_ADDED, only).checked(only), none()));
+        items.push((MenuEntry::line(), none()));
+        let settings: MenuAction = Box::new(|shell, cx| shell.browser.agent_access(cx));
+        items.push((MenuEntry::new(SETTINGS, true), settings));
         self.show_menu(items, hung_under(chip, clicked), None, cx);
     }
 

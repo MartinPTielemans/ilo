@@ -43,10 +43,9 @@ use browser::settings_card::{self, Card, Paging};
 use browser::settings_column::{self, Section};
 use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
-    Act, Chip, Look as RowLook, SLIDE, another_agent_row, assistant_row, chevron_slot, chip,
-    command_export, command_text, detailed_row, end, frame, glyph_plate, group, group_lined,
-    named_button, row, sent_part, stop_button, stop_chip, stop_popup, stop_restore, stop_switch,
-    text,
+    Act, Chip, Look as RowLook, SLIDE, assistant_row, chevron_slot, chip, command_export,
+    command_text, detailed_row, end, frame, glyph_plate, group, group_lined, named_button, row,
+    sent_part, stop_button, stop_chip, stop_popup, stop_restore, stop_switch, text,
 };
 use browser::settings_search::{
     self, EndSearch, Entry, NextControl, PageBottom, PageDown, PageTop, PageUp, PreviousControl,
@@ -184,7 +183,7 @@ enum Popup {
     Assistant(Cli),
     /// An assistant's Model, under its row in Agents › Your assistant.
     Model(Cli),
-    /// Agents › Notifications' When to notify.
+    /// Agents › Notifications' Notify.
     Notify,
     /// General's Page zoom.
     PageZoom,
@@ -3798,7 +3797,6 @@ impl Settings {
             blocks.push(Block::Rows(vec![self.when_to_notify(agents, cx)]));
         }
         blocks.push(Block::Heading(APPS_THAT_CONNECT.into()));
-        // Another app's How to Connect comes here.
         let apps = SharedString::from(APPS_THAT_CONNECT);
         blocks.push(Block::Group(self.flashed(&apps, group(look, clients))));
         // Shown as Apps that connect are, whether agents are on or off: the command says they're
@@ -5662,15 +5660,12 @@ fn method(target: &str) -> &str {
     target.split(' ').next().unwrap_or_default()
 }
 
-/// Apps that connect's heading, which Another app's How to Connect goes to.
+/// Apps that connect's heading.
 const APPS_THAT_CONNECT: &str = "Apps that connect";
 
 /// What Your assistant's rows never do, under them. That ilo has no assistant of its own is first
 /// run's to say.
-const NEVER_SEES_LOGIN: &str = concat!(
-    env!("APP_NAME"),
-    " never sees or keeps your assistant's login."
-);
+const NEVER_SEES_LOGIN: &str = concat!(env!("APP_NAME"), " never sees your assistant's login.");
 
 /// A line under a group that says more of it, in a row's line's grey, as Fenced sites' has.
 fn foot(look: &RowLook, line: impl Into<SharedString>) -> gpui::Div {
@@ -5712,7 +5707,7 @@ fn feature_row(
 /// and its buttons: a kept task's own, and the one for them all. An assistant that keeps none
 /// has no task in the list, which says it.
 const KEEP_TASKS: &str = "Keep finished tasks so you can reply";
-const KEPT_WHERE: &str = "Titles only. The conversation stays with your assistant.";
+const KEPT_WHERE: &str = "Titles only. Conversations stay with your assistant.";
 const REMOVE: &str = "Remove";
 const REMOVE_ALL: &str = "Remove All…";
 

@@ -1,7 +1,7 @@
 //! Quiet until it needs you, outside ilo (docs/ux-spec.md › Agent task, Needs you): the Dock's
 //! badge, the taskbar button's overlay or the window's urgency says how many tasks wait for the
 //! user, ⌘T's and outside agents' alike, and a task that comes to need the user or finishes posts
-//! one system notification, as Settings › Agents' When to notify says, whose click opens its task's
+//! one system notification, as Settings › Agents' Notify says, whose click opens its task's
 //! card. Nothing is kept of them past the run, and nothing else interrupts: no sound, no bounce, no
 //! flash.
 
@@ -15,7 +15,7 @@ use crate::agents::task::{Card, Dot, Word};
 
 /// Settings › Agents' group and row that choose when these post.
 pub const NOTIFICATIONS: &str = "Notifications";
-pub const WHEN_TO_NOTIFY: &str = "When to notify";
+pub const WHEN_TO_NOTIFY: &str = "Notify";
 const NOTIFY_AWAY: &str = concat!("When ", env!("APP_NAME"), " isn't in front");
 const NOTIFY_ALWAYS: &str = "Always";
 const NOTIFY_NEVER: &str = "Never";
@@ -48,7 +48,7 @@ impl Notify {
         Notify::ALL.into_iter().find(|each| each.id() == id)
     }
 
-    /// As When to notify's pop-up says it.
+    /// As Notify's pop-up says it.
     pub fn title(self) -> &'static str {
         match self {
             Notify::Away => NOTIFY_AWAY,

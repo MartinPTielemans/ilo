@@ -1,5 +1,5 @@
 //! Settings › Agents' Your assistant (#4100): its rows, each with its Model under it, an
-//! assistant's ⋯ menu and the ask before Sign Out; and Notifications' When to notify.
+//! assistant's ⋯ menu and the ask before Sign Out; and Notifications' Notify.
 
 use super::*;
 use browser::agents::task::{MODEL, model_default};
@@ -7,7 +7,7 @@ use browser::needs_you::{Notify, WHEN_TO_NOTIFY};
 
 impl Settings {
     /// Your assistant: a row for each CLI tasks from ⇥ in ⌘T run on, which signs in with its own
-    /// sign-in and has the mark that picks it, then a row for another agent, which connects.
+    /// sign-in and has the mark that picks it.
     pub(super) fn assistants(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> gpui::Div {
         let look = &self.look;
         // Each assistant's Model, under its row.
@@ -51,11 +51,8 @@ impl Settings {
             (row, ROW_X)
         });
         let assistants = (assistants.into_iter().zip(models)).flat_map(|(row, model)| [row, model]);
-        let how = cx.listener(|settings, _: &(), window, cx| {
-            settings.show_found(Section::Agents, APPS_THAT_CONNECT.into(), window, cx)
-        });
-        let another = another_agent_row(look, self.a11y, move |window, cx| how(&(), window, cx));
-        group_lined(look, assistants.chain([(another, ROW_X)]))
+        // Another app is Apps that connect's, two groups down, so it's not here as well.
+        group_lined(look, assistants)
     }
 
     /// `cli`'s Model, under its row and set in from it as a feature's own settings are, with the
@@ -114,7 +111,7 @@ impl Settings {
         self.pop_up(Popup::Model(cli), items, picked, window, cx);
     }
 
-    /// Notifications' When to notify: when a task that finishes or needs the user posts its
+    /// Notifications' Notify: when a task that finishes or needs the user posts its
     /// notification.
     pub(super) fn when_to_notify(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Row {
         let chosen = agents.read(cx).notify();
