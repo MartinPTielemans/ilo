@@ -370,6 +370,8 @@ impl Shell {
     pub fn show_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
         // A view set aside for a close's question is left for the one asked for now.
         self.forget_closing(cx);
+        // A conversation opened leaves the empty page the composer's start would have opened.
+        self.show_started = None;
         let Some(card) = self.task_cards.iter().find(|card| card.agent == agent) else {
             return;
         };
