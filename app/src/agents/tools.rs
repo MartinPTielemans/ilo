@@ -591,6 +591,18 @@ fn shared() -> Value {
             "annotations": { "readOnlyHint": true, "openWorldHint": false },
         },
         {
+            "name": "sign_in",
+            "title": "Sign in with the user's saved login",
+            "description": "Ask the browser to sign the tab's page in with a login the user saved for its site. The browser fills it and submits the form; you never see the username or password. Meanwhile the tab is the browser's, and calls on it are refused. If it was submitted, read the page to see where you are: it may ask for a code or say the login didn't work. If the step is the user's, such as a code or a choice between logins, they're handed the tab and this waits until they hand it back. Don't ask again where a sign-in didn't work.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tab": tab,
+                },
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false },
+        },
+        {
             "name": "ask_for_tab",
             "title": "Ask for a tab back",
             "description": "Ask the user to hand back a tab they took over, when your task can't go on without it. They took it on purpose, so say why you need it, and carry on in your other tabs if you can. They're asked in the browser, and this waits for their answer: the tab back, or that they keep it. Don't ask again for a tab they keep.",
@@ -926,6 +938,12 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
             "Couldn't sort",
             "its tabs by site".to_string(),
         ),
+        "sign_in" => (
+            "Asking ilo to sign in on",
+            "Asked ilo to sign in on",
+            "Couldn't sign in on",
+            site("a page"),
+        ),
         "hand_off" => (
             "Handing you",
             "Handed you",
@@ -998,6 +1016,7 @@ pub fn step_glyph(tool: &str) -> &'static str {
             "icons/app-window.svg"
         }
         "pin_tab" | "unpin_tab" => "icons/pin.svg",
+        "sign_in" => "icons/key-round.svg",
         "ask" => "icons/circle-question-mark.svg",
         "upload" => "icons/file.svg",
         "thought" => "icons/lightbulb.svg",
@@ -1067,6 +1086,8 @@ pub fn describe(action: &str) -> &'static str {
         "stopped" => "You stopped it",
         "stopped by the user" => "You stopped it, which closed its connection",
         "hand_off" => "Handed you a tab",
+        "sign_in" => "Asked ilo to sign in",
+        "filled_login" => "ilo filled and sent the sign-in form",
         "upload" => "Added a file to a page",
         "file_dialog file_input" | "file_dialog file_system_access" => {
             "Page tried to open a file dialog"

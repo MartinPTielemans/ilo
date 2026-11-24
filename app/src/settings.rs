@@ -3782,7 +3782,39 @@ impl Settings {
             true => self.kept_rows(agents, cx),
             false => Vec::new(),
         };
-        let rows = [master].into_iter().chain(tasks).chain(keeps).chain(kept);
+        // Whether agents may ask ilo to fill a saved login (#4098), shown while agents are on.
+        let sign_in = on.then(|| {
+            use agents::signing;
+            let sign_in_on = agents.read(cx).sign_in_on();
+            let switch = {
+                let agents = agents.clone();
+                let set = move |on, cx: &mut App| {
+                    agents.update(cx, |agents, cx| agents.set_sign_in_on(on, cx))
+                };
+                self.toggle(
+                    "agent sign-in",
+                    signing::HEADING,
+                    sign_in_on,
+                    set,
+                    accent,
+                    cx,
+                )
+            };
+            Row {
+                div: sign_in_row(look, switch),
+                name: signing::HEADING.into(),
+                line: Some(signing::SWITCH_LINE.into()),
+                keys: None,
+                nested: false,
+            }
+        });
+        // The kept tasks' rows first, then this switch (Settings order, #4098).
+        let rows = [master]
+            .into_iter()
+            .chain(tasks)
+            .chain(keeps)
+            .chain(kept)
+            .chain(sign_in);
         let mut blocks = vec![Block::Rows(rows.collect())];
         if tasks_on {
             blocks.push(Block::Heading("Your assistant".into()));
@@ -5648,6 +5680,15 @@ fn line_row(
     frame()
         .child(text(look, name, line))
         .when(!controls.is_empty(), |row| row.child(end(controls)))
+}
+
+/// The switch that lets tasks be signed in with the user's saved logins (#4098), its name and its
+/// one line, with `switch`, the caller's stop_switch, whose click calls Agents::set_sign_in_on:
+/// one component, which Settings › Agents and first run's assistant step both draw.
+pub fn sign_in_row(look: &RowLook, switch: AnyElement) -> gpui::Div {
+    use agents::signing;
+    let line = signing::SWITCH_LINE.into();
+    line_row(look, signing::HEADING, Some(line), vec![switch])
 }
 
 /// A feature's row, or a thing's in a list: its glyph on its quiet plate before its name.

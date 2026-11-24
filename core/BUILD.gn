@@ -253,6 +253,21 @@ source_set("ad_block_list_check") {
   public_deps = [ "//base" ]
 }
 
+# Which saved logins and fields an agent's sign-in uses, and whether a page shows the password, apart
+# so browser_core_unittests tests the rules alone.
+source_set("agent_sign_in_rule") {
+  sources = [
+    "agent_sign_in_rule.cc",
+    "agent_sign_in_rule.h",
+  ]
+  deps = [
+    ":ax_text",
+    "//base",
+    "//net",
+    "//url",
+  ]
+}
+
 # Whether a pinned tab is at its pinned URL, apart so browser_core_unittests tests the rule alone.
 source_set("pinned_url") {
   sources = [
@@ -748,6 +763,8 @@ source_set("browser_core") {
     "agent_file_field.h",
     "agent_page.cc",
     "agent_page.h",
+    "agent_sign_in.cc",
+    "agent_sign_in.h",
     "agent_request.cc",
     "agent_request.h",
     "agent_session.cc",
@@ -937,6 +954,7 @@ source_set("browser_core") {
     ":focus_leaving_rule",
     ":overlay_lend",
     ":live_folder_rule",
+    ":agent_sign_in_rule",
     ":pinned_url",
     ":tab_follow_rule",
     ":tab_recent_rule",
@@ -1049,12 +1067,14 @@ source_set("browser_core") {
     "//chrome/browser/ui/views/overlay",
     "//chrome/common",
     "//chrome/common/profiler",
+    "//components/affiliations/core/browser:match_type",
     "//components/autofill/content/browser",
     "//components/autofill/core/browser",
     "//components/component_updater",
     "//components/content_settings/browser",
     "//components/content_settings/core/browser",
     "//components/crash/core/app",
+    "//components/device_reauth",
     "//components/crash/core/common",
     "//components/content_settings/core/common",
     "//components/download/content/public",
@@ -1081,6 +1101,7 @@ source_set("browser_core") {
     "//components/password_manager/content/browser",
     "//components/password_manager/core/browser",
     "//components/password_manager/core/browser:password_form",
+    "//components/password_manager/core/browser/form_parsing",
     "//components/password_manager/core/browser/import:importer",
     "//components/password_manager/core/browser/ui",
     "//components/password_manager/core/browser/ui:credential_ui_entry",
@@ -1283,6 +1304,7 @@ test("browser_core_unittests") {
     "live_folder_rule_unittest.cc",
     "mojo_once_for_testing.h",
     "native_ad_block_lists_unittest.cc",
+    "agent_sign_in_rule_unittest.cc",
     "pinned_url_unittest.cc",
     "saved_read_rule_unittest.cc",
     "saved_read_unittest.cc",
@@ -1354,6 +1376,7 @@ test("browser_core_unittests") {
     ":overlay_lend",
     ":live_folder_rule",
     ":native_ad_block_lists",
+    ":agent_sign_in_rule",
     ":pinned_url",
     ":saved_read",
     ":saved_read_rule",

@@ -45,6 +45,10 @@ bool HandBack(bc_id tab);
 
 bool IsHeld(bc_id tab);
 
+// What an agent's call on a tab the user holds hears, whenever the core finds it held.
+inline constexpr char kHeldRefusal[] =
+    "The user has this tab until they hand it back. Ask for it with ask_for_tab.";
+
 }  // namespace browser_core
 
 #endif  // BROWSER_CORE_AGENT_SESSION_H_

@@ -433,6 +433,7 @@ fn the_server_answers_what_needs_no_browser() {
             "run_steps",
             "upload",
             "hand_off",
+            "sign_in",
             "ask_for_tab",
             "pin_tab",
             "unpin_tab",

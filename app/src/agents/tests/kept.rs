@@ -721,3 +721,63 @@ fn an_assistants_words_never_make_a_line_of_ilos(cx: &mut TestAppContext) {
     });
     assert_eq!(run.ilo_lines(&agent, cx), []);
 }
+
+/// A saved login's account (#4098) is in nothing the task's assistant is handed: not the sign_in
+/// answer, an outline of the page after, the first message of the run a reply starts, which
+/// replays the conversation so far, or any file ilo wrote. Only the user's line has it.
+#[cfg(unix)]
+#[gpui::test]
+fn a_saved_logins_account_is_in_nothing_the_assistant_is_handed(cx: &mut TestAppContext) {
+    const ACCOUNT: &str = "made-up-account-4121@example.org";
+    let run = Run::new("account", cx);
+    (run.agents).update(cx, |agents, cx| {
+        agents.set_keeps_tasks(false, cx);
+        agents.set_sign_in_on(true, cx);
+    });
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    let space = run.browser.agent_space(&agent);
+    let tab = (40, space, "Sign in", "https://www.example.com/login");
+    run.browser.tabs.borrow_mut().push(tab);
+    let answer = call(&run.agents, &agent, "sign_in", json!({ "tab": 40 }), cx);
+    let request = (run.browser.saved_sign_ins.borrow().last())
+        .expect("asked of the core")
+        .2;
+    (run.agents).update(cx, |agents, cx| {
+        agents.signed_in(&agent, 40, "example.com", ACCOUNT.into(), cx);
+        let said = "ilo filled the login saved for this site and sent the form.".to_string();
+        agents.sign_in_done(request, true, true, said, None, cx);
+    });
+    let mut handed = vec![answer.recv().unwrap().text];
+    let drawn = (run.ilo_lines(&agent, cx).into_iter()).find_map(|kind| match kind {
+        IloKind::SignedIn {
+            with: ilo::SignedInWith::Saved(account),
+            ..
+        } => Some(account.drawn().to_string()),
+        _ => None,
+    });
+    assert_eq!(drawn.as_deref(), Some(ACCOUNT), "the user's line has it");
+    let outline = call(&run.agents, &agent, "snapshot", json!({ "tab": 40 }), cx);
+    handed.push(page_done(&run.agents, &run.browser, outline, shop_tree(), cx).text);
+
+    run.finish(&agent, cx);
+    // Its run gone, the reply starts another, which is given the conversation so far.
+    run.said(&agent, Out::Gone(String::new()), cx);
+    (run.agents).update(cx, |agents, cx| agents.reply(&agent, "And for Sunday?", cx));
+    let (args, second) = run.ran(2);
+    assert!(second.contains("And for Sunday?"), "the replay: {second}");
+    assert!(
+        second.contains("Find two seats to Lisbon"),
+        "the replay: {second}"
+    );
+    handed.push(second);
+    handed.extend(args);
+    // Everything the first run was sent, too.
+    handed.push(std::fs::read_to_string(beside(&run.program, "in.1")).unwrap());
+    for text in &handed {
+        assert!(!text.contains(ACCOUNT), "{text}");
+    }
+    for (path, text) in run.files() {
+        assert!(!text.contains(ACCOUNT), "{} has it", path.display());
+    }
+}

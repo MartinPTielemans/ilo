@@ -15,6 +15,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "browser_core/agent_page.h"
+#include "browser_core/agent_sign_in.h"
 #include "browser_core/arrange.h"
 #include "browser_core/ax_text.h"
 #include "browser_core/boosts.h"
@@ -522,8 +523,8 @@ void PagePoint::Hover(std::optional<Shown> shown) {
   const bool changed = (shown ? shown->node : 0) != (shown_ ? shown_->node : 0);
   shown_ = std::move(shown);
   if (changed) {
-    LOG(ERROR) << "browser: tab " << tab_ << " point over "
-               << (shown_ ? (shown_->kind.empty() ? "element" : shown_->kind) : "nothing");
+    // The tab id alone: an element's kind is a role the page names, as any text of its own.
+    LOG(ERROR) << "browser: tab " << tab_ << " point over " << (shown_ ? "element" : "nothing");
   }
   if (!Host().tab_point_hover) {
     return;
@@ -555,31 +556,50 @@ void PagePoint::Pick() {
   picked.kind = shown_->kind;
   picked.name = shown_->name;
   picked.box = shown_->box;
+  LOG(ERROR) << "browser: tab " << tab_ << " point picks element";
+  if (PageWithheld(tab_)) {
+    ReportWithheld(picked);
+    return;
+  }
   content::WebContents* contents = web_contents();
   picked.address = AddressOf(contents->GetPrimaryMainFrame()->GetLastCommittedURL());
   picked.title = base::UTF16ToUTF8(contents->GetTitle());
-  LOG(ERROR) << "browser: tab " << tab_ << " point picks "
-             << (picked.kind.empty() ? "element" : picked.kind);
-  // DOM and CSS on in this client, which reads the page and changes nothing in it; then the
-  // document's tree, for the element's tag, the path the selector names, and the id CSS asks its
-  // styles by. The page's own frame's alone: an element inside another frame goes without.
+  // DOM and CSS on in this client, which reads the page and changes nothing in it; then the page's
+  // one look, as an agent's call has (AgentPage::Freeze); then the document's tree, for the
+  // element's tag, the path the selector names, and the id CSS asks its styles by. The page's own
+  // frame's alone: an element inside another frame goes without.
   Send("DOM.enable", base::DictValue(),
        base::BindOnce(
            [](base::WeakPtr<PagePoint> point, Picked picked, const base::DictValue*) {
              if (!point) {
                return;
              }
-             point->Send(
-                 "CSS.enable", base::DictValue(),
-                 base::BindOnce(
-                     [](base::WeakPtr<PagePoint> point, Picked picked, const base::DictValue*) {
-                       if (!point) {
-                         return;
-                       }
-                       point->Send("DOM.getDocument", base::DictValue().Set("depth", -1),
-                                   base::BindOnce(&PagePoint::Document, point, std::move(picked)));
-                     },
-                     point, std::move(picked)));
+             point->Send("DOM.freezeWithheldValues", base::DictValue(),
+                         base::BindOnce(&PagePoint::Looked, point, std::move(picked)));
+           },
+           weak_factory_.GetWeakPtr(), std::move(picked)));
+}
+
+void PagePoint::Looked(Picked picked, const base::DictValue* result) {
+  if (!on_ || picked.turn != turn_) {
+    return;
+  }
+  // One that couldn't answer counts as showing one, as an agent's look counts it.
+  if (!result || result->FindBool("shows").value_or(true)) {
+    WithholdShownPage(*web_contents());
+  }
+  if (PageWithheld(tab_)) {
+    ReportWithheld(picked);
+    return;
+  }
+  Send("CSS.enable", base::DictValue(),
+       base::BindOnce(
+           [](base::WeakPtr<PagePoint> point, Picked picked, const base::DictValue*) {
+             if (!point) {
+               return;
+             }
+             point->Send("DOM.getDocument", base::DictValue().Set("depth", -1),
+                         base::BindOnce(&PagePoint::Document, point, std::move(picked)));
            },
            weak_factory_.GetWeakPtr(), std::move(picked)));
 }
@@ -710,9 +730,17 @@ void PagePoint::Encoded(Picked picked, std::optional<std::vector<uint8_t>> png) 
   Report(picked);
 }
 
+void PagePoint::ReportWithheld(const Picked& picked) {
+  picking_ = false;
+  Picked bare;
+  bare.turn = picked.turn;
+  bare.box = picked.box;
+  bare.withheld = true;
+  Report(bare);
+}
+
 void PagePoint::Report(const Picked& picked) {
-  LOG(ERROR) << "browser: tab " << tab_ << " point picked "
-             << (picked.kind.empty() ? "element" : picked.kind)
+  LOG(ERROR) << "browser: tab " << tab_ << " point picked element"
              << (picked.withheld ? " withheld" : "") << (picked.png.empty() ? " no picture" : "");
   if (!Host().tab_point_picked) {
     return;

@@ -1809,6 +1809,50 @@ open(sys.argv[1], "wb").write(base64.b64decode(content["data"]))' "$out/agent-ty
   ../tools/window-screenshot.sh "$pid" "$out/agent-pointer.png" || fail "no window to capture"
   await_log '^browser: agent pointer gone$' "the agent's pointer didn't go"
 
+  # A page that may show a withheld field's value again commits withheld: sent from the user's
+  # hold, it reads withheld after Hand Back, its address too. The control's page reads whole, with
+  # its address.
+  for form in with without; do
+    case $form in with) field='name=pass type=password' ;; without) field='name=word' ;; esac
+    printf '%s' "<script src=\"painted.js\"></script>
+<form action=sent-$form.html><input $field style=\"position:fixed;inset:0;width:100%;height:100%\"></form>
+<script>painted(() => document.title = 'send $form');</script>" > "$out/site/send-$form.html"
+    printf '%s' "<script src=\"painted.js\"></script><p>Sent $form</p>
+<script>painted(() => document.title = 'sent $form');</script>" > "$out/site/sent-$form.html"
+  done
+  send_form() { # with or without, what the user types in its field
+    call navigate "{\"tab\":$agent_tab,\"url\":\"localhost:$port/send-$1.html\"}" > /dev/null
+    await_log "^browser: title $agent_tab send $1\$" "the form $1 didn't load in the agent's tab"
+    await_log "^browser: page $agent_tab back [0-9]* forward 0 loading 0 http://localhost:$port/send-$1\\.html\$" \
+      "the form $1 didn't finish loading"
+    presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+    send click $page_point
+    send type "$2"
+    send key return
+    expect "^browser: title $agent_tab sent $1\$" "Enter in the form $1 didn't send it"
+    hand_back_pressed "$presses"
+    sent_read=$(call read_page "{\"tab\":$agent_tab}")
+    sent_line=$(call list_tabs '{}' | grep "^. $agent_tab  " || true)
+  }
+  send_form with 'G3t-s3nt-pw'
+  case "$sent_read" in
+    "error: ilo won't give you this tab's page"*) ;;
+    *) fail "a page that may show a withheld field's value again didn't commit withheld: $sent_read" ;;
+  esac
+  case "$sent_line" in
+    *sent-with* | *G3t-s3nt-pw*)
+      fail "a page that may show a withheld field's value again listed its address: $sent_line" ;;
+  esac
+  send_form without 'N0-pass-w0rd'
+  case "$sent_read" in
+    *"Sent without"*) ;;
+    *) fail "a page that shows no withheld field's value didn't read whole: $sent_read" ;;
+  esac
+  case "$sent_line" in
+    *"sent-without.html?word=N0-pass-w0rd"*) ;;
+    *) fail "a page that shows no withheld field's value didn't list its address: $sent_line" ;;
+  esac
+
   # A page's frames are part of it: the outline has what's in a frame of the page's site and in
   # one of another, which Chromium puts in a process of its own, and the agent acts in both. A
   # password field in a frame is as off limits as one in the page. The page names itself once the
@@ -2895,6 +2939,143 @@ PY
   [ "$typed_red" -eq 0 ] ||
     fail "the agent's picture showed the user's typing, which it may not: $typed_red red pixels"
   call close_tab "{\"tab\":$fields_tab}" > /dev/null
+
+  # withheld value shown again: a withheld field's value reads withheld wherever the page shows
+  # it again.
+  withheld_refusal="error: ilo won't give you this tab's page: it may show what a password field on it held. Go to another page in this tab, or work in your other tabs."
+  page_of() { # name, title, body
+    printf '%s' "<!doctype html><meta charset=utf-8><title>loading</title>
+<script src=painted.js></script>
+$3
+<script>painted(() => document.title = '$2');</script>" > "$out/site/$1.html"
+  }
+  page_of shown-again 'shown again' "<input aria-label=First type=password value='Pl4nt-s3cret 1/x'>
+<p>Your password is Pl4nt-s3cret 1/x</p>"
+  page_of shown-second 'shown second' "<input aria-label=First type=password value='S3cond-pl4nted'>
+<ul><li>Kept: F1rst-pl4nted<li>Kept: S3cond-pl4nted</ul>"
+  page_of not-shown 'not shown' "<input aria-label=First type=password value='Typ3d-by-agent'>
+<textarea aria-label=Echo oninput=\"echo.textContent = 'Echo: ' + this.value\"></textarea>
+<p id=echo>Echo:</p>"
+  page_of shown-later 'shown later' "<input aria-label=First type=password value='L4ter-c0py'>
+<button onclick=\"later.textContent = 'Later: ' + document.querySelector('[aria-label=First]').value\">Show</button>
+<p id=later>Later:</p>"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/agent.html\"}")
+  shown_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$shown_tab" ] || fail "withheld value shown again: open_tab answered: $opened"
+  go_shown() { # page, title
+    went=$(call navigate "{\"tab\":$shown_tab,\"url\":\"127.0.0.1:$port/$1.html\"}")
+    await_log "^browser: title $shown_tab $2\$" "withheld value shown again: $1 didn't paint"
+  }
+  go_shown shown-again 'shown again'
+  for tool in read_page snapshot read_page screenshot; do
+    answer=$(call "$tool" "{\"tab\":$shown_tab}")
+    [ "$answer" = "$withheld_refusal" ] ||
+      fail "withheld value shown again: step 1, $tool answered: $answer"
+  done
+  first_refusal=$answer
+  go_shown shown-second 'shown second'
+  answer=$(call read_page "{\"tab\":$shown_tab}")
+  [ "$answer" = "$first_refusal" ] ||
+    fail "withheld value shown again: step 2 answered: $answer"
+  go_shown not-shown 'not shown'
+  outline=$(call snapshot "{\"tab\":$shown_tab}")
+  case "$outline" in
+    error:*) fail "withheld value shown again: step 3 answered: $outline" ;;
+  esac
+  echo_ref=$(printf '%s\n' "$outline" | sed -n 's/.*- textbox "Echo" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+  [ -n "$echo_ref" ] || fail "withheld value shown again: step 3 had no ref for Echo: $outline"
+  call type "{\"tab\":$shown_tab,\"ref\":\"$echo_ref\",\"text\":\"Typ3d-by-agent\"}" > /dev/null
+  typed=$(call read_page "{\"tab\":$shown_tab}")
+  call type "{\"tab\":$shown_tab,\"ref\":\"$echo_ref\",\"text\":\"Other-w0rds-xy\"}" > /dev/null
+  other=$(call read_page "{\"tab\":$shown_tab}")
+  case "$typed" in
+    *"Echo: Typ3d-by-agent"*) ;;
+    *) fail "withheld value shown again: step 3 read: $typed" ;;
+  esac
+  [ "${typed//Typ3d-by-agent/TEXT}" = "${other//Other-w0rds-xy/TEXT}" ] ||
+    fail "withheld value shown again: step 3 read two ways: $typed // $other"
+  go_shown shown-later 'shown later'
+  answer=$(call read_page "{\"tab\":$shown_tab}")
+  case "$answer" in
+    error:* | *L4ter-c0py*) fail "withheld value shown again: step 4 answered: $answer" ;;
+  esac
+  outline=$(call snapshot "{\"tab\":$shown_tab}")
+  show_ref=$(printf '%s\n' "$outline" | sed -n 's/.*- button "Show" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+  call click "{\"tab\":$shown_tab,\"ref\":\"$show_ref\"}" > /dev/null
+  answer=$(call read_page "{\"tab\":$shown_tab}")
+  case "$answer" in
+    *"Later: L4ter-c0py"*) ;;
+    *) fail "withheld value shown again: step 4 read: $answer" ;;
+  esac
+  page_of held-again 'held again' "<input aria-label=First type=password value='Ag4in-held-x'>
+<button onclick=\"again()\">Show</button>
+<p id=held>Again:</p>
+<script>
+function again() {
+  const first = document.querySelector('[aria-label=First]');
+  const value = first.value;
+  first.value = 'Other-v4lue-y';
+  first.value = value;
+  const second = document.createElement('input');
+  second.type = 'password';
+  second.setAttribute('aria-label', 'Second');
+  second.value = value;
+  first.after(second);
+  held.textContent = 'Again: ' + value;
+}
+</script>"
+  go_shown held-again 'held again'
+  answer=$(call read_page "{\"tab\":$shown_tab}")
+  case "$answer" in
+    error:* | *Ag4in-held-x*) fail "withheld value shown again: step 6 answered: $answer" ;;
+  esac
+  outline=$(call snapshot "{\"tab\":$shown_tab}")
+  show_ref=$(printf '%s\n' "$outline" | sed -n 's/.*- button "Show" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+  call click "{\"tab\":$shown_tab,\"ref\":\"$show_ref\"}" > /dev/null
+  answer=$(call read_page "{\"tab\":$shown_tab}")
+  case "$answer" in
+    *"Again: Ag4in-held-x"*) ;;
+    *) fail "withheld value shown again: step 6 read: $answer" ;;
+  esac
+  # Step 7's frame is from another site, so it has a renderer and a session of its own. Asked,
+  # it says on a channel of its own until when it'll be busy, then is; the page's title says the
+  # word came while it was (a frame's postMessage comes only once it's free). The read starts then,
+  # and the page removes the frame 3 s into its busy time: the read's text saying the frame left
+  # shows the read's look was out across the frame's session ending.
+  printf '%s' "<!doctype html><meta charset=utf-8><title>Frame</title><p>In the frame</p>
+<script>addEventListener('message', (event) => {
+  const until = Date.now() + 5000;
+  event.ports[0].postMessage(until);
+  while (Date.now() < until) {}
+});</script>" > "$out/site/frame-busy.html"
+  printf '%s' "<!doctype html><meta charset=utf-8><title>loading</title><p id=state>Frame page</p>
+<iframe src=\"http://localhost:$port/frame-busy.html\"></iframe>
+<script>const frame = document.querySelector('iframe');
+frame.addEventListener('load', () => setTimeout(() => {
+  const channel = new MessageChannel();
+  channel.port1.onmessage = (event) => {
+    document.title = Date.now() < event.data - 4000 ? 'frame busy' : 'frame free';
+    setTimeout(() => {
+      document.title = 'frame left';
+      state.textContent = 'Frame page, its frame left';
+      frame.remove();
+    }, 3000);
+  };
+  frame.contentWindow.postMessage('ask', '*', [channel.port2]);
+}, 4000));</script>" > "$out/site/frame-gone.html"
+  go_shown frame-gone 'frame \(busy\|free\)'
+  grep -q "^browser: title $shown_tab frame busy\$" "$log" ||
+    fail "withheld value shown again: step 7's frame wasn't busy when its word came"
+  grep -q "^browser: title $shown_tab frame left\$" "$log" &&
+    fail "withheld value shown again: step 7's frame left before the read"
+  answer=$(call read_page "{\"tab\":$shown_tab}")
+  case "$answer" in
+    *"Frame page, its frame left"*) ;;
+    *"Frame page"*)
+      fail "withheld value shown again: step 7's read didn't wait for the busy frame: $answer" ;;
+    *) fail "withheld value shown again: step 7 read: $answer" ;;
+  esac
+  call close_tab "{\"tab\":$shown_tab}" > /dev/null
 
   # It opens a page in its Space, clicks its link, scrolls a long page and takes a screenshot.
   opened=$(call open_tab "{\"url\":\"localhost:$port/agent.html\"}")

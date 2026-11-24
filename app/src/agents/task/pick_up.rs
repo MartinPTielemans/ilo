@@ -611,6 +611,7 @@ impl Task {
             started: at,
             // Library › Agents has its receipt from the run it ended in.
             kept: Some(at),
+            filled: Vec::new(),
             orders: 0,
             sent: 0,
             messages: Vec::new(),

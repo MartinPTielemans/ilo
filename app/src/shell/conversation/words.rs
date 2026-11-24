@@ -27,7 +27,10 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         IloKind::Stopped { at, .. } => (format!("stopped {agent} at"), Some(at.to_string())),
         IloKind::Yours { .. } => ("handed this step to you".into(), None),
         IloKind::TabBack { .. } => (format!("· {agent} needs this tab back"), None),
-        IloKind::SignedIn { site, .. } => ("signed in to".into(), Some(site.to_string())),
+        IloKind::SignedIn { site, .. } => (
+            "filled and sent the sign-in form on".into(),
+            Some(site.to_string()),
+        ),
         IloKind::TierChanged { to, .. } => (format!("· You set this task to {}", to.label()), None),
         // The helpers' limit (#4102), by the app's own count, each a whole sentence.
         IloKind::Helpers { deep, .. } => (
@@ -89,8 +92,9 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
     match kind {
         IloKind::Stopped { why, tier, .. } => Some(tier::why_line(*why, *tier, at)),
         IloKind::SignedIn { with, .. } => Some(match with {
-            SignedInWith::Saved(account) => format!("With your saved login, {account}."),
-            SignedInWith::Extension(name) => format!("With {name}."),
+            // Labels, without a full stop.
+            SignedInWith::Saved(account) => format!("With your saved login, {}", account.drawn()),
+            SignedInWith::Extension(name) => format!("With {name}"),
         }),
         IloKind::Yours { .. } | IloKind::TabBack { .. } | IloKind::TierChanged { .. } => None,
         IloKind::Helpers { .. } => None,

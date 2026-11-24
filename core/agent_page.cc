@@ -12,11 +12,13 @@
 #include "base/base64.h"
 #include "base/containers/adapters.h"
 #include "base/containers/span.h"
+#include "base/barrier_callback.h"
 #include "base/functional/bind.h"
 #include "base/i18n/case_conversion.h"
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
+#include "base/no_destructor.h"
 #include "base/strings/strcat.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/strings/string_number_conversions.h"
@@ -29,6 +31,9 @@
 #include "base/time/time.h"
 #include "browser_core/agent_file_field.h"
 #include "browser_core/agent_job_voter.h"
+#include "browser_core/agent_session.h"
+#include "browser_core/agent_sign_in.h"
+#include "browser_core/agent_sign_in_rule.h"
 #include "browser_core/agent_splash_rule.h"
 #include "browser_core/ax_text.h"
 #include "browser_core/host.h"
@@ -371,6 +376,14 @@ std::string ChoiceSelector(std::string_view kind, const std::optional<std::strin
 
 // A Fill's job, the user's, which no agent asks for.
 constexpr int kFill = -1;
+// An agent's sign-in's jobs, the core's own (agent_sign_in.h).
+constexpr int kFind = -2;
+constexpr int kSubmit = -3;
+constexpr int kRead = -4;
+constexpr int kStep = -5;
+constexpr int kCheckSubmitters = -6;
+// More than a sign-in page holds: a document with more is read as one sending a form elsewhere.
+constexpr size_t kMostSubmitters = 16;
 
 // What an agent hears of a field that left before the user's files could go in.
 constexpr char kFieldGone[] = "The element isn't on the page any more. Take a new snapshot.";
@@ -399,6 +412,12 @@ base::ScopedClosureRunner LiftWhileWorking(content::WebContents& contents) {
         }
       },
       page));
+}
+
+// Every tab's look-first mark, and the looks' numbers.
+LookFirstTabs& LookFirsts() {
+  static base::NoDestructor<LookFirstTabs> tabs;
+  return *tabs;
 }
 
 }  // namespace
@@ -637,11 +656,60 @@ void AgentPage::Fill(int64_t element,
   Next();
 }
 
+void AgentPage::WhenIdle(base::OnceClosure idle) {
+  if (job_ || !jobs_.empty()) {
+    idle_ = std::move(idle);
+    return;
+  }
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, std::move(idle));
+}
+
+void AgentPage::FindField(std::string selector, bool submit, base::OnceCallback<void(bool)> done) {
+  Job job{0, submit ? kSubmit : kFind, 0, std::move(selector)};
+  job.put = std::move(done);
+  jobs_.push_back(std::move(job));
+  Next();
+}
+
+void AgentPage::CheckSubmitters(base::OnceCallback<void(bool)> done) {
+  Job job{0, kCheckSubmitters, 0, std::string()};
+  job.put = std::move(done);
+  jobs_.push_back(std::move(job));
+  Next();
+}
+
+void AgentPage::ReadAll(Trees done) {
+  Job job{0, kRead, 0, std::string()};
+  job.trees = std::move(done);
+  job.put = base::DoNothing();
+  jobs_.push_back(std::move(job));
+  Next();
+}
+
+void AgentPage::Step(base::OnceCallback<void(base::OnceClosure done)> step) {
+  Job job{0, kStep, 0, std::string()};
+  job.step = std::move(step);
+  job.put = base::DoNothing();
+  jobs_.push_back(std::move(job));
+  Next();
+}
+
+void AgentPage::Forget() {
+  typed_.clear();
+}
+
 // static
 void AgentPage::SessionEnded(bc_id tab) {
   content::WebContents* contents = Tab::FromId(tab);
   if (AgentPage* page = contents ? AgentPage::FromWebContents(contents) : nullptr) {
+    page->LookUnheard();
     page->LetGo();
+  }
+  // A tab the user holds from an agent keeps what its password fields hold while they have it, as
+  // the agent's next look after the hand back looks for it there.
+  const Space* space = Space::Holding(tab);
+  if (contents && IsHeld(tab) && space && space->agent()) {
+    Watch(contents);
   }
 }
 
@@ -711,6 +779,36 @@ void AgentPage::Run() {
     FailNotWebPage();
     return;
   }
+  // An agent's call looks once at what a password field held before anything is read or done; the
+  // core's own steps in a sign-in, which no agent asks for, don't.
+  if (action < 0) {
+    RunLooked(/*withheld=*/false);
+    return;
+  }
+  const uint64_t request = job_->request;
+  Freeze(base::BindOnce(
+      [](base::WeakPtr<AgentPage> page, uint64_t request, bool withheld) {
+        if (page && page->job_ && page->job_->request == request) {
+          page->RunLooked(withheld);
+        }
+      },
+      weak_factory_.GetWeakPtr(), request));
+}
+
+void AgentPage::RunLooked(bool withheld) {
+  const int action = job_->action;
+  const bool history = action == BC_AGENT_PAGE_BACK || action == BC_AGENT_PAGE_FORWARD;
+  // The user may have taken the tab since the agent's call was let in. The core's own steps, a
+  // sign-in's and the user's files for a file field, aren't the agent's.
+  if (action >= 0 && IsHeld(tab_)) {
+    Fail(kHeldRefusal, BC_AGENT_FAILURE_HELD);
+    return;
+  }
+  // Taking the tab to another page is all an agent may do there, as api.cc's bc_agent_may_act says.
+  if (withheld && !history) {
+    Fail(kWithheldPageRefusal, BC_AGENT_FAILURE_WITHHELD_PAGE);
+    return;
+  }
   // An element in a frame that's gone, or now holds what isn't a web page's, is off limits.
   const int slot = SlotOfElement(job_->element);
   content::RenderFrameHost* frame = slot ? FrameOf(slot) : nullptr;
@@ -777,6 +875,55 @@ void AgentPage::Run() {
       return;
     case kFill:
       FillField();
+      return;
+    case kFind:
+    case kSubmit:
+      Find(action == kSubmit);
+      return;
+    case kCheckSubmitters:
+      Submitters();
+      return;
+    case kRead: {
+      std::vector<Frame> frames = Frames();
+      std::vector<int> slots;
+      for (const Frame& frame : frames) {
+        slots.push_back(frame.slot);
+      }
+      ReadTrees(0, std::move(frames), 0, {},
+                base::BindOnce(
+                    [](base::WeakPtr<AgentPage> page, std::vector<int> slots,
+                       std::optional<std::vector<base::ListValue>> trees) {
+                      if (!page || !page->job_) {
+                        return;
+                      }
+                      // A field holding just what the agent typed tells the look nothing.
+                      for (size_t each = 0; trees && each < trees->size(); ++each) {
+                        std::map<int, std::u16string> typed;
+                        for (const auto& [element, text] : page->typed_) {
+                          if (SlotOfElement(element) == slots[each]) {
+                            typed[NodeOfElement(element)] = text;
+                          }
+                        }
+                        (*trees)[each] = WithoutOwnTyping(std::move((*trees)[each]), typed);
+                      }
+                      // Posted, as what hears them may end the agent's session with the page.
+                      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+                          FROM_HERE,
+                          base::BindOnce(std::move(page->job_->trees), std::move(trees)));
+                      page->Answer(std::string(), /*error=*/false);
+                    },
+                    weak_factory_.GetWeakPtr(), std::move(slots)));
+      return;
+    }
+    case kStep:
+      std::move(job_->step)
+          .Run(base::BindOnce(
+              [](base::WeakPtr<AgentPage> page) {
+                if (page && page->job_ && page->job_->action == kStep) {
+                  page->Answer(std::string(), /*error=*/false);
+                }
+              },
+              weak_factory_.GetWeakPtr()));
       return;
   }
   Fail("There's no such action.");
@@ -977,6 +1124,11 @@ void AgentPage::Still(std::vector<base::ListValue> last) {
               return;
             }
             page->job_->busy |= !same || splash;
+            // A sign-in's Enter answers its caller once the page has settled, with no snapshot.
+            if (page->job_->action == kSubmit) {
+              page->Answer(std::string(), /*error=*/false);
+              return;
+            }
             page->Read(std::move(trees->front()));
           },
           weak_factory_.GetWeakPtr(), request, std::move(last)));
@@ -1983,8 +2135,119 @@ void AgentPage::Paint(gfx::Rect source,
           std::move(done)));
 }
 
+void AgentPage::Freeze(base::OnceCallback<void(bool withheld)> then) {
+  std::vector<int> slots;
+  for (size_t slot = 0; slot < targets_.size(); ++slot) {
+    if (!slot || !targets_[slot].session.empty()) {
+      slots.push_back(static_cast<int>(slot));
+    }
+  }
+  // Before the first Send, which attaches the main frame's session.
+  if (slots.empty()) {
+    slots.push_back(0);
+  }
+  // Counted before the first Send, which the limit counts for it.
+  const uint64_t look = LookFirsts().Started();
+  looks_[look] = std::move(then);
+  limit_.Looking(looks_.size());
+  auto answered = base::BarrierCallback<bool>(
+      slots.size(),
+      base::BindOnce(
+          [](base::WeakPtr<AgentPage> page, uint64_t look, std::vector<bool> shown) {
+            if (page) {
+              page->Looked(look, std::ranges::any_of(shown, std::identity()));
+            }
+          },
+          weak_factory_.GetWeakPtr(), look));
+  for (const int slot : slots) {
+    // A session that couldn't answer counts as showing one, as the sign-in's look counts what it
+    // couldn't read; but a frame's session that ended while asked had its document go, which
+    // shows nothing now (an ad frame a page removes). The page's own, slot 0, never counts so.
+    Send("DOM.freezeWithheldValues", base::DictValue(),
+         base::BindOnce(
+             [](base::WeakPtr<AgentPage> page, int slot, std::string session,
+                base::RepeatingCallback<void(bool)> answered, const base::DictValue* result) {
+               if (!result && slot && page &&
+                   (static_cast<size_t>(slot) >= page->targets_.size() ||
+                    page->targets_[slot].session != session)) {
+                 answered.Run(false);
+                 return;
+               }
+               answered.Run(!result || result->FindBool("shows").value_or(true));
+             },
+             weak_factory_.GetWeakPtr(), slot,
+             static_cast<size_t>(slot) < targets_.size() ? targets_[slot].session : std::string(),
+             answered),
+         slot);
+  }
+}
+
+void AgentPage::Looked(uint64_t look, bool shows) {
+  auto out = looks_.find(look);
+  // Answered already, unheard.
+  if (out == looks_.end()) {
+    return;
+  }
+  base::OnceCallback<void(bool)> then = std::move(out->second);
+  looks_.erase(out);
+  limit_.Looking(looks_.size());
+  LookFirsts().Answered(tab_, look);
+  if (shows) {
+    WithholdShownPage(GetWebContents());
+  }
+  std::move(then).Run(PageWithheld(tab_));
+}
+
+void AgentPage::LookUnheard() {
+  // The renderer may have looked, and closed what it looked for, with its answer lost: so it
+  // counts as a yes.
+  if (!looks_.empty()) {
+    WithholdShownPage(GetWebContents());
+    AnswerLooks();
+  }
+}
+
+void AgentPage::AnswerLooks() {
+  base::flat_map<uint64_t, base::OnceCallback<void(bool)>> looks = std::exchange(looks_, {});
+  limit_.Looking(0);
+  // Posted, as each may answer the app, which may be inside its own call into the core. A job's
+  // look hears it for a job that's been answered by then, and does nothing.
+  for (auto& [look, then] : looks) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(then), /*withheld=*/true));
+  }
+}
+
+// static
+void AgentPage::LookFirst(bc_id tab) {
+  LookFirsts().Mark(tab);
+}
+
+// static
+bool AgentPage::LooksFirst(bc_id tab) {
+  return LookFirsts().Marked(tab);
+}
+
+// static
+void AgentPage::TabClosed(bc_id tab) {
+  LookFirsts().Forget(tab);
+  ForgetWithheld(tab);
+}
+
+// static
+void AgentPage::Watch(content::WebContents* contents) {
+  if (!contents) {
+    return;
+  }
+  CreateForWebContents(contents);
+  AgentPage* page = FromWebContents(contents);
+  page->watching_ = true;
+  // Sending is what attaches, and DOM goes on with it.
+  page->Send("DOM.enable", base::DictValue(), base::DoNothing(), 0);
+}
+
 void AgentPage::Rest() {
-  if (!acted_ && !pictures_ && !job_ && jobs_.empty()) {
+  if (!acted_ && !watching_ && !pictures_ && !job_ && jobs_.empty() && looks_.empty()) {
     Detach();
   }
 }
@@ -3083,10 +3346,16 @@ void AgentPage::Answer(std::string text, bool error, bc_agent_failure failure) {
   // after (#1443).
   if (std::optional<GURL> app = std::exchange(app_link_, std::nullopt); app && !error) {
     const std::string opens = app_name_.empty() ? "an app" : base::UTF16ToUTF8(app_name_);
+    // A title withheld from agents, as after a sign-in whose page showed what it filled, isn't
+    // named.
+    const std::string stayed =
+        WithheldFromAgents(tab_)
+            ? std::string("The tab stayed on its page")
+            : base::StrCat({"The tab stayed on “", base::UTF16ToUTF8(GetWebContents().GetTitle()),
+                            "”"});
     text = base::StrCat({"That link opens ", opens, " (", app->GetScheme(),
-                         ":), outside the browser, and agents can't open apps. ",
-                         "The tab stayed on “", base::UTF16ToUTF8(GetWebContents().GetTitle()),
-                         "”. Ask the user, or use the page's web link if it has one."});
+                         ":), outside the browser, and agents can't open apps. ", stayed,
+                         ". Ask the user, or use the page's web link if it has one."});
     error = true;
   }
   app_name_.clear();
@@ -3118,6 +3387,9 @@ void AgentPage::Answer(std::string text, bool error, bc_agent_failure failure) {
         FROM_HERE, base::BindOnce(&Report, tab_, request, std::move(text), error, failure));
   }
   Next();
+  if (!job_ && idle_) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, std::move(idle_));
+  }
   if (!job_) {
     // A hidden page left drawing would keep its animations waking the browser while the agent
     // thinks or has gone quiet.
@@ -3136,16 +3408,25 @@ void AgentPage::EndWaiting(std::string why, std::optional<std::string> unstarted
   // answered would otherwise run into the job after this one. Dropped, a picture under way
   // answers that there's none.
   base::flat_map<int, std::pair<int, Reply>> owed = std::exchange(replies_, {});
+  // A look whose answer is dropped with them withholds the page (LookUnheard).
+  LookUnheard();
   // The jobs queued behind it would each send to a page that can't answer while its dialog is up,
   // and wait out the limit in turn, so they end now with their own answer, after this one's.
   std::deque<Job> queued = unstarted ? std::exchange(jobs_, {}) : std::deque<Job>();
-  Fail(std::move(why));
+  // A look with no job, a read's or a request's, has no job to answer.
+  if (job_) {
+    Fail(std::move(why));
+  }
   for (Job& job : queued) {
     Owe(job, *unstarted);
   }
 }
 
 void AgentPage::Owe(Job& job, const std::string& why) {
+  if (job.trees) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(job.trees), std::nullopt));
+  }
   if (job.put) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(job.put), false));
@@ -3210,12 +3491,18 @@ void AgentPage::LetGo() {
   for (Job& job : owed) {
     Owe(job, "The agent's session with the tab ended.");
   }
+  // A look still out as the tab closes: its read or request is answered as a withheld page's.
+  AnswerLooks();
+  if (idle_) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, std::move(idle_));
+  }
   // A file the user is choosing for one of its fields goes nowhere, and its dialog closes.
   AgentFileField::TabEnded(tab_);
   weak_factory_.InvalidateWeakPtrs();
   // What the agent typed is kept only to compare with while its session lasts.
   typed_.clear();
   acted_ = false;
+  watching_ = false;
   pictures_ = 0;
   wheel_.reset();
   wait_.Stop();
@@ -3270,6 +3557,14 @@ void AgentPage::Send(const char* method, base::DictValue params, Reply reply, in
     agent_host_ = std::move(host);
     targets_.assign(1, Target());
     AutoAttach(0);
+    // DOM on, in each frame's session as it comes, is what has the renderer keep what a password
+    // field holds for Freeze (chromium-agent-withheld-values.patch). DevTools turns it on again in
+    // a frame's new renderer before its page runs.
+    Send("DOM.enable", base::DictValue(), base::DoNothing(), 0);
+    // No page is prerendered from it: one would run before DOM is on in its sessions. Chromium
+    // refuses that already for a session of this kind; this holds for any.
+    Send("Page.setPrerenderingAllowed", base::DictValue().Set("isAllowed", false),
+         base::DoNothing(), 0);
   }
   if (slot < 0 || static_cast<size_t>(slot) >= targets_.size() ||
       (slot && targets_[slot].session.empty())) {
@@ -3376,6 +3671,7 @@ void AgentPage::Attached(const std::string& session, const base::DictValue& even
                          return;
                        }
                        page->AutoAttach(slot);
+                       page->Send("DOM.enable", base::DictValue(), base::DoNothing(), slot);
                        if (page->listening_) {
                          page->Send("Network.enable", Hearing(), base::DoNothing(), slot);
                        }
@@ -3418,7 +3714,19 @@ void AgentPage::DidStopLoading() {
   }
 }
 
+void AgentPage::DidStartNavigation(content::NavigationHandle* navigation) {
+  // A navigation that may show a withheld field's value again commits withheld, as a look that
+  // found the value would (SendsPasswordForm).
+  if (navigation->IsInPrimaryMainFrame() && !navigation->IsPost() && IsHeld(tab_) &&
+      SendsPasswordForm(*navigation)) {
+    sends_password_.insert(navigation->GetNavigationId());
+  }
+}
+
 void AgentPage::DidFinishNavigation(content::NavigationHandle* navigation) {
+  if (sends_password_.erase(navigation->GetNavigationId()) && navigation->HasCommitted()) {
+    WithholdShownPage(GetWebContents());
+  }
   // A new document's fields hold nothing the agent typed.
   if (navigation->IsInPrimaryMainFrame() && navigation->HasCommitted() &&
       !navigation->IsSameDocument()) {
@@ -3494,6 +3802,144 @@ void AgentPage::FileField() {
             page->Answer(answer.value_or(std::string()), !answer);
           },
           weak_factory_.GetWeakPtr()));
+}
+
+void AgentPage::Find(bool submit) {
+  Send("DOM.getDocument", base::DictValue().Set("depth", 0),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, bool submit, const base::DictValue* result) {
+             if (!page || !page->job_) {
+               return;
+             }
+             const std::optional<int> root =
+                 result ? result->FindIntByDottedPath("root.nodeId") : std::nullopt;
+             if (!root) {
+               page->Fail(std::string());
+               return;
+             }
+             // Made before the call, whose reply binds the job's: see FindChoice.
+             base::DictValue query =
+                 base::DictValue().Set("nodeId", *root).Set("selector", page->job_->text);
+             page->Send(
+                 "DOM.querySelectorAll", std::move(query),
+                 base::BindOnce(
+                     [](base::WeakPtr<AgentPage> page, bool submit, const base::DictValue* result) {
+                       if (!page || !page->job_) {
+                         return;
+                       }
+                       // querySelectorAll never looks into a shadow root, so a field there is
+                       // none, as the rule wants.
+                       const base::ListValue* found = result ? result->FindList("nodeIds") : nullptr;
+                       if (!found || found->size() != 1 || !found->front().is_int()) {
+                         page->Fail(std::string());
+                         return;
+                       }
+                       if (!submit) {
+                         page->Answer(std::string(), /*error=*/false);
+                         return;
+                       }
+                       page->Listen(base::BindOnce(&AgentPage::PressEnterIn, page,
+                                                   found->front().GetInt()));
+                     },
+                     page, submit));
+           },
+           weak_factory_.GetWeakPtr(), submit));
+}
+
+void AgentPage::Submitters() {
+  Send("DOM.getDocument", base::DictValue().Set("depth", 0),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, const base::DictValue* result) {
+             if (!page || !page->job_) {
+               return;
+             }
+             const std::optional<int> root =
+                 result ? result->FindIntByDottedPath("root.nodeId") : std::nullopt;
+             if (!root) {
+               page->Fail(std::string());
+               return;
+             }
+             page->Send(
+                 "DOM.querySelectorAll",
+                 base::DictValue().Set("nodeId", *root).Set("selector", kSubmitters),
+                 base::BindOnce(
+                     [](base::WeakPtr<AgentPage> page, const base::DictValue* result) {
+                       if (!page || !page->job_) {
+                         return;
+                       }
+                       const base::ListValue* found =
+                           result ? result->FindList("nodeIds") : nullptr;
+                       if (!found || found->size() > kMostSubmitters) {
+                         page->Fail(std::string());
+                         return;
+                       }
+                       std::vector<int> nodes;
+                       for (const base::Value& each : *found) {
+                         if (!each.is_int()) {
+                           page->Fail(std::string());
+                           return;
+                         }
+                         nodes.push_back(each.GetInt());
+                       }
+                       page->SubmitterAttributes(std::move(nodes), 0);
+                     },
+                     page));
+           },
+           weak_factory_.GetWeakPtr()));
+}
+
+void AgentPage::SubmitterAttributes(std::vector<int> nodes, size_t next) {
+  if (next == nodes.size()) {
+    Answer(std::string(), /*error=*/false);
+    return;
+  }
+  const int node = nodes[next];
+  Send("DOM.getAttributes", base::DictValue().Set("nodeId", node),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, std::vector<int> nodes, size_t next,
+              const base::DictValue* result) {
+             if (!page || !page->job_) {
+               return;
+             }
+             // Name, value, name, value, as DevTools gives them.
+             const base::ListValue* flat = result ? result->FindList("attributes") : nullptr;
+             if (!flat || flat->size() % 2) {
+               page->Fail(std::string());
+               return;
+             }
+             std::vector<std::pair<std::string, std::string>> attributes;
+             for (size_t i = 0; i < flat->size(); i += 2) {
+               const std::string* name = (*flat)[i].GetIfString();
+               const std::string* value = (*flat)[i + 1].GetIfString();
+               if (!name || !value) {
+                 page->Fail(std::string());
+                 return;
+               }
+               attributes.emplace_back(*name, *value);
+             }
+             if (SendsElsewhere(attributes)) {
+               page->Fail(std::string());
+               return;
+             }
+             page->SubmitterAttributes(std::move(nodes), next + 1);
+           },
+           weak_factory_.GetWeakPtr(), std::move(nodes), next));
+}
+
+void AgentPage::PressEnterIn(int node) {
+  Send("DOM.focus", base::DictValue().Set("nodeId", node),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, const base::DictValue* focused) {
+             if (!page || !page->job_) {
+               return;
+             }
+             if (!focused) {
+               page->Fail(std::string());
+               return;
+             }
+             page->PressKey("Enter", base::BindOnce(&AgentPage::Settle, page));
+           },
+           weak_factory_.GetWeakPtr()));
 }
 
 void AgentPage::FillField() {

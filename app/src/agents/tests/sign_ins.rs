@@ -198,12 +198,16 @@ fn nothing_a_sign_in_carries_is_saved(cx: &mut TestAppContext) {
     std::fs::remove_dir_all(folder).unwrap();
 }
 
-/// No agent can start, read or end a sign-in: the MCP server has no tool for it, and nothing an
-/// agent's call runs reaches the Agents' sign-in.
+/// No agent can start, read or end a CLI's sign-in: the MCP server has no tool for it, and nothing
+/// an agent's call runs reaches the Agents' sign-in. Its sign_in is a page's, with a login the user
+/// saved (#4098), which the core fills (signing.rs) and which reaches no CLI's.
 #[test]
 fn no_agent_reaches_a_sign_in() {
     for agent in ["claude-code", "codex", "task-1"] {
         for name in crate::agents::tools::names(agent) {
+            if name == "sign_in" {
+                continue;
+            }
             for word in ["login", "logout", "sign_in", "sign_out", "signin", "auth"] {
                 assert!(!name.contains(word), "{agent} has the tool {name}");
             }
@@ -217,6 +221,7 @@ fn no_agent_reaches_a_sign_in() {
         ("command.rs", include_str!("../command.rs")),
         ("cli.rs", include_str!("../cli.rs")),
         ("task.rs", include_str!("../task.rs")),
+        ("signing.rs", include_str!("../signing.rs")),
     ];
     for (file, source) in reached {
         // A card's Sign in to … comes only from the user's press, through the shell.

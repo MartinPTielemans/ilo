@@ -12,7 +12,7 @@ use std::{
 };
 
 use browser::account::{self, Account};
-use browser::agents::task::ilo::{IloKind, IloLine, SignedInWith};
+use browser::agents::task::ilo::{self, IloKind, IloLine, SignedInWith};
 use browser::agents::task::{
     Card as TaskCard, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep, Word,
 };

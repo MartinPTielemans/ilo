@@ -350,6 +350,9 @@ pub struct Task {
     pub messages: Vec<Message>,
     /// Its steps, oldest first.
     pub trace: Vec<Traced>,
+    /// The sign-ins ilo did for it, each by its call's place in `trace`, with the account it
+    /// filled, for its ilo line alone: in memory, never kept in a file (signing.rs).
+    pub(super) filled: Vec<(usize, ilo::IloKind)>,
     pub dismissed: bool,
     /// When it last left the foot for the Archive, which lists it by then. Kept in memory only.
     pub left: Option<SystemTime>,
@@ -872,6 +875,7 @@ impl Agents {
         helpers::lines(task, &mut lines);
         // ilo's own lines of a task that can be replied to after it ended (#4105).
         self.kept_lines(task, &mut lines);
+        self.filled_lines(task, &mut lines);
         let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
             .map(|tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
             .collect();
@@ -1330,6 +1334,7 @@ impl Agents {
             end_entry: 0,
             started: SystemTime::now(),
             kept: None,
+            filled: Vec::new(),
             orders: 0,
             sent: 0,
             messages: Vec::new(),
@@ -2244,7 +2249,7 @@ impl Agents {
     }
 
     /// The card whose trace `agent`'s `call` goes in: its task's, or the session it came in.
-    fn tracer(&self, agent: &str, call: u64) -> Option<String> {
+    pub(super) fn tracer(&self, agent: &str, call: u64) -> Option<String> {
         let task = self.task(agent).or_else(|| self.session_of(agent, call))?;
         Some(task.agent.clone())
     }
@@ -2481,6 +2486,7 @@ impl Agents {
             end_entry: 0,
             started: SystemTime::now(),
             kept: None,
+            filled: Vec::new(),
             orders: 0,
             sent: 0,
             messages: Vec::new(),

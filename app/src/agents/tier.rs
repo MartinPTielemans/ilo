@@ -439,3 +439,12 @@ mod tests {
         assert!(changed_turn(Tier::Full, Tier::Look).contains("will be refused"));
     }
 }
+
+/// What signing in for the agent with a saved login is (#4098), on a bank's site or not, which a
+/// tier allows or refuses as its row says.
+pub fn sign_in_why(bank: bool) -> Why {
+    match bank {
+        true => Why::SignInBank,
+        false => Why::SignIn,
+    }
+}

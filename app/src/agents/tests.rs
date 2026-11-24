@@ -17,6 +17,10 @@ use super::*;
 /// The core's refusal of a tab the user holds.
 const HELD: &str = "The user has this tab until they hand it back. Ask for it with ask_for_tab.";
 
+/// The core's refusal of an act on a page ilo withholds (kWithheldPageRefusal).
+const WITHHELD_REFUSAL: &str = "ilo won't give you this tab's page: it may show what a password \
+     field on it held. Go to another page in this tab, or work in your other tabs.";
+
 /// The user's Space 1 with the tab 10, on Wikipedia, and Claude Code's Space 2 with the tab 20, on
 /// example.com, once it has one.
 #[derive(Default)]
@@ -35,8 +39,10 @@ struct Made {
     cant_go: RefCell<bool>,
     /// The question each window shows, as the agents last told them.
     asked: RefCell<Option<Question>>,
-    /// The tabs the user holds from agents, as the core keeps them.
+    /// The tabs the user holds from agents, as the core keeps them, and each hand-back the core
+    /// was told of (bc_tab_hand_back), which forgives a failed sign-in at the tab's origin.
     held: RefCell<HashSet<u64>>,
+    handed_back: RefCell<Vec<u64>>,
     /// Each action the agents asked the core whether they may take (bc_agent_may_act).
     checked: RefCell<Vec<String>>,
     /// The app, which the core asks about the key press_key presses from inside bc_agent_page.
@@ -73,6 +79,10 @@ struct Made {
     sign_in_pages: RefCell<Vec<(String, u64)>>,
     sign_in_closed: RefCell<Vec<(u64, u64)>>,
     no_sign_in_page: std::cell::Cell<bool>,
+    /// The tabs whose title and address the core withholds from agents, and each sign-in the
+    /// agents asked of the core: the agent, the tab and the request.
+    withheld: RefCell<HashSet<u64>>,
+    saved_sign_ins: RefCell<Vec<(String, u64, u64)>>,
     /// The user's Spaces outside the profile the others are in, "Default", each with the name of
     /// its profile's folder.
     profiles: RefCell<Vec<(u64, &'static str)>>,
@@ -127,7 +137,7 @@ impl Browser for Made {
         }
     }
 
-    fn tab(&self, tab: u64, _: &App) -> TabInfo {
+    fn shown(&self, tab: u64, _: &App) -> TabInfo {
         let tabs = self.tabs.borrow();
         let found = tabs.iter().find(|each| each.0 == tab);
         found.map_or(
@@ -170,6 +180,12 @@ impl Browser for Made {
             .iter()
             .any(|each| each.0 == tab && each.1 == space && space != 0)
         {
+            // As the core: on a withheld page, only taking the tab elsewhere or closing it.
+            true if self.withheld.borrow().contains(&tab)
+                && !["back", "close_tab", "forward", "navigate"].contains(&action) =>
+            {
+                Err((Failure::WithheldPage, words(WITHHELD_REFUSAL)))
+            }
             true => Ok(()),
             false => Err((
                 Failure::NotItsSpace,
@@ -241,7 +257,20 @@ impl Browser for Made {
     }
 
     fn hand_back(&self, tab: u64) -> bool {
+        self.handed_back.borrow_mut().push(tab);
         self.held.borrow_mut().remove(&tab)
+    }
+
+    fn withheld(&self, tab: u64) -> bool {
+        self.withheld.borrow().contains(&tab)
+    }
+
+    fn held(&self, tab: u64) -> bool {
+        self.held.borrow().contains(&tab)
+    }
+
+    fn sign_in(&self, agent: &str, tab: u64, request: u64) {
+        (self.saved_sign_ins.borrow_mut()).push((agent.into(), tab, request));
     }
 
     // As the core does, without a dialog.
@@ -2564,8 +2593,9 @@ fn what_an_agent_may_not_do_is_refused_and_logged(cx: &mut TestAppContext) {
     assert!(browser.navigated.borrow().is_empty());
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "navigate");
 
-    // The account is the user's alone: its secret reads their passwords.
-    for tool in ["sign_in", "recovery_words", "sync"] {
+    // The account is the user's alone: its secret reads their passwords. Signing a page in with a
+    // saved login is the browser's (sign_in), and the agent never has the login.
+    for tool in ["recovery_words", "sync"] {
         let answer = call(&agents, "claude-code", tool, json!({}), cx);
         assert_eq!(
             answer.recv().unwrap(),
@@ -2938,15 +2968,16 @@ fn every_tool_and_step_is_in_one_class() {
         "wait",
         "check",
     ];
-    // Acts on a page: refused below Work by ACTS, or by its own Why, as a request's method is. A
-    // run's steps are each judged as their tool is.
-    const ACTS_ON: [&str; 6] = [
+    // Acts on a page: refused below Work by ACTS, or by its own Why, as a request's method is and
+    // a sign-in is (Why::SignIn). A run's steps are each judged as their tool is.
+    const ACTS_ON: [&str; 7] = [
         "click",
         "type",
         "select",
         "press_key",
         "request",
         "run_steps",
+        "sign_in",
     ];
     // Arranges the agent's own tabs. A close that would lose what a page holds is judged Discard.
     const ARRANGES: [&str; 8] = [
@@ -3328,6 +3359,24 @@ fn a_handoff_not_handed_back_answers_after_15_minutes(cx: &mut TestAppContext) {
     agents.update(cx, |agents, cx| agents.hand_back(20, cx));
     assert!(browser.held.borrow().is_empty());
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "handed back");
+}
+
+/// Only the user's own Hand Back tells the core the tab is back, which forgives an agent's failed
+/// sign-in at its origin: a handoff timing out doesn't, however long it stays held.
+#[gpui::test]
+fn a_handoff_timing_out_hands_nothing_back(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let reason = json!({ "tab": 20, "reason": "Sign in to example.com" });
+    let handed = call(&agents, "claude-code", "hand_off", reason, cx);
+    cx.executor().advance_clock(HANDOFF_WAIT * 3);
+    assert!(handed.recv().unwrap().error);
+    assert!(
+        browser.handed_back.borrow().is_empty(),
+        "the timeout handed the tab back"
+    );
+
+    agents.update(cx, |agents, cx| agents.hand_back(20, cx));
+    assert_eq!(*browser.handed_back.borrow(), [20]);
 }
 
 /// The core's report of a download the page in tab `tab` started, held, as the answer to
@@ -5402,7 +5451,7 @@ fn a_runs_check_and_screenshot_keep_to_the_rules(cx: &mut TestAppContext) {
 
 /// The actions the core lets an agent take in its tabs, agent_session.cc's RefusedAction: each a
 /// thing the user does in a page, or handing the tab to them.
-const CORE_ALLOWS: [&str; 22] = [
+const CORE_ALLOWS: [&str; 23] = [
     "add_to_split",
     "back",
     "click",
@@ -5420,6 +5469,7 @@ const CORE_ALLOWS: [&str; 22] = [
     "scroll",
     "select_option",
     "separate_tab",
+    "sign_in",
     "snapshot",
     "split_tabs",
     "type",
@@ -5517,6 +5567,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "run_steps",
             "upload",
             "hand_off",
+            "sign_in",
             "ask_for_tab",
             "pin_tab",
             "unpin_tab",
@@ -5528,6 +5579,8 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
     );
 
     let (agents, browser, _) = connected(cx);
+    // The user's switch on, so sign_in asks the core as the rest do.
+    agents.update(cx, |agents, cx| agents.set_sign_in_on(true, cx));
     let tab = |more: Value| {
         let mut arguments = json!({ "tab": 20 });
         arguments
@@ -5561,6 +5614,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         ("upload", tab(json!({ "ref": "e1" }))),
         ("hand_off", tab(json!({ "reason": "Sign in" }))),
         ("ask_for_tab", tab(json!({ "reason": "To go on" }))),
+        ("sign_in", tab(json!({}))),
         ("pin_tab", tab(json!({}))),
         ("unpin_tab", tab(json!({}))),
         ("pin_tab", tab(json!({}))),
@@ -5609,6 +5663,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         "request",
         "back",
         "hand_off",
+        "sign_in",
         "close_tab",
         "pin_tab",
         "unpin_tab",
@@ -10730,6 +10785,7 @@ mod helpers;
 mod holds;
 mod kept;
 mod notes;
+mod saved_logins;
 mod sign_ins;
 mod uploads;
 

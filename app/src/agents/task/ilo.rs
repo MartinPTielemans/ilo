@@ -77,6 +77,28 @@ pub enum IloKind {
     NoSpace,
 }
 
+/// The account of a saved login ilo filled, which only the user's line draws (#4098): it has no
+/// Display, and its Debug hides it, so no log line, panic, trace or answer can format it.
+#[derive(Clone, PartialEq)]
+pub struct Account(SharedString);
+
+impl Account {
+    pub fn new(name: impl Into<SharedString>) -> Self {
+        Account(name.into())
+    }
+
+    /// The name, for the line's words alone.
+    pub fn drawn(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Account {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("Account(..)")
+    }
+}
+
 /// Whether a line stands in the reply field's place, under the log, as the task takes no reply.
 pub fn in_field(kind: &IloKind) -> bool {
     matches!(
@@ -93,7 +115,7 @@ pub fn in_field(kind: &IloKind) -> bool {
 #[derive(Clone, Debug, PartialEq)]
 pub enum SignedInWith {
     /// A login saved in ilo, by its account's name.
-    Saved(SharedString),
+    Saved(Account),
     /// A password extension, by its name.
     Extension(SharedString),
 }

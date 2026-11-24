@@ -260,6 +260,11 @@ impl command_bar::Host for Bar {
         let shell = shell?.upgrade()?;
         let shell = shell.read(cx);
         let tab = shell::shown_tab(cx);
+        // A page withheld from agents, as it showed what a sign-in filled, gives the task neither
+        // its address nor its title (bc_tab_withheld_from_agents).
+        if unsafe { bc::bc_tab_withheld_from_agents(tab) } {
+            return None;
+        }
         let url = shell.page(tab).url;
         let web = url.starts_with("https://") || url.starts_with("http://");
         web.then(|| (url.into(), shell.title(tab).into()))

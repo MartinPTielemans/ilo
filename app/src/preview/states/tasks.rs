@@ -542,7 +542,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 IloKind::SignedIn {
                     tab,
                     site: "tickets.example".into(),
-                    with: SignedInWith::Saved("ada@example.com".into()),
+                    with: SignedInWith::Saved(ilo::Account::new("ada@example.com")),
                 },
             ),
             working(10, "Reading this page"),

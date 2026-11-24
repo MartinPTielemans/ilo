@@ -69,6 +69,52 @@ class AgentPage : public content::WebContentsObserver,
             Lands lands,
             base::OnceCallback<void(bool)> put);
 
+  // The core's own steps in an agent's sign-in (agent_sign_in.h), each a job after those queued,
+  // which no agent asks for and whose answer goes to its caller alone, posted.
+  // |idle| runs once no job is running or queued, as an agent's action under way answers first.
+  void WhenIdle(base::OnceClosure idle);
+  // Whether |selector| finds exactly one field in the main frame's document, outside any shadow
+  // root (agent_sign_in_rule.h's FieldSelector). With |submit|, then presses Enter in it and waits
+  // for the page to settle: |done| hears whether it did.
+  void FindField(std::string selector, bool submit, base::OnceCallback<void(bool)> done);
+  // Whether no element in the main frame's document sends a form somewhere its action doesn't say
+  // (agent_sign_in_rule.h's kSubmitters and SendsElsewhere): |done| hears true only then, false if
+  // one does or the document couldn't be read.
+  void CheckSubmitters(base::OnceCallback<void(bool clear)> done);
+  // Every frame's tree an agent could read, its outline's and read_page's, as DevTools gives them,
+  // values and all, or none if the main frame's couldn't be read. For the core to search, never an
+  // agent's.
+  using Trees = base::OnceCallback<void(std::optional<std::vector<base::ListValue>>)>;
+  void ReadAll(Trees done);
+  // Runs |step|, which calls the closure it's given once it's done, before the agent's next
+  // action in the page.
+  void Step(base::OnceCallback<void(base::OnceClosure done)> step);
+  // Forgets what the agent typed, so no field shows as holding it.
+  void Forget();
+
+  // The one look at an agent's first call since a password field held a value: each of the tab's
+  // DevTools sessions asks its documents once whether they show, anywhere outside the field, what
+  // one of them held (chromium-agent-withheld-values.patch), and none is looked for again. Any yes,
+  // or a session that couldn't answer, withholds the page whole (WithholdShownPage), and |then|
+  // hears whether it's withheld now; a frame's session that ended while asked answers no. A page
+  // with no such value answers at once. A renderer that never answers is AgentReplyLimit's, with a
+  // job or without, and a look that limit ends withholds the page too and hears it is
+  // (LookUnheard). Looks may overlap, as a read's while a job's is out: each is kept apart.
+  void Freeze(base::OnceCallback<void(bool withheld)> then);
+
+  // The user holds |contents|' tab, or a sign-in filled its page: what it has a password field
+  // hold since may show in its title or address, which agents don't get (WithheldFromAgents) until
+  // a look on the tab started since has answered (LooksFirst). Kept by tab, through a new page
+  // as the tab sleeps and wakes, until the tab closes (TabClosed).
+  static void LookFirst(bc_id tab);
+  static bool LooksFirst(bc_id tab);
+  static void TabClosed(bc_id tab);
+
+  // |contents| came into an agent's Space: DevTools takes it now, with DOM on, so its page keeps
+  // what a password field holds from the first, not only from the agent's first act, until the
+  // agent's session with the tab ends.
+  static void Watch(content::WebContents* contents);
+
   // The agent's session with |tab| ended: its page stops drawing while hidden, and DevTools lets
   // it go. What's still asked is answered as an error.
   static void SessionEnded(bc_id tab);
@@ -117,6 +163,9 @@ class AgentPage : public content::WebContentsObserver,
     std::vector<std::string> files;
     Lands lands;
     base::OnceCallback<void(bool)> put;
+    // ReadAll's and Step's.
+    Trees trees;
+    base::OnceCallback<void(base::OnceClosure done)> step;
   };
   using Reply = base::OnceCallback<void(const base::DictValue* result)>;
   using Then = base::OnceCallback<void(std::optional<gfx::RectF>)>;
@@ -161,6 +210,8 @@ class AgentPage : public content::WebContentsObserver,
   // Runs the next job once the one before has answered.
   void Next();
   void Run();
+  // Run's work, once the page's one look (Freeze) has answered.
+  void RunLooked(bool withheld);
   // Whether the tab's page is one agents may use, and if not, fails the job with why.
   bool IsWebPage();
   void FailNotWebPage();
@@ -343,8 +394,20 @@ class AgentPage : public content::WebContentsObserver,
   // Ends the job, which its page's dialog or the limit stopped waiting on, with |why|, and with
   // |unstarted| the jobs queued behind it.
   void EndWaiting(std::string why, std::optional<std::string> unstarted);
+  // Freeze's looks are dropped unanswered, as when the limit ends them or the session ends: the
+  // page is withheld, and each hears it is.
+  void LookUnheard();
+  // Look |look| answered, with whether a session said the page shows a value.
+  void Looked(uint64_t look, bool shows);
+  // Each look out hears the page is withheld, as none will hear from it.
+  void AnswerLooks();
   // Gives the answer kept while a download started, as none took its action.
   void AnswerHeld();
+  // FindField's job: the field its selector finds, then with |submit| Enter in it.
+  void Find(bool submit);
+  void Submitters();
+  void SubmitterAttributes(std::vector<int> nodes, size_t next);
+  void PressEnterIn(int node);
 
   // Scrolls the job's element into view and gives its box, in the main frame's viewport's CSS
   // pixels.
@@ -406,6 +469,7 @@ class AgentPage : public content::WebContentsObserver,
 
   // content::WebContentsObserver:
   void DidStopLoading() override;
+  void DidStartNavigation(content::NavigationHandle* navigation) override;
   void DidFinishNavigation(content::NavigationHandle* navigation) override;
   void WebContentsDestroyed() override;
 
@@ -439,6 +503,8 @@ class AgentPage : public content::WebContentsObserver,
   // What the agent typed or chose in each element it typed in or chose in, until the page's
   // document changes or the session ends. In memory alone, to compare with, and never logged.
   std::map<int64_t, std::u16string> typed_;
+  // The main frame's navigations under way whose page commits withheld (DidStartNavigation).
+  std::set<int64_t> sends_password_;
   // Whether the job hears of the page's requests, and waits for them to end.
   bool listening_ = false;
   bool settling_ = false;
@@ -470,7 +536,14 @@ class AgentPage : public content::WebContentsObserver,
   // Whether an agent acts on the page, from its first action until its session ends, and how many
   // pictures are under way, so a page only pictured lets DevTools go after.
   bool acted_ = false;
+  // Watch took the tab, which keeps DevTools until the session ends, acted on or not.
+  bool watching_ = false;
+  // Freeze's looks out, their answers not all in, by number (LookFirstTabs::Started), each with
+  // what hears its answer.
+  base::flat_map<uint64_t, base::OnceCallback<void(bool withheld)>> looks_;
   int pictures_ = 0;
+  // WhenIdle's.
+  base::OnceClosure idle_;
   // The app link the job running followed, and the app the system opens it in, once it's found.
   std::optional<GURL> app_link_;
   std::u16string app_name_;

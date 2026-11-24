@@ -24,6 +24,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "browser_core/agent_autofill.h"
+#include "browser_core/agent_page.h"
 #include "browser_core/agent_session.h"
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
@@ -390,7 +391,7 @@ bool OffTheRecord(const Tab* tab) {
 }
 
 // |tab|, leaving a window, was seen until now.
-void Seen(bc_id tab) {
+void SeenUntilNow(bc_id tab) {
   if (Tab* seen = Tab::Get(tab)) {
     seen->set_last_seen(base::Time::Now());
     seen->LeftWindow();
@@ -1622,6 +1623,8 @@ void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent) {
   // the agent started in it, which would land in the user's page.
   if (from->agent()) {
     EndTabSession(tab, BC_AGENT_SESSION_RELEASED);
+    // One the agent never acted in has no session to end, and DevTools watched it all the same.
+    AgentPage::SessionEnded(tab);
   }
   if (kept.is_valid()) {
     // Its place was among the old Space's tabs, so it gets one at the top of the new one's.
@@ -2015,7 +2018,7 @@ void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
   std::vector<bc_id> panes = PanesWith(tab);
   for (bc_id pane : panes_) {
     if (!std::ranges::contains(panes, pane)) {
-      Seen(pane);
+      SeenUntilNow(pane);
     }
   }
   // The window takes a tile's page, with its input, from the tile.
@@ -2271,7 +2274,7 @@ void Window::ShowNothing() {
   selected_ = 0;
   waiting_ = 0;
   for (bc_id pane : std::exchange(panes_, {})) {
-    Seen(pane);
+    SeenUntilNow(pane);
   }
   shown_ = nullptr;
   SetLetGo(false);
@@ -3696,6 +3699,10 @@ void Window::ReportTabOpened(bc_id tab,
   }
   if (Space* space = SpaceForOpened(opener)) {
     space->Add(tab, opener, foreground);
+    // A page an agent's page opened is the agent's too, from its first.
+    if (space->agent()) {
+      AgentPage::Watch(Tab::FromId(tab));
+    }
     // Beside the page it came from, unless that page's split view is full.
     const bool split = split_with && space->Split(tab, split_with, Tab::PageUrl(Tab::FromId(tab)),
                                                   /*left=*/false);

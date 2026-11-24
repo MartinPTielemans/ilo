@@ -109,6 +109,9 @@ class PagePoint : public content::WebContentsObserver,
   // The pick: the shown element's tag, place in the page and styles, its text, and its picture,
   // each step adding to |picked| until it goes to the app.
   void Pick();
+  // The page's one look answered: a pick on a page that showed what a password field held hands
+  // nothing of it (ReportWithheld).
+  void Looked(Picked picked, const base::DictValue* result);
   void Document(Picked picked, const base::DictValue* result);
   void Styled(Picked picked, const base::DictValue* result);
   // Whether an agent may read the frame DevTools names |frame|, and each it's in (IsWebFrame).
@@ -117,6 +120,10 @@ class PagePoint : public content::WebContentsObserver,
   void Drawn(Picked picked, base::expected<SkBitmap, std::string> picture);
   void Encoded(Picked picked, std::optional<std::vector<uint8_t>> png);
   void Report(const Picked& picked);
+  // A pick on a withheld page (PageWithheld), or one its look found showing what a password field
+  // held: where it was, and that it's withheld, with no kind, tag, selector, styles, text, title,
+  // address or picture.
+  void ReportWithheld(const Picked& picked);
 
   // Sends a DevTools command, attaching first if need be. |reply| gets its result, or null for an
   // error or a page that went.
