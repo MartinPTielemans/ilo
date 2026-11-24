@@ -8175,13 +8175,11 @@ mod tasks {
         assert_eq!(*browser.deleted.borrow(), vec![102]);
     }
 
-    /// The Archive lists the dismissed tasks, the last to leave the foot first, each with how it
-    /// ended and when. Delete from Archive takes one out of the list and out of ⇧⌘T's reach, and
     /// Each state has one word, which a task's card, its conversation's line and its Archive row all
     /// say: one whose assistant's program quit or broke is Interrupted, never Failed or Stopped;
     /// one waiting on the user Needs you; one at its assistant's limit says so, with the
-    /// assistant's name when the word stands alone. The conversation's line keeps the limit's
-    /// longer words.
+    /// assistant's name when the word stands alone and never twice. The conversation's line says
+    /// when the limit resets if it knows.
     #[gpui::test]
     fn every_state_has_one_word_and_every_place_says_it(cx: &mut TestAppContext) {
         use crate::agents::task::Word;
@@ -8234,10 +8232,7 @@ mod tasks {
             let about = agents.read_with(cx, |agents, cx| {
                 agents.conversation(&agent, cx).unwrap().about.to_string()
             });
-            match word {
-                Word::AtLimit => assert_eq!(about, "Claude · Claude hit its usage limit"),
-                _ => assert_eq!(about, format!("Claude · {after_name}"), "{state:?}"),
-            }
+            assert_eq!(about, format!("Claude · {after_name}"), "{state:?}");
             // Dismissing stops a task under way, so its row is read with the state put back.
             agents.update(cx, |agents, cx| agents.dismiss_task(&agent, cx));
             set(&agents, cx);
@@ -8250,8 +8245,32 @@ mod tasks {
             assert!(row.starts_with(&word_then), "{state:?}'s row: {row}");
         }
         assert_eq!(Word::of(&State::Working, true), Word::NeedsYou);
+
+        // With its reset time, the line says when, and the card's own status keeps the longer line.
+        let agent = start(&agents, "Find two seats", cx);
+        agents.update(cx, |agents, _| {
+            let task = agents.task_mut(&agent).unwrap();
+            task.state = State::Limit {
+                resets: Some("18:00".into()),
+            };
+            task.ended = None;
+        });
+        let about = agents.read_with(cx, |agents, cx| {
+            agents.conversation(&agent, cx).unwrap().about.to_string()
+        });
+        assert_eq!(about, "Claude · Limit resets at 18:00");
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Limit { resets: None };
+        });
+        let card = agents.read_with(cx, |agents, cx| {
+            let mut cards = agents.cards(1, cx).into_iter();
+            cards.find(|card| card.agent.as_ref() == agent).unwrap()
+        });
+        assert_eq!(card.status.as_ref(), "Claude hit its usage limit");
     }
 
+    /// The Archive lists the dismissed tasks, the last to leave the foot first, each with how it
+    /// ended and when. Delete from Archive takes one out of the list and out of ⇧⌘T's reach, and
     /// ⌘Z's Undelete puts it back.
     #[gpui::test]
     fn the_archive_lists_dismissed_tasks_until_one_is_deleted(cx: &mut TestAppContext) {

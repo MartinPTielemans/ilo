@@ -854,12 +854,13 @@ impl Agents {
             false => String::new(),
         };
         // The state's word, whoever of the task's waits: the task itself or a helper. Done says
-        // when, and a limit its longer line.
+        // when, and a limit when it resets if the assistant said; without that it's the word, as
+        // the name before it says whose limit it is.
         let about = match &task.state {
             State::Done { .. } if let Some(at) = task.ended => {
                 done_at(&super::local_time(seconds(at)))
             }
-            State::Limit { resets } => limit_words(&task.name, resets),
+            State::Limit { resets } if resets.is_some() => limit_words(&task.name, resets),
             state => Word::of(state, self.waits_on_user(task))
                 .after_name()
                 .to_string(),
