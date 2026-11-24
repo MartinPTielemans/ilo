@@ -2254,6 +2254,14 @@ impl Browser for Engine {
         });
     }
 
+    fn show_tile(&self, tab: u64, at: Bounds<Pixels>, radius: f32) -> bool {
+        unsafe { bc::bc_tab_show_tile(tab, self.ui_view, rect(at), f64::from(radius)) }
+    }
+
+    fn end_tile(&self, tab: u64) {
+        unsafe { bc::bc_tab_end_tile(tab) };
+    }
+
     fn tab_to_new_window(&self, tab: u64, at: Option<Point<f32>>, grab: Point<f32>, cx: &mut App) {
         let id = self.window;
         // Outside the shell's update, as the new window's shell reads this one's.

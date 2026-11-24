@@ -3155,6 +3155,27 @@ BC_EXPORT void bc_tab_draw_preview(bc_id tab,
                                    double about_y,
                                    double opacity);
 
+// Tiles: an agent's page shown small in a view of the app's, live, for the user to watch it work
+// (#4115). The user's alone: no agent path reaches them. A tile's page is visible, so it draws,
+// while the tile is on screen, as a page its window shows is; otherwise it's as any agent's page
+// out of sight is. Visible isn't focused: its tab isn't activated, and the page is never told it
+// has the keyboard. It keeps the size and screen it had, and showing or ending a tile never resizes
+// it.
+
+// Shows the page of |tab|, an agent's tab that no window shows, such as one in its Agent Space, in
+// |view|, an NSView of the app's, at |frame| in points from the view's top-left, scaled from the
+// page's size, over what the view draws, with corners of |corner_radius|. The page never takes the
+// keyboard or makes its window key, whatever it or a commit asks, and gets no pointer, wheel, keys
+// or drops: a click on it is the view's. Call it again as the frame changes; a call with another
+// view moves it there. Returns false and shows nothing for a user's tab, a tab a window shows, and
+// on Windows and Linux, where the app shows the tab's picture instead. A window showing the tab, as
+// a Take over or a hand-off does, ends the tile first.
+BC_EXPORT bool bc_tab_show_tile(bc_id tab, void* view, bc_rect frame, double corner_radius);
+
+// Takes |tab|'s page out of the view bc_tab_show_tile showed it in, back to an agent's page out of
+// sight. Nothing if it isn't a tile, as after its tab or the view went.
+BC_EXPORT void bc_tab_end_tile(bc_id tab);
+
 // Puts |tab|, a link preview, at the top of the Today tabs of the Space the window shows, and shows
 // it there, as it is: its page doesn't load again. Then space_changed and window_selected.
 BC_EXPORT void bc_window_keep_preview(bc_id window, bc_id tab);

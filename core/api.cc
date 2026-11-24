@@ -86,6 +86,7 @@
 #include "browser_core/tab.h"
 #include "browser_core/tab_follow_rule.h"
 #include "browser_core/tab_recent.h"
+#include "browser_core/tile.h"
 #include "browser_core/typed_http.h"
 #include "browser_core/webrtc.h"
 #include "browser_core/widevine.h"
@@ -2088,6 +2089,8 @@ void bc_tab_show_in(bc_id id, void* view, bc_rect frame, double corner_radius) {
   if (!contents || !view || browser_core::Window::Showing(id)) {
     return;
   }
+  // A card takes the page with its input.
+  browser_core::tiles::ShowInCard(id);
   browser_core::Window* window = browser_core::Window::Holding(id);
   // The frame the app passed, not the rect laid out from it, so the app can match it.
   auto shown = [](bc_id id, bc_rect frame) {
@@ -2099,6 +2102,14 @@ void bc_tab_show_in(bc_id id, void* view, bc_rect frame, double corner_radius) {
                                      contents->GetNativeView(), view, ToRect(frame),
                                      corner_radius, base::BindOnce(shown, id, frame));
   contents->Focus();
+}
+
+bool bc_tab_show_tile(bc_id tab, void* view, bc_rect frame, double corner_radius) {
+  return browser_core::tiles::Show(tab, view, ToRect(frame), corner_radius);
+}
+
+void bc_tab_end_tile(bc_id tab) {
+  browser_core::tiles::EndTile(tab);
 }
 
 void bc_tab_draw_preview(bc_id id, double scale, double about_x, double about_y, double opacity) {

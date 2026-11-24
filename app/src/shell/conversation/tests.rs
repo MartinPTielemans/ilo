@@ -2819,3 +2819,97 @@ fn a_helpers_line_under_way_shimmers_unless_motion_is_reduced(cx: &mut TestAppCo
     assert!(!moving(cx), "nothing is under way");
     cx.update(|_, cx| cx.set_reduce_motion(true));
 }
+
+/// Its pages show live in their pictures in the rail, where the core can (#4115): not under the
+/// page a tile's click watches over the conversation, again once it's back, and every tile ends as
+/// the task closes.
+#[gpui::test]
+fn its_pages_are_live_in_the_rail_and_end_as_it_goes(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    host.shows_tiles.set(Some(true));
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let draw = |cx: &mut VisualTestContext| {
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        host.take()
+    };
+    let did = draw(cx);
+    assert!(
+        did.iter().any(|line| line.starts_with("tile 30 at ")),
+        "not live in the rail: {did:?}"
+    );
+
+    let (_, at) = view.read_with(cx, |view, _| view.drawn.borrow()[0]);
+    cx.simulate_click(at.center(), Modifiers::none());
+    let did = draw(cx);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(30)))
+    );
+    assert!(
+        did.contains(&"end tile 30".to_string()),
+        "live under its watched page: {did:?}"
+    );
+
+    cx.simulate_keystrokes("escape");
+    let did = draw(cx);
+    assert!(
+        did.iter().any(|line| line.starts_with("tile 30 at ")),
+        "not live again with its page back: {did:?}"
+    );
+
+    shell.update(cx, |shell, cx| shell.close_task(cx));
+    cx.run_until_parked();
+    assert!(
+        host.take().contains(&"end tile 30".to_string()),
+        "live with the task closed"
+    );
+}
+
+/// Only a picture wholly in the rail's view is live: where the row under the header holds more
+/// than fit, those past its edge keep their pictures until it scrolls to them, and those it
+/// scrolls away from end.
+#[gpui::test]
+fn only_a_picture_wholly_in_the_rails_view_is_live(cx: &mut TestAppContext) {
+    use crate::tokens::shell::task::RAIL_BREAKPOINT;
+    use gpui::size;
+    let (shell, host, cx) = shown(cx);
+    host.shows_tiles.set(Some(true));
+    cx.simulate_resize(size(px(RAIL_BREAKPOINT - 100.), px(900.)));
+    let mut talk = conversation(1);
+    talk.tabs = (30..36)
+        .map(|tab| (tab, "tickets.example".into()))
+        .collect();
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let live = |cx: &mut VisualTestContext| {
+        for _ in 0..2 {
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        }
+        let did = host.take();
+        let shown = |tab: u64| {
+            did.iter()
+                .any(|line| line.starts_with(&format!("tile {tab} at ")))
+        };
+        let ended = |tab: u64| did.contains(&format!("end tile {tab}"));
+        (did.clone(), shown(30), shown(35), ended(30))
+    };
+    let (did, first, last, _) = live(cx);
+    assert!(first, "the first picture isn't live: {did:?}");
+    assert!(!last, "a picture past the row's edge is live: {did:?}");
+
+    view.update(cx, |view, _| {
+        view.rail_scroll
+            .set_offset(gpui::point(px(-10_000.), px(0.)))
+    });
+    let (did, _, last, first_ended) = live(cx);
+    assert!(last, "the last picture isn't live, scrolled to: {did:?}");
+    assert!(
+        first_ended,
+        "the first picture, scrolled away, is still live: {did:?}"
+    );
+}

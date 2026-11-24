@@ -14,8 +14,10 @@
 #include "base/time/time.h"
 #import "components/remote_cocoa/app_shim/bridged_content_view.h"
 #include "content/public/browser/frame_shown.h"
+#include "content/public/browser/page_tile_mac.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/stretch_content_on_resize_mac.h"
+#include "content/public/browser/web_contents.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/widget/widget.h"
@@ -215,6 +217,34 @@
     }
   }
   [CATransaction commit];
+}
+@end
+
+// A tile's holder (#4115): clips the page to the tile's rounded frame, and takes no pointer, so a
+// click on the tile is the app's view's under it.
+@interface BrowserCoreTileView : NSView
+@end
+
+@implementation BrowserCoreTileView
+- (BOOL)isFlipped {
+  return YES;
+}
+
+- (NSView*)hitTest:(NSPoint)point {
+  return nil;
+}
+@end
+
+// Between a tile and its page: shows the page at its own size, scaled to the tile's width by this
+// view's bounds, as NSScrollView's magnification scales its document. AppKit keeps a view's bounds
+// through its own layout; a transform set on the page's layer, which AppKit owns, showed the page
+// unscaled (#4115).
+@interface BrowserCoreTileScale : NSView
+@end
+
+@implementation BrowserCoreTileScale
+- (BOOL)isFlipped {
+  return YES;
 }
 @end
 
@@ -578,6 +608,109 @@ void ShowPageIn(views::Widget*,
 
 // The page is in the app's view, which scales and fades it with the card.
 void DrawPageIn(views::Widget*, gfx::NativeView, float, const gfx::PointF&, float) {}
+
+namespace {
+
+// The tile holding |page|, which is in the tile's scale view, if it's in one.
+BrowserCoreTileView* TileOf(NSView* page) {
+  return base::apple::ObjCCast<BrowserCoreTileView>(page.superview.superview);
+}
+
+// Fits |page|'s own width to |tile|'s, from the tile's top-left, and the tile cuts it at its foot:
+// tile width over page width, the page never laid out again for it.
+void FitTile(NSView* tile, NSView* page) {
+  NSView* scale = page.superview;
+  const NSSize own = page.frame.size;
+  const NSSize shown = tile.bounds.size;
+  if (own.width <= 0 || shown.width <= 0) {
+    return;
+  }
+  const NSRect frame = NSMakeRect(0, 0, shown.width, shown.height);
+  if (!NSEqualRects(scale.frame, frame)) {
+    scale.frame = frame;
+  }
+  const NSSize bounds = NSMakeSize(own.width, shown.height * own.width / shown.width);
+  if (!NSEqualSizes(scale.bounds.size, bounds)) {
+    [scale setBoundsSize:bounds];
+  }
+}
+
+}  // namespace
+
+bool CanTile() {
+  return true;
+}
+
+void ShowTile(content::WebContents* contents,
+              void* view,
+              const gfx::Rect& frame,
+              double corner_radius) {
+  NSView* holder = (__bridge NSView*)view;
+  NSView* page_view = contents->GetNativeView().GetNativeNSView();
+  if (!holder || !page_view) {
+    return;
+  }
+  // Before the page is in the tile's window, which it's never told it moved to.
+  content::SetPageTile(contents, true);
+  BrowserCoreTileView* tile = TileOf(page_view);
+  const bool placed = !tile || tile.superview != holder;
+  if (!tile) {
+    tile = [[BrowserCoreTileView alloc] initWithFrame:NSZeroRect];
+    tile.wantsLayer = YES;
+    NSView* scale = [[BrowserCoreTileScale alloc] initWithFrame:NSZeroRect];
+    scale.autoresizingMask = NSViewNotSizable;
+    [tile addSubview:scale];
+    Unhide(page_view, /*hidden=*/false);
+    [page_view setFrameOrigin:NSZeroPoint];
+    [scale addSubview:page_view];
+  }
+  if (tile.superview != holder) {
+    [holder addSubview:tile];
+    // The app places a tile from the view's top and asks again only when that place changes,
+    // which a change of the window's height alone doesn't do, so the tile keeps its distance from
+    // the top: in an unflipped view, by a flexible bottom margin.
+    tile.autoresizingMask = holder.isFlipped ? NSViewNotSizable : NSViewMinYMargin;
+  }
+  RoundCorners(tile, corner_radius, kAllCorners);
+  // A page taller than the tile at its width is cut at the tile's foot, whatever its corners.
+  tile.layer.masksToBounds = YES;
+  NSRect rect = frame.ToCGRect();
+  if (!holder.isFlipped) {
+    rect.origin.y = NSHeight(holder.bounds) - NSMaxY(rect);
+  }
+  tile.frame = rect;
+  FitTile(tile, page_view);
+  // Not for each frame of a tile's motion, which the app calls again for, since asking the window
+  // server about every window takes milliseconds.
+  if (placed) {
+    UpdateOcclusion(holder.window);
+  }
+}
+
+void EndTile(content::WebContents* contents) {
+  NSView* page_view = contents->GetNativeView().GetNativeNSView();
+  if (BrowserCoreTileView* tile = TileOf(page_view)) {
+    [page_view removeFromSuperview];
+    [tile removeFromSuperview];
+  }
+  // Once it's out of the tile's window, so the page hears of the one it goes to next.
+  content::SetPageTile(contents, false);
+}
+
+void TilePageChanged(content::WebContents* contents) {
+  NSView* page_view = contents->GetNativeView().GetNativeNSView();
+  content::RenderWidgetHostView* widget = contents->GetRenderWidgetHostView();
+  if (!TileOf(page_view) || !widget) {
+    return;
+  }
+  // Chromium sizes a committing page's view to its container as the window measures it, which is
+  // the tile's scaled size, so the page drew in a patch at its corner. The page keeps its own size,
+  // since a tile's views never tell it theirs, and its view takes that size back.
+  NSView* view = widget->GetNativeView().GetNativeNSView();
+  if (view.superview == page_view && !NSEqualRects(view.frame, page_view.bounds)) {
+    view.frame = page_view.bounds;
+  }
+}
 
 bool FocusSettledOnActivation() {
   // AppKit can be part way through moving the keyboard, as when a committing page hides the view
