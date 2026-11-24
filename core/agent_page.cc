@@ -388,6 +388,9 @@ base::ScopedClosureRunner LiftWhileWorking(content::WebContents& contents) {
   base::WeakPtr<performance_manager::PageNode> page =
       performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(&contents);
   AgentJobVoter* voter = AgentJobVoter::Get();
+  // Never to land (#4227): which tab the voter's next line is for.
+  LOG(ERROR) << "agent-vote-4227: job on tab " << Tab::IdOf(&contents) << ", page node "
+             << static_cast<bool>(page) << ", voter " << (voter != nullptr);
   if (!page || !voter) {
     return {};
   }

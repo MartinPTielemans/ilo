@@ -1,9 +1,15 @@
 #include "browser_core/agent_job_voter.h"
 
+#include <string>
 #include <utility>
 
+#include "base/logging.h"
 #include "base/process/process.h"
+#include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
+#include "components/performance_manager/public/graph/frame_node.h"
 #include "components/performance_manager/public/graph/graph.h"
+#include "components/performance_manager/public/graph/process_node.h"
 #include "components/performance_manager/public/performance_manager.h"
 
 namespace browser_core {
@@ -17,6 +23,41 @@ using performance_manager::execution_context_priority::Vote;
 using performance_manager::execution_context_priority::VotingChannel;
 
 AgentJobVoter* g_voter = nullptr;
+
+// Never to land (#4227): where the job's vote goes, for one loaded run to read. One prefix for
+// every line, and only process ids and ranks in them.
+constexpr char kProbe[] = "agent-vote-4227: ";
+
+const char* RankName(base::Process::Priority priority) {
+  if (priority == base::Process::Priority::kBestEffort) {
+    return "best-effort";
+  }
+  if (priority == base::Process::Priority::kUserVisible) {
+    return "user-visible";
+  }
+  if (priority == base::Process::Priority::kUserBlocking) {
+    return "user-blocking";
+  }
+  return "other";
+}
+
+// Each of the page's main frames, so a cross-site load's committing renderer shows beside the old.
+std::string ProcessOf(const PageNode* page) {
+  std::string out;
+  if (page) {
+    for (const performance_manager::FrameNode* frame : page->GetMainFrameNodes()) {
+      const performance_manager::ProcessNode* process = frame->GetProcessNode();
+      if (!process) {
+        continue;
+      }
+      base::StrAppend(
+          &out, {out.empty() ? "" : "; ", "pid ", base::NumberToString(process->GetProcessId()),
+                 ", rank ", RankName(process->GetPriority()),
+                 frame == page->GetPrimaryMainFrameNode() ? " (primary)" : ""});
+    }
+  }
+  return out.empty() ? "no process" : out;
+}
 
 }  // namespace
 
@@ -33,12 +74,15 @@ AgentJobVoter* AgentJobVoter::Get() {
 }
 
 void AgentJobVoter::JobStarted(const PageNode* page) {
+  LOG(ERROR) << kProbe << "job starts on " << ProcessOf(page) << ", user loads counting "
+             << user_loads_.size();
   if (working_.insert(page).second && user_loads_.empty()) {
     GiveVote(page);
   }
 }
 
 void AgentJobVoter::JobEnded(const PageNode* page) {
+  LOG(ERROR) << kProbe << "job ends on " << ProcessOf(page);
   if (working_.erase(page) && user_loads_.empty()) {
     TakeVote(page);
   }
@@ -66,10 +110,12 @@ void AgentJobVoter::GiveVote(const PageNode* page) {
   // User-visible and not user-blocking: a hidden agent page doesn't rank with the page the user is
   // looking at.
   voting_channel_.SetVote(page, Vote(base::Process::Priority::kUserVisible, kReason));
+  LOG(ERROR) << kProbe << "give, now " << ProcessOf(page);
 }
 
 void AgentJobVoter::TakeVote(const PageNode* page) {
   voting_channel_.SetVote(page, std::nullopt);
+  LOG(ERROR) << kProbe << "take, now " << ProcessOf(page);
 }
 
 void AgentJobVoter::InitializeOnGraph(Graph* graph, VotingChannel voting_channel) {
@@ -161,6 +207,9 @@ void UserLoad::Update() {
     return;
   }
   counted_ = counts;
+  LOG(ERROR) << kProbe << "user load " << (counts ? "counts" : "ends") << " on "
+             << ProcessOf(page_.get()) << ", shown " << shown_ << ", agent's " << agents_
+             << ", voter " << (AgentJobVoter::Get() != nullptr);
   // A page already gone has left the voter's count with its node.
   AgentJobVoter* voter = AgentJobVoter::Get();
   if (!voter || !page_) {
@@ -180,6 +229,8 @@ void AddAgentJobVoter() {
   if (voting && !g_voter) {
     voting->AddPriorityVoter<AgentJobVoter>();
   }
+  LOG(ERROR) << kProbe << "graph " << (graph != nullptr) << ", voting system "
+             << (voting != nullptr) << ", voter " << (g_voter != nullptr);
 }
 
 }  // namespace browser_core
