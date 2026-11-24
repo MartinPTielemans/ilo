@@ -261,6 +261,11 @@ BrowserCoreWindowView* WindowView(views::Widget* widget) {
   return base::apple::ObjCCastStrict<BrowserCoreWindowView>(ContentView(widget).embeddedView);
 }
 
+// The tile holding |page|, which is in the tile's scale view, if it's in one.
+BrowserCoreTileView* TileOf(NSView* page) {
+  return base::apple::ObjCCast<BrowserCoreTileView>(page.superview.superview);
+}
+
 // Shows a page's view, or its DevTools', which Chrome's views host leaves hidden while their tab is
 // in the background, unless |hidden| as its window is out of sight. Hidden, a page never draws, and
 // Chromium drops the keys it doesn't use instead of passing them to the window.
@@ -483,11 +488,15 @@ void ShowPages(views::Widget* widget,
       RoundCorners(page_view, corner_radius, kAllCorners);
     }
     if (page_view.superview != view) {
+      // A tile's or a parked page goes from its tile to the window's pages within the window, so
+      // Chromium needn't hear it leave the window (#3788), and the tile it leaves goes.
+      BrowserCoreTileView* tile = TileOf(page_view);
       if (lowest_leaving) {
         [view addSubview:page_view positioned:NSWindowBelow relativeTo:lowest_leaving];
       } else {
         [view addSubview:page_view];
       }
+      [tile removeFromSuperview];
     }
     if (devtools_view) {
       // Only when it's out of order: a view moved loses the keyboard.
@@ -611,11 +620,6 @@ void DrawPageIn(views::Widget*, gfx::NativeView, float, const gfx::PointF&, floa
 
 namespace {
 
-// The tile holding |page|, which is in the tile's scale view, if it's in one.
-BrowserCoreTileView* TileOf(NSView* page) {
-  return base::apple::ObjCCast<BrowserCoreTileView>(page.superview.superview);
-}
-
 // Fits |page|'s own width to |tile|'s, from the tile's top-left, and the tile cuts it at its foot:
 // tile width over page width, the page never laid out again for it.
 void FitTile(NSView* tile, NSView* page) {
@@ -687,14 +691,28 @@ void ShowTile(content::WebContents* contents,
   }
 }
 
-void EndTile(content::WebContents* contents) {
+void EndTile(content::WebContents* contents, bool leaves_window) {
   NSView* page_view = contents->GetNativeView().GetNativeNSView();
-  if (BrowserCoreTileView* tile = TileOf(page_view)) {
+  BrowserCoreTileView* tile = TileOf(page_view);
+  if (tile && leaves_window) {
     [page_view removeFromSuperview];
     [tile removeFromSuperview];
   }
-  // Once it's out of the tile's window, so the page hears of the one it goes to next.
+  // Once it's out of the tile's window, so the page hears of the one it goes to next; or, staying
+  // in it, before the window's pages take it, so it hears the frame they give it.
   content::SetPageTile(contents, false);
+}
+
+void ParkTile(content::WebContents* contents) {
+  BrowserCoreTileView* tile = TileOf(contents->GetNativeView().GetNativeNSView());
+  if (!tile) {
+    return;
+  }
+  // Shown at no size, where it was: in its window and not hidden, which is all Chromium asks of a
+  // visible page; the page keeps its own size, which a tile's views never tell it.
+  NSRect frame = tile.frame;
+  frame.size = NSZeroSize;
+  tile.frame = frame;
 }
 
 void TilePageChanged(content::WebContents* contents) {

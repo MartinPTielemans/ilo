@@ -4,6 +4,7 @@
 
 #include "base/no_destructor.h"
 #include "browser_core/agent_autofill.h"
+#include "browser_core/agent_session.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/tab.h"
 #include "browser_core/tile_rule.h"
@@ -19,14 +20,21 @@ TileRule& Rule() {
   return *rule;
 }
 
-// The page of |tab|, which was a tile in |view|, leaves it.
-void Ended(bc_id tab, const void* view) {
-  if (!view) {
+void LogEnded(bc_id tab) {
+  fprintf(stderr, "browser: tile %llu ended\n", static_cast<unsigned long long>(tab));
+}
+
+// The page of |tab|, which was a tile in |view| or |parked|, leaves both: out of its window as well
+// where it |leaves_window|.
+void Out(bc_id tab, const void* view, bool parked, bool leaves_window) {
+  if (!view && !parked) {
     return;
   }
-  fprintf(stderr, "browser: tile %llu ended\n", static_cast<unsigned long long>(tab));
+  if (view) {
+    LogEnded(tab);
+  }
   if (content::WebContents* contents = Tab::FromId(tab)) {
-    platform::EndTile(contents);
+    platform::EndTile(contents, leaves_window);
   }
 }
 
@@ -46,6 +54,12 @@ bool Show(bc_id tab, void* view, const gfx::Rect& frame, double corner_radius) {
   }
   switch (shown) {
     case TileRule::Shown::kNew:
+      // A page the user took over had their size, and once it's the agent's again it has its own
+      // before the tile shows it: one resize, as it's handed back, and none while it's a tile.
+      if (!IsHeld(tab)) {
+        Window::GiveAgentPageItsSize(contents);
+      }
+      [[fallthrough]];
     case TileRule::Shown::kFramed:
     case TileRule::Shown::kMoved:
       platform::ShowTile(contents, view, frame, corner_radius);
@@ -56,19 +70,32 @@ bool Show(bc_id tab, void* view, const gfx::Rect& frame, double corner_radius) {
 }
 
 void End(bc_id tab) {
-  Ended(tab, Rule().Left(tab));
+  const bool parked = Rule().Parked(tab);
+  Out(tab, Rule().Left(tab), parked, /*leaves_window=*/true);
+}
+
+void TakenByWindow(bc_id tab) {
+  const bool parked = Rule().Parked(tab);
+  Out(tab, Rule().Left(tab), parked, /*leaves_window=*/false);
 }
 
 void EndTile(bc_id tab) {
-  Ended(tab, Rule().End(tab));
+  if (!Rule().End(tab)) {
+    return;
+  }
+  LogEnded(tab);
+  if (content::WebContents* contents = Tab::FromId(tab)) {
+    platform::ParkTile(contents);
+  }
 }
 
 void ShowInCard(bc_id tab) {
-  Ended(tab, Rule().ShowInCard(tab));
+  const bool parked = Rule().Parked(tab);
+  Out(tab, Rule().ShowInCard(tab), parked, /*leaves_window=*/true);
 }
 
 void PageViewChanged(bc_id tab) {
-  if (!Rule().Holds(tab)) {
+  if (!Rule().InTile(tab)) {
     return;
   }
   if (content::WebContents* contents = Tab::FromId(tab)) {
@@ -77,7 +104,7 @@ void PageViewChanged(bc_id tab) {
 }
 
 bool Holds(bc_id tab) {
-  return Rule().Holds(tab);
+  return Rule().InTile(tab);
 }
 
 }  // namespace browser_core::tiles
