@@ -198,7 +198,7 @@ impl Trace {
     /// line stays.
     pub fn helpers(&self) -> usize {
         (self.items.iter())
-            .filter(|item| matches!(item, TraceItem::Helper(_)))
+            .filter(|item| matches!(item, TraceItem::Helper { .. }))
             .count()
     }
 
@@ -251,9 +251,17 @@ pub enum TraceItem {
     Step(TraceStep),
     /// What the agent said as it worked, which isn't its turn's last message.
     Said(SharedString),
-    /// A helper the task started (#4102), as the step it's on: a step's line in ilo's own words
-    /// for the page the helper works on, never the helper's own text.
-    Helper(TraceStep),
+    /// A helper the task started (#4102), as one line. Nothing on it is the helper's own text or
+    /// what it found.
+    Helper {
+        /// The step it's on, in ilo's own words for the page it works on.
+        step: TraceStep,
+        /// The name its task gave it as it asked for it, the task's own words as its title is:
+        /// one line of plain text, cut short, held in memory alone. Empty if it gave none.
+        name: SharedString,
+        /// The page it works on, by its tab.
+        tab: Option<u64>,
+    },
 }
 
 /// A line of a trace: a step, in one sentence.
@@ -368,6 +376,9 @@ pub struct Task {
     pub sites: Sites,
     /// What ilo stopped, as its conversation shows each, oldest first.
     pub stops: Vec<Stop>,
+    /// ilo's other lines of what happened to it: its steps handed to the user, the tabs its
+    /// agent asked back and the changes of its access, oldest first.
+    pub(super) placed: Vec<super::lines::Placed>,
     /// What ilo tells its CLI with the user's next turn: a change of tier while it wasn't working.
     pub(super) told: Option<String>,
     /// While it's thinking, what ends the turn if its CLI never answers (NO_ANSWER). It goes as
@@ -442,6 +453,11 @@ impl Task {
         }
     }
 
+    /// Ends its run: the process goes, and a message to the task starts another.
+    pub(super) fn end_run(&mut self) {
+        self.process = None;
+    }
+
     /// Where the turn under way starts among its messages: after the user's last.
     fn turn(&self) -> usize {
         self.messages
@@ -492,8 +508,6 @@ pub struct Card {
     pub pages: Vec<u64>,
     /// Its access, which its group's line leads with at Full access.
     pub tier: Tier,
-    /// An ask's answers, as buttons.
-    pub answers: Vec<SharedString>,
     /// A confirmation or a handoff of the task's, which the card asks instead of the windows'.
     pub question: Option<Question>,
     /// Done's tabs to open, each with its site, in the agent's order.
@@ -596,7 +610,6 @@ pub enum TaskAction {
     Dismiss,
     /// ⇧⌘T or ⌘Z: the task named, or with none named, the last dismissed.
     Restore,
-    Answer(SharedString),
     Reply(SharedString),
     Retry,
     Stop,
@@ -714,6 +727,14 @@ impl Agents {
     /// `agent`'s run goes before the app hears it end, as a reply can find it: the next reply
     /// starts a run of its own.
     #[cfg(test)]
+    pub(super) fn run_of(&self, agent: &str) -> u32 {
+        let process = self.task(agent).and_then(|task| task.process.as_ref());
+        process.map_or(0, runner::Process::run)
+    }
+
+    /// `agent`'s run goes before the app hears it end, as a reply can find it: the next reply
+    /// starts a run of its own.
+    #[cfg(test)]
     pub(super) fn run_went_unheard(&mut self, agent: &str) {
         if let Some(task) = self.task_mut(agent) {
             task.process = None;
@@ -780,18 +801,20 @@ impl Agents {
         action: TaskAction,
         cx: &mut Context<Self>,
     ) -> (Option<u64>, Option<String>) {
+        // Whether `action` asks more of the agent: a reply to its ask only lets it finish.
+        let answers = self.task(agent).is_some_and(|task| task.asking.is_some());
+        let asks = match action {
+            TaskAction::Reply(_) => !answers,
+            TaskAction::Retry => true,
+            _ => false,
+        };
         // A session's user talks to its agent where they started it.
         let session = self.task(agent).is_some_and(|task| task.session.is_some());
-        if session
-            && matches!(
-                action,
-                TaskAction::Answer(_) | TaskAction::Reply(_) | TaskAction::Retry
-            )
-        {
+        if session && asks {
             return (None, None);
         }
         // With tasks off nothing more is asked of a task; an answer still lets one finish.
-        if !self.tasks_on() && matches!(action, TaskAction::Reply(_) | TaskAction::Retry) {
+        if !self.tasks_on() && asks {
             return (None, None);
         }
         match action {
@@ -800,7 +823,6 @@ impl Agents {
                 let named = Some(agent).filter(|agent| !agent.is_empty());
                 return (None, self.restore_task(named, cx));
             }
-            TaskAction::Answer(answer) => self.answer_task(agent, &answer, cx),
             TaskAction::Reply(text) => self.reply(agent, &text, cx),
             TaskAction::Retry => self.retry_task(agent, cx),
             TaskAction::Stop => self.stop_task(agent, cx),
@@ -825,8 +847,9 @@ impl Agents {
                 }
                 self.take_over_stopped(agent, tab, cx)
             }
-            // The surface's other buttons, which the hand-off's step wires.
-            TaskAction::HandBack(_) | TaskAction::NotNow(_) => {}
+            // A step's line: the tab goes back to the agent, or stays the user's for now.
+            TaskAction::HandBack(tab) => self.hand_back(tab, cx),
+            TaskAction::NotNow(key) => self.not_now(agent, key, cx),
         }
         (None, None)
     }
@@ -870,6 +893,8 @@ impl Agents {
         }
         // ilo's line of each time it stopped the task at its helpers' limit (#4102).
         helpers::lines(task, &mut lines);
+        // ilo's lines of its refusals, its steps handed to the user and its changes of access.
+        self.ilo_lines(task, &mut lines, cx);
         // ilo's own lines of a task that can be replied to after it ended (#4105).
         self.kept_lines(task, &mut lines);
         let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
@@ -923,7 +948,7 @@ impl Agents {
         })
     }
 
-    /// Whether a confirmation or a handoff of the task's waits on the user.
+    /// Whether a step of the task's waits on the user.
     fn waits_on_user(&self, task: &Task) -> bool {
         self.task_question(task).is_some()
     }
@@ -933,27 +958,17 @@ impl Agents {
             Some(session) => (session.agent.as_str(), self.session_prompt(session)?),
             None => (task.agent.as_str(), self.first_prompt(&task.agent)?),
         };
-        (self.asking.iter().map(|asking| &asking.question))
-            .chain(
-                self.question()
-                    .as_ref()
-                    .filter(|question| question.handoff.is_some()),
-            )
-            .find(|question| question.from == from && question.id == first)
-            .cloned()
+        (self.question()).filter(|question| question.from == from && question.id == first)
     }
 
     /// The number of the first of the prompts a session's calls under way wait on: its client's
     /// other connections' calls wait on theirs.
     fn session_prompt(&self, session: &Session) -> Option<u64> {
         let ours = |agent: &str, call: u64| agent == session.agent && session.calls.contains(&call);
-        let confirmations = (self.asking.iter())
-            .filter(|asking| ours(&asking.act.agent, asking.act.call))
-            .map(|asking| asking.question.id);
-        let handoffs = (self.held.values())
+        (self.held.values())
             .filter(|held| held.reply.is_some() && ours(&held.agent, held.call))
-            .map(|held| held.question);
-        confirmations.chain(handoffs).min()
+            .map(|held| held.question)
+            .min()
     }
 
     /// The tab a task is on while it works: its agent's last, or a session's last step's, as its
@@ -966,7 +981,7 @@ impl Agents {
     }
 
     /// A task's pages: its Space's tabs, or of its client's Space, a session's own.
-    fn pages(&self, task: &Task, cx: &App) -> Vec<u64> {
+    pub(super) fn pages(&self, task: &Task, cx: &App) -> Vec<u64> {
         let tabs = self.browser.space_tab_ids(task.space, cx);
         match &task.session {
             Some(session) => session
@@ -983,9 +998,6 @@ impl Agents {
     /// wait on the user and its task's ask. Its calls on different tabs go at once (#1476), so
     /// several can ask together: the first shows, and the others wait their turn.
     pub(super) fn first_prompt(&self, agent: &str) -> Option<u64> {
-        let confirmations = (self.asking.iter())
-            .filter(|asking| asking.act.agent == agent)
-            .map(|asking| asking.question.id);
         let handoffs = (self.held.values())
             .filter(|held| held.agent == agent && held.reply.is_some())
             .map(|held| held.question);
@@ -993,7 +1005,7 @@ impl Agents {
             .task(agent)
             .and_then(|task| task.asking.as_ref())
             .map(|(id, _)| *id);
-        confirmations.chain(handoffs).chain(ask).min()
+        handoffs.chain(ask).min()
     }
 
     /// Whether the task's ask is the prompt its agent shows.
@@ -1098,10 +1110,6 @@ impl Agents {
             word: Word::of(&task.state, dot == Dot::Waiting),
             pages: self.pages(task, cx),
             tier: task.tier,
-            answers: match &task.state {
-                State::Asking { answers, .. } if asks => answers.clone(),
-                _ => Vec::new(),
-            },
             question,
             open,
             page_steps: match task.state {
@@ -1234,6 +1242,7 @@ impl Agents {
     pub fn task_model_menu(&self, cli: Cli) -> (Vec<(String, String)>, Vec<MenuEntry>) {
         model_menu(
             self.task_model(cli),
+            &model_default(cli),
             self.task_default_model(cli),
             self.task_models(cli),
         )
@@ -1272,7 +1281,13 @@ impl Agents {
         Some(name.into())
     }
 
+    /// Sets the model `cli` runs tasks with, only one its Model menu lists, so nothing else, typed
+    /// or from a page, an agent or a file, is ever passed to the CLI as one.
     pub fn set_task_model(&mut self, cli: Cli, model: &str, cx: &mut Context<Self>) {
+        let listed = self.task_models(cli).iter().any(|(id, _)| id == model);
+        if !model.is_empty() && !listed {
+            return;
+        }
         match model.is_empty() {
             true => self.tasks.models.remove(&cli),
             false => self.tasks.models.insert(cli, model.to_string()),
@@ -1339,6 +1354,7 @@ impl Agents {
             tier,
             sites: Sites::default(),
             stops: Vec::new(),
+            placed: Vec::new(),
             told: None,
             helpers: Helpers::of_task(self.helpers_on() && cli == Cli::Claude),
         };
@@ -1400,7 +1416,7 @@ impl Agents {
         helpers::ON
     }
 
-    fn launch(&mut self, agent: &str, first: &str, cx: &mut Context<Self>) {
+    pub(super) fn launch(&mut self, agent: &str, first: &str, cx: &mut Context<Self>) {
         let Some((task, Some(cli))) = self.task(agent).map(|task| (task, task.cli)) else {
             return;
         };
@@ -1452,6 +1468,10 @@ impl Agents {
             Ok(process) => {
                 if let Some(task) = self.task_mut(agent) {
                     task.process = Some(process);
+                    // Until its first line says which kinds of helper it has (#4102).
+                    let new = matches!(keep, super::kept::Keep::New(_));
+                    let had = (task.trace.len(), task.messages.len());
+                    task.helpers.run_started(first, new, had);
                 }
                 self.kept_started(agent, cli, &keep);
             }
@@ -1495,7 +1515,14 @@ impl Agents {
 
     /// What a task's CLI said.
     pub fn task_said(&mut self, event: runner::Event, cx: &mut Context<Self>) {
-        let runner::Event { agent, out } = event;
+        let runner::Event { agent, run, out } = event;
+        // A line of a run ilo ended as it started the task again isn't the task's (helpers.rs).
+        let under_way = (self.task(&agent))
+            .and_then(|task| task.process.as_ref())
+            .map(runner::Process::run);
+        if under_way.is_some_and(|under_way| under_way != run) {
+            return;
+        }
         // Whatever it said, it answered.
         if let Some(task) = self.task_mut(&agent) {
             task.waiting = None;
@@ -1561,7 +1588,9 @@ impl Agents {
                 });
             }
             Out::Helper { id, told } => self.helper_told(&agent, id, told, cx),
-            Out::Started { deep } => self.helper_started(&agent, deep),
+            Out::Started { deep } => self.helper_started(&agent, deep, cx),
+            Out::NotAllowed(limit) => self.helper_not_allowed(&agent, limit, cx),
+            Out::Kinds { ours } => self.helper_kinds(&agent, ours, cx),
             // The turn ilo interrupted at the helpers' limit ends, however its CLI says so. The
             // first since the user wrote, the task goes on in a new turn that starts with what
             // ilo tells it; the second, the turn ends as any does and the task waits for them.
@@ -1575,7 +1604,7 @@ impl Agents {
                     helpers::After::Told(told) => self.tell_task(&agent, told, true, cx),
                     helpers::After::Ends => {
                         let out = Out::Ended(None);
-                        self.task_said(runner::Event { agent, out }, cx)
+                        self.task_said(runner::Event { agent, run, out }, cx)
                     }
                 }
             }
@@ -1680,7 +1709,7 @@ impl Agents {
         }
         // A reply answers the ask waiting, as a button would.
         if self.task(agent).is_some_and(|task| task.asking.is_some()) {
-            return self.answer_task(agent, text, cx);
+            return self.answer_ask(agent, text, cx);
         }
         // One a run before left comes back in its own profile, or not at all (#4105).
         if !self.goes_on(agent) {
@@ -1717,8 +1746,8 @@ impl Agents {
         cx.notify();
     }
 
-    /// The user's answer to the task's ask.
-    pub fn answer_task(&mut self, agent: &str, answer: &str, cx: &mut Context<Self>) {
+    /// The user's reply to the task's ask, which answers it.
+    fn answer_ask(&mut self, agent: &str, answer: &str, cx: &mut Context<Self>) {
         let Some(task) = self.task_mut(agent) else {
             return;
         };
@@ -1732,8 +1761,7 @@ impl Agents {
         _ = reply.send(ToolResult::text(format!("The user answered: {answer}")));
         self.note(agent, 0, "answered", "", "");
         self.wait_for_answer(agent, cx);
-        // The agent's next prompt, if one waited its turn.
-        self.asked(cx);
+        cx.notify();
     }
 
     /// ⌘. or Stop: ends what the task is doing at once. A reply goes on from there.
@@ -2490,6 +2518,7 @@ impl Agents {
             tier: Tier::default(),
             sites: Sites::default(),
             stops: Vec::new(),
+            placed: Vec::new(),
             told: None,
             helpers: Helpers::default(),
         });
@@ -3189,7 +3218,6 @@ fn first_words(result: &str) -> SharedString {
 /// What a card's status leads with when a confirmation or a handoff waits on the user, the one
 /// status the card sets heavier (`status_lead`).
 pub const NEEDS_YOU: &str = "Needs you";
-pub const NEEDS_OK: &str = "Needs your OK";
 /// A card's status while a refusal of its task's access is unsettled, before what it stopped.
 pub const STOPPED_AT: &str = "Stopped at";
 
@@ -3362,26 +3390,17 @@ fn stopped(task: &Task) -> SharedString {
     }
 }
 
-/// The status while a confirmation or a handoff waits: what the user is needed for, after the
-/// words that say they are. A handoff says why, as the agent gave it; a confirmation, what the
-/// agent would do.
+/// The status while a step waits on the user: that it does, and why, as the agent gave it.
 fn needs_you(question: &Question) -> SharedString {
-    match question.handoff {
-        Some(_) if question.why.is_empty() => NEEDS_YOU.into(),
-        Some(_) => format!("{NEEDS_YOU} · {}", question.why.trim_end_matches('.')).into(),
-        // A request's changes: what the browser knows from their methods, never the agent's
-        // words, which the card above quotes as its.
-        None => match &question.changes[..] {
-            [] => format!("{NEEDS_OK} · {}", question.what).into(),
-            [one] => format!("{NEEDS_OK} · {}", one.kind().noun()).into(),
-            many => format!("{NEEDS_OK} · {} changes", many.len()).into(),
-        },
+    match question.why.is_empty() {
+        true => NEEDS_YOU.into(),
+        false => format!("{NEEDS_YOU} · {}", question.why.trim_end_matches('.')).into(),
     }
 }
 
 /// How much of a card's `status` leads it, set in the title's ink and heavier: the step count
-/// while it works ("Step 5"), and "Needs you" or "Needs your OK" while a confirmation or a handoff
-/// waits, the one state that asks for the user. Zero for the rest. By the words alone, as a status
+/// while it works ("Step 5"), and "Needs you" while a step waits on the
+/// user, the one state that asks for them. Zero for the rest. By the words alone, as a status
 /// rolling out has left its card's state behind.
 pub fn status_lead(status: &str) -> usize {
     let counts = (status.strip_prefix("Step "))
@@ -3463,7 +3482,10 @@ pub fn fold(
         first += turn.len();
     }
     let mut lines = Vec::new();
-    let mut stretch = Stretch::default();
+    let mut stretch = Stretch {
+        helpers: Some(helpers),
+        ..Stretch::default()
+    };
     let mut steps = trace.iter().enumerate().peekable();
     for (index, message) in messages.iter().enumerate() {
         while let Some((key, step)) = steps.next_if(|(_, step)| step.after <= index) {
@@ -3499,7 +3521,7 @@ fn steps(lines: Vec<Line>) -> Vec<Line> {
     });
     (steps.filter_map(|item| match item {
         TraceItem::Step(step) => Some(Line::Step(step)),
-        TraceItem::Said(_) | TraceItem::Helper(_) => None,
+        TraceItem::Said(_) | TraceItem::Helper { .. } => None,
     }))
     .collect()
 }
@@ -3507,6 +3529,8 @@ fn steps(lines: Vec<Line>) -> Vec<Line> {
 /// The stretch of work a trace is made of, as it gathers.
 #[derive(Default)]
 struct Stretch<'a> {
+    /// The task's helpers, for the names it gave them.
+    helpers: Option<&'a Helpers>,
     gathered: Vec<Gathered<'a>>,
     key: Option<usize>,
     started: Option<Instant>,
@@ -3554,14 +3578,18 @@ impl<'a> Stretch<'a> {
                 Together::Steps(steps) => TraceItem::Step(trace_step(&steps)),
                 Together::Said(text) => TraceItem::Said(text),
                 // A helper's one line is the step it's on, in the place of its first.
-                Together::Helper(_, key, on) => TraceItem::Helper(helper_step(key, on)),
+                Together::Helper(helper, key, on) => TraceItem::Helper {
+                    step: helper_step(key, on),
+                    name: (self.helpers).map_or_else(SharedString::default, |all| all.name(helper)),
+                    tab: on.1.did.tab,
+                },
             })
             .collect();
         // A stretch that's over has nothing under way, a helper's line neither: what its
         // assistant does with helpers once a turn ends or is interrupted isn't ilo's to show.
         if !running {
             for item in &mut items {
-                if let TraceItem::Step(step) | TraceItem::Helper(step) = item {
+                if let TraceItem::Step(step) | TraceItem::Helper { step, .. } = item {
                     step.running = false;
                     if let Opens::Steps(steps) = &mut step.opens {
                         steps.iter_mut().for_each(|step| step.running = false);
@@ -3860,15 +3888,27 @@ fn receipt(session: &Session, ended: &str) -> String {
     }
 }
 
-/// A CLI's Model menu, as its ids and items, with `chosen` checked: Default first, followed by the
-/// name of the model it is where the CLI says, then `models`.
+/// Settings › Agents' row under each assistant's: what its new tasks start with. Its name carries
+/// it, so it has no line.
+pub const MODEL: &str = "Model";
+/// Model's first choice, `{assistant}` its name: the assistant's own default, passing it no model.
+const MODEL_DEFAULT: &str = "{assistant}'s default";
+
+/// `cli`'s Model's first choice, as its pop-up and menu say it.
+pub fn model_default(cli: Cli) -> String {
+    MODEL_DEFAULT.replace("{assistant}", cli.assistant())
+}
+
+/// A CLI's Model menu, as its ids and items, with `chosen` checked: its own default first, as
+/// `first` says it, followed by the name of the model it is where the CLI says, then `models`.
 pub fn model_menu(
     chosen: &str,
+    first: &str,
     default: Option<&str>,
     models: Vec<(String, String)>,
 ) -> (Vec<(String, String)>, Vec<MenuEntry>) {
     let default = default.map(|name| SharedString::from(name.to_string()));
-    let mut all = vec![(String::new(), MenuEntry::label("Default").to_string())];
+    let mut all = vec![(String::new(), first.to_string())];
     all.extend(models);
     let items = (all.iter().enumerate())
         .map(|(at, (id, name))| {
@@ -3931,45 +3971,4 @@ fn names_the_browser(name: &str) -> bool {
             .iter()
             .any(|browser| read.contains(&reads_as(browser)))
         || read == reads_as("browser")
-}
-
-#[cfg(test)]
-mod needs_you_tests {
-    use super::*;
-    use crate::agents::request::Request;
-
-    fn change(method: &str) -> Request {
-        Request {
-            method: method.into(),
-            url: "https://team.example.com/api/items/7".into(),
-            path: "/api/items/7".into(),
-            headers: Vec::new(),
-            body: String::new(),
-            what: "Tidy up the old draft.".into(),
-        }
-    }
-
-    /// A confirmation's status says what the agent would do; a request's, the kind of its one
-    /// change, or how many it has.
-    #[test]
-    fn a_waiting_status_says_what_the_ok_is_for() {
-        let order = Question {
-            what: "click “Place order” on shop.example".into(),
-            ..Question::default()
-        };
-        assert_eq!(
-            needs_you(&order).as_ref(),
-            "Needs your OK · click “Place order” on shop.example"
-        );
-        let one = Question {
-            changes: vec![change("DELETE")].into(),
-            ..Question::default()
-        };
-        assert_eq!(needs_you(&one).as_ref(), "Needs your OK · a delete");
-        let many = Question {
-            changes: vec![change("PATCH"), change("DELETE")].into(),
-            ..Question::default()
-        };
-        assert_eq!(needs_you(&many).as_ref(), "Needs your OK · 2 changes");
-    }
 }

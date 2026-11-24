@@ -6,9 +6,7 @@ use std::ffi::CString;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use browser::agents::{
-    self, Agents, Browser, Failure, GlobalAgents, PageAction, Question, TabInfo,
-};
+use browser::agents::{self, Agents, Browser, Failure, GlobalAgents, PageAction, TabInfo};
 use gpui::{App, AppContext};
 
 use crate::{WINDOWS, bar_picks_host, bc, ids, name};
@@ -216,12 +214,6 @@ impl Browser for Core {
         })
     }
 
-    fn ask(&self, question: Option<Question>, cx: &mut App) {
-        crate::update_shells_in(cx, |shell, cx| {
-            shell.set_agent_question(question.clone(), cx)
-        });
-    }
-
     fn hand_off(&self, agent: &str, tab: u64) -> bool {
         let Ok(agent) = CString::new(agent) else {
             return false;
@@ -255,10 +247,6 @@ impl Browser for Core {
 
     fn answer_download(&self, download: u64, keep: bool) {
         unsafe { bc::bc_agent_download_answer(download, keep) };
-    }
-
-    fn file_field_choose(&self, field: u64, window: u64) -> bool {
-        unsafe { bc::bc_file_field_choose(field, window) }
     }
 
     fn file_field_drop(&self, field: u64) {
@@ -507,7 +495,8 @@ pub fn start(cx: &mut App) {
         let status = agents.read(cx).status();
         // Each card is compared with the last, so a window redraws only for a task that changed.
         let cards = agents.read(cx).shown_cards(cx);
-        browser::needs_you::follow(&cards, cx);
+        let when = agents.read(cx).notify();
+        browser::needs_you::follow(&cards, when, cx);
         // Each task that ended goes to Library › Agents of its home Space's profile, as its receipt
         // shows it, for 30 days (browser::agent_history).
         let ended = agents.update(cx, |agents, cx| agents.take_ended(cx));

@@ -431,7 +431,7 @@ enum Lane {
     InOrder,
     /// One tab's calls, in the order they came.
     Tab(u64),
-    /// ask, hand_off and ask_for_tab: one prompt at a time, the others waiting their turn.
+    /// `ONE_AT_A_TIME`'s tools: one prompt at a time, the others waiting their turn.
     Asks,
 }
 
@@ -571,6 +571,11 @@ impl<'a> Answering<'a> {
     }
 }
 
+/// What asks the user and waits for their answer one at a time, the next waiting its turn. A step
+/// the user takes on a tab (hand_off) isn't here: it holds only its tab's lane, so each tab's
+/// stands by itself and the other tabs carry on; another such step leaves this list the same way.
+const ONE_AT_A_TIME: [&str; 2] = ["ask", "ask_for_tab"];
+
 /// The lanes a message holds while it's answered.
 fn lanes(line: &str) -> Vec<Lane> {
     let message = serde_json::from_str::<Value>(line).unwrap_or_default();
@@ -587,7 +592,7 @@ fn lanes(line: &str) -> Vec<Lane> {
         (_, Some(tab)) => Some(Lane::Tab(tab)),
         (_, None) => Some(Lane::InOrder),
     };
-    let asks = matches!(tool, "ask" | "hand_off" | "ask_for_tab").then_some(Lane::Asks);
+    let asks = ONE_AT_A_TIME.contains(&tool).then_some(Lane::Asks);
     own.into_iter().chain(asks).collect()
 }
 

@@ -54,7 +54,6 @@ fn card() -> Card {
         word: Word::for_dot(Dot::Done),
         pages: Vec::new(),
         tier: Default::default(),
-        answers: Vec::new(),
         question: None,
         open: Vec::new(),
         page_steps: Vec::new(),

@@ -242,7 +242,7 @@ pub(super) fn fading(
 fn steps(trace: &Trace) -> impl Iterator<Item = &TraceStep> {
     (trace.items.iter())
         .filter_map(|item| match item {
-            TraceItem::Step(step) | TraceItem::Helper(step) => Some(step),
+            TraceItem::Step(step) | TraceItem::Helper { step, .. } => Some(step),
             TraceItem::Said(_) => None,
         })
         .flat_map(and_inner)

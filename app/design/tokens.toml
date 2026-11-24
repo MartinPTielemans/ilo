@@ -2401,6 +2401,23 @@ sync-at = [0.6, 5.0]
 sync-cross = 1.2
 sync-phone = [76.0, 150.0]
 sync-phone-out = 48.0
+# A name too long for the phone's row ends in a fade `sync-fade` wide, into the row's colour.
+sync-fade = 14.0
+# The assistant's: the ask comes at `assistant-at`, its three pages open at `assistant-open`, a
+# price is read from each from `assistant-read`, `assistant-stagger` apart, and the answer comes
+# at `assistant-answer`, each fading in as the import's parts do.
+assistant-at = 0.4
+assistant-open = 1.4
+assistant-read = 2.6
+assistant-stagger = 0.7
+assistant-answer = 5.0
+# Up to you's: today's count, a card `count-card` wide, fills from `count-at`, a line every
+# `count-stagger`; from `count-week` a week goes by under it, a day every `count-day`.
+count-card = 200.0
+count-at = 0.5
+count-stagger = 0.5
+count-week = 3.8
+count-day = 0.6
 
 [shell.import]
 # Ours (#1673): while an import runs, each Space it makes is a card in its own colours, under the
@@ -2657,7 +2674,7 @@ foot-share = 0.5
 # down their left under the middle of the glyph's column, each a favicon, the page's title and
 # one word at its end, with the sidebar's two plates and no other: under the pointer, and on the
 # page shown. A page being worked in has the working dot before its word, in Signal, and its word
-# in the stronger ink.
+# in the stronger ink; the page its task needs the user at has its word in the title's ink.
 pages-top = 2.0
 pages-bottom = 4.0
 pages-line = 1.5
@@ -2677,8 +2694,9 @@ page-word-working = 0.8
 page-dot = 5.0
 page-dot-gap = 5.0
 # The glyph: a box at the favicon's column, a ring in Signal round a dot that circles it while
-# the task works, at this alpha, and goes to the middle, grown, while it asks; done, the ring
-# shrinks away for a tick; stopped, the dot goes and the ring shrinks, in the ink at `stopped`.
+# the task works, at this alpha, and goes to the middle, grown, while it asks, both in the title's
+# ink then; done, the ring shrinks away for a tick, in the state line's ink; stopped, the dot goes
+# and the ring shrinks, in the ink at `stopped`. Signal is the working mark only.
 # The rings are drawn at these values, under the floor text keeps (palette), as they're marks
 # beside a status that says the same in words. On the selected plate's fill, which Signal stands
 # out from less, the ring is as much brighter as `ring-working-selected` is than `ring-working`:
