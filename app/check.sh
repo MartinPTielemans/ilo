@@ -293,7 +293,6 @@ with open(sys.argv[1], "w", encoding="utf-8") as f:
   if [ "${site:-} ${port:-}" != "$checksh_site_was" ] &&
     { [ "$checksh_site_was" != " " ] || [ -z "${server:-}" ]; }; then
     fail "the $run run changed \$site or \$port, which the runs after it read: \"$checksh_site_was\" became \"${site:-} ${port:-}\""
-    site=${checksh_site_was% *} port=${checksh_site_was#* }
   fi
   # On Windows GPUI lost a window's move, size or modifiers that came during an update (#1358).
   if windows && grep -q '^browser: gpui dropped ' "$log"; then
