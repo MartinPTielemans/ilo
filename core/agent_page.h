@@ -25,6 +25,7 @@
 #include "browser_core/public/browser_core.h"
 #include "browser_core/withheld_fields.h"
 #include "content/public/browser/devtools_agent_host_client.h"
+#include "content/public/browser/weak_document_ptr.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "third_party/skia/include/core/SkBitmap.h"
@@ -116,7 +117,8 @@ class AgentPage : public content::WebContentsObserver,
   static void Watch(content::WebContents* contents);
 
   // The agent's session with |tab| ended: its page stops drawing while hidden, and DevTools lets
-  // it go. What's still asked is answered as an error.
+  // it go. What's still asked is answered as an error, and a look still out keeps DevTools until
+  // its own answer is in, which then withholds the page or doesn't.
   static void SessionEnded(bc_id tab);
 
   // |contents|' page went to |url|, which opens an app outside the browser, and the core stopped it
@@ -302,6 +304,8 @@ class AgentPage : public content::WebContentsObserver,
              std::optional<Boxes> after);
   // Lets DevTools go from a page no agent acts on, once nothing pictures it.
   void Rest();
+  // Rests once the last look a session's end kept is in.
+  void RestIfKept();
   // The boxes withheld from a picture, by element, in the main frame's viewport's CSS pixels, or
   // none if a frame's fields couldn't be read: each frame's filled fields (ReadFields), each frame
   // whose fields can't be read (Cover), then each field's attributes and markup (NextField), and a
@@ -394,13 +398,18 @@ class AgentPage : public content::WebContentsObserver,
   // Ends the job, which its page's dialog or the limit stopped waiting on, with |why|, and with
   // |unstarted| the jobs queued behind it.
   void EndWaiting(std::string why, std::optional<std::string> unstarted);
-  // Freeze's looks are dropped unanswered, as when the limit ends them or the session ends: the
-  // page is withheld, and each hears it is.
+  // Freeze's looks are dropped unanswered, as when the limit ends them: each counts as a yes for
+  // its document (Yes), and each hears the page is withheld.
   void LookUnheard();
   // Look |look| answered, with whether a session said the page shows a value.
   void Looked(uint64_t look, bool shows);
+  // A look's yes, for the document it asked (AnswerOfLook).
+  void Yes(const content::WeakDocumentPtr& document);
   // Each look out hears the page is withheld, as none will hear from it.
   void AnswerLooks();
+  // Each look out hears the page is withheld now, as the session's end answers every call, and
+  // is kept for its own answer.
+  void AnswerCallsKeepingLooks();
   // Gives the answer kept while a download started, as none took its action.
   void AnswerHeld();
   // FindField's job: the field its selector finds, then with |submit| Enter in it.
@@ -452,12 +461,15 @@ class AgentPage : public content::WebContentsObserver,
   int SlotOf(content::RenderFrameHost* frame);
   content::RenderFrameHost* FrameOf(int slot);
 
-  // Sends the command to the session at |slot|.
-  void Send(const char* method, base::DictValue params, Reply reply, int slot = 0);
+  // Sends the command to the session at |slot|: its number, or 0 if it was answered at once.
+  int Send(const char* method, base::DictValue params, Reply reply, int slot = 0);
   // Has the session at |slot| bring each frame in another process into a session of its own.
   void AutoAttach(int slot);
   void Detach();
-  void LetGo();
+  // Whether a look still out keeps DevTools for its own answer (SessionEnded), or is answered as
+  // the tab goes.
+  enum class Looks { kAnswer, kKeep };
+  void LetGo(Looks looks = Looks::kAnswer);
 
   // content::DevToolsAgentHostClient:
   void DispatchProtocolMessage(content::DevToolsAgentHost* agent_host,
@@ -538,15 +550,26 @@ class AgentPage : public content::WebContentsObserver,
   bool acted_ = false;
   // Watch took the tab, which keeps DevTools until the session ends, acted on or not.
   bool watching_ = false;
-  // Freeze's looks out, their answers not all in, by number (LookFirstTabs::Started), each with
-  // what hears its answer.
-  base::flat_map<uint64_t, base::OnceCallback<void(bool withheld)>> looks_;
+  // A look out: what hears its answer, gone once the session's end has answered it, and the
+  // document it asked, whose alone its yes is.
+  struct Look {
+    base::OnceCallback<void(bool withheld)> then;
+    content::WeakDocumentPtr document;
+  };
+  // Freeze's looks out, their answers not all in, by number (LookFirstTabs::Started).
+  base::flat_map<uint64_t, Look> looks_;
+  // The commands Freeze sent that are still owed, which outlive the agent's session.
+  std::set<int> look_commands_;
+  // The agent's session ended with a look out, which keeps DevTools until it's answered.
+  bool kept_ = false;
   int pictures_ = 0;
   // WhenIdle's.
   base::OnceClosure idle_;
   // The app link the job running followed, and the app the system opens it in, once it's found.
   std::optional<GURL> app_link_;
   std::u16string app_name_;
+  // The looks', which a session's end leaves, as their answers come after it.
+  base::WeakPtrFactory<AgentPage> look_weak_factory_{this};
   base::WeakPtrFactory<AgentPage> weak_factory_{this};
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();

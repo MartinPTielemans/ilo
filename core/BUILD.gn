@@ -618,6 +618,15 @@ source_set("protected_move_rule") {
   deps = [ "//base" ]
 }
 
+# What a look's answer does to the page it asked, by where that page's document is when it comes,
+# apart so browser_core_unittests tests the rule alone (#4098).
+source_set("agent_look_rule") {
+  sources = [
+    "agent_look_rule.cc",
+    "agent_look_rule.h",
+  ]
+}
+
 # How long an agent's job waits on its page's renderer, apart so browser_core_unittests tests the
 # limit alone (#3536).
 source_set("agent_reply_limit") {
@@ -972,6 +981,7 @@ source_set("browser_core") {
     ":agent_close_rule",
     ":agent_file_field_rule",
     ":agent_splash_rule",
+    ":agent_look_rule",
     ":agent_reply_limit",
     ":popup_hold",
     ":protected_move_rule",
@@ -1315,6 +1325,7 @@ test("browser_core_unittests") {
     "agent_file_field_rule_unittest.cc",
     "agent_splash_rule_unittest.cc",
     "agent_download_hold_unittest.cc",
+    "agent_look_rule_unittest.cc",
     "agent_reply_limit_unittest.cc",
     "agent_job_voter_unittest.cc",
     "quit_stores_wait_unittest.cc",
@@ -1390,6 +1401,7 @@ test("browser_core_unittests") {
     ":agent_splash_rule",
     ":agent_download_hold",
     ":agent_job_voter",
+    ":agent_look_rule",
     ":agent_reply_limit",
     ":quit_stores_wait",
     ":boost_colors",

@@ -31,6 +31,7 @@
 #include "base/time/time.h"
 #include "browser_core/agent_file_field.h"
 #include "browser_core/agent_job_voter.h"
+#include "browser_core/agent_look_rule.h"
 #include "browser_core/agent_session.h"
 #include "browser_core/agent_sign_in.h"
 #include "browser_core/agent_sign_in_rule.h"
@@ -52,6 +53,7 @@
 #include "content/public/browser/browser_accessibility_state.h"
 #include "components/viz/common/frame_sinks/copy_output_result.h"
 #include "mojo/public/cpp/bindings/callback_helpers.h"
+#include "content/public/browser/back_forward_cache.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/host_zoom_map.h"
 #include "content/public/browser/navigation_controller.h"
@@ -83,6 +85,9 @@ namespace browser_core {
 namespace {
 
 constexpr base::TimeDelta kLoadTimeout = base::Seconds(15);
+// The back-forward cache's reason for a document a look found showing a withheld field's value,
+// as agent_sign_in.cc's for a filled one: Chrome's list has none, so its kUnknown, 0.
+constexpr content::BackForwardCache::DisabledReasonType kNoBackForwardCache = 0;
 // How long an action waits for its element to be ready, and then for the page to settle.
 constexpr base::TimeDelta kBusy = base::Seconds(5);
 // A page with no request for this long has settled: what an input starts, such as a navigation
@@ -702,8 +707,9 @@ void AgentPage::Forget() {
 void AgentPage::SessionEnded(bc_id tab) {
   content::WebContents* contents = Tab::FromId(tab);
   if (AgentPage* page = contents ? AgentPage::FromWebContents(contents) : nullptr) {
-    page->LookUnheard();
-    page->LetGo();
+    // The renderer closes what it looked for as it answers, so a look's answer dropped here would
+    // have to count as a yes: it's heard instead.
+    page->LetGo(Looks::kKeep);
   }
   // A tab the user holds from an agent keeps what its password fields hold while they have it, as
   // the agent's next look after the hand back looks for it there.
@@ -2148,7 +2154,7 @@ void AgentPage::Freeze(base::OnceCallback<void(bool withheld)> then) {
   }
   // Counted before the first Send, which the limit counts for it.
   const uint64_t look = LookFirsts().Started();
-  looks_[look] = std::move(then);
+  looks_[look] = {std::move(then), GetWebContents().GetPrimaryMainFrame()->GetWeakDocumentPtr()};
   limit_.Looking(looks_.size());
   auto answered = base::BarrierCallback<bool>(
       slots.size(),
@@ -2158,27 +2164,31 @@ void AgentPage::Freeze(base::OnceCallback<void(bool withheld)> then) {
               page->Looked(look, std::ranges::any_of(shown, std::identity()));
             }
           },
-          weak_factory_.GetWeakPtr(), look));
+          look_weak_factory_.GetWeakPtr(), look));
   for (const int slot : slots) {
     // A session that couldn't answer counts as showing one, as the sign-in's look counts what it
     // couldn't read; but a frame's session that ended while asked had its document go, which
     // shows nothing now (an ad frame a page removes). The page's own, slot 0, never counts so.
-    Send("DOM.freezeWithheldValues", base::DictValue(),
-         base::BindOnce(
-             [](base::WeakPtr<AgentPage> page, int slot, std::string session,
-                base::RepeatingCallback<void(bool)> answered, const base::DictValue* result) {
-               if (!result && slot && page &&
-                   (static_cast<size_t>(slot) >= page->targets_.size() ||
-                    page->targets_[slot].session != session)) {
-                 answered.Run(false);
-                 return;
-               }
-               answered.Run(!result || result->FindBool("shows").value_or(true));
-             },
-             weak_factory_.GetWeakPtr(), slot,
-             static_cast<size_t>(slot) < targets_.size() ? targets_[slot].session : std::string(),
-             answered),
-         slot);
+    const int command = Send(
+        "DOM.freezeWithheldValues", base::DictValue(),
+        base::BindOnce(
+            [](base::WeakPtr<AgentPage> page, int slot, std::string session,
+               base::RepeatingCallback<void(bool)> answered, const base::DictValue* result) {
+              if (!result && slot && page &&
+                  (static_cast<size_t>(slot) >= page->targets_.size() ||
+                   page->targets_[slot].session != session)) {
+                answered.Run(false);
+                return;
+              }
+              answered.Run(!result || result->FindBool("shows").value_or(true));
+            },
+            look_weak_factory_.GetWeakPtr(), slot,
+            static_cast<size_t>(slot) < targets_.size() ? targets_[slot].session : std::string(),
+            answered),
+        slot);
+    if (command && replies_.contains(command)) {
+      look_commands_.insert(command);
+    }
   }
 }
 
@@ -2188,34 +2198,92 @@ void AgentPage::Looked(uint64_t look, bool shows) {
   if (out == looks_.end()) {
     return;
   }
-  base::OnceCallback<void(bool)> then = std::move(out->second);
+  Look done = std::move(out->second);
   looks_.erase(out);
   limit_.Looking(looks_.size());
-  LookFirsts().Answered(tab_, look);
-  if (shows) {
-    WithholdShownPage(GetWebContents());
+  if (looks_.empty()) {
+    look_commands_.clear();
   }
-  std::move(then).Run(PageWithheld(tab_));
+  // One the session's end answered says nothing more: its yes is all that's left of it.
+  if (done.then) {
+    LookFirsts().Answered(tab_, look);
+  }
+  if (shows) {
+    Yes(done.document);
+  }
+  if (done.then) {
+    std::move(done.then).Run(PageWithheld(tab_));
+  }
+  RestIfKept();
+}
+
+void AgentPage::Yes(const content::WeakDocumentPtr& document) {
+  content::RenderFrameHost* asked = document.AsRenderFrameHostIfValid();
+  content::RenderFrameHost* main = GetWebContents().GetPrimaryMainFrame();
+  const LookedDocument where = asked == main                ? LookedDocument::kShown
+                               : asked                      ? LookedDocument::kCached
+                               : !main->IsRenderFrameLive() ? LookedDocument::kRendererGone
+                                                            : LookedDocument::kLeft;
+  switch (AnswerOfLook(/*shows=*/true, where)) {
+    case LookAnswer::kWithhold:
+      WithholdShownPage(GetWebContents());
+      return;
+    case LookAnswer::kKeepFromCache:
+      content::BackForwardCache::DisableForRenderFrameHost(
+          asked, content::BackForwardCache::DisabledReason(
+                     content::BackForwardCache::DisabledSource::kEmbedder, kNoBackForwardCache,
+                     "ilo withholds this document from agents",
+                     /*context=*/"", /*report_string=*/"masked"));
+      return;
+    case LookAnswer::kNothing:
+      return;
+  }
 }
 
 void AgentPage::LookUnheard() {
   // The renderer may have looked, and closed what it looked for, with its answer lost: so it
   // counts as a yes.
-  if (!looks_.empty()) {
-    WithholdShownPage(GetWebContents());
-    AnswerLooks();
+  if (looks_.empty()) {
+    return;
   }
+  for (const auto& [look, out] : looks_) {
+    Yes(out.document);
+  }
+  AnswerLooks();
+  RestIfKept();
 }
 
 void AgentPage::AnswerLooks() {
-  base::flat_map<uint64_t, base::OnceCallback<void(bool)>> looks = std::exchange(looks_, {});
+  base::flat_map<uint64_t, Look> looks = std::exchange(looks_, {});
+  look_commands_.clear();
   limit_.Looking(0);
   // Posted, as each may answer the app, which may be inside its own call into the core. A job's
   // look hears it for a job that's been answered by then, and does nothing.
-  for (auto& [look, then] : looks) {
-    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(std::move(then), /*withheld=*/true));
+  for (auto& [look, out] : looks) {
+    if (out.then) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(std::move(out.then), /*withheld=*/true));
+    }
   }
+}
+
+void AgentPage::AnswerCallsKeepingLooks() {
+  for (auto& [look, out] : looks_) {
+    if (out.then) {
+      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(std::move(out.then), /*withheld=*/true));
+    }
+  }
+}
+
+void AgentPage::RestIfKept() {
+  if (!kept_ || !looks_.empty()) {
+    return;
+  }
+  kept_ = false;
+  // Posted, as this may be inside DevTools' own reply.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&AgentPage::Rest, look_weak_factory_.GetWeakPtr()));
 }
 
 // static
@@ -3478,7 +3546,7 @@ void AgentPage::AnswerHeld() {
   }
 }
 
-void AgentPage::LetGo() {
+void AgentPage::LetGo(Looks looks) {
   std::deque<Job> owed = std::exchange(jobs_, {});
   if (job_ && !std::exchange(taken_, false)) {
     owed.push_front(*std::move(job_));
@@ -3491,8 +3559,14 @@ void AgentPage::LetGo() {
   for (Job& job : owed) {
     Owe(job, "The agent's session with the tab ended.");
   }
-  // A look still out as the tab closes: its read or request is answered as a withheld page's.
-  AnswerLooks();
+  // A look still out as the tab closes: its read or request is answered as a withheld page's. As
+  // the session ends, the look stays for its own answer, and keeps DevTools until it's in.
+  const bool keep = looks == Looks::kKeep && !looks_.empty();
+  if (keep) {
+    AnswerCallsKeepingLooks();
+  } else {
+    AnswerLooks();
+  }
   if (idle_) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, std::move(idle_));
   }
@@ -3510,6 +3584,16 @@ void AgentPage::LetGo() {
   loaded_.Reset();
   EndChoosing();
   drawing_.RunAndReset();
+  if (keep) {
+    kept_ = true;
+    // Only the looks' commands are still owed: the rest were the agent's.
+    base::EraseIf(replies_,
+                  [this](const auto& reply) { return !look_commands_.contains(reply.first); });
+    Unlisten();
+    return;
+  }
+  look_weak_factory_.InvalidateWeakPtrs();
+  kept_ = false;
   Detach();
   // With DevTools gone, its sessions are too, and what they heard.
   Unlisten();
@@ -3545,14 +3629,14 @@ content::RenderFrameHost* AgentPage::FrameOf(int slot) {
   return found;
 }
 
-void AgentPage::Send(const char* method, base::DictValue params, Reply reply, int slot) {
+int AgentPage::Send(const char* method, base::DictValue params, Reply reply, int slot) {
   if (!agent_host_) {
     scoped_refptr<content::DevToolsAgentHost> host =
         content::DevToolsAgentHost::GetOrCreateFor(&GetWebContents());
     // The profile's policy may keep DevTools from the page, which leaves agents without it too.
     if (!host || !host->AttachClient(this)) {
       std::move(reply).Run(nullptr);
-      return;
+      return 0;
     }
     agent_host_ = std::move(host);
     targets_.assign(1, Target());
@@ -3569,7 +3653,7 @@ void AgentPage::Send(const char* method, base::DictValue params, Reply reply, in
   if (slot < 0 || static_cast<size_t>(slot) >= targets_.size() ||
       (slot && targets_[slot].session.empty())) {
     std::move(reply).Run(nullptr);
-    return;
+    return 0;
   }
   const int id = next_command_++;
   base::DictValue command =
@@ -3580,11 +3664,12 @@ void AgentPage::Send(const char* method, base::DictValue params, Reply reply, in
   std::optional<std::string> json = base::WriteJson(command);
   if (!json) {
     std::move(reply).Run(nullptr);
-    return;
+    return 0;
   }
   replies_[id] = {slot, std::move(reply)};
   limit_.Sent();
   agent_host_->DispatchProtocolMessage(this, base::as_byte_span(*json));
+  return id;
 }
 
 void AgentPage::AutoAttach(int slot) {
