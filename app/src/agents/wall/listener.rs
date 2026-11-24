@@ -193,6 +193,9 @@ fn accept(listener: TcpListener, hosts: &'static [&'static str], dial: Dial, sha
             let mut open = shared.open.lock().unwrap();
             if open.len() >= MOST_OPEN {
                 drop(open);
+                // Its request is left unread, so the client may see a reset in place of the 503:
+                // either is the refusal. Reading it would need the thread or the timer the cap is
+                // there to spare.
                 refuse(&mut stream, &shared, "503 Service Unavailable");
                 continue;
             }
@@ -365,15 +368,32 @@ mod tests {
         Listener::start_with(LISTED, to_echo).unwrap()
     }
 
+    /// The listener's reply to `request`, empty when it closed the connection with a reset: a
+    /// refusal that leaves the request unread (over the cap, or past the longest head) can end so,
+    /// and is the refusal as a clean close is.
     fn ask(listener: &Listener, request: &[u8]) -> (String, TcpStream) {
         let mut stream = TcpStream::connect(("127.0.0.1", listener.port())).unwrap();
-        stream.write_all(request).unwrap();
+        // The listener may have reset it before the whole request is sent.
+        _ = stream.write_all(request);
         let mut reply = Vec::new();
         let mut byte = [0u8];
-        while !reply.ends_with(b"\r\n\r\n") && stream.read(&mut byte).unwrap() == 1 {
-            reply.push(byte[0]);
+        while !reply.ends_with(b"\r\n\r\n") {
+            match stream.read(&mut byte) {
+                Ok(1) => reply.push(byte[0]),
+                Ok(_) => break,
+                Err(why) if why.kind() == io::ErrorKind::ConnectionReset => {
+                    reply.clear();
+                    break;
+                }
+                Err(why) => panic!("{why}"),
+            }
         }
         (String::from_utf8(reply).unwrap(), stream)
+    }
+
+    /// A refusal's reply: its status, or nothing when the connection was reset.
+    fn refused_with(reply: &str, status: &str) -> bool {
+        reply.is_empty() || reply.starts_with(&format!("HTTP/1.1 {status}"))
     }
 
     #[test]
@@ -423,7 +443,7 @@ mod tests {
         ]
         .concat();
         let (reply, _) = ask(&listener, &long);
-        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+        assert!(refused_with(&reply, "403"), "{reply}");
         assert_eq!(
             listener.counts(),
             Counts {
@@ -440,7 +460,7 @@ mod tests {
             .map(|_| ask(&listener, b"CONNECT api.example.org:443 HTTP/1.1\r\n\r\n").1)
             .collect();
         let (reply, _) = ask(&listener, b"CONNECT api.example.org:443 HTTP/1.1\r\n\r\n");
-        assert!(reply.starts_with("HTTP/1.1 503"), "{reply}");
+        assert!(refused_with(&reply, "503"), "{reply}");
         assert_eq!(
             listener.counts(),
             Counts {
