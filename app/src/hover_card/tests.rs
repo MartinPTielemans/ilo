@@ -150,6 +150,24 @@ fn a_card_shows_once_the_pointer_has_rested_on_its_row_for_dia_s_half_second(
     );
 }
 
+/// A platform's timer can wake the card a little before its dwell is up, as Windows' can by up to
+/// its tick: it waits out the rest and shows, rather than waiting on with nothing to wake it, so
+/// that no rest on the row ever showed it again (#4108's Windows overlays run).
+#[gpui::test]
+fn a_wake_before_the_dwell_is_up_waits_out_the_rest(cx: &mut TestAppContext) {
+    let (host, told) = open_card(cx);
+    rest_on(cx, &told, card(1, true));
+    assert!(after(cx, &host, DWELL - Duration::from_millis(5)).is_empty());
+    let card_window = card_window(cx);
+    cx.update(|cx| card_window.update(cx, |card, _, cx| card.woke(cx)).unwrap());
+    cx.run_until_parked();
+    assert!(host.0.take().is_empty(), "it showed before its dwell");
+    assert_eq!(
+        after(cx, &host, Duration::from_millis(5)),
+        [shown(1, waiting_height())]
+    );
+}
+
 #[gpui::test]
 fn the_pointer_leaving_before_the_dwell_opens_nothing(cx: &mut TestAppContext) {
     let (host, told) = open_card(cx);
