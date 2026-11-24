@@ -2026,7 +2026,7 @@ void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
   }
   // The window takes a tile's page, with its input, from the tile.
   for (bc_id pane : panes) {
-    tiles::End(pane);
+    tiles::TakenByWindow(pane);
   }
   panes_ = std::move(panes);
   const bool newly_shown = shown_.get() != contents;

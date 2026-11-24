@@ -20,14 +20,21 @@ TileRule& Rule() {
   return *rule;
 }
 
-// The page of |tab|, which was a tile in |view|, leaves it.
-void Ended(bc_id tab, const void* view) {
-  if (!view) {
+void LogEnded(bc_id tab) {
+  fprintf(stderr, "browser: tile %llu ended\n", static_cast<unsigned long long>(tab));
+}
+
+// The page of |tab|, which was a tile in |view| or |parked|, leaves both: out of its window as well
+// where it |leaves_window|.
+void Out(bc_id tab, const void* view, bool parked, bool leaves_window) {
+  if (!view && !parked) {
     return;
   }
-  fprintf(stderr, "browser: tile %llu ended\n", static_cast<unsigned long long>(tab));
+  if (view) {
+    LogEnded(tab);
+  }
   if (content::WebContents* contents = Tab::FromId(tab)) {
-    platform::EndTile(contents);
+    platform::EndTile(contents, leaves_window);
   }
 }
 
@@ -63,15 +70,28 @@ bool Show(bc_id tab, void* view, const gfx::Rect& frame, double corner_radius) {
 }
 
 void End(bc_id tab) {
-  Ended(tab, Rule().Left(tab));
+  const bool parked = Rule().Parked(tab);
+  Out(tab, Rule().Left(tab), parked, /*leaves_window=*/true);
+}
+
+void TakenByWindow(bc_id tab) {
+  const bool parked = Rule().Parked(tab);
+  Out(tab, Rule().Left(tab), parked, /*leaves_window=*/false);
 }
 
 void EndTile(bc_id tab) {
-  Ended(tab, Rule().End(tab));
+  if (!Rule().End(tab)) {
+    return;
+  }
+  LogEnded(tab);
+  if (content::WebContents* contents = Tab::FromId(tab)) {
+    platform::ParkTile(contents);
+  }
 }
 
 void ShowInCard(bc_id tab) {
-  Ended(tab, Rule().ShowInCard(tab));
+  const bool parked = Rule().Parked(tab);
+  Out(tab, Rule().ShowInCard(tab), parked, /*leaves_window=*/true);
 }
 
 void PageViewChanged(bc_id tab) {

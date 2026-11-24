@@ -12,11 +12,16 @@ namespace browser_core::tiles {
 // bc_tab_show_tile.
 bool Show(bc_id tab, void* view, const gfx::Rect& frame, double corner_radius);
 
-// A window showing |tab|, and its page going: takes the page out of its tile, and a card has it no
-// more. Nothing if neither had it.
+// Its page going: takes the page out of its tile or the park, and its window, and a card has it no
+// more. Nothing if none had it.
 void End(bc_id tab);
 
-// bc_tab_end_tile: takes the page out of its tile. Nothing if it isn't one.
+// A window showing |tab| takes its page, with its input, from its tile or the park, within the
+// window, and a card has it no more. Nothing if none had it.
+void TakenByWindow(bc_id tab);
+
+// bc_tab_end_tile: takes the page out of its tile, parking it in the tile's window, so it stays
+// visible (#3788). Nothing if it isn't a tile.
 void EndTile(bc_id tab);
 
 // bc_tab_show_in: a card has the page, with its input, from now on, until End. Takes it out of its

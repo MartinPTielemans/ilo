@@ -29,7 +29,9 @@ class TileRule {
   Shown Show(uint64_t tab, const void* view, bool agent_tab, bool window_shows, bool platform_can);
 
   // bc_tab_end_tile. Returns the view it was in, or null if it wasn't a tile, as after its tab or
-  // view went. A card keeps the tab.
+  // view went. A card keeps the tab. The page is parked: out of sight but still in that view's
+  // window, so it stays visible to itself, until a tile, a card or a window has it, or it goes
+  // (#3788).
   const void* End(uint64_t tab);
 
   // bc_tab_show_in: a card has |tab|'s page from now on, until Left. Ends its tile, returning the
@@ -40,6 +42,9 @@ class TileRule {
   // view of the tile it was, or null.
   const void* Left(uint64_t tab);
 
+  // Whether End parked |tab|'s page and nothing has had it since.
+  bool Parked(uint64_t tab) const;
+
   // Whether |tab| is a tile, which a page's focus(), an activation and a commit's focus are
   // refused for. A tab it never held, or holds no more, as a closed one, is as Chromium has it.
   bool Holds(uint64_t tab) const;
@@ -48,8 +53,12 @@ class TileRule {
   static const char* Name(Shown shown);
 
  private:
+  // Takes |tab| out of its tile, returning the view it was in, or null.
+  const void* Take(uint64_t tab);
+
   base::flat_map<uint64_t, const void*> views_;
   base::flat_set<uint64_t> cards_;
+  base::flat_set<uint64_t> parked_;
 };
 
 }  // namespace browser_core
