@@ -78,17 +78,21 @@ impl Agents {
     ) {
         // A tab can leave the agent's Space, close or turn off limits while its page answers, as
         // before a discard: the core refuses it then, in its own words, so the agent learns
-        // nothing of a tab not its own and nothing runs. One the core still calls its own is
-        // refused as any other.
+        // nothing of a tab not its own and nothing runs. One the core still calls its own but the
+        // UI doesn't list, as a popup may be, sends a request's reads and refuses its changes in
+        // the core's words; any other act there is refused as anywhere.
         let space = self.browser.agent_space(&act.agent);
         if act.tab != 0
             && !self
                 .tabs_seen(space, cx)
                 .iter()
                 .any(|tab| tab.id == act.tab)
-            && let Err(refused) = self.may_act(&act.agent, act.tab, act.action, cx)
         {
-            return self.refuse(act, &site, refused, cx);
+            match self.may_act(&act.agent, act.tab, act.action, cx) {
+                Err(refused) => return self.refuse(act, &site, refused, cx),
+                Ok(()) if act.action == "request" => return self.send(act, false, cx),
+                Ok(()) => {}
+            }
         }
         let at = match act.asks.is_empty() {
             true => tier::plain(&site),

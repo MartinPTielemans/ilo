@@ -2936,13 +2936,15 @@ fn every_tool_and_step_is_in_one_class() {
         assert_eq!(placed.count(), 1, "{name} isn't in exactly one class");
     }
     // The tools that act on a page by themselves are those ACTS refuses, as their calls name them.
-    let acts = ACTS_ON[..4].map(|name| {
-        if name == "select" {
-            "select_option"
-        } else {
-            name
-        }
-    });
+    let acts: Vec<&str> = (ACTS_ON[..4].iter())
+        .map(|name| {
+            if *name == "select" {
+                "select_option"
+            } else {
+                name
+            }
+        })
+        .collect();
     assert_eq!(acts, super::access::ACTS);
 }
 
@@ -7993,13 +7995,14 @@ mod tasks {
             task.state = State::Working;
             task.sites = Sites::Only(vec!["example.com".into()]);
         });
-        let act = |action| {
+        let mut act = |action| {
             agents.update(cx, |agents, cx| {
                 agents.task_action(&agent, action, cx);
             })
         };
-        act(TaskAction::SetTier(Tier::Full));
+        // Any site first: the step up tells the task, which here has no CLI to run it again.
         act(TaskAction::AnySite);
+        act(TaskAction::SetTier(Tier::Full));
         let (tier, sites) = agents.read_with(cx, |agents, _| {
             let task = agents.task(&agent).unwrap();
             (task.tier, task.sites.clone())
