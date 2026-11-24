@@ -11,8 +11,11 @@ use super::*;
 use crate::agents::access::ACCESS_ACTION;
 use crate::agents::files::Given;
 use crate::agents::runner::{self, Cli, Out};
-use crate::agents::task::State;
-use crate::agents::task::rewall::{Change, PutUp, Rewalled};
+use crate::agents::task::ilo::{IloKind, IloLine, LeftOut, Reach};
+use crate::agents::task::rewall::{
+    Change, LEFT_OUT_LOGGED, PutUp, Rewalled, STOPPED_FILES_LOGGED, STOPPED_FOLDER_LOGGED,
+};
+use crate::agents::task::{Line, State, Who};
 use crate::agents::tier::{self, Tier};
 use crate::agents::wall::{Granted, Wall, WallFor, WallRefused};
 
@@ -86,8 +89,38 @@ fn run_of(run: &Run, agent: &str, cx: &mut TestAppContext) -> u32 {
 fn stands(run: &Run, agent: &str, cx: &mut TestAppContext) -> (Tier, bool, Vec<(usize, Rewalled)>) {
     (run.agents).read_with(cx, |agents, _| {
         let task = agents.task(agent).unwrap();
-        (task.tier, task.files.any(), task.rewalled.clone())
+        // The turn each came in, as the user's messages before it count it.
+        let turn = |after: usize| {
+            let before = task.messages.iter().take(after);
+            before.filter(|message| message.who == Who::User).count()
+        };
+        let came = (task.rewalled.iter())
+            .map(|came| (turn(came.after), came.what.clone()))
+            .collect();
+        (task.tier, task.files.any(), came)
     })
+}
+
+/// What ilo's lines in the task's conversation say, in its order. Each is settled, as none of a
+/// wall's has a button.
+fn lines(run: &Run, agent: &str, cx: &mut TestAppContext) -> Vec<IloKind> {
+    (run.talk(agent, cx).lines.into_iter())
+        .filter_map(|line| match line {
+            Line::Ilo(IloLine { kind, settled, .. }) => {
+                assert!(settled, "{kind:?}");
+                Some(kind)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The name `folder()` is shown by.
+const FOLDER: &str = "folder";
+
+/// A start's row in the log where it left the task's files out.
+fn started_without(tier: Tier, pages: usize) -> String {
+    format!("{}{LEFT_OUT_LOGGED}", tier::started_logged(tier, pages))
 }
 
 /// The changes of level the log has for the task, oldest first.
@@ -335,6 +368,7 @@ fn a_raise_whose_wall_isnt_put_up_leaves_the_task_as_it_runs(cx: &mut TestAppCon
     let stays = Rewalled::Stays {
         at: Tier::Work,
         refused: Tier::Full,
+        files: folder(),
     };
     assert_eq!(
         stands(&run, &agent, cx),
@@ -343,11 +377,54 @@ fn a_raise_whose_wall_isnt_put_up_leaves_the_task_as_it_runs(cx: &mut TestAppCon
     assert_eq!((run_of(&run, &agent, cx), logged(&run, &agent, cx)), before);
     assert_eq!(run.state(&agent, cx), State::Working);
     assert_eq!(sent(&run, 1, 1).len(), 1);
+    // ilo's line says the level it stays at and the one it couldn't have, and no line says the
+    // user set it.
+    let kept = IloKind::KeptAt {
+        at: Tier::Work,
+        refused: Tier::Full,
+        folder: FOLDER.into(),
+    };
+    assert_eq!(lines(&run, &agent, cx), [kept]);
 }
 
-/// What came of a wall is kept with the turn it came in, as an ilo line's is, so its line stands
-/// where it happened: one refused after the user's reply is the next turn's, and the first's
-/// stays the first's.
+/// A start whose wall isn't put up goes on without its files: ilo's line says which folder it
+/// started without, and the start's one row in the log ends with that its files were left out,
+/// with no name in it. Files the user attached have no name a line says yet, so theirs is the
+/// log's row alone.
+#[gpui::test]
+fn a_start_whose_wall_isnt_put_up_says_what_it_started_without(cx: &mut TestAppContext) {
+    for (name, files, said) in [
+        (
+            "start-folder",
+            folder(),
+            Some(LeftOut::Folder(FOLDER.into())),
+        ),
+        ("start-attached", attached(), None),
+    ] {
+        let (run, walls) = (Run::new(name, cx), Walls::default());
+        walls.refuses.set(true);
+        (run.agents).update(cx, |agents, _| {
+            agents.tasks.files = files;
+            agents.tasks.wall = Some(walls.maker());
+        });
+        let agent = run.start(Cli::Claude, cx);
+        let (args, _) = run.ran(1);
+        assert!(!walled(&args), "{args:?}");
+        assert!(!stands(&run, &agent, cx).1);
+        let said: Vec<IloKind> = (said.into_iter())
+            .map(|left| IloKind::StartedWithout { left })
+            .collect();
+        assert_eq!(lines(&run, &agent, cx), said, "{name}");
+        let logged = logged(&run, &agent, cx);
+        assert_eq!(logged, [started_without(Tier::Work, 0)], "{name}");
+        let named = |text: &String| text.contains(FOLDER) || text.contains("nonexistent");
+        assert!(!logged.iter().any(named), "{logged:?}");
+    }
+}
+
+/// What came of a wall is kept with where it came among the task's messages and steps, as a
+/// refusal's line is, so its line stands where it happened: one refused after the user's reply is
+/// the next turn's and stands after the reply, and the first's stays before it.
 #[gpui::test]
 fn what_came_of_a_wall_is_kept_with_its_turn(cx: &mut TestAppContext) {
     let (run, walls, agent) = started("turns", folder(), cx);
@@ -359,9 +436,18 @@ fn what_came_of_a_wall_is_kept_with_its_turn(cx: &mut TestAppContext) {
     let stays = Rewalled::Stays {
         at: Tier::Work,
         refused: Tier::Full,
+        files: folder(),
     };
     let kept = stands(&run, &agent, cx).2;
     assert_eq!(kept, vec![(0, stays.clone()), (1, stays)]);
+    let stood: Vec<&str> = (run.talk(&agent, cx).lines.iter())
+        .filter_map(|line| match line {
+            Line::You(_) => Some("you"),
+            Line::Ilo(_) => Some("ilo"),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(stood, ["ilo", "you", "ilo"]);
 }
 
 /// A lower whose wall isn't put up still lowers the task, at once: it goes on at the new level
@@ -387,6 +473,23 @@ fn a_lower_whose_wall_isnt_put_up_goes_on_without_its_files(cx: &mut TestAppCont
         (Tier::Look, false, vec![(0, without)])
     );
     assert_eq!(run.state(&agent, cx), State::Working);
+    // Under the line of the level the user set, ilo's of what the task went on without.
+    let lowered = IloKind::TierChanged {
+        from: Tier::Work,
+        to: Tier::Look,
+    };
+    let without = IloKind::StartedWithout {
+        left: LeftOut::Folder(FOLDER.into()),
+    };
+    assert_eq!(lines(&run, &agent, cx), [lowered, without]);
+    // The start at the lower level has a row of its own, as no row is written over.
+    assert_eq!(
+        logged(&run, &agent, cx)[1..],
+        [
+            tier::changed_logged(Tier::Work, Tier::Look),
+            started_without(Tier::Look, 0)
+        ]
+    );
     // With no files left, a change of level is any task's.
     walls.refuses.set(false);
     let asked = walls.asked().len();
@@ -411,15 +514,28 @@ fn a_raise_the_system_refuses_goes_back_to_its_level(cx: &mut TestAppContext) {
     assert!(!first.contains("access"), "{first}");
     let levels: Vec<Tier> = walls.asked().iter().map(|asked| asked.0).collect();
     assert_eq!(levels, [Tier::Work, Tier::Full, Tier::Work]);
-    let stays = Rewalled::Stays {
+    let back = Rewalled::SetBack {
         at: Tier::Work,
         refused: Tier::Full,
+        files: folder(),
     };
     assert_eq!(
         stands(&run, &agent, cx),
-        (Tier::Work, true, vec![(0, stays)])
+        (Tier::Work, true, vec![(0, back)])
     );
     assert_eq!(run.state(&agent, cx), State::Working);
+    // It was at the new level for a moment, so under the line of the level the user set, ilo's
+    // says it set the task back, and none says it kept it.
+    let raised = IloKind::TierChanged {
+        from: Tier::Work,
+        to: Tier::Full,
+    };
+    let back = IloKind::SetBack {
+        at: Tier::Work,
+        refused: Tier::Full,
+        folder: FOLDER.into(),
+    };
+    assert_eq!(lines(&run, &agent, cx), [raised, back]);
     assert_eq!(
         logged(&run, &agent, cx)[1..],
         [
@@ -450,6 +566,18 @@ fn a_start_the_system_refuses_goes_on_without_its_files(cx: &mut TestAppContext)
         (Tier::Work, false, vec![(0, without)])
     );
     assert_eq!(run.state(&agent, cx), State::Working);
+    let without = IloKind::StartedWithout {
+        left: LeftOut::Folder(FOLDER.into()),
+    };
+    assert_eq!(lines(&run, &agent, cx), [without]);
+    // The start it had made has its row, and the one without its files its own.
+    assert_eq!(
+        logged(&run, &agent, cx),
+        [
+            tier::started_logged(Tier::Work, 0),
+            started_without(Tier::Work, 0)
+        ]
+    );
 }
 
 /// The user takes back the task's folder, as the menu's row will: the run that had it ends and
@@ -490,6 +618,67 @@ fn files_taken_back_start_it_again_without_them(cx: &mut TestAppContext) {
     );
     assert_eq!(run_of(&run, &agent, cx), 0);
     assert!(matches!(run.state(&agent, cx), State::Failed { .. }));
+    // ilo's line says why it stopped, and the log has that it did, with no name in it.
+    let stopped = IloKind::NotRestarted {
+        left: LeftOut::Folder(FOLDER.into()),
+    };
+    assert_eq!(lines(&run, &agent, cx), [stopped]);
+    let rows = logged(&run, &agent, cx);
+    assert_eq!(rows.last().map(String::as_str), Some(STOPPED_FOLDER_LOGGED));
+
+    // Attached copies taken back say the files in the log, and have no name a line says yet.
+    let (run, _, agent) = started("taken-copies", attached(), cx);
+    run.ran(1);
+    (run.agents).update(cx, |agents, _| {
+        let found = agents.tasks.found.get_mut(&Cli::Claude).unwrap();
+        found.program = Some(PathBuf::from("/nonexistent/claude"));
+    });
+    take_back(&run, &agent, cx);
+    assert!(matches!(run.state(&agent, cx), State::Failed { .. }));
+    let rows = logged(&run, &agent, cx);
+    assert_eq!(rows.last().map(String::as_str), Some(STOPPED_FILES_LOGGED));
+}
+
+/// What the wait on a raise's restart and the sweep at a run's end will hand a task, which
+/// nothing makes yet: each is a line of ilo's in the task's conversation, in the order it came,
+/// and what's left running is said by what the task had, the folder by its name and the files
+/// the user attached as the task's.
+#[gpui::test]
+fn a_restart_that_cant_start_and_a_run_left_running_are_lines_of_ilos(cx: &mut TestAppContext) {
+    let both = Given {
+        attached: attached().attached,
+        ..folder()
+    };
+    let (run, _, agent) = started("left", folder(), cx);
+    run.ran(1);
+    (run.agents).update(cx, |agents, _| {
+        let task = agents.task_mut(&agent).unwrap();
+        task.not_raised(Tier::Full);
+        task.left_running(folder());
+        task.left_running(attached());
+        task.left_running(both);
+        // A run that had no files left nothing that reaches any.
+        task.left_running(Given::default());
+        task.ended_left();
+    });
+    let left = |reach| IloKind::LeftRunning { reach };
+    assert_eq!(
+        lines(&run, &agent, cx),
+        [
+            IloKind::NotRaised {
+                refused: Tier::Full
+            },
+            left(Reach::Folder(FOLDER.into())),
+            left(Reach::Files),
+            left(Reach::Both(FOLDER.into())),
+            IloKind::EndedLeft,
+        ]
+    );
+    // The lines are the task's own record: the log has nothing of them from here.
+    assert_eq!(
+        logged(&run, &agent, cx),
+        [tier::started_logged(Tier::Work, 0)]
+    );
 }
 
 /// Files taken back from a task that isn't at work end its run at once all the same, and its
@@ -513,4 +702,161 @@ fn files_taken_back_from_a_task_at_rest_end_its_run(cx: &mut TestAppContext) {
     assert!(!walled(&args), "{args:?}");
     assert_eq!(walls.asked().len(), 1);
     assert_eq!(run.state(&agent, cx), State::Working);
+}
+
+/// A folder's name is the user's, and one place says it: ilo's line in the task's conversation.
+/// With each of a wall's lines made on a task whose folder has a name no other string holds,
+/// nothing else holds it: what the browser was asked, the activity log, the task's card and its
+/// bar, a posted notification, each tool's answer to the task and to a client from outside, a
+/// start outside a wall, Library's record and every file ilo wrote.
+#[gpui::test]
+fn a_folders_name_is_in_ilos_line_and_nowhere_else(cx: &mut TestAppContext) {
+    use crate::needs_you::{self, Host, Notify};
+    #[derive(Default)]
+    struct Posted(RefCell<Vec<String>>);
+    impl Host for Posted {
+        fn badge(&self, _: usize) {}
+        fn active(&self) -> bool {
+            false
+        }
+        fn notify(&self, _: u64, title: &str, body: &str) {
+            self.0.borrow_mut().push(format!("{title}\n{body}"));
+        }
+    }
+    const NAME: &str = "Saffron ledger";
+    let named = || Given {
+        folder: Some(Granted::named_for_test(NAME)),
+        attached: None,
+    };
+    let names = |text: &str| text.contains(NAME) || text.contains("nonexistent");
+    let posted = Rc::new(Posted::default());
+
+    // Each line, made as its test above makes it, with the runs of its task that started
+    // outside a wall.
+    type Makes = fn(&Run, &Walls, &str, &mut TestAppContext) -> (IloKind, Vec<usize>);
+    let cases: [(&str, bool, Makes); 4] = [
+        ("named-start", true, |_, _, _, _| {
+            let left = LeftOut::Folder(NAME.into());
+            (IloKind::StartedWithout { left }, vec![1])
+        }),
+        ("named-kept", false, |run, walls, agent, cx| {
+            run.ran(1);
+            walls.refuses.set(true);
+            set(run, agent, Tier::Full, cx);
+            let kept = IloKind::KeptAt {
+                at: Tier::Work,
+                refused: Tier::Full,
+                folder: NAME.into(),
+            };
+            (kept, Vec::new())
+        }),
+        ("named-back", false, |run, _, agent, cx| {
+            run.ran(1);
+            set(run, agent, Tier::Full, cx);
+            run.ran(2);
+            run.said(agent, Out::Walled(Err(refused())), cx);
+            run.ran(3);
+            let back = IloKind::SetBack {
+                at: Tier::Work,
+                refused: Tier::Full,
+                folder: NAME.into(),
+            };
+            (back, Vec::new())
+        }),
+        ("named-stopped", false, |run, _, agent, cx| {
+            run.ran(1);
+            (run.agents).update(cx, |agents, cx| {
+                let found = agents.tasks.found.get_mut(&Cli::Claude).unwrap();
+                found.program = Some(PathBuf::from("/nonexistent/claude"));
+                let files = std::mem::take(&mut agents.task_mut(agent).unwrap().files);
+                agents.rewall(agent, Change::TookBack(files), "Taken back.".into(), cx);
+            });
+            let left = LeftOut::Folder(NAME.into());
+            (IloKind::NotRestarted { left }, Vec::new())
+        }),
+    ];
+    let mut notified = 0;
+    for (name, refuses, makes) in cases {
+        // Each task's notification is its own, whatever the one before was told.
+        cx.update(|cx| needs_you::open(posted.clone(), cx));
+        let (run, walls) = (Run::new(name, cx), Walls::default());
+        walls.refuses.set(refuses);
+        (run.agents).update(cx, |agents, _| {
+            agents.tasks.files = named();
+            agents.tasks.wall = Some(walls.maker());
+        });
+        let agent = run.start(Cli::Claude, cx);
+        let (line, unwalled) = makes(&run, &walls, &agent, cx);
+
+        // The conversation says it once, in ilo's line, and no other line of it does.
+        let said = run.talk(&agent, cx).lines;
+        let ilos = |line: &&Line| matches!(line, Line::Ilo(_));
+        let held: Vec<&Line> = (said.iter())
+            .filter(|line| names(&format!("{line:?}")))
+            .collect();
+        assert_eq!(held.len(), 1, "{name}: {held:?}");
+        assert!(
+            matches!(held[0], Line::Ilo(IloLine { kind, .. }) if *kind == line),
+            "{name}: {held:?}"
+        );
+        assert!(said.iter().filter(ilos).count() >= 1, "{name}");
+
+        let mut words: Vec<String> = Vec::new();
+        for ran in unwalled {
+            let (args, first) = run.ran(ran);
+            assert!(!walled(&args), "{name}: {args:?}");
+            words.extend(args);
+            words.push(first);
+        }
+        // Its card and its notification, as it is and once it ends, where it still works.
+        let mut follow = |cx: &mut TestAppContext| {
+            let cards = (run.agents).read_with(cx, |agents, cx| agents.shown_cards(cx));
+            cx.update(|cx| needs_you::follow(&cards, Notify::Away, cx));
+            format!("{cards:?}")
+        };
+        words.push(follow(cx));
+        let works = run.state(&agent, cx) == State::Working;
+        if works {
+            run.finish(&agent, cx);
+            words.push(follow(cx));
+        }
+        (run.agents).update(cx, |agents, cx| {
+            words.push(format!("{:?}", agents.status()));
+            words.push(format!("{:?}", agents.question()));
+            words.extend(agents.activity(&agent).map(|entry| format!("{entry:?}")));
+            agents.connect(Client::ClaudeCode, cx);
+        });
+        cx.run_until_parked();
+        // Each tool, asked with nothing: what it answers at once, a refusal included.
+        let before = words.len();
+        for client in [agent.as_str(), "claude-code"] {
+            for tool in tools::names(client) {
+                if let Ok(answer) = call(&run.agents, client, &tool, json!({}), cx).try_recv() {
+                    words.push(answer.text);
+                }
+            }
+        }
+        assert!(words.len() > before + 10, "{name}: few tools answered");
+        cx.run_until_parked();
+        let browser = &run.browser;
+        words.push(format!("{:?}", browser.made.borrow()));
+        words.push(format!("{:?}", browser.navigated.borrow()));
+        words.push(format!("{:?}", browser.checked.borrow()));
+        words.push(format!("{:?}", browser.sign_in_pages.borrow()));
+        (run.agents).update(cx, |agents, cx| {
+            words.extend(agents.activity(&agent).map(|entry| format!("{entry:?}")));
+            words.push(format!("{:?}", agents.take_ended(cx)));
+            agents.save();
+        });
+        words.extend(run.files().into_iter().map(|(_, text)| text));
+        let posted = posted.0.borrow();
+        // A task that ended posted its notification, so one was read.
+        assert_eq!(posted.len() > notified, works, "{name}: {posted:?}");
+        words.extend(posted[notified..].iter().cloned());
+        notified = posted.len();
+        for word in &words {
+            assert!(!names(word), "{name}: {word}");
+        }
+    }
+    assert_eq!(notified, 3);
 }

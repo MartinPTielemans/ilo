@@ -411,10 +411,10 @@ pub struct Task {
     pub(in crate::agents) files: Given,
     /// Its start inside a wall, until the system says the wall is up (rewall.rs).
     pub(super) rising: Option<rewall::Rising>,
-    /// What came of each wall of its that wasn't put up, in order, each with the turn it came in
-    /// as an ilo line's is counted (lines.rs), so its line stands where it happened: what its
-    /// lines about them are written from, by the conversation's words table.
-    pub(in crate::agents) rewalled: Vec<(usize, rewall::Rewalled)>,
+    /// What came of each wall of its that wasn't put up, in order, each with where it came among
+    /// the task's messages and steps, so its line stands where it happened: what its lines about
+    /// them are written from, by the conversation's words table.
+    pub(in crate::agents) rewalled: Vec<rewall::Came>,
 }
 
 /// The message an agent is writing as the turn's last, which shows under its trace as it comes,
@@ -1508,13 +1508,13 @@ impl Agents {
         };
         self.tasks.tasks.push(task);
         self.tokens_changed();
-        // The log keeps the tier it starts at, as it keeps a change of it.
-        let started = super::tier::started_logged(tier, pages.len());
-        self.note_on(&agent, 0, super::access::ACCESS_ACTION, "", &started, "");
+        // The log keeps the tier it starts at, as it keeps a change of it, and on the same row
+        // that it started without its files, which its wall's answer says (rewall.rs).
+        let wall = self.wall_to_begin(&agent, pages.len());
         let task = self.task(&agent);
         let first = first_message(asked, task.and_then(|task| task.page.as_ref()));
         let first = with_added(first, task.map_or(&[], |task| &task.added));
-        self.launch(&agent, &first, cx);
+        self.launch_in(&agent, &first, wall, cx);
         self.wait_for_answer(&agent, cx);
         cx.notify();
         Some(agent)
