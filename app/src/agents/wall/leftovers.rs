@@ -248,6 +248,7 @@ fn folder(recursive: bool) -> std::fs::DirBuilder {
 impl Wall {
     /// This wall, for the task whose place is `place`: its rules allow the place's mark.
     pub fn in_place(mut self, place: std::sync::Arc<Place>) -> Wall {
+        self.tmp = Some(place.tmp().to_path_buf());
         self.place = Some(place);
         self
     }

@@ -66,10 +66,13 @@ impl Agents {
         let Some(root) = self.kept_root() else {
             return (Keep::Nothing, None);
         };
+        // A task with files runs where its assistant can keep no conversation, and reach none
+        // it kept (wall.rs).
+        let walled = self.walled(agent);
         let keep = match self.tasks.kept.of(agent) {
-            Some(record) if record.gone => Keep::Nothing,
+            Some(record) if record.gone || walled => Keep::Nothing,
             Some(record) => Keep::Resume(record.id.clone()),
-            None => kept::decide(cli, self.keeps_tasks()),
+            None => kept::decide(cli, self.keeps_tasks(), walled),
         };
         let folder = match &keep {
             Keep::Nothing => None,
@@ -89,10 +92,16 @@ impl Agents {
         self.tasks.kept.write(&root);
     }
 
+    /// Whether `agent`'s task has files, and so runs inside a wall.
+    fn walled(&self, agent: &str) -> bool {
+        self.task(agent).is_some_and(|task| task.files.any())
+    }
+
     /// Whether `agent`'s next run goes on with a conversation its assistant kept, and so takes
-    /// only what's new as its first message.
+    /// only what's new as its first message. A task with files never does: it starts from its
+    /// own words, whatever was kept of it.
     pub(super) fn resumes(&self, agent: &str) -> bool {
-        (self.tasks.kept.of(agent)).is_some_and(|record| !record.gone)
+        !self.walled(agent) && (self.tasks.kept.of(agent)).is_some_and(|record| !record.gone)
     }
 
     /// The user replies to `agent`'s task: if it had ended and its conversation is kept, the reply
@@ -100,8 +109,10 @@ impl Agents {
     /// reply says so only where there's something to say: the task comes back at another access
     /// than it ended at, or it's one a run before left, whose assistant ilo starts again. A reply
     /// to a task done or stopped in this run, at the access it had, is the resume and has no line.
-    /// Nothing the assistant or a page says has a part in it.
-    pub(super) fn pick_up(&mut self, agent: &str) {
+    /// Nothing the assistant or a page says has a part in it, and its assistant is told nothing
+    /// of the access: ilo's own check holds it. A run inside a wall the lower access changes is
+    /// over, so the reply starts one inside the new level's (rewall.rs).
+    pub(super) fn pick_up(&mut self, agent: &str, cx: &mut Context<Self>) {
         let Some(task) = self.task(agent) else {
             return;
         };
@@ -126,6 +137,10 @@ impl Agents {
         log!("browser: task {agent} picked up");
         // The activity log's entry for it, under the task's own name.
         self.note(agent, 0, "resumed", "", "");
+        let same = (self.task(agent)).is_none_or(|task| task.files.same_rules(ended_at, back));
+        if !same {
+            self.wall_outgrown(agent, cx);
+        }
     }
 
     /// `agent`'s run went, saying `said`. If it was to go on with a conversation its assistant no
@@ -690,6 +705,9 @@ impl Task {
             placed: Vec::new(),
             told: None,
             helpers: Helpers::of_task(helpers),
+            files: crate::agents::files::Given::default(),
+            rising: None,
+            rewalled: Vec::new(),
         }
     }
 }

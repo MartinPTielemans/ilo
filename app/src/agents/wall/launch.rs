@@ -145,6 +145,7 @@ impl Wall {
             folder,
             started: SystemTime::now(),
             launcher: Some(Launcher { program, handoff }),
+            tmp: None,
             place: None,
         })
     }
