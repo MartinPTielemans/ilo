@@ -13,12 +13,13 @@ use std::time::{Duration, SystemTime};
 use gpui::{App, AppContext, Context, SharedString};
 
 use super::ilo::{IloKind, IloLine};
-use super::{KEPT, Line, State, Task, Who, seconds};
+use super::{Card, KEPT, Line, State, Task, Who, seconds};
 use crate::agents::Agents;
 use crate::agents::helpers::Helpers;
 use crate::agents::kept::{self, Keep, Keeps, Nowhere};
 use crate::agents::runner::Cli;
 use crate::agents::tier::{Sites, Tier};
+use crate::tokens::shell::composer::CARDS;
 
 /// The title of a task a run before left whose agent never named it: what was asked stood as
 /// its title, and isn't kept.
@@ -438,6 +439,50 @@ impl Agents {
             .map(|task| {
                 let agent = SharedString::from(task.agent.clone());
                 (agent, task.title.clone(), self.about(task, cx).into())
+            })
+            .collect()
+    }
+
+    /// The tasks a run before left that haven't been brought back, the last to end first, as the
+    /// composer's Latest tasks lists them until one is opened: each as its card, which has its
+    /// title and how it ended and no more, and for its home the user's Space of the profile it was
+    /// asked in, by which a window lists those of the profile in front alone. One whose
+    /// conversation takes no reply, or whose profile has no Space of the user's, is in the
+    /// Archive alone, as is one older than the newest a profile's composer has room for. Made
+    /// from what a launch already holds: nothing is read for it, and no tool of an agent's
+    /// reaches it.
+    pub fn kept_cards(&self, cx: &App) -> Vec<Card> {
+        let mut left: Vec<&Task> = (self.tasks.kept.listed())
+            .filter_map(|agent| self.task(agent))
+            .filter(|task| task.from_before() && task.home == 0)
+            .filter(|task| task.dismissed && !task.deleted)
+            .collect();
+        left.sort_by_key(|task| std::cmp::Reverse(task.ended));
+        // Each profile is asked for its Space once, and has no more cards made than the composer
+        // shows, however many tasks are kept: this runs at every change of a task.
+        let most = CARDS as usize;
+        let mut profiles: Vec<(&str, u64, usize)> = Vec::new();
+        (left.into_iter())
+            .filter_map(|task| {
+                let profile = self.tasks.kept.of(&task.agent)?.profile.as_str();
+                let known = profiles.iter().position(|(each, ..)| *each == profile);
+                let at = known.unwrap_or_else(|| {
+                    let home = match profile.is_empty() {
+                        true => 0,
+                        false => self.browser.profile_space(profile),
+                    };
+                    profiles.push((profile, home, 0));
+                    profiles.len() - 1
+                });
+                let (_, home, listed) = &mut profiles[at];
+                if *home == 0 || *listed == most {
+                    return None;
+                }
+                *listed += 1;
+                Some(Card {
+                    home: *home,
+                    ..self.card(task, cx)
+                })
             })
             .collect()
     }

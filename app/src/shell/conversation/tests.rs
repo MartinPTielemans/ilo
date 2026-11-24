@@ -182,6 +182,7 @@ fn the_agents_send_a_shown_conversation_made_before_its_shell_changes(cx: &mut T
             Vec::new(),
             vec![card()],
             Vec::new(),
+            Vec::new(),
             made,
             &[weak.clone()],
             cx,
