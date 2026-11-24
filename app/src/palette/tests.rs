@@ -1595,3 +1595,50 @@ fn gray_on_a_dark_plate_is_one_ink_that_reads_on_the_measured_card() {
         }
     }
 }
+
+/// Gray text on a dark window's plate holds text's 4.5:1 by the plate's own ground, however much
+/// of a bright window comes through: on the foot's shown card's and shown page row's plate, at
+/// rest and under the pointer, and on the plate a card, the count or a page row has under the
+/// pointer, over every point of the window over a black and a white backdrop, with a Space's
+/// colour and with none, at every level. The plates take the palette's shade as the window's tint
+/// asks, so this follows the tint's tokens wherever they end.
+///
+/// What it knows is the palette's own account of the window: the material's measured greys under
+/// the tint, lifted as a desktop picture lifts it. At Standard with no colour that account's
+/// lightest shown plate is #6d6d6b, the real app's own pixel with a white window behind (at
+/// 469483355). A material that reads lighter than its account is the real app's to be measured on.
+#[test]
+fn gray_on_a_dark_plate_reads_over_a_bright_window_at_every_level() {
+    use crate::tokens::shell::HOVERED;
+    use crate::tokens::shell::task::STATUS;
+    let themes = grid(
+        &[0., 60., 120., 180., 240., 300.],
+        &[0.4, 1.],
+        &[0.2, 0.45, 0.8],
+        &[crate::theme::DEFAULT_INTENSITY],
+    );
+    for level in Transparency::ALL {
+        set_transparency(level);
+        for theme in themes.iter().map(Some).chain([None]) {
+            let palette = Palette::of(theme, Tone::Dark);
+            let ink = Rgba::from(palette.gray_on_plate(STATUS));
+            let plates = [
+                ("shown", palette.shown(0.)),
+                ("shown, under the pointer", palette.shown(1.)),
+                ("hovered", palette.ground_plate(Ground::Hovered, HOVERED)),
+            ];
+            for at in fine_window(&palette) {
+                for (name, plate) in plates {
+                    let plate = Rgba::from(plate);
+                    let ground = over(at, plate, plate.a);
+                    let ratio = contrast(over(ground, ink, ink.a), ground);
+                    assert!(
+                        ratio >= TEXT,
+                        "{level:?} {theme:?} {name} on {:06x}: {ratio:.2}",
+                        hex(ground)
+                    );
+                }
+            }
+        }
+    }
+}
