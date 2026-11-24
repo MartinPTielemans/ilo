@@ -741,11 +741,16 @@ mod walled {
     }
 
     /// The system's word is the control: rules that allow every name, the control too, aren't a
-    /// wall it places the program inside, and neither is a wall with no mark.
+    /// wall it places the program inside, and neither is a wall with no place, whose rules allow
+    /// a mark that isn't its own. Both are rules the system takes, so it's the control that
+    /// refuses each.
     #[test]
     fn the_runner_starts_nothing_the_system_doesnt_place_inside_its_wall() {
         let folder = Folder::new("runner-outside");
-        for wall in [placed(&folder, OPEN), wall(MARKED, &[], &[])] {
+        let other = leftovers::Place::make(&folder.join("others")).unwrap();
+        let stray = Path::new(other.mark().as_cstr().to_str().unwrap()).to_path_buf();
+        let placeless = wall(MARKED, &[("MARK", stray.as_path())], &[]);
+        for wall in [placed(&folder, OPEN), placeless] {
             let launch = launch(&folder, wall);
             let (events, heard) = futures::channel::mpsc::unbounded();
             let _process = Process::start(&launch, "task-1", "Hello", events).unwrap();
