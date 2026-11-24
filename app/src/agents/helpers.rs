@@ -168,7 +168,7 @@ pub struct Helpers {
     started: u32,
     /// What follows the end of the turn ilo interrupted for the limit, while that end is awaited.
     stopping: Option<After>,
-    /// The times ilo stopped it for starting more, as its conversation shows each.
+    /// The times ilo stopped it after it started more, as its conversation shows each.
     pub(super) over: Vec<Over>,
 }
 
