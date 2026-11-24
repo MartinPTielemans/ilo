@@ -223,8 +223,17 @@ mod system {
                 unsafe { libc::close(woken) };
                 return Err(error);
             }
-            // The waker's own copy, so either end closes its own whenever it's done.
+            // The waker's own copy, so either end closes its own whenever it's done. Without it
+            // nothing could end the watch's thread, so the watch doesn't start.
             let shared = unsafe { libc::fcntl(woken, libc::F_DUPFD_CLOEXEC, 0) };
+            if shared < 0 {
+                let error = std::io::Error::last_os_error();
+                unsafe {
+                    libc::close(inotify);
+                    libc::close(woken);
+                }
+                return Err(error);
+            }
             Ok((Waker(shared), Queue { inotify, woken }))
         }
 
@@ -301,8 +310,23 @@ mod system {
                     return None;
                 }
                 let read = unsafe { libc::read(self.inotify, events.as_mut_ptr().cast(), 4096) };
-                if read <= 0 {
-                    continue;
+                if read < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+                    ) {
+                        continue;
+                    }
+                    // One that stays would spin the thread, so the watch ends.
+                    crate::log!("browser: a task's folder watch stopped: {error}");
+                    return Some(Gone::Unwatched);
+                }
+                // inotify never reads nothing after a poll says it's ready; if it did, it would
+                // again, so that ends the watch too.
+                if read == 0 {
+                    crate::log!("browser: a task's folder watch stopped: it read nothing");
+                    return Some(Gone::Unwatched);
                 }
                 if let Some(gone) = told(&events[..read as usize]) {
                     return Some(gone);
@@ -375,7 +399,13 @@ mod system {
                 unsafe { libc::close(queue) };
                 return Err(error);
             }
+            // The waker's own copy, as on Linux: without it nothing could end the watch's thread.
             let shared = unsafe { libc::fcntl(queue, libc::F_DUPFD_CLOEXEC, 0) };
+            if shared < 0 {
+                let error = std::io::Error::last_os_error();
+                unsafe { libc::close(queue) };
+                return Err(error);
+            }
             Ok((Waker(shared), Queue(queue)))
         }
 
@@ -694,22 +724,74 @@ mod tests {
     /// counted in a test process of their own, as other tests open theirs meanwhile.
     #[test]
     fn a_watch_leaves_no_descriptor_open() {
-        const ALONE: &str = "ILO_WATCH_DESCRIPTORS";
+        alone("a_watch_leaves_no_descriptor_open", counted);
+    }
+
+    /// Runs `test`, this module's test of that name, in a test process of its own.
+    fn alone(name: &str, test: fn()) {
+        const ALONE: &str = "ILO_WATCH_ALONE";
         if std::env::var_os(ALONE).is_some() {
-            return counted();
+            return test();
         }
-        let name = "agents::wall::watch::tests::a_watch_leaves_no_descriptor_open";
+        let name = format!("agents::wall::watch::tests::{name}");
         let out = crate::child::command(std::env::current_exe().unwrap())
-            .args(["--exact", name, "--test-threads=1"])
+            .args(["--exact", &name, "--test-threads=1"])
             .env(ALONE, "1")
             .output()
             .unwrap();
         let said = String::from_utf8_lossy(&out.stdout);
         assert!(
             out.status.success(),
-            "the count in a process of its own failed:\n{said}"
+            "{name} in a process of its own failed:\n{said}"
         );
-        assert!(said.contains("1 passed"), "the count didn't run:\n{said}");
+        assert!(said.contains("1 passed"), "{name} didn't run:\n{said}");
+    }
+
+    /// A watch whose waker can't have its own descriptor couldn't be ended, so it doesn't start:
+    /// it reports Unwatched at once and leaves nothing open. The system refuses the copy in a
+    /// process of its own, with only the queue's descriptors left free.
+    #[test]
+    fn a_watch_whose_waker_is_refused_reports_unwatched() {
+        alone("a_watch_whose_waker_is_refused_reports_unwatched", refused);
+    }
+
+    fn refused() {
+        // The queue's own: an eventfd and inotify on Linux, a kqueue on the Mac.
+        let queue = match cfg!(target_os = "linux") {
+            true => 2,
+            false => 1,
+        };
+        let place = place("refused");
+        let held = Identity::of(&place.folder).unwrap();
+        let listed = match cfg!(target_os = "linux") {
+            true => "/proc/self/fd",
+            false => "/dev/fd",
+        };
+        let highest = std::fs::read_dir(listed)
+            .unwrap()
+            .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<u64>().ok())
+            .max()
+            .unwrap();
+        let mut limit: libc::rlimit = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) },
+            0
+        );
+        limit.rlim_cur = (highest + 8).min(limit.rlim_max);
+        assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) }, 0);
+        let take = || std::fs::File::open("/dev/null");
+        let mut taken: Vec<_> = std::iter::from_fn(|| take().ok()).collect();
+        taken.truncate(taken.len() - queue);
+        let (send, told) = mpsc::channel();
+        let _watch = Watch::start(&place.folder, held, move |gone| _ = send.send(gone));
+        assert_eq!(
+            told.try_recv(),
+            Ok(Gone::Unwatched),
+            "reported at its start"
+        );
+        let freed: Vec<_> = std::iter::from_fn(|| take().ok()).collect();
+        assert_eq!(freed.len(), queue, "the queue's descriptors closed again");
+        drop((taken, freed));
     }
 
     fn open_descriptors() -> usize {
