@@ -101,8 +101,8 @@ std::optional<std::string> FieldSelector(bool password, std::string_view id, std
   return std::nullopt;
 }
 
-bool PostsWithin(const GURL& action, const url::Origin& page) {
-  if (action.is_empty()) {
+bool PostsWithin(const GURL& action, bool action_empty, const url::Origin& page) {
+  if (action_empty) {
     return true;
   }
   if (!action.is_valid() || !action.SchemeIs(url::kHttpsScheme)) {

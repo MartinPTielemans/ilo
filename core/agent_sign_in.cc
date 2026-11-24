@@ -230,7 +230,7 @@ std::optional<FormStep> StepOf(const std::vector<autofill::FormData>& forms,
     if (!selector) {
       continue;
     }
-    if (!PostsWithin(form.action(), origin)) {
+    if (!PostsWithin(form.action(), form.is_action_empty(), origin)) {
       return FormStep{.elsewhere = true};
     }
     const autofill::FormFieldData* name = FieldOf(form, parsed->username_element_renderer_id);
@@ -253,7 +253,7 @@ std::optional<FormStep> StepOf(const std::vector<autofill::FormData>& forms,
         FieldSelector(false, base::UTF16ToUTF8(field.id_attribute()),
                       base::UTF16ToUTF8(field.name_attribute()));
     if (selector) {
-      if (!PostsWithin(form.action(), origin)) {
+      if (!PostsWithin(form.action(), form.is_action_empty(), origin)) {
         return FormStep{.elsewhere = true};
       }
       return FormStep{field.renderer_id(), FieldRendererId(), *std::move(selector)};

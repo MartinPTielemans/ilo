@@ -63,9 +63,10 @@ std::optional<size_t> UsernameOnlyField(const std::vector<FormField>& fields);
 std::optional<std::string> FieldSelector(bool password, std::string_view id, std::string_view name);
 
 // Whether a form on a page of |page| whose action is |action| sends its fields within the page's
-// site: no action, or an https one on the same site. A page can carry another site's form, as
+// site: none in the form's markup (|action_empty|, as autofill reads it), or an https one on the
+// same site. An action that didn't parse is neither. A page can carry another site's form, as
 // markup its users post, and the core never fills and submits a login into it.
-bool PostsWithin(const GURL& action, const url::Origin& page);
+bool PostsWithin(const GURL& action, bool action_empty, const url::Origin& page);
 
 // Every control or element that can send a form somewhere its action doesn't say: a button's or an
 // image input's formaction or formtarget, and a form's or the document's target.

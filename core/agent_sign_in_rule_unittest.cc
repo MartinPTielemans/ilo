@@ -134,18 +134,22 @@ TEST(AgentSignInRule, AFieldsIdCantEndItsSelector) {
 }
 
 TEST(AgentSignInRule, AFormPostsWithinThePagesSite) {
-  EXPECT_TRUE(PostsWithin(GURL(), Page()));
-  EXPECT_TRUE(PostsWithin(GURL("https://shop.example.org/session"), Page()));
-  EXPECT_TRUE(PostsWithin(GURL("https://login.example.org/session"), Page()));
+  // Fields in no form, and a form with no action, which autofill reads as the page's address.
+  EXPECT_TRUE(PostsWithin(GURL(), true, Page()));
+  EXPECT_TRUE(PostsWithin(GURL("https://shop.example.org/login"), true, Page()));
+  EXPECT_TRUE(PostsWithin(GURL("https://shop.example.org/session"), false, Page()));
+  EXPECT_TRUE(PostsWithin(GURL("https://login.example.org/session"), false, Page()));
 }
 
 TEST(AgentSignInRule, AFormPostingElsewhereIsNot) {
-  EXPECT_FALSE(PostsWithin(GURL("https://collector.example.com/session"), Page()));
-  EXPECT_FALSE(PostsWithin(GURL("http://shop.example.org/session"), Page()));
-  EXPECT_FALSE(PostsWithin(GURL("javascript:void(0)"), Page()));
-  EXPECT_FALSE(PostsWithin(GURL("not a url"), Page()));
+  EXPECT_FALSE(PostsWithin(GURL("https://collector.example.com/session"), false, Page()));
+  EXPECT_FALSE(PostsWithin(GURL("http://shop.example.org/session"), false, Page()));
+  EXPECT_FALSE(PostsWithin(GURL("javascript:void(0)"), false, Page()));
+  // An action in the markup that didn't parse, whatever autofill made of it.
+  EXPECT_FALSE(PostsWithin(GURL("not a url"), false, Page()));
+  EXPECT_FALSE(PostsWithin(GURL(), false, Page()));
   // Each name under a private registry, such as github.io, is a site of its own.
-  EXPECT_FALSE(PostsWithin(GURL("https://other.github.io/session"),
+  EXPECT_FALSE(PostsWithin(GURL("https://other.github.io/session"), false,
                            url::Origin::Create(GURL("https://mine.github.io/login"))));
 }
 
