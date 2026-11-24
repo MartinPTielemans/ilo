@@ -2,6 +2,7 @@
 
 #include <utility>
 
+#include "base/functional/bind.h"
 #include "base/process/process.h"
 #include "components/performance_manager/public/graph/graph.h"
 #include "components/performance_manager/public/performance_manager.h"
@@ -33,22 +34,43 @@ AgentJobVoter* AgentJobVoter::Get() {
 }
 
 void AgentJobVoter::JobStarted(const PageNode* page) {
-  if (working_.insert(page).second && user_loads_.empty()) {
+  if (++working_[page] == 1 && user_loads_.empty()) {
     GiveVote(page);
   }
 }
 
 void AgentJobVoter::JobEnded(const PageNode* page) {
-  if (working_.erase(page) && user_loads_.empty()) {
+  auto job = working_.find(page);
+  if (job == working_.end() || --job->second > 0) {
+    return;
+  }
+  working_.erase(job);
+  if (user_loads_.empty()) {
     TakeVote(page);
   }
+}
+
+// static
+base::ScopedClosureRunner AgentJobVoter::Lift(base::WeakPtr<PageNode> page) {
+  AgentJobVoter* voter = Get();
+  if (!page || !voter) {
+    return {};
+  }
+  voter->JobStarted(page.get());
+  return base::ScopedClosureRunner(base::BindOnce(
+      [](base::WeakPtr<PageNode> page) {
+        if (AgentJobVoter* voter = Get(); voter && page) {
+          voter->JobEnded(page.get());
+        }
+      },
+      std::move(page)));
 }
 
 void AgentJobVoter::UserLoadStarted(const PageNode* page) {
   if (!user_loads_.insert(page).second || user_loads_.size() > 1) {
     return;
   }
-  for (const PageNode* job : working_) {
+  for (const auto& [job, count] : working_) {
     TakeVote(job);
   }
 }
@@ -57,7 +79,7 @@ void AgentJobVoter::UserLoadEnded(const PageNode* page) {
   if (!user_loads_.erase(page) || !user_loads_.empty()) {
     return;
   }
-  for (const PageNode* job : working_) {
+  for (const auto& [job, count] : working_) {
     GiveVote(job);
   }
 }
@@ -82,7 +104,7 @@ void AgentJobVoter::TearDownOnGraph(Graph* graph) {
   g_voter = nullptr;
   // While a load of the user's counts, the jobs' pages have no vote to take.
   if (std::exchange(user_loads_, {}).empty()) {
-    for (const PageNode* page : working_) {
+    for (const auto& [page, count] : working_) {
       TakeVote(page);
     }
   }
@@ -92,7 +114,10 @@ void AgentJobVoter::TearDownOnGraph(Graph* graph) {
 }
 
 void AgentJobVoter::OnBeforePageNodeRemoved(const PageNode* page) {
-  JobEnded(page);
+  // Every job under way in it ends with it; its jobs' own ends, later, find no page.
+  if (working_.erase(page) && user_loads_.empty()) {
+    TakeVote(page);
+  }
   UserLoadEnded(page);
 }
 

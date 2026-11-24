@@ -575,6 +575,12 @@ class AgentPage : public content::WebContentsObserver,
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
 
+// Lifts |contents|' page while one of the agent's calls is under way in it, until the runner it
+// gives back runs or goes. A hidden tab's renderer runs as a background process, which the OS
+// starves while the agent's typing or reading waits on it (#3285, #4227). The vote follows the
+// page to whichever process holds it, and goes with the page if the tab closes first.
+base::ScopedClosureRunner LiftWhileWorking(content::WebContents& contents);
+
 // Whether the frame holds a web page's content, from an http(s) origin, as do the about:blank and
 // sandboxed frames a page makes. An extension's or the browser's frame, as a password manager puts
 // in pages, is never an agent's.

@@ -2466,11 +2466,14 @@ void bc_tab_read_text(bc_id id, uint64_t request) {
         FROM_HERE, base::BindOnce(nothing, id, request, BC_AGENT_FAILURE_NONE));
     return;
   }
+  // Lifted from the call's entry, ahead of the look and the page's own work, to its answer
+  // (#4227). A look that ends without a read drops it with its callback.
+  base::ScopedClosureRunner lift = browser_core::LiftWhileWorking(*contents);
   // An agent's read, so the page's one look comes first (AgentPage::Freeze).
   browser_core::AgentPage::CreateForWebContents(contents);
   browser_core::AgentPage::FromWebContents(contents)->Freeze(base::BindOnce(
       [](decltype(nothing) nothing, base::WeakPtr<content::WebContents> contents, bc_id tab,
-         uint64_t request, browser_core::LookEnd end) {
+         uint64_t request, base::ScopedClosureRunner lift, browser_core::LookEnd end) {
         // The user may have taken the tab while the look was out: their page isn't read for the
         // agent then, and the app answers the call as any on a held tab. A page the look couldn't
         // check in time isn't read, and the app hears so.
@@ -2480,9 +2483,10 @@ void bc_tab_read_text(bc_id id, uint64_t request) {
           nothing(tab, request, unchecked ? BC_AGENT_FAILURE_UNCHECKED : BC_AGENT_FAILURE_NONE);
           return;
         }
-        browser_core::PageText::GetOrCreateForWebContents(contents.get())->Read(request);
+        browser_core::PageText::GetOrCreateForWebContents(contents.get())
+            ->Read(request, std::move(lift));
       },
-      nothing, contents->GetWeakPtr(), id, request));
+      nothing, contents->GetWeakPtr(), id, request, std::move(lift)));
 }
 
 void bc_tab_translate_read(bc_id id, uint64_t request) {

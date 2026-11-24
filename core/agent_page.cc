@@ -399,26 +399,6 @@ void Report(bc_id tab, uint64_t request, std::string text, bool error, bc_agent_
   }
 }
 
-// A hidden tab's renderer runs as a background process, which the OS starves while the agent's
-// typing waits on it (#3285). The vote follows the page to whichever process holds it, and goes
-// with the page if the tab closes first.
-base::ScopedClosureRunner LiftWhileWorking(content::WebContents& contents) {
-  base::WeakPtr<performance_manager::PageNode> page =
-      performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(&contents);
-  AgentJobVoter* voter = AgentJobVoter::Get();
-  if (!page || !voter) {
-    return {};
-  }
-  voter->JobStarted(page.get());
-  return base::ScopedClosureRunner(base::BindOnce(
-      [](base::WeakPtr<performance_manager::PageNode> page) {
-        if (AgentJobVoter* voter = AgentJobVoter::Get(); voter && page) {
-          voter->JobEnded(page.get());
-        }
-      },
-      page));
-}
-
 // Every tab's look-first mark, and the looks' numbers.
 LookFirstTabs& LookFirsts() {
   static base::NoDestructor<LookFirstTabs> tabs;
@@ -426,6 +406,11 @@ LookFirstTabs& LookFirsts() {
 }
 
 }  // namespace
+
+base::ScopedClosureRunner LiftWhileWorking(content::WebContents& contents) {
+  return AgentJobVoter::Lift(
+      performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(&contents));
+}
 
 bool IsWebFrame(content::RenderFrameHost* frame) {
   const std::string& scheme =
