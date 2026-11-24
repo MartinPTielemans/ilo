@@ -328,8 +328,6 @@ impl Shell {
         if to != self.sidebar_width {
             self.sidebar_width = to;
             self.browser.set_sidebar_width(to, cx);
-            // The tasks' lines and chips at the foot wrap to the new width.
-            self.reshape_foot(cx);
         }
         self.width_motion = (from != to).then(|| (from, crate::motion::start(cx)));
         if self.width_motion.is_none() {
@@ -832,7 +830,6 @@ impl Shell {
                 && self.resize.is_none()
                 && !self.pointer_on_card
                 && !self.page_asks()
-                && self.agent_question.is_none()
                 && self.cast.is_none()
                 && !self.menu_open
             {

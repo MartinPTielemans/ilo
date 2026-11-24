@@ -56,6 +56,9 @@ impl Folders {
         let wall = Wall {
             folder: Some(self.root.clone()),
             started: SystemTime::now(),
+            launcher: None,
+            tmp: None,
+            place: None,
         };
         sleep(Duration::from_millis(30));
         wall
@@ -317,6 +320,9 @@ fn a_task_with_no_folder_has_no_links() {
     let wall = Wall {
         folder: None,
         started: SystemTime::now(),
+        launcher: None,
+        tmp: None,
+        place: None,
     };
     assert_eq!(walk(&wall), Walked::default());
 }

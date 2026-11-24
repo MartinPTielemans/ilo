@@ -6,9 +6,7 @@ use std::ffi::CString;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use browser::agents::{
-    self, Agents, Browser, Failure, GlobalAgents, PageAction, Question, TabInfo,
-};
+use browser::agents::{self, Agents, Browser, Failure, GlobalAgents, PageAction, TabInfo};
 use gpui::{App, AppContext};
 
 use crate::{WINDOWS, bar_picks_host, bc, ids, name};
@@ -216,12 +214,6 @@ impl Browser for Core {
         })
     }
 
-    fn ask(&self, question: Option<Question>, cx: &mut App) {
-        crate::update_shells_in(cx, |shell, cx| {
-            shell.set_agent_question(question.clone(), cx)
-        });
-    }
-
     fn hand_off(&self, agent: &str, tab: u64) -> bool {
         let Ok(agent) = CString::new(agent) else {
             return false;
@@ -255,10 +247,6 @@ impl Browser for Core {
 
     fn answer_download(&self, download: u64, keep: bool) {
         unsafe { bc::bc_agent_download_answer(download, keep) };
-    }
-
-    fn file_field_choose(&self, field: u64, window: u64) -> bool {
-        unsafe { bc::bc_file_field_choose(field, window) }
     }
 
     fn file_field_drop(&self, field: u64) {
@@ -343,6 +331,38 @@ impl Browser for Core {
                 .find(|&space| users(space))
                 .unwrap_or(shown),
         }
+    }
+
+    fn space_profile(&self, space: u64) -> String {
+        profile_folder(unsafe { bc::bc_space_profile(space) })
+    }
+
+    fn profile_space(&self, profile: &str) -> u64 {
+        let users = |space: u64| {
+            space != 0
+                && name(bc::bc_space_agent, space).is_empty()
+                && profile_folder(unsafe { bc::bc_space_profile(space) }) == profile
+        };
+        let shown = unsafe { bc::bc_window_space(crate::front().0) };
+        match users(shown) {
+            true => shown,
+            false => (ids(bc::bc_spaces).into_iter())
+                .find(|&space| users(space))
+                .unwrap_or(0),
+        }
+    }
+
+    fn has_profile(&self, profile: &str) -> bool {
+        (ids(bc::bc_profiles).into_iter()).any(|each| profile_folder(each) == profile)
+    }
+
+    fn private_space(&self, space: u64) -> bool {
+        space != 0
+            && WINDOWS.with_borrow(|windows| {
+                (windows.iter()).any(|window| {
+                    window.private && unsafe { bc::bc_window_space(window.id) } == space
+                })
+            })
     }
 
     fn request(&self, agent: &str, tab: u64, request: u64, sent: &agents::request::Request) {
@@ -484,7 +504,8 @@ pub fn start(cx: &mut App) {
         let status = agents.read(cx).status();
         // Each card is compared with the last, so a window redraws only for a task that changed.
         let cards = agents.read(cx).shown_cards(cx);
-        browser::needs_you::follow(&cards, cx);
+        let when = agents.read(cx).notify();
+        browser::needs_you::follow(&cards, when, cx);
         // Each task that ended goes to Library › Agents of its home Space's profile, as its receipt
         // shows it, for 30 days (browser::agent_history).
         let ended = agents.update(cx, |agents, cx| agents.take_ended(cx));
@@ -503,10 +524,11 @@ pub fn start(cx: &mut App) {
             );
         }
         let archived = agents.read(cx).archived_tasks(cx);
+        let kept = agents.read(cx).kept_cards(cx);
         let shells: Vec<_> = WINDOWS
             .with_borrow(|windows| windows.iter().map(|window| window.shell.clone()).collect());
         let conversation = |agent: &str, cx: &App| agents.read(cx).conversation(agent, cx);
-        browser::shell::send_agents(status, cards, archived, conversation, &shells, cx);
+        browser::shell::send_agents(status, cards, archived, kept, conversation, &shells, cx);
         browser::command_bar::task_agents_changed(cx);
     })
     .detach();
@@ -517,6 +539,14 @@ pub fn start(cx: &mut App) {
         }
     })
     .detach();
+}
+
+/// The name of `profile`'s own folder, "Default" or "Profile 2", or nothing for one the core
+/// doesn't know. The core's number for a profile is new each run; its folder's name isn't.
+pub fn profile_folder(profile: u64) -> String {
+    (crate::bar_picks_host::folder(profile))
+        .and_then(|folder| Some(folder.file_name()?.to_string_lossy().into_owned()))
+        .unwrap_or_default()
 }
 
 /// Tells the Agents what the core reported, once the update the report came from, if any, is over.

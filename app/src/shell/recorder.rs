@@ -61,6 +61,8 @@ pub(super) struct Recorder {
     calls: RefCell<Vec<String>>,
     /// What the window's resting bars asked of the core, in order (#4140).
     pub(super) resting: Rc<RefCell<Vec<String>>>,
+    /// The in-place bar's profile is new: it has learned no agent till this goes false.
+    pub(super) unlearned: Rc<std::cell::Cell<bool>>,
     /// How many detents the trackpad was asked for.
     pub(super) detents: Cell<usize>,
     /// How many tabs and folders it was asked to move.
@@ -213,6 +215,9 @@ pub(super) struct Recorder {
     pub(super) site_search_settings: Cell<usize>,
     /// Each of Settings, About, Import and Quit the app asked for, in order.
     pub(super) app_asks: RefCell<Vec<&'static str>>,
+    /// What the last Quit runs once its quit is decided: a test answers Quit by calling it, and
+    /// Cancel by leaving it.
+    pub(super) quit_going: RefCell<Option<Rc<dyn Fn(&mut App)>>>,
     pub(super) clear_browsing_data: Cell<usize>,
     /// Each profile's folder, which the test makes.
     pub(super) profile_folders: RefCell<HashMap<u64, std::path::PathBuf>>,
@@ -976,14 +981,6 @@ impl Browser for Recorder {
 
     fn answer_permission(&self, tab: u64, answer: Answer, _: &mut App) {
         self.record(format!("answer {tab} {answer:?}"))
-    }
-
-    fn answer_agent(&self, question: u64, answer: crate::agents::Answer, _: &mut App) {
-        self.record(format!("answer agent {question} {answer:?}"))
-    }
-
-    fn choose_agent_file(&self, question: u64, window: u64, _: &mut App) {
-        self.record(format!("choose agent file {question} in {window}"))
     }
 
     fn open_elsewhere(&self, url: &str, _: &mut App) {
@@ -1868,6 +1865,7 @@ impl Browser for Recorder {
         self.record("command bar in place".into());
         let host = resting_bar::RestingBar {
             asked: self.resting.clone(),
+            unlearned: self.unlearned.clone(),
         };
         crate::command_bar::in_place(Rc::new(host), window, cx)
     }
@@ -1877,12 +1875,24 @@ impl Browser for Recorder {
         agent: &str,
         asked: &str,
         home: u64,
-        tier: crate::agents::tier::Tier,
+        start: crate::agents::task::Start,
         _: &mut App,
     ) {
+        // The model only when the user picked one: "on " and its id, empty for the default. The
+        // pages only when the user added some: their addresses, and "only them" for Only the
+        // sites you add.
+        let model = (start.model.as_ref()).map_or(String::new(), |id| format!(" on {id:?}"));
+        let pages = match (start.pages.is_empty(), start.only_added) {
+            (true, _) => String::new(),
+            (false, only) => format!(
+                " with {:?}{}",
+                start.pages,
+                if only { " only them" } else { "" }
+            ),
+        };
         self.record(format!(
-            "start task {agent} {asked} from {home} at {}",
-            tier.label()
+            "start task {agent} {asked} from {home} at {}{model}{pages}",
+            start.tier.label()
         ));
     }
 
@@ -2012,6 +2022,14 @@ impl Browser for Recorder {
         self.record("off limits".into());
     }
 
+    fn agent_access(&self, _: &mut App) {
+        self.record("agent access".into());
+    }
+
+    fn agents_settings(&self, _: &mut App) {
+        self.record("agents settings".into());
+    }
+
     fn shortcuts(&self, _: &mut App) {}
 
     fn about(&self, _: &mut App) {
@@ -2075,8 +2093,9 @@ impl Browser for Recorder {
 
     fn jump_to_selection(&self, _: u64, _: &mut App) {}
 
-    fn quit(&self, _: &mut App) {
+    fn quit(&self, going: Rc<dyn Fn(&mut App)>, _: &mut App) {
         self.app_asks.borrow_mut().push("quit");
+        *self.quit_going.borrow_mut() = Some(going);
     }
 
     fn new_window(&self, _: &mut App) {

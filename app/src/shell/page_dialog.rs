@@ -79,6 +79,9 @@ impl Shell {
             Some(dialog) => self.page_dialogs.insert(tab, dialog),
             None => self.page_dialogs.remove(&tab),
         };
+        // The one dialog of a user's page that shows while a task has the page area: whether to
+        // leave it, as the window closes (#4202).
+        self.step_aside_to_ask(cx);
         cx.notify();
     }
 
@@ -105,9 +108,11 @@ impl Shell {
         self.page_dialog_up = None;
         // check.sh reads this line, which never has what was typed.
         log!("browser: page {tab} dialog answered {reply:?}");
-        // A page that asks to stay stops a quit, and so a restart into an update.
+        // A page that asks to stay stops a quit, and so a restart into an update, and the
+        // window's close, which brings back the task's view that stood as it began.
         if stayed {
             crate::updates::restart_stopped(cx);
+            self.close_refused(cx);
         }
         self.browser.answer_page_dialog(tab, id, reply, cx);
         cx.notify();
@@ -136,8 +141,10 @@ impl Shell {
             return;
         }
         // The user's page is out of the window while a task has the page area, and its dialog
-        // waits for it. A task's page watched there shows its sign-in, which only the user may
-        // answer (#3662); its other dialogs pause the agent until it closes the tab (#3536).
+        // waits for it, but for whether to leave it as the window closes, which the area steps
+        // aside for (`step_aside_to_ask`). A task's page watched there shows its sign-in, which
+        // only the user may answer (#3662); its other dialogs pause the agent until it closes
+        // the tab (#3536).
         let shown: Vec<u64> = match &self.task_area {
             None => {
                 let panes = self.panes(self.selected);
@@ -240,8 +247,8 @@ impl Shell {
     pub(super) fn page_took_keyboard(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.page_keyboard = Some(window.focused(cx).map(|focused| focused.downgrade()));
         self.field_let_go(cx);
-        // A press in the page ends the agent card's keys there, before any of its keys.
-        self.leave_card_keys(cx);
+        // A press in the page ends an ilo line's keys there, before any of its keys.
+        self.leave_ilo_keys(cx);
     }
 
     /// Gives the UI the keyboard, from the page if the page has it. Every way the shell takes it

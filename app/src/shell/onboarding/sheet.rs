@@ -18,7 +18,15 @@ pub(super) use crate::tokens::shell::onboarding::sheet::{
 pub(super) fn on_sheet(step: Step) -> bool {
     matches!(
         step,
-        Step::Intro | Step::Import | Step::Favorites | Step::DefaultBrowser | Step::Color
+        Step::Intro
+            | Step::Import
+            | Step::Favorites
+            | Step::DefaultBrowser
+            | Step::SearchEngine
+            | Step::Color
+            | Step::Account
+            | Step::Assistant
+            | Step::OptIns
     )
 }
 
@@ -167,21 +175,30 @@ impl Shell {
                 .mb(px(t::MARK_UNDER))
                 .child(wordmark(drawn, colors, t::MARK_SCALE))
         });
+        // A step with no line has its title alone, as far above what follows as a line would be.
+        let line = (!line.is_empty()).then(|| {
+            div()
+                .mb(px(t::LINE_UNDER))
+                .text_size(px(t::LINE_SIZE))
+                .line_height(px(t::LINE_LINE))
+                .text_color(colors.ink(t::LINE_QUIET))
+                .child(line)
+        });
+        let under = match line {
+            Some(_) => t::TITLE_UNDER,
+            None => t::LINE_UNDER,
+        };
         let words = div()
             .flex()
             .flex_col()
             .opacity(if welcome { drawn.tagline } else { 1. })
-            .child(title.mb(px(t::TITLE_UNDER)).text_color(colors.ink(1.)))
-            .child(
-                div()
-                    .mb(px(t::LINE_UNDER))
-                    .text_size(px(t::LINE_SIZE))
-                    .line_height(px(t::LINE_LINE))
-                    .text_color(colors.ink(t::LINE_QUIET))
-                    .child(line),
-            );
+            .child(title.mb(px(under)).text_color(colors.ink(1.)))
+            .children(line);
+        // No taller than the sheet's half, so a choice taller than its room scrolls in it and the
+        // foot stays where every step has it.
         div()
             .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
             .child(pager(count, at, colors))
@@ -264,6 +281,10 @@ impl Shell {
             Step::DefaultBrowser => {
                 loops::default_browser(looped, colors, &place).into_any_element()
             }
+            Step::SearchEngine => loops::search(looped, colors, &place).into_any_element(),
+            Step::Account => loops::sync(looped, colors, &place).into_any_element(),
+            Step::Assistant => loops::assistant(looped, colors, &place).into_any_element(),
+            Step::OptIns => loops::count(looped, colors, &place).into_any_element(),
             Step::Color => {
                 let picked = (self.onboarding.as_ref()).and_then(|onboarding| onboarding.picked);
                 let other = (picked.unwrap_or_default() + SWATCHES.len() / 2) % SWATCHES.len();

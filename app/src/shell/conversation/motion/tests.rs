@@ -44,7 +44,6 @@ fn conversation(lines: Vec<Line>) -> Conversation {
         name: "Claude".into(),
         title: "Museums in Lisbon".into(),
         about: "Claude · Haiku · Working".into(),
-        progress: "".into(),
         asked: "what's on at maat".into(),
         page: None,
         lines,
@@ -55,6 +54,7 @@ fn conversation(lines: Vec<Line>) -> Conversation {
         answers: Vec::new(),
         writing: false,
         tier: Default::default(),
+        only_added: false,
     }
 }
 
@@ -101,7 +101,6 @@ fn a_turns_answer_comes_once_its_trace_has_folded() {
     let answer = "Two shows.\n\nBoth close at six.".into();
     let new = Conversation {
         about: "Claude · Haiku · Done 13:31".into(),
-        progress: "".into(),
         stoppable: false,
         ..conversation(vec![
             Line::You("what's on".into()),
@@ -338,8 +337,11 @@ fn with_helpers(helpers: usize, steps: usize) -> Line {
     let Line::Trace(mut trace) = trace(true, steps) else {
         unreachable!()
     };
-    let lines =
-        (0..helpers).map(|at| TraceItem::Helper(step(100 + at, "Reading shop.example", true)));
+    let lines = (0..helpers).map(|at| TraceItem::Helper {
+        step: step(100 + at, "Reading shop.example", true),
+        name: "".into(),
+        tab: None,
+    });
     trace.items.splice(0..0, lines);
     Line::Trace(trace)
 }

@@ -1,5 +1,20 @@
 use std::path::{Path, PathBuf};
 
+/// The files wall's launcher (#4101), built for the tests that start it by the script build.sh
+/// builds the app's with: one C file and the system's compiler, on the Mac alone.
+fn wall_launcher(root: &Path) {
+    let out = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("wall-launcher");
+    let built = std::process::Command::new("bash")
+        .arg(root.join("platform/mac/wall_launcher.sh"))
+        .arg(&out)
+        .status();
+    assert!(
+        built.is_ok_and(|status| status.success()),
+        "the files wall's launcher didn't compile: platform/mac/wall_launcher.sh needs cc"
+    );
+    println!("cargo:rustc-env=WALL_LAUNCHER={}", out.display());
+}
+
 fn main() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let header = root.join("../core/public/browser_core.h");
@@ -7,6 +22,9 @@ fn main() {
 
     println!("cargo::rustc-check-cfg=cfg(engine_header_mismatch)");
     native(&root, &header, &os);
+    if os == "macos" {
+        wall_launcher(&root);
+    }
 
     // The core's API, read from its header, so the two can't drift.
     bindgen::Builder::default()

@@ -10,13 +10,14 @@ use gpui::{
 
 use super::Fold;
 
-use crate::agents::task::ilo::{IloButton, IloKind, IloLine};
+use crate::agents::task::ilo::{HelpersLimit, IloButton, IloKind, IloLine};
 use crate::agents::task::{
     Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep, Word,
 };
 use crate::agents::tier::{Tier, Why};
 use crate::shell::picture::PagePicture;
 use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
+use crate::text_input::TextInput;
 use crate::tokens::shell::conversation::ilo::TEXT_LINE as ILO_TEXT_LINE;
 use crate::tokens::shell::conversation::{INSET, SITE, SITE_GAP, TRACE_LINE};
 use crate::tokens::shell::task_area::BESIDE;
@@ -37,7 +38,8 @@ fn card() -> Card {
         asks: false,
         dot: Dot::Working,
         word: Word::for_dot(Dot::Working),
-        answers: Vec::new(),
+        pages: Vec::new(),
+        tier: Default::default(),
         question: None,
         open: Vec::new(),
         page_steps: Vec::new(),
@@ -70,7 +72,6 @@ fn conversation(steps: usize) -> Conversation {
         name: "Claude".into(),
         title: "Flight to Lisbon".into(),
         about: "Claude · Haiku · Working".into(),
-        progress: "".into(),
         asked: "a flight to Lisbon next Friday".into(),
         page: None,
         lines: vec![Line::Trace(Trace {
@@ -86,6 +87,7 @@ fn conversation(steps: usize) -> Conversation {
         answers: Vec::new(),
         writing: false,
         tier: Default::default(),
+        only_added: false,
     }
 }
 
@@ -182,6 +184,7 @@ fn the_agents_send_a_shown_conversation_made_before_its_shell_changes(cx: &mut T
             Vec::new(),
             vec![card()],
             Vec::new(),
+            Vec::new(),
             made,
             &[weak.clone()],
             cx,
@@ -207,7 +210,8 @@ fn a_needs_notification_opens_its_task(cx: &mut TestAppContext) {
     let mut waits = card();
     waits.dot = Dot::Waiting;
     waits.status = "Which seat?".into();
-    cx.update(|_, cx| crate::needs_you::follow(&[waits], cx));
+    let when = crate::needs_you::Notify::Away;
+    cx.update(|_, cx| crate::needs_you::follow(&[waits], when, cx));
     let agent = cx
         .update(|_, cx| crate::needs_you::clicked(1, cx))
         .expect("its task");
@@ -295,7 +299,6 @@ fn a_sessions_conversation_has_no_reply_field(cx: &mut TestAppContext) {
         name: "Claude Code".into(),
         title: "Claude Code".into(),
         about: "Working".into(),
-        progress: "".into(),
         asked: "".into(),
         lines: vec![
             Line::Step(step(0, "Read the page", false)),
@@ -365,11 +368,11 @@ fn escape_steps_back_and_command_w_dismisses(cx: &mut TestAppContext) {
     shell.read_with(cx, |shell, _| assert_eq!(shell.talk_agent(), None));
 }
 
-/// A task with two pages opens on Pages, its grid, a picture each; a pick zooms its page out of
-/// its picture, Esc puts it back in its picture on Pages, and Esc again goes to Talk, whose lines
-/// show, and a third closes the task.
+/// A task's pages stand in a rail beside its conversation, one view with no switch: a tile's click
+/// opens its page, focusing no page; Esc puts the page back in its tile with the keyboard back in
+/// the reply field, and Esc again closes the task.
 #[gpui::test]
-fn two_pages_open_on_pages_and_esc_goes_back_to_talk(cx: &mut TestAppContext) {
+fn two_pages_stand_in_the_rail_beside_the_conversation(cx: &mut TestAppContext) {
     let (shell, host, cx) = shown(cx);
     let mut talk = conversation(1);
     talk.tabs = vec![
@@ -379,10 +382,6 @@ fn two_pages_open_on_pages_and_esc_goes_back_to_talk(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
     shell.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
-    assert!(
-        shell.read_with(cx, |shell, cx| shell.talk_on_pages(cx)),
-        "two pages opened on Talk"
-    );
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
     let tiles: Vec<u64> = view.read_with(cx, |view, _| {
         view.drawn.borrow().iter().map(|(tab, _)| *tab).collect()
@@ -391,7 +390,12 @@ fn two_pages_open_on_pages_and_esc_goes_back_to_talk(cx: &mut TestAppContext) {
     let (_, at) = view.read_with(cx, |view, _| view.drawn.borrow()[0]);
     host.take();
     cx.simulate_click(at.center(), Modifiers::none());
-    assert!(host.take().contains(&"select 30".to_string()));
+    let lines = host.take();
+    assert!(lines.contains(&"select 30".to_string()), "{lines:?}");
+    assert!(
+        !lines.iter().any(|line| line.starts_with("focus page")),
+        "a tile's click focused its page: {lines:?}"
+    );
     assert_eq!(
         shell.read_with(cx, |shell, _| shell.task_shown()),
         Some((3, Some(30)))
@@ -404,21 +408,296 @@ fn two_pages_open_on_pages_and_esc_goes_back_to_talk(cx: &mut TestAppContext) {
         shell.read_with(cx, |shell, _| shell.task_shown()),
         Some((3, None))
     );
+    let reply = view.read_with(cx, |view, cx| view.reply.focus_handle(cx));
     assert!(
-        shell.read_with(cx, |shell, cx| shell.talk_on_pages(cx)),
-        "the page went back to Talk"
-    );
-    shell.update(cx, |shell, cx| shell.task_step_back(cx));
-    assert!(
-        !shell.read_with(cx, |shell, cx| shell.talk_on_pages(cx)),
-        "Esc stayed on Pages"
-    );
-    assert_eq!(
-        shell.read_with(cx, |shell, _| shell.task_shown()),
-        Some((3, None))
+        cx.update(|window, _| reply.is_focused(window)),
+        "the reply field hasn't the keys back after Esc"
     );
     shell.update(cx, |shell, cx| shell.task_step_back(cx));
     assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
+}
+
+/// One view at every width: wide, the tiles stand one under another at the area's right edge, past
+/// the conversation's column; narrow, they fall to one row under the header. Either way the
+/// conversation's lines and its reply field show with them.
+#[gpui::test]
+fn one_view_at_every_width(cx: &mut TestAppContext) {
+    use crate::tokens::shell::task::RAIL_BREAKPOINT;
+    use gpui::size;
+    let (shell, _, cx) = shown(cx);
+    let mut talk = conversation(1);
+    talk.tabs = vec![
+        (30, "tickets.example".into()),
+        (31, "seatmap.example".into()),
+        (32, "stalls.example".into()),
+    ];
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let draw = |wide: f32, cx: &mut VisualTestContext| {
+        cx.simulate_resize(size(px(wide), px(900.)));
+        // The first frame learns the area's width; the second lays the rail out by it.
+        for _ in 0..2 {
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        }
+        let tiles = view.read_with(cx, |view, _| view.drawn.borrow().clone());
+        let area = view.read_with(cx, |view, _| view.drawn_at.get()).unwrap();
+        let reply = view.read_with(cx, |view, _| view.reply_drawn.get());
+        (tiles, area, reply)
+    };
+    let (tiles, area, reply) = draw(RAIL_BREAKPOINT + 600., cx);
+    assert_eq!(tiles.len(), 3, "{tiles:?}");
+    let reply = reply.expect("no reply field beside the rail");
+    for pair in tiles.windows(2) {
+        let (above, below) = (pair[0].1, pair[1].1);
+        assert_eq!(above.origin.x, below.origin.x, "{tiles:?}");
+        assert!(below.origin.y > above.origin.y, "{tiles:?}");
+    }
+    assert!(
+        tiles[0].1.origin.x >= reply.right(),
+        "the rail is over the column"
+    );
+    assert!(
+        area.right() - tiles[0].1.right() < px(80.),
+        "the rail isn't at the right edge"
+    );
+
+    let (tiles, _, reply) = draw(RAIL_BREAKPOINT - 100., cx);
+    assert_eq!(tiles.len(), 3, "{tiles:?}");
+    let reply = reply.expect("no reply field under the row");
+    for pair in tiles.windows(2) {
+        let (before, after) = (pair[0].1, pair[1].1);
+        assert_eq!(before.origin.y, after.origin.y, "{tiles:?}");
+        assert!(after.origin.x > before.origin.x, "{tiles:?}");
+    }
+    assert!(
+        tiles[0].1.bottom() < reply.top(),
+        "the row isn't over the reply field"
+    );
+}
+
+/// While its task works every page says Working, where each reads `page_mark`: the rail's tile,
+/// the card's helper lines and the sidebar's row, as a screen reader names it. A page that has
+/// finished loading, or that the task isn't in, is still Working: Done comes only with the task.
+#[gpui::test]
+fn a_working_tasks_pages_all_say_working_where_each_is_read(cx: &mut TestAppContext) {
+    let mut working = card();
+    working.pages = vec![30, 31];
+    working.page_steps = vec![(31, "Reading".into())];
+    let (shell, _, cx) = shown_with(working, cx);
+    cx.simulate_a11y_activation();
+    let mut talk = conversation(1);
+    talk.tabs = vec![(30, "tickets.example".into()), (31, "seats.example".into())];
+    shell.update(cx, |shell, cx| {
+        let folders = Folders::default();
+        shell.set_tabs(3, Vec::new(), vec![30, 31], Vec::new(), folders, cx);
+        for (tab, url) in [
+            (30, "https://tickets.example/"),
+            (31, "https://seats.example/"),
+        ] {
+            let page = Page {
+                url: url.into(),
+                loading: false,
+                ..Page::default()
+            };
+            shell.set_page(tab, page, cx);
+        }
+        shell.set_conversation(Some(talk), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    for _ in 0..2 {
+        view.update(cx, |_, cx| cx.notify());
+        shell.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+    let tiles = view.read_with(cx, |view, _| {
+        [30, 31].map(|tab| view.said_logged.borrow().get(&tab).copied())
+    });
+    assert_eq!(tiles, [Some("Working"); 2], "the rail's tiles");
+    let helpers = shell.read_with(cx, |shell, _| {
+        let pages = shell.helper_pages(&"task-1".into(), vec![30, 31]);
+        pages.iter().map(|page| page.word).collect::<Vec<_>>()
+    });
+    assert_eq!(helpers, ["Working"; 2], "the card's helper lines");
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    let rows: Vec<String> = (tree.nodes.iter())
+        .filter_map(|(_, node)| node.label().map(|label| label.to_string()))
+        .filter(|label| {
+            ["Working", "Done", "Paused"]
+                .iter()
+                .any(|word| label.ends_with(&format!(", {word}")))
+        })
+        .collect();
+    assert_eq!(rows.len(), 2, "the sidebar's rows: {rows:?}");
+    assert!(
+        rows.iter().all(|row| row.ends_with(", Working")),
+        "the sidebar's rows: {rows:?}"
+    );
+}
+
+/// A tile whose word turns to Needs you is brought into sight once, where the rail holds more
+/// than fit, its tiles in their order; one the user scrolls away again stays away. Its page opens
+/// by itself and takes no keyboard.
+#[gpui::test]
+fn a_tile_turning_to_needs_you_comes_into_sight_once(cx: &mut TestAppContext) {
+    use crate::agents::Status;
+    use crate::tokens::shell::task::RAIL_BREAKPOINT;
+    use gpui::{point, size};
+    let waiting = Card {
+        dot: Dot::Waiting,
+        word: Word::NeedsYou,
+        ..card()
+    };
+    let (shell, host, cx) = shown_with(waiting, cx);
+    let mut talk = conversation(1);
+    talk.tabs = (30..36)
+        .map(|tab| (tab, "tickets.example".into()))
+        .collect();
+    shell.update(cx, |shell, cx| {
+        let tabs = (30..36).collect();
+        shell.set_tabs(3, Vec::new(), tabs, Vec::new(), Folders::default(), cx);
+        shell.set_conversation(Some(talk), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    cx.simulate_resize(size(px(RAIL_BREAKPOINT - 100.), px(900.)));
+    let draw = |cx: &mut VisualTestContext| {
+        for _ in 0..2 {
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        }
+        view.read_with(cx, |view, _| view.rail_scroll.offset().x)
+    };
+    assert_eq!(draw(cx), px(0.), "the row started scrolled");
+    let tiles = view.read_with(cx, |view, _| view.drawn.borrow().clone());
+    let order: Vec<u64> = tiles.iter().map(|(tab, _)| *tab).collect();
+    assert_eq!(order, [30, 31, 32, 33, 34, 35]);
+
+    host.take();
+    let held = Status {
+        agent: "task-1".into(),
+        name: "Claude".into(),
+        space: 3,
+        doing: "".into(),
+        held: vec![(35, "Sign in".into())],
+    };
+    shell.update(cx, |shell, cx| shell.set_agent_status(vec![held], cx));
+    assert!(
+        draw(cx) < px(0.),
+        "the tile that needs the user stayed out of sight"
+    );
+    let tiles = view.read_with(cx, |view, _| view.drawn.borrow().clone());
+    let after: Vec<u64> = tiles.iter().map(|(tab, _)| *tab).collect();
+    assert_eq!(after, order, "the tiles changed their order");
+    // With no page in the area, the page that needs the user opens as itself (i).
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watched_task_page().map(|(_, tab)| tab)),
+        Some(35),
+        "the page that needs the user didn't open"
+    );
+    let calls = host.take();
+    assert!(
+        !calls.iter().any(|call| call == "focus page"),
+        "the page ilo opened took the keyboard: {calls:?}"
+    );
+
+    // The user scrolls back to the start: the tile isn't brought back again.
+    view.update(cx, |view, _| {
+        view.rail_scroll.set_offset(point(px(0.), px(0.)))
+    });
+    assert_eq!(
+        draw(cx),
+        px(0.),
+        "the rail scrolled to the tile a second time"
+    );
+}
+
+/// A page ilo would open by itself over the reply field doesn't open while the user types there:
+/// the field keeps the keyboard and its text, and the tile that needs them is in sight.
+#[gpui::test]
+fn a_needs_you_page_never_covers_the_reply_field_in_use(cx: &mut TestAppContext) {
+    let reply = needs_you_beside_typing(
+        |reply, window, cx| reply.set_text("Two seats".into(), 9, window, cx),
+        cx,
+    );
+    assert_eq!(reply, "Two seats");
+}
+
+/// A composition under way is typing too, before the input method commits a word of it: a page
+/// opening then would take the keyboard mid-word. The field holds the marked text in its text.
+#[gpui::test]
+fn a_needs_you_page_never_covers_a_composition_under_way(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler;
+    let reply = needs_you_beside_typing(
+        |reply, window, cx| reply.replace_and_mark_text_in_range(None, "か", None, window, cx),
+        cx,
+    );
+    assert_eq!(reply, "か", "the composition was lost");
+}
+
+/// Types into the focused reply field with `type_in`, turns a tile to Needs you, checks ilo
+/// opened no page over the field and left it the keyboard, and gives back the field's text.
+fn needs_you_beside_typing(
+    type_in: impl FnOnce(&mut TextInput, &mut gpui::Window, &mut gpui::Context<TextInput>),
+    cx: &mut TestAppContext,
+) -> String {
+    use crate::agents::Status;
+    let waiting = Card {
+        dot: Dot::Waiting,
+        word: Word::NeedsYou,
+        ..card()
+    };
+    let (shell, host, cx) = shown_with(waiting, cx);
+    let mut talk = conversation(1);
+    talk.tabs = vec![
+        (30, "tickets.example".into()),
+        (31, "tickets.example".into()),
+    ];
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(
+            3,
+            Vec::new(),
+            vec![30, 31],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
+        shell.set_conversation(Some(talk), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let reply = view.read_with(cx, |view, _| view.reply.clone());
+    cx.update(|window, cx| {
+        reply.update(cx, |reply, cx| type_in(reply, window, cx));
+        let handle = reply.read(cx).focus_handle(cx);
+        window.focus(&handle, cx);
+    });
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    host.take();
+    let held = Status {
+        agent: "task-1".into(),
+        name: "Claude".into(),
+        space: 3,
+        doing: "".into(),
+        held: vec![(31, "Sign in".into())],
+    };
+    shell.update(cx, |shell, cx| shell.set_agent_status(vec![held], cx));
+    for _ in 0..2 {
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watched_task_page()),
+        None,
+        "the page covered the reply field the user types in"
+    );
+    let calls = host.take();
+    assert!(!calls.iter().any(|call| call == "focus page"), "{calls:?}");
+    let handle = reply.read_with(cx, |reply, cx| reply.focus_handle(cx));
+    assert!(
+        cx.update(|window, _| handle.is_focused(window)),
+        "the reply field lost the keyboard"
+    );
+    reply.read_with(cx, |reply, _| reply.text().to_string())
 }
 
 /// A picture's click zooms its page out of it, at the picture's place and with its image; what
@@ -433,9 +712,8 @@ fn a_picture_shows_its_page(cx: &mut TestAppContext) {
     let picture = PagePicture::from_bgra(vec![255; 4 * 4], 2, 2);
     shell.update(cx, |shell, cx| shell.page_pictured(request, picture, cx));
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
-    // One page opens on Talk, which has no pictures: Pages has them.
-    assert!(!shell.read_with(cx, |shell, cx| shell.talk_on_pages(cx)));
-    view.update(cx, |view, cx| view.show_pages(true, cx));
+    // One page has a rail of one.
+    view.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
     let (tab, at) = view.read_with(cx, |view, _| view.drawn.borrow()[0]);
     assert_eq!(tab, 30);
@@ -913,34 +1191,6 @@ fn the_reply_placeholder_follows_the_appearance(cx: &mut TestAppContext) {
     assert_eq!(colours[0], colours[2]);
 }
 
-/// A page the user holds from the agent says why under its picture, over the agent's step: taken
-/// over, that they drive it; handed to them, what the agent asked of them (#1080).
-#[test]
-fn a_held_pages_picture_says_why() {
-    use super::picture_status;
-    let step = || Some("Clicking “Tickets”".into());
-    assert_eq!(picture_status(None, step()), step());
-    assert_eq!(picture_status(None, None), None);
-    assert_eq!(
-        picture_status(Some(&"".into()), step()),
-        Some("You're driving".into())
-    );
-    assert_eq!(
-        picture_status(Some(&"Sign in to github.com".into()), None),
-        Some("Needs you · Sign in to github.com".into())
-    );
-}
-
-/// Under a page's picture its site leads its step by weight, as the two are one size: the step is
-/// lighter than the site, and a hold, which asks for the user, is as heavy as the site.
-#[test]
-fn a_pages_step_is_lighter_than_its_site() {
-    use super::{Caption, caption_weight};
-    let site = caption_weight(Caption::Site);
-    assert!(caption_weight(Caption::Step) < site);
-    assert_eq!(caption_weight(Caption::Hold), site);
-}
-
 /// Task-1's conversation with ilo's line that it stopped Claude at Place order, under Work on
 /// pages, drawn, and its view.
 fn stopped_at_order(
@@ -958,6 +1208,7 @@ fn stopped_at_order(
             kind: IloKind::Stopped {
                 tab: 30,
                 at: "Place order".into(),
+                doing: "clicking “Place order”".into(),
                 why: Why::Order,
                 tier: Tier::Work,
                 count: 1,
@@ -989,7 +1240,7 @@ fn an_agents_text_never_draws_an_ilo_lines_buttons(cx: &mut TestAppContext) {
     let (shell, _host, cx) = shown(cx);
     let talk = Conversation {
         lines: vec![Line::Said(
-            "ilo stopped Claude at “Place order”\n\nPlacing an order isn't part of Work on pages.\n\n\
+            "ilo stopped Claude from clicking “Place order”\n\nPlacing an order isn't part of Work on pages.\n\n\
              Take Over · Give Full access"
                 .into(),
         )],
@@ -1017,13 +1268,14 @@ fn a_site_is_never_in_quotes_and_a_pages_words_are(_: &mut TestAppContext) {
     let stopped = |why| IloKind::Stopped {
         tab: 30,
         at: "seatmap.example".into(),
+        doing: "".into(),
         why,
         tier: Tier::Work,
         count: 1,
     };
     let said = |kind: &IloKind| {
         let (own, name) = super::words::head(kind, "Claude");
-        super::words::with_name(kind, &own, &name.unwrap())
+        super::words::with_name(kind, &own, &name.unwrap()).0
     };
     assert_eq!(
         said(&stopped(Why::Fenced)),
@@ -1042,14 +1294,41 @@ fn a_site_is_never_in_quotes_and_a_pages_words_are(_: &mut TestAppContext) {
     let order = IloKind::Stopped {
         tab: 30,
         at: "Place order".into(),
+        doing: "clicking “Place order”".into(),
+        why: Why::Order,
+        tier: Tier::Work,
+        count: 1,
+    };
+    // B1: the refused step as it was under way, its control's name in its own quotes alone.
+    assert_eq!(
+        super::words::head(&order, "Claude"),
+        (
+            "stopped Claude from clicking \u{201c}Place order\u{201d}".into(),
+            None
+        )
+    );
+    // With no step of its own traced, it names none.
+    let untraced = IloKind::Stopped {
+        tab: 30,
+        at: "Place order".into(),
+        doing: "".into(),
         why: Why::Order,
         tier: Tier::Work,
         count: 1,
     };
     assert_eq!(
-        said(&order),
-        "stopped Claude at \u{201c}Place order\u{201d}"
+        super::words::head(&untraced, "Claude"),
+        ("stopped one of Claude's steps".into(), None)
     );
+    // O1: a step on one of several pages names its site, in the middle of ilo's words.
+    let yours = IloKind::Yours {
+        tab: 30,
+        site: Some("boxoffice.example".into()),
+    };
+    assert_eq!(said(&yours), "handed this step on boxoffice.example to you");
+    let (own, name) = super::words::head(&yours, "Claude");
+    let (line, at) = super::words::with_name(&yours, &own, &name.unwrap());
+    assert_eq!(&line[at], "boxoffice.example");
 }
 
 /// An ilo line's head is a sentence: where ilo is its subject the mark is its first word and a verb
@@ -1065,6 +1344,7 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
         IloKind::Stopped {
             tab: 1,
             at: "Place order".into(),
+            doing: "clicking “Place order”".into(),
             why: Why::Order,
             tier: Tier::Work,
             count: 1,
@@ -1072,11 +1352,16 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
         IloKind::Stopped {
             tab: 1,
             at: "seatmap.example".into(),
+            doing: "".into(),
             why: Why::Fenced,
             tier: Tier::Work,
             count: 1,
         },
-        IloKind::Yours { tab: 1 },
+        IloKind::Yours { tab: 1, site: None },
+        IloKind::Yours {
+            tab: 1,
+            site: Some("boxoffice.example".into()),
+        },
         IloKind::TabBack { tab: 1 },
         IloKind::SignedIn {
             tab: 1,
@@ -1092,11 +1377,20 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
         IloKind::Gone,
         IloKind::NotKept,
         IloKind::KeepsNothing,
+        IloKind::NoProfile,
+        IloKind::NoSpace,
         IloKind::Helpers {
             tab: 1,
-            deep: false,
+            limit: HelpersLimit::Count,
         },
-        IloKind::Helpers { tab: 1, deep: true },
+        IloKind::Helpers {
+            tab: 1,
+            limit: HelpersLimit::Depth,
+        },
+        IloKind::Helpers {
+            tab: 1,
+            limit: HelpersLimit::Kind,
+        },
     ];
     for kind in &every {
         // Every kind is in the list above: a new one fails to compile here until it's added.
@@ -1111,6 +1405,8 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             | IloKind::Gone
             | IloKind::NotKept
             | IloKind::KeepsNothing
+            | IloKind::NoProfile
+            | IloKind::NoSpace
             | IloKind::Helpers { .. } => {}
         }
         let (own, _) = head(kind, "Claude");
@@ -1138,6 +1434,7 @@ fn a_fences_refusal_links_to_off_limits_and_changes_nothing(cx: &mut TestAppCont
             kind: IloKind::Stopped {
                 tab: 30,
                 at: "seatmap.example".into(),
+                doing: "".into(),
                 why,
                 tier: Tier::Work,
                 count: 1,
@@ -1214,6 +1511,280 @@ fn no_key_presses_an_ilo_lines_button(cx: &mut TestAppContext) {
             .iter()
             .any(|line| line.contains("SetTier") || line.contains("TakeOver")),
         "a key pressed an ilo line's button"
+    );
+}
+
+/// The Focus command brings the keyboard to the newest line's first button, where a key typed at
+/// once presses nothing; after PROTECT Tab moves along the line and ↩ presses the ringed button,
+/// and Escape or the command again gives the keyboard back, pressing nothing (#3955).
+#[gpui::test]
+fn the_focus_command_alone_brings_the_keys_to_an_ilo_lines_buttons(cx: &mut TestAppContext) {
+    let (shell, host, view, cx) = stopped_at_order(cx);
+    let past_protect = |view: &Entity<super::TalkView>, cx: &mut VisualTestContext| {
+        view.update(cx, |view, _| {
+            let keys = view.ilo_keys.as_mut().expect("the keys left the line");
+            keys.last -= crate::agents::tier::PROTECT * 2;
+            // The buttons have stood, as a click needs too.
+            for (_, since) in view.ilo_drawn.borrow_mut().values_mut() {
+                *since -= std::time::Duration::from_secs(5);
+            }
+        });
+    };
+    let pressed = |host: &Rc<Recorder>| -> Vec<String> {
+        (host.take().into_iter())
+            .filter(|line| line.contains("SetTier") || line.contains("TakeOver"))
+            .collect()
+    };
+    host.take();
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::FocusAgentQuestion, "ui", cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        pressed(&host),
+        Vec::<String>::new(),
+        "a key typed as the keys came pressed"
+    );
+    cx.simulate_keystrokes("tab");
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(1));
+    past_protect(&view, cx);
+    cx.simulate_keystrokes("enter");
+    assert_eq!(pressed(&host), ["task task-1 SetTier(Full)"]);
+
+    past_protect(&view, cx);
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(
+        view.read_with(cx, |view, _| view.ilo_keys.is_none()),
+        "Escape kept the keys"
+    );
+    // The command again, after it brought them, gives them back too.
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::FocusAgentQuestion, "ui", cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::FocusAgentQuestion, "ui", cx)
+    });
+    cx.run_until_parked();
+    assert!(
+        view.read_with(cx, |view, _| view.ilo_keys.is_none()),
+        "the key kept the keys"
+    );
+    assert_eq!(
+        pressed(&host),
+        Vec::<String>::new(),
+        "Escape or the key pressed a button"
+    );
+}
+
+/// A line that comes after the ring was drawn on another line's button is never pressed by the
+/// key meant for the ringed one: the keys end, and nothing is pressed.
+#[gpui::test]
+fn a_line_arriving_after_the_ring_takes_no_press(cx: &mut TestAppContext) {
+    use super::ilo_keys::IloPress;
+    let (shell, host, view, cx) = stopped_at_order(cx);
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::FocusAgentQuestion, "ui", cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
+    let mut talk = view.read_with(cx, |view, _| view.shown.clone().unwrap());
+    talk.lines.push(Line::Ilo(IloLine {
+        key: 8,
+        kind: IloKind::Stopped {
+            tab: 30,
+            at: "Pay".into(),
+            doing: "clicking “Pay”".into(),
+            why: Why::Message,
+            tier: Tier::Work,
+            count: 2,
+        },
+        settled: false,
+    }));
+    view.update(cx, |view, _| {
+        let keys = view.ilo_keys.as_mut().expect("the keys left the line");
+        keys.last -= crate::agents::tier::PROTECT * 2;
+        for (_, since) in view.ilo_drawn.borrow_mut().values_mut() {
+            *since -= std::time::Duration::from_secs(5);
+        }
+    });
+    host.take();
+    // The line comes and the key with it, before a frame draws the line, the ring still on line
+    // 7's button.
+    cx.update(|window, cx| {
+        shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+        view.update(cx, |view, cx| view.ilo_press(&IloPress, window, cx));
+    });
+    cx.run_until_parked();
+    let pressed: Vec<String> = (host.take().into_iter())
+        .filter(|line| line.contains("SetTier") || line.contains("TakeOver"))
+        .collect();
+    assert_eq!(pressed, Vec::<String>::new(), "the new line was pressed");
+    assert!(
+        view.read_with(cx, |view, _| view.ilo_keys.is_none()),
+        "the keys stayed on a line that changed under them"
+    );
+}
+
+/// What the checks wait on to press by key is the guard's own end: they're told only once a key
+/// on the ringed button would press, and once its line has moved under a button that widens they
+/// are told anew, again not before.
+#[gpui::test]
+fn the_checks_are_told_a_key_presses_only_at_the_guards_end(cx: &mut TestAppContext) {
+    use super::ilo_keys::{Tell, Told};
+    use std::time::{Duration, Instant};
+    let (shell, host, view, cx) = stopped_at_order(cx);
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::FocusAgentQuestion, "ui", cx)
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(1));
+    let guard = |view: &Entity<super::TalkView>, cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| view.ilo_guard())
+            .expect("no guard with the keys on a line")
+    };
+    // As if `protect` had passed since the keyboard came, and `stood` since the buttons were drawn.
+    let later = |view: &Entity<super::TalkView>, cx: &mut VisualTestContext, stood: Duration| {
+        view.update(cx, |view, _| {
+            view.ilo_keys.as_mut().unwrap().last -= crate::agents::tier::PROTECT * 2;
+            for (_, since) in view.ilo_drawn.borrow_mut().values_mut() {
+                *since -= stood;
+            }
+        });
+    };
+    let raised = |host: &Rc<Recorder>| host.take().iter().any(|line| line.contains("SetTier"));
+    let mut told = Told::default();
+    let long = Duration::from_secs(5);
+    host.take();
+
+    // The keyboard has been there long enough, the button hasn't stood: neither told nor pressed.
+    later(&view, cx, Duration::ZERO);
+    let first = guard(&view, cx);
+    assert!(matches!(
+        told.step(first, Instant::now(), false),
+        Tell::Wait(_)
+    ));
+    cx.simulate_keystrokes("enter");
+    assert!(!raised(&host), "a key pressed a button that hadn't stood");
+    later(&view, cx, long);
+    let stood = guard(&view, cx);
+    assert_eq!(told.step(stood, Instant::now(), false), Tell::Ready);
+    assert_eq!(
+        told.step(stood, Instant::now(), false),
+        Tell::Nothing,
+        "told twice of one guard"
+    );
+
+    // A line comes above it and the button moves: the guard starts anew, and so does the telling.
+    let mut talk = view.read_with(cx, |view, _| view.shown.clone().unwrap());
+    talk.lines
+        .insert(0, Line::Said("Two seats are left.".into()));
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(1));
+    let moved = guard(&view, cx);
+    assert_ne!(moved, stood, "the button didn't move with its line");
+    let Tell::Wait(end) = told.step(moved, Instant::now(), false) else {
+        panic!("told ready of a button that had just moved");
+    };
+    cx.simulate_keystrokes("enter");
+    assert!(!raised(&host), "a key pressed a button that had just moved");
+    // Its wait ends at the guard's end, and a moment short of it nothing is told.
+    let moved = guard(&view, cx);
+    let Tell::Wait(end_again) = told.step(moved, Instant::now(), false) else {
+        panic!("told ready after a key that came too soon");
+    };
+    assert!(end_again >= end, "a key didn't push the guard's end back");
+    let short = Duration::from_millis(2);
+    assert!(matches!(
+        told.step(moved, end_again - short, true),
+        Tell::Wait(_)
+    ));
+    assert_eq!(told.step(moved, end_again + short, true), Tell::Ready);
+    // And once that long has passed, the key presses.
+    later(&view, cx, long);
+    cx.simulate_keystrokes("enter");
+    assert!(raised(&host), "a key after the guard's end didn't press");
+}
+
+/// What the checks read to press a line's button is the line's key, the button's own name and its
+/// place: nothing the line says, which may be a page's words or a site, is in it.
+#[gpui::test]
+fn a_buttons_place_for_the_checks_holds_no_word_of_its_line(cx: &mut TestAppContext) {
+    use crate::agents::task::ilo;
+    let (_shell, _host, view, cx) = stopped_at_order(cx);
+    let order = view.read_with(cx, |view, _| {
+        (view.shown.as_ref().unwrap().lines.iter())
+            .find_map(|line| match line {
+                Line::Ilo(line) => Some(line.kind.clone()),
+                _ => None,
+            })
+            .expect("no ilo line")
+    });
+    // The same stop at another site's door, where the line says the site.
+    let mut site = order.clone();
+    if let IloKind::Stopped { at, why, .. } = &mut site {
+        *at = "seatmap.example".into();
+        *why = Why::OtherSite;
+    }
+    let yours = IloKind::Yours {
+        tab: 30,
+        site: Some("boxoffice.example".into()),
+    };
+    let bounds = gpui::Bounds::new(point(px(12.), px(340.)), gpui::size(px(96.), px(24.)));
+    for kind in [order, site, yours] {
+        let (own, name) = super::words::head(&kind, "Claude");
+        let said = format!("{own} {}", name.unwrap_or_default());
+        let line = IloLine {
+            key: 7,
+            kind,
+            settled: false,
+        };
+        let buttons = ilo::drawn(&line, Some(30));
+        assert!(!buttons.is_empty(), "{said}: no button to place");
+        for button in buttons {
+            let name = super::words::button(button);
+            let place = super::ilo_keys::place((7, button), bounds);
+            let rest = (place.strip_prefix("browser: ilo line 7 ")).expect("no line's key");
+            let (named, at) = rest.rsplit_once(" at ").expect("no place");
+            assert_eq!(named, name, "more than the button's name: {place}");
+            assert_eq!(at, "12 340 96 24");
+            for word in said.split(|each: char| !each.is_alphanumeric() && each != '.') {
+                let own = name.to_lowercase().contains(&word.to_lowercase());
+                assert!(
+                    word.len() < 4 || own || !place.contains(word),
+                    "“{word}” of “{said}” is in {place}"
+                );
+            }
+        }
+    }
+}
+
+/// The reply field's caret stands before its placeholder, not on its first letter; what's typed
+/// starts at the field's start, where the caret was.
+#[gpui::test]
+fn the_reply_fields_caret_stands_before_its_placeholder(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    let reply = shell.read_with(cx, |shell, cx| {
+        shell.talk.as_ref().unwrap().view.read(cx).reply.clone()
+    });
+    let inset = reply.read_with(cx, |reply, _| reply.placeholder_inset());
+    assert!(
+        inset > crate::text_input::CARET,
+        "the placeholder starts {inset:?} in, under the caret"
+    );
+    cx.update(|window, cx| {
+        reply.update(cx, |reply, cx| reply.set_text("ok".into(), 2, window, cx))
+    });
+    assert_eq!(
+        reply.read_with(cx, |reply, _| reply.placeholder_inset()),
+        px(0.)
     );
 }
 
@@ -1349,7 +1920,7 @@ fn ilos_line_wraps_its_whole_sentence_in_the_narrowest_conversation(cx: &mut Tes
         text_width(&laid.text().into(), text::BODY, FontWeight::NORMAL, &system)
     });
     assert!(
-        laid.text().ends_with("so you can reply."),
+        laid.text().ends_with("still has this conversation."),
         "not the whole sentence: {}",
         laid.text()
     );
@@ -1376,6 +1947,7 @@ fn ilos_wrapped_line_and_its_buttons_start_under_its_mark(cx: &mut TestAppContex
     let stopped = IloKind::Stopped {
         tab: 30,
         at: "Place the order for both of the seats".into(),
+        doing: "clicking “Place the order for both of the seats”".into(),
         why: Why::Order,
         tier: Tier::Work,
         count: 1,
@@ -1436,6 +2008,77 @@ fn level_chip_with(kind: IloKind, cx: &mut TestAppContext) -> bool {
     view.read_with(cx, |view, _| view.level_drawn.get().is_some())
 }
 
+/// The chip under the reply field says the task's own level, at Look only and at Full access,
+/// and a click on it opens the level's menu: names only, that level checked, where it may go and
+/// Settings. A pick there is the user's press on the task, the one way its level changes.
+#[gpui::test]
+fn the_level_chip_says_the_tasks_level_and_opens_its_menu(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    for tier in [Tier::Look, Tier::Full] {
+        shell.update(cx, |shell, cx| {
+            shell.set_talk_beside(true, cx);
+            shell.set_conversation(
+                Some(Conversation {
+                    tier,
+                    ..ended(IloKind::KeptHere)
+                }),
+                cx,
+            );
+        });
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        let chip = view.read_with(cx, |view, _| view.level_drawn.get());
+        let chip = chip.expect("the level chip drawn");
+        host.take();
+        cx.simulate_click(chip.center(), Modifiers::none());
+        cx.run_until_parked();
+        let rows: Vec<(String, bool)> = (host.menus.borrow().last().cloned())
+            .expect("a click on the chip showed no menu")
+            .into_iter()
+            .map(|(title, enabled)| (title.to_string(), enabled))
+            .collect();
+        let row = |title: &str, enabled: bool| (title.to_string(), enabled);
+        assert_eq!(
+            rows,
+            vec![
+                row("Look only", true),
+                row("Work on pages", true),
+                row("Full access", true),
+                row("", false),
+                row("Any site", true),
+                row("Only the sites you add", false),
+                row("", false),
+                row("Settings…", true),
+            ],
+            "the level menu's rows at {tier:?}"
+        );
+        let checked: Vec<bool> = host.entries.borrow().iter().map(|e| e.checked).collect();
+        let at = |each: Tier| tier == each;
+        assert_eq!(
+            checked,
+            [
+                at(Tier::Look),
+                at(Tier::Work),
+                at(Tier::Full),
+                false,
+                true,
+                false,
+                false,
+                false
+            ],
+            "the menu checks {tier:?}, the task's own level"
+        );
+    }
+    host.take();
+    cx.update(|_, cx| host.choose("Work on pages", cx));
+    assert_eq!(
+        host.take(),
+        vec!["task task-1 SetTier(Work)".to_string()],
+        "the pick is the user's press on the task"
+    );
+}
+
 /// A task that takes a reply keeps its level under the field, ended and picked up again too.
 #[gpui::test]
 fn a_task_that_takes_a_reply_keeps_its_level_under_the_field(cx: &mut TestAppContext) {
@@ -1461,12 +2104,110 @@ fn a_task_of_an_assistant_that_keeps_nothing_has_no_level_row(cx: &mut TestAppCo
     assert!(!level_chip_with(IloKind::KeepsNothing, cx));
 }
 
+/// A helper's line on `step`, which its task gave no name.
+fn helper(step: TraceStep) -> TraceItem {
+    TraceItem::Helper {
+        step,
+        name: "".into(),
+        tab: None,
+    }
+}
+
+/// A helper its task named says that name on its line, and its page's word after it, as the
+/// page's row in the sidebar ends: not its step, and nothing it found. Its page's favicon stands
+/// in its step's glyph's place, which a page without one keeps. One its task gave no name has
+/// its step's line.
+#[test]
+fn a_named_helpers_line_says_its_name_and_its_pages_word() {
+    use super::{HelperPage, helper_line};
+    use crate::shell::task_cards::PageWord;
+    let reading = step(10, "Reading shop.example", true);
+    let name = gpui::SharedString::from("Northwick Home price");
+    for word in [PageWord::Working, PageWord::Done, PageWord::Paused] {
+        let page = HelperPage {
+            tab: 30,
+            title: "Lamps".into(),
+            favicon: None,
+            word: word.label(),
+        };
+        let line = helper_line(&reading, &name, Some(&page)).expect("named");
+        assert_eq!(
+            line.text(),
+            format!("Northwick Home price {}", word.label())
+        );
+        assert_eq!(
+            (line.glyph, line.icon.is_some()),
+            (Some(reading.glyph), false)
+        );
+    }
+    let favicon = std::sync::Arc::new(gpui::Image::empty());
+    let page = HelperPage {
+        tab: 30,
+        title: "".into(),
+        favicon: Some(favicon),
+        word: PageWord::Working.label(),
+    };
+    let line = helper_line(&reading, &name, Some(&page)).expect("named");
+    assert_eq!((line.glyph, line.icon.is_some()), (None, true));
+    // A page that's gone leaves the name alone.
+    let line = helper_line(&reading, &name, None).expect("named");
+    assert_eq!(line.text(), "Northwick Home price");
+    assert!(helper_line(&reading, &"".into(), Some(&page)).is_none());
+}
+
+/// A started helper its task gave no name has no empty line: its row appears with its first
+/// words, its page's title once it has a page with one, said as a name is with the page's word
+/// after it. Until then it draws nothing, and its stretch's count alone shows it. One with a step
+/// and no titled page has its step's line.
+#[test]
+fn a_helper_with_no_name_has_no_line_until_its_page_has_a_title() {
+    use super::{HelperPage, HelperRow, helper_row};
+    use crate::shell::task_cards::PageWord;
+    let none = gpui::SharedString::default();
+    let page = |title: &'static str| HelperPage {
+        tab: 30,
+        title: title.into(),
+        favicon: None,
+        word: PageWord::Working.label(),
+    };
+    // Started, with no step yet: its line has no words of its own.
+    let began = step(10, "", true);
+    assert!(matches!(
+        helper_row(&began, &none, None),
+        HelperRow::Nothing
+    ));
+    let untitled = page("");
+    let row = helper_row(&began, &none, Some(&untitled));
+    assert!(matches!(row, HelperRow::Nothing));
+    let titled = page("Lamps · Northwick Home");
+    for on in [&began, &step(11, "Reading shop.example", true)] {
+        let HelperRow::Known(line) = helper_row(on, &none, Some(&titled)) else {
+            panic!("its page has a title");
+        };
+        assert_eq!(line.text(), "Lamps · Northwick Home Working");
+    }
+    // Its count is its stretch's, with or without a line.
+    let trace = Trace {
+        key: 1,
+        running: true,
+        took: None,
+        items: vec![helper(began.clone()), helper(began)],
+    };
+    assert_eq!(trace.helpers(), 2);
+    // With a step and no titled page, the step's line.
+    let reading = step(11, "Reading shop.example", true);
+    assert!(matches!(helper_row(&reading, &none, None), HelperRow::Step));
+    // Named, it has its line from its start.
+    let row = helper_row(&step(10, "", true), &"Lamp prices".into(), None);
+    assert!(matches!(row, HelperRow::Known(line) if line.text() == "Lamp prices"));
+}
+
 /// Task-1's conversation as it works with `helpers` helpers (#4102), each reading its shop's
 /// page, and its own step under way after them.
 fn with_helpers(helpers: usize) -> Conversation {
     let mut talk = conversation(1);
     let items = (0..helpers)
-        .map(|at| TraceItem::Helper(step(10 + at, "Reading shop.example", true)))
+        .map(|at| helper(step(10 + at, "Reading shop.example", true)))
         .chain([TraceItem::Step(step(0, "Reading reviews.example", true))]);
     talk.lines = vec![Line::Trace(Trace {
         key: 0,
@@ -1520,81 +2261,13 @@ fn a_working_line_counts_the_tasks_helpers() {
     // One of the four waits on the user and one has finished: each still has its line, so each
     // still counts.
     let mut talk = with_helpers(4);
-    its_trace(&mut talk).items[1] = TraceItem::Helper(step(11, "Read shop.example", false));
-    its_trace(&mut talk).items[2] = TraceItem::Helper(step(12, "Handed you shop.example", false));
+    its_trace(&mut talk).items[1] = helper(step(11, "Read shop.example", false));
+    its_trace(&mut talk).items[2] = helper(step(12, "Handed you shop.example", false));
     assert_eq!(summary(&mut talk), "Working · 4 helpers");
 
     let over = its_trace(&mut talk);
     (over.running, over.took) = (false, Some(41));
     assert_eq!(summary(&mut talk), "Worked for 41 s · 4 helpers");
-}
-
-/// On Pages, a task on one page rings the page it's on, with the step under way. One that works
-/// on several rings every page that has a step of its own, each saying its own and never
-/// another's, but not the page the user holds, nor one with no step yet (#4102).
-#[test]
-fn every_page_a_task_works_on_is_ringed_with_its_own_step() {
-    use super::picture_work;
-    use gpui::SharedString;
-    let running: Option<SharedString> = Some("Clicking “Tickets”".into());
-    assert_eq!(
-        picture_work(1, Some(1), running.clone(), &[], false),
-        (true, running.clone())
-    );
-    assert!(!picture_work(2, Some(1), running.clone(), &[], false).0);
-
-    let pages: Vec<(u64, SharedString)> = vec![
-        (1, "Reading tickets.example".into()),
-        (2, "Reading stalls.example".into()),
-        (3, "Handing you boxoffice.example".into()),
-    ];
-    for (tab, step) in &pages[..2] {
-        let work = picture_work(*tab, Some(1), running.clone(), &pages, false);
-        assert_eq!(work, (true, Some(step.clone())), "page {tab}");
-    }
-    assert!(
-        !picture_work(3, Some(1), running.clone(), &pages, true).0,
-        "the held page"
-    );
-    assert_eq!(
-        picture_work(4, Some(1), running, &pages, false),
-        (false, None)
-    );
-}
-
-/// Pages' grid holds as many pictures across as fit at their full size, up to the most a row has.
-/// Where only one fits, as beside a page, three pages or more go two across, each half the room,
-/// so no one scrolls for the third; one page or two stay whole.
-#[test]
-fn three_pages_or_more_are_never_fewer_than_two_across() {
-    use super::grid_shape;
-    use crate::tokens::shell::conversation::{PICTURE_GAP, PICTURE_WIDTH, PICTURES_COLUMNS};
-
-    // Room for one picture and most of a second.
-    let one = PICTURE_WIDTH * 1.75;
-    for pages in [1, 2] {
-        assert_eq!(grid_shape(one, pages), (1, PICTURE_WIDTH), "{pages} pages");
-    }
-    for pages in [3, 4, 9] {
-        let (across, wide) = grid_shape(one, pages);
-        assert_eq!(across, 2, "{pages} pages");
-        assert!(wide < PICTURE_WIDTH, "{wide}");
-        let (row, spare) = (2. * wide + PICTURE_GAP, one - (2. * wide + PICTURE_GAP));
-        assert!(
-            row <= one && spare < 2.,
-            "the two don't fill the room: {row} of {one}"
-        );
-    }
-    // With room for more, each is whole however many there are.
-    let two = 2. * PICTURE_WIDTH + PICTURE_GAP;
-    assert_eq!(grid_shape(two, 4), (2, PICTURE_WIDTH));
-    let wide = (PICTURES_COLUMNS + 1.) * (PICTURE_WIDTH + PICTURE_GAP);
-    for pages in [1, 4] {
-        assert_eq!(
-            grid_shape(wide, pages),
-            (PICTURES_COLUMNS as usize, PICTURE_WIDTH)
-        );
-    }
 }
 
 /// Opened, as it is while it works, the Working line lists a line for each helper with the task's
@@ -1625,7 +2298,7 @@ fn a_working_line_opens_to_a_line_for_each_helper(cx: &mut TestAppContext) {
 
     // A fifth line as a helper comes, and none goes as one finishes.
     let mut talk = with_helpers(5);
-    its_trace(&mut talk).items[0] = TraceItem::Helper(step(10, "Read shop.example", false));
+    its_trace(&mut talk).items[0] = helper(step(10, "Read shop.example", false));
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
     draw(cx);
     assert_eq!(listed(cx), Some(6. * TRACE_LINE));
@@ -1633,6 +2306,62 @@ fn a_working_line_opens_to_a_line_for_each_helper(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.toggle(Fold::Trace(0), true, cx));
     draw(cx);
     assert_eq!(listed(cx), None, "folded, it still listed them");
+}
+
+/// In the one view the live line stands over the reply field with Take Over at its end, and
+/// names the step under way only: once that step has ended, as at Hand Back, or was refused, it
+/// says the assistant is working, until the next step starts (c, h).
+#[gpui::test]
+fn the_live_line_over_the_reply_names_only_the_step_under_way(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(3)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let draw = |cx: &mut VisualTestContext| {
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| view.take_over_drawn.borrow().clone())
+    };
+    let chips = draw(cx);
+    assert_eq!(
+        chips.len(),
+        1,
+        "Take Over stands once, on the live line: {chips:?}"
+    );
+    let reply = view
+        .read_with(cx, |view, _| view.reply_drawn.get())
+        .expect("the reply field");
+    assert!(
+        chips[0].bottom() <= reply.top(),
+        "the live line isn't over the reply field: {chips:?} {reply:?}"
+    );
+    host.take();
+    cx.simulate_click(chips[0].center(), Modifiers::none());
+    assert_eq!(host.take(), ["task task-1 TakeOver(30)"]);
+
+    let said = |talk: &Conversation| super::under_way(&talk.lines).map(|step| step.title.clone());
+    assert_eq!(
+        said(&conversation(3)).as_deref(),
+        Some("Opened skyscanner.net")
+    );
+    // The step handed over has ended once the user hands the page back.
+    let mut ended = conversation(3);
+    its_trace(&mut ended).items[2] = TraceItem::Step(step(2, "Handed you skyscanner.net", false));
+    assert_eq!(said(&ended), None);
+    // A refused step is never the one under way.
+    let mut refused = conversation(3);
+    let mut row = step(2, "Couldn't click “Pay”", false);
+    row.failed = true;
+    its_trace(&mut refused).items[2] = TraceItem::Step(row);
+    assert_eq!(said(&refused), None);
+    assert_eq!(super::words::working("Claude"), "Claude is working");
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(refused), cx));
+    assert_eq!(
+        draw(cx).len(),
+        1,
+        "Take Over left the live line between steps"
+    );
 }
 
 /// Beside its page, Take Over stands once on the lines, on the task's own step under way, which
@@ -1688,10 +2417,9 @@ fn a_helpers_line_under_way_shimmers_unless_motion_is_reduced(cx: &mut TestAppCo
 
     // Three have finished and the fourth waits for the user to sign in.
     for at in 0..3 {
-        its_trace(&mut talk).items[at] =
-            TraceItem::Helper(step(10 + at, "Read shop.example", false));
+        its_trace(&mut talk).items[at] = helper(step(10 + at, "Read shop.example", false));
     }
-    its_trace(&mut talk).items[3] = TraceItem::Helper(step(13, "Handed you shop.example", false));
+    its_trace(&mut talk).items[3] = helper(step(13, "Handed you shop.example", false));
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
     assert!(!moving(cx), "nothing is under way");
     cx.update(|_, cx| cx.set_reduce_motion(true));

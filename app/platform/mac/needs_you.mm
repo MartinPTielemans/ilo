@@ -1,6 +1,7 @@
 // Quiet until it needs you, outside ilo (app/src/needs_you.rs): the Dock icon's badge counts the
-// tasks waiting for the user, and a need that comes while another app is active posts one
-// notification through UNUserNotificationCenter, whose click brings ilo forward and opens its task.
+// tasks waiting for the user, and a task that comes to need the user or finishes posts one
+// notification through UNUserNotificationCenter, as Settings › Agents' Notify says, whose
+// click brings ilo forward and opens its task.
 
 #import <Cocoa/Cocoa.h>
 #import <UserNotifications/UserNotifications.h>
@@ -39,11 +40,12 @@ NSString* const kNeed = @"need";
   completionHandler();
 }
 
-// One that comes as ilo becomes active still shows, in the list alone, as ilo has it in view.
+// One posted while ilo is in front, as Settings › Agents' Notify can choose, shows as one
+// posted from the background does: the app posts in front only when the user chose it.
 - (void)userNotificationCenter:(UNUserNotificationCenter*)center
        willPresentNotification:(UNNotification*)notification
          withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler {
-  completionHandler(UNNotificationPresentationOptionList);
+  completionHandler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionList);
 }
 
 @end
