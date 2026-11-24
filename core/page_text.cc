@@ -57,7 +57,8 @@ std::set<std::string, std::less<>> ReadableUrls(content::WebContents& contents) 
 
 void Report(bc_id tab, uint64_t request, std::optional<std::string> text) {
   if (Host().tab_text) {
-    Host().tab_text(Host().context, tab, request, text ? text->c_str() : nullptr);
+    Host().tab_text(Host().context, tab, request, text ? text->c_str() : nullptr,
+                    BC_AGENT_FAILURE_NONE);
   }
 }
 
