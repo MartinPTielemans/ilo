@@ -18,8 +18,9 @@ use gpui::{
     prelude::*, px, size, svg,
 };
 
+use crate::glass;
 use crate::hold::{Hold, Reason};
-use crate::palette::{Float, Ground, Palette, STATE_HOVERED, STATE_PRESSED};
+use crate::palette::{Float, Ground, Palette, STATE_HOVERED, STATE_PRESSED, Tone};
 use crate::shell::{CARD_INSET, cubic_bezier, scaled::scaled_from_top, spring};
 
 // Arc's, measured at 2× (docs/ux-spec.md › Toast): 46.5 tall, 8 inside the card's top right
@@ -792,6 +793,13 @@ impl Render for Toast {
             .bg(Float::Toast.fill(palette.tone))
             .shadow(Level::Popover.shadow())
             .opacity(pose.opacity)
+            .when(Float::Toast.over_material(), |toast| {
+                toast.child(glass::under(
+                    RADIUS,
+                    pose.opacity,
+                    palette.tone == Tone::Light,
+                ))
+            })
             .text_size(px(TEXT_SIZE))
             .font_weight(FontWeight::MEDIUM)
             .text_color(palette.ink)

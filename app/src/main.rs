@@ -936,6 +936,24 @@ fn profile_dir() -> String {
 /// was `given`, and the callbacks.
 fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
     browser::palette::set_window_material(unsafe { platform::host_has_window_material() });
+    // The Mac's floating windows lie on the window's glass, under their plates (glass.rs). Main's
+    // thread is the one that draws.
+    #[cfg(target_os = "macos")]
+    browser::glass::set_host(|window, plate| {
+        let (at, size) = (plate.bounds.origin, plate.bounds.size);
+        unsafe {
+            platform::host_set_glass(
+                browser_windows::ns_view(window),
+                f64::from(at.x),
+                f64::from(at.y),
+                f64::from(size.width),
+                f64::from(size.height),
+                f64::from(plate.radius),
+                f64::from(plate.opacity),
+                plate.light,
+            )
+        };
+    });
     let profile = profile_dir();
     // The Flatpak's sandbox has no cameras: Chromium reaches one through PipeWire and the Camera
     // portal, which asks the user, rather than through a grant of every device (#3166). Without a
