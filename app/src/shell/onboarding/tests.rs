@@ -19,7 +19,7 @@ use crate::theme::Theme;
 use crate::theme_picker::{SWATCHES, swatch_name};
 use crate::tokens::shell::onboarding::IMPORT_HOLD;
 use crate::tokens::shell::onboarding::loops::{
-    COLOR_AT, COLOR_SWIPE, PERIOD, SIDEBAR, WELCOME_AT, WELCOME_CLICK, WELCOME_MOVE,
+    COLOR_AT, COLOR_SWIPE, PERIOD, WELCOME_AT, WELCOME_CLICK, WELCOME_MOVE,
 };
 use crate::transparency::{self, Transparency};
 

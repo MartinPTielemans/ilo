@@ -2228,6 +2228,8 @@ pointer-fade = 0.3
 # once from each time here: 2nd, 3rd, then the 1st again. The press's ring grows and fades
 # over `press`; the tab and its page change on the press, as a tab switch does.
 welcome-at = [0.4, 3.4, 6.4]
+# Where across the sidebar the pointer presses a tab and rests on it: past the longest title.
+press-across = 0.8
 welcome-move = 0.8
 welcome-click = 0.2
 welcome-press = 0.5
