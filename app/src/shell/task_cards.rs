@@ -962,7 +962,7 @@ impl Shell {
             }
             // The ring stays on the row, whose page shows: the keys never go to an agent's page.
             StripStop::Row(tab) => {
-                if self.watch_row(tab, cx) && self.agents_page_watched() {
+                if self.watch_row(tab, false, cx) && self.agents_page_watched() {
                     self.focus_keys = true;
                 }
             }
@@ -982,8 +982,8 @@ impl Shell {
 
     /// A page's row's click: stands on that page, as its picture's click in the task's view does,
     /// and nothing else. Says whether it did. The page zooms out of its picture there, or of its
-    /// row where the view has drawn none.
-    pub(super) fn watch_row(&mut self, tab: u64, cx: &mut Context<Self>) -> bool {
+    /// row where the view has drawn none. `by_ilo` when ilo opens it by itself, as at a handoff.
+    pub(super) fn watch_row(&mut self, tab: u64, by_ilo: bool, cx: &mut Context<Self>) -> bool {
         if self
             .watched_task_page()
             .is_some_and(|(_, shown)| shown == tab)
@@ -993,7 +993,7 @@ impl Shell {
         let row = self.foot.rows_drawn.borrow().get(&tab).copied();
         let (from, picture) =
             (self.talk_thumb(tab, cx)).unwrap_or_else(|| (row.unwrap_or_default(), None));
-        self.watch_task_page(tab, from, picture, cx)
+        self.watch_task_page(tab, from, picture, by_ilo, cx)
     }
 
     /// A chip's click: the user's own act on the task.
@@ -1960,7 +1960,7 @@ impl Shell {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |shell, _, _, cx| {
                 cx.stop_propagation();
-                shell.watch_row(tab, cx);
+                shell.watch_row(tab, false, cx);
             }))
             .into_any_element()
     }

@@ -236,6 +236,9 @@ pub struct TalkView {
     ilo_links: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     /// Where the level's chip under the reply field was drawn, if the last frame drew it.
     level_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Whether the user was typing in the reply field as the last frame drew, the field having
+    /// the keyboard and words in it: a page ilo opens by itself mustn't cover those.
+    typing: bool,
     /// Where the last frame drew Take Over on the lines: once, on the live line.
     take_over_drawn: Rc<RefCell<Vec<Bounds<Pixels>>>>,
     landed: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -366,6 +369,7 @@ impl Shell {
                     ilo_words_drawn: Rc::default(),
                     ilo_links: Rc::default(),
                     level_drawn: Rc::default(),
+                    typing: false,
                     take_over_drawn: Rc::default(),
                     landed: Rc::default(),
                     drawn_at: Rc::default(),
@@ -800,7 +804,7 @@ impl TalkView {
         log!("browser: task {} page {tab}", self.agent);
         self.shell
             .update(cx, |shell, cx| {
-                shell.watch_task_page(tab, from, picture, cx)
+                shell.watch_task_page(tab, from, picture, false, cx)
             })
             .ok();
     }
@@ -1161,14 +1165,17 @@ impl TalkView {
                 log!("browser: task picture {tab} says {says}");
                 // Once, as it turns: a tile the user scrolls away again stays away, and its page
                 // opens as itself unless the user has put another of the task's pages there.
+                // Nor while the user types in the reply field the page would cover: the tile in
+                // sight is enough, and the field keeps the keyboard and what's in it.
                 if said == Some(PageWord::NeedsYou) {
                     self.rail_scroll.scroll_to_item(index);
-                    let shell = self.shell.clone();
+                    let (shell, typing) = (self.shell.clone(), self.typing);
                     cx.defer(move |cx| {
                         shell
                             .update(cx, |shell, cx| {
-                                if shell.watched_task_page().is_none() {
-                                    shell.watch_row(tab, cx);
+                                let covers = !shell.talk_beside;
+                                if shell.watched_task_page().is_none() && !(typing && covers) {
+                                    shell.watch_row(tab, true, cx);
                                 }
                             })
                             .ok();
@@ -2851,6 +2858,8 @@ fn helper_tabs(lines: &[Line]) -> Vec<u64> {
 
 impl Render for TalkView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let reply = self.reply.read(cx);
+        self.typing = reply.focus_handle(cx).is_focused(window) && !reply.text().is_empty();
         self.step_ilo_keys(window, cx);
         let now = Instant::now();
         let still = crate::motion::still(cx);

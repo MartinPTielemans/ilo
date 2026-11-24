@@ -1240,7 +1240,7 @@ fn a_page_rows_click_watches_its_page_and_nothing_else(cx: &mut TestAppContext) 
     draw(&shell, cx);
     host.take();
     shell.update(cx, |shell, cx| {
-        assert!(shell.watch_task_page(1011, row, None, cx));
+        assert!(shell.watch_task_page(1011, row, None, false, cx));
     });
     cx.run_until_parked();
     assert_eq!(asked, host.take());

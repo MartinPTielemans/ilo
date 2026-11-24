@@ -474,7 +474,8 @@ fn one_view_at_every_width(cx: &mut TestAppContext) {
 }
 
 /// A tile whose word turns to Needs you is brought into sight once, where the rail holds more
-/// than fit, its tiles in their order; one the user scrolls away again stays away.
+/// than fit, its tiles in their order; one the user scrolls away again stays away. Its page opens
+/// by itself and takes no keyboard.
 #[gpui::test]
 fn a_tile_turning_to_needs_you_comes_into_sight_once(cx: &mut TestAppContext) {
     use crate::agents::Status;
@@ -485,7 +486,7 @@ fn a_tile_turning_to_needs_you_comes_into_sight_once(cx: &mut TestAppContext) {
         word: Word::NeedsYou,
         ..card()
     };
-    let (shell, _, cx) = shown_with(waiting, cx);
+    let (shell, host, cx) = shown_with(waiting, cx);
     let mut talk = conversation(1);
     talk.tabs = (30..36)
         .map(|tab| (tab, "tickets.example".into()))
@@ -509,6 +510,7 @@ fn a_tile_turning_to_needs_you_comes_into_sight_once(cx: &mut TestAppContext) {
     let order: Vec<u64> = tiles.iter().map(|(tab, _)| *tab).collect();
     assert_eq!(order, [30, 31, 32, 33, 34, 35]);
 
+    host.take();
     let held = Status {
         agent: "task-1".into(),
         name: "Claude".into(),
@@ -530,6 +532,11 @@ fn a_tile_turning_to_needs_you_comes_into_sight_once(cx: &mut TestAppContext) {
         Some(35),
         "the page that needs the user didn't open"
     );
+    let calls = host.take();
+    assert!(
+        !calls.iter().any(|call| call == "focus page"),
+        "the page ilo opened took the keyboard: {calls:?}"
+    );
 
     // The user scrolls back to the start: the tile isn't brought back again.
     view.update(cx, |view, _| {
@@ -539,6 +546,75 @@ fn a_tile_turning_to_needs_you_comes_into_sight_once(cx: &mut TestAppContext) {
         draw(cx),
         px(0.),
         "the rail scrolled to the tile a second time"
+    );
+}
+
+/// A page ilo would open by itself over the reply field doesn't open while the user types there:
+/// the field keeps the keyboard and its text, and the tile that needs them is in sight.
+#[gpui::test]
+fn a_needs_you_page_never_covers_the_reply_field_in_use(cx: &mut TestAppContext) {
+    use crate::agents::Status;
+    let waiting = Card {
+        dot: Dot::Waiting,
+        word: Word::NeedsYou,
+        ..card()
+    };
+    let (shell, host, cx) = shown_with(waiting, cx);
+    let mut talk = conversation(1);
+    talk.tabs = vec![
+        (30, "tickets.example".into()),
+        (31, "tickets.example".into()),
+    ];
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(
+            3,
+            Vec::new(),
+            vec![30, 31],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
+        shell.set_conversation(Some(talk), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let reply = view.read_with(cx, |view, _| view.reply.clone());
+    cx.update(|window, cx| {
+        reply.update(cx, |reply, cx| {
+            reply.set_text("Two seats".into(), 9, window, cx)
+        });
+        let handle = reply.read(cx).focus_handle(cx);
+        window.focus(&handle, cx);
+    });
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    host.take();
+    let held = Status {
+        agent: "task-1".into(),
+        name: "Claude".into(),
+        space: 3,
+        doing: "".into(),
+        held: vec![(31, "Sign in".into())],
+    };
+    shell.update(cx, |shell, cx| shell.set_agent_status(vec![held], cx));
+    for _ in 0..2 {
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watched_task_page()),
+        None,
+        "the page covered the reply field the user types in"
+    );
+    let calls = host.take();
+    assert!(!calls.iter().any(|call| call == "focus page"), "{calls:?}");
+    let handle = reply.read_with(cx, |reply, cx| reply.focus_handle(cx));
+    assert!(
+        cx.update(|window, _| handle.is_focused(window)),
+        "the reply field lost the keyboard"
+    );
+    assert_eq!(
+        reply.read_with(cx, |reply, _| reply.text().to_string()),
+        "Two seats"
     );
 }
 

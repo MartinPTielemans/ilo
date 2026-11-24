@@ -15,6 +15,7 @@ use gpui::{
 use super::{Zoom, pushed, watched};
 use crate::agents::Status;
 use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
+use crate::tokens::shell::conversation::ilo::ARM;
 
 /// The user's Space 1 with tabs 10 and 11, shown with 10, Claude Code's own Space 2 with tab 20,
 /// Space 3 of the task task-1, run by Claude Code, with tabs 30 and 31, and the user's empty
@@ -183,11 +184,62 @@ fn watching(shell: &Entity<Shell>, host: &Recorder, cx: &mut VisualTestContext) 
     let view = conversation(cx);
     shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
     let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
-    assert!(shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx)));
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, thumb, None, false, cx)
+    }));
     core_shows_task(shell, cx, 30);
     draw(shell, cx);
     host.take();
     host.shown.borrow_mut().clear();
+}
+
+/// A page ilo opens by itself, as at a handoff, never takes the keyboard, even one the user is
+/// handed; and for ARM after it opens it stays behind its picture, so a press meant for what
+/// stood there doesn't reach it. Then it's in place, where the user's first click gives it the
+/// keyboard, as on a page they opened.
+#[gpui::test]
+fn a_page_ilo_opens_takes_no_keyboard_and_no_click_at_first(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    let view = conversation(cx);
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    let held = Status {
+        agent: "task-1".into(),
+        name: "Claude".into(),
+        space: 3,
+        doing: "".into(),
+        held: vec![(30, "Sign in".into())],
+    };
+    shell.update(cx, |shell, cx| shell.set_agent_status(vec![held], cx));
+    draw(&shell, cx);
+    host.take();
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, thumb, None, true, cx)
+    }));
+    core_shows_task(&shell, cx, 30);
+    draw(&shell, cx);
+    let calls = host.take();
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call == "focus page" || call == "focus ui"),
+        "the page ilo opened moved the keyboard: {calls:?}"
+    );
+    let live = |cx: &mut VisualTestContext| shell.read_with(cx, |shell, _| shell.task_page_live());
+    assert_eq!(live(cx), None, "the page took a click as it opened");
+    shell.update(cx, |shell, cx| shell.press_task_page(cx));
+    draw(&shell, cx);
+    assert_eq!(live(cx), None, "a press inside ARM reached the page");
+
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs_f32(ARM + 0.1));
+    draw(&shell, cx);
+    assert_eq!(live(cx), Some(30), "the page isn't in place after ARM");
+    assert!(
+        !host.take().iter().any(|call| call == "focus page"),
+        "the page took the keyboard by itself once in place"
+    );
 }
 
 /// A task's Space, and an outside agent's, whose sessions are cards as tasks are (#1080), is in
@@ -440,7 +492,9 @@ fn a_tasks_page_zooms_out_of_its_thumbnail_and_back(cx: &mut TestAppContext) {
     // where it starts however slow the runner, and a second back has it over.
     let begun = Instant::now() + Duration::from_secs(60);
     let over = Instant::now() - Duration::from_secs(1);
-    shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx));
+    shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, thumb, None, false, cx)
+    });
     assert_eq!(host.take(), ["select 30", "focus ui"]);
     assert!(matches!(zoom(&shell, cx), Zoom::Out(_)), "it zooms out");
     set_zoom(&shell, cx, Zoom::Out(begun));
@@ -510,7 +564,9 @@ fn a_click_on_the_conversation_while_the_page_goes_back_reaches_it(cx: &mut Test
     let view: AnyView = cx.update(|_, cx| cx.new(|_| Pictures(pictures)).into());
     shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
     let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
-    shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx));
+    shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, thumb, None, false, cx)
+    });
     core_shows_task(&shell, cx, 30);
     let over = Instant::now() - Duration::from_secs(1);
     set_zoom(&shell, cx, Zoom::Out(over));
@@ -906,7 +962,9 @@ fn a_page_watched_since_the_close_goes_back_for_the_question(cx: &mut TestAppCon
     draw(&shell, cx);
     close(&shell, &host, cx, false);
     let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
-    assert!(shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx)));
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, thumb, None, false, cx)
+    }));
     core_shows_task(&shell, cx, 30);
     draw(&shell, cx);
     host.take();
@@ -1313,7 +1371,9 @@ fn an_agent_is_at_work_in_no_tab_once_it_closes_the_one_it_was_in(cx: &mut TestA
     let view = conversation(cx);
     shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
     let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
-    assert!(shell.update(cx, |shell, cx| shell.watch_task_page(31, thumb, None, cx)));
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page(31, thumb, None, false, cx)
+    }));
     core_shows_task(&shell, cx, 31);
     draw(&shell, cx);
     shell.update(cx, |shell, cx| {
@@ -1424,7 +1484,9 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         shell.show_task("task-1".into(), cx);
     });
     let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
-    assert!(shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx)));
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, thumb, None, false, cx)
+    }));
     core_shows_task(&shell, cx, 30);
     draw(&shell, cx);
     let expected = (
@@ -1802,7 +1864,9 @@ fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
         shell.show_task("task-1".into(), cx);
     });
     let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
-    assert!(shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx)));
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, thumb, None, false, cx)
+    }));
     core_shows_task(&shell, cx, 30);
     shell.update(cx, |shell, cx| {
         shell.set_agent_status(held(31), cx);
@@ -1990,7 +2054,9 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         shell.show_task("task-1".into(), cx);
     });
     let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
-    assert!(shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx)));
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, thumb, None, false, cx)
+    }));
     core_shows_task(shell, cx, 30);
     shell.update(cx, |shell, cx| {
         let status = Status {
