@@ -99,6 +99,7 @@ ours/chromium-passkeys-page-no-google-account.patch
 ours/chromium-core-page-file-dialog.patch
 ours/chromium-same-document-keeps-beforeunload.patch
 ours/chromium-passwords-new-profile-moved.patch
+ours/chromium-performance-cpu-describe-no-data.patch
 # mac/: applied only to the Mac's tree (setup.sh and build.sh say so), after the rest.
 mac/chromium-crashpad-mac-handler.patch
 mac/chromium-crashpad-mac-async-start.patch
