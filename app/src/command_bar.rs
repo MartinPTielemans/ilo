@@ -238,7 +238,7 @@ impl TaskRow {
 }
 
 /// An agent ⌘T's ask lists (Agent task).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct TaskAgent {
     pub id: SharedString,
     pub name: SharedString,
@@ -246,6 +246,14 @@ pub struct TaskAgent {
     pub glyph: &'static str,
     /// The model it runs tasks on, by name, or None for its own default.
     pub model: Option<SharedString>,
+    /// That model by id, empty for its own default: Settings' Model row.
+    pub model_id: String,
+    /// Its Model menu's first row, `{assistant}'s default`, and which model that is where it said.
+    pub default_row: SharedString,
+    pub default_model: Option<SharedString>,
+    /// The models it offers after its default, as id and name: the one list Settings' Model row
+    /// is built from.
+    pub models: Vec<(String, String)>,
     /// When its plan's limit resets, if it's at it.
     pub resets: Option<SharedString>,
 }

@@ -31,6 +31,10 @@ use super::tier::Tier;
 
 pub mod launch;
 pub mod listener;
+/// The Mac's answers for ending what a walled task left running, which nothing asks yet.
+#[cfg(target_os = "macos")]
+#[path = "../../platform/mac/wall_walk.rs"]
+pub mod walk_mac;
 
 /// Why this system can't wall a task in, for the menu's file and folder rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
