@@ -3130,6 +3130,18 @@ fn main() {
                         if let Some(card) = working {
                             shell.agent_acted(card.agent.clone(), FIRST_TASK + 200, cx);
                         }
+                        // The task that needs the user handed them its third page, to sign in.
+                        let waits = cards.iter().find(|card| card.word == Word::NeedsYou);
+                        if let Some(card) = waits.filter(|_| group_state().is_some()) {
+                            let status = browser::agents::Status {
+                                agent: card.agent.clone(),
+                                name: card.name.clone(),
+                                space: card.space,
+                                doing: SharedString::default(),
+                                held: vec![(FIRST_TASK + 202, "Sign in".into())],
+                            };
+                            shell.set_agent_status(vec![status], cx);
+                        }
                         shell.set_task_cards(cards, cx);
                         // After the first frame, which sets the palette the reply field takes, as
                         // a click on the header comes after it.

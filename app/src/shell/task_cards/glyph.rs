@@ -1,9 +1,10 @@
 //! A task's state in the favicon's column: one shape that moves into the next. A ring in Signal
 //! round a dot that circles it while the task works; asking, the dot stops where it is and goes to
-//! the middle, grown, as the ring fills in; done, the ring shrinks away and the dot goes for a tick
-//! drawing in; stopped, the dot goes and the ring shrinks, in the ink. Working again, the dot
-//! circles on from where it stopped. With motion reduced each change is a crossfade and the dot
-//! holds still on the ring.
+//! the middle, grown, as the ring fills in, both in the title's ink; done, the ring shrinks away
+//! and the dot goes for a tick drawing in, in the state line's ink; stopped, the dot goes and the
+//! ring shrinks, in the ink. Signal is the working mark only. Working again, the dot circles on
+//! from where it stopped. With motion reduced each change is a crossfade and the dot holds still
+//! on the ring.
 
 use std::time::Instant;
 
@@ -45,9 +46,12 @@ impl From<Dot> for State {
 /// How the glyph's parts look in a state, or on their way between two.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Look {
-    /// The ring's alpha and its size, and how far its colour has gone from Signal to the ink.
+    /// The ring's alpha and its size.
     ring: f32,
     scale: f32,
+    /// How far the ring's and the dot's colour has gone from Signal to an ink, and how far that
+    /// ink has gone from the title's to the stopped ring's.
+    inked: f32,
     grey: f32,
     /// How far the dot has gone from the ring to the middle, its size, and its alpha.
     inward: f32,
@@ -62,6 +66,7 @@ impl Look {
         let rest = Look {
             ring: RING_WORKING,
             scale: 1.,
+            inked: 0.,
             grey: 0.,
             inward: 0.,
             dot_scale: 1.,
@@ -72,6 +77,7 @@ impl Look {
             State::Working => rest,
             State::Asks => Look {
                 ring: 1.,
+                inked: 1.,
                 inward: 1.,
                 dot_scale: DOT_ASKS,
                 ..rest
@@ -79,6 +85,9 @@ impl Look {
             State::Done => Look {
                 ring: 0.,
                 scale: RING_DONE,
+                // The ring greys as it goes, and comes back from grey.
+                inked: 1.,
+                grey: 1.,
                 inward: 1.,
                 dot_scale: DOT_DONE,
                 dot: 0.,
@@ -88,6 +97,7 @@ impl Look {
             State::Stopped => Look {
                 ring: 1.,
                 scale: RING_STOPPED,
+                inked: 1.,
                 grey: 1.,
                 dot: 0.,
                 ..rest
@@ -101,6 +111,7 @@ pub(super) struct Glyph {
     state: State,
     ring: Ease,
     scale: Ease,
+    inked: Ease,
     grey: Ease,
     inward: Ease,
     dot_scale: Ease,
@@ -122,6 +133,7 @@ impl Glyph {
             state,
             ring: Ease::rest(look.ring),
             scale: Ease::rest(look.scale),
+            inked: Ease::rest(look.inked),
             grey: Ease::rest(look.grey),
             inward: Ease::rest(look.inward),
             dot_scale: Ease::rest(look.dot_scale),
@@ -163,6 +175,7 @@ impl Glyph {
         self.state = state;
         self.ring.go(to.ring, now, RING_MOTION, 0., Curve::Ease);
         self.scale.go(to.scale, now, RING_MOTION, 0., Curve::Ease);
+        self.inked.go(to.inked, now, RING_MOTION, 0., Curve::Ease);
         self.grey.go(to.grey, now, RING_MOTION, 0., Curve::Ease);
         self.inward.go(to.inward, now, RING_MOTION, 0., Curve::Ease);
         self.dot_scale
@@ -183,6 +196,7 @@ impl Glyph {
         Look {
             ring: self.ring.at(now),
             scale: self.scale.at(now),
+            inked: self.inked.at(now),
             grey: self.grey.at(now),
             inward: self.inward.at(now),
             dot_scale: self.dot_scale.at(now),
@@ -200,6 +214,7 @@ impl Glyph {
             || [
                 self.ring,
                 self.scale,
+                self.inked,
                 self.grey,
                 self.inward,
                 self.dot_scale,
@@ -247,14 +262,31 @@ pub(super) struct Drawn {
 const TICK_POINTS: [(f32, f32); 3] = [(5.2, 9.3), (7.8, 11.8), (12.8, 6.4)];
 const TICK_DASH: f32 = 12.;
 
-/// Paints `drawn` in `bounds`, the glyph's box, in Signal, the stopped ring in `stopped`. On the
-/// selected plate's fill, which Signal stands out from less, the ring is as much brighter as the
-/// working ring's `ring-working-selected` is.
+/// The glyph's colours. Signal is the working mark only: asking, the ring and the dot are in the
+/// title's ink, Done's tick is in the state line's, and the stopped ring has its own.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Inks {
+    pub(super) signal: Hsla,
+    pub(super) title: Hsla,
+    pub(super) status: Hsla,
+    pub(super) stopped: Hsla,
+}
+
+impl Inks {
+    /// The ring's and the dot's colour in `look`.
+    fn of(&self, look: Look) -> Hsla {
+        let ink = mix(self.title, self.stopped, look.grey);
+        mix(self.signal, ink, look.inked)
+    }
+}
+
+/// Paints `drawn` in `bounds`, the glyph's box, in `inks`. On the selected plate's fill, which
+/// Signal stands out from less, the ring is as much brighter as the working ring's
+/// `ring-working-selected` is.
 pub(super) fn paint(
     drawn: &Drawn,
     bounds: Bounds<Pixels>,
-    signal: Hsla,
-    stopped: Hsla,
+    inks: Inks,
     selected: bool,
     window: &mut Window,
 ) {
@@ -270,7 +302,7 @@ pub(super) fn paint(
             continue;
         }
         let ring = RING * look.scale;
-        let colour = mix(signal, stopped, look.grey);
+        let colour = inks.of(look);
         if look.ring > 0. && ring > 0. {
             let outer = ring + RING_STROKE / 2.;
             let square = Bounds::new(
@@ -297,12 +329,12 @@ pub(super) fn paint(
             dot(
                 middle,
                 DOT * look.dot_scale,
-                signal.opacity(look.dot * alpha),
+                colour.opacity(look.dot * alpha),
                 window,
             );
         }
         if look.tick > 0. {
-            let colour = signal.opacity(alpha);
+            let colour = inks.status.opacity(alpha);
             let mut left = TICK_DASH * look.tick;
             let mut path = PathBuilder::stroke(px(TICK_STROKE));
             let (x, y) = TICK_POINTS[0];
@@ -362,7 +394,9 @@ fn mix(from: Hsla, to: Hsla, way: f32) -> Hsla {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{Glyph, Look, State};
+    use gpui::{Hsla, hsla};
+
+    use super::{Glyph, Inks, Look, State};
     use crate::tokens::shell::task::{DOT_ASKS, RING_WORKING};
 
     /// Working, the dot circles round a faint ring. Asked, it stops where it was and goes to the
@@ -409,6 +443,27 @@ mod tests {
         glyph.set(State::Stopped, done, false);
         let look = glyph.look_at(done + Duration::from_secs(1));
         assert_eq!((look.grey, look.dot, look.tick), (1., 0., 0.));
+    }
+
+    /// Signal is the working mark only: the ring and the dot are in it while the task works, in
+    /// the title's ink while it asks, and the stopped ring is in its own. Nothing of a look at
+    /// rest but the working one has any Signal in it.
+    #[test]
+    fn only_the_working_glyph_is_in_signal() {
+        let ink = |h: f32| -> Hsla { hsla(h, 0.5, 0.5, 1.) };
+        let inks = Inks {
+            signal: ink(0.4),
+            title: ink(0.),
+            status: ink(0.6),
+            stopped: ink(0.8),
+        };
+        assert_eq!(inks.of(Look::of(State::Working)), inks.signal);
+        assert_eq!(inks.of(Look::of(State::Asks)), inks.title);
+        assert_eq!(inks.of(Look::of(State::Stopped)), inks.stopped);
+        // Done has neither ring nor dot, so its tick, in the state line's ink, is all of it.
+        let done = Look::of(State::Done);
+        assert_eq!((done.ring, done.dot, done.tick), (0., 0., 1.));
+        assert_eq!(done.inked, 1., "Done's ring would come back in Signal");
     }
 
     /// With motion reduced, the dot holds still on the ring, and a change crossfades the looks.
