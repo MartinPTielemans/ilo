@@ -1,5 +1,6 @@
 //! What a task is started with, the switch off and on, and what ilo reads of helpers from Claude's
-//! output: the first message of the one recorded run, `claude-2.1.331-helpers.jsonl`.
+//! output: the first message of the first recorded run, `claude-2.1.331-helpers.jsonl`, which was
+//! started without `ENV`, and lines made up in the shapes the second showed, started with it.
 
 use std::path::PathBuf;
 
@@ -49,11 +50,10 @@ fn read() -> Vec<Out> {
         .collect()
 }
 
-/// The switch is off while the assistant keeps kinds of helper that aren't ilo's: the recorded
-/// run was started as a task with helpers is, and its first line still lists them. One of them
-/// has the task's own tools.
+/// Started without `ENV`, the assistant keeps kinds of helper that aren't ilo's: the first
+/// recorded run's first line lists them beside ilo's, and read today that line ends the run.
 #[test]
-fn the_switch_is_off_while_the_assistant_keeps_kinds_of_its_own() {
+fn started_without_the_variables_the_assistant_keeps_kinds_of_its_own() {
     let lines = lines();
     assert!(
         lines[0].get("_recorded").is_some(),
@@ -66,11 +66,7 @@ fn the_switch_is_off_while_the_assistant_keeps_kinds_of_its_own() {
         .map(|kind| kind.as_str().unwrap())
         .collect();
     assert!(kinds.contains(&KIND), "{kinds:?}");
-    let own = kinds.iter().filter(|kind| **kind != KIND).count();
-    assert!(
-        own == 0 || !ON,
-        "helpers are on with {own} kinds that aren't ilo's"
-    );
+    assert!(kinds.iter().any(|kind| *kind != KIND), "{kinds:?}");
     // The helper tool is among its tools, under one of the names ilo knows it by.
     let tools = init["tools"].as_array().unwrap();
     assert!(
@@ -231,8 +227,9 @@ fn a_helpers_lines_are_never_the_tasks() {
 }
 
 /// Only the browser's tools label a helper's page: a call of another tool with a `tab` of its own
-/// says nothing, and a start of ilo's kind that doesn't say how deep counts as the task's own
-/// level. Nothing a helper writes, says or thinks comes out. The lines are made up.
+/// says only that the helper calls, as one of the browser's without a tab does, and the one that
+/// opens a page says that. A start of ilo's kind that doesn't say how deep counts as the task's
+/// own level. Nothing a helper writes, says or thinks comes out. The lines are made up.
 #[test]
 fn only_the_browsers_tools_label_a_page() {
     let helper = |told| Out::Helper {
@@ -265,13 +262,22 @@ fn only_the_browsers_tools_label_a_page() {
         "message": { "content": [
             { "type": "tool_use", "id": "x", "name": "mcp__other__click", "input": { "tab": 41 } },
             { "type": "tool_use", "id": "y", "name": "mcp__ilo__list_tabs", "input": {} },
+            { "type": "tool_use", "id": "z", "name": "mcp__ilo__open_tab",
+              "input": { "url": "https://stalls.example/saturday" } },
         ] } });
-    assert_eq!(claude_read(&other, &mut Turn::default()), []);
+    assert_eq!(
+        claude_read(&other, &mut Turn::default()),
+        [
+            helper(Helper::Calls),
+            helper(Helper::Calls),
+            helper(Helper::Opens)
+        ]
+    );
     let started = serde_json::json!({ "type": "system", "subtype": "task_started",
         "subagent_type": KIND });
     assert_eq!(
         claude_read(&started, &mut Turn::default()),
-        [Out::Started { deep: 0 }]
+        [Out::Started { id: None, deep: 0 }]
     );
     let progress = serde_json::json!({ "type": "system", "subtype": "task_progress" });
     assert_eq!(claude_read(&progress, &mut Turn::default()), []);
@@ -291,15 +297,16 @@ fn a_start_on_a_helpers_own_line_is_counted() {
         claude_read(&line, &mut Turn::default())
     };
     let deeper = u64::from(DEEP) + 1;
-    assert_eq!(line(None, "task_started"), [Out::Started { deep: deeper }]);
-    assert_eq!(line(Some(1), "task_started"), [Out::Started { deep: 1 }]);
+    let started = |deep| [Out::Started { id: None, deep }];
+    assert_eq!(line(None, "task_started"), started(deeper));
+    assert_eq!(line(Some(1), "task_started"), started(1));
     assert_eq!(line(Some(1), "task_progress"), []);
     // Only a `system` line starts one, whatever another's fields say.
     let said = serde_json::json!({ "type": "assistant", "subtype": "task_started" });
     assert_eq!(claude_read(&said, &mut Turn::default()), []);
 }
 
-/// The lines below are made up: no run has shown the assistant started as `ENV` starts it.
+/// The lines below are made up, in the shapes the run started as `ENV` starts it showed.
 fn made_up(line: Value) -> Vec<Out> {
     claude_read(&line, &mut Turn::default())
 }
@@ -332,10 +339,11 @@ fn a_first_line_says_whether_its_kinds_are_ilos() {
     assert_eq!(made_up(status), []);
 }
 
-/// The task's own line that asks for a helper says so before the helper starts: one of ilo's
-/// kind is asked for, and one of another kind, of none, or for the background isn't allowed.
+/// The task's own line that asks for a helper of ilo's kind says so, by the name it gave it. One
+/// that asks for another kind, or for none, says nothing of a helper: the program refuses the
+/// call with an error and tells no start, and neither stops anything.
 #[test]
-fn a_helper_asked_for_as_another_kind_isnt_allowed() {
+fn a_call_for_another_kind_says_nothing_of_a_helper() {
     let asks = |input: Value| {
         made_up(
             serde_json::json!({ "type": "assistant", "message": { "content": [
@@ -365,32 +373,47 @@ fn a_helper_asked_for_as_another_kind_isnt_allowed() {
     };
     assert!(name.starts_with("Shop one price x"), "{name}");
     assert_eq!(name.chars().count(), tier::TEXT_MOST);
-    let refused = [Out::Calling, Out::NotAllowed(Limit::Kind)];
+    // One of ilo's kind asked for the background is asked for all the same: its start says where
+    // it runs.
+    let background = serde_json::json!({ "subagent_type": KIND, "run_in_background": true });
+    assert_eq!(asks(background), [Out::Calling, asked("")]);
     for input in [
         serde_json::json!({ "subagent_type": "general-purpose", "prompt": "One shop." }),
         serde_json::json!({ "subagent_type": "fork", "prompt": "One shop." }),
         serde_json::json!({ "prompt": "One shop." }),
-        serde_json::json!({ "subagent_type": KIND, "run_in_background": true }),
     ] {
-        assert_eq!(asks(input.clone()), refused, "{input}");
+        assert_eq!(asks(input.clone()), [Out::Calling], "{input}");
     }
+    // The program's refusal comes as the call's answer, an error, on a line of the user's.
+    let refused = serde_json::json!({ "type": "user", "message": { "content": [
+        { "type": "tool_result", "tool_use_id": "toolu_a", "is_error": true,
+          "content": "Agent type 'general-purpose' has been denied by permission rule." },
+    ] } });
+    assert_eq!(made_up(refused), []);
 }
 
-/// A start says its kind and whether the task waits for it: another kind than ilo's, none, or
-/// one in the background isn't allowed, and one deeper than a helper may be is told as deep
-/// whatever its kind, as that's what the task is told of it.
+/// A start says the call that asked for it, its kind and whether the task waits for it: another
+/// kind than ilo's, none, or one in the background isn't allowed, and one deeper than a helper
+/// may be is told as deep whatever its kind, as that's what the task is told of it.
 #[test]
 fn a_start_of_another_kind_or_in_the_background_isnt_allowed() {
     let start = |fields: Value| {
-        let mut line = serde_json::json!({ "type": "system", "subtype": "task_started" });
+        let mut line = serde_json::json!({ "type": "system", "subtype": "task_started",
+            "tool_use_id": "toolu_a", "task_type": "local_agent" });
         for (key, value) in fields.as_object().unwrap() {
             line[key] = value.clone();
         }
         made_up(line)
     };
+    let started = |deep| {
+        [Out::Started {
+            id: Some("toolu_a".into()),
+            deep,
+        }]
+    };
     let ours = serde_json::json!({ "subagent_type": KIND, "spawn_depth": 1,
         "is_backgrounded": false });
-    assert_eq!(start(ours), [Out::Started { deep: 1 }]);
+    assert_eq!(start(ours), started(1));
     let refused = [Out::NotAllowed(Limit::Kind)];
     for fields in [
         serde_json::json!({ "subagent_type": "general-purpose", "spawn_depth": 1 }),
@@ -402,12 +425,37 @@ fn a_start_of_another_kind_or_in_the_background_isnt_allowed() {
     let deeper = u64::from(DEEP) + 1;
     for kind in [KIND, "general-purpose"] {
         let deep = serde_json::json!({ "subagent_type": kind, "spawn_depth": deeper });
-        assert_eq!(start(deep), [Out::Started { deep: deeper }]);
+        assert_eq!(start(deep), started(deeper));
     }
 }
 
-/// A helper's own line that starts a helper, or calls a tool that is the task's alone, says only
-/// that: the task's name, its question, its end and a tab handed to the user aren't a helper's.
+/// A helper's end is told by the call that asked for it, done or stopped; one that names no call
+/// tells nothing, and nothing else of the line comes out.
+#[test]
+fn a_helpers_end_is_told_by_the_call_that_asked_for_it() {
+    let ended = |status: &str| {
+        made_up(
+            serde_json::json!({ "type": "system", "subtype": "task_notification",
+            "tool_use_id": "toolu_a", "status": status, "summary": "Stalls price" }),
+        )
+    };
+    let told = [Out::Helper {
+        id: "toolu_a".into(),
+        told: Helper::Ended,
+    }];
+    assert_eq!(ended("completed"), told);
+    assert_eq!(ended("stopped"), told);
+    let unnamed = serde_json::json!({ "type": "system", "subtype": "task_notification",
+        "status": "completed" });
+    assert_eq!(made_up(unnamed), []);
+    let updated = serde_json::json!({ "type": "system", "subtype": "task_updated",
+        "patch": { "status": "completed" } });
+    assert_eq!(made_up(updated), []);
+}
+
+/// A helper's own line that calls a tool that is the task's alone says only that: the task's
+/// name, its question, its end and a tab handed to the user aren't a helper's. One that asks for
+/// a helper of its own says no more than that it calls, as a start would tell of one.
 #[test]
 fn a_helpers_line_that_calls_the_tasks_own_tools_isnt_allowed() {
     let calls = |name: &str| {
@@ -420,8 +468,13 @@ fn a_helpers_line_that_calls_the_tasks_own_tools_isnt_allowed() {
             ] } }),
         )
     };
+    let helper = |told| Out::Helper {
+        id: "toolu_a".into(),
+        told,
+    };
     for tool in TOOLS {
-        assert_eq!(calls(tool), [Out::NotAllowed(Limit::Depth)], "{tool}");
+        let said = [helper(Helper::On(41)), helper(Helper::Calls)];
+        assert_eq!(calls(tool), said, "{tool}");
     }
     for tool in ["title", "ask", "finish", "done", "hand_off"] {
         let name = format!("mcp__ilo__{tool}");
