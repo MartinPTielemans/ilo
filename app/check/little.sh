@@ -314,6 +314,19 @@ send window 1
 # Over the main window in full screen, on the Mac, ⌥⌘N's Little ilo window opens on its desktop,
 # over it, rather than on another.
 if [ "$(uname)" = Darwin ]; then
+  # Waits until the desktop shown has the browser windows $1 and not those of $2, by number.
+  desktop_shows() {
+    for _ in $(seq 50); do
+      send desktop
+      shown="$(grep '^browser: desktop shown' "$log" | tail -1 | sed 's/^browser: desktop shown//') "
+      missing=
+      for each in $1; do case "$shown" in *" window $each "*) ;; *) missing=1 ;; esac; done
+      for each in $2; do case "$shown" in *" window $each "*) missing=1 ;; esac; done
+      [ -z "$missing" ] && return 0
+      sleep 0.1
+    done
+    return 1
+  }
   send fullscreen
   expect '^browser: window entered full screen$' "the main window didn't go full screen"
   send key n cmd alt
@@ -322,7 +335,16 @@ if [ "$(uname)" = Darwin ]; then
   little=$(opened)
   expect '^browser: little window over full screen$' \
     "the Little ilo window didn't open over the full-screen window"
-  send window 5
+  # Where it ended, which that line doesn't say: the host wrote it too for a window AppKit had
+  # taken full screen, on a desktop of its own (#4179). The driver numbers windows in the order
+  # they were made, the closed ones too.
+  little_window=$(grep -c '^browser: window opened ' "$log")
+  desktop_shows "1 $little_window" ||
+    fail "the Little ilo window isn't on the full-screen window's desktop with it:$shown"
+  send window "$little_window"
+  send layout
+  logged '^browser: layout full screen 0$' ||
+    fail "the Little ilo window over the full-screen window went full screen itself"
   ../tools/window-screenshot.sh "$pid" "$out/little-full-screen.png" all || fail "no window to capture"
   send key w cmd
   expect "^browser: window closed $little\$" "⌘W didn't close the Little ilo window over full screen"
@@ -385,19 +407,6 @@ if [ "$(uname)" = Darwin ]; then
   # which the Little ilo window left on the first isn't on, and Show All brings it over the full
   # screen, rather than the user back to the desktop it was left on.
   little_window=$(grep -c '^browser: window opened ' "$log")
-  # Waits until the desktop shown has the browser windows $1 and not those of $2, by number.
-  desktop_shows() {
-    for _ in $(seq 50); do
-      send desktop
-      shown="$(grep '^browser: desktop shown' "$log" | tail -1 | sed 's/^browser: desktop shown//') "
-      missing=
-      for each in $1; do case "$shown" in *" window $each "*) ;; *) missing=1 ;; esac; done
-      for each in $2; do case "$shown" in *" window $each "*) missing=1 ;; esac; done
-      [ -z "$missing" ] && return 0
-      sleep 0.1
-    done
-    return 1
-  }
   send window 1
   send fullscreen
   expect '^browser: window entered full screen$' "the main window didn't go full screen"
