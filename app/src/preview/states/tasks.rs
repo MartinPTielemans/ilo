@@ -443,7 +443,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             Line::Said("The stalls are on another page. A helper reads them while I go on.".into()),
             Line::Trace(helper_trace(1, false)),
         ],
-        // ilo stopped the task for starting a fifth: its line, with Take Over alone.
+        // ilo stopped the task after it started a fifth: its line, with Take Over alone.
         "helpers-limit" => vec![
             done(0, before),
             Line::Said(FOUR_SHOPS.into()),
