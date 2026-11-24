@@ -45,7 +45,6 @@ fn card(agent: &str, name: &str, dot: Dot) -> Card {
         status: "Searching flights".into(),
         asks: false,
         dot,
-        answers: Vec::new(),
         question: None,
         open: Vec::new(),
         page_steps: Vec::new(),

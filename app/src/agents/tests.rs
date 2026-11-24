@@ -6329,6 +6329,23 @@ mod tasks {
         assert!(card_of(&agents, cx).retry);
     }
 
+    /// With tasks off, a reply to the agent's ask still answers it, so the task can finish.
+    #[gpui::test]
+    fn with_tasks_off_a_reply_still_answers_the_ask(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Move the ten cases to Closed", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        let ask = json!({ "question": "Close all ten?", "answers": ["Yes", "No"] });
+        let asked = call(&agents, &agent, "ask", ask, cx);
+        agents.update(cx, |agents, cx| agents.set_tasks_on(false, cx));
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&agent, TaskAction::Reply("Yes".into()), cx);
+        });
+        assert!(!asked.recv().unwrap().error, "the ask went unanswered");
+    }
+
     #[gpui::test]
     fn the_task_tools_are_a_tasks_alone(cx: &mut TestAppContext) {
         let names = tools::names("task-1");
@@ -6387,12 +6404,8 @@ mod tasks {
             (card.status.as_ref(), card.dot),
             ("Which day?", Dot::Waiting)
         );
-        assert_eq!(
-            card.answers,
-            vec![SharedString::from("Friday"), SharedString::from("Saturday")]
-        );
         assert!(asked.try_recv().is_err(), "ask waits for the user");
-        agents.update(cx, |agents, cx| agents.answer_task(&agent, "Saturday", cx));
+        agents.update(cx, |agents, cx| agents.reply(&agent, "Saturday", cx));
         assert_eq!(
             asked.recv().unwrap(),
             ToolResult::text("The user answered: Saturday")
@@ -6928,7 +6941,6 @@ mod tasks {
             }),
             cx,
         );
-        assert!(card_of(&agents, cx).answers.is_empty());
         // A reply answers it.
         agents.update(cx, |agents, cx| agents.reply(&agent, "Porto", cx));
         assert_eq!(
@@ -7003,12 +7015,9 @@ mod tasks {
             card.asks && card.question.is_none(),
             "the handoff went first"
         );
-        assert_eq!(
-            (card.status.as_ref(), card.answers.len()),
-            ("Close all ten?", 2)
-        );
+        assert_eq!(card.status.as_ref(), "Close all ten?");
         assert_eq!(*browser.asked.borrow(), None, "a window asked out of turn");
-        agents.update(cx, |agents, cx| agents.answer_task(&agent, "Yes", cx));
+        agents.update(cx, |agents, cx| agents.reply(&agent, "Yes", cx));
         assert!(!asked.recv().unwrap().error);
         let question = browser
             .asked

@@ -49,7 +49,6 @@ fn card() -> Card {
         status: "Most open at 10".into(),
         asks: false,
         dot: Dot::Done,
-        answers: Vec::new(),
         question: None,
         open: Vec::new(),
         page_steps: Vec::new(),

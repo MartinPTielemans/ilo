@@ -2,7 +2,7 @@
 //! each, of a player's shape and fill, oldest lowest, so the list's rows above never move as tasks
 //! come and go. The favicon's column holds the state's glyph; the title is a row's, over a status
 //! line where each step rolls in, the agent's question, or its result's line; its chips sit under
-//! that: the answers, Retry, its assistant's Sign in to … or Get …, or Open. ✕ shows under the pointer. Three show, waiting first,
+//! that: Retry, its assistant's Sign in to … or Get …, or Open. ✕ shows under the pointer. Three show, waiting first,
 //! then working, then done, and a fourth plate says how many more there are and opens the foot to
 //! all of them. While ⌘T asks for a task, the foot holds an empty slot a plate tall, which the bar
 //! folds into and the card fills. The foot is the window's, as the players are, so switching Spaces
@@ -127,7 +127,6 @@ pub(super) struct Shape {
 /// A chip on a card: its words, and what it does.
 #[derive(Clone, Debug, PartialEq)]
 enum Chip {
-    Answer(SharedString),
     Retry,
     /// A failure's fix, its assistant's row's own button.
     Assistant(Cli, Offer),
@@ -137,7 +136,6 @@ enum Chip {
 impl Chip {
     fn label(&self) -> SharedString {
         match self {
-            Chip::Answer(answer) => answer.clone(),
             Chip::Retry => "Retry".into(),
             Chip::Assistant(cli, offer) => offer.label(*cli).unwrap_or_default().into(),
             Chip::Open(label) => label.clone(),
@@ -145,10 +143,10 @@ impl Chip {
     }
 }
 
-/// A card's chips: the ask's answers, Limit's Retry, a failure's fix from its assistant's row, or
+/// A card's chips: Limit's Retry, a failure's fix from its assistant's row, or
 /// Done's Open <site> or Open 3 pages.
 fn chips(card: &Card) -> Vec<Chip> {
-    let mut chips: Vec<Chip> = card.answers.iter().cloned().map(Chip::Answer).collect();
+    let mut chips: Vec<Chip> = Vec::new();
     if card.retry {
         chips.push(Chip::Retry);
     }
@@ -163,7 +161,7 @@ fn chips(card: &Card) -> Vec<Chip> {
 
 /// How `card` lays out in a sidebar `width` wide, with `measure` giving how wide a text is at a
 /// size and weight. The agent's question takes a second line if it needs one. The chips wrap to
-/// two rows; past that, or with an answer wider than the room, none show, and the card's click
+/// two rows; past that, or with a chip wider than the room, none show, and the card's click
 /// opens the conversation, where they do. A chip of its own, such as Open, is cut to the room.
 fn shape(
     card: &Card,
@@ -178,7 +176,7 @@ fn shape(
     };
     let room = plate - CHIP_END - (COLUMN - CHIP_X);
     let chips = chips(card);
-    if chips.len() == 1 && !matches!(chips[0], Chip::Answer(_)) {
+    if chips.len() == 1 {
         return Shape {
             lines,
             rows: vec![vec![0]],
@@ -1802,9 +1800,6 @@ impl Shell {
                 let element = element.child(drawn);
                 let agent = card.agent.clone();
                 let element = match chip {
-                    Chip::Answer(answer) => {
-                        element.on_click(act(agent, TaskAction::Answer(answer), cx))
-                    }
                     Chip::Retry => element.on_click(act(agent, TaskAction::Retry, cx)),
                     Chip::Open(_) => {
                         let chips = self.foot.chips_drawn.clone();

@@ -137,7 +137,6 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         status: status.into(),
         asks: false,
         dot,
-        answers: Vec::new(),
         question: None,
         open: match dot {
             Dot::Done => {
@@ -296,7 +295,6 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         on: Some(FIRST_TASK + 200),
         stoppable: true,
         open: None,
-        answers: Vec::new(),
         writing: false,
         tier: Default::default(),
     };

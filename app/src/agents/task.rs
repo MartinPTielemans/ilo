@@ -484,8 +484,6 @@ pub struct Card {
     /// Whether the status is the agent's question, which may take two lines.
     pub asks: bool,
     pub dot: Dot,
-    /// An ask's answers, as buttons.
-    pub answers: Vec<SharedString>,
     /// A confirmation or a handoff of the task's, which the card asks instead of the windows'.
     pub question: Option<Question>,
     /// Done's tabs to open, each with its site, in the agent's order.
@@ -526,7 +524,6 @@ pub enum TaskAction {
     Dismiss,
     /// ⇧⌘T or ⌘Z: the task named, or with none named, the last dismissed.
     Restore,
-    Answer(SharedString),
     Reply(SharedString),
     Retry,
     Stop,
@@ -689,18 +686,20 @@ impl Agents {
         action: TaskAction,
         cx: &mut Context<Self>,
     ) -> (Option<u64>, Option<String>) {
+        // Whether `action` asks more of the agent: a reply to its ask only lets it finish.
+        let answers = self.task(agent).is_some_and(|task| task.asking.is_some());
+        let asks = match action {
+            TaskAction::Reply(_) => !answers,
+            TaskAction::Retry => true,
+            _ => false,
+        };
         // A session's user talks to its agent where they started it.
         let session = self.task(agent).is_some_and(|task| task.session.is_some());
-        if session
-            && matches!(
-                action,
-                TaskAction::Answer(_) | TaskAction::Reply(_) | TaskAction::Retry
-            )
-        {
+        if session && asks {
             return (None, None);
         }
         // With tasks off nothing more is asked of a task; an answer still lets one finish.
-        if !self.tasks_on() && matches!(action, TaskAction::Reply(_) | TaskAction::Retry) {
+        if !self.tasks_on() && asks {
             return (None, None);
         }
         match action {
@@ -709,7 +708,6 @@ impl Agents {
                 let named = Some(agent).filter(|agent| !agent.is_empty());
                 return (None, self.restore_task(named, cx));
             }
-            TaskAction::Answer(answer) => self.answer_task(agent, &answer, cx),
             TaskAction::Reply(text) => self.reply(agent, &text, cx),
             TaskAction::Retry => self.retry_task(agent, cx),
             TaskAction::Stop => self.stop_task(agent, cx),
@@ -1004,10 +1002,6 @@ impl Agents {
             status,
             asks,
             dot,
-            answers: match &task.state {
-                State::Asking { answers, .. } if asks => answers.clone(),
-                _ => Vec::new(),
-            },
             question,
             open,
             page_steps: match task.state {
@@ -1578,7 +1572,7 @@ impl Agents {
         }
         // A reply answers the ask waiting, as a button would.
         if self.task(agent).is_some_and(|task| task.asking.is_some()) {
-            return self.answer_task(agent, text, cx);
+            return self.answer_ask(agent, text, cx);
         }
         // A reply to a task that has ended takes it up, if its conversation is kept (#4105).
         self.pick_up(agent);
@@ -1611,8 +1605,8 @@ impl Agents {
         cx.notify();
     }
 
-    /// The user's answer to the task's ask.
-    pub fn answer_task(&mut self, agent: &str, answer: &str, cx: &mut Context<Self>) {
+    /// The user's reply to the task's ask, which answers it.
+    fn answer_ask(&mut self, agent: &str, answer: &str, cx: &mut Context<Self>) {
         let Some(task) = self.task_mut(agent) else {
             return;
         };

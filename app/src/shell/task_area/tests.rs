@@ -942,7 +942,6 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         status: status.to_string().into(),
         asks: false,
         dot,
-        answers: Vec::new(),
         question: None,
         open: Vec::new(),
         page_steps: Vec::new(),
@@ -1253,7 +1252,6 @@ fn the_strip_under_a_page_says_that_pages_own_step(cx: &mut TestAppContext) {
         status: "Working · 2 helpers".into(),
         asks: false,
         dot: Dot::Working,
-        answers: Vec::new(),
         question: None,
         open: Vec::new(),
         page_steps: (steps.iter())
@@ -1306,7 +1304,6 @@ fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
         status: "Needs you · Sign in".into(),
         asks: false,
         dot: Dot::Waiting,
-        answers: Vec::new(),
         question: None,
         open: Vec::new(),
         page_steps: (steps.iter())
@@ -1535,7 +1532,6 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         status: "Clicking “Tickets”".into(),
         asks: false,
         dot: Dot::Working,
-        answers: Vec::new(),
         question: None,
         open: Vec::new(),
         page_steps: Vec::new(),

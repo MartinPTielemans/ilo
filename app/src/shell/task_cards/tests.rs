@@ -22,7 +22,6 @@ fn card(n: u64, dot: Dot) -> Card {
         status: "Searching flights".into(),
         asks: false,
         dot,
-        answers: Vec::new(),
         question: None,
         open: Vec::new(),
         page_steps: Vec::new(),
@@ -127,21 +126,15 @@ fn tick(seconds: f32) {
 fn a_card_shapes_to_its_question_and_its_chips() {
     // Every character 6 pt wide, in a sidebar 240 wide: 180 for the status, 191 for chips.
     let measure = |text: &SharedString, _: f32, _: FontWeight| text.chars().count() as f32 * 6.;
-    let answers = |words: &[&str]| {
-        words
-            .iter()
-            .map(|word| SharedString::from(word.to_string()))
-            .collect()
-    };
+    // A question takes a second line when it needs one; its answers are the conversation's.
     let mut asks = card(1, Dot::Waiting);
     asks.asks = true;
     asks.status = "Both are open Saturday. Which would you rather visit?".into();
-    asks.answers = answers(&["Gulbenkian", "MAAT"]);
     assert_eq!(
         shape(&asks, 240., &measure),
         Shape {
             lines: 2,
-            rows: vec![vec![0, 1]]
+            rows: Vec::new()
         }
     );
     let mut working = card(2, Dot::Working);
@@ -152,16 +145,6 @@ fn a_card_shapes_to_its_question_and_its_chips() {
             lines: 1,
             rows: Vec::new()
         }
-    );
-
-    asks.answers = answers(&["Museum 1", "Museum 2", "Museum 3", "Museum 4"]);
-    assert_eq!(shape(&asks, 240., &measure).rows, [vec![0, 1], vec![2, 3]]);
-    asks.answers = answers(&["Museum 1", "Museum 2", "Museum 3", "Museum 4", "Museum 5"]);
-    assert!(shape(&asks, 240., &measure).rows.is_empty(), "a third row");
-    asks.answers = answers(&["The Calouste Gulbenkian Museum's modern wing"]);
-    assert!(
-        shape(&asks, 240., &measure).rows.is_empty(),
-        "an answer wider than the room"
     );
 
     let mut done = card(3, Dot::Done);

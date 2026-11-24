@@ -731,7 +731,8 @@ impl TalkView {
                 since: now,
             });
         }
-        self.act(TaskAction::Answer(answer), cx);
+        // A reply answers the ask, as the chip's words.
+        self.act(TaskAction::Reply(answer), cx);
     }
 
     /// ilo's line in the reply field's place: the task has ended and takes no reply (#4105).

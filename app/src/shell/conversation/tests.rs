@@ -32,7 +32,6 @@ fn card() -> Card {
         status: "Searching flights".into(),
         asks: false,
         dot: Dot::Working,
-        answers: Vec::new(),
         question: None,
         open: Vec::new(),
         page_steps: Vec::new(),
