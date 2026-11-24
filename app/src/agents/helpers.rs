@@ -9,11 +9,9 @@
 //! refuses reads, and a count of the helpers its CLI says started, for the limit. The limit bounds
 //! what a task costs the user's plan, never what it may reach.
 //!
-//! The reading here is written from the stream's field names as one run showed them
-//! (`task_started` with `spawn_depth`, `parent_tool_use_id` on a helper's lines), with the made-up
-//! lines in `runner/answers/claude-helpers-written.jsonl`. No run was recorded, so what comes when,
-//! and what an interrupt does to helpers under way, isn't known: `ON` goes on only in the commit
-//! that replaces those lines with a recorded run.
+//! The reading here is checked against one recorded run, whose first message is
+//! `runner/answers/claude-2.1.331-helpers.jsonl`. What that run showed keeps `ON` off, and is
+//! written at it.
 
 use std::time::Instant;
 
@@ -30,19 +28,22 @@ use crate::tokens::agents::helpers::{DEEP, MOST};
 /// Whether a task's assistant gets its helper tool. Off: nothing in Settings turns it on, and a
 /// task started while it's off has today's arguments, to the byte.
 ///
-/// It goes on only in a commit that replaces the made-up lines with a recorded run, and only if
-/// that run shows each of these:
-/// 1. Under `--tools Agent` no helper of any kind, ilo's or one the assistant has built in, has a
-///    shell, files, fetch or search. If the built-in kinds can't be removed, that alone keeps it
-///    off.
-/// 2. No helper can call `title`, `ask` or `finish`, or what each does when one does.
-/// 3. The `task_started` line's real shape, its parent and its depth, and what the start of a
-///    helper's own helper looks like.
-/// 4. What an interrupt does to helpers under way, and whether their calls still arrive after it.
-///    And what arrives while an interrupt lands: ilo counts a start that comes then and does
-///    nothing more about it, so "at most `MOST` + 2 starts for a message of the user's" holds
-///    only if none does. How many can is what that message may cost.
-/// 5. Whether the helper tool needs `--allowedTools`.
+/// One run was recorded (Claude Code 2.1.331), started as a task with helpers is. It showed:
+/// 1. Under `--tools Agent` the assistant keeps kinds of helper of its own beside ilo's. ilo's
+///    kind had the browser's tools alone. A built-in one had no shell, files, fetch or search, but
+///    every tool the task is allowed, the task's own among them.
+/// 2. So a built-in helper called `title`, and ilo took the call for the task's. `ask` and
+///    `finish` weren't tried.
+/// 3. A helper starts in the background: `task_started` names the call that asked for it as
+///    `tool_use_id`, with `spawn_depth` 1 and no parent, and the turn's `result` comes while the
+///    helpers are at work, so the task reads as done while they still act. No helper started one
+///    of its own, so that start's shape isn't known.
+/// 4. An interrupt ended every helper under way at once, and no start came after it. A helper's
+///    call that waited in ilo's own queue was still answered after the Stop.
+/// 5. The helper tool needs no `--allowedTools`.
+///
+/// It stays off until a run shows no helper with the task's own tools, a task that isn't done
+/// while its helpers work, and nothing of a stopped task's answered.
 pub const ON: bool = false;
 
 /// The assistant's tool that starts a helper: as its arguments and its own calls name it, and as
