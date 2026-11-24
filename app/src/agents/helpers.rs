@@ -61,7 +61,7 @@ use crate::tokens::agents::helpers::{DEEP, MOST};
 ///
 /// No real run has shown a helper's own helper refused, which the assistant didn't try, or a call
 /// after Stop answered as stopped, which didn't come up: a stand-in shows both.
-pub const ON: bool = false;
+pub const ON: bool = true;
 
 /// What the assistant's process is started with while helpers are on, each by its maker's
 /// documentation, and none while they're off. ilo sets them on the process itself, so its value
