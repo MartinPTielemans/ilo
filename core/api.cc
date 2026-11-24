@@ -6,9 +6,11 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "base/compiler_specific.h"
+#include "base/containers/fixed_flat_set.h"
 #include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
@@ -26,6 +28,7 @@
 #include "browser_core/agent_page.h"
 #include "browser_core/agent_request.h"
 #include "browser_core/agent_session.h"
+#include "browser_core/agent_sign_in.h"
 #include "browser_core/archive.h"
 #include "browser_core/arrange.h"
 #include "browser_core/arrange_rule.h"
@@ -637,6 +640,19 @@ bool bc_agent_may_act(const char* agent,
     refused = "The user has this tab until they hand it back. Ask for it with ask_for_tab.";
     code = BC_AGENT_FAILURE_HELD;
   }
+  if (refused.empty() && browser_core::SigningIn(tab)) {
+    refused = "ilo is signing this tab in already. Wait for its answer.";
+    code = BC_AGENT_FAILURE_SIGNING_IN;
+  }
+  if (refused.empty() && browser_core::PageWithheld(tab)) {
+    // Taking it to another page, or closing it, is all an agent may do there.
+    static constexpr auto kLeaving = base::MakeFixedFlatSet<std::string_view>(
+        {"back", "close_tab", "forward", "navigate"});
+    if (!kLeaving.contains(action ? action : "")) {
+      refused = browser_core::kWithheldPageRefusal;
+      code = BC_AGENT_FAILURE_WITHHELD_PAGE;
+    }
+  }
   if (refused.empty() && contents) {
     // The user's clicks there are Point's until they send or close it.
     const browser_core::PagePoint* point = browser_core::PagePoint::FromWebContents(contents);
@@ -684,7 +700,7 @@ size_t bc_agent_disconnected(const char* agent) {
 int bc_agent_close_tab(const char* agent, bc_id tab, bool discard) {
   const browser_core::Tab* closing = browser_core::Tab::Get(tab);
   if (!agent || !closing || !browser_core::Space::AgentMayAct(agent, tab) ||
-      browser_core::IsHeld(tab)) {
+      browser_core::IsHeld(tab) || browser_core::SigningIn(tab)) {
     return BC_AGENT_CLOSE_REFUSED;
   }
   if (browser_core::Space::Holding(tab)->IsPinned(tab)) {
@@ -694,6 +710,8 @@ int bc_agent_close_tab(const char* agent, bc_id tab, bool discard) {
 }
 
 bool bc_tab_take_back(bc_id tab) {
+  // Before the hold, which fills the user's login, so the sign-in's emptying can't empty that.
+  browser_core::StopSignIn(tab, BC_AGENT_FAILURE_HELD);
   browser_core::Hold(tab);
   return browser_core::EndTabSession(tab, BC_AGENT_SESSION_TAKEN_BACK);
 }
@@ -733,7 +751,8 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
 }
 
 bool bc_agent_hand_off(const char* agent, bc_id tab) {
-  if (!agent || !browser_core::Space::AgentMayAct(agent, tab) || browser_core::IsHeld(tab)) {
+  if (!agent || !browser_core::Space::AgentMayAct(agent, tab) || browser_core::IsHeld(tab) ||
+      browser_core::SigningIn(tab)) {
     return false;
   }
   browser_core::Hold(tab);
@@ -749,6 +768,22 @@ bool bc_tab_hand_back(bc_id tab) {
 
 bool bc_tab_held(bc_id tab) {
   return browser_core::IsHeld(tab);
+}
+
+void bc_agent_sign_in(const char* agent, bc_id tab, uint64_t request) {
+  browser_core::StartAgentSignIn(agent ? agent : "", tab, request);
+}
+
+bool bc_tab_signing_in(bc_id tab) {
+  return browser_core::SigningIn(tab);
+}
+
+bool bc_tab_withheld_from_agents(bc_id tab) {
+  return browser_core::WithheldFromAgents(tab);
+}
+
+bool bc_tab_sign_in_choose(bc_id tab, uint64_t request, size_t account) {
+  return browser_core::ChooseSignIn(tab, request, account);
 }
 
 bool bc_file_field_choose(bc_id field, bc_id window) {
@@ -796,7 +831,7 @@ bc_id bc_agent_open_tab(const char* agent, const char* url) {
 bool bc_agent_navigate(const char* agent, bc_id tab, const char* url) {
   const GURL target(url ? url : "");
   if (!agent || !browser_core::Space::AgentMayAct(agent, tab) || browser_core::IsHeld(tab) ||
-      !target.SchemeIsHTTPOrHTTPS() || !browser_core::Window::PageOf(tab)) {
+      browser_core::SigningIn(tab) || !target.SchemeIsHTTPOrHTTPS() || !browser_core::Window::PageOf(tab)) {
     return false;
   }
   return FollowInTab(tab, target, /*new_group=*/true);
@@ -829,21 +864,27 @@ void bc_agent_page(const char* agent,
                    int64_t element,
                    const char* text) {
   const bool may =
-      agent && browser_core::Space::AgentMayAct(agent, tab) && !browser_core::IsHeld(tab);
+      agent && browser_core::Space::AgentMayAct(agent, tab) && !browser_core::IsHeld(tab) &&
+      !browser_core::SigningIn(tab);
+  const bool withheld = may && browser_core::PageWithheld(tab);
   // A tab the browser unloaded to save memory gets its page back, not shown.
-  content::WebContents* contents = may ? browser_core::Window::PageOf(tab) : nullptr;
+  content::WebContents* contents =
+      may && !withheld ? browser_core::Window::PageOf(tab) : nullptr;
   if (!contents) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(
-                       [](bc_id tab, uint64_t request) {
+                       [](bc_id tab, uint64_t request, bool withheld) {
                          if (browser_core::Host().agent_page_done) {
                            browser_core::Host().agent_page_done(
                                browser_core::Host().context, tab, request,
-                               "The tab isn't in the agent's own Space.", true,
-                               BC_AGENT_FAILURE_NOT_ITS_SPACE);
+                               withheld ? browser_core::kWithheldPageRefusal
+                                        : "The tab isn't in the agent's own Space.",
+                               true,
+                               withheld ? BC_AGENT_FAILURE_WITHHELD_PAGE
+                                        : BC_AGENT_FAILURE_NOT_ITS_SPACE);
                          }
                        },
-                       tab, request));
+                       tab, request, withheld));
     return;
   }
   browser_core::AgentPage::CreateForWebContents(contents);
@@ -860,7 +901,13 @@ void bc_agent_request(const char* agent,
                       const char* body,
                       size_t size) {
   const bool may =
-      agent && browser_core::Space::AgentMayAct(agent, tab) && !browser_core::IsHeld(tab);
+      agent && browser_core::Space::AgentMayAct(agent, tab) && !browser_core::IsHeld(tab) &&
+      !browser_core::SigningIn(tab);
+  if (may && browser_core::PageWithheld(tab)) {
+    browser_core::RefuseAgentRequest(request, browser_core::kWithheldPageRefusal,
+                                     BC_AGENT_FAILURE_WITHHELD_PAGE);
+    return;
+  }
   content::WebContents* contents = may ? browser_core::Window::PageOf(tab) : nullptr;
   if (!contents) {
     browser_core::RefuseAgentRequest(request, "The tab isn't in the agent's own Space.",
@@ -2380,7 +2427,10 @@ void bc_tab_picture(bc_id id, uint64_t request, int width, int height) {
 }
 
 void bc_tab_read_text(bc_id id, uint64_t request) {
-  if (content::WebContents* contents = browser_core::Tab::FromId(id)) {
+  // A page showing what a sign-in filled gives none of its text, as a tab without its page.
+  content::WebContents* contents =
+      browser_core::PageWithheld(id) ? nullptr : browser_core::Tab::FromId(id);
+  if (contents) {
     browser_core::PageText::GetOrCreateForWebContents(contents)->Read(request);
   } else if (browser_core::Host().tab_text) {
     // A tab without its page, or none: nothing to read, told from a task of its own.

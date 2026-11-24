@@ -29,6 +29,8 @@
 #include "base/time/time.h"
 #include "browser_core/agent_file_field.h"
 #include "browser_core/agent_job_voter.h"
+#include "browser_core/agent_sign_in.h"
+#include "browser_core/agent_sign_in_rule.h"
 #include "browser_core/agent_splash_rule.h"
 #include "browser_core/ax_text.h"
 #include "browser_core/host.h"
@@ -371,6 +373,14 @@ std::string ChoiceSelector(std::string_view kind, const std::optional<std::strin
 
 // A Fill's job, the user's, which no agent asks for.
 constexpr int kFill = -1;
+// An agent's sign-in's jobs, the core's own (agent_sign_in.h).
+constexpr int kFind = -2;
+constexpr int kSubmit = -3;
+constexpr int kRead = -4;
+constexpr int kStep = -5;
+constexpr int kCheckSubmitters = -6;
+// More than a sign-in page holds: a document with more is read as one sending a form elsewhere.
+constexpr size_t kMostSubmitters = 16;
 
 // What an agent hears of a field that left before the user's files could go in.
 constexpr char kFieldGone[] = "The element isn't on the page any more. Take a new snapshot.";
@@ -637,6 +647,48 @@ void AgentPage::Fill(int64_t element,
   Next();
 }
 
+void AgentPage::WhenIdle(base::OnceClosure idle) {
+  if (job_ || !jobs_.empty()) {
+    idle_ = std::move(idle);
+    return;
+  }
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, std::move(idle));
+}
+
+void AgentPage::FindField(std::string selector, bool submit, base::OnceCallback<void(bool)> done) {
+  Job job{0, submit ? kSubmit : kFind, 0, std::move(selector)};
+  job.put = std::move(done);
+  jobs_.push_back(std::move(job));
+  Next();
+}
+
+void AgentPage::CheckSubmitters(base::OnceCallback<void(bool)> done) {
+  Job job{0, kCheckSubmitters, 0, std::string()};
+  job.put = std::move(done);
+  jobs_.push_back(std::move(job));
+  Next();
+}
+
+void AgentPage::ReadAll(Trees done) {
+  Job job{0, kRead, 0, std::string()};
+  job.trees = std::move(done);
+  job.put = base::DoNothing();
+  jobs_.push_back(std::move(job));
+  Next();
+}
+
+void AgentPage::Step(base::OnceCallback<void(base::OnceClosure done)> step) {
+  Job job{0, kStep, 0, std::string()};
+  job.step = std::move(step);
+  job.put = base::DoNothing();
+  jobs_.push_back(std::move(job));
+  Next();
+}
+
+void AgentPage::Forget() {
+  typed_.clear();
+}
+
 // static
 void AgentPage::SessionEnded(bc_id tab) {
   content::WebContents* contents = Tab::FromId(tab);
@@ -777,6 +829,39 @@ void AgentPage::Run() {
       return;
     case kFill:
       FillField();
+      return;
+    case kFind:
+    case kSubmit:
+      Find(action == kSubmit);
+      return;
+    case kCheckSubmitters:
+      Submitters();
+      return;
+    case kRead:
+      ReadTrees(0, Frames(), 0, {},
+                base::BindOnce(
+                    [](base::WeakPtr<AgentPage> page,
+                       std::optional<std::vector<base::ListValue>> trees) {
+                      if (!page || !page->job_) {
+                        return;
+                      }
+                      // Posted, as what hears them may end the agent's session with the page.
+                      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+                          FROM_HERE,
+                          base::BindOnce(std::move(page->job_->trees), std::move(trees)));
+                      page->Answer(std::string(), /*error=*/false);
+                    },
+                    weak_factory_.GetWeakPtr()));
+      return;
+    case kStep:
+      std::move(job_->step)
+          .Run(base::BindOnce(
+              [](base::WeakPtr<AgentPage> page) {
+                if (page && page->job_ && page->job_->action == kStep) {
+                  page->Answer(std::string(), /*error=*/false);
+                }
+              },
+              weak_factory_.GetWeakPtr()));
       return;
   }
   Fail("There's no such action.");
@@ -977,6 +1062,11 @@ void AgentPage::Still(std::vector<base::ListValue> last) {
               return;
             }
             page->job_->busy |= !same || splash;
+            // A sign-in's Enter answers its caller once the page has settled, with no snapshot.
+            if (page->job_->action == kSubmit) {
+              page->Answer(std::string(), /*error=*/false);
+              return;
+            }
             page->Read(std::move(trees->front()));
           },
           weak_factory_.GetWeakPtr(), request, std::move(last)));
@@ -3083,10 +3173,16 @@ void AgentPage::Answer(std::string text, bool error, bc_agent_failure failure) {
   // after (#1443).
   if (std::optional<GURL> app = std::exchange(app_link_, std::nullopt); app && !error) {
     const std::string opens = app_name_.empty() ? "an app" : base::UTF16ToUTF8(app_name_);
+    // A title withheld from agents, as after a sign-in whose page showed what it filled, isn't
+    // named.
+    const std::string stayed =
+        WithheldFromAgents(tab_)
+            ? std::string("The tab stayed on its page")
+            : base::StrCat({"The tab stayed on “", base::UTF16ToUTF8(GetWebContents().GetTitle()),
+                            "”"});
     text = base::StrCat({"That link opens ", opens, " (", app->GetScheme(),
-                         ":), outside the browser, and agents can't open apps. ",
-                         "The tab stayed on “", base::UTF16ToUTF8(GetWebContents().GetTitle()),
-                         "”. Ask the user, or use the page's web link if it has one."});
+                         ":), outside the browser, and agents can't open apps. ", stayed,
+                         ". Ask the user, or use the page's web link if it has one."});
     error = true;
   }
   app_name_.clear();
@@ -3118,6 +3214,9 @@ void AgentPage::Answer(std::string text, bool error, bc_agent_failure failure) {
         FROM_HERE, base::BindOnce(&Report, tab_, request, std::move(text), error, failure));
   }
   Next();
+  if (!job_ && idle_) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, std::move(idle_));
+  }
   if (!job_) {
     // A hidden page left drawing would keep its animations waking the browser while the agent
     // thinks or has gone quiet.
@@ -3146,6 +3245,10 @@ void AgentPage::EndWaiting(std::string why, std::optional<std::string> unstarted
 }
 
 void AgentPage::Owe(Job& job, const std::string& why) {
+  if (job.trees) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(job.trees), std::nullopt));
+  }
   if (job.put) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(job.put), false));
@@ -3209,6 +3312,9 @@ void AgentPage::LetGo() {
   AnswerHeld();
   for (Job& job : owed) {
     Owe(job, "The agent's session with the tab ended.");
+  }
+  if (idle_) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, std::move(idle_));
   }
   // A file the user is choosing for one of its fields goes nowhere, and its dialog closes.
   AgentFileField::TabEnded(tab_);
@@ -3494,6 +3600,144 @@ void AgentPage::FileField() {
             page->Answer(answer.value_or(std::string()), !answer);
           },
           weak_factory_.GetWeakPtr()));
+}
+
+void AgentPage::Find(bool submit) {
+  Send("DOM.getDocument", base::DictValue().Set("depth", 0),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, bool submit, const base::DictValue* result) {
+             if (!page || !page->job_) {
+               return;
+             }
+             const std::optional<int> root =
+                 result ? result->FindIntByDottedPath("root.nodeId") : std::nullopt;
+             if (!root) {
+               page->Fail(std::string());
+               return;
+             }
+             // Made before the call, whose reply binds the job's: see FindChoice.
+             base::DictValue query =
+                 base::DictValue().Set("nodeId", *root).Set("selector", page->job_->text);
+             page->Send(
+                 "DOM.querySelectorAll", std::move(query),
+                 base::BindOnce(
+                     [](base::WeakPtr<AgentPage> page, bool submit, const base::DictValue* result) {
+                       if (!page || !page->job_) {
+                         return;
+                       }
+                       // querySelectorAll never looks into a shadow root, so a field there is
+                       // none, as the rule wants.
+                       const base::ListValue* found = result ? result->FindList("nodeIds") : nullptr;
+                       if (!found || found->size() != 1 || !found->front().is_int()) {
+                         page->Fail(std::string());
+                         return;
+                       }
+                       if (!submit) {
+                         page->Answer(std::string(), /*error=*/false);
+                         return;
+                       }
+                       page->Listen(base::BindOnce(&AgentPage::PressEnterIn, page,
+                                                   found->front().GetInt()));
+                     },
+                     page, submit));
+           },
+           weak_factory_.GetWeakPtr(), submit));
+}
+
+void AgentPage::Submitters() {
+  Send("DOM.getDocument", base::DictValue().Set("depth", 0),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, const base::DictValue* result) {
+             if (!page || !page->job_) {
+               return;
+             }
+             const std::optional<int> root =
+                 result ? result->FindIntByDottedPath("root.nodeId") : std::nullopt;
+             if (!root) {
+               page->Fail(std::string());
+               return;
+             }
+             page->Send(
+                 "DOM.querySelectorAll",
+                 base::DictValue().Set("nodeId", *root).Set("selector", kSubmitters),
+                 base::BindOnce(
+                     [](base::WeakPtr<AgentPage> page, const base::DictValue* result) {
+                       if (!page || !page->job_) {
+                         return;
+                       }
+                       const base::ListValue* found =
+                           result ? result->FindList("nodeIds") : nullptr;
+                       if (!found || found->size() > kMostSubmitters) {
+                         page->Fail(std::string());
+                         return;
+                       }
+                       std::vector<int> nodes;
+                       for (const base::Value& each : *found) {
+                         if (!each.is_int()) {
+                           page->Fail(std::string());
+                           return;
+                         }
+                         nodes.push_back(each.GetInt());
+                       }
+                       page->SubmitterAttributes(std::move(nodes), 0);
+                     },
+                     page));
+           },
+           weak_factory_.GetWeakPtr()));
+}
+
+void AgentPage::SubmitterAttributes(std::vector<int> nodes, size_t next) {
+  if (next == nodes.size()) {
+    Answer(std::string(), /*error=*/false);
+    return;
+  }
+  const int node = nodes[next];
+  Send("DOM.getAttributes", base::DictValue().Set("nodeId", node),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, std::vector<int> nodes, size_t next,
+              const base::DictValue* result) {
+             if (!page || !page->job_) {
+               return;
+             }
+             // Name, value, name, value, as DevTools gives them.
+             const base::ListValue* flat = result ? result->FindList("attributes") : nullptr;
+             if (!flat || flat->size() % 2) {
+               page->Fail(std::string());
+               return;
+             }
+             std::vector<std::pair<std::string, std::string>> attributes;
+             for (size_t i = 0; i < flat->size(); i += 2) {
+               const std::string* name = (*flat)[i].GetIfString();
+               const std::string* value = (*flat)[i + 1].GetIfString();
+               if (!name || !value) {
+                 page->Fail(std::string());
+                 return;
+               }
+               attributes.emplace_back(*name, *value);
+             }
+             if (SendsElsewhere(attributes)) {
+               page->Fail(std::string());
+               return;
+             }
+             page->SubmitterAttributes(std::move(nodes), next + 1);
+           },
+           weak_factory_.GetWeakPtr(), std::move(nodes), next));
+}
+
+void AgentPage::PressEnterIn(int node) {
+  Send("DOM.focus", base::DictValue().Set("nodeId", node),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, const base::DictValue* focused) {
+             if (!page || !page->job_) {
+               return;
+             }
+             if (!focused) {
+               page->Fail(std::string());
+               return;
+             }
+             page->PressKey("Enter", base::BindOnce(&AgentPage::Settle, page));
+           },
+           weak_factory_.GetWeakPtr()));
 }
 
 void AgentPage::FillField() {

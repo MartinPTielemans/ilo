@@ -69,6 +69,29 @@ class AgentPage : public content::WebContentsObserver,
             Lands lands,
             base::OnceCallback<void(bool)> put);
 
+  // The core's own steps in an agent's sign-in (agent_sign_in.h), each a job after those queued,
+  // which no agent asks for and whose answer goes to its caller alone, posted.
+  // |idle| runs once no job is running or queued, as an agent's action under way answers first.
+  void WhenIdle(base::OnceClosure idle);
+  // Whether |selector| finds exactly one field in the main frame's document, outside any shadow
+  // root (agent_sign_in_rule.h's FieldSelector). With |submit|, then presses Enter in it and waits
+  // for the page to settle: |done| hears whether it did.
+  void FindField(std::string selector, bool submit, base::OnceCallback<void(bool)> done);
+  // Whether no element in the main frame's document sends a form somewhere its action doesn't say
+  // (agent_sign_in_rule.h's kSubmitters and SendsElsewhere): |done| hears true only then, false if
+  // one does or the document couldn't be read.
+  void CheckSubmitters(base::OnceCallback<void(bool clear)> done);
+  // Every frame's tree an agent could read, its outline's and read_page's, as DevTools gives them,
+  // values and all, or none if the main frame's couldn't be read. For the core to search, never an
+  // agent's.
+  using Trees = base::OnceCallback<void(std::optional<std::vector<base::ListValue>>)>;
+  void ReadAll(Trees done);
+  // Runs |step|, which calls the closure it's given once it's done, before the agent's next
+  // action in the page.
+  void Step(base::OnceCallback<void(base::OnceClosure done)> step);
+  // Forgets what the agent typed, so no field shows as holding it.
+  void Forget();
+
   // The agent's session with |tab| ended: its page stops drawing while hidden, and DevTools lets
   // it go. What's still asked is answered as an error.
   static void SessionEnded(bc_id tab);
@@ -117,6 +140,9 @@ class AgentPage : public content::WebContentsObserver,
     std::vector<std::string> files;
     Lands lands;
     base::OnceCallback<void(bool)> put;
+    // ReadAll's and Step's.
+    Trees trees;
+    base::OnceCallback<void(base::OnceClosure done)> step;
   };
   using Reply = base::OnceCallback<void(const base::DictValue* result)>;
   using Then = base::OnceCallback<void(std::optional<gfx::RectF>)>;
@@ -345,6 +371,11 @@ class AgentPage : public content::WebContentsObserver,
   void EndWaiting(std::string why, std::optional<std::string> unstarted);
   // Gives the answer kept while a download started, as none took its action.
   void AnswerHeld();
+  // FindField's job: the field its selector finds, then with |submit| Enter in it.
+  void Find(bool submit);
+  void Submitters();
+  void SubmitterAttributes(std::vector<int> nodes, size_t next);
+  void PressEnterIn(int node);
 
   // Scrolls the job's element into view and gives its box, in the main frame's viewport's CSS
   // pixels.
@@ -471,6 +502,8 @@ class AgentPage : public content::WebContentsObserver,
   // pictures are under way, so a page only pictured lets DevTools go after.
   bool acted_ = false;
   int pictures_ = 0;
+  // WhenIdle's.
+  base::OnceClosure idle_;
   // The app link the job running followed, and the app the system opens it in, once it's found.
   std::optional<GURL> app_link_;
   std::u16string app_name_;

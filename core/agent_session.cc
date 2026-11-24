@@ -12,9 +12,11 @@
 #include "base/no_destructor.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_page.h"
+#include "browser_core/agent_sign_in.h"
 #include "browser_core/host.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 
 namespace browser_core {
@@ -50,6 +52,7 @@ bool End(bc_id tab, std::optional<std::string_view> agent, int why) {
   }
   const std::string held = std::move(it->second);
   Sessions().erase(it);
+  StopSignIn(tab, BC_AGENT_FAILURE_NONE);
   AgentPage::SessionEnded(tab);
   // One whose tab closed or left the agent's Space ended then, and the app saw it.
   if (!Space::AgentMayAct(held, tab)) {
@@ -64,10 +67,11 @@ bool End(bc_id tab, std::optional<std::string_view> agent, int why) {
 }  // namespace
 
 void AgentActed(const std::string& agent, bc_id tab) {
-  std::erase_if(Sessions(), [](const auto& session) {
+  std::erase_if(Sessions(), [&](const auto& session) {
     if (Space::AgentMayAct(session.second, session.first)) {
       return false;
     }
+    StopSignIn(session.first, BC_AGENT_FAILURE_NONE);
     AgentPage::SessionEnded(session.first);
     return true;
   });
@@ -108,7 +112,7 @@ std::string RefusedAction(std::string_view action) {
   static constexpr auto kAllowed = base::MakeFixedFlatSet<std::string_view>(
       {"add_to_split", "back", "click", "close_tab", "forward", "hand_off", "list_split",
        "navigate", "pin_tab", "press_key", "read_page", "remove_tab", "request", "screenshot",
-       "scroll", "select_option", "separate_tab", "snapshot", "split_tabs", "type", "unpin_tab",
+       "scroll", "select_option", "separate_tab", "sign_in", "snapshot", "split_tabs", "type", "unpin_tab",
        "upload"});
   // Those agents ask for that the rules forbid outright, with why.
   static constexpr auto kForbidden = base::MakeFixedFlatMap<std::string_view, std::string_view>({
@@ -138,6 +142,15 @@ bool HandBack(bc_id tab) {
     return false;
   }
   Blur(tab);
+  // What Chrome filled for the user while they held it never reaches the agent.
+  EmptyForAgent(tab);
+  // The user took the tab and gave it back, as after doing a sign-in an agent's failed: every
+  // agent may try a sign-in at its origin again. Not as a held tab closes, which the app hands back
+  // too, by the user or by its page: it has left its Space by then, while its unload handlers run.
+  content::WebContents* contents = Tab::FromId(tab);
+  if (contents && !contents->IsBeingDestroyed() && Space::Holding(tab)) {
+    ForgiveSignInTries(contents->GetPrimaryMainFrame()->GetLastCommittedOrigin());
+  }
   return true;
 }
 
