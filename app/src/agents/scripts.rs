@@ -98,6 +98,7 @@ impl Agents {
             url: SharedString::default(),
             sent: Vec::new(),
             said: SharedString::default(),
+            tier: SharedString::default(),
         };
         let same = event != 0 && self.script_event == event;
         match self.log.iter().rposition(|each| each.agent == AGENT) {

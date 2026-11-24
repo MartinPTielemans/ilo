@@ -116,9 +116,10 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
         return Vec::new();
     }
     match &line.kind {
-        // The Off limits list is the user's own, which no step up passes.
+        // The Off limits list and a Never are the user's own, which no step up passes.
         IloKind::Stopped {
-            why: Why::Fenced, ..
+            why: Why::Fenced | Why::Never,
+            ..
         } => vec![IloButton::TakeOver],
         IloKind::Stopped {
             why: Why::OtherSite,

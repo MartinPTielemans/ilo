@@ -1,25 +1,23 @@
-//! Sites the user fences (#3724): on one of these, and on its subdomains, an agent asks the user
-//! before it opens a page, before its first call on a page it came to any other way, and before
-//! each click, key or form it sends, whatever they answered before. The list is the user's alone:
-//! no agent tool lists, reads or changes it, and a refusal at a fence says no more than any other.
+//! Sites the user puts off limits (#3724): on one of these, and on its subdomains, an agent can't
+//! open a page, use one it came to any other way, or click, type or send anything, whatever its
+//! task's access: no tier lifts a fence, and the way on is the user's taking the site off. The list
+//! is the user's alone: no agent tool lists, reads or changes it.
 //!
 //! Every string a person reads for it is here, so a wording pass changes this file alone.
 
 use std::net::Ipv4Addr;
 
 /// Settings › Agents' heading over the list.
-pub const HEADING: &str = "Always ask first";
+pub const HEADING: &str = "Off limits";
 /// The one row while the list is empty, and its line.
 pub const NONE: &str = "No sites";
-pub const NONE_LINE: &str = "Add a site where agents always ask you first, such as your bank.";
+pub const NONE_LINE: &str = "Add a site agents can't open or use, such as your bank.";
 /// The button under the list that opens the field, and the field's own words.
 pub const ADD_SITE: &str = "Add Site…";
 pub const PLACEHOLDER: &str = "Site or address";
-pub const SPOKEN: &str = "Site where agents always ask first";
+pub const SPOKEN: &str = "Site agents can't open or use";
 /// The sentence under the list.
-pub const FOOT: &str = "On these sites and their subdomains, an agent asks you before opening a page \
-                        or using one it reached, and before each click, key or form it sends. \
-                        Earlier answers don't count here, and agents can't see or change this list.";
+pub const FOOT: &str = "Agents can't open or use these sites, whatever a task's access.";
 
 /// Why the card asks, under what the agent wants: the user's own list.
 pub fn why(site: &str) -> String {
@@ -43,8 +41,8 @@ pub fn requests(count: usize, site: &str) -> String {
 /// What an answer says in place of the page, once the tab came to a fenced site by itself.
 pub fn withheld(tab: u64, site: &str) -> String {
     format!(
-        "Tab {tab} is now on {site}, where the user wants to be asked first. Your next call on \
-         this tab will ask them."
+        "Tab {tab} is now on {site}, which is off limits to agents, so nothing of its page is \
+         shown and calls on it are refused."
     )
 }
 
@@ -56,11 +54,11 @@ pub fn refused(tab: u64, site: &str) -> String {
 /// The activity log's words for that refusal, which the user reads: by the entry of their list
 /// the site matched, so a subdomain's names what they wrote.
 pub fn logged(entry: &str) -> String {
-    format!("{entry} is on Always ask first; you'll be asked next.")
+    format!("{entry} is on Off limits.")
 }
 
 /// The title list_tabs gives such a tab, with no address.
-pub const LISTED: &str = "Asks the user first";
+pub const LISTED: &str = "Off limits";
 
 /// Why close_tab leaves such a tab open, which says neither that its page shows a dialog nor that
 /// it asks before it's left.
@@ -70,16 +68,16 @@ pub const STAYS_OPEN: &str = "its page may have unsaved changes";
 /// the file's name nor how it ends.
 pub fn download(site: &str) -> String {
     format!(
-        "A download from {site}, where the user asked to be asked first, is theirs to answer: its \
-         name and how it ends aren't shown."
+        "A download from {site}, which is off limits to agents, is refused: its name isn't \
+         shown."
     )
 }
 
 /// A run's answer when its step's tab came to a fenced site.
 pub fn run_stopped(step: usize, tab: u64, site: &str) -> String {
     format!(
-        "Step {step} is on {site}, where the user asked to be asked first, so the run stopped \
-         there. Call snapshot on tab {tab} on its own for the user to answer."
+        "Step {step} is on {site}, which is off limits to agents, so the run stopped there. \
+         Carry on in another tab, without tab {tab}."
     )
 }
 
