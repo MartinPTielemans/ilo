@@ -1978,6 +1978,10 @@ impl Browser for Recorder {
         self.app_asks.borrow_mut().push("settings");
     }
 
+    fn off_limits(&self, _: &mut App) {
+        self.record("off limits".into());
+    }
+
     fn shortcuts(&self, _: &mut App) {}
 
     fn about(&self, _: &mut App) {

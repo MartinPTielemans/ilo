@@ -3921,9 +3921,11 @@ impl Settings {
                     .child(foot.mt(px(BUTTONS_TOP)))
             }
         };
+        // An ilo line's link opens here, flashing the list (Browser::off_limits).
+        let heading: SharedString = fence::HEADING.into();
         vec![
-            Block::Heading(fence::HEADING.into()),
-            Block::Group(group(look, rows)),
+            Block::Heading(heading.clone()),
+            Block::Group(self.flashed(&heading, group(look, rows))),
             Block::Under(under),
         ]
     }

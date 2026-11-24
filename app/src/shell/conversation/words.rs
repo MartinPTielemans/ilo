@@ -46,8 +46,35 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
     }
 }
 
+/// A line's head as drawn: ilo's words `own`, then `name`. A page's own words are quoted, so they
+/// read as its; a site's name never is, as it's the app's to write.
+pub fn with_name(kind: &IloKind, own: &str, name: &str) -> String {
+    let site = matches!(
+        kind,
+        IloKind::Stopped {
+            why: Why::Fenced | Why::OtherSite,
+            ..
+        } | IloKind::SignedIn { .. }
+    );
+    match site {
+        true => format!("{own} {name}"),
+        false => format!("{own} \u{201c}{name}\u{201d}"),
+    }
+}
+
 /// Where the switch that keeps finished tasks is, under the line that says they're kept.
 const KEPT_IN: &str = "Settings › Agents";
+
+/// The app's own quiet link under a line, which opens Settings where its words point and changes
+/// nothing by itself: under a fence's refusal, the Off limits list.
+pub fn link(kind: &IloKind) -> Option<&'static str> {
+    match kind {
+        IloKind::Stopped {
+            why: Why::Fenced, ..
+        } => Some(KEPT_IN),
+        _ => None,
+    }
+}
 
 /// What a line says under its head, if anything: why ilo stopped, in the user's terms, or what it
 /// signed in with. `at` is the line's name, already cut to its length.

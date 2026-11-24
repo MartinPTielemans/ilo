@@ -226,6 +226,8 @@ pub struct TalkView {
     ilo_hovered: Rc<Cell<bool>>,
     /// Where each of ilo's lines' words were last drawn, by its line.
     ilo_words_drawn: WordsDrawn,
+    /// Where each ilo line's link was drawn, by the line's key.
+    ilo_links: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     /// Where the level's chip under the reply field was drawn, if the last frame drew it.
     level_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     landed: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -349,6 +351,7 @@ impl Shell {
                     ilo_drawn: Rc::default(),
                     ilo_hovered: Rc::default(),
                     ilo_words_drawn: Rc::default(),
+                    ilo_links: Rc::default(),
                     level_drawn: Rc::default(),
                     landed: Rc::default(),
                     drawn_at: Rc::default(),
@@ -1758,6 +1761,9 @@ impl TalkView {
         (self.ilo_words_drawn.borrow_mut()).retain(|key, _| {
             (shown.lines.iter()).any(|line| matches!(line, Line::Ilo(line) if line.key == *key))
         });
+        (self.ilo_links.borrow_mut()).retain(|key, _| {
+            (shown.lines.iter()).any(|line| matches!(line, Line::Ilo(line) if line.key == *key))
+        });
         if !buttons.iter().any(|(_, button)| button.widens()) {
             self.ilo_hovered.set(false);
         }
@@ -2033,11 +2039,11 @@ impl TalkView {
         let palette = look.palette;
         let ink = palette.text(ILO_INK);
         let (own, name) = words::head(&line.kind, agent);
-        // A page's words are cut short and quoted, in the title's ink, so they read as a name.
+        // A page's words or a site are cut short, in the title's ink, so they read as a name.
         let name = name.map(|name| clip(&name, QUOTED_CHARS as usize));
         let (said, highlights) = match &name {
             Some(name) => {
-                let said = format!("{own} \u{201c}{name}\u{201d}");
+                let said = words::with_name(&line.kind, &own, name);
                 let quoted = own.len() + 1..said.len();
                 let style = HighlightStyle {
                     color: Some(palette.text(TITLE)),
@@ -2090,6 +2096,31 @@ impl TalkView {
                 .text_color(ink)
                 .child(body)
         });
+        let link = words::link(&line.kind).map(|words| {
+            let drawn = self.ilo_links.clone();
+            let key = line.key;
+            div()
+                .id(SharedString::from(format!("ilo-{key}-link")))
+                .relative()
+                .pl(under)
+                .mt(px(NOTE_TOP))
+                .text_size(px(text::SMALL))
+                .text_color(palette.text(NOTE_INK))
+                .cursor_pointer()
+                .child(words)
+                .child(
+                    canvas(
+                        move |bounds, _, _| _ = drawn.borrow_mut().insert(key, bounds),
+                        |_, _, _, _| {},
+                    )
+                    // Pinned to the corner: unpinned, it would stand after the words, a line below.
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+                )
+                .on_click(cx.listener(|view, _, _, cx| view.open_off_limits(cx)))
+        });
         let buttons = ilo::buttons(line);
         let note = words::note(&buttons).map(|note| {
             div()
@@ -2117,6 +2148,7 @@ impl TalkView {
             .mb(px(ILO_BELOW))
             .child(head)
             .children(body)
+            .children(link)
             .children(row)
             .children(note)
             .into_any_element()
@@ -2154,6 +2186,14 @@ impl TalkView {
                 chip.on_hover(move |over, _, _| hovered.set(*over))
             })
             .on_click(cx.listener(move |view, _, _, cx| view.press_ilo(key, tab, cx)))
+    }
+
+    /// The link under a fence's refusal: Settings, on its Off limits list. It only opens it, so
+    /// nothing it does lifts a fence or raises a task's access.
+    fn open_off_limits(&mut self, cx: &mut Context<Self>) {
+        self.shell
+            .update(cx, |shell, cx| shell.browser.off_limits(cx))
+            .ok();
     }
 
     /// A press on an ilo line's button. One that widens what the agent may do counts only once it
