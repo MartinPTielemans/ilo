@@ -16,7 +16,8 @@
 # over the page's bottom, as pointing's, whose keys read as this system's menus write them (#2380),
 # Settings › Agents' Model menu for Claude, Sonnet chosen, and for Codex, on its own default, which
 # names its model, light and dark (#2455), and its Model rows, one assistant signed in and one not,
-# and Notifications under them, light and dark (#4100), and the safe-start card at the sidebar's foot, light and dark,
+# then Access and Notifications under them, light and dark (#4100), and the safe-start card at the
+# sidebar's foot, light and dark,
 # and in the narrowest sidebar with ad blocking off (#2345), a Live Folder of made-up pull
 # requests, open light and dark, closed with its count, signed out and after a failed refresh,
 # light and dark, with its tooltip then, the Space's menu with Live Folders open, light and dark,

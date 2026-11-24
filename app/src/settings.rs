@@ -3782,7 +3782,8 @@ impl Settings {
         if tasks_on {
             blocks.push(Block::Heading("Your assistant".into()));
             blocks.push(Block::Group(self.assistants(agents, cx)));
-            blocks.push(Block::Under(foot(look, NO_ASSISTANT_OF_ITS_OWN)));
+            blocks.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
+            blocks.extend(self.access());
         }
         // ⌘T's tasks and outside agents' sessions notify alike, so it's here while agents are on.
         // The Mac, Windows and Linux each post them (needs_you_host.rs).
@@ -3892,11 +3893,28 @@ impl Settings {
                 )],
             )));
         }
-        Page::new(
-            Section::Agents,
-            "Agents never see your passwords, cookies or autofill.",
-            blocks,
-        )
+        Page::new(Section::Agents, agents::tier::NEVER_GETS, blocks)
+    }
+
+    /// Access: what each tier lets a task do, in words only, since only a task's own menu sets
+    /// one. The level's menu opens Settings here, flashing the group (settings::show_row).
+    fn access(&self) -> Vec<Block> {
+        use agents::tier::{ACCESS, Tier};
+        let look = &self.look;
+        let rows = Tier::ALL.map(|tier| {
+            setting(
+                look,
+                tier.label(),
+                Some(tier.explained().into()),
+                Vec::new(),
+            )
+            .div
+        });
+        let heading: SharedString = ACCESS.into();
+        vec![
+            Block::Heading(heading.clone()),
+            Block::Group(self.flashed(&heading, group(look, rows))),
+        ]
     }
 
     /// Always ask first (#3724): the sites the user fenced, each with Remove, then Add Site…, which
@@ -5591,12 +5609,11 @@ fn method(target: &str) -> &str {
 /// Apps that connect's heading, which Another app's How to Connect goes to.
 const APPS_THAT_CONNECT: &str = "Apps that connect";
 
-/// What Your assistant's rows never do, under them.
-const NO_ASSISTANT_OF_ITS_OWN: &str = concat!(
+/// What Your assistant's rows never do, under them. That ilo has no assistant of its own is first
+/// run's to say.
+const NEVER_SEES_LOGIN: &str = concat!(
     env!("APP_NAME"),
-    " has no assistant of its own. You sign in on your assistant's page, and ",
-    env!("APP_NAME"),
-    " never sees or keeps your login."
+    " never sees or keeps your assistant's login."
 );
 
 /// A line under a group that says more of it, in a row's line's grey, as Fenced sites' has.

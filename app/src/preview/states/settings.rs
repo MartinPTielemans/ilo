@@ -506,7 +506,18 @@ impl gpui::Render for PicturesPage {
                 nested = vec![(0, 1), (0, 3)];
                 match self.shown {
                     Pictures::Models => {
+                        use browser::agents::tier::{ACCESS, Tier};
                         use browser::needs_you::{Notify, WHEN_TO_NOTIFY};
+                        // Words only, as Settings has no control there.
+                        let access = Tier::ALL
+                            .map(|tier| {
+                                frame().child(row_text(
+                                    &look,
+                                    tier.label(),
+                                    Some(tier.explained().into()),
+                                ))
+                            })
+                            .into();
                         let when = popup(&look, Notify::Away.title(), POPUP_WIDTH, false);
                         let when = frame()
                             .child(row_text(&look, WHEN_TO_NOTIFY, None))
@@ -522,6 +533,7 @@ impl gpui::Render for PicturesPage {
                                     another(),
                                 ],
                             ),
+                            (Some(ACCESS), access),
                             (Some(browser::needs_you::NOTIFICATIONS), vec![when]),
                         ]
                     }
@@ -661,12 +673,17 @@ impl gpui::Render for PicturesPage {
         )
         .text_color(base.opacity(browser::tokens::settings::TITLE));
         let general = matches!(self.shown, Pictures::General);
-        let lede = general.then(|| {
+        let lede = match self.shown {
+            Pictures::General => Some("ilo isn't your default browser."),
+            Pictures::Models => Some(browser::agents::tier::NEVER_GETS),
+            _ => None,
+        };
+        let lede = lede.map(|lede| {
             div()
                 .mt(px(browser::tokens::settings::LEDE_TOP))
                 .line_height(px(browser::tokens::settings::LEDE_LINE))
                 .text_color(base.opacity(browser::tokens::settings::DETAIL))
-                .child("ilo isn't your default browser.")
+                .child(lede)
         });
         let make = general.then(|| {
             div()
