@@ -579,6 +579,7 @@ fn a_tile_turning_to_needs_you_comes_into_sight_once(cx: &mut TestAppContext) {
         space: 3,
         doing: "".into(),
         held: vec![(35, "Sign in".into())],
+        taken: Vec::new(),
     };
     shell.update(cx, |shell, cx| shell.set_agent_status(vec![held], cx));
     assert!(
@@ -679,6 +680,7 @@ fn needs_you_beside_typing(
         space: 3,
         doing: "".into(),
         held: vec![(31, "Sign in".into())],
+        taken: Vec::new(),
     };
     shell.update(cx, |shell, cx| shell.set_agent_status(vec![held], cx));
     for _ in 0..2 {
@@ -2498,6 +2500,7 @@ fn a_watch_from_any_door_is_a_tile_and_a_handoff_leaves_the_reply_field(cx: &mut
         space: 3,
         doing: "".into(),
         held: vec![(30, "Sign in".into())],
+        taken: Vec::new(),
     };
     shell.update(cx, |shell, cx| shell.set_agent_status(vec![held], cx));
     let mut did = draw(cx);

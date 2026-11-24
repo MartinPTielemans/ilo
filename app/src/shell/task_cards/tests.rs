@@ -241,6 +241,7 @@ fn a_pages_word_and_outline_are_one_answer(cx: &mut TestAppContext) {
             space: 102,
             doing: SharedString::default(),
             held: vec![(40, "Sign in".into()), (41, SharedString::default())],
+            taken: vec![41],
         };
         shell.set_agent_status(vec![status], cx);
     });

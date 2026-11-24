@@ -667,10 +667,9 @@ impl Shell {
     }
 
     /// Whether the user took `tab` over, their own act, rather than the agent handing it to them
-    /// or asking for it, which says why.
+    /// or asking for it: by the hold's kind, never by the words an agent wrote for it.
     fn task_page_taken(&self, tab: u64) -> bool {
-        (self.agent_status.iter())
-            .any(|status| (status.held.iter()).any(|(held, why)| *held == tab && why.is_empty()))
+        (self.agent_status.iter()).any(|status| status.taken.contains(&tab))
     }
 
     /// Lets go of a watch that's over: the picture it asked for, and its tile, which the

@@ -178,6 +178,9 @@ pub struct Status {
     /// The tabs the user holds from it, each with what it asked of the user, or empty if the user
     /// took it over.
     pub held: Vec<(u64, SharedString)>,
+    /// Those of `held` the user took over themselves, by Take Over or a press in the page, as the
+    /// hold's kind says, never its words: a hand-off or an ask is the agent's, whatever its reason.
+    pub taken: Vec<u64>,
 }
 
 /// The user's answer to an agent's question.
@@ -983,6 +986,9 @@ struct Held {
     call: u64,
     /// What the agent asked the user to do, or empty if they took it over.
     why: String,
+    /// Whether the user took it over themselves (`take_over`), rather than the agent or its page
+    /// handing it to them: only that hold gives the page the keyboard by itself.
+    taken: bool,
     /// The handoff's question, or the agent's asking for the tab back, for its card.
     question: u64,
     /// Why the agent asks for the tab back (ask_for_tab), while its call waits for the answer.
@@ -1549,6 +1555,7 @@ impl Agents {
                 reply: None,
                 timer: None,
                 sign_in: false,
+                taken: false,
             };
             self.held.insert(tab, held);
             self.carry(tab, held::Event::Passkey, life, actions, cx);
@@ -2013,6 +2020,7 @@ impl Agents {
                     reply: Some(reply),
                     timer: None,
                     sign_in: false,
+                    taken: false,
                 };
                 self.held.insert(tab, held);
                 self.carry(tab, held::Event::HandOff, life, actions, cx);
@@ -2743,6 +2751,7 @@ impl Agents {
             reply: Some(reply),
             timer: None,
             sign_in: true,
+            taken: false,
         };
         self.held.insert(tab, held);
         self.carry(tab, held::Event::HandOff, life, actions, cx);
@@ -2771,6 +2780,7 @@ impl Agents {
             reply: None,
             timer: None,
             sign_in: false,
+            taken: true,
         };
         self.held.insert(tab, held);
         // The core ends the agent's session there, which logs it.
@@ -3034,12 +3044,18 @@ impl Agents {
                     .map(|(&tab, held)| (tab, held.why.clone().into()))
                     .collect();
                 held.sort();
+                let mut taken: Vec<u64> = (self.held.iter())
+                    .filter(|(_, held)| held.agent == agent && held.taken)
+                    .map(|(&tab, _)| tab)
+                    .collect();
+                taken.sort();
                 Status {
                     agent: agent.to_string().into(),
                     name: self.agent_name(agent),
                     space: self.browser.agent_space(agent),
                     doing: self.doing.get(agent).cloned().unwrap_or_default(),
                     held,
+                    taken,
                 }
             })
             .collect()
@@ -3492,6 +3508,7 @@ impl Agents {
             reply: Some(reply),
             timer: None,
             sign_in: false,
+            taken: false,
         };
         self.held.insert(tab, held);
         self.carry(tab, held::Event::HandOff, life, actions, cx);

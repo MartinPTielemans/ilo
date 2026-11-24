@@ -262,6 +262,7 @@ fn a_page_ilo_opens_takes_no_keyboard_and_no_click_at_first(cx: &mut TestAppCont
         space: 3,
         doing: "".into(),
         held: vec![(30, "Sign in".into())],
+        taken: Vec::new(),
     };
     shell.update(cx, |shell, cx| shell.set_agent_status(vec![held], cx));
     draw(&shell, cx);
@@ -864,6 +865,7 @@ fn a_page_that_refuses_the_close_brings_the_page_watched_back(cx: &mut TestAppCo
                 space: 3,
                 doing: "Typed · flights.example".into(),
                 held: held_tabs,
+                taken: (held.then_some(30)).into_iter().collect(),
             };
             shell.set_agent_status(vec![status], cx);
             shell.agent_acted("task-1".into(), 30, cx);
@@ -1100,6 +1102,7 @@ fn the_strip_takes_over_hands_back_and_stops(cx: &mut TestAppContext) {
             name: "Claude".into(),
             space: 3,
             doing,
+            taken: taken_over(&held),
             held,
         }]
     };
@@ -1166,6 +1169,7 @@ fn a_taken_over_pages_row_ends_in_its_bars_title(cx: &mut TestAppContext) {
                 space: 3,
                 doing: "Typed · flights.example".into(),
                 held: vec![(30, why.to_string().into())],
+                taken: (why.is_empty()).then_some(30).into_iter().collect(),
             };
             shell.set_agent_status(vec![status], cx);
         });
@@ -1201,6 +1205,7 @@ fn a_press_in_the_agents_page_takes_it_over_and_hand_back_gives_it_back(cx: &mut
             name: "Claude".into(),
             space: 3,
             doing: "Typed · flights.example".into(),
+            taken: taken_over(&held),
             held,
         }]
     };
@@ -1253,6 +1258,7 @@ fn a_press_takes_over_each_of_the_agents_tabs_after_the_one_it_acted_in(cx: &mut
             name: "Claude".into(),
             space: 3,
             doing: "Typed · flights.example".into(),
+            taken: taken_over(&held),
             held,
         }]
     };
@@ -1294,6 +1300,7 @@ fn take_over_and_hand_back_come_before_the_agents_page(cx: &mut TestAppContext) 
             name: "Claude".into(),
             space: 3,
             doing: "Typed · flights.example".into(),
+            taken: taken_over(&held),
             held,
         }]
     };
@@ -1335,6 +1342,7 @@ fn hand_back_from_the_page_is_one_press_in_the_ui_too(cx: &mut TestAppContext) {
                 space: 3,
                 doing: "Typed · flights.example".into(),
                 held: vec![(30, "".into())],
+                taken: vec![30],
             }],
             cx,
         )
@@ -1394,6 +1402,7 @@ fn a_scroll_in_the_agents_page_never_takes_it_over(cx: &mut TestAppContext) {
                 space: 3,
                 doing: "Typed · flights.example".into(),
                 held: Vec::new(),
+                taken: Vec::new(),
             }],
             cx,
         );
@@ -1437,6 +1446,7 @@ fn an_agent_is_at_work_in_no_tab_once_it_closes_the_one_it_was_in(cx: &mut TestA
                 space: 3,
                 doing: "Clicked “Report”".into(),
                 held: Vec::new(),
+                taken: Vec::new(),
             }],
             cx,
         );
@@ -1795,6 +1805,7 @@ fn the_strip_names_the_agent_as_its_card_does(cx: &mut TestAppContext) {
             space: 3,
             doing: "Typed · flights.example".into(),
             held: vec![(30, "Sign in to flights.example".into())],
+            taken: Vec::new(),
         }]
     };
     let says = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
@@ -1909,6 +1920,7 @@ fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
             space: 3,
             doing: "Read · tickets.example".into(),
             held: vec![(tab, "Sign in".into())],
+            taken: Vec::new(),
         }]
     };
     // The page watched is 30; the task handed 31 to the user, where it acted last.
@@ -2118,6 +2130,7 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
             space: 3,
             doing: "Clicking “Tickets”".into(),
             held: Vec::new(),
+            taken: Vec::new(),
         };
         shell.set_agent_status(vec![status], cx);
         shell.agent_acted("task-1".into(), 30, cx);
@@ -2163,6 +2176,7 @@ fn a_held_task_page_takes_tab_as_the_users_does(cx: &mut TestAppContext) {
             space: 3,
             doing: "".into(),
             held: vec![(30, "".into())],
+            taken: vec![30],
         };
         shell.set_agent_status(vec![status], cx);
     });
@@ -2345,6 +2359,7 @@ fn a_press_on_the_crash_card_of_the_agents_page_takes_it_over(cx: &mut TestAppCo
                 space: 3,
                 doing: "Typed · flights.example".into(),
                 held: Vec::new(),
+                taken: Vec::new(),
             }],
             cx,
         );
@@ -2443,12 +2458,21 @@ fn watching_tile(shell: &Entity<Shell>, host: &Rc<Recorder>, cx: &mut VisualTest
     draw(shell, cx);
 }
 
+/// The tabs of `held` a test's user took over: those it gave no words, as Take Over has none.
+fn taken_over(held: &[(u64, SharedString)]) -> Vec<u64> {
+    (held.iter())
+        .filter(|(_, why)| why.is_empty())
+        .map(|(tab, _)| *tab)
+        .collect()
+}
+
 fn at_work(held: Vec<(u64, SharedString)>) -> Vec<Status> {
     vec![Status {
         agent: "task-1".into(),
         name: "Claude".into(),
         space: 3,
         doing: "Typed · flights.example".into(),
+        taken: taken_over(&held),
         held,
     }]
 }
@@ -2596,39 +2620,47 @@ fn a_press_on_the_tile_takes_over_and_reaches_nothing(cx: &mut TestAppContext) {
     );
 }
 
-/// A handoff while the user watches the tile is the agent's doing, not the user's: the page stays
-/// a tile for ARM, so a click meant for the tile reaches nothing, then it's the window's page with
-/// the keyboard left where it was, for the user's first click in the page to give it.
+/// A handoff or an ask while the user watches the tile is the agent's doing, not the user's, by
+/// the hold's kind and whatever words the agent gave it, none too: the page stays a tile for ARM,
+/// so a click meant for the tile reaches nothing, then it's the window's page with the keyboard
+/// left where it was, for the user's first click in the page to give it.
 #[gpui::test]
 fn a_handoff_while_a_tile_is_watched_asks_no_focus_page(cx: &mut TestAppContext) {
-    let (shell, host, cx) = shell_with_task(cx);
-    watching_tile(&shell, &host, cx);
-    host.take();
-    let keyboard = |asked: &[String]| {
-        (asked.iter()).any(|line| line.starts_with("focus page") || line == "focus ui")
-    };
-    shell.update(cx, |shell, cx| {
-        shell.set_agent_status(at_work(vec![(30, "Sign in to continue".into())]), cx)
-    });
-    draw(&shell, cx);
-    let asked = host.take();
-    assert!(!keyboard(&asked), "{asked:?}");
-    page_untouched(&asked);
-    assert_eq!(
-        shell.read_with(cx, |shell, _| shell.watch_tile_shown()),
-        Some(30),
-        "a tile still, in the ARM"
-    );
+    for why in ["Sign in to continue", ""] {
+        let (shell, host, cx) = shell_with_task(cx);
+        watching_tile(&shell, &host, cx);
+        host.take();
+        let keyboard = |asked: &[String]| {
+            (asked.iter()).any(|line| line.starts_with("focus page") || line == "focus ui")
+        };
+        // The agent's hold: none of it is the user's own Take Over.
+        let mut status = at_work(vec![(30, why.into())]);
+        status[0].taken.clear();
+        shell.update(cx, |shell, cx| shell.set_agent_status(status, cx));
+        draw(&shell, cx);
+        let asked = host.take();
+        assert!(!keyboard(&asked), "{why:?}: {asked:?}");
+        page_untouched(&asked);
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.watch_tile_shown()),
+            Some(30),
+            "{why:?}: a tile still, in the ARM"
+        );
 
-    shell.update(cx, |shell, _| shell.age_watch_press());
-    draw(&shell, cx);
-    let asked = host.take();
-    assert_eq!(asked[..2], ["end tile 30", "select 30"], "{asked:?}");
-    assert!(!keyboard(&asked), "{asked:?}");
-    assert_eq!(
-        shell.read_with(cx, |shell, _| shell.watch_tile_shown()),
-        None
-    );
+        shell.update(cx, |shell, _| shell.age_watch_press());
+        draw(&shell, cx);
+        let asked = host.take();
+        assert_eq!(
+            asked[..2],
+            ["end tile 30", "select 30"],
+            "{why:?}: {asked:?}"
+        );
+        assert!(!keyboard(&asked), "{why:?}: {asked:?}");
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.watch_tile_shown()),
+            None
+        );
+    }
 }
 
 /// Taken over from the bar while watched, the user's own act, the page is the window's at once and

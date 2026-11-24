@@ -4018,6 +4018,10 @@ fn a_handoff_waits_for_the_user_to_hand_the_tab_back(cx: &mut TestAppContext) {
     assert!(browser.held.borrow().contains(&20));
     let status = agents.read_with(cx, |agents, _| agents.status());
     assert_eq!(status[0].held, [(20, "Sign in to example.com".into())]);
+    assert!(
+        status[0].taken.is_empty(),
+        "a handoff read as the user's own"
+    );
     let refused = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
     assert_eq!(
         refused.recv().unwrap(),
@@ -4046,6 +4050,7 @@ fn the_user_takes_over_and_stops_an_agent(cx: &mut TestAppContext) {
     assert_eq!(shown(&agents, cx), None);
     let status = agents.read_with(cx, |agents, _| agents.status());
     assert_eq!(status[0].held, [(20, "".into())]);
+    assert_eq!(status[0].taken, [20]);
     let refused = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
     assert!(refused.recv().unwrap().error);
     agents.update(cx, |agents, cx| agents.hand_back(20, cx));
