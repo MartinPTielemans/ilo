@@ -219,13 +219,9 @@ impl Step {
                 let title = concat!("Make ", env!("APP_NAME"), " your default browser.");
                 return (title, line.into(), button);
             }
-            // The engine that searches until one is picked is already the filled dot, so the line
-            // needn't name it.
-            Step::SearchEngine => (
-                "Pick a search engine.",
-                "You can change it later in Settings.",
-                "Continue",
-            ),
+            // The engine that searches until one is picked is already the filled dot; the title
+            // alone, with no line under it (the ninth wording batch).
+            Step::SearchEngine => ("Pick a search engine.", "", "Continue"),
             Step::Color => (
                 "Pick a color for your first Space.",
                 "The window takes it. Each Space can have its own, from its name in the sidebar.",
@@ -245,10 +241,9 @@ impl Step {
                 "Spaces, bookmarks and passwords, encrypted end to end.",
                 "Sign In",
             ),
-            // Settings › Agents' heading, and the line the lead gave, as the sheet adds no words
-            // of its own.
+            // The lead's words, as the sheet adds none of its own.
             Step::Assistant => (
-                "Your assistant.",
+                "Bring your own assistant",
                 "Tasks run on the assistant you already use.",
                 "Continue",
             ),
@@ -441,6 +436,11 @@ pub(super) struct Onboarding {
     account: Option<Signing>,
     /// The assistant step's rows follow the Agents, as a sign-in under way changes them.
     _assistants: Option<Subscription>,
+    /// The assistants' rows the preview shows, and the one marked, as it has no Agents to read.
+    shown_assistants: Option<(
+        Vec<(crate::agents::runner::Cli, crate::agents::sign_in::Shown)>,
+        Option<crate::agents::runner::Cli>,
+    )>,
     /// The daily usage count's switch as turned at the opt-ins step, None while untouched: it's
     /// set as the step is left (onboarding_next), so turned on and off again it sends nothing.
     count: Option<bool>,
@@ -551,6 +551,7 @@ impl Shell {
             account,
             _assistants: (crate::agents::global(cx))
                 .map(|agents| cx.observe(&agents, |_, _, cx| cx.notify())),
+            shown_assistants: None,
             count: None,
         });
         cx.notify();
@@ -681,7 +682,7 @@ impl Shell {
         {
             onboarding.steps.retain(|&each| each != Step::SearchEngine);
         }
-        match at.and_then(|at| onboarding.steps.get(at + 1)).copied() {
+        let shown = match at.and_then(|at| onboarding.steps.get(at + 1)).copied() {
             Some(next) => {
                 let elapsed = onboarding.secs_since(onboarding.since);
                 onboarding.leaving = Some((step, elapsed));
@@ -691,8 +692,15 @@ impl Shell {
                 onboarding.loop_since = None;
                 onboarding.settled = false;
                 log!("browser: onboarding step {}", next.name());
+                Some(next)
             }
-            None => onboarding.ending = Some(onboarding.clock.now()),
+            None => {
+                onboarding.ending = Some(onboarding.clock.now());
+                None
+            }
+        };
+        if let Some(shown) = shown {
+            self.onboarding_shown(shown, cx);
         }
         if unpainted {
             self.onboarding_unpaint();
@@ -734,7 +742,19 @@ impl Shell {
         if step == Step::Color {
             self.onboarding_unpaint();
         }
+        self.onboarding_shown(before, cx);
         cx.notify();
+    }
+
+    /// As the assistants' step shows, ilo looks for them once, off the UI thread, as Settings ›
+    /// Agents does as it opens, so each row says what it found, not that it's checking.
+    fn onboarding_shown(&self, step: Step, cx: &mut Context<Self>) {
+        if step != Step::Assistant {
+            return;
+        }
+        if let Some(agents) = crate::agents::global(cx) {
+            agents.update(cx, |agents, cx| agents.look_for_task_agents(cx));
+        }
     }
 
     /// The welcome's Skip Setup, and its Esc: the flow ends there, as it does after its last step,
@@ -786,6 +806,20 @@ impl Shell {
     /// Picks the `index`th swatch at the color step, as a click does, for the preview's captures.
     pub fn onboarding_pick_swatch(&mut self, index: usize, cx: &mut Context<Self>) {
         self.onboarding_pick(index, cx);
+    }
+
+    /// Shows the assistants' step with `rows`, `marked` the one tasks run on, for the preview's
+    /// captures: the preview has no Agents for them to come from.
+    pub fn onboarding_show_assistants(
+        &mut self,
+        rows: Vec<(crate::agents::runner::Cli, crate::agents::sign_in::Shown)>,
+        marked: Option<crate::agents::runner::Cli>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(onboarding) = self.onboarding.as_mut() {
+            onboarding.shown_assistants = Some((rows, marked));
+            cx.notify();
+        }
     }
 
     /// Turns the daily count's switch on at the opt-ins step, for the preview's captures.
@@ -1404,7 +1438,9 @@ impl Shell {
             .map_or(Os::Mac, |onboarding| onboarding.os);
         let (title, line, button) = step.message(os);
         let switches = (step == Step::OptIns).then(|| self.opt_in_rows(colors, cx));
-        let assistants = (step == Step::Assistant).then(|| self.assistant_rows(step, colors, cx));
+        // Taller than its room, the list scrolls in it, and the foot stays where every step has it.
+        let assistants =
+            (step == Step::Assistant).then(|| sheet::choice(self.assistant_rows(step, colors, cx)));
         let engines = (step == Step::SearchEngine).then(|| self.engine_rows(colors, cx));
         let favorites = (step == Step::Favorites)
             .then(|| self.favorite_tiles(colors, window, cx))
@@ -1581,7 +1617,7 @@ impl Shell {
                         content
                             .role(Role::Dialog)
                             .aria_label(title)
-                            .aria_description(line)
+                            .when(!line.is_empty(), |content| content.aria_description(line))
                     })
             };
             return sheet::sheet(
@@ -1601,7 +1637,7 @@ impl Shell {
                     content
                         .role(Role::Dialog)
                         .aria_label(title)
-                        .aria_description(line)
+                        .when(!line.is_empty(), |content| content.aria_description(line))
                 })
                 .flex()
                 .flex_col()
@@ -1712,7 +1748,7 @@ impl Shell {
     /// then. Without the app's Agents, as in a test's shell, only that room.
     fn assistant_rows(&self, step: Step, colors: Colors, cx: &mut Context<Self>) -> gpui::Div {
         use crate::agents::runner::Cli;
-        use crate::settings_rows::{Act, another_agent_row, assistant_row};
+        use crate::settings_rows::{Act, another_agent_name_row, assistant_row};
         let look = Look::on(
             colors.ground.blend(colors.ink(IMPORT_SURFACE)),
             colors.ink(1.),
@@ -1759,14 +1795,25 @@ impl Shell {
                     div(),
                     Rc::new(act),
                 )
+                .children(self.place(step, cli.id()))
             });
-            let another = another_agent_row(&look, a11y, move |_, cx| {
+            let another = another_agent_name_row(&look, a11y, move |_, cx| {
                 let open = |shell: &mut Shell, cx: &mut Context<Shell>| {
                     shell.browser.agents_settings(cx);
                 };
                 shell.update(cx, open).ok();
-            });
+            })
+            .children(self.place(step, "another"));
             group(&look, rows.into_iter().chain([another]))
+        });
+        let rows = rows.or_else(|| {
+            let (shown, marked) = self.onboarding.as_ref()?.shown_assistants.clone()?;
+            let rows = shown.iter().map(|(cli, shown)| {
+                let act = Rc::new(|_: Act, _: &mut Window, _: &mut gpui::App| {});
+                assistant_row(&look, *cli, shown, marked == Some(*cli), a11y, div(), act)
+            });
+            let another = another_agent_name_row(&look, a11y, |_, _| {});
+            Some(group(&look, rows.chain([another])))
         });
         div()
             .w_full()
