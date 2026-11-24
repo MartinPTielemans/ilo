@@ -18,6 +18,7 @@ use futures::StreamExt;
 use gpui::{App, AppContext, Context, SharedString};
 use serde_json::Value;
 
+use super::helpers::{self, Helpers};
 use super::ready::{Found, Ready};
 use super::runner::{self, Cli, Failure, Launch, Out, Process};
 use super::sign_in::Offer;
@@ -201,29 +202,41 @@ impl Trace {
             .count()
     }
 
-    /// What its summary line counts: its helpers while it works with any, as each is on the
-    /// user's plan, else its steps.
+    /// What its summary line counts: its helpers if it has any, as each is on the user's plan,
+    /// else its steps. Under way or over, so the line counts the same thing as the turn ends.
     pub fn counted(&self) -> (usize, Counted) {
-        match (self.took, self.helpers()) {
-            (None, helpers @ 1..) => (helpers, Counted::Helpers),
-            _ => (self.steps(), Counted::Steps),
+        match self.helpers() {
+            0 => (self.steps(), Counted::Steps),
+            helpers => (helpers, Counted::Helpers),
         }
+    }
+
+    /// Its summary line in one: "Working · 4 helpers", which the task's card says too.
+    pub fn line(&self) -> SharedString {
+        let (title, counted) = self.summary();
+        format!("{title} · {counted}").into()
     }
 
     /// Its summary line's title and description.
     pub fn summary(&self) -> (SharedString, SharedString) {
-        let counted = match self.counted() {
-            (1, Counted::Steps) => "1 step".to_string(),
-            (count, Counted::Steps) => format!("{count} steps"),
-            (1, Counted::Helpers) => "1 helper".to_string(),
-            (count, Counted::Helpers) => format!("{count} helpers"),
-        };
-        let title = match self.took {
-            Some(seconds) => format!("Worked for {}", duration(seconds)),
-            None => "Working".to_string(),
-        };
-        (title.into(), counted.into())
+        summary(self.took, self.counted())
     }
+}
+
+/// A stretch's summary line, its title and description: one that `took` its time, or one under
+/// way, and what it counts.
+fn summary(took: Option<u64>, counted: (usize, Counted)) -> (SharedString, SharedString) {
+    let counted = match counted {
+        (1, Counted::Steps) => "1 step".to_string(),
+        (count, Counted::Steps) => format!("{count} steps"),
+        (1, Counted::Helpers) => "1 helper".to_string(),
+        (count, Counted::Helpers) => format!("{count} helpers"),
+    };
+    let title = match took {
+        Some(seconds) => format!("Worked for {}", duration(seconds)),
+        None => "Working".to_string(),
+    };
+    (title.into(), counted.into())
 }
 
 /// What a trace's summary line counts.
@@ -362,6 +375,8 @@ pub struct Task {
     pub(super) waiting: Option<gpui::Task<()>>,
     /// The message the agent is writing at the end of the turn under way, as it comes.
     pub(super) writing: Option<Writing>,
+    /// What ilo holds of its helpers (#4102), which it has only if it started with the switch on.
+    pub(super) helpers: Helpers,
 }
 
 /// The message an agent is writing as the turn's last, which shows under its trace as it comes,
@@ -420,6 +435,13 @@ impl Task {
         &self.token
     }
 
+    /// Stops its turn under way, as Stop's press does, and leaves its state as it is.
+    pub(super) fn interrupt(&mut self) {
+        if let Some(process) = self.process.as_mut() {
+            process.interrupt();
+        }
+    }
+
     /// Where the turn under way starts among its messages: after the user's last.
     fn turn(&self) -> usize {
         self.messages
@@ -465,6 +487,9 @@ pub struct Card {
     pub question: Option<Question>,
     /// Done's tabs to open, each with its site, in the agent's order.
     pub open: Vec<(u64, SharedString)>,
+    /// Each of its pages' own step of the turn under way, while it works on more than one: what
+    /// the strip under a page says, never another page's (#4102).
+    pub page_steps: Vec<(u64, SharedString)>,
     /// Limit's Retry.
     pub retry: bool,
     /// A failure's fix, its assistant's row's own button: Sign in to …, Cancel or Get ….
@@ -592,6 +617,9 @@ pub struct Tasks {
     pub(super) sign_ins: super::sign_in::SignIns,
     /// Whether a look asked for while one ran waits for it to end, as after a sign-in.
     pub(super) look_again: bool,
+    /// Helpers for the tasks a test starts, whatever the switch says.
+    #[cfg(test)]
+    pub(super) helpers: bool,
 }
 
 impl Agents {
@@ -692,9 +720,17 @@ impl Agents {
             // or a task's Sites change, but not a press meant for what was there before a
             // refusal's line appeared.
             TaskAction::SetTier(_) | TaskAction::AnySite if self.just_stopped(agent) => {}
+            // Nor one meant for what was there before the helpers' limit's line appeared.
+            TaskAction::SetTier(_) | TaskAction::AnySite
+                if (self.task(agent)).is_some_and(|task| task.helpers.just_stopped()) => {}
             TaskAction::SetTier(tier) => self.set_tier(agent, tier, cx),
             TaskAction::AnySite => self.set_sites(agent, Sites::Any, cx),
-            TaskAction::TakeOver(tab) => self.take_over_stopped(agent, tab, cx),
+            TaskAction::TakeOver(tab) => {
+                if let Some(task) = self.task_mut(agent) {
+                    task.helpers.settle(Some(tab));
+                }
+                self.take_over_stopped(agent, tab, cx)
+            }
             // The surface's other buttons, which the hand-off's step wires.
             TaskAction::HandBack(_) | TaskAction::NotNow(_) => {}
         }
@@ -714,6 +750,7 @@ impl Agents {
             ended,
             working,
             task.writing.as_ref(),
+            &task.helpers,
         );
         // A session's conversation is in its agent's terminal: here, only its steps, one by one.
         if task.session.is_some() {
@@ -736,6 +773,8 @@ impl Agents {
                 });
             }
         }
+        // ilo's line of each time it stopped the task at its helpers' limit (#4102).
+        helpers::lines(task, &mut lines);
         // ilo's own lines of a task that can be replied to after it ended (#4105).
         self.kept_lines(task, &mut lines);
         let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
@@ -746,7 +785,8 @@ impl Agents {
             false => String::new(),
         };
         let about = match &task.state {
-            State::Working if self.waits_on_user(task) => "Waiting for you".to_string(),
+            // What the card says, whoever of the task's waits: the task itself or a helper.
+            State::Working if self.waits_on_user(task) => NEEDS_YOU.to_string(),
             State::Working => "Working".to_string(),
             State::Asking { .. } => "Waiting for you".to_string(),
             State::Done { .. } => match task.ended {
@@ -823,7 +863,7 @@ impl Agents {
 
     /// The tab a task is on while it works: its agent's last, or a session's last step's, as its
     /// client's other connections have their own.
-    fn on(&self, task: &Task) -> Option<u64> {
+    pub(super) fn on(&self, task: &Task) -> Option<u64> {
         match &task.session {
             Some(_) => task.trace.iter().rev().find_map(|step| step.did.tab),
             None => self.current.get(&(task.agent.clone(), 0)).copied(),
@@ -964,6 +1004,10 @@ impl Agents {
             },
             question,
             open,
+            page_steps: match task.state {
+                State::Working => page_steps(task),
+                _ => Vec::new(),
+            },
             retry: matches!(task.state, State::Limit { .. }) && self.tasks_on(),
             fix: match (&task.state, task.cli) {
                 (
@@ -1195,6 +1239,7 @@ impl Agents {
             sites: Sites::default(),
             stops: Vec::new(),
             told: None,
+            helpers: Helpers::of_task(self.helpers_on() && cli == Cli::Claude),
         };
         self.tasks.tasks.push(task);
         self.tokens_changed();
@@ -1241,6 +1286,16 @@ impl Agents {
     }
 
     /// Starts the task's CLI with its first message.
+    /// Whether a task that starts now gets its assistant's helper tool: the switch, which a test
+    /// turns on for its own tasks.
+    fn helpers_on(&self) -> bool {
+        #[cfg(test)]
+        if self.tasks.helpers {
+            return true;
+        }
+        helpers::ON
+    }
+
     fn launch(&mut self, agent: &str, first: &str, cx: &mut Context<Self>) {
         let Some((task, Some(cli))) = self.task(agent).map(|task| (task, task.cli)) else {
             return;
@@ -1277,8 +1332,16 @@ impl Agents {
                 token: task.token.clone(),
             },
             model,
-            instructions: tools::TASK_INSTRUCTIONS.into(),
+            instructions: match task.helpers.on {
+                true => format!(
+                    "{}\n\n{}",
+                    tools::TASK_INSTRUCTIONS,
+                    helpers::instructions()
+                ),
+                false => tools::TASK_INSTRUCTIONS.into(),
+            },
             tools: tools::names(agent),
+            helpers: task.helpers.on,
         };
         let events = self.task_events(cx);
         match Process::start_kept(&launch, &keep, agent, first, events) {
@@ -1393,6 +1456,25 @@ impl Agents {
                     notes: None,
                 });
             }
+            Out::Helper { id, told } => self.helper_told(&agent, id, told, cx),
+            Out::Started { deep } => self.helper_started(&agent, deep),
+            // The turn ilo interrupted at the helpers' limit ends, however its CLI says so. The
+            // first since the user wrote, the task goes on in a new turn that starts with what
+            // ilo tells it; the second, the turn ends as any does and the task waits for them.
+            Out::Ended(_)
+                if let Some(after) = self
+                    .task_mut(&agent)
+                    .filter(|task| task.state == State::Working)
+                    .and_then(|task| task.helpers.takes_end()) =>
+            {
+                match after {
+                    helpers::After::Told(told) => self.tell_task(&agent, told, true, cx),
+                    helpers::After::Ends => {
+                        let out = Out::Ended(None);
+                        self.task_said(runner::Event { agent, out }, cx)
+                    }
+                }
+            }
             Out::Ended(None) => {
                 let Some(task) = self.task_mut(&agent) else {
                     return;
@@ -1501,6 +1583,7 @@ impl Agents {
             .push(Message::new(Who::User, text.to_string()));
         task.state = State::Working;
         task.writing = None;
+        task.helpers.turned(task.trace.len());
         // What ilo had to tell it since its last turn comes first, as ilo's, not the user's.
         let text = match task.told.take() {
             Some(told) => format!("{told}\n\n{text}"),
@@ -2281,6 +2364,7 @@ impl Agents {
             sites: Sites::default(),
             stops: Vec::new(),
             told: None,
+            helpers: Helpers::default(),
         });
         cx.notify();
         Some(key)
@@ -2986,6 +3070,13 @@ pub const STOPPED_AT: &str = "Stopped at";
 /// with its thoughts left out; "Thinking · no steps yet" until it takes one. It changes only as a
 /// step comes, never on a clock.
 fn working(task: &Task) -> SharedString {
+    // With helpers at work, the conversation's live line, in its own words: their steps come in
+    // turn, and a card that said each would flicker between them.
+    let helpers = helpers_under_way(task);
+    if helpers > 0 {
+        let (title, counted) = summary(None, (helpers, Counted::Helpers));
+        return format!("{title} · {counted}").into();
+    }
     let taken = turn_steps(task);
     // A session's title is the agent's words or its sites, so its line leads with its client's
     // name, then what it's doing, whose room the step count would take (#3690).
@@ -3004,6 +3095,46 @@ fn working(task: &Task) -> SharedString {
         .into(),
         (None, Some(_)) => format!("{} · no steps yet", task.name).into(),
         (None, None) => "Thinking · no steps yet".into(),
+    }
+}
+
+/// How many helpers the stretch under way of a working task has, which its conversation's live
+/// line counts: those the steps since the last message that ends a stretch, the user's or a
+/// question of the task's, are labelled as. A card is made again whenever any task changes, so
+/// it counts them from those steps alone, as it reads its own step, and never folds the
+/// conversation (`fold`), whose live line a test holds it to.
+fn helpers_under_way(task: &Task) -> usize {
+    if !task.helpers.on || task.state != State::Working {
+        return 0;
+    }
+    let ends = |message: &Message| matches!(message.who, Who::User | Who::Asked);
+    let from = (task.messages.iter().rposition(ends)).map_or(0, |at| at + 1);
+    let mut helpers: Vec<usize> = Vec::new();
+    for (key, step) in (task.trace.iter().enumerate().rev()).take_while(|(_, s)| s.after >= from) {
+        if let Some(helper) = task.helpers.of(key, step.did.tab)
+            && !helpers.contains(&helper)
+        {
+            helpers.push(helper);
+        }
+    }
+    helpers.len()
+}
+
+/// Each page's own last step of the turn under way, newest first, once the turn's steps are on
+/// more than one page or the task has helpers: else the task's step is its one page's.
+fn page_steps(task: &Task) -> Vec<(u64, SharedString)> {
+    let mut pages: Vec<(u64, SharedString)> = Vec::new();
+    for step in turn_steps(task) {
+        let Some(tab) = step.did.tab else {
+            continue;
+        };
+        if pages.iter().all(|(each, _)| *each != tab) {
+            pages.push((tab, tools::step_title(&step.did, tense(step)).into()));
+        }
+    }
+    match pages.len() {
+        0 | 1 if !task.helpers.on => Vec::new(),
+        _ => pages,
     }
 }
 
@@ -3153,6 +3284,12 @@ pub fn duration(seconds: u64) -> String {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many conversations this thread folded, for the test that a card costs none.
+    pub(super) static FOLDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A conversation's lines from its `messages` and its `trace`, oldest first. Each turn, from a
 /// message of the user's to the next, shows its questions and, once it has `ended`, its last
 /// message; the steps between those are a trace each, with what the agent said along the way in
@@ -3164,7 +3301,10 @@ pub fn fold(
     ended: bool,
     working: bool,
     writing: Option<&Writing>,
+    helpers: &Helpers,
 ) -> Vec<Line> {
+    #[cfg(test)]
+    FOLDS.with(|folds| folds.set(folds.get() + 1));
     let writing = writing.filter(|_| working && !ended);
     // Once whole, it's the last message, which shows where it was written rather than in the trace.
     let held = (writing.is_some_and(|writing| writing.said))
@@ -3194,7 +3334,7 @@ pub fn fold(
     let mut steps = trace.iter().enumerate().peekable();
     for (index, message) in messages.iter().enumerate() {
         while let Some((key, step)) = steps.next_if(|(_, step)| step.after <= index) {
-            stretch.step(key, step);
+            stretch.step(key, step, helpers.of(key, step.did.tab));
         }
         if Some(index) == held {
             continue;
@@ -3211,7 +3351,7 @@ pub fn fold(
         });
     }
     for (key, step) in steps {
-        stretch.step(key, step);
+        stretch.step(key, step, helpers.of(key, step.did.tab));
     }
     stretch.flush(&mut lines, working, None);
     lines.extend(writing.map(|writing| Line::Said(writing.text.clone())));
@@ -3244,10 +3384,12 @@ struct Stretch<'a> {
 enum Gathered<'a> {
     Step(usize, &'a Traced),
     Said(SharedString),
+    /// A step labelled as a helper's (#4102), by which of the task's helpers.
+    Helper(usize, usize, &'a Traced),
 }
 
 impl<'a> Stretch<'a> {
-    fn step(&mut self, key: usize, step: &'a Traced) {
+    fn step(&mut self, key: usize, step: &'a Traced, helper: Option<usize>) {
         self.key.get_or_insert(key);
         self.started = Some(
             self.started
@@ -3255,7 +3397,10 @@ impl<'a> Stretch<'a> {
         );
         let end = step.ended.unwrap_or(step.started);
         self.ended = Some(self.ended.map_or(end, |ended| ended.max(end)));
-        self.gathered.push(Gathered::Step(key, step));
+        self.gathered.push(match helper {
+            Some(helper) => Gathered::Helper(helper, key, step),
+            None => Gathered::Step(key, step),
+        });
     }
 
     /// The stretch as its lines: a trace, or with no steps, what the agent said, as itself. It's
@@ -3267,7 +3412,7 @@ impl<'a> Stretch<'a> {
         let Some(key) = key else {
             lines.extend(gathered.into_iter().filter_map(|item| match item {
                 Gathered::Said(text) => Some(Line::Said(text)),
-                Gathered::Step(..) => None,
+                Gathered::Step(..) | Gathered::Helper(..) => None,
             }));
             return;
         };
@@ -3275,11 +3420,15 @@ impl<'a> Stretch<'a> {
             .map(|item| match item {
                 Together::Steps(steps) => TraceItem::Step(trace_step(&steps)),
                 Together::Said(text) => TraceItem::Said(text),
+                // A helper's one line is the step it's on, in the place of its first.
+                Together::Helper(_, key, on) => TraceItem::Helper(helper_step(key, on)),
             })
             .collect();
+        // A stretch that's over has nothing under way, a helper's line neither: what its
+        // assistant does with helpers once a turn ends or is interrupted isn't ilo's to show.
         if !running {
             for item in &mut items {
-                if let TraceItem::Step(step) = item {
+                if let TraceItem::Step(step) | TraceItem::Helper(step) = item {
                     step.running = false;
                     if let Opens::Steps(steps) = &mut step.opens {
                         steps.iter_mut().for_each(|step| step.running = false);
@@ -3309,6 +3458,8 @@ impl<'a> Stretch<'a> {
 enum Together<'a> {
     Steps(Vec<(usize, &'a Traced)>),
     Said(SharedString),
+    /// A helper's steps as one line (#4102): which helper, its first step's place, and its last.
+    Helper(usize, usize, (usize, &'a Traced)),
 }
 
 /// A stretch's lines, in which a turn's same step on several tabs is one (#1476), as an agent
@@ -3326,6 +3477,17 @@ fn together(gathered: Vec<Gathered<'_>>) -> Vec<Together<'_>> {
             Gathered::Said(text) => {
                 lines.push(Together::Said(text));
                 from = lines.len();
+                continue;
+            }
+            Gathered::Helper(helper, key, step) => {
+                let line = lines.iter_mut().find_map(|line| match line {
+                    Together::Helper(each, _, on) if *each == helper => Some(on),
+                    _ => None,
+                });
+                match line {
+                    Some(on) => *on = (key, step),
+                    None => lines.push(Together::Helper(helper, key, (key, step))),
+                }
                 continue;
             }
         };
@@ -3357,6 +3519,24 @@ fn together(gathered: Vec<Gathered<'_>>) -> Vec<Together<'_>> {
         }
     }
     lines
+}
+
+/// A helper's line: its step `on`, at `key`. A page it handed the user is handed over from the
+/// moment it asks, with nothing under way on it but the user's own step, though its call waits.
+fn helper_step(key: usize, on: (usize, &Traced)) -> TraceStep {
+    let line = TraceStep {
+        key,
+        ..trace_step(&[on])
+    };
+    let step = on.1;
+    match step.did.tool == "hand_off" && step.ended.is_none() {
+        true => TraceStep {
+            title: tools::step_title(&step.did, tools::Tense::Done).into(),
+            running: false,
+            ..line
+        },
+        false => line,
+    }
 }
 
 /// A line of a trace: a step, or a turn's same step on several tabs, which opens to each tab's.

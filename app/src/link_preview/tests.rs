@@ -589,10 +589,12 @@ fn where_the_core_never_says_a_close_before_the_hole_opens_holds(cx: &mut TestAp
     frame(&mut shown);
     assert_eq!(shown.drawn(), [NO_HOLE, PLACED, NO_HOLE]);
     // Esc before the next frame, which would open the hole.
-    shown
-        .cx
-        .cx
-        .update(|cx| update(cx, |preview, _, cx| preview.close("escape", cx)).expect("no window"));
+    shown.cx.cx.update(|cx| {
+        update(cx, |preview, _, cx| {
+            preview.close(dismissal::Close::new(Why::Escape, By::Keyboard), cx)
+        })
+        .expect("no window")
+    });
     advance(&mut shown, CLOSE * 0.7);
     assert_eq!(pose_of(&mut shown).scale, 1.);
     frame(&mut shown);
@@ -960,4 +962,22 @@ fn it_follows_the_window(cx: &mut TestAppContext) {
         .cx
         .update(|cx| page_moved(WINDOW, (bounds(240., 10., 750., 580.), 6.), cx));
     assert_eq!(shown.calls(), ["place 7 299 109 632 422 r16"]);
+}
+
+/// Each way Peek closes logs the words check.sh reads for it, from the close's reason and who
+/// closed it.
+#[test]
+fn each_close_logs_its_reason_in_the_checks_words() {
+    let close = dismissal::Close::new;
+    let closes = [
+        (close(Why::Escape, By::Keyboard), "escape"),
+        (close(Why::CloseCommand, By::Keyboard), "cmd-w"),
+        (close(Why::CloseCommand, By::Pointer), "button"),
+        (close(Why::CloseCommand, By::Code), "redo"),
+        (close(Why::PressOutside, By::Pointer), "click outside"),
+        (close(Why::WindowLeft, By::Pointer), "dismissed"),
+    ];
+    for (close, said) in closes {
+        assert_eq!(words(close), said, "{close:?}");
+    }
 }

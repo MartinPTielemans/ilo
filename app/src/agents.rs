@@ -21,6 +21,7 @@ mod codex;
 pub mod command;
 pub mod fence;
 mod held;
+mod helpers;
 pub mod kept;
 pub mod notes;
 pub mod page;
@@ -5224,6 +5225,15 @@ impl Agents {
     ) -> Result<u64, Refused> {
         let space = self.space(agent, cx);
         let tabs = self.tabs_seen(space, cx);
+        // A task with helpers has several callers on its one connection, so the tab used last
+        // may be another's: a call names its tab unless the task has only one (#4102).
+        if (self.task(agent)).is_some_and(|task| task.helpers.on) {
+            return match &tabs[..] {
+                [only] => Ok(only.id),
+                [] => Err(Refused::of(tools::Kind::NotFound, NO_TAB)),
+                _ => Err(Refused::new(helpers::NAME_YOUR_TAB)),
+            };
+        }
         let last = self.current.get(&(agent.into(), connection)).copied();
         match (
             last.filter(|last| tabs.iter().any(|tab| tab.id == *last)),

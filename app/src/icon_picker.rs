@@ -19,6 +19,7 @@ use gpui::{
 };
 
 use crate::{
+    dismissal::{By, Close, Why},
     elevation::Level,
     palette::{INK, Palette, STATE_HOVERED, STATE_PRESSED},
     shell::{KEY_CONTEXT, cubic_bezier},
@@ -321,17 +322,19 @@ pub fn entity(cx: &App) -> Option<Entity<IconPicker>> {
 /// it, where `dismissed` hears of a close the host has made.
 pub fn leave(cx: &mut App) {
     if let Some(window) = cx.try_global::<IconPickerWindow>().map(|picker| picker.0) {
-        window.update(cx, |picker, _, cx| picker.close(cx)).ok();
+        window
+            .update(cx, |picker, _, cx| {
+                picker.close(Close::new(Why::FocusLeft, By::Code), cx)
+            })
+            .ok();
     }
 }
 
 pub fn dismissed(cx: &mut App) {
     if let Some(window) = cx.try_global::<IconPickerWindow>().map(|picker| picker.0) {
+        let close = Close::left(cx.active_window().is_none());
         window
-            .update(cx, |picker, _, cx| {
-                picker.picking = None;
-                cx.notify();
-            })
+            .update(cx, |picker, _, cx| picker.close(close, cx))
             .ok();
     }
 }
@@ -618,16 +621,19 @@ impl IconPicker {
     /// Esc closes the picker, unless it was an input method's, composing in the search
     /// (dismissal's rule).
     fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
-        if crate::dismissal::Close::escape_from([&self.search.clone()], cx).is_some() {
-            self.close(cx);
+        if let Some(close) = Close::escape_from([&self.search.clone()], cx) {
+            self.close(close, cx);
         }
     }
 
-    fn close(&mut self, cx: &mut Context<Self>) {
+    /// Closes the picker for `close`, hiding it unless the host already has, as the user left it.
+    fn close(&mut self, close: Close, cx: &mut Context<Self>) {
         if self.picking.take().is_some() {
-            // check.sh reads this line.
-            log!("browser: icon picker dismissed");
-            self.host.hide();
+            if !matches!(close.why, Why::PressOutside | Why::WindowLeft) {
+                // check.sh reads this line.
+                log!("browser: icon picker dismissed");
+                self.host.hide();
+            }
             cx.notify();
         }
     }

@@ -35,6 +35,7 @@ fn card() -> Card {
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
+        page_steps: Vec::new(),
         retry: false,
         fix: None,
     }
@@ -925,6 +926,16 @@ fn a_held_pages_picture_says_why() {
     );
 }
 
+/// Under a page's picture its site leads its step by weight, as the two are one size: the step is
+/// lighter than the site, and a hold, which asks for the user, is as heavy as the site.
+#[test]
+fn a_pages_step_is_lighter_than_its_site() {
+    use super::{Caption, caption_weight};
+    let site = caption_weight(Caption::Site);
+    assert!(caption_weight(Caption::Step) < site);
+    assert_eq!(caption_weight(Caption::Hold), site);
+}
+
 /// Task-1's conversation with ilo's line that it stopped Claude at Place order, under Work on
 /// pages, drawn, and its view.
 fn stopped_at_order(
@@ -1076,6 +1087,11 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
         IloKind::Gone,
         IloKind::NotKept,
         IloKind::KeepsNothing,
+        IloKind::Helpers {
+            tab: 1,
+            deep: false,
+        },
+        IloKind::Helpers { tab: 1, deep: true },
     ];
     for kind in &every {
         // Every kind is in the list above: a new one fails to compile here until it's added.
@@ -1089,7 +1105,8 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             | IloKind::KeptHere
             | IloKind::Gone
             | IloKind::NotKept
-            | IloKind::KeepsNothing => {}
+            | IloKind::KeepsNothing
+            | IloKind::Helpers { .. } => {}
         }
         let (own, _) = head(kind, "Claude");
         let verb = VERBS.iter().any(|verb| own.split(' ').next() == Some(verb));
@@ -1463,8 +1480,28 @@ fn its_trace(talk: &mut Conversation) -> &mut Trace {
     }
 }
 
+/// A stretch's summary line draws the one string its task's card writes, its dot between how long
+/// it worked and what it counts: under way and over, steps and helpers, one and several. A step's
+/// line has no dot before its note.
+#[test]
+fn a_stretchs_summary_line_draws_the_cards_string() {
+    use super::{TraceLine, summary_line};
+    for helpers in [0, 1, 4] {
+        let mut talk = with_helpers(helpers);
+        let trace = its_trace(&mut talk);
+        assert_eq!(summary_line(trace).text(), trace.line().as_ref());
+        (trace.running, trace.took) = (false, Some(41));
+        let drawn = summary_line(trace).text();
+        assert_eq!(drawn, trace.line().as_ref());
+        assert!(drawn.contains(" \u{b7} "), "{drawn}");
+    }
+    let step = TraceLine::new(Fold::Step(1), "Read".into(), "shop.example".into());
+    assert_eq!(step.text(), "Read shop.example");
+}
+
 /// A task at work with helpers says how many on its Working line, one in its own form, in place
-/// of its steps; without one, and once its turn is over, the line counts its steps as it did.
+/// of its steps, and still once its turn is over, as its helpers' lines stay; without one, the
+/// line counts its steps as it did.
 #[test]
 fn a_working_line_counts_the_tasks_helpers() {
     let summary = |talk: &mut Conversation| {
@@ -1484,7 +1521,75 @@ fn a_working_line_counts_the_tasks_helpers() {
 
     let over = its_trace(&mut talk);
     (over.running, over.took) = (false, Some(41));
-    assert_eq!(summary(&mut talk), "Worked for 41 s · 1 step");
+    assert_eq!(summary(&mut talk), "Worked for 41 s · 4 helpers");
+}
+
+/// On Pages, a task on one page rings the page it's on, with the step under way. One that works
+/// on several rings every page that has a step of its own, each saying its own and never
+/// another's, but not the page the user holds, nor one with no step yet (#4102).
+#[test]
+fn every_page_a_task_works_on_is_ringed_with_its_own_step() {
+    use super::picture_work;
+    use gpui::SharedString;
+    let running: Option<SharedString> = Some("Clicking “Tickets”".into());
+    assert_eq!(
+        picture_work(1, Some(1), running.clone(), &[], false),
+        (true, running.clone())
+    );
+    assert!(!picture_work(2, Some(1), running.clone(), &[], false).0);
+
+    let pages: Vec<(u64, SharedString)> = vec![
+        (1, "Reading tickets.example".into()),
+        (2, "Reading stalls.example".into()),
+        (3, "Handing you boxoffice.example".into()),
+    ];
+    for (tab, step) in &pages[..2] {
+        let work = picture_work(*tab, Some(1), running.clone(), &pages, false);
+        assert_eq!(work, (true, Some(step.clone())), "page {tab}");
+    }
+    assert!(
+        !picture_work(3, Some(1), running.clone(), &pages, true).0,
+        "the held page"
+    );
+    assert_eq!(
+        picture_work(4, Some(1), running, &pages, false),
+        (false, None)
+    );
+}
+
+/// Pages' grid holds as many pictures across as fit at their full size, up to the most a row has.
+/// Where only one fits, as beside a page, three pages or more go two across, each half the room,
+/// so no one scrolls for the third; one page or two stay whole.
+#[test]
+fn three_pages_or_more_are_never_fewer_than_two_across() {
+    use super::grid_shape;
+    use crate::tokens::shell::conversation::{PICTURE_GAP, PICTURE_WIDTH, PICTURES_COLUMNS};
+
+    // Room for one picture and most of a second.
+    let one = PICTURE_WIDTH * 1.75;
+    for pages in [1, 2] {
+        assert_eq!(grid_shape(one, pages), (1, PICTURE_WIDTH), "{pages} pages");
+    }
+    for pages in [3, 4, 9] {
+        let (across, wide) = grid_shape(one, pages);
+        assert_eq!(across, 2, "{pages} pages");
+        assert!(wide < PICTURE_WIDTH, "{wide}");
+        let (row, spare) = (2. * wide + PICTURE_GAP, one - (2. * wide + PICTURE_GAP));
+        assert!(
+            row <= one && spare < 2.,
+            "the two don't fill the room: {row} of {one}"
+        );
+    }
+    // With room for more, each is whole however many there are.
+    let two = 2. * PICTURE_WIDTH + PICTURE_GAP;
+    assert_eq!(grid_shape(two, 4), (2, PICTURE_WIDTH));
+    let wide = (PICTURES_COLUMNS + 1.) * (PICTURE_WIDTH + PICTURE_GAP);
+    for pages in [1, 4] {
+        assert_eq!(
+            grid_shape(wide, pages),
+            (PICTURES_COLUMNS as usize, PICTURE_WIDTH)
+        );
+    }
 }
 
 /// Opened, as it is while it works, the Working line lists a line for each helper with the task's

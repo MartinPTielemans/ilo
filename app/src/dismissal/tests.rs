@@ -313,10 +313,12 @@ fn where_the_keyboard_goes_for_each_reason_a_surface_closes(cx: &mut TestAppCont
     let reasons = [
         (Why::Escape, Returned::Opener),
         (Why::Toggled, Returned::Opener),
+        (Why::CloseCommand, Returned::Opener),
         (Why::Chosen, Returned::Opener),
         (Why::PressOutside, Returned::Fallback),
         (Why::FocusLeft, Returned::Fallback),
         (Why::WindowLeft, Returned::Fallback),
+        (Why::PointerLeft, Returned::Fallback),
     ];
     let (host, cx) = opened(cx);
     for (why, back) in reasons {
