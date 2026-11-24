@@ -6178,6 +6178,7 @@ mod tasks {
     fn said(agents: &Entity<Agents>, agent: &str, out: Out, cx: &mut TestAppContext) {
         let event = runner::Event {
             agent: agent.into(),
+            run: agents.read_with(cx, |agents, _| agents.run_of(agent)),
             out,
         };
         agents.update(cx, |agents, cx| agents.task_said(event, cx));

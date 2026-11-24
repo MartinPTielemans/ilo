@@ -646,7 +646,13 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             done(0, before),
             Line::Said(FOUR_SHOPS.into()),
             Line::Trace(helper_trace(HELPER_PAGES.len(), false)),
-            line(100, IloKind::Helpers { tab, deep: false }),
+            line(
+                100,
+                IloKind::Helpers {
+                    tab,
+                    limit: HelpersLimit::Count,
+                },
+            ),
         ],
         // The turn ended with its helpers: the stretch is over, and no helper's line is under way.
         "helpers-ended" => {

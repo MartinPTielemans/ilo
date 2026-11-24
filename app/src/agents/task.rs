@@ -442,6 +442,11 @@ impl Task {
         }
     }
 
+    /// Ends its run: the process goes, and a message to the task starts another.
+    pub(super) fn end_run(&mut self) {
+        self.process = None;
+    }
+
     /// Where the turn under way starts among its messages: after the user's last.
     fn turn(&self) -> usize {
         self.messages
@@ -709,6 +714,14 @@ impl Agents {
 
     pub(super) fn task_mut(&mut self, agent: &str) -> Option<&mut Task> {
         self.tasks.tasks.iter_mut().find(|task| task.agent == agent)
+    }
+
+    /// `agent`'s run goes before the app hears it end, as a reply can find it: the next reply
+    /// starts a run of its own.
+    #[cfg(test)]
+    pub(super) fn run_of(&self, agent: &str) -> u32 {
+        let process = self.task(agent).and_then(|task| task.process.as_ref());
+        process.map_or(0, runner::Process::run)
     }
 
     /// `agent`'s run goes before the app hears it end, as a reply can find it: the next reply
@@ -1400,7 +1413,7 @@ impl Agents {
         helpers::ON
     }
 
-    fn launch(&mut self, agent: &str, first: &str, cx: &mut Context<Self>) {
+    pub(super) fn launch(&mut self, agent: &str, first: &str, cx: &mut Context<Self>) {
         let Some((task, Some(cli))) = self.task(agent).map(|task| (task, task.cli)) else {
             return;
         };
@@ -1452,6 +1465,10 @@ impl Agents {
             Ok(process) => {
                 if let Some(task) = self.task_mut(agent) {
                     task.process = Some(process);
+                    // Until its first line says which kinds of helper it has (#4102).
+                    let new = matches!(keep, super::kept::Keep::New(_));
+                    let had = (task.trace.len(), task.messages.len());
+                    task.helpers.run_started(first, new, had);
                 }
                 self.kept_started(agent, cli, &keep);
             }
@@ -1495,7 +1512,14 @@ impl Agents {
 
     /// What a task's CLI said.
     pub fn task_said(&mut self, event: runner::Event, cx: &mut Context<Self>) {
-        let runner::Event { agent, out } = event;
+        let runner::Event { agent, run, out } = event;
+        // A line of a run ilo ended as it started the task again isn't the task's (helpers.rs).
+        let under_way = (self.task(&agent))
+            .and_then(|task| task.process.as_ref())
+            .map(runner::Process::run);
+        if under_way.is_some_and(|under_way| under_way != run) {
+            return;
+        }
         // Whatever it said, it answered.
         if let Some(task) = self.task_mut(&agent) {
             task.waiting = None;
@@ -1561,7 +1585,9 @@ impl Agents {
                 });
             }
             Out::Helper { id, told } => self.helper_told(&agent, id, told, cx),
-            Out::Started { deep } => self.helper_started(&agent, deep),
+            Out::Started { deep } => self.helper_started(&agent, deep, cx),
+            Out::NotAllowed(limit) => self.helper_not_allowed(&agent, limit, cx),
+            Out::Kinds { ours } => self.helper_kinds(&agent, ours, cx),
             // The turn ilo interrupted at the helpers' limit ends, however its CLI says so. The
             // first since the user wrote, the task goes on in a new turn that starts with what
             // ilo tells it; the second, the turn ends as any does and the task waits for them.
@@ -1575,7 +1601,7 @@ impl Agents {
                     helpers::After::Told(told) => self.tell_task(&agent, told, true, cx),
                     helpers::After::Ends => {
                         let out = Out::Ended(None);
-                        self.task_said(runner::Event { agent, out }, cx)
+                        self.task_said(runner::Event { agent, run, out }, cx)
                     }
                 }
             }

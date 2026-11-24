@@ -130,6 +130,7 @@ impl Run {
     pub(super) fn said(&self, agent: &str, out: Out, cx: &mut TestAppContext) {
         let event = runner::Event {
             agent: agent.into(),
+            run: (self.agents).read_with(cx, |agents, _| agents.run_of(agent)),
             out,
         };
         (self.agents).update(cx, |agents, cx| agents.task_said(event, cx));

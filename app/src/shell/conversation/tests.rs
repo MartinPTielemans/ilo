@@ -10,7 +10,7 @@ use gpui::{
 
 use super::Fold;
 
-use crate::agents::task::ilo::{IloButton, IloKind, IloLine};
+use crate::agents::task::ilo::{HelpersLimit, IloButton, IloKind, IloLine};
 use crate::agents::task::{
     Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep, Word,
 };
@@ -1098,9 +1098,16 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
         IloKind::NoSpace,
         IloKind::Helpers {
             tab: 1,
-            deep: false,
+            limit: HelpersLimit::Count,
         },
-        IloKind::Helpers { tab: 1, deep: true },
+        IloKind::Helpers {
+            tab: 1,
+            limit: HelpersLimit::Depth,
+        },
+        IloKind::Helpers {
+            tab: 1,
+            limit: HelpersLimit::Kind,
+        },
     ];
     for kind in &every {
         // Every kind is in the list above: a new one fails to compile here until it's added.
