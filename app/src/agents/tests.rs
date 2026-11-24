@@ -3140,7 +3140,10 @@ fn a_handoff_timing_out_hands_nothing_back(cx: &mut TestAppContext) {
     let handed = call(&agents, "claude-code", "hand_off", reason, cx);
     cx.executor().advance_clock(HANDOFF_WAIT * 3);
     assert!(handed.recv().unwrap().error);
-    assert!(browser.handed_back.borrow().is_empty(), "the timeout handed the tab back");
+    assert!(
+        browser.handed_back.borrow().is_empty(),
+        "the timeout handed the tab back"
+    );
 
     agents.update(cx, |agents, cx| agents.hand_back(20, cx));
     assert_eq!(*browser.handed_back.borrow(), [20]);
