@@ -3037,11 +3037,12 @@ function again() {
     *"Again: Ag4in-held-x"*) ;;
     *) fail "withheld value shown again: step 6 read: $answer" ;;
   esac
-  # Step 7's frame is from another site, so it has a renderer and a session of its own. Asked,
-  # it says on a channel of its own until when it'll be busy, then is; the page's title says the
-  # word came while it was (a frame's postMessage comes only once it's free). The read starts then,
-  # and the page removes the frame 3 s into its busy time: the read's text saying the frame left
-  # shows the read's look was out across the frame's session ending.
+  # Step 7's frame is from another site, so it has a renderer and a session of its own. Asked 9 s
+  # after it loads, past the 5 s a navigate may hold its answer for, so the read is the one call
+  # out, it says on a channel of its own until when it'll be busy, then is; the page's title says
+  # the word came while it was (a frame's postMessage comes only once it's free). The read starts
+  # then, and the page removes the frame 3 s into its busy time: the read's text saying the frame
+  # left shows the read's look was out across the frame's session ending.
   printf '%s' "<!doctype html><meta charset=utf-8><title>Frame</title><p>In the frame</p>
 <script>addEventListener('message', (event) => {
   const until = Date.now() + 5000;
@@ -3062,7 +3063,7 @@ frame.addEventListener('load', () => setTimeout(() => {
     }, 3000);
   };
   frame.contentWindow.postMessage('ask', '*', [channel.port2]);
-}, 4000));</script>" > "$out/site/frame-gone.html"
+}, 9000));</script>" > "$out/site/frame-gone.html"
   go_shown frame-gone 'frame \(busy\|free\)'
   grep -q "^browser: title $shown_tab frame busy\$" "$log" ||
     fail "withheld value shown again: step 7's frame wasn't busy when its word came"
@@ -3074,6 +3075,40 @@ frame.addEventListener('load', () => setTimeout(() => {
     *"Frame page"*)
       fail "withheld value shown again: step 7's read didn't wait for the busy frame: $answer" ;;
     *) fail "withheld value shown again: step 7 read: $answer" ;;
+  esac
+  # Step 8: the page leaves while a read's look waits on its busy frame, asked as step 7's is, 1 s
+  # into the frame's busy time. A look whose document left withholds nothing, so neither the read
+  # out then nor the next one is refused on a page with no password field.
+  printf '%s' "<!doctype html><meta charset=utf-8><title>loading</title><p>Leaving page</p>
+<iframe src=\"http://localhost:$port/frame-busy.html\"></iframe>
+<script>const frame = document.querySelector('iframe');
+frame.addEventListener('load', () => setTimeout(() => {
+  const channel = new MessageChannel();
+  channel.port1.onmessage = (event) => {
+    document.title = Date.now() < event.data - 4000 ? 'look busy' : 'look free';
+    setTimeout(() => location = '/not-shown.html', 1000);
+  };
+  frame.contentWindow.postMessage('ask', '*', [channel.port2]);
+}, 9000));</script>" > "$out/site/look-leaves.html"
+  # Step 3 came to not-shown.html in this tab already.
+  left="^browser: title $shown_tab not shown\$"
+  been=$(grep -c "$left" "$log" || true)
+  go_shown look-leaves 'look \(busy\|free\)'
+  grep -q "^browser: title $shown_tab look busy\$" "$log" ||
+    fail "withheld value shown again: step 8's frame wasn't busy when its word came"
+  [ "$(grep -c "$left" "$log" || true)" -gt "$been" ] &&
+    fail "withheld value shown again: step 8's page left before the read"
+  first=$(call read_page "{\"tab\":$shown_tab}")
+  await_more "$left" "$been" || fail "withheld value shown again: step 8's page didn't leave"
+  second=$(call read_page "{\"tab\":$shown_tab}")
+  printf 'first: %s\nsecond: %s\n' "$first" "$second" > "$out/mcp-look-leaves.txt"
+  [ "$first" = "$withheld_refusal" ] &&
+    fail "withheld value shown again: step 8's read out when the page left was refused"
+  case "$second" in
+    "$withheld_refusal")
+      fail "withheld value shown again: step 8's page was refused after it left" ;;
+    *Echo:*) ;;
+    *) fail "withheld value shown again: step 8 read: $second" ;;
   esac
   call close_tab "{\"tab\":$shown_tab}" > /dev/null
 
@@ -4862,6 +4897,57 @@ say(); middle.onchange = say;
 else
   own_size_said="skip: an agent's tab's own page size (#3788): not run on an engine without it"
 fi
+# No page is prerendered in an agent's tab (agent_page.cc says why). This build prerenders nothing
+# until prediction is turned on (ungoogled-chromium's default prefs), which an extension or a policy
+# can do, so the run turns it on in a new profile: the user's tab of the page, the control, goes on
+# to a prerendered page, and the agent's doesn't.
+prerender_said=
+if engine_has ../core/agent_page.cc; then
+  printf '%s' "<!doctype html><meta charset=utf-8><title>pre start</title><p>Start</p>
+<script type=speculationrules>{\"prerender\":[{\"urls\":[\"/pre-next.html\"]}]}</script>
+<script>setTimeout(() => location = '/pre-next.html', 3000);</script>" > "$out/site/pre-start.html"
+  # A prerendered page runs before it's shown, so it says how it came once it is.
+  printf '%s' "<!doctype html><meta charset=utf-8><title>pre next</title><p>Next</p>
+<script>const say = () => document.title =
+  performance.getEntriesByType('navigation')[0].activationStart > 0
+    ? 'was prerendered' : 'loaded fresh';
+document.prerendering ? document.addEventListener('prerenderingchange', say) : say();</script>" \
+    > "$out/site/pre-next.html"
+  rm -rf "$profile_dir"
+  mkdir -p "$profile_dir/Default"
+  printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"
+  printf '%s' '{"net":{"network_prediction_options":0}}' > "$profile_dir/Default/Preferences"
+  came='\(was prerendered\|loaded fresh\)'
+  log="$out/mcp-prerender.log"
+  step=0
+  BROWSER_DRIVE=1 BROWSER_URL="http://localhost:$port/pre-start.html" "$browser" < "$out/drive" \
+    > "$log" 2>&1 &
+  pid=$!
+  exec 3> "$out/drive"
+  await_log "^browser: title [0-9]* $came\$" "the user's tab didn't go on from pre-start.html"
+  control=$(grep "^browser: title [0-9]* $came\$" "$log" | tail -1 | cut -d' ' -f4-)
+  await_log "$on" "the prerender launch didn't start the server"
+  socket=$(grep '^browser: agents server on' "$log" | tail -1 | sed 's/^browser: agents server on //')
+  bridge_on
+  mcp '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"check","version":"1"}}}' \
+    > /dev/null
+  mcp '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+  opened=$(call open_tab "{\"url\":\"localhost:$port/pre-start.html\"}")
+  pre_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$pre_tab" ] || fail "open_tab of pre-start.html answered: $opened"
+  await_log "^browser: title $pre_tab $came\$" "the agent's tab didn't go on from pre-start.html"
+  agent_came=$(grep "^browser: title $pre_tab $came\$" "$log" | tail -1 | cut -d' ' -f4-)
+  exec 4>&- 5<&-
+  quit
+  printf "The user's tab: %s\nThe agent's tab: %s\n" "$control" "$agent_came" \
+    > "$out/mcp-prerender.txt"
+  [ "$control" = "was prerendered" ] ||
+    fail "with prediction on, the user's tab of pre-start.html wasn't prerendered, so the agent's shows nothing: $control"
+  [ "$agent_came" = "loaded fresh" ] || fail "a page was prerendered in an agent's tab"
+  prerender_said="ok: with prediction on, a page prerendered in the user's tab isn't in an agent's"
+else
+  prerender_said="skip: no prerender in an agent's tab: not run on an engine without it"
+fi
 trap cleanup EXIT
 rm -f "$agents_file" "$out/mcp-in" "$out/mcp-out"
 # The closing line, its clauses joined by a space: one a line, so two changes that each add a step's
@@ -4972,6 +5058,7 @@ else
     "so the page ignored the click.")"
 fi
 echo "$own_size_said"
+echo "$prerender_said"
 if [ -n "${toast_skip:-}" ]; then
   echo "skip: the needs' toast showing, as Windows shows toasts only for an installed copy, which the run's isn't: it counted on the taskbar button and asked for the toast."
 fi
