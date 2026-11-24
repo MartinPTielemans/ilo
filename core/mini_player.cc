@@ -129,10 +129,13 @@ class MiniPlayerWatch : public views::WidgetObserver {
       return;
     }
 #if BUILDFLAG(IS_MAC)
-    // Over another app's window in full screen, as Arc's is: Chrome puts the window on every
-    // Space, and the Mac keeps it off the Space another app has made full screen unless it may
-    // join one.
+    // Over another app's window in full screen, as Arc's is. The Mac keeps a window to the Space
+    // it was born on, and off one another app has made full screen, unless it may join one
+    // (SetCanAppearInExistingFullscreenSpaces) and is on every Space at all
+    // (SetVisibleOnAllWorkspaces): the PiP window's InitParams set visible_on_all_workspaces, but
+    // only the Aura native widget reads it, so the Mac's window has neither until here.
     widget->SetCanAppearInExistingFullscreenSpaces(true);
+    widget->SetVisibleOnAllWorkspaces(true);
 #endif
     // check.sh reads these lines.
     LogHandover("mini player shows", widget->GetWindowBoundsInScreen().size().ToString());
