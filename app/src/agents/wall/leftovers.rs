@@ -28,7 +28,7 @@ pub const CONTROL: &CStr = c"ilo.mark.control";
 pub const ROOT: &str = ".tmp";
 
 const PREFIX: &str = "ilo.mark.";
-const OUTSIDE: &str = "the program isn't inside its wall";
+pub(super) const OUTSIDE: &str = "the program isn't inside its wall";
 
 /// A wall's mark: `ilo.mark.` and 32 hex characters from the system's random numbers, new for each
 /// task. It never equals the control, which ends in no hex.

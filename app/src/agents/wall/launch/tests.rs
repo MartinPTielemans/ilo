@@ -89,6 +89,7 @@ mod walled {
 
     use super::*;
     use crate::agents::runner::{Cli, Launch, Out, Process, Server};
+    use crate::agents::wall::leftovers;
 
     /// A folder of the test's own, by its real path, as rules name paths. Gone with the test.
     struct Folder(PathBuf);
@@ -715,10 +716,21 @@ mod walled {
         outs
     }
 
+    /// A wall whose rules allow its place's mark and no other of ilo's, as a task's do.
+    fn placed(folder: &Folder, text: &str) -> Wall {
+        let place = Arc::new(leftovers::Place::make(&folder.join("places")).unwrap());
+        let mark = Path::new(place.mark().as_cstr().to_str().unwrap()).to_path_buf();
+        wall(text, &[("MARK", mark.as_path())], &[]).in_place(place)
+    }
+
+    const MARKED: &str = "(version 1)(allow default)\
+        (deny mach-lookup (global-name-prefix \"ilo.mark.\"))\
+        (allow mach-lookup (global-name (param \"MARK\")))";
+
     #[test]
     fn the_runner_says_the_wall_is_up_before_anything_of_the_run() {
         let folder = Folder::new("runner-up");
-        let launch = launch(&folder, wall(OPEN, &[], &[]));
+        let launch = launch(&folder, placed(&folder, MARKED));
         let (events, heard) = futures::channel::mpsc::unbounded();
         let _process = Process::start(&launch, "task-1", "Hello", events).unwrap();
         // The first message went in behind the hand-off and reached the stand-in whole.
@@ -726,6 +738,22 @@ mod walled {
             said(heard),
             [Out::Walled(Ok(())), Out::Gone("first\n".into())]
         );
+    }
+
+    /// The system's word is the control: rules that allow every name, the control too, aren't a
+    /// wall it places the program inside, and neither is a wall with no mark.
+    #[test]
+    fn the_runner_starts_nothing_the_system_doesnt_place_inside_its_wall() {
+        let folder = Folder::new("runner-outside");
+        for wall in [placed(&folder, OPEN), wall(MARKED, &[], &[])] {
+            let launch = launch(&folder, wall);
+            let (events, heard) = futures::channel::mpsc::unbounded();
+            let _process = Process::start(&launch, "task-1", "Hello", events).unwrap();
+            let outs = said(heard);
+            assert_eq!(outs.len(), 2, "{outs:?}");
+            assert_eq!(outs[0], Out::Walled(refused(leftovers::OUTSIDE)));
+            assert!(matches!(outs[1], Out::Gone(_)));
+        }
     }
 
     #[test]

@@ -313,3 +313,67 @@ fn a_place_whose_sweep_isnt_clean_is_kept_for_the_next_launch() {
     assert!(place.tmp().is_dir() && place.tmp().with_extension("mark").is_file());
     std::fs::remove_dir_all(&tasks).unwrap();
 }
+
+/// The sweep on the Mac, around stand-ins only: the system's shell started through ilo's launcher
+/// under rules that allow a mark of the test's own. Nothing outside the test holds its marks, so
+/// nothing else can be ended.
+#[cfg(target_os = "macos")]
+mod mac {
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{Child, Stdio};
+
+    use super::*;
+    use crate::agents::wall::launch::Rules;
+
+    /// A task's rules as far as marks go: none of ilo's names but the wall's own.
+    const MARKED: &str = "(version 1)(allow default)\
+        (deny mach-lookup (global-name-prefix \"ilo.mark.\"))\
+        (allow mach-lookup (global-name (param \"MARK\")))";
+
+    /// The shell inside the wall marked `mark`, running `script`, and the first line it says.
+    fn inside(mark: &Mark, script: &str) -> (Child, String) {
+        let rules = Rules {
+            text: MARKED.into(),
+            params: vec![("MARK", PathBuf::from(mark.as_cstr().to_str().unwrap()))],
+        };
+        let wall = Wall::inside(None, &rules, &[]).unwrap();
+        let mut command = wall.command(Path::new("/bin/sh"));
+        command
+            .args(["-c", script])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let (mut child, rising) = wall.start(&mut command).unwrap();
+        assert_eq!(rising.expect("a walled start").risen(), Ok(()));
+        let mut said = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut said)
+            .unwrap();
+        (child, said.trim().to_string())
+    }
+
+    fn held(pid: u32, mark: &Mark) -> bool {
+        Os.holds(pid, mark.as_cstr(), CONTROL) == Some(true)
+    }
+
+    #[test]
+    fn a_sweep_ends_what_left_the_group_and_nothing_in_another_wall() {
+        let (mark, other) = (Mark::new(), Mark::new());
+        // A job of its own group, which outlives the shell's group being ended.
+        let (mut shell, job) = inside(&mark, "set -m; sleep 60 & echo $!; read line");
+        let job: u32 = job.parse().unwrap();
+        let (mut beside, _) = inside(&other, "echo up; read line");
+        assert!(held(shell.id(), &mark) && held(job, &mark));
+        assert!(!held(std::process::id(), &mark) && !held(beside.id(), &mark));
+        let swept = sweep(&mark).unwrap();
+        assert!(swept.ended >= 2, "{swept:?}");
+        assert_eq!(shell.wait().unwrap().signal(), Some(libc::SIGKILL));
+        assert!(!held(job, &mark));
+        assert_eq!(sweep(&mark), Ok(Swept { ended: 0, walks: 1 }));
+        // The other wall's shell is still there.
+        assert!(beside.try_wait().unwrap().is_none());
+        _ = beside.kill();
+        _ = beside.wait();
+    }
+}
