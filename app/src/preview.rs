@@ -2645,7 +2645,7 @@ fn task_conversation(agent: SharedString) -> Conversation {
             0,
             "icons/globe.svg",
             "Opened tickets.example",
-            "2 s",
+            &browser::agents::task::duration(2),
             false,
             false,
         )),
@@ -2828,7 +2828,7 @@ fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 key: 10,
                 glyph: "icons/globe.svg",
                 title: "Opened github.com".into(),
-                description: "2 s".into(),
+                description: browser::agents::task::duration(2).into(),
                 running: false,
                 failed: false,
                 opens: Opens::Nothing,
@@ -4958,8 +4958,10 @@ impl gpui::Render for PicturesPage {
                 &look, name, name, on, 1., look.on, a11y,
             ))])
         };
-        // A line under the first group, as Settings' Reduce Transparency line is.
+        // A line under the first group, as Settings' Reduce Transparency line is, or under the
+        // last, as Site notes' is.
         let mut under: Option<&str> = None;
+        let mut foot: Option<&str> = None;
         let blocks: Vec<(Option<&str>, Vec<gpui::Div>)> = match self.shown {
             Pictures::Appearance { appearance, right } => {
                 let three = appearance_picker(
@@ -5370,9 +5372,11 @@ impl gpui::Render for PicturesPage {
                         site_note_row(&look, note, opened, a11y, logged, |_, _, _| {})
                     })
                     .collect();
+                foot = Some(notes::FOOT);
                 vec![(None, vec![on]), (None, rows)]
             }
         };
+        let last = blocks.len().saturating_sub(1);
         let blocks = blocks
             .into_iter()
             .enumerate()
@@ -5391,7 +5395,8 @@ impl gpui::Render for PicturesPage {
                     (_, true) => HEADING_TOP,
                     (_, false) => GROUP_GAP,
                 };
-                let under = under.filter(|_| index == 0).map(|line| {
+                let under = under.filter(|_| index == 0);
+                let under = under.or(foot.filter(|_| index == last)).map(|line| {
                     div()
                         .mt(px(BUTTONS_TOP))
                         .px(px(TEXT_X))

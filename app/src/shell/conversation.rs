@@ -313,7 +313,7 @@ impl Shell {
                 }
                 let placeholder = self.palette.text(FORM_PLACEHOLDER);
                 let reply = cx.new(|cx| {
-                    TextInput::new(format!("Reply to {name}…"), cx).placeholder_color(placeholder)
+                    TextInput::new(format!("Reply to {name}"), cx).placeholder_color(placeholder)
                 });
                 let shell = cx.weak_entity();
                 cx.new(|_| TalkView {
@@ -1698,11 +1698,11 @@ impl TalkView {
         };
         let opened = content.and_then(|content| self.unfolding(fold, open, content.w_full(), look));
         // The line under its title, as the task made it (the site's notes its answer carried), in
-        // the ink of what a line opens to.
+        // the grey of a line's own detail, quieter than its title.
         let sub = (!step.under.is_empty()).then(|| {
             div()
                 .pl(px(under))
-                .text_color(palette.text(SECONDARY))
+                .text_color(palette.text(TRACE_NOTE))
                 .child(step.under.clone())
                 .into_any_element()
         });

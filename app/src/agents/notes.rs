@@ -29,6 +29,13 @@ pub struct Note {
 /// The bytes a note holds at most.
 pub const MAX_BYTES: usize = 1200;
 
+/// A note's parts, in their order: a line that is one of these names the sentences under it.
+pub const PARTS: [&str; 3] = [
+    "Go straight there",
+    "Keys beat clicks",
+    "Know before you start",
+];
+
 /// Every note, as Settings lists them.
 pub static NOTES: [Note; 3] = [
     Note {
@@ -177,11 +184,6 @@ mod tests {
     /// address outside its own site: its addresses start at the site's root.
     #[test]
     fn every_note_is_short_and_stays_on_its_site() {
-        const PARTS: [&str; 3] = [
-            "Go straight there",
-            "Keys beat clicks",
-            "Know before you start",
-        ];
         for note in &NOTES {
             let name = note.name;
             assert!(!note.text.trim().is_empty(), "{name}");
