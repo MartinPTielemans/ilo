@@ -758,6 +758,32 @@ fn the_next_launch_removes_what_a_task_deleted_from_the_archive_kept(cx: &mut Te
     assert!(!next.profile.join(kept::FOLDER).exists());
 }
 
+/// A private window starts no task, whichever way it was asked: every way ends in the one start,
+/// which is given the Space the window shows. Nothing is made for it, no assistant runs and
+/// nothing of it is kept, where the same words from a Space of the user's start one.
+#[gpui::test]
+fn a_private_window_starts_no_task_and_keeps_nothing(cx: &mut TestAppContext) {
+    let run = Run::new("private", cx);
+    run.browser.private.borrow_mut().push(9);
+    let asked = "Find two seats to Lisbon for Saturday";
+    let from_private = (run.agents).update(cx, |agents, cx| {
+        agents.start_task(Cli::Claude, asked, None, 9, Tier::default(), cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(from_private, None);
+    assert!((run.agents).read_with(cx, |agents, _| agents.tasks.tasks.is_empty()));
+    assert!(run.browser.made.borrow().is_empty());
+    assert!(!started(&run, 1));
+    assert!(!index(&run).exists());
+    assert_eq!(run.kept(cx), (0, 0));
+
+    let agent = start_in(&run, 1, cx);
+    run.ran(1);
+    assert_eq!(run.browser.made.borrow().len(), 1);
+    assert_eq!(rows(&run).len(), 1);
+    assert_eq!(run.state(&agent, cx), State::Working);
+}
+
 /// The Archive holds ten, so the ten that ended last come back and what the run before kept of
 /// the others goes, each asked of its assistant.
 #[gpui::test]

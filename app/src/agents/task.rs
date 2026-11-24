@@ -1370,6 +1370,12 @@ impl Agents {
         if asked.is_empty() || !self.tasks_on() {
             return None;
         }
+        // A private window starts no task, whichever way it was asked: agents get no path into
+        // one, and nothing of what's asked there is kept.
+        if self.browser.private_space(home) {
+            log!("browser: no task from a private window");
+            return None;
+        }
         self.tasks.next += 1;
         let agent = format!("task-{}", self.tasks.next);
         // check.sh reads this line.

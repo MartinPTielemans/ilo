@@ -315,6 +315,9 @@ pub trait Browser {
     fn profile_space(&self, profile: &str) -> u64;
     /// Whether there is a profile whose folder is named `profile`.
     fn has_profile(&self, profile: &str) -> bool;
+    /// Whether `space` is a private window's own Space. No task starts from one, as agents get
+    /// no path into private windows.
+    fn private_space(&self, space: u64) -> bool;
     /// Sends `sent` from the page in the agent's `tab`, as the page's own script could, to its own
     /// site (bc_agent_request). Its answer comes to `Agents::request_done` with `request`.
     fn request(&self, agent: &str, tab: u64, request: u64, sent: &request::Request);

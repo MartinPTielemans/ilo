@@ -71,6 +71,8 @@ struct Made {
     /// The user's Spaces outside the profile the others are in, "Default", each with the name of
     /// its profile's folder.
     profiles: RefCell<Vec<(u64, &'static str)>>,
+    /// The Spaces that are a private window's own, as a test says.
+    private: RefCell<Vec<u64>>,
 }
 
 impl Made {
@@ -407,6 +409,10 @@ impl Browser for Made {
     /// has no Space of the user's.
     fn has_profile(&self, profile: &str) -> bool {
         profile == "Default" || self.profiles.borrow().iter().any(|each| each.1 == profile)
+    }
+
+    fn private_space(&self, space: u64) -> bool {
+        self.private.borrow().contains(&space)
     }
 
     fn request(&self, _: &str, tab: u64, request: u64, sent: &request::Request) {
