@@ -10,7 +10,7 @@ use crate::agents::kept::{self, Id};
 use crate::agents::ready::{Found, Ready};
 use crate::agents::runner::{self, Cli, Out};
 use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
-use crate::agents::task::{AskedOn, Conversation, Line, State, Word};
+use crate::agents::task::{AskedOn, Conversation, Line, State, TaskAction, Word};
 use crate::agents::tier::Tier;
 
 /// A stand-in for `claude`. A run of it writes what it was started with and where beside itself,
@@ -283,14 +283,12 @@ fn a_reply_takes_an_ended_task_up_at_work_on_pages(cx: &mut TestAppContext) {
     let agent = run.start(Cli::Claude, cx);
     let (new, _) = run.ran(1);
     let id = run.id(&agent, cx);
+    // The user gives it the highest access while it works, and it ends there.
+    (run.agents).update(cx, |agents, cx| agents.set_tier(&agent, Tier::Full, cx));
     run.finish(&agent, cx);
     // Its run went, as at its assistant's own end.
     run.said(&agent, Out::Gone(String::new()), cx);
     assert!(matches!(run.state(&agent, cx), State::Done { .. }));
-    // As the task's access will be saved once tasks have one each: it ended at the highest.
-    run.agents.update(cx, |agents, _| {
-        agents.tasks.kept.of_mut(&agent).unwrap().tier = Tier::Full
-    });
     let reply = "Are there two together for Sunday too?";
     (run.agents).update(cx, |agents, cx| agents.reply(&agent, reply, cx));
 
@@ -307,8 +305,10 @@ fn a_reply_takes_an_ended_task_up_at_work_on_pages(cx: &mut TestAppContext) {
         })
         .collect();
     assert_eq!(as_new, new);
-    let tier = (run.agents).read_with(cx, |agents, _| agents.tasks.kept.of(&agent).unwrap().tier);
-    assert_eq!(tier, Tier::Work);
+    let tier = |cx: &mut TestAppContext| {
+        (run.agents).read_with(cx, |agents, _| agents.task(&agent).unwrap().tier)
+    };
+    assert_eq!(tier(cx), Tier::Work);
 
     // ilo's line is right over the reply, under the first run's work and answer.
     let talk = run.talk(&agent, cx);
@@ -322,7 +322,9 @@ fn a_reply_takes_an_ended_task_up_at_work_on_pages(cx: &mut TestAppContext) {
             ..
         })
     ));
-    assert!(matches!(&talk.lines[at - 2], Line::Said(said) if said.contains("9:05")));
+    let answer = (talk.lines[..at - 1].iter())
+        .any(|line| matches!(line, Line::Said(said) if said.contains("9:05")));
+    assert!(answer, "the first run's answer");
     assert_eq!(run.state(&agent, cx), State::Working);
     assert_eq!(run.kept(cx), (1, 0), "a pick-up is the same conversation");
     // The activity log has it once, under the task.
@@ -334,8 +336,54 @@ fn a_reply_takes_an_ended_task_up_at_work_on_pages(cx: &mut TestAppContext) {
     let resumed = |kind: &IloKind| matches!(kind, IloKind::Resumed { .. });
     let lines = run.ilo_lines(&agent, cx);
     assert_eq!(lines.iter().filter(|kind| resumed(kind)).count(), 1);
+    // Done again at Work on pages, the next reply takes it up there: the reply is the resume, and
+    // ilo has no second line.
+    run.finish(&agent, cx);
+    (run.agents).update(cx, |agents, cx| agents.reply(&agent, "And Monday?", cx));
+    assert_eq!(run.state(&agent, cx), State::Working);
+    assert_eq!(tier(cx), Tier::Work);
+    let lines = run.ilo_lines(&agent, cx);
+    assert_eq!(lines.iter().filter(|kind| resumed(kind)).count(), 1);
     // And a task that only looked comes back only looking.
     assert_eq!(kept::comes_back(Tier::Look), Tier::Look);
+}
+
+/// A reply to a task done or stopped in this run, at the access it had, has no line of ilo's over
+/// it: the reply is the resume. The activity log still has each.
+#[cfg(unix)]
+#[gpui::test]
+fn a_reply_at_the_access_a_task_had_has_no_line_of_ilos(cx: &mut TestAppContext) {
+    let run = Run::new("same-access", cx);
+    let done = run.start(Cli::Claude, cx);
+    run.ran(1);
+    run.finish(&done, cx);
+    run.said(&done, Out::Gone(String::new()), cx);
+    (run.agents).update(cx, |agents, cx| agents.reply(&done, "And for Sunday?", cx));
+    let (resumed, _) = run.ran(2);
+    assert!(resumed.iter().any(|arg| arg == "--resume"));
+    assert_eq!(run.state(&done, cx), State::Working);
+    assert_eq!(run.ilo_lines(&done, cx), []);
+
+    // One that only looks, stopped, comes back only looking, with no line either.
+    let stopped = run.start(Cli::Claude, cx);
+    run.ran(3);
+    (run.agents).update(cx, |agents, cx| {
+        agents.set_tier(&stopped, Tier::Look, cx);
+        _ = agents.task_action(&stopped, TaskAction::Stop, cx);
+    });
+    assert_eq!(run.state(&stopped, cx), State::Stopped);
+    (run.agents).update(cx, |agents, cx| agents.reply(&stopped, "Go on", cx));
+    assert_eq!(run.state(&stopped, cx), State::Working);
+    let resumed = |kind: &IloKind| matches!(kind, IloKind::Resumed { .. });
+    assert!(!run.ilo_lines(&stopped, cx).iter().any(resumed));
+    (run.agents).read_with(cx, |agents, _| {
+        assert_eq!(agents.task(&stopped).unwrap().tier, Tier::Look)
+    });
+    for agent in [&done, &stopped] {
+        let noted = log(&run.agents, agent, cx);
+        let resumes = (noted.iter()).filter(|(action, _, _)| action == "resumed");
+        assert_eq!(resumes.count(), 1, "{noted:?}");
+    }
 }
 
 /// A task whose run still waits when the reply comes is taken up the same, on that run.
@@ -358,8 +406,9 @@ fn a_reply_to_a_run_that_still_waits_takes_the_task_up_on_it(cx: &mut TestAppCon
     let second: Value = serde_json::from_str(sent.lines().nth(1).expect("the reply")).unwrap();
     assert_eq!(second["message"]["content"], json!("And for Sunday?"));
     assert!(!beside(&run.program, "args.2").exists(), "a second run");
-    let lines = run.ilo_lines(&agent, cx);
-    assert!(lines.contains(&IloKind::Resumed { tier: Tier::Work }));
+    assert_eq!(run.state(&agent, cx), State::Working);
+    // At the access it had: the reply is the resume, with no line of ilo's.
+    assert_eq!(run.ilo_lines(&agent, cx), []);
 }
 
 /// Settings › Agents' switch off: a task's run keeps nothing, ilo holds no id and makes no folder,

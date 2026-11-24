@@ -238,8 +238,6 @@ pub struct Record {
     pub profile: String,
     /// Why its task has nowhere to work, if it hasn't, so it takes no reply.
     pub nowhere: Option<Nowhere>,
-    /// The access the task last ended at.
-    pub tier: Tier,
     /// The assistant no longer has it: a reply found none.
     pub gone: bool,
     /// The user's replies that took the task up again, each by how many messages of theirs came
@@ -303,7 +301,6 @@ impl Kept {
             past: None,
             profile: profile.to_string(),
             nowhere: None,
-            tier: Tier::default(),
             gone: false,
             resumed: Vec::new(),
             removing: false,

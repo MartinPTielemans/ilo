@@ -277,6 +277,11 @@ fn a_finished_task_is_there_after_a_quit_and_takes_a_reply(cx: &mut TestAppConte
             .unwrap()
             .contains("Sunday")
     );
+    // The next reply, in the run that brought it back, is the resume: ilo's line stays the one.
+    reply(&next, &past, "And Monday?", cx);
+    let lines = next.ilo_lines(&past, cx);
+    let resumed = |kind: &&IloKind| matches!(kind, IloKind::Resumed { .. });
+    assert_eq!(lines.iter().filter(resumed).count(), 1, "{lines:?}");
 }
 
 /// A past task whose assistant no longer has its conversation, found by the reply: the reply never
