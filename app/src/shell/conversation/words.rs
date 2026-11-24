@@ -3,7 +3,7 @@
 //! here (#4086). The tiers' names are the tier table's (agents/tier.rs).
 
 use crate::agents::kept;
-use crate::agents::task::ilo::{HelpersLimit as Limit, IloButton, IloKind, SignedInWith};
+use crate::agents::task::ilo::{HelpersLimit as Limit, IloButton, IloKind, LeftOut, SignedInWith};
 use crate::agents::tier::{self, Tier, Why};
 
 /// ilo's mark, before each of its lines' words.
@@ -49,6 +49,29 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
             },
             None,
         ),
+        // A wall ilo couldn't put up (#4101). Each names what the user gave, and `tail` ends it.
+        IloKind::StartedWithout {
+            left: LeftOut::Folder(name) | LeftOut::File(name),
+        } => ("started this task without".into(), Some(name.to_string())),
+        IloKind::StartedWithout {
+            left: LeftOut::Files(files),
+        } => (
+            format!(
+                "started this task without your {files} files: ilo couldn't limit {agent} to them"
+            ),
+            None,
+        ),
+        IloKind::KeptAt { at, folder, .. } => (
+            format!(
+                "kept this task at {}: ilo couldn't limit {agent} to",
+                at.label()
+            ),
+            Some(folder.to_string()),
+        ),
+        IloKind::NotRestarted { folder } => (
+            format!("stopped this task: ilo couldn't restart {agent} without"),
+            Some(folder.to_string()),
+        ),
         IloKind::Resumed { tier } => (format!("resumed this task at {}", tier.label()), None),
         // Where the assistant is the subject, a middle dot sets ilo's mark off from the sentence.
         // A kept task takes a reply after a quit too, so the words name no end; the reply field
@@ -88,6 +111,20 @@ pub fn with_name(kind: &IloKind, own: &str, name: &str) -> (String, std::ops::Ra
     }
 }
 
+/// What a line says after its name, to its sentence's end, if anything.
+pub fn tail(kind: &IloKind, agent: &str) -> Option<String> {
+    match kind {
+        IloKind::StartedWithout {
+            left: LeftOut::Folder(_),
+        } => Some(format!(": ilo couldn't limit {agent} to that folder")),
+        IloKind::StartedWithout {
+            left: LeftOut::File(_),
+        } => Some(format!(": ilo couldn't limit {agent} to that file")),
+        IloKind::KeptAt { refused, .. } => Some(format!(" at {}", refused.label())),
+        _ => None,
+    }
+}
+
 /// Where Settings holds what a line's link points at.
 const KEPT_IN: &str = "Settings › Agents";
 
@@ -113,6 +150,9 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
         }),
         IloKind::Yours { .. } | IloKind::TabBack { .. } | IloKind::TierChanged { .. } => None,
         IloKind::Helpers { .. } => None,
+        IloKind::StartedWithout { .. } | IloKind::KeptAt { .. } | IloKind::NotRestarted { .. } => {
+            None
+        }
         IloKind::Resumed { .. } => None,
         IloKind::KeptHere
         | IloKind::Gone

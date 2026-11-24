@@ -1,14 +1,17 @@
 //! ilo's lines of what happened to a task (#4086 step 3): each refusal, each step that's the
-//! user's, each time an agent asks for a tab back, and each change of the task's access. The app
+//! user's, each time an agent asks for a tab back, each change of the task's access, and each wall
+//! around its files that ilo couldn't put up (#4101, rewall.rs). The app
 //! makes each from the task's own state, at the end of the turn it came in: nothing an agent sends
 //! and no page's text makes one, names its buttons or gives it a link.
 
 use std::time::Instant;
 
-use gpui::{App, Context};
+use gpui::{App, Context, SharedString};
 
+use super::files::Given;
 use super::held;
-use super::task::ilo::{IloKind, IloLine};
+use super::task::ilo::{IloKind, IloLine, LeftOut};
+use super::task::rewall::Rewalled;
 use super::task::{Line, Task, Who};
 use super::tier::{self, Tier};
 use super::{Agents, site};
@@ -17,6 +20,58 @@ use super::{Agents, site};
 /// keys of its steps below and of the helpers' and the kept task's lines above.
 const STOPS: usize = usize::MAX / 8;
 const PLACED: usize = usize::MAX / 4;
+/// Where the keys of the lines of the walls that weren't put up start: two to each, as a start
+/// without a folder and without attached files says each on a line.
+const REWALLED: usize = usize::MAX / 8 * 3;
+
+/// What the user gave a task as a line names it: the folder, and each file they attached.
+#[derive(Default)]
+struct Shown {
+    folder: Option<SharedString>,
+    attached: Vec<SharedString>,
+}
+
+/// The names `files` are shown by: the one place a line takes a folder's or a file's name from,
+/// so nothing else of a line holds one. Until the names the user sees where they give a task its
+/// files are kept beside it, the folder's is its own name on the disk and an attached file has
+/// none, so no line says one.
+fn shown(files: &Given) -> Shown {
+    let folder = (files.folder.as_ref())
+        .and_then(|folder| folder.root().file_name())
+        .map(|name| name.to_string_lossy().into_owned().into());
+    Shown {
+        folder,
+        attached: Vec::new(),
+    }
+}
+
+/// The lines of one wall that wasn't put up: none where a line would have no name to say.
+fn rewalled(came: &Rewalled) -> Vec<IloKind> {
+    match came {
+        Rewalled::Stays { at, refused, files } => (shown(files).folder.into_iter())
+            .map(|folder| IloKind::KeptAt {
+                at: *at,
+                refused: *refused,
+                folder,
+            })
+            .collect(),
+        // The folder's first, the attached files' under it.
+        Rewalled::WithoutFiles { files } => {
+            let Shown { folder, attached } = shown(files);
+            let attached = match attached.as_slice() {
+                [] => None,
+                [file] => Some(LeftOut::File(file.clone())),
+                files => Some(LeftOut::Files(files.len())),
+            };
+            (folder.map(LeftOut::Folder).into_iter().chain(attached))
+                .map(|left| IloKind::StartedWithout { left })
+                .collect()
+        }
+        Rewalled::Stopped { files } => (shown(files).folder.into_iter())
+            .map(|folder| IloKind::NotRestarted { folder })
+            .collect(),
+    }
+}
 
 /// One of a task's lines other than a refusal, which a refusal's count keeps in `Task::stops`.
 #[derive(Clone, Debug, PartialEq)]
@@ -195,6 +250,16 @@ impl Agents {
                 settled: placed.settled || ended,
             };
             made.push((placed.turn, placed.appeared, line));
+        }
+        for (index, (turn, appeared, came)) in task.rewalled.iter().enumerate() {
+            for (nth, kind) in rewalled(came).into_iter().enumerate() {
+                let line = IloLine {
+                    key: REWALLED + 2 * index + nth,
+                    kind,
+                    settled: true,
+                };
+                made.push((*turn, *appeared, line));
+            }
         }
         made.sort_by_key(|(turn, appeared, _)| (*turn, *appeared));
         // In the order they came: each goes before the user's next message, after those of its

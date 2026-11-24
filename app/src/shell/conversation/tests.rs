@@ -10,7 +10,7 @@ use gpui::{
 
 use super::Fold;
 
-use crate::agents::task::ilo::{HelpersLimit, IloButton, IloKind, IloLine};
+use crate::agents::task::ilo::{HelpersLimit, IloButton, IloKind, IloLine, LeftOut};
 use crate::agents::task::{
     Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep, Word,
 };
@@ -1173,6 +1173,77 @@ fn a_site_is_never_in_quotes_and_a_pages_words_are(_: &mut TestAppContext) {
     assert_eq!(&line[at], "boxoffice.example");
 }
 
+/// The lines of a wall ilo couldn't put up around a task's files (#4101), whole: what ilo did,
+/// then why, with the folder's or the file's name quoted as the user's own and nothing else of
+/// the line drawn as a name.
+#[gpui::test]
+fn a_wall_that_wasnt_put_up_says_what_ilo_did_and_why(_: &mut TestAppContext) {
+    use super::words::{head, tail, with_name};
+    let said = |kind: &IloKind| {
+        let (own, name) = head(kind, "Claude");
+        let own = format!("ilo {own}");
+        let Some(name) = name else {
+            assert_eq!(tail(kind, "Claude"), None);
+            return (own, String::new());
+        };
+        let (mut said, at) = with_name(kind, &own, &name);
+        let quoted = said[at].to_string();
+        said.extend(tail(kind, "Claude"));
+        (said, quoted)
+    };
+    let without = |left| IloKind::StartedWithout { left };
+    let cases = [
+        (
+            without(LeftOut::Folder("Trip".into())),
+            "ilo started this task without \u{201c}Trip\u{201d}: ilo couldn't limit Claude to \
+             that folder",
+            "\u{201c}Trip\u{201d}",
+        ),
+        (
+            without(LeftOut::File("seats.pdf".into())),
+            "ilo started this task without \u{201c}seats.pdf\u{201d}: ilo couldn't limit Claude \
+             to that file",
+            "\u{201c}seats.pdf\u{201d}",
+        ),
+        (
+            without(LeftOut::Files(3)),
+            "ilo started this task without your 3 files: ilo couldn't limit Claude to them",
+            "",
+        ),
+        (
+            IloKind::KeptAt {
+                at: Tier::Work,
+                refused: Tier::Full,
+                folder: "Trip".into(),
+            },
+            "ilo kept this task at Work on pages: ilo couldn't limit Claude to \
+             \u{201c}Trip\u{201d} at Full access",
+            "\u{201c}Trip\u{201d}",
+        ),
+        (
+            IloKind::NotRestarted {
+                folder: "Trip".into(),
+            },
+            "ilo stopped this task: ilo couldn't restart Claude without \u{201c}Trip\u{201d}",
+            "\u{201c}Trip\u{201d}",
+        ),
+    ];
+    for (kind, whole, name) in cases {
+        assert_eq!(
+            said(&kind),
+            (whole.to_string(), name.to_string()),
+            "{kind:?}"
+        );
+        assert_eq!(super::words::body(&kind, "Trip"), None);
+        let line = IloLine {
+            key: 0,
+            kind,
+            settled: false,
+        };
+        assert!(crate::agents::task::ilo::buttons(&line).is_empty());
+    }
+}
+
 /// An ilo line's head is a sentence: where ilo is its subject the mark is its first word and a verb
 /// of ilo's follows ("ilo stopped Claude at …"); where it isn't, a middle dot sets the mark off
 /// and the sentence starts with a capital ("ilo · Claude needs this tab back").
@@ -1181,7 +1252,7 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
     use super::words::head;
     use crate::agents::task::ilo::SignedInWith;
     // ilo's verbs. A new head that starts with another word fails here, to be read as a sentence.
-    const VERBS: [&str; 4] = ["stopped", "signed", "handed", "resumed"];
+    const VERBS: [&str; 6] = ["stopped", "signed", "handed", "resumed", "started", "kept"];
     let every = [
         IloKind::Stopped {
             tab: 1,
@@ -1212,6 +1283,20 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             from: Tier::Work,
             to: Tier::Full,
         },
+        IloKind::StartedWithout {
+            left: LeftOut::Folder("Trip".into()),
+        },
+        IloKind::StartedWithout {
+            left: LeftOut::Files(3),
+        },
+        IloKind::KeptAt {
+            at: Tier::Work,
+            refused: Tier::Full,
+            folder: "Trip".into(),
+        },
+        IloKind::NotRestarted {
+            folder: "Trip".into(),
+        },
         IloKind::Resumed { tier: Tier::Work },
         IloKind::KeptHere,
         IloKind::Gone,
@@ -1240,6 +1325,9 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             | IloKind::TabBack { .. }
             | IloKind::SignedIn { .. }
             | IloKind::TierChanged { .. }
+            | IloKind::StartedWithout { .. }
+            | IloKind::KeptAt { .. }
+            | IloKind::NotRestarted { .. }
             | IloKind::Resumed { .. }
             | IloKind::KeptHere
             | IloKind::Gone

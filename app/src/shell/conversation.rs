@@ -2079,7 +2079,9 @@ impl TalkView {
         let name = name.map(|name| clip(&name, QUOTED_CHARS as usize));
         let (said, highlights) = match &name {
             Some(name) => {
-                let (said, quoted) = words::with_name(&line.kind, &own, name);
+                let (mut said, quoted) = words::with_name(&line.kind, &own, name);
+                // What its sentence says after the name.
+                said.extend(words::tail(&line.kind, agent));
                 let style = HighlightStyle {
                     color: Some(palette.text(TITLE)),
                     ..Default::default()
@@ -2097,7 +2099,12 @@ impl TalkView {
             IloKind::Yours { .. } => "icons/user.svg",
             IloKind::TabBack { .. } => "icons/undo-2.svg",
             IloKind::SignedIn { .. } => "icons/key-round.svg",
-            IloKind::TierChanged { .. } => "icons/shield.svg",
+            IloKind::TierChanged { .. } | IloKind::KeptAt { .. } => "icons/shield.svg",
+            IloKind::StartedWithout {
+                left: ilo::LeftOut::Folder(_),
+            } => "icons/folder.svg",
+            IloKind::StartedWithout { .. } => "icons/file.svg",
+            IloKind::NotRestarted { .. } => "icons/ban.svg",
             IloKind::Resumed { .. } => "icons/play.svg",
             IloKind::KeptHere => "icons/save.svg",
             IloKind::Gone

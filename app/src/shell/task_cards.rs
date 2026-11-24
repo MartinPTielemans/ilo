@@ -45,7 +45,7 @@ use crate::agents::runner::Cli;
 use crate::agents::sign_in::Offer;
 use crate::agents::task::{Card, Dot, NEEDS_YOU, TaskAction, Word};
 use crate::agents::tier::Tier;
-use crate::palette::FIELD_PLATE as URL_FIELD;
+use crate::palette::{FIELD_PLATE as URL_FIELD, Ground};
 use crate::tokens::shell::task::motion::{
     ARCHIVE, ARCHIVE_CLOSE, ARCHIVE_CLOSE_DELAY, ARCHIVE_CONTENT, ARCHIVE_EASE, ARCHIVE_HOLD,
     ARCHIVE_LEAVE, ARCHIVE_OPEN, BUMP, BUMP_EASE, BUMP_GLYPH, BUMP_PEAK, BUMP_SCALE, CONTENT,
@@ -1588,6 +1588,13 @@ impl Shell {
         }
     }
 
+    /// A card's, the count's or a page row's plate under the pointer: the ink at the foot's own
+    /// alpha, with the shade a sidebar row's plate takes there, so what's written on it reads
+    /// however much of a bright window comes through.
+    fn hovered_plate(&self) -> Hsla {
+        self.palette.ground_plate(Ground::Hovered, HOVERED)
+    }
+
     fn more_row(&self, group: &Group, now: Instant, cx: &mut Context<Self>) -> AnyElement {
         let words = self.more_words();
         let key = Holds::More.key();
@@ -1596,7 +1603,7 @@ impl Shell {
         let drawn = drawn_listener(&self.foot.plates_drawn, &self.foot.rested, key, rest);
         let row = self
             .header_plate(group, now)
-            .when(hovered, |row| row.bg(self.palette.plate(HOVERED)))
+            .when(hovered, |row| row.bg(self.hovered_plate()))
             .id("task-more");
         // A stop is placed in the flow; this one keeps its plate's place in its row.
         self.strip_stop(row, StripStop::More, words.clone(), PLATE_RADIUS)
@@ -1605,7 +1612,10 @@ impl Shell {
             .flex()
             .items_center()
             .text_size(px(text::SMALL))
-            .text_color(self.palette.gray(SECONDARY))
+            .text_color(match hovered {
+                true => self.palette.gray_on_plate(SECONDARY),
+                false => self.palette.gray(SECONDARY),
+            })
             .child(drawn)
             .child(words)
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -1665,7 +1675,7 @@ impl Shell {
                 f32::from(u8::from(hovered)),
                 false,
             ),
-            (false, true) => plate.bg(self.palette.plate(HOVERED)),
+            (false, true) => plate.bg(self.hovered_plate()),
             // The bar's plate as it lands, which goes as the header comes.
             (false, false) => plate.bg(self.palette.plate(TILE).opacity(landed)),
         };
@@ -1678,7 +1688,7 @@ impl Shell {
             .flex()
             .flex_col()
             .child(self.task_title(face, shown, now, still))
-            .child(self.task_status(face, now, still));
+            .child(self.task_status(face, shown || hovered, now, still));
         let content = div()
             .absolute()
             .inset_0()
@@ -1746,8 +1756,15 @@ impl Shell {
 
     /// The state's line: each new one rolling in from under the old, which goes up, or with motion
     /// reduced crossfading. While the task works a highlight sweeps along it. Full access, where
-    /// it leads, is in the title's ink, and no other colour.
-    fn task_status(&self, face: &Face, now: Instant, still: bool) -> impl IntoElement + use<> {
+    /// it leads, is in the title's ink, and no other colour. `plated`, its header has a plate
+    /// under it, shown or under the pointer, and the line is in the gray that reads on one.
+    fn task_status(
+        &self,
+        face: &Face,
+        plated: bool,
+        now: Instant,
+        still: bool,
+    ) -> impl IntoElement + use<> {
         let length = if still { CROSSFADE } else { ROLL };
         let rise = if still { 0. } else { ROLL_RISE };
         let working = face.glyph.state() == State::Working && !still;
@@ -1759,6 +1776,10 @@ impl Shell {
             font_weight: Some(FontWeight::MEDIUM),
             ..HighlightStyle::default()
         };
+        let gray = match plated {
+            true => self.palette.gray_on_plate(STATUS),
+            false => self.palette.gray(STATUS),
+        };
         let line = |words: SharedString, top: f32, alpha: f32, shimmers: bool| {
             let lead = state_lead(&words);
             let base = div()
@@ -1769,7 +1790,7 @@ impl Shell {
                 .opacity(alpha)
                 .text_size(px(text::SMALL))
                 .line_height(px(STATUS_LINE))
-                .text_color(self.palette.gray(STATUS))
+                .text_color(gray)
                 .truncate();
             match shimmers {
                 true => {
@@ -1919,7 +1940,7 @@ impl Shell {
             true => selected_plate(&self.palette, row, 1., 0., false),
             false => row,
         };
-        let hover = self.palette.plate(HOVERED);
+        let hover = self.hovered_plate();
         let row = row
             .id(("task-page", tab))
             .when(!shown, |row| row.hover(move |style| style.bg(hover)));
@@ -1946,17 +1967,25 @@ impl Shell {
                 .rounded_full()
                 .bg(rgb(STATUS_AGENT))
         });
+        // A word in gray is at this, and on the shown row's plate in the gray that reads on one;
+        // one the user is needed at or drives is in the title's ink.
+        let gray = match word {
+            PageWord::NeedsYou | PageWord::Driving => None,
+            PageWord::Working => Some(PAGE_WORD_WORKING),
+            PageWord::Done | PageWord::Paused => Some(PAGE_WORD),
+        };
+        let ink = match gray {
+            None => self.palette.text(TITLE),
+            Some(alpha) if shown => self.palette.gray_on_plate(alpha),
+            Some(alpha) => self.palette.gray(alpha),
+        };
         let state = div()
             .flex_none()
             .flex()
             .items_center()
             .gap(px(PAGE_DOT_GAP))
             .text_size(px(text::SMALL))
-            .text_color(match word {
-                PageWord::NeedsYou | PageWord::Driving => self.palette.text(TITLE),
-                PageWord::Working => self.palette.gray(PAGE_WORD_WORKING),
-                PageWord::Done | PageWord::Paused => self.palette.gray(PAGE_WORD),
-            })
+            .text_color(ink)
             .children(dot)
             .child(word.label());
         let drawn = {
