@@ -3271,8 +3271,13 @@ fn main() {
                     // second Space, for its colour, =private in a private window with no tabs, and =new
                     // in a Space with no tabs and no favorites, as a new user's after the onboarding.
                     // PREVIEW_WELCOME=1 shows no page with the first run's welcome, and
-                    // PREVIEW_ONBOARDING=1, =light or =dark the onboarding over it first.
-                    let onboarding = std::env::var("PREVIEW_ONBOARDING").ok();
+                    // PREVIEW_ONBOARDING=1, =light or =dark the onboarding over it first, and
+                    // PREVIEW_ONBOARDING_STEP=transparency, or a step's number from 1, opens it at
+                    // that step.
+                    let onboarding_step = std::env::var("PREVIEW_ONBOARDING_STEP").ok();
+                    let onboarding = std::env::var("PREVIEW_ONBOARDING")
+                        .ok()
+                        .or(onboarding_step.as_ref().map(|_| "1".into()));
                     let welcome =
                         std::env::var_os("PREVIEW_WELCOME").is_some() || onboarding.is_some();
                     let empty = std::env::var("PREVIEW_EMPTY")
@@ -3640,9 +3645,10 @@ fn main() {
                     // daily count's switch on there.
                     if let Some(given) = &onboarding {
                         let mut parts = given.split(':');
-                        shell.start_onboarding(parts.next(), cx);
-                        if let Some(step) = parts.next() {
-                            shell.onboarding_to(step, cx);
+                        let appearance = parts.next();
+                        match parts.next().or(onboarding_step.as_deref()) {
+                            Some(step) => shell.onboarding_at(appearance, step, cx),
+                            None => shell.start_onboarding(appearance, cx),
                         }
                         if parts.next() == Some("on") {
                             shell.onboarding_count_on(cx);
