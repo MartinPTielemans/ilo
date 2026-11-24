@@ -12,7 +12,7 @@ use gpui::{
 };
 
 use crate::agents::task::{Card, Dot};
-use crate::agents::task::{Start, model_menu};
+use crate::agents::task::{Start, added_address, model_menu};
 use crate::agents::tier::{ANY_SITE, ONLY_ADDED, Tier};
 use crate::command_bar::{self, CommandBar, InPlaceKey, TaskAgent};
 use crate::palette::{Palette, Tone};
@@ -300,18 +300,15 @@ impl Shell {
         cx.notify();
     }
 
-    /// The Space's pages the `+` menu offers: its pinned and Today tabs with an http(s) page, by
-    /// title, those shown most recently first.
+    /// The Space's pages the `+` menu offers: its pinned and Today tabs with an http(s) page whose
+    /// address isn't too long to give a task, by title, those shown most recently first.
     fn pages_to_add(&self) -> Vec<(u64, SharedString)> {
         let Some(space) = self.shown_space() else {
             return Vec::new();
         };
         let tabs = self.recent_first(space_tabs(space).collect());
         (tabs.into_iter())
-            .filter(|&tab| {
-                let url = self.url(tab).to_ascii_lowercase();
-                url.starts_with("https://") || url.starts_with("http://")
-            })
+            .filter(|&tab| added_address(&self.url(tab)).is_some())
             .map(|tab| (tab, self.title(tab)))
             .collect()
     }
@@ -349,7 +346,9 @@ impl Shell {
     /// The user's pick of a page on the `+` menu: added, its address as it is now, or taken off
     /// again if it was. With none left, the task may go to any site.
     pub(in crate::shell) fn toggle_page(&mut self, tab: u64, cx: &mut Context<Self>) {
-        let (url, title) = (self.url(tab).to_string(), self.title(tab));
+        let (Some(url), title) = (added_address(&self.url(tab)), self.title(tab)) else {
+            return;
+        };
         let Some(resting) = &mut self.resting else {
             return;
         };

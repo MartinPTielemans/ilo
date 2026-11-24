@@ -8177,6 +8177,40 @@ mod tasks {
         });
     }
 
+    /// An added page's address reaches the task without the user name and password a tab's
+    /// address can carry, and one over the cap doesn't reach it at all.
+    #[gpui::test]
+    fn an_added_address_carries_no_login_and_none_over_the_cap(cx: &mut TestAppContext) {
+        use crate::agents::task::{ADDED_MOST, Start, added_address};
+        let at_most = format!("https://a.example/{}", "a".repeat(ADDED_MOST - 18));
+        assert_eq!(at_most.len(), ADDED_MOST);
+        assert_eq!(added_address(&at_most).as_deref(), Some(at_most.as_str()));
+        assert_eq!(added_address(&format!("{at_most}a")), None);
+        assert_eq!(
+            added_address("https://sam@a.example/x").as_deref(),
+            Some("https://a.example/x")
+        );
+        let (agents, _) = ready(None, cx);
+        let start = Start {
+            pages: vec![
+                "https://sam:hunter2@fieldbook.example/lakeside?day=2".into(),
+                format!("{at_most}a"),
+            ],
+            ..Start::default()
+        };
+        let agent = agents.update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, "Plan a walk", None, 1, start, cx)
+        });
+        agents.read_with(cx, |agents, _| {
+            let task = agents.task(&agent.expect("started")).unwrap();
+            assert_eq!(
+                task.added,
+                ["https://fieldbook.example/lakeside?day=2"],
+                "the login is the user's, and a page over the cap isn't added"
+            );
+        });
+    }
+
     /// A card lists the task's last three steps this turn, oldest first, as the conversation's
     /// trace lines say them, and names the site of the last page it was on; before its first
     /// step it has none of either.

@@ -553,6 +553,51 @@ fn add_a_page_gives_the_task_its_address_alone(cx: &mut TestAppContext) {
     assert!(!only, "the next task may go to any site");
 }
 
+/// A tab's address can carry a user name and password, which the task never gets; a page whose
+/// address is too long to give a task isn't offered.
+#[gpui::test]
+fn an_added_page_carries_no_login_and_a_long_one_isnt_offered(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    let long = format!("https://fieldbook.example/{}", "a".repeat(2048));
+    shell.update(cx, |shell, cx| {
+        let page = |url: &str| Page {
+            url: url.into(),
+            ..Page::default()
+        };
+        shell.set_page(
+            1,
+            page("https://sam:hunter2@fieldbook.example/lakeside"),
+            cx,
+        );
+        shell.set_title(1, "The Lakeside loop".into(), cx);
+        shell.set_page(2, page(&long), cx);
+        shell.set_title(2, "A long one".into(), cx);
+    });
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    shell.update(cx, |shell, cx| shell.pages_menu(point(px(0.), px(0.)), cx));
+    let titles: Vec<String> = (host.entries.borrow().iter())
+        .map(|entry| entry.title.to_string())
+        .collect();
+    assert_eq!(
+        titles,
+        ["The Lakeside loop"],
+        "a page over the cap is offered"
+    );
+    cx.update(|_, cx| host.choose("The Lakeside loop", cx));
+    host.take();
+    cx.simulate_input("find a place to stay");
+    cx.simulate_keystrokes("enter");
+    let started = "start task claude find a place to stay from 1 at Work on pages \
+                   with [\"https://fieldbook.example/lakeside\"]";
+    let calls = host.take();
+    assert!(
+        calls.contains(&started.to_string()),
+        "the task got more than the page's address: {calls:?}"
+    );
+}
+
 /// A task starts at the level picked for it, and the next at Work on pages: the pick holds for one
 /// run. The chip shows the level each ↩ starts at.
 #[gpui::test]

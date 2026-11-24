@@ -642,6 +642,24 @@ pub struct Start {
     pub only_added: bool,
 }
 
+/// The longest address a task gets for a page the user added: a page's over it isn't offered.
+pub const ADDED_MOST: usize = 2048;
+
+/// The address a task gets for a page the user added: an http(s) one alone, at most ADDED_MOST
+/// long, without the user name or password a tab's address can carry, which a task never gets.
+pub fn added_address(url: &str) -> Option<String> {
+    if url.len() > ADDED_MOST {
+        return None;
+    }
+    let mut parsed = url::Url::parse(url).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    _ = parsed.set_username("");
+    _ = parsed.set_password(None);
+    Some(parsed.into())
+}
+
 impl From<Tier> for Start {
     fn from(tier: Tier) -> Self {
         Start {
@@ -1342,9 +1360,10 @@ impl Agents {
             pages,
             only_added,
         } = start.into();
-        // Only an http(s) page is added: the composer lists no other, and nothing else is opened.
-        let pages: Vec<String> = (pages.into_iter())
-            .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
+        // Only an http(s) page is added, and only its address: the composer lists no other, and
+        // nothing else is opened.
+        let pages: Vec<String> = (pages.iter())
+            .filter_map(|url| added_address(url))
             .collect();
         let asked = asked.trim();
         if asked.is_empty() || !self.tasks_on() {
