@@ -522,8 +522,8 @@ void PagePoint::Hover(std::optional<Shown> shown) {
   const bool changed = (shown ? shown->node : 0) != (shown_ ? shown_->node : 0);
   shown_ = std::move(shown);
   if (changed) {
-    LOG(ERROR) << "browser: tab " << tab_ << " point over "
-               << (shown_ ? (shown_->kind.empty() ? "element" : shown_->kind) : "nothing");
+    // The tab id alone: an element's kind is a role the page names, as any text of its own.
+    LOG(ERROR) << "browser: tab " << tab_ << " point over " << (shown_ ? "element" : "nothing");
   }
   if (!Host().tab_point_hover) {
     return;
@@ -558,8 +558,7 @@ void PagePoint::Pick() {
   content::WebContents* contents = web_contents();
   picked.address = AddressOf(contents->GetPrimaryMainFrame()->GetLastCommittedURL());
   picked.title = base::UTF16ToUTF8(contents->GetTitle());
-  LOG(ERROR) << "browser: tab " << tab_ << " point picks "
-             << (picked.kind.empty() ? "element" : picked.kind);
+  LOG(ERROR) << "browser: tab " << tab_ << " point picks element";
   // DOM and CSS on in this client, which reads the page and changes nothing in it; then the
   // document's tree, for the element's tag, the path the selector names, and the id CSS asks its
   // styles by. The page's own frame's alone: an element inside another frame goes without.
@@ -711,8 +710,7 @@ void PagePoint::Encoded(Picked picked, std::optional<std::vector<uint8_t>> png) 
 }
 
 void PagePoint::Report(const Picked& picked) {
-  LOG(ERROR) << "browser: tab " << tab_ << " point picked "
-             << (picked.kind.empty() ? "element" : picked.kind)
+  LOG(ERROR) << "browser: tab " << tab_ << " point picked element"
              << (picked.withheld ? " withheld" : "") << (picked.png.empty() ? " no picture" : "");
   if (!Host().tab_point_picked) {
     return;
