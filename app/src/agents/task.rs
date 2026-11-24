@@ -2161,7 +2161,6 @@ impl Agents {
     /// be undone, as the tabs close to the archive as any do (#1080).
     pub fn end_old_tasks(&mut self, cx: &mut Context<Self>) {
         for space in self.browser.task_spaces() {
-            // check.sh reads this line.
             log!("browser: deleting space {space} of a task before");
             self.browser.delete_space(space, cx);
         }
@@ -2175,7 +2174,6 @@ impl Agents {
             for tab in self.browser.space_tab_ids(space, cx).into_iter().rev() {
                 self.browser.move_tab(tab, home, cx);
             }
-            // check.sh reads this line.
             log!(
                 "browser: deleting space {space} of agent {} before",
                 client.id()
