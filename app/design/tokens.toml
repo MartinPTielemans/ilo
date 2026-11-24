@@ -1873,24 +1873,25 @@ field-fill = 0.085
 field-rim = 0xffff_ff17
 field-shadow-near = 0x0000_0033
 field-shadow-far = 0x0000_003d
-# The ⇥ chip before the switch, 8 from it, at 0.6: 18 tall, 5 in, radius 5, ink 0.1 under ink 0.7
-# at 11.
+# The ⇥ chip before the switch, 8 from it, at 0.6: 18 tall, 5 in, at the control radius, ink 0.1
+# under ink 0.7 at 11.
 key-gap = 8.0
 key-opacity = 0.6
 key-height = 18.0
 key-inset = 5.0
-key-radius = 5.0
+key-radius = 6.0
 key-fill = 0.1
 key-ink = 0.7
 key-size = 11.0
-# The switch, Search | Ask: a 2-in track of ink 0.08 at radius 9, its parts 28 tall, 13 in at
-# radius 7, in ink 0.6; the one it's on is ink 0.16 under full ink, medium, in a rim of white 0.07.
+# The switch, Search | Ask: a 2-in track of ink 0.08, its parts 28 tall, 13 in at the control
+# radius, in ink 0.6, and the track concentric round them; the one it's on is ink 0.16 under full
+# ink, medium, in a rim of white 0.07.
 switch-inset = 2.0
-switch-radius = 9.0
+switch-radius = 8.0
 switch-fill = 0.08
 switch-height = 28.0
 switch-part-inset = 13.0
-switch-part-radius = 7.0
+switch-part-radius = 6.0
 switch-ink = 0.6
 switch-on = 0.16
 switch-on-rim = 0xffff_ff12
@@ -1937,10 +1938,10 @@ step-size = 10.5
 step-line = 15.0
 step-ink = 0.6
 step-glyph = 10.0
-# The task's page under its words: 112 tall, 6 in from the card's sides and foot, radius 11.
+# The task's page under its words: 112 tall, 6 in from the card's sides and foot, concentric in it.
 page-height = 112.0
 page-inset = 6.0
-page-radius = 11.0
+page-radius = 10.0
 page-fill = 0.05
 
 [shell.extensions]
