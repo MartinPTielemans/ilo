@@ -137,6 +137,31 @@ impl Editor {
             .unwrap()
     }
 
+    /// An input method composes "ぴ" in the name field being renamed, and the field.
+    fn compose(&mut self) -> gpui::Entity<crate::text_input::TextInput> {
+        use gpui::EntityInputHandler as _;
+        let field = self.window.update(&mut self.cx.cx, |editor, window, cx| {
+            let field = (editor.editing.as_ref())
+                .and_then(|editing| editing.renaming.clone())
+                .expect("not renaming");
+            field.update(cx, |field, cx| {
+                field.replace_and_mark_text_in_range(None, "ぴ", None, window, cx)
+            });
+            field
+        });
+        self.cx.run_until_parked();
+        field.unwrap()
+    }
+
+    /// Whether the name field is there, renaming.
+    fn renaming(&mut self) -> bool {
+        self.window
+            .read_with(&self.cx.cx, |editor, _| {
+                (editor.editing.as_ref()).is_some_and(|editing| editing.renaming.is_some())
+            })
+            .unwrap()
+    }
+
     fn open(&mut self) -> bool {
         self.cx.cx.update(|cx| is_open(cx))
     }
@@ -407,6 +432,34 @@ fn rename_keeps_what_is_typed_and_escape_leaves_the_name(cx: &mut TestAppContext
     editor.keys("escape");
     assert_eq!(editor.style().name.as_deref(), Some("Quiet news"));
     assert!(editor.open());
+}
+
+/// ↩ while an input method composes in the name commits what it composed and keeps no name; the
+/// next ↩ keeps it. Esc while one composes drops it and leaves the field; the next Esc does.
+#[gpui::test]
+fn return_and_escape_while_composing_are_the_compositions(cx: &mut TestAppContext) {
+    let mut editor = Editor::new(Style::default(), cx);
+    editor.click((NAME_LEFT + 4., HEADER / 2.));
+    editor.click(find(Target::Item(Item::Rename), &Style::default(), true));
+    editor.cx.simulate_input("Quiet");
+    let field = editor.compose();
+    editor.keys("enter");
+    assert_eq!(editor.style().name, None, "↩ kept the name while composing");
+    assert!(editor.renaming(), "↩ left the field while composing");
+    let typed = editor.cx.read(|cx| field.read(cx).text().to_string());
+    assert_eq!(typed, "Quietぴ");
+    editor.keys("enter");
+    assert_eq!(editor.style().name.as_deref(), Some("Quietぴ"));
+
+    editor.click((NAME_LEFT + 4., HEADER / 2.));
+    editor.click(find(Target::Item(Item::Rename), &Style::default(), true));
+    editor.compose();
+    editor.keys("escape");
+    assert!(editor.renaming(), "esc left the field while composing");
+    assert!(editor.open());
+    editor.keys("escape");
+    assert!(!editor.renaming());
+    assert_eq!(editor.style().name.as_deref(), Some("Quietぴ"));
 }
 
 #[gpui::test]

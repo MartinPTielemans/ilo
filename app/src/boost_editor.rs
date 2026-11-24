@@ -630,10 +630,8 @@ impl BoostEditor {
     /// Escape: ends a rename, then closes the menu, then the editor, a layer at a time. While an
     /// input method composes in the name, it's the composition's.
     fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
-        let composing = (self.editing.as_ref())
-            .and_then(|editing| editing.renaming.as_ref())
-            .is_some_and(|input| input.read(cx).composing());
-        let Some(close) = Close::escape(composing) else {
+        let renaming = (self.editing.as_ref()).and_then(|editing| editing.renaming.clone());
+        let Some(close) = Close::escape_from(&renaming, window, cx) else {
             return;
         };
         let Some(editing) = self.editing.as_mut().filter(|editing| editing.open) else {
@@ -651,8 +649,13 @@ impl BoostEditor {
         cx.notify();
     }
 
+    /// ↩ keeps a rename, unless it was an input method's, composing in the name (dismissal's
+    /// rule).
     fn commit(&mut self, _: &Commit, window: &mut Window, cx: &mut Context<Self>) {
-        self.commit_rename(window, cx);
+        let renaming = (self.editing.as_ref()).and_then(|editing| editing.renaming.clone());
+        if crate::dismissal::submits(&renaming, window, cx) {
+            self.commit_rename(window, cx);
+        }
     }
 
     fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
