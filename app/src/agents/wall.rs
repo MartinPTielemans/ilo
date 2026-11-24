@@ -172,6 +172,14 @@ impl Granted {
             root: PathBuf::from("/nonexistent/folder"),
         }
     }
+
+    /// The same by a name of the test's own, for a test of where a folder's name reaches.
+    #[cfg(test)]
+    pub(crate) fn named_for_test(name: &str) -> Granted {
+        Granted {
+            root: Path::new("/nonexistent").join(name),
+        }
+    }
 }
 
 /// Puts the wall up for a task's start, a raise or a take-back. A task with no files needs none and

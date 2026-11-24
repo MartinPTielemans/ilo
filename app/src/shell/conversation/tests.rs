@@ -10,7 +10,7 @@ use gpui::{
 
 use super::Fold;
 
-use crate::agents::task::ilo::{HelpersLimit, IloButton, IloKind, IloLine, LeftOut};
+use crate::agents::task::ilo::{HelpersLimit, IloButton, IloKind, IloLine, LeftOut, Reach};
 use crate::agents::task::{
     Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep, Word,
 };
@@ -1173,9 +1173,9 @@ fn a_site_is_never_in_quotes_and_a_pages_words_are(_: &mut TestAppContext) {
     assert_eq!(&line[at], "boxoffice.example");
 }
 
-/// The lines of a wall ilo couldn't put up around a task's files (#4101), whole: what ilo did,
-/// then why, with the folder's or the file's name quoted as the user's own and nothing else of
-/// the line drawn as a name.
+/// The lines of a wall ilo couldn't put up around a task's files, and of a run it couldn't end
+/// whole (#4101), each whole: what ilo did, then why, with the folder's or the file's name quoted
+/// as the user's own and nothing else of the line drawn as a name.
 #[gpui::test]
 fn a_wall_that_wasnt_put_up_says_what_ilo_did_and_why(_: &mut TestAppContext) {
     use super::words::{head, tail, with_name};
@@ -1192,6 +1192,8 @@ fn a_wall_that_wasnt_put_up_says_what_ilo_did_and_why(_: &mut TestAppContext) {
         (said, quoted)
     };
     let without = |left| IloKind::StartedWithout { left };
+    let stopped = |left| IloKind::NotRestarted { left };
+    let left = |reach| IloKind::LeftRunning { reach };
     let cases = [
         (
             without(LeftOut::Folder("Trip".into())),
@@ -1221,11 +1223,60 @@ fn a_wall_that_wasnt_put_up_says_what_ilo_did_and_why(_: &mut TestAppContext) {
             "\u{201c}Trip\u{201d}",
         ),
         (
-            IloKind::NotRestarted {
+            IloKind::SetBack {
+                at: Tier::Work,
+                refused: Tier::Full,
                 folder: "Trip".into(),
             },
+            "ilo set this task back to Work on pages: ilo couldn't limit Claude to \
+             \u{201c}Trip\u{201d} at Full access",
+            "\u{201c}Trip\u{201d}",
+        ),
+        (
+            stopped(LeftOut::Folder("Trip".into())),
             "ilo stopped this task: ilo couldn't restart Claude without \u{201c}Trip\u{201d}",
             "\u{201c}Trip\u{201d}",
+        ),
+        (
+            stopped(LeftOut::File("seats.pdf".into())),
+            "ilo stopped this task: ilo couldn't restart Claude without \
+             \u{201c}seats.pdf\u{201d}",
+            "\u{201c}seats.pdf\u{201d}",
+        ),
+        (
+            stopped(LeftOut::Files(3)),
+            "ilo stopped this task: ilo couldn't restart Claude without your 3 files",
+            "",
+        ),
+        (
+            IloKind::NotRaised {
+                refused: Tier::Full,
+            },
+            "ilo stopped this task: ilo couldn't restart Claude at Full access",
+            "",
+        ),
+        (
+            left(Reach::Folder("Trip".into())),
+            "ilo couldn't end everything Claude started: what's left can still reach \
+             \u{201c}Trip\u{201d}. Restarting this computer ends it.",
+            "\u{201c}Trip\u{201d}",
+        ),
+        (
+            left(Reach::Files),
+            "ilo couldn't end everything Claude started: what's left can still reach this \
+             task's files. Restarting this computer ends it.",
+            "",
+        ),
+        (
+            left(Reach::Both("Trip".into())),
+            "ilo couldn't end everything Claude started: what's left can still reach \
+             \u{201c}Trip\u{201d} and this task's files. Restarting this computer ends it.",
+            "\u{201c}Trip\u{201d}",
+        ),
+        (
+            IloKind::EndedLeft,
+            "ilo ended what Claude had left running",
+            "",
         ),
     ];
     for (kind, whole, name) in cases {
@@ -1252,7 +1303,9 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
     use super::words::head;
     use crate::agents::task::ilo::SignedInWith;
     // ilo's verbs. A new head that starts with another word fails here, to be read as a sentence.
-    const VERBS: [&str; 6] = ["stopped", "signed", "handed", "resumed", "started", "kept"];
+    const VERBS: [&str; 9] = [
+        "stopped", "signed", "handed", "resumed", "started", "kept", "set", "couldn't", "ended",
+    ];
     let every = [
         IloKind::Stopped {
             tab: 1,
@@ -1294,9 +1347,27 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             refused: Tier::Full,
             folder: "Trip".into(),
         },
-        IloKind::NotRestarted {
+        IloKind::SetBack {
+            at: Tier::Work,
+            refused: Tier::Full,
             folder: "Trip".into(),
         },
+        IloKind::NotRestarted {
+            left: LeftOut::Folder("Trip".into()),
+        },
+        IloKind::NotRestarted {
+            left: LeftOut::Files(3),
+        },
+        IloKind::NotRaised {
+            refused: Tier::Full,
+        },
+        IloKind::LeftRunning {
+            reach: Reach::Folder("Trip".into()),
+        },
+        IloKind::LeftRunning {
+            reach: Reach::Files,
+        },
+        IloKind::EndedLeft,
         IloKind::Resumed { tier: Tier::Work },
         IloKind::KeptHere,
         IloKind::Gone,
@@ -1327,7 +1398,11 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             | IloKind::TierChanged { .. }
             | IloKind::StartedWithout { .. }
             | IloKind::KeptAt { .. }
+            | IloKind::SetBack { .. }
             | IloKind::NotRestarted { .. }
+            | IloKind::NotRaised { .. }
+            | IloKind::LeftRunning { .. }
+            | IloKind::EndedLeft
             | IloKind::Resumed { .. }
             | IloKind::KeptHere
             | IloKind::Gone

@@ -3,7 +3,8 @@
 //! that has ended (#4105): that the user's reply took it up, and in the reply field's place, that
 //! its assistant no longer has the conversation or keeps none, or that its profile was deleted.
 //! And of a task with files (#4101) whose assistant ilo couldn't limit to them: that it started
-//! without them, stayed at its level, or stopped.
+//! without them, stayed at its level or went back to it, or stopped; and that ilo couldn't end
+//! everything its assistant had started, or later did.
 //!
 //! An ilo line is its own kind of entry, never a message. Only the app makes one, from its own
 //! events: nothing an agent sends, no tool's argument and no page's text becomes one, so nothing
@@ -80,15 +81,30 @@ pub enum IloKind {
     /// assistant to them (#4101).
     StartedWithout { left: LeftOut },
     /// The task stays at `at`, as ilo couldn't limit its assistant to `folder` at `refused`, the
-    /// level the user set.
+    /// level the user asked for, which it never had.
     KeptAt {
         at: Tier,
         refused: Tier,
         folder: SharedString,
     },
-    /// The task stopped, as ilo couldn't start its assistant again without `folder`, which the
-    /// user took back.
-    NotRestarted { folder: SharedString },
+    /// The same once the task had been at `refused`, under the line that says the user set it:
+    /// ilo set it back to `at`.
+    SetBack {
+        at: Tier,
+        refused: Tier,
+        folder: SharedString,
+    },
+    /// The task stopped, as ilo couldn't start its assistant again without what the user took
+    /// back.
+    NotRestarted { left: LeftOut },
+    /// The task stopped, as ilo couldn't start its assistant again at `refused`, the level the
+    /// user raised it to.
+    NotRaised { refused: Tier },
+    /// ilo couldn't end everything the assistant had started, which can still reach what the
+    /// task was given.
+    LeftRunning { reach: Reach },
+    /// ilo later ended what the assistant had left running.
+    EndedLeft,
     /// The user's reply took up the task after it had ended, at `tier`, which the app decided.
     Resumed { tier: Tier },
     /// The assistant keeps the task's conversation on the user's computer, said once per profile.
@@ -110,7 +126,8 @@ pub enum IloKind {
     NoSpace,
 }
 
-/// What a task went on without, by the name the app shows for it.
+/// What a task went on without, or couldn't be started again without, by the name the app shows
+/// for it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LeftOut {
     /// The folder the user gave.
@@ -119,6 +136,15 @@ pub enum LeftOut {
     File(SharedString),
     /// The files they attached, more than one, which the line counts.
     Files(usize),
+}
+
+/// What the processes a run left can still reach of what its task was given: the folder, by the
+/// name the app shows for it, the files the user attached, or both.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Reach {
+    Folder(SharedString),
+    Files,
+    Both(SharedString),
 }
 
 /// Whether a line stands in the reply field's place, under the log, as the task takes no reply.
@@ -204,9 +230,13 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
         IloKind::TabBack { .. } => vec![IloButton::HandBack, IloButton::NotNow],
         IloKind::SignedIn { .. } | IloKind::TierChanged { .. } => Vec::new(),
         // What happened, which no press undoes: the files are given again at a task's start.
-        IloKind::StartedWithout { .. } | IloKind::KeptAt { .. } | IloKind::NotRestarted { .. } => {
-            Vec::new()
-        }
+        IloKind::StartedWithout { .. }
+        | IloKind::KeptAt { .. }
+        | IloKind::SetBack { .. }
+        | IloKind::NotRestarted { .. }
+        | IloKind::NotRaised { .. }
+        | IloKind::LeftRunning { .. }
+        | IloKind::EndedLeft => Vec::new(),
         IloKind::Resumed { .. } | IloKind::KeptHere => Vec::new(),
         IloKind::Gone
         | IloKind::NotKept
@@ -240,9 +270,13 @@ pub fn tab(kind: &IloKind) -> Option<u64> {
         | IloKind::TabBack { tab }
         | IloKind::SignedIn { tab, .. } => Some(*tab),
         IloKind::TierChanged { .. } => None,
-        IloKind::StartedWithout { .. } | IloKind::KeptAt { .. } | IloKind::NotRestarted { .. } => {
-            None
-        }
+        IloKind::StartedWithout { .. }
+        | IloKind::KeptAt { .. }
+        | IloKind::SetBack { .. }
+        | IloKind::NotRestarted { .. }
+        | IloKind::NotRaised { .. }
+        | IloKind::LeftRunning { .. }
+        | IloKind::EndedLeft => None,
         IloKind::Resumed { .. } | IloKind::KeptHere => None,
         IloKind::Gone
         | IloKind::NotKept

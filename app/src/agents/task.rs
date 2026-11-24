@@ -1463,13 +1463,13 @@ impl Agents {
         };
         self.tasks.tasks.push(task);
         self.tokens_changed();
-        // The log keeps the tier it starts at, as it keeps a change of it.
-        let started = super::tier::started_logged(tier, pages.len());
-        self.note_on(&agent, 0, super::access::ACCESS_ACTION, "", &started, "");
+        // The log keeps the tier it starts at, as it keeps a change of it, and on the same row
+        // that it started without its files, which its wall's answer says (rewall.rs).
+        let wall = self.wall_to_begin(&agent, pages.len());
         let task = self.task(&agent);
         let first = first_message(asked, task.and_then(|task| task.page.as_ref()));
         let first = with_added(first, task.map_or(&[], |task| &task.added));
-        self.launch(&agent, &first, cx);
+        self.launch_in(&agent, &first, wall, cx);
         self.wait_for_answer(&agent, cx);
         cx.notify();
         Some(agent)

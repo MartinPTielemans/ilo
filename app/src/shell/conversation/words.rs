@@ -3,7 +3,9 @@
 //! here (#4086). The tiers' names are the tier table's (agents/tier.rs).
 
 use crate::agents::kept;
-use crate::agents::task::ilo::{HelpersLimit as Limit, IloButton, IloKind, LeftOut, SignedInWith};
+use crate::agents::task::ilo::{
+    HelpersLimit as Limit, IloButton, IloKind, LeftOut, Reach, SignedInWith,
+};
 use crate::agents::tier::{self, Tier, Why};
 
 /// ilo's mark, before each of its lines' words.
@@ -68,10 +70,49 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
             ),
             Some(folder.to_string()),
         ),
-        IloKind::NotRestarted { folder } => (
-            format!("stopped this task: ilo couldn't restart {agent} without"),
+        IloKind::SetBack { at, folder, .. } => (
+            format!(
+                "set this task back to {}: ilo couldn't limit {agent} to",
+                at.label()
+            ),
             Some(folder.to_string()),
         ),
+        IloKind::NotRestarted {
+            left: LeftOut::Folder(name) | LeftOut::File(name),
+        } => (
+            format!("stopped this task: ilo couldn't restart {agent} without"),
+            Some(name.to_string()),
+        ),
+        IloKind::NotRestarted {
+            left: LeftOut::Files(files),
+        } => (
+            format!("stopped this task: ilo couldn't restart {agent} without your {files} files"),
+            None,
+        ),
+        IloKind::NotRaised { refused } => (
+            format!(
+                "stopped this task: ilo couldn't restart {agent} at {}",
+                refused.label()
+            ),
+            None,
+        ),
+        // What a run left running (#4101): what it can still reach, and what ends it.
+        IloKind::LeftRunning {
+            reach: Reach::Folder(folder) | Reach::Both(folder),
+        } => (
+            format!("couldn't end everything {agent} started: what's left can still reach"),
+            Some(folder.to_string()),
+        ),
+        IloKind::LeftRunning {
+            reach: Reach::Files,
+        } => (
+            format!(
+                "couldn't end everything {agent} started: what's left can still reach this \
+                 task's files{RESTART_ENDS}"
+            ),
+            None,
+        ),
+        IloKind::EndedLeft => (format!("ended what {agent} had left running"), None),
         IloKind::Resumed { tier } => (format!("resumed this task at {}", tier.label()), None),
         // Where the assistant is the subject, a middle dot sets ilo's mark off from the sentence.
         // A kept task takes a reply after a quit too, so the words name no end; the reply field
@@ -111,6 +152,9 @@ pub fn with_name(kind: &IloKind, own: &str, name: &str) -> (String, std::ops::Ra
     }
 }
 
+/// How the line of what a run left running ends: what the user can do about it.
+const RESTART_ENDS: &str = ". Restarting this computer ends it.";
+
 /// What a line says after its name, to its sentence's end, if anything.
 pub fn tail(kind: &IloKind, agent: &str) -> Option<String> {
     match kind {
@@ -120,7 +164,15 @@ pub fn tail(kind: &IloKind, agent: &str) -> Option<String> {
         IloKind::StartedWithout {
             left: LeftOut::File(_),
         } => Some(format!(": ilo couldn't limit {agent} to that file")),
-        IloKind::KeptAt { refused, .. } => Some(format!(" at {}", refused.label())),
+        IloKind::KeptAt { refused, .. } | IloKind::SetBack { refused, .. } => {
+            Some(format!(" at {}", refused.label()))
+        }
+        IloKind::LeftRunning {
+            reach: Reach::Folder(_),
+        } => Some(RESTART_ENDS.into()),
+        IloKind::LeftRunning {
+            reach: Reach::Both(_),
+        } => Some(format!(" and this task's files{RESTART_ENDS}")),
         _ => None,
     }
 }
@@ -150,9 +202,13 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
         }),
         IloKind::Yours { .. } | IloKind::TabBack { .. } | IloKind::TierChanged { .. } => None,
         IloKind::Helpers { .. } => None,
-        IloKind::StartedWithout { .. } | IloKind::KeptAt { .. } | IloKind::NotRestarted { .. } => {
-            None
-        }
+        IloKind::StartedWithout { .. }
+        | IloKind::KeptAt { .. }
+        | IloKind::SetBack { .. }
+        | IloKind::NotRestarted { .. }
+        | IloKind::NotRaised { .. }
+        | IloKind::LeftRunning { .. }
+        | IloKind::EndedLeft => None,
         IloKind::Resumed { .. } => None,
         IloKind::KeptHere
         | IloKind::Gone

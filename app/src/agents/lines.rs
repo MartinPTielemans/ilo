@@ -1,6 +1,7 @@
 //! ilo's lines of what happened to a task (#4086 step 3): each refusal, each step that's the
 //! user's, each time an agent asks for a tab back, each change of the task's access, and each wall
-//! around its files that ilo couldn't put up (#4101, rewall.rs). The app
+//! around its files that ilo couldn't put up, with what a run inside one left running (#4101,
+//! rewall.rs). The app
 //! makes each from the task's own state, at the end of the turn it came in: nothing an agent sends
 //! and no page's text makes one, names its buttons or gives it a link.
 
@@ -10,7 +11,7 @@ use gpui::{App, Context, SharedString};
 
 use super::files::Given;
 use super::held;
-use super::task::ilo::{IloKind, IloLine, LeftOut};
+use super::task::ilo::{IloKind, IloLine, LeftOut, Reach};
 use super::task::rewall::Rewalled;
 use super::task::{Line, Task, Who};
 use super::tier::{self, Tier};
@@ -45,7 +46,20 @@ fn shown(files: &Given) -> Shown {
     }
 }
 
-/// The lines of one wall that wasn't put up: none where a line would have no name to say.
+/// What `files` are said as where a line says what a task is without: the folder first, then
+/// the attached files, one by its name and more by their count.
+fn left_out(files: &Given) -> impl Iterator<Item = LeftOut> {
+    let Shown { folder, attached } = shown(files);
+    let attached = match attached.as_slice() {
+        [] => None,
+        [file] => Some(LeftOut::File(file.clone())),
+        files => Some(LeftOut::Files(files.len())),
+    };
+    folder.map(LeftOut::Folder).into_iter().chain(attached)
+}
+
+/// The lines of one wall that wasn't put up, or of what a run left running: none where a line
+/// would have no name to say.
 fn rewalled(came: &Rewalled) -> Vec<IloKind> {
     match came {
         Rewalled::Stays { at, refused, files } => (shown(files).folder.into_iter())
@@ -55,21 +69,33 @@ fn rewalled(came: &Rewalled) -> Vec<IloKind> {
                 folder,
             })
             .collect(),
-        // The folder's first, the attached files' under it.
-        Rewalled::WithoutFiles { files } => {
-            let Shown { folder, attached } = shown(files);
-            let attached = match attached.as_slice() {
-                [] => None,
-                [file] => Some(LeftOut::File(file.clone())),
-                files => Some(LeftOut::Files(files.len())),
+        Rewalled::SetBack { at, refused, files } => (shown(files).folder.into_iter())
+            .map(|folder| IloKind::SetBack {
+                at: *at,
+                refused: *refused,
+                folder,
+            })
+            .collect(),
+        Rewalled::WithoutFiles { files } => (left_out(files))
+            .map(|left| IloKind::StartedWithout { left })
+            .collect(),
+        Rewalled::Stopped { files } => (left_out(files))
+            .map(|left| IloKind::NotRestarted { left })
+            .collect(),
+        Rewalled::NotRaised { refused } => vec![IloKind::NotRaised { refused: *refused }],
+        Rewalled::LeftRunning { files } => {
+            // The files the user attached are said as the task's, so need no name.
+            let reach = match (shown(files).folder, files.attached.is_some()) {
+                (Some(folder), true) => Some(Reach::Both(folder)),
+                (Some(folder), false) => Some(Reach::Folder(folder)),
+                (None, true) => Some(Reach::Files),
+                (None, false) => None,
             };
-            (folder.map(LeftOut::Folder).into_iter().chain(attached))
-                .map(|left| IloKind::StartedWithout { left })
+            (reach.into_iter())
+                .map(|reach| IloKind::LeftRunning { reach })
                 .collect()
         }
-        Rewalled::Stopped { files } => (shown(files).folder.into_iter())
-            .map(|folder| IloKind::NotRestarted { folder })
-            .collect(),
+        Rewalled::EndedLeft => vec![IloKind::EndedLeft],
     }
 }
 
