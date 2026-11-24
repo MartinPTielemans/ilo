@@ -1693,3 +1693,45 @@ fn a_helpers_line_under_way_shimmers_unless_motion_is_reduced(cx: &mut TestAppCo
     assert!(!moving(cx), "nothing is under way");
     cx.update(|_, cx| cx.set_reduce_motion(true));
 }
+
+/// Its pages show live in their pictures while Pages shows, where the core can (#4115), and every
+/// tile ends as Talk, or anything else, takes the conversation's place.
+#[gpui::test]
+fn its_pages_are_live_in_pages_and_end_as_it_goes(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    host.shows_tiles.set(Some(true));
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    cx.run_until_parked();
+    assert!(
+        !host.take().iter().any(|line| line.starts_with("tile ")),
+        "live in Talk"
+    );
+    let pages = |view: &Entity<super::TalkView>, cx: &mut VisualTestContext| {
+        view.update(cx, |view, cx| view.show_pages(true, cx));
+        cx.run_until_parked();
+        let did = host.take();
+        assert!(
+            did.iter().any(|line| line.starts_with("tile 30 at ")),
+            "not live in Pages: {did:?}"
+        );
+    };
+    pages(&view, cx);
+
+    view.update(cx, |view, cx| view.show_pages(false, cx));
+    cx.run_until_parked();
+    assert!(
+        host.take().contains(&"end tile 30".to_string()),
+        "live in Talk"
+    );
+
+    pages(&view, cx);
+    shell.update(cx, |shell, cx| shell.close_task(cx));
+    cx.run_until_parked();
+    assert!(
+        host.take().contains(&"end tile 30".to_string()),
+        "live with the task closed"
+    );
+}

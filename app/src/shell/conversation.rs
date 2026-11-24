@@ -25,6 +25,7 @@ use super::{
     NAV_RADIUS, SECONDARY, Shell, TITLE,
     agent_bar::stop_keys,
     browser::Browser,
+    live_tiles::LiveTiles,
     picture::{PagePicture, next_request},
     row_spring,
 };
@@ -184,6 +185,8 @@ pub struct TalkView {
     unpictured: Vec<u64>,
     /// Where each picture was drawn last, in the window, for its page to zoom out of.
     drawn: Rc<RefCell<Vec<(u64, Bounds<Pixels>)>>>,
+    /// Its pages, live in their pictures' places where the core can.
+    tiles: Rc<LiveTiles>,
     /// Where each picture was drawn when that was logged last.
     drawn_logged: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
     /// What each picture's status line said when that was logged last.
@@ -335,6 +338,7 @@ impl Shell {
                     pictures: Vec::new(),
                     unpictured: Vec::new(),
                     drawn: Rc::default(),
+                    tiles: LiveTiles::new(self.browser.clone()),
                     drawn_logged: Rc::default(),
                     said_logged: RefCell::default(),
                     stop_logged: Rc::default(),
@@ -638,6 +642,7 @@ impl TalkView {
 
     /// Its pictures go, as it no longer shows, and are taken again when it does.
     fn let_go(&mut self) -> Vec<Arc<RenderImage>> {
+        self.tiles.end_all();
         self.stale = true;
         self.motion.reset();
         let pictures = std::mem::take(&mut self.pictures);
@@ -2851,28 +2856,39 @@ impl Render for TalkView {
                 .when(look.behind, |part| part.child(unpressed()))
         };
         let middle = match self.on_pages() {
-            true => div()
-                .flex_1()
-                .min_h_0()
-                .mx(px(PICTURE_GAP - INSET))
-                .flex()
-                .mb(px(REPLY_GAP))
-                .child(self.grid(&look, cx)),
-            false => shut(
+            true => {
+                // Its pages show live in their pictures where the core can (live_tiles.rs), but
+                // not under a page watched over them, which they'd draw over.
+                let held = look.behind
+                    || (self.shell.upgrade())
+                        .is_some_and(|shell| shell.read(cx).watched_task_page().is_some());
+                let grid = self.grid(&look, cx);
                 div()
                     .flex_1()
                     .min_h_0()
-                    .w_full()
+                    .mx(px(PICTURE_GAP - INSET))
                     .flex()
-                    .justify_center()
                     .mb(px(REPLY_GAP))
-                    .child(
-                        div()
-                            .size_full()
-                            .max_w(px(COLUMN + 2. * TRACE_HANG))
-                            .child(lines),
-                    ),
-            ),
+                    .child(self.tiles.over(grid, self.drawn.clone(), held))
+            }
+            false => {
+                self.tiles.end_all();
+                shut(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .flex()
+                        .justify_center()
+                        .mb(px(REPLY_GAP))
+                        .child(
+                            div()
+                                .size_full()
+                                .max_w(px(COLUMN + 2. * TRACE_HANG))
+                                .child(lines),
+                        ),
+                )
+            }
         };
         let column = div()
             .size_full()

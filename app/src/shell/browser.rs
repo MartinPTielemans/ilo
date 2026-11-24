@@ -1136,6 +1136,15 @@ pub trait Browser {
     /// Shows `tab` in browser window `window`, its page moving there live, as a click on its row
     /// there does.
     fn show_in_window(&self, _window: u64, _tab: u64, _cx: &mut App) {}
+    /// Shows `tab`'s page live in this window at `at`, with corners of `radius`, over what the
+    /// UI draws there: an agent's page no window shows, which takes nothing from the user and
+    /// hears no click (#4115). Call again as `at` changes. False, with nothing shown, for any
+    /// other tab and off the Mac, where the UI draws its picture instead.
+    fn show_tile(&self, _tab: u64, _at: Bounds<Pixels>, _radius: f32) -> bool {
+        false
+    }
+    /// Takes `tab`'s page out of the tile `show_tile` showed it in; nothing if it isn't one.
+    fn end_tile(&self, _tab: u64) {}
     /// Opens a window as ⌘N does with `tab` in it, its page moving there live: at the screen point
     /// `at` less `grab`, where the pointer was in this window as the drag started, so the row comes
     /// in under the pointer, or where the system puts it without `at`.
