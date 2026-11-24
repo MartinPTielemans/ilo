@@ -30,8 +30,12 @@ int main() {
     NSApplication* app = NSApplication.sharedApplication;
     app.activationPolicy = NSApplicationActivationPolicyRegular;
     // At the screen's bottom left, clear of the browser window's top and a Mini Player's corner.
+    // Resizable, as full screen takes it: AppKit leaves a window that isn't resizable out of
+    // full screen, and toggleFullScreen on it is a no-op that says nothing back, so the check's
+    // wait for the entered-full-screen line ran out.
     NSWindow* window = [[NSWindow alloc] initWithContentRect:NSMakeRect(20, 20, 240, 120)
-                                                   styleMask:NSWindowStyleMaskTitled
+                                                   styleMask:NSWindowStyleMaskTitled |
+                                                            NSWindowStyleMaskResizable
                                                      backing:NSBackingStoreBuffered
                                                        defer:NO];
     window.title = @"Other app";
