@@ -908,17 +908,28 @@ tint-more = 0.44
 gray-text-less = 4.5
 gray-text = 3.0
 gray-text-more = 3.0
-# The HUD window's material alone, untinted, over a white, a grey and a black backdrop, as the
-# app draws it on a Mac with the tint off, measured from its window's pixels; the window's ground
-# over each is the tint's colour at its alpha over these.
-material-over-white = 0xacacac
-material-over-grey = 0x5e5e5e
+# The HUD window's material alone, untinted, over a window of white, grey 128 and black behind
+# it, on a black desktop, as the app draws it on a Mac with the tint off, measured from its
+# window's pixels: the darkest the window can be. The desktop picture comes through what's behind
+# as well, and a light one lifts the material over each by up to `material-lift` levels of 255 (13
+# over the check VM's own picture, 12 to 13 at every grey). These are the reads with the Mac's
+# desktop tinting on, the system's default; with it off there's no lift, and the material reads
+# between these and the lifted ones in both looks, so the same range holds it. The window's ground
+# over each is the tint's colour at its alpha over these; its lightest is over white, lifted.
+material-over-white = 0xa0a0a0
+material-over-grey = 0x585858
 material-over-black = 0x131313
+material-lift = 13.0
 # What stands in for the material where the window's look has to be opaque, under rows it covers
 # or in the reveal's panel over the page: the ground over grey at Standard. The palette works out
 # each level's from the tokens above; this one is for what reads it without a palette, and a test
 # holds it to the palette's.
 stand-in = 0x303030
+# What AppKit draws in the material's place with Reduce Transparency or Increase Contrast, at every
+# level: an opaque ground, nothing behind it showing through, so gray text on it holds what it does
+# at Less. The window background material's, from the VM's run 6, stands in until the VM reads the
+# HUD window's under those settings.
+material-solid = 0x333332
 # The Space's colour is a glow from the sidebar's foot, not a wash over the window (#4089): an
 # ellipse `glow-width` by `glow-height` (its radii) centred on the window's bottom left corner, the
 # main colour at `gradient-alpha` there, going in a straight line to nothing at `glow-fade` of the
@@ -944,10 +955,12 @@ dialog-dark = 0x2a2720
 light-tint-less = 0.83
 light-tint = 0.7
 light-tint-more = 0.58
-light-material-over-white = 0xf6f6f6
-light-material-over-grey = 0xb6b6b6
-light-material-over-black = 0x717171
+light-material-over-white = 0xe9e9e9
+light-material-over-grey = 0xb0b0b0
+light-material-over-black = 0x707070
+light-material-lift = 13.0
 light-stand-in = 0xebebeb
+light-material-solid = 0xffffff
 # What floats over the window at each level, for the transparency picker: the dark fill over the
 # window's material at these, beside the window's own tints.
 overlay-fill-less = 0.88
@@ -1487,7 +1500,9 @@ plate-inset = 8.0
 list-trail = 118.0
 folder-indent = 16.0
 # A dragged row's drop line is Arc's: 2 pt, from a ring 8 across, drawn with the same 2 pt,
-# whose left is 7 in from the plate's, to 2 before the plate's end (Arc 1.170 rec).
+# whose left is 7 in from the plate's, to 2 before the plate's end (Arc 1.170 rec), in the window's
+# ink at `drop` (Arc's white at 0.9 over the dark Space; the ink is ilo's, and shows on the light
+# window, where white doesn't).
 drop-line = 2.0
 drop-ring = 8.0
 drop-ring-x = 7.0
@@ -1496,7 +1511,7 @@ drop-line-end = 2.0
 # edges at the plate's radius less as much, filled as a hovered row (ours: Arc's preview isn't
 # measured).
 drop-slot-inset = 3.0
-drop = 0xffff_ffe6
+drop = 0.9
 plate-radius = 12.0
 # A row's host under its title, in `secondary` at text's small size, Arc's 11 pt (Arc 1.168): a
 # pinned tab's whose page left its pinned URL's host, and a tab's in Developer Mode. The two lines
@@ -2337,6 +2352,41 @@ welcome-press = 0.5
 # The color's: the sidebar's rows swipe to the next Space from `at` over `swipe`, and back.
 color-at = [0.6, 5.0]
 color-swipe = 0.6
+# The import's: the other browser's strip over ilo's window, `strip-gap` above it. Its bookmarks
+# land as favorites from `at`'s first and its tabs as tabs from its second, one every `stagger`,
+# each over `land`, coming down `drop` into place as its strip's dims to `dim`. The Spaces' dots
+# come at `spaces` and what came at `came`, each over `fade`, and all of it goes over the loop's
+# last `out`. The favorites are `tile` tiles, `tile-gap` apart, from `tiles-top` down.
+strip-height = 58.0
+strip-gap = 14.0
+tile = 22.0
+tile-gap = 4.0
+tiles-top = 22.0
+import-at = [0.4, 2.2]
+import-stagger = 0.35
+import-land = 0.35
+import-drop = 6.0
+import-dim = 0.35
+import-spaces = 4.2
+import-came = 4.8
+import-fade = 0.4
+import-out = 0.6
+# The favorites': the sites the history visited most in a strip over ilo's window, as the import's
+# other browser is. From `at`, one every `stagger`, a site's tick fills and `tick` later it lands in
+# the sidebar as a tile, as the import's favorites land; the last site stays unticked and never
+# lands. What came is said at `came`; the import's land, drop, fade and out are theirs too.
+favorites-at = 0.6
+favorites-stagger = 0.7
+favorites-tick = 0.3
+favorites-came = 3.6
+# The default browser's: a message in another app over ilo's window, its link `default-link` in
+# from the message's corner. From `default-at` the pointer goes to the link over the welcome's
+# move, clicks it and fades, and `default-open` after the press the link lands in ilo's sidebar as
+# a new tab at the top, over the import's land and drop, taking the selected plate as its page
+# shows.
+default-link = [40.0, 34.0]
+default-at = 0.6
+default-open = 0.3
 
 [shell.import]
 # Ours (#1673): while an import runs, each Space it makes is a card in its own colours, under the

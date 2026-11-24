@@ -51,7 +51,7 @@ impl Shell {
         log!("browser: rename space {space}");
         let name = cx.new(|cx| {
             TextInput::new("Space name", cx)
-                .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
+                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
@@ -98,7 +98,7 @@ impl Shell {
         log!("browser: rename space {space} in library");
         let name = cx.new(|cx| {
             TextInput::new("Space name", cx)
-                .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
+                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
@@ -127,7 +127,7 @@ impl Shell {
         }
         let name = cx.new(|cx| {
             TextInput::new(placeholder, cx)
-                .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
+                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
                 .with_text(text)
         });
         self.renaming = Some(Renaming {
@@ -151,7 +151,7 @@ impl Shell {
         let url = self.browser.pinned_url(tab);
         let field = cx.new(|cx| {
             TextInput::new("Pinned URL", cx)
-                .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
+                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
                 .with_text(url.into())
         });
         self.renaming = Some(Renaming {
@@ -504,7 +504,7 @@ impl Shell {
     pub(super) fn name_folder(&mut self, folder: u64, name: SharedString, cx: &mut Context<Self>) {
         let name = cx.new(|cx| {
             TextInput::new("Folder name", cx)
-                .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
+                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
@@ -552,7 +552,7 @@ impl Shell {
         log!("browser: name board {tab}");
         let name = cx.new(|cx| {
             TextInput::new("Board name", cx)
-                .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
+                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
                 .with_text(BOARD.into())
         });
         self.renaming = Some(Renaming {
@@ -582,7 +582,7 @@ impl Shell {
     ) {
         let name = cx.new(|cx| {
             TextInput::new(name.clone(), cx)
-                .placeholder_color(self.palette.text(FORM_PLACEHOLDER))
+                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
                 .with_text(name)
         });
         self.renaming = Some(Renaming {

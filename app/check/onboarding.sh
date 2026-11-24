@@ -88,6 +88,13 @@ launch_new() {
     "intro import "*"color ${glass}${account}opt-ins") ;;
     *) fail "$1: the steps were '$steps', not the intro, the import, the rest, the color, ${glass}${account}the opt-ins" ;;
   esac
+  # BROWSER_ONBOARDING gives the sheet its look but leaves the window's material the system's, so
+  # on a system of the other look the captures would show a sheet on glass no user can reach.
+  # ilo's own Appearance, picked as a user picks it, gives the window the same look (#4093).
+  look=Light
+  [ "$1" = light ] || look=Dark
+  send menu "$(cased "Appearance › $look")"
+  expect "^browser: appearance $1\$" "$1: View › Appearance › $look didn't set ilo's look"
 }
 
 # Light: the welcome waits once drawn, Return goes on from it, and Esc from every step after.
@@ -133,7 +140,7 @@ grep -q '^browser: onboarding' "$log" &&
 exec 3>&-
 quit
 
-# Dark: Return goes on from the welcome, Skip at the window's bottom right leaves the import, and
+# Dark: Return goes on from the welcome, Skip in the sheet's foot leaves the import, and
 # the colour step's → and Return give the first Space the first swatch.
 # With the system's animations off the app reduces its motion, read at launch, and follows them
 # back on. Only on a CI VM, as the setting is the desk's: on Windows "Show animations in Windows",
@@ -179,22 +186,10 @@ fi
 expect '^browser: onboarding step import settled$' "dark: the import step didn't come"
 capture_step dark-import
 import_choices dark
-# Its words and chip end 24 in from the window's right and bottom, 20 tall.
-# Only the Mac's window frame is its content, so elsewhere the driver's layout gives its size: Linux
-# logs no frame (host_window_frame), and Windows' takes in the title bar and borders.
-frame=
-if [ "$(uname)" = Darwin ]; then
-  frame=$(grep -m1 '^browser: window [0-9]* frame ' "$log" | cut -d' ' -f7-8)
-fi
-if [ -z "$frame" ]; then
-  send layout
-  frame=$(grep -m1 '^browser: layout content ' "$log" |
-    sed 's/^browser: layout content \([0-9]*\)x\([0-9]*\).*/\1 \2/')
-fi
-width=${frame% *}
-height=${frame#* }
-[ -n "$height" ] || fail "the window didn't log its frame"
-send click $((width - 24 - 15)) $((height - 24 - 10))
+# The sheet's Skip takes a click where the app last said it's drawn, as it logs where once the step
+# has come, before the choices above, and again only if it moves (#4093).
+await '^browser: onboarding skip at ' || fail "dark: the import step didn't draw its Skip"
+send click $(grep '^browser: onboarding skip at ' "$log" | tail -1 | cut -d' ' -f5-6)
 expect '^browser: onboarding left import via skip$' \
   "dark: a click on Skip didn't leave the import step"
 case " $steps " in
@@ -449,6 +444,10 @@ await '^browser: onboarding step favorites settled$' ||
 capture_step favorites
 send key escape
 expect '^browser: onboarding left favorites via escape$' "favorites: Esc didn't leave the step"
+# The look goes back to the system's, as the light and dark passes set ilo's own, for the runs after.
+send menu "$(cased 'Appearance › Automatic')"
+expect '^browser: appearance automatic$' \
+  "favorites: View › Appearance › Automatic didn't give the look back to the system"
 exec 3>&-
 quit
 

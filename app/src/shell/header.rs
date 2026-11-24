@@ -555,7 +555,7 @@ impl Shell {
     /// bar's placeholder, `shown` of the way in.
     pub(super) fn url_words(&self, tab: u64, url: &str, shown: f32) -> (SharedString, Hsla) {
         if tab == 0 {
-            let mut color = self.palette.text(URL_PLACEHOLDER);
+            let mut color = self.palette.gray(URL_PLACEHOLDER);
             color.a *= shown;
             return (PLACEHOLDER_TEXT.into(), color);
         }

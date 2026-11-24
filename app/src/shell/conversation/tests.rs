@@ -902,7 +902,7 @@ fn the_reply_placeholder_follows_the_appearance(cx: &mut TestAppContext) {
             let reply = talk.view.read(cx).reply.read(cx).placeholder_hsla();
             (
                 reply,
-                gpui::Hsla::from(shell.palette.text(FORM_PLACEHOLDER)),
+                gpui::Hsla::from(shell.palette.gray(FORM_PLACEHOLDER)),
             )
         });
         assert_eq!(drawn, meant, "{appearance:?}'s placeholder");
