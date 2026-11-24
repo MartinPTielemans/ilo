@@ -1462,10 +1462,52 @@ namespace {
 // The window's material (docs/ux-spec.md › Window material): what's behind the window, blurred,
 // under the UI, which tints it, dark or light. AppKit swaps it for an opaque fill while the window
 // is inactive, and with Reduce Transparency or Increase Contrast.
+// Never to land (the window-material probe): the window's material by its name in
+// BROWSER_PROBE_MATERIAL, one of AppKit's public, undeprecated ones, and the HUD window's
+// without it. A measurement in the check VM, read nowhere else.
+NSVisualEffectMaterial ProbeMaterial() {
+  static const struct {
+    const char* name;
+    NSVisualEffectMaterial material;
+  } kMaterials[] = {
+      {"titlebar", NSVisualEffectMaterialTitlebar},
+      {"selection", NSVisualEffectMaterialSelection},
+      {"menu", NSVisualEffectMaterialMenu},
+      {"popover", NSVisualEffectMaterialPopover},
+      {"sidebar", NSVisualEffectMaterialSidebar},
+      {"header-view", NSVisualEffectMaterialHeaderView},
+      {"sheet", NSVisualEffectMaterialSheet},
+      {"window-background", NSVisualEffectMaterialWindowBackground},
+      {"hud-window", NSVisualEffectMaterialHUDWindow},
+      {"full-screen-ui", NSVisualEffectMaterialFullScreenUI},
+      {"tool-tip", NSVisualEffectMaterialToolTip},
+      {"content-background", NSVisualEffectMaterialContentBackground},
+      {"under-window-background", NSVisualEffectMaterialUnderWindowBackground},
+      {"under-page-background", NSVisualEffectMaterialUnderPageBackground},
+  };
+  const char* asked = getenv("BROWSER_PROBE_MATERIAL");
+  for (const auto& each : kMaterials) {
+    if (asked && strcmp(asked, each.name) == 0) {
+      return each.material;
+    }
+  }
+  if (asked) {
+    fprintf(stderr, "browser: probe material %s isn't one; the HUD window's\n", asked);
+  }
+  return NSVisualEffectMaterialHUDWindow;
+}
+
+// Never to land (the window-material probe): BROWSER_PROBE_EMPHASIZED=0 for a window that
+// isn't, and as the window is without it.
+bool ProbeEmphasized() {
+  const char* asked = getenv("BROWSER_PROBE_EMPHASIZED");
+  return !asked || strcmp(asked, "0") != 0;
+}
+
 void SetWindowMaterialLight(NSVisualEffectView* material, bool light) {
   // The HUD window's in both looks, ilo's own pick: the same glass dark and light, a material
   // AppKit names, and the one the transparency levels' tints are reckoned against.
-  material.material = NSVisualEffectMaterialHUDWindow;
+  material.material = ProbeMaterial();
   material.appearance =
       [NSAppearance appearanceNamed:light ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua];
 }
@@ -1475,8 +1517,12 @@ NSVisualEffectView* WindowMaterial(NSRect frame, bool light) {
   material.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   material.blendingMode = NSVisualEffectBlendingModeBehindWindow;
   material.state = NSVisualEffectStateFollowsWindowActiveState;
-  material.emphasized = YES;
+  material.emphasized = ProbeEmphasized();
   SetWindowMaterialLight(material, light);
+  if (getenv("BROWSER_PROBE_MATERIAL") || getenv("BROWSER_PROBE_EMPHASIZED")) {
+    fprintf(stderr, "browser: probe material %ld emphasized %d\n", (long)material.material,
+            material.emphasized);
+  }
   return material;
 }
 

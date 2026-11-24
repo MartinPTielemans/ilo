@@ -98,6 +98,16 @@ impl Transparency {
 
     /// The window's black over its material in dark, or its white in light, at this level.
     pub fn tint(self, dark: bool) -> f32 {
+        // Never to land (the window-material probe): the layer's amount from the environment,
+        // 0 for none of it, in either look.
+        static PROBE: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
+        let probe = PROBE.get_or_init(|| {
+            let asked = std::env::var("BROWSER_PROBE_TINT").ok()?;
+            asked.trim().parse().ok().filter(|amount| (0. ..=1.).contains(amount))
+        });
+        if let Some(amount) = *probe {
+            return amount;
+        }
         match (self, dark) {
             (Transparency::Less, true) => TINT_LESS,
             (Transparency::Standard, true) => TINT,
