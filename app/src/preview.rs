@@ -1717,7 +1717,7 @@ impl Browser for Fake {
     }
 
     // The preview runs no tasks.
-    fn start_task(&self, _: &str, _: &str, _: u64, _: Tier, _: &mut App) {}
+    fn start_task(&self, _: &str, _: &str, _: u64, _: browser::agents::task::Start, _: &mut App) {}
 
     fn field_window_typing(&self, _: &mut App) -> bool {
         false
@@ -2147,6 +2147,12 @@ impl command_bar::Host for PreviewBar {
             name: "Claude".into(),
             glyph: "icons/terminal.svg",
             model: Some("Haiku".into()),
+            model_id: "haiku".into(),
+            default_row: "Claude Code's default".into(),
+            default_model: Some("Sonnet".into()),
+            models: [("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")]
+                .map(|(id, name)| (id.to_string(), name.to_string()))
+                .to_vec(),
             resets: None,
         };
         Some(command_bar::TaskAgents {

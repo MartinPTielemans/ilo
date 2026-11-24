@@ -277,6 +277,7 @@ fn agents(listed: &[(&str, Option<&str>)]) -> Option<TaskAgents> {
             },
             model: (id == "claude").then(|| "Haiku".into()),
             resets: resets.map(|at| at.to_string().into()),
+            ..TaskAgent::default()
         })
         .collect();
     Some(TaskAgents {

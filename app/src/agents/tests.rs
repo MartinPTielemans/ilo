@@ -8140,8 +8140,87 @@ mod tasks {
                     .map(|entry| entry.target.to_string())
                     .collect()
             });
-            assert_eq!(logged, vec![crate::agents::tier::started_logged(tier)]);
+            assert_eq!(logged, vec![crate::agents::tier::started_logged(tier, 0)]);
         }
+    }
+
+    /// Pages the user added reach the task as their addresses, http(s) only; Only the pages you
+    /// add limits it to their sites; and the start's entry gains their count, never an address.
+    #[gpui::test]
+    fn added_pages_limit_the_task_to_their_sites_and_the_log_counts_them(cx: &mut TestAppContext) {
+        use crate::agents::task::Start;
+        let (agents, _) = ready(None, cx);
+        let start = |only_added: bool| Start {
+            pages: vec![
+                "https://fieldbook.example/lakeside".into(),
+                "https://www.atlas.example/parks".into(),
+                "file:///etc/passwd".into(),
+            ],
+            only_added,
+            ..Start::default()
+        };
+        let only = agents.update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, "Plan a walk", None, 1, start(true), cx)
+        });
+        let any = agents.update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, "Plan a walk", None, 1, start(false), cx)
+        });
+        let [only, any] = [only, any].map(|agent| agent.expect("started"));
+        agents.read_with(cx, |agents, _| {
+            let task = agents.task(&only).unwrap();
+            let sites = [
+                "https://fieldbook.example/lakeside",
+                "https://www.atlas.example/parks",
+            ]
+            .map(|url| crate::sort_by_site::made_up_site(url).unwrap())
+            .to_vec();
+            assert_eq!(
+                task.sites,
+                Sites::Only(sites),
+                "only the added pages' sites"
+            );
+            assert_eq!(task.added.len(), 2, "no page off the web is added");
+            assert_eq!(agents.task(&any).unwrap().sites, Sites::Any);
+            let logged: Vec<String> = (agents.activity(&only))
+                .filter(|entry| entry.action.as_ref() == crate::agents::access::ACCESS_ACTION)
+                .map(|entry| entry.target.to_string())
+                .collect();
+            assert_eq!(logged, ["Starts at Work on pages · 2 pages"]);
+        });
+    }
+
+    /// An added page's address reaches the task without the user name and password a tab's
+    /// address can carry, and one over the cap doesn't reach it at all.
+    #[gpui::test]
+    fn an_added_address_carries_no_login_and_none_over_the_cap(cx: &mut TestAppContext) {
+        use crate::agents::task::{ADDED_MOST, Start, added_address};
+        let at_most = format!("https://a.example/{}", "a".repeat(ADDED_MOST - 18));
+        assert_eq!(at_most.len(), ADDED_MOST);
+        assert_eq!(added_address(&at_most).as_deref(), Some(at_most.as_str()));
+        assert_eq!(added_address(&format!("{at_most}a")), None);
+        assert_eq!(
+            added_address("https://sam@a.example/x").as_deref(),
+            Some("https://a.example/x")
+        );
+        let (agents, _) = ready(None, cx);
+        let start = Start {
+            pages: vec![
+                "https://sam:hunter2@fieldbook.example/lakeside?day=2".into(),
+                format!("{at_most}a"),
+            ],
+            ..Start::default()
+        };
+        let agent = agents.update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, "Plan a walk", None, 1, start, cx)
+        });
+        agents.read_with(cx, |agents, _| {
+            let task = agents.task(&agent.expect("started")).unwrap();
+            assert_eq!(
+                task.added,
+                ["https://fieldbook.example/lakeside?day=2"],
+                "the login is the user's, and a page over the cap isn't added"
+            );
+        });
     }
 
     /// A card lists the task's last three steps this turn, oldest first, as the conversation's
@@ -8746,6 +8825,65 @@ mod tasks {
         agents.update(cx, |agents, cx| agents.set_task_model(Cli::Claude, "", cx));
         agents.read_with(cx, |agents, _| {
             assert_eq!(agents.task_model(Cli::Claude), "")
+        });
+    }
+
+    /// The composer's pick on the assistant's chip is the model its task's run passes, and the
+    /// task's own name for it; Settings' Model is untouched, and the next task starts on it. A
+    /// pick the CLI no longer offers runs on its default, saying nothing.
+    #[gpui::test]
+    fn a_composer_pick_runs_its_task_alone(cx: &mut TestAppContext) {
+        use crate::agents::task::Start;
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let agents = agents(&browser, &configs, None, cx);
+        let start = |model: Option<&str>| Start {
+            model: model.map(str::to_string),
+            ..Start::default()
+        };
+        agents.update(cx, |agents, cx| {
+            agents.set_on(true, cx);
+            agents.set_task_model(Cli::Claude, "sonnet", cx);
+        });
+        let picked = agents.update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, "Pick", None, 1, start(Some("haiku")), cx)
+        });
+        let settings = agents.update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, "Settings", None, 1, Tier::default(), cx)
+        });
+        let unknown = agents.update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, "Gone", None, 1, start(Some("opus-9")), cx)
+        });
+        let default = agents.update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, "Default", None, 1, start(Some("")), cx)
+        });
+        let [picked, settings, unknown, default] =
+            [picked, settings, unknown, default].map(|agent| agent.expect("a task started"));
+        agents.read_with(cx, |agents, _| {
+            let run = |agent: &str| agents.launch_model(agent, Cli::Claude);
+            let named = |agent: &str| agents.task(agent).unwrap().model.to_string();
+            assert_eq!(
+                run(&picked).as_deref(),
+                Some("haiku"),
+                "the pick runs its task"
+            );
+            assert_eq!(named(&picked), "Haiku");
+            assert_eq!(
+                run(&settings).as_deref(),
+                Some("sonnet"),
+                "the next starts on Settings'"
+            );
+            assert_eq!(named(&settings), "Sonnet");
+            assert_eq!(
+                run(&unknown),
+                None,
+                "a model not offered runs on the default"
+            );
+            assert_eq!(run(&default), None, "the default picked passes no model");
+            assert_eq!(
+                agents.task_model(Cli::Claude),
+                "sonnet",
+                "Settings' Model untouched"
+            );
         });
     }
 
