@@ -18,10 +18,10 @@ pub(crate) use {
 pub(crate) struct State {
     pub(crate) name: &'static str,
     /// What it takes; "1" for a switch, which any value turns on.
-    #[expect(dead_code, reason = "read by whoever picks a state, not by the preview")]
+    #[expect(dead_code, reason = "read by people picking a state")]
     pub(crate) values: &'static str,
     /// What it shows.
-    #[expect(dead_code, reason = "read by whoever picks a state, not by the preview")]
+    #[expect(dead_code, reason = "read by people picking a state")]
     pub(crate) shows: &'static str,
 }
 
