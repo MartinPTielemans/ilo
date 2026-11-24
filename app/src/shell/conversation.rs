@@ -224,6 +224,10 @@ pub struct TalkView {
     ilo_drawn: Rc<RefCell<HashMap<(usize, IloButton), (Bounds<Pixels>, Instant)>>>,
     /// Whether the pointer rests on such a button, which holds the lines still as more come.
     ilo_hovered: Rc<Cell<bool>>,
+    /// Where each of ilo's lines' words were last drawn, by its line.
+    ilo_words_drawn: WordsDrawn,
+    /// Where the level's chip under the reply field was drawn, if the last frame drew it.
+    level_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     landed: Rc<Cell<Option<Bounds<Pixels>>>>,
     drawn_at: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
@@ -313,7 +317,7 @@ impl Shell {
                 }
                 let placeholder = self.palette.text(FORM_PLACEHOLDER);
                 let reply = cx.new(|cx| {
-                    TextInput::new(format!("Reply to {name}…"), cx).placeholder_color(placeholder)
+                    TextInput::new(format!("Reply to {name}"), cx).placeholder_color(placeholder)
                 });
                 let shell = cx.weak_entity();
                 cx.new(|_| TalkView {
@@ -344,6 +348,8 @@ impl Shell {
                     answers_drawn: Rc::default(),
                     ilo_drawn: Rc::default(),
                     ilo_hovered: Rc::default(),
+                    ilo_words_drawn: Rc::default(),
+                    level_drawn: Rc::default(),
                     landed: Rc::default(),
                     drawn_at: Rc::default(),
                 })
@@ -1698,11 +1704,11 @@ impl TalkView {
         };
         let opened = content.and_then(|content| self.unfolding(fold, open, content.w_full(), look));
         // The line under its title, as the task made it (the site's notes its answer carried), in
-        // the ink of what a line opens to.
+        // the grey of a line's own detail, quieter than its title.
         let sub = (!step.under.is_empty()).then(|| {
             div()
                 .pl(px(under))
-                .text_color(palette.text(SECONDARY))
+                .text_color(palette.text(TRACE_NOTE))
                 .child(step.under.clone())
                 .into_any_element()
         });
@@ -1749,6 +1755,9 @@ impl TalkView {
         self.ilo_drawn
             .borrow_mut()
             .retain(|key, _| buttons.contains(key));
+        (self.ilo_words_drawn.borrow_mut()).retain(|key, _| {
+            (shown.lines.iter()).any(|line| matches!(line, Line::Ilo(line) if line.key == *key))
+        });
         if !buttons.iter().any(|(_, button)| button.widens()) {
             self.ilo_hovered.set(false);
         }
@@ -1986,14 +1995,22 @@ impl TalkView {
             .as_ref()
             .map(|shown| shown.tier)
             .unwrap_or_default();
-        let chip = page_chip(palette, "conversation-tier", tier.label(), None).child(
-            svg()
-                .flex_none()
-                .ml(px(COMPOSER_CHEVRON_GAP - KEY_GAP))
-                .path("icons/chevron-down.svg")
-                .size(px(COMPOSER_CHEVRON))
-                .text_color(palette.glyph(CHIP_KEY)),
-        );
+        let drawn = self.level_drawn.clone();
+        let chip = page_chip(palette, "conversation-tier", tier.label(), None)
+            .relative()
+            .child(
+                svg()
+                    .flex_none()
+                    .ml(px(COMPOSER_CHEVRON_GAP - KEY_GAP))
+                    .path("icons/chevron-down.svg")
+                    .size(px(COMPOSER_CHEVRON))
+                    .text_color(palette.glyph(CHIP_KEY)),
+            )
+            .child(
+                canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
+                    .absolute()
+                    .size_full(),
+            );
         div()
             .mt(px(COMPOSER_TOP))
             .flex()
@@ -2055,6 +2072,7 @@ impl TalkView {
                 glyph: Some(glyph),
                 mark: Some(mark),
                 highlights,
+                words_drawn: Some((line.key, self.ilo_words_drawn.clone())),
                 ..TraceLine::new(
                     LineKey::Ilo(line.key),
                     said.into(),
@@ -2311,6 +2329,9 @@ fn steps(lines: &[Line]) -> usize {
         .sum()
 }
 
+/// Where the words of ilo's lines were drawn, by line.
+type WordsDrawn = Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>;
+
 /// A line of a trace as it draws: its glyph, its title, what it took or why it failed, and how
 /// open its chevron is if it opens. The step under way's title `shimmers`, as far through its pass
 /// as it says, or under Reduce Motion, holds at the title's colour. What changed on it fades or
@@ -2323,6 +2344,8 @@ struct TraceLine {
     mark: Option<gpui::AnyElement>,
     /// Its words' parts set apart, as an ilo line's name from a page.
     highlights: Vec<(std::ops::Range<usize>, HighlightStyle)>,
+    /// Where its words were drawn goes here, by its line.
+    words_drawn: Option<(usize, WordsDrawn)>,
     failed: bool,
     title: SharedString,
     note: SharedString,
@@ -2342,6 +2365,7 @@ impl TraceLine {
             glyph: None,
             mark: None,
             highlights: Vec::new(),
+            words_drawn: None,
             failed: false,
             title,
             note,
@@ -2377,6 +2401,7 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         glyph,
         mark,
         highlights,
+        words_drawn,
         failed,
         title,
         note: description,
@@ -2427,6 +2452,18 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
             .size(px(size))
             .text_color(color)
     });
+    // One of ilo's lines wraps its words and never cuts them (#4105), so what stands beside them
+    // keeps to their first line, which is where a trace's one line is.
+    let first = |part: gpui::AnyElement| match ilos {
+        true => div()
+            .flex_none()
+            .h(px(TRACE_LINE))
+            .flex()
+            .items_center()
+            .child(part)
+            .into_any_element(),
+        false => part,
+    };
     let opens = chevron.is_some();
     let chevron = chevron.map(|open| {
         svg()
@@ -2461,7 +2498,13 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
     let hover = group.clone();
     let title = div()
         .min_w_0()
-        .truncate()
+        .map(|title| match ilos {
+            true => title
+                .relative()
+                .py(px((TRACE_LINE - ILO_TEXT_LINE) / 2.))
+                .line_height(px(ILO_TEXT_LINE)),
+            false => title.truncate(),
+        })
         .opacity(alpha)
         .text_color(words)
         // A shimmering title is lit by its shimmer, under the pointer too.
@@ -2472,36 +2515,50 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         .child(match shimmers {
             Some(Some(phase)) => shimmering(&palette, title, phase),
             _ => StyledText::new(title).with_highlights(highlights),
-        });
+        })
+        .children(words_drawn.map(|(key, drawn)| {
+            canvas(
+                move |bounds, _, _| _ = drawn.borrow_mut().insert(key, bounds),
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .size_full()
+        }));
     div()
         .id(id)
         .group(group)
         .flex_none()
         .max_w_full()
-        .h(px(TRACE_LINE))
-        // Its plate hangs outside its text, which ilo's lines, which don't open, have none of.
-        .when(!ilos, |line| line.ml(px(-TRACE_HANG)).px(px(TRACE_HANG)))
         .flex()
-        .items_center()
         .gap(px(TRACE_GAP))
         .rounded(px(NAV_RADIUS))
-        .whitespace_nowrap()
+        .map(|line| match ilos {
+            true => line.min_h(px(TRACE_LINE)).items_start(),
+            // Its plate hangs outside its text, which ilo's lines, which don't open, have none of.
+            false => line
+                .h(px(TRACE_LINE))
+                .ml(px(-TRACE_HANG))
+                .px(px(TRACE_HANG))
+                .items_center()
+                .whitespace_nowrap(),
+        })
         .when(opens, |line| {
             line.cursor_pointer()
                 .hover(move |style| style.bg(palette.plate(TRACE_HOVER)))
         })
-        .children(glyph)
-        // ilo's mark stays whole before its words, which truncate.
+        .children(glyph.map(|glyph| first(glyph.into_any_element())))
+        // ilo's mark stays whole before its words.
         .children(mark)
         .child(title)
         .when(noted, |line| {
-            line.child(
+            line.child(first(
                 div()
                     .flex_none()
                     .opacity(note_alpha)
                     .text_color(note)
-                    .child(description),
-            )
+                    .child(description)
+                    .into_any_element(),
+            ))
         })
         .children(chevron)
 }
@@ -2586,6 +2643,7 @@ impl Render for TalkView {
         if std::mem::replace(&mut self.viewport, viewport) != viewport && self.at_end() {
             self.scroll.scroll_to_bottom();
         }
+        self.level_drawn.set(None);
         let busy = self.motion.settle(now);
         self.follow_on(now);
         // What changes once it has shown moves.
@@ -2667,8 +2725,10 @@ impl Render for TalkView {
             .child(shut(on_column(self.header(&look, cx).into_any_element())))
             .child(middle)
             .child(shut(on_column(self.reply(&look, cx).into_any_element())))
+            // With ilo's line and Start Again in the field's place there is no level to set, so
+            // the row goes with the field (#4105).
             .children(
-                look.beside
+                (look.beside && self.in_field().is_none())
                     .then(|| shut(on_column(self.composer(&look, cx).into_any_element()))),
             );
         let drawn = self.drawn_at.clone();
