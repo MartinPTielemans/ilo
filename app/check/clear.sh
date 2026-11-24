@@ -596,6 +596,26 @@ view=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layou
 [ "$view" = "417,10 ${docked#* }" ] ||
   fail "the Library didn't push the page to 417 at its width: it's at $view, docked at $docked"
 ../tools/window-screenshot.sh "$pid" "$out/library.png" || fail "no window to capture"
+# Where the Library last drew History's top row of the kind $1, archived or visited, once History
+# had answered, as "x y". The Library and its History start afresh at its section's line.
+history_top() {
+  local at=
+  for _ in $(seq 100); do
+    at=$(awk -v kind="$1" '/^browser: library section / { listed = 0; split("", at) }
+      /^browser: history listed [0-9]+$/ { listed = 1; split("", at) }
+      listed && $3 == "library" && $4 == kind && $6 == "at" { at[$5] = $7 " " $8 }
+      END {
+        for (row in at) {
+          split(at[row], p, " ")
+          if (top == "" || p[2] + 0 < top + 0) { top = p[2]; x = p[1] }
+        }
+        if (top == "") exit 1
+        print x " " top
+      }' "$log") && break
+    sleep 0.1
+  done
+  echo "$at"
+}
 # History lists the pages this run visited among its closed tabs (#2337). The pointer on a row
 # shows its trash, and its title truncates before it; a click on a visited page's row opens the
 # page in Peek, as a closed tab's does, and Esc closes it, leaving the Library.
@@ -603,37 +623,18 @@ send move 300 111
 expect '^browser: history pointed closed [0-9][0-9]*$' \
   "the pointer on History's first row, the tab ⌘W closed, didn't point at it"
 ../tools/window-screenshot.sh "$pid" "$out/history-hover-closed.png" || fail "no window to capture"
-# The run's closed tabs come first, newest first, so its visited pages can start low on the list:
-# each row the window shows, down to its foot. A run that crosses midnight lists its rows under two
-# days, and the pointer on the heading between points at none, which passes only there: where two
-# closed tabs' rows, as the app logs their places, are a step apart that isn't a whole number of
-# rows (#4154). Visited pages' rows log no place. The rows below move down by the heading, so the
-# next y is still on a row.
-visited_y= heading=
-for y in 167 223 279 335 391 447 503 559 615 671 727; do
-  send move 300 $y
-  expect '^browser: history pointed \(\(closed\|visited\) [0-9][0-9]*\|none\)$' \
-    "the pointer on History's row at y $y didn't point at it"
-  case $(since | grep '^browser: history pointed ' | tail -1) in
-    *" none")
-      places=$(grep '^browser: settings library archived [0-9]* at ' "$log" |
-        awk '{ at[$5] = $8 } END { for (id in at) print at[id] }' | sort -n | tr '\n' ' ')
-      [ -z "$heading" ] && echo "$places" | awk -v y="$y" '{
-        for (i = 2; i <= NF; i++) if ($i - $(i - 1) < pitch || !pitch) pitch = $i - $(i - 1)
-        for (i = 2; i <= NF; i++) if ($(i - 1) < y && y < $i && ($i - $(i - 1)) % pitch) found = 1
-      } END { exit !found }' ||
-        fail "the pointer on History's row at y $y didn't point at it, and no heading is there: closed tabs' rows are at $places"
-      heading=$y
-      ;;
-    *" visited "*)
-      visited_y=$y
-      break
-      ;;
-  esac
-done
-[ -n "$visited_y" ] || fail "History listed no visited page in the rows the window shows; they were: $(sed -n "/^browser: drive $step: /,\$p" "$log" | grep '^browser: history pointed ' | cut -d' ' -f4- | tr '\n' ' ')"
+# The run's closed tabs come first, newest first, so its visited pages can start low on the list,
+# under another day's heading on a run across midnight (#4154): the pointer goes where the app drew
+# the first.
+visited_at=$(history_top visited)
+[ -n "$visited_at" ] || fail "the Library drew no visited page's row once History had answered"
+# shellcheck disable=SC2086 # x and y
+send move $visited_at
+expect '^browser: history pointed visited [0-9][0-9]*$' \
+  "the pointer on History's first visited page's row, drawn at $visited_at, didn't point at it"
 ../tools/window-screenshot.sh "$pid" "$out/history-hover-visited.png" || fail "no window to capture"
-send click 300 $visited_y
+# shellcheck disable=SC2086 # x and y
+send click $visited_at
 expect '^browser: history page in preview$' "a click on a visited page's row didn't open it in Peek"
 none_since '^browser: history open$' || fail "a click on a visited page's row opened it at once"
 expect '^browser: link preview [1-9][0-9]* https\{0,1\}://' "Peek of the visited page didn't open at a page"
@@ -673,27 +674,12 @@ expect '^browser: command view-library via ui$' "Open Library… didn't run"
 expect '^browser: library shown$' "Open Library… didn't open the Library"
 # Delete from Archive in a tab's menu takes it out, and the Library stays open. The tab ⌘-click
 # restored has loaded since, so its page can be newer than every closed tab and History's first
-# row: the closed tab is the first row the pointer finds closed.
+# row: the closed tab is History's top closed row, where the app drew it.
 archived=$(grep '^browser: archive [0-9]* tabs$' "$log" | tail -1 | cut -d' ' -f3)
-# The Library can open under the pointer, already on the first row, where a move to it says
-# nothing: the pointer starts on Today's heading, on no row.
-send move 300 71
-closed_y=
-rows=
-for y in 111 167 223 279 335 391 447 503 559 615 671 727; do
-  send move 300 $y
-  expect '^browser: history pointed \(closed\|visited\) [0-9][0-9]*$' \
-    "the pointer on History's row at y $y didn't point at it"
-  pointed=$(since | grep -m1 '^browser: history pointed \(closed\|visited\) ' | cut -d' ' -f4)
-  rows="$rows $pointed"
-  if [ "$pointed" = closed ]; then
-    closed_y=$y
-    break
-  fi
-done
-[ -n "$closed_y" ] ||
-  fail "History listed no closed tab in the rows the window shows, which were:$rows"
-post rightclick 300 $closed_y
+closed_at=$(history_top archived)
+[ -n "$closed_at" ] || fail "the Library drew no closed tab's row once History had answered"
+# shellcheck disable=SC2086 # x and y
+post rightclick $closed_at
 expect "^browser: menu shown $(cased 'Reopen Tab, Copy URL, Delete from Archive')\$" \
   "a right-click on an archived tab didn't show its menu"
 send choose "$(cased 'Delete from Archive')"
