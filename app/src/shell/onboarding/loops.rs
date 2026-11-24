@@ -19,7 +19,10 @@ pub(super) type Place<'a> = &'a dyn Fn(&'static str) -> Option<AnyElement>;
 
 /// The steps with a loop in their slot.
 pub(super) fn has_loop(step: Step) -> bool {
-    matches!(step, Step::Intro | Step::Import | Step::Color)
+    matches!(
+        step,
+        Step::Intro | Step::Import | Step::Favorites | Step::DefaultBrowser | Step::Color
+    )
 }
 
 /// Where a loop is `secs` after it started, or its last frame while `still`.
@@ -169,26 +172,7 @@ pub(super) fn import(t_: f32, colors: Colors, place: Place) -> impl IntoElement 
     // In ilo's sidebar, the favorites as tiles above the tabs, each coming down into place.
     let tiles = (0..BOOKMARKS.len()).filter_map(|index| {
         let landed = landed(bookmarks_at, index);
-        (landed > 0.).then(|| {
-            div()
-                .absolute()
-                .top(px(t::TILES_TOP - t::IMPORT_DROP * (1. - landed)))
-                .left(px(6. + index as f32 * (t::TILE + t::TILE_GAP)))
-                .size(px(t::TILE))
-                .rounded(px(t::PLATE_RADIUS))
-                .bg(palette.shown(0.))
-                .opacity(landed)
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    div()
-                        .size(px(7.))
-                        .rounded(px(t::ICON_RADIUS))
-                        .bg(palette.faint(0.3)),
-                )
-                .children(place(TILES[index]))
-        })
+        (landed > 0.).then(|| tile(index, landed, &palette).children(place(TILES[index])))
     });
     let rows = TABS.iter().enumerate().filter_map(|(index, &name)| {
         let landed = landed(tabs_at, index);
@@ -238,6 +222,268 @@ pub(super) fn import(t_: f32, colors: Colors, place: Place) -> impl IntoElement 
         .gap(px(t::STRIP_GAP))
         .child(other)
         .child(ilo)
+}
+
+/// The favorites': the sites the history visited most, in a strip over ilo's window, each ticked
+/// in turn but the last, and each ticked landing in the sidebar as a favorite's tile, as the
+/// import's do; then what came, said in the page. All of it goes again at the loop's end; its last
+/// frame, still, is what came, the last site unticked.
+pub(super) fn favorites(t_: f32, colors: Colors, place: Place) -> impl IntoElement {
+    const SITES: [&str; 4] = ["Weather", "Recipes", "Trails", "Forum"];
+    const TILES: [&str; 3] = ["tile-0", "tile-1", "tile-2"];
+    const TICKS: [&str; 4] = ["tick-0", "tick-1", "tick-2", "tick-3"];
+    let palette = Palette::of(None, tone(colors));
+    let out = match t_ >= t::PERIOD {
+        true => 0.,
+        false => ((t_ - (t::PERIOD - t::IMPORT_OUT)) / t::IMPORT_OUT).clamp(0., 1.),
+    };
+    // How far a part starting at `from` has come over `over`: none before it starts.
+    let come = |from: f32, over: f32| match t_ > from {
+        true => ease_out(((t_ - from) / over).min(1.)) * (1. - out),
+        false => 0.,
+    };
+    let ticked_at = |index: usize| t::FAVORITES_AT + index as f32 * t::FAVORITES_STAGGER;
+    let ticked = |index: usize| come(ticked_at(index), t::IMPORT_FADE);
+    let landed = |index: usize| come(ticked_at(index) + t::FAVORITES_TICK, t::IMPORT_LAND);
+    // A tick as the import's list draws one: an empty ring, filled in the ink once ticked.
+    let tick = |index: usize| {
+        let filled = match index < TILES.len() {
+            true => ticked(index),
+            false => 0.,
+        };
+        div()
+            .relative()
+            .flex_none()
+            .size(px(8.))
+            .rounded_full()
+            .border_1()
+            .border_color(palette.faint(0.4))
+            .child(
+                div()
+                    .absolute()
+                    .inset(px(-1.))
+                    .rounded_full()
+                    .bg(palette.text(0.75))
+                    .opacity(filled),
+            )
+            .children(place(TICKS[index]))
+    };
+    let sites = SITES.iter().enumerate().map(|(index, &name)| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .child(tick(index))
+            .child(
+                div()
+                    .size(px(7.))
+                    .rounded(px(t::ICON_RADIUS))
+                    .bg(palette.faint(0.3)),
+            )
+            .child(name)
+    });
+    let strip = div()
+        .flex_none()
+        .w(px(t::WINDOW_WIDTH))
+        .h(px(t::STRIP_HEIGHT))
+        .px(px(12.))
+        .flex()
+        .items_center()
+        .justify_between()
+        .overflow_hidden()
+        .rounded(px(t::WINDOW_RADIUS))
+        .bg(palette.page)
+        .border_1()
+        .border_color(palette.faint(0.12))
+        .text_size(px(t::TEXT_SIZE))
+        .text_color(palette.text(0.75))
+        .children(sites)
+        .children(place("strip"));
+    let tiles = (0..TILES.len()).filter_map(|index| {
+        let landed = landed(index);
+        (landed > 0.).then(|| tile(index, landed, &palette).children(place(TILES[index])))
+    });
+    let rows = ["Field notes", "Trail map"]
+        .iter()
+        .enumerate()
+        .map(|(index, name)| row(name, index, if index == 0 { 1. } else { 0. }, &palette));
+    let sidebar = column(div().children(tiles).children(rows), &[(1., 1.)], &palette)
+        .children(place("sidebar"));
+    let came = come(t::FAVORITES_CAME, t::IMPORT_FADE);
+    let said = (came > 0.).then(|| {
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(6.))
+            .opacity(came)
+            .text_size(px(t::TEXT_SIZE))
+            .text_color(palette.text(0.75))
+            .child(div().size(px(9.)).rounded_full().bg(palette.faint(0.5)))
+            .child("3 favorites added")
+            .children(place("came"))
+    });
+    let ilo = window(
+        &palette,
+        &[(palette, 1.)],
+        sidebar,
+        div().size_full().children(said),
+    )
+    .children(place("window"));
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(t::STRIP_GAP))
+        .child(strip)
+        .child(ilo)
+}
+
+/// The default browser's: a message in another app, its link clicked, and the link opening in
+/// ilo's window as a new tab at the top of the sidebar, selected, its page shown. The pointer
+/// goes once it has clicked, and the tab goes again at the loop's end; its last frame, still, is
+/// the link open in ilo.
+pub(super) fn default_browser(t_: f32, colors: Colors, place: Place) -> impl IntoElement {
+    const TABS: [&str; 2] = ["Field notes", "Recipes"];
+    let palette = Palette::of(None, tone(colors));
+    let out = match t_ >= t::PERIOD {
+        true => 0.,
+        false => ((t_ - (t::PERIOD - t::IMPORT_OUT)) / t::IMPORT_OUT).clamp(0., 1.),
+    };
+    // How far a part starting at `from` has come over `over`: none before it starts.
+    let come = |from: f32, over: f32| match t_ > from {
+        true => ease_out(((t_ - from) / over).min(1.)) * (1. - out),
+        false => 0.,
+    };
+    // The pointer, in the other app: from rest to the link, its press, then gone.
+    let [x, y] = t::DEFAULT_LINK;
+    let rest = (t::WINDOW_WIDTH - 70., 16.);
+    let moved = match t_ > t::DEFAULT_AT {
+        true => ease_in_out(((t_ - t::DEFAULT_AT) / t::WELCOME_MOVE).min(1.)),
+        false => 0.,
+    };
+    let pointer = lerp(rest, (x, y), moved);
+    let press = t::DEFAULT_AT + t::WELCOME_MOVE + t::WELCOME_CLICK;
+    let seen = (t_ / t::POINTER_FADE)
+        .min((press + t::WELCOME_PRESS + t::POINTER_FADE - t_) / t::POINTER_FADE)
+        .clamp(0., 1.);
+    let ring = (t_ >= press && t_ < press + t::WELCOME_PRESS).then(|| {
+        let grown = (t_ - press) / t::WELCOME_PRESS;
+        let side = 10. + 10. * ease_out(grown);
+        div()
+            .absolute()
+            .left(px(pointer.0 - side / 2.))
+            .top(px(pointer.1 - side / 2.))
+            .size(px(side))
+            .rounded_full()
+            .border_1()
+            .border_color(palette.faint(0.5 * (1. - grown)))
+    });
+    // The link, underlined, its corner `default-link` less half a line in from the message's.
+    let link = div()
+        .absolute()
+        .left(px(x - 12.))
+        .top(px(y - 5.))
+        .flex()
+        .flex_col()
+        .text_color(palette.text(0.9))
+        .child("trailmap.example")
+        .child(div().h(px(1.)).bg(palette.faint(0.5)))
+        .children(place("link"));
+    let other = div()
+        .relative()
+        .flex_none()
+        .w(px(t::WINDOW_WIDTH))
+        .h(px(t::STRIP_HEIGHT))
+        .rounded(px(t::WINDOW_RADIUS))
+        .bg(palette.page)
+        .border_1()
+        .border_color(palette.faint(0.12))
+        .text_size(px(t::TEXT_SIZE))
+        .text_color(palette.text(0.75))
+        .child(
+            div()
+                .absolute()
+                .left(px(12.))
+                .top(px(12.))
+                .size(px(10.))
+                .rounded_full()
+                .bg(palette.faint(0.3)),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(px(x - 12.))
+                .top(px(12.))
+                .child("Ana · the map for Saturday"),
+        )
+        .child(link)
+        .children(ring)
+        .child(arrow(pointer, colors, place).opacity(seen))
+        .children(place("other"));
+    // In ilo, the link lands as a new tab above the others, which make room, and takes the plate.
+    let opened = come(press + t::DEFAULT_OPEN, t::IMPORT_LAND);
+    let new = (opened > 0.).then(|| {
+        row("Trail map", 0, opened, &palette)
+            .top(px(t::ROWS_TOP - t::IMPORT_DROP * (1. - opened)))
+            .opacity(opened)
+            .children(place("tab-new"))
+    });
+    let rows = TABS.iter().enumerate().map(|(index, name)| {
+        let plate = if index == 0 { 1. - opened } else { 0. };
+        row(name, index, plate, &palette).top(px(t::ROWS_TOP + (index as f32 + opened) * t::ROW))
+    });
+    let sidebar = column(
+        div().children(new).children(rows),
+        &[(1., 1.), (0., 1.)],
+        &palette,
+    )
+    .children(place("sidebar"));
+    let pages = div()
+        .absolute()
+        .inset_0()
+        .child(page(0, &palette).opacity(1. - opened))
+        .child(
+            page(2, &palette)
+                .opacity(opened)
+                .children((opened > 0.).then(|| place("page-new")).flatten()),
+        );
+    let ilo = window(&palette, &[(palette, 1.)], sidebar, pages).children(place("window"));
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(px(t::STRIP_GAP))
+        .child(other)
+        .child(ilo)
+}
+
+/// A favorite's tile at the sidebar's top, the `index`th, as far down into place as it has
+/// `landed`.
+fn tile(index: usize, landed: f32, palette: &Palette) -> gpui::Div {
+    div()
+        .absolute()
+        .top(px(t::TILES_TOP - t::IMPORT_DROP * (1. - landed)))
+        .left(px(6. + index as f32 * (t::TILE + t::TILE_GAP)))
+        .size(px(t::TILE))
+        .rounded(px(t::PLATE_RADIUS))
+        .bg(palette.shown(0.))
+        .opacity(landed)
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .size(px(7.))
+                .rounded(px(t::ICON_RADIUS))
+                .bg(palette.faint(0.3)),
+        )
 }
 
 /// The colour's: the window glows with the colour picked, or none, and the sidebar's rows swipe
