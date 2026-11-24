@@ -373,7 +373,8 @@ pub struct Task {
     /// Its steps, oldest first.
     pub trace: Vec<Traced>,
     pub dismissed: bool,
-    /// When it last left the foot for the Archive, which lists it by then. Kept in memory only.
+    /// When it last left the foot for the Archive, which a task with no end is listed by. Kept
+    /// in memory only.
     pub left: Option<SystemTime>,
     /// Deleted from the Archive: listed nowhere and out of ⇧⌘T's reach, until ⌘Z brings it back
     /// or it goes for good with the dismissed tasks past the last few.
@@ -711,11 +712,34 @@ pub struct ArchivedTask {
     pub asked: SharedString,
     /// Done's tick, or Stopped's and Failed's grey dot, as its card had.
     pub dot: Dot,
-    /// Who worked on it, how it ended and when, and the pages it still holds:
-    /// "Claude · Done 13:31 · 1 page".
+    /// Who worked on it and how it ended, "Claude · Done".
     pub about: SharedString,
-    /// When it left the foot, in milliseconds since the Unix epoch, as the archive dates its tabs.
-    pub left: f64,
+    /// When it ended, or left the foot with no end, in milliseconds since the Unix epoch as the
+    /// archive dates its tabs, or 0 if nothing says. History lists it by then, under that day,
+    /// and says it as it says its pages' times (`about_at`).
+    pub ended: f64,
+    /// The pages it still holds, "1 page", or nothing.
+    pub pages: SharedString,
+}
+
+impl ArchivedTask {
+    /// What its row says under its title, with `when` it ended as the list it's in says a time:
+    /// "Claude · Done 13:31 · 1 page".
+    pub fn about_at(&self, when: &str) -> String {
+        about_at(&self.about, when, &self.pages)
+    }
+}
+
+/// A finished task's row under its title: who worked on it and how it ended, when, and the pages
+/// it still holds.
+fn about_at(about: &str, when: &str, pages: &str) -> String {
+    let mut about = about.to_string();
+    for (between, part) in [(" ", when), (" · ", pages)] {
+        if !part.is_empty() {
+            about = format!("{about}{between}{part}");
+        }
+    }
+    about
 }
 
 /// Open's words, for the tabs a task left the user: its site for one, and how many for several.
@@ -832,38 +856,45 @@ impl Agents {
                     State::Done { .. } => Dot::Done,
                     _ => Dot::Ended,
                 };
-                let about = self.about(task, cx);
-                let left = task
-                    .left
-                    .and_then(|at| at.duration_since(SystemTime::UNIX_EPOCH).ok());
+                let (about, pages) = self.about_parts(task, cx);
+                let since = |at: Option<SystemTime>| {
+                    at.and_then(|at| at.duration_since(SystemTime::UNIX_EPOCH).ok())
+                        .map_or(0., |since| since.as_secs_f64() * 1000.)
+                };
                 ArchivedTask {
                     agent: task.agent.clone().into(),
                     title: task.title.clone(),
                     asked: task.asked.clone(),
                     dot,
                     about: about.into(),
-                    left: left.map_or(0., |since| since.as_secs_f64() * 1000.),
+                    ended: since(task.ended.or(task.left)),
+                    pages: pages.into(),
                 }
             })
             .collect()
     }
 
-    /// What a finished task's row says under its title, in the Archive and in Settings › Agents'
-    /// list of the kept: who worked on it, how it ended and when, and the pages it still holds,
-    /// "Claude · Done 13:31 · 1 page". One that ended on an earlier day says the day instead,
-    /// "Claude · Done 21 Nov", as a time alone reads as today's.
+    /// What a finished task's row says under its title in Settings › Agents' list of the kept:
+    /// who worked on it, how it ended and when, and the pages it still holds, "Claude · Done 13:31
+    /// · 1 page". One that ended on an earlier day says the day instead, "Claude · Done 21 Nov",
+    /// as a time alone reads as today's in a list with no days over its rows. History's has them,
+    /// and says when as its pages' rows do (`ArchivedTask::about_at`).
     pub(super) fn about(&self, task: &Task, cx: &App) -> String {
+        let (about, pages) = self.about_parts(task, cx);
+        let when = (task.ended.or(task.left)).map(|at| super::time_or_day(seconds(at)));
+        about_at(&about, &when.unwrap_or_default(), &pages)
+    }
+
+    /// A finished task's row around when it ended: who worked on it and how it ended, "Claude ·
+    /// Done", and the pages it still holds, "1 page" or nothing.
+    fn about_parts(&self, task: &Task, cx: &App) -> (String, String) {
         let words = Word::of(&task.state, false).after_name();
-        let mut about = format!("{} · {words}", task.name);
-        if let Some(at) = task.ended.or(task.left) {
-            about = format!("{about} {}", super::time_or_day(seconds(at)));
-        }
-        match self.open_tabs(task, cx).len() {
-            0 => {}
-            1 => about.push_str(" · 1 page"),
-            pages => about.push_str(&format!(" · {pages} pages")),
-        }
-        about
+        let pages = match self.open_tabs(task, cx).len() {
+            0 => String::new(),
+            1 => "1 page".to_string(),
+            pages => format!("{pages} pages"),
+        };
+        (format!("{} · {words}", task.name), pages)
     }
 
     /// Does what the user did to `agent`'s task. Returns the tab Open moved into the user's
