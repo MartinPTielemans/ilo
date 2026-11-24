@@ -908,12 +908,16 @@ tint-more = 0.44
 gray-text-less = 4.5
 gray-text = 3.0
 gray-text-more = 3.0
-# The HUD window's material alone, untinted, over a white, a grey and a black backdrop, as the
-# app draws it on a Mac with the tint off, measured from its window's pixels; the window's ground
-# over each is the tint's colour at its alpha over these.
-material-over-white = 0xacacac
-material-over-grey = 0x5e5e5e
+# The HUD window's material alone, untinted, over a window of white, grey 128 and black behind
+# it, on a black desktop, as the app draws it on a Mac with the tint off, measured from its
+# window's pixels: the darkest the window can be. The desktop picture comes through what's behind
+# as well, and a light one lifts the material over each by up to `material-lift` levels of 255 (13
+# over the check VM's own picture, 12 to 13 at every grey). The window's ground over each is the
+# tint's colour at its alpha over these; its lightest is over white, lifted.
+material-over-white = 0xa0a0a0
+material-over-grey = 0x585858
 material-over-black = 0x131313
+material-lift = 13.0
 # What stands in for the material where the window's look has to be opaque, under rows it covers
 # or in the reveal's panel over the page: the ground over grey at Standard. The palette works out
 # each level's from the tokens above; this one is for what reads it without a palette, and a test

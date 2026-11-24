@@ -33,8 +33,8 @@ pub use crate::tokens::palette::{
 use crate::tokens::palette::{
     DIALOG_DARK, DIALOG_LIGHT, GRADIENT_ALPHA, LIGHT_GRADIENT_ALPHA, LIGHT_MATERIAL_OVER_BLACK,
     LIGHT_MATERIAL_OVER_GREY, LIGHT_MATERIAL_OVER_WHITE, LIGHT_NEUTRAL_GRADIENT_ALPHA,
-    LIGHT_STAND_IN, MATERIAL_OVER_BLACK, MATERIAL_OVER_GREY, MATERIAL_OVER_WHITE, NEUTRAL,
-    NEUTRAL_GRADIENT_ALPHA, OVERLAY_LIGHT, STAND_IN,
+    LIGHT_STAND_IN, MATERIAL_LIFT, MATERIAL_OVER_BLACK, MATERIAL_OVER_GREY, MATERIAL_OVER_WHITE,
+    NEUTRAL, NEUTRAL_GRADIENT_ALPHA, OVERLAY_LIGHT, STAND_IN,
 };
 use crate::tokens::palette::{FAR_GLOW, LIGHT_SHOWN, LIGHT_SHOWN_HOVERED, SHOWN, SHOWN_HOVERED};
 pub use crate::tokens::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
@@ -141,26 +141,42 @@ impl Tone {
         }
     }
 
-    /// The tinted material over a black and over a white backdrop: the tint's colour at its
-    /// alpha over the material alone, as run 6 measured it.
+    /// The tinted material at its darkest and its lightest: over a black backdrop on a black
+    /// desktop, and over a white one with the most a desktop picture lifts it.
     fn grounds(self) -> [Rgba; 2] {
-        let material = match self {
-            Tone::Dark => [MATERIAL_OVER_BLACK, MATERIAL_OVER_WHITE],
-            Tone::Light => [LIGHT_MATERIAL_OVER_BLACK, LIGHT_MATERIAL_OVER_WHITE],
-        };
-        material.map(|under| over(rgb(under), self.tint_color(), self.tint()))
+        let [black, ..] = self.materials(0.);
+        let [.., white] = self.materials(1.);
+        [black, white].map(|under| over(under, self.tint_color(), self.tint()))
     }
 
-    /// The material alone over a black, a grey 128 and a white backdrop, as measured.
-    fn materials(self) -> [u32; 3] {
-        match self {
-            Tone::Dark => [MATERIAL_OVER_BLACK, MATERIAL_OVER_GREY, MATERIAL_OVER_WHITE],
-            Tone::Light => [
-                LIGHT_MATERIAL_OVER_BLACK,
-                LIGHT_MATERIAL_OVER_GREY,
-                LIGHT_MATERIAL_OVER_WHITE,
-            ],
-        }
+    /// The material alone over a black, a grey 128 and a white backdrop, as measured on a black
+    /// desktop, and `lift` of the most a desktop picture lifts each.
+    fn materials(self, lift: f32) -> [Rgba; 3] {
+        let (measured, most) = match self {
+            Tone::Dark => (
+                [MATERIAL_OVER_BLACK, MATERIAL_OVER_GREY, MATERIAL_OVER_WHITE],
+                MATERIAL_LIFT,
+            ),
+            Tone::Light => (
+                [
+                    LIGHT_MATERIAL_OVER_BLACK,
+                    LIGHT_MATERIAL_OVER_GREY,
+                    LIGHT_MATERIAL_OVER_WHITE,
+                ],
+                // The light window's lift isn't measured yet.
+                0.,
+            ),
+        };
+        let up = lift * most / 255.;
+        measured.map(|material| {
+            let material = rgb(material);
+            Rgba {
+                r: (material.r + up).min(1.),
+                g: (material.g + up).min(1.),
+                b: (material.b + up).min(1.),
+                a: 1.,
+            }
+        })
     }
 
     fn stand_in(self) -> Rgba {
@@ -941,13 +957,13 @@ impl Palette {
     }
 
     /// The window over a grey backdrop at black, grey 128 and white, the three its material was
-    /// measured over, where its glows are `foot` and `far` of their full strength. Everything
-    /// over the material lies over it evenly, so over a grey between two of these the window is
-    /// as far between theirs.
-    pub fn window_over_greys(&self, foot: f32, far: f32) -> [Rgba; 3] {
+    /// measured over, where its glows are `foot` and `far` of their full strength, with `lift` of
+    /// the most a desktop picture lifts the material. Everything over the material lies over it
+    /// evenly, so over a grey between two of these the window is as far between theirs.
+    pub fn window_over_greys(&self, foot: f32, far: f32, lift: f32) -> [Rgba; 3] {
         let glow = self.glow_at(foot, far);
-        self.tone.materials().map(|material| {
-            let ground = over(rgb(material), self.tint, self.tint.a);
+        self.tone.materials(lift).map(|material| {
+            let ground = over(material, self.tint, self.tint.a);
             over(ground, glow, glow.a)
         })
     }

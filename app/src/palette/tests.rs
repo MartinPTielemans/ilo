@@ -1419,7 +1419,8 @@ fn the_selected_plate_reads_apart_from_the_hovered_one_at_every_level() {
 }
 
 /// What the palette reckons the window over black, grey 128 and white, which check/window.sh reads
-/// the sidebar against, is the window it draws over black and white, glows and all.
+/// the sidebar against, is the window it draws at its darkest and lightest, glows and all: over
+/// black on a black desktop, and over white with the most a desktop picture lifts it.
 #[test]
 fn the_window_reckoned_over_greys_is_the_one_drawn() {
     for (theme, tone) in [
@@ -1429,7 +1430,8 @@ fn the_window_reckoned_over_greys_is_the_one_drawn() {
     ] {
         let palette = Palette::of(theme.as_ref(), tone);
         for (foot, far) in [(0., 0.), (0.4, 0.), (1., 1.)] {
-            let [black, _, white] = palette.window_over_greys(foot, far).map(hex);
+            let [black, ..] = palette.window_over_greys(foot, far, 0.).map(hex);
+            let [.., white] = palette.window_over_greys(foot, far, 1.).map(hex);
             assert_eq!(
                 [black, white],
                 palette.window_at(foot, far).map(hex),

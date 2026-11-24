@@ -327,8 +327,9 @@ impl Shell {
     }
 
     /// What the window's palette makes of the empty sidebar 60 points in and 450 down, where
-    /// check/window.sh reads it over a grey backdrop: the window over black, grey 128 and white, as
-    /// grey levels, logged when it changes. The check reads a grey between them as between these.
+    /// check/window.sh reads it over a grey backdrop: the window over black, grey 128 and white on
+    /// a black desktop, and over black as much lighter as a desktop picture can make it, as grey
+    /// levels, logged when it changes. The check reads a grey between them as between these.
     /// Called only while the checks run the app.
     pub(super) fn log_window_reckoning(&self) {
         let (width, height) = (
@@ -349,10 +350,13 @@ impl Shell {
         }
         RECKONED.set(Some(key));
         let (foot, far) = glow::strengths(60., 450., width, height, self.right());
-        let [black, grey, white] = palette
-            .window_over_greys(foot, far)
-            .map(|at| ((at.r + at.g + at.b) / 3. * 255.).round() as u8);
-        log!("browser: window reckons {black} {grey} {white} at 60,450 in {width:.0}x{height:.0}");
+        let level = |at: Rgba| ((at.r + at.g + at.b) / 3. * 255.).round() as u8;
+        let [black, grey, white] = palette.window_over_greys(foot, far, 0.).map(level);
+        let [lifted, ..] = palette.window_over_greys(foot, far, 1.).map(level);
+        log!(
+            "browser: window reckons {black} {grey} {white} lifted {lifted} at 60,450 in \
+             {width:.0}x{height:.0}"
+        );
     }
 
     /// The window's colour behind everything: the Space's glows from the sidebar's foot and the
