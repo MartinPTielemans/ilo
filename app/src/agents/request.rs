@@ -23,9 +23,6 @@ pub const WHAT_SHOWN: usize = 120;
 /// leaves room under the answer's cap (`tools::MAX_ANSWER`) for each request's line.
 const SHOWN: usize = 10_000;
 pub const ALL_SHOWN: usize = 11_000;
-/// The most characters of an address or a header's name or value the whole request shows. Nothing
-/// earlier bounds them, and a server takes far fewer: an address past this is no real one.
-pub const PART_SHOWN: usize = 10_000;
 /// The headers that name a method for a server to take in the sent one's place.
 const OVERRIDES: [&str; 3] = [
     "x-http-method-override",
