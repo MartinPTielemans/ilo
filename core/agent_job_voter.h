@@ -2,9 +2,11 @@
 #define BROWSER_CORE_AGENT_JOB_VOTER_H_
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <set>
 
+#include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
 #include "components/performance_manager/public/execution_context_priority/execution_context_priority.h"
 #include "components/performance_manager/public/execution_context_priority/priority_voting_system.h"
@@ -42,9 +44,14 @@ class AgentJobVoter : public performance_manager::execution_context_priority::Pr
   // The voter on the browser's graph, or null before it's added and once the graph is gone.
   static AgentJobVoter* Get();
 
-  // A job starts working in |page|, or stops: it answered, or the agent's session ended.
+  // A job starts working in |page|, or stops: it answered, or the agent's session ended. A job is
+  // any of the agent's calls under way in the page, an act or a read, and several may be at once:
+  // the page has the vote from the first one's start to the last one's end.
   void JobStarted(const performance_manager::PageNode* page);
   void JobEnded(const performance_manager::PageNode* page);
+  // One call's job in |page|, from now until the runner runs or goes, however the call ends: its
+  // answer, a refusal, a limit reached or its page closing. Nothing without a voter or a page.
+  static base::ScopedClosureRunner Lift(base::WeakPtr<performance_manager::PageNode> page);
 
   // A page the user is looking at starts loading, or stops counting: it painted, committed
   // nothing, stopped loading, went out of sight or closed. Each page counts once however often it
@@ -67,7 +74,8 @@ class AgentJobVoter : public performance_manager::execution_context_priority::Pr
   void TakeVote(const performance_manager::PageNode* page);
 
   performance_manager::execution_context_priority::VotingChannel voting_channel_;
-  std::set<const performance_manager::PageNode*> working_;
+  // The jobs under way in each page that has one.
+  std::map<const performance_manager::PageNode*, int> working_;
   std::set<const performance_manager::PageNode*> user_loads_;
 };
 

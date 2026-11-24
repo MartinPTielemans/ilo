@@ -7,7 +7,9 @@
 #include <string>
 #include <vector>
 
+#include "base/containers/flat_map.h"
 #include "base/functional/callback_forward.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 #include "browser_core/ax_text.h"
@@ -33,8 +35,9 @@ class PageText : public content::WebContentsObserver,
   PageText& operator=(const PageText&) = delete;
   ~PageText() override;
 
-  // See bc_tab_read_text.
-  void Read(uint64_t request);
+  // See bc_tab_read_text. |lift| is the page's lift for the call (LiftWhileWorking), given at its
+  // entry and taken back at its answer, whatever the answer is.
+  void Read(uint64_t request, base::ScopedClosureRunner lift);
 
  private:
   friend class content::WebContentsUserData<PageText>;
@@ -57,6 +60,9 @@ class PageText : public content::WebContentsObserver,
   std::set<uint64_t> asked_;
   // A page that never stops loading, as one that streams, is read as it is after a while.
   base::OneShotTimer give_up_;
+  // Each read's lift until its answer, as an agent's act has while it works: reading a hidden
+  // tab's page is the agent's call too (#4227).
+  base::flat_map<uint64_t, base::ScopedClosureRunner> lifts_;
   base::WeakPtrFactory<PageText> weak_factory_{this};
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
