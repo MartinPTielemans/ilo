@@ -6,8 +6,8 @@ use gpui::TestAppContext;
 
 use super::*;
 use crate::agents::Question;
-use crate::agents::page::clip;
 use crate::agents::task::Word;
+use crate::agents::tier::TEXT_MOST;
 
 #[derive(Default)]
 struct Recorder {
@@ -174,7 +174,13 @@ fn a_need_posts_once_a_task_and_only_while_ilo_is_in_the_background(cx: &mut Tes
 
     // Answered, then asked again, a task that has posted its need doesn't post another, so going
     // back and forth can't ring the user; one that hadn't, does.
-    follow_cards(&[], cx);
+    follow_cards(
+        &[
+            card("task-1", "Claude", Dot::Working),
+            card("task-2", "Codex", Dot::Working),
+        ],
+        cx,
+    );
     let again = waiting("task-2", "Codex", 9, None);
     follow_cards(std::slice::from_ref(&again), cx);
     assert!(posted(&host).is_empty(), "a task posted its need twice");
@@ -253,8 +259,36 @@ fn a_tasks_title_goes_on_one_line_and_capped(cx: &mut TestAppContext) {
     follow_cards(&[named(Dot::Working)], cx);
     follow_cards(&[named(Dot::Done)], cx);
     let one_line = long.split_whitespace().collect::<Vec<_>>().join(" ");
-    let expected = format!("{} · Done", clip(&one_line, TITLE_CHARS));
+    let capped: String = one_line.chars().take(TEXT_MOST - 1).collect();
+    let expected = format!("{capped}… · Done");
     assert_eq!(posted(&host), [(expected, String::new())]);
+}
+
+#[gpui::test]
+fn a_title_that_turns_text_around_is_one_plain_line(cx: &mut TestAppContext) {
+    let host = opened(cx);
+    let named = |dot| Card {
+        title: "Pay\u{2028}the\u{202E} rent\u{2066}".into(),
+        ..card("task-1", "Claude", dot)
+    };
+    follow_cards(&[named(Dot::Working)], cx);
+    follow_cards(&[named(Dot::Waiting)], cx);
+    assert_eq!(
+        posted(&host),
+        [("Pay the rent · Needs you".to_string(), String::new())]
+    );
+}
+
+#[gpui::test]
+fn a_task_gone_from_the_cards_is_forgotten(cx: &mut TestAppContext) {
+    let host = opened(cx);
+    follow_cards(&[card("task-1", "Claude", Dot::Working)], cx);
+    follow_cards(&[card("task-1", "Claude", Dot::Waiting)], cx);
+    assert_eq!(posted(&host).len(), 1);
+    let told = |cx: &mut TestAppContext| cx.update(|cx| cx.global::<NeedsYou>().told.len());
+    assert_eq!(told(cx), 1);
+    follow_cards(&[card("task-2", "Codex", Dot::Working)], cx);
+    assert_eq!(told(cx), 0, "a task gone from the cards is still told");
 }
 
 #[gpui::test]
