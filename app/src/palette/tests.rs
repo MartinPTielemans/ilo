@@ -537,8 +537,8 @@ fn sweep(themes: &[Theme]) -> Vec<String> {
         .collect()
 }
 
-/// A Space with no theme has the measured window, black 0.25 over the material and nothing more,
-/// and ilo green made to read with Ink on it, and everything passes.
+/// A Space with no theme has the measured window, black at `tint` over the material and nothing
+/// more, and ilo green made to read with Ink on it, and everything passes.
 #[test]
 fn no_theme_is_the_measured_window_and_ilo_green_with_ink() {
     let palette = Palette::of(None, Tone::Dark);
@@ -547,7 +547,7 @@ fn no_theme_is_the_measured_window_and_ilo_green_with_ink() {
         (TINT, 0., 0.)
     );
     // #289054 reads 2.7:1 on the window over a white backdrop, so ilo green, lighter, at its hue.
-    assert_eq!(hex(palette.accent), 0x57b97a);
+    assert_eq!(hex(palette.accent), 0x78d999);
     assert_eq!(hex(palette.accent_label), INK);
     assert!(contrast(palette.accent_label, palette.accent) >= TEXT);
     // #0B8045 with Paper, the value #319 first had, is under 4.5.
@@ -585,14 +585,20 @@ fn a_light_window_is_white_over_the_material_with_ink() {
 /// for Paper over a white backdrop is shaded, by the least step that lets it read.
 #[test]
 fn the_window_is_shaded_only_where_paper_needs_it() {
-    // check/window.sh's black Space, measured against Dia's composite: neutral, unshaded.
+    // check/window.sh's black Space: neutral, and two steps shaded, since the HUD window's
+    // material under `tint` is too light for Paper's selected plate over white without them.
     let black = Palette::of(Some(&Theme::at(0., 0.)), Tone::Dark);
+    let shade = 2. * SHADE_STEP;
     assert_eq!(
         (black.tint.a, black.shade, black.layer_alpha),
-        (TINT, 0., NEUTRAL_GRADIENT_ALPHA)
+        (
+            1. - (1. - TINT) * (1. - shade),
+            shade,
+            NEUTRAL_GRADIENT_ALPHA
+        )
     );
     let violet = Palette::of(Some(&Theme::of_color(0x5a2a9a)), Tone::Dark);
-    assert_eq!((violet.shade, violet.layer_alpha), (0., GRADIENT_ALPHA));
+    assert_eq!((violet.shade, violet.layer_alpha), (shade, GRADIENT_ALPHA));
     // Blue lightens to #9AC3FF down the window, too light for Paper's plates over white.
     let pale = Theme::of_color(0x1a79ff);
     let palette = Palette::of(Some(&pale), Tone::Dark);
@@ -609,21 +615,24 @@ fn the_window_is_shaded_only_where_paper_needs_it() {
     assert!(fails, "a step less shade would have read");
 }
 
-/// The pickers' card keeps Arc's measured grey where its text reads, and Capture's menu, ilo's
-/// menu's panel, reads in both looks: its glyphs, in the secondary colour, at 3:1, and its field's
-/// words, in the label's, as text on the field's tint of the line colour.
+/// The pickers' card takes the least step from Arc's measured grey toward the dark overlay at
+/// which its text reads, two steps over the black Space and four with no theme on the HUD window's
+/// material, and Capture's menu, ilo's menu's panel, reads in both looks: its glyphs, in the
+/// secondary colour, at 3:1, and its field's words, in the label's, as text on the field's tint of
+/// the line colour.
 #[test]
 fn the_pickers_card_and_captures_menu_read() {
     let black = Palette::of(Some(&Theme::at(0., 0.)), Tone::Dark);
     assert_eq!(
-        hex(black.card),
-        hex(rgba(CARD)),
-        "the measured grey over the black Space"
+        (hex(black.card), black.card.a),
+        (0x444443, 0.6082353),
+        "two steps from the measured grey over the black Space"
     );
+    let none = Palette::of(None, Tone::Dark).card;
     assert_eq!(
-        Palette::of(None, Tone::Dark).card,
-        rgba(CARD),
-        "the measured grey with no theme"
+        (hex(none), none.a),
+        (0x403f3e, 0.65176475),
+        "four steps from the measured grey with no theme"
     );
     let lay = |at: Rgba, colour: u32| over(at, rgb(colour >> 8), (colour & 0xff) as f32 / 255.);
     for light in [false, true] {
@@ -645,9 +654,10 @@ fn the_pickers_card_and_captures_menu_read() {
     }
 }
 
-/// With no theme over a white backdrop, ilo green reads under 3:1 on the Library's column under
-/// the selected section's plate, so that glyph alone takes the nearest colour at its hue that
-/// reads, and the accent stays. An accent that reads there is the glyph's colour as it is.
+/// The selected Library section's glyph is the accent where the accent reads on the Library's
+/// column under the section's plate, and otherwise, alone, the nearest colour at its hue that
+/// reads, the accent staying. With no theme on the HUD window's material, ilo green, made to
+/// read with Ink, reads there as it is.
 #[test]
 fn the_selected_library_section_glyph_reads_without_moving_the_accent() {
     use crate::tokens::shell::library::{COLUMN, LIBRARY_PLATE};
@@ -661,12 +671,13 @@ fn the_selected_library_section_glyph_reads_without_moving_the_accent() {
             .map(|&at| contrast(c, at))
             .fold(f32::MAX, f32::min)
     };
-    assert_eq!(hex(none.accent), 0x57b97a);
+    assert_eq!(hex(none.accent), 0x78d999);
     assert!(
-        worst(none.accent) < GLYPH,
-        "ilo green reads there: {:.2}",
+        worst(none.accent) >= GLYPH + BETWEEN,
+        "ilo green doesn't read there: {:.2}",
         worst(none.accent)
     );
+    assert_eq!(none.section_glyph, none.accent);
     assert!(worst(none.section_glyph) >= GLYPH + BETWEEN);
     let (hue, glyph_hue) = (Hsla::from(none.accent).h, Hsla::from(none.section_glyph).h);
     assert!(
@@ -804,12 +815,12 @@ fn a_pressed_accent_goes_darker_than_hovered() {
     }
     assert_eq!(
         hex(Palette::of(None, Tone::Dark).accent_pressed().to_rgb()),
-        0x469462
+        0x60ae7a
     );
 }
 
 /// A filled button under the pointer goes 0.9 darker, whatever its label (the owner, 2026-10-26):
-/// the dialog's OK on ilo green from #57B97A to #4EA76E, not lighter.
+/// the dialog's OK on ilo green from #78D999 to #6CC38A, not lighter.
 #[test]
 fn a_hovered_accent_goes_darker() {
     let themes = grid(
@@ -836,8 +847,8 @@ fn a_hovered_accent_goes_darker() {
         }
     }
     let green = Palette::of(None, Tone::Dark);
-    assert_eq!(hex(green.accent), 0x57b97a);
-    assert_eq!(hex(green.accent_hovered().to_rgb()), 0x4ea76e);
+    assert_eq!(hex(green.accent), 0x78d999);
+    assert_eq!(hex(green.accent_hovered().to_rgb()), 0x6cc38a);
 }
 
 /// The find bar's caret is ilo green on its dark fill, whatever the Space's theme.
