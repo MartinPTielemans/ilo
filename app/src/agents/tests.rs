@@ -774,6 +774,38 @@ fn settings_lists_the_clients_found_here(cx: &mut TestAppContext) {
     assert_eq!(look(cx), [Client::Other]);
 }
 
+/// Any MCP client's line and Your assistant's row can't disagree: a client whose CLI the
+/// assistants' look found is listed though its files aren't in the home, so the line never calls
+/// it missing beside a row that says it's there, and one the look didn't find is missing only
+/// where its row says it isn't installed.
+#[gpui::test]
+fn the_clients_line_agrees_with_the_assistants_rows(cx: &mut TestAppContext) {
+    use crate::agents::ready::{Found, Ready};
+    use crate::agents::runner::Cli;
+    for ready in [Ready::NotFound, Ready::SignedOut, Ready::SignedIn] {
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let found = Found {
+            ready,
+            ..Default::default()
+        };
+        *configs.looked.lock().unwrap() = vec![(Cli::Claude, found)];
+        let agents = agents(&browser, &configs, None, cx);
+        agents.update(cx, |agents, cx| {
+            agents.look_for_clients(cx);
+            agents.look_for_task_agents(cx);
+        });
+        cx.run_until_parked();
+        let (row, listed) = agents.read_with(cx, |agents, _| {
+            (agents.assistant_row(Cli::Claude).line, agents.listed())
+        });
+        assert_eq!(
+            !listed.contains(&Client::ClaudeCode),
+            row == "Not installed",
+            "{ready:?}: Claude Code's row says {row:?} and Apps that connect lists {listed:?}"
+        );
+    }
+}
+
 /// A Connect that fails, as when the client isn't installed, connects nothing and says why on
 /// the client's row.
 #[gpui::test]
