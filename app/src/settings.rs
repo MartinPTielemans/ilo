@@ -31,8 +31,8 @@ use browser::widevine::{self, Widevine, WidevineRow};
 use gpui::{
     AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, FontWeight,
     Global, Hsla, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, PathPromptOptions, Rgba,
-    SharedString, Subscription, TitlebarOptions, Window, WindowBounds, WindowHandle, WindowKind,
-    WindowOptions, actions, canvas, div, point, prelude::*, px, rgb, rgba, size, svg,
+    SharedString, Subscription, Window, WindowHandle, WindowOptions, actions, canvas, div, point,
+    prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{bc, ns_view, platform, show_menu};
@@ -58,8 +58,8 @@ use browser::tokens::settings::{
     BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS, DETAIL,
     DETAIL_LINE, DETAIL_TOP, END_GAP, FIELD_PADDING, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME,
     GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE,
-    LEDE_TOP, MIN_HEIGHT, MIN_WIDTH, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SENT_TUCK,
-    SHARE_TOP, SHORT_PADDING, SHORT_ROW, SIDE_ROOM, TEXT_X, TITLE, WIDTH,
+    LEDE_TOP, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SENT_TUCK, SHARE_TOP,
+    SHORT_PADDING, SHORT_ROW, SIDE_ROOM, TEXT_X, TITLE, WIDTH,
 };
 use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
 use browser::tokens::shell::{
@@ -903,27 +903,12 @@ fn open(cx: &mut App) {
     }
     account::bind_keys(cx);
     settings_search::bind_keys(cx);
+    let bounds = Bounds::new(point(px(0.), px(0.)), size(px(WIDTH), px(HEIGHT)));
+    let title = Section::General.name().into();
     let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-            point(px(0.), px(0.)),
-            size(px(WIDTH), px(HEIGHT)),
-        ))),
-        // The column runs under the window's buttons, which sit where the browser window's do.
-        titlebar: Some(TitlebarOptions {
-            title: Some(Section::General.name().into()),
-            appears_transparent: true,
-            traffic_light_position: Some(point(px(12.), px(16.))),
-        }),
-        // Nor a title bar of the window manager's on Linux, where the UI draws the close button.
-        #[cfg(target_os = "linux")]
-        window_decorations: Some(gpui::WindowDecorations::Client),
-        kind: WindowKind::Normal,
         show: false,
         focus: false,
-        is_resizable: true,
-        is_minimizable: false,
-        window_min_size: Some(size(px(MIN_WIDTH), px(MIN_HEIGHT))),
-        ..Default::default()
+        ..browser::settings_column::window_options(bounds, title)
     };
     SHOWN_SECTION.set(Section::General.name());
     let window = cx.open_window(options, |window, cx| {
@@ -1836,14 +1821,19 @@ impl Settings {
             ],
         );
         // Transparency, directly under Appearance, where the window has glass to show through.
-        let transparency = browser::transparency::row(look, browser::transparency::has_glass(), cx)
-            .map(|div| Row {
-                div,
-                name: browser::transparency::NAME.into(),
-                line: Some(browser::transparency::ABOUT.into()),
-                keys: None,
-                nested: false,
-            });
+        let transparency = browser::transparency::row(
+            look,
+            browser::transparency::has_glass(),
+            self.drawn_logged.clone(),
+            cx,
+        )
+        .map(|div| Row {
+            div,
+            name: browser::transparency::NAME.into(),
+            line: Some(browser::transparency::ABOUT.into()),
+            keys: None,
+            nested: false,
+        });
         let mut looks = vec![pictured(look, "Appearance", appearance_line, appearances)];
         // On the Mac the system's Reduce Transparency is said under the group, so Page zoom
         // starts the next one.
@@ -3955,40 +3945,18 @@ impl Settings {
             false => notes::SWITCH_OFF_LINE,
         };
         let row = setting(look, notes::HEADING, Some(line.into()), vec![switch]);
-        let rows: Vec<gpui::Div> = (notes::NOTES.iter().enumerate())
-            .map(|(index, note)| {
-                let opened = self.notes_opened.contains(note.host);
-                let title = match opened {
-                    true => notes::CLOSE,
-                    false => notes::READ,
-                };
+        let rows: Vec<gpui::Div> = (notes::NOTES.iter())
+            .map(|note| {
                 let host = note.host;
-                let read = self
-                    .button(("agent-note-read", index as u64), title)
-                    .relative()
-                    .child(self.drawn(format!("note {host}")))
-                    .on_click(cx.listener(move |settings, _, _, cx| {
-                        if !settings.notes_opened.remove(host) {
-                            settings.notes_opened.insert(host);
-                        }
-                        cx.notify();
-                    }));
-                let head = line_row(
-                    look,
-                    note.name,
-                    Some(note.about.into()),
-                    vec![read.into_any_element()],
-                );
-                let text = opened.then(|| {
-                    div()
-                        .px(px(ROW_X))
-                        .pb(px(browser::tokens::settings::PADDING))
-                        .text_size(px(text::SMALL))
-                        .line_height(px(DETAIL_LINE))
-                        .text_color(look.detail)
-                        .child(note.text.trim_end())
+                let opened = self.notes_opened.contains(host);
+                let toggle = cx.listener(move |settings, _, _, cx| {
+                    if !settings.notes_opened.remove(host) {
+                        settings.notes_opened.insert(host);
+                    }
+                    cx.notify();
                 });
-                div().child(head).children(text)
+                let logged = self.drawn_logged.clone();
+                browser::settings_rows::site_note_row(look, note, opened, self.a11y, logged, toggle)
             })
             .collect();
         vec![
