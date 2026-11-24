@@ -3808,19 +3808,13 @@ impl Settings {
                 nested: false,
             }
         });
-        // The kept tasks' rows first, then this switch (Settings order, #4098).
-        let rows = [master]
-            .into_iter()
-            .chain(tasks)
-            .chain(keeps)
-            .chain(kept)
-            .chain(sign_in);
+        let rows = [master].into_iter().chain(tasks).chain(keeps).chain(kept);
         let mut blocks = vec![Block::Rows(rows.collect())];
         if tasks_on {
             blocks.push(Block::Heading("Your assistant".into()));
             blocks.push(Block::Group(self.assistants(agents, cx)));
             blocks.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
-            blocks.extend(self.access());
+            blocks.extend(self.access(sign_in));
         }
         // ⌘T's tasks and outside agents' sessions notify alike, so it's here while agents are on.
         // The Mac, Windows and Linux each post them (needs_you_host.rs).
@@ -3935,7 +3929,9 @@ impl Settings {
 
     /// Access: what each tier lets a task do, in words only, since only a task's own menu sets
     /// one. The level's menu opens Settings here, flashing the group (settings::show_row).
-    fn access(&self) -> Vec<Block> {
+    /// The saved-logins switch (#4098) comes first, under the heading, where keeping a task doesn't
+    /// move it.
+    fn access(&self, sign_in: Option<Row>) -> Vec<Block> {
         use agents::tier::{ACCESS, Tier};
         let look = &self.look;
         let rows = Tier::ALL.map(|tier| {
@@ -3948,10 +3944,10 @@ impl Settings {
             .div
         });
         let heading: SharedString = ACCESS.into();
-        vec![
-            Block::Heading(heading.clone()),
-            Block::Group(self.flashed(&heading, group(look, rows))),
-        ]
+        let mut blocks = vec![Block::Heading(heading.clone())];
+        blocks.extend(sign_in.map(|row| Block::Rows(vec![row])));
+        blocks.push(Block::Group(self.flashed(&heading, group(look, rows))));
+        blocks
     }
 
     /// Always ask first (#3724): the sites the user fenced, each with Remove, then Add Site…, which

@@ -518,6 +518,13 @@ impl gpui::Render for PicturesPage {
                                 ))
                             })
                             .into();
+                        // The saved-logins switch, on, first under Access (#4098).
+                        let sign_in = {
+                            use browser::agents::signing::{HEADING, SWITCH_LINE};
+                            frame()
+                                .child(row_text(&look, HEADING, Some(SWITCH_LINE.into())))
+                                .child(switch(HEADING, true))
+                        };
                         let when = popup(&look, Notify::Away.title(), POPUP_WIDTH, false);
                         let when = frame()
                             .child(row_text(&look, WHEN_TO_NOTIFY, None))
@@ -533,7 +540,8 @@ impl gpui::Render for PicturesPage {
                                     another(),
                                 ],
                             ),
-                            (Some(ACCESS), access),
+                            (Some(ACCESS), vec![sign_in]),
+                            (None, access),
                             (Some(browser::needs_you::NOTIFICATIONS), vec![when]),
                         ]
                     }
