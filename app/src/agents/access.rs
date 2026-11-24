@@ -4,6 +4,7 @@
 
 use gpui::Context;
 
+use super::task::rewall::Change;
 use super::tier::{self, Sites, Stop, Tier, Why};
 use super::{
     Act, Agents, CHANGES_ASK, Call, DOWNLOADS, FENCED, OTHER_SITE, Refused, UNSAVED, act_of, fence,
@@ -165,14 +166,22 @@ impl Agents {
 
     /// The user changes the task `key`'s access to `tier`: from its line or its chip, never from
     /// an agent. Its refusals are settled, the log keeps the change, and a task ilo runs is told.
+    /// One with files goes up only if its wall of the new level does, and starts again inside
+    /// the wall of whichever level it's set to (rewall.rs).
     pub fn set_tier(&mut self, key: &str, tier: Tier, cx: &mut Context<Self>) {
-        let Some(task) = self.task_mut(key).filter(|task| task.ended.is_none()) else {
+        let Some(task) = self.task(key).filter(|task| task.ended.is_none()) else {
             return;
         };
         let from = task.tier;
         if from == tier {
             return;
         }
+        let Ok(raised) = self.wall_to_raise(key, from, tier) else {
+            return cx.notify();
+        };
+        let Some(task) = self.task_mut(key) else {
+            return;
+        };
         task.tier = tier;
         for stop in &mut task.stops {
             stop.settled = true;
@@ -193,12 +202,8 @@ impl Agents {
         let changed = tier::changed_logged(from, tier);
         self.note_on(&agent, connection, ACCESS_ACTION, "", &changed, "");
         if runs {
-            self.tell_task(
-                key,
-                tier::changed_turn(from, tier),
-                tier as usize > from as usize,
-                cx,
-            );
+            let change = Change::Level { from, raised };
+            self.rewall(key, change, tier::changed_turn(from, tier), cx);
         }
         cx.notify();
     }

@@ -141,6 +141,7 @@ mod walled {
             folder: None,
             started: SystemTime::now(),
             launcher: Some(Launcher { program, handoff }),
+            tmp: None,
         }
     }
 

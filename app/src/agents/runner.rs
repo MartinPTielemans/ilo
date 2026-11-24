@@ -6,6 +6,7 @@
 //! Claude Code runs in print mode with stream-json both ways, so a reply is one more line on its
 //! stdin. Codex runs as `codex app-server`, which speaks newline JSON-RPC (see codex.rs).
 
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Stdio};
@@ -433,16 +434,60 @@ fn keep_tail(mut from: impl Read, said: &Mutex<String>) {
 /// What the CLI's process is started with beyond the browser's own environment, each set on the
 /// process, so ilo's value is the one it reads.
 fn environment(command: &mut std::process::Command, launch: &Launch) {
+    command.envs(sets(launch));
+}
+
+/// Every variable a start of `launch` sets, with its value: the one account of them, which
+/// `environment` puts on the process. Each name is in `kept` for its CLI.
+pub fn sets(launch: &Launch) -> Vec<(&'static str, OsString)> {
+    let mut sets: Vec<(&'static str, OsString)> = Vec::new();
     if let Some(path) = &launch.path {
-        command.env("PATH", path);
+        sets.push((PATH, path.into()));
     }
     // The token reaches the bridge through Codex's environment, and through Claude's config.
     if launch.cli == Cli::Codex {
-        command.env(super::bridge::TOKEN, &launch.server.token);
+        sets.push((super::bridge::TOKEN, (&launch.server.token).into()));
     }
     // With helpers, what leaves the assistant ilo's kind of helper alone (#4102).
     if launch.helpers {
-        command.envs(super::helpers::ENV);
+        sets.extend(super::helpers::ENV.map(|(name, value)| (name, value.into())));
+    }
+    // Inside a wall Claude Code keeps nothing of its own in the user's folders, which the wall
+    // denies it: no history of what it was asked, no memory, no copies of the files it changes,
+    // no update of itself and no report of its use. Its temporary files go in the wall's folder
+    // for them.
+    if let (Cli::Claude, Some(wall)) = (launch.cli, &launch.wall) {
+        sets.extend(CLAUDE_WALLED.map(|name| (name, "1".into())));
+        if let Some(tmp) = wall.tmp() {
+            sets.push((CLAUDE_TMP, tmp.into()));
+        }
+    }
+    sets
+}
+
+const PATH: &str = "PATH";
+/// What a walled Claude Code is started with, each on.
+const CLAUDE_WALLED: [&str; 5] = [
+    "CLAUDE_CODE_SKIP_PROMPT_HISTORY",
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
+    "CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING",
+    "DISABLE_UPDATES",
+    "DISABLE_TELEMETRY",
+];
+/// Where a walled Claude Code keeps its temporary files: the wall's folder for them.
+const CLAUDE_TMP: &str = "CLAUDE_CODE_TMPDIR";
+
+/// Every name a start of `cli` may set on its process, walled or not: what a wall's launcher is
+/// told to keep of the runner's, beside the wall's own names. A wall drops every name it isn't
+/// told (wall/launch.rs), so one set and not listed here would never arrive, and nothing would
+/// say so: `sets` answers from these alone, which a test holds.
+pub fn kept(cli: Cli) -> Vec<&'static str> {
+    match cli {
+        Cli::Claude => {
+            let helpers = super::helpers::ENV.map(|(name, _)| name);
+            [&[PATH, CLAUDE_TMP][..], &CLAUDE_WALLED[..], &helpers[..]].concat()
+        }
+        Cli::Codex => vec![PATH, super::bridge::TOKEN],
     }
 }
 
@@ -532,8 +577,16 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
     if launch.helpers {
         args.extend(super::helpers::claude_args(&allowed));
     }
+    // Inside ilo's wall its own sandbox is off: the wall is what holds it. No settings file is
+    // read, so this is its only setting.
+    if launch.wall.is_some() {
+        args.extend(["--settings".into(), WALLED_SETTINGS.into()]);
+    }
     args
 }
+
+/// A walled Claude Code's settings.
+const WALLED_SETTINGS: &str = r#"{"sandbox":{"enabled":false}}"#;
 
 /// What a turn of Claude's has shown so far that its result needs: a limit it hit.
 #[derive(Default)]
