@@ -24,7 +24,13 @@ pub(crate) const TASKS: [(&str, &str, Dot); 3] = [
     ),
 ];
 
-/// The pages the done task left the user, each with its site.
+/// What each task was asked, as its view says it.
+const ASKED: [&str; 3] = [
+    "Find two tickets for Saturday's concert, in the stalls",
+    "Compare the museum passes for a weekend in the city",
+    "Book a table for four on Friday at 20:00",
+];
+
 /// The working task's last three steps, as its trace lines say them.
 const WORKING_STEPS: [&str; 3] = [
     "Opened encore.example",
@@ -32,11 +38,65 @@ const WORKING_STEPS: [&str; 3] = [
     "Clicking “Tickets”",
 ];
 
+/// The working task's four pages, as its conversation lists them: their titles and addresses.
+const WORKING_PAGES: [(&str, &str); 4] = [
+    ("Seats · Saturday", "https://tickets.example/seats"),
+    ("Stalls · Seat map", "https://seatmap.example/stalls"),
+    ("Basket · Tickets", "https://tickets.example/basket"),
+    ("Directions · Concert hall", "https://maps.example/hall"),
+];
+
+/// The pages the stopped task had open.
+const STOPPED_PAGES: [(&str, &str); 2] = [
+    ("Passes · City Museums", "https://museums.example/passes"),
+    ("Weekend pass · Gallery", "https://gallery.example/weekend"),
+];
+
+/// The pages the done task left the user, each with its site.
 pub(crate) const TASK_PAGES: [(&str, &str); 3] = [
     ("Booking · Taberna", "https://taberna.example/booking"),
     ("Menu · Taberna", "https://taberna.example/menu"),
     ("Directions", "https://maps.example/taberna"),
 ];
+
+/// A task's pages by its place in `TASKS`, the tabs of its Space, which its group at the
+/// sidebar's foot lists: each one's tab, title and address.
+pub(crate) fn task_pages(at: usize) -> Vec<(u64, &'static str, &'static str)> {
+    let (first, pages): (u64, &[(&str, &str)]) = match at {
+        // The bench's task stands on its one page, or has one for each helper (#4102).
+        0 if states::var_os("PREVIEW_TASK").is_some() => {
+            (200, &HELPER_PAGES[..bench_helpers().unwrap_or(1)])
+        }
+        0 => (200, &WORKING_PAGES),
+        1 => (150, &STOPPED_PAGES),
+        _ => (100, &TASK_PAGES),
+    };
+    let tabs = FIRST_TASK + first..;
+    (tabs
+        .zip(pages)
+        .map(|(tab, &(title, url))| (tab, title, url)))
+    .collect()
+}
+
+/// The state PREVIEW_TASKS=<state> shows one task's group in, its view over the page area: done,
+/// with the pages it left open; needs-you; stopped; interrupted, with its assistant's fix under
+/// its header; or two, the done task's group open over the working one's, closed to its header.
+/// =open is the working task's, with four pages, the other two closed.
+pub(crate) fn group_state() -> Option<String> {
+    let state = states::var("PREVIEW_TASKS").ok()?;
+    let one = ["done", "needs-you", "stopped", "interrupted", "two"];
+    one.contains(&state.as_str()).then_some(state)
+}
+
+/// The task whose view PREVIEW_TASKS=<state> opens, by its place in `TASKS`.
+pub(crate) fn shown_task(state: &str) -> Option<usize> {
+    match state {
+        "open" | "needs-you" | "interrupted" => Some(0),
+        "stopped" => Some(1),
+        "done" | "two" => Some(2),
+        _ => None,
+    }
+}
 
 /// The pages of the helpers PREVIEW_TASK's helper states show (#4102), one each: their titles and
 /// addresses. With four, the third is the one its helper handed the user, for the sign-in.
@@ -146,13 +206,17 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         asks: false,
         dot,
         word: Word::for_dot(dot),
+        pages: (task_pages((at - FIRST_TASK) as usize).iter())
+            .map(|&(tab, ..)| tab)
+            .collect(),
+        tier: Default::default(),
         answers: Vec::new(),
         question: None,
         open: match dot {
             Dot::Done => {
                 let site = |url: &str| url.split('/').nth(2).unwrap_or("").into();
-                let pages = (FIRST_TASK + 100..).zip(TASK_PAGES);
-                pages.map(|(tab, (_, url))| (tab, site(url))).collect()
+                let pages = task_pages((at - FIRST_TASK) as usize).into_iter();
+                pages.map(|(tab, _, url)| (tab, site(url))).collect()
             }
             _ => Vec::new(),
         },
@@ -180,6 +244,8 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             status: status.into(),
             dot,
             word: Word::for_dot(dot),
+            pages: Vec::new(),
+            tier: Default::default(),
             open,
             ..card((FIRST_TASK, TASKS[0]))
         }];
@@ -220,6 +286,33 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         cards[0].status = "Two seats in row 12 are in your basket".into();
         cards[0].dot = Dot::Done;
         cards[0].open = vec![(FIRST_TASK + 200, "tickets.example".into())];
+    }
+    // One group's state (`group_state`): the task it's of, alone, or with the one beside it.
+    match group_state().as_deref() {
+        Some("needs-you") => {
+            cards[0].status = format!(
+                "{} · Sign in to tickets.example",
+                browser::agents::task::NEEDS_YOU
+            )
+            .into();
+            cards[0].dot = Dot::Waiting;
+            cards[0].word = Word::NeedsYou;
+            cards.truncate(1);
+        }
+        Some("interrupted") => {
+            cards[0].status = "Claude Code isn't signed in.".into();
+            cards[0].dot = Dot::Ended;
+            cards[0].word = Word::Interrupted;
+            cards[0].fix = Some((
+                browser::agents::runner::Cli::Claude,
+                browser::agents::sign_in::Offer::SignIn,
+            ));
+            cards.truncate(1);
+        }
+        Some("stopped") => cards = vec![cards.swap_remove(1)],
+        Some("done") => cards = vec![cards.swap_remove(2)],
+        Some("two") => drop(cards.remove(1)),
+        _ => {}
     }
     // Newest first, as the Agents send them.
     cards.reverse();
@@ -303,8 +396,73 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         writing: false,
         tier: Default::default(),
     };
+    group_talk(&mut talk, &items);
     bench_task(&mut talk, items);
     talk
+}
+
+/// The view of a task that isn't at work says what its group's header does: its title, where it
+/// is and its pages, after a stretch of work that's over.
+fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
+    let cards = task_cards(0);
+    let Some(card) = cards.iter().find(|card| card.agent == talk.agent) else {
+        return;
+    };
+    if card.word == Word::Working {
+        return;
+    }
+    let at = (card.space - FIRST_TASK) as usize;
+    let site =
+        |url: &str| -> SharedString { url.split('/').nth(2).unwrap_or("").to_string().into() };
+    let pages = task_pages(at);
+    talk.title = card.title.clone();
+    talk.asked = ASKED[at].into();
+    talk.about = match card.word {
+        Word::Done => format!("{} · Done at 14:02", card.name).into(),
+        word => format!("{} · {}", card.name, word.after_name()).into(),
+    };
+    talk.progress = "".into();
+    talk.tabs = (pages.iter().map(|&(tab, _, url)| (tab, site(url)))).collect();
+    talk.on = None;
+    talk.stoppable = card.word == Word::NeedsYou;
+    // The first task's steps are the working conversation's; the others read their first page.
+    let read = |key, glyph, did: &str| {
+        TraceItem::Step(TraceStep {
+            key,
+            glyph,
+            title: format!("{did} {}", site(pages[0].2)).into(),
+            description: "".into(),
+            running: false,
+            failed: false,
+            opens: Opens::Nothing,
+            under: "".into(),
+        })
+    };
+    let steps = match at {
+        0 => items[..items.len() - 1].to_vec(),
+        _ => vec![
+            read(0, "icons/globe.svg", "Opened"),
+            read(1, "icons/text-align-start.svg", "Read"),
+        ],
+    };
+    let worked = Line::Trace(Trace {
+        key: 0,
+        running: false,
+        took: Some(40),
+        items: steps,
+    });
+    talk.lines = match card.word {
+        Word::Done => vec![worked, Line::Said(card.status.clone())],
+        Word::NeedsYou => vec![
+            worked,
+            Line::Ilo(IloLine {
+                key: 100,
+                kind: IloKind::Yours { tab: pages[0].0 },
+                settled: false,
+            }),
+        ],
+        _ => vec![worked],
+    };
 }
 
 /// PREVIEW_TASK=<state> (#4095's bench) shows the working task's conversation beside its page in

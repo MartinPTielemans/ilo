@@ -945,6 +945,8 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         asks: false,
         dot,
         word: Word::for_dot(dot),
+        pages: Vec::new(),
+        tier: Default::default(),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
@@ -1270,6 +1272,8 @@ fn the_strip_under_a_page_says_that_pages_own_step(cx: &mut TestAppContext) {
         asks: false,
         dot: Dot::Working,
         word: Word::for_dot(Dot::Working),
+        pages: Vec::new(),
+        tier: Default::default(),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
@@ -1326,6 +1330,8 @@ fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
         asks: false,
         dot: Dot::Waiting,
         word: Word::for_dot(Dot::Waiting),
+        pages: Vec::new(),
+        tier: Default::default(),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
@@ -1487,7 +1493,7 @@ fn the_ring_never_enters_an_agents_page(cx: &mut TestAppContext) {
         draw(shell, cx);
         at(shell, cx)
     };
-    assert_eq!(at(&shell, cx), (false, Some(StripStop::Card)));
+    assert_eq!(at(&shell, cx), (false, Some(StripStop::Header(1))));
     let went: Vec<_> = (0..5).map(|_| tab(false, &shell, cx)).collect();
     assert_eq!(
         went,
@@ -1496,7 +1502,7 @@ fn the_ring_never_enters_an_agents_page(cx: &mut TestAppContext) {
             (false, Some(StripStop::Page)),
             (false, Some(StripStop::TakeOver)),
             (false, Some(StripStop::Stop)),
-            (false, Some(StripStop::Card)),
+            (false, Some(StripStop::Header(1))),
         ]
     );
     let back: Vec<_> = (0..5).map(|_| tab(true, &shell, cx)).collect();
@@ -1507,7 +1513,7 @@ fn the_ring_never_enters_an_agents_page(cx: &mut TestAppContext) {
             (false, Some(StripStop::TakeOver)),
             (false, Some(StripStop::Page)),
             (false, Some(StripStop::Back)),
-            (false, Some(StripStop::Card)),
+            (false, Some(StripStop::Header(1))),
         ]
     );
     // Shift+Tab from the window rings the last stop, Stop.
@@ -1560,6 +1566,8 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         asks: false,
         dot: Dot::Working,
         word: Word::for_dot(Dot::Working),
+        pages: Vec::new(),
+        tier: Default::default(),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
@@ -1588,21 +1596,27 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
     draw(shell, cx);
 }
 
-/// Return on the task's card does what a click on it does: the shown task's card closes its
-/// conversation, its page with it, and the ring leaves the strip.
+/// Return on the task's header does what a click on it does: with one of its pages watched it
+/// goes back to the task's view, and the ring leaves the strip.
 #[gpui::test]
-fn return_on_the_task_card_does_what_its_click_does(cx: &mut TestAppContext) {
+fn return_on_the_task_header_does_what_its_click_does(cx: &mut TestAppContext) {
     use crate::shell::page_ends::StripStop;
     let (shell, _, cx) = shell_with_task(cx);
     watching_working(&shell, cx);
     assert!(shell.update(cx, |shell, cx| shell.tab_into_strip(false, cx)));
     draw(&shell, cx);
     let stop = shell.read_with(cx, |shell, _| shell.keyed_strip);
-    assert_eq!(stop, Some(StripStop::Card));
-    shell.update(cx, |shell, cx| shell.key_strip_show(StripStop::Card, cx));
+    assert_eq!(stop, Some(StripStop::Header(1)));
+    shell.update(cx, |shell, cx| {
+        shell.key_strip_show(StripStop::Header(1), cx)
+    });
     draw(&shell, cx);
-    let (open, stop) = shell.read_with(cx, |shell, _| (shell.task_open(), shell.keyed_strip));
-    assert_eq!(open, None, "Return on the card left its conversation open");
+    let (shown, stop) = shell.read_with(cx, |shell, _| (shell.task_shown(), shell.keyed_strip));
+    assert_eq!(
+        shown,
+        Some((3, None)),
+        "Return on the header didn't go back to its task's view"
+    );
     assert_eq!(stop, None, "the ring stayed in the strip");
 }
 
@@ -1723,7 +1737,7 @@ fn take_over_shows_with_the_ring_on_the_tasks_stops_alone(cx: &mut TestAppContex
     assert!(!shows(&shell, cx), "Take Over shows with no ring");
     shell.update(cx, |shell, cx| shell.tab_into_strip(false, cx));
     let stops = [
-        StripStop::Card,
+        StripStop::Header(1),
         StripStop::Back,
         StripStop::Page,
         StripStop::TakeOver,
