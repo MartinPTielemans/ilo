@@ -894,11 +894,20 @@ paper = 0xf3f0e8
 tint-less = 0.64
 tint = 0.52
 tint-more = 0.44
-# The material alone, untinted, over a white, a grey and a black backdrop (run 5); the window's
-# ground over each is the tint's colour at its alpha over these, which run 6 measured to the hex.
-material-over-white = 0xadacac
-material-over-grey = 0x646464
-material-over-black = 0x1f1f1f
+# What text holds over the window's worst backdrop at each level: primary text (titles, a field's
+# own text, a button's label, a chip's key) the palette's 4.5:1 at all three, and gray text
+# (placeholders, section labels, a row's detail) these, as the page shows through more. Where
+# primary text misses it, the plate right under it takes the least shade of the tint that brings
+# it back (#4090).
+gray-text-less = 4.5
+gray-text = 3.0
+gray-text-more = 3.0
+# The HUD window's material alone, untinted, over a white, a grey and a black backdrop, as the
+# app draws it on a Mac with the tint off, measured from its window's pixels; the window's ground
+# over each is the tint's colour at its alpha over these.
+material-over-white = 0xacacac
+material-over-grey = 0x5e5e5e
+material-over-black = 0x131313
 # What stands in for the material where the window's look has to be opaque, under rows it covers
 # or in the reveal's panel over the page: the ground over grey at Standard. The palette works out
 # each level's from the tokens above; this one is for what reads it without a palette, and a test
@@ -929,9 +938,9 @@ dialog-dark = 0x2a2720
 light-tint-less = 0.83
 light-tint = 0.7
 light-tint-more = 0.58
-light-material-over-white = 0xf5f5f4
-light-material-over-grey = 0xbcbcbb
-light-material-over-black = 0x7c7c7c
+light-material-over-white = 0xf6f6f6
+light-material-over-grey = 0xb6b6b6
+light-material-over-black = 0x717171
 light-stand-in = 0xebebeb
 # What floats over the window at each level, for the transparency picker: the dark fill over the
 # window's material at these, beside the window's own tints.

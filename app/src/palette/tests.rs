@@ -44,11 +44,34 @@ fn fine_window(palette: &Palette) -> Vec<Rgba> {
         .collect()
 }
 
+/// The least contrast gray text (placeholders, section labels, a row's detail) holds at `level`,
+/// from the table beside the window's tints; primary text holds TEXT at every level.
+fn gray_text(level: Transparency) -> f32 {
+    use crate::tokens::palette::{GRAY_TEXT, GRAY_TEXT_LESS, GRAY_TEXT_MORE};
+    match level {
+        Transparency::Less => GRAY_TEXT_LESS,
+        Transparency::Standard => GRAY_TEXT,
+        Transparency::More => GRAY_TEXT_MORE,
+    }
+}
+
 /// What fails: each of the chrome's components drawn as the shell draws it, with its alpha
-/// from the token ladder, on every point of a window of `tone`, below its WCAG minimum.
+/// from the token ladder, on every point of a window of `tone`, below its WCAG minimum, gray
+/// text below the user's level's.
 fn failures(theme: Option<&Theme>, tone: Tone) -> Vec<String> {
     let palette = Palette::of(theme, tone);
     let window = fine_window(&palette);
+    failures_over(theme, &palette, &window, gray_text(transparency()))
+}
+
+/// What fails of `palette`'s chrome drawn on each point of `window`, gray text held to `gray`.
+fn failures_over(
+    theme: Option<&Theme>,
+    palette: &Palette,
+    window: &[Rgba],
+    gray: f32,
+) -> Vec<String> {
+    let tone = palette.tone;
     let grain = theme.map_or(0., |theme| theme.grain);
     let ink = palette.ink;
     let grained: Vec<Rgba> = window
@@ -57,6 +80,11 @@ fn failures(theme: Option<&Theme>, tone: Tone) -> Vec<String> {
         .collect();
     let plated =
         |plate: f32| -> Vec<Rgba> { window.iter().map(|&at| over(at, ink, plate)).collect() };
+    // A plate as the palette draws it, shaded on its ground.
+    let laid = |plate: Hsla| -> Vec<Rgba> {
+        let plate = Rgba::from(plate);
+        window.iter().map(|&at| over(at, plate, plate.a)).collect()
+    };
     let mut failed = Vec::new();
     let mut check = |name: &str, worst: f32, minimum: f32| {
         if worst < minimum - 1e-4 {
@@ -86,12 +114,15 @@ fn failures(theme: Option<&Theme>, tone: Tone) -> Vec<String> {
     check("unselected title", on(palette.text(0.78), &grained), TEXT);
     check(
         "title on hovered plate",
-        on(palette.text(0.78), &plated(HOVERED_PLATE)),
+        on(palette.text(0.78), &laid(palette.hovered_row())),
         TEXT,
     );
     check(
         "URL host on field",
-        on(palette.text(0.62), &plated(FIELD_PLATE)),
+        on(
+            palette.text(0.62),
+            &laid(palette.ground_plate(Ground::Field, FIELD_PLATE)),
+        ),
         TEXT,
     );
     for name in ["Space name", "New Tab", "Clear", "secondary"] {
@@ -109,7 +140,7 @@ fn failures(theme: Option<&Theme>, tone: Tone) -> Vec<String> {
             .map(|&at| contrast(accent, at))
             .fold(f32::MAX, f32::min)
     };
-    check("focus ring, New Space circle", against(&window), GLYPH);
+    check("focus ring, New Space circle", against(window), GLYPH);
     check(
         "label on accent",
         contrast(palette.accent_label, accent),
@@ -248,7 +279,7 @@ fn failures(theme: Option<&Theme>, tone: Tone) -> Vec<String> {
     }
     // Every surface's controls in each of the ladder's states over their resting fills (#318):
     // the text on them at 4.5:1 and the glyphs at 3:1.
-    for (name, content, minimum, on_states) in states(&palette) {
+    for (name, content, minimum, on_states) in states(palette, window, gray) {
         check(
             &format!("{name}, every state"),
             on(content, &on_states),
@@ -260,7 +291,7 @@ fn failures(theme: Option<&Theme>, tone: Tone) -> Vec<String> {
         Some(theme) => Window::of(theme, tone).swatch(),
         None => vec![rgb(NO_THEME_ACCENT)],
     };
-    let edge = match Palette::swatch_ring_on(theme, &window) {
+    let edge = match Palette::swatch_ring_on(theme, window) {
         Some(ring) => window
             .iter()
             .map(|&at| contrast(ring, at))
@@ -278,11 +309,10 @@ fn failures(theme: Option<&Theme>, tone: Tone) -> Vec<String> {
 
 /// Each control drawn on a state of the ladder, off the sidebar, whose measured states the ladder
 /// is: its name, what's drawn on it, the contrast that needs, and the grounds it's drawn on, its
-/// resting fill under each state it takes.
-fn states(palette: &Palette) -> Vec<(String, Hsla, f32, Vec<Rgba>)> {
+/// resting fill under each state it takes, over each point of `window`. Gray text needs `gray`.
+fn states(palette: &Palette, window: &[Rgba], gray: f32) -> Vec<(String, Hsla, f32, Vec<Rgba>)> {
     use crate::tokens::{command_bar, dialog, offer, shell, site_controls, toast};
     const PRESSABLE: [f32; 2] = [STATE_PRESSED, STATE_HOVERED];
-    let window = fine_window(palette);
     let ink = palette.ink;
     // A control resting at `rest`, a plate of the ink, on `grounds`, in each of `states`.
     let lay = |grounds: &[Rgba], rest: f32, states: &[f32]| -> Vec<Rgba> {
@@ -293,6 +323,17 @@ fn states(palette: &Palette) -> Vec<(String, Hsla, f32, Vec<Rgba>)> {
         grounds
             .iter()
             .flat_map(|&at| alphas.iter().map(move |&alpha| over(at, ink, alpha)))
+            .collect()
+    };
+    // The same on `ground`, shaded as the palette draws it there.
+    let lay_on = |ground: Ground, grounds: &[Rgba], rest: f32, states: &[f32]| -> Vec<Rgba> {
+        let plates: Vec<Rgba> = states
+            .iter()
+            .map(|&state| Rgba::from(palette.ground_state(ground, rest, state)))
+            .collect();
+        grounds
+            .iter()
+            .flat_map(|&at| plates.iter().map(move |&plate| over(at, plate, plate.a)))
             .collect()
     };
     // The same on a surface that's dark on any theme, in Paper.
@@ -319,7 +360,7 @@ fn states(palette: &Palette) -> Vec<(String, Hsla, f32, Vec<Rgba>)> {
         (
             "Library section label",
             palette.text(shell::library::SECTION_LABEL),
-            TEXT,
+            gray,
             lay(&column, 0., &sections),
         ),
         (
@@ -332,67 +373,67 @@ fn states(palette: &Palette) -> Vec<(String, Hsla, f32, Vec<Rgba>)> {
             "Library row title",
             palette.text(shell::UNSELECTED_TITLE),
             TEXT,
-            lay(&window, 0., &PRESSABLE),
+            lay_on(Ground::Library, window, 0., &PRESSABLE),
         ),
         (
             "Library row detail",
             palette.text(shell::SECONDARY),
-            TEXT,
-            lay(&window, 0., &PRESSABLE),
+            gray,
+            lay_on(Ground::Library, window, 0., &PRESSABLE),
         ),
         (
             "Library card name",
             palette.text(shell::UNSELECTED_TITLE),
             TEXT,
-            lay(&window, 0., &[STATE_HOVERED]),
+            lay_on(Ground::Library, window, 0., &[STATE_HOVERED]),
         ),
         (
             "Library and side panel buttons",
             palette.glyph(shell::NAV),
             GLYPH,
-            lay(&window, 0., &PRESSABLE),
+            lay(window, 0., &PRESSABLE),
         ),
         (
             "URL field host",
             palette.text(shell::SECONDARY),
             TEXT,
-            lay(&window, FIELD_PLATE, &[STATE_HOVERED]),
+            lay_on(Ground::Field, window, FIELD_PLATE, &[STATE_HOVERED]),
         ),
         (
             "URL field placeholder",
             palette.text(shell::header::URL_PLACEHOLDER),
-            TEXT,
-            lay(&window, FIELD_PLATE, &[STATE_HOVERED]),
+            gray,
+            lay_on(Ground::Field, window, FIELD_PLATE, &[STATE_HOVERED]),
         ),
         (
             "question card button",
             palette.text(shell::TITLE),
             TEXT,
-            lay(&window, FIELD_PLATE, &PRESSABLE),
+            lay_on(Ground::Field, window, FIELD_PLATE, &PRESSABLE),
         ),
         (
             "offer button",
             palette.text(offer::TITLE),
             TEXT,
-            lay(&window, offer::PLATE, &PRESSABLE),
+            lay_on(Ground::Offer, window, offer::PLATE, &PRESSABLE),
         ),
         (
             "offer chevron",
             palette.glyph(offer::DETAIL),
             GLYPH,
-            lay(&window, 0., &PRESSABLE),
+            lay(window, 0., &PRESSABLE),
         ),
         (
             "toast chip key",
             palette.text(toast::KEY_COLOR),
             TEXT,
-            lay(&window, toast::CHIP_FILL, &PRESSABLE),
+            lay_on(Ground::Chip, window, toast::CHIP_FILL, &PRESSABLE),
         ),
         (
             "page chip key",
             palette.text(shell::conversation::CHIP_KEY),
             TEXT,
-            lay(&window, toast::CHIP_FILL, &PRESSABLE),
+            lay_on(Ground::Chip, window, toast::CHIP_FILL, &PRESSABLE),
         ),
         // On the overlays.
         (
@@ -538,7 +579,8 @@ fn sweep(themes: &[Theme]) -> Vec<String> {
 }
 
 /// A Space with no theme has the measured window, black at `tint` over the material and nothing
-/// more, and ilo green made to read with Ink on it, and everything passes.
+/// more, and ilo green made to read with Ink on it, and everything passes, at every transparency
+/// level: primary text at 4.5:1 and gray text at the level's (#4090).
 #[test]
 fn no_theme_is_the_measured_window_and_ilo_green_with_ink() {
     let palette = Palette::of(None, Tone::Dark);
@@ -552,7 +594,20 @@ fn no_theme_is_the_measured_window_and_ilo_green_with_ink() {
     assert!(contrast(palette.accent_label, palette.accent) >= TEXT);
     // #0B8045 with Paper, the value #319 first had, is under 4.5.
     assert!(contrast(rgb(PAPER), rgb(0x0b8045)) < TEXT);
-    assert_eq!(failures(None, Tone::Dark), Vec::<String>::new());
+    for level in Transparency::ALL {
+        set_transparency(level);
+        let palette = Palette::of(None, Tone::Dark);
+        assert_eq!(
+            (palette.tint.a, palette.shade, palette.layer_alpha),
+            (level.tint(true), 0., 0.),
+            "{level:?}: the window is never shaded"
+        );
+        assert_eq!(
+            failures(None, Tone::Dark),
+            Vec::<String>::new(),
+            "{level:?}"
+        );
+    }
 }
 
 /// A light window is its material under white 0.8 with Ink on it, a theme's colours over it at
@@ -573,7 +628,15 @@ fn a_light_window_is_white_over_the_material_with_ink() {
     );
     assert_eq!(hex(palette.ink), INK);
     assert!(luminance(palette.accent) < luminance(Palette::of(None, Tone::Dark).accent));
-    assert_eq!(failures(None, Tone::Light), Vec::<String>::new());
+    for level in Transparency::ALL {
+        set_transparency(level);
+        assert_eq!(
+            failures(None, Tone::Light),
+            Vec::<String>::new(),
+            "{level:?}"
+        );
+    }
+    set_transparency(Transparency::Standard);
     let violet = Palette::of(Some(&Theme::of_color(0x5a2a9a)), Tone::Light);
     assert_eq!(
         (violet.shade, violet.layer_alpha),
@@ -1284,5 +1347,94 @@ fn the_window_takes_the_users_level_and_shows_more_of_what_is_behind_it_at_each_
             Palette::of(None, tone).tint.a,
             "{tone:?}: Standard is the window as it was"
         );
+    }
+}
+
+/// At Less the window is as opaque as before levels, so no plate is shaded and no text of
+/// either ink, primary or gray, is under 4.5:1 (#4090).
+#[test]
+fn at_less_nothing_is_shaded_and_no_text_is_under_4_5() {
+    set_transparency(Transparency::Less);
+    for tone in [Tone::Dark, Tone::Light] {
+        let palette = Palette::of(None, tone);
+        assert_eq!(palette.ground_shades, [0.; Ground::ALL.len()], "{tone:?}");
+        let window = fine_window(&palette);
+        assert_eq!(
+            failures_over(None, &palette, &window, TEXT),
+            Vec::<String>::new(),
+            "{tone:?}"
+        );
+    }
+}
+
+/// With Reduce Transparency or Increase Contrast, AppKit draws an opaque ground in the window's
+/// material's place and the level's tint lies over it: no text of either ink is under 4.5:1 on it,
+/// shaded plates and all, at any level (#4090).
+#[test]
+fn reduce_transparency_holds_the_windows_text_at_every_level() {
+    for tone in [Tone::Dark, Tone::Light] {
+        let opaque = rgb(match tone {
+            Tone::Dark => OPAQUE_MATERIAL_DARK,
+            Tone::Light => OPAQUE_MATERIAL_LIGHT,
+        });
+        for level in Transparency::ALL {
+            set_transparency(level);
+            let palette = Palette::of(None, tone);
+            let window = [over(opaque, palette.tint, palette.tint.a)];
+            assert_eq!(
+                failures_over(None, &palette, &window, TEXT),
+                Vec::<String>::new(),
+                "{tone:?} {level:?}"
+            );
+        }
+    }
+}
+
+/// The selected row's plate reads apart from a hovered row's at every level, in either look,
+/// shaded grounds and all: the lighter of the two by 1.15:1 at every point of the window. With no
+/// shade they're 1.18:1 apart at worst, at More over white, where a hovered plate shaded less than
+/// the selected one ended the lighter (#4090).
+#[test]
+fn the_selected_plate_reads_apart_from_the_hovered_one_at_every_level() {
+    const APART: f32 = 1.15;
+    for tone in [Tone::Dark, Tone::Light] {
+        for level in Transparency::ALL {
+            set_transparency(level);
+            let palette = Palette::of(None, tone);
+            let selected = Rgba::from(palette.selected(0.));
+            let hovered = Rgba::from(palette.hovered_row());
+            for at in fine_window(&palette) {
+                let (selected, hovered) =
+                    (over(at, selected, selected.a), over(at, hovered, hovered.a));
+                assert!(
+                    luminance(selected) > luminance(hovered)
+                        && contrast(selected, hovered) >= APART,
+                    "{tone:?} {level:?}: {:06x} beside {:06x}",
+                    hex(selected),
+                    hex(hovered)
+                );
+            }
+        }
+    }
+}
+
+/// What the palette reckons the window over black, grey 128 and white, which check/window.sh reads
+/// the sidebar against, is the window it draws over black and white, glows and all.
+#[test]
+fn the_window_reckoned_over_greys_is_the_one_drawn() {
+    for (theme, tone) in [
+        (None, Tone::Dark),
+        (Some(Theme::at(0., 0.)), Tone::Dark),
+        (Some(Theme::of_color(0x5a2a9a)), Tone::Light),
+    ] {
+        let palette = Palette::of(theme.as_ref(), tone);
+        for (foot, far) in [(0., 0.), (0.4, 0.), (1., 1.)] {
+            let [black, _, white] = palette.window_over_greys(foot, far).map(hex);
+            assert_eq!(
+                [black, white],
+                palette.window_at(foot, far).map(hex),
+                "{tone:?} {foot} {far}"
+            );
+        }
     }
 }
