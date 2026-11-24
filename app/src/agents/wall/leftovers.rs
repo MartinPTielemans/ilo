@@ -27,7 +27,7 @@ pub const CONTROL: &CStr = c"ilo.mark.control";
 /// The places' folder, in `Tasks/`.
 pub const ROOT: &str = ".tmp";
 
-const PREFIX: &str = "ilo.mark.";
+pub(super) const PREFIX: &str = "ilo.mark.";
 pub(super) const OUTSIDE: &str = "the program isn't inside its wall";
 
 /// A wall's mark: `ilo.mark.` and 32 hex characters from the system's random numbers, new for each

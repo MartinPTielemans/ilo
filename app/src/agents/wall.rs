@@ -32,6 +32,7 @@ use super::tier::Tier;
 pub mod launch;
 pub mod leftovers;
 pub mod listener;
+pub mod rules;
 /// The Mac's answers for ending what a walled task left running, which nothing asks yet.
 #[cfg(target_os = "macos")]
 #[path = "../../platform/mac/wall_walk.rs"]
