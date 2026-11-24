@@ -127,6 +127,47 @@ asked_preview() {
   expect '^browser: link preview settled$' "$1: the preview didn't settle"
   expect "^browser: loaded $p $target\$" "$1: the preview's page didn't load"
 }
+# Probe for #4165, never to land: a press on a dim, held, moved and let go over a sidebar row. The
+# press closes the dim's surface, which empties its pointer region as it leaves, so the release
+# reaches the surface only by the display server's implicit grab. The row must not click.
+open_from_bar "http://localhost:$port/preview-target.html"
+# The browser window's dialog: ⌘Q asks, and a press on its dim cancels it.
+post key q cmd
+expect "^browser: dialog shown Quit $app_name?\$" "probe: ⌘Q didn't ask before quitting"
+expect '^browser: dialog settled$' "probe: the quit dialog didn't settle"
+send press $page_point
+probe_pressed=$step
+send dragto $(row 1)
+send release $(row 1)
+expect '^browser: dialog cancelled$' "probe: a press on the dialog's dim didn't cancel it"
+expect '^browser: dialog window hidden$' "probe: the dialog's window stayed up"
+send order
+if none_since '^browser: selected ' "$probe_pressed"; then
+  echo "probe 4165 dialog dim: the release over a row selected nothing"
+else
+  echo "probe 4165 dialog dim: ROW CLICKED, $(since "$probe_pressed" | grep '^browser: selected ' | tail -1)"
+fi
+none_since '^browser: tab [0-9]* closed$' "$probe_pressed" || echo "probe 4165 dialog dim: a tab closed"
+# Back to the test page, whose link opens Peek.
+send click $(row 1)
+expect "^browser: selected $a\( in .*\)\{0,1\}\$" "probe: a click on the test page's row didn't show it"
+send click $link_point shift
+asked_preview "probe: ⇧-click on the test page's link"
+send press $dim_point
+probe_pressed=$step
+send dragto $(row 0)
+send release $(row 0)
+expect "^browser: tab $p closed\$" "probe: a press on Peek's dim didn't close it"
+send order
+if none_since '^browser: selected ' "$probe_pressed"; then
+  echo "probe 4165 Peek dim: the release over a row selected nothing"
+else
+  echo "probe 4165 Peek dim: ROW CLICKED, $(since "$probe_pressed" | grep '^browser: selected ' | tail -1)"
+fi
+echo "probe 4165: done; the run stops here"
+exec 3>&-
+quit
+exit 0
 # Asked for, a link opens in the preview from any tab, here a Today tab, whose plain click opens it
 # in the tab (#1370): ⇧-click, which Chrome opens in a new window, and Open Link in Peek in the
 # link's menu. No tab opens, and the tab stays on its page.
