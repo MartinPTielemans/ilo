@@ -659,12 +659,12 @@ impl Agents {
             TaskAction::Undelete => self.delete_task(agent, false, cx),
             TaskAction::SignIn => self.sign_in_for_task(agent, cx),
             TaskAction::CancelSignIn => self.cancel_sign_in_for_task(agent),
-            // The surface's buttons, which the tier model wires (#4086 step 2).
-            TaskAction::TakeOver(_)
-            | TaskAction::SetTier(_)
-            | TaskAction::AnySite
-            | TaskAction::HandBack(_)
-            | TaskAction::NotNow(_) => {}
+            // A Stopped line's step up and the chip: the user's own press, the one way a tier
+            // or a task's Sites change.
+            TaskAction::SetTier(tier) => self.set_tier(agent, tier, cx),
+            TaskAction::AnySite => self.set_sites(agent, Sites::Any, cx),
+            // The surface's other buttons, which the hand-off's step wires.
+            TaskAction::TakeOver(_) | TaskAction::HandBack(_) | TaskAction::NotNow(_) => {}
         }
         (None, None)
     }

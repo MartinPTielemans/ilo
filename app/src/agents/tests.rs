@@ -7753,6 +7753,32 @@ mod tasks {
         assert_eq!(tier, Tier::Look);
     }
 
+    /// A Stopped line's step up and Any site reach the task through the user's press, as Stop
+    /// does, and a task outside its Sites goes on once the user has said any site.
+    #[gpui::test]
+    fn the_lines_buttons_change_the_tasks_access(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Check my balance", cx);
+        agents.update(cx, |agents, _| {
+            let task = agents.task_mut(&agent).unwrap();
+            task.ended = None;
+            task.state = State::Working;
+            task.sites = Sites::Only(vec!["example.com".into()]);
+        });
+        let act = |action| {
+            agents.update(cx, |agents, cx| {
+                agents.task_action(&agent, action, cx);
+            })
+        };
+        act(TaskAction::SetTier(Tier::Full));
+        act(TaskAction::AnySite);
+        let (tier, sites) = agents.read_with(cx, |agents, _| {
+            let task = agents.task(&agent).unwrap();
+            (task.tier, task.sites.clone())
+        });
+        assert_eq!((tier, sites), (Tier::Full, Sites::Any));
+    }
+
     #[gpui::test]
     fn stop_ends_it_and_refuses_what_waits(cx: &mut TestAppContext) {
         let (agents, _) = ready(None, cx);
