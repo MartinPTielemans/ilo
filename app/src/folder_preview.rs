@@ -473,10 +473,10 @@ impl FolderPreview {
         self.go(1, cx);
     }
 
-    /// ↩ shows the tab selected. While an input method composes, it's the method's.
-    fn choose_selected(&mut self, _: &Choose, _: &mut Window, cx: &mut Context<Self>) {
-        if self.search.read(cx).composing() {
-            cx.propagate();
+    /// ↩ shows the tab selected, unless it was an input method's, composing in the search
+    /// (dismissal's rule).
+    fn choose_selected(&mut self, _: &Choose, window: &mut Window, cx: &mut Context<Self>) {
+        if !crate::dismissal::submits([&self.search.clone()], window, cx) {
             return;
         }
         let Some(shown) = &self.shown else {
@@ -499,8 +499,11 @@ impl FolderPreview {
         chosen(tab, cx);
     }
 
-    fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
-        self.close(cx);
+    /// Esc closes the preview, unless it was an input method's, composing in the search.
+    fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
+        if crate::dismissal::Close::escape_from([&self.search.clone()], window, cx).is_some() {
+            self.close(cx);
+        }
     }
 
     /// The preview goes, and the browser window gets the keyboard back.
