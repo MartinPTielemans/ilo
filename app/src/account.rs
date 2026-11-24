@@ -13,6 +13,7 @@ use std::rc::Rc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::list_keys::Named;
 use gpui::{
     App, Bounds, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
     Global, KeyBinding, Pixels, Render, SharedString, Window, actions, canvas, div, prelude::*, px,
@@ -690,6 +691,12 @@ impl Account {
         cx.notify();
     }
 
+    /// The field open, the server's address or the recovery words, whose ↩ and esc are an input
+    /// method's while it composes there (dismissal's rule).
+    fn open_field(&self) -> Option<Entity<TextInput>> {
+        (self.server.as_ref().or(self.entering.as_ref())).map(|field| field.input.clone())
+    }
+
     fn leave_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // With no server, the field is the only way to name one, so it stays.
         let stays = self.no_server() && self.server.is_some();
@@ -949,16 +956,20 @@ impl Account {
                     .py(px(PADDING))
                     .key_context("AccountField")
                     .on_action(cx.listener(|account, _: &Keep, window, cx| {
+                        if !crate::dismissal::submits(&account.open_field(), cx) {
+                            return;
+                        }
                         match account.server.is_some() {
                             true => _ = account.keep_server(window, cx),
                             false => account.keep_words(cx),
                         }
                     }))
-                    .on_action(
-                        cx.listener(|account, _: &Leave, window, cx| {
+                    .on_action(cx.listener(|account, _: &Leave, window, cx| {
+                        let field = account.open_field();
+                        if crate::dismissal::Close::escape_from(&field, cx).is_some() {
                             account.leave_field(window, cx)
-                        }),
-                    )
+                        }
+                    }))
                     .child(self.place("field".into()))
                     .child(field.input.clone())],
             ))
@@ -1198,6 +1209,10 @@ impl Account {
                 .child(div().flex_none().child(sign_out)),
         );
 
+        let removable: Vec<_> = (self.devices.iter().flatten())
+            .filter(|device| !device.current)
+            .map(|device| device.id.clone())
+            .collect();
         let devices = self.devices.iter().flatten().map(|device| {
             let control = match device.current {
                 true => div()
@@ -1212,6 +1227,16 @@ impl Account {
                             cx.notify();
                         };
                     let spoken = format!("Remove {}", device.name);
+                    // From the keys, the keyboard goes on to the Remove of the device that takes
+                    // its place (list_keys' rule).
+                    let (gone, listed) = (device.id.clone(), removable.clone());
+                    let hand_on = move |_: &mut Self,
+                                        click: &gpui::ClickEvent,
+                                        window: &mut Window,
+                                        cx: &mut Context<Self>| {
+                        let keys = click.is_keyboard();
+                        crate::list_keys::removing(&gone, &listed, Named::ByRow, keys, window, cx)
+                    };
                     self.button_said(
                         format!("remove {}", device.id),
                         "Remove",
@@ -1219,6 +1244,7 @@ impl Account {
                         cx,
                         remove,
                     )
+                    .on_click(cx.listener(hand_on))
                     .into_any_element()
                 }
             };

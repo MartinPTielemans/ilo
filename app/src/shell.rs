@@ -556,6 +556,7 @@ use crate::tokens::shell::CANCEL_BOTTOM;
 use crate::tokens::shell::CANCEL_HEIGHT;
 use crate::tokens::shell::CREATE_BOTTOM;
 
+use crate::palette::FIELD_PLATE as URL_FIELD;
 use crate::tokens::shell::CHOSEN;
 use crate::tokens::shell::CLEAR;
 use crate::tokens::shell::CLEAR_HOVERED;
@@ -572,7 +573,6 @@ use crate::tokens::shell::SLEEPING_FAVICON;
 use crate::tokens::shell::TILE;
 use crate::tokens::shell::TITLE;
 use crate::tokens::shell::UNSELECTED_TITLE;
-use crate::palette::FIELD_PLATE as URL_FIELD;
 /// A tile, and the URL field, under the pointer: the ladder's hover over its resting plate.
 pub(crate) const TILE_HOVERED: f32 =
     crate::palette::state_alpha(TILE, crate::palette::STATE_HOVERED);
@@ -1523,8 +1523,9 @@ pub struct Shell {
     split_folds: HashMap<u64, split_fold::Fold>,
     /// The row whose ring the keys move while the sidebar has the keyboard (sidebar_keys.rs), the
     /// focus it takes them with, whether it takes them at the next draw, and where the ring was
-    /// last drawn.
+    /// last drawn, and the rows it last went over, for the one that takes a gone row's place.
     keyed: Option<u64>,
+    keyed_rows: Vec<u64>,
     sidebar_keys: FocusHandle,
     focus_keys: bool,
     keyed_drawn: Rc<Cell<Option<(u64, Bounds<Pixels>)>>>,
@@ -2040,7 +2041,7 @@ pub struct Shell {
     /// What the chrome draws with, for the Space shown (palette.rs), and each theme's, worked
     /// out once.
     palette: Palette,
-    palettes: RefCell<Vec<((Option<Theme>, Tone), Palette)>>,
+    palettes: RefCell<Vec<(themes::PaletteKey, Palette)>>,
     /// The system's appearance as the window last drew, or the one View › Appearance chose in its
     /// place, which a Space without a theme, or with an automatic one, follows; the preview's own
     /// where it forces one; whether the window is the active one, as its texture shows; and the
@@ -2203,6 +2204,7 @@ impl Shell {
             pinned_turn: None,
             split_folds: HashMap::new(),
             keyed: None,
+            keyed_rows: Vec::new(),
             sidebar_keys: cx.focus_handle(),
             focus_keys: false,
             keyed_drawn: Rc::default(),
@@ -3112,7 +3114,7 @@ impl Shell {
         let kept = |of: &[u64], with: &[u64]| -> Vec<u64> {
             of.iter().copied().filter(|id| with.contains(id)).collect()
         };
-        self.glide_spaces(places, kept(&order, &now) != kept(&now, &order));
+        self.glide_spaces(places, kept(&order, &now) != kept(&now, &order), cx);
         self.live_profiles_changed(&reprofiled, cx);
         self.settle_theme_preview();
         if let Some(form) = &self.form

@@ -34,6 +34,9 @@ pub fn app_appearance(cx: &App) -> Appearance {
 /// the Spaces whose swatches a frame draws, and the one the picker is making.
 const PALETTES: usize = 64;
 
+/// What a Space's palette is worked out for: its theme, its tone and the transparency level.
+pub(super) type PaletteKey = (Option<Theme>, Tone, crate::transparency::Transparency);
+
 impl Shell {
     /// The theme `space` shows: the one the picker is making for it, else its own.
     pub(super) fn theme_of(&self, space: u64) -> Option<Theme> {
@@ -162,7 +165,11 @@ impl Shell {
     /// `space`'s palette, worked out once for each theme and tone it shows rather than while
     /// drawing.
     pub(super) fn palette_of(&self, space: u64) -> Palette {
-        let key = (self.space_theme(space), self.tone_of(space));
+        let key = (
+            self.space_theme(space),
+            self.tone_of(space),
+            crate::palette::transparency(),
+        );
         let mut palettes = self.palettes.borrow_mut();
         if let Some(at) = palettes.iter().position(|(each, _)| *each == key) {
             let kept = palettes.remove(at);
@@ -327,9 +334,7 @@ impl Shell {
                 ]
                 .into_iter()
                 .filter(move |(_, color)| color.a > 0. && weight > 0.)
-                .map(move |(corner, color)| {
-                    glow::glow(corner, right, color, color.a * weight)
-                })
+                .map(move |(corner, color)| glow::glow(corner, right, color, color.a * weight))
             })),
         };
         let dimmed = if self.window_active {

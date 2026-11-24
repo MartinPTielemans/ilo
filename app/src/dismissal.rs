@@ -3,21 +3,40 @@
 //! Library's (shell/library/keys.rs), the one surface that already gave the keyboard back to the
 //! element rather than to a window.
 //!
-//! The rule, the Library's: closed by Escape or by the key or command that opened it, the surface
-//! gives the keyboard back to its opener, or to the fallback its caller names when the opener has
-//! gone; closed any other way (a press outside, a choice inside, focus or the window leaving), to
-//! the fallback. Either way only while the surface still has the keyboard: what the user moved
-//! the keyboard to in the meantime keeps it. Escape while an input method composes in the
-//! surface's field is the composition's, and closes nothing.
+//! The rule: closed by Escape, by the key or command that opened it, or by a choice in it, the
+//! surface gives the keyboard back to its opener, or to the fallback its caller names when the
+//! opener has gone (a row's menu whose choice closed the row: the row that took its place, by
+//! `list_keys::took_place`, is the caller's fallback); closed as the user left it (a press
+//! outside, focus or the window leaving), to the fallback. Either way only while the surface still
+//! has the keyboard: what the user moved the keyboard to in the meantime keeps it, and so does
+//! what a choice's own result gave it to, such as the field Rename opens.
+//!
+//! Return and Escape while an input method composes in one of the surface's fields are the
+//! composition's, and the input method ends it: the surface neither submits nor closes, and
+//! leaves the marked text alone. A field's Return asks `submits` and its Escape
+//! `Close::escape_from`, with the surface's fields, and nothing else reads the composition for
+//! them.
 //!
 //! How to compose it: as the surface takes the keyboard, `FocusReturn::remember` who had it
 //! (the page, if its key came from there, as GPUI's focus doesn't see the page's). Every way it
-//! closes makes a `Close` (`Close::escape` for Escape, so a composition keeps it); then, while
-//! its own elements may still have the keyboard, `FocusReturn::give_back` with them and the
+//! closes makes a `Close` (`Close::escape_from` for Escape, so a composition keeps it); then,
+//! while its own elements may still have the keyboard, `FocusReturn::give_back` with them and the
 //! fallback, and on `Returned::Page` hand the page the keyboard as the surface may: it comes only
 //! while no other window of ours, such as an overlay, has the keyboard.
 
-use gpui::{App, FocusHandle, WeakFocusHandle, Window};
+use gpui::{App, Entity, FocusHandle, WeakFocusHandle, Window};
+
+use crate::text_input::TextInput;
+
+/// Whether Return acts on the surface: not while an input method composes in one of its
+/// `fields`, as the key is the composition's.
+pub fn submits<'a>(fields: impl IntoIterator<Item = &'a Entity<TextInput>>, cx: &App) -> bool {
+    !composing(fields, cx)
+}
+
+fn composing<'a>(fields: impl IntoIterator<Item = &'a Entity<TextInput>>, cx: &App) -> bool {
+    (fields.into_iter()).any(|field| field.read(cx).composing())
+}
 
 /// Why a surface closed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,10 +78,13 @@ impl Close {
         Self { why, by }
     }
 
-    /// Escape's close, or none while an input method is `composing` in the surface's field:
-    /// Escape there ends the composition, and the surface stays.
-    pub fn escape(composing: bool) -> Option<Self> {
-        (!composing).then_some(Self::new(Why::Escape, By::Keyboard))
+    /// Escape's close, or none while an input method composes in one of the surface's `fields`,
+    /// as the key is the composition's.
+    pub fn escape_from<'a>(
+        fields: impl IntoIterator<Item = &'a Entity<TextInput>>,
+        cx: &App,
+    ) -> Option<Self> {
+        (!composing(fields, cx)).then_some(Self::new(Why::Escape, By::Keyboard))
     }
 
     /// The close of an overlay the host hid as the user left it: a press outside it, or, with no
@@ -79,9 +101,9 @@ impl Close {
 
     /// Whether this close gives the keyboard back to the surface's opener, rather than to the
     /// fallback: Escape and the surface's own key or command do, as they're how a user goes back
-    /// to what they were doing.
+    /// to what they were doing, and so does a choice, which doesn't take the user anywhere else.
     pub fn gives_back(&self) -> bool {
-        matches!(self.why, Why::Escape | Why::Toggled)
+        matches!(self.why, Why::Escape | Why::Toggled | Why::Chosen)
     }
 }
 

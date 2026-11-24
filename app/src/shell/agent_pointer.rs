@@ -66,7 +66,7 @@ impl Shell {
             return;
         }
         // From where it is if it's still over the page, else from up and left of the element.
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         let from = (self.agent_pointer.as_ref())
             .filter(|pointer| pointer.tab == tab && self.agent_pointer_shown())
             .map(|pointer| pointer.tip(pointer.since.elapsed().as_secs_f32(), still))
@@ -152,7 +152,7 @@ impl Shell {
         let pane = self.pane_of(pointer.tab)?;
         let name = self.agent_bar().map(|bar| bar.name()).unwrap_or_default();
         let t = pointer.since.elapsed().as_secs_f32();
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         // Frames only while it moves: the glide, the ring coming in and the fade.
         if t < GLIDE + RING_IN || t > GLIDE + HOLD {
             window.request_animation_frame();

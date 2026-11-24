@@ -419,7 +419,7 @@ impl FolderPreview {
         // check.sh reads this line, to see the preview is beside its row.
         log!("browser: folder preview shown {folder} at {left} {top} {WIDTH} {height}");
         // Under Reduce Motion nothing scales, and the fades stay (docs/ux-spec.md › Motion).
-        let from = if cx.reduce_motion() { 1. } else { FROM };
+        let from = if crate::motion::still(cx) { 1. } else { FROM };
         self.host.show(over, left, top, height, from);
         cx.notify();
     }
@@ -473,10 +473,10 @@ impl FolderPreview {
         self.go(1, cx);
     }
 
-    /// ↩ shows the tab selected. While an input method composes, it's the method's.
+    /// ↩ shows the tab selected, unless it was an input method's, composing in the search
+    /// (dismissal's rule).
     fn choose_selected(&mut self, _: &Choose, _: &mut Window, cx: &mut Context<Self>) {
-        if self.search.read(cx).composing() {
-            cx.propagate();
+        if !crate::dismissal::submits([&self.search.clone()], cx) {
             return;
         }
         let Some(shown) = &self.shown else {
@@ -499,8 +499,11 @@ impl FolderPreview {
         chosen(tab, cx);
     }
 
+    /// Esc closes the preview, unless it was an input method's, composing in the search.
     fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
-        self.close(cx);
+        if crate::dismissal::Close::escape_from([&self.search.clone()], cx).is_some() {
+            self.close(cx);
+        }
     }
 
     /// The preview goes, and the browser window gets the keyboard back.

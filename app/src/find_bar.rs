@@ -395,11 +395,19 @@ impl FindBar {
             .update(cx, |input, cx| input.reset(text, window, cx));
     }
 
-    /// Escape closes the bar, unless an input method is composing in its field, whose Escape it
-    /// is (dismissal's rule).
+    /// Escape closes the bar, unless it was an input method's, composing in its field (dismissal's
+    /// rule).
     fn escape(&mut self, _: &Close, window: &mut Window, cx: &mut Context<Self>) {
-        if browser::dismissal::Close::escape(self.input.read(cx).composing()).is_some() {
+        if browser::dismissal::Close::escape_from([&self.input.clone()], cx).is_some() {
             self.close(&Close, window, cx);
+        }
+    }
+
+    /// ↩ and ⇧↩ find the next match and the one before, unless it was an input method's,
+    /// composing in the field. ⌘G and ⇧⌘G are the same actions, and wait for a composition alike.
+    fn find_key(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if browser::dismissal::submits([&self.input.clone()], cx) {
+            self.find_next(forward, cx);
         }
     }
 
@@ -603,9 +611,9 @@ impl Render for FindBar {
                         .key_context("FindBar")
                         // A key ends a button's tooltip, as a click does.
                         .capture_key_down(cx.listener(|bar, _, _, cx| bar.end_tip(cx)))
-                        .on_action(cx.listener(|bar, _: &FindNext, _, cx| bar.find_next(true, cx)))
+                        .on_action(cx.listener(|bar, _: &FindNext, _, cx| bar.find_key(true, cx)))
                         .on_action(
-                            cx.listener(|bar, _: &FindPrevious, _, cx| bar.find_next(false, cx)),
+                            cx.listener(|bar, _: &FindPrevious, _, cx| bar.find_key(false, cx)),
                         )
                         .on_action(cx.listener(Self::select_all))
                         .on_action(cx.listener(Self::escape))

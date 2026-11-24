@@ -14,8 +14,8 @@ use super::Space;
 use super::{
     BREATH, BREATH_LOW, CHOSEN, CLEAR, CLEAR_ARROW, CLEAR_HOVERED, CLOSE_GLYPH, CLOSE_HOVERED,
     CLOSE_RIGHT, CLOSE_SIZE, CancelName, Closing, Command, Curve, DIVIDER, DIVIDER_HEIGHT,
-    EMOJI_SIZE, FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FORM_TEXT,
-    KeepName, LOADING_SIZE, NAME_HEIGHT, NAV, NAV_HOVERED, NAV_RADIUS, Naming, PINNED_CARET,
+    EMOJI_SIZE, FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FORM_TEXT, KeepName,
+    LOADING_SIZE, NAME_HEIGHT, NAV, NAV_HOVERED, NAV_RADIUS, Naming, PINNED_CARET,
     PINNED_CARET_GAP, PINNED_CARET_PLATE, PINNED_TURN, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS,
     Page, Pending, REMOVE_GLYPH, ROW_HEIGHT, ROW_PITCH, Row, SECONDARY, SEGMENT_END,
     SEGMENT_FAVICON_X, SEGMENT_LINE, SEGMENT_TITLE_GAP, SELECTED_UNHOVER, SLEEPING_FAVICON,
@@ -1769,10 +1769,10 @@ impl Shell {
             return row
                 .key_context("Naming")
                 .on_action(
-                    cx.listener(|shell, _: &KeepName, window, cx| shell.keep_name(window, cx)),
+                    cx.listener(|shell, _: &KeepName, window, cx| shell.return_name(window, cx)),
                 )
                 .on_action(
-                    cx.listener(|shell, _: &CancelName, window, cx| shell.cancel_name(window, cx)),
+                    cx.listener(|shell, _: &CancelName, window, cx| shell.escape_name(window, cx)),
                 )
                 .text_color(self.palette.text(FORM_TEXT))
                 .pr(px(end + SPACE_DONE_WIDTH + 4.))
@@ -2124,7 +2124,7 @@ impl Breath {
 
     /// Once a frame is built: if it drew a loading dot, draws the next in a moment.
     pub(super) fn arm(&self, cx: &mut Context<Shell>) {
-        self.still.set(cx.reduce_motion());
+        self.still.set(crate::motion::still(cx));
         if !self.drawn.take() || self.still.get() || self.pending.replace(true) {
             return;
         }

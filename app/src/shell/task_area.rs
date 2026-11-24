@@ -399,7 +399,7 @@ impl Shell {
         if !self.task_tabs(area.space).contains(&tab) {
             return false;
         }
-        let zoom = if cx.reduce_motion() {
+        let zoom = if crate::motion::still(cx) {
             Zoom::Rest
         } else {
             Zoom::Out(Instant::now())
@@ -438,7 +438,7 @@ impl Shell {
     /// Back to the conversation: the page shrinks into its thumbnail, from a picture of it as it
     /// is now.
     pub fn task_page_back(&mut self, cx: &mut Context<Self>) {
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         let Some(page) = self.task_area.as_mut().and_then(|area| area.page.as_mut()) else {
             return;
         };
@@ -814,7 +814,7 @@ impl Shell {
 
     /// Steps the area's motion for a frame: the page's zoom.
     pub(super) fn step_task_area(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         let now = Instant::now();
         let Some(area) = &mut self.task_area else {
             return;
@@ -1076,6 +1076,22 @@ impl Shell {
         )
     }
 
+    /// The strip's chips, as `strip_chips` has them for the page watched: beside the
+    /// conversation, Take Over is always the strip's, and Stop is the composer's. The ring's stops
+    /// are these, so it never rings one that isn't drawn.
+    pub(super) fn strip_shows(
+        &self,
+        held: bool,
+        dot: Option<Dot>,
+        open: bool,
+        keyed: bool,
+    ) -> Vec<(StripChip, Look)> {
+        let standing = self.task_standing();
+        (strip_chips(held, dot, open, keyed || standing).into_iter())
+            .filter(|(chip, _)| !(standing && *chip == StripChip::Stop))
+            .collect()
+    }
+
     /// Whether the task the page area shows is at work, which its page's ring says.
     pub(super) fn task_working(&self) -> bool {
         self.task_card_shown()
@@ -1102,11 +1118,9 @@ impl Shell {
         let dot = card.map(|card| card.dot);
         let open = self.task_strip_open(tab);
         let held = matches!(bar, Some(Bar::Held { .. }));
-        // Beside the conversation, Take over is always the strip's, and Stop is the composer's.
-        let standing = self.task_standing();
-        let keyed = self.keyed_strip.is_some() || standing;
-        let chips: Vec<_> = (strip_chips(held, dot, open.is_some(), keyed).into_iter())
-            .filter(|(chip, _)| !(standing && *chip == StripChip::Stop))
+        let keyed = self.keyed_strip.is_some();
+        let shows = self.strip_shows(held, dot, open.is_some(), keyed);
+        let chips: Vec<_> = (shows.into_iter())
             .map(|(chip, look)| match chip {
                 // A click while it shows does what its key does, as Take Over is on screen.
                 StripChip::TakeOver => self.strip_stop(

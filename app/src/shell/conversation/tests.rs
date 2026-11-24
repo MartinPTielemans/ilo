@@ -1265,6 +1265,43 @@ fn ended(kind: IloKind) -> Conversation {
     }
 }
 
+/// Where the words of ilo's line 7 were drawn and how they were laid out, and where the
+/// conversation was, once it has drawn again.
+fn ilo_words(
+    view: &Entity<super::TalkView>,
+    cx: &mut VisualTestContext,
+) -> (
+    gpui::Bounds<gpui::Pixels>,
+    gpui::TextLayout,
+    gpui::Bounds<gpui::Pixels>,
+) {
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        let (words, laid) =
+            (view.ilo_words_drawn.borrow().get(&7).cloned()).expect("ilo's line wasn't drawn");
+        (words, laid, view.drawn_at.get().unwrap())
+    })
+}
+
+/// Narrows the window until the conversation is no wider than the panel beside a page, the
+/// narrowest it gets.
+fn narrowest(view: &Entity<super::TalkView>, cx: &mut VisualTestContext) {
+    let (_, _, area) = ilo_words(view, cx);
+    let size = cx.update(|window, _| window.viewport_size());
+    let narrow = px(BESIDE) - px(1.);
+    cx.simulate_resize(gpui::size(
+        size.width - (area.size.width - narrow),
+        size.height,
+    ));
+    let (_, _, area) = ilo_words(view, cx);
+    assert!(
+        area.size.width <= px(BESIDE),
+        "the conversation is {:?} wide, wider than the panel beside a page",
+        area.size.width
+    );
+}
+
 /// One of ilo's lines wraps and is never cut (#4105): in a conversation as narrow as the panel
 /// beside a page, the line that says a conversation is kept lays its whole sentence out on more
 /// lines, inside the column.
@@ -1272,43 +1309,27 @@ fn ended(kind: IloKind) -> Conversation {
 fn ilos_line_wraps_its_whole_sentence_in_the_narrowest_conversation(cx: &mut TestAppContext) {
     let (shell, _host, cx) = shown(cx);
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
-    let words = |kind: Option<IloKind>, cx: &mut VisualTestContext| {
-        if let Some(kind) = kind {
-            shell.update(cx, |shell, cx| {
-                shell.set_conversation(Some(ended(kind)), cx)
-            });
-        }
-        view.update(cx, |_, cx| cx.notify());
-        cx.run_until_parked();
-        view.read_with(cx, |view, _| {
-            let words = view.ilo_words_drawn.borrow().get(&7).copied();
-            (
-                words.expect("ilo's line wasn't drawn"),
-                view.drawn_at.get().unwrap(),
-            )
-        })
+    let show = |kind: IloKind, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            shell.set_conversation(Some(ended(kind)), cx)
+        });
     };
     // Words that fit are one line, as tall as a trace's.
-    let (short, _) = words(Some(IloKind::KeepsNothing), cx);
+    show(IloKind::KeepsNothing, cx);
+    let (short, _, _) = ilo_words(&view, cx);
     assert_eq!(f32::from(short.size.height), TRACE_LINE);
 
-    let (_, area) = words(Some(IloKind::KeptHere), cx);
-    let (sentence, _) = super::words::head(&IloKind::KeptHere, "Claude");
+    show(IloKind::KeptHere, cx);
+    narrowest(&view, cx);
+    let (wrapped, laid, area) = ilo_words(&view, cx);
     let whole = cx.update(|_, cx| {
         let system = WindowTextSystem::new(cx.text_system().clone());
-        text_width(&sentence.into(), text::BODY, FontWeight::NORMAL, &system)
+        text_width(&laid.text().into(), text::BODY, FontWeight::NORMAL, &system)
     });
-    let narrow = px(BESIDE) - px(1.);
-    let size = cx.update(|window, _| window.viewport_size());
-    cx.simulate_resize(gpui::size(
-        size.width - (area.size.width - narrow),
-        size.height,
-    ));
-    let (wrapped, area) = words(None, cx);
     assert!(
-        area.size.width <= px(BESIDE),
-        "the conversation is {:?} wide, wider than the panel beside a page",
-        area.size.width
+        laid.text().ends_with("so you can reply."),
+        "not the whole sentence: {}",
+        laid.text()
     );
     assert!(
         wrapped.left() >= area.left() + px(INSET) && wrapped.right() <= area.right() - px(INSET),
@@ -1322,6 +1343,61 @@ fn ilos_line_wraps_its_whole_sentence_in_the_narrowest_conversation(cx: &mut Tes
         "{lines} lines of {:?} don't hold the sentence, {whole} long",
         wrapped.size.width
     );
+}
+
+/// An ilo line has one left edge, its mark's (#4105): in the narrowest conversation the line its
+/// words wrap to starts under the mark, and its buttons start there too.
+#[gpui::test]
+fn ilos_wrapped_line_and_its_buttons_start_under_its_mark(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let stopped = IloKind::Stopped {
+        tab: 30,
+        at: "Place the order for both of the seats".into(),
+        why: Why::Order,
+        tier: Tier::Work,
+        count: 1,
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(ended(stopped)), cx)
+    });
+    narrowest(&view, cx);
+    let (words, laid, _) = ilo_words(&view, cx);
+    let text = laid.text();
+    assert!(
+        text.starts_with(super::words::MARK),
+        "ilo's mark isn't the first of its words: {text}"
+    );
+    let mark = laid.position_for_index(0).unwrap();
+    assert_eq!(
+        mark.x,
+        words.left(),
+        "the mark isn't at its words' left edge"
+    );
+    let line = laid.line_height();
+    // The character at the mark's left edge, a line down: the first of the wrapped line.
+    let wrapped = laid
+        .index_for_position(point(mark.x, mark.y + line * 1.5))
+        .expect("ilo's words didn't wrap under its mark");
+    assert!(wrapped > super::words::MARK.len(), "{wrapped} of {text}");
+    // The tests' text system sets every character one advance wide, so the wrapped line's second
+    // character is as far from its start as the mark's second is from the mark's.
+    let step = |from: usize| from + text[from..].chars().next().unwrap().len_utf8();
+    let (in_mark, in_wrapped) = (
+        laid.position_for_index(step(0)).unwrap(),
+        laid.position_for_index(step(wrapped)).unwrap(),
+    );
+    assert_eq!(
+        in_wrapped.y,
+        mark.y + line,
+        "not on the line under the mark"
+    );
+    assert_eq!(
+        in_wrapped.x, in_mark.x,
+        "the wrapped line doesn't start at the mark's left edge"
+    );
+    let (button, _) = ilo_button(&view, (7, IloButton::TakeOver), cx).expect("no Take Over");
+    assert_eq!(button.left(), mark.x, "its buttons don't start under ilo");
 }
 
 /// Whether the level's chip under the reply field is drawn for task-1's conversation, done, with

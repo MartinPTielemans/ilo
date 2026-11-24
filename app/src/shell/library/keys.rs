@@ -102,12 +102,11 @@ impl Shell {
         keys.closed = (open && !self.library_open).then(|| Close::new(Why::Toggled, by(from)));
     }
 
-    /// Escape closes the Library, giving the keyboard back as its key does, unless an input method
-    /// is composing in its field, whose Escape it is.
+    /// Escape closes the Library, giving the keyboard back as its key does, unless it was an input
+    /// method's, composing in its field (dismissal's rule).
     pub(in crate::shell) fn escape_library(&mut self, cx: &mut Context<Self>) {
-        let composing =
-            (self.library.as_ref()).is_some_and(|library| library.search.read(cx).composing());
-        let Some(close) = Close::escape(composing) else {
+        let search = (self.library.as_ref()).map(|library| library.search.clone());
+        let Some(close) = Close::escape_from(&search, cx) else {
             return;
         };
         self.library_keys.closed = Some(close);
@@ -118,7 +117,8 @@ impl Shell {
     /// Spaces' ring once something else has the keyboard, and gives the keyboard back as the
     /// Library closes.
     pub(super) fn step_library_keys(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let first = self.spaces.first().map(|space| space.id);
+        let ids: Vec<u64> = self.spaces.iter().map(|space| space.id).collect();
+        let first = ids.first().copied();
         let Some(library) = &self.library else {
             return;
         };
@@ -148,6 +148,14 @@ impl Shell {
         } else if library.keyed_card.is_some() && !cards.is_focused(window) {
             library.keyed_card = None;
         }
+        // A Space gone, by the user, the app or an agent, gives its card's ring to the card that
+        // took its place.
+        if let Some(card) = library.keyed_card {
+            library.keyed_card = crate::list_keys::took_place(&card, &library.cards_seen, &ids);
+            library.cards_seen = ids;
+        } else {
+            library.cards_seen.clear();
+        }
         // A click elsewhere ends the rows' ring, as the field's keys move it.
         if library.keyed_row.is_some() && !search.is_focused(window) {
             library.keyed_row = None;
@@ -162,9 +170,10 @@ impl Shell {
         }
         // The field and cards go with the Library. Its key or Escape gives the keyboard back to
         // whoever had it. Otherwise the window takes it, where Tab rings the sidebar, and not the
-        // page: a click on a row may be opening another, and a click elsewhere took it already.
+        // page: a click on a row may be opening another, whose page the choice gives the keyboard,
+        // and a click elsewhere took it already, so it closed as the keyboard left it.
         let LibraryKeys { back, closed, .. } = std::mem::take(&mut self.library_keys);
-        let close = closed.unwrap_or(Close::new(Why::Chosen, By::Code));
+        let close = closed.unwrap_or(Close::new(Why::FocusLeft, By::Code));
         let fallback = self.focus_handle.clone();
         match back.give_back(close, &[&search, &cards], &fallback, window, cx) {
             // The tab shown may have changed since, by a key for another tab or Space: an agent's
@@ -851,7 +860,8 @@ mod tests {
     }
 
     /// Escape while an input method composes in the search field is the composition's: the Library
-    /// stays open, its field keeping the keyboard, and the next Escape closes it.
+    /// stays open, its field keeping the keyboard and the marked text, and once the method has
+    /// dropped it, the next Escape closes the Library.
     #[gpui::test]
     fn escape_while_composing_keeps_the_library(cx: &mut TestAppContext) {
         use gpui::EntityInputHandler as _;
@@ -874,11 +884,16 @@ mod tests {
             "escape closed it"
         );
         assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
+        search.read_with(cx, |search, _| {
+            assert!(search.composing(), "escape ended the composition");
+            assert_eq!(search.text(), "ぴ");
+        });
         cx.update(|window, cx| {
             search.update(cx, |search, cx| {
-                search.replace_text_in_range(None, "p", window, cx)
+                search.replace_text_in_range(None, "", window, cx)
             })
         });
+        cx.run_until_parked();
         cx.simulate_keystrokes("escape");
         shell.update(cx, |shell, _| settle(shell));
         cx.run_until_parked();
@@ -1184,6 +1199,41 @@ mod tests {
         shell.update(cx, |shell, cx| shell.set_library(true, cx));
         cx.run_until_parked();
         assert!(!host.take().contains(&"focus ui".to_owned()));
+    }
+
+    /// A Space going with its card ringed, here by the app, gives the ring to the card that took
+    /// its place, the next, else the one before (#4108).
+    #[gpui::test]
+    fn a_ringed_card_gone_gives_the_ring_to_the_card_in_its_place(cx: &mut TestAppContext) {
+        let (shell, _, cx) = window(Section::Spaces, cx);
+        run(&shell, Command::ViewLibrary, cx);
+        let card = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+            shell.read_with(cx, |shell, _| shell.library.as_ref()?.keyed_card)
+        };
+        let keep = |ids: &[u64], shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+            shell.update(cx, |shell, cx| {
+                let spaces = ids.iter().map(|&id| {
+                    let name = format!("Space {id}").into();
+                    (id, name, None, 0, "".into(), "".into(), "".into())
+                });
+                shell.set_spaces(spaces.collect(), cx);
+            });
+            cx.run_until_parked();
+        };
+        cx.simulate_keystrokes("right");
+        assert_eq!(card(&shell, cx), Some(2));
+        keep(&[1, 3], &shell, cx);
+        assert_eq!(
+            card(&shell, cx),
+            Some(3),
+            "the card after didn't take its place"
+        );
+        keep(&[1], &shell, cx);
+        assert_eq!(
+            card(&shell, cx),
+            Some(1),
+            "the last card's ring went nowhere"
+        );
     }
 
     /// In Spaces, which has no field, the ring goes on the first card, read by its Space's name;

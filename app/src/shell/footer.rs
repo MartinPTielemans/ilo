@@ -197,7 +197,9 @@ impl Shell {
                     (true, false) => dot(squeezed(size, cell), self.palette.glyph(1.)),
                     (false, _) => dot(squeezed(size, cell), self.palette.glyph(SPACE_OTHER))
                         .group_hover("space", |style| {
-                            style.size(px(hovered)).bg(self.palette.glyph(SPACE_HOVERED))
+                            style
+                                .size(px(hovered))
+                                .bg(self.palette.glyph(SPACE_HOVERED))
                         }),
                 }
                 .into_any_element()

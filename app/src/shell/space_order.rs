@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use gpui::{
-    AnyElement, Bounds, Context, DispatchPhase, DragMoveEvent, Entity, MouseButton, MouseUpEvent,
-    Pixels, Point, Render, WeakEntity, Window, canvas, div, prelude::*, px, rgba,
+    AnyElement, App, Bounds, Context, DispatchPhase, DragMoveEvent, Entity, MouseButton,
+    MouseUpEvent, Pixels, Point, Render, WeakEntity, Window, canvas, div, prelude::*, px, rgba,
 };
 
 use super::{
@@ -285,12 +285,18 @@ impl Shell {
 
     /// The Spaces came in another order: the dots and cards that were in `before` glide from
     /// where they were drawn to their places, and the one just let go from where its copy was.
-    pub(super) fn glide_spaces(&mut self, before: HashMap<(Along, u64), f32>, moved: bool) {
+    /// Under Reduce Motion they're in their places from the first frame.
+    pub(super) fn glide_spaces(
+        &mut self,
+        before: HashMap<(Along, u64), f32>,
+        moved: bool,
+        cx: &App,
+    ) {
         let landing = self.space_landing.take();
         if !moved && landing.is_none() {
             return;
         }
-        let now = Instant::now();
+        let now = crate::motion::start(cx);
         for (key, at) in self.space_places() {
             let from = match landing {
                 Some((along, space, x)) if (along, space) == key => x,
