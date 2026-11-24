@@ -39,7 +39,6 @@ use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
 use crate::text_input::TextInput;
 use crate::tokens::command_bar::{CHIP as BAR_CHIP, HINT_KEY_RIM, HINT_KEY_X};
 use crate::tokens::find_bar::NOT_FOUND;
-use crate::tokens::shell::FORM_PLACEHOLDER;
 use crate::tokens::shell::agent_pointer::{COLOR as SIGNAL, RING};
 use crate::tokens::shell::conversation::ilo::{
     ARM, BELOW as ILO_BELOW, BUTTONS_GAP, BUTTONS_TOP, COMPOSER_CHEVRON, COMPOSER_CHEVRON_GAP,
@@ -53,9 +52,9 @@ use crate::tokens::shell::conversation::{
     LINK_LINE, LINK_UNDERLINE, LIST_MARKER, META_GAP, META_LINE, OPEN_BELOW, OPEN_TOP,
     PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG,
     PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PARAGRAPH_GAP, PICTURE_EMPTY_GLYPH, PICTURE_HEIGHT,
-    PICTURE_RADIUS, PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP, REPLY_HEIGHT,
-    REPLY_INSET, REPLY_KEY_END, REPLY_RIM, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD, SITE_GAP,
-    TEXT_LINE, TITLE_LINE, TOP, TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH,
+    PICTURE_RADIUS, PICTURE_RIM, PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP,
+    REPLY_HEIGHT, REPLY_INSET, REPLY_KEY_END, REPLY_RIM, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD,
+    SITE_GAP, TEXT_LINE, TITLE_LINE, TOP, TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH,
     TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER, TRACE_INDENT, TRACE_LINE, TRACE_NOTE,
     TRACE_PICTURE_HEIGHT, TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH, TRACE_RULE, TRACE_RULE_FILL,
     TRACE_RULE_X, TRACE_TITLE,
@@ -65,6 +64,7 @@ use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT};
 use crate::tokens::shell::task::{
     RAIL_BREAKPOINT, RAIL_DOT, RAIL_FAVICON, RAIL_GAP, RAIL_HEAD, RAIL_WIDTH, STATUS,
 };
+use crate::tokens::shell::{FORM_PLACEHOLDER, HAIRLINE};
 use crate::tokens::text;
 use crate::tokens::toast::{
     CHIP_FILL, CHIP_GAP, CHIP_HEIGHT, CHIP_RADIUS, CHIP_X, KEY_COLOR, KEY_GAP,
@@ -1158,6 +1158,14 @@ impl TalkView {
                 .overflow_hidden()
                 .children(blank)
                 .child(paint)
+                .child(
+                    div()
+                        .absolute()
+                        .size_full()
+                        .rounded(px(PICTURE_RADIUS))
+                        .border(px(HAIRLINE))
+                        .border_color(palette.plate(PICTURE_RIM)),
+                )
                 .when(acting, |picture| {
                     picture.child(
                         div()
