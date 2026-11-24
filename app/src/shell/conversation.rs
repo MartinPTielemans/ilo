@@ -1227,10 +1227,9 @@ impl TalkView {
                     .flex()
                     .items_center()
                     .children(sound)
-                    // The site is the tile's title, its step under it the same size and regular.
                     .child(
                         line(site.clone(), look.palette.text(TITLE))
-                            .font_weight(FontWeight::MEDIUM),
+                            .font_weight(caption_weight(Caption::Site)),
                     );
                 let status = picture_status(held.as_ref(), step.filter(|_| working));
                 if let Some(words) = &status {
@@ -1242,11 +1241,11 @@ impl TalkView {
                     }
                 }
                 let status = status.map(|words| match held {
-                    Some(_) => {
-                        line(words, look.palette.text(TITLE)).font_weight(FontWeight::MEDIUM)
-                    }
+                    Some(_) => line(words, look.palette.text(TITLE))
+                        .font_weight(caption_weight(Caption::Hold)),
                     // The ring says it's working: no text is written in the working green.
-                    None => line(words, look.palette.text(SECONDARY)),
+                    None => line(words, look.palette.text(SECONDARY))
+                        .font_weight(caption_weight(Caption::Step)),
                 });
                 div()
                     .id(("conversation-page", tab))
@@ -2955,6 +2954,24 @@ pub(super) fn picture_work(
     match pages.is_empty() {
         true => (on == Some(tab), running),
         false => (own.is_some() && !held, own.map(|(_, step)| step.clone())),
+    }
+}
+
+/// A line under a page's picture: its site, why the user holds it, or the agent's step there.
+#[derive(Clone, Copy)]
+enum Caption {
+    Site,
+    Hold,
+    Step,
+}
+
+/// The weight a page's picture sets a line under it in. Its site is the tile's title and a hold
+/// asks for the user as loudly; the agent's step is regular under its site, which it has to say,
+/// as the panel's text is medium and a line that names no weight takes that.
+fn caption_weight(line: Caption) -> FontWeight {
+    match line {
+        Caption::Site | Caption::Hold => FontWeight::MEDIUM,
+        Caption::Step => FontWeight::NORMAL,
     }
 }
 

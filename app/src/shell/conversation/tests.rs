@@ -926,6 +926,16 @@ fn a_held_pages_picture_says_why() {
     );
 }
 
+/// Under a page's picture its site leads its step by weight, as the two are one size: the step is
+/// lighter than the site, and a hold, which asks for the user, is as heavy as the site.
+#[test]
+fn a_pages_step_is_lighter_than_its_site() {
+    use super::{Caption, caption_weight};
+    let site = caption_weight(Caption::Site);
+    assert!(caption_weight(Caption::Step) < site);
+    assert_eq!(caption_weight(Caption::Hold), site);
+}
+
 /// Task-1's conversation with ilo's line that it stopped Claude at Place order, under Work on
 /// pages, drawn, and its view.
 fn stopped_at_order(
