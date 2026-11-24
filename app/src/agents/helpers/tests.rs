@@ -112,6 +112,24 @@ fn on_claude_gets_the_helper_tool_and_ilos_kind_of_helper() {
     assert!(instructions().contains(KIND));
 }
 
+/// What ilo tells a task it stopped counts as a sentence does, one helper or several, with the
+/// limit it's held to, and a helper's own helper is said as that and not as the task's count.
+#[test]
+fn a_stopped_task_is_told_its_limit_as_a_sentence() {
+    let several = MOST.max(2);
+    assert!(told(false, 1).contains("more than 1 helper."));
+    assert!(told(false, several).contains(&format!("more than {several} helpers.")));
+    for most in [1, several] {
+        assert!(told(false, most).contains(&format!("at most {most} for each message")));
+    }
+    let deep = told(true, several);
+    assert!(
+        deep.contains("A helper started a helper of its own."),
+        "{deep}"
+    );
+    assert!(!deep.contains("You started"), "{deep}");
+}
+
 /// A helper's lines are never the task's: of two helpers that write, say, think and read, the
 /// task's output tells who asked for each, that each started and how deep, and the tab each
 /// calls for. Nothing a helper wrote, said, thought or was answered comes out, and the task's own

@@ -144,8 +144,8 @@ fn with_helpers_a_task_is_told_the_two_numbers_at_its_start(cx: &mut TestAppCont
         rest.contains(&format!("at most {MOST} for each message")),
         "{rest}"
     );
-    assert!(rest.contains("a helper starts none"), "{rest}");
-    assert!(rest.contains("every call names its tab"), "{rest}");
+    assert!(rest.contains("a helper may start none"), "{rest}");
+    assert!(rest.contains("give every browser call its tab"), "{rest}");
 }
 
 /// Name your tab. With helpers, several callers share the task's connection, so "the tab used
@@ -230,7 +230,7 @@ fn past_the_most_ilo_stops_the_turn_and_the_task_goes_on(cx: &mut TestAppContext
     started(&run, &agent, 1, DEEP, cx);
     let was = sent(&run, "\"interrupt\"", 1);
     assert!(
-        !was.contains("ilo stopped your turn"),
+        !was.contains("ilo stopped that turn"),
         "it was told before its turn ended"
     );
     let line = limit_line(&run, &agent, cx).expect("no line");
@@ -247,7 +247,7 @@ fn past_the_most_ilo_stops_the_turn_and_the_task_goes_on(cx: &mut TestAppContext
     let interrupted = Failure::Other("Interrupted".into());
     run.said(&agent, Out::Ended(Some(interrupted)), cx);
     assert_eq!(run.state(&agent, cx), State::Working);
-    let told = sent(&run, "ilo stopped your turn", 1);
+    let told = sent(&run, "ilo stopped that turn", 1);
     assert!(
         told.contains(&format!("more than {MOST} helpers")),
         "{told}"
@@ -270,7 +270,7 @@ fn past_the_limit_again_the_turn_ends_and_the_task_waits_for_the_user(cx: &mut T
     started(&run, &agent, MOST + 1, DEEP, cx);
     sent(&run, "\"interrupt\"", 1);
     run.said(&agent, Out::Ended(None), cx);
-    sent(&run, "ilo stopped your turn", 1);
+    sent(&run, "ilo stopped that turn", 1);
 
     started(&run, &agent, 1, DEEP, cx);
     sent(&run, "\"interrupt\"", 2);
@@ -286,7 +286,7 @@ fn past_the_limit_again_the_turn_ends_and_the_task_waits_for_the_user(cx: &mut T
     // The user writes: what the task was sent since has its one telling and its two stops.
     (run.agents).update(cx, |agents, cx| agents.reply(&agent, "Go on.", cx));
     let was = sent(&run, "Go on.", 1);
-    assert_eq!(was.matches("ilo stopped your turn").count(), 1, "{was}");
+    assert_eq!(was.matches("ilo stopped that turn").count(), 1, "{was}");
     assert_eq!(was.matches("\"interrupt\"").count(), 2, "{was}");
     started(&run, &agent, MOST, DEEP, cx);
     assert_eq!(run.state(&agent, cx), State::Working);
@@ -307,7 +307,7 @@ fn a_helper_that_starts_its_own_is_stopped_too(cx: &mut TestAppContext) {
     let line = limit_line(&run, &agent, cx).expect("no line");
     assert!(matches!(line.kind, IloKind::Helpers { deep: true, .. }));
     run.said(&agent, Out::Ended(None), cx);
-    let told = sent(&run, "ilo stopped your turn", 1);
+    let told = sent(&run, "ilo stopped that turn", 1);
     assert!(
         told.contains("A helper started a helper of its own"),
         "{told}"
@@ -410,6 +410,42 @@ fn a_tasks_helpers_are_a_line_each_and_its_card_says_the_live_line(cx: &mut Test
     assert_eq!(lines, [own(PAGES[0].0), own(PAGES[1].0)]);
     assert_ne!(lines[0], lines[1]);
     assert!(lines[1].contains("stalls.example"), "{lines:?}");
+}
+
+/// A card is made again whenever any task changes, so one of a task with helpers at work costs no
+/// fold of the task's conversation, and still says what the conversation's live line says: after a
+/// question the task asked and the user answered too, where the stretch under way starts again
+/// and counts only the helpers that worked since.
+#[gpui::test]
+fn a_card_counts_its_tasks_helpers_without_folding_the_conversation(cx: &mut TestAppContext) {
+    use crate::agents::task::FOLDS;
+    let (run, agent) = with_helpers("card", cx);
+    pages(&run, 2);
+    helper(&run, &agent, "toolu_a", PAGES[0].0, cx);
+    helper(&run, &agent, "toolu_b", PAGES[1].0, cx);
+    let on = |tab: u64| json!({ "tab": tab });
+    let _a = call(&run.agents, &agent, "read_page", on(PAGES[0].0), cx);
+    let _b = call(&run.agents, &agent, "scroll", on(PAGES[1].0), cx);
+
+    let folds = FOLDS.with(|folds| folds.get());
+    let made = [card(&run, cx), card(&run, cx)];
+    assert_eq!(FOLDS.with(|folds| folds.get()), folds, "a card folded");
+    let trace = live(&run, &agent, cx);
+    assert_eq!(trace.counted(), (2, Counted::Helpers));
+    assert_eq!(made.map(|card| card.status), [trace.line(), trace.line()]);
+
+    let ask = json!({ "question": "Row 12 or row 14?", "answers": ["Row 12", "Row 14"] });
+    let _asked = call(&run.agents, &agent, "ask", ask, cx);
+    (run.agents).update(cx, |agents, cx| agents.answer_task(&agent, "Row 12", cx));
+    let _a = call(&run.agents, &agent, "screenshot", on(PAGES[0].0), cx);
+    let trace = live(&run, &agent, cx);
+    assert_eq!(
+        (trace.running, trace.counted()),
+        (true, (1, Counted::Helpers))
+    );
+    let folds = FOLDS.with(|folds| folds.get());
+    assert_eq!(card(&run, cx).status, trace.line());
+    assert_eq!(FOLDS.with(|folds| folds.get()), folds, "a card folded");
 }
 
 /// When any helper waits on the user, the task's header and its card say it needs them, whatever

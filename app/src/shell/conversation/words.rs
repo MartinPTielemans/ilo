@@ -32,9 +32,9 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         // The helpers' limit (#4102), by the app's own count, each a whole sentence.
         IloKind::Helpers { deep, .. } => (
             match (*deep, crate::tokens::agents::helpers::MOST) {
-                (true, _) => format!("stopped {agent} from starting helpers under a helper"),
-                (false, 1) => format!("stopped {agent} from starting more than 1 helper"),
-                (false, most) => format!("stopped {agent} from starting more than {most} helpers"),
+                (true, _) => format!("stopped {agent} when a helper started a helper of its own"),
+                (false, 1) => format!("stopped {agent} for starting more than 1 helper"),
+                (false, most) => format!("stopped {agent} for starting more than {most} helpers"),
             },
             None,
         ),

@@ -219,18 +219,24 @@ impl Trace {
 
     /// Its summary line's title and description.
     pub fn summary(&self) -> (SharedString, SharedString) {
-        let counted = match self.counted() {
-            (1, Counted::Steps) => "1 step".to_string(),
-            (count, Counted::Steps) => format!("{count} steps"),
-            (1, Counted::Helpers) => "1 helper".to_string(),
-            (count, Counted::Helpers) => format!("{count} helpers"),
-        };
-        let title = match self.took {
-            Some(seconds) => format!("Worked for {}", duration(seconds)),
-            None => "Working".to_string(),
-        };
-        (title.into(), counted.into())
+        summary(self.took, self.counted())
     }
+}
+
+/// A stretch's summary line, its title and description: one that `took` its time, or one under
+/// way, and what it counts.
+fn summary(took: Option<u64>, counted: (usize, Counted)) -> (SharedString, SharedString) {
+    let counted = match counted {
+        (1, Counted::Steps) => "1 step".to_string(),
+        (count, Counted::Steps) => format!("{count} steps"),
+        (1, Counted::Helpers) => "1 helper".to_string(),
+        (count, Counted::Helpers) => format!("{count} helpers"),
+    };
+    let title = match took {
+        Some(seconds) => format!("Worked for {}", duration(seconds)),
+        None => "Working".to_string(),
+    };
+    (title.into(), counted.into())
 }
 
 /// What a trace's summary line counts.
@@ -3066,8 +3072,10 @@ pub const STOPPED_AT: &str = "Stopped at";
 fn working(task: &Task) -> SharedString {
     // With helpers at work, the conversation's live line, in its own words: their steps come in
     // turn, and a card that said each would flicker between them.
-    if let Some(live) = live(task).filter(|live| live.helpers() > 0) {
-        return live.line();
+    let helpers = helpers_under_way(task);
+    if helpers > 0 {
+        let (title, counted) = summary(None, (helpers, Counted::Helpers));
+        return format!("{title} · {counted}").into();
     }
     let taken = turn_steps(task);
     // A session's title is the agent's words or its sites, so its line leads with its client's
@@ -3090,24 +3098,26 @@ fn working(task: &Task) -> SharedString {
     }
 }
 
-/// The stretch under way of a task that has helpers, as its conversation's live line has it.
-fn live(task: &Task) -> Option<Trace> {
-    // Only a task started with helpers has any to count, so no other folds for its card.
+/// How many helpers the stretch under way of a working task has, which its conversation's live
+/// line counts: those the steps since the last message that ends a stretch, the user's or a
+/// question of the task's, are labelled as. A card is made again whenever any task changes, so
+/// it counts them from those steps alone, as it reads its own step, and never folds the
+/// conversation (`fold`), whose live line a test holds it to.
+fn helpers_under_way(task: &Task) -> usize {
     if !task.helpers.on || task.state != State::Working {
-        return None;
+        return 0;
     }
-    let lines = fold(
-        &task.messages,
-        &task.trace,
-        false,
-        true,
-        task.writing.as_ref(),
-        &task.helpers,
-    );
-    lines.into_iter().rev().find_map(|line| match line {
-        Line::Trace(trace) if trace.running => Some(trace),
-        _ => None,
-    })
+    let ends = |message: &Message| matches!(message.who, Who::User | Who::Asked);
+    let from = (task.messages.iter().rposition(ends)).map_or(0, |at| at + 1);
+    let mut helpers: Vec<usize> = Vec::new();
+    for (key, step) in (task.trace.iter().enumerate().rev()).take_while(|(_, s)| s.after >= from) {
+        if let Some(helper) = task.helpers.of(key, step.did.tab)
+            && !helpers.contains(&helper)
+        {
+            helpers.push(helper);
+        }
+    }
+    helpers.len()
 }
 
 /// Each page's own last step of the turn under way, newest first, once the turn's steps are on
@@ -3274,6 +3284,12 @@ pub fn duration(seconds: u64) -> String {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many conversations this thread folded, for the test that a card costs none.
+    pub(super) static FOLDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A conversation's lines from its `messages` and its `trace`, oldest first. Each turn, from a
 /// message of the user's to the next, shows its questions and, once it has `ended`, its last
 /// message; the steps between those are a trace each, with what the agent said along the way in
@@ -3287,6 +3303,8 @@ pub fn fold(
     writing: Option<&Writing>,
     helpers: &Helpers,
 ) -> Vec<Line> {
+    #[cfg(test)]
+    FOLDS.with(|folds| folds.set(folds.get() + 1));
     let writing = writing.filter(|_| working && !ended);
     // Once whole, it's the last message, which shows where it was written rather than in the trace.
     let held = (writing.is_some_and(|writing| writing.said))
