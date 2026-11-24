@@ -229,6 +229,10 @@ impl Host for Recorder {
         self.record(format!("show setting {} › {name}", section.name()));
     }
 
+    fn look_for_agents(&self, _: &mut App) {
+        self.record("look for agents".into());
+    }
+
     fn asking(&self, shown: bool, _: &mut App) {
         self.record(format!("asking {shown}"));
     }

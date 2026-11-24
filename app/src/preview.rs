@@ -2166,6 +2166,8 @@ impl command_bar::Host for PreviewBar {
         false
     }
 
+    fn look_for_agents(&self, _: &mut App) {}
+
     fn asking(&self, _: bool, _: &mut App) {}
 
     fn task_page(&self, _: &App) -> Option<(SharedString, SharedString)> {

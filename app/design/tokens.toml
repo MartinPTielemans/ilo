@@ -227,6 +227,8 @@ row-end = 12.0
 input-icon = 18.0
 input-text = 18.0
 input-line = 23.0
+# Between the chips before the input: a page's each, as the composer can add several.
+chip-gap = 6.0
 input-icon-x = 23.0
 input-text-x = 53.0
 # The hint after the input ends this far from the panel's side, 11 after the field.
@@ -1972,7 +1974,8 @@ switch-on = 0.16
 switch-on-rim = 0xffff_ff12
 switch-size = 12.0
 # Ask's line under the field: 524 wide, 7 under it, its chips 26 tall, 8 in, radius 6, at 12 in
-# ink 0.6. It keeps its room in Search, so nothing moves as the switch flips.
+# ink 0.6. It keeps its room in Search, so nothing moves as the switch flips. The + with nothing to
+# add stays in its place at 0.26, as the header's back does with nowhere to go.
 line-width = 524.0
 line-top = 7.0
 chip-height = 26.0
@@ -1980,6 +1983,7 @@ chip-inset = 8.0
 chip-radius = 6.0
 chip-gap = 6.0
 chip-ink = 0.6
+chip-disabled = 0.26
 chip-size = 12.0
 chip-glyph = 14.0
 chip-chevron = 10.0

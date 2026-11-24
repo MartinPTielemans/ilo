@@ -51,6 +51,7 @@ actions!(
 
 use crate::settings_column::Section;
 use crate::settings_search;
+use crate::tokens::command_bar::CHIP_GAP as ADDED_GAP;
 use crate::tokens::command_bar::HEIGHT;
 use crate::tokens::command_bar::LINE;
 use crate::tokens::command_bar::LINE_INSET;
@@ -567,6 +568,10 @@ pub trait Host {
     /// closes it. As it first shows in a run, the browser learns again which agents are ready, in
     /// the background, which `task_agents_changed` reports.
     fn asking(&self, shown: bool, cx: &mut App);
+    /// The page's switch went to Ask: as ⌘T's ask does as it first shows in a run, the browser
+    /// learns again which agents are ready, in the background, which `agents_changed` then gives
+    /// the page's bar.
+    fn look_for_agents(&self, cx: &mut App);
     /// The page the user is on, if it's a web page: its address and title, all of it that goes
     /// with an ask, as the agent never gets the user's tab.
     fn task_page(&self, cx: &App) -> Option<(SharedString, SharedString)>;
@@ -686,6 +691,9 @@ pub enum InPlaceKey {
     Flip,
     Escape,
     Run,
+    /// ⌫ at the start of Ask's field, with a page added: the last one added goes, as ⌘T's ask
+    /// takes its page's chip off first.
+    DropPage,
 }
 
 impl gpui::EventEmitter<InPlaceKey> for CommandBar {}
@@ -737,6 +745,9 @@ pub struct CommandBar {
     ask: Option<Ask>,
     /// The rows' favicons by page, asked for as they first show. None until one comes.
     favicons: HashMap<String, Option<Arc<Image>>>,
+    /// At rest in Ask, the pages the page added for the task, each address with its title, which
+    /// the field draws as chips before the input, as an ask over a page draws its page.
+    added: Vec<(SharedString, SharedString)>,
     /// The Space's tabs it lists before anything is typed.
     tabs: Vec<shell::BarTab>,
     /// The Spaces a Spaces menu lists.
@@ -974,6 +985,7 @@ fn new_bar(
             task_agents: None,
             ask: None,
             favicons: HashMap::new(),
+            added: Vec::new(),
             tabs: Vec::new(),
             spaces: Vec::new(),
             shown: Vec::new(),
@@ -1347,6 +1359,29 @@ pub fn page_favicon(url: &str, favicon: Option<Arc<Image>>, cx: &mut App) {
             }
         })
         .ok();
+}
+
+/// A chip before the input: a mode's or a page's, with the page's favicon, in `fill`.
+fn mode_chip(
+    fill: impl Into<gpui::Fill>,
+    label: Hsla,
+    favicon: Option<AnyElement>,
+    name: SharedString,
+) -> gpui::Div {
+    div()
+        .flex_none()
+        .max_w(px(CHIP_MAX))
+        .flex()
+        .items_center()
+        .gap(px(5.))
+        .px(px(6.))
+        .py(px(2.))
+        .rounded(px(CHIP_RADIUS))
+        .bg(fill)
+        .text_color(label)
+        .text_size(px(text::BODY))
+        .children(favicon)
+        .child(div().min_w_0().truncate().child(name))
 }
 
 /// Where the centred panel's top is, down a browser window `height` tall.
@@ -2096,6 +2131,10 @@ impl CommandBar {
     fn leave_at_start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.input.read(cx).selection() != (0..0) {
             return;
+        }
+        if self.on_ask && !self.added.is_empty() {
+            cx.emit(InPlaceKey::DropPage);
+            return cx.stop_propagation();
         }
         if let Some(ask) = self.ask.as_mut().filter(|ask| ask.page.is_some()) {
             log!("browser: command bar ask without its page");
@@ -3633,22 +3672,26 @@ impl CommandBar {
             true => self.accent(&palette),
             false => (palette.plate(CHIP), palette.ink.into()),
         };
-        Some(
-            div()
-                .flex_none()
-                .max_w(px(CHIP_MAX))
-                .flex()
-                .items_center()
-                .gap(px(5.))
-                .px(px(6.))
-                .py(px(2.))
-                .rounded(px(CHIP_RADIUS))
-                .bg(fill)
-                .text_color(label)
-                .text_size(px(text::BODY))
-                .children(favicon)
-                .child(div().min_w_0().truncate().child(name)),
-        )
+        Some(mode_chip(fill, label, favicon, name))
+    }
+
+    /// At rest in Ask, a chip for each page added, as `mode_chip` draws an ask's page.
+    fn added_chips(&self, palette: &palette::Palette) -> Vec<gpui::Div> {
+        if !self.on_ask {
+            return Vec::new();
+        }
+        (self.added.iter())
+            .map(|(url, title)| {
+                let name = match title.is_empty() {
+                    true => SharedString::from(crate::agents::site(url)),
+                    false => title.clone(),
+                };
+                let favicon = self.favicon(url, CHIP_FAVICON, palette.ink.into());
+                mode_chip(palette.plate(CHIP), palette.ink.into(), Some(favicon), name)
+                    .flex_shrink(1.)
+                    .mr(px(ADDED_GAP))
+            })
+            .collect()
     }
 
     /// The rows, `top` under the input's row, as many as show before the list scrolls.
@@ -3710,6 +3753,7 @@ impl CommandBar {
     ) {
         if std::mem::replace(&mut self.on_ask, on_ask) != on_ask {
             if on_ask {
+                self.host.look_for_agents(cx);
                 // Its site search and commands-only list are the search's.
                 self.site_left(cx);
                 self.commands = None;
@@ -3755,9 +3799,31 @@ impl CommandBar {
             .flex()
             .items_center()
             .children(self.mode_chip(&palette))
+            .children(self.added_chips(&palette))
             .child(div().flex_1().min_w_0().child(self.input.clone()))
             .children(self.a11y.then(|| self.announcer()))
             .into_any_element()
+    }
+
+    /// The pages the page added for the task, each address with its title, which Ask's field
+    /// draws as chips before the input. Each one's favicon is asked for as it's first added.
+    pub fn set_added(&mut self, added: Vec<(SharedString, SharedString)>, cx: &mut Context<Self>) {
+        for (url, _) in &added {
+            if !self.favicons.contains_key(url.as_ref()) {
+                self.favicons.insert(url.to_string(), None);
+                self.host.page_favicon(url);
+            }
+        }
+        if added != self.added {
+            self.added = added;
+            cx.notify();
+        }
+    }
+
+    /// The pages Ask's field draws as chips, as `set_added` gave them.
+    #[cfg(test)]
+    pub fn added(&self) -> &[(SharedString, SharedString)] {
+        &self.added
     }
 
     /// The assistant the page's Ask runs on: the first ready one the browser last learned, read as
@@ -3771,6 +3837,28 @@ impl CommandBar {
         (agents.agents.iter())
             .find(|agent| agent.resets.is_none())
             .cloned()
+    }
+
+    /// What the browser knows of the agents changed, as after it learned which are ready: the
+    /// page's bar learns them again if it had, so Ask's assistant shows once one is found. Whether
+    /// they changed.
+    pub fn agents_changed(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.task_agents.is_none() {
+            return false;
+        }
+        let agents = self.learned_agents(cx);
+        if agents == self.task_agents {
+            return false;
+        }
+        self.task_agents = agents;
+        cx.notify();
+        true
+    }
+
+    /// What the page's field says while it's empty.
+    pub fn set_placeholder(&mut self, placeholder: SharedString, cx: &mut Context<Self>) {
+        self.input
+            .update(cx, |input, cx| input.set_placeholder(placeholder, cx));
     }
 
     /// ↩ in the page's Ask: the assistant it runs on and what was typed, trimmed, and the field
