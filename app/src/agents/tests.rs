@@ -2928,15 +2928,16 @@ fn every_tool_and_step_is_in_one_class() {
         "wait",
         "check",
     ];
-    // Acts on a page: refused below Work by ACTS, or by its own Why, as a request's method is. A
-    // run's steps are each judged as their tool is.
-    const ACTS_ON: [&str; 6] = [
+    // Acts on a page: refused below Work by ACTS, or by its own Why, as a request's method is and
+    // a sign-in is (Why::SignIn). A run's steps are each judged as their tool is.
+    const ACTS_ON: [&str; 7] = [
         "click",
         "type",
         "select",
         "press_key",
         "request",
         "run_steps",
+        "sign_in",
     ];
     // Arranges the agent's own tabs. A close that would lose what a page holds is judged Discard.
     const ARRANGES: [&str; 8] = [
@@ -5410,7 +5411,7 @@ fn a_runs_check_and_screenshot_keep_to_the_rules(cx: &mut TestAppContext) {
 
 /// The actions the core lets an agent take in its tabs, agent_session.cc's RefusedAction: each a
 /// thing the user does in a page, or handing the tab to them.
-const CORE_ALLOWS: [&str; 22] = [
+const CORE_ALLOWS: [&str; 23] = [
     "add_to_split",
     "back",
     "click",
@@ -5428,6 +5429,7 @@ const CORE_ALLOWS: [&str; 22] = [
     "scroll",
     "select_option",
     "separate_tab",
+    "sign_in",
     "snapshot",
     "split_tabs",
     "type",
@@ -5525,6 +5527,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
             "run_steps",
             "upload",
             "hand_off",
+            "sign_in",
             "ask_for_tab",
             "pin_tab",
             "unpin_tab",
@@ -5569,6 +5572,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         ("upload", tab(json!({ "ref": "e1" }))),
         ("hand_off", tab(json!({ "reason": "Sign in" }))),
         ("ask_for_tab", tab(json!({ "reason": "To go on" }))),
+        ("sign_in", tab(json!({}))),
         ("pin_tab", tab(json!({}))),
         ("unpin_tab", tab(json!({}))),
         ("pin_tab", tab(json!({}))),
@@ -5617,6 +5621,7 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
         "request",
         "back",
         "hand_off",
+        "sign_in",
         "close_tab",
         "pin_tab",
         "unpin_tab",
