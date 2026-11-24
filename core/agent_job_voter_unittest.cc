@@ -3,10 +3,14 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 
+#include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "base/process/process.h"
+#include "base/test/bind.h"
+#include "browser_core/agent_reply_limit.h"
 #include "components/performance_manager/graph/frame_node_impl.h"
 #include "components/performance_manager/graph/page_node_impl.h"
 #include "components/performance_manager/graph/process_node_impl.h"
@@ -114,6 +118,24 @@ TEST_F(AgentJobVoterTest, AReadsCallGivesAndTakesBesideAnAct) {
   EXPECT_EQ(tab.process->GetPriority(), Priority::kUserVisible)
       << "the first answer took the vote from the call still under way";
   voter_->JobEnded(tab.page.get());
+  EXPECT_EQ(tab.process->GetPriority(), Priority::kBestEffort);
+}
+
+// A call the starved page never answers ends at its limit, and its end takes the vote back, as
+// AgentPage's limit answers the job and drops its lift; a call still under way keeps it.
+TEST_F(AgentJobVoterTest, ACallEndedAtALimitTakesItsVote) {
+  MockSinglePageInSingleProcessGraph tab(graph());
+  base::ScopedClosureRunner read = AgentJobVoter::Lift(tab.page->GetWeakPtr());
+  base::ScopedClosureRunner act = AgentJobVoter::Lift(tab.page->GetWeakPtr());
+  AgentReplyLimit limit(base::BindLambdaForTesting(
+      [&act](std::string, std::optional<std::string>) { act.RunAndReset(); }));
+  limit.Started();
+  limit.Sent();
+  AdvanceClock(AgentReplyLimit::kLimit);
+  EXPECT_FALSE(act) << "the limit didn't end the call";
+  EXPECT_EQ(tab.process->GetPriority(), Priority::kUserVisible);
+
+  read = base::ScopedClosureRunner();  // Ended any other way, as a refusal, it goes too.
   EXPECT_EQ(tab.process->GetPriority(), Priority::kBestEffort);
 }
 

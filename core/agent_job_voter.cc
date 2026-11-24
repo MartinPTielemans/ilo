@@ -2,6 +2,7 @@
 
 #include <utility>
 
+#include "base/functional/bind.h"
 #include "base/process/process.h"
 #include "components/performance_manager/public/graph/graph.h"
 #include "components/performance_manager/public/performance_manager.h"
@@ -47,6 +48,22 @@ void AgentJobVoter::JobEnded(const PageNode* page) {
   if (user_loads_.empty()) {
     TakeVote(page);
   }
+}
+
+// static
+base::ScopedClosureRunner AgentJobVoter::Lift(base::WeakPtr<PageNode> page) {
+  AgentJobVoter* voter = Get();
+  if (!page || !voter) {
+    return {};
+  }
+  voter->JobStarted(page.get());
+  return base::ScopedClosureRunner(base::BindOnce(
+      [](base::WeakPtr<PageNode> page) {
+        if (AgentJobVoter* voter = Get(); voter && page) {
+          voter->JobEnded(page.get());
+        }
+      },
+      std::move(page)));
 }
 
 void AgentJobVoter::UserLoadStarted(const PageNode* page) {

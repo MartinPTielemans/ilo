@@ -384,20 +384,8 @@ void Report(bc_id tab, uint64_t request, std::string text, bool error, bc_agent_
 }  // namespace
 
 base::ScopedClosureRunner LiftWhileWorking(content::WebContents& contents) {
-  base::WeakPtr<performance_manager::PageNode> page =
-      performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(&contents);
-  AgentJobVoter* voter = AgentJobVoter::Get();
-  if (!page || !voter) {
-    return {};
-  }
-  voter->JobStarted(page.get());
-  return base::ScopedClosureRunner(base::BindOnce(
-      [](base::WeakPtr<performance_manager::PageNode> page) {
-        if (AgentJobVoter* voter = AgentJobVoter::Get(); voter && page) {
-          voter->JobEnded(page.get());
-        }
-      },
-      page));
+  return AgentJobVoter::Lift(
+      performance_manager::PerformanceManager::GetPrimaryPageNodeForWebContents(&contents));
 }
 
 bool IsWebFrame(content::RenderFrameHost* frame) {

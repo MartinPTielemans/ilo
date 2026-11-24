@@ -6,6 +6,7 @@
 #include <optional>
 #include <set>
 
+#include "base/functional/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
 #include "components/performance_manager/public/execution_context_priority/execution_context_priority.h"
 #include "components/performance_manager/public/execution_context_priority/priority_voting_system.h"
@@ -48,6 +49,9 @@ class AgentJobVoter : public performance_manager::execution_context_priority::Pr
   // the page has the vote from the first one's start to the last one's end.
   void JobStarted(const performance_manager::PageNode* page);
   void JobEnded(const performance_manager::PageNode* page);
+  // One call's job in |page|, from now until the runner runs or goes, however the call ends: its
+  // answer, a refusal, a limit reached or its page closing. Nothing without a voter or a page.
+  static base::ScopedClosureRunner Lift(base::WeakPtr<performance_manager::PageNode> page);
 
   // A page the user is looking at starts loading, or stops counting: it painted, committed
   // nothing, stopped loading, went out of sight or closed. Each page counts once however often it
