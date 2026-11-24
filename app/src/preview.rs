@@ -2531,6 +2531,10 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
                 shell.watch_task_page(tab, Bounds::default(), None, cx);
                 shell.set_space(FIRST_TASK, cx);
                 shell.set_selected(tab, cx);
+                // A task that has ended is at work nowhere.
+                if bench_ended().is_some() {
+                    return;
+                }
                 let status = browser::agents::Status {
                     agent: agent.clone(),
                     name: "Claude".into(),
@@ -2617,9 +2621,27 @@ fn task_cards(home: u64) -> Vec<TaskCard> {
         cards[0].status =
             "Step 3 · Comparing the seats in rows 12 to 18 for two on the aisle".into();
     }
+    // The bench's task that has ended (#4105) is done on its card too, which the strip under its
+    // page and the page's ring follow, with the page it left the user.
+    if let Some(name) = bench_ended() {
+        cards[0].name = name.into();
+        cards[0].status = "Two seats in row 12 are in your basket".into();
+        cards[0].dot = Dot::Done;
+        cards[0].open = vec![(FIRST_TASK + 200, "tickets.example".into())];
+    }
     // Newest first, as the Agents send them.
     cards.reverse();
     cards
+}
+
+/// The assistant of the task PREVIEW_TASK's bench shows as ended (#4105), if it's one of those
+/// states: all but picked-up, which a reply set to work again.
+fn bench_ended() -> Option<&'static str> {
+    match std::env::var("PREVIEW_TASK").ok()?.as_str() {
+        "ended" | "ended-first" | "gone" | "not-kept" => Some("Claude"),
+        "codex-ended" => Some("Codex"),
+        _ => None,
+    }
 }
 
 /// The working task's conversation: a step done, one that failed, what the agent said of it, and
