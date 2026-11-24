@@ -182,6 +182,10 @@ enum Popup {
     Notes(u64),
     /// A signed-in assistant's ⋯ menu, in Agents › Your assistant.
     Assistant(Cli),
+    /// An assistant's Model, under its row in Agents › Your assistant.
+    Model(Cli),
+    /// Agents › Notifications' When to notify.
+    Notify,
     /// General's Page zoom.
     PageZoom,
 }
@@ -196,6 +200,8 @@ impl Popup {
             Popup::ArchiveAfter(_) => "Archive Today tabs after".into(),
             Popup::Notes(_) => "New Note".into(),
             Popup::Assistant(cli) => format!("{} options", cli.assistant()).into(),
+            Popup::Model(_) => browser::agents::task::MODEL.into(),
+            Popup::Notify => browser::needs_you::WHEN_TO_NOTIFY.into(),
             Popup::PageZoom => "Page zoom".into(),
         }
     }
@@ -3777,6 +3783,12 @@ impl Settings {
             blocks.push(Block::Heading("Your assistant".into()));
             blocks.push(Block::Group(self.assistants(agents, cx)));
             blocks.push(Block::Under(foot(look, NO_ASSISTANT_OF_ITS_OWN)));
+        }
+        // ⌘T's tasks and outside agents' sessions notify alike, so it's here while agents are on.
+        // The Mac, Windows and Linux each post them (needs_you_host.rs).
+        if on {
+            blocks.push(Block::Heading(browser::needs_you::NOTIFICATIONS.into()));
+            blocks.push(Block::Rows(vec![self.when_to_notify(agents, cx)]));
         }
         blocks.push(Block::Heading(APPS_THAT_CONNECT.into()));
         // Another app's How to Connect comes here.

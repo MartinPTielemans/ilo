@@ -484,7 +484,8 @@ pub fn start(cx: &mut App) {
         let status = agents.read(cx).status();
         // Each card is compared with the last, so a window redraws only for a task that changed.
         let cards = agents.read(cx).shown_cards(cx);
-        browser::needs_you::follow(&cards, cx);
+        let when = agents.read(cx).notify();
+        browser::needs_you::follow(&cards, when, cx);
         // Each task that ended goes to Library › Agents of its home Space's profile, as its receipt
         // shows it, for 30 days (browser::agent_history).
         let ended = agents.update(cx, |agents, cx| agents.take_ended(cx));

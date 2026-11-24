@@ -1,16 +1,20 @@
-//! Settings › Agents' Your assistant (#4100): its rows, an assistant's ⋯ menu, and the ask
-//! before Sign Out.
+//! Settings › Agents' Your assistant (#4100): its rows, each with its Model under it, an
+//! assistant's ⋯ menu and the ask before Sign Out; and Notifications' When to notify.
 
 use super::*;
+use browser::agents::task::{MODEL, model_default, model_line};
+use browser::needs_you::{Notify, WHEN_TO_NOTIFY, WHEN_TO_NOTIFY_LINE};
 
 impl Settings {
     /// Your assistant: a row for each CLI tasks from ⇥ in ⌘T run on, which signs in with its own
     /// sign-in and has the mark that picks it, then a row for another agent, which connects.
     pub(super) fn assistants(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> gpui::Div {
         let look = &self.look;
+        // Each assistant's Model, under its row.
+        let models = Cli::ALL.map(|cli| self.model_row(agents, cli, cx));
         let model = agents.read(cx);
         let marked = model.default_task_agent();
-        let rows = Cli::ALL.map(|cli| {
+        let assistants = Cli::ALL.map(|cli| {
             let act = {
                 let (settings, agents) = (cx.weak_entity(), agents.clone());
                 move |act: Act, window: &mut Window, cx: &mut App| {
@@ -35,7 +39,7 @@ impl Settings {
                     }
                 }
             };
-            assistant_row(
+            let row = assistant_row(
                 look,
                 cli,
                 &model.assistant_row(cli),
@@ -43,17 +47,129 @@ impl Settings {
                 self.a11y,
                 self.menu_at(Popup::Assistant(cli)),
                 Rc::new(act),
-            )
+            );
+            (row, ROW_X)
         });
+        let assistants = (assistants.into_iter().zip(models)).flat_map(|(row, model)| [row, model]);
         let how = cx.listener(|settings, _: &(), window, cx| {
             settings.show_found(Section::Agents, APPS_THAT_CONNECT.into(), window, cx)
         });
         let another = another_agent_row(look, self.a11y, move |window, cx| how(&(), window, cx));
-        group(look, rows.into_iter().chain([another]))
+        group_lined(look, assistants.chain([(another, ROW_X)]))
     }
 
-    /// Opens a signed-in assistant's ⋯ menu: Model, with its own default first then its models,
-    /// and Sign Out, which asks first.
+    /// `cli`'s Model, under its row and set in from it as a feature's own settings are, with the
+    /// hairline from where it's set in: what its new tasks start with.
+    fn model_row(
+        &self,
+        agents: &Entity<Agents>,
+        cli: Cli,
+        cx: &mut Context<Self>,
+    ) -> (gpui::Div, f32) {
+        let label: SharedString = match agents.read(cx).task_model_name(cli) {
+            Some(model) => model,
+            None => model_default(cli).into(),
+        };
+        let agents = agents.clone();
+        let popup = self.popup(
+            Popup::Model(cli),
+            label,
+            POPUP_WIDTH,
+            cx.listener(move |settings, _, window, cx| {
+                settings.choose_model(&agents, cli, window, cx)
+            }),
+        );
+        let line = model_line(cli);
+        let x = ROW_X + GLYPH_PLATE + GLYPH_PLATE_GAP;
+        let controls = vec![
+            popup
+                .child(self.drawn(format!("model {}", cli.id())))
+                .into_any_element(),
+        ];
+        (
+            line_row(&self.look, MODEL, Some(line.into()), controls).pl(px(x)),
+            x,
+        )
+    }
+
+    /// `cli`'s Model pop-up: its own default first, saying which model it is where the CLI says,
+    /// then the models it lists. A model is set only from that list.
+    fn choose_model(
+        &mut self,
+        agents: &Entity<Agents>,
+        cli: Cli,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (models, items) = agents.read(cx).task_model_menu(cli);
+        let (settings, agents) = (cx.weak_entity(), agents.clone());
+        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
+            if let Some((id, _)) = picked.and_then(|at| models.get(at)) {
+                // check.sh waits for this line.
+                log!(
+                    "browser: task model {} {}",
+                    cli.id(),
+                    if id.is_empty() { "default" } else { id }
+                );
+                agents.update(cx, |agents, cx| agents.set_task_model(cli, id, cx));
+            }
+            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
+        });
+        self.pop_up(Popup::Model(cli), items, picked, window, cx);
+    }
+
+    /// Notifications' When to notify: when a task that finishes or needs the user posts its
+    /// notification.
+    pub(super) fn when_to_notify(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Row {
+        let chosen = agents.read(cx).notify();
+        let agents = agents.clone();
+        let popup = self.popup(
+            Popup::Notify,
+            chosen.title().into(),
+            POPUP_WIDTH,
+            cx.listener(move |settings, _, window, cx| {
+                settings.choose_notify(&agents, chosen, window, cx)
+            }),
+        );
+        setting(
+            &self.look,
+            WHEN_TO_NOTIFY,
+            Some(WHEN_TO_NOTIFY_LINE.into()),
+            vec![
+                popup
+                    .child(self.drawn("when to notify".into()))
+                    .into_any_element(),
+            ],
+        )
+    }
+
+    fn choose_notify(
+        &mut self,
+        agents: &Entity<Agents>,
+        chosen: Notify,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let items = (Notify::ALL.iter())
+            .map(|&each| MenuEntry {
+                checked: each == chosen,
+                over: each == chosen,
+                ..MenuEntry::new(each.title(), true)
+            })
+            .collect();
+        let (settings, agents) = (cx.weak_entity(), agents.clone());
+        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
+            if let Some(&notify) = picked.and_then(|at| Notify::ALL.get(at)) {
+                // check.sh waits for this line.
+                log!("browser: notify {}", notify.id());
+                agents.update(cx, |agents, cx| agents.set_notify(notify, cx));
+            }
+            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
+        });
+        self.pop_up(Popup::Notify, items, picked, window, cx);
+    }
+
+    /// Opens a signed-in assistant's ⋯ menu: Sign Out, which asks first. Its Model is its own row.
     fn assistant_menu(
         &mut self,
         agents: &Entity<Agents>,
@@ -61,47 +177,23 @@ impl Settings {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        let (models, model_items) = agents.read(cx).task_model_menu(cli);
-        let mut items = vec![MenuEntry::new("Model", true)];
-        items.extend(model_items.into_iter().map(|item| MenuEntry {
-            parent: Some(0),
-            // A submenu opens beside its item, not over it.
-            over: false,
-            ..item
-        }));
-        items.push(MenuEntry::line());
-        let sign_out = items.len();
-        items.push(MenuEntry::new("Sign Out…", true));
+        let items = vec![MenuEntry::new("Sign Out…", true)];
         let (settings, agents) = (cx.weak_entity(), agents.clone());
         let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
-            match picked {
-                Some(at) if at == sign_out => {
-                    let agents = agents.clone();
-                    // Asked once the menu is gone, in the window it was in.
-                    cx.defer(move |cx| {
-                        let Some(window) = cx.try_global::<SettingsWindow>().map(|w| w.0) else {
-                            return;
-                        };
-                        let ask = |settings: &mut Settings,
-                                   window: &mut Window,
-                                   cx: &mut Context<Settings>| {
-                            settings.ask_sign_out(&agents, cli, window, cx)
-                        };
-                        window.update(cx, ask).ok();
-                    });
-                }
-                Some(at) => {
-                    if let Some((id, _)) = at.checked_sub(1).and_then(|index| models.get(index)) {
-                        // check.sh waits for this line.
-                        log!(
-                            "browser: task model {} {}",
-                            cli.id(),
-                            if id.is_empty() { "default" } else { id }
-                        );
-                        agents.update(cx, |agents, cx| agents.set_task_model(cli, id, cx));
-                    }
-                }
-                None => {}
+            if picked == Some(0) {
+                let agents = agents.clone();
+                // Asked once the menu is gone, in the window it was in.
+                cx.defer(move |cx| {
+                    let Some(window) = cx.try_global::<SettingsWindow>().map(|w| w.0) else {
+                        return;
+                    };
+                    let ask = |settings: &mut Settings,
+                               window: &mut Window,
+                               cx: &mut Context<Settings>| {
+                        settings.ask_sign_out(&agents, cli, window, cx)
+                    };
+                    window.update(cx, ask).ok();
+                });
             }
             settings.update(cx, |settings, cx| settings.chose(cx)).ok();
         });
