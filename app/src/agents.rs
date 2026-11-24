@@ -1199,7 +1199,7 @@ impl Agents {
         self.notify
     }
 
-    /// Settings › Agents' When to notify.
+    /// Settings › Agents' Notify.
     pub fn set_notify(&mut self, notify: crate::needs_you::Notify, cx: &mut Context<Self>) {
         self.notify = notify;
         self.save();
