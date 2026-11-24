@@ -797,8 +797,12 @@ impl Shell {
             self.stand_again(area, cx);
         }
         let space = self.task_open();
-        match watched {
-            Some(page) if space.is_some_and(|space| self.task_tabs(space).contains(&page.tab)) => {
+        match (watched, space) {
+            (Some(page), Some(space)) if self.task_tabs(space).contains(&page.tab) => {
+                // The core shows the task's Space from this call on, and says so a turn later.
+                // The window doesn't wait to hear it: a frame drawn meanwhile had the page back
+                // and the sidebar, the URL field and the strip still the user's page's (#4202).
+                self.task_core = space;
                 // In place at once, as it stood.
                 let page = Watched {
                     zoom: Zoom::Rest,
@@ -806,7 +810,7 @@ impl Shell {
                 };
                 self.show_watched(page, cx);
             }
-            gone => {
+            (gone, _) => {
                 self.let_go_of(gone);
                 if space.is_some() {
                     self.take_keyboard(cx);
