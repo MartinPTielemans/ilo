@@ -1,8 +1,9 @@
 // ilo's own context menu's window (app/src/menu.rs). GPUI draws the menu in a window of its own,
 // as nothing can draw over the page's native view, which goes over the browser window as its
 // child and takes the keyboard while it shows, as the command bar does (AGENTS.md › Over the
-// page). The menu sees every pointer event in the app first, so a press outside closes it before
-// the click lands and a right-click elsewhere opens that menu in its place.
+// page). The menu sees every pointer event in the app first, so a press outside only closes it,
+// the click going no further, but for a right press, which goes on and opens the menu of what
+// it's on in its place (menu.rs has the rule).
 
 #import <Cocoa/Cocoa.h>
 

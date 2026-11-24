@@ -1483,8 +1483,9 @@ impl ContextMenu {
                     cx.notify();
                     return true;
                 }
-                // A click outside closes the menu and goes no further; a right-click goes on, to
-                // open the menu of what it's on.
+                // While a menu is open, a press outside it only closes it: the click goes no
+                // further. The one exception is a right press, which goes on to open the menu of
+                // what it's on, in this one's place.
                 self.close(Closing::PressedAt(at), cx);
                 event == Pointer::Pressed
             }

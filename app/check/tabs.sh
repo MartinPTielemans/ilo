@@ -461,13 +461,16 @@ else
   send click $(($1 - 60)) $2
   expect "^browser: selected $b\( in .*\)\{0,1\}\$" "a click on the second row didn't show its tab again"
 fi
-# A right-click elsewhere opens that menu in its place: on the next row, left of the menu, which
-# opens right of the pointer. ↓ shows the new one has the keys, not closed as it opened.
+# The one press outside that goes on is a right press, which opens that thing's menu in this
+# one's place: on the next row, left of the menu, which opens right of the pointer. ↓ shows the new
+# one has the keys, not closed as it opened.
 post rightclick $(row 0)
 expect "^browser: menu shown $(cased 'Copy Link, ')" "a right-click on the top Today row didn't show its menu"
 expect '^browser: menu window at ' "the menu didn't take the keyboard"
 set -- $(row 1)
 post rightclick $(($1 - 60)) $2
+expect '^browser: menu at .* closed by pressed outside$' \
+  "a right-click on the next row with the menu up didn't close the top row's menu"
 expect "^browser: menu shown $(cased 'Copy Link, ')" \
   "a right-click on the next row with the menu up didn't show that row's menu"
 expect '^browser: menu window at ' "the next row's menu didn't take the keyboard"
