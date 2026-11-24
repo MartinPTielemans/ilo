@@ -40,7 +40,9 @@ use super::{
 use crate::agents::runner::Cli;
 use crate::agents::sign_in::Offer;
 use crate::agents::task::{Card, Dot, TaskAction, foot_words, open_label, status_lead};
+use crate::palette::FIELD_PLATE as URL_FIELD;
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
+use crate::tokens::shell::MEDIA_BUTTON;
 use crate::tokens::shell::task::motion::{
     ARCHIVE, ARCHIVE_CLOSE, ARCHIVE_CLOSE_DELAY, ARCHIVE_CONTENT, ARCHIVE_EASE, ARCHIVE_HOLD,
     ARCHIVE_LEAVE, ARCHIVE_OPEN, BUMP, BUMP_EASE, BUMP_GLYPH, BUMP_PEAK, BUMP_SCALE, CHIPS,
@@ -53,8 +55,6 @@ use crate::tokens::shell::task::{
     GHOST_RADIUS, GLYPH, GLYPH_TOP, HEIGHT, LINE, QUESTION_LINE, SHIMMER_FROM, SHIMMER_HIGH,
     SHIMMER_REACH, SHIMMER_TO, SLOT_DASH, STATUS, STATUS_GAP, STATUS_LINE, STOPPED, TOP,
 };
-use crate::palette::FIELD_PLATE as URL_FIELD;
-use crate::tokens::shell::MEDIA_BUTTON;
 use crate::tokens::text;
 use crate::tooltip::text_width;
 use glyph::{Glyph, State};

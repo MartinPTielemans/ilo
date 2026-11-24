@@ -3769,6 +3769,10 @@ void host_set_window_title(void* ui_view, const char* title) {
 // The window has no material under the UI, whose tint is the window's look.
 void host_set_window_light(void* ui_view, bool light) {}
 
+bool host_has_window_material(void) {
+  return false;
+}
+
 // The UI takes the choice itself; the system's controls and the pages keep Windows'.
 void host_set_app_appearance(int appearance) {}
 
