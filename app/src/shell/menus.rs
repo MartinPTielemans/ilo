@@ -842,6 +842,11 @@ impl Shell {
                     log!("browser: command {name} via tab menu");
                     action(shell, cx)
                 }
+                // The pointer still on the row rests for its card again, with no move, as none
+                // rested while the menu was up (#4108).
+                if shell.hovered == Some(row) {
+                    shell.hover_card(row, true, cx);
+                }
             }),
             cx,
         );

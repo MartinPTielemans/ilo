@@ -592,19 +592,30 @@ impl HoverCard {
             }
             Next::Wait(delay) => {
                 self.resting = Some(rest);
-                self.wait = Some(cx.spawn(async move |card, cx| {
-                    cx.background_executor().timer(delay).await;
-                    card.update(cx, |card, cx| {
-                        card.wait = None;
-                        if card.intent.due(card.clock.now())
-                            && let Some(rest) = card.resting.take()
-                        {
-                            card.show(rest, cx)
-                        }
-                    })
-                    .ok();
-                }));
+                self.wake_after(delay, cx);
             }
+        }
+    }
+
+    /// Wakes after `delay` for the row it waits on.
+    fn wake_after(&mut self, delay: Duration, cx: &mut Context<Self>) {
+        self.wait = Some(cx.spawn(async move |card, cx| {
+            cx.background_executor().timer(delay).await;
+            card.update(cx, |card, cx| card.woke(cx)).ok();
+        }));
+    }
+
+    /// Its timer woke: the card shows once the pointer has rested its whole dwell, and a wake that
+    /// came early waits out the rest.
+    fn woke(&mut self, cx: &mut Context<Self>) {
+        self.wait = None;
+        let now = self.clock.now();
+        if self.intent.due(now) {
+            if let Some(rest) = self.resting.take() {
+                self.show(rest, cx)
+            }
+        } else if let Some(left) = self.intent.early(now) {
+            self.wake_after(left, cx)
         }
     }
 
