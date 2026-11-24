@@ -299,6 +299,9 @@ struct Asked {
     settling: Settling,
     /// Once the user has answered, or Chrome took it back: when, and where the motion was.
     answered_at: Option<(Instant, Pose)>,
+    /// The press on the dim that cancelled it, until it's let go: that press is spent, and its
+    /// release never lands on what's under a window's own dialog.
+    cancelling_press: bool,
     _leave: Option<Task<()>>,
     /// The button under the pointer, and the one the last frame drew so.
     hovered: Option<&'static str>,
@@ -488,8 +491,12 @@ pub fn asks(dialog: &Entity<Dialog>, cx: &App) -> bool {
 }
 
 /// What a window draws over all of its content while its own `dialog` asks: the dialog, which
-/// takes every click, as the window waits for the answer.
+/// takes every click as the window waits for the answer, and none once it's answered and
+/// leaving, so a press then reaches what's under it; the press that cancelled it, though, never
+/// does, as it's held.
 pub fn cover(dialog: &Entity<Dialog>, cx: &App) -> Option<AnyElement> {
+    let inert = (dialog.read(cx).asked.as_ref())
+        .is_some_and(|asked| asked.answered_at.is_some() && !asked.cancelling_press);
     asks(dialog, cx).then(|| {
         div()
             .id("dialog-cover")
@@ -497,7 +504,7 @@ pub fn cover(dialog: &Entity<Dialog>, cx: &App) -> Option<AnyElement> {
             .top_0()
             .left_0()
             .size_full()
-            .occlude()
+            .when(!inert, |cover| cover.occlude())
             .child(dialog.clone())
             .into_any_element()
     })
@@ -947,6 +954,7 @@ impl Dialog {
             settled: false,
             settling: Settling::default(),
             answered_at: None,
+            cancelling_press: false,
             _leave: None,
             hovered: None,
             drawn_hover: None,
@@ -1605,11 +1613,12 @@ impl Render for Dialog {
         let width = asked
             .over
             .map_or(WIDTH, |(over, _)| card_width(over.size.width));
-        // The card occludes the dim under it, so it hears its own presses.
+        // The card occludes the dim under it, so it hears its own presses, until it's answered:
+        // leaving, it's inert.
         let card = focus_on_press(div(), asked.focus_pane.clone().filter(|_| rests))
             .id("dialog")
             // Clicks on the card stay on it, and one around it cancels.
-            .occlude()
+            .when(asked.answered_at.is_none(), |card| card.occlude())
             .relative()
             .child(drawn_into(&asked.check_drawn, |drawn, at| drawn.card = at))
             .top(px(-pose.raised))
@@ -1684,10 +1693,33 @@ impl Render for Dialog {
             )
             // A page waits for its answer, so a click on its card's dim does nothing.
             .when(!page, |root| {
+                let let_go = |dialog: &mut Self,
+                              _: &gpui::MouseUpEvent,
+                              _: &mut Window,
+                              cx: &mut Context<Self>| {
+                    if let Some(asked) =
+                        dialog.asked.as_mut().filter(|asked| asked.cancelling_press)
+                    {
+                        asked.cancelling_press = false;
+                        cx.notify();
+                    }
+                };
                 root.on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|dialog, _, _, cx| dialog.answer(Answer::Cancel, cx)),
+                    cx.listener(|dialog, _, _, cx| {
+                        let asking = |dialog: &Self| {
+                            (dialog.asked.as_ref()).is_some_and(|asked| asked.answered_at.is_none())
+                        };
+                        let was_asking = asking(dialog);
+                        dialog.answer(Answer::Cancel, cx);
+                        if let Some(asked) = dialog.asked.as_mut() {
+                            // Only the press that answered is spent.
+                            asked.cancelling_press = was_asking && asked.answered_at.is_some();
+                        }
+                    }),
                 )
+                .on_mouse_up(MouseButton::Left, cx.listener(let_go))
+                .on_mouse_up_out(MouseButton::Left, cx.listener(let_go))
             })
             // Over a tab's card, the dim has the card's corners.
             .rounded(px(radius))

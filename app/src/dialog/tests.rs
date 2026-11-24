@@ -1058,6 +1058,8 @@ fn the_checkbox_answers_with_a_click(cx: &mut TestAppContext) {
 struct Covered {
     dialog: Entity<Dialog>,
     host: Rc<Recorder>,
+    /// Whether what's under hears a bare release as well as a click.
+    hears_releases: bool,
 }
 
 impl Render for Covered {
@@ -1069,6 +1071,12 @@ impl Render for Covered {
                 div()
                     .id("under")
                     .size_full()
+                    .when(self.hears_releases, |under| {
+                        let host = host.clone();
+                        under.on_mouse_up(gpui::MouseButton::Left, move |_, _, _| {
+                            host.0.borrow_mut().push("under up".into())
+                        })
+                    })
                     .on_click(move |_, _, _| host.0.borrow_mut().push("under".into())),
             )
             .children(cover(&self.dialog, cx))
@@ -1082,6 +1090,7 @@ fn a_windows_own_dialog_covers_it_until_it_has_gone(cx: &mut TestAppContext) {
     let (view, cx) = cx.add_window_view(|_, cx| Covered {
         dialog: in_window(host.clone(), cx),
         host: host.clone(),
+        hears_releases: false,
     });
     cx.simulate_resize(size(px(684.), px(650.)));
     let ask = |cx: &mut VisualTestContext| {
@@ -1210,5 +1219,57 @@ fn the_checkbox_label_wraps_inside_the_card(cx: &mut TestAppContext) {
     assert!(
         (middle - first_line).abs() < px(0.5),
         "the box's middle is at {middle:?}, the first line's at {first_line:?}"
+    );
+}
+
+/// A window's own dialog takes every press while it asks, and none once it's answered and
+/// leaving: a press then reaches what's under it, as a layer animating out is inert (#4108). The
+/// press that cancelled it stays spent until it's let go, so not even its release lands.
+#[gpui::test]
+fn a_press_as_a_windows_dialog_leaves_reaches_what_is_under_it(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let (view, cx) = cx.add_window_view(|_, cx| Covered {
+        dialog: in_window(host.clone(), cx),
+        host: host.clone(),
+        hears_releases: true,
+    });
+    cx.simulate_resize(size(px(684.), px(650.)));
+    cx.update(|window, cx| {
+        let dialog = view.read(cx).dialog.clone();
+        let (message, detail) = ("Remove “example.com”?".into(), String::new());
+        let removed = Box::new(|_: &mut App| {});
+        ask_in(
+            &dialog,
+            message,
+            detail,
+            "Remove",
+            Return::Action,
+            removed,
+            window,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let leaving = |cx: &mut VisualTestContext| cx.update(|_, cx| asks(&view.read(cx).dialog, cx));
+    // A press around the card cancels; held and let go, neither half reaches the window.
+    let around = point(px(342.), px(30.));
+    cx.simulate_mouse_down(around, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert!(leaving(cx), "the dialog had gone before it was let go");
+    cx.simulate_mouse_up(around, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        host.0.take(),
+        ["show"],
+        "the cancelling press reached the window"
+    );
+    // A press as it leaves, where the card still is, goes to the window.
+    assert!(leaving(cx), "the dialog had gone before the press");
+    cx.simulate_click(point(px(342.), px(325.)), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        host.0.take(),
+        ["under", "under up"],
+        "a press as it left was lost to it"
     );
 }
