@@ -25,6 +25,15 @@ impl Agents {
             .map_or(Tier::default(), |task| task.tier)
     }
 
+    /// The task `act` is held to, by its access and its Sites: the one under way that holds its
+    /// page, or the page that started its download, whichever of its client's connections calls,
+    /// else the act's own, as an open's is. A second connection would otherwise pass the access
+    /// the user set on a task, and the refusal's line would change another task's.
+    pub(super) fn judged_task(&self, act: &Act) -> Option<&super::task::Task> {
+        (self.page_task(&act.agent, act.tab.max(act.started_in)))
+            .or_else(|| self.acting_task(&act.agent, act.connection, act.call))
+    }
+
     /// Why `act` on `site` is one a tier may refuse, from what would have asked (`why`), or None
     /// for one that only opens or reads.
     pub(super) fn why_of(act: &Act, site: &str, why: Option<&'static str>) -> Option<Why> {
@@ -54,7 +63,7 @@ impl Agents {
     /// Whether the task's Sites leave out where `act` goes or what it's on: an open's address, or
     /// its tab's page. A download comes from wherever the site keeps its files, so it isn't asked.
     pub(super) fn off_sites(&self, act: &Act, cx: &gpui::App) -> bool {
-        let Some(task) = self.acting_task(&act.agent, act.connection, act.call) else {
+        let Some(task) = self.judged_task(act) else {
             return false;
         };
         if task.sites == Sites::Any || act.download != 0 {
@@ -99,14 +108,15 @@ impl Agents {
             true => tier::plain(&site),
             false => tier::plain(&act.asks),
         };
-        let key = (self.acting_task(&act.agent, act.connection, act.call)).map(|t| t.agent.clone());
+        // The refused call came as a step of its own task before it was judged, so the line names
+        // it as it is under way.
+        let doing = (self.acting_task(&act.agent, act.connection, act.call))
+            .and_then(|task| task.trace.iter().rfind(|step| step.call == act.call))
+            .map(|step| lowered(&tools::step_title(&step.did, tools::Tense::Now)))
+            .unwrap_or_default();
+        let key = self.judged_task(&act).map(|task| task.agent.clone());
         if let Some(task) = key.as_deref().and_then(|key| self.task_mut(key)) {
             let (after, traced) = (task.messages.len(), task.trace.len());
-            // The refused call came as a step before it was judged, so the line names it as it is
-            // under way.
-            let doing = (task.trace.iter().rfind(|step| step.call == act.call))
-                .map(|step| lowered(&tools::step_title(&step.did, tools::Tense::Now)))
-                .unwrap_or_default();
             match (task.stops.iter_mut()).find(|stop| stop.same(act.tab, &at, why, tier)) {
                 Some(stop) => stop.count += 1,
                 None => task.stops.push(Stop {
@@ -151,7 +161,9 @@ impl Agents {
         cx: &mut Context<Self>,
     ) -> Option<Call> {
         let url = self.browser.tab(tab, cx).url.to_string();
-        let Some(task) = self.acting_task(&call.agent, call.connection, call.id) else {
+        let Some(task) = (self.page_task(&call.agent, tab))
+            .or_else(|| self.acting_task(&call.agent, call.connection, call.id))
+        else {
             return Some(call);
         };
         if task.sites.allows(self.browser.url_site(&url).as_deref()) {

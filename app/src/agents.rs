@@ -504,6 +504,9 @@ struct Act {
     asks: String,
     /// The download it lets go on, for "download", else 0.
     download: u64,
+    /// The tab whose page started the download, whose task it's judged at as an act there is,
+    /// while `tab` is 0 for one; else 0.
+    started_in: u64,
     /// The file field it asks the user to choose a file for, for "upload".
     file: Option<FileField>,
     /// The HTTP requests it sends (request).
@@ -1863,6 +1866,7 @@ impl Agents {
                     note: String::new(),
                     show,
                     download: 0,
+                    started_in: 0,
                     file: None,
                     field: String::new(),
                     requests: Vec::new(),
@@ -2256,6 +2260,7 @@ impl Agents {
                     asks: String::new(),
                     field: String::new(),
                     download: 0,
+                    started_in: 0,
                     file: None,
                     requests,
                     wait: None,
@@ -3108,6 +3113,7 @@ impl Agents {
             what: String::new(),
             asks: String::new(),
             download: 0,
+            started_in: 0,
             file: None,
             requests: Vec::new(),
             wait: None,
@@ -3369,7 +3375,7 @@ impl Agents {
             true => Some(OTHER_SITE),
             false => why,
         };
-        let tier = self.tier_of(&act.agent, act.connection, act.call);
+        let tier = (self.judged_task(&act)).map_or(tier::Tier::default(), |task| task.tier);
         // A site the user answered Never for this agent stays refused at every tier until they
         // revoke it, while Settings still lists it (#4086 step 3 moves these to Off limits).
         let why = Self::why_of(&act, &site, why).map(|why| match why {
@@ -3945,6 +3951,7 @@ impl Agents {
             show: Show::Nothing,
             field: String::new(),
             download: id,
+            started_in: tab,
             file: None,
             requests: Vec::new(),
             wait: None,
@@ -5392,6 +5399,7 @@ fn act_of(
         asks: String::new(),
         field: String::new(),
         download: 0,
+        started_in: 0,
         file: None,
         requests: Vec::new(),
         wait: None,
