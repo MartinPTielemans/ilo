@@ -1470,6 +1470,25 @@ fn its_trace(talk: &mut Conversation) -> &mut Trace {
     }
 }
 
+/// A stretch's summary line draws the one string its task's card writes, its dot between how long
+/// it worked and what it counts: under way and over, steps and helpers, one and several. A step's
+/// line has no dot before its note.
+#[test]
+fn a_stretchs_summary_line_draws_the_cards_string() {
+    use super::{TraceLine, summary_line};
+    for helpers in [0, 1, 4] {
+        let mut talk = with_helpers(helpers);
+        let trace = its_trace(&mut talk);
+        assert_eq!(summary_line(trace).text(), trace.line().as_ref());
+        (trace.running, trace.took) = (false, Some(41));
+        let drawn = summary_line(trace).text();
+        assert_eq!(drawn, trace.line().as_ref());
+        assert!(drawn.contains(" \u{b7} "), "{drawn}");
+    }
+    let step = TraceLine::new(Fold::Step(1), "Read".into(), "shop.example".into());
+    assert_eq!(step.text(), "Read shop.example");
+}
+
 /// A task at work with helpers says how many on its Working line, one in its own form, in place
 /// of its steps, and still once its turn is over, as its helpers' lines stay; without one, the
 /// line counts its steps as it did.
