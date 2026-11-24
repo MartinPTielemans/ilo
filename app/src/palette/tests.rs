@@ -1425,8 +1425,9 @@ fn reduce_transparency_holds_the_windows_text_at_every_level() {
 /// the selected one ended the lighter (#4090).
 ///
 /// A dark window at More is the one place it doesn't hold: there a plate under the pointer has
-/// to tell from a bright window at 1.2:1, the selected one, held to its title's 4.5:1, tells
-/// less, and over a white backdrop the pointer's is the lighter, by under 1.08:1.
+/// to tell from a bright window at 1.2:1 and lets its title give, the selected one tells as much
+/// as its title's 4.5:1 leaves, and over a white backdrop the pointer's is the lighter, by under
+/// 1.02:1.
 #[test]
 fn the_selected_plate_reads_apart_from_the_hovered_one_at_every_level() {
     const APART: f32 = 1.15;
@@ -1443,7 +1444,7 @@ fn the_selected_plate_reads_apart_from_the_hovered_one_at_every_level() {
                 let apart = luminance(selected) > luminance(hovered)
                     && contrast(selected, hovered) >= APART;
                 assert!(
-                    apart || (bright && contrast(selected, hovered) < 1.08),
+                    apart || (bright && contrast(selected, hovered) < 1.02),
                     "{tone:?} {level:?}: {:06x} beside {:06x}",
                     hex(selected),
                     hex(hovered)
@@ -1787,11 +1788,18 @@ fn a_rows_plate_under_the_pointer_is_the_one_a_card_has_on_a_dark_window() {
 /// at least and no less than a row's plate under the pointer does, at rest and under the pointer
 /// itself, and its title keeps its bar, on every point of the window over both backdrops.
 ///
-/// Where the window leaves less than both take, at More and with a Space's colour, one of the two
-/// has to give, and this holds neither of them to it.
+/// At More the ink reads 5.45 on the window's brightest point, which a plate that tells at TELLS
+/// and a title at its bar take between them whole. There the shown plate still tells at TELLS
+/// with its title at its bar, and the pointer's, which tells first and lets its title give, is
+/// ahead of it by 0.02 at most.
+///
+/// With a Space's colour the window leaves less than both take, and this holds neither to it.
 #[test]
 fn the_shown_plate_is_never_the_fainter_where_its_title_keeps_its_bar() {
-    for level in [Transparency::Less, Transparency::Standard] {
+    // What the pointer's plate may tell over the shown one at More, where the shown one's title
+    // keeps 4.5 and the pointer's doesn't.
+    let ahead_at_more = 0.02;
+    for level in Transparency::ALL {
         set_transparency(level);
         let palette = Palette::of(None, Tone::Dark);
         let window = fine_window(&palette);
@@ -1809,15 +1817,19 @@ fn the_shown_plate_is_never_the_fainter_where_its_title_keeps_its_bar() {
                 })
         };
         let (pointed, _) = least(palette.hovered_row());
+        let tells = match level {
+            Transparency::More => TELLS.max(pointed - ahead_at_more),
+            _ => TELLS.max(pointed),
+        };
         for hover in [0., 1.] {
             let (told, read) = least(palette.shown(hover));
             assert!(
-                told >= TELLS.max(pointed),
-                "{level:?} hover {hover}: the shown plate tells at {told:.2}, one under the pointer at {pointed:.2}"
+                told >= tells,
+                "{level:?} hover {hover}: the shown plate tells at {told:.3}, one under the pointer at {pointed:.3}"
             );
             assert!(
                 read >= TEXT,
-                "{level:?} hover {hover}: its title reads {read:.2}"
+                "{level:?} hover {hover}: its title reads {read:.4}"
             );
         }
     }
