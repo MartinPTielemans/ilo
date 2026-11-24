@@ -26,6 +26,7 @@ use super::{Agents, Client, Question, ToolResult, notes, page, site, tools};
 use crate::shell::MenuEntry;
 
 pub mod ilo;
+mod pick_up;
 
 /// The answers an ask shows as buttons on the card, at most, and how long each may be.
 pub const ANSWERS: usize = 3;
@@ -531,6 +532,11 @@ pub struct AskAgent {
 #[derive(Default)]
 pub struct Tasks {
     pub tasks: Vec<Task>,
+    /// The finished tasks' conversations ilo holds an id for (kept.rs).
+    pub kept: super::kept::Kept,
+    /// The state each task was in when the user's reply took it up, which it goes back to if its
+    /// assistant no longer has the conversation.
+    pub(super) picked_up: HashMap<String, State>,
     /// The dismissed, newest last, for ⇧⌘T.
     pub(super) dismissed: VecDeque<String>,
     pub(super) next: u64,
@@ -698,6 +704,8 @@ impl Agents {
                 });
             }
         }
+        // ilo's own lines of a task that can be replied to after it ended (#4105).
+        self.kept_lines(task, &mut lines);
         let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
             .map(|tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
             .collect();
@@ -1223,11 +1231,13 @@ impl Agents {
         args.push(self.socket.to_string_lossy().into_owned());
         let command = args.remove(0);
         let model = Some(self.task_model(cli).to_string()).filter(|model| !model.is_empty());
+        // A kept run's folder is its conversation's own, which outlives the run (kept.rs).
+        let (keep, kept_in) = self.keep_for(agent, cli);
         let launch = Launch {
             cli,
             program,
             path: found.path.clone(),
-            dir: dir.join(agent),
+            dir: kept_in.unwrap_or_else(|| dir.join(agent)),
             config: dir.join(format!("{agent}.json")),
             server: runner::Server {
                 command,
@@ -1239,13 +1249,18 @@ impl Agents {
             tools: tools::names(agent),
         };
         let events = self.task_events(cx);
-        match Process::start(&launch, agent, first, events) {
+        match Process::start_kept(&launch, &keep, agent, first, events) {
             Ok(process) => {
                 if let Some(task) = self.task_mut(agent) {
                     task.process = Some(process);
                 }
+                self.kept_started(agent, cli, &keep);
             }
             Err(error) => {
+                // The folder made for a conversation that never began.
+                if matches!(keep, super::kept::Keep::New(_)) {
+                    _ = std::fs::remove_dir(&launch.dir);
+                }
                 log!("browser: task {agent} couldn't start {}: {error}", cli.id());
                 self.fail(
                     agent,
@@ -1371,11 +1386,17 @@ impl Agents {
                     .is_some_and(|task| task.state == State::Stopped) => {}
             Out::Ended(Some(failure)) => self.fail(&agent, failure, cx),
             Out::Gone(said) => {
+                // Its assistant no longer has the conversation it was to go on with, or what it
+                // said goes to the log without the conversation's id.
+                let (gone, said) = self.kept_gone(&agent, &said);
                 let Some(task) = self.task_mut(&agent) else {
                     return;
                 };
                 task.process = None;
-                if matches!(task.state, State::Working | State::Asking { .. }) {
+                if gone {
+                    log!("browser: task {agent} has no conversation kept");
+                    self.forget_waiting(&agent, None, cx);
+                } else if matches!(task.state, State::Working | State::Asking { .. }) {
                     let said = said.trim();
                     log!("browser: task {agent} ended: {said}");
                     let why = format!("{} stopped working.", task.name);
@@ -1438,6 +1459,9 @@ impl Agents {
         if self.task(agent).is_some_and(|task| task.asking.is_some()) {
             return self.answer_task(agent, text, cx);
         }
+        // A reply to a task that has ended takes it up, if its conversation is kept (#4105).
+        self.pick_up(agent);
+        let resumes = self.resumes(agent);
         let Some(task) = self.task_mut(agent) else {
             return;
         };
@@ -1453,8 +1477,12 @@ impl Agents {
         let text = text.as_str();
         let sent = task.process.as_mut().map(|process| process.say(text));
         if !matches!(sent, Some(Ok(()))) {
-            // Gone, or never started: a new run, with the conversation so far.
-            let first = conversation(task);
+            // Gone, or never started: a new run, which goes on with the conversation its assistant
+            // kept, or is given the conversation so far.
+            let first = match resumes {
+                true => text.to_string(),
+                false => conversation(task),
+            };
             self.launch(agent, &first, cx);
         }
         self.wait_for_answer(agent, cx);
@@ -1524,7 +1552,10 @@ impl Agents {
             self.tasks.limits.remove(&cli);
         }
         if !matches!(sent, Some(Ok(()))) {
-            let first = conversation(self.task(agent).expect("found"));
+            let first = match self.resumes(agent) {
+                true => RETRY.to_string(),
+                false => conversation(self.task(agent).expect("found")),
+            };
             self.launch(agent, &first, cx);
         }
         self.wait_for_answer(agent, cx);
@@ -1636,6 +1667,9 @@ impl Agents {
     /// The task goes for good: its CLI ends and its Space goes, with its tabs.
     pub(super) fn drop_task(&mut self, agent: &str, cx: &mut Context<Self>) {
         self.end_task(agent, true, cx);
+        // What its assistant kept of it goes with it (#4105), once its run has ended, so nothing
+        // writes it back.
+        self.forget_kept(agent, cx);
     }
 
     /// The task goes: its CLI ends, and its Space too with `space`. A session's tabs close instead,

@@ -1094,6 +1094,7 @@ pub fn describe(action: &str) -> &'static str {
         "title" => "Named the task",
         "ask" => "Asked you",
         "answered" => "You answered",
+        "resumed" => "You replied after the task ended",
         "finish" => "Finished",
         "done" => "Marked the task done",
         super::fence::ASKED_ACTION => super::fence::ASKED_DONE,
