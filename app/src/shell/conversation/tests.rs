@@ -473,6 +473,65 @@ fn one_view_at_every_width(cx: &mut TestAppContext) {
     );
 }
 
+/// A tile whose word turns to Needs you is brought into sight once, where the rail holds more
+/// than fit, its tiles in their order; one the user scrolls away again stays away.
+#[gpui::test]
+fn a_tile_turning_to_needs_you_comes_into_sight_once(cx: &mut TestAppContext) {
+    use crate::agents::Status;
+    use crate::tokens::shell::task::RAIL_BREAKPOINT;
+    use gpui::{point, size};
+    let waiting = Card {
+        dot: Dot::Waiting,
+        word: Word::NeedsYou,
+        ..card()
+    };
+    let (shell, _, cx) = shown_with(waiting, cx);
+    let mut talk = conversation(1);
+    talk.tabs = (30..36)
+        .map(|tab| (tab, "tickets.example".into()))
+        .collect();
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    cx.simulate_resize(size(px(RAIL_BREAKPOINT - 100.), px(900.)));
+    let draw = |cx: &mut VisualTestContext| {
+        for _ in 0..2 {
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        }
+        view.read_with(cx, |view, _| view.rail_scroll.offset().x)
+    };
+    assert_eq!(draw(cx), px(0.), "the row started scrolled");
+    let tiles = view.read_with(cx, |view, _| view.drawn.borrow().clone());
+    let order: Vec<u64> = tiles.iter().map(|(tab, _)| *tab).collect();
+    assert_eq!(order, [30, 31, 32, 33, 34, 35]);
+
+    let held = Status {
+        agent: "task-1".into(),
+        name: "Claude".into(),
+        space: 3,
+        doing: "".into(),
+        held: vec![(35, "Sign in".into())],
+    };
+    shell.update(cx, |shell, cx| shell.set_agent_status(vec![held], cx));
+    assert!(
+        draw(cx) < px(0.),
+        "the tile that needs the user stayed out of sight"
+    );
+    let tiles = view.read_with(cx, |view, _| view.drawn.borrow().clone());
+    let after: Vec<u64> = tiles.iter().map(|(tab, _)| *tab).collect();
+    assert_eq!(after, order, "the tiles changed their order");
+
+    // The user scrolls back to the start: the tile isn't brought back again.
+    view.update(cx, |view, _| {
+        view.rail_scroll.set_offset(point(px(0.), px(0.)))
+    });
+    assert_eq!(
+        draw(cx),
+        px(0.),
+        "the rail scrolled to the tile a second time"
+    );
+}
+
 /// A picture's click zooms its page out of it, at the picture's place and with its image; what
 /// the task does meanwhile isn't pictured under the page, but is once the page is back.
 #[gpui::test]

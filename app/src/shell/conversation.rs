@@ -200,6 +200,8 @@ pub struct TalkView {
     shimmering: bool,
     /// Its lines, which keep the newest in view as they come while the user is at the end.
     scroll: ScrollHandle,
+    /// Its rail of pages, which brings a tile into sight once as its word turns to Needs you.
+    rail_scroll: ScrollHandle,
     /// The window's size as last drawn: a change keeps the lines at their end if they were.
     viewport: Size<Pixels>,
     /// What the user opened or folded of its traces and their lines, which wins over what the
@@ -345,6 +347,7 @@ impl Shell {
                     stale: false,
                     shimmering: false,
                     scroll: ScrollHandle::new(),
+                    rail_scroll: ScrollHandle::new(),
                     viewport: Size::default(),
                     opened: HashMap::new(),
                     was_open: HashMap::new(),
@@ -1036,7 +1039,7 @@ impl TalkView {
             (Some(shell), Some(shown)) => shell.read(cx).task_page_steps(&shown.agent).to_vec(),
             _ => Vec::new(),
         };
-        let tiles = tabs.iter().map(|(tab, site)| {
+        let tiles = tabs.iter().enumerate().map(|(index, (tab, site))| {
             let tab = *tab;
             let opacity = match self.motion.came(Key::Picture(tab)) {
                 Some(since) if !look.still => eased(since, look.now, RISE),
@@ -1154,6 +1157,10 @@ impl TalkView {
             if self.said_logged.borrow_mut().insert(tab, says) != Some(says) {
                 // check.sh reads this line.
                 log!("browser: task picture {tab} says {says}");
+                // Once, as it turns: a tile the user scrolls away again stays away.
+                if said == Some(PageWord::NeedsYou) {
+                    self.rail_scroll.scroll_to_item(index);
+                }
             }
             let word = said.map(|said| {
                 div()
@@ -1207,6 +1214,7 @@ impl TalkView {
             .id("conversation-pages")
             .flex()
             .gap(px(RAIL_GAP))
+            .track_scroll(&self.rail_scroll)
             .children(tiles);
         match across {
             true => rail.w_full().overflow_x_scroll(),
