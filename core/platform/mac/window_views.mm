@@ -697,6 +697,21 @@ void EndTile(content::WebContents* contents) {
   content::SetPageTile(contents, false);
 }
 
+void TilePageChanged(content::WebContents* contents) {
+  NSView* page_view = contents->GetNativeView().GetNativeNSView();
+  content::RenderWidgetHostView* widget = contents->GetRenderWidgetHostView();
+  if (!TileOf(page_view) || !widget) {
+    return;
+  }
+  // Chromium sizes a committing page's view to its container as the window measures it, which is
+  // the tile's scaled size, so the page drew in a patch at its corner. The page keeps its own size,
+  // since a tile's views never tell it theirs, and its view takes that size back.
+  NSView* view = widget->GetNativeView().GetNativeNSView();
+  if (view.superview == page_view && !NSEqualRects(view.frame, page_view.bounds)) {
+    view.frame = page_view.bounds;
+  }
+}
+
 bool FocusSettledOnActivation() {
   // AppKit can be part way through moving the keyboard, as when a committing page hides the view
   // that had it and Chromium makes the window key: a page view focused inside that move believes
