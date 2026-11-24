@@ -2898,7 +2898,7 @@ PY
 
   # withheld value shown again: a withheld field's value reads withheld wherever the page shows
   # it again.
-  withheld_refusal="error: This tab's page shows what ilo filled when signing in. Go to another page first."
+  withheld_refusal="error: ilo won't give you this tab's page: it may show what a password field on it held. Go to another page in this tab, or work in your other tabs."
   page_of() { # name, title, body
     printf '%s' "<!doctype html><meta charset=utf-8><title>loading</title>
 <script src=painted.js></script>
@@ -2962,6 +2962,57 @@ $3
   case "$answer" in
     *"Later: L4ter-c0py"*) ;;
     *) fail "withheld value shown again: step 4 read: $answer" ;;
+  esac
+  page_of held-again 'held again' "<input aria-label=First type=password value='Ag4in-held-x'>
+<button onclick=\"again()\">Show</button>
+<p id=held>Again:</p>
+<script>
+function again() {
+  const first = document.querySelector('[aria-label=First]');
+  const value = first.value;
+  first.value = 'Other-v4lue-y';
+  first.value = value;
+  const second = document.createElement('input');
+  second.type = 'password';
+  second.setAttribute('aria-label', 'Second');
+  second.value = value;
+  first.after(second);
+  held.textContent = 'Again: ' + value;
+}
+</script>"
+  go_shown held-again 'held again'
+  answer=$(call read_page "{\"tab\":$shown_tab}")
+  case "$answer" in
+    error:* | *Ag4in-held-x*) fail "withheld value shown again: step 6 answered: $answer" ;;
+  esac
+  outline=$(call snapshot "{\"tab\":$shown_tab}")
+  show_ref=$(printf '%s\n' "$outline" | sed -n 's/.*- button "Show" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+  call click "{\"tab\":$shown_tab,\"ref\":\"$show_ref\"}" > /dev/null
+  answer=$(call read_page "{\"tab\":$shown_tab}")
+  case "$answer" in
+    *"Again: Ag4in-held-x"*) ;;
+    *) fail "withheld value shown again: step 6 read: $answer" ;;
+  esac
+  # Step 7's frame is from another site, so it has a renderer and a session of its own. The page's
+  # title says when the frame is busy, and the page removes it a while after.
+  printf '%s' "<!doctype html><meta charset=utf-8><title>Frame</title><p>In the frame</p>
+<script>addEventListener('load', () => setTimeout(() => {
+  parent.postMessage('busy', '*');
+  const until = Date.now() + 5000;
+  while (Date.now() < until) {}
+}, 4000));</script>" > "$out/site/frame-busy.html"
+  printf '%s' "<!doctype html><meta charset=utf-8><title>loading</title><p>Frame page</p>
+<iframe src=\"http://localhost:$port/frame-busy.html\"></iframe>
+<script>addEventListener('message', (event) => {
+  if (event.data !== 'busy') return;
+  document.title = 'frame busy';
+  setTimeout(() => document.querySelector('iframe').remove(), 3000);
+});</script>" > "$out/site/frame-gone.html"
+  go_shown frame-gone 'frame busy'
+  answer=$(call read_page "{\"tab\":$shown_tab}")
+  case "$answer" in
+    *"Frame page"*) ;;
+    *) fail "withheld value shown again: step 7 read: $answer" ;;
   esac
   call close_tab "{\"tab\":$shown_tab}" > /dev/null
 
