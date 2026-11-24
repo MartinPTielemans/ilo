@@ -145,6 +145,7 @@ impl Wall {
             folder,
             started: SystemTime::now(),
             launcher: Some(Launcher { program, handoff }),
+            place: None,
         })
     }
 
@@ -156,6 +157,9 @@ impl Wall {
             Some(launcher) => {
                 let mut command = crate::child::command(&launcher.program);
                 command.arg(program);
+                // A group of its own, which its end ends whole before it's reaped.
+                #[cfg(unix)]
+                std::os::unix::process::CommandExt::process_group(&mut command, 0);
                 command
             }
         }

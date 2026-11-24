@@ -2175,7 +2175,7 @@ impl Agents {
             self.browser.delete_space(space, cx);
         }
         if let Some(dir) = &self.tasks.dir {
-            _ = std::fs::remove_dir_all(dir.join("Tasks"));
+            end_old_task_files(&dir.join("Tasks"));
         }
     }
 
@@ -4190,4 +4190,38 @@ fn names_the_browser(name: &str) -> bool {
             .iter()
             .any(|browser| read.contains(&reads_as(browser)))
         || read == reads_as("browser")
+}
+
+/// The files of the tasks a run before left, but for the places walled tasks left, which are swept
+/// first (leftovers.rs). They're listed here, before any task can make one, and swept off the UI
+/// thread, as a sweep walks every process.
+fn end_old_task_files(tasks: &std::path::Path) {
+    use super::wall::leftovers;
+    let root = tasks.join(leftovers::ROOT);
+    let left = leftovers::left_in(&root);
+    if left.is_empty() {
+        _ = std::fs::remove_dir_all(tasks);
+        return;
+    }
+    for entry in std::fs::read_dir(tasks).into_iter().flatten().flatten() {
+        if entry.file_name() == leftovers::ROOT {
+            continue;
+        }
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => _ = std::fs::remove_dir_all(entry.path()),
+            Ok(_) => _ = std::fs::remove_file(entry.path()),
+            Err(_) => {}
+        }
+    }
+    _ = std::thread::Builder::new()
+        .name("task-leftovers".into())
+        .spawn(move || {
+            let cleaned = leftovers::clean_up(&root, &left);
+            log!(
+                "browser: walled tasks a run before left: {} ended, {} places removed, {} kept",
+                cleaned.ended,
+                cleaned.removed,
+                cleaned.kept
+            );
+        });
 }

@@ -30,6 +30,7 @@ use super::runner::Cli;
 use super::tier::Tier;
 
 pub mod launch;
+pub mod leftovers;
 pub mod listener;
 /// The Mac's answers for ending what a walled task left running, which nothing asks yet.
 #[cfg(target_os = "macos")]
@@ -122,6 +123,8 @@ pub struct Wall {
     /// What starts a program inside it, or None for a task with no files, whose program starts
     /// as it always has.
     launcher: Option<launch::Launcher>,
+    /// The task's TMP and mark, which its rules allow: what tells what is inside this wall.
+    place: Option<std::sync::Arc<leftovers::Place>>,
 }
 
 impl std::fmt::Debug for Wall {
@@ -151,6 +154,7 @@ pub fn put_up(task: &WallFor) -> Result<Wall, WallRefused> {
             folder: None,
             started: SystemTime::now(),
             launcher: None,
+            place: None,
         });
     }
     available().map_err(WallRefused::Unavailable)?;
@@ -257,6 +261,7 @@ mod tests {
             folder: Some(PathBuf::from("/nonexistent/Private Letters")),
             started: SystemTime::now(),
             launcher: None,
+            place: None,
         };
         let printed = format!("{wall:?}");
         assert!(printed.contains("folder: true"), "{printed}");
