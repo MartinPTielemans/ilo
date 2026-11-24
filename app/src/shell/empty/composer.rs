@@ -46,7 +46,6 @@ impl Shell {
     pub(in crate::shell) fn step_resting(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected != 0 || self.welcome {
             if self.resting.take().is_some() {
-                // check.sh reads this line.
                 log!("browser: resting field dropped");
             }
             return;
@@ -72,7 +71,6 @@ impl Shell {
                 cx.notify();
             }
         });
-        // check.sh reads this line.
         log!("browser: resting field made");
     }
 
@@ -117,7 +115,6 @@ impl Shell {
             };
             bar.set_on_ask(on_ask, words, window, cx)
         });
-        // check.sh reads this line.
         log!("browser: composer on {}", if on_ask { ASK } else { SEARCH });
         cx.notify();
     }
@@ -131,7 +128,6 @@ impl Shell {
         let Some((agent, asked)) = bar.update(cx, |bar, cx| bar.take_task(window, cx)) else {
             return;
         };
-        // check.sh reads this line.
         log!("browser: composer runs a task on {agent}");
         let home = self.space();
         self.browser.start_task(&agent, &asked, home, cx);
