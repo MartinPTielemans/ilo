@@ -9,4 +9,11 @@ LookAnswer AnswerOfLook(bool shows, LookedDocument where) {
   return {.withhold = true, .keep_from_cache = where == LookedDocument::kCached};
 }
 
+CutLook CutOfLook(LookCut cut) {
+  if (cut == LookCut::kLate) {
+    return {.call = LookEnd::kUnchecked, .kept = true};
+  }
+  return {.call = LookEnd::kWithheld, .kept = cut == LookCut::kSessionEnded};
+}
+
 }  // namespace browser_core

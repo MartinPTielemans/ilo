@@ -920,10 +920,16 @@ void bc_agent_request(const char* agent,
   browser_core::AgentPage::CreateForWebContents(contents);
   browser_core::AgentPage::FromWebContents(contents)->Freeze(base::BindOnce(
       [](base::WeakPtr<content::WebContents> contents, uint64_t request, std::string method,
-         std::string url, std::string headers, std::string body, bool withheld) {
-        if (withheld) {
+         std::string url, std::string headers, std::string body, browser_core::LookEnd end) {
+        if (end == browser_core::LookEnd::kWithheld) {
           browser_core::RefuseAgentRequest(request, browser_core::kWithheldPageRefusal,
                                            BC_AGENT_FAILURE_WITHHELD_PAGE);
+          return;
+        }
+        // The look comes before the request is sent, so one it couldn't check was never sent.
+        if (end == browser_core::LookEnd::kUnchecked) {
+          browser_core::RefuseAgentRequest(request, browser_core::kUncheckedAnswer,
+                                           BC_AGENT_FAILURE_UNCHECKED);
           return;
         }
         if (!contents) {
@@ -2448,28 +2454,30 @@ void bc_tab_picture(bc_id id, uint64_t request, int width, int height) {
 void bc_tab_read_text(bc_id id, uint64_t request) {
   // A tab without its page, or none, or one whose page is withheld: nothing to read, told from a
   // task of its own.
-  const auto nothing = [](bc_id tab, uint64_t request) {
+  const auto nothing = [](bc_id tab, uint64_t request, int failure) {
     if (browser_core::Host().tab_text) {
-      browser_core::Host().tab_text(browser_core::Host().context, tab, request, nullptr,
-                                    BC_AGENT_FAILURE_NONE);
+      browser_core::Host().tab_text(browser_core::Host().context, tab, request, nullptr, failure);
     }
   };
   content::WebContents* contents =
       browser_core::PageWithheld(id) ? nullptr : browser_core::Tab::FromId(id);
   if (!contents) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-        FROM_HERE, base::BindOnce(nothing, id, request));
+        FROM_HERE, base::BindOnce(nothing, id, request, BC_AGENT_FAILURE_NONE));
     return;
   }
   // An agent's read, so the page's one look comes first (AgentPage::Freeze).
   browser_core::AgentPage::CreateForWebContents(contents);
   browser_core::AgentPage::FromWebContents(contents)->Freeze(base::BindOnce(
       [](decltype(nothing) nothing, base::WeakPtr<content::WebContents> contents, bc_id tab,
-         uint64_t request, bool withheld) {
+         uint64_t request, browser_core::LookEnd end) {
         // The user may have taken the tab while the look was out: their page isn't read for the
-        // agent then, and the app answers the call as any on a held tab.
-        if (withheld || !contents || browser_core::IsHeld(tab)) {
-          nothing(tab, request);
+        // agent then, and the app answers the call as any on a held tab. A page the look couldn't
+        // check in time isn't read, and the app hears so.
+        if (end != browser_core::LookEnd::kClear || !contents || browser_core::IsHeld(tab)) {
+          const bool unchecked =
+              end == browser_core::LookEnd::kUnchecked && contents && !browser_core::IsHeld(tab);
+          nothing(tab, request, unchecked ? BC_AGENT_FAILURE_UNCHECKED : BC_AGENT_FAILURE_NONE);
           return;
         }
         browser_core::PageText::GetOrCreateForWebContents(contents.get())->Read(request);

@@ -59,6 +59,14 @@ inline constexpr char kWithheldPageRefusal[] =
     "ilo won't give you this tab's page: it may show what a password field on it held. Go to "
     "another page in this tab, or work in your other tabs.";
 
+// What an agent hears for a page action or request whose page's look didn't answer in time
+// (BC_AGENT_FAILURE_UNCHECKED). The look comes before the call does anything, so this call did
+// nothing, and the page isn't withheld. It never says to repeat the step: the call may be one of
+// a run's or a batch's, whose earlier steps went through.
+inline constexpr char kUncheckedAnswer[] =
+    "ilo couldn't check this tab's page in time, so it gave you nothing of it. The page isn't "
+    "withheld. Look at it again before you repeat a step that changes something.";
+
 // The user handed back a tab at |origin|: every agent's sign-in there that submitted and didn't
 // sign in is forgiven, and agents may try it again. Ending a session forgives nothing.
 void ForgiveSignInTries(const url::Origin& origin);

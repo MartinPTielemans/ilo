@@ -788,22 +788,24 @@ void AgentPage::Run() {
   // An agent's call looks once at what a password field held before anything is read or done; the
   // core's own steps in a sign-in, which no agent asks for, don't.
   if (action < 0) {
-    RunLooked(/*withheld=*/false);
+    RunLooked(LookEnd::kClear);
     return;
   }
   const uint64_t request = job_->request;
+  job_->looking = true;
   Freeze(base::BindOnce(
-      [](base::WeakPtr<AgentPage> page, uint64_t request, bool withheld) {
+      [](base::WeakPtr<AgentPage> page, uint64_t request, LookEnd end) {
         if (page && page->job_ && page->job_->request == request) {
-          page->RunLooked(withheld);
+          page->RunLooked(end);
         }
       },
       weak_factory_.GetWeakPtr(), request));
 }
 
-void AgentPage::RunLooked(bool withheld) {
+void AgentPage::RunLooked(LookEnd end) {
   const int action = job_->action;
   const bool history = action == BC_AGENT_PAGE_BACK || action == BC_AGENT_PAGE_FORWARD;
+  job_->looking = false;
   // The user may have taken the tab since the agent's call was let in. The core's own steps, a
   // sign-in's and the user's files for a file field, aren't the agent's.
   if (action >= 0 && IsHeld(tab_)) {
@@ -811,8 +813,13 @@ void AgentPage::RunLooked(bool withheld) {
     return;
   }
   // Taking the tab to another page is all an agent may do there, as api.cc's bc_agent_may_act says.
-  if (withheld && !history) {
+  if (end == LookEnd::kWithheld && !history) {
     Fail(kWithheldPageRefusal, BC_AGENT_FAILURE_WITHHELD_PAGE);
+    return;
+  }
+  // The look comes before anything is done, so a page it couldn't check had nothing done to it.
+  if (end == LookEnd::kUnchecked) {
+    Fail(kUncheckedAnswer, BC_AGENT_FAILURE_UNCHECKED);
     return;
   }
   // An element in a frame that's gone, or now holds what isn't a web page's, is off limits.
@@ -2141,7 +2148,7 @@ void AgentPage::Paint(gfx::Rect source,
           std::move(done)));
 }
 
-void AgentPage::Freeze(base::OnceCallback<void(bool withheld)> then) {
+void AgentPage::Freeze(base::OnceCallback<void(LookEnd)> then) {
   std::vector<int> slots;
   for (size_t slot = 0; slot < targets_.size(); ++slot) {
     if (!slot || !targets_[slot].session.empty()) {
@@ -2155,7 +2162,7 @@ void AgentPage::Freeze(base::OnceCallback<void(bool withheld)> then) {
   // Counted before the first Send, which the limit counts for it.
   const uint64_t look = LookFirsts().Started();
   looks_[look] = {std::move(then), GetWebContents().GetPrimaryMainFrame()->GetWeakDocumentPtr()};
-  limit_.Looking(looks_.size());
+  limit_.Looking(Waiting());
   auto answered = base::BarrierCallback<bool>(
       slots.size(),
       base::BindOnce(
@@ -2200,7 +2207,7 @@ void AgentPage::Looked(uint64_t look, bool shows) {
   }
   LookOut done = std::move(out->second);
   looks_.erase(out);
-  limit_.Looking(looks_.size());
+  limit_.Looking(Waiting());
   if (looks_.empty()) {
     look_commands_.clear();
   }
@@ -2212,7 +2219,7 @@ void AgentPage::Looked(uint64_t look, bool shows) {
     Yes(done.document);
   }
   if (done.then) {
-    std::move(done.then).Run(PageWithheld(tab_));
+    std::move(done.then).Run(PageWithheld(tab_) ? LookEnd::kWithheld : LookEnd::kClear);
   }
   RestIfKept();
 }
@@ -2237,40 +2244,26 @@ void AgentPage::Yes(const content::WeakDocumentPtr& document) {
   }
 }
 
-void AgentPage::LookUnheard() {
-  // The renderer may have looked, and closed what it looked for, with its answer lost: so it
-  // counts as a yes.
-  if (looks_.empty()) {
-    return;
-  }
-  for (const auto& [look, out] : looks_) {
-    Yes(out.document);
-  }
-  AnswerLooks();
-  RestIfKept();
-}
-
-void AgentPage::AnswerLooks() {
-  base::flat_map<uint64_t, LookOut> looks = std::exchange(looks_, {});
-  look_commands_.clear();
-  limit_.Looking(0);
+void AgentPage::CutLooks(LookCut cut) {
+  const CutLook rule = CutOfLook(cut);
   // Posted, as each may answer the app, which may be inside its own call into the core. A job's
   // look hears it for a job that's been answered by then, and does nothing.
-  for (auto& [look, out] : looks) {
-    if (out.then) {
-      base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, base::BindOnce(std::move(out.then), /*withheld=*/true));
-    }
-  }
-}
-
-void AgentPage::AnswerCallsKeepingLooks() {
   for (auto& [look, out] : looks_) {
     if (out.then) {
       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-          FROM_HERE, base::BindOnce(std::move(out.then), /*withheld=*/true));
+          FROM_HERE, base::BindOnce(std::move(out.then), rule.call));
     }
   }
+  limit_.Looking(0);
+  if (!rule.kept) {
+    looks_.clear();
+    look_commands_.clear();
+  }
+}
+
+size_t AgentPage::Waiting() const {
+  return std::ranges::count_if(looks_,
+                               [](const auto& each) { return !each.second.then.is_null(); });
 }
 
 void AgentPage::RestIfKept() {
@@ -3471,16 +3464,27 @@ void AgentPage::Fail(std::string why, bc_agent_failure failure) {
 void AgentPage::EndWaiting(std::string why, std::optional<std::string> unstarted) {
   // What the page owes the job is never waited on again: a reply that comes once the dialog is
   // answered would otherwise run into the job after this one. Dropped, a picture under way
-  // answers that there's none.
-  base::flat_map<int, std::pair<int, Reply>> owed = std::exchange(replies_, {});
-  // A look whose answer is dropped with them withholds the page (LookUnheard).
-  LookUnheard();
+  // answers that there's none. A look's stay owed, as each goes to its own look, never a job.
+  base::flat_map<int, std::pair<int, Reply>> owed;
+  for (auto reply = replies_.begin(); reply != replies_.end();) {
+    if (look_commands_.contains(reply->first)) {
+      ++reply;
+      continue;
+    }
+    owed.emplace(reply->first, std::move(reply->second));
+    reply = replies_.erase(reply);
+  }
+  // A look out is kept for its own answer, and its call hears the page wasn't checked.
+  CutLooks(LookCut::kLate);
   // The jobs queued behind it would each send to a page that can't answer while its dialog is up,
   // and wait out the limit in turn, so they end now with their own answer, after this one's.
   std::deque<Job> queued = unstarted ? std::exchange(jobs_, {}) : std::deque<Job>();
-  // A look with no job, a read's or a request's, has no job to answer.
-  if (job_) {
+  // A look with no job, a read's or a request's, has no job to answer. A job whose look was out
+  // has done nothing: its look's call answers it, or at a dialog what a job not started hears.
+  if (job_ && !job_->looking) {
     Fail(std::move(why));
+  } else if (job_ && unstarted) {
+    Fail(*unstarted);
   }
   for (Job& job : queued) {
     Owe(job, *unstarted);
@@ -3559,11 +3563,7 @@ void AgentPage::LetGo(Looks looks) {
   // A look still out as the tab closes: its read or request is answered as a withheld page's. As
   // the session ends, the look stays for its own answer, and keeps DevTools until it's in.
   const bool keep = looks == Looks::kKeep && !looks_.empty();
-  if (keep) {
-    AnswerCallsKeepingLooks();
-  } else {
-    AnswerLooks();
-  }
+  CutLooks(keep ? LookCut::kSessionEnded : LookCut::kGone);
   if (idle_) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, std::move(idle_));
   }

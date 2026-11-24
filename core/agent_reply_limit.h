@@ -14,8 +14,8 @@ namespace browser_core {
 
 // How long an agent's job, or a look with none (AgentPage::Freeze), waits on its page's renderer,
 // which a page's dialog or a hung page keeps from answering (#3536). The job ends with what the
-// agent hears, and the next one runs; a look ends unheard. Apart from content so
-// browser_core_unittests tests it alone.
+// agent hears, and the next one runs; a look's call hears the page wasn't checked. Apart from
+// content so browser_core_unittests tests it alone.
 class AgentReplyLimit {
  public:
   // As long as Chromium waits on a renderer before it calls the page hung on the desktop

@@ -21,6 +21,7 @@
 #include "base/types/expected.h"
 #include "base/values.h"
 #include "browser_core/agent_file_field_rule.h"
+#include "browser_core/agent_look_rule.h"
 #include "browser_core/agent_reply_limit.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/withheld_fields.h"
@@ -98,10 +99,11 @@ class AgentPage : public content::WebContentsObserver,
   // one of them held (chromium-agent-withheld-values.patch), and none is looked for again. Any yes,
   // or a session that couldn't answer, withholds the page whole (WithholdShownPage), and |then|
   // hears whether it's withheld now; a frame's session that ended while asked answers no. A page
-  // with no such value answers at once. A renderer that never answers is AgentReplyLimit's, with a
-  // job or without, and a look that limit ends withholds the page too and hears it is
-  // (LookUnheard). Looks may overlap, as a read's while a job's is out: each is kept apart.
-  void Freeze(base::OnceCallback<void(bool withheld)> then);
+  // with no such value answers at once. A renderer that doesn't answer in time is
+  // AgentReplyLimit's, with a job or without: |then| hears the page wasn't checked, and the look is
+  // kept for its own answer, which then decides (CutOfLook). Looks may overlap, as a read's while
+  // a job's is out: each is kept apart, and a session answers them in the order they were asked.
+  void Freeze(base::OnceCallback<void(LookEnd)> then);
 
   // The user holds |contents|' tab, or a sign-in filled its page: what it has a password field
   // hold since may show in its title or address, which agents don't get (WithheldFromAgents) until
@@ -168,6 +170,8 @@ class AgentPage : public content::WebContentsObserver,
     // ReadAll's and Step's.
     Trees trees;
     base::OnceCallback<void(base::OnceClosure done)> step;
+    // Run's look is out, so nothing of the job has been done yet.
+    bool looking = false;
   };
   using Reply = base::OnceCallback<void(const base::DictValue* result)>;
   using Then = base::OnceCallback<void(std::optional<gfx::RectF>)>;
@@ -213,7 +217,7 @@ class AgentPage : public content::WebContentsObserver,
   void Next();
   void Run();
   // Run's work, once the page's one look (Freeze) has answered.
-  void RunLooked(bool withheld);
+  void RunLooked(LookEnd end);
   // Whether the tab's page is one agents may use, and if not, fails the job with why.
   bool IsWebPage();
   void FailNotWebPage();
@@ -398,18 +402,14 @@ class AgentPage : public content::WebContentsObserver,
   // Ends the job, which its page's dialog or the limit stopped waiting on, with |why|, and with
   // |unstarted| the jobs queued behind it.
   void EndWaiting(std::string why, std::optional<std::string> unstarted);
-  // Freeze's looks are dropped unanswered, as when the limit ends them: each counts as a yes for
-  // its document (Yes), and each hears the page is withheld.
-  void LookUnheard();
+  // Each look out has its call answered before the look is, for |cut|, as CutOfLook says.
+  void CutLooks(LookCut cut);
+  // How many looks out still have a call waiting on them, which alone the limit counts for.
+  size_t Waiting() const;
   // Look |look| answered, with whether a session said the page shows a value.
   void Looked(uint64_t look, bool shows);
   // A look's yes, for the document it asked (AnswerOfLook).
   void Yes(const content::WeakDocumentPtr& document);
-  // Each look out hears the page is withheld, as none will hear from it.
-  void AnswerLooks();
-  // Each look out hears the page is withheld now, as the session's end answers every call, and
-  // is kept for its own answer.
-  void AnswerCallsKeepingLooks();
   // Gives the answer kept while a download started, as none took its action.
   void AnswerHeld();
   // FindField's job: the field its selector finds, then with |submit| Enter in it.
@@ -553,7 +553,7 @@ class AgentPage : public content::WebContentsObserver,
   // A look out: what hears its answer, gone once the session's end has answered it, and the
   // document it asked, which its yes keeps from the cache if it's there.
   struct LookOut {
-    base::OnceCallback<void(bool withheld)> then;
+    base::OnceCallback<void(LookEnd)> then;
     content::WeakDocumentPtr document;
   };
   // Freeze's looks out, their answers not all in, by number (LookFirstTabs::Started).
