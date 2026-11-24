@@ -5684,23 +5684,28 @@ pub fn web_site(site: &str) -> bool {
 }
 
 /// The local time `at`, in seconds since 1970, reads on the clock here, such as "18:00", with
-/// its day if it's a day or more away, such as "Tue 18:00".
+/// its day if it's a day or more away, such as "Tue 18:00". On the system's clock, 12- or
+/// 24-hour, as every time a task says is and History's rows are (clock.rs).
 pub fn local_time(at: u64) -> String {
     use chrono::{Local, TimeZone};
     let Some(time) = Local.timestamp_opt(at as i64, 0).single() else {
         return String::new();
     };
     let soon = time.signed_duration_since(Local::now()) < chrono::Duration::hours(20);
-    time.format(if soon { "%H:%M" } else { "%a %H:%M" })
-        .to_string()
+    let hour = crate::clock::hour_minute(crate::clock::twelve_hour());
+    match soon {
+        true => time.format(hour).to_string(),
+        false => time.format(&format!("%a {hour}")).to_string(),
+    }
 }
 
 /// When `at` was, in seconds since 1970, as a finished task says it: the time on the clock here
-/// if it was today, "13:31", else its day, "21 Nov", as a time alone reads as today's.
+/// if it was today, "13:31" or "1:31 PM" as the system's clock is, else its day, "21 Nov", as a
+/// time alone reads as today's.
 pub fn time_or_day(at: u64) -> String {
     use chrono::{Local, TimeZone};
     match Local.timestamp_opt(at as i64, 0).single() {
-        Some(time) => time_or_day_on(time, Local::now()),
+        Some(time) => time_or_day_on(time, Local::now(), crate::clock::twelve_hour()),
         None => String::new(),
     }
 }
@@ -5708,13 +5713,17 @@ pub fn time_or_day(at: u64) -> String {
 fn time_or_day_on<Zone: chrono::TimeZone>(
     time: chrono::DateTime<Zone>,
     now: chrono::DateTime<Zone>,
+    twelve: bool,
 ) -> String
 where
     Zone::Offset: std::fmt::Display,
 {
     let today = time.date_naive() == now.date_naive();
-    time.format(if today { "%H:%M" } else { "%-d %b" })
-        .to_string()
+    let form = match today {
+        true => crate::clock::hour_minute(twelve),
+        false => "%-d %b",
+    };
+    time.format(form).to_string()
 }
 
 /// An agent's sentence for a request as an opened log entry shows it, marked as its words:

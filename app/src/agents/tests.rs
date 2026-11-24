@@ -8596,8 +8596,23 @@ mod tasks {
         let ended = Utc.with_ymd_and_hms(2026, 11, 21, 14, 5, 0).unwrap();
         let that_night = Utc.with_ymd_and_hms(2026, 11, 21, 23, 59, 0).unwrap();
         let next_day = Utc.with_ymd_and_hms(2026, 11, 22, 0, 1, 0).unwrap();
-        assert_eq!(crate::agents::time_or_day_on(ended, that_night), "14:05");
-        assert_eq!(crate::agents::time_or_day_on(ended, next_day), "21 Nov");
+        assert_eq!(
+            crate::agents::time_or_day_on(ended, that_night, false),
+            "14:05"
+        );
+        assert_eq!(
+            crate::agents::time_or_day_on(ended, next_day, false),
+            "21 Nov"
+        );
+        // On the system's 12-hour clock it reads as History's page rows do.
+        assert_eq!(
+            crate::agents::time_or_day_on(ended, that_night, true),
+            "2:05 PM"
+        );
+        assert_eq!(
+            crate::agents::time_or_day_on(ended, next_day, true),
+            "21 Nov"
+        );
     }
 
     /// The Archive lists the dismissed tasks, the last to leave the foot first, each with how it
