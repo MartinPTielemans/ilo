@@ -910,7 +910,10 @@ impl ImportView {
         let (title, line, button, corner) = match &self.step {
             Step::List => (
                 "Bring your stuff.".to_string(),
-                format!("From the browser you used. It all stays on {here}."),
+                format!(
+                    "Spaces, pinned tabs, folders and favorites from the browser you used. It \
+                     all stays on {here}."
+                ),
                 (!self.sources.is_empty())
                     .then(|| format!("Import from {}", name(self.picked_row))),
                 Corner::Skip,
@@ -999,7 +1002,10 @@ impl ImportView {
             ),
             _ => (
                 "Bring your stuff.".to_string(),
-                format!("From the browser you used. It all stays on {here}."),
+                format!(
+                    "Spaces, pinned tabs, folders and favorites from the browser you used. It \
+                     all stays on {here}."
+                ),
                 None,
                 Corner::Skip,
             ),
@@ -2621,7 +2627,8 @@ impl ImportView {
     }
 
     /// A browser's row in the guided list, which a click picks: the one picked on a plate, with
-    /// the ↩ that brings it at its end.
+    /// its tick at its end and the others' empty, neutral as the sheet's controls are; the
+    /// step's button says the one ↩ brings.
     fn guided_row(
         &self,
         index: usize,
@@ -2632,18 +2639,28 @@ impl ImportView {
     ) -> gpui::Div {
         let look = &self.look;
         let picked = index == self.picked_row;
-        let enter = picked.then(|| {
-            svg()
-                .path("icons/corner-down-left.svg")
-                .size(px(DISCLOSURE_GLYPH))
-                .text_color(look.detail)
-                .into_any_element()
-        });
+        let tick = div()
+            .flex_none()
+            .size(px(BADGE))
+            .rounded_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .when(picked, |tick| {
+                tick.bg(look.ink).child(
+                    svg()
+                        .path("icons/check.svg")
+                        .size(px(BADGE * 0.75))
+                        .text_color(look.surface),
+                )
+            })
+            .when(!picked, |tick| tick.border_1().border_color(look.detail))
+            .into_any_element();
         let line = (!line.is_empty()).then(|| line.into());
         let row = frame()
             .child(self.app_plate(index))
             .child(self.row_words(source, line))
-            .children(enter.map(|enter| end([enter])));
+            .child(end([tick]));
         let hovered = look.hovered;
         div().child(
             div()
@@ -2661,11 +2678,11 @@ impl ImportView {
         )
     }
 
-    /// The guided list's files, as one quiet line: a bookmarks file or a passwords file, each a
-    /// link, in the ink, to the system's open panel.
+    /// The guided list's files, as one quiet line under it: a bookmarks file or a passwords
+    /// file, each a link, in the ink, to the system's open panel.
     fn file_links(&self, cx: &mut Context<Self>) -> gpui::Div {
         let look = &self.look;
-        let said = "Or bring a bookmarks file or a passwords file.";
+        let said = "Another browser or computer? Bring a bookmarks file or a passwords file.";
         let range = |part: &str| {
             let start = said.find(part).unwrap_or_default();
             start..start + part.len()
@@ -2694,8 +2711,6 @@ impl ImportView {
         );
         div()
             .px(px(ROW_X))
-            .flex()
-            .justify_center()
             .text_size(px(text::SMALL))
             .text_color(look.detail)
             .child(text)

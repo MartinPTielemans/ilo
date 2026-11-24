@@ -19,7 +19,7 @@ use crate::theme::Theme;
 use crate::theme_picker::{SWATCHES, swatch_name};
 use crate::tokens::shell::onboarding::IMPORT_HOLD;
 use crate::tokens::shell::onboarding::loops::{
-    COLOR_AT, COLOR_SWIPE, PERIOD, WELCOME_AT, WELCOME_CLICK, WELCOME_MOVE,
+    COLOR_AT, COLOR_SWIPE, IMPORT_CAME, PERIOD, WELCOME_AT, WELCOME_CLICK, WELCOME_MOVE,
 };
 use crate::transparency::{self, Transparency};
 
@@ -95,7 +95,12 @@ fn started(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
 /// Goes on with Esc to `to`, as the user skipping each step before it does, from the welcome with
 /// Return, as its Esc skips the whole setup.
 fn skip_to(shell: &Entity<Shell>, cx: &mut VisualTestContext, to: Step) {
-    while let Some(at) = step(shell, cx).filter(|&step| step != to) {
+    // A flow that never comes to `to` fails rather than spins. Esc may take a few presses at a
+    // step, as the import's goes back inside it first, but never this many.
+    for _ in 0..32 {
+        let Some(at) = step(shell, cx).filter(|&step| step != to) else {
+            break;
+        };
         cx.simulate_keystrokes(if at == Step::Intro { "enter" } else { "escape" });
     }
     assert_eq!(step(shell, cx), Some(to));
@@ -289,9 +294,9 @@ fn a_loop_draws_only_while_its_step_shows(cx: &mut TestAppContext) {
     later(&shell, cx, 2. * PERIOD);
     assert!(looping(&shell, cx), "the welcome's loop plays");
     assert!(asks_for_frames(&shell, cx), "and draws");
-    cx.simulate_keystrokes("enter");
+    skip_to(&shell, cx, Step::DefaultBrowser);
     later(&shell, cx, STEP_MOTION);
-    assert!(!looping(&shell, cx), "the import has none");
+    assert!(!looping(&shell, cx), "the default browser's step has none");
     assert!(
         !asks_for_frames(&shell, cx),
         "so nothing draws once it's in"
@@ -1456,7 +1461,10 @@ fn the_import_steps_words_follow_the_state_its_view_shows(cx: &mut TestAppContex
     assert_eq!(list.title, "Bring your stuff.");
     assert_eq!(
         list.line,
-        format!("From the browser you used. It all stays on {here}.")
+        format!(
+            "Spaces, pinned tabs, folders and favorites from the browser you used. It all \
+             stays on {here}."
+        )
     );
     assert_eq!(list.button.as_deref(), Some("Import from Arc"));
     assert_eq!(list.corner, Corner::Skip);
@@ -2238,5 +2246,68 @@ fn the_cards_welcome_waits_under_the_flow_and_comes_as_it_fades(cx: &mut TestApp
     assert!(
         shown(&shell, cx) > 0.,
         "the card's welcome shows as the flow fades"
+    );
+}
+
+/// At the import on the sheet, Back goes back in its view where its state has somewhere to go back
+/// to, as Esc does: from a browser's choices to the list, keeping the step; from the list, to the
+/// step before.
+#[gpui::test]
+fn the_imports_back_goes_back_in_its_view_first(cx: &mut TestAppContext) {
+    use crate::import::tests::Browser;
+    let (shell, cx, view) = importing_from(Rc::new(Browser::new(None)), cx);
+    let drawn = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.drawn());
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(drawn(cx), Some("pick"), "↩ shows the browser's choices");
+    click_back(cx);
+    cx.run_until_parked();
+    assert_eq!(
+        drawn(cx),
+        Some("list"),
+        "Back in a browser's choices goes back to the list"
+    );
+    assert_eq!(step(&shell, cx), Some(Step::Import), "keeping the step");
+    click_back(cx);
+    cx.run_until_parked();
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Intro),
+        "Back at the list goes to the step before"
+    );
+}
+
+/// The import's loop lands the other browser's bookmarks and tabs in the small window's sidebar,
+/// the first within its first second and every one inside the sidebar, and its last frame, still,
+/// is what came.
+#[gpui::test]
+fn the_imports_loop_lands_each_in_the_sidebar(cx: &mut TestAppContext) {
+    use crate::import::tests::Browser;
+    let (shell, cx, _) = importing_from(Rc::new(Browser::new(None)), cx);
+    held_at(&shell, cx, 0.);
+    assert!(
+        placed("tile-0", cx).is_none(),
+        "nothing has landed as the loop starts"
+    );
+    held_at(&shell, cx, 1.);
+    assert!(
+        placed("tile-0", cx).is_some(),
+        "the first favorite lands in the loop's first second"
+    );
+    held_at(&shell, cx, IMPORT_CAME);
+    let sidebar = placed("sidebar", cx).expect("the loop's sidebar is drawn");
+    for name in [
+        "tile-0", "tile-1", "tile-2", "tile-3", "tab-0", "tab-1", "tab-2", "tab-3",
+    ] {
+        let part = placed(name, cx).unwrap_or_else(|| panic!("{name} has landed by then"));
+        assert!(
+            inside(part, sidebar),
+            "{name} lands inside the sidebar at {sidebar:?}, but it was at {part:?}"
+        );
+    }
+    held_at(&shell, cx, PERIOD);
+    assert!(
+        placed("came", cx).is_some() && placed("tab-3", cx).is_some(),
+        "the still last frame is what came"
     );
 }
