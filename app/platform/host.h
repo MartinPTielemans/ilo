@@ -253,15 +253,13 @@ double host_since_launch(void);
 void host_forget_window(void* ui_view);
 
 // The overlays: the command bar, the Space's icon and theme pickers, a closed folder's preview, the
-// Boost editor, the switcher a held ⌃Tab shows and the whole of an agent's request beside its
-// question. One shows at a time.
+// Boost editor and the switcher a held ⌃Tab shows. One shows at a time.
 #define HOST_COMMAND_BAR 0
 #define HOST_ICON_PICKER 1
 #define HOST_THEME_PICKER 2
 #define HOST_FOLDER_PREVIEW 3
 #define HOST_BOOST_EDITOR 4
 #define HOST_TAB_SWITCHER 5
-#define HOST_AGENT_REQUEST 6
 // The Site Controls take the same elevation call, though they aren't one of the overlays.
 #define HOST_SITE_CONTROLS 7
 

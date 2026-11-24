@@ -692,19 +692,6 @@ pub(crate) fn finish_opening(
         },
         cx,
     );
-    when_asked::<agent_request::AgentRequest>(
-        |cx| {
-            if let Some(shown) = agent_request::open(Rc::new(AgentRequestHost), cx)
-                && let Ok(view) = shown.update(cx, |_, window, _| ns_view(window))
-            {
-                let radius = agent_request::RADIUS.into();
-                elevate(AGENT_REQUEST, Level::Popover);
-                let dismissed = agent_request_dismissed;
-                unsafe { platform::host_add_overlay(AGENT_REQUEST, view, radius, dismissed) };
-            }
-        },
-        cx,
-    );
     when_asked::<folder_preview::FolderPreview>(
         |cx| {
             if let Some(preview) = folder_preview::open(Rc::new(FolderPreviewHost), cx)
