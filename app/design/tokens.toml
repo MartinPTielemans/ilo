@@ -11,6 +11,12 @@
 # Timings, springs and other motion stay in the code, as the design file has no motion, except a
 # surface's `motion` table, which design sync leaves out: seconds, and points for distances.
 
+[agents.helpers]
+# A task's helpers (#4102), which aren't a look: the most a task's assistant starts in one turn of
+# the user's, and how many levels under the task a helper may be, so a helper starts none.
+most = 4
+deep = 1
+
 [board]
 # A Board's page (#3073), which copy-board.sh writes as CSS custom properties, `--<key>`, each
 # `-dark` key the same property in dark mode: a colour as #rrggbb(aa), a `-share` as a percentage,
