@@ -14,8 +14,10 @@
 # with its focus back on its first and last control, and have NVDA say the page, and the Library's
 # key has it on the Library's search field, where ↓ has it say the row ringed and where it stands
 # and Tab has it on the Library's sections. ⇧Tab goes round the page's stops backwards, and
-# escape or F6 from the ring gives the page the keyboard, read as the page (#4030). Elsewhere it
-# records, a Board's cards among them: read as the keyboard reaches them, moved and deleted.
+# escape or F6 from the ring gives the page the keyboard, read as the page (#4030). Focus Agent
+# Question's key has it say an agent card's first answer (#3869). Elsewhere it records, a Board's
+# cards among them: read as the keyboard reaches them, moved and deleted, and what an agent's card
+# arriving made it say.
 # NVDA's portable copy (GPL) is fetched from NV Access' release on GitHub, its checksum pinned, into
 # the hosted runner's temporary folder, and never installed: with NVDA_DIR naming a portable copy,
 # the run uses that instead. Off a hosted Windows runner, and without NVDA_DIR, it skips.
@@ -84,9 +86,12 @@ nvda_quit() {
 # The focus-event record's own process, from focus_events_start, stopped by its PID.
 events="$out/screen-reader-events.txt"
 recorder=
+bridge_pid=
 screen_reader_undo() {
   [ -z "$recorder" ] || kill "$recorder" 2> /dev/null || true
   recorder=
+  [ -z "$bridge_pid" ] || kill "$bridge_pid" 2> /dev/null || true
+  bridge_pid=
   nvda_quit
 }
 run_undo=screen_reader_undo
@@ -309,6 +314,13 @@ press() {
 log="$out/screen-reader.log"
 step=0
 rm -f "$saved" "$profile_dir/Account"
+# An agent of the run's own, whose change asks with a card (#3869), and a page for its tab.
+serve
+printf '%s' '<title>agent</title>' > "$out/site/agent.html"
+agent_token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
+printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$agent_token" \
+  > "$profile_dir/Agents"
+chmod 600 "$profile_dir/Agents"
 # An empty home for the import step, as a new user's may be, and never the runner's own browsers.
 mkdir -p "$out/screen-reader-home"
 BROWSER_IMPORT_HOME=$(cygpath -aw "$out/screen-reader-home") BROWSER_DRIVE=1 BROWSER_ONBOARDING=light \
@@ -574,6 +586,65 @@ press tab shift
 in_library "Search History" "⇧Tab twice"
 judging=
 press escape
+# An agent's card (#3869): arriving, it's an alert dialog named by its title, ending in a full stop
+# so the line after it is heard apart, and described by the key that reaches it, in words, which
+# its live region says as it comes, as NVDA reads no dialog nobody moved to. Focus Agent
+# Question's key gives the card the keyboard on its first answer, and Escape answers it as its
+# Deny does.
+await '^browser: agents server on \\\\\.\\pipe\\.*-agents-[0-9a-f]*$' ||
+  fail "the saved switch didn't start the agents' server"
+socket=$(grep '^browser: agents server on' "$log" | tail -1 | sed 's/^browser: agents server on //')
+rm -f "$out/screen-reader-in" "$out/screen-reader-out"
+mkfifo "$out/screen-reader-in" "$out/screen-reader-out"
+BROWSER_AGENT_TOKEN=$agent_token windows_bridge "$app/mcp-bridge.exe" "$socket" \
+  "$out/screen-reader-in" "$out/screen-reader-out" 2>> "$out/screen-reader-bridge.log" &
+bridge_pid=$!
+exec 4> "$out/screen-reader-in" 5< "$out/screen-reader-out"
+# The bridge's next line within 30 s, as overlays' agent_line.
+agent_line() {
+  perl -e 'alarm shift; my $line = "";
+    while (sysread STDIN, my $byte, 1) { $line .= $byte; last if $byte eq "\n" }
+    print $line; exit($line =~ /\n\z/ ? 0 : 1)' 30 <&5
+}
+printf '%s\n' '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"screen-reader","version":"1"}}}' >&4
+agent_line > /dev/null || fail "the browser didn't answer the agent's initialize"
+printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}' >&4
+agent_page="http://localhost:$port/agent.html"
+printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"open_tab\",\"arguments\":{\"url\":\"$agent_page\"}}}" >&4
+opened=$(agent_line) || fail "the browser didn't answer the agent's open_tab"
+agent_tab=$(printf '%s\n' "$opened" | grep -o 'Opened tab [0-9]*' | head -1 | cut -d' ' -f3)
+[ -n "$agent_tab" ] || fail "the agent's open_tab answered: $opened"
+await "^browser: loaded $agent_tab $agent_page\$" || fail "the agent's tab didn't load $agent_page"
+spoken "the agent's tab"
+at=$(wc -l < "$nvda_log")
+printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"request\",\"arguments\":{\"tab\":$agent_tab,\"requests\":[{\"method\":\"PUT\",\"path\":\"/api/screen-reader-note\",\"body\":{},\"what\":\"change the note on the agent page\"}]}}}" >&4
+expect '^browser: agent mcp-client asks ' "the agent's change didn't ask"
+q=$(grep '^browser: agent mcp-client asks ' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
+expect "^browser: agent question $q at " "the agent's change drew no card"
+says "$at" "asks to make a change on localhost\..*Press Alt Shift A to answer\." \
+  "NVDA didn't say the agent's card, its title then the key's line, as it arrived"
+spoken "the agent's card arriving"
+arrival=$(tail -n "+$((at + 1))" "$nvda_log" | grep '^Speaking ' | tr '\n' ' ')
+echo "note: NVDA on the agent's card arriving: $arrival"
+at=$(wc -l < "$nvda_log")
+press a ctrl shift
+expect "^browser: agent card keys on $q Allow\$" "Focus Agent Question's key didn't give the agent's card the keyboard on Allow"
+says "$at" "'Allow'" "NVDA didn't say Allow when Focus Agent Question's key gave the card the keyboard"
+landing=$(tail -n "+$((at + 1))" "$nvda_log" | grep '^Speaking ' | tr '\n' ' ')
+echo "note: NVDA on Focus Agent Question's key: $landing"
+case "$landing" in
+  *'Press Alt Shift A to answer.'*) echo "note: NVDA said the key's line on the landing: yes" ;;
+  *) echo "note: NVDA said the key's line on the landing: no" ;;
+esac
+expect "^browser: agent card keys ready on $q\$" "the app never said the card's protection had passed"
+press escape
+expect '^browser: agent card key escape$' "Escape on the agent's card didn't answer it as its Deny does"
+agent_line > /dev/null || fail "the browser didn't answer the agent's denied change"
+exec 4>&-
+for _ in $(seq 100); do kill -0 "$bridge_pid" 2> /dev/null || break; sleep 0.1; done
+bridge_pid=
+exec 5<&-
+rm -f "$out/screen-reader-in" "$out/screen-reader-out"
 # A Board's cards (#3407), not judged yet, last of the steps as the Board stays open. New Board's
 # first note, offered with the page's keyboard, is read as an empty note. A Board whose file holds
 # two notes, opened by its address, is read card by card as Tab reaches each, and moving the second

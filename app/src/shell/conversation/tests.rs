@@ -7,9 +7,9 @@ use gpui::{Entity, Focusable, Modifiers, TestAppContext, VisualTestContext, poin
 
 use super::Fold;
 
-use crate::agents::task::ilo::{IloButton, IloKind, IloLine, Why};
+use crate::agents::task::ilo::{IloButton, IloKind, IloLine};
 use crate::agents::task::{Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep};
-use crate::agents::tier::Tier;
+use crate::agents::tier::{Tier, Why};
 use crate::shell::picture::PagePicture;
 use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
 use crate::tokens::shell::conversation::{SITE, SITE_GAP};
@@ -30,7 +30,7 @@ fn card() -> Card {
         question: None,
         open: Vec::new(),
         retry: false,
-        command: None,
+        fix: None,
     }
 }
 
@@ -44,6 +44,7 @@ fn step(key: usize, title: &str, running: bool) -> TraceStep {
         running,
         failed: false,
         opens: Opens::Nothing,
+        under: "".into(),
     }
 }
 

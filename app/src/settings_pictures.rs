@@ -1,19 +1,20 @@
-//! Settings' rows chosen from drawings: a row of small pictures under the row's line, the chosen
-//! one ringed and its name beneath in the row's ink. A click on one picks it, and so do ← and →
+//! Settings' rows chosen from drawings: a row of small pictures, the chosen one ringed in the text
+//! colour and its name beneath in the row's ink (#4092). A click on one picks it, and so do ← and →
 //! while the row has the keyboard; an assistive app reads them as options with one chosen.
 //!
-//! Sidebar position (#2407) draws the window with the sidebar on each side, Appearance (#2429)
-//! draws it light, dark, and split between the two for Automatic, and Share favorites (#2430)
-//! draws three Spaces' favorites, alike where they're shared.
+//! Sidebar position (#2407) draws the window with the sidebar on each side and Appearance (#2429)
+//! draws it light, dark, and split between the two for Automatic, each the control at its row's
+//! end; Share favorites (#2430) draws three Spaces' favorites, alike where they're shared, under
+//! its row's line.
 
 use std::rc::Rc;
 
 use gpui::{
-    AnyElement, App, BoxShadow, FontWeight, KeyDownEvent, Rgba, Window,
+    App, BoxShadow, KeyDownEvent, Rgba, Window,
     accesskit::{Action, Role, Toggled},
     div, point,
     prelude::*,
-    px, rgb, svg,
+    px, rgb,
 };
 
 use crate::palette::{INK, PAPER};
@@ -25,6 +26,13 @@ use crate::tokens::command_bar::site_colors::{
     LINKEDIN, REDDIT, SPOTIFY,
 };
 use crate::tokens::settings::{
+    SHARE_HEIGHT, SHARE_WIDTH, SIDE_BAR, SIDE_BAR_FIRST, SIDE_BAR_FIRST_LIGHT, SIDE_BAR_HEIGHT,
+    SIDE_BAR_LIGHT, SIDE_EDGE, SIDE_GAP, SIDE_HEIGHT, SIDE_INSET, SIDE_LABEL_GAP, SIDE_OTHER,
+    SIDE_PAGE, SIDE_PAGE_LIGHT, SIDE_PAGE_RADIUS, SIDE_PLATE, SIDE_PLATE_LIGHT, SIDE_RADIUS,
+    SIDE_RING, SIDE_RING_GAP, SIDE_ROOM, SIDE_ROWS_GAP, SIDE_SIDEBAR, SIDE_SIDEBAR_PADDING,
+    SIDE_WIDTH, SIDE_WINDOW, SIDE_WINDOW_LIGHT,
+};
+use crate::tokens::settings::{
     SHARE_MARK, SHARE_MARK_SQUARE, SHARE_PLATE, SHARE_PLATE_GAP, SHARE_PLATE_PADDING,
     SHARE_PLATE_RADIUS, SHARE_PROFILES_GAP, SHARE_RING, SHARE_SPACE_GAP, SHARE_SPACE_HEIGHT,
     SHARE_SPACE_PADDING, SHARE_SPACE_PADDING_X, SHARE_SPACE_RADIUS, SHARE_SPACE_WIDTH,
@@ -32,39 +40,7 @@ use crate::tokens::settings::{
     SHARE_TILE_LIGHT, SHARE_TILE_RADIUS, SHARE_TILE_RIM, SHARE_TILE_WIDTH, SHARE_TINT,
     SHARE_TINT_LIGHT,
 };
-use crate::tokens::settings::{
-    SIDE_BAR, SIDE_BAR_FIRST, SIDE_BUTTON, SIDE_BUTTON_GAP, SIDE_BUTTONS, SIDE_GAP, SIDE_GLYPH,
-    SIDE_GLYPH_GAP, SIDE_HEADING, SIDE_HEIGHT, SIDE_INSET, SIDE_LABEL_GAP, SIDE_MAC_CLOSE,
-    SIDE_MAC_MINIMIZE, SIDE_MAC_ZOOM, SIDE_OTHER, SIDE_PAGE, SIDE_PAGE_LIGHT, SIDE_PAGE_PADDING,
-    SIDE_PAGE_RADIUS, SIDE_PAGE_RING, SIDE_RADIUS, SIDE_RING, SIDE_RING_GAP, SIDE_ROOM,
-    SIDE_ROWS_GAP, SIDE_SIDEBAR, SIDE_SIDEBAR_PADDING, SIDE_TEXT, SIDE_WIDTH, SIDE_WINDOW,
-    SIDE_WINDOW_LIGHT,
-};
-use crate::tokens::shell::{WINDOW_BUTTON_CLOSE, WINDOW_BUTTON_MINIMIZE, WINDOW_BUTTON_ZOOM};
 use crate::tokens::text::SMALL;
-
-/// The window's buttons as this OS has them, which each drawing shows.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Buttons {
-    /// AppKit's three: close, minimize, full screen; mirrored as a unit on the right.
-    Mac,
-    /// The caption group ilo draws: minimize, maximize, close in that order on either side, close
-    /// at the corner on the right.
-    Windows,
-    /// The three ilo draws on its frameless window, mirrored as a unit on the right.
-    Linux,
-}
-
-impl Buttons {
-    /// This OS's.
-    pub const HERE: Buttons = if cfg!(target_os = "macos") {
-        Buttons::Mac
-    } else if cfg!(target_os = "windows") {
-        Buttons::Windows
-    } else {
-        Buttons::Linux
-    };
-}
 
 /// One of a row's pictures: its name, under it and as an assistive app says it, and its drawing.
 pub struct Choice {
@@ -85,6 +61,10 @@ pub fn keyed(event: &KeyDownEvent, chosen: usize, count: usize) -> Option<usize>
     }
 }
 
+/// What a row's pictures call with the index picked, by a click or a key, when it isn't the one
+/// chosen.
+pub type Picked = Rc<dyn Fn(usize, &mut Window, &mut App)>;
+
 /// The row's pictures, `chosen` ringed, on a row's plate in `look`, the others with a hairline in
 /// the window's `base` ink. `name` is the row's, which an assistive app reads for the group, and
 /// `logged` is Settings' (settings_rows::drawn), so check.sh can click each picture as "<name>
@@ -101,58 +81,94 @@ pub fn pictures(
     logged: crate::settings_rows::Drawn,
     pick: impl Fn(usize, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
-    let pick = Rc::new(pick);
-    let keyed_pick = pick.clone();
+    let pick: Picked = Rc::new(pick);
     let count = choices.len();
-    let logged_name = name.to_lowercase();
     let options = choices.into_iter().enumerate().map(|(index, choice)| {
-        let is_chosen = index == chosen;
-        let pick = pick.clone();
-        let label = div()
-            .text_size(px(SMALL))
-            .text_color(if is_chosen { look.ink } else { look.detail })
-            .when(is_chosen, |label| label.font_weight(FontWeight::MEDIUM))
-            .child(choice.title);
-        // GPUI paints a later shadow over an earlier one, so the plate's gap goes over the accent.
-        let ring = match is_chosen {
-            true => vec![
-                spread(look.accent, SIDE_RING_GAP + SIDE_RING),
-                spread(look.surface, SIDE_RING_GAP),
-            ],
-            false => vec![spread(base.opacity(SIDE_OTHER), 1.)],
-        };
-        div()
-            .id((name, index))
-            .when(a11y, |option| {
-                let toggled = if is_chosen {
-                    Toggled::True
-                } else {
-                    Toggled::False
-                };
-                option
-                    .role(Role::RadioButton)
-                    .aria_label(choice.title)
-                    .aria_toggled(toggled)
-                    .a11y_synthetic_children(|builder| {
-                        builder.parent_node().add_action(Action::Click)
-                    })
-            })
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap(px(SIDE_LABEL_GAP))
-            .child(choice.drawing.shadow(ring).relative().child(drawn(
-                format!("{logged_name} option {}", choice.title),
-                logged.clone(),
-            )))
-            .child(label)
-            .on_click(move |_, window, cx| {
-                if !is_chosen {
-                    pick(index, window, cx)
-                }
-            })
-            .into_any_element()
+        option(
+            look,
+            base,
+            name,
+            index,
+            index == chosen,
+            choice,
+            a11y,
+            &logged,
+            &pick,
+        )
     });
+    let options: Vec<_> = options.collect();
+    group(look, name, chosen, count, a11y, pick).children(options)
+}
+
+/// One of a row's pictures, its drawing ringed while it's `chosen`, with a hairline in `base` inside
+/// its edge, and its name under it, as `pictures` draws each. A row whose pictures share its width
+/// gives each `flex_1`.
+#[allow(clippy::too_many_arguments)]
+pub fn option(
+    look: &Look,
+    base: Rgba,
+    name: &'static str,
+    index: usize,
+    is_chosen: bool,
+    choice: Choice,
+    a11y: bool,
+    logged: &crate::settings_rows::Drawn,
+    pick: &Picked,
+) -> gpui::Stateful<gpui::Div> {
+    let pick = pick.clone();
+    let label = div()
+        .text_size(px(SMALL))
+        .text_color(if is_chosen { look.ink } else { look.detail })
+        .child(choice.title);
+    // GPUI paints a later shadow over an earlier one, so the plate's gap goes over the ring.
+    let ring = match is_chosen {
+        true => vec![
+            spread(look.on, SIDE_RING_GAP + SIDE_RING),
+            spread(look.surface, SIDE_RING_GAP),
+        ],
+        false => vec![],
+    };
+    let ring = ring.into_iter().chain([inset(other(base))]).collect();
+    div()
+        .id((name, index))
+        .when(a11y, |option| {
+            let toggled = if is_chosen {
+                Toggled::True
+            } else {
+                Toggled::False
+            };
+            option
+                .role(Role::RadioButton)
+                .aria_label(choice.title)
+                .aria_toggled(toggled)
+                .a11y_synthetic_children(|builder| builder.parent_node().add_action(Action::Click))
+        })
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(SIDE_LABEL_GAP))
+        .child(choice.drawing.shadow(ring).relative().child(drawn(
+            format!("{} option {}", name.to_lowercase(), choice.title),
+            logged.clone(),
+        )))
+        .child(label)
+        .on_click(move |_, window, cx| {
+            if !is_chosen {
+                pick(index, window, cx)
+            }
+        })
+}
+
+/// The group a row's pictures go in, `count` of them with `chosen` the one chosen: one stop for ⇥,
+/// ringed while it has the keyboard, where ← and → pick the one beside the chosen one.
+pub fn group(
+    look: &Look,
+    name: &'static str,
+    chosen: usize,
+    count: usize,
+    a11y: bool,
+    pick: Picked,
+) -> gpui::Stateful<gpui::Div> {
     div()
         .id(name)
         .when(a11y, |row| row.role(Role::RadioGroup).aria_label(name))
@@ -166,10 +182,24 @@ pub fn pictures(
         .on_key_down(move |event: &KeyDownEvent, window, cx| {
             if let Some(index) = keyed(event, chosen, count) {
                 cx.stop_propagation();
-                keyed_pick(index, window, cx);
+                pick(index, window, cx);
             }
         })
-        .children(options)
+}
+
+/// The hairline `option` draws inside a picture's edge, in the window's `base` ink, as a layer for
+/// a drawing whose own layers cover its plate, and so the hairline under them, to put on top: its
+/// corners at the drawing's `radius`.
+pub fn edge_over(base: Rgba, radius: f32) -> gpui::Div {
+    div()
+        .absolute()
+        .inset_0()
+        .rounded(px(radius))
+        .shadow(vec![inset(other(base))])
+}
+
+fn other(base: Rgba) -> Rgba {
+    base.opacity(SIDE_OTHER)
 }
 
 /// A side's name, as the drawing's label and an assistive app say it.
@@ -185,7 +215,6 @@ pub fn picker(
     base: Rgba,
     dark: bool,
     right: bool,
-    buttons: Buttons,
     a11y: bool,
     logged: crate::settings_rows::Drawn,
     pick: impl Fn(bool, &mut Window, &mut App) + 'static,
@@ -193,7 +222,7 @@ pub fn picker(
     let choices = [false, true]
         .map(|side| Choice {
             title: title(side),
-            drawing: window(base, dark, side, buttons),
+            drawing: window(base, dark, side, true),
         })
         .into();
     pictures(
@@ -229,13 +258,12 @@ pub fn appearance_picker(
     look: &Look,
     base: Rgba,
     chosen: Appearance,
-    buttons: Buttons,
     a11y: bool,
     logged: crate::settings_rows::Drawn,
     pick: impl Fn(Appearance, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
-    let light = || window(rgb(INK), false, false, buttons);
-    let dark = || window(rgb(PAPER), true, false, buttons);
+    let light = || window(rgb(INK), false, false, false);
+    let dark = || window(rgb(PAPER), true, false, false);
     let choices = APPEARANCES
         .map(|appearance| Choice {
             title: appearance_title(appearance),
@@ -349,8 +377,8 @@ fn favorites(base: Rgba, dark: bool, scope: FavoritesScope) -> gpui::Div {
     let space = |index: usize| space(base, dark, SHARE_SPACES[index], LISTS[lists[index]]);
     div()
         .flex_none()
-        .w(px(SIDE_WIDTH))
-        .h(px(SIDE_HEIGHT))
+        .w(px(SHARE_WIDTH))
+        .h(px(SHARE_HEIGHT))
         .rounded(px(SIDE_RADIUS))
         .bg(rgb(if dark { SIDE_WINDOW } else { SIDE_WINDOW_LIGHT }))
         .flex()
@@ -433,63 +461,45 @@ fn space(base: Rgba, dark: bool, color: u32, (sites, mark): ([u32; 4], Mark)) ->
         )
 }
 
-/// The window drawn: its material with the sidebar on `right` or not, its buttons at its top,
-/// and the page's card on the other side.
-fn window(base: Rgba, dark: bool, right: bool, buttons: Buttons) -> gpui::Div {
-    let bar = |height: f32, width: f32, alpha: f32| {
+/// The window drawn: its ground with the sidebar on `right` or not, three bars for its rows, on
+/// a plate of the ink where the drawing is the sidebar's (`plated`), and the page's card on the
+/// other side.
+fn window(base: Rgba, dark: bool, right: bool, plated: bool) -> gpui::Div {
+    let (first, rest) = match dark {
+        true => (SIDE_BAR_FIRST, SIDE_BAR),
+        false => (SIDE_BAR_FIRST_LIGHT, SIDE_BAR_LIGHT),
+    };
+    let bars = [first, rest, rest].map(|alpha| {
         div()
             .flex_none()
-            .h(px(height))
-            .w(gpui::relative(width))
+            .h(px(SIDE_BAR_HEIGHT))
             .rounded_full()
             .bg(base.opacity(alpha))
-    };
-    let head = div()
-        .flex_none()
-        .h(px(SIDE_BUTTONS))
-        .flex()
-        .items_center()
-        .when(right, |head| head.justify_end())
-        .children(window_buttons(base, right, buttons));
+    });
+    // Its rows start 4 in from the window's outer edge and end 3 short of the page.
+    let (outer, inner) = (SIDE_INSET + 1., SIDE_INSET);
     let sidebar = div()
         .flex_none()
         .w(px((SIDE_WIDTH * SIDE_SIDEBAR).round()))
+        .my(px(SIDE_INSET))
+        .rounded(px(SIDE_PAGE_RADIUS))
+        .when(plated, |sidebar| {
+            sidebar.bg(base.opacity(if dark { SIDE_PLATE } else { SIDE_PLATE_LIGHT }))
+        })
         .flex()
         .flex_col()
         .gap(px(SIDE_ROWS_GAP))
-        .py(px(SIDE_SIDEBAR_PADDING))
-        .px(px(SIDE_INSET))
-        .child(head)
-        .children(
-            [0.8, 0.64, 0.72, 0.56, 0.68]
-                .iter()
-                .enumerate()
-                .map(|(index, &width)| {
-                    let alpha = if index == 0 { SIDE_BAR_FIRST } else { SIDE_BAR };
-                    bar(4., width, alpha)
-                }),
-        );
-    let page_fill = rgb(if dark { SIDE_PAGE } else { SIDE_PAGE_LIGHT });
+        .pt(px(SIDE_SIDEBAR_PADDING - SIDE_INSET))
+        .map(|sidebar| match right {
+            true => sidebar.pl(px(inner)).pr(px(outer)).mr(px(SIDE_INSET)),
+            false => sidebar.pl(px(outer)).pr(px(inner)).ml(px(SIDE_INSET)),
+        })
+        .children(bars);
     let page = div()
         .flex_1()
-        .my(px(SIDE_INSET))
-        .map(|page| match right {
-            true => page.ml(px(SIDE_INSET)),
-            false => page.mr(px(SIDE_INSET)),
-        })
+        .m(px(SIDE_INSET))
         .rounded(px(SIDE_PAGE_RADIUS))
-        .bg(page_fill)
-        .shadow(vec![spread(base.opacity(SIDE_PAGE_RING), 0.5)])
-        .flex()
-        .flex_col()
-        .gap(px(SIDE_ROWS_GAP))
-        .p(px(SIDE_PAGE_PADDING))
-        .child(bar(5., 0.55, SIDE_HEADING))
-        .children(
-            [0.9, 0.82, 0.88, 0.6]
-                .iter()
-                .map(|&width| bar(3., width, SIDE_TEXT)),
-        );
+        .bg(rgb(if dark { SIDE_PAGE } else { SIDE_PAGE_LIGHT }));
     div()
         .flex_none()
         .w(px(SIDE_WIDTH))
@@ -504,58 +514,15 @@ fn window(base: Rgba, dark: bool, right: bool, buttons: Buttons) -> gpui::Div {
         })
 }
 
-/// The window's buttons in a drawing, close at the corner on either side.
-fn window_buttons(base: Rgba, right: bool, buttons: Buttons) -> Vec<AnyElement> {
-    let dot = |color: u32| {
-        div()
-            .flex_none()
-            .size(px(SIDE_BUTTON))
-            .rounded_full()
-            .bg(rgb(color))
-    };
-    let (colors, gap) = match buttons {
-        Buttons::Mac => (
-            [SIDE_MAC_CLOSE, SIDE_MAC_MINIMIZE, SIDE_MAC_ZOOM],
-            SIDE_BUTTON_GAP,
-        ),
-        Buttons::Linux => (
-            [
-                WINDOW_BUTTON_CLOSE,
-                WINDOW_BUTTON_MINIMIZE,
-                WINDOW_BUTTON_ZOOM,
-            ],
-            SIDE_BUTTON_GAP,
-        ),
-        Buttons::Windows => {
-            let glyphs = [
-                "icons/window-windows-minimize.svg",
-                "icons/window-windows-maximize.svg",
-                "icons/window-windows-close.svg",
-            ];
-            let row = div()
-                .flex()
-                .gap(px(SIDE_GLYPH_GAP))
-                .children(glyphs.map(|glyph| {
-                    svg()
-                        .flex_none()
-                        .path(glyph)
-                        .size(px(SIDE_BUTTON))
-                        .text_color(base.opacity(SIDE_GLYPH))
-                }));
-            return vec![row.into_any_element()];
-        }
-    };
-    let mut order = colors.to_vec();
-    if right {
-        order.reverse();
+/// A hairline just inside a drawing's edge, in `color`, which a ring outside it doesn't cover.
+fn inset(color: Rgba) -> BoxShadow {
+    BoxShadow {
+        color: color.into(),
+        offset: point(px(0.), px(0.)),
+        blur_radius: px(0.),
+        spread_radius: px(SIDE_EDGE),
+        inset: true,
     }
-    vec![
-        div()
-            .flex()
-            .gap(px(gap))
-            .children(order.into_iter().map(dot))
-            .into_any_element(),
-    ]
 }
 
 /// A ring `width` out from an element's edge, in `color`.

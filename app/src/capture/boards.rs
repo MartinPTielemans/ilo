@@ -476,7 +476,7 @@ impl Capture {
     ) -> Option<AnyElement> {
         let at = session.submenu_bounds(chosen).filter(|_| session.submenu)?;
         let origin = session.menu_origin(chosen);
-        let (palette, highlight) = (look.palette(), look.highlight);
+        let (palette, highlight) = (look.palette(), look.plate());
         let rows = (session.boards.iter().enumerate()).map(|(at, board)| {
             let action = Action::Board(at);
             let lit = session.lit == Some(action);

@@ -11,7 +11,7 @@
 
 use gpui::SharedString;
 
-use crate::agents::tier::Tier;
+use crate::agents::tier::{Tier, Why};
 
 /// One of ilo's lines.
 #[derive(Clone, Debug, PartialEq)]
@@ -50,29 +50,6 @@ pub enum IloKind {
     },
     /// The user changed the task's access.
     TierChanged { from: Tier, to: Tier },
-}
-
-/// Why ilo refused, as the tier table names it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Why {
-    /// A change on a page: typing, pressing, choosing.
-    Act,
-    /// Sending a message as the user.
-    Message,
-    /// Paying or placing an order.
-    Order,
-    /// A bank's site.
-    Bank,
-    /// A download.
-    Download,
-    /// Throwing away what the user wrote in a tab the agent didn't open.
-    Discard,
-    /// A request that may change something.
-    Request,
-    /// A site on the user's Off limits list.
-    Fenced,
-    /// A site outside the pages the task was given.
-    OtherSite,
 }
 
 /// What ilo signed in with.

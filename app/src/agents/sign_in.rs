@@ -760,7 +760,7 @@ pub enum Offer {
     Nothing,
     /// Get Claude Code or Get Codex: its maker's install page.
     Get,
-    /// Sign in to Claude Code or Sign in to Codex.
+    /// Sign In to Claude Code or Sign In to Codex.
     SignIn,
     /// Cancel, while it signs in.
     Cancel,
@@ -770,11 +770,36 @@ pub enum Offer {
     SignedIn,
 }
 
+impl Offer {
+    /// Its one button's words, on the assistant's row and a task's card; None where it has none.
+    pub fn label(self, cli: Cli) -> Option<String> {
+        let name = cli.assistant();
+        match self {
+            Offer::Get => Some(format!("Get {name}")),
+            Offer::SignIn => Some(format!("Sign In to {name}")),
+            Offer::TryAgain => Some("Try Again".into()),
+            Offer::Cancel => Some("Cancel".into()),
+            Offer::Nothing | Offer::SignedIn => None,
+        }
+    }
+}
+
 /// An assistant's row, the same in Settings › Agents and first run: its line and what it offers.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shown {
     pub line: String,
     pub offer: Offer,
+}
+
+/// What Claude Code's line says to run where its sign-in needs a terminal.
+pub const CLAUDE_SIGN_IN: &str = "claude auth login";
+
+impl Shown {
+    /// Where in its line a command to type is, set in the face a terminal shows it in.
+    pub fn command(&self) -> Option<std::ops::Range<usize>> {
+        let at = self.line.find(CLAUDE_SIGN_IN)?;
+        Some(at..at + CLAUDE_SIGN_IN.len())
+    }
 }
 
 impl Cli {
@@ -814,11 +839,11 @@ pub fn shown(cli: Cli, ready: super::ready::Ready, plan: Option<&str>, row: &Row
         // Claude Code's command ends this way when it asks for a code in a terminal, which ilo
         // never gives it.
         (Row::Failed(None), _) if cli == Cli::Claude => shown(
-            "Finish with “claude auth login” in a terminal",
+            &format!("Run {CLAUDE_SIGN_IN} in a terminal"),
             Offer::TryAgain,
         ),
         (Row::Failed(None), _) => shown("The sign-in didn't finish", Offer::TryAgain),
-        (Row::Idle, Ready::Unknown) => shown("Looking…", Offer::Nothing),
+        (Row::Idle, Ready::Unknown) => shown("Checking…", Offer::Nothing),
         (Row::Idle, Ready::NotFound) => shown("Not installed", Offer::Get),
         (Row::Idle, Ready::SignedOut) => shown("Not signed in", Offer::SignIn),
         (Row::Idle, Ready::SignedIn) => match plan {
@@ -834,6 +859,33 @@ impl Agents {
         let found = self.tasks.found.get(&cli);
         let plan = found.and_then(|found| found.plan.as_deref());
         shown(cli, self.found(cli), plan, &self.sign_in_row(cli))
+    }
+
+    /// What the card of a task that failed for want of `cli`'s sign-in or install offers: its
+    /// row's own button, so the two never differ. Try Again reads as Sign in there, as on a card it
+    /// would read as trying the task again.
+    pub(super) fn card_offer(&self, cli: Cli) -> Option<Offer> {
+        match self.assistant_row(cli).offer {
+            Offer::TryAgain => Some(Offer::SignIn),
+            offer @ (Offer::Get | Offer::SignIn | Offer::Cancel) => Some(offer),
+            Offer::Nothing | Offer::SignedIn => None,
+        }
+    }
+
+    /// The Sign in to … on the card of `agent`'s task, which starts its assistant's own sign-in,
+    /// as the row's does. The user's alone: only a card's press sends it.
+    pub(super) fn sign_in_for_task(&mut self, agent: &str, cx: &mut Context<Self>) {
+        if let Some(cli) = self.task(agent).and_then(|task| task.cli) {
+            log!("browser: assistant sign-in from task {agent}");
+            self.sign_in(cli, cx);
+        }
+    }
+
+    /// The Cancel on the card of `agent`'s task while its assistant signs in, as the row's.
+    pub(super) fn cancel_sign_in_for_task(&mut self, agent: &str) {
+        if let Some(cli) = self.task(agent).and_then(|task| task.cli) {
+            self.cancel_sign_in(cli);
+        }
     }
 }
 

@@ -6047,6 +6047,7 @@ mod tasks {
     use super::*;
     use crate::agents::ready::{Found, Ready};
     use crate::agents::runner::{self, Cli, Failure, Out};
+    use crate::agents::sign_in::Offer;
     use crate::agents::task::{AskedOn, Dot, State, TaskAction};
 
     /// A stand-in for `claude` that keeps what it's sent beside itself, and never answers. Each
@@ -6112,6 +6113,13 @@ mod tasks {
             agents.tasks.default = Some(Cli::Claude);
         });
         (agents, browser)
+    }
+
+    /// What the last look found of Claude Code.
+    fn set_found(agents: &Entity<Agents>, ready: Ready, cx: &mut TestAppContext) {
+        agents.update(cx, |agents, _| {
+            agents.tasks.found.get_mut(&Cli::Claude).unwrap().ready = ready
+        });
     }
 
     fn page() -> Option<AskedOn> {
@@ -6339,12 +6347,12 @@ mod tasks {
     fn a_cli_not_installed_says_how_to_install_it(cx: &mut TestAppContext) {
         let (agents, _) = ready(None, cx);
         start(&agents, "Find a flight", cx);
+        // As the look its failure starts finds it.
+        set_found(&agents, Ready::NotFound, cx);
         let card = card_of(&agents, cx);
         assert_eq!(card.status.as_ref(), "Claude isn't installed.");
-        assert_eq!(
-            card.command,
-            Some("npm install -g @anthropic-ai/claude-code")
-        );
+        // Its row's own Get.
+        assert_eq!(card.fix, Some((Cli::Claude, Offer::Get)));
         assert_eq!(card.dot, Dot::Ended);
     }
 
@@ -7124,11 +7132,19 @@ mod tasks {
         let listed = agents.read_with(cx, |agents, _| agents.ask_agents());
         assert_eq!(listed[0].resets.as_deref(), Some(resets.as_str()));
         said(&agents, &agent, Out::Ended(Some(Failure::SignedOut)), cx);
+        // As the look its failure starts finds it: the card offers its row's own Sign in.
+        set_found(&agents, Ready::SignedOut, cx);
         let card = card_of(&agents, cx);
         assert_eq!(
-            (card.status.as_ref(), card.command),
-            ("Claude isn't signed in.", Some("claude auth login"))
+            (card.status.as_ref(), card.fix),
+            (
+                "Claude isn't signed in.",
+                Some((Cli::Claude, Offer::SignIn))
+            )
         );
+        // Signed in since, it offers nothing more.
+        set_found(&agents, Ready::SignedIn, cx);
+        assert_eq!(card_of(&agents, cx).fix, None);
     }
 
     #[gpui::test]
@@ -7202,6 +7218,7 @@ mod tasks {
             error,
             kind: result.kind,
             image: result.image.clone(),
+            notes: result.notes.map(|note| note.name),
         };
         agents.update(cx, |agents, cx| agents.handle(answered, cx));
         result
@@ -7610,6 +7627,7 @@ mod tasks {
             kind: Some(Kind::NotWebPage),
             picture: None,
             close: None,
+            notes: None,
         };
         let lines = fold(&[], &[failed], true, false, None);
         let [Line::Trace(trace)] = lines.as_slice() else {
@@ -7653,6 +7671,7 @@ mod tasks {
                 kind,
                 picture: None,
                 close: None,
+                notes: None,
             };
             let lines = fold(&[], &[failed], true, false, None);
             let [Line::Trace(trace)] = lines.as_slice() else {
@@ -7833,6 +7852,7 @@ mod tasks {
             kind: None,
             picture: None,
             close: None,
+            notes: None,
         };
         let mut messages = vec![message(Who::User, "Museum hours", 0)];
         let mut trace = vec![step("open_tab", 1, 1, Some(3))];
@@ -7903,6 +7923,7 @@ mod tasks {
             kind: None,
             picture: None,
             close: None,
+            notes: None,
         }];
         let mut messages = vec![
             message(Who::User, "Museum hours", 0),
@@ -7941,6 +7962,7 @@ mod tasks {
             kind: None,
             picture: None,
             close: None,
+            notes: None,
         };
         let messages = [Message {
             who: Who::User,
@@ -8483,6 +8505,7 @@ mod sessions {
             error: None,
             kind: None,
             image: None,
+            notes: None,
         };
         agents.update(cx, |agents, cx| agents.handle(event, cx));
     }
@@ -9747,6 +9770,7 @@ mod sessions {
                 error: None,
                 kind: None,
                 image: None,
+                notes: None,
             };
             agents.update(cx, |agents, cx| agents.handle(event, cx));
             let closed = Event::Closed {
@@ -10318,6 +10342,7 @@ fn an_agent_sorts_its_own_today_tabs_by_site(cx: &mut TestAppContext) {
 
 mod fenced;
 mod holds;
+mod notes;
 mod sign_ins;
 mod uploads;
 

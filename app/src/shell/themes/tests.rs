@@ -42,7 +42,7 @@ fn entry(color: Option<u32>, theme: Option<Theme>) -> crate::shell::SpaceEntry {
 }
 
 fn rgb_of(color: Rgba) -> u32 {
-    theme::packed(color)
+    crate::theme::packed(color)
 }
 
 #[gpui::test]
@@ -62,35 +62,31 @@ fn a_theme_of_one_colour_at_its_start_looks_as_the_colour_alone(cx: &mut TestApp
     assert_eq!(before, after);
 }
 
+/// A Space's colour is a glow from the sidebar's foot, the main colour there, and a faint one of
+/// its second colour from the far top corner, with nothing of either between them (#4089); with
+/// the sidebar on the right, its foot is on the right.
 #[gpui::test]
-fn two_colours_go_from_the_top_left_to_the_second_along_the_diagonal(cx: &mut TestAppContext) {
+fn a_space_glows_from_the_sidebars_foot_and_faintly_from_the_far_corner(cx: &mut TestAppContext) {
     let theme = Theme::at(0.6, 0.).with_count(2);
     let [main, second] = theme.colors()[..] else {
         panic!("two colours")
     };
     let (shell, cx) = shell(Some(main), Some(theme), cx);
-    shell.update(cx, |shell, _| {
-        assert_eq!(rgb_of(shell.theme_color_at(&theme, 1., 0., 0.)), main);
-        assert_eq!(rgb_of(shell.theme_color_at(&theme, 1., 1., 1.)), second);
-        // The right edge is the second colour from three quarters of the way down the diagonal.
-        let (width, height) = (1800., 1130.);
-        let y = (SECOND_AT * (width + height) - width) / height;
-        assert_eq!(
-            rgb_of(shell.theme_color_at(&theme, 1., 1., y + 0.01)),
-            second
-        );
-        assert_ne!(
-            rgb_of(shell.theme_color_at(&theme, 1., 1., y - 0.2)),
-            second
-        );
-        // A third comes in down the window.
-        let three = theme.with_count(3);
-        let third = three.colors()[2];
-        let bottom_left = shell.theme_color_at(&three, 1., 0., 1.);
-        assert_eq!(
-            rgb_of(bottom_left),
-            rgb_of(theme::mix_oklab(rgb(main), rgb(third), 1.))
-        );
+    shell.update(cx, |shell, cx| {
+        let palette = shell.palette_of(1);
+        let foot = shell.space_color_at(1, 0., 1.);
+        let far = shell.space_color_at(1, 1., 0.);
+        let same = |a: Rgba, b: Rgba| rgb_of(a) == rgb_of(b) && (a.a - b.a).abs() < 1e-5;
+        assert!(same(foot, palette.glow), "{foot:?} {:?}", palette.glow);
+        assert!(far.a > 0. && far.a < foot.a, "{far:?} {foot:?}");
+        assert_eq!(shell.space_color_at(1, 0.5, 0.5).a, 0.);
+        assert_eq!(shell.space_color_at(1, 1., 1.).a, 0.);
+        // The glows are the theme's colours, the foot's moved no further than the window needs.
+        assert_eq!(rgb_of(palette.far_glow), second);
+        assert_eq!(rgb_of(palette.glow), main);
+        shell.set_sidebar_right(true, cx);
+        assert!(same(shell.space_color_at(1, 1., 1.), palette.glow));
+        assert_eq!(shell.space_color_at(1, 0., 1.).a, 0.);
     });
 }
 
@@ -99,17 +95,10 @@ fn intensity_washes_the_colours_out(cx: &mut TestAppContext) {
     // A deep red the palette never has to hold back (a paler one stops at its legibility cap).
     let theme = Theme::at(0.3, 0.);
     let (shell, cx) = shell(Some(theme.main_color()), Some(theme), cx);
-    shell.update(cx, |shell, _| {
+    shell.update(cx, |_, _| {
         let alpha = |intensity| {
             let theme = Theme { intensity, ..theme };
-            shell
-                .theme_color_at(
-                    &theme,
-                    Palette::of(Some(&theme), Tone::Dark).layer_alpha,
-                    0.5,
-                    0.5,
-                )
-                .a
+            Palette::of(Some(&theme), Tone::Dark).glow.a
         };
         assert!(alpha(0.) < alpha(0.24) && alpha(0.24) < alpha(DEFAULT_INTENSITY));
         assert!(alpha(DEFAULT_INTENSITY) < alpha(1.));
@@ -166,8 +155,8 @@ fn remove_theme_color_takes_the_space_back_to_the_accent(cx: &mut TestAppContext
 }
 
 /// ilo's menu takes the window's look: light where the Space's theme makes it light, dark where
-/// it makes it dark, and the system's where it's automatic; its highlight the Space's accent in
-/// that look. The Space's menu keeps Delete Space apart, below a line.
+/// it makes it dark, and the system's where it's automatic; its accent, for capture's markup, the
+/// Space's in that look. The Space's menu keeps Delete Space apart, below a line.
 #[gpui::test]
 fn the_menu_takes_the_windows_look(cx: &mut TestAppContext) {
     use crate::menu::Highlight;
@@ -207,7 +196,7 @@ fn the_menu_takes_the_windows_look(cx: &mut TestAppContext) {
     let accents = shown
         .map(|(appearance, _, tone)| Highlight::of(&Palette::of(Some(&themed(appearance)), tone)));
     assert_eq!(
-        looks.iter().map(|look| look.highlight).collect::<Vec<_>>(),
+        looks.iter().map(|look| look.accent).collect::<Vec<_>>(),
         accents
     );
     assert_ne!(
@@ -421,42 +410,6 @@ fn remove_theme_color_undoes(cx: &mut TestAppContext) {
         assert!(shell.undo(cx));
     });
     assert_eq!(host.take_edits(), gives(Some(theme)));
-}
-
-/// GPUI's shader, as gpui_apple's fill_color has it for a linear gradient on a square, `side`
-/// across from the origin, with stops at `start` and `end`: how far from the first colour to the
-/// second `point` is.
-fn shader_t(angle: f32, side: f32, start: f32, end: f32, point: (f32, f32)) -> f32 {
-    let radians = (angle - 90.).to_radians();
-    let direction = (radians.cos(), radians.sin());
-    let half = side / 2.;
-    let to_point = (point.0 - half, point.1 - half);
-    let dot = to_point.0 * direction.0 + to_point.1 * direction.1;
-    let along = dot / direction.0.hypot(direction.1);
-    let t = (along + half) / side;
-    ((t - start) / (end - start)).clamp(0., 1.)
-}
-
-#[test]
-fn the_diagonal_is_drawn_where_it_is_taken_for_what_covers_it() {
-    for (width, height) in [(1800., 1130.), (800., 1200.), (1000., 1000.)] {
-        let (side, start, end) = diagonal_stops(width, height);
-        for (x, y) in [
-            (0., 0.),
-            (0.2, 0.7),
-            (0.5, 0.5),
-            (0.9, 0.1),
-            (1., 1.),
-            (0.6, 0.3),
-        ] {
-            let drawn = shader_t(135., side, start, end, (x * width, y * height));
-            let taken = (theme::diagonal(x, y, width, height) / SECOND_AT).min(1.);
-            assert!(
-                (drawn - taken).abs() < 1e-4,
-                "{width}×{height} at {x}, {y}: {drawn} {taken}"
-            );
-        }
-    }
 }
 
 /// Where nothing blurs what's behind the window, its ground is opaque, the same look the rows that

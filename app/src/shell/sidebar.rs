@@ -12,13 +12,14 @@ use gpui::{
 };
 
 use super::access::Accessible as _;
+use crate::glow;
 use crate::tokens::shell::{SHOWN_MARKER, SHOWN_MARKER_HIT};
 
 use super::{
-    CARD_INSET, PLATE_INSET, PRIVATE_SHADE, REVEAL_HOLD, REVEAL_IN_DAMPING, REVEAL_IN_RESPONSE,
-    REVEAL_INSET, REVEAL_MOVE, REVEAL_OUT_DAMPING, REVEAL_OUT_RESPONSE, REVEAL_OVERSHOOT,
-    REVEAL_WAIT, ROW_HEIGHT, Row, SIDEBAR_EDGE, SIDEBAR_HIDE, SIDEBAR_MAX, SIDEBAR_MIN,
-    SIDEBAR_SHOW, SIDEBAR_WIDTH, Settle, Shell, Slot, Space, settle_progress, spring,
+    CARD_INSET, PLATE_INSET, PRIVATE_SHADE, REVEAL_BACK, REVEAL_HOLD, REVEAL_IN_DAMPING,
+    REVEAL_IN_RESPONSE, REVEAL_INSET, REVEAL_MOVE, REVEAL_OUT_DAMPING, REVEAL_OUT_RESPONSE,
+    REVEAL_OVERSHOOT, REVEAL_WAIT, ROW_HEIGHT, Row, SIDEBAR_EDGE, SIDEBAR_HIDE, SIDEBAR_MAX,
+    SIDEBAR_MIN, SIDEBAR_SHOW, SIDEBAR_WIDTH, Settle, Shell, Slot, Space, settle_progress, spring,
 };
 use crate::tokens::shell::{FOOTER_HEIGHT, NAV_SIZE, NAV_TOP, NAV_TRAIL, PLUS_INSET};
 
@@ -525,7 +526,7 @@ impl Shell {
             .w_full()
             .h(px(SHOWN_MARKER))
             .rounded(px(SHOWN_MARKER / 2.))
-            .bg(self.palette.selected(0.));
+            .bg(self.palette.shown(0.));
         let marker = div()
             .id("shown-marker")
             .absolute()
@@ -645,10 +646,9 @@ impl Shell {
         (space, Some((beside, t)))
     }
 
-    /// The gradient down the window, at `y` from its top (0) to its bottom (1), where the sidebar
-    /// is: the Space's colour, going to the same at HSL lightness + 0.25, or its theme's colours.
-    /// While the sidebar pages between two Spaces, it cross-fades from one's to the other's as the
-    /// pages move.
+    /// The Space's colour where the sidebar's middle is, `y` from the window's top (0) to its
+    /// bottom (1): its glows there. While the sidebar pages between two Spaces, it cross-fades from
+    /// one's to the other's as the pages move.
     pub(super) fn gradient_color(&self, y: f32) -> Hsla {
         let x = self.sidebar_x();
         let (space, beside) = self.colored_pages();
@@ -668,8 +668,8 @@ impl Shell {
         .into()
     }
 
-    /// `space`'s colour `x` of the way across the window and `y` of the way down, as the gradient
-    /// has it: its theme's, or nothing over the underlay without one.
+    /// `space`'s colour `x` of the way across the window and `y` of the way down: its glows there,
+    /// to lay over the window's ground; a private window's shade; nothing without a colour.
     pub(super) fn space_color_at(&self, space: u64, x: f32, y: f32) -> Rgba {
         if self.private {
             return Rgba {
@@ -679,32 +679,37 @@ impl Shell {
                 a: PRIVATE_SHADE,
             };
         }
-        match self.space_theme(space) {
-            Some(theme) => self.theme_color_at(&theme, self.palette_of(space).layer_alpha, x, y),
-            None => Rgba {
-                r: 0.,
-                g: 0.,
-                b: 0.,
-                a: 0.,
-            },
-        }
+        let (width, height) = (
+            f32::from(self.viewport.width),
+            f32::from(self.viewport.height),
+        );
+        let (foot, far) = glow::strengths(x * width, y * height, width, height, self.right());
+        self.palette_of(space).glow_at(foot, far)
     }
 
-    /// `space`'s gradient from top to bottom, for what is as tall as the window, such as its card
-    /// in the Library.
-    pub(super) fn space_gradient(&self, space: u64) -> gpui::Background {
-        // Across the window's middle, for a theme of more than one colour.
-        let stop = |y| linear_color_stop(Hsla::from(self.space_color_at(space, 0.5, y)), y);
-        linear_gradient(180., stop(0.), stop(1.))
-    }
-
-    /// The gradient as a background, over `base` where the window's look has to be opaque.
-    pub(super) fn gradient(&self, base: Option<Hsla>) -> gpui::Background {
-        let stop = |y| {
-            let color = self.gradient_color(y);
-            linear_color_stop(base.map_or(color, |base| base.blend(color)), y)
+    /// `space`'s glow at the foot of an opaque copy of its sidebar `width` by `height` with corners
+    /// of `radius`, such as the panel the hidden sidebar comes out in and its card in the Library:
+    /// the glow down the column's middle, as GPUI draws no radial gradient in a rounded box.
+    pub(super) fn foot_glow(&self, space: u64, width: f32, height: f32, radius: f32) -> gpui::Div {
+        let (_, reach) = glow::Corner::Foot.extent();
+        let reach = reach.min(height);
+        let palette = self.palette_of(space);
+        let at = |up: f32| {
+            let (foot, _) = glow::strengths(width / 2., height - up, width, height, false);
+            Hsla::from(palette.glow_at(foot, 0.))
         };
-        linear_gradient(180., stop(0.), stop(1.))
+        div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .h(px(reach))
+            .rounded_b(px(radius))
+            .bg(linear_gradient(
+                180.,
+                linear_color_stop(at(reach), 0.),
+                linear_color_stop(at(0.), 1.),
+            ))
     }
 
     /// The window's look, opaque, halfway down: what covers the rows it passes over, and the find
@@ -727,26 +732,60 @@ impl Shell {
     /// The pointer moved to `at` over the browser window's own view, which has the strip at its
     /// left edge while the sidebar is hidden: it brings the sidebar out once it has moved a few
     /// points up or down in the strip, not as it comes in, so one flung at the edge leaves the
-    /// sidebar hidden (Arc 1.171).
+    /// sidebar hidden (Arc 1.171). Back in the strip soon after leaving the window across it, it
+    /// has moved there, as a pointer kept in at a screen's edge would have (#3989).
     pub(super) fn pointer_over(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
         let (x, y) = (f32::from(at.x), f32::from(at.y));
-        self.reveal_strip =
-            (0. ..CARD_INSET)
-                .contains(&self.from_side(x))
-                .then(|| match self.reveal_strip {
-                    Some((from, moved)) => (from, moved || (y - from).abs() >= REVEAL_MOVE),
-                    None => (y, false),
-                });
+        let side = self.from_side(x);
+        let mut back = false;
+        if y < 0. {
+            // Above the window, as GPUI's (-1, -1) before each leave on Linux and Windows: its
+            // last move in the window says which way it went.
+            self.left_by_last_move(cx);
+        } else {
+            let toward = self.reveal_heard.is_some_and(|(from, _)| side <= from);
+            self.reveal_heard = Some((side, toward));
+            // Its first move back over the window is its return.
+            let left = self.reveal_left.take();
+            let now = cx.background_executor().now();
+            back = left.is_some_and(|left| now.duration_since(left) <= REVEAL_BACK);
+        }
+        let in_strip = (0. ..CARD_INSET).contains(&side) && y >= 0.;
+        self.reveal_strip = in_strip.then(|| match self.reveal_strip {
+            Some((from, moved)) => (from, moved || (y - from).abs() >= REVEAL_MOVE),
+            None => (y, back),
+        });
         self.pointer_at(x, cx);
     }
 
     /// The pointer left the browser window's own view, onto the page or another window, so a wait
     /// at the edge ends as one the pointer passed. On Linux and Windows the page is Chromium's
     /// window, whose moves the shell doesn't hear, so its leave is how the shell knows.
-    pub(super) fn pointer_left(&mut self) {
+    pub(super) fn pointer_left(&mut self, cx: &mut Context<Self>) {
+        self.left_by_last_move(cx);
         if !self.revealed {
             self.reveal_wait = None;
             self.reveal_strip = None;
+        }
+    }
+
+    /// The pointer left the window's view. From the strip, a last move away from the edge took it
+    /// onto the page, which starts where the strip ends, and one toward the edge or along it took
+    /// it out across the edge. A first move in, with none heard before it to tell, counts as
+    /// neither: a pointer jumping onto the page and one jumping out look the same.
+    fn left_by_last_move(&mut self, cx: &mut Context<Self>) {
+        if self.reveal_heard.take().is_some_and(|(_, toward)| toward) {
+            self.left_across_edge(cx);
+        }
+    }
+
+    /// The pointer left the window across its edge on the sidebar's side: from the strip, with the
+    /// sidebar still to reveal, it's when its return counts.
+    fn left_across_edge(&mut self, cx: &mut Context<Self>) {
+        if self.can_reveal() && !self.revealed && self.reveal_strip.is_some() {
+            // check.sh reads this line.
+            log!("browser: reveal left across the edge");
+            self.reveal_left = Some(cx.background_executor().now());
         }
     }
 
@@ -944,7 +983,7 @@ fn past(top: f32, scrolled: f32, height: f32) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
+    use std::{rc::Rc, time::Duration};
 
     use gpui::{
         Bounds, Context, Entity, InputEvent as _, Modifiers, MouseButton, MouseDownEvent, Render,
@@ -1733,12 +1772,280 @@ mod tests {
             shell.sidebar_hidden = true;
             shell.pointer_over(point(px(1.), px(300.)), cx);
             shell.pointer_over(point(px(1.), px(306.)), cx);
-            shell.pointer_left();
+            shell.pointer_left(cx);
         });
         cx.executor().advance_clock(super::REVEAL_WAIT * 2);
         assert!(
             !shell.read_with(cx, |shell, _| shell.revealed),
             "the pointer gone onto the page brought the sidebar out"
+        );
+    }
+
+    /// The pointer moving to `x`, `y` over a window, after `wait`.
+    fn move_to(shell: &Entity<Shell>, wait: u64, x: f32, y: f32, cx: &mut TestAppContext) {
+        cx.executor().advance_clock(Duration::from_millis(wait));
+        shell.update(cx, |shell, cx| shell.pointer_over(point(px(x), px(y)), cx));
+    }
+
+    /// The pointer leaving the window's own view, after `wait`, as GPUI tells it on Linux and
+    /// Windows: a move to (-1, -1), then the leave.
+    fn leave(shell: &Entity<Shell>, wait: u64, cx: &mut TestAppContext) {
+        cx.executor().advance_clock(Duration::from_millis(wait));
+        shell.update(cx, |shell, cx| {
+            shell.pointer_over(point(px(-1.), px(-1.)), cx);
+            shell.pointer_left(cx);
+        });
+    }
+
+    /// Whether the sidebar is out once the reveal's wait is over.
+    fn out_after_the_wait(shell: &Entity<Shell>, cx: &mut TestAppContext) -> bool {
+        cx.executor().advance_clock(super::REVEAL_WAIT * 2);
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| shell.revealed)
+    }
+
+    /// A window with its sidebar hidden.
+    fn hidden_sidebar(cx: &mut TestAppContext) -> Entity<Shell> {
+        let (shell, _) = shell_with(cx, &[], &[1], Default::default());
+        shell.update(cx, |shell, _| shell.sidebar_hidden = true);
+        shell
+    }
+
+    /// Puts the revealed sidebar away and the pointer over the page.
+    fn put_away(shell: &Entity<Shell>, cx: &mut TestAppContext) {
+        shell.update(cx, |shell, cx| {
+            shell.set_revealed(false, cx);
+            shell.reveal_motion = None;
+        });
+        move_to(shell, 0, 400., 300., cx);
+    }
+
+    /// A pointer flung at the edge of a window away from the screen's edge overshoots out of the
+    /// window and comes back to the edge without moving along it, which brings the sidebar out, as
+    /// a pointer the screen's edge stopped would have (#3989).
+    #[gpui::test]
+    fn a_pointer_back_at_the_edge_after_an_overshoot_reveals(cx: &mut TestAppContext) {
+        let shell = hidden_sidebar(cx);
+        move_to(&shell, 0, 400., 300., cx);
+        move_to(&shell, 16, 4., 300., cx);
+        leave(&shell, 16, cx);
+        move_to(&shell, 200, 3., 300., cx);
+        assert!(
+            out_after_the_wait(&shell, cx),
+            "back at the edge after an overshoot, the pointer didn't bring the sidebar out"
+        );
+        // The Mac tells the leave alone.
+        put_away(&shell, cx);
+        move_to(&shell, 16, 4., 300., cx);
+        cx.executor().advance_clock(Duration::from_millis(16));
+        shell.update(cx, |shell, cx| shell.pointer_left(cx));
+        move_to(&shell, 200, 3., 300., cx);
+        assert!(
+            out_after_the_wait(&shell, cx),
+            "back at the edge after a leave alone, the pointer didn't bring the sidebar out"
+        );
+    }
+
+    /// On Linux and Windows the page is a window the shell doesn't hear the pointer in, so it hears
+    /// a pointer coming from the page first in the strip: heard twice on its way to the edge before
+    /// it overshoots, its return brings the sidebar out.
+    #[gpui::test]
+    fn a_pointer_heard_only_at_the_edge_reveals_after_an_overshoot(cx: &mut TestAppContext) {
+        let shell = hidden_sidebar(cx);
+        leave(&shell, 0, cx);
+        move_to(&shell, 1500, 8., 300., cx);
+        move_to(&shell, 8, 4., 300., cx);
+        leave(&shell, 8, cx);
+        move_to(&shell, 200, 3., 300., cx);
+        assert!(
+            out_after_the_wait(&shell, cx),
+            "back at the edge after an overshoot from the page, the pointer didn't bring the \
+             sidebar out"
+        );
+    }
+
+    /// A pointer heard once in the strip before it leaves may have jumped onto the page as well as
+    /// out across the edge: its jump back to the edge has to move along it, as one from the page.
+    #[gpui::test]
+    fn a_pointer_heard_once_at_the_edge_has_to_move_along_it_after_leaving(
+        cx: &mut TestAppContext,
+    ) {
+        let shell = hidden_sidebar(cx);
+        leave(&shell, 0, cx);
+        move_to(&shell, 1500, 1., 300., cx);
+        leave(&shell, 300, cx);
+        move_to(&shell, 200, 0., 300., cx);
+        assert!(
+            !out_after_the_wait(&shell, cx),
+            "a pointer jumping back to the edge from the page brought the sidebar out"
+        );
+    }
+
+    /// A pointer brought slowly to the edge and stopped there reveals as it drifts along the edge,
+    /// as before, and as it drifts out across the edge and back.
+    #[gpui::test]
+    fn a_pointer_stopped_at_the_edge_reveals_as_it_drifts(cx: &mut TestAppContext) {
+        let shell = hidden_sidebar(cx);
+        for x in [30., 9., 6., 3.] {
+            move_to(&shell, 50, x, 300., cx);
+        }
+        assert!(
+            !out_after_the_wait(&shell, cx),
+            "a pointer coming straight in brought the sidebar out"
+        );
+        move_to(&shell, 300, 3., 304., cx);
+        assert!(
+            out_after_the_wait(&shell, cx),
+            "a drift along the edge didn't bring the sidebar out"
+        );
+        put_away(&shell, cx);
+        for x in [30., 9., 6., 3.] {
+            move_to(&shell, 50, x, 300., cx);
+        }
+        move_to(&shell, 300, 1., 300., cx);
+        leave(&shell, 100, cx);
+        move_to(&shell, 400, 2., 300., cx);
+        assert!(
+            out_after_the_wait(&shell, cx),
+            "a drift out across the edge and back didn't bring the sidebar out"
+        );
+    }
+
+    /// A pointer passing out of the window across the edge, on its way to another window or
+    /// display, brings nothing out.
+    #[gpui::test]
+    fn a_pointer_passing_out_across_the_edge_brings_nothing_out(cx: &mut TestAppContext) {
+        let shell = hidden_sidebar(cx);
+        move_to(&shell, 0, 400., 300., cx);
+        move_to(&shell, 16, 4., 300., cx);
+        leave(&shell, 16, cx);
+        cx.executor().advance_clock(super::REVEAL_BACK);
+        assert!(
+            !out_after_the_wait(&shell, cx),
+            "a pointer gone out across the edge brought the sidebar out"
+        );
+        assert!(shell.read_with(cx, |shell, _| shell.reveal_wait.is_none()));
+    }
+
+    /// Back at the edge later than `REVEAL_BACK` after leaving, the pointer has come in afresh and
+    /// has to move along the edge.
+    #[gpui::test]
+    fn a_late_return_has_to_move_along_the_edge(cx: &mut TestAppContext) {
+        let shell = hidden_sidebar(cx);
+        move_to(&shell, 0, 400., 300., cx);
+        move_to(&shell, 16, 4., 300., cx);
+        leave(&shell, 16, cx);
+        move_to(&shell, 1100, 3., 300., cx);
+        assert!(
+            !out_after_the_wait(&shell, cx),
+            "a return 1.1 s after leaving brought the sidebar out"
+        );
+        move_to(&shell, 16, 3., 304., cx);
+        assert!(
+            out_after_the_wait(&shell, cx),
+            "a move along the edge after a late return didn't bring the sidebar out"
+        );
+    }
+
+    /// A pointer that leaves the window's view on a move away from the edge has gone onto the
+    /// page, which starts where the strip ends, so its return isn't one from past the edge.
+    #[gpui::test]
+    fn a_pointer_back_from_the_page_has_to_move_along_the_edge(cx: &mut TestAppContext) {
+        let shell = hidden_sidebar(cx);
+        move_to(&shell, 0, 2., 300., cx);
+        move_to(&shell, 16, 8., 300., cx);
+        leave(&shell, 16, cx);
+        move_to(&shell, 50, 4., 300., cx);
+        assert!(
+            !out_after_the_wait(&shell, cx),
+            "a pointer back from the page brought the sidebar out"
+        );
+    }
+
+    /// A return that counts and goes on in, past the strip, before the wait is out brings
+    /// nothing out: a pointer passing through the edge on its way in.
+    #[gpui::test]
+    fn a_return_passing_on_in_brings_nothing_out(cx: &mut TestAppContext) {
+        let shell = hidden_sidebar(cx);
+        move_to(&shell, 0, 400., 300., cx);
+        move_to(&shell, 16, 4., 300., cx);
+        leave(&shell, 16, cx);
+        move_to(&shell, 200, 3., 300., cx);
+        move_to(&shell, 50, 30., 300., cx);
+        assert!(
+            !out_after_the_wait(&shell, cx),
+            "a pointer passing on in through the edge brought the sidebar out"
+        );
+    }
+
+    /// A pointer leaving across the edge while the sidebar shows, docked or revealed, leaves
+    /// nothing behind: hidden again, its return is a fresh one in.
+    #[gpui::test]
+    fn a_leave_with_the_sidebar_out_leaves_nothing_behind(cx: &mut TestAppContext) {
+        let shell = hidden_sidebar(cx);
+        shell.update(cx, |shell, _| shell.sidebar_hidden = false);
+        move_to(&shell, 0, 400., 300., cx);
+        move_to(&shell, 16, 4., 300., cx);
+        leave(&shell, 16, cx);
+        shell.update(cx, |shell, _| shell.sidebar_hidden = true);
+        move_to(&shell, 200, 3., 300., cx);
+        assert!(
+            !out_after_the_wait(&shell, cx),
+            "a leave while the sidebar was docked counted after it hid"
+        );
+        move_to(&shell, 16, 3., 304., cx);
+        assert!(out_after_the_wait(&shell, cx), "the edge didn't reveal");
+        // Out now: a leave and return leave it out, and once it's away count for nothing.
+        move_to(&shell, 16, 4., 310., cx);
+        leave(&shell, 16, cx);
+        move_to(&shell, 200, 3., 310., cx);
+        assert!(
+            out_after_the_wait(&shell, cx),
+            "the revealed sidebar went away"
+        );
+        put_away(&shell, cx);
+        move_to(&shell, 16, 3., 310., cx);
+        assert!(
+            !out_after_the_wait(&shell, cx),
+            "a leave while the sidebar was out counted after it went away"
+        );
+    }
+
+    /// A press in the band at the window's edge, on Linux, resizes the window, the window manager
+    /// taking the pointer from the strip: back in it as the drag ends, the pointer has come in
+    /// afresh and the sidebar stays hidden.
+    #[cfg(target_os = "linux")]
+    #[gpui::test]
+    fn a_pointer_back_from_a_band_drag_leaves_the_sidebar_hidden(cx: &mut TestAppContext) {
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(Rc::new(Recorder::default()), cx));
+        shell.update(cx, |shell, cx| {
+            shell.sidebar_hidden = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.simulate_mouse_move(point(px(1.), px(300.)), None, Modifiers::none());
+        cx.simulate_mouse_down(
+            point(px(1.), px(300.)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+        cx.simulate_event(gpui::MouseExitEvent {
+            position: point(px(1.), px(300.)),
+            pressed_button: Some(MouseButton::Left),
+            modifiers: Modifiers::none(),
+        });
+        cx.simulate_mouse_up(
+            point(px(1.), px(300.)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+        cx.executor().advance_clock(Duration::from_millis(300));
+        cx.simulate_mouse_move(point(px(2.), px(300.)), None, Modifiers::none());
+        cx.executor().advance_clock(super::REVEAL_WAIT * 2);
+        cx.run_until_parked();
+        assert!(
+            !shell.read_with(cx, |shell, _| shell.revealed),
+            "the pointer back from a drag of the window's edge brought the sidebar out"
         );
     }
 
