@@ -1924,6 +1924,8 @@ impl Agents {
         if let Some(cli) = task.cli {
             self.tasks.limits.remove(&cli);
         }
+        // At work again: the file's row for a kept task says so (pick_up.rs).
+        self.kept_under_way(agent);
         if !matches!(sent, Some(Ok(()))) {
             let first = match self.resumes(agent) {
                 true => RETRY.to_string(),
@@ -2365,6 +2367,8 @@ impl Agents {
         match named {
             Ok(()) => {
                 self.note(agent, connection, "title", "", "");
+                // A kept task's row in the file has its name from now (pick_up.rs).
+                self.kept_named(agent);
                 _ = reply.send(ToolResult::text(match kept == text {
                     true => "The task has its name.".to_string(),
                     false => format!("The task has its name: “{kept}”."),

@@ -619,34 +619,6 @@ fn a_removal_that_failed_stays_listed_and_remove_all_tries_again(cx: &mut TestAp
     assert_eq!(run.ilo_lines(&agent, cx).last(), Some(&IloKind::Gone));
 }
 
-/// The conversation of a task that never ended, as a crash leaves it, goes at the next launch,
-/// as its task went: by the id in the file alone, asked of its assistant.
-#[cfg(unix)]
-#[gpui::test]
-fn the_next_launch_removes_what_a_task_that_never_ended_kept(cx: &mut TestAppContext) {
-    let run = Run::new("launch", cx);
-    let agent = run.start(Cli::Claude, cx);
-    run.ran(1);
-    let id = run.id(&agent, cx);
-    // No quit: the browser went while it worked.
-    assert!(run.folder(&id).exists());
-    assert!(run.purged(cx).is_empty());
-
-    let next = Run::again(run.profile.clone(), run.program.clone(), cx);
-    assert!(
-        next.agents
-            .read_with(cx, |agents, cx| agents.archived_tasks(cx).is_empty())
-    );
-    let folder = run.folder(&id);
-    assert_eq!(
-        next.purged(cx),
-        ["purge", folder.to_str().unwrap(), "--yes"]
-    );
-    assert!(!folder.exists());
-    assert_eq!(next.kept(cx), (0, 0));
-    assert!(!next.profile.join(kept::FOLDER).exists());
-}
-
 /// A launch after a run that kept nothing looks for the file of ids and does no more: no process
 /// is started, nothing is spawned, nothing is made in the profile, and no one is told of a change.
 #[cfg(unix)]

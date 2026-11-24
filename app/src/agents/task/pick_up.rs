@@ -82,9 +82,44 @@ impl Agents {
         let (Keep::New(id), Some(root)) = (keep, self.kept_root()) else {
             return;
         };
-        let home = self.task(agent).map_or(0, |task| task.home);
+        let (home, started) =
+            (self.task(agent)).map_or((0, SystemTime::now()), |task| (task.home, task.started));
         let profile = self.browser.space_profile(home);
-        self.tasks.kept.hold(agent, cli, id.clone(), &profile);
+        // The one write a start makes says all a launch needs if the browser is killed before
+        // the task ends: that it was under way, since when and in which profile (#4105).
+        (self.tasks.kept).hold(agent, cli, id.clone(), &profile, seconds(started));
+        self.tasks.kept.write(&root);
+    }
+
+    /// `agent`'s task has the name its agent gave it: the file's row for it has it from now, so
+    /// a launch after the browser was killed lists it by its name. Once for each name, which an
+    /// agent gives with its first call and again only as it moves on to another task.
+    pub(super) fn kept_named(&mut self, agent: &str) {
+        let (Some(root), Some(task)) = (self.kept_root(), self.task(agent)) else {
+            return;
+        };
+        let title = title_of(task);
+        let past = (self.tasks.kept.of_mut(agent)).and_then(|record| record.past.as_mut());
+        let Some(past) = past.filter(|past| past.title != title) else {
+            return;
+        };
+        past.title = title;
+        self.tasks.kept.write(&root);
+    }
+
+    /// `agent`'s task, which had ended, is under way again, by a reply or Retry: the file's row
+    /// for it says so from now, so if the browser is killed it comes back as one that broke off
+    /// and not as it ended before.
+    pub(super) fn kept_under_way(&mut self, agent: &str) {
+        let (Some(root), Some(task)) = (self.kept_root(), self.task(agent)) else {
+            return;
+        };
+        let under_way = kept::Past::under_way(title_of(task), seconds(SystemTime::now()));
+        let record = (self.tasks.kept.of_mut(agent)).filter(|record| !record.gone);
+        let Some(past) = record.and_then(|record| record.past.as_mut()) else {
+            return;
+        };
+        *past = under_way;
         self.tasks.kept.write(&root);
     }
 
@@ -119,6 +154,7 @@ impl Agents {
             record.resumed.push((said, back));
         }
         self.tasks.picked_up.insert(agent.to_string(), was);
+        self.kept_under_way(agent);
         if let Some(task) = self.task_mut(agent) {
             task.tier = back;
         }
@@ -453,8 +489,10 @@ impl Agents {
     /// At launch: the tasks an earlier run of the browser left that had ended are tasks again, in
     /// the Archive, each with its title and how it ended and no more, as its conversation is its
     /// assistant's: the last ones the Archive holds, and nothing is made or started for one until
-    /// it's brought back. The other conversations that run left go: an older task's than those,
-    /// and one whose task never ended, or was removed and couldn't be.
+    /// it's brought back. One under way when the browser went without a quit, as when it's
+    /// killed, is among them as one that broke off. The other conversations that run left go: an
+    /// older task's than those, and one whose task was deleted from the Archive, or was removed
+    /// and couldn't be.
     /// From `load`, which the app calls once the first window's UI has shown, so none of this is
     /// in the time to the first frame. With no file of ids, as on every launch after a run that
     /// kept nothing, the one look for the file is all a launch pays: nothing is read, started or
@@ -559,8 +597,8 @@ fn title_of(task: &Task) -> String {
 }
 
 /// What the file is to say of `task`: nothing for one deleted from the Archive, and how and when
-/// it ended for one that has. None leaves what it says as it is, for a task at work, which a
-/// reply took up after it had ended.
+/// it ended for one that has. None leaves what it says as it is, for a task at work, whose row
+/// is one under way's since its start or since a reply took it up.
 fn past_of(task: &Task) -> Option<Option<kept::Past>> {
     let end = match task.state {
         _ if task.deleted => return Some(None),

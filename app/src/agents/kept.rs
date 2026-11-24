@@ -209,8 +209,9 @@ impl End {
 /// only a file someone changed has more.
 const TITLE: usize = 80;
 
-/// What the file says of a task that has ended, beside its conversation's id: all a task is
-/// after a quit, until a reply takes it up.
+/// What the file says of a task, beside its conversation's id: all a task is after a quit, until
+/// a reply takes it up. Of one that has ended, how and when. Of one under way (`Past::under_way`),
+/// what the next launch is to find if the browser goes without another word, as when it's killed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Past {
     /// The name its agent gave it (#3690), or empty if it gave none: what the user asked, which
@@ -221,6 +222,16 @@ pub struct Past {
     pub at: u64,
 }
 
+impl Past {
+    /// A task under way since `at`, by `title`: if no end is ever written over it, its
+    /// assistant's run broke off with the browser, which is a task that failed, and reads
+    /// Interrupted. Its time is its start's, as when the browser went isn't known.
+    pub fn under_way(title: String, at: u64) -> Past {
+        let end = End::Failed;
+        Past { title, end, at }
+    }
+}
+
 /// A kept conversation, beside its task.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Record {
@@ -229,7 +240,7 @@ pub struct Record {
     pub task: Option<String>,
     pub cli: Cli,
     pub id: Id,
-    /// What the file says of its task, once it has ended and while it's listed: none for one
+    /// What the file says of its task, from its start and while it's listed: none for one
     /// deleted from the Archive, which a quit then leaves to be removed.
     pub past: Option<Past>,
     /// The profile its task was asked in, by the name of the profile's own folder, which names
@@ -292,13 +303,21 @@ impl Kept {
             .find(|record| record.task.as_deref() == Some(task) && !record.removing)
     }
 
-    /// Holds `id` for `task`, new, or with no task for one an earlier run left.
-    fn hold_for(&mut self, task: Option<&str>, cli: Cli, id: Id, profile: &str) {
+    /// Holds `id` for `task`, new, or with no task for one an earlier run left, of which the
+    /// file says `past`.
+    fn hold_for(
+        &mut self,
+        task: Option<&str>,
+        cli: Cli,
+        id: Id,
+        profile: &str,
+        past: Option<Past>,
+    ) {
         self.records.push(Record {
             task: task.map(String::from),
             cli,
             id,
-            past: None,
+            past,
             profile: profile.to_string(),
             nowhere: None,
             gone: false,
@@ -308,9 +327,10 @@ impl Kept {
         });
     }
 
-    /// Holds `id` for `task`, new, asked in `profile`.
-    pub fn hold(&mut self, task: &str, cli: Cli, id: Id, profile: &str) {
-        self.hold_for(Some(task), cli, id, profile);
+    /// Holds `id` for `task`, new, asked in `profile` and under way since `at`.
+    pub fn hold(&mut self, task: &str, cli: Cli, id: Id, profile: &str, at: u64) {
+        let under_way = Past::under_way(String::new(), at);
+        self.hold_for(Some(task), cli, id, profile, Some(under_way));
     }
 
     /// The tasks an earlier run of the browser left that ended, each by its conversation's id,
@@ -333,7 +353,8 @@ impl Kept {
         }
     }
 
-    /// The tasks whose conversation takes a reply: each one's that has ended and is listed.
+    /// The tasks the file has a row for, whose conversation takes a reply once the task has
+    /// ended: one under way is among them.
     pub fn listed(&self) -> impl Iterator<Item = &str> {
         (self.records.iter())
             .filter(|record| record.past.is_some() && !record.gone && !record.removing)
@@ -391,7 +412,7 @@ impl Kept {
             }
             // A folder's own name and nothing more: one with a path in it names no profile.
             let profile = text("profile").filter(|name| !name.contains(['/', '\\']));
-            self.hold_for(None, cli, id, profile.unwrap_or_default());
+            self.hold_for(None, cli, id, profile.unwrap_or_default(), None);
             let end =
                 text("state").and_then(|end| End::ALL.into_iter().find(|each| each.id() == end));
             let at = each.get("ended").and_then(Value::as_u64);
@@ -409,7 +430,7 @@ impl Kept {
 
     /// Writes what's held to `root`'s file, which only its owner can read, or removes the file
     /// and the folder with none left: each conversation's id and assistant, and of a task that
-    /// has ended and is listed, what `Past` holds and its profile.
+    /// is listed, what `Past` holds and its profile.
     pub fn write(&self, root: &Path) {
         if self.records.is_empty() {
             _ = std::fs::remove_file(root.join(INDEX));
