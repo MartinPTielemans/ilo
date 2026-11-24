@@ -120,7 +120,8 @@ pub(crate) unsafe extern "C" fn agent_page_element(
     });
 }
 
-/// The text of a tab's page that bc_tab_read_text asked for, or null if it had none.
+/// The text of a tab's page that bc_tab_read_text asked for, or null if it had none, with why
+/// when the page's look didn't answer in time.
 pub(crate) unsafe extern "C" fn tab_text(
     _: *mut c_void,
     tab: bc::bc_id,
@@ -128,8 +129,6 @@ pub(crate) unsafe extern "C" fn tab_text(
     text: *const c_char,
     failure: c_int,
 ) {
-    // The kind of a read that gave nothing, which no answer here tells apart yet.
-    let _ = failure;
     let text = (!text.is_null()).then(|| {
         unsafe { CStr::from_ptr(text) }
             .to_string_lossy()
@@ -140,6 +139,9 @@ pub(crate) unsafe extern "C" fn tab_text(
         "browser: tab text {tab} {request} {}",
         text.as_ref().map_or(0, String::len)
     );
+    if text.is_none() && failure == bc::bc_agent_failure_BC_AGENT_FAILURE_UNCHECKED as c_int {
+        return agents_core::update(move |agents, cx| agents.text_unchecked(request, cx));
+    }
     agents_core::update(move |agents, cx| agents.text_read(request, text, cx));
 }
 

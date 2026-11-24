@@ -457,6 +457,60 @@ fn a_read_of_a_tab_the_user_took_meanwhile_answers_as_a_held_tabs_call(cx: &mut 
     assert_eq!(reads[0].refused.as_ref(), HELD);
 }
 
+/// A read whose page's one look didn't answer in time gives nothing of the page and withholds
+/// nothing, in the core's words, which never tell the agent to repeat a step: alone or after
+/// navigate, which went through. The call's one entry stays its own, with no refusal.
+#[gpui::test]
+fn a_read_whose_page_couldnt_be_checked_in_time_gives_nothing_and_withholds_nothing(
+    cx: &mut TestAppContext,
+) {
+    let (agents, browser, _) = connected(cx);
+    hello(&agents, cx);
+    let answer = call(
+        &agents,
+        "claude-code",
+        "read_page",
+        json!({ "tab": 20 }),
+        cx,
+    );
+    let (_, request) = *browser
+        .reads
+        .borrow()
+        .last()
+        .expect("its text asked of the core");
+    agents.update(cx, |agents, cx| agents.text_unchecked(request, cx));
+    let unchecked = answer.recv().unwrap();
+    assert!(unchecked.error && unchecked.kind.is_none());
+    assert_eq!(unchecked.text, crate::agents::UNCHECKED);
+    assert!(!browser.withheld.borrow().contains(&20));
+    let reads: Vec<Activity> = agents.read_with(cx, |agents, _| {
+        (agents.activity("claude-code"))
+            .filter(|entry| entry.action == "read_page")
+            .cloned()
+            .collect()
+    });
+    assert_eq!(reads.len(), 1, "{reads:?}");
+    assert_eq!(reads[0].refused.as_ref(), "");
+
+    let answer = call(
+        &agents,
+        "claude-code",
+        "navigate",
+        json!({ "tab": 20, "url": "iana.org", "answer": "text" }),
+        cx,
+    );
+    let request = browser.pages.borrow().last().unwrap().1;
+    agents.update(cx, |agents, cx| {
+        agents.page_done(request, super::shop_tree(), None, cx)
+    });
+    let (_, read) = *browser.reads.borrow().last().unwrap();
+    agents.update(cx, |agents, cx| agents.text_unchecked(read, cx));
+    let unchecked = answer.recv().unwrap();
+    assert!(unchecked.error);
+    assert_eq!(unchecked.text, crate::agents::UNCHECKED);
+    assert!(!unchecked.text.contains("Try again"));
+}
+
 /// The activity log and the 30-day record name the site a login was filled at, never its account.
 #[gpui::test]
 fn the_log_and_the_record_name_the_site_never_the_account(cx: &mut TestAppContext) {

@@ -624,6 +624,7 @@ pub(crate) fn failure_of(code: std::ffi::c_int) -> Failure {
         bc::bc_agent_failure_BC_AGENT_FAILURE_SIGNING_IN => Failure::SigningIn,
         bc::bc_agent_failure_BC_AGENT_FAILURE_USER_STEP => Failure::UserStep,
         bc::bc_agent_failure_BC_AGENT_FAILURE_WITHHELD_PAGE => Failure::WithheldPage,
+        bc::bc_agent_failure_BC_AGENT_FAILURE_UNCHECKED => Failure::Unchecked,
         _ => Failure::Other,
     }
 }

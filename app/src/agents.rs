@@ -634,6 +634,13 @@ struct Reading {
     from: usize,
 }
 
+/// What a read whose page's one look didn't answer in time says: the core's words for a page
+/// action's or a request's (kUncheckedAnswer), which never say to repeat a step, as a read may
+/// answer navigate's, which went through.
+const UNCHECKED: &str = "ilo couldn't check this tab's page in time, so it gave you nothing of it. \
+                         The page isn't withheld. Look at it again before you repeat a step that \
+                         changes something.";
+
 /// What of the page's outline an action answers with, as its `outline` argument says.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Show {
@@ -1645,6 +1652,17 @@ impl Agents {
             }
             (None, _, _) => ToolResult::error(NO_PAGE),
         });
+        self.advance(cx);
+    }
+
+    /// The core's answer to the read `request` whose page's one look didn't answer in time
+    /// (BC_AGENT_FAILURE_UNCHECKED): nothing of the page, which isn't withheld for it, and nothing
+    /// in the log but the call's own entry, and words that never say to repeat a step.
+    pub fn text_unchecked(&mut self, request: u64, cx: &mut Context<Self>) {
+        let Some(reading) = self.reading.remove(&request) else {
+            return;
+        };
+        _ = reading.reply.send(ToolResult::error(UNCHECKED));
         self.advance(cx);
     }
 
@@ -5234,6 +5252,9 @@ pub enum Failure {
     SigningIn,
     /// The step is the user's, such as a sign-in only they may finish.
     UserStep,
+    /// The page's one look before the call didn't answer in time, so the call did nothing and
+    /// gave nothing of the page, which isn't withheld for it.
+    Unchecked,
     /// The tab shows a page withheld from agents (Browser::withheld): only a navigation to
     /// another page, or closing it.
     WithheldPage,
