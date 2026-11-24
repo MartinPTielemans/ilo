@@ -93,6 +93,35 @@ fn started(run: &Run, at: usize) -> bool {
     beside(&run.program, &format!("args.{at}")).exists()
 }
 
+/// That its assistant still has a task's conversation is said only where the messages of a task
+/// a run before left would begin. One at work, or done or stopped in this run, has its messages
+/// there and no such line; after a quit all there is of it is that line.
+#[gpui::test]
+fn only_a_task_brought_back_says_its_assistant_still_has_it(cx: &mut TestAppContext) {
+    let run = Run::new("still-has", cx);
+    let done = run.start(Cli::Claude, cx);
+    run.ran(1);
+    assert_eq!(run.ilo_lines(&done, cx), []);
+    name_it(&run, &done, "Lisbon seats", cx);
+    run.finish(&done, cx);
+    assert_eq!(run.ilo_lines(&done, cx), []);
+    assert!(!run.talk(&done, cx).lines.is_empty());
+    let stopped = run.start(Cli::Claude, cx);
+    run.ran(2);
+    name_it(&run, &stopped, "Porto seats", cx);
+    act(&run, &stopped, TaskAction::Stop, cx);
+    assert_eq!(run.ilo_lines(&stopped, cx), []);
+
+    quit(&run, cx);
+    let next = next(&run, cx);
+    let past = archive(&next, cx);
+    assert_eq!(past.len(), 2);
+    for (past, ..) in &past {
+        assert_eq!(next.talk(past, cx).lines.len(), 1);
+        assert_eq!(next.ilo_lines(past, cx), [IloKind::KeptHere]);
+    }
+}
+
 /// For the shell's test of the same road (shell/library/history_tests.rs): a task named `title`
 /// ended Done with a page open, and the browser quit with no window left, which leaves the task's
 /// Space as a crash does. The next launch finds the Space and its page, and gives none of it to

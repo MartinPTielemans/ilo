@@ -580,11 +580,7 @@ impl Agents {
         task.helpers.on = false;
         task.end_run();
         if run.new {
-            // The first kept conversation of a profile says where it lives, once: the one that
-            // goes hands that on to the one that follows.
-            let told = (self.tasks.kept.of(agent)).is_some_and(|record| record.told);
             self.forget_kept(agent, cx);
-            self.tasks.kept.told &= !told;
         }
         log!("browser: task {agent} starts again without helpers");
         self.launch(agent, &run.first, cx);

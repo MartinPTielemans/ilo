@@ -77,8 +77,7 @@ impl Agents {
         (keep, folder)
     }
 
-    /// `agent`'s run started, keeping `keep`: a new conversation's id is held from now. The
-    /// profile's first says, at the foot of its log once it ends, where the conversation lives.
+    /// `agent`'s run started, keeping `keep`: a new conversation's id is held from now.
     pub(super) fn kept_started(&mut self, agent: &str, cli: Cli, keep: &Keep) {
         let (Keep::New(id), Some(root)) = (keep, self.kept_root()) else {
             return;
@@ -86,12 +85,6 @@ impl Agents {
         let home = self.task(agent).map_or(0, |task| task.home);
         let profile = self.browser.space_profile(home);
         self.tasks.kept.hold(agent, cli, id.clone(), &profile);
-        if !std::mem::replace(&mut self.tasks.kept.told, true) {
-            if let Some(record) = self.tasks.kept.of_mut(agent) {
-                record.told = true;
-            }
-            self.save();
-        }
         self.tasks.kept.write(&root);
     }
 
@@ -163,11 +156,13 @@ impl Agents {
         (true, said)
     }
 
-    /// ilo's lines in a kept task's log: over each reply that took it up, the access it came back
-    /// at, and at its foot, once, where the conversation lives. Then, last, the line that stands
-    /// in the reply field's place once a task is done, stopped, or failed as its conversation went,
-    /// and can't take a reply: its assistant keeps none, didn't keep this one as the switch was
-    /// off, or no longer has it. An outside agent's session has none of them.
+    /// ilo's lines in a kept task's log: where the messages of one a run before left would begin,
+    /// that its assistant still has them, and over each reply that took a task up, the access it
+    /// came back at. Then, last, the line that stands in the reply field's place once a task is
+    /// done, stopped, or failed as its conversation went, and can't take a reply: its assistant
+    /// keeps none, didn't keep this one as the switch was off, or no longer has it. One that ended
+    /// in this run with its conversation kept has no line: its messages are there, over its reply
+    /// field. An outside agent's session has none of them.
     pub(super) fn kept_lines(&self, task: &Task, lines: &mut Vec<Line>) {
         let Some(cli) = task.cli.filter(|_| task.session.is_none()) else {
             return;
@@ -223,11 +218,7 @@ impl Agents {
             return;
         }
         match record {
-            Some(record) if !record.gone => {
-                if record.told {
-                    lines.push(line(KEPT_HERE, IloKind::KeptHere));
-                }
-            }
+            Some(record) if !record.gone => {}
             Some(_) => lines.push(line(IN_FIELD, IloKind::Gone)),
             None => lines.push(line(
                 IN_FIELD,

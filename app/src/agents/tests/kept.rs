@@ -248,8 +248,7 @@ pub(super) fn after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
 }
 
 /// A kept task's run starts with an id of ilo's making, in a folder of its own under the
-/// profile's, named by the id, with nothing in it. ilo holds the id and counts it; the profile's
-/// first says, once it has ended, where its conversation lives, and no other does.
+/// profile's, named by the id, with nothing in it. ilo holds the id and counts it.
 #[cfg(unix)]
 #[gpui::test]
 fn a_kept_task_runs_under_an_id_of_ilos_in_a_folder_of_its_own(cx: &mut TestAppContext) {
@@ -264,23 +263,12 @@ fn a_kept_task_runs_under_an_id_of_ilos_in_a_folder_of_its_own(cx: &mut TestAppC
     assert_eq!(run.ran_in(1), run.folder(&id));
     assert_eq!(std::fs::read_dir(run.folder(&id)).unwrap().count(), 0);
     assert_eq!(run.kept(cx), (1, 0));
-    // While it works its conversation has none of ilo's lines; ended, the one that says where.
-    assert_eq!(run.ilo_lines(&agent, cx), []);
-    run.finish(&agent, cx);
-    assert_eq!(run.ilo_lines(&agent, cx), [IloKind::KeptHere]);
-    assert!(matches!(
-        run.talk(&agent, cx).lines.last(),
-        Some(Line::Ilo(_))
-    ));
-    // The next task's says nothing of it: once per profile, which the settings keep.
     let second = run.start(Cli::Claude, cx);
     run.ran(2);
     run.finish(&second, cx);
-    assert_eq!(run.ilo_lines(&second, cx), []);
     assert_eq!(run.kept(cx), (2, 0));
     let saved = std::fs::read_to_string(run.profile.join("agents.json")).unwrap();
     let saved: Value = serde_json::from_str(&saved).unwrap();
-    assert_eq!(saved["tasks"]["kept_told"], json!(true));
     assert_eq!(saved["tasks"]["keep"], json!(true));
 }
 

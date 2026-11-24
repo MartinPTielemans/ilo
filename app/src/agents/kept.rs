@@ -245,8 +245,6 @@ pub struct Record {
     /// The user's replies that took the task up again, each by how many messages of theirs came
     /// before it and the access it came back at: ilo's line goes over each.
     pub resumed: Vec<(usize, Tier)>,
-    /// Whether its log says, at its foot, where the conversation lives: the profile's first.
-    pub told: bool,
     /// Its removal is under way.
     removing: bool,
     /// Its removal failed: it's still there, for the user to try again.
@@ -259,8 +257,6 @@ pub struct Kept {
     records: Vec<Record>,
     /// Settings › Agents' Keep finished tasks, off.
     pub off: bool,
-    /// Whether a task's log has said where its conversation lives, which one says once.
-    pub told: bool,
     /// The tasks whose conversation was removed from under them, as Remove All does: each had
     /// one, where a task that started with the switch off never did, and the two say so apart.
     removed_from: Vec<String>,
@@ -310,7 +306,6 @@ impl Kept {
             tier: Tier::default(),
             gone: false,
             resumed: Vec::new(),
-            told: false,
             removing: false,
             stuck: false,
         });
