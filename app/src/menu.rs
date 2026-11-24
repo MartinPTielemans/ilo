@@ -259,7 +259,7 @@ pub enum Closed {
     PressedAt(Point<Pixels>),
     /// With the user gone to another window or app, or its browser window changed under it.
     Left,
-    /// With its keys, a shortcut, a scroll outside it or another menu taking its place.
+    /// With its keys, a shortcut or another menu taking its place.
     Otherwise,
 }
 
@@ -271,7 +271,6 @@ enum Closing {
     Left,
     Escape,
     Shortcut,
-    ScrolledOutside,
     ReleasedOutside,
     Replaced,
 }
@@ -295,7 +294,6 @@ impl Closing {
             Closing::Left => "left",
             Closing::Escape => "escape",
             Closing::Shortcut => "shortcut",
-            Closing::ScrolledOutside => "scrolled outside",
             Closing::ReleasedOutside => "released outside",
             Closing::Replaced => "another menu",
         };
@@ -1494,13 +1492,9 @@ impl ContextMenu {
                 self.outcome(outcome, cx);
                 true
             }
-            Pointer::Scrolled => {
-                if tracking.hit(at) != Hit::Outside {
-                    return true;
-                }
-                self.close(Closing::ScrolledOutside, cx);
-                false
-            }
+            // A scroll is the menu's wherever the pointer is: it stays open, and nothing under
+            // the pointer outside it scrolls.
+            Pointer::Scrolled => true,
         }
     }
 

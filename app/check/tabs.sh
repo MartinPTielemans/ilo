@@ -82,15 +82,18 @@ step=0
 rm -f "$saved" "$launch_frame"
 # The example.com and example.org pages the steps open, and DuckDuckGo's for the searches, come from
 # a server of the run's own, which a runner always reaches (#3144).
-# h puts what a page has heard of presses and releases in its title, and h again takes it out.
+# h puts what a page has heard of presses, releases and scrolls in its title, and h again takes it
+# out.
 serve_tls example '<meta charset=utf-8><link rel=icon href="data:,"><title>Example Domain</title>
 <h1>Example Domain</h1>
 <script>
-let downs = 0, ups = 0, said = false;
+let downs = 0, ups = 0, wheels = 0, said = false;
 onmousedown = () => ++downs;
 onmouseup = () => ++ups;
+onwheel = () => ++wheels;
 onkeydown = e => {
-  if (e.key == "h") document.title = (said = !said) ? "heard " + downs + " " + ups : "Example Domain";
+  if (e.key != "h") return;
+  document.title = (said = !said) ? "heard " + downs + " " + ups + " " + wheels : "Example Domain";
 };
 </script>' example.com '*.example.com' example.org duckduckgo.com
 # shellcheck disable=SC2086 # the record mode, or nothing
@@ -416,30 +419,37 @@ in_browser RenderWidgetHostViewCocoa "a click into the page right after a menu i
 send order
 [ "$(grep '^browser: frame window 1 ' "$log" | tail -1 | cut -d' ' -f5-)" = "$chosen_frame" ] ||
   fail "a click into the page right after a menu item chosen with the pointer moved the window from $chosen_frame"
-# A click outside closes the menu, and goes no further: the page under it hears neither the press
-# nor the release, which alone would be half a click. The page has the keyboard from the click into
-# it above, and has it back as the menu closes, so it can be asked on both sides of the click.
+# While a menu is open, what the pointer does outside it is the menu's. A scroll leaves it open and
+# scrolls nothing, and a click only closes it and goes no further: the page under it hears neither
+# the press nor the release, which alone would be half a click. The page has the keyboard from the
+# click into it above, and has it back as the menu closes, so it can be asked on both sides.
 send key h
-expect '^browser: title [0-9]* heard [0-9]* [0-9]*$' "h in the page didn't say what clicks it had heard"
+expect '^browser: title [0-9]* heard [0-9 ]*$' "h in the page didn't say what it had heard"
 heard=$(since | sed -n 's/^browser: title [0-9]* heard //p' | tail -1)
 send key h
 expect '^browser: title [0-9]* Example Domain$' "h again didn't give the page its title back"
 post rightclick $(row 0)
 expect "^browser: menu shown $(cased 'Copy Link, ')" "a right-click on the top Today row didn't show its menu"
 expect '^browser: menu window at ' "the menu didn't take the keyboard"
+if [ "$(uname)" != Linux ]; then
+  send scroll $page_point 40 2
+  scrolled=$step
+  send order
+  none_since '^browser: menu closed$' "$scrolled" || fail "a scroll outside the menu closed it"
+fi
 send click $page_point
 expect '^browser: menu closed$' "a click outside didn't close the menu"
 expect '^browser: menu window hidden$' "a click outside left the menu's window up"
 if [ "$(uname)" = Linux ]; then
-  echo "skip: the click that closes a menu going no further, to the page or the row under it, on" \
-    "Linux: its host lets the press land where it was pressed (#4165)."
+  echo "skip: the click that closes a menu going no further, to the page or the row under it, and" \
+    "a scroll outside it scrolling nothing, on Linux: its host lets them land (#4165)."
 else
   send key h
-  expect '^browser: title [0-9]* heard [0-9]* [0-9]*$' \
+  expect '^browser: title [0-9]* heard [0-9 ]*$' \
     "after the click that closed the menu, h didn't reach the page"
   heard_since=$(since | sed -n 's/^browser: title [0-9]* heard //p' | tail -1)
   [ "$heard_since" = "$heard" ] ||
-    fail "the click that closed the menu reached the page under it: of presses and releases it had heard $heard, and then $heard_since"
+    fail "the scroll outside the menu or the click that closed it reached the page under them: of presses, releases and scrolls it had heard $heard, and then $heard_since"
   send key h
   expect '^browser: title [0-9]* Example Domain$' "h again didn't give the page its title back"
   # Nor does it show the tab whose row it's on: the next click there does. Then back to the tab

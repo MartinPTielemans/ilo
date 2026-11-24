@@ -458,7 +458,6 @@ fn the_log_tells_how_a_menu_closed_and_names_none_of_its_items() {
         Closing::Left,
         Closing::Escape,
         Closing::Shortcut,
-        Closing::ScrolledOutside,
         Closing::ReleasedOutside,
         Closing::Replaced,
     ];
@@ -718,6 +717,34 @@ fn where_the_window_cant_blend_it_holds_the_open_panels_alone(cx: &mut TestAppCo
     );
     cx.simulate_keystrokes("escape");
     assert_eq!(*host.calls.borrow(), ["show", "show", "show", "hide"]);
+}
+
+/// A scroll is the menu's while it shows, over it or outside it: the host hears it's taken, so
+/// nothing under the pointer scrolls, and the menu stays open with the keys.
+#[gpui::test]
+fn a_scroll_leaves_the_menu_open_and_goes_no_further(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let window = cx
+        .update(|cx| super::open(host.clone(), cx))
+        .expect("no window for the menu");
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+
+    let chosen = show_menu(cx);
+    let menu_at = host.shown.borrow().last().expect("no menu shown").0.origin;
+    let over = point(px(150.), px(100. + PADDING + 12.)) - menu_at;
+    let outside = point(px(60.), px(40.)) - menu_at;
+    for (place, at) in [("over the menu", over), ("outside it", outside)] {
+        assert!(
+            cx.cx
+                .update(|cx: &mut App| super::pointer(Pointer::Scrolled, at, cx)),
+            "a scroll {place} went on to what's under it"
+        );
+        cx.run_until_parked();
+        assert_eq!(chosen.get(), None, "a scroll {place} closed the menu");
+    }
+    assert_eq!(*host.calls.borrow(), ["show"]);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(chosen.get(), Some(Closed::Otherwise));
 }
 
 /// The menu in its window, driven the ways the host drives it: keys through the window, pointer
