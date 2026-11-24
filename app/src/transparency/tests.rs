@@ -291,3 +291,46 @@ fn the_row_is_absent_where_the_host_has_no_glass(cx: &mut TestAppContext) {
         "a Transparency control was drawn"
     );
 }
+
+/// `under` seen through `layers`, bottom layer first, each laid over what's under it.
+fn through(layers: [Rgba; 2], under: Rgba) -> [f32; 3] {
+    layers
+        .into_iter()
+        .fold([under.r, under.g, under.b], |under, layer| {
+            let top = [layer.r, layer.g, layer.b];
+            std::array::from_fn(|channel| top[channel] * layer.a + under[channel] * (1. - layer.a))
+        })
+}
+
+/// How far the back window's lines stand out from its white through each level's glass: what
+/// tells the three pictures apart where the glass is.
+fn lines_through(dark: bool) -> [f32; 3] {
+    Transparency::ALL.map(|level| {
+        let ground = through(glass(level, dark), rgb(BRIGHT));
+        [BRIGHT_LINE_FIRST, BRIGHT_LINE]
+            .map(|line| {
+                let line = through(glass(level, dark), rgb(line));
+                (0..3)
+                    .map(|channel| ground[channel] - line[channel])
+                    .sum::<f32>()
+                    / 3.
+            })
+            .into_iter()
+            .fold(f32::MAX, f32::min)
+    })
+}
+
+/// Where the glass is, the three pictures differ: the back window's lines show through each level
+/// more than through the one before it, in both looks, by a step a reader sees.
+#[test]
+fn the_back_windows_lines_tell_the_levels_apart_through_the_glass() {
+    for dark in [true, false] {
+        let seen = lines_through(dark);
+        for step in seen.windows(2) {
+            assert!(step[1] - step[0] >= STEP, "dark {dark}: {seen:?}");
+        }
+    }
+}
+
+/// The least step between two levels' lines through the glass: 5 of 255.
+const STEP: f32 = 5. / 255.;
