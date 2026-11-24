@@ -1065,3 +1065,133 @@ fn a_folders_name_is_in_ilos_line_and_nowhere_else(cx: &mut TestAppContext) {
     }
     assert_eq!(notified, 4);
 }
+
+/// A task whose files ilo copies, from the user's picks on the `+`, on the stand-in assistant.
+#[cfg(unix)]
+mod copying {
+    use super::*;
+
+    /// A folder the test makes, as the panel would give it: beside the build, as ilo may give that on
+    /// every system the tests run on, where the system's temporary folder is one ilo never gives on
+    /// the Mac.
+    fn real_folder(name: &str) -> PathBuf {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target/ilo-test-folders")
+            .join(format!("{name}-{}", std::process::id()));
+        _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.canonicalize().unwrap()
+    }
+
+    /// A task started from ⌘T with `folder` and one attached file, as the user picks them, its copy
+    /// not made yet: nothing has run until the test lets the copy end.
+    fn picked(name: &str, folder: PathBuf, cx: &mut TestAppContext) -> (Run, Walls, String) {
+        use crate::agents::files::Picked;
+        use crate::agents::task::Start;
+        let (run, walls) = (Run::new(name, cx), Walls::default());
+        let file = beside(&run.program, "seats.pdf");
+        std::fs::write(&file, "two seats").unwrap();
+        (run.agents).update(cx, |agents, _| {
+            agents.tasks.files_available = true;
+            agents.tasks.wall = Some(walls.maker());
+        });
+        let start = Start {
+            tier: Tier::default(),
+            model: None,
+            pages: Vec::new(),
+            only_added: false,
+            files: Picked {
+                files: vec![file],
+                folder: Some(Granted::at_for_test(folder)),
+            },
+        };
+        let agent = (run.agents)
+            .update(cx, |agents, cx| {
+                agents.start_task(Cli::Claude, ASKED, None, 1, start, cx)
+            })
+            .expect("started");
+        (run, walls, agent)
+    }
+
+    /// How many times the task's assistant was started.
+    fn starts(run: &Run) -> usize {
+        (1..)
+            .take_while(|n| beside(&run.program, &format!("in.{n}")).exists())
+            .count()
+    }
+
+    fn copies(run: &Run, agent: &str, cx: &mut TestAppContext) -> PathBuf {
+        (run.agents).read_with(cx, |agents, _| {
+            agents.tasks_dir().join(format!("{agent} files"))
+        })
+    }
+
+    /// While ilo copies the files attached to a task, nothing starts its assistant: a Revoke then
+    /// takes the folder, says so, and the task starts once, as the copies end, with its files and
+    /// without the folder.
+    #[gpui::test]
+    fn a_revoke_while_the_files_are_copied_gives_one_start_without_the_folder(
+        cx: &mut TestAppContext,
+    ) {
+        let folder = real_folder("revoked-copying");
+        let (run, walls, agent) = picked("revoke-copying", folder.clone(), cx);
+        (run.agents).update(cx, |agents, cx| agents.revoke_folder(&agent, cx));
+        assert_eq!(walls.asked(), [], "a start before the copies ended");
+        cx.run_until_parked();
+        run.ran(1);
+        cx.run_until_parked();
+        assert_eq!(starts(&run), 1, "the task started twice");
+        assert_eq!(walls.asked(), [(Tier::Work, false, true)]);
+        let name = crate::agents::files::shown_name(&folder);
+        assert_eq!(
+            lines(&run, &agent, cx),
+            [IloKind::Revoked {
+                folder: name.into()
+            }]
+        );
+        let started = tier::started_logged(
+            Tier::Work,
+            tier::StartedWith {
+                files: 1,
+                ..Default::default()
+            },
+        );
+        assert!(
+            logged(&run, &agent, cx).contains(&started),
+            "{:?}",
+            logged(&run, &agent, cx)
+        );
+        _ = std::fs::remove_dir_all(folder);
+    }
+
+    /// A change of level while the files are copied is the task's from then on, and its one start
+    /// is at it.
+    #[gpui::test]
+    fn a_level_change_while_the_files_are_copied_gives_one_start_at_it(cx: &mut TestAppContext) {
+        let folder = real_folder("level-copying");
+        let (run, walls, agent) = picked("level-copying", folder.clone(), cx);
+        set(&run, &agent, Tier::Full, cx);
+        assert_eq!(walls.asked(), [], "a wall before the copies ended");
+        cx.run_until_parked();
+        run.ran(1);
+        cx.run_until_parked();
+        assert_eq!(starts(&run), 1, "the task started twice");
+        assert_eq!(walls.asked(), [(Tier::Full, true, true)]);
+        _ = std::fs::remove_dir_all(folder);
+    }
+
+    /// Stop while the files are copied starts nothing, and the copies go.
+    #[gpui::test]
+    fn stop_while_the_files_are_copied_starts_nothing(cx: &mut TestAppContext) {
+        use crate::agents::task::TaskAction;
+        let folder = real_folder("stop-copying");
+        let (run, walls, agent) = picked("stop-copying", folder.clone(), cx);
+        (run.agents).update(cx, |agents, cx| {
+            _ = agents.task_action(&agent, TaskAction::Stop, cx)
+        });
+        cx.run_until_parked();
+        assert_eq!((starts(&run), walls.asked()), (0, vec![]));
+        assert!(!copies(&run, &agent, cx).exists(), "the copies stayed");
+        _ = std::fs::remove_dir_all(folder);
+    }
+}

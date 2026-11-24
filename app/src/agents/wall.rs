@@ -173,6 +173,12 @@ impl Granted {
         }
     }
 
+    /// A folder of the test's own, which is there, as the panel would give it.
+    #[cfg(test)]
+    pub(crate) fn at_for_test(root: PathBuf) -> Granted {
+        Granted { root }
+    }
+
     /// The same by a name of the test's own, for a test of where a folder's name reaches.
     #[cfg(test)]
     pub(crate) fn named_for_test(name: &str) -> Granted {

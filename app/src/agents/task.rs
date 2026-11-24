@@ -422,6 +422,10 @@ pub struct Task {
     /// the task's messages and steps, so its line stands where it happened: what its lines about
     /// them are written from, by the conversation's words table.
     pub(in crate::agents) rewalled: Vec<rewall::Came>,
+    /// While ilo copies its attached files, before its assistant first starts: nothing starts or
+    /// tells a run until the copies end, and what ilo or the user had to say meanwhile is in
+    /// `told`, which that one start carries (`attached`).
+    pub(in crate::agents) copying: bool,
 }
 
 /// The message an agent is writing as the turn's last, which shows under its trace as it comes,
@@ -510,6 +514,14 @@ impl Task {
 
     fn thinking(&self) -> bool {
         self.state == State::Working && self.heard_nothing()
+    }
+
+    /// `text` waits in `told` for the task's next start, after what waits there already.
+    pub(in crate::agents) fn hold(&mut self, text: String) {
+        self.told = Some(match self.told.take() {
+            Some(told) => format!("{told}\n\n{text}"),
+            None => text,
+        });
     }
 }
 
@@ -1526,6 +1538,7 @@ impl Agents {
             names: self.names_at_start(),
             rising: None,
             rewalled: Vec::new(),
+            copying: false,
         };
         self.tasks.tasks.push(task);
         self.tokens_changed();
@@ -1564,6 +1577,9 @@ impl Agents {
             self.launch_in(agent, &first, wall, cx);
             return self.wait_for_answer(agent, cx);
         }
+        if let Some(task) = self.task_mut(agent) {
+            task.copying = true;
+        }
         let into = self.attached_dir(agent);
         let files = picked.files;
         let copy = (cx.background_executor())
@@ -1594,12 +1610,27 @@ impl Agents {
         copied: Option<PathBuf>,
         cx: &mut Context<Self>,
     ) {
-        let working = |task: &&mut Task| task.state == State::Working;
-        if self.task_mut(agent).filter(working).is_none() {
+        let Some(task) = self.task_mut(agent) else {
+            _ = std::fs::remove_dir_all(self.attached_dir(agent));
+            return;
+        };
+        task.copying = false;
+        // Its folder is what it has now, which a Revoke meanwhile took.
+        let with = StartedWith {
+            folder: task.files.folder.is_some(),
+            ..with
+        };
+        if task.state != State::Working {
             self.log_start(agent, with);
             _ = std::fs::remove_dir_all(self.attached_dir(agent));
             return;
         }
+        // What ilo or the user had to say while the copies were made goes with its one start.
+        let first = match task.told.take() {
+            Some(told) => format!("{first}\n\n{told}"),
+            None => first.to_string(),
+        };
+        let first = first.as_str();
         let copied_none = copied.is_none();
         match copied {
             Some(into) => {
@@ -2050,6 +2081,11 @@ impl Agents {
         task.state = State::Working;
         task.writing = None;
         task.helpers.turned(task.trace.len());
+        // Its assistant hasn't started: the reply goes with its one start, once the copies end.
+        if task.copying {
+            task.hold(text.to_string());
+            return cx.notify();
+        }
         // What ilo had to tell it since its last turn comes first, as ilo's, not the user's.
         let text = match task.told.take() {
             Some(told) => format!("{told}\n\n{text}"),
@@ -2622,6 +2658,9 @@ impl Agents {
         let Some(task) = self.task_mut(key) else {
             return;
         };
+        if task.copying {
+            return task.hold(text);
+        }
         if !now && task.state != State::Working {
             task.told = Some(text);
             return;
@@ -2857,6 +2896,7 @@ impl Agents {
             names: Default::default(),
             rising: None,
             rewalled: Vec::new(),
+            copying: false,
         });
         cx.notify();
         Some(key)

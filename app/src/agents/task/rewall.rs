@@ -309,7 +309,8 @@ impl Agents {
         let Some(task) = self.task(key).filter(|_| to > from) else {
             return Ok(None);
         };
-        if task.files.same_rules(from, to) {
+        // Its one start, once its copies end, puts up the wall of the level it then has.
+        if task.files.same_rules(from, to) || task.copying {
             return Ok(None);
         }
         let wall = match task.cli {
@@ -358,6 +359,10 @@ impl Agents {
         let Some(task) = self.task_mut(key) else {
             return;
         };
+        // Its assistant hasn't started: it starts once, as its copies end, with what it then has.
+        if task.copying {
+            return;
+        }
         let (raise, same) = match &change {
             Change::Level { from, .. } => {
                 (task.tier > *from, task.files.same_rules(*from, task.tier))
