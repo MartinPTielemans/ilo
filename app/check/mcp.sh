@@ -1809,6 +1809,50 @@ open(sys.argv[1], "wb").write(base64.b64decode(content["data"]))' "$out/agent-ty
   ../tools/window-screenshot.sh "$pid" "$out/agent-pointer.png" || fail "no window to capture"
   await_log '^browser: agent pointer gone$' "the agent's pointer didn't go"
 
+  # A page that may show a withheld field's value again commits withheld: sent from the user's
+  # hold, it reads withheld after Hand Back, its address too. The control's page reads whole, with
+  # its address.
+  for form in with without; do
+    case $form in with) field='name=pass type=password' ;; without) field='name=word' ;; esac
+    printf '%s' "<script src=\"painted.js\"></script>
+<form action=sent-$form.html><input $field style=\"position:fixed;inset:0;width:100%;height:100%\"></form>
+<script>painted(() => document.title = 'send $form');</script>" > "$out/site/send-$form.html"
+    printf '%s' "<script src=\"painted.js\"></script><p>Sent $form</p>
+<script>painted(() => document.title = 'sent $form');</script>" > "$out/site/sent-$form.html"
+  done
+  send_form() { # with or without, what the user types in its field
+    call navigate "{\"tab\":$agent_tab,\"url\":\"localhost:$port/send-$1.html\"}" > /dev/null
+    await_log "^browser: title $agent_tab send $1\$" "the form $1 didn't load in the agent's tab"
+    await_log "^browser: page $agent_tab back [0-9]* forward 0 loading 0 http://localhost:$port/send-$1\\.html\$" \
+      "the form $1 didn't finish loading"
+    presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+    send click $page_point
+    send type "$2"
+    send key return
+    expect "^browser: title $agent_tab sent $1\$" "Enter in the form $1 didn't send it"
+    hand_back_pressed "$presses"
+    sent_read=$(call read_page "{\"tab\":$agent_tab}")
+    sent_line=$(call list_tabs '{}' | grep "^. $agent_tab  " || true)
+  }
+  send_form with 'G3t-s3nt-pw'
+  case "$sent_read" in
+    "error: ilo won't give you this tab's page"*) ;;
+    *) fail "a page that may show a withheld field's value again didn't commit withheld: $sent_read" ;;
+  esac
+  case "$sent_line" in
+    *sent-with* | *G3t-s3nt-pw*)
+      fail "a page that may show a withheld field's value again listed its address: $sent_line" ;;
+  esac
+  send_form without 'N0-pass-w0rd'
+  case "$sent_read" in
+    *"Sent without"*) ;;
+    *) fail "a page that shows no withheld field's value didn't read whole: $sent_read" ;;
+  esac
+  case "$sent_line" in
+    *"sent-without.html?word=N0-pass-w0rd"*) ;;
+    *) fail "a page that shows no withheld field's value didn't list its address: $sent_line" ;;
+  esac
+
   # A page's frames are part of it: the outline has what's in a frame of the page's site and in
   # one of another, which Chromium puts in a process of its own, and the agent acts in both. A
   # password field in a frame is as off limits as one in the page. The page names itself once the
