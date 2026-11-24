@@ -214,7 +214,7 @@ impl Shell {
                     .mt(px(DETAIL_TOP))
                     .text_size(px(text::SMALL))
                     .line_height(px(SAFE_START_DETAIL_LINE))
-                    .text_color(self.palette.text(SECONDARY))
+                    .text_color(self.palette.gray(SECONDARY))
                     .child(detail(shape.ad_blocking)),
             );
         let room = chips_room(self.width() - 2. * PLATE_INSET);

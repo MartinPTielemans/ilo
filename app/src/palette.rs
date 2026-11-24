@@ -32,11 +32,13 @@ pub use crate::tokens::palette::{
 };
 use crate::tokens::palette::{
     DIALOG_DARK, DIALOG_LIGHT, GRADIENT_ALPHA, LIGHT_GRADIENT_ALPHA, LIGHT_MATERIAL_OVER_BLACK,
-    LIGHT_MATERIAL_OVER_GREY, LIGHT_MATERIAL_OVER_WHITE, LIGHT_NEUTRAL_GRADIENT_ALPHA,
-    LIGHT_STAND_IN, MATERIAL_LIFT, MATERIAL_OVER_BLACK, MATERIAL_OVER_GREY, MATERIAL_OVER_WHITE,
-    NEUTRAL, NEUTRAL_GRADIENT_ALPHA, OVERLAY_LIGHT, STAND_IN,
+    LIGHT_MATERIAL_OVER_GREY, LIGHT_MATERIAL_OVER_WHITE, LIGHT_MATERIAL_SOLID,
+    LIGHT_NEUTRAL_GRADIENT_ALPHA, LIGHT_STAND_IN, MATERIAL_LIFT, MATERIAL_OVER_BLACK,
+    MATERIAL_OVER_GREY, MATERIAL_OVER_WHITE, MATERIAL_SOLID, NEUTRAL, NEUTRAL_GRADIENT_ALPHA,
+    OVERLAY_LIGHT, STAND_IN,
 };
 use crate::tokens::palette::{FAR_GLOW, LIGHT_SHOWN, LIGHT_SHOWN_HOVERED, SHOWN, SHOWN_HOVERED};
+use crate::tokens::palette::{GRAY_TEXT, GRAY_TEXT_LESS, GRAY_TEXT_MORE};
 pub use crate::tokens::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
 use crate::tokens::palette::{
     LIGHT_SELECTED, LIGHT_SELECTED_HOVERED, LIGHT_SELECTED_SHADOW, LIGHT_SELECTED_SHADOW_BLUR,
@@ -147,6 +149,14 @@ impl Tone {
         let [black, ..] = self.materials(0.);
         let [.., white] = self.materials(1.);
         [black, white].map(|under| over(under, self.tint_color(), self.tint()))
+    }
+
+    /// What AppKit draws in the material's place with Reduce Transparency or Increase Contrast.
+    fn solid(self) -> Rgba {
+        rgb(match self {
+            Tone::Dark => MATERIAL_SOLID,
+            Tone::Light => LIGHT_MATERIAL_SOLID,
+        })
     }
 
     /// The material alone over a black, a grey 128 and a white backdrop, as measured on a black
@@ -392,6 +402,10 @@ pub struct Palette {
     /// plates everywhere.
     pub text_floor: f32,
     pub glyph_floor: f32,
+    /// The least alpha at which `ink` reads as gray text (placeholders, section labels, a row's
+    /// detail, a status) at the user's level, on the window and its plates everywhere, and at
+    /// Less's on the solid window Reduce Transparency gives.
+    pub gray_floor: f32,
     /// The Space's accent, for controls: filled rows and buttons, focus rings, toggles.
     pub accent: Rgba,
     /// Ink or Paper, whichever reads more on the accent.
@@ -549,6 +563,7 @@ impl Palette {
             ink,
             text_floor: 0.,
             glyph_floor: 0.,
+            gray_floor: 0.,
             accent: ink,
             accent_label: ink,
             section_glyph: ink,
@@ -579,16 +594,27 @@ impl Palette {
         let grounds = palette.grounds(window);
         palette.text_floor = least_alpha(ink, &grounds, TEXT + BETWEEN);
         palette.glyph_floor = least_alpha(ink, &grounds, GLYPH + BETWEEN);
+        palette.gray_floor = least_alpha(ink, &grounds, gray_text(transparency()) + BETWEEN);
+        // With Reduce Transparency the window is solid at every level, the level's tint over it,
+        // and nothing shows through, so gray text there holds what it does at Less.
+        let solid = palette.grounds_on(&[over(tone.solid(), palette.tint, palette.tint.a)], 0.);
+        let solid_gray = least_alpha(ink, &solid, gray_text(Transparency::Less) + BETWEEN);
+        palette.gray_floor = palette.gray_floor.max(solid_gray);
         palette
     }
 
     /// The window at every point checked over both backdrops, shaded, with grain moving it
     /// toward the ink; and under the selected, hovered and field plates.
     fn grounds(&self, window: &Window) -> Vec<Rgba> {
-        let plain = window.samples(self.shade, self.layer_alpha);
+        self.grounds_on(&window.samples(self.shade, self.layer_alpha), window.grain)
+    }
+
+    /// `plain`, with `grain` moving it toward the ink, and under the selected, hovered and field
+    /// plates.
+    fn grounds_on(&self, plain: &[Rgba], grain: f32) -> Vec<Rgba> {
         let mut grounds: Vec<Rgba> = plain
             .iter()
-            .map(|&at| over(at, self.ink, GRAIN_SHIFT * window.grain))
+            .map(|&at| over(at, self.ink, GRAIN_SHIFT * grain))
             .collect();
         // A light window's selected row is white, and a control's states still reach the ink's
         // selected plate.
@@ -737,6 +763,7 @@ impl Palette {
             ink: mix(self.ink, other.ink),
             text_floor: self.text_floor.max(other.text_floor),
             glyph_floor: self.glyph_floor.max(other.glyph_floor),
+            gray_floor: self.gray_floor.max(other.gray_floor),
             accent: mix(self.accent, other.accent),
             accent_label: near.accent_label,
             section_glyph: mix(self.section_glyph, other.section_glyph),
@@ -803,6 +830,13 @@ impl Palette {
     /// Ink or Paper at `alpha`, or as much more as text needs to read on any theme.
     pub fn text(&self, alpha: f32) -> Hsla {
         Hsla::from(self.ink).opacity(alpha.max(self.text_floor))
+    }
+
+    /// Gray text (placeholders, section labels, a row's detail, a status) at `alpha`, or as much
+    /// more as the user's level asks of gray text on any theme. Its floor is never over `text`'s,
+    /// so where the window shows more through it stays dimmer than the text beside it.
+    pub fn gray(&self, alpha: f32) -> Hsla {
+        Hsla::from(self.ink).opacity(alpha.max(self.gray_floor))
     }
 
     /// Ink or Paper at `alpha` on the opaque `fill`, or as much more as text needs to read on it.
@@ -1453,6 +1487,16 @@ fn layer_alpha(theme: &Theme, tone: Tone) -> f32 {
 fn grounds(tone: Tone, shade: f32) -> [Rgba; 2] {
     tone.grounds()
         .map(|ground| over(ground, tone.tint_color(), shade))
+}
+
+/// The least contrast gray text holds at `level`, from the table beside the window's tints;
+/// primary text holds TEXT at every level.
+pub fn gray_text(level: Transparency) -> f32 {
+    match level {
+        Transparency::Less => GRAY_TEXT_LESS,
+        Transparency::Standard => GRAY_TEXT,
+        Transparency::More => GRAY_TEXT_MORE,
+    }
 }
 
 /// The most a control on an overlay rests at under its text: a chip's or a button's plate.

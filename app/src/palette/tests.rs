@@ -44,17 +44,6 @@ fn fine_window(palette: &Palette) -> Vec<Rgba> {
         .collect()
 }
 
-/// The least contrast gray text (placeholders, section labels, a row's detail) holds at `level`,
-/// from the table beside the window's tints; primary text holds TEXT at every level.
-fn gray_text(level: Transparency) -> f32 {
-    use crate::tokens::palette::{GRAY_TEXT, GRAY_TEXT_LESS, GRAY_TEXT_MORE};
-    match level {
-        Transparency::Less => GRAY_TEXT_LESS,
-        Transparency::Standard => GRAY_TEXT,
-        Transparency::More => GRAY_TEXT_MORE,
-    }
-}
-
 /// What fails: each of the chrome's components drawn as the shell draws it, with its alpha
 /// from the token ladder, on every point of a window of `tone`, below its WCAG minimum, gray
 /// text below the user's level's.
@@ -359,7 +348,7 @@ fn states(palette: &Palette, window: &[Rgba], gray: f32) -> Vec<(String, Hsla, f
         // A section's plates are Arc's selected one and ours under it.
         (
             "Library section label",
-            palette.text(shell::library::SECTION_LABEL),
+            palette.gray(shell::library::SECTION_LABEL),
             gray,
             lay(&column, 0., &sections),
         ),
@@ -377,7 +366,7 @@ fn states(palette: &Palette, window: &[Rgba], gray: f32) -> Vec<(String, Hsla, f
         ),
         (
             "Library row detail",
-            palette.text(shell::SECONDARY),
+            palette.gray(shell::SECONDARY),
             gray,
             lay_on(Ground::Library, window, 0., &PRESSABLE),
         ),
@@ -401,7 +390,7 @@ fn states(palette: &Palette, window: &[Rgba], gray: f32) -> Vec<(String, Hsla, f
         ),
         (
             "URL field placeholder",
-            palette.text(shell::header::URL_PLACEHOLDER),
+            palette.gray(shell::header::URL_PLACEHOLDER),
             gray,
             lay_on(Ground::Field, window, FIELD_PLATE, &[STATE_HOVERED]),
         ),
@@ -1214,10 +1203,9 @@ const MATERIAL_DARK: [u32; 4] = [0xadacac, 0x646464, 0x1f1f1f, 0x733e50];
 const MATERIAL_LIGHT: [u32; 4] = [0xf5f5f4, 0xbcbcbb, 0x7c7c7c, 0xcf98ab];
 
 /// What AppKit draws in the material's place with Reduce Transparency or Increase Contrast, an
-/// opaque ground, dark and light. Run 6's window background material stands in until the VM reads
-/// the HUD window's under those settings.
-const OPAQUE_MATERIAL_DARK: u32 = 0x333332;
-const OPAQUE_MATERIAL_LIGHT: u32 = 0xffffff;
+/// opaque ground, dark and light.
+const OPAQUE_MATERIAL_DARK: u32 = crate::tokens::palette::MATERIAL_SOLID;
+const OPAQUE_MATERIAL_LIGHT: u32 = crate::tokens::palette::LIGHT_MATERIAL_SOLID;
 
 fn material(tone: Tone) -> [u32; 4] {
     match tone {
@@ -1469,6 +1457,43 @@ fn the_drop_line_shows_on_either_window() {
                         hex(at)
                     );
                 }
+            }
+        }
+    }
+}
+
+/// Gray text is gray: at every level, in either look, a secondary line meets the level's gray
+/// contrast on every point of the window, the lightest included, and is drawn dimmer than a
+/// primary line beside it there by 1.15:1, the step this file already holds two plates apart by
+/// (above), so a row's detail reads as less than its title at a glance (#4128).
+#[test]
+fn secondary_text_reads_as_gray_beside_primary_at_every_level() {
+    use crate::tokens::palette::{TEXT_PRIMARY, TEXT_SECONDARY};
+    const APART: f32 = 1.15;
+    for level in Transparency::ALL {
+        set_transparency(level);
+        for tone in [Tone::Dark, Tone::Light] {
+            let palette = Palette::of(None, tone);
+            let primary = Rgba::from(palette.text(TEXT_PRIMARY));
+            let secondary = Rgba::from(palette.gray(TEXT_SECONDARY));
+            for at in fine_window(&palette) {
+                let (primary, secondary) = (
+                    over(at, primary, primary.a),
+                    over(at, secondary, secondary.a),
+                );
+                assert!(
+                    contrast(secondary, at) >= gray_text(level) - 1e-4,
+                    "{level:?} {tone:?} on {:06x}: {:.2}",
+                    hex(at),
+                    contrast(secondary, at)
+                );
+                assert!(
+                    contrast(primary, at) > contrast(secondary, at)
+                        && contrast(primary, secondary) >= APART,
+                    "{level:?} {tone:?} on {:06x}: {:.3} apart",
+                    hex(at),
+                    contrast(primary, secondary)
+                );
             }
         }
     }

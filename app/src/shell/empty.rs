@@ -216,7 +216,7 @@ impl Shell {
             .items_center()
             .gap(px(KEYS_GAP))
             .text_size(px(WORDS_SIZE))
-            .text_color(self.palette.text(SECONDARY))
+            .text_color(self.palette.gray(SECONDARY))
             .child("Type a site, a search or a command.")
             .when_some(keys, |hint, keys| {
                 hint.child(keys).child("brings it back from anywhere.")
@@ -240,7 +240,7 @@ impl Shell {
             .flex()
             .items_center()
             .gap(px(KEYS_GAP))
-            .text_color(self.palette.text(SECONDARY))
+            .text_color(self.palette.gray(SECONDARY))
             .child(div().text_size(px(WORDS_SIZE)).child("New Tab"))
             .children(keys);
         let sign = div()

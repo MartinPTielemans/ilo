@@ -923,6 +923,11 @@ material-lift = 13.0
 # each level's from the tokens above; this one is for what reads it without a palette, and a test
 # holds it to the palette's.
 stand-in = 0x303030
+# What AppKit draws in the material's place with Reduce Transparency or Increase Contrast, at every
+# level: an opaque ground, nothing behind it showing through, so gray text on it holds what it does
+# at Less. The window background material's, from the VM's run 6, stands in until the VM reads the
+# HUD window's under those settings.
+material-solid = 0x333332
 # The Space's colour is a glow from the sidebar's foot, not a wash over the window (#4089): an
 # ellipse `glow-width` by `glow-height` (its radii) centred on the window's bottom left corner, the
 # main colour at `gradient-alpha` there, going in a straight line to nothing at `glow-fade` of the
@@ -952,6 +957,7 @@ light-material-over-white = 0xf6f6f6
 light-material-over-grey = 0xb6b6b6
 light-material-over-black = 0x717171
 light-stand-in = 0xebebeb
+light-material-solid = 0xffffff
 # What floats over the window at each level, for the transparency picker: the dark fill over the
 # window's material at these, beside the window's own tints.
 overlay-fill-less = 0.88

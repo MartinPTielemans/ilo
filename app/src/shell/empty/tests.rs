@@ -190,9 +190,9 @@ fn the_url_field_says_what_to_type_only_with_no_page(cx: &mut TestAppContext) {
         shell.empty_since = Some(now - Duration::from_secs(1))
     });
     let (_, faded_in) = words(cx);
-    // Dimmer than a host where the window lets it be, and never under what text needs to read.
+    // Dimmer than a host where the window lets it be, and never under what gray text needs to read.
     let (floor, host) = shell.read_with(cx, |shell, _| {
-        (shell.palette.text_floor, shell.palette.text(SECONDARY).a)
+        (shell.palette.gray_floor, shell.palette.text(SECONDARY).a)
     });
     assert!(
         faded_in > floor.max(0.3) - 0.01 && faded_in <= host,
