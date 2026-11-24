@@ -160,6 +160,10 @@ pub fn follow(cards: &[Card], when: Notify, cx: &mut App) {
         crate::log!("browser: needs you notified {id} {}", card.agent);
         host.notify(id, &said(card, told), "");
     }
+    // A task whose card has gone is done with, so what it was told goes with it.
+    state
+        .told
+        .retain(|(agent, _)| cards.iter().any(|card| card.agent == *agent));
     state.last = (cards.iter())
         .map(|card| (card.agent.clone(), card.dot))
         .collect();
@@ -182,19 +186,9 @@ pub fn clicked(id: u64, cx: &App) -> Option<SharedString> {
 /// own words, which never stand where ilo speaks, so it's named by its agent, as its card is.
 fn said(card: &Card, told: Told) -> String {
     let task = match card.replies {
-        true => {
-            let line: String = (card.title.chars())
-                .map(|c| {
-                    if c.is_control() || c.is_whitespace() {
-                        ' '
-                    } else {
-                        c
-                    }
-                })
-                .collect();
-            let line = line.split(' ').filter(|word| !word.is_empty());
-            clip(&line.collect::<Vec<_>>().join(" "), TITLE_CHARS)
-        }
+        // Plain text, as an ilo line takes a page's, so no direction mark in a title can turn the
+        // state's word around in the system's notification.
+        true => clip(&crate::agents::tier::plain(&card.title), TITLE_CHARS),
         false => card.name.to_string(),
     };
     // Y4: its title, or an outside agent's name, then its state's word, as its card says it.
