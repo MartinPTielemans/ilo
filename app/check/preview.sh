@@ -139,8 +139,8 @@ send press $dim_point
 probe_pressed=$step
 send dragto $(row 1)
 send release $(row 1)
-expect '^browser: dialog cancelled$' "probe: a press on the dialog's dim didn't cancel it"
-expect '^browser: dialog window hidden$' "probe: the dialog's window stayed up"
+expect '^browser: dialog cancelled$' "probe: a press on the dialog's dim didn't cancel it" "$probe_pressed"
+expect '^browser: dialog window hidden$' "probe: the dialog's window stayed up" "$probe_pressed"
 send order
 if none_since '^browser: selected ' "$probe_pressed"; then
   echo "probe 4165 dialog dim: the release over a row selected nothing"
@@ -157,7 +157,7 @@ send press $dim_point
 probe_pressed=$step
 send dragto $(row 0)
 send release $(row 0)
-expect "^browser: tab $p closed\$" "probe: a press on Peek's dim didn't close it"
+expect "^browser: tab $p closed\$" "probe: a press on Peek's dim didn't close it" "$probe_pressed"
 send order
 if none_since '^browser: selected ' "$probe_pressed"; then
   echo "probe 4165 Peek dim: the release over a row selected nothing"
