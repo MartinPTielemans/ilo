@@ -95,10 +95,13 @@ fn started(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
 /// Goes on with Esc to `to`, as the user skipping each step before it does, from the welcome with
 /// Return, as its Esc skips the whole setup.
 fn skip_to(shell: &Entity<Shell>, cx: &mut VisualTestContext, to: Step) {
-    while let Some(at) = step(shell, cx).filter(|&step| step != to) {
+    // A flow that never comes to `to` fails rather than spins. Esc may take a few presses at a
+    // step, as the import's goes back inside it first, but never this many.
+    for _ in 0..32 {
+        let Some(at) = step(shell, cx).filter(|&step| step != to) else {
+            break;
+        };
         cx.simulate_keystrokes(if at == Step::Intro { "enter" } else { "escape" });
-        // A step that stays, rather than this one never coming, fails here instead of spinning.
-        assert_ne!(step(shell, cx), Some(at), "the key at {at:?} didn't go on toward {to:?}");
     }
     assert_eq!(step(shell, cx), Some(to));
 }
