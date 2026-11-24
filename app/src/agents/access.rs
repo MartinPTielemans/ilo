@@ -191,6 +191,8 @@ impl Agents {
             None => (task.agent.clone(), 0),
         };
         let runs = task.cli.is_some();
+        let made = super::lines::Happened::TierChanged { from, to: tier };
+        self.place_in(key, made);
         // check.sh reads this line.
         log!(
             "browser: task {key} access {} to {}",

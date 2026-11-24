@@ -6,6 +6,11 @@
 /// opens Settings there by this name (settings::show_row).
 pub const ACCESS: &str = "Access";
 
+/// The level's menu's rows for where a task may go: every site, the default, or only the sites of
+/// the pages the user added to it.
+pub const ANY_SITE: &str = "Any site";
+pub const ONLY_ADDED: &str = "Only the sites you add";
+
 /// Settings › Agents' line under its name, the one place it says what a task never gets.
 pub const NEVER_GETS: &str = "A task never gets passwords, cookies or your other tabs.";
 
@@ -34,6 +39,12 @@ impl Tier {
             Tier::Work => "Work on pages",
             Tier::Full => "Full access",
         }
+    }
+
+    /// The lowest tier above this one at which an act refused for `why` happens, which its
+    /// refusal offers, or None if none does.
+    pub fn lifting(self, why: Why) -> Option<Tier> {
+        (Tier::ALL.into_iter()).find(|tier| *tier as usize > self as usize && tier.allows(why))
     }
 
     /// What it lets a task do, under its name in Settings › Agents' Access, each past the one below.
@@ -295,9 +306,14 @@ pub fn changed_logged(from: Tier, to: Tier) -> String {
 }
 
 /// The activity log's words for the tier a task starts at, which its start's entry keeps as its
-/// target, as a change's keeps `changed_logged`.
-pub fn started_logged(tier: Tier) -> String {
-    format!("Starts at {}", tier.label())
+/// target, as a change's keeps `changed_logged`, with how many pages the user added to it: their
+/// count alone, never an address or title.
+pub fn started_logged(tier: Tier, added: usize) -> String {
+    match added {
+        0 => format!("Starts at {}", tier.label()),
+        1 => format!("Starts at {} · 1 page", tier.label()),
+        added => format!("Starts at {} · {added} pages", tier.label()),
+    }
 }
 
 /// The most of a page's text a line carries.
@@ -367,9 +383,11 @@ mod tests {
         assert_eq!(at(SignIn), [false, true, true]);
         assert_eq!(at(SignInBank), [false, false, true]);
         assert_eq!(Tier::default(), Work);
-        assert_eq!(Look.up(), Some(Work));
-        assert_eq!(Work.up(), Some(Full));
-        assert_eq!(Full.up(), None);
+        assert_eq!(Look.lifting(Act), Some(Work));
+        assert_eq!(Look.lifting(Message), Some(Full));
+        assert_eq!(Work.lifting(Order), Some(Full));
+        assert_eq!(Full.lifting(Order), None);
+        assert_eq!(Look.lifting(Fenced), None);
     }
 
     #[test]

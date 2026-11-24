@@ -33,7 +33,6 @@ fn card(n: u64, dot: Dot) -> Card {
         word: Word::for_dot(dot),
         pages: Vec::new(),
         tier: Default::default(),
-        answers: Vec::new(),
         question: None,
         open: Vec::new(),
         page_steps: Vec::new(),
@@ -191,7 +190,7 @@ fn a_header_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     });
 }
 
-/// A page's row ends in one word of five: Reading where the task works in the page now, Done where
+/// A page's row ends in one word of five: Working where the task works in the page now, Done where
 /// it has moved on or finished, Paused where the task waits or stopped, Needs you at the page it
 /// handed the user, and the bar's own title at one they took over.
 #[gpui::test]
@@ -202,11 +201,11 @@ fn a_pages_row_says_one_word(cx: &mut TestAppContext) {
         working.pages = vec![30, 31];
         working.page_steps = vec![(31, "Opening maat.pt".into())];
         assert_eq!(shell.page_word(&working, 30), PageWord::Done);
-        assert_eq!(shell.page_word(&working, 31), PageWord::Reading);
+        assert_eq!(shell.page_word(&working, 31), PageWord::Working);
         // With one page, that's the one it works in.
         working.pages = vec![30];
         working.page_steps.clear();
-        assert_eq!(shell.page_word(&working, 30), PageWord::Reading);
+        assert_eq!(shell.page_word(&working, 30), PageWord::Working);
         let mut waits = card(2, Dot::Waiting);
         waits.pages = vec![40, 41, 42];
         assert_eq!(shell.page_word(&waits, 40), PageWord::Paused);
@@ -243,7 +242,7 @@ fn a_pages_row_says_one_word(cx: &mut TestAppContext) {
         working.page_steps = vec![(42, "Opening maat.pt".into())];
         assert_eq!(
             words(&working),
-            [PageWord::Paused, PageWord::Driving, PageWord::Reading]
+            [PageWord::Paused, PageWord::Driving, PageWord::Working]
         );
         // A page they took over is theirs whatever its task came to.
         for dot in [Dot::Done, Dot::Ended] {
@@ -253,8 +252,8 @@ fn a_pages_row_says_one_word(cx: &mut TestAppContext) {
         }
     });
     assert_eq!(
-        [PageWord::Reading, PageWord::Done, PageWord::Paused].map(PageWord::label),
-        ["Reading", "Done", "Paused"]
+        [PageWord::Working, PageWord::Done, PageWord::Paused].map(PageWord::label),
+        ["Working", "Done", "Paused"]
     );
     assert_eq!(PageWord::NeedsYou.label(), Word::NeedsYou.after_name());
 }
@@ -559,7 +558,7 @@ fn clear_leaves_the_tasks(cx: &mut TestAppContext) {
 
 /// The one chip under a header is the user's own act, which has no page: Limit's Retry, or its
 /// assistant's fix. Its words sit on the title's column and its click does the act. Done's pages
-/// are rows now and an ask's answers are the task's view's, so neither makes a chip.
+/// are rows now and an ask is answered in the task's view, so neither makes a chip.
 #[gpui::test]
 fn the_chip_acts(cx: &mut TestAppContext) {
     let mut limit = card(4, Dot::Ended);
@@ -568,7 +567,6 @@ fn the_chip_acts(cx: &mut TestAppContext) {
     done.open = vec![(30, "maat.pt".into()), (31, "gulbenkian.pt".into())];
     let mut asks = card(6, Dot::Waiting);
     asks.asks = true;
-    asks.answers = vec!["Gulbenkian".into(), "MAAT".into()];
     assert_eq!((chip(&done), chip(&asks)), (None, None));
     assert_eq!(chip(&limit), Some(Chip::Retry));
     let mut failed = card(7, Dot::Ended);

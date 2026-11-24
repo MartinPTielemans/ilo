@@ -3,13 +3,16 @@
 //! other host. The wall lets the task reach this port and ilo's MCP socket, and nothing else, so a
 //! command can't send the user's file to a host of its own. One listener per walled task, alive
 //! while it runs. It keeps no host a command asked for, only two counts for the task's end.
+//! A connection that never sends its head keeps one of the 32 places until the task ends, so a
+//! command can use them all up and stop its own assistant's network, but never reach another host.
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, Shutdown, TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Shutdown, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use crate::agents::runner::Cli;
 
@@ -102,6 +105,13 @@ fn dial(host: &'static str) -> io::Result<TcpStream> {
     Err(last)
 }
 
+/// How the listener's own thread is woken to stop: a connection to its port.
+type Wake = fn(u16) -> io::Result<TcpStream>;
+
+fn wake(port: u16) -> io::Result<TcpStream> {
+    TcpStream::connect_timeout(&(Ipv4Addr::LOCALHOST, port).into(), Duration::from_secs(1))
+}
+
 #[derive(Default)]
 struct Shared {
     stop: AtomicBool,
@@ -118,6 +128,7 @@ pub struct Listener {
     port: u16,
     shared: Arc<Shared>,
     accepting: Option<JoinHandle<()>>,
+    wake: Wake,
 }
 
 /// What a task's end may say of its network: counts, never hosts.
@@ -147,6 +158,7 @@ impl Listener {
             port,
             shared,
             accepting: Some(accepting),
+            wake,
         })
     }
 
@@ -167,8 +179,12 @@ impl Drop for Listener {
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::SeqCst);
         // The accept blocks with no timer, so a connection of its own is what wakes it to stop.
-        _ = TcpStream::connect(("127.0.0.1", self.port));
-        if let Some(accepting) = self.accepting.take() {
+        // Without one the join would never return, so the thread is left to stop at the next
+        // connection that comes, which it then closes unserved.
+        let woken = (self.wake)(self.port).is_ok();
+        if let Some(accepting) = self.accepting.take()
+            && woken
+        {
             _ = accepting.join();
         }
         let open = std::mem::take(&mut *self.shared.open.lock().unwrap());
@@ -193,6 +209,9 @@ fn accept(listener: TcpListener, hosts: &'static [&'static str], dial: Dial, sha
             let mut open = shared.open.lock().unwrap();
             if open.len() >= MOST_OPEN {
                 drop(open);
+                // Its request is left unread, so the client may see a reset in place of the 503:
+                // either is the refusal. Reading it would need the thread or the timer the cap is
+                // there to spare.
                 refuse(&mut stream, &shared, "503 Service Unavailable");
                 continue;
             }
@@ -288,6 +307,7 @@ fn tunnel(client: &mut TcpStream, hosts: &'static [&'static str], dial: Dial, sh
 mod tests {
     use super::*;
     use std::sync::OnceLock;
+    use std::sync::mpsc;
 
     const LISTED: &[&str] = &["api.example.org"];
 
@@ -365,15 +385,32 @@ mod tests {
         Listener::start_with(LISTED, to_echo).unwrap()
     }
 
+    /// The listener's reply to `request`, empty when it closed the connection with a reset: a
+    /// refusal that leaves the request unread (over the cap, or past the longest head) can end so,
+    /// and is the refusal as a clean close is.
     fn ask(listener: &Listener, request: &[u8]) -> (String, TcpStream) {
         let mut stream = TcpStream::connect(("127.0.0.1", listener.port())).unwrap();
-        stream.write_all(request).unwrap();
+        // The listener may have reset it before the whole request is sent.
+        _ = stream.write_all(request);
         let mut reply = Vec::new();
         let mut byte = [0u8];
-        while !reply.ends_with(b"\r\n\r\n") && stream.read(&mut byte).unwrap() == 1 {
-            reply.push(byte[0]);
+        while !reply.ends_with(b"\r\n\r\n") {
+            match stream.read(&mut byte) {
+                Ok(1) => reply.push(byte[0]),
+                Ok(_) => break,
+                Err(why) if why.kind() == io::ErrorKind::ConnectionReset => {
+                    reply.clear();
+                    break;
+                }
+                Err(why) => panic!("{why}"),
+            }
         }
         (String::from_utf8(reply).unwrap(), stream)
+    }
+
+    /// A refusal's reply: its status, or nothing when the connection was reset.
+    fn refused_with(reply: &str, status: &str) -> bool {
+        reply.is_empty() || reply.starts_with(&format!("HTTP/1.1 {status}"))
     }
 
     #[test]
@@ -423,7 +460,7 @@ mod tests {
         ]
         .concat();
         let (reply, _) = ask(&listener, &long);
-        assert!(reply.starts_with("HTTP/1.1 403"), "{reply}");
+        assert!(refused_with(&reply, "403"), "{reply}");
         assert_eq!(
             listener.counts(),
             Counts {
@@ -440,7 +477,7 @@ mod tests {
             .map(|_| ask(&listener, b"CONNECT api.example.org:443 HTTP/1.1\r\n\r\n").1)
             .collect();
         let (reply, _) = ask(&listener, b"CONNECT api.example.org:443 HTTP/1.1\r\n\r\n");
-        assert!(reply.starts_with("HTTP/1.1 503"), "{reply}");
+        assert!(refused_with(&reply, "503"), "{reply}");
         assert_eq!(
             listener.counts(),
             Counts {
@@ -461,5 +498,34 @@ mod tests {
         let mut rest = Vec::new();
         assert_eq!(stream.read_to_end(&mut rest).ok(), Some(0));
         assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
+    }
+
+    #[test]
+    fn a_listener_whose_wake_fails_still_ends_and_closes_its_tunnels() {
+        fn no_wake(_: u16) -> io::Result<TcpStream> {
+            Err(io::ErrorKind::ConnectionRefused.into())
+        }
+        let mut listener = listener();
+        listener.wake = no_wake;
+        let port = listener.port();
+        let (reply, mut stream) = ask(&listener, b"CONNECT api.example.org:443 HTTP/1.1\r\n\r\n");
+        assert!(reply.starts_with("HTTP/1.1 200"));
+        let (dropped, ended) = mpsc::channel();
+        std::thread::spawn(move || {
+            drop(listener);
+            _ = dropped.send(());
+        });
+        assert!(
+            ended.recv_timeout(Duration::from_secs(5)).is_ok(),
+            "the drop waited on a thread nothing woke"
+        );
+        let mut rest = Vec::new();
+        assert_eq!(stream.read_to_end(&mut rest).ok(), Some(0));
+        // The thread left behind stops at the next connection and serves it nothing.
+        let mut late = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        _ = late.write_all(b"CONNECT api.example.org:443 HTTP/1.1\r\n\r\n");
+        let mut back = Vec::new();
+        _ = late.read_to_end(&mut back);
+        assert!(back.is_empty());
     }
 }

@@ -325,11 +325,6 @@ pub trait Browser {
     fn set_developer_mode(&self, tab: u64, on: bool, cx: &mut App);
     /// Answers what the tab's page asks (Shell::set_question), if it still asks.
     fn answer_permission(&self, tab: u64, answer: Answer, cx: &mut App);
-    /// Answers what an agent asks (Shell::set_agent_question), if it still asks.
-    fn answer_agent(&self, question: u64, answer: crate::agents::Answer, cx: &mut App);
-    /// The user pressed Choose File… on an agent's question for a page's file field: the system's
-    /// file dialog opens over `window`.
-    fn choose_agent_file(&self, question: u64, window: u64, cx: &mut App);
     /// Asks the dialog a tab's page asks over the tab's card, with the corners of its radius, or
     /// takes back the one it asks (None).
     fn show_page_dialog(&self, shown: Option<ShownPageDialog>, cx: &mut App);
@@ -928,14 +923,14 @@ pub trait Browser {
     /// (#4140). It asks nothing of the core until it's typed in.
     fn command_bar_in_place(&self, window: &mut Window, cx: &mut App) -> Entity<CommandBar>;
     /// Runs what the user asked in the composer's Ask as a task on the assistant `agent`, from Space
-    /// `home`, at the level `tier` the user picked there (#4140). Only the user's ↩ there calls
-    /// it: no agent has a path to it.
+    /// `home`, with the level and model the user picked there (#4140). Only the user's ↩ there
+    /// calls it: no agent has a path to it.
     fn start_task(
         &self,
         agent: &str,
         asked: &str,
         home: u64,
-        tier: crate::agents::tier::Tier,
+        start: crate::agents::task::Start,
         cx: &mut App,
     );
     /// Whether the user types in a field of a window over this one: find, the password offer, the
@@ -1034,6 +1029,9 @@ pub trait Browser {
     fn settings(&self, cx: &mut App);
     /// Opens the Settings window on Agents' Off limits list, scrolled to it.
     fn off_limits(&self, _cx: &mut App) {}
+    /// Opens the Settings window on Agents' Access group, which explains each level: the level
+    /// menu's Settings….
+    fn agent_access(&self, _cx: &mut App) {}
     /// Opens the Settings window on Agents, for what first run's assistant step leaves to it.
     fn agents_settings(&self, _cx: &mut App) {}
     /// Opens the Settings window on its Shortcuts tab.

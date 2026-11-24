@@ -31,7 +31,6 @@ pub(crate) struct State {
 pub(crate) const STATES: &[State] = &[
     State { name: "PREVIEW_ACCOUNT", values: "signed-out, no-server, words, waiting, signed-in", shows: "Settings › Account in that state" },
     State { name: "PREVIEW_AGENT", values: "1", shows: "Reading as Claude Code's Space, shown, with the agent at work" },
-    State { name: "PREVIEW_AGENT_ASKS", values: "click, long, request", shows: "the agent's question card: a click, a long name and site, or a request's change" },
     State { name: "PREVIEW_APPEARANCE", values: "light, dark", shows: "the window as if the system's appearance were that" },
     State { name: "PREVIEW_APPEARANCE_PICKER", values: "automatic, light, dark", shows: "Settings › Appearance with that choice" },
     State { name: "PREVIEW_ARRANGEMENT", values: "nofit, changed", shows: "what Site Controls says of the Boost's arrangement" },

@@ -830,7 +830,6 @@ impl Shell {
                 && self.resize.is_none()
                 && !self.pointer_on_card
                 && !self.page_asks()
-                && self.agent_question.is_none()
                 && self.cast.is_none()
                 && !self.menu_open
             {

@@ -8,7 +8,9 @@ use super::*;
 use crate::agents::helpers::NAME_YOUR_TAB;
 use crate::agents::runner::{Cli, Failure, Helper, Out};
 use crate::agents::task::ilo::{self, HelpersLimit, IloButton, IloKind, IloLine};
-use crate::agents::task::{Card, Counted, Dot, Line, NEEDS_YOU, State, TaskAction, Trace};
+use crate::agents::task::{
+    Card, Counted, Dot, Line, NEEDS_YOU, State, TaskAction, Trace, TraceItem,
+};
 use crate::agents::tier::{self, Tier};
 use crate::tokens::agents::helpers::{DEEP, MOST};
 
@@ -50,19 +52,48 @@ fn clicked(run: &Run) -> Vec<u64> {
     clicks.map(|page| page.0).collect()
 }
 
-/// The task's output says it asked for the helper `id`, whose lines name `tab`.
+/// The task's output tells `told` of the helper `id`.
+fn told(run: &Run, agent: &str, id: &str, told: Helper, cx: &mut TestAppContext) {
+    let id = id.to_string();
+    run.said(agent, Out::Helper { id, told }, cx);
+}
+
+/// The task's output says it asked for the helper `id`, and its CLI that the helper started.
+fn begun(run: &Run, agent: &str, id: &str, cx: &mut TestAppContext) {
+    told(run, agent, id, Helper::Asked(format!("Shop {id}")), cx);
+    let (id, deep) = (Some(id.to_string()), DEEP.into());
+    run.said(agent, Out::Started { id, deep }, cx);
+}
+
+/// The task's output says it asked for the helper `id`, which started and whose lines name `tab`.
 fn helper(run: &Run, agent: &str, id: &str, tab: u64, cx: &mut TestAppContext) {
-    for told in [Helper::Asked(format!("Shop {id}")), Helper::On(tab)] {
-        let id = id.to_string();
-        run.said(agent, Out::Helper { id, told }, cx);
-    }
+    begun(run, agent, id, cx);
+    told(run, agent, id, Helper::On(tab), cx);
 }
 
 /// The task's CLI says `count` helpers started, each `deep` under the task.
 fn started(run: &Run, agent: &str, count: u32, deep: u32, cx: &mut TestAppContext) {
     for _ in 0..count {
-        run.said(agent, Out::Started { deep: deep.into() }, cx);
+        let (id, deep) = (None, deep.into());
+        run.said(agent, Out::Started { id, deep }, cx);
     }
+}
+
+/// The task's output has `line`, read as its CLI's lines are.
+fn line(run: &Run, agent: &str, line: Value, cx: &mut TestAppContext) {
+    for out in runner::claude_read(&line, &mut runner::Turn::default()) {
+        run.said(agent, out, cx);
+    }
+}
+
+/// The helpers' lines of a stretch: each one's name, its page, and whether it's under way.
+fn helpers_of(trace: &Trace) -> Vec<(&str, Option<u64>, bool)> {
+    (trace.items.iter())
+        .filter_map(|item| match item {
+            TraceItem::Helper { step, name, tab } => Some((name.as_ref(), *tab, step.running)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// What the stand-in was sent, once `needle` is in it `times` times.
@@ -344,7 +375,8 @@ fn a_helper_that_starts_its_own_stops_the_task(cx: &mut TestAppContext) {
 }
 
 /// A helper ilo doesn't allow stops the task: one of a kind ilo didn't make, one in the
-/// background, or one that called a tool that is the task's alone, each as its output tells it.
+/// background, one that calls with no start told, or one that called a tool that is the task's
+/// alone, each as its output tells it.
 #[gpui::test]
 fn a_helper_ilo_doesnt_allow_stops_the_task(cx: &mut TestAppContext) {
     let (run, agent) = with_helpers("kind", cx);
@@ -369,6 +401,240 @@ fn a_helper_ilo_doesnt_allow_stops_the_task(cx: &mut TestAppContext) {
     assert_eq!(run.state(&agent, cx), State::Working);
     assert_eq!(limit_line(&run, &agent, cx), None);
     assert!(!beside(&run.program, "args.2").exists());
+}
+
+/// The floor waits for the start. A call for a kind of helper that isn't ilo's, which the
+/// program refuses, stops nothing: no start follows it, so it's no helper, no step of the task's
+/// and no line of ilo's. The lines are made up, in the shapes a recorded run showed.
+#[gpui::test]
+fn a_refused_call_for_another_kind_is_nothing(cx: &mut TestAppContext) {
+    let (run, agent) = with_helpers("refused", cx);
+    let asks = json!({ "type": "assistant", "message": { "content": [
+        { "type": "tool_use", "id": "toolu_x", "name": "Agent",
+          "input": { "subagent_type": "general-purpose", "description": "Stalls price",
+                     "prompt": "One shop." } },
+    ] } });
+    line(&run, &agent, asks, cx);
+    let refused = json!({ "type": "user", "message": { "content": [
+        { "type": "tool_result", "tool_use_id": "toolu_x", "is_error": true,
+          "content": "Agent type 'general-purpose' has been denied by permission rule." },
+    ] } });
+    line(&run, &agent, refused, cx);
+
+    assert_eq!(run.state(&agent, cx), State::Working);
+    assert_eq!(run.ilo_lines(&agent, cx), []);
+    let stretch = |line: &Line| matches!(line, Line::Trace(_));
+    assert!(!run.talk(&agent, cx).lines.iter().any(stretch));
+    assert!(!card(&run, cx).status.contains("helper"));
+    run.said(&agent, Out::Said("Two seats at 9:05.".into()), cx);
+    run.said(&agent, Out::Ended(None), cx);
+    assert!(matches!(run.state(&agent, cx), State::Done { .. }));
+    assert!(!sent(&run, "Find two seats", 1).contains("interrupt"));
+}
+
+/// A start of another kind than ilo's stops the task at the start, waiting for nothing else,
+/// and one in the background does too.
+#[gpui::test]
+fn a_start_of_another_kind_stops_the_task(cx: &mut TestAppContext) {
+    for (name, fields) in [
+        ("start-kind", json!({ "subagent_type": "general-purpose" })),
+        (
+            "start-background",
+            json!({ "subagent_type": "page-helper", "is_backgrounded": true }),
+        ),
+    ] {
+        let (run, agent) = with_helpers(name, cx);
+        let mut start = json!({ "type": "system", "subtype": "task_started",
+            "tool_use_id": "toolu_x", "spawn_depth": 1, "is_backgrounded": false,
+            "task_type": "local_agent" });
+        for (key, value) in fields.as_object().unwrap() {
+            start[key] = value.clone();
+        }
+        line(&run, &agent, start, cx);
+        let says = "a helper ilo doesn't allow";
+        stopped_over(&run, &agent, HelpersLimit::Kind, says, cx);
+    }
+}
+
+/// A start two levels under the task is a helper's own helper, which stops the task as that,
+/// though the helper is of ilo's kind and the task started only one.
+#[gpui::test]
+fn a_start_two_levels_under_the_task_stops_it(cx: &mut TestAppContext) {
+    let (run, agent) = with_helpers("start-deep", cx);
+    begun(&run, &agent, "toolu_a", cx);
+    assert_eq!(limit_line(&run, &agent, cx), None);
+    let start = json!({ "type": "system", "subtype": "task_started", "tool_use_id": "toolu_n",
+        "subagent_type": "page-helper", "spawn_depth": 2, "is_backgrounded": false,
+        "task_type": "local_agent", "parent_tool_use_id": "toolu_a" });
+    line(&run, &agent, start, cx);
+    let says = "A helper started a helper of its own";
+    stopped_over(&run, &agent, HelpersLimit::Depth, says, cx);
+}
+
+/// A helper's line that calls a tool when no start was told for that helper stops the task, so
+/// a start told some way ilo doesn't read fails closed: a helper the task asked for whose start
+/// never came, and one nobody asked for, as a helper's own helper is.
+#[gpui::test]
+fn a_helpers_call_without_a_start_stops_the_task(cx: &mut TestAppContext) {
+    let calls = |parent: &str| {
+        json!({ "type": "assistant", "parent_tool_use_id": parent,
+            "message": { "content": [
+                { "type": "tool_use", "id": "toolu_c", "name": "mcp__ilo__open_tab",
+                  "input": { "url": "https://stalls.example/saturday" } },
+            ] } })
+    };
+    let says = "a helper ilo doesn't allow";
+    let (run, agent) = with_helpers("no-start", cx);
+    told(
+        &run,
+        &agent,
+        "toolu_a",
+        Helper::Asked("Stalls price".into()),
+        cx,
+    );
+    // What it says before it calls stops nothing.
+    let says_only = json!({ "type": "assistant", "parent_tool_use_id": "toolu_a",
+        "message": { "content": [{ "type": "text", "text": "I'll open the shop." }] } });
+    line(&run, &agent, says_only, cx);
+    assert_eq!(run.state(&agent, cx), State::Working);
+    line(&run, &agent, calls("toolu_a"), cx);
+    stopped_over(&run, &agent, HelpersLimit::Kind, says, cx);
+
+    let (run, agent) = with_helpers("no-start-nested", cx);
+    begun(&run, &agent, "toolu_a", cx);
+    // The helper asks for one of its own, which stops nothing by itself, and its own calls go on.
+    let nests = json!({ "type": "assistant", "parent_tool_use_id": "toolu_a",
+        "message": { "content": [
+            { "type": "tool_use", "id": "toolu_n", "name": "Agent",
+              "input": { "subagent_type": "page-helper", "prompt": "One shop." } },
+        ] } });
+    line(&run, &agent, nests, cx);
+    line(&run, &agent, calls("toolu_a"), cx);
+    assert_eq!(run.state(&agent, cx), State::Working);
+    assert_eq!(limit_line(&run, &agent, cx), None);
+    line(&run, &agent, calls("toolu_n"), cx);
+    stopped_over(&run, &agent, HelpersLimit::Kind, says, cx);
+}
+
+/// A helper is counted and shown from its start: before it has done anything its line stands,
+/// under way, with the name its task gave it, and the live line and the card count it. The page
+/// it opens is its own, never a step of the task's nor a group of them, and has its own step on
+/// the card from when it's open. Once its CLI says it ended, its page has no step of its own,
+/// so its row and its line say it's done, and the count stays the number that started, as the
+/// line of the stretch that's over counts it.
+#[gpui::test]
+fn a_helper_shows_and_counts_from_its_start(cx: &mut TestAppContext) {
+    let (run, agent) = with_helpers("start", cx);
+    pages(&run, 1);
+    begun(&run, &agent, "toolu_a", cx);
+    let trace = live(&run, &agent, cx);
+    assert_eq!(trace.counted(), (1, Counted::Helpers));
+    assert_eq!(helpers_of(&trace), [("Shop toolu_a", None, true)]);
+    assert_eq!(card(&run, cx).status, trace.line());
+    begun(&run, &agent, "toolu_b", cx);
+    let key = live(&run, &agent, cx).key;
+
+    // The first opens its page: its line comes, then the call, which names no tab.
+    told(&run, &agent, "toolu_a", Helper::Opens, cx);
+    let open = json!({ "url": "https://encore.example/saturday" });
+    let opened = call(&run.agents, &agent, "open_tab", open.clone(), cx);
+    let trace = live(&run, &agent, cx);
+    assert_eq!((trace.steps(), trace.helpers(), trace.key), (0, 2, key));
+    let named = [
+        ("Shop toolu_a", Some(30), true),
+        ("Shop toolu_b", None, true),
+    ];
+    assert_eq!(helpers_of(&trace), named);
+    let made = card(&run, cx);
+    assert_eq!(made.status, trace.line());
+    let own: Vec<u64> = made.page_steps.iter().map(|(tab, _)| *tab).collect();
+    assert_eq!(own, [30]);
+    let opened = page_done(&run.agents, &run.browser, opened, shop_tree(), cx);
+    assert!(!opened.error, "{}", opened.text);
+
+    // The second is given a page of the task's, and works there.
+    told(&run, &agent, "toolu_b", Helper::On(PAGES[0].0), cx);
+    let _read = call(
+        &run.agents,
+        &agent,
+        "read_page",
+        json!({ "tab": PAGES[0].0 }),
+        cx,
+    );
+    let own = |run: &Run, cx: &mut TestAppContext| {
+        let mut tabs: Vec<u64> = (card(run, cx).page_steps.iter())
+            .map(|(tab, _)| *tab)
+            .collect();
+        tabs.sort();
+        tabs
+    };
+    assert_eq!(own(&run, cx), [30, PAGES[0].0]);
+
+    // The first ends: its page has no step, its line isn't under way, and it still counts.
+    told(&run, &agent, "toolu_a", Helper::Ended, cx);
+    assert_eq!(own(&run, cx), [PAGES[0].0]);
+    let trace = live(&run, &agent, cx);
+    assert_eq!(trace.counted(), (2, Counted::Helpers));
+    assert_eq!(card(&run, cx).status, trace.line());
+    // A step of the task's own on that page afterwards is the task's.
+    let _own = call(&run.agents, &agent, "screenshot", json!({ "tab": 30 }), cx);
+    let trace = live(&run, &agent, cx);
+    assert_eq!((trace.steps(), trace.helpers()), (1, 2));
+    assert_eq!(own(&run, cx), [30, PAGES[0].0]);
+
+    told(&run, &agent, "toolu_b", Helper::Ended, cx);
+    run.said(&agent, Out::Said("Two seats at 9:05.".into()), cx);
+    run.said(&agent, Out::Ended(None), cx);
+    let trace = live(&run, &agent, cx);
+    assert!(trace.took.is_some() && !trace.running);
+    assert_eq!(trace.counted(), (2, Counted::Helpers));
+    assert!(helpers_of(&trace).iter().all(|(.., running)| !running));
+}
+
+/// A page opened while helpers work is the helper's whose line asked for it, in the order the
+/// lines and the calls came, whichever came first; the task's own stays the task's step. Where
+/// the order gave a page to the wrong helper, the helper's own line that names it puts it right.
+#[gpui::test]
+fn a_page_a_helper_opens_is_its_own(cx: &mut TestAppContext) {
+    let open = || json!({ "url": "https://encore.example/saturday" });
+    // The call comes before the helper's line: its step is the task's until the line comes.
+    let (run, agent) = with_helpers("opens-late", cx);
+    begun(&run, &agent, "toolu_a", cx);
+    let _opened = call(&run.agents, &agent, "open_tab", open(), cx);
+    let trace = live(&run, &agent, cx);
+    assert_eq!((trace.steps(), trace.helpers()), (1, 1));
+    told(&run, &agent, "toolu_a", Helper::Opens, cx);
+    let trace = live(&run, &agent, cx);
+    assert_eq!((trace.steps(), trace.helpers()), (0, 1));
+    assert_eq!(helpers_of(&trace), [("Shop toolu_a", Some(30), true)]);
+
+    // With no helper at work, a page the task opens is its own step.
+    let (run, agent) = with_helpers("opens-own", cx);
+    let _opened = call(&run.agents, &agent, "open_tab", open(), cx);
+    begun(&run, &agent, "toolu_a", cx);
+    told(&run, &agent, "toolu_a", Helper::Opens, cx);
+    let trace = live(&run, &agent, cx);
+    assert_eq!((trace.steps(), trace.helpers()), (1, 1));
+    assert_eq!(helpers_of(&trace), [("Shop toolu_a", None, true)]);
+
+    // Two lines, then one call: the order gives its page to the first, and the second's own line
+    // that names the page takes it.
+    let (run, agent) = with_helpers("opens-named", cx);
+    begun(&run, &agent, "toolu_a", cx);
+    begun(&run, &agent, "toolu_b", cx);
+    told(&run, &agent, "toolu_a", Helper::Opens, cx);
+    told(&run, &agent, "toolu_b", Helper::Opens, cx);
+    let _opened = call(&run.agents, &agent, "open_tab", open(), cx);
+    let pages = |run: &Run, cx: &mut TestAppContext| {
+        let trace = live(run, &agent, cx);
+        let pages: Vec<Option<u64>> = (helpers_of(&trace).iter())
+            .map(|(_, tab, _)| *tab)
+            .collect();
+        (trace.steps(), pages)
+    };
+    assert_eq!(pages(&run, cx), (0, vec![Some(30), None]));
+    told(&run, &agent, "toolu_b", Helper::On(30), cx);
+    assert_eq!(pages(&run, cx), (0, vec![None, Some(30)]));
 }
 
 /// A run whose first line lists a kind of helper ilo didn't make ends before its first answer,
@@ -494,7 +760,7 @@ fn the_limits_line_offers_take_over_alone(cx: &mut TestAppContext) {
 
 /// A helper's label is only for a tab of the task's own: a number its lines name that isn't one
 /// then labels nothing, so naming numbers grows nothing ilo holds, and a step on that tab later
-/// is the task's own step.
+/// is the task's own step. The helper has started, so its line stands, with no page.
 #[gpui::test]
 fn a_helper_is_labelled_only_by_the_tasks_own_tabs(cx: &mut TestAppContext) {
     let (run, agent) = with_helpers("label", cx);
@@ -508,7 +774,11 @@ fn a_helper_is_labelled_only_by_the_tasks_own_tabs(cx: &mut TestAppContext) {
     let _a = call(&run.agents, &agent, "read_page", on(PAGES[1].0), cx);
     let _b = call(&run.agents, &agent, "read_page", on(PAGES[0].0), cx);
     let trace = live(&run, &agent, cx);
-    assert_eq!((trace.helpers(), trace.steps()), (1, 1));
+    assert_eq!((trace.helpers(), trace.steps()), (2, 1));
+    let pages: Vec<Option<u64>> = (helpers_of(&trace).iter())
+        .map(|(_, tab, _)| *tab)
+        .collect();
+    assert_eq!(pages, [None, Some(PAGES[0].0)]);
 }
 
 /// A task's helpers show as a line each, the step each is on, in the place of its first: ilo's own
@@ -594,7 +864,7 @@ fn a_card_counts_its_tasks_helpers_without_folding_the_conversation(cx: &mut Tes
 
     let ask = json!({ "question": "Row 12 or row 14?", "answers": ["Row 12", "Row 14"] });
     let _asked = call(&run.agents, &agent, "ask", ask, cx);
-    (run.agents).update(cx, |agents, cx| agents.answer_task(&agent, "Row 12", cx));
+    (run.agents).update(cx, |agents, cx| agents.reply(&agent, "Row 12", cx));
     let _a = call(&run.agents, &agent, "screenshot", on(PAGES[0].0), cx);
     let trace = live(&run, &agent, cx);
     assert_eq!(

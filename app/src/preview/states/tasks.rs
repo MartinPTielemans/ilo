@@ -137,6 +137,12 @@ pub(crate) fn bench_helper_waits() -> bool {
     states::var("PREVIEW_TASK").as_deref() == Ok("helpers")
 }
 
+/// Whether the bench's task handed its one page to the user (PREVIEW_TASK=yours): the page is
+/// theirs, so nothing works on it, and the task needs them.
+pub(crate) fn bench_yours() -> bool {
+    states::var("PREVIEW_TASK").as_deref() == Ok("yours")
+}
+
 /// The helpers' lines of the bench's task: each on its page, reading it, and with `waits`, the
 /// one that handed its page to the user. None is `running` once the turn is over.
 fn helper_lines(count: usize, waits: bool, running: bool) -> Vec<TraceItem> {
@@ -220,7 +226,6 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             .map(|&(tab, ..)| tab)
             .collect(),
         tier: Default::default(),
-        answers: Vec::new(),
         question: None,
         open: match dot {
             Dot::Done => {
@@ -278,6 +283,14 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         }
         (Some(count), false) => cards[0].status = helper_trace(count, false).line(),
         (None, _) => {}
+    }
+    if bench_yours() {
+        cards[0].status = format!(
+            "{} · Sign in to tickets.example",
+            browser::agents::task::NEEDS_YOU
+        )
+        .into();
+        cards[0].dot = Dot::Waiting;
     }
     // Each helper's page has its own step, which the strip under it and its tile say.
     if let Some(count) = bench_helpers().filter(|_| bench_ended().is_none()) {
@@ -385,7 +398,6 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         name: "Claude".into(),
         title: title.into(),
         about: "Claude · Working".into(),
-        progress: "step 3 · 4 pages".into(),
         asked: "Find two tickets for Saturday's concert, in the stalls".into(),
         page: None,
         lines: vec![Line::Trace(Trace {
@@ -432,7 +444,6 @@ fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
         Word::Done => format!("{} · Done at 14:02", card.name).into(),
         word => format!("{} · {}", card.name, word.after_name()).into(),
     };
-    talk.progress = "".into();
     talk.tabs = (pages.iter().map(|&(tab, _, url)| (tab, site(url)))).collect();
     talk.on = None;
     talk.stoppable = card.word == Word::NeedsYou;
@@ -468,7 +479,10 @@ fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
             worked,
             Line::Ilo(IloLine {
                 key: 100,
-                kind: IloKind::Yours { tab: pages[0].0 },
+                kind: IloKind::Yours {
+                    tab: pages[0].0,
+                    site: None,
+                },
                 settled: false,
             }),
         ],
@@ -522,28 +536,38 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
         tier: Tier::Work,
         count,
     };
-    talk.progress = "".into();
     // It stands on its one page, beside it.
     talk.tabs.truncate(1);
     talk.lines = match state.as_str() {
         "refused" => vec![
             done(0, before),
-            Line::Said("Two seats in row 12 are in the basket. Placing the order is the last step.".into()),
+            Line::Said(
+                "Two seats in row 12 are in the basket. Placing the order is the last step.".into(),
+            ),
             line(100, stopped(Why::Order, "Place order", 2)),
         ],
         "off-limits" => vec![
             done(0, before),
             line(100, stopped(Why::Fenced, "seatmap.example", 1)),
         ],
-        "yours" => vec![
+        "yours" => {
+            talk.about = format!("{} · {}", talk.name, browser::agents::task::NEEDS_YOU).into();
+            talk.on = None;
+            vec![
             done(0, before),
             Line::Said("tickets.example wants you to sign in before it shows the seats. I'll carry on once you hand the tab back.".into()),
-            line(100, IloKind::Yours { tab }),
-        ],
+            line(100, IloKind::Yours { tab, site: None }),
+        ]
+        }
         "tab-back" => vec![
             done(0, before),
             Line::Said("I need the seat map back to pick two seats together.".into()),
-            line(100, IloKind::TabBack { tab: FIRST_TASK + 201 }),
+            line(
+                100,
+                IloKind::TabBack {
+                    tab: FIRST_TASK + 201,
+                },
+            ),
         ],
         "signed-in" => vec![
             done(0, before),
@@ -590,7 +614,10 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             }
             let mut lines = vec![
                 done(0, &items),
-                Line::Said("Two seats in row 12 of the stalls are in your basket on tickets.example.".into()),
+                Line::Said(
+                    "Two seats in row 12 of the stalls are in your basket on tickets.example."
+                        .into(),
+                ),
             ];
             match state.as_str() {
                 "ended-first" => lines.push(line(100, IloKind::KeptHere)),
@@ -613,7 +640,6 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
         "past" | "past-no-profile" | "past-no-space" => {
             talk.title = "Concert tickets".into();
             talk.about = format!("{} · Done · 21 Nov", talk.name).into();
-            talk.progress = "".into();
             talk.asked = "".into();
             talk.tabs.clear();
             talk.on = None;
@@ -635,8 +661,11 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
         // bench gives it once it shows.
         "helpers" => {
             talk.about = format!("{} · {}", talk.name, browser::agents::task::NEEDS_YOU).into();
+            // One of several pages: its line names the page's site (O1).
+            let (tab, site) = helper_tabs().remove(HELPER_WAITING);
             let yours = IloKind::Yours {
-                tab: helper_tabs()[HELPER_WAITING].0,
+                tab,
+                site: Some(site),
             };
             vec![
                 done(0, before),

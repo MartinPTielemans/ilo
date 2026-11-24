@@ -539,16 +539,8 @@ fn selecting_a_tab_or_a_space_leaves_the_area(cx: &mut TestAppContext) {
     assert!(shell.read_with(cx, |shell, _| shell.task_shown().is_some()));
     // Focus Agent Question too, from the page or the UI: the card shows over the area (#3869).
     shell.update(cx, |shell, cx| {
-        let asked = crate::agents::Question {
-            id: 9,
-            agent: "Claude".into(),
-            what: "download a file".into(),
-            ..Default::default()
-        };
-        shell.set_agent_question(Some(asked), cx);
         shell.run(Command::FocusAgentQuestion, "page", cx);
         shell.run(Command::FocusAgentQuestion, "ui", cx);
-        shell.set_agent_question(None, cx);
     });
     assert!(shell.read_with(cx, |shell, _| shell.task_shown().is_some()));
     host.take();
@@ -581,8 +573,9 @@ fn selecting_a_tab_or_a_space_leaves_the_area(cx: &mut TestAppContext) {
 }
 
 /// ⌘Q with a task's view shown asks first, and Cancel leaves the window as it was, the task's
-/// page watched still showing (#4202). Once the quit is decided the area goes and the core shows
-/// the user's Space again, which the session then keeps for the window.
+/// page watched still showing (#4202). Once the quit is decided it's as the window's close: the
+/// page watched goes back to the conversation, so the core shows the user's Space again, which
+/// the session then keeps for the window.
 #[gpui::test]
 fn quit_leaves_the_tasks_view_until_the_quit_is_decided(cx: &mut TestAppContext) {
     let (shell, host, cx) = shell_with_task(cx);
@@ -606,7 +599,336 @@ fn quit_leaves_the_tasks_view_until_the_quit_is_decided(cx: &mut TestAppContext)
     let going = going.expect("Quit gave the host nothing to run once it's decided");
     cx.update(|_, cx| going(cx));
     assert_eq!(*host.shown.borrow(), [1]);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, None))
+    );
+}
+
+/// ⇧⌘W with a task's view shown leaves its conversation standing: the close is the core's, which
+/// asks the window's pages first, and their Cancel leaves the window as it was (#4202). A page of
+/// the task's watched goes back to the conversation before the close, so the core shows the
+/// user's Space again, which the session keeps for the window.
+#[gpui::test]
+fn close_window_leaves_the_tasks_conversation(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    let view = conversation(cx);
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    draw(&shell, cx);
+    host.take();
+    shell.update(cx, |shell, cx| shell.run(Command::CloseWindow, "ui", cx));
+    assert!(host.take().contains(&"close window".to_string()));
+    // Cancel is the core never saying the window closed.
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, None)),
+        "the view closed before the page's answer"
+    );
+    assert!(
+        host.shown.borrow().is_empty(),
+        "the core was shown a Space it already showed"
+    );
+
+    watching(&shell, &host, cx);
+    shell.update(cx, |shell, cx| shell.run(Command::CloseWindow, "ui", cx));
+    assert!(host.take().contains(&"close window".to_string()));
+    assert_eq!(
+        *host.shown.borrow(),
+        [1],
+        "the window closed with the core showing the task's Space"
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, None)),
+        "the conversation went with the page watched"
+    );
+}
+
+/// The user's page 10 asks whether to leave it, as the core reports it while the window closes.
+fn page_asks_to_stay(shell: &Entity<Shell>, cx: &mut VisualTestContext, id: u64) {
+    use crate::shell::DialogKind;
+    shell.update(cx, |shell, cx| {
+        shell.set_page_dialog(10, Some(page_dialog(id, DialogKind::Leave)), cx)
+    });
+    draw(shell, cx);
+}
+
+/// The user's answer to that question.
+fn answer(shell: &Entity<Shell>, cx: &mut VisualTestContext, id: u64, leave: bool) {
+    let reply = crate::shell::PageReply {
+        accept: leave,
+        text: String::new(),
+        password: String::new(),
+        checked: false,
+    };
+    shell.update(cx, |shell, cx| shell.answer_page_dialog(10, id, reply, cx));
+    draw(shell, cx);
+}
+
+/// Closes the window one of the two ways: ⇧⌘W, or ⌘Q with its own question answered.
+fn close(shell: &Entity<Shell>, host: &Recorder, cx: &mut VisualTestContext, quit: bool) {
+    if !quit {
+        return shell.update(cx, |shell, cx| shell.run(Command::CloseWindow, "ui", cx));
+    }
+    shell.update(cx, |shell, cx| shell.run(Command::Quit, "ui", cx));
+    let going = host.quit_going.borrow_mut().take();
+    let going = going.expect("Quit gave the host nothing to run once it's decided");
+    cx.update(|_, cx| going(cx));
+}
+
+/// ⇧⌘W, or a quit decided, with a task's conversation standing and a page of the user's that
+/// asks before it's left: the page and its question show, as no page's dialog is drawn over a
+/// conversation, and Cancel brings the conversation back with the keyboard, the page out of the
+/// window again (#4202). The core never says a close was refused: the page's answer is that word.
+#[gpui::test]
+fn a_page_that_refuses_the_close_brings_the_conversation_back(cx: &mut TestAppContext) {
+    for quit in [false, true] {
+        let (shell, host, cx) = shell_with_task(cx);
+        still(cx);
+        let view = conversation(cx);
+        shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+        draw(&shell, cx);
+        let (card, _) = frames(&shell, cx);
+        let away = away(&shell, cx);
+        close(&shell, &host, cx, quit);
+        host.take();
+
+        page_asks_to_stay(&shell, cx, 7);
+        assert_eq!(
+            dialogs(&host),
+            ["page dialog 10 7"],
+            "the page's question never showed (quit: {quit})"
+        );
+        assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
+        assert_eq!(
+            frames(&shell, cx).1,
+            card,
+            "the page asks out of the window"
+        );
+
+        answer(&shell, cx, 7, false);
+        let asked = host.take();
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.task_shown()),
+            Some((3, None)),
+            "Cancel didn't bring the conversation back (quit: {quit})"
+        );
+        assert_eq!(frames(&shell, cx).1, pushed(card, away));
+        let at = |call: &str| asked.iter().position(|each| each == call);
+        assert!(at("focus ui").is_some(), "{asked:?}");
+        assert!(
+            at("focus ui") < at("answer dialog 10 7 cancel"),
+            "the page was answered before the view was back: {asked:?}"
+        );
+        assert!(
+            host.shown.borrow().is_empty(),
+            "the core was shown a Space it already showed"
+        );
+
+        // The close it refused is over: a question the page asks by itself waits as ever.
+        page_asks_to_stay(&shell, cx, 8);
+        assert!(dialogs(&host).iter().all(|call| call == "page dialog none"));
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.task_shown()),
+            Some((3, None))
+        );
+    }
+}
+
+/// The same from a page of the task's watched: it goes back to the conversation for the close,
+/// and Cancel on the user's page's question brings it back in place, watched, with the keyboard
+/// where a page watched has it: the page's if the user holds it, else the UI's.
+#[gpui::test]
+fn a_page_that_refuses_the_close_brings_the_page_watched_back(cx: &mut TestAppContext) {
+    for (quit, held) in [(false, false), (true, false), (false, true)] {
+        let (shell, host, cx) = shell_with_task(cx);
+        watching(&shell, &host, cx);
+        let held_tabs: Vec<(u64, SharedString)> = match held {
+            true => vec![(30, "".into())],
+            false => Vec::new(),
+        };
+        shell.update(cx, |shell, cx| {
+            let status = Status {
+                agent: "task-1".into(),
+                name: "Claude".into(),
+                space: 3,
+                doing: "Typed · flights.example".into(),
+                held: held_tabs,
+            };
+            shell.set_agent_status(vec![status], cx);
+            shell.agent_acted("task-1".into(), 30, cx);
+        });
+        draw(&shell, cx);
+        host.take();
+
+        close(&shell, &host, cx, quit);
+        assert_eq!(*host.shown.borrow(), [1]);
+        host.shown.borrow_mut().clear();
+        core_shows_users(&shell, cx);
+        host.take();
+        page_asks_to_stay(&shell, cx, 7);
+        assert_eq!(
+            dialogs(&host),
+            ["page dialog 10 7"],
+            "the page's question never showed (quit: {quit})"
+        );
+
+        answer(&shell, cx, 7, false);
+        let asked = host.take();
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.task_shown()),
+            Some((3, Some(30))),
+            "Cancel didn't bring the page watched back (quit: {quit}, held: {held})"
+        );
+        assert_eq!(zoom(&shell, cx), Zoom::Rest);
+        let at = |call: &str| asked.iter().position(|each| each == call);
+        assert!(at("select 30").is_some(), "{asked:?}");
+        let keyboard = if held { "focus page" } else { "focus ui" };
+        assert!(
+            at("select 30") < at(keyboard),
+            "the keyboard isn't where the page watched has it (held: {held}): {asked:?}"
+        );
+        core_shows_task(&shell, cx, 30);
+        draw(&shell, cx);
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.task_page_live()),
+            Some(30)
+        );
+    }
+}
+
+/// Leave on that question goes on with the close, the window on the user's page, and what the
+/// user does next is no answer to the close: the view kept for its Cancel is let go.
+#[gpui::test]
+fn leaving_the_page_goes_on_with_the_close(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    let view = conversation(cx);
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    draw(&shell, cx);
+    close(&shell, &host, cx, false);
+    page_asks_to_stay(&shell, cx, 7);
+    host.take();
+    answer(&shell, cx, 7, true);
+    assert!(
+        host.take()
+            .contains(&"answer dialog 10 7 accept".to_string())
+    );
     assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
+
+    // A second page of theirs refuses: the conversation is back, as the window stays.
+    page_asks_to_stay(&shell, cx, 8);
+    answer(&shell, cx, 8, false);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, None))
+    );
+
+    // And a command meanwhile lets the view go: a later Cancel is some other question's.
+    close(&shell, &host, cx, false);
+    page_asks_to_stay(&shell, cx, 9);
+    shell.update(cx, |shell, cx| shell.run(Command::ToggleSidebar, "ui", cx));
+    answer(&shell, cx, 9, false);
+    assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
+}
+
+/// The same close asked again while its question is up, ⇧⌘W twice or ⌘Q twice, is no other
+/// command: the question stays, the view stays kept, and Cancel brings it back as it stood, a
+/// page watched with it (#4202).
+#[gpui::test]
+fn the_same_close_again_keeps_the_view(cx: &mut TestAppContext) {
+    for (quit, watched) in [(false, false), (true, false), (false, true), (true, true)] {
+        let (shell, host, cx) = shell_with_task(cx);
+        if watched {
+            watching(&shell, &host, cx);
+        } else {
+            still(cx);
+            let view = conversation(cx);
+            shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+            draw(&shell, cx);
+        }
+        close(&shell, &host, cx, quit);
+        if watched {
+            core_shows_users(&shell, cx);
+        }
+        host.take();
+        page_asks_to_stay(&shell, cx, 7);
+        assert_eq!(dialogs(&host), ["page dialog 10 7"]);
+
+        close(&shell, &host, cx, quit);
+        draw(&shell, cx);
+        assert!(
+            dialogs(&host).iter().all(|call| call != "page dialog none"),
+            "the question went at the second press (quit: {quit})"
+        );
+        assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
+
+        answer(&shell, cx, 7, false);
+        let stood = Some((3, watched.then_some(30)));
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.task_shown()),
+            stood,
+            "the second press dropped the view (quit: {quit}, watched: {watched})"
+        );
+    }
+}
+
+/// A command that isn't the user's own act in the window, as another launch's ask for a new
+/// window is, is no word of theirs on the close: the view stays kept for its Cancel.
+#[gpui::test]
+fn a_command_not_the_users_keeps_the_view(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    let view = conversation(cx);
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    draw(&shell, cx);
+    close(&shell, &host, cx, false);
+    page_asks_to_stay(&shell, cx, 7);
+    shell.update(cx, |shell, cx| shell.run(Command::NewWindow, "launch", cx));
+    draw(&shell, cx);
+    answer(&shell, cx, 7, false);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, None))
+    );
+}
+
+/// A page of the task's the user watched after asking the close, before a page of theirs asked
+/// to stay, goes back for the question as one watched at the close does: the core shows the
+/// user's page to ask on, and Cancel brings the page watched back.
+#[gpui::test]
+fn a_page_watched_since_the_close_goes_back_for_the_question(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    let view = conversation(cx);
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    draw(&shell, cx);
+    close(&shell, &host, cx, false);
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    assert!(shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx)));
+    core_shows_task(&shell, cx, 30);
+    draw(&shell, cx);
+    host.take();
+    host.shown.borrow_mut().clear();
+
+    page_asks_to_stay(&shell, cx, 7);
+    assert_eq!(
+        *host.shown.borrow(),
+        [1],
+        "the question's page isn't the one the core shows"
+    );
+    core_shows_users(&shell, cx);
+    draw(&shell, cx);
+    let asked = dialogs(&host);
+    assert!(asked.contains(&"page dialog 10 7".to_string()), "{asked:?}");
+    assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
+
+    answer(&shell, cx, 7, false);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(30)))
+    );
 }
 
 /// Clear Archive with a task's view shown leaves it standing: with nothing to clear, while it
@@ -719,7 +1041,6 @@ fn a_taken_over_pages_row_ends_in_its_bars_title(cx: &mut TestAppContext) {
         word: Word::for_dot(dot),
         pages: vec![30, 31],
         tier: Default::default(),
-        answers: Vec::new(),
         question: None,
         open: Vec::new(),
         page_steps: Vec::new(),
@@ -1073,7 +1394,6 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         word: Word::for_dot(dot),
         pages: Vec::new(),
         tier: Default::default(),
-        answers: Vec::new(),
         question: None,
         open: Vec::new(),
         page_steps: Vec::new(),
@@ -1400,7 +1720,6 @@ fn the_strip_under_a_page_says_that_pages_own_step(cx: &mut TestAppContext) {
         word: Word::for_dot(Dot::Working),
         pages: Vec::new(),
         tier: Default::default(),
-        answers: Vec::new(),
         question: None,
         open: Vec::new(),
         page_steps: (steps.iter())
@@ -1458,7 +1777,6 @@ fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
         word: Word::for_dot(Dot::Waiting),
         pages: Vec::new(),
         tier: Default::default(),
-        answers: Vec::new(),
         question: None,
         open: Vec::new(),
         page_steps: (steps.iter())
@@ -1521,41 +1839,8 @@ fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
 #[test]
 fn only_what_needs_the_user_has_a_primary() {
     use super::{StripChip, strip_chips};
-    use crate::agents::Question;
     use crate::agents::task::Dot;
-    use crate::shell::agent_question::buttons;
     use crate::shell::permission::Look;
-
-    let question = |handoff: Option<u64>, back: bool| Question {
-        id: 1,
-        agent: "Claude Code".into(),
-        from: "claude-code".into(),
-        what: "open bank.example".into(),
-        why: "It's a bank's site.".into(),
-        handoff,
-        back,
-        ..Default::default()
-    };
-    for (asked, primary) in [
-        (question(None, false), "Allow Once"),
-        (question(Some(30), false), "Show Tab"),
-        (question(Some(30), true), "Hand Back"),
-    ] {
-        let buttons = buttons(&asked);
-        let primaries: Vec<_> = (buttons.iter())
-            .filter(|button| button.look == Look::Primary)
-            .map(|button| button.label)
-            .collect();
-        assert_eq!(primaries, [primary], "{asked:?}");
-        assert_eq!(
-            buttons.last().map(|button| button.look),
-            Some(match asked.handoff {
-                Some(_) => Look::Primary,
-                None => Look::Text,
-            }),
-            "the primary is on the right, and Always Allow on a row of its own"
-        );
-    }
 
     let primaries = |held, dot, open| -> Vec<StripChip> {
         (strip_chips(held, dot, open, false).into_iter())
@@ -1694,7 +1979,6 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         word: Word::for_dot(Dot::Working),
         pages: Vec::new(),
         tier: Default::default(),
-        answers: Vec::new(),
         question: None,
         open: Vec::new(),
         page_steps: Vec::new(),
