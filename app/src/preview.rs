@@ -3191,6 +3191,29 @@ fn main() {
                         if parts.next() == Some("on") {
                             shell.onboarding_count_on(cx);
                         }
+                        // PREVIEW_ONBOARDING_PICK=<n> picks the nth swatch at the color step.
+                        let pick = std::env::var("PREVIEW_ONBOARDING_PICK").ok();
+                        if let Some(index) = pick.and_then(|pick| pick.parse().ok()) {
+                            shell.onboarding_pick_swatch(index, cx);
+                        }
+                    }
+                    // PREVIEW_ONBOARDING_LOOP=<s> holds the step's loop <s> seconds in, for a still
+                    // capture, and =<s>,<ms> lets it play from the start <ms> in, for its frames.
+                    if let Ok(held) = std::env::var("PREVIEW_ONBOARDING_LOOP") {
+                        let mut parts = held.split(',').map(|part| part.trim().parse::<f32>().ok());
+                        if let Some(Some(at)) = parts.next() {
+                            shell.onboarding_hold_loop(Some(at), cx);
+                        }
+                        if let Some(Some(ms)) = parts.next() {
+                            cx.spawn(async move |shell, cx| {
+                                let after = Duration::from_millis(ms as u64);
+                                cx.background_executor().timer(after).await;
+                                shell
+                                    .update(cx, |shell, cx| shell.onboarding_hold_loop(None, cx))
+                                    .ok();
+                            })
+                            .detach();
+                        }
                     }
                     shell
                 });

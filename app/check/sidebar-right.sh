@@ -91,10 +91,11 @@ side_buttons "at launch, left" left
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
 settings_drew
-if [ "$(sed -n 's/^browser: settings shown //p' "$log" | tail -1)" != "Tabs & Sidebar" ]; then
-  send clickkey $(drawn "toolbar Tabs & Sidebar")
-  expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its tab"
-  settings_drew 'Tabs & Sidebar'
+# Sidebar position is Appearance's (#4092).
+if [ "$(sed -n 's/^browser: settings shown //p' "$log" | tail -1)" != "Appearance" ]; then
+  send clickkey $(drawn "toolbar Appearance")
+  expect '^browser: settings tab Appearance$' "a click on Appearance didn't show its tab"
+  settings_drew Appearance
 fi
 # Sidebar position is two drawings of the window (#2407): a click on Right's picks it. The picker
 # is at the pane's foot, under the card's edge where the screen is short, as on the Mac's check
