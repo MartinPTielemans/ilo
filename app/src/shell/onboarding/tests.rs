@@ -18,7 +18,9 @@ use crate::shell::{Folders, Shell, commands::Command, recorder::Recorder};
 use crate::theme::Theme;
 use crate::theme_picker::{SWATCHES, swatch_name};
 use crate::tokens::shell::onboarding::IMPORT_HOLD;
-use crate::tokens::shell::onboarding::loops::PERIOD;
+use crate::tokens::shell::onboarding::loops::{
+    COLOR_AT, COLOR_SWIPE, PERIOD, SIDEBAR, WELCOME_AT, WELCOME_CLICK, WELCOME_MOVE,
+};
 use crate::transparency::{self, Transparency};
 
 /// A drawn shell showing one Space with no tab shown, as at a new profile's first launch, with the
@@ -2140,5 +2142,83 @@ fn the_window_is_bare_glass_at_the_transparency_step(cx: &mut TestAppContext) {
     assert!(
         !bare(&shell, cx),
         "the shell comes back under the flow's fade"
+    );
+}
+
+/// Whether `part` is wholly inside `whole`.
+fn inside(part: gpui::Bounds<gpui::Pixels>, whole: gpui::Bounds<gpui::Pixels>) -> bool {
+    part.left() >= whole.left()
+        && part.right() <= whole.right()
+        && part.top() >= whole.top()
+        && part.bottom() <= whole.bottom()
+}
+
+/// Holds the step's loop `at` seconds in, and draws it.
+fn held_at(shell: &Entity<Shell>, cx: &mut VisualTestContext, at: f32) {
+    shell.update(cx, |shell, cx| shell.onboarding_hold_loop(Some(at), cx));
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn the_welcomes_pointer_clicks_each_tab_in_its_window(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
+    started(&shell, cx);
+    // The second tab, the third, then the first again, each as the pointer clicks it.
+    for (start, row) in WELCOME_AT.into_iter().zip(["row-1", "row-2", "row-0"]) {
+        held_at(&shell, cx, start + WELCOME_MOVE + WELCOME_CLICK / 2.);
+        let window = placed("window", cx).expect("the loop's window is drawn");
+        let pointer = placed("pointer", cx).expect("the pointer is drawn");
+        let tab = placed(row, cx).expect("the tab is drawn");
+        assert!(
+            inside(pointer, window) && tab.contains(&pointer.origin),
+            "the pointer's tip clicks {row} inside the loop's window, but it was at {pointer:?} \
+             with the tab at {tab:?} in the window at {window:?}"
+        );
+    }
+}
+
+#[gpui::test]
+fn the_colours_swipe_shows_one_spaces_sidebar_with_the_fingers_in_its_window(
+    cx: &mut TestAppContext,
+) {
+    let (shell, cx, _) = first_window(cx);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Color);
+    held_at(&shell, cx, COLOR_AT[0] + COLOR_SWIPE / 2.);
+    let window = placed("window", cx).expect("the loop's window is drawn");
+    let next = placed("next-space-row", cx).expect("the next Space's row is drawn");
+    let column = window.left() + px(SIDEBAR);
+    assert!(
+        next.right() <= column,
+        "halfway through the swipe the next Space's row shows only in the sidebar's column, \
+         left of {column:?}, but it showed to {:?}",
+        next.right()
+    );
+    let fingers = placed("fingers", cx).expect("the fingers are drawn as it swipes");
+    assert!(
+        inside(fingers, window),
+        "the fingers swipe in the loop's window at {window:?}, but were at {fingers:?}"
+    );
+}
+
+#[gpui::test]
+fn the_cards_welcome_waits_under_the_flow_and_comes_as_it_fades(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
+    started(&shell, cx);
+    waited(cx, 5.);
+    let shown = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        let now = cx.executor().now();
+        shell.read_with(cx, |shell, _| shell.card_opacity(now))
+    };
+    assert_eq!(
+        shown(&shell, cx),
+        0.,
+        "the card's welcome draws nothing under the flow, which the window shows through"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(
+        shown(&shell, cx) > 0.,
+        "the card's welcome shows as the flow fades"
     );
 }

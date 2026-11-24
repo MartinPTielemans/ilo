@@ -250,15 +250,16 @@ impl Shell {
     /// The slot's loop for `step`, `looped` seconds into it: at the colour, in the colour picked,
     /// else the first, paging to a Space in another.
     pub(super) fn sheet_art(&self, step: Step, looped: f32, colors: Colors) -> AnyElement {
+        let place = |name| (self.place(step, name)).map(IntoElement::into_any_element);
         match step {
-            Step::Intro => loops::welcome(looped, colors).into_any_element(),
+            Step::Intro => loops::welcome(looped, colors, &place).into_any_element(),
             Step::Color => {
                 let picked = (self.onboarding.as_ref())
                     .and_then(|onboarding| onboarding.picked)
                     .unwrap_or_default();
                 let other = (picked + SWATCHES.len() / 2) % SWATCHES.len();
                 let (picked, other) = (rgb(SWATCHES[picked]), rgb(SWATCHES[other]));
-                loops::colour(looped, picked, other, colors).into_any_element()
+                loops::colour(looped, picked, other, colors, &place).into_any_element()
             }
             _ => div().into_any_element(),
         }

@@ -3,7 +3,7 @@
 //! the core, and nothing it shows is kept. It plays only while its step shows on a visible window
 //! (Shell::onboarding_looping); with Reduce Motion it's its last frame, still.
 
-use gpui::{PathBuilder, Rgba, canvas, div, point, prelude::*, px};
+use gpui::{AnyElement, PathBuilder, Rgba, canvas, div, point, prelude::*, px};
 
 use super::{Colors, Step, ease_in_out, ease_out, mix};
 use crate::tokens::shell::onboarding::loops as t;
@@ -12,6 +12,9 @@ use crate::tokens::shell::onboarding::loops as t;
 pub(super) fn has_loop(step: Step) -> bool {
     matches!(step, Step::Intro | Step::Color)
 }
+
+/// What keeps where a loop draws a part, by its name, for a test (Shell::place).
+pub(super) type Place<'a> = &'a dyn Fn(&'static str) -> Option<AnyElement>;
 
 /// Where a loop is `secs` after it started, or its last frame while `still`.
 pub(super) fn at(secs: Option<f32>, still: bool) -> f32 {
@@ -23,8 +26,9 @@ pub(super) fn at(secs: Option<f32>, still: bool) -> f32 {
 
 /// The welcome's: a pointer goes down the tabs, clicking the second, the third, then the first
 /// again, and the page follows each click.
-pub(super) fn welcome(t_: f32, colors: Colors) -> impl IntoElement {
+pub(super) fn welcome(t_: f32, colors: Colors, place: Place) -> impl IntoElement {
     const ROWS: [&str; 3] = ["Field notes", "Trail map", "Recipes"];
+    const PLACES: [&str; 3] = ["row-0", "row-1", "row-2"];
     const ORDER: [usize; 3] = [1, 2, 0];
     let rest = (t::SIDEBAR + 110., t::ROWS_TOP + 4. * t::ROW + 40.);
     let mut pointer = rest;
@@ -54,7 +58,7 @@ pub(super) fn welcome(t_: f32, colors: Colors) -> impl IntoElement {
             _ if index == before => 1. - faded,
             _ => 0.,
         };
-        row(name, index, plate, colors)
+        row(name, index, plate, colors).children(place(PLACES[index]))
     });
     let pages = (0..ROWS.len()).map(|index| {
         let opacity = match index {
@@ -78,7 +82,8 @@ pub(super) fn welcome(t_: f32, colors: Colors) -> impl IntoElement {
                 .border_1()
                 .border_color(colors.ink(0.5 * (1. - grown)))
         });
-    window(
+    // The pointer and its ring are in the window's own terms, as the rows they click are.
+    let shown = window(
         colors,
         None,
         div()
@@ -89,13 +94,21 @@ pub(super) fn welcome(t_: f32, colors: Colors) -> impl IntoElement {
             .children(rows),
         div().children(pages),
     )
+    .children(place("window"))
     .children(ring)
-    .child(arrow(pointer, colors).opacity(seen))
+    .child(arrow(pointer, colors, place).opacity(seen));
+    centred(shown)
 }
 
 /// The colour's: the window glows with the colour picked; two fingers swipe to another Space,
 /// which glows with its own, and back.
-pub(super) fn colour(t_: f32, picked: Rgba, other: Rgba, colors: Colors) -> impl IntoElement {
+pub(super) fn colour(
+    t_: f32,
+    picked: Rgba,
+    other: Rgba,
+    colors: Colors,
+    place: Place,
+) -> impl IntoElement {
     const SPACES: [[&str; 3]; 2] = [["Inbox", "Notes", "Map"], ["Studio", "Sketches", "Palette"]];
     let [there, back] = t::COLOR_AT;
     let swiped = |start: f32| ease_in_out(((t_ - start) / t::COLOR_SWIPE).clamp(0., 1.));
@@ -111,19 +124,31 @@ pub(super) fn colour(t_: f32, picked: Rgba, other: Rgba, colors: Colors) -> impl
             (way * 40. * swiped(start), seen)
         })
     });
-    let sidebar = div()
+    // The Spaces side by side, slid along under the sidebar's column, which shows one at rest.
+    let spaces = div()
         .absolute()
         .top_0()
+        .bottom_0()
         .left(px(-t::SIDEBAR * across))
         .w(px(2. * t::SIDEBAR))
         .flex()
-        .children(SPACES.iter().map(|rows| {
-            div().w(px(t::SIDEBAR)).children(
-                rows.iter().enumerate().map(|(index, name)| {
+        .children(SPACES.iter().enumerate().map(|(space, rows)| {
+            div().relative().w(px(t::SIDEBAR)).h_full().children(
+                rows.iter().enumerate().map(move |(index, name)| {
+                    let named = (space == 1 && index == 0).then(|| place("next-space-row"));
                     row(name, index, if index == 0 { 1. } else { 0. }, colors)
+                        .children(named.flatten())
                 }),
             )
         }));
+    let sidebar = div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left_0()
+        .w(px(t::SIDEBAR))
+        .overflow_hidden()
+        .child(spaces);
     let fingers = fingers.map(|(moved, seen)| {
         let middle = t::SIDEBAR / 2. + moved;
         div()
@@ -134,17 +159,21 @@ pub(super) fn colour(t_: f32, picked: Rgba, other: Rgba, colors: Colors) -> impl
             .gap(px(6.))
             .opacity(seen)
             .children((0..2).map(|_| div().size(px(7.)).rounded_full().bg(colors.ink(0.45))))
+            .children(place("fingers"))
     });
-    window(
+    let shown = window(
         colors,
         Some(mix(picked, other, across)),
         sidebar,
         page(0, colors),
     )
-    .children(fingers)
+    .children(place("window"))
+    .children(fingers);
+    centred(shown)
 }
 
-/// The small window: its glow from the sidebar's foot, its sidebar and its page.
+/// The small window: its glow from the sidebar's foot, its sidebar and its page. What a loop
+/// adds over it goes in it, in its terms.
 fn window(
     colors: Colors,
     glow: Option<Rgba>,
@@ -158,7 +187,7 @@ fn window(
         .flex()
         .gap(px(5.))
         .children((0..3).map(|_| div().size(px(7.)).rounded_full().bg(colors.ink(0.22))));
-    let shown = div()
+    div()
         .relative()
         .flex_none()
         .w(px(t::WINDOW_WIDTH))
@@ -182,7 +211,11 @@ fn window(
                 .rounded(px(t::PLATE_RADIUS))
                 .bg(colors.ink(0.05))
                 .child(page),
-        );
+        )
+}
+
+/// The small window centred in the slot.
+fn centred(shown: gpui::Div) -> gpui::Div {
     div()
         .size_full()
         .flex()
@@ -307,7 +340,7 @@ fn lerp(from: (f32, f32), to: (f32, f32), t_: f32) -> (f32, f32) {
 }
 
 /// The pointer, its tip at `at` in the window.
-fn arrow(at: (f32, f32), colors: Colors) -> gpui::Div {
+fn arrow(at: (f32, f32), colors: Colors, place: Place) -> gpui::Div {
     // An arrow's outline, its tip at the origin, as a system pointer is drawn.
     const OUTLINE: [(f32, f32); 7] = [
         (0., 0.),
@@ -353,4 +386,5 @@ fn arrow(at: (f32, f32), colors: Colors) -> gpui::Div {
             )
             .size_full(),
         )
+        .children(place("pointer"))
 }

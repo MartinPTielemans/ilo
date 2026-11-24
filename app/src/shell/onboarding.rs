@@ -1874,14 +1874,17 @@ impl Shell {
             ))
     }
 
-    /// Keeps where the step shown draws `name`, for a test to click it; the step leaving, drawn
-    /// under it, keeps none.
+    /// Keeps where the step shown draws `name`, as much of it as shows, for a test to click it;
+    /// the step leaving, drawn under it, keeps none.
     pub(super) fn place(&self, step: Step, name: &'static str) -> Option<impl IntoElement + use<>> {
         let places = (self.onboarding.as_ref())
             .filter(|onboarding| onboarding.step == step)
             .map(|onboarding| onboarding.places.clone())?;
         let frame = canvas(
-            move |bounds, _, _| _ = places.borrow_mut().insert(name, bounds),
+            move |bounds, window, _| {
+                let shown = bounds.intersect(&window.content_mask().bounds);
+                places.borrow_mut().insert(name, shown);
+            },
             |_, _, _, _| {},
         );
         Some(frame.absolute().inset_0())
