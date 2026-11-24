@@ -644,7 +644,7 @@ pub(crate) fn finish_opening(
         platform::host_watch_option_taps(option_tapped);
         #[cfg(not(target_os = "linux"))]
         platform::host_watch_ui_keyboard(ui_keyboard_left);
-        platform::host_watch_resigning_active(launch_picture_on_resigning);
+        platform::host_watch_resigning_active(resigning_active);
         platform::host_watch_active(became_active);
     }
     follow_reduce_motion(cx);
