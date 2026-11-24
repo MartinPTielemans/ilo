@@ -2,8 +2,8 @@
 //! assistant's ⋯ menu and the ask before Sign Out; and Notifications' When to notify.
 
 use super::*;
-use browser::agents::task::{MODEL, model_default, model_line};
-use browser::needs_you::{Notify, WHEN_TO_NOTIFY, WHEN_TO_NOTIFY_LINE};
+use browser::agents::task::{MODEL, model_default};
+use browser::needs_you::{Notify, WHEN_TO_NOTIFY};
 
 impl Settings {
     /// Your assistant: a row for each CLI tasks from ⇥ in ⌘T run on, which signs in with its own
@@ -79,17 +79,13 @@ impl Settings {
                 settings.choose_model(&agents, cli, window, cx)
             }),
         );
-        let line = model_line(cli);
         let x = ROW_X + GLYPH_PLATE + GLYPH_PLATE_GAP;
         let controls = vec![
             popup
                 .child(self.drawn(format!("model {}", cli.id())))
                 .into_any_element(),
         ];
-        (
-            line_row(&self.look, MODEL, Some(line.into()), controls).pl(px(x)),
-            x,
-        )
+        (line_row(&self.look, MODEL, None, controls).pl(px(x)), x)
     }
 
     /// `cli`'s Model pop-up: its own default first, saying which model it is where the CLI says,
@@ -134,7 +130,7 @@ impl Settings {
         setting(
             &self.look,
             WHEN_TO_NOTIFY,
-            Some(WHEN_TO_NOTIFY_LINE.into()),
+            None,
             vec![
                 popup
                     .child(self.drawn("when to notify".into()))

@@ -493,11 +493,11 @@ impl gpui::Render for PicturesPage {
                 };
                 // Its Model row, as Settings draws it under its row, on `chosen` or its default.
                 let model = |cli: Cli, chosen: Option<&str>| {
-                    use browser::agents::task::{MODEL, model_default, model_line};
+                    use browser::agents::task::{MODEL, model_default};
                     let label = chosen.map_or_else(|| model_default(cli), str::to_string);
                     let popup = popup(&look, label, POPUP_WIDTH, false);
                     frame()
-                        .child(row_text(&look, MODEL, Some(model_line(cli).into())))
+                        .child(row_text(&look, MODEL, None))
                         .child(end([gpui::IntoElement::into_any_element(popup)]))
                         .pl(px(NESTED_X))
                 };
@@ -506,14 +506,10 @@ impl gpui::Render for PicturesPage {
                 nested = vec![(0, 1), (0, 3)];
                 match self.shown {
                     Pictures::Models => {
-                        use browser::needs_you::{Notify, WHEN_TO_NOTIFY, WHEN_TO_NOTIFY_LINE};
+                        use browser::needs_you::{Notify, WHEN_TO_NOTIFY};
                         let when = popup(&look, Notify::Away.title(), POPUP_WIDTH, false);
                         let when = frame()
-                            .child(row_text(
-                                &look,
-                                WHEN_TO_NOTIFY,
-                                Some(WHEN_TO_NOTIFY_LINE.into()),
-                            ))
+                            .child(row_text(&look, WHEN_TO_NOTIFY, None))
                             .child(end([gpui::IntoElement::into_any_element(when)]));
                         vec![
                             (

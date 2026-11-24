@@ -3835,17 +3835,11 @@ fn receipt(session: &Session, ended: &str) -> String {
     }
 }
 
-/// Settings › Agents' row under each assistant's, `{assistant}` its name: what its new tasks
-/// start with.
+/// Settings › Agents' row under each assistant's: what its new tasks start with. Its name carries
+/// it, so it has no line.
 pub const MODEL: &str = "Model";
-const MODEL_LINE: &str = "The model {assistant} uses for new tasks.";
-/// Model's first choice: the assistant's own default, passing it no model.
+/// Model's first choice, `{assistant}` its name: the assistant's own default, passing it no model.
 const MODEL_DEFAULT: &str = "{assistant}'s default";
-
-/// `cli`'s Model row's line.
-pub fn model_line(cli: Cli) -> String {
-    MODEL_LINE.replace("{assistant}", cli.assistant())
-}
 
 /// `cli`'s Model's first choice, as its pop-up and menu say it.
 pub fn model_default(cli: Cli) -> String {

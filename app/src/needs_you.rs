@@ -11,20 +11,11 @@ use std::rc::Rc;
 use gpui::{App, Global, SharedString};
 
 use crate::agents::page::clip;
-use crate::agents::task::{Card, Dot};
-
-/// A notification's words for a task that finished (Y4): its title, or an outside agent's name.
-pub const DONE: &str = "{task} · Done";
-/// And for one that needs the user.
-pub const NEEDS_YOU: &str = "{task} · Needs you";
+use crate::agents::task::{Card, Dot, Word};
 
 /// Settings › Agents' group and row that choose when these post.
 pub const NOTIFICATIONS: &str = "Notifications";
 pub const WHEN_TO_NOTIFY: &str = "When to notify";
-pub const WHEN_TO_NOTIFY_LINE: &str = concat!(
-    env!("APP_NAME"),
-    " notifies you when a task finishes or needs you."
-);
 const NOTIFY_AWAY: &str = concat!("When ", env!("APP_NAME"), " isn't in front");
 const NOTIFY_ALWAYS: &str = "Always";
 const NOTIFY_NEVER: &str = "Never";
@@ -206,11 +197,12 @@ fn said(card: &Card, told: Told) -> String {
         }
         false => card.name.to_string(),
     };
-    let words = match told {
-        Told::Done => DONE,
-        Told::NeedsYou => NEEDS_YOU,
+    // Y4: its title, or an outside agent's name, then its state's word, as its card says it.
+    let word = match told {
+        Told::Done => Word::Done,
+        Told::NeedsYou => Word::NeedsYou,
     };
-    words.replace("{task}", &task)
+    format!("{task} · {}", word.after_name())
 }
 
 #[cfg(target_os = "linux")]
