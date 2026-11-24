@@ -1376,8 +1376,9 @@ impl Browser for Fake {
         _: Option<Bounds<Pixels>>,
         cx: &mut App,
     ) {
-        // No command bar here: a new tab opens at once.
-        if editing.is_some() {
+        // No command bar here: a new tab opens at once. PREVIEW_BAR's bar is ⌘T's, up already
+        // when the shell's command asks for it, so there is nothing to open.
+        if editing.is_some() || command_bar::is_open(cx) {
             return;
         }
         let tab = self.next_id.get();
@@ -3251,6 +3252,14 @@ fn main() {
                 let top = y as f32 + command_bar::centered_top(height as f32);
                 let at = point(px(left as f32), px(top));
                 preview_bar(&mode, at, cx);
+                // The bar is ⌘T's, so the shell runs ⌘T's command as it does in the app and New
+                // Tab's row has the plate under it: a frame without it differs from the app in
+                // what a look is judged by (#4091).
+                if let Some(shell) = shell_window {
+                    shell
+                        .update(cx, |shell, _, cx| shell.run(Command::NewTab, "preview", cx))
+                        .ok();
+                }
             }
             if account.as_deref() == Some("approve") {
                 if !DIALOG_OPEN.replace(true) {
