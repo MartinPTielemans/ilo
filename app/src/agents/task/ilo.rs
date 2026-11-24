@@ -2,13 +2,16 @@
 //! tab the agent needs back, a sign-in ilo did and a change of the task's access. And of a task
 //! that has ended (#4105): that the user's reply took it up, and in the reply field's place, that
 //! its assistant no longer has the conversation or keeps none, or that its profile was deleted.
+//! And of a task with files (#4101) whose assistant ilo couldn't limit to them: that it started
+//! without them, stayed at its level or went back to it, or stopped; and that ilo couldn't end
+//! everything its assistant had started, or later did.
 //!
 //! An ilo line is its own kind of entry, never a message. Only the app makes one, from its own
 //! events: nothing an agent sends, no tool's argument and no page's text becomes one, so nothing
 //! they write can draw its mark or its buttons. Its words come from its kind (the conversation's
 //! words table) and its buttons from its kind alone (`buttons`). The only text it carries from
-//! elsewhere is a name, the page's button ilo stopped at or a site, which it draws as capped plain
-//! text set apart from its own words. Why a step is the user's is the agent's own message above
+//! elsewhere is a name, the page's button ilo stopped at, a site, or a folder or file the user
+//! gave, which it draws as capped plain text set apart from its own words. Why a step is the user's is the agent's own message above
 //! the line, in the agent's words; the line says only that it's theirs.
 
 use gpui::SharedString;
@@ -47,6 +50,9 @@ pub enum IloKind {
         /// Where, in the page's own words: the button ilo stopped the agent at, "Place order", or
         /// the site it was kept from.
         at: SharedString,
+        /// The refused step's under-way phrase, its first letter lowered, as the line says it
+        /// after "from": "clicking “Place order”". Empty where its step isn't traced.
+        doing: SharedString,
         why: Why,
         /// The access it was judged under.
         tier: Tier,
@@ -74,6 +80,34 @@ pub enum IloKind {
     /// allows. `tab` is the page the task stood on, or 0 with none. The count its line says is
     /// the app's own.
     Helpers { tab: u64, limit: HelpersLimit },
+    /// The task started, or went on, without files the user gave it, as ilo couldn't limit its
+    /// assistant to them (#4101).
+    StartedWithout { left: LeftOut },
+    /// The task stays at `at`, as ilo couldn't limit its assistant to `folder` at `refused`, the
+    /// level the user asked for, which it never had.
+    KeptAt {
+        at: Tier,
+        refused: Tier,
+        folder: SharedString,
+    },
+    /// The same once the task had been at `refused`, under the line that says the user set it:
+    /// ilo set it back to `at`.
+    SetBack {
+        at: Tier,
+        refused: Tier,
+        folder: SharedString,
+    },
+    /// The task stopped, as ilo couldn't start its assistant again without what the user took
+    /// back.
+    NotRestarted { left: LeftOut },
+    /// The task stopped, as ilo couldn't start its assistant again at `refused`, the level the
+    /// user raised it to.
+    NotRaised { refused: Tier },
+    /// ilo couldn't end everything the assistant had started, which can still reach what the
+    /// task was given.
+    LeftRunning { reach: Reach },
+    /// ilo later ended what the assistant had left running.
+    EndedLeft,
     /// The user's reply took up the task after it had ended, at `tier`, which the app decided.
     Resumed { tier: Tier },
     /// The assistant keeps the task's conversation on the user's computer, said once per profile.
@@ -93,6 +127,27 @@ pub enum IloKind {
     /// nowhere to work and its pages nowhere to go: a task a run of the browser before left. In
     /// the reply field's place.
     NoSpace,
+}
+
+/// What a task went on without, or couldn't be started again without, by the name the app shows
+/// for it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LeftOut {
+    /// The folder the user gave.
+    Folder(SharedString),
+    /// The one file they attached.
+    File(SharedString),
+    /// The files they attached, more than one, which the line counts.
+    Files(usize),
+}
+
+/// What the processes a run left can still reach of what its task was given: the folder, by the
+/// name the app shows for it, the files the user attached, or both.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Reach {
+    Folder(SharedString),
+    Files,
+    Both(SharedString),
 }
 
 /// Whether a line stands in the reply field's place, under the log, as the task takes no reply.
@@ -177,6 +232,14 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
         // Not Now keeps the tab, as the user's own.
         IloKind::TabBack { .. } => vec![IloButton::HandBack, IloButton::NotNow],
         IloKind::SignedIn { .. } | IloKind::TierChanged { .. } => Vec::new(),
+        // What happened, which no press undoes: the files are given again at a task's start.
+        IloKind::StartedWithout { .. }
+        | IloKind::KeptAt { .. }
+        | IloKind::SetBack { .. }
+        | IloKind::NotRestarted { .. }
+        | IloKind::NotRaised { .. }
+        | IloKind::LeftRunning { .. }
+        | IloKind::EndedLeft => Vec::new(),
         IloKind::Resumed { .. } | IloKind::KeptHere => Vec::new(),
         IloKind::Gone
         | IloKind::NotKept
@@ -188,11 +251,12 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
     }
 }
 
-/// A line's buttons as drawn beside `shown`, the page in place beside the conversation: a step on
-/// a page that isn't shows that page first, and only then offers it back (O2). A task with one
-/// page has it beside the conversation, so its step offers Hand Back at once.
+/// A line's buttons as drawn with `shown`, the page in the area: a step's page opens by itself as
+/// it turns to Needs you, so its line offers Hand Back at once, and Show Page only while the user
+/// has put another of the task's pages there (O2).
 pub fn drawn(line: &IloLine, shown: Option<u64>) -> Vec<IloButton> {
-    let away = matches!(&line.kind, IloKind::Yours { tab, site: Some(_) } if shown != Some(*tab));
+    let away = matches!(&line.kind, IloKind::Yours { tab, site: Some(_) }
+        if shown.is_some_and(|shown| shown != *tab));
     (buttons(line).into_iter())
         .map(|button| match button {
             IloButton::HandBack if away => IloButton::ShowPage,
@@ -210,6 +274,13 @@ pub fn tab(kind: &IloKind) -> Option<u64> {
         | IloKind::TabBack { tab }
         | IloKind::SignedIn { tab, .. } => Some(*tab),
         IloKind::TierChanged { .. } => None,
+        IloKind::StartedWithout { .. }
+        | IloKind::KeptAt { .. }
+        | IloKind::SetBack { .. }
+        | IloKind::NotRestarted { .. }
+        | IloKind::NotRaised { .. }
+        | IloKind::LeftRunning { .. }
+        | IloKind::EndedLeft => None,
         IloKind::Resumed { .. } | IloKind::KeptHere => None,
         IloKind::Gone
         | IloKind::NotKept
@@ -229,6 +300,7 @@ mod tests {
             kind: IloKind::Stopped {
                 tab: 1,
                 at: "Place order".into(),
+                doing: "clicking “Place order”".into(),
                 why,
                 tier,
                 count: 1,
@@ -290,8 +362,9 @@ mod tests {
         assert_eq!(buttons(&line(changed)), vec![]);
     }
 
-    /// O2: a step on a page that isn't beside the conversation offers Show Page, never Hand Back,
-    /// until that page is the one shown. With one page, the step offers Hand Back at once.
+    /// O2: a step on a page while the user has another of the task's pages in the area offers
+    /// Show Page, never Hand Back, until its page is the one shown. With none there its page opens
+    /// by itself (i), and with one page it's the task's, so either offers Hand Back at once.
     #[test]
     fn a_step_shows_its_page_before_it_offers_it_back() {
         use IloButton::*;
@@ -304,7 +377,7 @@ mod tests {
             settled: false,
         };
         let two = line(Some("boxoffice.example"));
-        assert_eq!(drawn(&two, None), vec![ShowPage, NotNow]);
+        assert_eq!(drawn(&two, None), vec![HandBack, NotNow]);
         assert_eq!(drawn(&two, Some(1)), vec![ShowPage, NotNow]);
         assert_eq!(drawn(&two, Some(2)), vec![HandBack, NotNow]);
         assert_eq!(drawn(&line(None), None), vec![HandBack, NotNow]);

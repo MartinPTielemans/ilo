@@ -1353,6 +1353,14 @@ enum Switch {
     Tab(u64),
 }
 
+/// What the composer's ↩ started, as the shell knows it: a start asked from Space `Asked`, until
+/// the Agents say which task it made, or that it made none.
+#[derive(Clone, Debug, PartialEq)]
+enum ShowStarted {
+    Asked(u64),
+    Task(SharedString),
+}
+
 pub struct Shell {
     browser: Rc<dyn Browser>,
     /// Holds GPUI's focus while nothing in the shell takes it, so the shortcuts have their context.
@@ -1896,6 +1904,11 @@ pub struct Shell {
     agent_history: Vec<crate::agent_history::Past>,
     /// The task the Archive brought back, whose conversation opens once its card is back.
     show_restored: Option<SharedString>,
+    /// What the composer's ↩ started: that task's view opens as its card comes in, if its Space
+    /// still shows no page.
+    show_started: Option<ShowStarted>,
+    /// The tasks a run before left that Latest tasks lists until one is opened (`set_kept_cards`).
+    kept_cards: Vec<crate::agents::task::Card>,
     /// The task's conversation shown in the page's place, and whether its field takes the keyboard
     /// once drawn (Agent task).
     talk: Option<conversation::Talk>,
@@ -1907,6 +1920,8 @@ pub struct Shell {
     /// page area shows of one (task_area.rs).
     task_spaces: Vec<Space>,
     task_area: Option<task_area::TaskArea>,
+    /// The task's view as it stood at a close of the window its pages haven't answered.
+    task_closing: Option<task_area::Closing>,
     /// The task Space the core shows while one of its pages is watched, else 0.
     task_core: u64,
     task_live_logged: Option<u64>,
@@ -2361,11 +2376,14 @@ impl Shell {
             archived_tasks: Vec::new(),
             agent_history: Vec::new(),
             show_restored: None,
+            show_started: None,
+            kept_cards: Vec::new(),
             talk: None,
             focus_talk: false,
             agent_status: Vec::new(),
             task_spaces: Vec::new(),
             task_area: None,
+            task_closing: None,
             task_core: 0,
             task_live_logged: None,
             task_strip_drawn: Rc::default(),
@@ -3141,6 +3159,10 @@ impl Shell {
 
     /// The Space the window shows. Which of its tabs shows follows in set_selected.
     pub fn set_space(&mut self, space: u64, cx: &mut Context<Self>) {
+        // Another Space shown leaves the empty page the composer's start was made from.
+        if space != self.space() {
+            self.show_started = None;
+        }
         // Another Space shown ends ⌘W's wait for the tab its own showed next (#3570).
         if self.close_waits.is_some_and(|(waits, _)| waits != space) {
             self.close_waits = None;
@@ -3527,6 +3549,10 @@ impl Shell {
     }
 
     pub fn set_selected(&mut self, tab: u64, cx: &mut Context<Self>) {
+        // A page shown leaves the empty page the composer's start would have opened over.
+        if tab != 0 {
+            self.show_started = None;
+        }
         // ⌘W's wait is for this selection only, whichever way it goes (#3570).
         let close_waits = self.close_waits.take();
         if self.task_tab_shown(tab, cx) {

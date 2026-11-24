@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 use super::*;
 use crate::agents::runner::{self, Launch, Server};
 
+/// When a task of these tests started, in seconds since 1970.
+const STARTED: u64 = 1_794_000_000;
+
 /// A folder of the test's own, as a profile's.
 fn profile(name: &str) -> PathBuf {
     static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -64,6 +67,7 @@ fn launch() -> Launch {
         instructions: "Work in the browser.".into(),
         tools: vec!["open_tab".into(), "finish".into()],
         helpers: false,
+        wall: None,
     }
 }
 
@@ -71,11 +75,16 @@ fn launch() -> Launch {
 fn the_table_has_a_row_for_each_assistant() {
     assert_eq!(keeps(Cli::Claude), Keeps::WhenWanted);
     assert_eq!(keeps(Cli::Codex), Keeps::Never);
-    assert!(matches!(decide(Cli::Claude, true), Keep::New(_)));
-    assert_eq!(decide(Cli::Claude, false), Keep::Nothing);
+    assert!(matches!(decide(Cli::Claude, true, false), Keep::New(_)));
+    assert_eq!(decide(Cli::Claude, false, false), Keep::Nothing);
     // Codex keeps nothing, whatever the switch says.
-    assert_eq!(decide(Cli::Codex, true), Keep::Nothing);
-    assert_eq!(decide(Cli::Codex, false), Keep::Nothing);
+    assert_eq!(decide(Cli::Codex, true, false), Keep::Nothing);
+    assert_eq!(decide(Cli::Codex, false, false), Keep::Nothing);
+    // A task with files keeps nothing, whatever the switch says, as one with the switch off.
+    for cli in [Cli::Claude, Cli::Codex] {
+        assert_eq!(decide(cli, true, true), decide(cli, false, false));
+        assert_eq!(decide(cli, false, true), Keep::Nothing);
+    }
 }
 
 #[test]
@@ -136,7 +145,9 @@ fn an_id_is_a_uuid_that_nothing_prints() {
 fn the_file_of_ids_holds_each_id_and_its_assistant_and_nothing_else() {
     let root = profile("file").join(FOLDER);
     let (mut kept, id) = (Kept::default(), Id::new());
-    kept.hold("task-1", Cli::Claude, id.clone(), "Default");
+    kept.hold("task-1", Cli::Claude, id.clone(), "Default", STARTED);
+    // Deleted from the Archive: its conversation is still to be removed.
+    kept.of_mut("task-1").unwrap().past = None;
     kept.write(&root);
     let saved: Value = serde_json::from_slice(&std::fs::read(root.join(INDEX)).unwrap()).unwrap();
     assert_eq!(saved, json!([{ "id": id.as_str(), "cli": "claude" }]));
@@ -217,7 +228,7 @@ fn a_removal_that_failed_removes_nothing_of_ilos_either() {
     assert!(folder(&root, &id).exists());
     // The id stays held, marked, and goes once a later try removes it.
     let mut kept = Kept::default();
-    kept.hold("task-1", Cli::Claude, id.clone(), "Default");
+    kept.hold("task-1", Cli::Claude, id.clone(), "Default", STARTED);
     assert!(!kept.had("task-1"));
     assert_eq!(kept.removing(|_| true), [(id.clone(), Cli::Claude)]);
     assert_eq!(kept.removing(|_| true), [], "removed twice at once");
@@ -283,6 +294,31 @@ fn no_code_asks_an_assistant_to_remove_everything() {
     assert!(read > 20, "read only {read} files");
 }
 
+/// A task has its row from its start, with no word of what was asked: if the browser goes without
+/// writing its end, the run after finds a task that failed at the time it started, and the name
+/// its agent gave it meanwhile.
+#[test]
+fn a_task_under_way_has_a_row_that_reads_as_one_that_broke_off() {
+    let root = profile("under-way").join(FOLDER);
+    let (mut kept, id) = (Kept::default(), Id::new());
+    kept.hold("task-1", Cli::Claude, id.clone(), "Profile 2", STARTED);
+    kept.write(&root);
+    let saved: Value = serde_json::from_slice(&std::fs::read(root.join(INDEX)).unwrap()).unwrap();
+    let row = json!({
+        "id": id.as_str(), "cli": "claude", "title": "", "state": "failed",
+        "ended": STARTED, "profile": "Profile 2",
+    });
+    assert_eq!(saved, json!([row]));
+    kept.of_mut("task-1").unwrap().past.as_mut().unwrap().title = "Lisbon seats".into();
+    kept.write(&root);
+    let mut after = Kept::default();
+    assert!(after.read(&root));
+    let under_way = Past::under_way("Lisbon seats".into(), STARTED);
+    assert_eq!(after.left(), [(id.clone(), Cli::Claude, under_way)]);
+    // It's a row as any other's, so nothing takes it for one to remove.
+    assert_eq!(after.removing(|record| record.past.is_none()), []);
+}
+
 /// Of a task that has ended the file says its title, how and when it ended and its profile, and
 /// no more; a run after takes them back as they were written, and of a file someone changed,
 /// only what has their shape: an end it doesn't know leaves an id alone, a profile with a path
@@ -291,7 +327,7 @@ fn no_code_asks_an_assistant_to_remove_everything() {
 fn the_file_says_of_an_ended_task_its_title_its_end_and_its_profile() {
     let root = profile("past").join(FOLDER);
     let (mut kept, id) = (Kept::default(), Id::new());
-    kept.hold("task-1", Cli::Claude, id.clone(), "Profile 2");
+    kept.hold("task-1", Cli::Claude, id.clone(), "Profile 2", STARTED);
     kept.of_mut("task-1").unwrap().past = Some(Past {
         title: "Lisbon seats".into(),
         end: End::Limit,
@@ -361,7 +397,7 @@ fn a_task_that_takes_no_reply_has_an_id_alone_in_the_file() {
         serde_json::from_slice(&std::fs::read(root.join(INDEX)).unwrap()).unwrap()
     };
     let (mut kept, id) = (Kept::default(), Id::new());
-    kept.hold("task-1", Cli::Claude, id.clone(), "Default");
+    kept.hold("task-1", Cli::Claude, id.clone(), "Default", STARTED);
     kept.of_mut("task-1").unwrap().past = past();
     assert_eq!(rows(&kept)[0]["title"], json!("Lisbon seats"));
     let alone = json!([{ "id": id.as_str(), "cli": "claude" }]);

@@ -61,6 +61,8 @@ pub(super) struct Recorder {
     calls: RefCell<Vec<String>>,
     /// What the window's resting bars asked of the core, in order (#4140).
     pub(super) resting: Rc<RefCell<Vec<String>>>,
+    /// The in-place bar's profile is new: it has learned no agent till this goes false.
+    pub(super) unlearned: Rc<std::cell::Cell<bool>>,
     /// How many detents the trackpad was asked for.
     pub(super) detents: Cell<usize>,
     /// How many tabs and folders it was asked to move.
@@ -1866,6 +1868,7 @@ impl Browser for Recorder {
         self.record("command bar in place".into());
         let host = resting_bar::RestingBar {
             asked: self.resting.clone(),
+            unlearned: self.unlearned.clone(),
         };
         crate::command_bar::in_place(Rc::new(host), window, cx)
     }
@@ -1875,12 +1878,24 @@ impl Browser for Recorder {
         agent: &str,
         asked: &str,
         home: u64,
-        tier: crate::agents::tier::Tier,
+        start: crate::agents::task::Start,
         _: &mut App,
     ) {
+        // The model only when the user picked one: "on " and its id, empty for the default. The
+        // pages only when the user added some: their addresses, and "only them" for Only the
+        // sites you add.
+        let model = (start.model.as_ref()).map_or(String::new(), |id| format!(" on {id:?}"));
+        let pages = match (start.pages.is_empty(), start.only_added) {
+            (true, _) => String::new(),
+            (false, only) => format!(
+                " with {:?}{}",
+                start.pages,
+                if only { " only them" } else { "" }
+            ),
+        };
         self.record(format!(
-            "start task {agent} {asked} from {home} at {}",
-            tier.label()
+            "start task {agent} {asked} from {home} at {}{model}{pages}",
+            start.tier.label()
         ));
     }
 
@@ -2008,6 +2023,10 @@ impl Browser for Recorder {
 
     fn off_limits(&self, _: &mut App) {
         self.record("off limits".into());
+    }
+
+    fn agent_access(&self, _: &mut App) {
+        self.record("agent access".into());
     }
 
     fn agents_settings(&self, _: &mut App) {

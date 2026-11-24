@@ -1,8 +1,8 @@
 //! The wall a task's assistant runs inside when the task has files (#4101): the system holds the
 //! level of files::allows around the assistant's whole process, so the assistant's own checks
 //! aren't what keeps it in. The app grants nothing until put_up answers that the wall is up, and a
-//! task whose wall can't be put up doesn't start with its files. No system has the launcher yet, so
-//! every answer here is no.
+//! task whose wall can't be put up doesn't start with its files. The Mac has its launcher
+//! (launch.rs), which nothing starts through yet, so every answer here is still no.
 //!
 //! Which refusals reach ilo, for the line that names them: a command the assistant asks ilo about
 //! first (Codex under an approval policy that asks, Claude Code's permission prompt) is refused by
@@ -29,7 +29,13 @@ use std::time::SystemTime;
 use super::runner::Cli;
 use super::tier::Tier;
 
+pub mod launch;
+pub mod leftovers;
 pub mod listener;
+/// The Mac's answers for ending what a walled task left running, which nothing asks yet.
+#[cfg(target_os = "macos")]
+#[path = "../../platform/mac/wall_walk.rs"]
+pub mod walk_mac;
 
 /// Why this system can't wall a task in, for the menu's file and folder rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -109,12 +115,28 @@ pub enum Refusal {
 
 /// The wall a task's assistant runs inside: the runner starts the assistant in it, and it's held
 /// for the run and dropped with the process.
-#[derive(Debug)]
 pub struct Wall {
     /// The granted folder, or None for a task with no folder.
     folder: Option<PathBuf>,
     /// When it went up: the task's own links are the ones made, moved or retargeted since.
     started: SystemTime,
+    /// What starts a program inside it, or None for a task with no files, whose program starts
+    /// as it always has.
+    launcher: Option<launch::Launcher>,
+    /// The task's own folder for temporary files, which put_up makes for it alone, or None
+    /// until it makes one.
+    tmp: Option<PathBuf>,
+    /// The task's TMP and mark, which its rules allow: what tells what is inside this wall.
+    place: Option<std::sync::Arc<leftovers::Place>>,
+}
+
+impl std::fmt::Debug for Wall {
+    /// Whether it has a folder and never which, as what holds a Wall may reach a log (#3656).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Wall")
+            .field("folder", &self.folder.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Wall {
@@ -125,6 +147,43 @@ impl Wall {
     pub fn started(&self) -> SystemTime {
         self.started
     }
+
+    /// Where the assistant inside keeps its temporary files, which its start is told (runner.rs).
+    pub fn tmp(&self) -> Option<&Path> {
+        self.tmp.as_deref()
+    }
+
+    /// A wall as put_up answers one for a task with files, for a test of what starts inside it:
+    /// no launcher, so the test's stand-in starts as any program, and no folder's name.
+    #[cfg(test)]
+    pub(crate) fn for_test(tmp: Option<PathBuf>) -> Wall {
+        Wall {
+            folder: None,
+            started: SystemTime::now(),
+            launcher: None,
+            tmp,
+            place: None,
+        }
+    }
+}
+
+impl Granted {
+    /// A folder granted in a test of what a task with one does, which is nowhere: the folder
+    /// panel alone grants a real one.
+    #[cfg(test)]
+    pub(crate) fn for_test() -> Granted {
+        Granted {
+            root: PathBuf::from("/nonexistent/folder"),
+        }
+    }
+
+    /// The same by a name of the test's own, for a test of where a folder's name reaches.
+    #[cfg(test)]
+    pub(crate) fn named_for_test(name: &str) -> Granted {
+        Granted {
+            root: Path::new("/nonexistent").join(name),
+        }
+    }
 }
 
 /// Puts the wall up for a task's start, a raise or a take-back. A task with no files needs none and
@@ -134,6 +193,9 @@ pub fn put_up(task: &WallFor) -> Result<Wall, WallRefused> {
         return Ok(Wall {
             folder: None,
             started: SystemTime::now(),
+            launcher: None,
+            tmp: None,
+            place: None,
         });
     }
     available().map_err(WallRefused::Unavailable)?;
@@ -232,6 +294,20 @@ mod tests {
                     .all(|read| read != tasks && read.starts_with(tasks))
             );
         }
+    }
+
+    #[test]
+    fn a_wall_printed_names_no_folder() {
+        let wall = Wall {
+            folder: Some(PathBuf::from("/nonexistent/Private Letters")),
+            started: SystemTime::now(),
+            launcher: None,
+            tmp: None,
+            place: None,
+        };
+        let printed = format!("{wall:?}");
+        assert!(printed.contains("folder: true"), "{printed}");
+        assert!(!printed.contains("nonexistent") && !printed.contains("Letters"));
     }
 
     #[test]

@@ -472,7 +472,7 @@ impl gpui::Render for PicturesPage {
                 use browser::agents::ready::Ready;
                 use browser::agents::runner::Cli;
                 use browser::agents::sign_in::{Row, shown};
-                use browser::settings_rows::{another_agent_row, assistant_row};
+                use browser::settings_rows::assistant_row;
                 let row = |cli, ready, plan: Option<&str>, row: Row, marked| {
                     let shown = shown(cli, ready, plan, &row);
                     assistant_row(
@@ -485,12 +485,6 @@ impl gpui::Render for PicturesPage {
                         Rc::new(|_, _, _| {}),
                     )
                 };
-                // Where the parity sheet waits for the rows to be drawn.
-                let another = || {
-                    another_agent_row(&look, a11y, |_, _| {})
-                        .relative()
-                        .child(drawn("assistant rows".into(), self.logged.clone()))
-                };
                 // Its Model row, as Settings draws it under its row, on `chosen` or its default.
                 let model = |cli: Cli, chosen: Option<&str>| {
                     use browser::agents::task::{MODEL, model_default};
@@ -500,6 +494,12 @@ impl gpui::Render for PicturesPage {
                         .child(row_text(&look, MODEL, None))
                         .child(end([gpui::IntoElement::into_any_element(popup)]))
                         .pl(px(NESTED_X))
+                };
+                // The group's last row, where the parity sheet waits for the rows to be drawn.
+                let last = || {
+                    model(Cli::Codex, None)
+                        .relative()
+                        .child(drawn("assistant rows".into(), self.logged.clone()))
                 };
                 // A made-up assistant's words, as a failed sign-in shows them.
                 let said = "Your workspace doesn't allow Codex".to_string();
@@ -529,8 +529,7 @@ impl gpui::Render for PicturesPage {
                                     row(Cli::Claude, Ready::SignedIn, None, Row::Idle, true),
                                     model(Cli::Claude, Some("Sonnet")),
                                     row(Cli::Codex, Ready::SignedOut, None, Row::Idle, false),
-                                    model(Cli::Codex, None),
-                                    another(),
+                                    last(),
                                 ],
                             ),
                             (Some(ACCESS), access),
@@ -544,8 +543,7 @@ impl gpui::Render for PicturesPage {
                                 row(Cli::Claude, Ready::SignedOut, None, Row::Idle, false),
                                 model(Cli::Claude, None),
                                 row(Cli::Codex, Ready::NotFound, None, Row::Idle, false),
-                                model(Cli::Codex, None),
-                                another(),
+                                last(),
                             ],
                         ),
                         (
@@ -585,8 +583,7 @@ impl gpui::Render for PicturesPage {
                                 row(Cli::Claude, Ready::SignedIn, None, Row::Idle, true),
                                 model(Cli::Claude, None),
                                 row(Cli::Codex, Ready::SignedIn, Some("Plus"), Row::Idle, false),
-                                model(Cli::Codex, None),
-                                another(),
+                                last(),
                             ],
                         ),
                         (

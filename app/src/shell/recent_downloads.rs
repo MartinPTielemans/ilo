@@ -652,7 +652,10 @@ impl Shell {
             .rounded(px(PLATE_RADIUS));
         let plate = match (live, capture) {
             (false, _) => plate,
-            (true, None) => self.download_row(plate, id, "recent downloads", cx),
+            (true, None) => {
+                let lit = self.palette.plate(STATE_HOVERED);
+                self.download_row(plate, id, "recent downloads", lit, cx)
+            }
             // A capture's row opens it as its tile in Media does, and has its menu.
             (true, Some(capture)) => {
                 let path = capture.path.clone();

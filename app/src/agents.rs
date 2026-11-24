@@ -178,6 +178,9 @@ pub struct Status {
     /// The tabs the user holds from it, each with what it asked of the user, or empty if the user
     /// took it over.
     pub held: Vec<(u64, SharedString)>,
+    /// Those of `held` the user took over themselves, by Take Over or a press in the page, as the
+    /// hold's kind says, never its words: a hand-off or an ask is the agent's, whatever its reason.
+    pub taken: Vec<u64>,
 }
 
 /// The user's answer to an agent's question.
@@ -315,6 +318,9 @@ pub trait Browser {
     fn profile_space(&self, profile: &str) -> u64;
     /// Whether there is a profile whose folder is named `profile`.
     fn has_profile(&self, profile: &str) -> bool;
+    /// Whether `space` is a private window's own Space. No task starts from one, as agents get
+    /// no path into private windows.
+    fn private_space(&self, space: u64) -> bool;
     /// Sends `sent` from the page in the agent's `tab`, as the page's own script could, to its own
     /// site (bc_agent_request). Its answer comes to `Agents::request_done` with `request`.
     fn request(&self, agent: &str, tab: u64, request: u64, sent: &request::Request);
@@ -980,6 +986,9 @@ struct Held {
     call: u64,
     /// What the agent asked the user to do, or empty if they took it over.
     why: String,
+    /// Whether the user took it over themselves (`take_over`), rather than the agent or its page
+    /// handing it to them: only that hold gives the page the keyboard by itself.
+    taken: bool,
     /// The handoff's question, or the agent's asking for the tab back, for its card.
     question: u64,
     /// Why the agent asks for the tab back (ask_for_tab), while its call waits for the answer.
@@ -1147,7 +1156,6 @@ impl Agents {
         .collect();
         self.tasks_off = tasks.get("on").and_then(Value::as_bool) == Some(false);
         self.tasks.kept.off = tasks.get("keep").and_then(Value::as_bool) == Some(false);
-        self.tasks.kept.told = tasks.get("kept_told").and_then(Value::as_bool) == Some(true);
         // The conversations kept for the tasks of a run before go, as its tasks went (#4105): now
         // that the assistants found are known, as each removes its own.
         self.take_old_kept(cx);
@@ -1199,7 +1207,7 @@ impl Agents {
         self.notify
     }
 
-    /// Settings › Agents' When to notify.
+    /// Settings › Agents' Notify.
     pub fn set_notify(&mut self, notify: crate::needs_you::Notify, cx: &mut Context<Self>) {
         self.notify = notify;
         self.save();
@@ -1290,13 +1298,24 @@ impl Agents {
     }
 
     /// The clients Settings › Agents lists: those found here, any connected, whose Disconnect
-    /// stays though the client has gone, and any other MCP client.
+    /// stays though the client has gone, and any other MCP client. A client whose CLI Your
+    /// assistant's look found is here though its files aren't, as where CLAUDE_CONFIG_DIR moves
+    /// them, so Any MCP client's line never calls it missing beside its row saying it's signed in.
     pub fn listed(&self) -> Vec<Client> {
+        let ran = |client: Client| {
+            client.cli().is_some_and(|cli| {
+                !matches!(
+                    self.found(cli),
+                    ready::Ready::NotFound | ready::Ready::Unknown
+                )
+            })
+        };
         (Client::APPS.into_iter())
             .filter(|client| {
                 *client == Client::Other
                     || self.found.contains(client)
                     || self.is_connected(*client)
+                    || ran(*client)
             })
             .collect()
     }
@@ -1536,6 +1555,7 @@ impl Agents {
                 reply: None,
                 timer: None,
                 sign_in: false,
+                taken: false,
             };
             self.held.insert(tab, held);
             self.carry(tab, held::Event::Passkey, life, actions, cx);
@@ -2000,6 +2020,7 @@ impl Agents {
                     reply: Some(reply),
                     timer: None,
                     sign_in: false,
+                    taken: false,
                 };
                 self.held.insert(tab, held);
                 self.carry(tab, held::Event::HandOff, life, actions, cx);
@@ -2730,6 +2751,7 @@ impl Agents {
             reply: Some(reply),
             timer: None,
             sign_in: true,
+            taken: false,
         };
         self.held.insert(tab, held);
         self.carry(tab, held::Event::HandOff, life, actions, cx);
@@ -2758,6 +2780,7 @@ impl Agents {
             reply: None,
             timer: None,
             sign_in: false,
+            taken: true,
         };
         self.held.insert(tab, held);
         // The core ends the agent's session there, which logs it.
@@ -3021,12 +3044,18 @@ impl Agents {
                     .map(|(&tab, held)| (tab, held.why.clone().into()))
                     .collect();
                 held.sort();
+                let mut taken: Vec<u64> = (self.held.iter())
+                    .filter(|(_, held)| held.agent == agent && held.taken)
+                    .map(|(&tab, _)| tab)
+                    .collect();
+                taken.sort();
                 Status {
                     agent: agent.to_string().into(),
                     name: self.agent_name(agent),
                     space: self.browser.agent_space(agent),
                     doing: self.doing.get(agent).cloned().unwrap_or_default(),
                     held,
+                    taken,
                 }
             })
             .collect()
@@ -3479,6 +3508,7 @@ impl Agents {
             reply: Some(reply),
             timer: None,
             sign_in: false,
+            taken: false,
         };
         self.held.insert(tab, held);
         self.carry(tab, held::Event::HandOff, life, actions, cx);
@@ -5113,7 +5143,6 @@ impl Agents {
             "models": models,
             "found": found,
             "keep": !self.tasks.kept.off,
-            "kept_told": self.tasks.kept.told,
             "notify": self.notify.id(),
         });
         let saved = json!({
@@ -5686,23 +5715,28 @@ pub fn web_site(site: &str) -> bool {
 }
 
 /// The local time `at`, in seconds since 1970, reads on the clock here, such as "18:00", with
-/// its day if it's a day or more away, such as "Tue 18:00".
+/// its day if it's a day or more away, such as "Tue 18:00". On the system's clock, 12- or
+/// 24-hour, as every time a task says is and History's rows are (clock.rs).
 pub fn local_time(at: u64) -> String {
     use chrono::{Local, TimeZone};
     let Some(time) = Local.timestamp_opt(at as i64, 0).single() else {
         return String::new();
     };
     let soon = time.signed_duration_since(Local::now()) < chrono::Duration::hours(20);
-    time.format(if soon { "%H:%M" } else { "%a %H:%M" })
-        .to_string()
+    let hour = crate::clock::hour_minute(crate::clock::twelve_hour());
+    match soon {
+        true => time.format(hour).to_string(),
+        false => time.format(&format!("%a {hour}")).to_string(),
+    }
 }
 
 /// When `at` was, in seconds since 1970, as a finished task says it: the time on the clock here
-/// if it was today, "13:31", else its day, "21 Nov", as a time alone reads as today's.
+/// if it was today, "13:31" or "1:31 PM" as the system's clock is, else its day, "21 Nov", as a
+/// time alone reads as today's.
 pub fn time_or_day(at: u64) -> String {
     use chrono::{Local, TimeZone};
     match Local.timestamp_opt(at as i64, 0).single() {
-        Some(time) => time_or_day_on(time, Local::now()),
+        Some(time) => time_or_day_on(time, Local::now(), crate::clock::twelve_hour()),
         None => String::new(),
     }
 }
@@ -5710,13 +5744,17 @@ pub fn time_or_day(at: u64) -> String {
 fn time_or_day_on<Zone: chrono::TimeZone>(
     time: chrono::DateTime<Zone>,
     now: chrono::DateTime<Zone>,
+    twelve: bool,
 ) -> String
 where
     Zone::Offset: std::fmt::Display,
 {
     let today = time.date_naive() == now.date_naive();
-    time.format(if today { "%H:%M" } else { "%-d %b" })
-        .to_string()
+    let form = match today {
+        true => crate::clock::hour_minute(twelve),
+        false => "%-d %b",
+    };
+    time.format(form).to_string()
 }
 
 /// An agent's sentence for a request as an opened log entry shows it, marked as its words:
@@ -5742,7 +5780,7 @@ pub fn ago(at: SystemTime, now: SystemTime) -> String {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// Whether the agent with the id `agent` runs a task the user asked from ⌘T (Agent task).
 pub fn is_task(agent: &str) -> bool {

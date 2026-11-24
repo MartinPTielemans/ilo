@@ -195,6 +195,11 @@ impl command_bar::Host for Bar {
             name: agent.cli.name().into(),
             glyph: agent.cli.glyph(),
             model: agents.task_model_name(agent.cli),
+            model_id: agents.task_model(agent.cli).to_string(),
+            default_row: browser::agents::task::model_default(agent.cli).into(),
+            default_model: (agents.task_default_model(agent.cli))
+                .map(|name| name.to_string().into()),
+            models: agents.task_models(agent.cli),
             resets: agent.resets,
         });
         Some(command_bar::TaskAgents {
@@ -232,6 +237,10 @@ impl command_bar::Host for Bar {
             shell.reopen_archived(archived, cx)
         })
         .unwrap_or(false)
+    }
+
+    fn look_for_agents(&self, cx: &mut App) {
+        agents_core::update(|agents, cx| agents.task_ask_shown(cx));
     }
 
     fn asking(&self, shown: bool, cx: &mut App) {

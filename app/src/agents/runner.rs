@@ -6,9 +6,11 @@
 //! Claude Code runs in print mode with stream-json both ways, so a reply is one more line on its
 //! stdin. Codex runs as `codex app-server`, which speaks newline JSON-RPC (see codex.rs).
 
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::time::Instant;
@@ -17,6 +19,7 @@ use futures::channel::mpsc::UnboundedSender;
 use serde_json::{Value, json};
 
 use super::kept::Keep;
+use super::wall::{Wall, WallRefused, leftovers};
 
 /// A CLI that runs tasks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -108,6 +111,8 @@ pub struct Launch {
     pub tools: Vec<String>,
     /// Whether it gets its helper tool (#4102), which only Claude's arguments read.
     pub helpers: bool,
+    /// The wall it starts inside (#4101), or None for a start that asked for none.
+    pub wall: Option<Arc<Wall>>,
 }
 
 /// What a task's CLI says, as the reader thread hands it to the UI thread.
@@ -126,11 +131,15 @@ pub enum Out {
     Ended(Option<Failure>),
     /// The process has gone: its output closed. What it last said on stderr.
     Gone(String),
+    /// A start inside a wall with files: the assistant is inside it, or nothing started and why.
+    /// Before anything else of the run's, and Gone follows a no.
+    Walled(Result<(), WallRefused>),
     /// What its output tells of a helper (#4102), by the call of the task's that asked for it.
     Helper { id: String, told: Helper },
-    /// Its CLI says a helper started, `deep` levels under the task, or 0 if it doesn't say how
-    /// deep: what ilo counts for the limit.
-    Started { deep: u64 },
+    /// Its CLI says a helper started, by the call of the task's that asked for it if it names
+    /// one, `deep` levels under the task, or 0 if it doesn't say how deep: what ilo counts for
+    /// the limit, and from when the helper shows.
+    Started { id: Option<String>, deep: u64 },
     /// Its output shows a helper ilo doesn't allow, which stops the task.
     NotAllowed(super::task::ilo::HelpersLimit),
     /// A run's first line lists its kinds of helper: whether each is ilo's.
@@ -146,6 +155,13 @@ pub enum Helper {
     Asked(String),
     /// It calls one of the browser's tools on this tab.
     On(u64),
+    /// It calls the browser's tool that opens a tab, which names none: the page is its own once
+    /// it's open.
+    Opens,
+    /// It calls a tool that names no tab.
+    Calls,
+    /// Its CLI says it ended, however it did.
+    Ended,
 }
 
 /// Why a turn or a run ended badly.
@@ -176,6 +192,10 @@ pub struct Process {
     id: u32,
     /// Codex's thread and turn, once it has them.
     codex: Option<Arc<super::codex::State>>,
+    /// Whether it's still the wall's launcher, which reads nothing it's sent.
+    rising: Arc<AtomicBool>,
+    /// The wall of a walled start, whose group and leftovers its end ends.
+    walled: Option<Arc<Wall>>,
 }
 
 impl Process {
@@ -204,7 +224,10 @@ impl Process {
         if let Some(folder) = launch.config.parent() {
             std::fs::create_dir_all(folder)?;
         }
-        let mut command = crate::child::command(&launch.program);
+        let mut command = match &launch.wall {
+            Some(wall) => wall.command(&launch.program),
+            None => crate::child::command(&launch.program),
+        };
         match launch.cli {
             Cli::Claude => {
                 super::clients::write_private(
@@ -225,7 +248,13 @@ impl Process {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         environment(&mut command, launch);
-        let mut child = command.spawn()?;
+        let (mut child, rising) = match &launch.wall {
+            Some(wall) => wall.start(&mut command)?,
+            None => (command.spawn()?, None),
+        };
+        let walled = rising.is_some();
+        let wall = launch.wall.clone().filter(|_| walled);
+        let still_rising = Arc::new(AtomicBool::new(walled));
         let stdin = Arc::new(Mutex::new(child.stdin.take()));
         let stdout = child.stdout.take().expect("piped");
         let stderr = child.stderr.take().expect("piped");
@@ -237,6 +266,8 @@ impl Process {
             id,
             stdin: stdin.clone(),
             codex: codex.clone(),
+            rising: still_rising.clone(),
+            walled: wall.clone(),
         };
         let said = Arc::new(Mutex::new(String::new()));
         let err = std::thread::Builder::new()
@@ -250,6 +281,23 @@ impl Process {
         std::thread::Builder::new()
             .name("task-output".into())
             .spawn(move || {
+                // The one wait for the wall, here, as this thread may wait and the UI's may not.
+                if let Some(rising) = rising {
+                    let risen = rising.risen();
+                    // The control, before the program is taken to be inside: the system's word.
+                    let inside = |()| wall.as_ref().map_or(Ok(()), |wall| wall.control(id));
+                    let out = Out::Walled(risen.and_then(inside));
+                    still_rising.store(false, Ordering::Release);
+                    let agent = agent.clone();
+                    let event = Event {
+                        agent,
+                        run: id,
+                        out,
+                    };
+                    if events.unbounded_send(event).is_err() {
+                        return;
+                    }
+                }
                 let mut turn = Turn::default();
                 for line in BufReader::new(stdout).lines() {
                     let Ok(line) = line else { break };
@@ -282,12 +330,16 @@ impl Process {
                 });
             })?;
         let mut process = process;
-        match launch.cli {
-            Cli::Claude => process.say(first)?,
+        let began = match launch.cli {
+            Cli::Claude => process.say(first),
             Cli::Codex => {
                 let state = process.codex.as_ref().expect("Codex's");
-                super::codex::begin(&process.stdin, state, first)?
+                super::codex::begin(&process.stdin, state, first)
             }
+        };
+        // A launcher that ended has closed its input, and Walled says why: one account of it.
+        if !walled {
+            began?;
         }
         Ok(process)
     }
@@ -313,6 +365,13 @@ impl Process {
 
     /// Stops the turn under way at once, leaving the process to take the next message.
     pub fn interrupt(&mut self) {
+        // Still the wall's launcher, which reads no line: Stop ends it, and the wait for it.
+        if self.rising.load(Ordering::Acquire) {
+            if let Some(child) = &mut self.child {
+                _ = child.kill();
+            }
+            return;
+        }
         let sent = match (self.cli, &self.codex) {
             (Cli::Codex, Some(state)) => super::codex::interrupt(&self.stdin, state),
             _ => write_line(
@@ -336,10 +395,21 @@ impl Drop for Process {
     fn drop(&mut self) {
         self.stdin.lock().unwrap().take();
         if let Some(mut child) = self.child.take() {
+            // A walled start's whole group first, while its leader isn't reaped and so no other
+            // process can have the group's id. What left the group is the sweep's, after.
+            let walled = self.walled.take();
+            if walled.is_some() {
+                leftovers::System::end_group(&leftovers::Os, self.id);
+            }
             _ = child.kill();
             _ = std::thread::Builder::new()
                 .name("task-reap".into())
-                .spawn(move || child.wait());
+                .spawn(move || {
+                    _ = child.wait();
+                    if let Some(wall) = walled {
+                        wall.sweep_after();
+                    }
+                });
         }
     }
 }
@@ -382,16 +452,60 @@ fn keep_tail(mut from: impl Read, said: &Mutex<String>) {
 /// What the CLI's process is started with beyond the browser's own environment, each set on the
 /// process, so ilo's value is the one it reads.
 fn environment(command: &mut std::process::Command, launch: &Launch) {
+    command.envs(sets(launch));
+}
+
+/// Every variable a start of `launch` sets, with its value: the one account of them, which
+/// `environment` puts on the process. Each name is in `kept` for its CLI.
+pub fn sets(launch: &Launch) -> Vec<(&'static str, OsString)> {
+    let mut sets: Vec<(&'static str, OsString)> = Vec::new();
     if let Some(path) = &launch.path {
-        command.env("PATH", path);
+        sets.push((PATH, path.into()));
     }
     // The token reaches the bridge through Codex's environment, and through Claude's config.
     if launch.cli == Cli::Codex {
-        command.env(super::bridge::TOKEN, &launch.server.token);
+        sets.push((super::bridge::TOKEN, (&launch.server.token).into()));
     }
     // With helpers, what leaves the assistant ilo's kind of helper alone (#4102).
     if launch.helpers {
-        command.envs(super::helpers::ENV);
+        sets.extend(super::helpers::ENV.map(|(name, value)| (name, value.into())));
+    }
+    // Inside a wall Claude Code keeps nothing of its own in the user's folders, which the wall
+    // denies it: no history of what it was asked, no memory, no copies of the files it changes,
+    // no update of itself and no report of its use. Its temporary files go in the wall's folder
+    // for them.
+    if let (Cli::Claude, Some(wall)) = (launch.cli, &launch.wall) {
+        sets.extend(CLAUDE_WALLED.map(|name| (name, "1".into())));
+        if let Some(tmp) = wall.tmp() {
+            sets.push((CLAUDE_TMP, tmp.into()));
+        }
+    }
+    sets
+}
+
+const PATH: &str = "PATH";
+/// What a walled Claude Code is started with, each on.
+const CLAUDE_WALLED: [&str; 5] = [
+    "CLAUDE_CODE_SKIP_PROMPT_HISTORY",
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
+    "CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING",
+    "DISABLE_UPDATES",
+    "DISABLE_TELEMETRY",
+];
+/// Where a walled Claude Code keeps its temporary files: the wall's folder for them.
+const CLAUDE_TMP: &str = "CLAUDE_CODE_TMPDIR";
+
+/// Every name a start of `cli` may set on its process, walled or not: what a wall's launcher is
+/// told to keep of the runner's, beside the wall's own names. A wall drops every name it isn't
+/// told (wall/launch.rs), so one set and not listed here would never arrive, and nothing would
+/// say so: `sets` answers from these alone, which a test holds.
+pub fn kept(cli: Cli) -> Vec<&'static str> {
+    match cli {
+        Cli::Claude => {
+            let helpers = super::helpers::ENV.map(|(name, _)| name);
+            [&[PATH, CLAUDE_TMP][..], &CLAUDE_WALLED[..], &helpers[..]].concat()
+        }
+        Cli::Codex => vec![PATH, super::bridge::TOKEN],
     }
 }
 
@@ -481,8 +595,16 @@ pub fn claude_args(launch: &Launch) -> Vec<String> {
     if launch.helpers {
         args.extend(super::helpers::claude_args(&allowed));
     }
+    // Inside ilo's wall its own sandbox is off: the wall is what holds it. No settings file is
+    // read, so this is its only setting.
+    if launch.wall.is_some() {
+        args.extend(["--settings".into(), WALLED_SETTINGS.into()]);
+    }
     args
 }
+
+/// A walled Claude Code's settings.
+const WALLED_SETTINGS: &str = r#"{"sandbox":{"enabled":false}}"#;
 
 /// What a turn of Claude's has shown so far that its result needs: a limit it hit.
 #[derive(Default)]
@@ -501,13 +623,14 @@ pub fn claude_read(message: &Value, turn: &mut Turn) -> Vec<Out> {
         .and_then(Value::as_str)
         .unwrap_or_default();
     // A helper's start is counted whoever's line says so, the task's or a helper's own (#4102),
-    // and a run's first line says which kinds of helper it has.
-    let helpers = super::helpers::started(kind, message);
+    // its end is told as its start is, and a run's first line says which kinds of helper it has.
+    let helpers =
+        super::helpers::started(kind, message).or_else(|| super::helpers::ended(kind, message));
     if let Some(told) = helpers.or_else(|| super::helpers::kinds(kind, message)) {
         return vec![told];
     }
     // A line with a parent is a helper's, never the task's: nothing it says, writes or thinks is
-    // the task's, shown or kept. It tells only which tabs the helper calls for.
+    // the task's, shown or kept. It tells only that the helper calls a tool, and on which tab.
     if let Some(parent) = message.get("parent_tool_use_id").and_then(Value::as_str) {
         return super::helpers::claude_read(parent, kind, message);
     }

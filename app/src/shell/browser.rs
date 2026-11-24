@@ -923,14 +923,14 @@ pub trait Browser {
     /// (#4140). It asks nothing of the core until it's typed in.
     fn command_bar_in_place(&self, window: &mut Window, cx: &mut App) -> Entity<CommandBar>;
     /// Runs what the user asked in the composer's Ask as a task on the assistant `agent`, from Space
-    /// `home`, at the level `tier` the user picked there (#4140). Only the user's ↩ there calls
-    /// it: no agent has a path to it.
+    /// `home`, with the level and model the user picked there (#4140). Only the user's ↩ there
+    /// calls it: no agent has a path to it.
     fn start_task(
         &self,
         agent: &str,
         asked: &str,
         home: u64,
-        tier: crate::agents::tier::Tier,
+        start: crate::agents::task::Start,
         cx: &mut App,
     );
     /// Whether the user types in a field of a window over this one: find, the password offer, the
@@ -1029,6 +1029,9 @@ pub trait Browser {
     fn settings(&self, cx: &mut App);
     /// Opens the Settings window on Agents' Off limits list, scrolled to it.
     fn off_limits(&self, _cx: &mut App) {}
+    /// Opens the Settings window on Agents' Access group, which explains each level: the level
+    /// menu's Settings….
+    fn agent_access(&self, _cx: &mut App) {}
     /// Opens the Settings window on Agents, for what first run's assistant step leaves to it.
     fn agents_settings(&self, _cx: &mut App) {}
     /// Opens the Settings window on its Shortcuts tab.

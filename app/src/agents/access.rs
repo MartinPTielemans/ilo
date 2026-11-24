@@ -4,6 +4,7 @@
 
 use gpui::Context;
 
+use super::task::rewall::Change;
 use super::tier::{self, Sites, Stop, Tier, Why};
 use super::{
     Act, Agents, CHANGES_ASK, Call, DOWNLOADS, FENCED, OTHER_SITE, Refused, UNSAVED, act_of, fence,
@@ -100,18 +101,25 @@ impl Agents {
         };
         let key = (self.acting_task(&act.agent, act.connection, act.call)).map(|t| t.agent.clone());
         if let Some(task) = key.as_deref().and_then(|key| self.task_mut(key)) {
-            let after = task.messages.len();
+            let (after, traced) = (task.messages.len(), task.trace.len());
+            // The refused call came as a step before it was judged, so the line names it as it is
+            // under way.
+            let doing = (task.trace.iter().rfind(|step| step.call == act.call))
+                .map(|step| lowered(&tools::step_title(&step.did, tools::Tense::Now)))
+                .unwrap_or_default();
             match (task.stops.iter_mut()).find(|stop| stop.same(act.tab, &at, why, tier)) {
                 Some(stop) => stop.count += 1,
                 None => task.stops.push(Stop {
                     tab: act.tab,
                     at: at.clone(),
                     site: tier::plain(&site),
+                    doing,
                     why,
                     tier,
                     count: 1,
                     appeared: std::time::Instant::now(),
                     after,
+                    traced,
                     settled: false,
                 }),
             }
@@ -165,15 +173,31 @@ impl Agents {
 
     /// The user changes the task `key`'s access to `tier`: from its line or its chip, never from
     /// an agent. Its refusals are settled, the log keeps the change, and a task ilo runs is told.
+    /// One with files goes up only if its wall of the new level does, and starts again inside
+    /// the wall of whichever level it's set to (rewall.rs). On a task that has ended nothing
+    /// starts: the level is the one its next reply starts at, walled then (`pick_up`).
     pub fn set_tier(&mut self, key: &str, tier: Tier, cx: &mut Context<Self>) {
-        let Some(task) = self.task_mut(key).filter(|task| task.ended.is_none()) else {
+        let Some(task) = self.task(key) else {
             return;
         };
-        let from = task.tier;
+        let (from, ended) = (task.tier, task.ended.is_some());
         if from == tier {
             return;
         }
+        let raised = match ended {
+            true => None,
+            false => match self.wall_to_raise(key, from, tier) {
+                Ok(raised) => raised,
+                Err(()) => return cx.notify(),
+            },
+        };
+        let Some(task) = self.task_mut(key) else {
+            return;
+        };
         task.tier = tier;
+        if ended {
+            task.picked_from.get_or_insert(from);
+        }
         for stop in &mut task.stops {
             stop.settled = true;
         }
@@ -192,20 +216,17 @@ impl Agents {
         );
         let changed = tier::changed_logged(from, tier);
         self.note_on(&agent, connection, ACCESS_ACTION, "", &changed, "");
-        if runs {
-            self.tell_task(
-                key,
-                tier::changed_turn(from, tier),
-                tier as usize > from as usize,
-                cx,
-            );
+        if runs && !ended {
+            let change = Change::Level { from, raised };
+            self.rewall(key, change, tier::changed_turn(from, tier), cx);
         }
         cx.notify();
     }
 
-    /// The user sets the sites the task `key` may use.
+    /// The user sets the sites the task `key` may use: on one that has ended, those its next reply
+    /// works on.
     pub fn set_sites(&mut self, key: &str, sites: Sites, cx: &mut Context<Self>) {
-        let Some(task) = self.task_mut(key).filter(|task| task.ended.is_none()) else {
+        let Some(task) = self.task_mut(key) else {
             return;
         };
         if task.sites == sites {
@@ -250,4 +271,12 @@ impl Agents {
             .flat_map(|task| task.stops.iter().filter(|stop| !stop.settled).cloned())
             .collect()
     }
+}
+
+/// `text` with its first letter lowered, as a step's phrase reads after "from".
+fn lowered(text: &str) -> String {
+    let mut chars = text.chars();
+    (chars.next())
+        .map(|first| first.to_lowercase().chain(chars).collect())
+        .unwrap_or_default()
 }

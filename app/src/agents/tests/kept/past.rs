@@ -33,15 +33,17 @@ fn row(run: &Run, id: &Id) -> Value {
     found.unwrap_or_default()
 }
 
-/// The Archive's tasks, the last to leave first: each one's task, title and the line under it.
+/// The Archive's tasks, the last to leave first: each one's task, title and the line under it,
+/// with its end said as Settings › Agents' list says it, which has no days over its rows.
 fn archive(run: &Run, cx: &mut TestAppContext) -> Vec<(String, String, String)> {
     (run.agents).read_with(cx, |agents, cx| {
         (agents.archived_tasks(cx).into_iter())
             .map(|task| {
+                let when = crate::agents::time_or_day((task.ended / 1000.) as u64);
                 (
                     task.agent.to_string(),
                     task.title.to_string(),
-                    task.about.to_string(),
+                    task.about_at(&when),
                 )
             })
             .collect()
@@ -91,6 +93,189 @@ fn reply(run: &Run, agent: &str, text: &str, cx: &mut TestAppContext) {
 /// Whether the stand-in's `run` was ever started.
 fn started(run: &Run, at: usize) -> bool {
     beside(&run.program, &format!("args.{at}")).exists()
+}
+
+/// That its assistant still has a task's conversation is said only where the messages of a task
+/// a run before left would begin. One at work, or done or stopped in this run, has its messages
+/// there and no such line; after a quit all there is of it is that line.
+#[gpui::test]
+fn only_a_task_brought_back_says_its_assistant_still_has_it(cx: &mut TestAppContext) {
+    let run = Run::new("still-has", cx);
+    let done = run.start(Cli::Claude, cx);
+    run.ran(1);
+    assert_eq!(run.ilo_lines(&done, cx), []);
+    name_it(&run, &done, "Lisbon seats", cx);
+    run.finish(&done, cx);
+    assert_eq!(run.ilo_lines(&done, cx), []);
+    assert!(!run.talk(&done, cx).lines.is_empty());
+    let stopped = run.start(Cli::Claude, cx);
+    run.ran(2);
+    name_it(&run, &stopped, "Porto seats", cx);
+    act(&run, &stopped, TaskAction::Stop, cx);
+    assert_eq!(run.ilo_lines(&stopped, cx), []);
+
+    quit(&run, cx);
+    let next = next(&run, cx);
+    let past = archive(&next, cx);
+    assert_eq!(past.len(), 2);
+    for (past, ..) in &past {
+        assert_eq!(next.talk(past, cx).lines.len(), 1);
+        assert_eq!(next.ilo_lines(past, cx), [IloKind::KeptHere]);
+    }
+}
+
+/// The tasks a run before left are Latest tasks' to list until one is opened, from what the file
+/// said of each and no more: the last to end first, each with the user's Space of the profile it
+/// was asked in for its home and no card at the foot. One brought back is a card at the foot
+/// instead, and Remove All takes the rest out at once, before any assistant has answered.
+#[gpui::test]
+fn the_tasks_a_run_before_left_are_listed_by_their_profile(cx: &mut TestAppContext) {
+    let run = Run::new("latest", cx);
+    for (at, name) in ["Lisbon seats", "Porto seats", "Faro seats"]
+        .into_iter()
+        .enumerate()
+    {
+        let agent = run.start(Cli::Claude, cx);
+        run.ran(at + 1);
+        name_it(&run, &agent, name, cx);
+        run.finish(&agent, cx);
+    }
+    // None of a run's own tasks is one: each has its card, or its row in the Archive.
+    let kept = |run: &Run, cx: &mut TestAppContext| {
+        (run.agents).read_with(cx, |agents, cx| {
+            (agents.kept_cards(cx).into_iter())
+                .map(|card| (card.title.to_string(), card.home))
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(kept(&run, cx), []);
+    quit(&run, cx);
+    // As the file would say had Porto's ended an hour before the others, and Faro's been asked
+    // in another profile.
+    let mut saved = rows(&run);
+    for row in &mut saved {
+        match row["title"].as_str() {
+            Some("Porto seats") => row["ended"] = json!(row["ended"].as_u64().unwrap() - 3600),
+            Some("Faro seats") => row["profile"] = json!("Profile 2"),
+            _ => row["ended"] = json!(row["ended"].as_u64().unwrap() + 60),
+        }
+    }
+    std::fs::write(index(&run), serde_json::to_vec(&saved).unwrap()).unwrap();
+
+    let next = next(&run, cx);
+    // Faro's profile has no Space of the user's yet, so it's in the Archive alone.
+    assert_eq!(archive(&next, cx).len(), 3);
+    let both = [
+        ("Lisbon seats".to_string(), 1),
+        ("Porto seats".to_string(), 1),
+    ];
+    assert_eq!(kept(&next, cx), both);
+    next.browser.profiles.borrow_mut().push((2, "Profile 2"));
+    let all = kept(&next, cx);
+    assert_eq!(all.len(), 3);
+    assert!(all.contains(&("Faro seats".to_string(), 2)), "{all:?}");
+    let cards = (next.agents).read_with(cx, |agents, cx| agents.kept_cards(cx));
+    for card in &cards {
+        assert!(card.replies && card.steps.is_empty() && card.pages.is_empty());
+        assert_eq!(card.space, 0);
+    }
+    assert!((next.agents).read_with(cx, |agents, cx| agents.shown_cards(cx).is_empty()));
+
+    let lisbon = cards[0].agent.to_string();
+    restore(&next, &lisbon, cx);
+    assert!(!kept(&next, cx).iter().any(|card| card.0 == "Lisbon seats"));
+    let shown = (next.agents).read_with(cx, |agents, cx| agents.shown_cards(cx));
+    assert_eq!(shown.len(), 1);
+    assert_eq!(shown[0].agent.as_ref(), lisbon);
+    (next.agents).update(cx, |agents, cx| agents.remove_kept_tasks(cx));
+    assert_eq!(kept(&next, cx), []);
+}
+
+/// However many tasks a run before left, a profile's cards are no more than the composer shows,
+/// the last to end, so a change of a task never makes a card nobody sees. Another profile has its
+/// own, older than those left out or not.
+#[gpui::test]
+fn a_profile_has_no_more_kept_cards_than_the_composer_shows(cx: &mut TestAppContext) {
+    let most = crate::tokens::shell::composer::CARDS as usize;
+    let run = Run::new("cap", cx);
+    for at in 0..most + 3 {
+        let agent = run.start(Cli::Claude, cx);
+        run.ran(at + 1);
+        name_it(&run, &agent, &format!("Task {at}"), cx);
+        run.finish(&agent, cx);
+    }
+    quit(&run, cx);
+    // As the file would say had each ended a minute after the one before, and the first been
+    // asked in another profile.
+    let mut saved = rows(&run);
+    assert_eq!(saved.len(), most + 3);
+    for row in &mut saved {
+        let title = row["title"].as_str().unwrap().to_string();
+        let at: u64 = title.trim_start_matches("Task ").parse().unwrap();
+        row["ended"] = json!(1_700_000_000 + at * 60);
+        if at == 0 {
+            row["profile"] = json!("Profile 2");
+        }
+    }
+    std::fs::write(index(&run), serde_json::to_vec(&saved).unwrap()).unwrap();
+
+    let next = next(&run, cx);
+    next.browser.profiles.borrow_mut().push((2, "Profile 2"));
+    let kept: Vec<(String, u64)> = (next.agents).read_with(cx, |agents, cx| {
+        (agents.kept_cards(cx).into_iter())
+            .map(|card| (card.title.to_string(), card.home))
+            .collect()
+    });
+    let mut newest: Vec<(String, u64)> = (0..most)
+        .map(|back| (format!("Task {}", most + 2 - back), 1))
+        .collect();
+    newest.push(("Task 0".to_string(), 2));
+    assert_eq!(kept, newest);
+    // Those left out are in the Archive, where each is still brought back.
+    assert_eq!(archive(&next, cx).len(), most + 3);
+}
+
+/// For the shell's test of the same road (shell/library/history_tests.rs): a task named `title`
+/// ended Done with a page open, and the browser quit with no window left, which leaves the task's
+/// Space as a crash does. The next launch finds the Space and its page, and gives none of it to
+/// the user. That launch's agents, and the task there.
+pub(crate) fn after_a_quit(title: &str, cx: &mut TestAppContext) -> (Entity<Agents>, String) {
+    let run = Run::new("road", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    name_it(&run, &agent, title, cx);
+    opens_a_page(&run.agents, &agent, cx);
+    run.finish(&agent, cx);
+    let space = (run.agents).read_with(cx, |agents, _| agents.task(&agent).unwrap().space);
+    let in_space = |browser: &Made, space: u64| -> Vec<_> {
+        let tabs = browser.tabs.borrow();
+        tabs.iter().filter(|tab| tab.1 == space).copied().collect()
+    };
+    let pages = in_space(&run.browser, space);
+    assert_eq!(pages.len(), 1);
+    (run.agents).update(cx, |agents, cx| agents.end_tasks(false, cx));
+    assert!(run.browser.deleted.borrow().is_empty());
+
+    let next = next(&run, cx);
+    let users = in_space(&next.browser, 1);
+    next.browser.task_spaces.borrow_mut().push(space);
+    next.browser.tabs.borrow_mut().extend(pages);
+    // An outside agent's Space is another matter (#1080), and none was left.
+    next.browser.agent_spaces.borrow_mut().clear();
+    (next.agents).update(cx, |agents, cx| agents.end_old_tasks(cx));
+    assert_eq!(*next.browser.deleted.borrow(), [space]);
+    assert_eq!(in_space(&next.browser, 1), users);
+    assert!(in_space(&next.browser, space).is_empty());
+    let past = archive(&next, cx)[0].0.clone();
+    (next.agents, past)
+}
+
+/// The task's agent opens a page, as its `open_tab` tool does. The task's Space after.
+pub(crate) fn opens_a_page(agents: &Entity<Agents>, agent: &str, cx: &mut TestAppContext) -> u64 {
+    let url = json!({ "url": "https://www.example.com/timetable" });
+    _ = call(agents, agent, "open_tab", url, cx);
+    cx.run_until_parked();
+    agents.read_with(cx, |agents, _| agents.task(agent).unwrap().space)
 }
 
 /// The file says of a task that has ended its conversation's id, its assistant, the name its
@@ -205,6 +390,33 @@ fn a_finished_task_is_there_after_a_quit_and_takes_a_reply(cx: &mut TestAppConte
             .unwrap()
             .contains("Sunday")
     );
+    // The next reply, in the run that brought it back, is the resume: ilo's line stays the one.
+    reply(&next, &past, "And Monday?", cx);
+    let lines = next.ilo_lines(&past, cx);
+    let resumed = |kind: &&IloKind| matches!(kind, IloKind::Resumed { .. });
+    assert_eq!(lines.iter().filter(resumed).count(), 1, "{lines:?}");
+}
+
+/// Full access picked on a task that has ended isn't kept across a quit: brought back, it takes a
+/// reply at Work on pages at most, as any does.
+#[gpui::test]
+fn full_access_picked_on_an_ended_task_isnt_kept_across_a_quit(cx: &mut TestAppContext) {
+    let run = Run::new("picked-quit", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    run.finish(&agent, cx);
+    act(&run, &agent, TaskAction::PickTier(Tier::Full), cx);
+    let tier = |run: &Run, agent: &str, cx: &mut TestAppContext| {
+        (run.agents).read_with(cx, |agents, _| agents.task(agent).unwrap().tier)
+    };
+    assert_eq!(tier(&run, &agent, cx), Tier::Full);
+    quit(&run, cx);
+    let next = next(&run, cx);
+    let past = archive(&next, cx)[0].0.clone();
+    restore(&next, &past, cx);
+    reply(&next, &past, "And for Sunday?", cx);
+    next.ran(2);
+    assert_eq!(tier(&next, &past, cx), Tier::Work);
 }
 
 /// A past task whose assistant no longer has its conversation, found by the reply: the reply never
@@ -280,7 +492,8 @@ fn a_task_its_agent_never_named_keeps_no_title(cx: &mut TestAppContext) {
 }
 
 /// Each end is kept as itself and reads its own word after the launch: done, stopped, failed and
-/// at its assistant's limit, whose reset isn't kept. A task still at work when the user quits is
+/// at its assistant's limit, whose reset isn't kept. A task still at work has the row of one that
+/// broke off, which is what it is if the browser goes with no quit, and when the user quits it's
 /// there as stopped. One at its limit takes Retry, which goes on with its conversation.
 #[gpui::test]
 fn each_end_comes_back_as_its_own_word(cx: &mut TestAppContext) {
@@ -321,7 +534,7 @@ fn each_end_comes_back_as_its_own_word(cx: &mut TestAppContext) {
             json!("failed"),
             json!("limit"),
             json!("stopped"),
-            Value::Null,
+            json!("failed"),
             json!("done")
         ]
     );
@@ -357,6 +570,242 @@ fn each_end_comes_back_as_its_own_word(cx: &mut TestAppContext) {
     act(&next, &limit, TaskAction::Retry, cx);
     let (args, _) = next.ran(6);
     assert_eq!(after(&args, "--resume"), Some(made[1].1.as_str()));
+}
+
+/// A task at work when the browser goes with no quit, as when it's killed, is there at the next
+/// launch as one that broke off: Interrupted, by the name its agent gave it, in its profile, and
+/// with its conversation, which nothing removed, so a reply takes it up. Its row is written at
+/// its start and when its agent names it, never at a step, and has what any row has: nothing
+/// asked, no address, no step. While it works it's in no list of past tasks.
+#[gpui::test]
+fn a_task_at_work_when_the_browser_went_comes_back_interrupted(cx: &mut TestAppContext) {
+    let run = Run::new("cut-off", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    let id = run.id(&agent, cx);
+    // From its start, before its agent has said a word.
+    let at_start = row(&run, &id);
+    assert_eq!(at_start["title"], json!(""));
+    assert_eq!(at_start["state"], json!("failed"));
+    name_it(&run, &agent, "Lisbon seats", cx);
+    let saved = rows(&run);
+    assert_eq!(saved.len(), 1);
+    let mut keys: Vec<&str> = (saved[0].as_object().unwrap().keys())
+        .map(String::as_str)
+        .collect();
+    keys.sort();
+    assert_eq!(keys, ["cli", "ended", "id", "profile", "state", "title"]);
+    assert_eq!(saved[0]["title"], json!("Lisbon seats"));
+    assert_eq!(saved[0]["state"], json!("failed"));
+    assert_eq!(saved[0]["profile"], json!("Default"));
+    // Its time is its start's.
+    assert_eq!(saved[0]["ended"], at_start["ended"]);
+    assert!(
+        saved[0]["ended"]
+            .as_u64()
+            .is_some_and(|at| at > 1_700_000_000)
+    );
+
+    // Nothing a task does at work writes the file: with the file out of the way, none is back.
+    let file = std::fs::read(index(&run)).unwrap();
+    std::fs::remove_file(index(&run)).unwrap();
+    let url = json!({ "url": "https://www.example.com/timetable" });
+    _ = call(&run.agents, &agent, "open_tab", url, cx);
+    cx.run_until_parked();
+    run.said(&agent, Out::Said("The 9:05 has two.".into()), cx);
+    name_it(&run, &agent, "Lisbon seats", cx);
+    assert!(!index(&run).exists(), "a step wrote the file");
+    std::fs::write(index(&run), &file).unwrap();
+    let text = String::from_utf8(file).unwrap();
+    for never in ["Find two seats", "Saturday", "example.com", "timetable"] {
+        assert!(!text.contains(never), "the file has {never:?}");
+    }
+    // At work it's a task, and no past one.
+    assert!(listed(&run, cx).is_empty());
+    assert!(archive(&run, cx).is_empty());
+
+    // No quit: the browser went while it worked.
+    let next = next(&run, cx);
+    assert!(next.purged(cx).is_empty());
+    assert!(next.folder(&id).exists());
+    assert_eq!(next.kept(cx), (1, 0));
+    let archived = archive(&next, cx);
+    assert_eq!(archived.len(), 1);
+    let (past, title, about) = archived[0].clone();
+    assert_eq!(title, "Lisbon seats");
+    assert!(about.starts_with("Claude · Interrupted "), "{about}");
+    assert_eq!(listed(&next, cx), archived);
+    assert_eq!(next.ilo_lines(&past, cx), [IloKind::KeptHere]);
+    assert!(next.browser.made.borrow().is_empty());
+    assert!(!started(&next, 2));
+
+    restore(&next, &past, cx);
+    reply(&next, &past, "And for Sunday?", cx);
+    let (args, first) = next.ran(2);
+    assert_eq!(after(&args, "--resume"), Some(id.as_str()));
+    assert_eq!(first, "And for Sunday?");
+    // Under way again, it's once more a task and no past one.
+    assert!(listed(&next, cx).is_empty());
+    assert!(archive(&next, cx).is_empty());
+    assert_eq!(rows(&next).len(), 1);
+    // A quit is the user's, and says stopped.
+    quit(&next, cx);
+    assert_eq!(row(&next, &id)["state"], json!("stopped"));
+    assert_eq!(row(&next, &id)["title"], json!("Lisbon seats"));
+}
+
+/// A task that had ended and is at work again, by a reply or by Retry, has the row of one that
+/// broke off from then, under the name it had: if the browser goes with no quit it comes back
+/// Interrupted, not as it ended before.
+#[gpui::test]
+fn a_task_taken_up_and_cut_off_comes_back_interrupted(cx: &mut TestAppContext) {
+    let run = Run::new("cut-off-again", cx);
+    let mut made = Vec::new();
+    for (at, name) in ["Lisbon seats", "Porto seats"].into_iter().enumerate() {
+        let agent = run.start(Cli::Claude, cx);
+        run.ran(at + 1);
+        name_it(&run, &agent, name, cx);
+        made.push((agent.clone(), run.id(&agent, cx)));
+    }
+    run.finish(&made[0].0, cx);
+    let resets = Failure::Limit(Some(1_900_000_000));
+    run.said(&made[1].0, Out::Ended(Some(resets)), cx);
+    quit(&run, cx);
+    let before: Vec<Value> = made.iter().map(|(_, id)| row(&run, id)).collect();
+    assert_eq!(before[0]["state"], json!("done"));
+    assert_eq!(before[1]["state"], json!("limit"));
+
+    let next = next(&run, cx);
+    let archived = archive(&next, cx);
+    let past = |title: &str| {
+        let found = archived.iter().find(|task| task.1 == title);
+        found.unwrap_or_else(|| panic!("no {title}")).0.clone()
+    };
+    let (done, limit) = (past("Lisbon seats"), past("Porto seats"));
+    restore(&next, &done, cx);
+    reply(&next, &done, "And for Sunday?", cx);
+    next.ran(3);
+    restore(&next, &limit, cx);
+    act(&next, &limit, TaskAction::Retry, cx);
+    next.ran(4);
+    for ((_, id), before) in made.iter().zip(&before) {
+        let now = row(&next, id);
+        assert_eq!(now["state"], json!("failed"));
+        assert_eq!(now["title"], before["title"]);
+        assert_eq!(now["profile"], before["profile"]);
+        assert!(now["ended"].as_u64() >= before["ended"].as_u64());
+    }
+
+    // No quit: the browser went while they worked.
+    let last = Run::again(next.profile.clone(), next.program.clone(), cx);
+    assert!(last.purged(cx).is_empty());
+    let archived = archive(&last, cx);
+    assert_eq!(archived.len(), 2);
+    for (_, title, about) in &archived {
+        assert!(
+            about.starts_with("Claude · Interrupted "),
+            "{title}: {about}"
+        );
+    }
+}
+
+/// Settings' Remove and Remove All take a task that broke off as any other: its row leaves the
+/// file at once and its conversation is asked of its assistant.
+#[gpui::test]
+fn remove_takes_a_task_that_broke_off_and_its_conversation(cx: &mut TestAppContext) {
+    let run = Run::new("cut-off-out", cx);
+    let mut made = Vec::new();
+    for (at, name) in ["Lisbon seats", "Porto seats"].into_iter().enumerate() {
+        let agent = run.start(Cli::Claude, cx);
+        run.ran(at + 1);
+        name_it(&run, &agent, name, cx);
+        made.push(run.id(&agent, cx));
+    }
+    // At work they keep their own, as their assistant is writing them.
+    (run.agents).update(cx, |agents, cx| agents.remove_kept_tasks(cx));
+    assert!(run.purged(cx).is_empty());
+    assert_eq!(rows(&run).len(), 2);
+
+    // No quit: the browser went while they worked.
+    let next = next(&run, cx);
+    let archived = archive(&next, cx);
+    assert_eq!(listed(&next, cx).len(), 2);
+    let lisbon = (archived.iter().find(|task| task.1 == "Lisbon seats"))
+        .unwrap()
+        .0
+        .clone();
+    (next.agents).update(cx, |agents, cx| agents.remove_kept_task(&lisbon, cx));
+    let alone = |id: &Id| json!({ "id": id.as_str(), "cli": "claude" });
+    assert_eq!(row(&next, &made[0]), alone(&made[0]));
+    assert_eq!(listed(&next, cx).len(), 1);
+    let folder = next.folder(&made[0]);
+    assert_eq!(
+        next.purged(cx),
+        ["purge", folder.to_str().unwrap(), "--yes"]
+    );
+    assert!(!folder.exists());
+    assert_eq!(row(&next, &made[0]), Value::Null);
+    assert_eq!(next.ilo_lines(&lisbon, cx).last(), Some(&IloKind::Gone));
+
+    (next.agents).update(cx, |agents, cx| agents.remove_kept_tasks(cx));
+    assert!(listed(&next, cx).is_empty());
+    next.purged(cx);
+    assert!(!index(&next).exists());
+    assert!(!next.folder(&made[1]).exists());
+    assert_eq!(next.kept(cx), (0, 0));
+}
+
+/// The conversation of a task deleted from the Archive goes at the next launch, with no quit
+/// between as with one: its row is its id alone, which is asked of its assistant.
+#[gpui::test]
+fn the_next_launch_removes_what_a_task_deleted_from_the_archive_kept(cx: &mut TestAppContext) {
+    let run = Run::new("launch", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    let id = run.id(&agent, cx);
+    run.finish(&agent, cx);
+    act(&run, &agent, TaskAction::Dismiss, cx);
+    act(&run, &agent, TaskAction::Delete, cx);
+    assert!(run.folder(&id).exists());
+    assert!(run.purged(cx).is_empty());
+
+    // No quit: the browser went.
+    let next = next(&run, cx);
+    assert!(archive(&next, cx).is_empty());
+    let folder = run.folder(&id);
+    assert_eq!(
+        next.purged(cx),
+        ["purge", folder.to_str().unwrap(), "--yes"]
+    );
+    assert!(!folder.exists());
+    assert_eq!(next.kept(cx), (0, 0));
+    assert!(!next.profile.join(kept::FOLDER).exists());
+}
+
+/// A private window starts no task, whichever way it was asked: every way ends in the one start,
+/// which is given the Space the window shows. Nothing is made for it, no assistant runs and
+/// nothing of it is kept, where the same words from a Space of the user's start one.
+#[gpui::test]
+fn a_private_window_starts_no_task_and_keeps_nothing(cx: &mut TestAppContext) {
+    let run = Run::new("private", cx);
+    run.browser.private.borrow_mut().push(9);
+    let asked = "Find two seats to Lisbon for Saturday";
+    let from_private = (run.agents).update(cx, |agents, cx| {
+        agents.start_task(Cli::Claude, asked, None, 9, Tier::default(), cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(from_private, None);
+    assert!((run.agents).read_with(cx, |agents, _| agents.tasks.tasks.is_empty()));
+    assert!(run.browser.made.borrow().is_empty());
+    assert!(!started(&run, 1));
+    assert!(!index(&run).exists());
+    assert_eq!(run.kept(cx), (0, 0));
+
+    let agent = start_in(&run, 1, cx);
+    run.ran(1);
+    assert_eq!(run.browser.made.borrow().len(), 1);
+    assert_eq!(rows(&run).len(), 1);
+    assert_eq!(run.state(&agent, cx), State::Working);
 }
 
 /// The Archive holds ten, so the ten that ended last come back and what the run before kept of

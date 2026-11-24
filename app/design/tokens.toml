@@ -227,6 +227,8 @@ row-end = 12.0
 input-icon = 18.0
 input-text = 18.0
 input-line = 23.0
+# Between the chips before the input: a page's each, as the composer can add several.
+chip-gap = 6.0
 input-icon-x = 23.0
 input-text-x = 53.0
 # The hint after the input ends this far from the panel's side, 11 after the field.
@@ -650,6 +652,13 @@ recent-title-bar-height = 9.0
 recent-detail-bar-height = 7.0
 recent-bar-gap = 6.0
 
+[hover-card.motion]
+# Seconds: how long the pointer rests on a row before its card shows, how long the card stays
+# after the pointer leaves the row, and its fade (hover_card.rs says whose each is; #4108).
+dwell = 0.5
+leave = 0.15
+fade = 0.1
+
 [folder-preview]
 # Resting on a closed folder shows a searchable list of its tabs beside its row (Arc's Folder
 # Preview, #690). Arc 1.171's layout (outside measurement, #1405): 240 wide, the search 48 tall
@@ -682,6 +691,14 @@ age-size = 11.0
 age-line = 14.0
 title = 0.9
 hint = 0.55
+
+[folder-preview.motion]
+# Seconds: the rest on a folder's row before the preview shows, how soon it goes after the
+# pointer leaves both, and its coming in and going out (folder_preview.rs; #4108).
+dwell = 0.45
+leave = 0.04
+in = 0.09
+out = 0.08
 
 [link-preview]
 # Ours (the owner, 2026-11-02, #1373), as nothing of Arc's preview is recorded: a quick look over
@@ -731,6 +748,14 @@ rim = 0.5
 text-size = 11.0
 secondary = 0.6
 primary = 1.0
+
+[link-target.motion]
+# Seconds: the rest on a link before its target shows, how soon after one went the next shows
+# at once, its fade out, and the rest that shows the whole address (link_target.rs; #4108).
+delay = 0.15
+grace = 0.4
+fade-out = 0.12
+whole-after = 1.5
 
 [link-card]
 # ⇧ on a link grows its plate into a card of what the page says about itself (#3080), in the hover
@@ -798,6 +823,10 @@ min-width = 200.0
 max-width = 320.0
 # How far a submenu lies over its parent, so their rows line up.
 overlap = 4.0
+# The safe triangle keeps a submenu open while the pointer is on its way to it, and ends once the
+# pointer rests this long in it, in seconds, what's under it lit then: in every menu, the capture
+# menu's Add to Board too (#4108).
+submenu-rest = 0.3
 # How far inside the screen's work area a menu stays.
 edge = 8.0
 # How far a menu a control opens lies off the control's plate, so the plate shows whole beside it
@@ -908,6 +937,16 @@ tint-more = 0.44
 gray-text-less = 4.5
 gray-text = 3.0
 gray-text-more = 3.0
+# Gray text on a plate in a dark window (the foot's card's second line while the card is shown or
+# under the pointer, a page's word on its shown row's plate): the plate is lighter than the window
+# beside it, so the gray that reads off it reads less on it, and on a plate it is Paper at this,
+# one ink wherever that is. It is Paper itself, the title's ink, as nothing under it holds the
+# palette's 4.5:1 and its margin on the shown card's plate at its lightest measured, with a white
+# window behind (#6d6d6b at Standard, from the real app's own pixels at 469483355): 4.55, where
+# 0.97 reads 4.40 and the state line's 0.75 read 3.39. Over the check VM's desktop alone (#6b6a65
+# at Standard, #696762 at More, at f98ded880) it reads 4.76 and 4.96, where the state line read
+# 3.51 and 4.28. A light window's gray reads 7.7 or more on its white plate and stays as it is.
+plate-gray = 1.0
 # The HUD window's material alone, untinted, over a window of white, grey 128 and black behind
 # it, on a black desktop, as the app draws it on a Mac with the tint off, measured from its
 # window's pixels: the darkest the window can be. The desktop picture comes through what's behind
@@ -1935,7 +1974,8 @@ switch-on = 0.16
 switch-on-rim = 0xffff_ff12
 switch-size = 12.0
 # Ask's line under the field: 524 wide, 7 under it, its chips 26 tall, 8 in, radius 6, at 12 in
-# ink 0.6. It keeps its room in Search, so nothing moves as the switch flips.
+# ink 0.6. It keeps its room in Search, so nothing moves as the switch flips. The + with nothing to
+# add stays in its place at 0.26, as the header's back does with nowhere to go.
 line-width = 524.0
 line-top = 7.0
 chip-height = 26.0
@@ -1943,9 +1983,12 @@ chip-inset = 8.0
 chip-radius = 6.0
 chip-gap = 6.0
 chip-ink = 0.6
+chip-disabled = 0.26
 chip-size = 12.0
 chip-glyph = 14.0
 chip-chevron = 10.0
+# A chip's menu hangs 4 under it, its names under the chip's word (the names-only drawing).
+menu-drop = 4.0
 # "Recent tasks", 600 wide, 14 semibold on an 18 line in full ink, 34 under the line and 12 over
 # the cards, 4 in.
 label-width = 600.0
@@ -2644,6 +2687,17 @@ check-box = 24.0
 # The check is Lucide's, so it draws at the icons' one stroke, `shell::assets::ICON_STROKE`.
 check-stroke = 2.25
 
+[shell.swap.motion]
+# Seconds, and the scales between: a glyph's change (ux-spec, Glyph change; Arc 1.170 rec at 2×,
+# reload into stop and back). From one moment, linearly, about the glyph's middle, the old one
+# fades out and shrinks to `shrunk` over `leave`, and the new one fades in over `come` and grows
+# from `small` over `swap`: the header's and the rows' glyphs, and an import tile's badge (#4108).
+swap = 0.08
+leave = 0.07
+come = 0.04
+shrunk = 0.6
+small = 0.8
+
 [shell.media.motion]
 # Seconds, on an ease-out: the design file has no motion, so tools/design-sync.md leaves this table
 # out. The stack opens and closes over `open` both ways (Arc 1.171), opening once the pointer has
@@ -2741,6 +2795,18 @@ chip-end = 6.0
 # A page the strip's Open sends to Today flies there from the chip as a plate going from a chip's
 # corners and fill to a row's hover plate.
 ghost-radius = 6.0
+# Ours, from the approved drawing of the task's view: the task's pages stand in a rail down the
+# page area's right edge beside the conversation's column, each tile this wide (about a sixth of
+# the window), `rail-gap` from the next and from the column. Where the area is narrower than
+# `rail-breakpoint`, the column at its least and the rail no longer both fit, and the rail falls
+# to one row of tiles under the header, scrolling sideways. A tile's head line is `rail-head` tall,
+# its favicon `rail-favicon`, the word's dot `rail-dot` across.
+rail-width = 196.0
+rail-gap = 12.0
+rail-breakpoint = 760.0
+rail-head = 20.0
+rail-favicon = 12.0
+rail-dot = 6.0
 
 [shell.task.motion]
 # Seconds, on the motion's ease, and points: the design file has no motion, so tools/design-sync.md
@@ -2820,30 +2886,19 @@ title-line = 20.0
 meta-line = 15.0
 meta-gap = 1.0
 header-bottom = 14.0
-# Pages, the task's own view of its pages (#1080, the orchestrator's call): a grid of its pages'
-# pictures, up to `pictures-columns` across, as many as the area holds, each over its site, and the
-# agent's page's step, `pictures-row-gap` over the next row. The pictures are taken at twice this
-# size, when the agent acts.
+# A task's pages are pictured at the page's own shape, this size's (#1080), and drawn on its rail at
+# the rail's width ([shell.task]). The pictures are taken at twice this size, when the agent acts.
 picture-width = 326.0
 picture-height = 204.0
 picture-radius = 6.0
-picture-gap = 16.0
-pictures-row-gap = 24.0
-pictures-columns = 3.0
+# Each tile's edge: a hairline of the ink at this, inside its corners and over its picture, so a
+# tile holds its shape on the window in both looks.
+picture-rim = 0.14
 site = 16.0
 site-gap = 3.0
-# A page with no picture yet has its site's globe in its tile's middle at this size, over "No
-# picture yet", in the card status's ink (#1080), and once the core had none to give, when the
-# next comes.
+# A page with no picture yet has only its favicon, or its site's globe, in its tile's middle at
+# this size.
 picture-empty-glyph = 16.0
-picture-empty-gap = 6.0
-# Its header's Talk and Pages, one switch: a track of the ink at `views-track`, the view shown on
-# the sidebar's light selected plate (palette light-selected) `views-inset` inside it, at the
-# control radius less the inset, the two `views-gap` apart. Stop stands apart on a card button's
-# plate, the URL field's.
-views-gap = 4.0
-views-track = 0.07
-views-inset = 2.0
 # The agent's text, at body, and the gap under each block.
 text-line = 20.0
 block-gap = 14.0
@@ -3309,6 +3364,13 @@ chip-text-size = 11.0
 # #D2D3FC over a lip of #8486E3, their glyphs #1F2AFF. Ours (#319): the overlay's dark fill, Paper
 # text, Paper chips with Ink glyphs, over a lip of Paper at this on the fill.
 chip-lip-fill = 0.55
+
+[tooltip.motion]
+# Seconds: the rest before a tooltip shows, how soon after one went the next shows at once, and
+# its fade out (tooltip.rs says whose each is; #4108).
+delay = 1.6
+grace = 0.5
+fade-out = 0.27
 
 [transparency]
 # The Transparency picker (#4129), in Settings and the onboarding: three pictures across the row,

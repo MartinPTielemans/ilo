@@ -346,7 +346,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
 /// states: all but picked-up, which a reply set to work again.
 pub(crate) fn bench_ended() -> Option<&'static str> {
     match states::var("PREVIEW_TASK").ok()?.as_str() {
-        "ended" | "ended-first" | "gone" | "not-kept" | "helpers-ended" => Some("Claude"),
+        "ended" | "gone" | "not-kept" | "helpers-ended" => Some("Claude"),
         "past" | "past-no-profile" | "past-no-space" => Some("Claude"),
         "codex-ended" => Some("Codex"),
         _ => None,
@@ -398,7 +398,6 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         name: "Claude".into(),
         title: title.into(),
         about: "Claude · Working".into(),
-        progress: "step 3 · 4 pages".into(),
         asked: "Find two tickets for Saturday's concert, in the stalls".into(),
         page: None,
         lines: vec![Line::Trace(Trace {
@@ -419,6 +418,7 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         answers: Vec::new(),
         writing: false,
         tier: Default::default(),
+        only_added: false,
     };
     group_talk(&mut talk, &items);
     bench_task(&mut talk, items);
@@ -445,7 +445,6 @@ fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
         Word::Done => format!("{} · Done at 14:02", card.name).into(),
         word => format!("{} · {}", card.name, word.after_name()).into(),
     };
-    talk.progress = "".into();
     talk.tabs = (pages.iter().map(|&(tab, _, url)| (tab, site(url)))).collect();
     talk.on = None;
     talk.stoppable = card.word == Word::NeedsYou;
@@ -495,9 +494,10 @@ fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
 /// PREVIEW_TASK=<state> (#4095's bench) shows the working task's conversation beside its page in
 /// one of the states ilo's own lines are made for, from made-up data: working, refused,
 /// off-limits, yours, tab-back, signed-in, raised or notes; or of a task that has ended (#4105):
-/// ended, ended-first, picked-up, gone, not-kept or codex-ended; or of one a run of the browser
-/// before left, brought back from the Archive: past, past-no-profile or past-no-space; or of one with helpers
-/// (#4102): helpers, helper, helpers-limit or helpers-ended.
+/// ended, picked-up, gone, not-kept or codex-ended; or of one a run of the browser before left,
+/// brought back from the Archive: past, past-no-profile or past-no-space; or of one with helpers
+/// (#4102): helpers, helper, helpers-limit or helpers-ended; or of one with files whose assistant
+/// ilo couldn't limit to them (#4101): files-wall.
 pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
     let Ok(state) = states::var("PREVIEW_TASK") else {
         return;
@@ -534,11 +534,11 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
     let stopped = |why, at: &str, count| IloKind::Stopped {
         tab,
         at: at.to_string().into(),
+        doing: format!("clicking \u{201c}{at}\u{201d}").into(),
         why,
         tier: Tier::Work,
         count,
     };
-    talk.progress = "".into();
     // It stands on its one page, beside it.
     talk.tabs.truncate(1);
     talk.lines = match state.as_str() {
@@ -599,10 +599,65 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 working(10, "Clicking “Place order”"),
             ]
         }
+        // A task with files whose assistant ilo couldn't limit to them (#4101), each line where
+        // it comes: started without the folder and the file, set back under the level the user
+        // set, and stopped once the folder was taken back, with what its run left running.
+        "files-wall" => {
+            use browser::agents::task::ilo::{LeftOut, Reach};
+            let folder = || gpui::SharedString::from("Lisbon trip");
+            let said = |key, kind| ilo(key, kind, true);
+            talk.about = format!("{} · Stopped", talk.name).into();
+            talk.stoppable = false;
+            talk.on = None;
+            vec![
+                said(
+                    100,
+                    IloKind::StartedWithout {
+                        left: LeftOut::Folder(folder()),
+                    },
+                ),
+                said(
+                    101,
+                    IloKind::StartedWithout {
+                        left: LeftOut::File("boarding passes.pdf".into()),
+                    },
+                ),
+                done(0, before),
+                Line::Said("Two seats in row 12 are in the basket.".into()),
+                Line::You("Put the tickets in the folder too.".into()),
+                said(
+                    102,
+                    IloKind::TierChanged {
+                        from: Tier::Work,
+                        to: Tier::Full,
+                    },
+                ),
+                said(
+                    103,
+                    IloKind::SetBack {
+                        at: Tier::Work,
+                        refused: Tier::Full,
+                        folder: folder(),
+                    },
+                ),
+                said(
+                    104,
+                    IloKind::NotRestarted {
+                        left: LeftOut::Folder(folder()),
+                    },
+                ),
+                said(
+                    105,
+                    IloKind::LeftRunning {
+                        reach: Reach::Folder(folder()),
+                    },
+                ),
+            ]
+        }
         // A task that has ended (#4105): with its reply field, the first one's line saying where
         // the conversation lives, a reply that took it up, and the three lines that stand in the
         // field's place.
-        "ended" | "ended-first" | "picked-up" | "gone" | "not-kept" | "codex-ended" => {
+        "ended" | "picked-up" | "gone" | "not-kept" | "codex-ended" => {
             let ended = state != "picked-up";
             if state == "codex-ended" {
                 talk.name = "Codex".into();
@@ -623,7 +678,6 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 ),
             ];
             match state.as_str() {
-                "ended-first" => lines.push(line(100, IloKind::KeptHere)),
                 "picked-up" => lines.extend([
                     line(100, IloKind::Resumed { tier: Tier::Work }),
                     Line::You("Are there two together for Sunday too?".into()),
@@ -643,7 +697,6 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
         "past" | "past-no-profile" | "past-no-space" => {
             talk.title = "Concert tickets".into();
             talk.about = format!("{} · Done · 21 Nov", talk.name).into();
-            talk.progress = "".into();
             talk.asked = "".into();
             talk.tabs.clear();
             talk.on = None;
