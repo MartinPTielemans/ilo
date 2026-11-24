@@ -14,7 +14,7 @@ use super::{
 pub const ACCESS_ACTION: &str = "access";
 
 /// The actions that act on a page, which Look only refuses, as `page_tool` names them.
-const ACTS: [&str; 4] = ["click", "type", "select_option", "press_key"];
+pub(super) const ACTS: [&str; 4] = ["click", "type", "select_option", "press_key"];
 
 impl Agents {
     /// The access the task `agent`'s act on `connection`, for its call `call` (0 for none), is of:

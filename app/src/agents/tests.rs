@@ -2880,6 +2880,72 @@ fn no_tool_touches_a_tasks_access() {
     }
 }
 
+/// Every tool an agent from outside or a ⌘T task is offered, and every step run_steps takes, is in
+/// exactly one class the tier table judges, so a new one fails here until it's placed: one that
+/// acts on a page would otherwise run at Look only.
+#[test]
+fn every_tool_and_step_is_in_one_class() {
+    // Opens or reads a page, which every tier allows.
+    const READS: [&str; 10] = [
+        "list_tabs",
+        "list_split",
+        "open_tab",
+        "navigate",
+        "snapshot",
+        "read_page",
+        "scroll",
+        "screenshot",
+        "wait",
+        "check",
+    ];
+    // Acts on a page: refused below Work by ACTS, or by its own Why, as a request's method is. A
+    // run's steps are each judged as their tool is.
+    const ACTS_ON: [&str; 6] = [
+        "click",
+        "type",
+        "select",
+        "press_key",
+        "request",
+        "run_steps",
+    ];
+    // Arranges the agent's own tabs. A close that would lose what a page holds is judged Discard.
+    const ARRANGES: [&str; 8] = [
+        "close_tab",
+        "split_tabs",
+        "add_to_split",
+        "separate_tab",
+        "pin_tab",
+        "unpin_tab",
+        "remove_tab",
+        "sort_tabs_by_site",
+    ];
+    // Asks the user, who does the step.
+    const ASKS: [&str; 4] = ["hand_off", "upload", "ask_for_tab", "ask"];
+    // Ends or names the task.
+    const ENDS: [&str; 3] = ["done", "title", "finish"];
+    let classes: [&[&str]; 5] = [&READS, &ACTS_ON, &ARRANGES, &ASKS, &ENDS];
+    let mut every: Vec<String> = ["claude-code", "task-1"]
+        .into_iter()
+        .flat_map(tools::names)
+        .collect();
+    every.extend(tools::STEPS.map(String::from));
+    for name in &every {
+        let placed = classes
+            .iter()
+            .filter(|class| class.contains(&name.as_str()));
+        assert_eq!(placed.count(), 1, "{name} isn't in exactly one class");
+    }
+    // The tools that act on a page by themselves are those ACTS refuses, as their calls name them.
+    let acts = ACTS_ON[..4].map(|name| {
+        if name == "select" {
+            "select_option"
+        } else {
+            name
+        }
+    });
+    assert_eq!(acts, super::access::ACTS);
+}
+
 /// Lowered mid-task, the next act above the new tier is refused, the log keeps the change, and the
 /// task's refusals are settled by it.
 #[gpui::test]
