@@ -2531,6 +2531,10 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
                 shell.watch_task_page(tab, Bounds::default(), None, cx);
                 shell.set_space(FIRST_TASK, cx);
                 shell.set_selected(tab, cx);
+                // A task that has ended is at work nowhere.
+                if bench_ended().is_some() {
+                    return;
+                }
                 let status = browser::agents::Status {
                     agent: agent.clone(),
                     name: "Claude".into(),
@@ -2617,9 +2621,27 @@ fn task_cards(home: u64) -> Vec<TaskCard> {
         cards[0].status =
             "Step 3 · Comparing the seats in rows 12 to 18 for two on the aisle".into();
     }
+    // The bench's task that has ended (#4105) is done on its card too, which the strip under its
+    // page and the page's ring follow, with the page it left the user.
+    if let Some(name) = bench_ended() {
+        cards[0].name = name.into();
+        cards[0].status = "Two seats in row 12 are in your basket".into();
+        cards[0].dot = Dot::Done;
+        cards[0].open = vec![(FIRST_TASK + 200, "tickets.example".into())];
+    }
     // Newest first, as the Agents send them.
     cards.reverse();
     cards
+}
+
+/// The assistant of the task PREVIEW_TASK's bench shows as ended (#4105), if it's one of those
+/// states: all but picked-up, which a reply set to work again.
+fn bench_ended() -> Option<&'static str> {
+    match std::env::var("PREVIEW_TASK").ok()?.as_str() {
+        "ended" | "ended-first" | "gone" | "not-kept" => Some("Claude"),
+        "codex-ended" => Some("Codex"),
+        _ => None,
+    }
 }
 
 /// The working task's conversation: a step done, one that failed, what the agent said of it, and
@@ -2645,7 +2667,7 @@ fn task_conversation(agent: SharedString) -> Conversation {
             0,
             "icons/globe.svg",
             "Opened tickets.example",
-            "2 s",
+            &browser::agents::task::duration(2),
             false,
             false,
         )),
@@ -2828,7 +2850,7 @@ fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 key: 10,
                 glyph: "icons/globe.svg",
                 title: "Opened github.com".into(),
-                description: "2 s".into(),
+                description: browser::agents::task::duration(2).into(),
                 running: false,
                 failed: false,
                 opens: Opens::Nothing,
@@ -4958,8 +4980,10 @@ impl gpui::Render for PicturesPage {
                 &look, name, name, on, 1., look.on, a11y,
             ))])
         };
-        // A line under the first group, as Settings' Reduce Transparency line is.
+        // A line under the first group, as Settings' Reduce Transparency line is, or under the
+        // last, as Site notes' is.
         let mut under: Option<&str> = None;
+        let mut foot: Option<&str> = None;
         let blocks: Vec<(Option<&str>, Vec<gpui::Div>)> = match self.shown {
             Pictures::Appearance { appearance, right } => {
                 let three = appearance_picker(
@@ -5370,9 +5394,11 @@ impl gpui::Render for PicturesPage {
                         site_note_row(&look, note, opened, a11y, logged, |_, _, _| {})
                     })
                     .collect();
+                foot = Some(notes::FOOT);
                 vec![(None, vec![on]), (None, rows)]
             }
         };
+        let last = blocks.len().saturating_sub(1);
         let blocks = blocks
             .into_iter()
             .enumerate()
@@ -5391,7 +5417,8 @@ impl gpui::Render for PicturesPage {
                     (_, true) => HEADING_TOP,
                     (_, false) => GROUP_GAP,
                 };
-                let under = under.filter(|_| index == 0).map(|line| {
+                let under = under.filter(|_| index == 0);
+                let under = under.or(foot.filter(|_| index == last)).map(|line| {
                     div()
                         .mt(px(BUTTONS_TOP))
                         .px(px(TEXT_X))

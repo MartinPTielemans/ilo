@@ -312,6 +312,13 @@ fn material(dark: bool) -> Rgba {
     }
 }
 
+/// The window's glass at `level`, bottom layer first: the material, then the level's tint over it,
+/// black in dark and white in light.
+fn glass(level: Transparency, dark: bool) -> [Rgba; 2] {
+    let tint = if dark { black() } else { white() };
+    [material(dark), tint.to_rgb().opacity(level.tint(dark))]
+}
+
 /// A layer filling its parent, `color` over what's under it.
 fn layer(color: impl Into<Hsla>) -> gpui::Div {
     div().absolute().inset_0().bg(color.into())
@@ -349,7 +356,6 @@ fn hairline(color: Rgba, inset: bool) -> BoxShadow {
 /// fill. `base` is the window's ink around the picture, for its hairline.
 fn picture(level: Transparency, dark: bool, base: Rgba) -> gpui::Div {
     let words = rgb(if dark { PAPER } else { INK });
-    let tint = if dark { black() } else { white() };
     let desktop = div()
         .absolute()
         .inset_0()
@@ -385,7 +391,8 @@ fn picture(level: Transparency, dark: bool, base: Rgba) -> gpui::Div {
         .rounded(px(BRIGHT_RADIUS))
         .bg(rgb(BRIGHT))
         .children(bright_lines);
-    let glass = layer(material(dark)).child(layer(tint.opacity(level.tint(dark))));
+    let [under, over] = glass(level, dark);
+    let glass = layer(under).child(layer(over));
     let dots = (0..3).map(|index| {
         div()
             .absolute()
