@@ -151,3 +151,34 @@ fn every_tile_ends_with_the_conversation() {
     drop(tiles);
     assert_eq!(host.take(), vec!["end tile 30".to_string()]);
 }
+
+/// A watch borrows a page's tile with nothing ended: while it's lent nothing here moves or ends
+/// it, and given back where the watch left it, the next frame moves it to its picture.
+#[test]
+fn a_lent_tile_is_left_to_the_watch_and_taken_back_where_it_is() {
+    let (host, tiles) = tiles(true);
+    let picture = bounds(120., 120., 200., 150.);
+    tiles.place(&[(30, picture)], area(), false);
+    host.take();
+    assert!(tiles.shown_any());
+
+    assert_eq!(tiles.lend(30), Some(page_in(picture)));
+    tiles.place(&[(30, picture)], area(), false);
+    tiles.place(&[], area(), true);
+    assert_eq!(
+        host.take(),
+        Vec::<String>::new(),
+        "a lent tile is the watch's"
+    );
+
+    let grown = bounds(240., 60., 1042., 734.);
+    tiles.take_back(30, Some(grown));
+    tiles.place(&[(30, picture)], area(), false);
+    assert_eq!(host.take(), vec![shown(30, picture)]);
+
+    // Taken back after the user took the page over, the core shows none, so none ends.
+    tiles.lend(30);
+    tiles.take_back(30, None);
+    tiles.place(&[], area(), false);
+    assert_eq!(host.take(), Vec::<String>::new());
+}

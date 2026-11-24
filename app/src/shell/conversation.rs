@@ -788,9 +788,10 @@ impl TalkView {
             .and_then(|(_, _, picture)| picture.clone());
         // check.sh reads this line.
         log!("browser: task {} page {tab}", self.agent);
+        let tiles = Some(self.tiles.clone());
         self.shell
             .update(cx, |shell, cx| {
-                shell.watch_task_page(tab, from, picture, cx)
+                shell.watch_task_page_from(tab, from, picture, tiles, cx)
             })
             .ok();
     }

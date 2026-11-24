@@ -12,9 +12,9 @@ use gpui::{
     div, point, px, size,
 };
 
-use super::{Zoom, pushed, watched};
+use super::{Zoom, agent_page_size, fitted, pushed, watched};
 use crate::agents::Status;
-use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
+use crate::shell::{Command, Folders, Page, Shell, live_tiles::LiveTiles, recorder::Recorder};
 
 /// The user's Space 1 with tabs 10 and 11, shown with 10, Claude Code's own Space 2 with tab 20,
 /// Space 3 of the task task-1, run by Claude Code, with tabs 30 and 31, and the user's empty
@@ -183,7 +183,9 @@ fn watching(shell: &Entity<Shell>, host: &Recorder, cx: &mut VisualTestContext) 
     let view = conversation(cx);
     shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
     let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
-    assert!(shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx)));
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, thumb, None, cx)
+    }));
     core_shows_task(shell, cx, 30);
     draw(shell, cx);
     host.take();
@@ -866,7 +868,9 @@ fn an_agent_is_at_work_in_no_tab_once_it_closes_the_one_it_was_in(cx: &mut TestA
     let view = conversation(cx);
     shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
     let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
-    assert!(shell.update(cx, |shell, cx| shell.watch_task_page(31, thumb, None, cx)));
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page(31, thumb, None, cx)
+    }));
     core_shows_task(&shell, cx, 31);
     draw(&shell, cx);
     shell.update(cx, |shell, cx| {
@@ -975,7 +979,9 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         shell.show_task("task-1".into(), cx);
     });
     let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
-    assert!(shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx)));
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, thumb, None, cx)
+    }));
     core_shows_task(&shell, cx, 30);
     draw(&shell, cx);
     let expected = (
@@ -1336,7 +1342,9 @@ fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
         shell.show_task("task-1".into(), cx);
     });
     let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
-    assert!(shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx)));
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, thumb, None, cx)
+    }));
     core_shows_task(&shell, cx, 30);
     shell.update(cx, |shell, cx| {
         shell.set_agent_status(held(31), cx);
@@ -1555,7 +1563,9 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         shell.show_task("task-1".into(), cx);
     });
     let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
-    assert!(shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx)));
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, thumb, None, cx)
+    }));
     core_shows_task(shell, cx, 30);
     shell.update(cx, |shell, cx| {
         let status = Status {
@@ -1862,4 +1872,249 @@ fn an_agents_split_never_shows_its_pages_dialogs(cx: &mut TestAppContext) {
         .filter(|call| call.starts_with("page dialog ") && call != "page dialog none")
         .collect();
     assert!(shown.is_empty(), "{shown:?}");
+}
+
+/// A conversation open on a host whose core shows tiles, as the Mac's does, and the task's tab 30
+/// watched from its picture, at rest, with the agent at work in it.
+fn watching_tile(shell: &Entity<Shell>, host: &Rc<Recorder>, cx: &mut VisualTestContext) {
+    still(cx);
+    host.shows_tiles.set(Some(true));
+    let tiles = LiveTiles::new(host.clone());
+    let view = conversation(cx);
+    shell.update(cx, |shell, cx| {
+        shell.open_task(3, view, cx);
+        shell.set_agent_status(at_work(Vec::new()), cx);
+        shell.agent_acted("task-1".into(), 30, cx);
+    });
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page_from(30, thumb, None, Some(tiles), cx)
+    }));
+    draw(shell, cx);
+}
+
+fn at_work(held: Vec<(u64, SharedString)>) -> Vec<Status> {
+    vec![Status {
+        agent: "task-1".into(),
+        name: "Claude".into(),
+        space: 3,
+        doing: "Typed · flights.example".into(),
+        held,
+    }]
+}
+
+/// Where the watched tile goes now: whole in the watched page's place, at the page's own shape.
+fn tile_place(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Bounds<Pixels> {
+    shell.read_with(cx, |shell, _| {
+        let (card, _) = shell.page_frame(shell.viewport);
+        fitted(watched(shell.page_part(card)))
+    })
+}
+
+fn tile_line(at: Bounds<Pixels>) -> String {
+    format!(
+        "tile 30 at {} {} {} {} radius",
+        f32::from(at.origin.x),
+        f32::from(at.origin.y),
+        f32::from(at.size.width),
+        f32::from(at.size.height)
+    )
+}
+
+/// Nothing the shell asked of the core put the agent's page in the window, where it would have the
+/// window's size and place.
+fn page_untouched(asked: &[String]) {
+    for line in asked {
+        assert!(
+            !["select 30", "select 31", "show space 3"].contains(&line.as_str()),
+            "{asked:?}"
+        );
+    }
+}
+
+/// Watched where the core shows tiles, the agent's page is its tile grown to the area (#3788): out
+/// of its picture to whole in the area, at its own shape and never past its own size, top-aligned
+/// and centred across. The window never shows its tab, so the page keeps its size and place.
+#[gpui::test]
+fn a_watched_page_is_its_tile_grown_to_the_area(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching_tile(&shell, &host, cx);
+    let asked = host.take();
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    let from = crate::shell::live_tiles::page_in(thumb);
+    let tiles: Vec<_> = (asked.iter())
+        .filter(|line| line.starts_with("tile"))
+        .collect();
+    assert!(tiles[0].starts_with(&tile_line(from)), "{asked:?}");
+    let place = tile_place(&shell, cx);
+    assert!(
+        asked.iter().any(|line| line.starts_with(&tile_line(place))),
+        "{asked:?}"
+    );
+    page_untouched(&asked);
+    let own = agent_page_size();
+    let (card, _) = shell.read_with(cx, |shell, _| shell.page_frame(shell.viewport));
+    let area = shell.read_with(cx, |shell, _| watched(shell.page_part(card)));
+    assert!(place.size.width <= own.width && place.size.height <= area.size.height);
+    assert!((place.size.width / place.size.height - own.width / own.height).abs() < 0.001);
+    assert_eq!(place.top(), area.top());
+    assert_eq!(place.center().x, area.center().x);
+}
+
+/// A window resized, or the conversation standing beside, while a tile is watched moves the tile
+/// alone: the agent's page is never laid out, selected or shown in the window.
+#[gpui::test]
+fn a_resize_or_standing_beside_moves_only_the_tile(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching_tile(&shell, &host, cx);
+    host.take();
+    cx.simulate_resize(size(px(1000.), px(640.)));
+    draw(&shell, cx);
+    let asked = host.take();
+    let place = tile_place(&shell, cx);
+    assert!(
+        asked.iter().any(|line| line.starts_with(&tile_line(place))),
+        "{asked:?}"
+    );
+    page_untouched(&asked);
+    shell.update(cx, |shell, cx| shell.set_talk_beside(true, cx));
+    draw(&shell, cx);
+    let asked = host.take();
+    page_untouched(&asked);
+    assert!(
+        !asked.iter().any(|line| line.starts_with("end tile")),
+        "{asked:?}"
+    );
+}
+
+/// A press on the watched tile takes the page over and reaches nothing in it: it, and any press in
+/// the ARM after it, are the tile's, so the page has no click; once the ARM is past and the user
+/// holds the page, it's the window's page, the user's tab, with the keyboard. Hand Back gives the
+/// agent its tile again.
+#[gpui::test]
+fn a_press_on_the_tile_takes_over_and_reaches_nothing(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching_tile(&shell, &host, cx);
+    host.take();
+    let place = tile_place(&shell, cx);
+    cx.simulate_click(place.center(), gpui::Modifiers::none());
+    assert_eq!(host.take(), ["take over task-1 30"]);
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(at_work(vec![(30, "".into())]), cx)
+    });
+    cx.simulate_click(place.center(), gpui::Modifiers::none());
+    draw(&shell, cx);
+    assert_eq!(
+        host.take(),
+        Vec::<String>::new(),
+        "a tile still, in the ARM"
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watch_tile_shown()),
+        Some(30)
+    );
+
+    shell.update(cx, |shell, _| shell.age_watch_press());
+    draw(&shell, cx);
+    let asked = host.take();
+    assert_eq!(
+        asked[..3],
+        ["end tile 30", "select 30", "focus page"],
+        "{asked:?}"
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watch_tile_shown()),
+        None
+    );
+
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::BackToPinnedUrl, "page", cx)
+    });
+    assert_eq!(host.take(), ["hand back 30", "focus ui"]);
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(at_work(Vec::new()), cx)
+    });
+    draw(&shell, cx);
+    let asked = host.take();
+    assert!(
+        asked.iter().any(|line| line.starts_with(&tile_line(place))),
+        "{asked:?}"
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watch_tile_shown()),
+        Some(30)
+    );
+}
+
+/// A page the user holds, a handoff's sign-in too, opens as the real page, the user's tab, with
+/// no press between: its picture's tile ends, and the window shows it.
+#[gpui::test]
+fn a_held_page_opens_as_the_real_page(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    host.shows_tiles.set(Some(true));
+    let tiles = LiveTiles::new(host.clone());
+    let view = conversation(cx);
+    shell.update(cx, |shell, cx| {
+        shell.open_task(3, view, cx);
+        shell.set_agent_status(at_work(vec![(30, "".into())]), cx);
+    });
+    host.take();
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page_from(30, thumb, None, Some(tiles), cx)
+    }));
+    let asked = host.take();
+    assert!(
+        !asked.iter().any(|line| line.starts_with("tile")),
+        "{asked:?}"
+    );
+    assert_eq!(asked[..2], ["select 30", "focus page"], "{asked:?}");
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watch_tile_shown()),
+        None
+    );
+}
+
+/// Find, zoom and print on a watched tile do nothing: the page they'd act on isn't the window's.
+#[gpui::test]
+fn find_zoom_and_print_do_nothing_on_a_tile(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching_tile(&shell, &host, cx);
+    host.take();
+    for command in [
+        Command::Find,
+        Command::Print,
+        Command::ActualSize,
+        Command::ZoomIn,
+        Command::ZoomOut,
+    ] {
+        shell.update(cx, |shell, cx| shell.run(command, "ui", cx));
+    }
+    draw(&shell, cx);
+    assert_eq!(host.take(), Vec::<String>::new());
+}
+
+/// The app's own size for an agent's page is the core's (core/window.cc, kAgentPageSize), from the
+/// same window size (window_opening.rs, WINDOW_SIZE).
+#[test]
+fn an_agent_pages_size_is_the_cores() {
+    let read = |path: &str| {
+        std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path))
+            .unwrap()
+    };
+    let numbers = |text: &str, after: &str| -> Vec<f32> {
+        let from = text.find(after).unwrap_or_else(|| panic!("no {after}")) + after.len();
+        let inside = &text[from..from + text[from..].find(')').unwrap()];
+        let inside = inside.trim_start_matches('(');
+        (inside
+            .split(',')
+            .map(|n| n.trim().trim_end_matches('.').parse().unwrap()))
+        .collect()
+    };
+    let core = numbers(&read("../core/window.cc"), "kAgentPageSize(");
+    let own = agent_page_size();
+    assert_eq!(core, [f32::from(own.width), f32::from(own.height)]);
+    let window = numbers(&read("src/window_opening.rs"), "WINDOW_SIZE: (f64, f64) = ");
+    assert_eq!(window, [super::DEFAULT_WINDOW.0, super::DEFAULT_WINDOW.1]);
 }

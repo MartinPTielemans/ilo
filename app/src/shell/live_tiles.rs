@@ -5,9 +5,11 @@
 //!
 //! The tile is the user's view alone. The core holds the rest (`bc_tab_show_tile`): the page takes
 //! no keyboard, focus or click from it, keeps its own size, and neither it nor its agent hears that
-//! it's watched. A click on the tile is the UI's, which watches the page as the picture's does.
+//! it's watched. A click on the tile is the UI's, which watches the page as the picture's does: the
+//! watch takes the tile, grows it to the area and gives it back (task_area.rs), so the page is never
+//! out of a tile till the user takes it over.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -25,7 +27,14 @@ pub(super) struct LiveTiles {
     /// The tabs the core said no to, where it was asked, so it's asked again only once the tile
     /// moves, as it does when what it is changes.
     refused: RefCell<HashMap<u64, Bounds<Pixels>>>,
+    /// The tab whose tile a watch has (`lend`), which nothing here moves or ends till it's back.
+    lent: Cell<Option<u64>>,
+    /// Whether the core has shown any of them, so shows tiles at all.
+    ever: Cell<bool>,
 }
+
+/// A tile's corners: the picture's, inside the ring the picture of the page the agent is on draws.
+pub(super) const TILE_RADIUS: f32 = PICTURE_RADIUS - RING;
 
 impl LiveTiles {
     pub(super) fn new(browser: Rc<dyn Browser>) -> Rc<Self> {
@@ -33,6 +42,8 @@ impl LiveTiles {
             browser,
             live: RefCell::default(),
             refused: RefCell::default(),
+            lent: Cell::new(None),
+            ever: Cell::new(false),
         })
     }
 
@@ -69,6 +80,7 @@ impl LiveTiles {
     fn place(&self, drawn: &[(u64, Bounds<Pixels>)], area: Bounds<Pixels>, held: bool) {
         let wanted: Vec<_> = (drawn.iter())
             .filter(|_| !held)
+            .filter(|(tab, _)| self.lent.get() != Some(*tab))
             .filter(|(_, picture)| inside(*picture, area))
             .map(|(tab, picture)| (*tab, page_in(*picture)))
             .collect();
@@ -82,14 +94,14 @@ impl LiveTiles {
         self.refused
             .borrow_mut()
             .retain(|tab, _| drawn.iter().any(|(each, _)| each == tab));
-        let radius = PICTURE_RADIUS - RING;
         for (tab, at) in wanted {
             if self.live.borrow().get(&tab) == Some(&at)
                 || self.refused.borrow().get(&tab) == Some(&at)
             {
                 continue;
             }
-            if self.browser.show_tile(tab, at, radius) {
+            if self.browser.show_tile(tab, at, TILE_RADIUS) {
+                self.ever.set(true);
                 self.refused.borrow_mut().remove(&tab);
                 if self.live.borrow_mut().insert(tab, at).is_none() {
                     // A run on the Mac reads these lines to see a page go live and end.
@@ -101,6 +113,30 @@ impl LiveTiles {
                     log!("browser: task tile {tab} ended");
                 }
             }
+        }
+    }
+
+    /// Whether the core shows these pages in tiles, as it does on the Mac: it has shown one.
+    pub(super) fn shown_any(&self) -> bool {
+        self.ever.get()
+    }
+
+    /// Lends `tab`'s tile to a watch of its page, which grows it to the area and moves it from
+    /// then on (#3788), and says where it was, if the core showed it.
+    pub(super) fn lend(&self, tab: u64) -> Option<Bounds<Pixels>> {
+        self.lent.set(Some(tab));
+        self.refused.borrow_mut().remove(&tab);
+        self.live.borrow_mut().remove(&tab)
+    }
+
+    /// Takes back the tile a watch had, which the core shows `at`, or none once the user took the
+    /// page over: the next frame moves it to its picture, or ends it.
+    pub(super) fn take_back(&self, tab: u64, at: Option<Bounds<Pixels>>) {
+        if self.lent.get() == Some(tab) {
+            self.lent.set(None);
+        }
+        if let Some(at) = at {
+            self.live.borrow_mut().insert(tab, at);
         }
     }
 
@@ -140,7 +176,7 @@ fn inside(picture: Bounds<Pixels>, area: Bounds<Pixels>) -> bool {
 
 /// The page's place in its picture: inside the ring the picture of the page the agent is on
 /// draws, which the page would hide, so the page doesn't change size as the agent moves on.
-fn page_in(picture: Bounds<Pixels>) -> Bounds<Pixels> {
+pub(super) fn page_in(picture: Bounds<Pixels>) -> Bounds<Pixels> {
     picture.inset(px(RING))
 }
 
