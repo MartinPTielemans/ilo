@@ -38,6 +38,9 @@ pub(super) const LIMITS: Limits = Limits {
 /// filesystem, or None where its change times can't tell the task's links from the user's.
 type Trust = fn(&OwnedFd) -> Option<Duration>;
 
+/// A directory's names, with their kinds where the directory says them.
+type Names = Vec<(OsString, Option<Kind>)>;
+
 /// Links read through before a chain counts as a loop: the kernel's own limit.
 const HOPS: usize = 40;
 
@@ -95,9 +98,14 @@ fn outside_with(wall: &Wall, limits: Limits, trust: Trust) -> Walked {
     };
     let opened = (|| -> io::Result<_> {
         let (root, walk_root) = (open_root(root_path)?, open_root(root_path)?);
-        Ok((stat_of(&root)?, entries(&walk_root)?, root, walk_root))
+        Ok((
+            stat_of(&root)?,
+            entries(&walk_root, limits.entries)?,
+            root,
+            walk_root,
+        ))
     })();
-    let Ok((root_stat, names, root, walk_root)) = opened else {
+    let Ok((root_stat, (names, mut more), root, walk_root)) = opened else {
         walked.root_unread = true;
         return walked;
     };
@@ -106,6 +114,8 @@ fn outside_with(wall: &Wall, limits: Limits, trust: Trust) -> Walked {
     let since = since(wall, slack);
     let began = Instant::now();
     let mut seen = 0;
+    // Names read so far, each within the budget: no directory is read past what's left of it.
+    let mut read = names.len();
 
     // Depth first, holding a handle only to each directory on the way down.
     let mut open = vec![Open {
@@ -120,10 +130,6 @@ fn outside_with(wall: &Wall, limits: Limits, trust: Trust) -> Walked {
             continue;
         };
         seen += 1;
-        if seen > limits.entries {
-            walked.stopped = Some(Stop::Entries);
-            break;
-        }
         if seen % 256 == 0 && began.elapsed() >= limits.time {
             walked.stopped = Some(Stop::Time);
             break;
@@ -156,14 +162,16 @@ fn outside_with(wall: &Wall, limits: Limits, trust: Trust) -> Walked {
                 let names = match sub {
                     Err(error) if gone(&error) => continue,
                     Ok((stat, sub)) if same_device(&root_stat, &stat) => {
-                        entries(&sub).map(|names| (sub, names))
+                        entries(&sub, limits.entries.saturating_sub(read)).map(|names| (sub, names))
                     }
                     _ => Err(io::Error::from(io::ErrorKind::Unsupported)),
                 };
-                let Ok((sub, names)) = names else {
+                let Ok((sub, (names, past))) = names else {
                     count_unread(&mut walked, &at);
                     continue;
                 };
+                read += names.len();
+                more |= past;
                 open.push(Open {
                     dir: sub,
                     at,
@@ -199,6 +207,10 @@ fn outside_with(wall: &Wall, limits: Limits, trust: Trust) -> Walked {
             }
             Kind::Other => {}
         }
+    }
+    // Every name read was walked, and some were left unread past the budget.
+    if more && walked.stopped.is_none() {
+        walked.stopped = Some(Stop::Entries);
     }
     walked.links.sort_by(|a, b| a.path.cmp(&b.path));
     walked
@@ -476,8 +488,9 @@ fn owned(fd: RawFd) -> io::Result<OwnedFd> {
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
-/// A directory's names, with their kinds where the directory says them.
-fn entries(dir: &OwnedFd) -> io::Result<Vec<(OsString, Option<Kind>)>> {
+/// A directory's names from its start: at most `budget` of them, so one directory of tens of
+/// millions of names is never read whole, and whether it has more.
+fn entries(dir: &OwnedFd, budget: usize) -> io::Result<(Names, bool)> {
     // The stream takes a handle of its own, closed with it.
     // SAFETY: an open handle.
     let fd = unsafe { libc::fcntl(dir.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
@@ -492,7 +505,12 @@ fn entries(dir: &OwnedFd) -> io::Result<Vec<(OsString, Option<Kind>)>> {
         unsafe { libc::close(fd) };
         return Err(error);
     }
+    // The copy shares the handle's place in the directory, which a read stopped at the budget
+    // leaves part way.
+    // SAFETY: an open stream.
+    unsafe { libc::rewinddir(stream) };
     let mut names = Vec::new();
+    let mut more = false;
     let read = loop {
         clear_errno();
         // SAFETY: an open stream.
@@ -511,6 +529,10 @@ fn entries(dir: &OwnedFd) -> io::Result<Vec<(OsString, Option<Kind>)>> {
         if name == b"." || name == b".." {
             continue;
         }
+        if names.len() == budget {
+            more = true;
+            break Ok(());
+        }
         let kind = match entry.d_type {
             libc::DT_DIR => Some(Kind::Dir),
             libc::DT_LNK => Some(Kind::Link),
@@ -521,7 +543,7 @@ fn entries(dir: &OwnedFd) -> io::Result<Vec<(OsString, Option<Kind>)>> {
     };
     // SAFETY: an open stream, closed once.
     unsafe { libc::closedir(stream) };
-    read.map(|()| names)
+    read.map(|()| (names, more))
 }
 
 fn clear_errno() {

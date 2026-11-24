@@ -207,6 +207,42 @@ fn the_walk_stops_short_and_says_so() {
     assert_eq!((listed(&whole), whole.stopped), (vec!["away"], None));
 }
 
+/// A directory larger than what's left of the walk's budget is read only that far, never whole,
+/// and the walk says it stopped short; one exactly as large as the budget is read whole.
+#[test]
+fn a_directory_past_the_budget_is_read_only_that_far() {
+    let folders = Folders::new();
+    folders.dir("big");
+    for n in 0..50 {
+        folders.file(&format!("big/file-{n}"));
+    }
+    let wall = folders.start();
+
+    let big = open_root(&folders.at("big")).unwrap();
+    let (names, more) = entries(&big, 10).unwrap();
+    assert_eq!((names.len(), more), (10, true));
+    let (names, more) = entries(&big, 50).unwrap();
+    assert_eq!((names.len(), more), (50, false));
+
+    // "big" itself is one name of the folder's, so ten leave nine for what's in it.
+    let short = walk_to(
+        &wall,
+        Limits {
+            entries: 10,
+            ..LIMITS
+        },
+    );
+    assert_eq!(short.stopped, Some(Stop::Entries));
+    let exact = walk_to(
+        &wall,
+        Limits {
+            entries: 51,
+            ..LIMITS
+        },
+    );
+    assert_eq!(exact.stopped, None);
+}
+
 /// A pipe blocks whoever opens it to read, and a locked file and folder refuse it, so a walk that
 /// opened a file would hang or fail here.
 #[test]
