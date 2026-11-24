@@ -1938,7 +1938,7 @@ fn the_level_chip_says_the_tasks_level_and_opens_its_menu(cx: &mut TestAppContex
     cx.update(|_, cx| host.choose("Work on pages", cx));
     assert_eq!(
         host.take(),
-        vec!["task task-1 SetTier(Work)".to_string()],
+        vec!["task task-1 PickTier(Work)".to_string()],
         "the pick is the user's press on the task"
     );
 }

@@ -555,7 +555,7 @@ impl Shell {
             .map(|tier| {
                 (
                     MenuEntry::named(tier.label(), true).checked(tier == current),
-                    press(TaskAction::SetTier(tier)),
+                    press(TaskAction::PickTier(tier)),
                 )
             })
             .collect();
@@ -563,7 +563,7 @@ impl Shell {
         items.push((MenuEntry::line(), none()));
         items.push((
             MenuEntry::named(ANY_SITE, true).checked(!only),
-            press(TaskAction::AnySite),
+            press(TaskAction::PickAnySite),
         ));
         items.push((MenuEntry::named(ONLY_ADDED, only).checked(only), none()));
         items.push((MenuEntry::line(), none()));
