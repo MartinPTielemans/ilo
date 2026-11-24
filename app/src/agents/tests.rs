@@ -7806,7 +7806,7 @@ mod tasks {
                 Tense::Done,
                 "Scrolled down in “Document”",
             ),
-            (did("wait", "", "2s", ""), Tense::Done, "Waited 2s"),
+            (did("wait", "", "2 s", ""), Tense::Done, "Waited 2 s"),
             (
                 did("wait", "", "“Tickets”", ""),
                 Tense::Failed,
@@ -7902,7 +7902,7 @@ mod tasks {
         assert!(!worked.running);
         assert_eq!(
             worked.summary(),
-            ("Worked for 40s".into(), "2 steps".into())
+            ("Worked for 40 s".into(), "2 steps".into())
         );
         assert_eq!(said.as_ref(), "MAAT opens at 10:00.");
         assert_eq!(
@@ -8025,9 +8025,9 @@ mod tasks {
         assert_eq!(
             titles(&trace),
             owned(&[
-                ("Opened 10 pages", "1s"),
+                ("Opened 10 pages", "1 s"),
                 ("Waited for “Ready” on 10 pages", ""),
-                ("Read 10 pages", "1s"),
+                ("Read 10 pages", "1 s"),
                 ("Clicking “Closed” on 10 pages", "9 of 10"),
             ])
         );
@@ -8072,9 +8072,9 @@ mod tasks {
         assert_eq!(
             titles(&trace),
             owned(&[
-                ("Clicked “Save” on 2 pages", "3s"),
+                ("Clicked “Save” on 2 pages", "3 s"),
                 ("Waited for “Saved” on 2 pages", ""),
-                ("Clicked “Save”", "1s"),
+                ("Clicked “Save”", "1 s"),
             ])
         );
     }
