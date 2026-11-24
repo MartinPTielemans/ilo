@@ -234,6 +234,8 @@ pub struct TalkView {
     /// buttons' handles, in their order on the line (ilo_keys.rs).
     ilo_keys: Option<ilo_keys::IloKeys>,
     ilo_stops: [gpui::FocusHandle; ilo_keys::MOST],
+    /// GPUI's focus still on a button whose keys ended, for the next frame to take from it.
+    ilo_left: Option<ilo_keys::Left>,
     /// Where each of ilo's lines' words were last drawn, and their layout, by its line.
     ilo_words_drawn: WordsDrawn,
     /// Where each ilo line's link was drawn, by the line's key.
@@ -433,6 +435,7 @@ impl Shell {
                     ilo_hovered: Rc::default(),
                     ilo_keys: None,
                     ilo_stops,
+                    ilo_left: None,
                     ilo_words_drawn: Rc::default(),
                     ilo_links: Rc::default(),
                     level_drawn: Rc::default(),
@@ -560,6 +563,7 @@ impl Shell {
     /// takes it back while a page watched covers the field: GPUI sends the keys of a field that
     /// isn't drawn to no binding of ours, so Esc stepped back from nothing.
     pub(super) fn focus_talk(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.step_ilo_keys_drawn(window, cx);
         let Some(talk) = &self.talk else { return };
         let view = talk.view.read(cx);
         let (reply, replies) = (view.reply.focus_handle(cx), view.takes_reply());
@@ -707,6 +711,7 @@ impl TalkView {
 
     /// Its pictures go, as it no longer shows, and are taken again when it does.
     fn let_go(&mut self) -> Vec<Arc<RenderImage>> {
+        self.ilo_keys_undrawn("area");
         self.stale = true;
         self.motion.reset();
         let pictures = std::mem::take(&mut self.pictures);
