@@ -26,11 +26,11 @@ impl Agents {
     }
 
     /// The task `act` is held to, by its access and its Sites: the one under way that holds its
-    /// page, whichever of its client's connections calls, else the act's own, as an open's is. A
-    /// second connection would otherwise pass the access the user set on a task, and the
-    /// refusal's line would change another task's.
+    /// page, or the page that started its download, whichever of its client's connections calls,
+    /// else the act's own, as an open's is. A second connection would otherwise pass the access
+    /// the user set on a task, and the refusal's line would change another task's.
     pub(super) fn judged_task(&self, act: &Act) -> Option<&super::task::Task> {
-        (self.page_task(&act.agent, act.tab))
+        (self.page_task(&act.agent, act.tab.max(act.started_in)))
             .or_else(|| self.acting_task(&act.agent, act.connection, act.call))
     }
 

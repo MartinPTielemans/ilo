@@ -9988,6 +9988,46 @@ mod sessions {
         assert_eq!(tier(&second, cx), Some(Tier::Full));
     }
 
+    /// A file a page starts is judged where the page is, as an act there is: a second connection's
+    /// read of a page of a task at Look only starts a download, which is refused and leaves no
+    /// file, though that connection's own task is at the access a download goes at. The refusal
+    /// answers the call that waits and is the line of the task that holds the page.
+    #[gpui::test]
+    fn a_download_is_judged_where_its_page_is(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let first = cards(&agents, cx)[0].agent.to_string();
+        agents.update(cx, |agents, cx| agents.set_tier(&first, Tier::Look, cx));
+
+        (browser.tabs.borrow_mut()).push((31, 2, "Other", "https://example.org/"));
+        hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        let now = std::time::Instant::now;
+        call_on(&agents, 2, 3, "snapshot", json!({ "tab": 31 }), now(), cx);
+        let second = cards(&agents, cx)[0].agent.to_string();
+        assert_ne!(first, second);
+
+        let reading = call_on(&agents, 2, 4, "screenshot", json!({ "tab": 20 }), now(), cx);
+        let request = browser.pages.borrow().last().unwrap().1;
+        download_started(&agents, 20, request, 900, cx);
+        assert_eq!(
+            *browser.downloads.borrow(),
+            [(900, false)],
+            "a second connection's download from a page of a task at Look only went"
+        );
+        let refused = reading.try_recv().expect("the download wasn't refused");
+        assert!(refused.error, "{}", refused.text);
+        for said in ["download report.docx from files.example.com", "(Look only)"] {
+            assert!(refused.text.contains(said), "{}", refused.text);
+        }
+        let stopped = |key: &str, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| agents.stops(key))
+        };
+        let held = stopped(&first, cx);
+        assert_eq!(held.len(), 1, "{held:?}");
+        assert_eq!((held[0].why, held[0].tier), (Why::Download, Tier::Look));
+        assert!(stopped(&second, cx).is_empty(), "the line is the caller's");
+    }
+
     /// One connection closing ends its own card alone: the other's works on, and its handoff
     /// stays up for the user.
     #[gpui::test]
