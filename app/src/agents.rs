@@ -20,6 +20,7 @@ pub mod clients;
 mod codex;
 pub mod command;
 pub mod fence;
+pub mod files;
 mod held;
 mod helpers;
 pub mod kept;
@@ -37,6 +38,7 @@ pub mod sign_in;
 pub mod task;
 pub mod tier;
 pub mod tools;
+pub mod wall;
 
 pub use server::address;
 
