@@ -811,7 +811,7 @@ impl Shell {
     /// the slot's plate.
     fn sync_foot(&mut self, took: Option<SharedString>, cx: &mut Context<Self>) {
         let now = clock();
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         let animate = self.foot.primed;
         let moves = animate && !still;
         self.foot.still = still;
@@ -975,7 +975,7 @@ impl Shell {
     /// whose card fades in then, or, where it couldn't fold, hidden, and the card fades in at once.
     pub fn fold_started(&mut self, folded: bool, cx: &mut Context<Self>) {
         let now = clock();
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         let Some(plate) = (self.foot.plates.iter_mut())
             .find(|plate| plate.holds == Holds::Slot && !plate.leaving)
         else {
@@ -1003,7 +1003,7 @@ impl Shell {
     /// shimmer draw on the loading dots' clock instead, as they move all the while it works.
     pub(super) fn step_foot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let now = clock();
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         self.foot.still = still;
         self.foot.primed = true;
         if let Some(opening) = &self.foot.opening {
@@ -1116,7 +1116,7 @@ impl Shell {
             self.fold_later(agent.clone(), 0.);
         }
         if let Some(from) = from
-            && !cx.reduce_motion()
+            && !crate::motion::still(cx)
             && !tabs.is_empty()
         {
             let origin = self.sidebar_origin.get();
@@ -1225,7 +1225,7 @@ impl Shell {
         }
         let now = clock();
         let flies =
-            self.foot.primed && !cx.reduce_motion() && !self.one_space() && self.foot_drawn();
+            self.foot.primed && !crate::motion::still(cx) && !self.one_space() && self.foot_drawn();
         let from = self
             .foot
             .plates_drawn

@@ -284,7 +284,7 @@ impl command_bar::Host for Bar {
         // The bar folds into the slot at the foot that its task's card takes, where the window
         // shows one; elsewhere it hides, and the card fades in.
         let window = front().0;
-        let still = cx.reduce_motion();
+        let still = browser::motion::still(cx);
         let from = rgba_u32(browser::palette::current(cx).overlay);
         let folded = match update_window_in(window, cx, |shell, _| shell.fold_target()).flatten() {
             Some((to, radius, fill)) => {
