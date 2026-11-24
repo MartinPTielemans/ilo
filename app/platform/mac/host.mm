@@ -952,6 +952,17 @@ NSWindow* KeyWindowAfter(Overlay& overlay, Browser* browser) {
   return back.visible && back.parentWindow == browser->window ? back : KeyWindowOver(browser);
 }
 
+// Gives the keyboard back as |overlay| over |browser| is put away, hidden or folded. Not when
+// another browser window has the keyboard: the user went there, and taking it back would leave
+// that window main with the keys going to this one.
+void GiveKeyboardBackAfter(Overlay& overlay, Browser* browser) {
+  NSWindow* back = KeyWindowAfter(overlay, browser);
+  Browser* key_browser = BrowserOf(NSApp.keyWindow);
+  if (!key_browser || key_browser == browser) {
+    [back makeKeyWindow];
+  }
+}
+
 // The dialog's frame over |browser|'s window, by its insets.
 NSRect DialogFrame(Browser* browser) {
   NSWindow* window = browser->window;
@@ -1448,12 +1459,13 @@ void WatchHeldEscape() {
 
 namespace {
 
-// Dia's window material (docs/ux-spec.md › Window material): what's behind the window, blurred,
+// The window's material (docs/ux-spec.md › Window material): what's behind the window, blurred,
 // under the UI, which tints it, dark or light. AppKit swaps it for an opaque fill while the window
 // is inactive, and with Reduce Transparency or Increase Contrast.
 void SetWindowMaterialLight(NSVisualEffectView* material, bool light) {
-  // Dia's dark material is one AppKit doesn't name; its light one is the HUD window's.
-  material.material = light ? NSVisualEffectMaterialHUDWindow : (NSVisualEffectMaterial)29;
+  // The HUD window's in both looks, ilo's own pick: the same glass dark and light, a material
+  // AppKit names, and the one the transparency levels' tints are reckoned against.
+  material.material = NSVisualEffectMaterialHUDWindow;
   material.appearance =
       [NSAppearance appearanceNamed:light ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua];
 }
@@ -3313,13 +3325,7 @@ void host_hide_overlay(int index) {
     [overlay->window orderOut:nil];
     TakeOffShadow(*overlay);
   }
-  // Not when another browser window has the keyboard: the user went there, and taking it back
-  // would leave that window main with the keys going to this one.
-  NSWindow* back = KeyWindowAfter(*overlay, browser);
-  Browser* key_browser = BrowserOf(NSApp.keyWindow);
-  if (!key_browser || key_browser == browser) {
-    [back makeKeyWindow];
-  }
+  GiveKeyboardBackAfter(*overlay, browser);
   fprintf(stderr, "browser: %s hidden\n", overlay->name);
   if (overlay->key_at_hide) {
     overlay->key_at_hide = false;
@@ -3487,7 +3493,7 @@ bool host_fold_overlay(int index,
         window.alphaValue = 1;
         window.ignoresMouseEvents = NO;
       }];
-  [KeyWindowAfter(*overlay, browser) makeKeyWindow];
+  GiveKeyboardBackAfter(*overlay, browser);
   fprintf(stderr, "browser: %s hidden\n", overlay->name);
   return true;
 }

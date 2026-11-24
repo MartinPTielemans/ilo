@@ -3,11 +3,13 @@
 //! Library's (shell/library/keys.rs), the one surface that already gave the keyboard back to the
 //! element rather than to a window.
 //!
-//! The rule, the Library's: closed by Escape or by the key or command that opened it, the surface
-//! gives the keyboard back to its opener, or to the fallback its caller names when the opener has
-//! gone; closed any other way (a press outside, a choice inside, focus or the window leaving), to
-//! the fallback. Either way only while the surface still has the keyboard: what the user moved
-//! the keyboard to in the meantime keeps it.
+//! The rule: closed by Escape, by the key or command that opened it, or by a choice in it, the
+//! surface gives the keyboard back to its opener, or to the fallback its caller names when the
+//! opener has gone (a row's menu whose choice closed the row: the row that took its place, by
+//! `list_keys::took_place`, is the caller's fallback); closed as the user left it (a press
+//! outside, focus or the window leaving), to the fallback. Either way only while the surface still
+//! has the keyboard: what the user moved the keyboard to in the meantime keeps it, and so does
+//! what a choice's own result gave it to, such as the field Rename opens.
 //!
 //! Return and Escape while an input method composes in one of the surface's fields are the
 //! composition's, and the input method ends it: the surface neither submits nor closes, and
@@ -99,9 +101,9 @@ impl Close {
 
     /// Whether this close gives the keyboard back to the surface's opener, rather than to the
     /// fallback: Escape and the surface's own key or command do, as they're how a user goes back
-    /// to what they were doing.
+    /// to what they were doing, and so does a choice, which doesn't take the user anywhere else.
     pub fn gives_back(&self) -> bool {
-        matches!(self.why, Why::Escape | Why::Toggled)
+        matches!(self.why, Why::Escape | Why::Toggled | Why::Chosen)
     }
 }
 

@@ -2299,14 +2299,30 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
         shell
             .update(cx, |shell, cx| {
                 let none = Folders::default();
-                shell.set_tabs(FIRST_TASK, Vec::new(), vec![tab], Vec::new(), none, cx);
-                shell.set_title(tab, "Seats · Saturday".into(), cx);
-                let url = "https://tickets.example/seats".into();
-                let page = Page {
-                    url,
-                    ..Default::default()
+                // The task's pages: its one, or with helpers (#4102) each helper's, which are the
+                // task's own in its group at the sidebar's foot and on Pages.
+                let helpers = bench_helpers();
+                let pages = match helpers {
+                    true => &HELPER_PAGES[..],
+                    false => &HELPER_PAGES[..1],
                 };
-                shell.set_page(tab, page, cx);
+                let tabs: Vec<u64> = (tab..).take(pages.len()).collect();
+                shell.set_tabs(FIRST_TASK, Vec::new(), tabs.clone(), Vec::new(), none, cx);
+                for (&tab, &(title, url)) in tabs.iter().zip(pages) {
+                    shell.set_title(tab, title.into(), cx);
+                    let page = Page {
+                        url: url.into(),
+                        ..Default::default()
+                    };
+                    shell.set_page(tab, page, cx);
+                }
+                // The helpers' pages came after the conversation opened, on Talk, so it stays
+                // there with all four on Pages.
+                if helpers {
+                    let mut talk = task_conversation(agent.clone());
+                    talk.tabs = helper_tabs();
+                    shell.set_conversation(Some(talk), cx);
+                }
                 shell.watch_task_page(tab, Bounds::default(), None, cx);
                 shell.set_space(FIRST_TASK, cx);
                 shell.set_selected(tab, cx);
@@ -2314,12 +2330,20 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
                 if bench_ended().is_some() {
                     return;
                 }
+                // With helpers, the user holds the page one of them handed over for a sign-in.
+                let held = match helpers {
+                    true => {
+                        let (tab, site) = helper_tabs().swap_remove(HELPER_WAITING);
+                        vec![(tab, format!("Sign in to {site}").into())]
+                    }
+                    false => Vec::new(),
+                };
                 let status = browser::agents::Status {
                     agent: agent.clone(),
                     name: "Claude".into(),
                     space: FIRST_TASK,
                     doing: "Clicking “Tickets”".into(),
-                    held: Vec::new(),
+                    held,
                 };
                 shell.set_agent_status(vec![status], cx);
                 shell.agent_acted(agent, tab, cx);

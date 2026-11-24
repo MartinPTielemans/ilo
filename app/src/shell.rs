@@ -1523,8 +1523,9 @@ pub struct Shell {
     split_folds: HashMap<u64, split_fold::Fold>,
     /// The row whose ring the keys move while the sidebar has the keyboard (sidebar_keys.rs), the
     /// focus it takes them with, whether it takes them at the next draw, and where the ring was
-    /// last drawn.
+    /// last drawn, and the rows it last went over, for the one that takes a gone row's place.
     keyed: Option<u64>,
+    keyed_rows: Vec<u64>,
     sidebar_keys: FocusHandle,
     focus_keys: bool,
     keyed_drawn: Rc<Cell<Option<(u64, Bounds<Pixels>)>>>,
@@ -2206,6 +2207,7 @@ impl Shell {
             pinned_turn: None,
             split_folds: HashMap::new(),
             keyed: None,
+            keyed_rows: Vec::new(),
             sidebar_keys: cx.focus_handle(),
             focus_keys: false,
             keyed_drawn: Rc::default(),
@@ -3116,7 +3118,7 @@ impl Shell {
         let kept = |of: &[u64], with: &[u64]| -> Vec<u64> {
             of.iter().copied().filter(|id| with.contains(id)).collect()
         };
-        self.glide_spaces(places, kept(&order, &now) != kept(&now, &order));
+        self.glide_spaces(places, kept(&order, &now) != kept(&now, &order), cx);
         self.live_profiles_changed(&reprofiled, cx);
         self.settle_theme_preview();
         if let Some(form) = &self.form

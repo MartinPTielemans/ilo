@@ -85,7 +85,7 @@ pub(crate) const STATES: &[State] = &[
     State { name: "PREVIEW_SPACES", values: "<count>", shows: "that many Spaces" },
     State { name: "PREVIEW_SWIPE", values: "1", shows: "the Library brought out and back by fingers, then clicks" },
     State { name: "PREVIEW_SYNC", values: "never, offline, server-error, refused, sign-in, throttled, stopped, update", shows: "the account's sync line" },
-    State { name: "PREVIEW_TASK", values: "working, refused, off-limits, yours, tab-back, signed-in, raised, notes, ended, …", shows: "the working task's conversation beside its page, in that state" },
+    State { name: "PREVIEW_TASK", values: "working, refused, off-limits, yours, tab-back, signed-in, raised, notes, helpers, ended, …", shows: "the working task's conversation beside its page, in that state" },
     State { name: "PREVIEW_TASK_RING", values: "none, card, back, page, take-over, stop", shows: "the working task's page watched, that stop rung" },
     State { name: "PREVIEW_TASK_STEP", values: "long", shows: "a step line too long for a narrow strip" },
     State { name: "PREVIEW_TASKS", values: "1, open, …", shows: "three tasks' cards at the sidebar's foot" },

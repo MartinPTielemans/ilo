@@ -7304,7 +7304,7 @@ mod tasks {
         let steps: Vec<_> = (trace.items.iter())
             .filter_map(|item| match item {
                 TraceItem::Step(step) => Some(step),
-                TraceItem::Said(_) => None,
+                TraceItem::Said(_) | TraceItem::Helper(_) => None,
             })
             .collect();
         let titles: Vec<_> = steps
@@ -7854,6 +7854,7 @@ mod tasks {
                 .map(|item| match item {
                     TraceItem::Step(step) => step.clone(),
                     TraceItem::Said(said) => panic!("{said}"),
+                    TraceItem::Helper(step) => panic!("{}", step.title),
                 })
                 .collect::<Vec<_>>()
         };

@@ -863,11 +863,18 @@ unsafe extern "C" fn launching(_: *mut c_void) {
     unsafe { platform::host_dock_dot_launch(profile.as_ptr()) };
 }
 
+/// Off to another app: a toast showing waits until the user is back.
+extern "C" fn resigning_active() {
+    quitting::launch_picture_on_resigning();
+    update_app_later(|cx| browser::toast::app_away(true, cx));
+}
+
 /// Back from another app, such as System Settings, where the user may have changed the default
 /// browser, given the app Full Disk Access or changed when scroll bars show.
 extern "C" fn became_active() {
     // Later: AppKit can say so from inside the update that activated the app to show a window.
     update_app_later(|cx| {
+        browser::toast::app_away(false, cx);
         settings::check_default_browser(cx);
         import_host::became_active(cx);
         daily_count_host::became_active(cx);

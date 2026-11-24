@@ -305,17 +305,55 @@ fn the_page_gets_the_keyboard_back_only_while_no_other_overlay_has_it(cx: &mut T
     assert!(focused(|host, _| host.window.clone(), &host, cx));
 }
 
-#[test]
-fn only_escape_and_the_surfaces_own_key_give_the_keyboard_back() {
-    for why in [Why::Escape, Why::Toggled] {
-        assert!(Close::new(why, By::Keyboard).gives_back(), "{why:?}");
-    }
-    for why in [
-        Why::PressOutside,
-        Why::FocusLeft,
-        Why::WindowLeft,
-        Why::Chosen,
-    ] {
-        assert!(!Close::new(why, By::Pointer).gives_back(), "{why:?}");
+/// The rule for every reason a surface closes: Escape, its own key and a choice in it give the
+/// keyboard back to the opener, leaving it goes to the fallback, and whatever took the keyboard
+/// in the meantime, the user or the choice's own result, keeps it.
+#[gpui::test]
+fn where_the_keyboard_goes_for_each_reason_a_surface_closes(cx: &mut TestAppContext) {
+    let reasons = [
+        (Why::Escape, Returned::Opener),
+        (Why::Toggled, Returned::Opener),
+        (Why::Chosen, Returned::Opener),
+        (Why::PressOutside, Returned::Fallback),
+        (Why::FocusLeft, Returned::Fallback),
+        (Why::WindowLeft, Returned::Fallback),
+    ];
+    let (host, cx) = opened(cx);
+    for (why, back) in reasons {
+        for moved in [false, true] {
+            cx.update(|window, cx| {
+                let opener = host.read(cx).opener.clone().unwrap();
+                window.focus(&opener, cx);
+                host.update(cx, |host, cx| host.open(window, cx));
+                if moved {
+                    window.focus(&host.read(cx).other.clone(), cx);
+                }
+                host.update(cx, |host, cx| {
+                    host.close(Close::new(why, By::Keyboard), window, cx)
+                });
+            });
+            cx.run_until_parked();
+            let returned = host.read_with(cx, |host, _| *host.returned.last().unwrap());
+            let (expected, has) = match moved {
+                true => (
+                    Returned::Left,
+                    focused(|host, _| host.other.clone(), &host, cx),
+                ),
+                false => (
+                    back,
+                    match back {
+                        Returned::Opener => {
+                            focused(|host, _| host.opener.clone().unwrap(), &host, cx)
+                        }
+                        _ => focused(|host, _| host.window.clone(), &host, cx),
+                    },
+                ),
+            };
+            assert_eq!(returned, expected, "{why:?}, moved in between: {moved}");
+            assert!(
+                has,
+                "{why:?}, moved in between: {moved}: the keyboard isn't where it went"
+            );
+        }
     }
 }
