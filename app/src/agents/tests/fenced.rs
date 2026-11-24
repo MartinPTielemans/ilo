@@ -90,7 +90,7 @@ fn asks_next(
 }
 
 /// Each way a tab comes to a fenced site, a click on another site, a redirect after an open of
-/// another, back, the page itself, a tab a page opened and a tab the user handed over, refuses the
+/// another, back, forward, the page itself, a tab a page opened and a tab the user handed over, refuses the
 /// agent's next call there, and what the call that took it there
 /// answers says nothing of the page, not even its outline (#3724).
 #[gpui::test]
@@ -104,8 +104,8 @@ fn each_way_onto_a_fenced_site_refuses_the_next_call(cx: &mut TestAppContext) {
     withheld(&clicked, 20, "login.mybank.example");
     asks_next(&agents, &browser, 20, "login.mybank.example", cx);
 
-    // A redirect after an open of another site, and back.
-    for url in ["shop.example", "back"] {
+    // A redirect after an open of another site, back, and forward.
+    for url in ["shop.example", "back", "forward"] {
         let (agents, browser) = fenced(cx);
         let go = json!({ "tab": 20, "url": url });
         let answer = call(&agents, "claude-code", "navigate", go, cx);

@@ -9422,6 +9422,29 @@ mod sessions {
         assert_eq!(cards(&agents, cx)[0].dot, Dot::Done);
     }
 
+    /// A hand-off still open holds off the quiet end, as any call waiting on the user does: the
+    /// agent closing its other page doesn't start it, and done names the call under way.
+    #[gpui::test]
+    fn a_handoff_open_holds_off_the_quiet_end(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        (browser.tabs.borrow_mut()).push((31, 2, "Other", "https://example.org/"));
+        let reason = json!({ "tab": 31, "reason": "Sign in to example.org" });
+        let _handed = call_as(&agents, 3, "hand_off", reason, cx);
+        assert!(browser.asked.borrow().is_some(), "the handoff didn't ask");
+        call_as(&agents, 4, "close_tab", json!({ "tab": 20 }), cx);
+        answered(&agents, 4, cx);
+        cx.executor().advance_clock(QUIET * 2);
+        assert_ne!(cards(&agents, cx)[0].dot, Dot::Done);
+        let refused = call_as(&agents, 5, "done", json!({}), cx).recv().unwrap();
+        assert_eq!(
+            refused,
+            ToolResult::error(
+                "Your hand_off on tab 31 is still under way: call done once it's answered."
+            )
+        );
+    }
+
     /// The user closing the agent's last page doesn't end its task: it may well open it again,
     /// which would split one task over two cards. IDLE ends it.
     #[gpui::test]
