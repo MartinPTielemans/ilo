@@ -23,6 +23,10 @@ void EndTile(bc_id tab);
 // tile first.
 void ShowInCard(bc_id tab);
 
+// A page from another site committed in |tab|, in a view of its own: if it's a tile, the view
+// keeps the page's size.
+void PageViewChanged(bc_id tab);
+
 // Whether |tab| is a tile, whose page's own asks to be activated are refused.
 bool Holds(bc_id tab);
 

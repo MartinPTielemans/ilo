@@ -1678,9 +1678,13 @@ void Tab::ShowOnPageColor() {
 void Tab::RenderFrameHostChanged(content::RenderFrameHost* old_host,
                                  content::RenderFrameHost* new_host) {
   // A page from another site comes in a view of its own, white until its first frame.
-  if (page_color_ && new_host == web_contents()->GetPrimaryMainFrame() && new_host->GetView()) {
+  if (new_host != web_contents()->GetPrimaryMainFrame()) {
+    return;
+  }
+  if (page_color_ && new_host->GetView()) {
     new_host->GetView()->SetBackgroundColor(*page_color_);
   }
+  tiles::PageViewChanged(id_);
 }
 
 void Tab::RenderViewReady() {
