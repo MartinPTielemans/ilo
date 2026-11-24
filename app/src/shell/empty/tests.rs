@@ -629,3 +629,170 @@ fn start_again_asks_at_work_on_pages(cx: &mut TestAppContext) {
     );
     assert_eq!(tier(&shell, cx), Tier::Work);
 }
+
+/// Makes the test's window the key one, as the user's window is when they're in it.
+fn key_window(cx: &mut VisualTestContext) {
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+}
+
+/// The Space shows no page: its field has the keyboard once the window is key, and only then. It
+/// takes it once, so whatever the user gives the keyboard to after keeps it.
+#[gpui::test]
+fn an_empty_space_gives_its_field_the_keyboard_once_the_window_is_key(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    assert!(
+        !field_focused(&shell, cx),
+        "the field took the keyboard of a window that isn't key"
+    );
+    key_window(cx);
+    assert!(
+        field_focused(&shell, cx),
+        "the key window's field has no keyboard"
+    );
+    assert!(host.command_bars.take().is_empty());
+
+    cx.update(|window, cx| window.blur(cx));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(
+        !field_focused(&shell, cx),
+        "the field took the keyboard back from where the user put it"
+    );
+}
+
+/// ⌘T and ⌘L give the field the keyboard and open no bar over it. The sidebar's New Tab and URL
+/// field and Start Again's ask still open the bar, as they did.
+#[gpui::test]
+fn cmd_t_and_cmd_l_give_the_field_the_keyboard_and_open_no_bar(cx: &mut TestAppContext) {
+    use crate::shell::Command;
+    let (shell, cx, host) = window_with_no_tab(cx);
+    key_window(cx);
+    for command in [Command::NewTab, Command::EditUrl] {
+        for from in ["ui", "page"] {
+            cx.update(|window, cx| window.blur(cx));
+            shell.update(cx, |shell, cx| shell.run(command, from, cx));
+            cx.run_until_parked();
+            assert!(
+                field_focused(&shell, cx),
+                "{command:?} via {from} left the field without the keyboard"
+            );
+            assert!(
+                host.command_bars.take().is_empty(),
+                "{command:?} via {from} opened the bar over the field"
+            );
+        }
+        cx.update(|window, cx| window.blur(cx));
+        shell.update(cx, |shell, cx| shell.run(command, "sidebar", cx));
+        cx.run_until_parked();
+        assert_eq!(
+            host.command_bars.take().len(),
+            1,
+            "{command:?} from the sidebar opened no bar"
+        );
+        assert!(!field_focused(&shell, cx));
+        host.bar_open.set(false);
+        shell.update(cx, |shell, cx| shell.command_bar_dismissed(cx));
+    }
+    shell.update(cx, |shell, cx| {
+        shell.ask_again("Find two tickets".into(), cx)
+    });
+    assert_eq!(
+        host.command_bars.take().len(),
+        1,
+        "Start Again opened no bar"
+    );
+}
+
+/// An open overlay keeps the keyboard: ⌘T's field waits for it to close.
+#[gpui::test]
+fn the_field_takes_no_keyboard_from_an_overlay(cx: &mut TestAppContext) {
+    use crate::shell::Command;
+    let (shell, cx, host) = window_with_no_tab(cx);
+    key_window(cx);
+    cx.update(|window, cx| window.blur(cx));
+    host.bar_open.set(true);
+    shell.update(cx, |shell, cx| shell.run(Command::NewTab, "ui", cx));
+    cx.run_until_parked();
+    assert!(
+        !field_focused(&shell, cx),
+        "the field took the keyboard from the open bar"
+    );
+    host.bar_open.set(false);
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(
+        field_focused(&shell, cx),
+        "the field didn't take it once the bar closed"
+    );
+}
+
+/// Another empty Space shown slides in: its field takes the keyboard when the slide has settled,
+/// not while the pages move.
+#[gpui::test]
+fn another_empty_space_takes_the_keyboard_when_its_page_settles(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window_with_no_tab(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_spaces(
+            vec![
+                (1, "Space".into(), None, 0, "".into(), "".into(), "".into()),
+                (2, "Other".into(), None, 0, "".into(), "".into(), "".into()),
+            ],
+            cx,
+        );
+        shell.set_tabs(2, Vec::new(), vec![3], Vec::new(), Folders::default(), cx);
+    });
+    key_window(cx);
+    assert!(field_focused(&shell, cx));
+    cx.update(|window, cx| window.blur(cx));
+    shell.update(cx, |shell, cx| shell.set_space(2, cx));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(
+        shell.read_with(cx, |shell, _| shell.settle.is_some()),
+        "the page didn't slide in"
+    );
+    assert!(
+        !field_focused(&shell, cx),
+        "the field took the keyboard while the pages moved"
+    );
+    shell.update(cx, |shell, _| {
+        if let Some(settle) = &mut shell.settle {
+            settle.start -= Duration::from_secs(5);
+        }
+    });
+    while shell.read_with(cx, |shell, _| shell.settle.is_some()) {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+    assert!(
+        field_focused(&shell, cx),
+        "the settled Space's field has no keyboard"
+    );
+}
+
+/// Closing the last tab rests the Space on its field again, in Search and with the keyboard,
+/// whatever it was on before the tab showed.
+#[gpui::test]
+fn closing_the_last_tab_returns_to_the_field_in_search(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window_with_no_tab(cx);
+    key_window(cx);
+    cx.simulate_keystrokes("tab");
+    assert!(switch(&shell, cx).0, "⇥ didn't go to Ask");
+    shell.update(cx, |shell, cx| shell.set_selected(1, cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.blur(cx));
+    shell.update(cx, |shell, cx| {
+        shell.set_tabs(1, Vec::new(), vec![2], Vec::new(), Folders::default(), cx);
+        shell.set_selected(0, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        switch(&shell, cx),
+        (false, "Search or enter address".into())
+    );
+    assert!(
+        field_focused(&shell, cx),
+        "the field came back without the keyboard"
+    );
+}
