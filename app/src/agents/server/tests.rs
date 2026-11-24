@@ -767,6 +767,45 @@ fn a_tabs_calls_keep_their_order() {
 fn asks_come_one_at_a_time() {
     let (server, _, mut handed) = server();
     let (mut writer, answers) = session(&server, &mut handed);
+    send_call(&mut writer, 2, "ask_for_tab", json!({ "tab": 1 }));
+    send_call(&mut writer, 3, "ask_for_tab", json!({ "tab": 2 }));
+    send_call(&mut writer, 4, "click", json!({ "tab": 3, "ref": "e1" }));
+    // The first ask and tab 3's call go at once, so either can reach the UI first.
+    let first = next_call(&mut handed).expect("the first ask_for_tab or tab 3's call");
+    let second = next_call(&mut handed).expect("tab 3's call or the first ask_for_tab waited");
+    let (asking, click) = match first.tool.as_str() {
+        "click" => (second, first),
+        _ => (first, second),
+    };
+    assert_eq!(
+        (asking.tool.as_str(), asking.arguments["tab"].clone()),
+        ("ask_for_tab", json!(1))
+    );
+    assert_eq!(click.tool, "click", "two asks at once");
+    assert!(no_call(&mut handed), "two asks at once");
+    click.reply.send(ToolResult::text("Clicked.")).unwrap();
+    assert_eq!(answered(&answers), 4);
+    asking.reply.send(ToolResult::text("Done.")).unwrap();
+    assert_eq!(answered(&answers), 2);
+    let next_ask = next_call(&mut handed).expect("the second ask_for_tab");
+    assert_eq!(next_ask.arguments["tab"], 2);
+    next_ask.reply.send(ToolResult::text("Done.")).unwrap();
+    assert_eq!(answered(&answers), 3);
+
+    for id in 5..15 {
+        let url = format!("case-{id}.example");
+        send_call(&mut writer, id, "open_tab", json!({ "url": url }));
+    }
+    let opening: Vec<Call> = (5..15).filter_map(|_| next_call(&mut handed)).collect();
+    assert_eq!(opening.len(), 10, "a turn's tabs opened one after another");
+}
+
+/// A hand-off is its tab's alone: two tabs handed off at once both reach the UI, neither waiting
+/// for the other, and each is answered when its own tab is handed back, in whatever order.
+#[test]
+fn hand_offs_on_two_tabs_wait_for_neither() {
+    let (server, _, mut handed) = server();
+    let (mut writer, answers) = session(&server, &mut handed);
     send_call(
         &mut writer,
         2,
@@ -779,35 +818,35 @@ fn asks_come_one_at_a_time() {
         "hand_off",
         json!({ "tab": 2, "reason": "Sign in" }),
     );
-    send_call(&mut writer, 4, "click", json!({ "tab": 3, "ref": "e1" }));
-    // The first ask and tab 3's call go at once, so either can reach the UI first.
-    let first = next_call(&mut handed).expect("the first hand_off or tab 3's call");
-    let second = next_call(&mut handed).expect("tab 3's call or the first hand_off waited");
-    let (asking, click) = match first.tool.as_str() {
-        "click" => (second, first),
-        _ => (first, second),
-    };
+    let mut calls: Vec<Call> = (0..2).filter_map(|_| next_call(&mut handed)).collect();
     assert_eq!(
-        (asking.tool.as_str(), asking.arguments["tab"].clone()),
-        ("hand_off", json!(1))
+        calls.len(),
+        2,
+        "the second tab's hand_off waited for the first's"
     );
-    assert_eq!(click.tool, "click", "two asks at once");
-    assert!(no_call(&mut handed), "two asks at once");
-    click.reply.send(ToolResult::text("Clicked.")).unwrap();
-    assert_eq!(answered(&answers), 4);
-    asking.reply.send(ToolResult::text("Done.")).unwrap();
+    calls.sort_by_key(|call| call.arguments["tab"].as_u64());
+    let [one, two] = <[Call; 2]>::try_from(calls).ok().unwrap();
+    two.reply.send(ToolResult::text("Handed back.")).unwrap();
+    assert_eq!(answered(&answers), 3, "tab 2's hand-off waited for tab 1's");
+    one.reply.send(ToolResult::text("Handed back.")).unwrap();
     assert_eq!(answered(&answers), 2);
-    let next_ask = next_call(&mut handed).expect("the second hand_off");
-    assert_eq!(next_ask.arguments["tab"], 2);
-    next_ask.reply.send(ToolResult::text("Done.")).unwrap();
-    assert_eq!(answered(&answers), 3);
-
-    for id in 5..15 {
-        let url = format!("case-{id}.example");
-        send_call(&mut writer, id, "open_tab", json!({ "url": url }));
-    }
-    let opening: Vec<Call> = (5..15).filter_map(|_| next_call(&mut handed)).collect();
-    assert_eq!(opening.len(), 10, "a turn's tabs opened one after another");
+    // A call on a handed-off tab still waits for its tab.
+    send_call(
+        &mut writer,
+        4,
+        "hand_off",
+        json!({ "tab": 1, "reason": "Sign in" }),
+    );
+    send_call(&mut writer, 5, "click", json!({ "tab": 1, "ref": "e1" }));
+    let again = next_call(&mut handed).expect("tab 1's hand_off");
+    assert_eq!(again.tool, "hand_off");
+    assert!(
+        no_call(&mut handed),
+        "a click on a tab the user has went before it was handed back"
+    );
+    again.reply.send(ToolResult::text("Handed back.")).unwrap();
+    assert_eq!(answered(&answers), 4);
+    assert_eq!(next_call(&mut handed).expect("tab 1's click").tool, "click");
 }
 
 /// Stopped by the user, a connection answers the call under way, refuses the calls after it

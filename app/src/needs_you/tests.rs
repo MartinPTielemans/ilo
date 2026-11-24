@@ -6,8 +6,8 @@ use gpui::TestAppContext;
 
 use super::*;
 use crate::agents::Question;
-use crate::agents::page::clip;
 use crate::agents::task::Word;
+use crate::agents::tier::TEXT_MOST;
 
 #[derive(Default)]
 struct Recorder {
@@ -52,7 +52,6 @@ fn card(agent: &str, name: &str, dot: Dot) -> Card {
         word: Word::for_dot(dot),
         pages: Vec::new(),
         tier: Default::default(),
-        answers: Vec::new(),
         question: None,
         open: Vec::new(),
         page_steps: Vec::new(),
@@ -61,24 +60,18 @@ fn card(agent: &str, name: &str, dot: Dot) -> Card {
     }
 }
 
-/// `agent`'s card, waiting on question `id`: a handoff, or with no tab, a confirmation.
-fn waiting(agent: &str, name: &str, id: u64, handoff: Option<u64>) -> Card {
+/// `agent`'s card, waiting on the step `id` that is the user's, `why`.
+fn waiting(agent: &str, name: &str, id: u64, why: &str) -> Card {
     let question = Question {
         id,
         agent: name.to_string().into(),
         from: agent.to_string().into(),
-        what: "click “Place order” on shop.example".into(),
-        why: "Sign in to github.com".into(),
-        handoff,
+        why: why.to_string().into(),
+        tab: 30,
         back: false,
-        ..Default::default()
-    };
-    let status = match handoff {
-        Some(_) => "Waiting for you",
-        None => "Waiting for your OK",
     };
     Card {
-        status: status.into(),
+        status: "Waiting for you".into(),
         question: Some(question),
         ..card(agent, name, Dot::Waiting)
     }
@@ -119,9 +112,9 @@ fn the_count_follows_the_tasks_that_wait_and_clears(cx: &mut TestAppContext) {
         "a working task showed a count"
     );
 
-    // A ⌘T task's handoff and an outside agent's confirmation count alike.
-    let sign_in = waiting("task-1", "Claude", 7, Some(30));
-    let order = waiting("session-1", "Claude Code", 8, None);
+    // A ⌘T task's handoff and an outside agent's count alike.
+    let sign_in = waiting("task-1", "Claude", 7, "Sign in to github.com");
+    let order = waiting("session-1", "Claude Code", 8, "Choose a file for “CV”.");
     follow_cards(&[sign_in.clone(), order.clone()], cx);
     assert_eq!(host.badges.take(), [2]);
     // Cards sent again as another task changes leave the count as it is.
@@ -147,7 +140,7 @@ fn the_count_follows_the_tasks_that_wait_and_clears(cx: &mut TestAppContext) {
 fn a_need_posts_once_a_task_and_only_while_ilo_is_in_the_background(cx: &mut TestAppContext) {
     let host = opened(cx);
     host.active.set(true);
-    let sign_in = waiting("task-1", "Claude", 7, Some(30));
+    let sign_in = waiting("task-1", "Claude", 7, "Sign in to github.com");
     follow_cards(std::slice::from_ref(&sign_in), cx);
     assert!(posted(&host).is_empty(), "ilo active, a notification came");
     // The same need, once ilo has gone to the background, posts nothing: it's never repeated.
@@ -159,7 +152,7 @@ fn a_need_posts_once_a_task_and_only_while_ilo_is_in_the_background(cx: &mut Tes
     );
 
     // Its words are the task's title and nothing of the step it waits on.
-    let order = waiting("task-2", "Codex", 8, None);
+    let order = waiting("task-2", "Codex", 8, "");
     follow_cards(&[sign_in.clone(), order.clone()], cx);
     let notified = host.notified.take();
     assert_eq!(notified.len(), 1);
@@ -174,8 +167,14 @@ fn a_need_posts_once_a_task_and_only_while_ilo_is_in_the_background(cx: &mut Tes
 
     // Answered, then asked again, a task that has posted its need doesn't post another, so going
     // back and forth can't ring the user; one that hadn't, does.
-    follow_cards(&[], cx);
-    let again = waiting("task-2", "Codex", 9, None);
+    follow_cards(
+        &[
+            card("task-1", "Claude", Dot::Working),
+            card("task-2", "Codex", Dot::Working),
+        ],
+        cx,
+    );
+    let again = waiting("task-2", "Codex", 9, "");
     follow_cards(std::slice::from_ref(&again), cx);
     assert!(posted(&host).is_empty(), "a task posted its need twice");
     follow_cards(&[again, sign_in], cx);
@@ -253,8 +252,36 @@ fn a_tasks_title_goes_on_one_line_and_capped(cx: &mut TestAppContext) {
     follow_cards(&[named(Dot::Working)], cx);
     follow_cards(&[named(Dot::Done)], cx);
     let one_line = long.split_whitespace().collect::<Vec<_>>().join(" ");
-    let expected = format!("{} · Done", clip(&one_line, TITLE_CHARS));
+    let capped: String = one_line.chars().take(TEXT_MOST - 1).collect();
+    let expected = format!("{capped}… · Done");
     assert_eq!(posted(&host), [(expected, String::new())]);
+}
+
+#[gpui::test]
+fn a_title_that_turns_text_around_is_one_plain_line(cx: &mut TestAppContext) {
+    let host = opened(cx);
+    let named = |dot| Card {
+        title: "Pay\u{2028}the\u{202E} rent\u{2066}".into(),
+        ..card("task-1", "Claude", dot)
+    };
+    follow_cards(&[named(Dot::Working)], cx);
+    follow_cards(&[named(Dot::Waiting)], cx);
+    assert_eq!(
+        posted(&host),
+        [("Pay the rent · Needs you".to_string(), String::new())]
+    );
+}
+
+#[gpui::test]
+fn a_task_gone_from_the_cards_is_forgotten(cx: &mut TestAppContext) {
+    let host = opened(cx);
+    follow_cards(&[card("task-1", "Claude", Dot::Working)], cx);
+    follow_cards(&[card("task-1", "Claude", Dot::Waiting)], cx);
+    assert_eq!(posted(&host).len(), 1);
+    let told = |cx: &mut TestAppContext| cx.update(|cx| cx.global::<NeedsYou>().told.len());
+    assert_eq!(told(cx), 1);
+    follow_cards(&[card("task-2", "Codex", Dot::Working)], cx);
+    assert_eq!(told(cx), 0, "a task gone from the cards is still told");
 }
 
 #[gpui::test]

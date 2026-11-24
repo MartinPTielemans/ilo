@@ -6,9 +6,7 @@ use std::ffi::CString;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use browser::agents::{
-    self, Agents, Browser, Failure, GlobalAgents, PageAction, Question, TabInfo,
-};
+use browser::agents::{self, Agents, Browser, Failure, GlobalAgents, PageAction, TabInfo};
 use gpui::{App, AppContext};
 
 use crate::{WINDOWS, bar_picks_host, bc, ids, name};
@@ -236,12 +234,6 @@ impl Browser for Core {
         })
     }
 
-    fn ask(&self, question: Option<Question>, cx: &mut App) {
-        crate::update_shells_in(cx, |shell, cx| {
-            shell.set_agent_question(question.clone(), cx)
-        });
-    }
-
     fn hand_off(&self, agent: &str, tab: u64) -> bool {
         let Ok(agent) = CString::new(agent) else {
             return false;
@@ -275,10 +267,6 @@ impl Browser for Core {
 
     fn answer_download(&self, download: u64, keep: bool) {
         unsafe { bc::bc_agent_download_answer(download, keep) };
-    }
-
-    fn file_field_choose(&self, field: u64, window: u64) -> bool {
-        unsafe { bc::bc_file_field_choose(field, window) }
     }
 
     fn file_field_drop(&self, field: u64) {
