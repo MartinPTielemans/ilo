@@ -2,6 +2,9 @@
 //! its conversation says where it can't, and how what was kept goes. The assistant is a stand-in
 //! the tests write themselves, in a profile folder of their own: never the user's own.
 
+#[cfg(unix)]
+mod past;
+
 use super::*;
 use crate::agents::kept::{self, Id};
 use crate::agents::ready::{Found, Ready};
@@ -537,22 +540,24 @@ fn a_removal_that_failed_stays_listed_and_remove_all_tries_again(cx: &mut TestAp
     assert_eq!(run.ilo_lines(&agent, cx).last(), Some(&IloKind::Gone));
 }
 
-/// The conversations a run of the browser left go at the next launch, as its tasks went: by the
-/// ids in the file alone, each asked of its assistant.
+/// The conversation of a task that never ended, as a crash leaves it, goes at the next launch,
+/// as its task went: by the id in the file alone, asked of its assistant.
 #[cfg(unix)]
 #[gpui::test]
-fn the_next_launch_removes_what_the_run_before_kept(cx: &mut TestAppContext) {
+fn the_next_launch_removes_what_a_task_that_never_ended_kept(cx: &mut TestAppContext) {
     let run = Run::new("launch", cx);
     let agent = run.start(Cli::Claude, cx);
     run.ran(1);
     let id = run.id(&agent, cx);
-    run.finish(&agent, cx);
-    // Quit: its tasks end, and what was kept waits for the next launch.
-    (run.agents).update(cx, |agents, cx| agents.end_tasks(true, cx));
+    // No quit: the browser went while it worked.
     assert!(run.folder(&id).exists());
     assert!(run.purged(cx).is_empty());
 
     let next = Run::again(run.profile.clone(), run.program.clone(), cx);
+    assert!(
+        next.agents
+            .read_with(cx, |agents, cx| agents.archived_tasks(cx).is_empty())
+    );
     let folder = run.folder(&id);
     assert_eq!(
         next.purged(cx),
@@ -577,7 +582,7 @@ fn a_launch_with_no_file_of_ids_starts_and_spawns_nothing(cx: &mut TestAppContex
         let told = told.clone();
         cx.observe(&run.agents, move |_, _| told.set(told.get() + 1))
     });
-    (run.agents).update(cx, |agents, cx| agents.remove_old_kept(cx));
+    (run.agents).update(cx, |agents, cx| agents.take_old_kept(cx));
     assert!(!cx.executor().tick(), "the launch spawned something");
     assert_eq!(told.get(), 0);
     assert!(run.purged(cx).is_empty());

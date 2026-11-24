@@ -3773,7 +3773,12 @@ impl Settings {
         });
         // Under tasks' own switch, while they're on: whether a finished one is kept (#4105).
         let keeps = (on && tasks_on).then(|| self.kept_tasks(agents, accent, cx));
-        let rows = [master].into_iter().chain(tasks).chain(keeps);
+        // And under that, each one kept, which is the list of what is.
+        let kept = match on && tasks_on {
+            true => self.kept_rows(agents, cx),
+            false => Vec::new(),
+        };
+        let rows = [master].into_iter().chain(tasks).chain(keeps).chain(kept);
         let mut blocks = vec![Block::Rows(rows.collect())];
         if tasks_on {
             blocks.push(Block::Heading("Your assistant".into()));
@@ -4243,8 +4248,8 @@ impl Settings {
 
     /// Keep finished tasks: its switch, how many ilo holds a conversation's id for, which isn't a
     /// promise each still takes a reply, and Remove All…, which asks first, as nothing brings a
-    /// conversation back. Turning it off offers the same. The line under it names who keeps none,
-    /// from kept.rs's table.
+    /// conversation back. Turning it off offers the same. The line under it says what is kept and
+    /// where, then names who keeps none, from kept.rs's table.
     fn kept_tasks(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> Row {
         let look = &self.look;
         let model = agents.read(cx);
@@ -4254,7 +4259,7 @@ impl Settings {
             let set = move |on, cx: &mut App| {
                 agents.update(cx, |agents, cx| agents.set_keeps_tasks(on, cx));
                 if !on && kept > 0 {
-                    ask_remove_kept(agents.clone(), kept, cx);
+                    ask_remove_kept(agents.clone(), kept, None, cx);
                 }
             };
             self.toggle(
@@ -4277,29 +4282,50 @@ impl Settings {
         let remove = (kept > 0).then(|| {
             let agents = agents.clone();
             self.button("remove-kept-tasks", REMOVE_ALL)
-                .on_click(move |_, _, cx| ask_remove_kept(agents.clone(), kept, cx))
+                .on_click(move |_, _, cx| ask_remove_kept(agents.clone(), kept, None, cx))
                 .into_any_element()
         });
-        let line: Vec<String> = Cli::ALL
+        let never = Cli::ALL
             .into_iter()
             .filter(|cli| agents::kept::keeps(*cli) == agents::kept::Keeps::Never)
-            .map(|cli| format!("{} doesn't keep finished tasks.", cli.name()))
-            .collect();
+            .map(|cli| format!("{} doesn't keep finished tasks.", cli.name()));
+        let line: Vec<String> = [KEPT_WHERE.to_string()].into_iter().chain(never).collect();
         let controls = count.into_iter().chain(remove).chain([switch]).collect();
         nested(setting(
             look,
             KEEP_TASKS,
-            (!line.is_empty()).then(|| line.join(" ").into()),
+            Some(line.join(" ").into()),
             controls,
         ))
     }
 
-    /// Asks before the `kept` finished tasks' conversations are removed, as nothing brings them
-    /// back: in an alert, or on Linux in Settings' own dialog, as a profile's Delete asks.
+    /// The finished tasks kept, the last to end first, each by its title and the Archive's own
+    /// words for it, with Remove, which asks first as Remove All… does: the list of what ilo
+    /// keeps of them, and the way out for one.
+    fn kept_rows(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Row> {
+        let kept = agents.read(cx).kept_list(cx);
+        (kept.into_iter())
+            .map(|(task, title, about)| {
+                let agents = agents.clone();
+                let remove = self
+                    .button(SharedString::from(format!("remove-kept-{task}")), REMOVE)
+                    .on_click(move |_, _, cx| {
+                        ask_remove_kept(agents.clone(), 1, Some(task.clone()), cx)
+                    })
+                    .into_any_element();
+                nested(setting(&self.look, title, Some(about), vec![remove]))
+            })
+            .collect()
+    }
+
+    /// Asks before the `kept` finished tasks' conversations are removed, or `only` that task's,
+    /// as nothing brings them back: in an alert, or on Linux in Settings' own dialog, as a
+    /// profile's Delete asks.
     fn ask_remove_kept(
         &mut self,
         agents: &Entity<Agents>,
         kept: usize,
+        only: Option<SharedString>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -4311,7 +4337,7 @@ impl Settings {
                     "The conversation is removed from {from}. A task that is still working keeps \
                      its own."
                 ),
-                "Remove",
+                REMOVE,
             ),
             kept => (
                 format!("Remove {kept} finished tasks?"),
@@ -4325,7 +4351,10 @@ impl Settings {
         let agents = agents.clone();
         let remove = move |cx: &mut App| {
             log!("browser: kept tasks removed from settings");
-            agents.update(cx, |agents, cx| agents.remove_kept_tasks(cx))
+            agents.update(cx, |agents, cx| match &only {
+                Some(task) => agents.remove_kept_task(task, cx),
+                None => agents.remove_kept_tasks(cx),
+            })
         };
         #[cfg(target_os = "linux")]
         dialog::ask_in(
@@ -5625,24 +5654,25 @@ fn feature_row(
         .when(!controls.is_empty(), |row| row.child(end(controls)))
 }
 
-/// Settings › Agents' switch that keeps finished tasks, and its button. A kept task takes a reply
-/// while the browser runs, and the name promises no more.
-const KEEP_TASKS: &str = concat!(
-    "Keep finished tasks until you quit ",
+/// Settings › Agents' switch that keeps finished tasks, what its line says is kept and where,
+/// and its buttons: a kept task's own, and the one for them all.
+const KEEP_TASKS: &str = "Keep finished tasks so you can reply";
+const KEPT_WHERE: &str = concat!(
     env!("APP_NAME"),
-    ", so you can reply"
+    " keeps each task's title on this computer. The conversation stays with your assistant."
 );
+const REMOVE: &str = "Remove";
 const REMOVE_ALL: &str = "Remove All…";
 
-/// Asks before the kept conversations go (`Settings::ask_remove_kept`), once the click that asked
-/// is over, in Settings' window.
-fn ask_remove_kept(agents: Entity<Agents>, kept: usize, cx: &mut App) {
+/// Asks before the kept conversations go, or `only` that task's (`Settings::ask_remove_kept`),
+/// once the click that asked is over, in Settings' window.
+fn ask_remove_kept(agents: Entity<Agents>, kept: usize, only: Option<SharedString>, cx: &mut App) {
     cx.defer(move |cx| {
         let Some(window) = cx.try_global::<SettingsWindow>().map(|w| w.0) else {
             return;
         };
         let ask = |settings: &mut Settings, window: &mut Window, cx: &mut Context<Settings>| {
-            settings.ask_remove_kept(&agents, kept, window, cx)
+            settings.ask_remove_kept(&agents, kept, only.clone(), window, cx)
         };
         window.update(cx, ask).ok();
     });
