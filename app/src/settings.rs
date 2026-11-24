@@ -2734,11 +2734,16 @@ impl Settings {
             .rounded(px(CONTROL_RADIUS))
             .bg(look.control)
             .key_context("Naming")
-            .on_action(
-                cx.listener(|settings, _: &KeepName, window, cx| settings.add_filter(window, cx)),
-            )
+            .on_action(cx.listener(|settings, _: &KeepName, window, cx| {
+                if browser::dismissal::submits([&settings.filter.clone()], cx) {
+                    settings.add_filter(window, cx)
+                }
+            }))
             .on_action(cx.listener(|settings, _: &CancelName, window, cx| {
-                (settings.filter).update(cx, |field, cx| field.reset("".into(), window, cx));
+                let filter = settings.filter.clone();
+                if browser::dismissal::Close::escape_from([&filter], cx).is_some() {
+                    filter.update(cx, |field, cx| field.reset("".into(), window, cx));
+                }
             }))
             .child(self.drawn("filter field".into()))
             .child(self.filter.clone());
@@ -3126,10 +3131,16 @@ impl Settings {
                 Some(renaming) if renaming.profile == id => div()
                     .key_context("Naming")
                     .on_action(cx.listener(|settings, _: &KeepName, window, cx| {
-                        settings.keep_name(window, cx)
+                        let name = settings.renaming.as_ref().map(|r| r.name.clone());
+                        if browser::dismissal::submits(&name, cx) {
+                            settings.keep_name(window, cx)
+                        }
                     }))
                     .on_action(cx.listener(|settings, _: &CancelName, window, cx| {
-                        settings.cancel_name(window, cx)
+                        let name = settings.renaming.as_ref().map(|r| r.name.clone());
+                        if browser::dismissal::Close::escape_from(&name, cx).is_some() {
+                            settings.cancel_name(window, cx)
+                        }
                     }))
                     .child(renaming.name.clone()),
                 _ => div()
@@ -5989,7 +6000,10 @@ impl Render for Settings {
             .on_action(|_: &NextControl, window, cx| window.focus_next(cx))
             .on_action(|_: &PreviousControl, window, cx| window.focus_prev(cx))
             .on_action(cx.listener(|settings, _: &EndSearch, window, cx| {
-                if !settings.end_search(window, cx) {
+                let search = settings.search.clone();
+                if browser::dismissal::Close::escape_from([&search], cx).is_some()
+                    && !settings.end_search(window, cx)
+                {
                     cx.propagate();
                 }
             }))

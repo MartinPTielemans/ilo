@@ -302,12 +302,10 @@ pub fn typed(input: &Entity<TextInput>, cx: &App) -> String {
     input.read(cx).committed()
 }
 
-/// Esc's part: empties the field, so the section shows again. False when it was empty, for Esc to
-/// go on to whatever else takes it, and while an input method composes there, whose Esc cancels
-/// the composition.
+/// Esc's part, once `Close::escape_from` has left it the key: empties the field, so the section
+/// shows again. False when it was empty, for Esc to go on to whatever else takes it.
 pub fn end(input: &Entity<TextInput>, window: &mut Window, cx: &mut App) -> bool {
-    let input_read = input.read(cx);
-    if input_read.text().is_empty() || input_read.composing() {
+    if input.read(cx).text().is_empty() {
         return false;
     }
     input.update(cx, |input, cx| input.reset("".into(), window, cx));
