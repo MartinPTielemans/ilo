@@ -3718,7 +3718,24 @@ impl Settings {
         });
         // Under tasks' own switch, while they're on: whether a finished one is kept (#4105).
         let keeps = (on && tasks_on).then(|| self.kept_tasks(agents, accent, cx));
-        let rows = [master].into_iter().chain(tasks).chain(keeps);
+        // Whether agents may ask ilo to fill a saved login (#4098), shown while agents are on.
+        let sign_in = on.then(|| {
+            use agents::signing;
+            let sign_in_on = agents.read(cx).sign_in_on();
+            let switch = {
+                let agents = agents.clone();
+                let set = move |on, cx: &mut App| {
+                    agents.update(cx, |agents, cx| agents.set_sign_in_on(on, cx))
+                };
+                self.toggle("agent sign-in", signing::HEADING, sign_in_on, set, accent, cx)
+            };
+            let line = match sign_in_on {
+                true => signing::SWITCH_LINE,
+                false => signing::SWITCH_OFF_LINE,
+            };
+            setting(look, signing::HEADING, Some(line.into()), vec![switch])
+        });
+        let rows = [master].into_iter().chain(tasks).chain(keeps).chain(sign_in);
         let mut blocks = vec![Block::Rows(rows.collect())];
         if tasks_on {
             blocks.push(Block::Heading("Your assistant".into()));

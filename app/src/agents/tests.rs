@@ -74,6 +74,10 @@ struct Made {
     sign_in_pages: RefCell<Vec<(String, u64)>>,
     sign_in_closed: RefCell<Vec<(u64, u64)>>,
     no_sign_in_page: std::cell::Cell<bool>,
+    /// The tabs whose title and address the core withholds from agents, and each sign-in the
+    /// agents asked of the core: the agent, the tab and the request.
+    withheld: RefCell<HashSet<u64>>,
+    saved_sign_ins: RefCell<Vec<(String, u64, u64)>>,
 }
 
 impl Made {
@@ -125,7 +129,7 @@ impl Browser for Made {
         }
     }
 
-    fn tab(&self, tab: u64, _: &App) -> TabInfo {
+    fn shown(&self, tab: u64, _: &App) -> TabInfo {
         let tabs = self.tabs.borrow();
         let found = tabs.iter().find(|each| each.0 == tab);
         found.map_or(
@@ -237,6 +241,18 @@ impl Browser for Made {
     fn hand_back(&self, tab: u64) -> bool {
         self.handed_back.borrow_mut().push(tab);
         self.held.borrow_mut().remove(&tab)
+    }
+
+    fn withheld(&self, tab: u64) -> bool {
+        self.withheld.borrow().contains(&tab)
+    }
+
+    fn held(&self, tab: u64) -> bool {
+        self.held.borrow().contains(&tab)
+    }
+
+    fn sign_in(&self, agent: &str, tab: u64, request: u64) {
+        (self.saved_sign_ins.borrow_mut()).push((agent.into(), tab, request));
     }
 
     // As the core does, without a dialog.
@@ -2501,8 +2517,9 @@ fn what_an_agent_may_not_do_is_refused_and_logged(cx: &mut TestAppContext) {
     assert!(browser.navigated.borrow().is_empty());
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "navigate");
 
-    // The account is the user's alone: its secret reads their passwords.
-    for tool in ["sign_in", "recovery_words", "sync"] {
+    // The account is the user's alone: its secret reads their passwords. Signing a page in with a
+    // saved login is the browser's (sign_in), and the agent never has the login.
+    for tool in ["recovery_words", "sync"] {
         let answer = call(&agents, "claude-code", tool, json!({}), cx);
         assert_eq!(
             answer.recv().unwrap(),

@@ -1161,6 +1161,8 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
         agent_download: Some(agent_download),
         agent_request_done: Some(agent_request_done),
         profile_read_done: Some(agents_core::profile_read_done),
+        agent_sign_in_done: Some(agents_core::agent_sign_in_done),
+        agent_signed_in: Some(agents_core::agent_signed_in),
         agent_close_answered: Some(agent_close_answered),
         window_downloads_question: Some(window_downloads_question),
         archive_note_changed: Some(archive_note_changed),

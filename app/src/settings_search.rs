@@ -87,6 +87,7 @@ pub fn also(name: &str) -> &'static [&'static str] {
         "Let sites ask to send notifications" => &["notifications"],
         "Ask where to save each file" => &["downloads"],
         "Tasks from the command bar" => &["agent tasks", "ask claude", "ask codex"],
+        "Sign in for agents" => &["agent sign in", "saved login"],
         "Appearance" => &["dark mode", "light mode"],
         "Show the hidden sidebar at the window's edge" => &["edge reveal", "auto hide"],
         "Sidebar position" => &[

@@ -32,6 +32,7 @@ pub mod saved_read;
 pub mod scripts;
 mod server;
 pub mod sign_in;
+pub mod signing;
 pub mod task;
 pub mod tier;
 pub mod tools;
@@ -278,11 +279,28 @@ pub trait Browser {
     /// The tabs of `agent`'s own Space, in `space_tabs`' order, as the core lists them
     /// (bc_agent_list_tabs): it finds the Space, so no other Space's tabs are ever listed.
     fn agent_tabs(&self, agent: &str, cx: &App) -> Vec<TabInfo>;
-    /// `tab`'s title and URL.
-    fn tab(&self, tab: u64, cx: &App) -> TabInfo;
-    /// Why no agent may see or act on `tab`, even in its own Space, or None (`off_limits`).
+    /// `tab`'s title and URL, as the user sees them.
+    fn shown(&self, tab: u64, cx: &App) -> TabInfo;
+    /// Whether `tab`'s title and address are withheld from agents (bc_tab_withheld_from_agents):
+    /// while the core signs it in, and while it shows a page a sign-in withheld.
+    fn withheld(&self, tab: u64) -> bool;
+    /// `tab`'s title and URL as agents, and all the app keeps or shows of them, may have them:
+    /// neither of a withheld tab, which is said to be withheld in its title's place.
+    fn tab(&self, tab: u64, cx: &App) -> TabInfo {
+        let shown = self.shown(tab, cx);
+        match self.withheld(tab) {
+            true => TabInfo {
+                title: WITHHELD.into(),
+                url: "".into(),
+                ..shown
+            },
+            false => shown,
+        }
+    }
+    /// Why no agent may see or act on `tab`, even in its own Space, or None (`off_limits`). By
+    /// its own address, so an agent can still take a withheld tab to another page.
     fn off_limits(&self, tab: u64, cx: &App) -> Option<&'static str> {
-        off_limits(&self.tab(tab, cx).url, "")
+        off_limits(&self.shown(tab, cx).url, "")
     }
     /// The Space that has `tab`, or 0 if none does: it closed, or is closing.
     fn space_of(&self, tab: u64, cx: &App) -> u64;
@@ -326,6 +344,12 @@ pub trait Browser {
     /// The user takes the tab over, which ends its agent's session there and holds it
     /// (bc_tab_take_back).
     fn take_back(&self, tab: u64, cx: &mut App);
+    /// Whether the core holds `tab` from agents (bc_tab_held), as it does a page that showed what
+    /// its sign-in filled.
+    fn held(&self, tab: u64) -> bool;
+    /// Asks the core to sign the agent's `tab` in with a login the user saved (bc_agent_sign_in).
+    /// Its answer comes to `Agents::sign_in_done` with `request`.
+    fn sign_in(&self, agent: &str, tab: u64, request: u64);
     /// The user hands the tab back to agents. Whether they held it.
     fn hand_back(&self, tab: u64) -> bool;
     /// Closes the agent's `tab` without a dialog (bc_agent_close_tab): a page with a beforeunload
@@ -932,6 +956,10 @@ pub struct Agents {
     /// The site notes each task has had (#4122), and Settings › Agents' Site notes turned off.
     noted: notes::Given,
     notes_off: bool,
+    /// Settings › Agents' Sign in for agents (#4098), and the sign-ins the core is doing, by their
+    /// request.
+    sign_in_on: bool,
+    signing: HashMap<u64, signing::Signing>,
     /// The log's last entry, by its id.
     logged: u64,
     /// The actions waiting on the user, the first asked now.
@@ -1070,9 +1098,10 @@ struct Held {
     reply: Option<mpsc::Sender<ToolResult>>,
     /// Answers a handoff's call once HANDOFF_WAIT passes with the tab still the user's.
     timer: Option<Task<()>>,
-    /// Whether the browser handed the tab off for its page's sign-in, which the agent's call
-    /// that met it waits on (`sign_in_hand_off`), so its answer says why.
-    sign_in: bool,
+    /// What the answer of a call that asked for no handoff starts with, as it waits on one: why
+    /// the browser handed the tab off, for its page's sign-in dialog (`sign_in_hand_off`) or a
+    /// saved login's sign-in that's the user's step (`sign_in_yours`).
+    told: Option<String>,
 }
 
 impl Held {
@@ -1142,6 +1171,8 @@ impl Agents {
             had: HashMap::new(),
             noted: notes::Given::default(),
             notes_off: false,
+            sign_in_on: signing::STARTS_ON,
+            signing: HashMap::new(),
             logged: 0,
             asking: Vec::new(),
             downloading: HashMap::new(),
@@ -1235,6 +1266,7 @@ impl Agents {
         // that the assistants found are known, as each removes its own.
         self.remove_old_kept(cx);
         self.notes_off = saved.get("notes").and_then(Value::as_bool) == Some(false);
+        self.sign_in_on = (saved.get("sign_in").and_then(Value::as_bool)).unwrap_or(signing::STARTS_ON);
         self.on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
         self.scripts = saved
             .get("scripts")
@@ -1603,7 +1635,7 @@ impl Agents {
                 back: None,
                 reply: None,
                 timer: None,
-                sign_in: false,
+                told: None,
             };
             self.held.insert(tab, held);
             self.carry(tab, held::Event::Passkey, life, actions, cx);
@@ -1802,6 +1834,13 @@ impl Agents {
                                 ..tab
                             })
                         }
+                        // Whatever lists it: Browser::tab says it's withheld, but a host's
+                        // list of a Space's tabs may not ask it.
+                        None if self.browser.withheld(tab.id) => Some(TabInfo {
+                            title: WITHHELD.into(),
+                            url: "".into(),
+                            ..tab
+                        }),
                         None if came.contains(&tab.id) => Some(TabInfo {
                             title: fence::LISTED.into(),
                             url: "".into(),
@@ -2055,7 +2094,7 @@ impl Agents {
                     back: None,
                     reply: Some(reply),
                     timer: None,
-                    sign_in: false,
+                    told: None,
                 };
                 self.held.insert(tab, held);
                 self.carry(tab, held::Event::HandOff, life, actions, cx);
@@ -2313,6 +2352,7 @@ impl Agents {
                     (false, false) => self.ask_first(act, host, CHANGES_ASK, cx),
                 }
             }
+            "sign_in" => self.sign_in_call(&agent, connection, id, &arguments, reply, cx),
             "title" => self.name_task(&agent, connection, id, &arguments, at, reply, cx),
             "ask" | "finish" if is_task(&agent) => {
                 self.task_tool(&agent, &tool, &arguments, reply, cx)
@@ -2802,7 +2842,7 @@ impl Agents {
             back: None,
             reply: Some(reply),
             timer: None,
-            sign_in: true,
+            told: Some(SIGNED_IN.into()),
         };
         self.held.insert(tab, held);
         self.carry(tab, held::Event::HandOff, life, actions, cx);
@@ -2830,7 +2870,7 @@ impl Agents {
             back: None,
             reply: None,
             timer: None,
-            sign_in: false,
+            told: None,
         };
         self.held.insert(tab, held);
         // The core ends the agent's session there, which logs it.
@@ -3003,8 +3043,8 @@ impl Agents {
             {
                 let mut answer = answer_of(tab, event);
                 // The call that met the sign-in asked for no handoff, so it hears why it waited.
-                if held.sign_in {
-                    answer.text = format!("{SIGNED_IN} {}", answer.text);
+                if let Some(told) = &held.told {
+                    answer.text = format!("{told} {}", answer.text);
                 }
                 _ = reply.send(answer);
             }
@@ -5500,6 +5540,7 @@ impl Agents {
             "tasks": tasks,
             "scripts": self.scripts,
             "notes": !self.notes_off,
+            "sign_in": self.sign_in_on,
         });
         if let Err(error) = clients::write_private(path, saved.to_string().as_bytes()) {
             log!("couldn't save the agents' settings: {error}");
@@ -5536,6 +5577,13 @@ pub enum Failure {
     Loading,
     PasswordField,
     NoOption,
+    /// The core is signing the tab in for an agent.
+    SigningIn,
+    /// The step is the user's, such as a sign-in only they may finish.
+    UserStep,
+    /// The tab shows a page withheld from agents (Browser::withheld): only a navigation to
+    /// another page, or closing it.
+    WithheldPage,
 }
 
 impl Failure {
@@ -5547,6 +5595,7 @@ impl Failure {
             Failure::Loading => Some(tools::Kind::StillLoading),
             Failure::PasswordField => Some(tools::Kind::Password),
             Failure::NoOption => Some(tools::Kind::NotFound),
+            Failure::UserStep => Some(tools::Kind::Yours),
             _ => None,
         }
     }
@@ -5903,6 +5952,10 @@ const NOT_WEB_PAGE: &str =
 const OFF_THE_WEB: &str = "A page that isn't http or https";
 /// list_tabs' words for a tab the user holds, in place of its page's title and address (#3694).
 const WITH_THE_USER: &str = "With the user until they hand it back";
+/// The words for a tab whose title and address are withheld (Browser::withheld), in their place in
+/// everything an agent gets or the app keeps for agents: all it says is that the page has to move
+/// on.
+pub const WITHHELD: &str = "Withheld until the tab goes to another page";
 /// The core's refusal of a tab not in the agent's Space (bc_agent_may_act).
 const NOT_ITS_SPACE: &str = "The tab isn't in the agent's own Space.";
 

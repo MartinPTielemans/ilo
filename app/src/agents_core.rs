@@ -77,7 +77,7 @@ impl Browser for Core {
         (tabs.into_iter()).map(|tab| self.tab(tab, cx)).collect()
     }
 
-    fn tab(&self, tab: u64, cx: &App) -> TabInfo {
+    fn shown(&self, tab: u64, cx: &App) -> TabInfo {
         // A pinned tab has the URL it goes back to; agents' Spaces have no favorites, which do too.
         let pinned = unsafe { bc::bc_tab_pinned_url(tab, std::ptr::null_mut(), 0) } > 0;
         // Every window's shell has every Space's tabs.
@@ -100,7 +100,27 @@ impl Browser for Core {
 
     fn off_limits(&self, tab: u64, cx: &App) -> Option<&'static str> {
         // A pinned tab not yet loaded has no page, only the URL it's pinned to.
-        agents::off_limits(&self.tab(tab, cx).url, &name(bc::bc_tab_pinned_url, tab))
+        agents::off_limits(&self.shown(tab, cx).url, &name(bc::bc_tab_pinned_url, tab))
+    }
+
+    fn withheld(&self, tab: u64) -> bool {
+        unsafe { bc::bc_tab_withheld_from_agents(tab) }
+    }
+
+    fn held(&self, tab: u64) -> bool {
+        unsafe { bc::bc_tab_held(tab) }
+    }
+
+    fn sign_in(&self, agent: &str, tab: u64, request: u64) {
+        let Ok(named) = CString::new(agent) else {
+            // As the core answers a refusal: from a task of its own.
+            let text = "The agent's name can't be used.".to_string();
+            update(move |agents, cx| {
+                agents.sign_in_done(request, false, false, text, Some(Failure::Other), cx)
+            });
+            return;
+        };
+        call(|| unsafe { bc::bc_agent_sign_in(named.as_ptr(), tab, request) });
     }
 
     fn space_of(&self, tab: u64, cx: &App) -> u64 {
@@ -428,6 +448,47 @@ pub unsafe extern "C" fn profile_read_done(
     update(move |agents, cx| agents.read_done(read, answer, cx));
 }
 
+/// The core's answer to an agent's sign-in (bc_agent_sign_in), for the call that waits on it.
+/// Whether it submitted is the app's alone.
+pub unsafe extern "C" fn agent_sign_in_done(
+    _: *mut std::ffi::c_void,
+    _tab: bc::bc_id,
+    request: u64,
+    signed_in: bool,
+    submitted: bool,
+    text: *const std::ffi::c_char,
+    failure: std::ffi::c_int,
+) {
+    let text = unsafe { string(text) };
+    let failure = (failure != 0).then(|| failure_of(failure));
+    update(move |agents, cx| {
+        agents.sign_in_done(request, signed_in, submitted, text, failure, cx)
+    });
+}
+
+/// A string the core passes, for as long as the call: empty for none.
+unsafe fn string(text: *const std::ffi::c_char) -> String {
+    match text.is_null() {
+        true => String::new(),
+        false => unsafe { std::ffi::CStr::from_ptr(text) }
+            .to_string_lossy()
+            .into_owned(),
+    }
+}
+
+/// The core signed an agent's tab in with a saved login: for the user's ilo line, whose account
+/// stays in memory, and the activity log, which never has it.
+pub unsafe extern "C" fn agent_signed_in(
+    _: *mut std::ffi::c_void,
+    agent: *const std::ffi::c_char,
+    tab: bc::bc_id,
+    site: *const std::ffi::c_char,
+    account: *const std::ffi::c_char,
+) {
+    let (agent, site, account) = unsafe { (string(agent), string(site), string(account)) };
+    update(move |agents, cx| agents.signed_in(&agent, tab, &site, account, cx));
+}
+
 /// The tabs `copy` copies of `space`, as bc_space_today does.
 fn tabs(
     copy: unsafe extern "C" fn(bc::bc_id, *mut bc::bc_id, usize) -> usize,
@@ -542,6 +603,9 @@ pub(crate) fn failure_of(code: std::ffi::c_int) -> Failure {
         bc::bc_agent_failure_BC_AGENT_FAILURE_LOADING => Failure::Loading,
         bc::bc_agent_failure_BC_AGENT_FAILURE_PASSWORD_FIELD => Failure::PasswordField,
         bc::bc_agent_failure_BC_AGENT_FAILURE_NO_OPTION => Failure::NoOption,
+        bc::bc_agent_failure_BC_AGENT_FAILURE_SIGNING_IN => Failure::SigningIn,
+        bc::bc_agent_failure_BC_AGENT_FAILURE_USER_STEP => Failure::UserStep,
+        bc::bc_agent_failure_BC_AGENT_FAILURE_WITHHELD_PAGE => Failure::WithheldPage,
         _ => Failure::Other,
     }
 }

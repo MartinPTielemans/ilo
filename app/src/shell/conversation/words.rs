@@ -24,7 +24,7 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         IloKind::Stopped { at, .. } => (format!("stopped {agent} at"), Some(at.to_string())),
         IloKind::Yours { .. } => ("this step is yours".into(), None),
         IloKind::TabBack { .. } => (format!("{agent} needs this tab back"), None),
-        IloKind::SignedIn { site, .. } => ("signed in to".into(), Some(site.to_string())),
+        IloKind::SignedIn { site, .. } => ("filled your login at".into(), Some(site.to_string())),
         IloKind::TierChanged { from, to } if to > from => {
             (format!("you gave this task {}", to.label()), None)
         }

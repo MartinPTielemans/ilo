@@ -65,3 +65,17 @@ pub enum Why {
     /// A site outside the pages the task was given.
     OtherSite,
 }
+
+/// Why signing in for the agent with a saved login is above `tier` (#4098), on a bank's site or
+/// not, or None: Look only signs in nowhere, Work on pages anywhere but on a bank's site, and Full
+/// access anywhere.
+pub fn sign_in_above(tier: Tier, bank: bool) -> Option<Why> {
+    let why = match bank {
+        true => Why::SignInBank,
+        false => Why::SignIn,
+    };
+    match (tier, bank) {
+        (Tier::Look, _) | (Tier::Work, true) => Some(why),
+        (Tier::Work, false) | (Tier::Full, _) => None,
+    }
+}

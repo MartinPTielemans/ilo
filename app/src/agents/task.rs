@@ -308,6 +308,9 @@ pub struct Task {
     pub messages: Vec<Message>,
     /// Its steps, oldest first.
     pub trace: Vec<Traced>,
+    /// The sign-ins ilo did for it, each by its call's place in `trace`, with the account it
+    /// filled, for its ilo line alone: in memory, never kept in a file (signing.rs).
+    pub(super) filled: Vec<(usize, ilo::IloKind)>,
     pub dismissed: bool,
     /// When it last left the foot for the Archive, which lists it by then. Kept in memory only.
     pub left: Option<SystemTime>,
@@ -693,6 +696,7 @@ impl Agents {
         }
         // ilo's own lines of a task that can be replied to after it ended (#4105).
         self.kept_lines(task, &mut lines);
+        self.filled_lines(task, &mut lines);
         let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
             .map(|tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
             .collect();
@@ -1129,6 +1133,7 @@ impl Agents {
             end_entry: 0,
             started: SystemTime::now(),
             kept: None,
+            filled: Vec::new(),
             orders: 0,
             sent: 0,
             messages: Vec::new(),
@@ -2167,6 +2172,7 @@ impl Agents {
             end_entry: 0,
             started: SystemTime::now(),
             kept: None,
+            filled: Vec::new(),
             orders: 0,
             sent: 0,
             messages: Vec::new(),
