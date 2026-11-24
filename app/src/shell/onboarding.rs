@@ -30,7 +30,7 @@ use super::{
 use crate::account::{self, Account, AccountEvent, Status};
 use crate::default_browser::{self, Os};
 use crate::import::{Corner, Guide, ImportEvent, ImportView, Look};
-use crate::settings_rows::{SLIDE, group, named_button, ring, stop_switch};
+use crate::settings_rows::{self, SLIDE, group, named_button, ring, stop_switch};
 use crate::theme::Theme;
 use crate::theme_picker::{SWATCHES, swatch_name};
 use crate::tokens::palette::{INK, PAPER};
@@ -368,6 +368,8 @@ pub(super) struct Onboarding {
     /// the one it was at as the flow began, which Skip puts back.
     pub(super) level: Transparency,
     before: Transparency,
+    /// Where the picker's pictures were drawn, its own log as the picker asks outside Settings.
+    level_drawn: settings_rows::Drawn,
     /// The search engines offered, each its keyword and name, and the profile's default's keyword,
     /// read until the core has them: a new profile's load after the flow starts.
     engines: (Vec<(SharedString, SharedString)>, SharedString),
@@ -490,6 +492,7 @@ impl Shell {
             picked: None,
             level,
             before: level,
+            level_drawn: Default::default(),
             engines,
             engine,
             os: self.browser.os(),
@@ -670,6 +673,21 @@ impl Shell {
     /// Turns the daily count's switch on at the opt-ins step, for the preview's captures.
     pub fn onboarding_count_on(&mut self, cx: &mut Context<Self>) {
         self.onboarding_switch(OptIn::DailyCount, cx);
+    }
+
+    /// Starts the flow in `appearance` at `step`, check.sh's name for it or its number from 1 in
+    /// the whole flow, for the preview. The transparency step shows on a host without glass too,
+    /// as on one with it, so it can be looked at anywhere.
+    pub fn onboarding_at(&mut self, appearance: Option<&str>, step: &str, cx: &mut Context<Self>) {
+        let numbered = (step.parse::<usize>().ok())
+            .and_then(|number| STEPS.get(number.checked_sub(1)?))
+            .map(|step| step.name());
+        let name = numbered.unwrap_or(step);
+        if name == Step::Transparency.name() {
+            self.blurred = true;
+        }
+        self.start_onboarding(appearance, cx);
+        self.onboarding_to(name, cx);
     }
 
     /// Goes on through the flow to the step check.sh calls `name`, for the preview's captures.
@@ -1667,9 +1685,11 @@ impl Shell {
         colors: Colors,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let level = (self.onboarding.as_ref()).map_or_else(Transparency::default, |o| o.level);
+        let (level, drawn) = (self.onboarding.as_ref())
+            .map_or_else(Default::default, |o| (o.level, o.level_drawn.clone()));
+        let look = settings_rows::Look::settings(colors.ink == PAPER);
         let shell = cx.weak_entity();
-        let picker = transparency::picker(level, colors.ink == PAPER, move |level, _, cx| {
+        let picker = transparency::picker(level, &look, drawn, move |level, _, cx| {
             shell
                 .update(cx, |shell, cx| shell.onboarding_transparency(level, cx))
                 .ok();

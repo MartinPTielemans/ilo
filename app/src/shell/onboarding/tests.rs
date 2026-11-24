@@ -1942,6 +1942,23 @@ fn no_glass_leaves_the_transparency_step_out(cx: &mut TestAppContext) {
     assert!(!steps.contains(&Step::Transparency), "{steps:?}");
 }
 
+/// The preview opens the flow at a step by its name or its number, and at the transparency step
+/// without glass too, so the step can be looked at on any host.
+#[gpui::test]
+fn the_preview_opens_the_flow_at_a_step_by_name_or_number(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
+    let at = |name: &str, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            shell.onboarding = None;
+            shell.onboarding_at(Some("dark"), name, cx);
+            shell.onboarding.as_ref().map(|onboarding| onboarding.step)
+        })
+    };
+    assert_eq!(at("6", cx), Some(Step::Color));
+    assert_eq!(at("transparency", cx), Some(Step::Transparency));
+    assert_eq!(at("7", cx), Some(Step::Transparency));
+}
+
 /// The keyboard rests on the picker, which shows Standard, and the arrows move the pick, stopping
 /// at either end.
 #[gpui::test]
