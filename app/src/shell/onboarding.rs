@@ -395,6 +395,10 @@ pub(super) struct Onboarding {
     focused_step: Option<Step>,
     /// Where the opt-ins' rows and switches are drawn (opt_in_frame).
     frames: Frames,
+    /// Where the step shown draws its Skip and Back, by name (Shell::place).
+    pub(super) places: Places,
+    /// Its last frame asked for another: something moves, or its loop plays.
+    pub(super) drawing: bool,
     /// Where the step's button is drawn, once the step has settled (button_frame).
     pub(super) button: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// GPUI's clock, which the flow's motion and the intro's hold are timed by: the real one in the
@@ -509,6 +513,8 @@ impl Shell {
             first_stop: cx.focus_handle().tab_stop(true),
             focused_step: None,
             frames: Frames::default(),
+            places: Places::default(),
+            drawing: false,
             button: Rc::default(),
             clock: cx.background_executor().clone(),
             since: cx.background_executor().now(),
@@ -1249,9 +1255,13 @@ impl Shell {
         {
             log!("browser: onboarding {} slid", opt_in.name());
         }
-        if !came || onboarding.leaving.is_some() || ending.is_some() || sliding || looping {
+        onboarding.drawing =
+            !came || onboarding.leaving.is_some() || ending.is_some() || sliding || looping;
+        if onboarding.drawing {
             window.request_animation_frame();
         }
+        // Each frame says again where its controls are.
+        onboarding.places.borrow_mut().clear();
         let light = onboarding.light.unwrap_or_else(|| {
             matches!(
                 window.appearance(),
@@ -1790,7 +1800,6 @@ impl Shell {
         .centred();
         div()
             .id("onboarding-transparency")
-            .debug_selector(|| "onboarding-transparency".into())
             .when_some(self.first_stop(step), |slot, stop| slot.track_focus(&stop))
             .mt(px(BUTTON_GAP))
             .w(px(IMPORT_WIDTH))
@@ -1834,7 +1843,6 @@ impl Shell {
         let stop = (self.onboarding.as_ref()).map(|onboarding| onboarding.skip_stop.clone());
         div()
             .id("onboarding-skip")
-            .debug_selector(|| "onboarding-skip".into())
             .when(self.a11y, |control| {
                 named_button(control, if back { "Back" } else { "Skip" })
             })
@@ -1860,6 +1868,23 @@ impl Shell {
             }))
             .child(if back { "Back" } else { "Skip" })
             .child(chip)
+            .children(self.place(
+                self.onboarding.as_ref().map_or(Step::Intro, |o| o.step),
+                "skip",
+            ))
+    }
+
+    /// Keeps where the step shown draws `name`, for a test to click it; the step leaving, drawn
+    /// under it, keeps none.
+    pub(super) fn place(&self, step: Step, name: &'static str) -> Option<impl IntoElement + use<>> {
+        let places = (self.onboarding.as_ref())
+            .filter(|onboarding| onboarding.step == step)
+            .map(|onboarding| onboarding.places.clone())?;
+        let frame = canvas(
+            move |bounds, _, _| _ = places.borrow_mut().insert(name, bounds),
+            |_, _, _, _| {},
+        );
+        Some(frame.absolute().inset_0())
     }
 }
 
@@ -1876,6 +1901,9 @@ fn button_frame(at: Rc<Cell<Option<Bounds<Pixels>>>>, settled: bool) -> impl Int
     .absolute()
     .inset_0()
 }
+
+/// Where the step shown draws a control, by its name (Shell::place).
+pub(super) type Places = Rc<RefCell<HashMap<&'static str, Bounds<Pixels>>>>;
 
 /// Where each opt-in's row and switch is drawn, by the opt-in and "row" or "switch".
 type Frames = Rc<RefCell<HashMap<(OptIn, &'static str), Bounds<Pixels>>>>;

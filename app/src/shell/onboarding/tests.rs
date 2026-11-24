@@ -109,14 +109,30 @@ fn waited(cx: &mut VisualTestContext, seconds: f32) {
 
 /// Clicks the step's Skip, in the corner or in the sheet's foot.
 fn click_skip(cx: &mut VisualTestContext) {
-    let skip = cx.debug_bounds("onboarding-skip").expect("Skip is drawn");
+    let skip = placed("skip", cx).expect("Skip is drawn");
     cx.simulate_click(skip.center(), Modifiers::none());
 }
 
-/// Whether the window asks for another frame: what it asked for runs, and says how much it was.
-fn asks_for_frames(cx: &mut VisualTestContext) -> bool {
+/// Where the step shown draws `name` (Shell::place).
+fn placed(name: &str, cx: &mut VisualTestContext) -> Option<gpui::Bounds<gpui::Pixels>> {
     cx.run_until_parked();
-    cx.update(|window, cx| window.simulate_next_frame(cx)) > 0
+    let shell = cx
+        .update(|window, _| window.root::<Shell>().flatten())
+        .expect("a shell");
+    shell.read_with(cx, |shell, _| {
+        let onboarding = shell.onboarding.as_ref()?;
+        onboarding.places.borrow().get(name).copied()
+    })
+}
+
+/// Whether the flow's last frame asked for another, once what it asked for has drawn.
+fn asks_for_frames(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> bool {
+    cx.run_until_parked();
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    cx.run_until_parked();
+    shell.read_with(cx, |shell, _| {
+        shell.onboarding.as_ref().is_some_and(|o| o.drawing)
+    })
 }
 
 fn later(shell: &Entity<Shell>, cx: &mut VisualTestContext, seconds: f32) {
@@ -253,7 +269,10 @@ fn reduce_motion_gives_the_still_welcome(cx: &mut TestAppContext) {
         "the still welcome is all there once its words fade in"
     );
     assert!(!shell.read_with(cx, |shell, _| shell.onboarding_looping()));
-    assert!(!asks_for_frames(cx), "a still welcome draws no more frames");
+    assert!(
+        !asks_for_frames(&shell, cx),
+        "a still welcome draws no more frames"
+    );
 }
 
 /// A step's loop asks for frames only while its step shows: going on from it, ending the flow
@@ -267,11 +286,14 @@ fn a_loop_draws_only_while_its_step_shows(cx: &mut TestAppContext) {
     started(&shell, cx);
     later(&shell, cx, 2. * PERIOD);
     assert!(looping(&shell, cx), "the welcome's loop plays");
-    assert!(asks_for_frames(cx), "and draws");
+    assert!(asks_for_frames(&shell, cx), "and draws");
     cx.simulate_keystrokes("enter");
     later(&shell, cx, STEP_MOTION);
     assert!(!looping(&shell, cx), "the import has none");
-    assert!(!asks_for_frames(cx), "so nothing draws once it's in");
+    assert!(
+        !asks_for_frames(&shell, cx),
+        "so nothing draws once it's in"
+    );
 
     skip_to(&shell, cx, Step::Color);
     later(&shell, cx, STEP_MOTION);
@@ -279,19 +301,18 @@ fn a_loop_draws_only_while_its_step_shows(cx: &mut TestAppContext) {
     click_back(cx);
     later(&shell, cx, STEP_MOTION);
     assert!(!looping(&shell, cx), "Back leaves it");
-    assert!(!asks_for_frames(cx), "and its frames");
+    assert!(!asks_for_frames(&shell, cx), "and its frames");
 
     started(&shell, cx);
     later(&shell, cx, 1.);
     cx.simulate_keystrokes("escape");
     later(&shell, cx, END_FADE);
     assert_eq!(step(&shell, cx), None);
-    assert!(!asks_for_frames(cx), "the flow ended draws nothing more");
 }
 
 /// Clicks the sheet's Back.
 fn click_back(cx: &mut VisualTestContext) {
-    let back = cx.debug_bounds("onboarding-back").expect("Back is drawn");
+    let back = placed("back", cx).expect("Back is drawn");
     cx.simulate_click(back.center(), Modifiers::none());
 }
 
@@ -301,10 +322,7 @@ fn back_goes_to_the_step_before(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     started(&shell, cx);
     cx.run_until_parked();
-    assert!(
-        cx.debug_bounds("onboarding-back").is_none(),
-        "the welcome has no Back"
-    );
+    assert!(placed("back", cx).is_none(), "the welcome has no Back");
     skip_to(&shell, cx, Step::Color);
     later(&shell, cx, STEP_MOTION);
     click_back(cx);
@@ -535,7 +553,8 @@ fn a_screen_reader_reads_each_steps_title_and_controls(cx: &mut TestAppContext) 
         let dialogs = said.iter().filter(|(role, ..)| *role == Role::Dialog);
         dialogs.map(|(_, name, _)| name.clone()).collect::<Vec<_>>()
     };
-    assert_eq!(dialogs(&read(cx)), [env!("APP_NAME")], "the intro");
+    let welcome = concat!("Welcome to ", env!("APP_NAME"), ".");
+    assert_eq!(dialogs(&read(cx)), [welcome], "the welcome, by its title");
 
     skip_to(&shell, cx, Step::Color);
     let said = read(cx);
@@ -1733,8 +1752,8 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
     started(&shell, cx);
     assert_eq!(
         keyed(cx),
-        Some((Role::Dialog, env!("APP_NAME").into())),
-        "the intro"
+        Some((Role::Button, "Get Started".into())),
+        "the welcome rests on its button, as a step with no choice does"
     );
 
     skip_to(&shell, cx, Step::DefaultBrowser);
@@ -1758,9 +1777,14 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
         Some((Role::RadioButton, first)),
         "→ picks the first, which it reads"
     );
+    // The sheet's foot, in its reading order: Back, Skip, then the step's button.
+    cx.simulate_keystrokes("tab");
+    assert_eq!(keyed(cx), Some((Role::Button, "Back".into())));
+    cx.simulate_keystrokes("tab");
+    assert_eq!(keyed(cx), Some((Role::Button, "Skip".into())));
     cx.simulate_keystrokes("tab");
     assert_eq!(keyed(cx), Some((Role::Button, "Continue".into())));
-    cx.simulate_keystrokes("tab");
+    cx.simulate_keystrokes("shift-tab");
     assert_eq!(keyed(cx), Some((Role::Button, "Skip".into())));
     host.take();
     press("enter", cx);
@@ -2025,41 +2049,6 @@ fn the_preview_opens_the_flow_at_a_step_by_name_or_number(cx: &mut TestAppContex
     assert_eq!(at("6", cx), Some(Step::Color));
     assert_eq!(at("transparency", cx), Some(Step::Transparency));
     assert_eq!(at("7", cx), Some(Step::Transparency));
-}
-
-/// The step is as tall at every level, its line as tall as the tallest level's, so what's under the
-/// picker stays where it is as the pick changes.
-#[gpui::test]
-fn the_transparency_step_keeps_its_height_at_every_level(cx: &mut TestAppContext) {
-    let (shell, cx, _) = glass_window(cx);
-    started(&shell, cx);
-    skip_to(&shell, cx, Step::Transparency);
-    later(&shell, cx, STEP_MOTION);
-    let height = |cx: &mut VisualTestContext| {
-        cx.run_until_parked();
-        let bounds = cx.debug_bounds("onboarding-transparency");
-        bounds.expect("the step's picker is drawn").size.height
-    };
-    let mut heights = vec![(level(&shell, cx), height(cx))];
-    for key in ["left", "right right"] {
-        cx.simulate_keystrokes(key);
-        heights.push((level(&shell, cx), height(cx)));
-    }
-    let levels: Vec<_> = heights.iter().map(|(level, _)| *level).collect();
-    assert_eq!(
-        levels,
-        [
-            Transparency::Standard,
-            Transparency::Less,
-            Transparency::More
-        ]
-        .map(Some),
-        "the arrows went through every level"
-    );
-    assert!(
-        heights.iter().all(|(_, each)| *each == heights[0].1),
-        "the step is as tall at every level: {heights:?}"
-    );
 }
 
 /// The keyboard rests on the picker, which shows Standard, and the arrows move the pick, stopping

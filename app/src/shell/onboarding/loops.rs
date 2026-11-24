@@ -238,7 +238,12 @@ fn row(name: &'static str, index: usize, plate: f32, colors: Colors) -> gpui::Di
                 .gap(px(6.))
                 .text_size(px(t::TEXT_SIZE))
                 .text_color(colors.ink(0.75))
-                .child(div().size(px(9.)).rounded(px(2.)).bg(colors.ink(0.3)))
+                .child(
+                    div()
+                        .size(px(9.))
+                        .rounded(px(t::ICON_RADIUS))
+                        .bg(colors.ink(0.3)),
+                )
                 .child(name),
         )
 }
@@ -249,7 +254,7 @@ fn page(index: usize, colors: Colors) -> gpui::Div {
         div()
             .w(px(width))
             .h(px(height))
-            .rounded(px(3.))
+            .rounded(px(t::BAR_RADIUS))
             .bg(colors.ink(alpha))
     };
     let lines = |count: usize| {

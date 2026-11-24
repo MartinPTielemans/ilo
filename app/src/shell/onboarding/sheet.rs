@@ -40,7 +40,7 @@ pub(super) fn sheet(
             color: colors.ink(t::RIM).into(),
             offset: point(px(0.), px(0.)),
             blur_radius: px(0.),
-            spread_radius: px(1.),
+            spread_radius: px(t::HAIRLINE),
             inset: true,
         },
         BoxShadow {
@@ -56,14 +56,13 @@ pub(super) fn sheet(
             color: black(t::EDGE).into(),
             offset: point(px(0.), px(0.)),
             blur_radius: px(0.),
-            spread_radius: px(1.),
+            spread_radius: px(t::HAIRLINE),
             inset: false,
         });
     }
     let [top, right, bottom, start] = t::PADDING;
     let pane = div()
         .id(id)
-        .debug_selector(|| "onboarding-sheet".into())
         .flex_none()
         .w(px(t::WIDTH))
         .h(px(t::HEIGHT))
@@ -216,17 +215,17 @@ impl Shell {
         let welcome = step == Step::Intro;
         let back = (!welcome).then(|| {
             quiet("onboarding-back", "Back", colors)
-                .debug_selector(|| "onboarding-back".into())
                 .when(self.a11y, |control| named_button(control, "Back"))
                 .when_some(stops.clone(), |control, (stop, _)| {
                     control.track_focus(&stop).focus_from_keys_only()
                 })
                 .on_click(cx.listener(|shell, _, _, cx| shell.onboarding_back("back", cx)))
+                .relative()
+                .children(self.place(step, "back"))
                 .into_any_element()
         });
         let label = if welcome { "Skip Setup" } else { "Skip" };
         let skip = quiet("onboarding-skip", label, colors)
-            .debug_selector(|| "onboarding-skip".into())
             .when(self.a11y, |control| named_button(control, label))
             .when_some(stops, |control, (_, stop)| {
                 control.track_focus(&stop).focus_from_keys_only()
@@ -234,7 +233,9 @@ impl Shell {
             .on_click(cx.listener(move |shell, _, _, cx| match welcome {
                 true => shell.onboarding_skip_setup("skip", cx),
                 false => shell.onboarding_next("skip", cx),
-            }));
+            }))
+            .relative()
+            .children(self.place(step, "skip"));
         div()
             .mt_auto()
             .flex()

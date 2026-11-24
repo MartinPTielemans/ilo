@@ -2145,6 +2145,7 @@ fill-alpha = 0.78
 light-fill = 0xf8f7f3
 light-fill-alpha = 0.8
 # A white hairline inside its edge, a black one outside, and its shadow below.
+hairline = 1.0
 rim = 0.15
 edge = 0.7
 shadow = 0.56
@@ -2191,7 +2192,7 @@ slot-ground = 0.04
 [shell.onboarding.loops]
 period = 10.0
 # A small window in the slot: its size, its sidebar's width, a row's height and the gap above the
-# rows, the radii of the window and of a row's plate.
+# rows, the radii of the window and of a row's plate, and of a tab's icon and a page's bars.
 window-width = 340.0
 window-height = 236.0
 sidebar = 116.0
@@ -2199,6 +2200,8 @@ row = 22.0
 rows-top = 46.0
 window-radius = 10.0
 plate-radius = 6.0
+icon-radius = 2.0
+bar-radius = 3.0
 text-size = 8.0
 # The welcome's: the pointer goes to the next tab over `move`, clicks `click` after, and the page
 # follows over `fade`, once from each time here: 2nd, 3rd, then the 1st again.
