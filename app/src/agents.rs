@@ -1735,6 +1735,20 @@ impl Agents {
                 .send(ToolResult::error("This agent isn't connected."));
             return;
         }
+        // A task the user stopped keeps its connection for their next message, so its calls still
+        // come: one that waited its turn in the server behind a slow page, or one its assistant
+        // made as it was interrupted. Each is answered as stopped, and nothing of it is run,
+        // shown or kept, until the user writes to the task again (#4209).
+        if (self.task(&call.agent)).is_some_and(|task| task.state == task::State::Stopped) {
+            log!(
+                "browser: agent {} call {} refused, as the user stopped it",
+                call.agent,
+                call.tool
+            );
+            let stopped = ToolResult::failed(tools::Kind::Stopped, STOPPED);
+            _ = call.reply.send(stopped);
+            return;
+        }
         self.trace_call(&call, cx);
         // check.sh reads this line.
         log!("browser: agent {} calls {}", call.agent, call.tool);
