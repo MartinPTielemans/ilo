@@ -7,17 +7,51 @@
 //! gives the keyboard back to its opener, or to the fallback its caller names when the opener has
 //! gone; closed any other way (a press outside, a choice inside, focus or the window leaving), to
 //! the fallback. Either way only while the surface still has the keyboard: what the user moved
-//! the keyboard to in the meantime keeps it. Escape while an input method composes in the
-//! surface's field is the composition's, and closes nothing.
+//! the keyboard to in the meantime keeps it.
+//!
+//! Return and Escape while an input method composes in one of the surface's fields are the
+//! composition's, in every field of the app: Return commits what it composes and Escape drops it,
+//! as the input method does when it takes the key itself, and neither acts on the surface. Most
+//! input methods take both before the app hears them (the Mac's, XIM's, Windows' IMM); this is
+//! for the ones that pass them on, so a half-typed word is never submitted or closed on. A field's
+//! Return asks `submits` and its Escape `Close::escape_from`, with the surface's fields, and
+//! nothing else reads the composition for them.
 //!
 //! How to compose it: as the surface takes the keyboard, `FocusReturn::remember` who had it
 //! (the page, if its key came from there, as GPUI's focus doesn't see the page's). Every way it
-//! closes makes a `Close` (`Close::escape` for Escape, so a composition keeps it); then, while
-//! its own elements may still have the keyboard, `FocusReturn::give_back` with them and the
+//! closes makes a `Close` (`Close::escape_from` for Escape, so a composition keeps it); then,
+//! while its own elements may still have the keyboard, `FocusReturn::give_back` with them and the
 //! fallback, and on `Returned::Page` hand the page the keyboard as the surface may: it comes only
 //! while no other window of ours, such as an overlay, has the keyboard.
 
-use gpui::{App, FocusHandle, WeakFocusHandle, Window};
+use gpui::{App, Entity, FocusHandle, WeakFocusHandle, Window};
+
+use crate::text_input::TextInput;
+
+/// Whether Return acts on the surface: not while an input method composes in one of its
+/// `fields`, whose Return commits the composition instead.
+pub fn submits<'a>(
+    fields: impl IntoIterator<Item = &'a Entity<TextInput>>,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    !composition_takes(true, fields, window, cx)
+}
+
+/// Whether the key was the composition's in one of `fields`, which it then ends: kept as typed
+/// for Return (`keep`), dropped for Escape.
+fn composition_takes<'a>(
+    keep: bool,
+    fields: impl IntoIterator<Item = &'a Entity<TextInput>>,
+    window: &mut Window,
+    cx: &mut App,
+) -> bool {
+    let Some(field) = (fields.into_iter()).find(|field| field.read(cx).composing()) else {
+        return false;
+    };
+    field.update(cx, |field, cx| field.end_composition(keep, window, cx));
+    true
+}
 
 /// Why a surface closed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,6 +97,17 @@ impl Close {
     /// Escape there ends the composition, and the surface stays.
     pub fn escape(composing: bool) -> Option<Self> {
         (!composing).then_some(Self::new(Why::Escape, By::Keyboard))
+    }
+
+    /// Escape's close, or none while an input method composes in one of the surface's `fields`:
+    /// Escape there drops the composition, and the surface stays.
+    pub fn escape_from<'a>(
+        fields: impl IntoIterator<Item = &'a Entity<TextInput>>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Self> {
+        (!composition_takes(false, fields, window, cx))
+            .then_some(Self::new(Why::Escape, By::Keyboard))
     }
 
     /// The close of an overlay the host hid as the user left it: a press outside it, or, with no

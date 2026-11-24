@@ -9,7 +9,7 @@ use gpui::{
 use super::*;
 use crate::text_input::TextInput;
 
-actions!(dismissal_tests, [Escape]);
+actions!(dismissal_tests, [Escape, Submit]);
 
 struct Host {
     window: FocusHandle,
@@ -19,6 +19,7 @@ struct Host {
     open: Option<FocusReturn>,
     closes: Vec<Close>,
     returned: Vec<Returned>,
+    submitted: usize,
 }
 
 impl Host {
@@ -62,9 +63,15 @@ impl Render for Host {
                         .w_full()
                         .child(self.field.clone())
                         .on_action(cx.listener(|host, _: &Escape, window, cx| {
-                            let composing = host.field.read(cx).composing();
-                            if let Some(close) = Close::escape(composing) {
+                            let field = host.field.clone();
+                            if let Some(close) = Close::escape_from([&field], window, cx) {
                                 host.close(close, window, cx);
+                            }
+                        }))
+                        .on_action(cx.listener(|host, _: &Submit, window, cx| {
+                            let field = host.field.clone();
+                            if submits([&field], window, cx) {
+                                host.submitted += 1;
                             }
                         }))
                         .on_mouse_down_out(cx.listener(|host, _, window, cx| {
@@ -77,7 +84,12 @@ impl Render for Host {
 
 /// A window with the opener focused and the panel opened from it.
 fn opened(cx: &mut TestAppContext) -> (Entity<Host>, &mut VisualTestContext) {
-    cx.update(|cx| cx.bind_keys([KeyBinding::new("escape", Escape, Some("Panel"))]));
+    cx.update(|cx| {
+        cx.bind_keys([
+            KeyBinding::new("escape", Escape, Some("Panel")),
+            KeyBinding::new("enter", Submit, Some("Panel")),
+        ])
+    });
     let (host, cx) = cx.add_window_view(|_, cx| Host {
         window: cx.focus_handle(),
         opener: Some(cx.focus_handle()),
@@ -86,6 +98,7 @@ fn opened(cx: &mut TestAppContext) -> (Entity<Host>, &mut VisualTestContext) {
         open: None,
         closes: Vec::new(),
         returned: Vec::new(),
+        submitted: 0,
     });
     cx.simulate_resize(size(px(400.), px(300.)));
     cx.update(|window, cx| {
@@ -166,9 +179,8 @@ fn what_the_user_moved_the_keyboard_to_keeps_it(cx: &mut TestAppContext) {
     assert!(focused(|host, _| host.other.clone(), &host, cx));
 }
 
-#[gpui::test]
-fn escape_while_an_input_method_composes_closes_nothing(cx: &mut TestAppContext) {
-    let (host, cx) = opened(cx);
+/// An input method composing "ぴ" in the panel's field, as Japanese input does before it's chosen.
+fn compose(host: &Entity<Host>, cx: &mut VisualTestContext) -> Entity<TextInput> {
     let field = host.read_with(cx, |host, _| host.field.clone());
     cx.update(|window, cx| {
         field.update(cx, |field, cx| {
@@ -176,11 +188,60 @@ fn escape_while_an_input_method_composes_closes_nothing(cx: &mut TestAppContext)
         })
     });
     cx.run_until_parked();
+    field
+}
+
+/// Escape while an input method composes drops the composition and closes nothing; the next
+/// Escape closes the panel.
+#[gpui::test]
+fn escape_while_an_input_method_composes_closes_nothing(cx: &mut TestAppContext) {
+    let (host, cx) = opened(cx);
+    let field = compose(&host, cx);
     cx.simulate_keystrokes("escape");
     assert_eq!(closes(&host, cx).0, []);
     assert!(
         host.read_with(cx, |host, _| host.open.is_some()),
         "the panel closed"
+    );
+    field.read_with(cx, |field, _| {
+        assert!(!field.composing(), "the composition went on");
+        assert_eq!(field.text(), "", "Escape kept what was composed");
+    });
+    cx.simulate_keystrokes("escape");
+    assert_eq!(closes(&host, cx).0, [Close::new(Why::Escape, By::Keyboard)]);
+}
+
+/// Return while an input method composes commits what it composed and submits nothing; the next
+/// Return submits it.
+#[gpui::test]
+fn return_while_an_input_method_composes_commits_and_submits_nothing(cx: &mut TestAppContext) {
+    let (host, cx) = opened(cx);
+    let field = compose(&host, cx);
+    cx.simulate_keystrokes("enter");
+    assert_eq!(host.read_with(cx, |host, _| host.submitted), 0);
+    field.read_with(cx, |field, _| {
+        assert!(!field.composing(), "the composition went on");
+        assert_eq!(field.text(), "ぴ", "Return dropped what was composed");
+    });
+    cx.simulate_keystrokes("enter");
+    assert_eq!(host.read_with(cx, |host, _| host.submitted), 1);
+    assert!(
+        host.read_with(cx, |host, _| host.open.is_some()),
+        "Return closed the panel"
+    );
+}
+
+/// With nothing composing, Return submits at once.
+#[gpui::test]
+fn return_submits_with_nothing_composing(cx: &mut TestAppContext) {
+    let (host, cx) = opened(cx);
+    cx.simulate_input("ab");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(host.read_with(cx, |host, _| host.submitted), 1);
+    let field = host.read_with(cx, |host, _| host.field.clone());
+    assert_eq!(
+        field.read_with(cx, |field, _| field.text().to_string()),
+        "ab"
     );
 }
 

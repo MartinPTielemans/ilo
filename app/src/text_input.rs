@@ -531,6 +531,22 @@ impl TextInput {
         self.marked_range.is_some()
     }
 
+    /// Ends what an input method composes in the field, as its Return or Escape does when the
+    /// method passes the key on (`dismissal::submits`): kept as typed if `keep`, else gone.
+    pub fn end_composition(&mut self, keep: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(marked) = self.marked_range.take() else {
+            return;
+        };
+        if !keep {
+            self.content =
+                (self.content[..marked.start].to_owned() + &self.content[marked.end..]).into();
+            self.selected_range = marked.start..marked.start;
+            self.selection_reversed = false;
+        }
+        window.notify_text_input_changed(&self.focus_handle);
+        cx.notify();
+    }
+
     /// The field's text if it isn't `last` and an input method has committed it: what Find
     /// searches as the user types, as Chrome's does.
     pub fn committed_change(&self, last: &str) -> Option<&str> {
