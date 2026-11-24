@@ -214,13 +214,12 @@ pub(crate) unsafe extern "C" fn window_selected(_: *mut c_void, window: bc::bc_i
         &format!("window {window}, tab {tab}"),
     );
     // A tab that wasn't shown had no event for its page's colour, so what the core kept is read
-    // here, for each pane of a split view.
-    let mut panes = [0; 3];
-    let count = unsafe { bc::bc_tab_split(tab, panes.as_mut_ptr(), panes.len()) };
-    let backgrounds = kept_backgrounds(&panes[..count.min(panes.len())]);
+    // here: a value it holds, which asks the page nothing.
+    let mut color = 0;
+    let background = unsafe { bc::bc_tab_background_color(tab, &mut color) }.then_some(color);
     update_window(window, |shell, cx| {
-        for &(pane, color) in &backgrounds {
-            shell.set_tab_background(pane, color, cx);
+        if tab != 0 {
+            shell.set_tab_background(tab, background, cx);
         }
         shell.set_selected(tab, cx);
         find_bar::tab_shown(window, tab, cx);
@@ -445,18 +444,6 @@ pub(crate) unsafe extern "C" fn tab_background_color_changed(
     update_window(window, |shell, cx| {
         shell.set_tab_background(tab, has_color.then_some(color), cx)
     });
-}
-
-/// The page background colour the core keeps for each of `tabs` (bc_tab_background_color), for
-/// tabs coming into view: the core's kept values, which ask the pages nothing.
-pub(crate) fn kept_backgrounds(tabs: &[bc::bc_id]) -> Vec<(bc::bc_id, Option<u32>)> {
-    tabs.iter()
-        .map(|&tab| {
-            let mut color = 0;
-            let has_color = unsafe { bc::bc_tab_background_color(tab, &mut color) };
-            (tab, has_color.then_some(color))
-        })
-        .collect()
 }
 
 pub(crate) unsafe extern "C" fn tab_history(

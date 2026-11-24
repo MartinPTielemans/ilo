@@ -42,6 +42,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "a test's made-up Space colour",
     ),
     (
+        "shell/tab_background_tests.rs",
+        "const PAGES",
+        "a test's made-up pages' background colours",
+    ),
+    (
         "shell/extensions.rs",
         "FontWeight::BOLD",
         "the badge's count, a pictogram inside its pill",

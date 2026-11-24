@@ -7,6 +7,13 @@ use gpui::{AppContext, Entity, Subscription, TestAppContext};
 
 use crate::shell::{Folders, Shell, recorder::Recorder};
 
+/// Made-up pages' colours: a dark one, a white one, a black one and a blue one.
+const PAGES: [u32; 4] = [0x1d1d21, 0xffffff, 0x000000, 0x336699];
+const DARK: u32 = PAGES[0];
+const WHITE: u32 = PAGES[1];
+const BLACK: u32 = PAGES[2];
+const BLUE: u32 = PAGES[3];
+
 /// A window whose Space has the Today tabs 10 and 11, showing 10, and how often it asked to be
 /// drawn since.
 fn window(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Cell<usize>>, Subscription) {
@@ -46,11 +53,11 @@ fn kept(shell: &Entity<Shell>, cx: &mut TestAppContext, tab: u64) -> Option<u32>
 fn a_tab_keeps_its_pages_colour_and_draws_once_for_a_change(cx: &mut TestAppContext) {
     let (shell, drawn, _watch) = window(cx);
     assert_eq!(kept(&shell, cx, 10), None);
-    set(&shell, cx, 10, Some(0x1d1d21));
-    assert_eq!(kept(&shell, cx, 10), Some(0x1d1d21));
+    set(&shell, cx, 10, Some(DARK));
+    assert_eq!(kept(&shell, cx, 10), Some(DARK));
     assert_eq!(drawn.get(), 1);
     // The colour kept already, as the read at a tab switch gives it again: nothing to draw.
-    set(&shell, cx, 10, Some(0x1d1d21));
+    set(&shell, cx, 10, Some(DARK));
     assert_eq!(drawn.get(), 1);
     // A page with no single opaque colour: the line goes back to its plain plate.
     set(&shell, cx, 10, None);
@@ -61,18 +68,18 @@ fn a_tab_keeps_its_pages_colour_and_draws_once_for_a_change(cx: &mut TestAppCont
 #[gpui::test]
 fn each_tab_has_its_own_colour(cx: &mut TestAppContext) {
     let (shell, _, _watch) = window(cx);
-    set(&shell, cx, 10, Some(0xffffff));
-    set(&shell, cx, 11, Some(0x000000));
-    assert_eq!(kept(&shell, cx, 10), Some(0xffffff));
-    assert_eq!(kept(&shell, cx, 11), Some(0x000000));
+    set(&shell, cx, 10, Some(WHITE));
+    set(&shell, cx, 11, Some(BLACK));
+    assert_eq!(kept(&shell, cx, 10), Some(WHITE));
+    assert_eq!(kept(&shell, cx, 11), Some(BLACK));
 }
 
 #[gpui::test]
 fn a_tab_the_window_doesnt_draw_keeps_its_colour_and_draws_nothing(cx: &mut TestAppContext) {
     let (shell, drawn, _watch) = window(cx);
     // Tab 30 is in no Space this window shows.
-    set(&shell, cx, 30, Some(0x336699));
-    assert_eq!(kept(&shell, cx, 30), Some(0x336699));
+    set(&shell, cx, 30, Some(BLUE));
+    assert_eq!(kept(&shell, cx, 30), Some(BLUE));
     assert_eq!(drawn.get(), 0);
     assert_eq!(kept(&shell, cx, 31), None);
 }
