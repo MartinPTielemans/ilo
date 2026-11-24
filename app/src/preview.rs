@@ -3710,6 +3710,11 @@ fn main() {
                         if parts.next() == Some("on") {
                             shell.onboarding_count_on(cx);
                         }
+                        // PREVIEW_ONBOARDING_PICK=<n> picks the nth swatch at the color step.
+                        let pick = std::env::var("PREVIEW_ONBOARDING_PICK").ok();
+                        if let Some(index) = pick.and_then(|pick| pick.parse().ok()) {
+                            shell.onboarding_pick_swatch(index, cx);
+                        }
                     }
                     // PREVIEW_ONBOARDING_LOOP=<s> holds the step's loop <s> seconds in, for a still
                     // capture, and =<s>,<ms> lets it play from the start <ms> in, for its frames.

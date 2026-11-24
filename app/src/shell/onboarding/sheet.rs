@@ -1,12 +1,10 @@
 //! First run's sheet (#4093): a pane over the browser's own window, its step on the left and the
 //! step's loop in the slot on the right.
 
-use gpui::{
-    AnyElement, BoxShadow, Context, MouseButton, SharedString, Stateful, div, point, prelude::*,
-    px, rgb, rgba,
-};
+use gpui::{AnyElement, Context, MouseButton, SharedString, Stateful, div, prelude::*, px};
 
 use super::{Colors, Drawn, Shell, Step, loops, with_alpha, wordmark};
+use crate::elevation::Level;
 use crate::settings_rows::{named_button, ring};
 use crate::theme_picker::SWATCHES;
 use crate::tokens::palette::INK;
@@ -34,32 +32,6 @@ pub(super) fn sheet(
         true => with_alpha(t::LIGHT_FILL, t::LIGHT_FILL_ALPHA),
         false => with_alpha(t::FILL, t::FILL_ALPHA),
     };
-    // A hairline lit from inside, a dark edge outside it where the ground is dark, and the lift.
-    let mut shadows = vec![
-        BoxShadow {
-            color: colors.ink(t::RIM).into(),
-            offset: point(px(0.), px(0.)),
-            blur_radius: px(0.),
-            spread_radius: px(t::HAIRLINE),
-            inset: true,
-        },
-        BoxShadow {
-            color: black(t::SHADOW).into(),
-            offset: point(px(0.), px(t::SHADOW_Y)),
-            blur_radius: px(t::SHADOW_BLUR),
-            spread_radius: px(0.),
-            inset: false,
-        },
-    ];
-    if !light {
-        shadows.push(BoxShadow {
-            color: black(t::EDGE).into(),
-            offset: point(px(0.), px(0.)),
-            blur_radius: px(0.),
-            spread_radius: px(t::HAIRLINE),
-            inset: false,
-        });
-    }
     let [top, right, bottom, start] = t::PADDING;
     let pane = div()
         .id(id)
@@ -67,9 +39,12 @@ pub(super) fn sheet(
         .w(px(t::WIDTH))
         .h(px(t::HEIGHT))
         .flex()
+        // At the dialog's elevation, as it takes the keyboard as a dialog does.
         .rounded(px(t::RADIUS))
+        .border_1()
+        .border_color(colors.ink(Level::Modal.rim().a))
         .bg(fill)
-        .shadow(shadows)
+        .shadow(Level::Modal.shadow())
         .child(
             div()
                 .flex_none()
@@ -149,11 +124,6 @@ pub(super) fn go(button: Stateful<gpui::Div>) -> Stateful<gpui::Div> {
         .h(px(t::BUTTON_HEIGHT))
         .px(px(t::BUTTON_INSET))
         .text_size(px(t::BUTTON_SIZE))
-}
-
-/// Black at `alpha`, for the sheet's edge and shadow.
-fn black(alpha: f32) -> gpui::Rgba {
-    rgba(((alpha * 255.).round() as u32).min(255))
 }
 
 impl Shell {
@@ -247,18 +217,16 @@ impl Shell {
             .children(button)
     }
 
-    /// The slot's loop for `step`, `looped` seconds into it: at the colour, in the colour picked,
-    /// else the first, paging to a Space in another.
+    /// The slot's loop for `step`, `looped` seconds into it: at the color, the Space in the
+    /// color picked, or in none, swiping to a Space in another.
     pub(super) fn sheet_art(&self, step: Step, looped: f32, colors: Colors) -> AnyElement {
         let place = |name| (self.place(step, name)).map(IntoElement::into_any_element);
         match step {
             Step::Intro => loops::welcome(looped, colors, &place).into_any_element(),
             Step::Color => {
-                let picked = (self.onboarding.as_ref())
-                    .and_then(|onboarding| onboarding.picked)
-                    .unwrap_or_default();
-                let other = (picked + SWATCHES.len() / 2) % SWATCHES.len();
-                let (picked, other) = (rgb(SWATCHES[picked]), rgb(SWATCHES[other]));
+                let picked = (self.onboarding.as_ref()).and_then(|onboarding| onboarding.picked);
+                let other = (picked.unwrap_or_default() + SWATCHES.len() / 2) % SWATCHES.len();
+                let (picked, other) = (picked.map(|index| SWATCHES[index]), SWATCHES[other]);
                 loops::colour(looped, picked, other, colors, &place).into_any_element()
             }
             _ => div().into_any_element(),

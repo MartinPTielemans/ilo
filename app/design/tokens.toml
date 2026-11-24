@@ -2146,13 +2146,6 @@ fill = 0x2a2720
 fill-alpha = 0.78
 light-fill = 0xf8f7f3
 light-fill-alpha = 0.8
-# A white hairline inside its edge, a black one outside, and its shadow below.
-hairline = 1.0
-rim = 0.15
-edge = 0.7
-shadow = 0.56
-shadow-y = 24.0
-shadow-blur = 64.0
 # The left half, and its padding: top, right, bottom, left.
 left = 350.0
 padding = [34.0, 30.0, 20.0, 32.0]
@@ -2205,14 +2198,26 @@ plate-radius = 6.0
 icon-radius = 2.0
 bar-radius = 3.0
 text-size = 8.0
-# The welcome's: the pointer goes to the next tab over `move`, clicks `click` after, and the page
-# follows over `fade`, once from each time here: 2nd, 3rd, then the 1st again.
-welcome-at = [1.0, 3.8, 6.6]
+# The real window's glow at the small window's size: its width to a 1280-point window's.
+scale = 0.27
+# The Space dots at the sidebar's foot: a dot, the shown Space's, the others' alpha, the gap
+# between them and how far up from the window's foot.
+dot = 4.0
+dot-shown = 6.0
+dot-alpha = 0.35
+dot-gap = 6.0
+dots-bottom = 10.0
+# The pointer fades in as the loop starts and out before it ends, over `pointer-fade`.
+pointer-fade = 0.3
+# The welcome's: the pointer goes to the next tab over `move` and presses it `click` after,
+# once from each time here: 2nd, 3rd, then the 1st again. The press's ring grows and fades
+# over `press`; the tab and its page change on the press, as a tab switch does.
+welcome-at = [0.4, 3.4, 6.4]
 welcome-move = 0.8
 welcome-click = 0.2
-welcome-fade = 0.25
-# The colour's: two fingers swipe the sidebar to the next Space from `at` over `swipe`, and back.
-color-at = [2.0, 6.5]
+welcome-press = 0.5
+# The color's: the sidebar's rows swipe to the next Space from `at` over `swipe`, and back.
+color-at = [0.6, 5.0]
 color-swipe = 0.6
 
 [shell.import]

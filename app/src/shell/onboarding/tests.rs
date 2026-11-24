@@ -562,7 +562,7 @@ fn a_screen_reader_reads_each_steps_title_and_controls(cx: &mut TestAppContext) 
     let said = read(cx);
     assert_eq!(
         dialogs(&said),
-        ["Pick a colour for your first Space."],
+        ["Pick a color for your first Space."],
         "the step it went on to only, as the one before slides out"
     );
     let line = cx
@@ -586,7 +586,7 @@ fn a_screen_reader_reads_each_steps_title_and_controls(cx: &mut TestAppContext) 
     }
     assert!(
         said.iter()
-            .any(|(role, name, _)| *role == Role::RadioGroup && name == "Colour")
+            .any(|(role, name, _)| *role == Role::RadioGroup && name == "Color")
     );
     let colours = |said: &[(Role, String, Option<Toggled>)]| {
         let swatches = said.iter().filter(|(role, ..)| *role == Role::RadioButton);
@@ -1769,7 +1769,7 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
     );
     assert_eq!(
         keyed(cx),
-        Some((Role::RadioGroup, "Colour".into())),
+        Some((Role::RadioGroup, "Color".into())),
         "the step it went on to has the keyboard"
     );
     cx.simulate_keystrokes("right");
@@ -1835,7 +1835,7 @@ fn each_step_rests_on_a_control(cx: &mut TestAppContext) {
     );
     press("escape", cx);
     assert_eq!(step(&shell, cx), Some(Step::Color));
-    assert_eq!(keyed(cx), Some((Role::RadioGroup, "Colour".into())));
+    assert_eq!(keyed(cx), Some((Role::RadioGroup, "Color".into())));
     press("enter", cx);
     assert_eq!(
         step(&shell, cx),
@@ -2178,27 +2178,45 @@ fn the_welcomes_pointer_clicks_each_tab_in_its_window(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn the_colours_swipe_shows_one_spaces_sidebar_with_the_fingers_in_its_window(
-    cx: &mut TestAppContext,
-) {
+fn the_colors_swipe_moves_the_rows_inside_the_sidebar(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     started(&shell, cx);
     skip_to(&shell, cx, Step::Color);
     held_at(&shell, cx, COLOR_AT[0] + COLOR_SWIPE / 2.);
-    let window = placed("window", cx).expect("the loop's window is drawn");
+    let sidebar = placed("sidebar", cx).expect("the loop's sidebar is drawn");
     let next = placed("next-space-row", cx).expect("the next Space's row is drawn");
-    let column = window.left() + px(SIDEBAR);
     assert!(
-        next.right() <= column,
-        "halfway through the swipe the next Space's row shows only in the sidebar's column, \
-         left of {column:?}, but it showed to {:?}",
+        next.right() <= sidebar.right(),
+        "halfway through the swipe the next Space's row shows only in the sidebar, left of \
+         {:?}, never over the page, but it showed to {:?}",
+        sidebar.right(),
         next.right()
     );
-    let fingers = placed("fingers", cx).expect("the fingers are drawn as it swipes");
+    held_at(&shell, cx, 0.);
     assert!(
-        inside(fingers, window),
-        "the fingers swipe in the loop's window at {window:?}, but were at {fingers:?}"
+        placed("next-space-row", cx).is_none_or(|row| row.size.width <= px(0.)),
+        "at rest the next Space's rows don't show"
     );
+}
+
+#[gpui::test]
+fn each_loop_moves_within_a_second_of_its_start(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
+    started(&shell, cx);
+    held_at(&shell, cx, 0.);
+    let first = placed("pointer", cx).expect("the pointer is drawn");
+    held_at(&shell, cx, 1.);
+    let then = placed("pointer", cx).expect("the pointer is drawn");
+    assert_ne!(
+        first.origin, then.origin,
+        "the welcome's pointer moves in its first second"
+    );
+    skip_to(&shell, cx, Step::Color);
+    held_at(&shell, cx, 0.);
+    let first = placed("next-space-row", cx).map(|row| row.size.width);
+    held_at(&shell, cx, 1.);
+    let then = placed("next-space-row", cx).map(|row| row.size.width);
+    assert_ne!(first, then, "the color's rows swipe in its first second");
 }
 
 #[gpui::test]

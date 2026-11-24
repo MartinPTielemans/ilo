@@ -223,7 +223,7 @@ impl Step {
                 "Continue",
             ),
             Step::Color => (
-                "Pick a colour for your first Space.",
+                "Pick a color for your first Space.",
                 "The window takes it. Each Space can have its own, from its name in the sidebar.",
                 "Continue",
             ),
@@ -762,6 +762,11 @@ impl Shell {
             );
             cx.notify();
         }
+    }
+
+    /// Picks the `index`th swatch at the color step, as a click does, for the preview's captures.
+    pub fn onboarding_pick_swatch(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.onboarding_pick(index, cx);
     }
 
     /// Turns the daily count's switch on at the opt-ins step, for the preview's captures.
@@ -1954,7 +1959,7 @@ fn swatch_row(
     let ringed = swatch + 4. * SWATCH_RING;
     div()
         .id("onboarding-swatches")
-        .when(a11y, |row| row.role(Role::RadioGroup).aria_label("Colour"))
+        .when(a11y, |row| row.role(Role::RadioGroup).aria_label("Color"))
         // One stop, the arrows going along it, with the swatch picked read as they move.
         .tab_index(0)
         .when_some(first, |row, stop| row.track_focus(&stop))

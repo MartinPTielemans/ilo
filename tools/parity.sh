@@ -111,10 +111,10 @@ screens=(
   "session-open-dark|drawn at|PREVIEW_TASKS=1 PREVIEW_SESSION=open PREVIEW_APPEARANCE=dark"
   "command-line-off-light|settings ilo-command|PREVIEW_COMMAND_LINE=off PREVIEW_APPEARANCE=light"
   "command-line-off-dark|settings ilo-command|PREVIEW_COMMAND_LINE=off PREVIEW_APPEARANCE=dark"
-  "onboarding-welcome-light|onboarding step intro settled|PREVIEW_ONBOARDING=light PREVIEW_ONBOARDING_STEP=1 PREVIEW_ONBOARDING_LOOP=2.2"
-  "onboarding-welcome-dark|onboarding step intro settled|PREVIEW_ONBOARDING=dark PREVIEW_ONBOARDING_STEP=1 PREVIEW_ONBOARDING_LOOP=2.2"
-  "onboarding-colour-light|onboarding step color settled|PREVIEW_ONBOARDING=light PREVIEW_ONBOARDING_STEP=6 PREVIEW_ONBOARDING_LOOP=2.3"
-  "onboarding-colour-dark|onboarding step color settled|PREVIEW_ONBOARDING=dark PREVIEW_ONBOARDING_STEP=6 PREVIEW_ONBOARDING_LOOP=2.3"
+  "onboarding-welcome-light|onboarding step intro settled|PREVIEW_ONBOARDING=light PREVIEW_ONBOARDING_STEP=1 PREVIEW_ONBOARDING_LOOP=2.2 PREVIEW_APPEARANCE=light"
+  "onboarding-welcome-dark|onboarding step intro settled|PREVIEW_ONBOARDING=dark PREVIEW_ONBOARDING_STEP=1 PREVIEW_ONBOARDING_LOOP=2.2 PREVIEW_APPEARANCE=dark"
+  "onboarding-color-light|onboarding step color settled|PREVIEW_ONBOARDING=light PREVIEW_ONBOARDING_STEP=6 PREVIEW_ONBOARDING_PICK=4 PREVIEW_ONBOARDING_LOOP=0.3 PREVIEW_APPEARANCE=light"
+  "onboarding-color-dark|onboarding step color settled|PREVIEW_ONBOARDING=dark PREVIEW_ONBOARDING_STEP=6 PREVIEW_ONBOARDING_PICK=4 PREVIEW_ONBOARDING_LOOP=0.3 PREVIEW_APPEARANCE=dark"
   "command-line-on-light|settings ilo-command|PREVIEW_COMMAND_LINE=on PREVIEW_APPEARANCE=light"
   "command-line-on-dark|settings ilo-command|PREVIEW_COMMAND_LINE=on PREVIEW_APPEARANCE=dark"
   "command-line-unsearched-light|settings ilo-command|PREVIEW_COMMAND_LINE=unsearched PREVIEW_APPEARANCE=light"
@@ -227,12 +227,12 @@ if [ "${systems[0]}" = wayland ]; then
     done < "$FRAMES/times"
     echo $((played - first)) > "$FRAMES/plays"
     rm "$FRAMES/times"'
-  for loop in welcome:1:intro colour:6:color; do
+  for loop in welcome:1:intro color:6:color; do
     IFS=: read -r name number step <<<"$loop"
     frames=$out/wayland/onboarding-$name-frames
     mkdir -p "$frames"
     if ! (export PREVIEW_SIZE=1280x800 PREVIEW_ONBOARDING=dark PREVIEW_ONBOARDING_STEP=$number \
-      PREVIEW_ONBOARDING_LOOP=0,8000 FRAMES="$frames" &&
+      PREVIEW_ONBOARDING_PICK=4 PREVIEW_APPEARANCE=dark PREVIEW_ONBOARDING_LOOP=0,8000 FRAMES="$frames" &&
       timeout 90 "$here/headless.sh" --moving 400 --then "$play" "$frames/start.png" \
         "onboarding step $step settled" "$preview" > "$frames.log" 2>&1); then
       missing+=("wayland/onboarding-$name-frames")
