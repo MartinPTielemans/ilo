@@ -626,6 +626,14 @@ impl Bar {
         self.cx.run_until_parked();
     }
 
+    /// A click on row `index`, away from its end.
+    fn click_row(&mut self, index: usize) {
+        self.point_at(index);
+        let y = height(0) + LINE + LIST_TOP + (index as f32 + 0.5) * ROW_HEIGHT;
+        self.cx.simulate_click(at(200., y), Modifiers::none());
+        self.cx.run_until_parked();
+    }
+
     /// A click where row `index` shows its trash under the pointer, at its end.
     fn click_remove(&mut self, index: usize) {
         self.point_at(index);
@@ -2550,6 +2558,55 @@ fn each_load_says_what_was_typed(cx: &mut TestAppContext) {
     assert_eq!(bar.typed(), ["http://exa"], "↩ on a completion");
 }
 
+/// Every close of the window's bar carries its reason (#4108): a choice hides it, which gives the
+/// keyboard back to what opened it, unless the choice took the keyboard, as a page gone to does;
+/// Escape and the bar's own key leave it as the user leaving it. By the pointer as by ↩.
+#[gpui::test]
+fn a_choice_gives_the_keyboard_back_unless_it_took_it(cx: &mut TestAppContext) {
+    let rows = || vec![searching("12*7"), page("https://a.test/12*7")];
+    let mut bar = Bar::new(cx);
+    bar.type_text("12*7");
+    bar.suggest("12*7", rows());
+    bar.calls();
+    bar.click_row(1);
+    assert_eq!(bar.calls(), ["hide", "copy 84"]);
+    assert!(
+        bar.page_keyboard().is_empty(),
+        "a copy gave the page the keyboard"
+    );
+
+    let mut bar = Bar::new(cx);
+    bar.type_text("12*7");
+    bar.suggest("12*7", rows());
+    bar.calls();
+    bar.click_row(2);
+    assert_eq!(
+        bar.page_keyboard(),
+        ["open https://a.test/12*7, hide"],
+        "the page gone to didn't take the keyboard"
+    );
+
+    let mut bar = Bar::new(cx);
+    bar.type_text("ex");
+    bar.calls();
+    bar.keys("escape");
+    assert_eq!(bar.calls(), ["dismiss"]);
+    assert!(bar.page_keyboard().is_empty());
+}
+
+/// Esc while an input method composes in the window's bar is the composition's: the bar stays
+/// open with what's in it.
+#[gpui::test]
+fn escape_while_composing_keeps_the_bar(cx: &mut TestAppContext) {
+    let mut bar = Bar::new(cx);
+    bar.type_text("にほん");
+    bar.calls();
+    bar.compose("にほんご");
+    bar.keys("escape");
+    assert!(bar.is_open(), "Esc while composing closed the bar");
+    assert_eq!(bar.calls(), Vec::<String>::new());
+}
+
 /// ↩ that goes to a page gives it the keyboard once the bar has hidden, as Chrome's address bar
 /// does, wherever the keyboard was before the bar opened: in the page, or in the UI, as over a
 /// Board (#3453) or a window with no page (#3239). A pick that shows a tab already open, or copies,
@@ -4323,6 +4380,37 @@ fn a_resting_bar_in_the_ask_suggests_nothing_and_hands_return_on(cx: &mut TestAp
     );
     rest.type_text("s");
     assert_eq!(rest.asked(), ["explains"]);
+}
+
+/// A choice at rest is the page's to follow: a sum's copy leaves the keyboard in the field, which
+/// goes on taking what's typed, as the bar stays open in its page; a page gone to takes it.
+#[gpui::test]
+fn a_choice_at_rest_leaves_the_keyboard_unless_a_page_takes_it(cx: &mut TestAppContext) {
+    let mut rest = Resting::new(cx);
+    rest.type_text("12*7");
+    rest.cx.cx.update(|cx| {
+        suggested(
+            "12*7".into(),
+            vec![searching("12*7"), page("https://a.test/12*7")],
+            cx,
+        )
+    });
+    rest.cx.run_until_parked();
+    rest.asked();
+    rest.keys("down enter");
+    assert_eq!(rest.host.calls.take(), ["copy 84"]);
+    assert!(rest.host.page_keyboard.take().is_empty());
+    assert_eq!(
+        rest.focused(),
+        (true, false),
+        "the copy took the keyboard from the field"
+    );
+    rest.type_text("0");
+    assert_eq!(
+        rest.asked(),
+        ["12*70"],
+        "the field stopped asking after the copy"
+    );
 }
 
 /// ↩ that commits Japanese the input method composes in the Ask is the input method's: the page
