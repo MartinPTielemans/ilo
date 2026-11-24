@@ -541,7 +541,7 @@ impl TalkView {
         }
         if self.shown.as_ref() != Some(&conversation) {
             let now = Instant::now();
-            self.motion.still = cx.reduce_motion();
+            self.motion.still = crate::motion::still(cx);
             if let Some(old) = self.shown.as_ref().filter(|_| self.motion.live) {
                 self.motion.changed(old, &conversation, &self.opened, now);
             }
@@ -566,7 +566,7 @@ impl TalkView {
                 grew,
                 self.shown.is_none(),
                 pinned,
-                self.motion.live && !cx.reduce_motion(),
+                self.motion.live && !crate::motion::still(cx),
             ) {
                 Follows::Not => {}
                 Follows::AtOnce => self.scroll.scroll_to_bottom(),
@@ -649,7 +649,7 @@ impl TalkView {
             return;
         }
         // It goes from where it was typed to its plate, the field's box around its words.
-        if let Some(field) = self.reply_drawn.get().filter(|_| !cx.reduce_motion()) {
+        if let Some(field) = self.reply_drawn.get().filter(|_| !crate::motion::still(cx)) {
             let style = window.text_style();
             let words = (window.text_system())
                 .shape_line(
@@ -679,7 +679,12 @@ impl TalkView {
         });
         // What the user sent, and the Thinking under it, show even if they'd scrolled up, the
         // lines making room on the curve it lands on.
-        match follows(true, false, true, self.motion.live && !cx.reduce_motion()) {
+        match follows(
+            true,
+            false,
+            true,
+            self.motion.live && !crate::motion::still(cx),
+        ) {
             Follows::Eased => {
                 let at = f32::from(self.scroll.offset().y);
                 self.motion.follow = Some(Follow {
@@ -703,7 +708,7 @@ impl TalkView {
             return;
         };
         let from = self.answers_drawn.borrow().get(&index).copied();
-        if let Some(from) = from.filter(|_| !cx.reduce_motion()) {
+        if let Some(from) = from.filter(|_| !crate::motion::still(cx)) {
             let now = Instant::now();
             self.landed.set(None);
             self.motion.landing = Some(Landing {
@@ -2629,7 +2634,7 @@ impl Shell {
 impl Render for TalkView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let now = Instant::now();
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         let asked = self
             .shown
             .as_ref()
