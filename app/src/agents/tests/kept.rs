@@ -11,7 +11,7 @@ use crate::agents::ready::{Found, Ready};
 use crate::agents::runner::{self, Cli, Out};
 use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
 use crate::agents::task::{AskedOn, Conversation, Line, State, TaskAction, Word};
-use crate::agents::tier::Tier;
+use crate::agents::tier::{Sites, Tier};
 
 /// A stand-in for `claude`. A run of it writes what it was started with and where beside itself,
 /// numbered by run, then keeps what it's sent and never answers. Asked to purge, it writes what
@@ -346,6 +346,69 @@ fn a_reply_takes_an_ended_task_up_at_work_on_pages(cx: &mut TestAppContext) {
     assert_eq!(lines.iter().filter(|kind| resumed(kind)).count(), 1);
     // And a task that only looked comes back only looking.
     assert_eq!(kept::comes_back(Tier::Look), Tier::Look);
+}
+
+/// On a task that has ended the level's menu sets the level its next reply starts at, Full access
+/// too: the chip says it and ilo's line and the activity log have it at the pick, as on a task at
+/// work, and nothing starts until the reply, which comes at that level with no line over it. Any
+/// site is the same. A refusal's button on a task that has ended does nothing.
+#[cfg(unix)]
+#[gpui::test]
+fn a_level_picked_on_an_ended_task_is_the_one_its_reply_starts_at(cx: &mut TestAppContext) {
+    let run = Run::new("picked", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    run.finish(&agent, cx);
+    run.said(&agent, Out::Gone(String::new()), cx);
+    assert!(matches!(run.state(&agent, cx), State::Done { .. }));
+    let act = |action, cx: &mut TestAppContext| {
+        (run.agents).update(cx, |agents, cx| _ = agents.task_action(&agent, action, cx));
+    };
+    let tier = |cx: &mut TestAppContext| {
+        (run.agents).read_with(cx, |agents, _| agents.task(&agent).unwrap().tier)
+    };
+    let started = || beside(&run.program, "args.2").exists();
+    let accesses = |cx: &mut TestAppContext| {
+        let noted = log(&run.agents, &agent, cx);
+        (noted.iter())
+            .filter(|(action, _, _)| action == "access")
+            .count()
+    };
+
+    let before = accesses(cx);
+    act(TaskAction::PickTier(Tier::Full), cx);
+    assert_eq!(tier(cx), Tier::Full);
+    assert_eq!(run.talk(&agent, cx).tier, Tier::Full, "the chip");
+    let changed = IloKind::TierChanged {
+        from: Tier::Work,
+        to: Tier::Full,
+    };
+    assert!(run.ilo_lines(&agent, cx).contains(&changed));
+    assert_eq!(accesses(cx), before + 1, "the pick's activity entry");
+    assert!(!started(), "a pick started a run");
+    assert!(matches!(run.state(&agent, cx), State::Done { .. }));
+
+    act(TaskAction::SetTier(Tier::Look), cx);
+    assert_eq!(
+        tier(cx),
+        Tier::Full,
+        "a line's button acted on an ended task"
+    );
+    (run.agents).update(cx, |agents, _| {
+        agents.task_mut(&agent).unwrap().sites = Sites::Only(vec!["example.com".into()]);
+    });
+    act(TaskAction::PickAnySite, cx);
+    let sites = (run.agents).read_with(cx, |agents, _| agents.task(&agent).unwrap().sites.clone());
+    assert_eq!(sites, Sites::Any);
+    assert!(!started(), "Any site started a run");
+
+    (run.agents).update(cx, |agents, cx| agents.reply(&agent, "And for Sunday?", cx));
+    let (resumed, _) = run.ran(2);
+    assert!(resumed.iter().any(|arg| arg == "--resume"));
+    assert_eq!(run.state(&agent, cx), State::Working);
+    assert_eq!(tier(cx), Tier::Full, "the reply didn't start at the pick");
+    let resumed = |kind: &IloKind| matches!(kind, IloKind::Resumed { .. });
+    assert!(!run.ilo_lines(&agent, cx).iter().any(resumed));
 }
 
 /// A reply to a task done or stopped in this run, at the access it had, has no line of ilo's over

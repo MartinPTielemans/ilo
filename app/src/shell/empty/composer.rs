@@ -16,6 +16,7 @@ use crate::agents::task::{Start, TaskAction, added_address, model_menu};
 use crate::agents::tier::{ANY_SITE, ONLY_ADDED, Tier};
 use crate::command_bar::{self, CommandBar, InPlaceKey, TaskAgent};
 use crate::palette::{Palette, Tone};
+use crate::shell::ShowStarted;
 use crate::tokens::shell::composer::*;
 use crate::tokens::text;
 
@@ -343,9 +344,18 @@ impl Shell {
         resting.forget_picks();
         log!("browser: composer runs a task on {agent}");
         let home = self.space();
-        self.show_started = Some(home);
+        self.show_started = Some(ShowStarted::Asked(home));
         self.browser.start_task(&agent, &asked, home, start, cx);
         cx.notify();
+    }
+
+    /// The Agents' answer to the composer's last ↩: the task it started, whose view alone opens as
+    /// its card comes in, or None, when it started none and no other task's card opens a view.
+    pub fn composed_started(&mut self, agent: Option<SharedString>) {
+        if !matches!(self.show_started, Some(ShowStarted::Asked(_))) {
+            return;
+        }
+        self.show_started = agent.map(ShowStarted::Task);
     }
 
     /// Puts the composer's level back to Work on pages, and its model back to Settings'.
@@ -555,7 +565,7 @@ impl Shell {
             .map(|tier| {
                 (
                     MenuEntry::named(tier.label(), true).checked(tier == current),
-                    press(TaskAction::SetTier(tier)),
+                    press(TaskAction::PickTier(tier)),
                 )
             })
             .collect();
@@ -563,7 +573,7 @@ impl Shell {
         items.push((MenuEntry::line(), none()));
         items.push((
             MenuEntry::named(ANY_SITE, true).checked(!only),
-            press(TaskAction::AnySite),
+            press(TaskAction::PickAnySite),
         ));
         items.push((MenuEntry::named(ONLY_ADDED, only).checked(only), none()));
         items.push((MenuEntry::line(), none()));
