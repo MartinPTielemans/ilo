@@ -27,7 +27,7 @@ use super::super::{
 };
 
 /// What the field says in Search.
-pub(in crate::shell) const SEARCH_WORDS: &str = "Search or enter address";
+pub(in crate::shell) const SEARCH_WORDS: &str = crate::command_bar::PLACEHOLDER_TEXT;
 /// The switch's two sides.
 const SEARCH: &str = "Search";
 const ASK: &str = "Ask";

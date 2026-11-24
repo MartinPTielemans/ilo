@@ -7466,9 +7466,9 @@ mod tasks {
             "the card says how far it has got and the step it's on"
         );
         assert_eq!(
-            conversation.progress.as_ref(),
-            "step 4 · 1 page",
-            "the conversation's header says how far it has got"
+            conversation.about.as_ref(),
+            "Claude · Working",
+            "the conversation's header says where the task is, its pages in the rail beside it"
         );
         assert!(
             !format!("{conversation:?}{card:?}").contains("hunter2"),

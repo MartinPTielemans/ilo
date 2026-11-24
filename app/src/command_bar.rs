@@ -106,7 +106,8 @@ use crate::tokens::command_bar::SELECTED_DIM;
 use crate::tokens::command_bar::TITLE;
 use crate::tokens::command_bar::site_colors;
 use crate::tokens::text;
-pub(crate) const PLACEHOLDER_TEXT: &str = "Search or Enter URL…";
+/// What the field says with nothing typed: in the bar, the sidebar's field and the composer.
+pub(crate) const PLACEHOLDER_TEXT: &str = "Search or enter address";
 /// What its input says for Search Tabs (ours, after the command's name).
 const TABS_PLACEHOLDER: &str = "Search Tabs…";
 const SPACES_PLACEHOLDER: &str = "Search Spaces…";
