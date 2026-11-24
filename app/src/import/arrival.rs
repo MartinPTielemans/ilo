@@ -19,17 +19,18 @@ use super::Look;
 use super::plan::{Add, Existing, Plan, ProfileRef, Target};
 use crate::settings_rows::{end, frame, glyph_plate, group};
 use crate::shell::cubic_bezier;
-use crate::shell::swap::drawing_check;
+use crate::shell::swap::{check_drawn, drawing_check};
 use crate::space_icon::SpaceIcon;
 use crate::tokens::radius;
 use crate::tokens::settings::ROW_X;
-use crate::tokens::shell::import::motion::{BREATH, CHECK};
+use crate::tokens::shell::import::motion::BREATH;
 use crate::tokens::shell::import::{
     BADGE, BADGE_INSET, CARD_COUNT, CARD_COUNT_ALPHA, CARD_COUNT_LINE, CARD_GAP, CARD_GLYPH,
     CARD_HEIGHT, CARD_HELD, CARD_INSET, CARD_NAME, CARD_NAME_LINE, CARD_TINT_BOTTOM,
     CARD_TINT_BOTTOM_LIGHT, CARD_TINT_TOP, CARD_TINT_TOP_LIGHT, CARD_WIDTH, CARD_WIDTH_SETTINGS,
     PROFILE_GAP, PROFILE_NAME, PROFILE_NAME_GAP, PROFILE_NAME_LINE,
 };
+use crate::tokens::shell::swap::motion::CHECK;
 use crate::tokens::shell::task::motion::SHIMMER;
 use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, CHIPS_STAGGER, EASE, ROLL, ROLL_RISE};
 use crate::tokens::shell::task::{SHIMMER_FROM, SHIMMER_HIGH, SHIMMER_REACH, SHIMMER_TO};
@@ -170,11 +171,6 @@ fn tabs(adds: &[Add]) -> usize {
 /// The motion's ease `t` of the way through.
 fn eased(t: f32) -> f32 {
     cubic_bezier(EASE[0], EASE[1], EASE[2], EASE[3], t.clamp(0., 1.))
-}
-
-/// The check draw's curve, CSS's ease-in-out (ux-spec, Check draw).
-fn ease_in_out(t: f32) -> f32 {
-    cubic_bezier(0.42, 0., 0.58, 1., t.clamp(0., 1.))
 }
 
 /// A waiting dot's strength `phase` of the way through its breath: from 0.35 up to full half way
@@ -356,7 +352,7 @@ fn card_view(
                     .text_color(look.detail),
             ),
         Some(at) => {
-            let way = ease_in_out(since(at) / CHECK);
+            let way = check_drawn(since(at));
             let tick = match still {
                 true => drawing_check(1., gpui::white().into()).into_any_element(),
                 false => drawing_check(way, gpui::white().into()).into_any_element(),
@@ -533,7 +529,7 @@ pub fn stages(look: &Look, rows: Vec<Div>) -> Option<Div> {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{Card, ROLL, pose};
+    use super::{CHECK, CHIPS, Card, ROLL, check_drawn, pose};
 
     fn card(placed: usize, total: usize, now: Instant) -> Card {
         Card {
@@ -571,6 +567,27 @@ mod tests {
         assert_eq!(shown, 9, "the count skipped to where the tabs are");
         assert_eq!(rolling.map(|(from, _)| from), Some(2));
         assert_eq!(card.count_at(at(ROLL * 3.)), (9, None));
+    }
+
+    /// A card's badge draws its check as Copy URL's does, and the card asks for frames until the
+    /// check is whole, and none after.
+    #[test]
+    fn a_cards_badge_moves_until_its_check_is_drawn() {
+        let start = Instant::now();
+        let at = |seconds: f32| start + Duration::from_secs_f32(seconds);
+        // It came long enough ago to be in place, and its tabs went in at `start`.
+        let mut card = card(3, 3, start - Duration::from_secs_f32(CHIPS + 1.));
+        card.shown = 3;
+        card.done = Some(start);
+        assert!(card.moving(at(CHECK * 0.9), false));
+        assert!(check_drawn(CHECK * 0.9) < 1.);
+        assert!(!card.moving(at(CHECK), false));
+        assert_eq!(check_drawn(CHECK), 1.);
+        assert_eq!(check_drawn(0.), 0.);
+        assert!(
+            (check_drawn(CHECK / 2.) - 0.5).abs() < 1e-3,
+            "ease-in-out is even"
+        );
     }
 
     /// A card rises into place as it fades in; under Reduce Motion it fades in place, and its
