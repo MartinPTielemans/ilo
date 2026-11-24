@@ -275,6 +275,13 @@ impl Shell {
         (self.talk.as_ref()).is_some_and(|talk| talk.view.read(cx).on_pages())
     }
 
+    /// An ended task's Start Again: the command bar opens as it does for a new tab, with what the
+    /// task was first asked in its field, as an ask. Nothing is sent until the user sends it.
+    pub fn ask_again(&mut self, asked: SharedString, cx: &mut Context<Self>) {
+        self.run(super::Command::NewTab, "start again", cx);
+        self.browser.ask_again(asked, cx);
+    }
+
     pub fn show_needed_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
         if self.talk_agent().as_ref() != Some(&agent) {
             self.show_task(agent, cx);
@@ -461,9 +468,11 @@ impl Shell {
     pub(super) fn focus_talk(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(talk) = &self.talk else { return };
         let view = talk.view.read(cx);
-        let (reply, replies) = (view.reply.focus_handle(cx), view.replies);
+        let (reply, replies) = (view.reply.focus_handle(cx), view.takes_reply());
+        // A task that ended while the user was in its field may take no reply: the field went.
+        let field_went = !replies && reply.is_focused(window);
         // Standing on a page, the field is beside it and keeps the keyboard the user gives it.
-        if self.watched_task_page().is_some() && !self.task_standing() {
+        if field_went || self.watched_task_page().is_some() && !self.task_standing() {
             if reply.is_focused(window) {
                 window.focus(&self.focus_handle, cx);
             }
@@ -706,6 +715,33 @@ impl TalkView {
             });
         }
         self.act(TaskAction::Answer(answer), cx);
+    }
+
+    /// ilo's line in the reply field's place: the task has ended and takes no reply (#4105).
+    fn in_field(&self) -> Option<IloLine> {
+        match self.shown.as_ref()?.lines.last()? {
+            Line::Ilo(line) if ilo::in_field(&line.kind) => Some(line.clone()),
+            _ => None,
+        }
+    }
+
+    /// Whether the reply field shows: a task's, unless ilo's line stands in its place.
+    pub(super) fn takes_reply(&self) -> bool {
+        self.replies && self.in_field().is_none()
+    }
+
+    /// Start Again: the command bar opens with what the task was first asked, as an ask the user
+    /// sends or changes. Once this view's own update is over, as the bar's opening reaches it.
+    fn start_again(&self, cx: &mut Context<Self>) {
+        let Some(asked) = self.shown.as_ref().map(|shown| shown.asked.clone()) else {
+            return;
+        };
+        let shell = self.shell.clone();
+        cx.defer(move |cx| {
+            shell
+                .update(cx, |shell, cx| shell.ask_again(asked, cx))
+                .ok();
+        });
     }
 
     fn act(&self, action: TaskAction, cx: &mut Context<Self>) {
@@ -1717,6 +1753,10 @@ impl TalkView {
             self.ilo_hovered.set(false);
         }
         for (index, line) in shown.lines.iter().enumerate() {
+            // The line in the reply field's place is drawn there.
+            if matches!(line, Line::Ilo(line) if ilo::in_field(&line.kind)) {
+                continue;
+            }
             if let Some(answered) = answered.filter(|answered| answered.at == index) {
                 lines.push(self.answered(answered, look));
             }
@@ -1882,6 +1922,16 @@ impl TalkView {
                 .text_color(look.palette.text(SECONDARY))
                 .child(quiet);
         }
+        // An ended task that takes no reply: ilo's line says why, with Start Again (#4105).
+        if let Some(line) = self.in_field() {
+            let name = (self.shown.as_ref())
+                .map(|shown| shown.name.clone())
+                .unwrap_or_default();
+            return div()
+                .id("conversation-ended")
+                .flex_none()
+                .child(self.ilo(&line, &name, look, cx));
+        }
         let reply = self.reply.clone();
         let drawn = self.reply_drawn.clone();
         let palette = look.palette;
@@ -1990,6 +2040,9 @@ impl TalkView {
             IloKind::TabBack { .. } => "icons/undo-2.svg",
             IloKind::SignedIn { .. } => "icons/key-round.svg",
             IloKind::TierChanged { .. } => "icons/shield.svg",
+            IloKind::Resumed { .. } => "icons/play.svg",
+            IloKind::KeptHere => "icons/save.svg",
+            IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing => "icons/message-circle.svg",
         };
         // Its words follow the mark closer than the line's gap.
         let mark = super::display_face::display_text(words::MARK, MARK_SIZE, TRACE_LINE, cx)
@@ -2103,6 +2156,10 @@ impl TalkView {
             IloButton::AnySite => Some(TaskAction::AnySite),
             IloButton::HandBack => tab.map(TaskAction::HandBack),
             IloButton::NotNow => Some(TaskAction::NotNow(line)),
+            IloButton::StartAgain => {
+                self.start_again(cx);
+                None
+            }
         };
         if let Some(action) = action {
             self.act(action, cx);
