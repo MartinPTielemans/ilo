@@ -2487,6 +2487,60 @@ fn a_press_on_the_tile_takes_over_and_reaches_nothing(cx: &mut TestAppContext) {
     );
 }
 
+/// A handoff while the user watches the tile is the agent's doing, not the user's: the page stays
+/// a tile for ARM, so a click meant for the tile reaches nothing, then it's the window's page with
+/// the keyboard left where it was, for the user's first click in the page to give it.
+#[gpui::test]
+fn a_handoff_while_a_tile_is_watched_asks_no_focus_page(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching_tile(&shell, &host, cx);
+    host.take();
+    let keyboard = |asked: &[String]| {
+        (asked.iter()).any(|line| line.starts_with("focus page") || line == "focus ui")
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(at_work(vec![(30, "Sign in to continue".into())]), cx)
+    });
+    draw(&shell, cx);
+    let asked = host.take();
+    assert!(!keyboard(&asked), "{asked:?}");
+    page_untouched(&asked);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watch_tile_shown()),
+        Some(30),
+        "a tile still, in the ARM"
+    );
+
+    shell.update(cx, |shell, _| shell.age_watch_press());
+    draw(&shell, cx);
+    let asked = host.take();
+    assert_eq!(asked[..2], ["end tile 30", "select 30"], "{asked:?}");
+    assert!(!keyboard(&asked), "{asked:?}");
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watch_tile_shown()),
+        None
+    );
+}
+
+/// Taken over from the bar while watched, the user's own act, the page is the window's at once and
+/// has the keyboard.
+#[gpui::test]
+fn a_take_over_while_a_tile_is_watched_gives_the_page_the_keyboard(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    watching_tile(&shell, &host, cx);
+    host.take();
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(at_work(vec![(30, "".into())]), cx)
+    });
+    draw(&shell, cx);
+    let asked = host.take();
+    assert_eq!(
+        asked[..3],
+        ["end tile 30", "select 30", "focus page"],
+        "{asked:?}"
+    );
+}
+
 /// A page the user holds, a handoff's sign-in too, opens as the real page, the user's tab, with
 /// no press between: its picture's tile ends, and the window shows it.
 #[gpui::test]

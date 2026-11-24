@@ -2112,3 +2112,64 @@ fn only_a_picture_wholly_in_the_rails_view_is_live(cx: &mut TestAppContext) {
         "the first picture, scrolled away, is still live: {did:?}"
     );
 }
+
+/// Every door to a page goes through its tile where the core shows them, as the sidebar's row and
+/// the strip's key stop do through watch_task_page: the page only watched is never the window's.
+/// A handoff while the user types in the reply field beside it leaves the field its keyboard and
+/// its words, and asks no "focus page".
+#[gpui::test]
+fn a_watch_from_any_door_is_a_tile_and_a_handoff_leaves_the_reply_field(cx: &mut TestAppContext) {
+    use crate::agents::Status;
+    let (shell, host, cx) = shown(cx);
+    host.shows_tiles.set(Some(true));
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let draw = |cx: &mut VisualTestContext| {
+        view.update(cx, |_, cx| cx.notify());
+        shell.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        host.take()
+    };
+    draw(cx);
+
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, Default::default(), None, cx)
+    }));
+    let did = draw(cx);
+    assert!(
+        did.iter().any(|line| line.starts_with("tile 30 at ")),
+        "the watch didn't grow the tile: {did:?}"
+    );
+    assert!(
+        !did.contains(&"select 30".to_string()),
+        "a page only watched is the window's: {did:?}"
+    );
+
+    shell.update(cx, |shell, cx| shell.set_talk_beside(true, cx));
+    let reply = view.read_with(cx, |view, cx| view.reply.focus_handle(cx));
+    cx.update(|window, cx| window.focus(&reply, cx));
+    cx.simulate_input("Ryanair");
+    draw(cx);
+    let held = Status {
+        agent: "task-1".into(),
+        name: "Claude".into(),
+        space: 3,
+        doing: "".into(),
+        held: vec![(30, "Sign in".into())],
+    };
+    shell.update(cx, |shell, cx| shell.set_agent_status(vec![held], cx));
+    let mut did = draw(cx);
+    shell.update(cx, |shell, _| shell.age_watch_press());
+    did.extend(draw(cx));
+    assert!(
+        !did.iter().any(|line| line.starts_with("focus page")),
+        "{did:?}"
+    );
+    assert!(cx.update(|window, _| reply.is_focused(window)), "{did:?}");
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.reply.read(cx).text().to_string()),
+        "Ryanair"
+    );
+}

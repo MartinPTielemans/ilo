@@ -95,6 +95,11 @@ struct WatchTile {
     /// When a press on it took the page over. It stays a tile till ARM after, so the press and any
     /// that follow it, a double-click's second, land on nothing the agent left under the pointer.
     pressed: Option<Instant>,
+    /// When the agent made the page the user's while it was watched, at a handoff or an ask. It
+    /// stays a tile till ARM after, so a click meant for what stood there reaches nothing, then
+    /// it's the window's page with the keyboard left where it was: the user's first click in the
+    /// page gives it the keyboard.
+    handed: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -471,7 +476,14 @@ impl Shell {
         picture: Option<PagePicture>,
         cx: &mut Context<Self>,
     ) -> bool {
-        self.watch_task_page_from(tab, from, picture, None, cx)
+        // Every door goes through the tile where the core shows them, so a page only watched is
+        // never the window's: the area's conversation lends it. Only show_task opens an area, and
+        // with its conversation.
+        let space = self.task_area.as_ref().map(|area| area.space);
+        let tiles = (space.and_then(|space| self.talk_in(space)))
+            .and(self.talk.as_ref())
+            .map(|talk| talk.tiles(cx));
+        self.watch_task_page_from(tab, from, picture, tiles, cx)
     }
 
     /// The same, from the conversation, whose `tiles` show its pages live where the core can: the
@@ -533,6 +545,7 @@ impl Shell {
                 shown: false,
                 placed: None,
                 pressed: None,
+                handed: None,
             });
         }
         let at = page_in(from);
@@ -542,6 +555,7 @@ impl Shell {
                 shown: true,
                 placed: Some((at, TILE_RADIUS)),
                 pressed: None,
+                handed: None,
             });
         }
         tiles.take_back(tab, was);
@@ -587,6 +601,13 @@ impl Shell {
     /// Whether the user holds `tab` from its agent: taken over, handed to them, or asked for.
     fn task_page_held(&self, tab: u64) -> bool {
         (self.agent_status.iter()).any(|status| status.held.iter().any(|(held, _)| *held == tab))
+    }
+
+    /// Whether the user took `tab` over, their own act, rather than the agent handing it to them
+    /// or asking for it, which says why.
+    fn task_page_taken(&self, tab: u64) -> bool {
+        (self.agent_status.iter())
+            .any(|status| (status.held.iter()).any(|(held, why)| *held == tab && why.is_empty()))
     }
 
     /// Lets go of a watch that's over: the picture it asked for, and its tile, which the
@@ -644,7 +665,8 @@ impl Shell {
 
     /// Swaps the watched page between its tile and the window as the hold changes, and keeps the
     /// tile where it goes. Held, taken over or handed to the user, it's the window's page, the
-    /// user's tab, though not before a press's ARM is past; handed back, it's a tile again.
+    /// user's tab, though not before ARM is past; handed back, it's a tile again. Only the user's
+    /// own press or Take Over gives it the keyboard.
     fn settle_watch_tile(&mut self, now: Instant, cx: &mut Context<Self>) {
         let Some(page) = self.task_area.as_ref().and_then(|area| area.page.as_ref()) else {
             return;
@@ -652,19 +674,38 @@ impl Shell {
         let Some(tile) = &page.tile else {
             return;
         };
-        let (tab, zoom, shown) = (page.tab, page.zoom, tile.shown);
-        let pressing =
-            (tile.pressed).is_some_and(|at| now.saturating_duration_since(at).as_secs_f32() < ARM);
+        let (tab, zoom, shown, pressed, handed) =
+            (page.tab, page.zoom, tile.shown, tile.pressed, tile.handed);
+        let within = |at: Option<Instant>| {
+            at.is_some_and(|at| now.saturating_duration_since(at).as_secs_f32() < ARM)
+        };
         let held = self.task_page_held(tab);
-        if shown && held && !pressing {
+        let users = pressed.is_some() || self.task_page_taken(tab);
+        if shown && held && !users && handed.is_none() {
             if let Some(tile) = self.watch_tile_mut() {
-                (tile.shown, tile.placed, tile.pressed) = (false, None, None);
+                tile.handed = Some(now);
+            }
+            // Once its ARM is past, the page handed to the user is the window's.
+            cx.spawn(async move |shell, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_secs_f32(ARM))
+                    .await;
+                shell.update(cx, |_, cx| cx.notify()).ok();
+            })
+            .detach();
+            return self.place_watch_tile(now, cx);
+        }
+        if shown && held && !within(pressed) && (users || !within(handed)) {
+            if let Some(tile) = self.watch_tile_mut() {
+                (tile.shown, tile.placed, tile.pressed, tile.handed) = (false, None, None, None);
             }
             self.browser.end_tile(tab);
             log!("browser: task page {tab} out of its tile");
             self.browser.select(tab, cx);
             self.lay_out_page(cx);
-            self.browser.focus_page(cx);
+            if users {
+                self.browser.focus_page(cx);
+            }
             return;
         }
         if !shown && !held && zoom == Zoom::Rest {
@@ -674,11 +715,11 @@ impl Shell {
             self.show_users_page(cx);
         }
         if !held
-            && !pressing
+            && !within(pressed)
             && let Some(tile) = self.watch_tile_mut()
         {
             // A press that took nothing over, as with the agent's session ended.
-            tile.pressed = None;
+            (tile.pressed, tile.handed) = (None, None);
         }
         self.place_watch_tile(now, cx);
     }
@@ -743,11 +784,13 @@ impl Shell {
         .detach();
     }
 
-    /// The press on the watched tile as if it were longer ago than its ARM, for a test.
+    /// The press on the watched tile, or its handing to the user, as if it were longer ago than its
+    /// ARM, for a test.
     #[cfg(test)]
     pub(super) fn age_watch_press(&mut self) {
         if let Some(tile) = self.watch_tile_mut() {
-            tile.pressed = (tile.pressed).map(|at| at - Duration::from_secs_f32(ARM + 1.));
+            let aged = |at: Option<Instant>| at.map(|at| at - Duration::from_secs_f32(ARM + 1.));
+            (tile.pressed, tile.handed) = (aged(tile.pressed), aged(tile.handed));
         }
     }
 
