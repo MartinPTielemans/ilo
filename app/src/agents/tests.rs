@@ -6187,6 +6187,7 @@ mod tasks {
     fn said(agents: &Entity<Agents>, agent: &str, out: Out, cx: &mut TestAppContext) {
         let event = runner::Event {
             agent: agent.into(),
+            run: agents.read_with(cx, |agents, _| agents.run_of(agent)),
             out,
         };
         agents.update(cx, |agents, cx| agents.task_said(event, cx));
@@ -7438,7 +7439,7 @@ mod tasks {
         let steps: Vec<_> = (trace.items.iter())
             .filter_map(|item| match item {
                 TraceItem::Step(step) => Some(step),
-                TraceItem::Said(_) | TraceItem::Helper(_) => None,
+                TraceItem::Said(_) | TraceItem::Helper { .. } => None,
             })
             .collect();
         let titles: Vec<_> = steps
@@ -7988,7 +7989,7 @@ mod tasks {
                 .map(|item| match item {
                     TraceItem::Step(step) => step.clone(),
                     TraceItem::Said(said) => panic!("{said}"),
-                    TraceItem::Helper(step) => panic!("{}", step.title),
+                    TraceItem::Helper { step, .. } => panic!("{}", step.title),
                 })
                 .collect::<Vec<_>>()
         };

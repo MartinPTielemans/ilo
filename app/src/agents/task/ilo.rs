@@ -25,6 +25,19 @@ pub struct IloLine {
     pub settled: bool,
 }
 
+/// Why ilo stopped a task over its helpers (#4102).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HelpersLimit {
+    /// It started more than a task may for one message of the user's: its turn is stopped, and
+    /// the task goes on.
+    Count,
+    /// A helper started a helper of its own: the task is stopped.
+    Depth,
+    /// A helper ilo doesn't allow: of a kind ilo didn't make, one in the background, or one that
+    /// called a tool that is the task's alone. The task is stopped.
+    Kind,
+}
+
 /// What an ilo line says.
 #[derive(Clone, Debug, PartialEq)]
 pub enum IloKind {
@@ -56,10 +69,11 @@ pub enum IloKind {
     },
     /// The user changed the task's access.
     TierChanged { from: Tier, to: Tier },
-    /// ilo stopped the task's turn at its helpers' limit (#4102): it started more than a task
-    /// may, or with `deep`, a helper started one of its own. `tab` is the page the task stood on,
-    /// or 0 with none. The count its line says is the app's own.
-    Helpers { tab: u64, deep: bool },
+    /// ilo stopped the task over its helpers (#4102), by `limit`: its turn where it started more
+    /// than a task may, the task itself where a helper started one of its own or isn't one ilo
+    /// allows. `tab` is the page the task stood on, or 0 with none. The count its line says is
+    /// the app's own.
+    Helpers { tab: u64, limit: HelpersLimit },
     /// The user's reply took up the task after it had ended, at `tier`, which the app decided.
     Resumed { tier: Tier },
     /// The assistant keeps the task's conversation on the user's computer, said once per profile.
@@ -152,8 +166,12 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
             .chain(tier.lifting(*why).map(IloButton::Raise))
             .collect(),
         // No level lifts the limit, so no step up stands under its line; with no page to take,
-        // nothing does.
+        // nothing does, nor where ilo stopped the task itself.
         IloKind::Helpers { tab: 0, .. } => Vec::new(),
+        IloKind::Helpers {
+            limit: HelpersLimit::Depth | HelpersLimit::Kind,
+            ..
+        } => Vec::new(),
         IloKind::Helpers { .. } => vec![IloButton::TakeOver],
         IloKind::Yours { .. } => vec![IloButton::HandBack, IloButton::NotNow],
         // Not Now keeps the tab, as the user's own.

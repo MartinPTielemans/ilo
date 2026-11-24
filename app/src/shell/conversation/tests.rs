@@ -10,7 +10,7 @@ use gpui::{
 
 use super::Fold;
 
-use crate::agents::task::ilo::{IloButton, IloKind, IloLine};
+use crate::agents::task::ilo::{HelpersLimit, IloButton, IloKind, IloLine};
 use crate::agents::task::{
     Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep, Word,
 };
@@ -1161,9 +1161,16 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
         IloKind::NoSpace,
         IloKind::Helpers {
             tab: 1,
-            deep: false,
+            limit: HelpersLimit::Count,
         },
-        IloKind::Helpers { tab: 1, deep: true },
+        IloKind::Helpers {
+            tab: 1,
+            limit: HelpersLimit::Depth,
+        },
+        IloKind::Helpers {
+            tab: 1,
+            limit: HelpersLimit::Kind,
+        },
     ];
     for kind in &every {
         // Every kind is in the list above: a new one fails to compile here until it's added.
@@ -1667,12 +1674,61 @@ fn a_task_of_an_assistant_that_keeps_nothing_has_no_level_row(cx: &mut TestAppCo
     assert!(!level_chip_with(IloKind::KeepsNothing, cx));
 }
 
+/// A helper's line on `step`, which its task gave no name.
+fn helper(step: TraceStep) -> TraceItem {
+    TraceItem::Helper {
+        step,
+        name: "".into(),
+        tab: None,
+    }
+}
+
+/// A helper its task named says that name on its line, and its page's word after it, as the
+/// page's row in the sidebar ends: not its step, and nothing it found. Its page's favicon stands
+/// in its step's glyph's place, which a page without one keeps. One its task gave no name has
+/// its step's line.
+#[test]
+fn a_named_helpers_line_says_its_name_and_its_pages_word() {
+    use super::{HelperPage, helper_line};
+    use crate::shell::task_cards::PageWord;
+    let reading = step(10, "Reading shop.example", true);
+    let name = gpui::SharedString::from("Northwick Home price");
+    for word in [PageWord::Reading, PageWord::Done, PageWord::Paused] {
+        let page = HelperPage {
+            tab: 30,
+            favicon: None,
+            word: word.label(),
+        };
+        let line = helper_line(&reading, &name, Some(&page)).expect("named");
+        assert_eq!(
+            line.text(),
+            format!("Northwick Home price {}", word.label())
+        );
+        assert_eq!(
+            (line.glyph, line.icon.is_some()),
+            (Some(reading.glyph), false)
+        );
+    }
+    let favicon = std::sync::Arc::new(gpui::Image::empty());
+    let page = HelperPage {
+        tab: 30,
+        favicon: Some(favicon),
+        word: PageWord::Reading.label(),
+    };
+    let line = helper_line(&reading, &name, Some(&page)).expect("named");
+    assert_eq!((line.glyph, line.icon.is_some()), (None, true));
+    // A page that's gone leaves the name alone.
+    let line = helper_line(&reading, &name, None).expect("named");
+    assert_eq!(line.text(), "Northwick Home price");
+    assert!(helper_line(&reading, &"".into(), Some(&page)).is_none());
+}
+
 /// Task-1's conversation as it works with `helpers` helpers (#4102), each reading its shop's
 /// page, and its own step under way after them.
 fn with_helpers(helpers: usize) -> Conversation {
     let mut talk = conversation(1);
     let items = (0..helpers)
-        .map(|at| TraceItem::Helper(step(10 + at, "Reading shop.example", true)))
+        .map(|at| helper(step(10 + at, "Reading shop.example", true)))
         .chain([TraceItem::Step(step(0, "Reading reviews.example", true))]);
     talk.lines = vec![Line::Trace(Trace {
         key: 0,
@@ -1726,8 +1782,8 @@ fn a_working_line_counts_the_tasks_helpers() {
     // One of the four waits on the user and one has finished: each still has its line, so each
     // still counts.
     let mut talk = with_helpers(4);
-    its_trace(&mut talk).items[1] = TraceItem::Helper(step(11, "Read shop.example", false));
-    its_trace(&mut talk).items[2] = TraceItem::Helper(step(12, "Handed you shop.example", false));
+    its_trace(&mut talk).items[1] = helper(step(11, "Read shop.example", false));
+    its_trace(&mut talk).items[2] = helper(step(12, "Handed you shop.example", false));
     assert_eq!(summary(&mut talk), "Working · 4 helpers");
 
     let over = its_trace(&mut talk);
@@ -1763,7 +1819,7 @@ fn a_working_line_opens_to_a_line_for_each_helper(cx: &mut TestAppContext) {
 
     // A fifth line as a helper comes, and none goes as one finishes.
     let mut talk = with_helpers(5);
-    its_trace(&mut talk).items[0] = TraceItem::Helper(step(10, "Read shop.example", false));
+    its_trace(&mut talk).items[0] = helper(step(10, "Read shop.example", false));
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
     draw(cx);
     assert_eq!(listed(cx), Some(6. * TRACE_LINE));
@@ -1826,10 +1882,9 @@ fn a_helpers_line_under_way_shimmers_unless_motion_is_reduced(cx: &mut TestAppCo
 
     // Three have finished and the fourth waits for the user to sign in.
     for at in 0..3 {
-        its_trace(&mut talk).items[at] =
-            TraceItem::Helper(step(10 + at, "Read shop.example", false));
+        its_trace(&mut talk).items[at] = helper(step(10 + at, "Read shop.example", false));
     }
-    its_trace(&mut talk).items[3] = TraceItem::Helper(step(13, "Handed you shop.example", false));
+    its_trace(&mut talk).items[3] = helper(step(13, "Handed you shop.example", false));
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
     assert!(!moving(cx), "nothing is under way");
     cx.update(|_, cx| cx.set_reduce_motion(true));
