@@ -231,7 +231,6 @@ pub fn column(
                 .pl(px(PLATE_INSET + SECTION_X))
                 .text_size(px(SMALL))
                 .line_height(px(LABEL_LINE))
-                .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(quiet)
                 .child(Section::LABELS[index]);
             div().child(label).children(plates)
