@@ -959,7 +959,7 @@ pub struct Agents {
     /// The site notes each task has had (#4122), and Settings › Agents' Site notes turned off.
     noted: notes::Given,
     notes_off: bool,
-    /// Settings › Agents' Sign in for agents (#4098), and the sign-ins the core is doing, by their
+    /// Settings › Agents' Sign tasks in with your saved logins (#4098), and the sign-ins the core is doing, by their
     /// request.
     sign_in_on: bool,
     signing: HashMap<u64, signing::Signing>,

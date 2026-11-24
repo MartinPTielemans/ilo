@@ -14,22 +14,24 @@ use super::task::ilo::{Account, IloKind, IloLine, SignedInWith};
 use super::tier::{self, Why};
 use super::{Act, Agents, Failure, Held, Refused, ToolResult, act_of, held, page, site, tools};
 
-/// Whether Sign in for agents is on until the user changes it: in a dev build, not yet in the
-/// owner's daily one, which waits on their word.
+/// Whether signing tasks in with saved logins is on until the user changes it: in a dev build,
+/// not yet in the owner's daily one, which waits on their word.
 pub(super) const STARTS_ON: bool = !cfg!(feature = "prod");
 
 /// Settings › Agents' switch, and the words beside it.
-pub const HEADING: &str = "Sign in for agents";
-pub const SWITCH_LINE: &str = "A page that steers an agent can get it signed in to any site you \
-    have a login saved for. It is filled only on that site, and the agent never sees it.";
-pub const SWITCH_OFF_LINE: &str = "Off: ilo fills no saved login for an agent.";
+pub const HEADING: &str = "Sign tasks in with your saved logins";
+pub const SWITCH_LINE: &str = "At Work on pages and Full access, ilo fills in your saved login \
+    and sends the form when a task asks to sign in on that login's site. Your assistant never \
+    sees the login. A page that misleads a task can get the task signed in to any site you have \
+    a login saved for.";
+pub const SWITCH_OFF_LINE: &str = "Off: a task that reaches a sign-in hands that step to you.";
 
 /// What the agent hears while Settings' switch is off.
-const OFF: &str = "Signing in for agents is off in Settings › Agents, which only the user changes.";
+const OFF: &str =
+    "Signing tasks in with saved logins is off in Settings › Agents, which only the user changes.";
 
-/// What the user's card says they're to do, when a sign-in is theirs.
-const YOURS: &str =
-    "Sign in on this page: ilo couldn't do it for the agent. Then hand the tab back.";
+/// What the user's card says they're to do, when a sign-in is theirs: the handoff's own words.
+const YOURS: &str = "Sign in on the page, then hand the tab back.";
 
 /// A sign-in the core is doing, for the call that waits on it.
 pub(super) struct Signing {
@@ -45,12 +47,13 @@ pub(super) struct Signing {
 const FILLED: usize = usize::MAX / 2;
 
 impl Agents {
-    /// Whether Settings › Agents' Sign in for agents is on.
+    /// Whether Settings › Agents' Sign tasks in with your saved logins is on.
     pub fn sign_in_on(&self) -> bool {
         self.sign_in_on
     }
 
-    /// Settings › Agents' Sign in for agents. Off, no agent's sign_in reaches the core.
+    /// Settings › Agents' Sign tasks in with your saved logins. Off, no agent's sign_in reaches
+    /// the core.
     pub fn set_sign_in_on(&mut self, on: bool, cx: &mut Context<Self>) {
         if on == self.sign_in_on {
             return;

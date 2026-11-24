@@ -27,7 +27,10 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         IloKind::Stopped { at, .. } => (format!("stopped {agent} at"), Some(at.to_string())),
         IloKind::Yours { .. } => ("this step is yours".into(), None),
         IloKind::TabBack { .. } => (format!("{agent} needs this tab back"), None),
-        IloKind::SignedIn { site, .. } => ("filled your login at".into(), Some(site.to_string())),
+        IloKind::SignedIn { site, .. } => (
+            "filled and sent the sign-in form on".into(),
+            Some(site.to_string()),
+        ),
         IloKind::TierChanged { to, .. } => (format!("· You set this task to {}", to.label()), None),
         IloKind::Resumed { tier } => (format!("resumed this task at {}", tier.label()), None),
         // Where the assistant is the subject, a middle dot sets ilo's mark off from the sentence.
@@ -55,8 +58,9 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
     match kind {
         IloKind::Stopped { why, tier, .. } => Some(tier::why_line(*why, *tier, at)),
         IloKind::SignedIn { with, .. } => Some(match with {
-            SignedInWith::Saved(account) => format!("With your saved login, {}.", account.drawn()),
-            SignedInWith::Extension(name) => format!("With {name}."),
+            // Labels, without a full stop.
+            SignedInWith::Saved(account) => format!("With your saved login, {}", account.drawn()),
+            SignedInWith::Extension(name) => format!("With {name}"),
         }),
         IloKind::Yours { .. } | IloKind::TabBack { .. } | IloKind::TierChanged { .. } => None,
         IloKind::KeptHere => Some(KEPT_IN.into()),

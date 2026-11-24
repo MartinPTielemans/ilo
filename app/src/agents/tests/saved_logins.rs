@@ -308,6 +308,47 @@ fn a_withheld_page_and_the_account_reach_nothing_an_agent_reads_or_the_app_keeps
     assert!(!format!("{kept:?}").contains(ACCOUNT), "{kept:?}");
 }
 
+/// A fill whose form wasn't sent: the core answers without telling the app it signed in, and
+/// neither the conversation nor the activity log says ilo filled and sent the form.
+#[gpui::test]
+fn a_fill_that_was_not_sent_adds_no_ilo_line_and_no_entry(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    hello(&agents, cx);
+    let answer = sign_in(&agents, 20, cx);
+    let words = "ilo filled the login saved for this site, but the form didn't go.";
+    agents.update(cx, |agents, cx| {
+        agents.sign_in_done(asked(&browser), false, false, words.into(), None, cx)
+    });
+    let answer = answer.recv().unwrap();
+    assert!(answer.error);
+    assert_eq!(answer.text, words);
+
+    let actions: Vec<String> = log(&agents, "claude-code", cx)
+        .into_iter()
+        .map(|(action, ..)| action)
+        .collect();
+    assert!(actions.contains(&"sign_in".to_string()), "{actions:?}");
+    assert!(
+        !actions.contains(&"filled_login".to_string()),
+        "{actions:?}"
+    );
+    let talk = agents.read_with(cx, |agents, cx| {
+        let cards = agents.shown_cards(cx);
+        (cards.first()).and_then(|card| agents.conversation(&card.agent, cx))
+    });
+    let talk = talk.expect("its conversation");
+    let filled = (talk.lines.iter()).any(|line| {
+        matches!(
+            line,
+            Line::Ilo(IloLine {
+                kind: IloKind::SignedIn { .. },
+                ..
+            })
+        )
+    });
+    assert!(!filled, "{:?}", talk.lines);
+}
+
 /// A read whose page's one look found it showing what a password field held (the core's freeze)
 /// comes back with no text and the tab withheld: the agent hears the core's refusal, as it does on
 /// every later call, and a tab without its page still says that instead.

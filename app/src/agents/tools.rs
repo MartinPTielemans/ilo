@@ -1086,8 +1086,8 @@ pub fn describe(action: &str) -> &'static str {
         "stopped" => "You stopped it",
         "stopped by the user" => "You stopped it, which closed its connection",
         "hand_off" => "Handed you a tab",
-        "sign_in" => "Asked ilo to sign it in",
-        "filled_login" => "ilo filled your saved login",
+        "sign_in" => "Asked ilo to sign in",
+        "filled_login" => "ilo filled and sent the sign-in form",
         "upload" => "Added a file to a page",
         "file_dialog file_input" | "file_dialog file_system_access" => {
             "Page tried to open a file dialog"
