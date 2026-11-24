@@ -1699,7 +1699,6 @@ impl Shell {
                 plate,
                 group.fill.at(now),
                 f32::from(u8::from(hovered)),
-                false,
             ),
             (false, true) => plate.bg(self.palette.hovered_plate()),
             // The bar's plate as it lands, which goes as the header comes.
@@ -1965,7 +1964,7 @@ impl Shell {
             .pr(px(PAGE_END))
             .rounded(px(PAGE_RADIUS));
         let row = match shown {
-            true => selected_plate(&self.palette, row, 1., 0., false),
+            true => selected_plate(&self.palette, row, 1., 0.),
             false => row,
         };
         let hover = self.palette.hovered_plate();
