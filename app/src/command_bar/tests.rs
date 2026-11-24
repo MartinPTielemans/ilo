@@ -1296,7 +1296,7 @@ fn a_site_search_lists_only_the_search_for_whats_typed(cx: &mut TestAppContext) 
         .unwrap();
     assert_eq!(placeholder, "Search…");
     bar.keys("escape");
-    assert_eq!(label(&mut bar).as_deref(), Some("Search or Enter URL"));
+    assert_eq!(label(&mut bar).as_deref(), Some("Search or enter address"));
 }
 
 /// Leaving a site search puts back what was typed before Tab, as Arc's ⌫ and ⇧Tab do, not the
@@ -3210,7 +3210,7 @@ fn a_screen_reader_hears_the_selected_row_as_the_keys_move_it(cx: &mut TestAppCo
     };
 
     let field = &nodes(Role::TextInput)[0];
-    assert_eq!(field.1.label(), Some("Search or Enter URL"));
+    assert_eq!(field.1.label(), Some("Search or enter address"));
     assert_eq!(field.1.value(), Some("do"));
     assert_eq!(tree.focus, field.0);
     let list = &nodes(Role::ListBox)[0];
