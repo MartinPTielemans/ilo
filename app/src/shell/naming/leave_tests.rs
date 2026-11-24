@@ -505,3 +505,22 @@ fn a_press_away_that_closes_the_fields_menu_ends_it(cx: &mut TestAppContext) {
     );
     assert_eq!(host.take_edits(), ["rename tab 3 Home"]);
 }
+
+/// A field the Library's search took the keyboard from ends, keeping its name, and leaves the
+/// keyboard in the search: closing never takes it back from where it went (#4108).
+#[gpui::test]
+fn the_element_that_took_the_keyboard_keeps_it_as_the_field_ends(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx);
+    rename(&shell, cx, &host, 3);
+    cx.simulate_input("Work");
+    shell.update(cx, |shell, cx| {
+        shell.run(crate::shell::commands::Command::ViewLibrary, "ui", cx)
+    });
+    cx.run_until_parked();
+    assert!(naming(&shell, cx).is_none(), "the field stayed open");
+    assert_eq!(host.take_edits(), ["rename tab 3 Work"]);
+    assert!(
+        cx.update(|window, cx| shell.read(cx).library_search_keys(window, cx)),
+        "the field took the keyboard back from the Library's search"
+    );
+}

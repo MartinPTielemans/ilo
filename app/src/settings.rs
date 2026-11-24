@@ -19,6 +19,7 @@ use browser::default_browser::{self, DefaultBrowser, Os};
 use browser::dialog;
 use browser::import::ImportView;
 use browser::link_rules::LinkRulesView;
+use browser::list_keys::{self, Named};
 use browser::little_launch;
 use browser::log;
 use browser::notes;
@@ -2702,22 +2703,26 @@ impl Settings {
     fn my_filters(&self, cx: &mut Context<Self>) -> gpui::Div {
         let look = &self.look;
         let locked = unsafe { bc::bc_ad_block_filters_locked() };
-        let rows = ad_block_filters()
-            .into_iter()
-            .enumerate()
-            .map(|(index, filter)| {
-                let remove = (!locked).then(|| {
-                    let remove =
-                        self.button(("ad-block-filter-remove", index as u64), "Remove")
-                            .relative()
-                            .child(self.drawn(format!("remove filter {index}")))
-                            .on_click(cx.listener(move |settings, _, _, cx| {
-                                settings.remove_filter(index, cx)
-                            }));
-                    remove.into_any_element()
-                });
-                line_row(look, filter, None, remove.into_iter().collect())
+        let filters = ad_block_filters();
+        let count = filters.len();
+        let rows = filters.into_iter().enumerate().map(|(index, filter)| {
+            let remove = (!locked).then(|| {
+                let remove = self
+                    .button(("ad-block-filter-remove", index as u64), "Remove")
+                    .relative()
+                    .child(self.drawn(format!("remove filter {index}")))
+                    .on_click(cx.listener(
+                        move |settings, click: &gpui::ClickEvent, window, cx| {
+                            let lines: Vec<usize> = (0..count).collect();
+                            let keys = click.is_keyboard();
+                            list_keys::removing(&index, &lines, Named::ByLine, keys, window, cx);
+                            settings.remove_filter(index, cx)
+                        },
+                    ));
+                remove.into_any_element()
             });
+            line_row(look, filter, None, remove.into_iter().collect())
+        });
         let mut rows: Vec<gpui::Div> = rows.collect();
         if locked {
             rows.push(line_row(look, "Set by your organization", None, Vec::new()));
@@ -2787,6 +2792,7 @@ impl Settings {
     /// which a page in it asks again (#671).
     fn always_translated(&self, languages: &[SharedString], cx: &mut Context<Self>) -> gpui::Div {
         let look = &self.look;
+        let count = languages.len();
         let rows = languages.iter().enumerate().map(|(index, language)| {
             let at = self.drawn(format!("always translated {language}"));
             let gone = language.clone();
@@ -2794,7 +2800,10 @@ impl Settings {
                 .button(("always-translated-remove", index as u64), "Remove")
                 .relative()
                 .child(at)
-                .on_click(cx.listener(move |_, _, _, cx| {
+                .on_click(cx.listener(move |_, click: &gpui::ClickEvent, window, cx| {
+                    let lines: Vec<usize> = (0..count).collect();
+                    let keys = click.is_keyboard();
+                    list_keys::removing(&index, &lines, Named::ByLine, keys, window, cx);
                     let mut languages = (cx.try_global::<shell::AlwaysTranslated>())
                         .map(|always| always.0.clone())
                         .unwrap_or_default();
@@ -3386,13 +3395,21 @@ impl Settings {
         let login_row = |index: usize, login: &Login, cx: &mut Context<Self>| {
             let (site, username) = passwords::lines(login);
             let login = login.clone();
+            // Named by its login's key, so another's Remove never takes its name, and the keyboard
+            // with it, as a row goes (list_keys::removing).
             let remove = self
-                .button(("remove-login", index), "Remove")
+                .button(
+                    SharedString::from(format!("remove-login {}", login.key)),
+                    "Remove",
+                )
                 .relative()
                 .child(self.drawn(format!("remove login {index}")))
-                .on_click(cx.listener(move |settings, _, window, cx| {
-                    settings.remove(profile, login.clone(), window, cx)
-                }));
+                .on_click(
+                    cx.listener(move |settings, click: &gpui::ClickEvent, window, cx| {
+                        let keys = click.is_keyboard();
+                        settings.remove(profile, login.clone(), keys, window, cx)
+                    }),
+                );
             feature_row(
                 &look,
                 Section::Passwords.glyph(),
@@ -3590,13 +3607,31 @@ impl Settings {
 
     /// Removes a saved login once the user confirms, in an alert, or on Linux in Settings' own
     /// dialog, as a profile's Delete asks, as nothing brings it back. A site set to Never comes off
-    /// it at once: the offer coming again is its way back.
-    fn remove(&mut self, profile: u64, login: Login, window: &mut Window, cx: &mut Context<Self>) {
+    /// it at once: the offer coming again is its way back. Its Remove pressed from the keys
+    /// (`from_keys`) hands the keyboard to the Remove of the row that takes its place, among the
+    /// saved or the Never rows it's listed in.
+    fn remove(
+        &mut self,
+        profile: u64,
+        login: Login,
+        from_keys: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let listed: Vec<Login> = (self.logins.get(&profile).into_iter().flatten())
+            .filter(|each| each.never == login.never)
+            .cloned()
+            .collect();
         if login.never {
+            list_keys::removing(&login, &listed, Named::ByRow, from_keys, window, cx);
             crate::remove_login(profile, &login);
             return;
         }
         let (message, detail) = passwords::question(&login);
+        // Not yet past Linux's question, Settings' own dialog, whose answer has no window to
+        // hand the keyboard on in.
+        #[cfg(target_os = "linux")]
+        let _ = (listed, from_keys);
         #[cfg(target_os = "linux")]
         dialog::ask_in(
             &self.dialog,
@@ -3609,15 +3644,16 @@ impl Settings {
             cx,
         );
         #[cfg(not(target_os = "linux"))]
-        {
-            let _ = window;
-            cx.spawn(async move |_, _| {
-                if crate::ask(&message, &detail, &["Remove", "Cancel"], true) == 0 {
-                    crate::remove_login(profile, &login);
-                }
-            })
-            .detach();
-        }
+        cx.spawn_in(window, async move |settings, cx| {
+            if crate::ask(&message, &detail, &["Remove", "Cancel"], true) == 0 {
+                (settings.update_in(cx, |_, window, cx| {
+                    list_keys::removing(&login, &listed, Named::ByRow, from_keys, window, cx)
+                }))
+                .ok();
+                crate::remove_login(profile, &login);
+            }
+        })
+        .detach();
     }
 
     /// Removes a saved address or card once the user confirms, as a login, as nothing brings it
