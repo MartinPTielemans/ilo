@@ -94,11 +94,9 @@ impl Intent {
         due
     }
 
-    /// The pointer left the thing before it opened: nothing opens.
+    /// The pointer left the thing before its surface showed it: nothing opens, and no grace starts.
     pub fn leave(&mut self) {
-        if matches!(self.phase, Phase::Waiting(_)) {
-            self.phase = Phase::Idle;
-        }
+        self.phase = Phase::Idle;
     }
 
     /// The surface went at `now`, or the thing it waited on did.
