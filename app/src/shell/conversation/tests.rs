@@ -39,7 +39,6 @@ fn card() -> Card {
         word: Word::for_dot(Dot::Working),
         pages: Vec::new(),
         tier: Default::default(),
-        answers: Vec::new(),
         question: None,
         open: Vec::new(),
         page_steps: Vec::new(),
@@ -1026,7 +1025,7 @@ fn a_site_is_never_in_quotes_and_a_pages_words_are(_: &mut TestAppContext) {
     };
     let said = |kind: &IloKind| {
         let (own, name) = super::words::head(kind, "Claude");
-        super::words::with_name(kind, &own, &name.unwrap())
+        super::words::with_name(kind, &own, &name.unwrap()).0
     };
     assert_eq!(
         said(&stopped(Why::Fenced)),
@@ -1053,6 +1052,15 @@ fn a_site_is_never_in_quotes_and_a_pages_words_are(_: &mut TestAppContext) {
         said(&order),
         "stopped Claude at \u{201c}Place order\u{201d}"
     );
+    // O1: a step on one of several pages names its site, in the middle of ilo's words.
+    let yours = IloKind::Yours {
+        tab: 30,
+        site: Some("boxoffice.example".into()),
+    };
+    assert_eq!(said(&yours), "handed this step on boxoffice.example to you");
+    let (own, name) = super::words::head(&yours, "Claude");
+    let (line, at) = super::words::with_name(&yours, &own, &name.unwrap());
+    assert_eq!(&line[at], "boxoffice.example");
 }
 
 /// An ilo line's head is a sentence: where ilo is its subject the mark is its first word and a verb
@@ -1079,7 +1087,11 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             tier: Tier::Work,
             count: 1,
         },
-        IloKind::Yours { tab: 1 },
+        IloKind::Yours { tab: 1, site: None },
+        IloKind::Yours {
+            tab: 1,
+            site: Some("boxoffice.example".into()),
+        },
         IloKind::TabBack { tab: 1 },
         IloKind::SignedIn {
             tab: 1,
@@ -1228,6 +1240,143 @@ fn no_key_presses_an_ilo_lines_button(cx: &mut TestAppContext) {
             .iter()
             .any(|line| line.contains("SetTier") || line.contains("TakeOver")),
         "a key pressed an ilo line's button"
+    );
+}
+
+/// The Focus command brings the keyboard to the newest line's first button, where a key typed at
+/// once presses nothing; after PROTECT Tab moves along the line and ↩ presses the ringed button,
+/// and Escape or the command again gives the keyboard back, pressing nothing (#3955).
+#[gpui::test]
+fn the_focus_command_alone_brings_the_keys_to_an_ilo_lines_buttons(cx: &mut TestAppContext) {
+    let (shell, host, view, cx) = stopped_at_order(cx);
+    let past_protect = |view: &Entity<super::TalkView>, cx: &mut VisualTestContext| {
+        view.update(cx, |view, _| {
+            let keys = view.ilo_keys.as_mut().expect("the keys left the line");
+            keys.last -= crate::agents::tier::PROTECT * 2;
+            // The buttons have stood, as a click needs too.
+            for (_, since) in view.ilo_drawn.borrow_mut().values_mut() {
+                *since -= std::time::Duration::from_secs(5);
+            }
+        });
+    };
+    let pressed = |host: &Rc<Recorder>| -> Vec<String> {
+        (host.take().into_iter())
+            .filter(|line| line.contains("SetTier") || line.contains("TakeOver"))
+            .collect()
+    };
+    host.take();
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::FocusAgentQuestion, "ui", cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        pressed(&host),
+        Vec::<String>::new(),
+        "a key typed as the keys came pressed"
+    );
+    cx.simulate_keystrokes("tab");
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(1));
+    past_protect(&view, cx);
+    cx.simulate_keystrokes("enter");
+    assert_eq!(pressed(&host), ["task task-1 SetTier(Full)"]);
+
+    past_protect(&view, cx);
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(
+        view.read_with(cx, |view, _| view.ilo_keys.is_none()),
+        "Escape kept the keys"
+    );
+    // The command again, after it brought them, gives them back too.
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::FocusAgentQuestion, "ui", cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::FocusAgentQuestion, "ui", cx)
+    });
+    cx.run_until_parked();
+    assert!(
+        view.read_with(cx, |view, _| view.ilo_keys.is_none()),
+        "the key kept the keys"
+    );
+    assert_eq!(
+        pressed(&host),
+        Vec::<String>::new(),
+        "Escape or the key pressed a button"
+    );
+}
+
+/// A line that comes after the ring was drawn on another line's button is never pressed by the
+/// key meant for the ringed one: the keys end, and nothing is pressed.
+#[gpui::test]
+fn a_line_arriving_after_the_ring_takes_no_press(cx: &mut TestAppContext) {
+    use super::ilo_keys::IloPress;
+    let (shell, host, view, cx) = stopped_at_order(cx);
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::FocusAgentQuestion, "ui", cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
+    let mut talk = view.read_with(cx, |view, _| view.shown.clone().unwrap());
+    talk.lines.push(Line::Ilo(IloLine {
+        key: 8,
+        kind: IloKind::Stopped {
+            tab: 30,
+            at: "Pay".into(),
+            why: Why::Message,
+            tier: Tier::Work,
+            count: 2,
+        },
+        settled: false,
+    }));
+    view.update(cx, |view, _| {
+        let keys = view.ilo_keys.as_mut().expect("the keys left the line");
+        keys.last -= crate::agents::tier::PROTECT * 2;
+        for (_, since) in view.ilo_drawn.borrow_mut().values_mut() {
+            *since -= std::time::Duration::from_secs(5);
+        }
+    });
+    host.take();
+    // The line comes and the key with it, before a frame draws the line, the ring still on line
+    // 7's button.
+    cx.update(|window, cx| {
+        shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+        view.update(cx, |view, cx| view.ilo_press(&IloPress, window, cx));
+    });
+    cx.run_until_parked();
+    let pressed: Vec<String> = (host.take().into_iter())
+        .filter(|line| line.contains("SetTier") || line.contains("TakeOver"))
+        .collect();
+    assert_eq!(pressed, Vec::<String>::new(), "the new line was pressed");
+    assert!(
+        view.read_with(cx, |view, _| view.ilo_keys.is_none()),
+        "the keys stayed on a line that changed under them"
+    );
+}
+
+/// The reply field's caret stands before its placeholder, not on its first letter; what's typed
+/// starts at the field's start, where the caret was.
+#[gpui::test]
+fn the_reply_fields_caret_stands_before_its_placeholder(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    let reply = shell.read_with(cx, |shell, cx| {
+        shell.talk.as_ref().unwrap().view.read(cx).reply.clone()
+    });
+    let inset = reply.read_with(cx, |reply, _| reply.placeholder_inset());
+    assert!(
+        inset > crate::text_input::CARET,
+        "the placeholder starts {inset:?} in, under the caret"
+    );
+    cx.update(|window, cx| {
+        reply.update(cx, |reply, cx| reply.set_text("ok".into(), 2, window, cx))
+    });
+    assert_eq!(
+        reply.read_with(cx, |reply, _| reply.placeholder_inset()),
+        px(0.)
     );
 }
 

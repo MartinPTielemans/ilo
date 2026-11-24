@@ -594,7 +594,7 @@ fn a_card_counts_its_tasks_helpers_without_folding_the_conversation(cx: &mut Tes
 
     let ask = json!({ "question": "Row 12 or row 14?", "answers": ["Row 12", "Row 14"] });
     let _asked = call(&run.agents, &agent, "ask", ask, cx);
-    (run.agents).update(cx, |agents, cx| agents.answer_task(&agent, "Row 12", cx));
+    (run.agents).update(cx, |agents, cx| agents.reply(&agent, "Row 12", cx));
     let _a = call(&run.agents, &agent, "screenshot", on(PAGES[0].0), cx);
     let trace = live(&run, &agent, cx);
     assert_eq!(
