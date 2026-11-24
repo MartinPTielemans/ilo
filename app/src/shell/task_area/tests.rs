@@ -841,6 +841,104 @@ fn leaving_the_page_goes_on_with_the_close(cx: &mut TestAppContext) {
     assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
 }
 
+/// The same close asked again while its question is up, ⇧⌘W twice or ⌘Q twice, is no other
+/// command: the question stays, the view stays kept, and Cancel brings it back as it stood, a
+/// page watched with it (#4202).
+#[gpui::test]
+fn the_same_close_again_keeps_the_view(cx: &mut TestAppContext) {
+    for (quit, watched) in [(false, false), (true, false), (false, true), (true, true)] {
+        let (shell, host, cx) = shell_with_task(cx);
+        if watched {
+            watching(&shell, &host, cx);
+        } else {
+            still(cx);
+            let view = conversation(cx);
+            shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+            draw(&shell, cx);
+        }
+        close(&shell, &host, cx, quit);
+        if watched {
+            core_shows_users(&shell, cx);
+        }
+        host.take();
+        page_asks_to_stay(&shell, cx, 7);
+        assert_eq!(dialogs(&host), ["page dialog 10 7"]);
+
+        close(&shell, &host, cx, quit);
+        draw(&shell, cx);
+        assert!(
+            dialogs(&host).iter().all(|call| call != "page dialog none"),
+            "the question went at the second press (quit: {quit})"
+        );
+        assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
+
+        answer(&shell, cx, 7, false);
+        let stood = Some((3, watched.then_some(30)));
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.task_shown()),
+            stood,
+            "the second press dropped the view (quit: {quit}, watched: {watched})"
+        );
+    }
+}
+
+/// A command that isn't the user's own act in the window, as another launch's ask for a new
+/// window is, is no word of theirs on the close: the view stays kept for its Cancel.
+#[gpui::test]
+fn a_command_not_the_users_keeps_the_view(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    let view = conversation(cx);
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    draw(&shell, cx);
+    close(&shell, &host, cx, false);
+    page_asks_to_stay(&shell, cx, 7);
+    shell.update(cx, |shell, cx| shell.run(Command::NewWindow, "launch", cx));
+    draw(&shell, cx);
+    answer(&shell, cx, 7, false);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, None))
+    );
+}
+
+/// A page of the task's the user watched after asking the close, before a page of theirs asked
+/// to stay, goes back for the question as one watched at the close does: the core shows the
+/// user's page to ask on, and Cancel brings the page watched back.
+#[gpui::test]
+fn a_page_watched_since_the_close_goes_back_for_the_question(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    let view = conversation(cx);
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    draw(&shell, cx);
+    close(&shell, &host, cx, false);
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    assert!(shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx)));
+    core_shows_task(&shell, cx, 30);
+    draw(&shell, cx);
+    host.take();
+    host.shown.borrow_mut().clear();
+
+    page_asks_to_stay(&shell, cx, 7);
+    assert_eq!(
+        *host.shown.borrow(),
+        [1],
+        "the question's page isn't the one the core shows"
+    );
+    core_shows_users(&shell, cx);
+    draw(&shell, cx);
+    let asked = dialogs(&host);
+    assert!(asked.contains(&"page dialog 10 7".to_string()), "{asked:?}");
+    assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
+
+    answer(&shell, cx, 7, false);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(30)))
+    );
+}
+
 /// Clear Archive with a task's view shown leaves it standing: with nothing to clear, while it
 /// asks, and once the archive is cleared (#4202).
 #[gpui::test]

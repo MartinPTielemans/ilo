@@ -676,15 +676,41 @@ impl Shell {
     /// The window is about to close, or the browser to quit, which the window's pages may still
     /// refuse (#4202). The conversation stands, and a page of the task's watched goes back to it
     /// first, kept for a refusal to bring back: the core shows the task's Space while one is
-    /// watched, and the session keeps for the window the Space the core shows.
+    /// watched, and the session keeps for the window the Space the core shows. The same close
+    /// asked again keeps what the first kept: with its question up the view is aside already.
     pub(super) fn about_to_close(&mut self, cx: &mut Context<Self>) {
-        self.forget_closing(cx);
-        let Some(area) = &self.task_area else {
+        let kept = self.task_closing.take();
+        if kept.as_ref().is_some_and(|kept| kept.aside.is_some()) {
+            self.task_closing = kept;
             return;
+        }
+        let kept = kept.and_then(|kept| kept.watched);
+        if self.task_area.is_none() {
+            return self.let_go_of(kept);
+        }
+        let watched = match self.back_to_close(cx) {
+            // One watched since the first is the view as it stands.
+            Some(page) => {
+                self.let_go_of(kept);
+                Some(page)
+            }
+            None => kept,
         };
-        let page = area.page.is_some();
+        self.task_closing = Some(Closing {
+            watched,
+            aside: None,
+        });
+        // A page of theirs that asked already, behind the conversation, asks now.
+        self.step_aside_to_ask(cx);
+        cx.notify();
+    }
+
+    /// The task's page watched goes back to its conversation at once for a close, and is
+    /// returned to keep unless it was on its way back already. The UI has the keyboard.
+    fn back_to_close(&mut self, cx: &mut Context<Self>) -> Option<Watched> {
+        let page = self.task_area.as_ref()?.page.as_ref()?;
         // One on its way back into its thumbnail is no longer watched.
-        if (area.page.as_ref()).is_some_and(|page| matches!(page.zoom, Zoom::In(_))) {
+        if matches!(page.zoom, Zoom::In(_)) {
             self.leave_task_page_now(cx);
         }
         let watched = (self.task_area.as_mut()).and_then(|area| area.page.take());
@@ -694,16 +720,8 @@ impl Shell {
             self.show_users_page(cx);
             self.retake_talk_pictures(cx);
         }
-        if page {
-            self.take_keyboard(cx);
-        }
-        self.task_closing = Some(Closing {
-            watched,
-            aside: None,
-        });
-        // A page of theirs that asked already, behind the conversation, asks now.
-        self.step_aside_to_ask(cx);
-        cx.notify();
+        self.take_keyboard(cx);
+        watched
     }
 
     /// A page of the user's asks whether to leave it while the window closes with a task's view
@@ -722,6 +740,13 @@ impl Shell {
             .any(|(tab, dialog)| dialog.kind == DialogKind::Leave && !tasks(tab));
         if !asks {
             return;
+        }
+        // A page of the task's the user watched since the close goes back first, as at the
+        // close: the question is asked on the user's page, which the core then shows.
+        if let Some(page) = self.back_to_close(cx) {
+            let kept =
+                (self.task_closing.as_mut()).and_then(|closing| closing.watched.replace(page));
+            self.let_go_of(kept);
         }
         let area = self.task_area.take();
         if let Some(area) = &area {

@@ -1471,8 +1471,12 @@ impl Shell {
     pub fn run(&mut self, command: Command, from: &str, cx: &mut Context<Self>) {
         // check.sh waits for these lines.
         log!("browser: command {} via {from}", command.name());
-        // And a command after a close a page hasn't answered is no answer to it.
-        self.forget_closing(cx);
+        // And a command of the user's after a close a page hasn't answered is no answer to it,
+        // so the view kept for its refusal goes. The same close again keeps it (#4202).
+        let closes = matches!(command, Command::CloseWindow | Command::Quit);
+        if users_own(from) && !closes {
+            self.forget_closing(cx);
+        }
         // A command after a ⌘L still waiting for the tab shown next is the one the user wants.
         self.edit_url_waits = None;
         // And so is any but another ⌘W after one waiting to close the tab shown next (#3570).
@@ -2539,6 +2543,14 @@ impl Shell {
 pub(super) fn space_tabs(space: &Space) -> impl Iterator<Item = u64> + '_ {
     let pinned = space.pinned.iter().filter(|&&row| !space.is_folder(row));
     pinned.chain(&space.today).copied()
+}
+
+/// Whether a command from `from` is the user's own act in this window. Every key, menu, click and
+/// gesture is, and so is Chrome's Downloads after the user stopped a quit for them. No agent's path
+/// runs a command. What isn't: another launch asking the window in front for a new one, the bar ilo
+/// opens by itself as the onboarding ends and in a new window, and the preview's start.
+fn users_own(from: &str) -> bool {
+    !matches!(from, "launch" | "onboarding" | "new window" | "preview")
 }
 
 /// Whether a private window runs `command`. It has one Space, unsaved, so nothing that keeps a tab
