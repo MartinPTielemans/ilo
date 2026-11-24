@@ -361,6 +361,8 @@ impl Shell {
         log!("browser: task area {space} opens");
         log!("browser: task area {space} open");
         self.take_keyboard(cx);
+        // Its group at the sidebar's foot opens to its pages, and the one shown before closes.
+        self.reshape_foot(cx);
         cx.notify();
     }
 
@@ -618,6 +620,8 @@ impl Shell {
         let left = self.talk_in(area.space);
         self.talk_closed(cx);
         self.lay_out_page(cx);
+        // Its group at the sidebar's foot closes to its header.
+        self.reshape_foot(cx);
         if let Some(agent) = left {
             self.talk_left(agent, cx);
         }
@@ -793,7 +797,10 @@ impl Shell {
             | Command::Quit
             | Command::ClearArchive
             // The agent's card shows over the area as over the user's Space.
-            | Command::FocusAgentQuestion => return false,
+            | Command::FocusAgentQuestion
+            // The ring goes to the task shown, at the foot: its pages' rows are there only while
+            // its view is.
+            | Command::FocusSidebar => return false,
             // Close Window too, so the session keeps the user's Space for the window.
             _ => {
                 self.leave_task_area(cx);
