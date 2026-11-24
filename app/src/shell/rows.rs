@@ -566,7 +566,7 @@ impl Shell {
                         .mr(px(LIVE_COUNT_END - TITLE_END_INSET))
                         .text_size(px(text::SMALL))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(self.palette.text(SECONDARY))
+                        .text_color(self.palette.gray(SECONDARY))
                         .child(waiting.to_string()),
                 ),
             None => label,
@@ -1859,7 +1859,7 @@ impl Shell {
                     .min_w_0()
                     .truncate()
                     .font_weight(FontWeight::NORMAL)
-                    .text_color(self.palette.text(SECONDARY))
+                    .text_color(self.palette.gray(SECONDARY))
                     .child(profile)
             }))
     }
@@ -2201,7 +2201,7 @@ pub(super) fn with_host(palette: &Palette, title: gpui::Div, host: SharedString)
         .truncate()
         .text_size(px(text::SMALL))
         .line_height(px(HOST_LINE))
-        .text_color(palette.text(SECONDARY))
+        .text_color(palette.gray(SECONDARY))
         .child(host);
     div()
         .flex_1()

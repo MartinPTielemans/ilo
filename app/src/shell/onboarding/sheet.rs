@@ -3,8 +3,9 @@
 
 use gpui::{AnyElement, Context, MouseButton, SharedString, Stateful, div, prelude::*, px};
 
-use super::{Colors, Drawn, Shell, Step, loops, with_alpha, wordmark};
+use super::{Colors, Drawn, Shell, Step, loops, skip_frame, with_alpha, wordmark};
 use crate::elevation::Level;
+use crate::import::Corner;
 use crate::settings_rows::{named_button, ring};
 use crate::theme_picker::SWATCHES;
 use crate::tokens::palette::INK;
@@ -15,7 +16,25 @@ pub(super) use crate::tokens::shell::onboarding::sheet::{
 
 /// The steps the sheet shows, over the window, rather than the whole window's ground.
 pub(super) fn on_sheet(step: Step) -> bool {
-    matches!(step, Step::Intro | Step::Color)
+    matches!(
+        step,
+        Step::Intro | Step::Import | Step::Favorites | Step::DefaultBrowser | Step::Color
+    )
+}
+
+/// A step's choice that may be taller than the room under its words, such as the import's
+/// view in its states or the favorites' tiles: as wide as the left half, scrolling in it above
+/// the foot.
+pub(super) fn choice(view: impl IntoElement) -> Stateful<gpui::Div> {
+    div()
+        .id("onboarding-choice")
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .overflow_y_scroll()
+        .text_size(px(crate::tokens::text::BODY))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(view)
 }
 
 /// The sheet, centred over the window: `left` its step, `art` the slot's loop. `dialog` makes the
@@ -171,7 +190,9 @@ impl Shell {
     }
 
     /// The sheet's foot: Back at its start but at the welcome, then Skip, Skip Setup at the
-    /// welcome, which ends the flow, and the step's own button at its end.
+    /// welcome, which ends the flow, and the step's own button at its end. At the import they
+    /// follow the state its view shows, as Esc does: Back goes back in the view where it has
+    /// somewhere to go back to, and Skip goes while Cancel is the view's own way out.
     pub(super) fn sheet_foot(
         &self,
         step: Step,
@@ -183,37 +204,52 @@ impl Shell {
             .filter(|onboarding| onboarding.step == step)
             .map(|onboarding| (onboarding.back_stop.clone(), onboarding.skip_stop.clone()));
         let welcome = step == Step::Intro;
+        let corner = match step {
+            Step::Import => (self.import_guide(cx)).map_or(Corner::Skip, |guide| guide.corner),
+            _ => Corner::Skip,
+        };
         let back = (!welcome).then(|| {
             quiet("onboarding-back", "Back", colors)
                 .when(self.a11y, |control| named_button(control, "Back"))
                 .when_some(stops.clone(), |control, (stop, _)| {
                     control.track_focus(&stop).focus_from_keys_only()
                 })
-                .on_click(cx.listener(|shell, _, _, cx| shell.onboarding_back("back", cx)))
+                .on_click(cx.listener(move |shell, _, _, cx| match corner {
+                    Corner::Back => shell.import_escape("back", cx),
+                    _ => shell.onboarding_back("back", cx),
+                }))
                 .relative()
                 .children(self.place(step, "back"))
                 .into_any_element()
         });
         let label = if welcome { "Skip Setup" } else { "Skip" };
-        let skip = quiet("onboarding-skip", label, colors)
-            .when(self.a11y, |control| named_button(control, label))
-            .when_some(stops, |control, (_, stop)| {
-                control.track_focus(&stop).focus_from_keys_only()
-            })
-            .on_click(cx.listener(move |shell, _, _, cx| match welcome {
-                true => shell.onboarding_skip_setup("skip", cx),
-                false => shell.onboarding_next("skip", cx),
-            }))
-            .relative()
-            .children(self.place(step, "skip"));
+        // check.sh clicks it where it's logged, once the step has come.
+        let frame = (self.onboarding.as_ref())
+            .filter(|onboarding| onboarding.step == step)
+            .map(|onboarding| skip_frame(onboarding.skip.clone(), onboarding.settled));
+        let skip = (corner != Corner::None).then(|| {
+            quiet("onboarding-skip", label, colors)
+                .when(self.a11y, |control| named_button(control, label))
+                .when_some(stops, |control, (_, stop)| {
+                    control.track_focus(&stop).focus_from_keys_only()
+                })
+                .on_click(cx.listener(move |shell, _, _, cx| match welcome {
+                    true => shell.onboarding_skip_setup("skip", cx),
+                    false => shell.onboarding_next("skip", cx),
+                }))
+                .relative()
+                .children(self.place(step, "skip"))
+                .children(frame)
+        });
         div()
             .mt_auto()
+            .pt(px(t::BUTTON_GAP))
             .flex()
             .items_center()
             .gap(px(t::BUTTON_GAP))
             .children(back)
             .child(div().flex_1())
-            .child(skip)
+            .children(skip)
             .children(button)
     }
 
@@ -223,6 +259,11 @@ impl Shell {
         let place = |name| (self.place(step, name)).map(IntoElement::into_any_element);
         match step {
             Step::Intro => loops::welcome(looped, colors, &place).into_any_element(),
+            Step::Import => loops::import(looped, colors, &place).into_any_element(),
+            Step::Favorites => loops::favorites(looped, colors, &place).into_any_element(),
+            Step::DefaultBrowser => {
+                loops::default_browser(looped, colors, &place).into_any_element()
+            }
             Step::Color => {
                 let picked = (self.onboarding.as_ref()).and_then(|onboarding| onboarding.picked);
                 let other = (picked.unwrap_or_default() + SWATCHES.len() / 2) % SWATCHES.len();

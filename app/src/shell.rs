@@ -108,6 +108,7 @@ mod little;
 #[cfg(test)]
 mod little_tests;
 mod live_folders;
+mod live_tiles;
 mod media_player;
 mod menu_bar;
 mod menu_keys;
@@ -457,7 +458,6 @@ use crate::tokens::shell::SPACE_GLYPH;
 // What's in a folder sits this far in from it (Arc).
 use crate::tokens::shell::FOLDER_INDENT;
 const NEW_FOLDER: &str = "New Folder";
-use crate::tokens::shell::DROP;
 use crate::tokens::shell::DROP_LINE;
 use crate::tokens::shell::DROP_LINE_END;
 use crate::tokens::shell::DROP_RING;
@@ -1570,6 +1570,9 @@ pub struct Shell {
     empty_settled: bool,
     /// The first run's welcome takes the empty card until a page shows (set_welcome).
     welcome: bool,
+    /// The command bar an empty Space's card rests on, made as the card comes to show no page and
+    /// dropped as a page shows (#4140).
+    resting: Option<empty::composer::Resting>,
     /// A new profile's first launch, or Help › Welcome to ilo, over the window while it shows.
     onboarding: Option<onboarding::Onboarding>,
     /// The first launch's import, made at its first step and kept for the window's life, so an
@@ -2221,6 +2224,7 @@ impl Shell {
             card_back: None,
             empty_settled: false,
             welcome: false,
+            resting: None,
             onboarding: None,
             importing: None,
             in_hint: false,
@@ -4958,6 +4962,7 @@ impl Render for Shell {
         let bare = self.onboarding_bare();
         let normal = normal && !bare;
         let task_area = task_area.filter(|_| !bare);
+        let empty_card = self.empty_card(window, cx);
         let (under, sidebar, over, edge) = match bare {
             true => (None, None, None, None),
             false => (under, sidebar, over, edge),
@@ -5045,7 +5050,7 @@ impl Render for Shell {
                             .flatten(),
                     )
                     .children(self.picture_element(cx))
-                    .children(self.empty_card(cx))
+                    .children(empty_card)
                     .children(self.crash_cards(self.page_frame(self.viewport).0, cx))
                     .children(self.pane_gaps(cx))
                     .children(self.pane_handles(cx))
@@ -5526,12 +5531,13 @@ impl Shell {
     /// `depth` folders in, with a ring at its start, as Arc's (docs/ux-spec.md › Tab rows).
     fn drop_line(&self, y: f32, depth: usize, room: f32) -> impl IntoElement + use<> {
         let left = PLATE_INSET + depth as f32 * FOLDER_INDENT + DROP_RING_X;
+        let colour = self.palette.drop_line();
         let ring = div()
             .flex_none()
             .size(px(DROP_RING))
             .rounded_full()
             .border(px(DROP_LINE))
-            .border_color(rgba(DROP));
+            .border_color(colour);
         div()
             .absolute()
             .top(px(room + y - DROP_RING / 2.))
@@ -5541,7 +5547,7 @@ impl Shell {
             .flex()
             .items_center()
             .child(ring)
-            .child(div().flex_1().h(px(DROP_LINE)).bg(rgba(DROP)))
+            .child(div().flex_1().h(px(DROP_LINE)).bg(colour))
     }
 
     /// What the reveal's window shows: the sidebar in a panel, as far out as it is.
@@ -5638,7 +5644,7 @@ impl Shell {
                     .bottom(px(REVEAL_INSET))
                     .w(px(self.width()))
                     .rounded(px(REVEAL_RADIUS))
-                    .border(px(0.5))
+                    .border(px(HAIRLINE))
                     .border_color(gpui::black().opacity(REVEAL_BORDER))
                     .shadow(vec![BoxShadow {
                         color: gpui::white().opacity(crate::tokens::shell::REVEAL_RIM),

@@ -323,7 +323,17 @@ impl command_bar::Host for Bar {
         });
         agents_core::update(move |agents, cx| {
             // The card takes the slot as it comes; one that didn't start leaves it empty.
-            if agents.start_task(cli, &asked, page, home, cx).is_none() {
+            if agents
+                .start_task(
+                    cli,
+                    &asked,
+                    page,
+                    home,
+                    browser::agents::tier::Tier::default(),
+                    cx,
+                )
+                .is_none()
+            {
                 update_shells_in(cx, |shell, cx| shell.set_ask_slot(false, cx));
             }
         });

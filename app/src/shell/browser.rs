@@ -4,8 +4,11 @@
 
 use std::{collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
-use gpui::{App, Bounds, Pixels, Point, RenderImage, SharedString, Size, point, px, size};
+use gpui::{
+    App, Bounds, Entity, Pixels, Point, RenderImage, SharedString, Size, Window, point, px, size,
+};
 
+use crate::command_bar::CommandBar;
 use crate::theme::Appearance;
 use crate::tokens::shell::{WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y};
 
@@ -921,6 +924,20 @@ pub trait Browser {
     /// Whether the command bar shows, which stays true through a click outside it until the app
     /// calls `Shell::command_bar_dismissed`, so a click on what opens it can tell it has closed it.
     fn command_bar_open(&self, cx: &App) -> bool;
+    /// A command bar to rest in this window's empty Space, whose page draws its field and rows
+    /// (#4140). It asks nothing of the core until it's typed in.
+    fn command_bar_in_place(&self, window: &mut Window, cx: &mut App) -> Entity<CommandBar>;
+    /// Runs what the user asked in the composer's Ask as a task on the assistant `agent`, from Space
+    /// `home`, at the level `tier` the user picked there (#4140). Only the user's ↩ there calls
+    /// it: no agent has a path to it.
+    fn start_task(
+        &self,
+        agent: &str,
+        asked: &str,
+        home: u64,
+        tier: crate::agents::tier::Tier,
+        cx: &mut App,
+    );
     /// Whether the user types in a field of a window over this one: find, the password offer, the
     /// icon picker, the Boost editor or the folder preview. Find doesn't count once the user has
     /// gone back to the page with it still showing.
@@ -1119,6 +1136,15 @@ pub trait Browser {
     /// Shows `tab` in browser window `window`, its page moving there live, as a click on its row
     /// there does.
     fn show_in_window(&self, _window: u64, _tab: u64, _cx: &mut App) {}
+    /// Shows `tab`'s page live in this window at `at`, with corners of `radius`, over what the
+    /// UI draws there: an agent's page no window shows, which takes nothing from the user and
+    /// hears no click (#4115). Call again as `at` changes. False, with nothing shown, for any
+    /// other tab and off the Mac, where the UI draws its picture instead.
+    fn show_tile(&self, _tab: u64, _at: Bounds<Pixels>, _radius: f32) -> bool {
+        false
+    }
+    /// Takes `tab`'s page out of the tile `show_tile` showed it in; nothing if it isn't one.
+    fn end_tile(&self, _tab: u64) {}
     /// Opens a window as ⌘N does with `tab` in it, its page moving there live: at the screen point
     /// `at` less `grab`, where the pointer was in this window as the drag started, so the row comes
     /// in under the pointer, or where the system puts it without `at`.

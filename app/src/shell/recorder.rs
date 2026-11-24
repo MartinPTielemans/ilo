@@ -19,6 +19,8 @@ use super::{
     ShownPageDialog, browser::WindowButton,
 };
 
+mod resting_bar;
+
 /// What the core shares between its windows, as it keeps them: the Spaces deleted and the archive's
 /// removals, 25 of each at most, the newest last. Clears are each window's own.
 #[derive(Default)]
@@ -57,12 +59,17 @@ pub(super) struct Recorder {
     /// This window's Clears, by id, the last ten.
     cleared: RefCell<Vec<u64>>,
     calls: RefCell<Vec<String>>,
+    /// What the window's resting bars asked of the core, in order (#4140).
+    pub(super) resting: Rc<RefCell<Vec<String>>>,
     /// How many detents the trackpad was asked for.
     pub(super) detents: Cell<usize>,
     /// How many tabs and folders it was asked to move.
     pub(super) moves: Cell<usize>,
     /// Whether a tab's row dragged out of the window starts the system's drag, as the Mac's does.
     pub(super) drags_tabs: Cell<bool>,
+    /// What the core answers a tile with, true as the Mac's does for an agent's page (#4115),
+    /// and recording what the shell asks of tiles; nothing recorded unless a test says.
+    pub(super) shows_tiles: Cell<Option<bool>>,
     /// The window that shows each tab's page, as `tab_window` answers.
     pub(super) tab_windows: RefCell<HashMap<u64, u64>>,
     /// Whether the system opens links with it, as `is_default_browser` answers.
@@ -1856,6 +1863,32 @@ impl Browser for Recorder {
         self.bar_open.get()
     }
 
+    fn command_bar_in_place(
+        &self,
+        window: &mut gpui::Window,
+        cx: &mut App,
+    ) -> gpui::Entity<crate::command_bar::CommandBar> {
+        self.record("command bar in place".into());
+        let host = resting_bar::RestingBar {
+            asked: self.resting.clone(),
+        };
+        crate::command_bar::in_place(Rc::new(host), window, cx)
+    }
+
+    fn start_task(
+        &self,
+        agent: &str,
+        asked: &str,
+        home: u64,
+        tier: crate::agents::tier::Tier,
+        _: &mut App,
+    ) {
+        self.record(format!(
+            "start task {agent} {asked} from {home} at {}",
+            tier.label()
+        ));
+    }
+
     fn field_window_typing(&self, _: &mut App) -> bool {
         self.find_typing.get()
     }
@@ -2124,6 +2157,26 @@ impl Browser for Recorder {
 
     fn show_in_window(&self, window: u64, tab: u64, _: &mut App) {
         self.record(format!("show {tab} in window {window}"))
+    }
+
+    fn show_tile(&self, tab: u64, at: Bounds<Pixels>, radius: f32) -> bool {
+        let Some(shows) = self.shows_tiles.get() else {
+            return false;
+        };
+        self.record(format!(
+            "tile {tab} at {} {} {} {} radius {radius}",
+            f32::from(at.origin.x),
+            f32::from(at.origin.y),
+            f32::from(at.size.width),
+            f32::from(at.size.height)
+        ));
+        shows
+    }
+
+    fn end_tile(&self, tab: u64) {
+        if self.shows_tiles.get().is_some() {
+            self.record(format!("end tile {tab}"));
+        }
     }
 
     fn tab_to_new_window(&self, tab: u64, at: Option<Point<f32>>, grab: Point<f32>, _: &mut App) {

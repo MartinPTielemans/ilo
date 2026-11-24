@@ -11,7 +11,9 @@ use gpui::{
 use super::Fold;
 
 use crate::agents::task::ilo::{IloButton, IloKind, IloLine};
-use crate::agents::task::{Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep};
+use crate::agents::task::{
+    Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep, Word,
+};
 use crate::agents::tier::{Tier, Why};
 use crate::shell::picture::PagePicture;
 use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
@@ -30,8 +32,11 @@ fn card() -> Card {
         replies: true,
         title: "Flight to Lisbon".into(),
         status: "Searching flights".into(),
+        steps: Vec::new(),
+        last_site: None,
         asks: false,
         dot: Dot::Working,
+        word: Word::for_dot(Dot::Working),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
@@ -895,7 +900,7 @@ fn the_reply_placeholder_follows_the_appearance(cx: &mut TestAppContext) {
             let reply = talk.view.read(cx).reply.read(cx).placeholder_hsla();
             (
                 reply,
-                gpui::Hsla::from(shell.palette.text(FORM_PLACEHOLDER)),
+                gpui::Hsla::from(shell.palette.gray(FORM_PLACEHOLDER)),
             )
         });
         assert_eq!(drawn, meant, "{appearance:?}'s placeholder");
@@ -1693,4 +1698,46 @@ fn a_helpers_line_under_way_shimmers_unless_motion_is_reduced(cx: &mut TestAppCo
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
     assert!(!moving(cx), "nothing is under way");
     cx.update(|_, cx| cx.set_reduce_motion(true));
+}
+
+/// Its pages show live in their pictures while Pages shows, where the core can (#4115), and every
+/// tile ends as Talk, or anything else, takes the conversation's place.
+#[gpui::test]
+fn its_pages_are_live_in_pages_and_end_as_it_goes(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    host.shows_tiles.set(Some(true));
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    cx.run_until_parked();
+    assert!(
+        !host.take().iter().any(|line| line.starts_with("tile ")),
+        "live in Talk"
+    );
+    let pages = |view: &Entity<super::TalkView>, cx: &mut VisualTestContext| {
+        view.update(cx, |view, cx| view.show_pages(true, cx));
+        cx.run_until_parked();
+        let did = host.take();
+        assert!(
+            did.iter().any(|line| line.starts_with("tile 30 at ")),
+            "not live in Pages: {did:?}"
+        );
+    };
+    pages(&view, cx);
+
+    view.update(cx, |view, cx| view.show_pages(false, cx));
+    cx.run_until_parked();
+    assert!(
+        host.take().contains(&"end tile 30".to_string()),
+        "live in Talk"
+    );
+
+    pages(&view, cx);
+    shell.update(cx, |shell, cx| shell.close_task(cx));
+    cx.run_until_parked();
+    assert!(
+        host.take().contains(&"end tile 30".to_string()),
+        "live with the task closed"
+    );
 }

@@ -25,6 +25,7 @@ use super::{
     NAV_RADIUS, SECONDARY, Shell, TITLE,
     agent_bar::stop_keys,
     browser::Browser,
+    live_tiles::LiveTiles,
     picture::{PagePicture, next_request},
     row_spring,
 };
@@ -184,6 +185,8 @@ pub struct TalkView {
     unpictured: Vec<u64>,
     /// Where each picture was drawn last, in the window, for its page to zoom out of.
     drawn: Rc<RefCell<Vec<(u64, Bounds<Pixels>)>>>,
+    /// Its pages, live in their pictures' places where the core can.
+    tiles: Rc<LiveTiles>,
     /// Where each picture was drawn when that was logged last.
     drawn_logged: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
     /// What each picture's status line said when that was logged last.
@@ -286,6 +289,8 @@ impl Shell {
     /// An ended task's Start Again: the command bar opens as it does for a new tab, with what the
     /// task was first asked in its field, as an ask. Nothing is sent until the user sends it.
     pub fn ask_again(&mut self, asked: SharedString, cx: &mut Context<Self>) {
+        // It asks again at Work on pages, whatever the composer had picked.
+        self.forget_composer_tier();
         self.run(super::Command::NewTab, "start again", cx);
         self.browser.ask_again(asked, cx);
     }
@@ -319,7 +324,7 @@ impl Shell {
                     let stale = old.view.update(cx, |view, _| view.let_go());
                     self.stale_pictures.extend(stale);
                 }
-                let placeholder = self.palette.text(FORM_PLACEHOLDER);
+                let placeholder = self.palette.gray(FORM_PLACEHOLDER);
                 let reply = cx.new(|cx| {
                     TextInput::new(format!("Reply to {name}"), cx).placeholder_color(placeholder)
                 });
@@ -333,6 +338,7 @@ impl Shell {
                     pictures: Vec::new(),
                     unpictured: Vec::new(),
                     drawn: Rc::default(),
+                    tiles: LiveTiles::new(self.browser.clone()),
                     drawn_logged: Rc::default(),
                     said_logged: RefCell::default(),
                     stop_logged: Rc::default(),
@@ -636,6 +642,7 @@ impl TalkView {
 
     /// Its pictures go, as it no longer shows, and are taken again when it does.
     fn let_go(&mut self) -> Vec<Arc<RenderImage>> {
+        self.tiles.end_all();
         self.stale = true;
         self.motion.reset();
         let pictures = std::mem::take(&mut self.pictures);
@@ -962,7 +969,7 @@ impl TalkView {
                     .whitespace_nowrap()
                     .text_size(px(text::SMALL))
                     .line_height(px(META_LINE))
-                    .text_color(palette.text(STATUS))
+                    .text_color(palette.gray(STATUS))
                     .child(about),
             );
         // Talk and Pages N, once it has a page: one switch, its track a chip's shape, the view
@@ -988,7 +995,7 @@ impl TalkView {
                             .text_color(palette.text(TITLE))
                     })
                     .when(!on, |chip| {
-                        chip.text_color(palette.text(STATUS))
+                        chip.text_color(palette.gray(STATUS))
                             .hover(move |style| style.bg(palette.plate(STATE_HOVERED)))
                             .active(move |style| style.bg(palette.plate(STATE_PRESSED)))
                     })
@@ -1156,7 +1163,7 @@ impl TalkView {
                         .justify_center()
                         .gap(px(PICTURE_EMPTY_GAP))
                         .text_size(px(text::SMALL))
-                        .text_color(look.palette.text(STATUS))
+                        .text_color(look.palette.gray(STATUS))
                         .child(
                             svg()
                                 .path("icons/globe.svg")
@@ -1244,7 +1251,7 @@ impl TalkView {
                     Some(_) => line(words, look.palette.text(TITLE))
                         .font_weight(caption_weight(Caption::Hold)),
                     // The ring says it's working: no text is written in the working green.
-                    None => line(words, look.palette.text(SECONDARY))
+                    None => line(words, look.palette.gray(SECONDARY))
                         .font_weight(caption_weight(Caption::Step)),
                 });
                 div()
@@ -1534,7 +1541,7 @@ impl TalkView {
                 TraceItem::Said(text) => {
                     let said = div()
                         .py(px((TRACE_LINE - TEXT_LINE) / 2.))
-                        .text_color(look.palette.text(SECONDARY))
+                        .text_color(look.palette.gray(SECONDARY))
                         .child(self.said("trace-said", (trace.key << 16) | index, text, &[], look));
                     nest.child(risen(
                         said.into_any_element(),
@@ -1726,7 +1733,7 @@ impl TalkView {
                     .pl(px(under))
                     .pt(px(OPEN_TOP))
                     .pb(px(OPEN_BELOW))
-                    .text_color(palette.text(SECONDARY))
+                    .text_color(palette.gray(SECONDARY))
                     .child(text.clone()),
             ),
             Opens::Picture(picture) => Some(
@@ -1756,7 +1763,7 @@ impl TalkView {
         let sub = (!step.under.is_empty()).then(|| {
             div()
                 .pl(px(under))
-                .text_color(palette.text(TRACE_NOTE))
+                .text_color(palette.gray(TRACE_NOTE))
                 .child(step.under.clone())
                 .into_any_element()
         });
@@ -1979,7 +1986,7 @@ impl TalkView {
                 .h(px(REPLY_HEIGHT))
                 .flex()
                 .items_center()
-                .text_color(look.palette.text(SECONDARY))
+                .text_color(look.palette.gray(SECONDARY))
                 .child(quiet);
         }
         // An ended task that takes no reply: ilo's line says why, with Start Again (#4105).
@@ -2155,7 +2162,7 @@ impl TalkView {
                 .pl(under)
                 .mt(px(NOTE_TOP))
                 .text_size(px(text::SMALL))
-                .text_color(palette.text(NOTE_INK))
+                .text_color(palette.gray(NOTE_INK))
                 .cursor_pointer()
                 .child(words)
                 .child(
@@ -2177,7 +2184,7 @@ impl TalkView {
                 .pl(under)
                 .mt(px(NOTE_TOP))
                 .text_size(px(text::SMALL))
-                .text_color(palette.text(NOTE_INK))
+                .text_color(palette.gray(NOTE_INK))
                 .child(note)
         });
         let row = (!buttons.is_empty()).then(|| {
@@ -2563,7 +2570,7 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
     let note = if failed {
         red
     } else {
-        palette.text(TRACE_NOTE)
+        palette.gray(TRACE_NOTE)
     };
     let ilos = mark.is_some();
     let words = match (failed, shimmers) {
@@ -2790,7 +2797,7 @@ impl Render for TalkView {
             return div().into_any_element();
         };
         // The reply's placeholder follows the appearance, as the lines drawn in `look` do (#1659).
-        let placeholder = look.palette.text(FORM_PLACEHOLDER);
+        let placeholder = look.palette.gray(FORM_PLACEHOLDER);
         (self.reply).update(cx, |reply, cx| reply.set_placeholder_color(placeholder, cx));
         self.settle_folds(now, still);
         // A shorter or narrower window keeps the newest line in view while the user reads at the
@@ -2849,28 +2856,39 @@ impl Render for TalkView {
                 .when(look.behind, |part| part.child(unpressed()))
         };
         let middle = match self.on_pages() {
-            true => div()
-                .flex_1()
-                .min_h_0()
-                .mx(px(PICTURE_GAP - INSET))
-                .flex()
-                .mb(px(REPLY_GAP))
-                .child(self.grid(&look, cx)),
-            false => shut(
+            true => {
+                // Its pages show live in their pictures where the core can (live_tiles.rs), but
+                // not under a page watched over them, which they'd draw over.
+                let held = look.behind
+                    || (self.shell.upgrade())
+                        .is_some_and(|shell| shell.read(cx).watched_task_page().is_some());
+                let grid = self.grid(&look, cx);
                 div()
                     .flex_1()
                     .min_h_0()
-                    .w_full()
+                    .mx(px(PICTURE_GAP - INSET))
                     .flex()
-                    .justify_center()
                     .mb(px(REPLY_GAP))
-                    .child(
-                        div()
-                            .size_full()
-                            .max_w(px(COLUMN + 2. * TRACE_HANG))
-                            .child(lines),
-                    ),
-            ),
+                    .child(self.tiles.over(grid, self.drawn.clone(), held))
+            }
+            false => {
+                self.tiles.end_all();
+                shut(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .flex()
+                        .justify_center()
+                        .mb(px(REPLY_GAP))
+                        .child(
+                            div()
+                                .size_full()
+                                .max_w(px(COLUMN + 2. * TRACE_HANG))
+                                .child(lines),
+                        ),
+                )
+            }
         };
         let column = div()
             .size_full()
@@ -2965,9 +2983,9 @@ enum Caption {
     Step,
 }
 
-/// The weight a page's picture sets a line under it in. Its site is the tile's title and a hold
-/// asks for the user as loudly; the agent's step is regular under its site, which it has to say,
-/// as the panel's text is medium and a line that names no weight takes that.
+/// The weight a page's picture sets a line under it in. Its site is the tile's title, in medium,
+/// and a hold asks for the user as loudly; the agent's step is regular under its site, as a line
+/// that names no weight is.
 fn caption_weight(line: Caption) -> FontWeight {
     match line {
         Caption::Site | Caption::Hold => FontWeight::MEDIUM,

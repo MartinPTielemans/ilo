@@ -112,7 +112,14 @@ impl Run {
         });
         (self.agents)
             .update(cx, |agents, cx| {
-                agents.start_task(cli, "Find two seats to Lisbon for Saturday", page, 1, cx)
+                agents.start_task(
+                    cli,
+                    "Find two seats to Lisbon for Saturday",
+                    page,
+                    1,
+                    Tier::default(),
+                    cx,
+                )
             })
             .expect("started")
     }
