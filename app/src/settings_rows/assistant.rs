@@ -152,14 +152,28 @@ pub fn another_agent_row(
     a11y: bool,
     how: impl Fn(&mut gpui::Window, &mut gpui::App) + 'static,
 ) -> gpui::Div {
+    another_app(look, a11y, how, Some("Any app that uses MCP".into()))
+}
+
+/// First run's Another app: its name alone, centred on the row's height, and How to Connect.
+pub fn another_agent_name_row(
+    look: &Look,
+    a11y: bool,
+    how: impl Fn(&mut gpui::Window, &mut gpui::App) + 'static,
+) -> gpui::Div {
+    another_app(look, a11y, how, None)
+}
+
+fn another_app(
+    look: &Look,
+    a11y: bool,
+    how: impl Fn(&mut gpui::Window, &mut gpui::App) + 'static,
+    line: Option<SharedString>,
+) -> gpui::Div {
     let how = stop_button(look, "assistant-another-how", "How to Connect", a11y)
         .on_click(move |_, window, cx| how(window, cx));
     frame()
         .child(glyph_plate(look, "icons/cable.svg", true))
-        .child(text(
-            look,
-            "Another app",
-            Some("Any app that uses MCP".into()),
-        ))
+        .child(text(look, "Another app", line))
         .child(end([how.into_any_element()]))
 }

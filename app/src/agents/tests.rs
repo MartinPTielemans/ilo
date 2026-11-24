@@ -463,6 +463,8 @@ struct Configs {
     found: Mutex<Vec<Client>>,
     /// What each task CLI answers when looked for; one not here isn't found.
     looked: Mutex<Vec<(crate::agents::runner::Cli, crate::agents::ready::Found)>>,
+    /// How many times a task CLI was looked for, each CLI counted.
+    looks: AtomicUsize,
     /// Whether the user's shell leaves out the `ilo` command's folder.
     unsearched: Mutex<bool>,
     /// Each sign-in started, as a stand-in the test says what it hears through; the CLIs whose
@@ -519,6 +521,7 @@ impl Clients for Configs {
 
     /// The tests never run a CLI of this computer's: each answers as `looked` says.
     fn look_for_task_cli(&self, cli: crate::agents::runner::Cli) -> crate::agents::ready::Found {
+        self.looks.fetch_add(1, Ordering::SeqCst);
         let looked = self.looked.lock().unwrap();
         let found = looked.iter().find(|(each, _)| *each == cli);
         found.map_or(
@@ -588,6 +591,28 @@ fn agents_running(
     std::fs::create_dir_all(&folder).unwrap();
     let socket = address(&folder);
     cx.new(|_| Agents::new(browser, configs, path, socket, bridge))
+}
+
+/// The app's Agents, on a made-up browser and clients, for another view's tests: each task CLI
+/// answers as `looked` says, and the count returned says how many times they were looked for.
+pub(crate) fn stand_in(
+    looked: Vec<(crate::agents::runner::Cli, crate::agents::ready::Found)>,
+    cx: &mut App,
+) -> (Entity<Agents>, impl Fn() -> usize + use<>) {
+    let configs = Arc::new(Configs::default());
+    *configs.looked.lock().unwrap() = looked;
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let number = NEXT.fetch_add(1, Ordering::SeqCst);
+    let folder = std::env::temp_dir().join(format!("agents-in-{}-{number}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let (browser, clients) = (Made::with_agent_space(), configs.clone());
+    let bridge = vec!["/app/mcp-bridge".into()];
+    let agents = cx.new(|_| Agents::new(browser, clients, None, address(&folder), bridge));
+    cx.set_global(GlobalAgents(agents.clone()));
+    // One look asks each CLI once.
+    let looks =
+        move || configs.looks.load(Ordering::SeqCst) / crate::agents::runner::Cli::ALL.len();
+    (agents, looks)
 }
 
 /// Claude Code, connected.

@@ -6102,7 +6102,7 @@ pub fn ago(at: SystemTime, now: SystemTime) -> String {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// Whether the agent with the id `agent` runs a task the user asked from ⌘T (Agent task).
 pub fn is_task(agent: &str) -> bool {

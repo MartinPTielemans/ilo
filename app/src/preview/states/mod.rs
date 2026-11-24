@@ -61,6 +61,7 @@ pub(crate) const STATES: &[State] = &[
     State { name: "PREVIEW_MINI_BAR", values: "selected, float, scrolls", shows: "Arrange's mini bar over a made-up thing on the page" },
     State { name: "PREVIEW_MODEL_MENU", values: "<claude|codex>[,<model>]", shows: "Settings › Agents' Model menu" },
     State { name: "PREVIEW_ONBOARDING", values: "1, light, dark", shows: "the onboarding over the welcome" },
+    State { name: "PREVIEW_ONBOARDING_ASSISTANTS", values: "checking, start, signed-in", shows: "the onboarding's assistants' step with its rows in that state" },
     State { name: "PREVIEW_ONBOARDING_STEP", values: "transparency, <step from 1>", shows: "the onboarding at that step" },
     State { name: "PREVIEW_PAGE_MENU", values: "<link|image|text|field>,<x>,<y>[,<key>…]", shows: "a page's menu there" },
     State { name: "PREVIEW_PAIR", values: "pin, confirm, passkey", shows: "a Bluetooth device the first tab's page pairs with" },
