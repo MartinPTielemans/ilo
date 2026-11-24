@@ -653,27 +653,76 @@ impl Asking {
     }
 }
 
-/// What a page's dialog asked of the host from `shown` on, answered with `answer`: as it starts
-/// leaving on Linux, whose page has the keyboard back then, and once it has hidden elsewhere.
+/// What a page's dialog asked of the host from `shown` on, answered with `answer`, which its page
+/// hears as the dialog starts to leave, before it hides.
 fn left(shown: &[&str], answer: &str) -> Vec<String> {
     let mut calls: Vec<String> = shown.iter().map(|call| call.to_string()).collect();
-    match PAGE_ANSWERED_AS_IT_LEAVES {
-        true => calls.extend([answer.into(), "hide".into()]),
-        false => calls.extend(["hide".into(), answer.into()]),
-    }
+    calls.extend([answer.into(), "hide".into()]);
     calls
 }
 
-/// On Linux the page has the keyboard back as its dialog starts leaving, and Chromium drops its keys
-/// until its question is answered, so a shortcut typed right after Esc, such as ⌘L, needs the answer
-/// at once (#1711, #1963).
+/// A page's alert, confirm, prompt and Leave are answered when the user answers, before the dialog
+/// lets go of the clicks and the keys, and its exit is only motion. So a quit the page stopped
+/// stays stopped while the dialog leaves (#4172), a click that passes the dialog going finds the
+/// page with its answer, and a shortcut typed right after Esc, such as ⌘L, isn't dropped by
+/// Chromium as a key to a page still asking (#1711, #1963).
 #[gpui::test]
-fn a_pages_question_is_answered_once_the_page_has_the_keyboard_back(cx: &mut TestAppContext) {
-    let mut dialog = Asking::page(page_question(Vec::new(), None), cx);
-    dialog.keys("escape");
-    let answered = dialog.host.0.borrow().iter().any(|call| call == "cancel ");
-    assert_eq!(answered, PAGE_ANSWERED_AS_IT_LEAVES);
-    assert_eq!(*dialog.host.1.borrow(), leaving(), "it hid before leaving");
+fn a_pages_question_is_answered_before_its_dialog_lets_go(cx: &mut TestAppContext) {
+    let confirm = || page_question(Vec::new(), None);
+    let alert = Question {
+        cancel: "".into(),
+        ..confirm()
+    };
+    let prompt = page_question(vec![field("Ada", false)], None);
+    let leave = Question {
+        message: "Leave site?".into(),
+        action: "Leave".into(),
+        cancel: "Stay".into(),
+        tone: Tone::Destructive,
+        ..confirm()
+    };
+    let (cx, host) = opened(cx);
+    cx.cx.update(crate::text_input::bind_keys);
+    let mut dialog = Asking { cx, host };
+    let asked = [
+        ("alert", alert, "enter"),
+        ("confirm", confirm(), "escape"),
+        ("prompt", prompt, "enter"),
+        ("Leave", leave, "escape"),
+    ];
+    for (id, (kind, question, key)) in (7..).zip(asked) {
+        let heard = dialog.host.clone();
+        dialog.cx.cx.update(|cx| {
+            let over = (
+                Bounds::new(point(px(100.), px(10.)), size(px(600.), px(500.))),
+                10.,
+            );
+            let answered =
+                Box::new(move |_: Reply, _: &mut App| heard.1.borrow_mut().push("answered"));
+            ask_page(
+                (1, id),
+                question,
+                over,
+                false,
+                Rc::new(|_| {}),
+                answered,
+                cx,
+            );
+        });
+        dialog.cx.run_until_parked();
+        dialog.keys(key);
+        assert_eq!(
+            *dialog.host.1.borrow(),
+            [&["answered"], leaving()].concat(),
+            "the page's {kind} wasn't answered before its dialog let go"
+        );
+        dialog.calls();
+        assert_eq!(
+            dialog.host.1.take(),
+            [&["answered"], leaving(), &["hide", "give"]].concat(),
+            "the page's {kind} left otherwise"
+        );
+    }
 }
 
 impl Asking {
