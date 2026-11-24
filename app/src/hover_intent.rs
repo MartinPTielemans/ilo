@@ -9,7 +9,8 @@
 //!
 //! How to compose it: give the surface an `Intent` with its delay (and `with_grace` if it has
 //! one). When the pointer comes onto a thing, `enter`: on `Next::Open` show it now, on
-//! `Next::Wait` keep what to show and wake after that long, then show it if `due`. `restart` waits
+//! `Next::Wait` keep what to show and wake after that long, then show it if `due`, or else wake
+//! again after what's `early`. `restart` waits
 //! the delay again from now, as the tooltip does on each move. When the pointer leaves before it
 //! opened, `leave`; when the surface goes, `close`.
 
@@ -94,6 +95,13 @@ impl Intent {
         due
     }
 
+    /// The surface woke at `now` and it wasn't `due`: while the pointer still waits on the thing,
+    /// how much longer, as a platform's timer can wake it a little early (Windows' by up to its
+    /// tick, #4108's Windows overlays run), and it waits that out rather than never opening.
+    pub fn early(&self, now: Instant) -> Option<Duration> {
+        self.wake().map(|at| at.saturating_duration_since(now))
+    }
+
     /// The pointer left the thing before its surface showed it: nothing opens, and no grace starts.
     pub fn leave(&mut self) {
         self.phase = Phase::Idle;
@@ -134,6 +142,26 @@ mod tests {
 
     fn intent() -> (Intent, Instant) {
         (Intent::new(DELAY).with_grace(GRACE), Instant::now())
+    }
+
+    /// A wake before the delay is up says how much is left while the pointer waits, and nothing
+    /// once it's open or the pointer has left.
+    #[test]
+    fn an_early_wake_waits_out_what_is_left() {
+        let (mut intent, at) = intent();
+        intent.enter(at);
+        assert!(!intent.due(at + DELAY - 3 * MS));
+        assert_eq!(intent.early(at + DELAY - 3 * MS), Some(3 * MS));
+        assert!(intent.due(at + DELAY));
+        assert_eq!(intent.early(at + DELAY), None, "an open one waits on");
+        intent.close(at + DELAY);
+        intent.enter(at + DELAY + GRACE);
+        intent.leave();
+        assert_eq!(
+            intent.early(at + DELAY + GRACE),
+            None,
+            "a left one waits on"
+        );
     }
 
     #[test]
