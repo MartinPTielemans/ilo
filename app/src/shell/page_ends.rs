@@ -14,12 +14,7 @@ use std::time::Instant;
 
 use gpui::{Context, Role, SharedString, Stateful, div, prelude::*, px};
 
-use super::{
-    Shell,
-    agent_bar::Bar,
-    sidebar_keys::NEW_TAB,
-    task_area::{StripChip, strip_chips},
-};
+use super::{Shell, agent_bar::Bar, sidebar_keys::NEW_TAB, task_area::StripChip};
 use crate::tokens::shell::{KEYED, KEYED_RING};
 
 /// A stop of the strip under a task's page watched.
@@ -205,9 +200,8 @@ impl Shell {
         let held = self.strip_held();
         let dot = self.task_strip_dot();
         let open = self.task_strip_open(tab).is_some();
-        let chips = strip_chips(held, dot, open, true)
-            .into_iter()
-            .map(|(chip, _)| match chip {
+        let chips =
+            (self.strip_shows(held, dot, open, true).into_iter()).map(|(chip, _)| match chip {
                 StripChip::TakeOver => StripStop::TakeOver,
                 StripChip::HandBack => StripStop::HandBack,
                 StripChip::Stop => StripStop::Stop,
