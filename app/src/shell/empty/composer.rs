@@ -21,7 +21,7 @@ use crate::tokens::text;
 
 use super::super::{
     STATUS_AGENT, Shell, URL_FIELD,
-    commands::key_name,
+    commands::{key_name, space_tabs},
     keys::OFF_THE_MAC,
     menus::{MenuAction, MenuEntry},
 };
@@ -62,6 +62,21 @@ pub(in crate::shell) struct Resting {
     pub(in crate::shell) model: Option<(SharedString, String)>,
     /// Where the assistant's chip was last drawn, which its menu hangs from.
     pub(in crate::shell) model_chip: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The pages the user added on the `+` menu, in the order added, whose addresses alone the
+    /// next task gets; and whether it may go only to their sites. Both go as the level does.
+    pub(in crate::shell) pages: Vec<Added>,
+    pub(in crate::shell) only_added: bool,
+    /// Where the `+` chip was last drawn, which its menu hangs from.
+    pub(in crate::shell) plus_chip: Rc<Cell<Option<Bounds<Pixels>>>>,
+}
+
+/// A page the user added: its tab, which its row in the menu is checked by, its address as it was
+/// when added, which is what the task gets, and its title, which only the user sees.
+#[derive(Clone, Debug, PartialEq)]
+pub(in crate::shell) struct Added {
+    pub(in crate::shell) tab: u64,
+    pub(in crate::shell) url: String,
+    title: SharedString,
 }
 
 /// Where a chip's menu hangs: 4 under the chip, its names under the chip's own word, or at the
@@ -94,6 +109,16 @@ pub(super) fn model_words(agent: &TaskAgent, id: &str) -> String {
     }
 }
 
+impl Resting {
+    /// The picks on Ask's line, which hold for the next task alone: its level, model and pages.
+    fn forget_picks(&mut self) {
+        self.tier = Tier::default();
+        self.model = None;
+        self.pages.clear();
+        self.only_added = false;
+    }
+}
+
 /// The level's menu's last row, which opens Settings › Agents at Access.
 const SETTINGS: &str = "Settings…";
 
@@ -119,7 +144,7 @@ impl Shell {
         if let Some(resting) = &mut self.resting {
             if resting.space != space {
                 (resting.tier, resting.space) = (Tier::default(), space);
-                resting.model = None;
+                resting.forget_picks();
             }
             return;
         }
@@ -139,6 +164,9 @@ impl Shell {
             tier_chip: Rc::default(),
             model: None,
             model_chip: Rc::default(),
+            pages: Vec::new(),
+            only_added: false,
+            plus_chip: Rc::default(),
         });
         cx.on_next_frame(window, |shell, _, cx| {
             if let Some(resting) = &mut shell.resting {
@@ -183,8 +211,7 @@ impl Shell {
             return;
         };
         if !on_ask {
-            resting.tier = Tier::default();
-            resting.model = None;
+            resting.forget_picks();
         }
         let bar = resting.bar.clone();
         bar.update(cx, |bar, cx| {
@@ -207,24 +234,28 @@ impl Shell {
         let Some((agent, asked)) = bar.update(cx, |bar, cx| bar.take_task(window, cx)) else {
             return;
         };
-        let tier = std::mem::take(&mut resting.tier);
         let model = resting
             .model
             .take()
             .filter(|(on, _)| *on == agent)
             .map(|(_, id)| id);
+        let start = Start {
+            tier: resting.tier,
+            model,
+            pages: resting.pages.iter().map(|page| page.url.clone()).collect(),
+            only_added: resting.only_added,
+        };
+        resting.forget_picks();
         log!("browser: composer runs a task on {agent}");
         let home = self.space();
-        self.browser
-            .start_task(&agent, &asked, home, Start { tier, model }, cx);
+        self.browser.start_task(&agent, &asked, home, start, cx);
         cx.notify();
     }
 
     /// Puts the composer's level back to Work on pages, and its model back to Settings'.
     pub(in crate::shell) fn forget_composer_tier(&mut self) {
         if let Some(resting) = &mut self.resting {
-            resting.tier = Tier::default();
-            resting.model = None;
+            resting.forget_picks();
         }
     }
 
@@ -254,6 +285,84 @@ impl Shell {
             })
             .collect();
         self.show_menu(items, hung_under(chip, clicked), None, cx);
+    }
+
+    /// The user's pick of where the next task may go: only the sites of the pages added, which
+    /// needs one, or any site.
+    pub(in crate::shell) fn pick_reach(&mut self, only: bool, cx: &mut Context<Self>) {
+        let Some(resting) = &mut self.resting else {
+            return;
+        };
+        if !resting.bar.read(cx).on_ask() || (only && resting.pages.is_empty()) {
+            return;
+        }
+        resting.only_added = only;
+        cx.notify();
+    }
+
+    /// The Space's pages the `+` menu offers: its pinned and Today tabs with an http(s) page, by
+    /// title, those shown most recently first.
+    fn pages_to_add(&self) -> Vec<(u64, SharedString)> {
+        let Some(space) = self.shown_space() else {
+            return Vec::new();
+        };
+        let tabs = self.recent_first(space_tabs(space).collect());
+        (tabs.into_iter())
+            .filter(|&tab| {
+                let url = self.url(tab).to_ascii_lowercase();
+                url.starts_with("https://") || url.starts_with("http://")
+            })
+            .map(|tab| (tab, self.title(tab)))
+            .collect()
+    }
+
+    /// The `+` chip's menu: the Space's pages, those added checked. It's Add a Page's submenu once
+    /// files and folders join it, when the system can wall them off; till then a menu of one row
+    /// would be no menu, so `+` lists the pages itself. With none, it shows nothing.
+    pub(in crate::shell) fn pages_menu(
+        &mut self,
+        clicked: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(resting) = &self.resting else {
+            return;
+        };
+        let chip = resting.plus_chip.get();
+        let added: Vec<u64> = resting.pages.iter().map(|page| page.tab).collect();
+        let pages = self.pages_to_add();
+        if pages.is_empty() {
+            return;
+        }
+        let mut items: Vec<(MenuEntry, MenuAction)> = Vec::new();
+        for (tab, title) in pages {
+            let entry = MenuEntry {
+                page: true,
+                favicon: self.tabs.get(&tab).and_then(|tab| tab.favicon.clone()),
+                ..MenuEntry::named(title, true).checked(added.contains(&tab))
+            };
+            let pick: MenuAction = Box::new(move |shell, cx| shell.toggle_page(tab, cx));
+            items.push((entry, pick));
+        }
+        self.show_menu(items, hung_under(chip, clicked), None, cx);
+    }
+
+    /// The user's pick of a page on the `+` menu: added, its address as it is now, or taken off
+    /// again if it was. With none left, the task may go to any site.
+    pub(in crate::shell) fn toggle_page(&mut self, tab: u64, cx: &mut Context<Self>) {
+        let (url, title) = (self.url(tab).to_string(), self.title(tab));
+        let Some(resting) = &mut self.resting else {
+            return;
+        };
+        if !resting.bar.read(cx).on_ask() {
+            return;
+        }
+        match resting.pages.iter().position(|page| page.tab == tab) {
+            Some(at) => _ = resting.pages.remove(at),
+            None => resting.pages.push(Added { tab, url, title }),
+        }
+        resting.only_added &= !resting.pages.is_empty();
+        log!("browser: composer pages {}", resting.pages.len());
+        cx.notify();
     }
 
     /// The user's pick on the assistant's menu, while the field is in Ask: for the next task on
@@ -303,9 +412,20 @@ impl Shell {
             })
             .collect();
         let none: fn() -> MenuAction = || Box::new(|_, _| {});
+        let (added, only) = (self.resting.as_ref()).map_or((false, false), |resting| {
+            (!resting.pages.is_empty(), resting.only_added)
+        });
+        let reach =
+            |only: bool| -> MenuAction { Box::new(move |shell, cx| shell.pick_reach(only, cx)) };
         items.push((MenuEntry::line(), none()));
-        items.push((MenuEntry::named(ANY_SITE, true).checked(true), none()));
-        items.push((MenuEntry::named(ONLY_ADDED, false), none()));
+        items.push((
+            MenuEntry::named(ANY_SITE, true).checked(!only),
+            reach(false),
+        ));
+        items.push((
+            MenuEntry::named(ONLY_ADDED, added).checked(only),
+            reach(true),
+        ));
         items.push((MenuEntry::line(), none()));
         let settings: MenuAction = Box::new(|shell, cx| shell.browser.agent_access(cx));
         items.push((MenuEntry::new(SETTINGS, true), settings));
@@ -512,6 +632,16 @@ impl Shell {
         };
         let tier_chip = (self.resting.as_ref()).map(|resting| resting.tier_chip.clone());
         let model_chip = (self.resting.as_ref()).map(|resting| resting.model_chip.clone());
+        let plus_chip = (self.resting.as_ref()).map(|resting| resting.plus_chip.clone());
+        let added: Vec<SharedString> = (self.resting.as_ref())
+            .map(|resting| {
+                resting
+                    .pages
+                    .iter()
+                    .map(|page| page.title.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
         let assistant = (self.resting.as_ref()).and_then(|resting| {
             let agent = resting.bar.update(cx, |bar, cx| bar.assistant(cx))?;
             Some(model_words(
@@ -519,30 +649,45 @@ impl Shell {
                 &next_model(resting.model.as_ref(), &agent),
             ))
         });
-        line.child(chip().child(glyph("icons/plus.svg", CHIP_GLYPH)))
-            .child(
-                chip()
-                    .id("composer-tier")
-                    .relative()
-                    .on_click(cx.listener(|shell, event: &gpui::ClickEvent, _, cx| {
-                        shell.tier_menu(event.position(), cx)
-                    }))
-                    .children(tier_chip.as_ref().map(drawn_at))
-                    .child(self.composer_tier().label())
-                    .child(glyph("icons/chevron-down.svg", CHIP_CHEVRON)),
-            )
-            .child(div().flex_1())
-            .children(assistant.map(|assistant| {
-                chip()
-                    .id("composer-model")
-                    .relative()
-                    .on_click(cx.listener(|shell, event: &gpui::ClickEvent, _, cx| {
-                        shell.model_menu(event.position(), cx)
-                    }))
-                    .children(model_chip.as_ref().map(drawn_at))
-                    .child(assistant)
-                    .child(glyph("icons/chevron-down.svg", CHIP_CHEVRON))
-            }))
+        line.child(
+            chip()
+                .id("composer-plus")
+                .relative()
+                .on_click(cx.listener(|shell, event: &gpui::ClickEvent, _, cx| {
+                    shell.pages_menu(event.position(), cx)
+                }))
+                .children(plus_chip.as_ref().map(drawn_at))
+                .child(glyph("icons/plus.svg", CHIP_GLYPH)),
+        )
+        .children(added.into_iter().map(|title| {
+            chip()
+                .min_w_0()
+                .flex_shrink(1.)
+                .child(div().min_w_0().truncate().child(title))
+        }))
+        .child(
+            chip()
+                .id("composer-tier")
+                .relative()
+                .on_click(cx.listener(|shell, event: &gpui::ClickEvent, _, cx| {
+                    shell.tier_menu(event.position(), cx)
+                }))
+                .children(tier_chip.as_ref().map(drawn_at))
+                .child(self.composer_tier().label())
+                .child(glyph("icons/chevron-down.svg", CHIP_CHEVRON)),
+        )
+        .child(div().flex_1())
+        .children(assistant.map(|assistant| {
+            chip()
+                .id("composer-model")
+                .relative()
+                .on_click(cx.listener(|shell, event: &gpui::ClickEvent, _, cx| {
+                    shell.model_menu(event.position(), cx)
+                }))
+                .children(model_chip.as_ref().map(drawn_at))
+                .child(assistant)
+                .child(glyph("icons/chevron-down.svg", CHIP_CHEVRON))
+        }))
     }
 
     /// A recent task's card: its state, its title and its last steps, the one under way in full

@@ -8128,8 +8128,53 @@ mod tasks {
                     .map(|entry| entry.target.to_string())
                     .collect()
             });
-            assert_eq!(logged, vec![crate::agents::tier::started_logged(tier)]);
+            assert_eq!(logged, vec![crate::agents::tier::started_logged(tier, 0)]);
         }
+    }
+
+    /// Pages the user added reach the task as their addresses, http(s) only; Only the pages you
+    /// add limits it to their sites; and the start's entry gains their count, never an address.
+    #[gpui::test]
+    fn added_pages_limit_the_task_to_their_sites_and_the_log_counts_them(cx: &mut TestAppContext) {
+        use crate::agents::task::Start;
+        let (agents, _) = ready(None, cx);
+        let start = |only_added: bool| Start {
+            pages: vec![
+                "https://fieldbook.example/lakeside".into(),
+                "https://www.atlas.example/parks".into(),
+                "file:///etc/passwd".into(),
+            ],
+            only_added,
+            ..Start::default()
+        };
+        let only = agents.update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, "Plan a walk", None, 1, start(true), cx)
+        });
+        let any = agents.update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, "Plan a walk", None, 1, start(false), cx)
+        });
+        let [only, any] = [only, any].map(|agent| agent.expect("started"));
+        agents.read_with(cx, |agents, _| {
+            let task = agents.task(&only).unwrap();
+            let sites = [
+                "https://fieldbook.example/lakeside",
+                "https://www.atlas.example/parks",
+            ]
+            .map(|url| crate::sort_by_site::made_up_site(url).unwrap())
+            .to_vec();
+            assert_eq!(
+                task.sites,
+                Sites::Only(sites),
+                "only the added pages' sites"
+            );
+            assert_eq!(task.added.len(), 2, "no page off the web is added");
+            assert_eq!(agents.task(&any).unwrap().sites, Sites::Any);
+            let logged: Vec<String> = (agents.activity(&only))
+                .filter(|entry| entry.action.as_ref() == crate::agents::access::ACCESS_ACTION)
+                .map(|entry| entry.target.to_string())
+                .collect();
+            assert_eq!(logged, ["Starts at Work on pages · 2 pages"]);
+        });
     }
 
     /// A card lists the task's last three steps this turn, oldest first, as the conversation's

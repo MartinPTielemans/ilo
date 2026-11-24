@@ -483,6 +483,76 @@ fn the_model_chip_picks_for_one_task(cx: &mut TestAppContext) {
     );
 }
 
+/// The `+` menu lists the Space's http(s) pages by title (Add a Page's list, a menu of its own till
+/// files and folders join it), and a pick adds one, whose
+/// title shows on Ask's line and whose address alone the task gets; Only the sites you add waits
+/// for one. A second pick takes it off, and the picks go with the run. Files and folders aren't
+/// offered yet.
+#[gpui::test]
+fn add_a_page_gives_the_task_its_address_alone(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    shell.update(cx, |shell, cx| {
+        let page = |url: &str| Page {
+            url: url.into(),
+            ..Page::default()
+        };
+        shell.set_page(1, page("https://fieldbook.example/lakeside"), cx);
+        shell.set_title(1, "The Lakeside loop".into(), cx);
+        shell.set_page(2, page("file:///Users/someone/notes.txt"), cx);
+    });
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    let rows = |host: &Recorder| -> Vec<String> {
+        (host.entries.borrow().iter())
+            .map(|entry| {
+                let under = if entry.parent.is_some() { "  " } else { "" };
+                let on = if entry.checked { " (checked)" } else { "" };
+                let off = if entry.enabled { "" } else { " (off)" };
+                format!("{under}{}{on}{off}", entry.title)
+            })
+            .collect()
+    };
+    shell.update(cx, |shell, cx| shell.tier_menu(point(px(0.), px(0.)), cx));
+    assert!(
+        rows(&host).contains(&"Only the sites you add (off)".to_string()),
+        "Only the sites you add waits for a page"
+    );
+    shell.update(cx, |shell, cx| shell.pages_menu(point(px(0.), px(0.)), cx));
+    assert_eq!(
+        rows(&host),
+        ["The Lakeside loop"],
+        "the + menu lists the Space's web page, and no file"
+    );
+    cx.update(|_, cx| host.choose("The Lakeside loop", cx));
+    shell.update(cx, |shell, cx| shell.pages_menu(point(px(0.), px(0.)), cx));
+    assert_eq!(rows(&host), ["The Lakeside loop (checked)"]);
+    cx.update(|_, cx| host.choose("The Lakeside loop", cx));
+    let added = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.resting.as_ref().unwrap().pages.len())
+    };
+    assert_eq!(added(&shell, cx), 0, "a second pick takes it off");
+
+    shell.update(cx, |shell, cx| {
+        shell.toggle_page(1, cx);
+        shell.tier_menu(point(px(0.), px(0.)), cx);
+    });
+    cx.update(|_, cx| host.choose("Only the sites you add", cx));
+    host.take();
+    cx.simulate_input("find a place to stay");
+    cx.simulate_keystrokes("enter");
+    let calls = host.take();
+    let started = "start task claude find a place to stay from 1 at Work on pages \
+                   with [\"https://fieldbook.example/lakeside\"] only them";
+    assert!(
+        calls.contains(&started.to_string()),
+        "the page's address didn't reach the task: {calls:?}"
+    );
+    assert_eq!(added(&shell, cx), 0, "the pages go with the run");
+    let only = shell.read_with(cx, |shell, _| shell.resting.as_ref().unwrap().only_added);
+    assert!(!only, "the next task may go to any site");
+}
+
 /// A task starts at the level picked for it, and the next at Work on pages: the pick holds for one
 /// run. The chip shows the level each ↩ starts at.
 #[gpui::test]

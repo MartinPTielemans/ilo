@@ -300,9 +300,14 @@ pub fn changed_logged(from: Tier, to: Tier) -> String {
 }
 
 /// The activity log's words for the tier a task starts at, which its start's entry keeps as its
-/// target, as a change's keeps `changed_logged`.
-pub fn started_logged(tier: Tier) -> String {
-    format!("Starts at {}", tier.label())
+/// target, as a change's keeps `changed_logged`, with how many pages the user added to it: their
+/// count alone, never an address or title.
+pub fn started_logged(tier: Tier, added: usize) -> String {
+    match added {
+        0 => format!("Starts at {}", tier.label()),
+        1 => format!("Starts at {} · 1 page", tier.label()),
+        added => format!("Starts at {} · {added} pages", tier.label()),
+    }
 }
 
 /// The most of a page's text a line carries.

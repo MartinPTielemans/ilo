@@ -1880,10 +1880,20 @@ impl Browser for Recorder {
         start: crate::agents::task::Start,
         _: &mut App,
     ) {
-        // The model only when the user picked one: "on " and its id, empty for the default.
+        // The model only when the user picked one: "on " and its id, empty for the default. The
+        // pages only when the user added some: their addresses, and "only them" for Only the
+        // sites you add.
         let model = (start.model.as_ref()).map_or(String::new(), |id| format!(" on {id:?}"));
+        let pages = match (start.pages.is_empty(), start.only_added) {
+            (true, _) => String::new(),
+            (false, only) => format!(
+                " with {:?}{}",
+                start.pages,
+                if only { " only them" } else { "" }
+            ),
+        };
         self.record(format!(
-            "start task {agent} {asked} from {home} at {}{model}",
+            "start task {agent} {asked} from {home} at {}{model}{pages}",
             start.tier.label()
         ));
     }

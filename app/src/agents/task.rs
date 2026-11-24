@@ -338,6 +338,8 @@ pub struct Task {
     /// The model it was started on by the user's pick in the composer, by id, empty for its CLI's
     /// own default; None for Settings' Model, read at each launch.
     pub(super) model_id: Option<String>,
+    /// The addresses of the pages the user added to it, which its first message names.
+    pub(super) added: Vec<String>,
     pub state: State,
     /// When it finished, done, stopped or failed, for its conversation and the Archive.
     pub ended: Option<SystemTime>,
@@ -633,6 +635,11 @@ pub struct Start {
     pub tier: Tier,
     /// The model picked for it, by id, empty for its CLI's own default; None for Settings' Model.
     pub model: Option<String>,
+    /// The addresses of the pages the user added on the `+` menu, which the task opens in tabs of
+    /// its own: never a tab of the user's, nor its title or anything of its state.
+    pub pages: Vec<String>,
+    /// Only the sites you add: the task may go only to the sites of the pages added.
+    pub only_added: bool,
 }
 
 impl From<Tier> for Start {
@@ -1332,7 +1339,13 @@ impl Agents {
         let Start {
             tier,
             model: picked,
+            pages,
+            only_added,
         } = start.into();
+        // Only an http(s) page is added: the composer lists no other, and nothing else is opened.
+        let pages: Vec<String> = (pages.into_iter())
+            .filter(|url| url.starts_with("https://") || url.starts_with("http://"))
+            .collect();
         let asked = asked.trim();
         if asked.is_empty() || !self.tasks_on() {
             return None;
@@ -1374,6 +1387,7 @@ impl Agents {
             title,
             model,
             model_id,
+            added: pages.clone(),
             state: State::Working,
             ended: None,
             end_entry: 0,
@@ -1393,7 +1407,15 @@ impl Agents {
             writing: None,
             named: None,
             tier,
-            sites: Sites::default(),
+            sites: match only_added && !pages.is_empty() {
+                true => Sites::Only(
+                    pages
+                        .iter()
+                        .filter_map(|url| self.browser.url_site(url))
+                        .collect(),
+                ),
+                false => Sites::default(),
+            },
             stops: Vec::new(),
             told: None,
             helpers: Helpers::of_task(self.helpers_on() && cli == Cli::Claude),
@@ -1401,9 +1423,11 @@ impl Agents {
         self.tasks.tasks.push(task);
         self.tokens_changed();
         // The log keeps the tier it starts at, as it keeps a change of it.
-        let started = super::tier::started_logged(tier);
+        let started = super::tier::started_logged(tier, pages.len());
         self.note_on(&agent, 0, super::access::ACCESS_ACTION, "", &started, "");
-        let first = first_message(asked, self.task(&agent).and_then(|task| task.page.as_ref()));
+        let task = self.task(&agent);
+        let first = first_message(asked, task.and_then(|task| task.page.as_ref()));
+        let first = with_added(first, task.map_or(&[], |task| &task.added));
         self.launch(&agent, &first, cx);
         self.wait_for_answer(&agent, cx);
         cx.notify();
@@ -2526,6 +2550,7 @@ impl Agents {
             page: None,
             model: SharedString::default(),
             model_id: None,
+            added: Vec::new(),
             state: State::Working,
             ended: None,
             end_entry: 0,
@@ -3195,9 +3220,21 @@ pub fn first_message(asked: &str, page: Option<&AskedOn>) -> String {
     }
 }
 
+/// `first` with the addresses of the pages the user added, for the task to open in tabs of its own:
+/// their addresses alone, as the user's own tabs are never the task's.
+fn with_added(first: String, pages: &[String]) -> String {
+    match pages {
+        [] => first,
+        pages => format!(
+            "{first}\n\n(Pages I added, to open in tabs of your own: {}.)",
+            pages.join(", ")
+        ),
+    }
+}
+
 /// The conversation so far, for a new run of a task whose CLI went.
 fn conversation(task: &Task) -> String {
-    let mut text = first_message(&task.asked, task.page.as_ref());
+    let mut text = with_added(first_message(&task.asked, task.page.as_ref()), &task.added);
     for message in &task.messages {
         let who = if message.who == Who::User {
             "Me"
