@@ -54,7 +54,11 @@ pub enum IloKind {
         count: u32,
     },
     /// A step only the user can do in `tab`: a sign-in, a code, a CAPTCHA, a file or a passkey.
-    Yours { tab: u64 },
+    /// `site` is the page's, named while the task has more than one page, so the line says which.
+    Yours {
+        tab: u64,
+        site: Option<SharedString>,
+    },
     /// The agent needs `tab` back from the user.
     TabBack { tab: u64 },
     /// ilo signed in for the agent on `site`, in `tab`.
@@ -123,6 +127,9 @@ pub enum IloButton {
     AnySite,
     /// The tab goes back to the agent.
     HandBack,
+    /// The page is shown beside the conversation, and nothing else changes: a step's first
+    /// button while its page isn't the one shown.
+    ShowPage,
     /// The user leaves the step for now.
     NotNow,
     /// The command bar opens with what the task was first asked, to ask it anew: nothing is sent
@@ -154,8 +161,9 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
             why: Why::OtherSite,
             ..
         } => vec![IloButton::TakeOver, IloButton::AnySite],
-        IloKind::Stopped { tier, .. } => std::iter::once(IloButton::TakeOver)
-            .chain(tier.up().map(IloButton::Raise))
+        // A step up only where it would let the act through.
+        IloKind::Stopped { tier, why, .. } => std::iter::once(IloButton::TakeOver)
+            .chain(tier.lifting(*why).map(IloButton::Raise))
             .collect(),
         // No level lifts the limit, so no step up stands under its line; with no page to take,
         // nothing does, nor where ilo stopped the task itself.
@@ -166,7 +174,8 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
         } => Vec::new(),
         IloKind::Helpers { .. } => vec![IloButton::TakeOver],
         IloKind::Yours { .. } => vec![IloButton::HandBack, IloButton::NotNow],
-        IloKind::TabBack { .. } => vec![IloButton::HandBack],
+        // Not Now keeps the tab, as the user's own.
+        IloKind::TabBack { .. } => vec![IloButton::HandBack, IloButton::NotNow],
         IloKind::SignedIn { .. } | IloKind::TierChanged { .. } => Vec::new(),
         IloKind::Resumed { .. } | IloKind::KeptHere => Vec::new(),
         IloKind::Gone
@@ -179,12 +188,25 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
     }
 }
 
+/// A line's buttons as drawn beside `shown`, the page in place beside the conversation: a step on
+/// a page that isn't shows that page first, and only then offers it back (O2). A task with one
+/// page has it beside the conversation, so its step offers Hand Back at once.
+pub fn drawn(line: &IloLine, shown: Option<u64>) -> Vec<IloButton> {
+    let away = matches!(&line.kind, IloKind::Yours { tab, site: Some(_) } if shown != Some(*tab));
+    (buttons(line).into_iter())
+        .map(|button| match button {
+            IloButton::HandBack if away => IloButton::ShowPage,
+            button => button,
+        })
+        .collect()
+}
+
 /// The tab a line is about, which Take over and Hand back act on.
 pub fn tab(kind: &IloKind) -> Option<u64> {
     match kind {
         IloKind::Stopped { tab, .. }
         | IloKind::Helpers { tab, .. }
-        | IloKind::Yours { tab }
+        | IloKind::Yours { tab, .. }
         | IloKind::TabBack { tab }
         | IloKind::SignedIn { tab, .. } => Some(*tab),
         IloKind::TierChanged { .. } => None,
@@ -230,6 +252,11 @@ mod tests {
                 vec![TakeOver, Raise(Tier::Full)],
             ),
             (stopped(Why::Order, Tier::Full), vec![TakeOver]),
+            // Work on pages sends no message, so a message refused at Look only offers Full.
+            (
+                stopped(Why::Message, Tier::Look),
+                vec![TakeOver, Raise(Tier::Full)],
+            ),
             (stopped(Why::Fenced, Tier::Work), vec![TakeOver]),
             (stopped(Why::OtherSite, Tier::Full), vec![TakeOver, AnySite]),
             (
@@ -249,14 +276,42 @@ mod tests {
             settled: false,
         };
         assert_eq!(
-            buttons(&line(IloKind::Yours { tab: 1 })),
+            buttons(&line(IloKind::Yours { tab: 1, site: None })),
             vec![HandBack, NotNow]
         );
-        assert_eq!(buttons(&line(IloKind::TabBack { tab: 1 })), vec![HandBack]);
+        assert_eq!(
+            buttons(&line(IloKind::TabBack { tab: 1 })),
+            vec![HandBack, NotNow]
+        );
         let changed = IloKind::TierChanged {
             from: Tier::Work,
             to: Tier::Full,
         };
         assert_eq!(buttons(&line(changed)), vec![]);
+    }
+
+    /// O2: a step on a page that isn't beside the conversation offers Show Page, never Hand Back,
+    /// until that page is the one shown. With one page, the step offers Hand Back at once.
+    #[test]
+    fn a_step_shows_its_page_before_it_offers_it_back() {
+        use IloButton::*;
+        let line = |site: Option<&str>| IloLine {
+            key: 0,
+            kind: IloKind::Yours {
+                tab: 2,
+                site: site.map(SharedString::from),
+            },
+            settled: false,
+        };
+        let two = line(Some("boxoffice.example"));
+        assert_eq!(drawn(&two, None), vec![ShowPage, NotNow]);
+        assert_eq!(drawn(&two, Some(1)), vec![ShowPage, NotNow]);
+        assert_eq!(drawn(&two, Some(2)), vec![HandBack, NotNow]);
+        assert_eq!(drawn(&line(None), None), vec![HandBack, NotNow]);
+        let settled = IloLine {
+            settled: true,
+            ..two
+        };
+        assert_eq!(drawn(&settled, None), vec![]);
     }
 }

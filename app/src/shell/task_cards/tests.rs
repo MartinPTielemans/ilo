@@ -33,7 +33,6 @@ fn card(n: u64, dot: Dot) -> Card {
         word: Word::for_dot(dot),
         pages: Vec::new(),
         tier: Default::default(),
-        answers: Vec::new(),
         question: None,
         open: Vec::new(),
         page_steps: Vec::new(),
@@ -559,7 +558,7 @@ fn clear_leaves_the_tasks(cx: &mut TestAppContext) {
 
 /// The one chip under a header is the user's own act, which has no page: Limit's Retry, or its
 /// assistant's fix. Its words sit on the title's column and its click does the act. Done's pages
-/// are rows now and an ask's answers are the task's view's, so neither makes a chip.
+/// are rows now and an ask is answered in the task's view, so neither makes a chip.
 #[gpui::test]
 fn the_chip_acts(cx: &mut TestAppContext) {
     let mut limit = card(4, Dot::Ended);
@@ -568,7 +567,6 @@ fn the_chip_acts(cx: &mut TestAppContext) {
     done.open = vec![(30, "maat.pt".into()), (31, "gulbenkian.pt".into())];
     let mut asks = card(6, Dot::Waiting);
     asks.asks = true;
-    asks.answers = vec!["Gulbenkian".into(), "MAAT".into()];
     assert_eq!((chip(&done), chip(&asks)), (None, None));
     assert_eq!(chip(&limit), Some(Chip::Retry));
     let mut failed = card(7, Dot::Ended);

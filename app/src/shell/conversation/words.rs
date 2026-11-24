@@ -25,6 +25,10 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
             Some(at.to_string()),
         ),
         IloKind::Stopped { at, .. } => (format!("stopped {agent} at"), Some(at.to_string())),
+        // With more than one page, it names the step's (O1).
+        IloKind::Yours {
+            site: Some(site), ..
+        } => ("handed this step on".into(), Some(site.to_string())),
         IloKind::Yours { .. } => ("handed this step to you".into(), None),
         IloKind::TabBack { .. } => (format!("· {agent} needs this tab back"), None),
         IloKind::SignedIn { site, .. } => ("signed in to".into(), Some(site.to_string())),
@@ -58,19 +62,29 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
     }
 }
 
-/// A line's head as drawn: ilo's words `own`, then `name`. A page's own words are quoted, so they
-/// read as its; a site's name never is, as it's the app's to write.
-pub fn with_name(kind: &IloKind, own: &str, name: &str) -> String {
+/// A line's head as drawn: ilo's words `own`, with `name`, and where `name` stands in it. A
+/// page's own words are quoted, so they read as its; a site's name never is, as it's the app's to
+/// write.
+pub fn with_name(kind: &IloKind, own: &str, name: &str) -> (String, std::ops::Range<usize>) {
     let site = matches!(
         kind,
         IloKind::Stopped {
             why: Why::Fenced | Why::OtherSite,
             ..
         } | IloKind::SignedIn { .. }
+            | IloKind::Yours { .. }
     );
-    match site {
-        true => format!("{own} {name}"),
-        false => format!("{own} \u{201c}{name}\u{201d}"),
+    let start = own.len() + 1;
+    match (site, kind) {
+        (true, IloKind::Yours { .. }) => {
+            (format!("{own} {name} to you"), start..start + name.len())
+        }
+        (true, _) => (format!("{own} {name}"), start..start + name.len()),
+        (false, _) => {
+            let said = format!("{own} \u{201c}{name}\u{201d}");
+            let end = said.len();
+            (said, start..end)
+        }
     }
 }
 
@@ -123,6 +137,7 @@ pub fn button(button: IloButton) -> &'static str {
         IloButton::Raise(Tier::Full) => "Give Full access",
         IloButton::AnySite => "Any site",
         IloButton::HandBack => "Hand Back",
+        IloButton::ShowPage => "Show Page",
         IloButton::NotNow => "Not Now",
         IloButton::StartAgain => "Start Again",
     }

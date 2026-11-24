@@ -267,7 +267,7 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     // the agent card's.
     update_tab_window(tab, |shell, cx| {
         shell.leave_keys("page", cx);
-        shell.leave_card_keys(cx);
+        shell.leave_ilo_keys(cx);
     });
     if let Some(kept) = link_card_key(tab, unsafe { &*key }) {
         return (kept, "link card");
@@ -289,7 +289,7 @@ fn key_before_page(tab: bc::bc_id, key: *const bc::bc_key) -> (bool, &'static st
     let repeat = repeated_here || unsafe { platform::host_key_repeated() };
     // Focus Agent Question's key gives an agent's card the keyboard while one shows (#3869).
     if update_tab_window(tab, |shell, cx| {
-        shell.run_agent_card_page_key(&keystroke, repeat, cx)
+        shell.run_ilo_page_key(&keystroke, repeat, cx)
     })
     .unwrap_or(false)
     {

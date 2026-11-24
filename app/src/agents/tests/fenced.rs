@@ -98,7 +98,6 @@ fn each_way_onto_a_fenced_site_refuses_the_next_call(cx: &mut TestAppContext) {
     // A click on another site.
     let (agents, browser) = fenced(cx);
     let answer = click_on(&agents, &browser, more_tree(), "Show more", cx);
-    assert_eq!(*browser.asked.borrow(), None, "a click off the fence asked");
     arrives(&agents, &browser, 20, "https://login.mybank.example/", cx);
     let clicked = page_done(&agents, &browser, answer, bank_tree(), cx);
     withheld(&clicked, 20, "login.mybank.example");
@@ -109,7 +108,6 @@ fn each_way_onto_a_fenced_site_refuses_the_next_call(cx: &mut TestAppContext) {
         let (agents, browser) = fenced(cx);
         let go = json!({ "tab": 20, "url": url });
         let answer = call(&agents, "claude-code", "navigate", go, cx);
-        assert_eq!(*browser.asked.borrow(), None, "{url} asked");
         arrives(&agents, &browser, 20, "https://mybank.example/signin", cx);
         withheld(
             &page_done(&agents, &browser, answer, bank_tree(), cx),
@@ -181,13 +179,11 @@ fn a_tab_on_a_fenced_site_it_came_to_gives_nothing(cx: &mut TestAppContext) {
     arrives(&agents, &browser, 20, "https://mybank.example/", cx);
     let listed = call(&agents, "claude-code", "list_tabs", json!({}), cx);
     let listed = listed.recv().unwrap();
-    assert_eq!(*browser.asked.borrow(), None, "list_tabs asked");
     assert!(listed.text.contains(fence::LISTED), "{}", listed.text);
     assert!(!listed.text.contains("mybank"), "{}", listed.text);
     assert!(!listed.text.contains("MyBank"), "{}", listed.text);
     let away = json!({ "tab": 20, "url": "https://news.example/" });
     let _left = call(&agents, "claude-code", "navigate", away, cx);
-    assert_eq!(*browser.asked.borrow(), None, "leaving asked");
     assert_eq!(
         *browser.navigated.borrow(),
         [(20, "https://news.example/".to_string())]
@@ -245,7 +241,6 @@ fn an_open_of_a_fenced_site_is_refused_at_every_tier(cx: &mut TestAppContext) {
     agents.update(cx, |agents, cx| agents.unfence("mybank.example", cx));
     (browser.tabs.borrow_mut()).push((25, 2, "MyBank", "https://mybank.example/"));
     let read = call(&agents, "claude-code", "snapshot", json!({ "tab": 25 }), cx);
-    assert_eq!(*browser.asked.borrow(), None, "a site off the list asked");
     assert!(!page_done(&agents, &browser, read, bank_tree(), cx).error);
 }
 /// A run whose step takes the tab to a fenced site stops there, saying nothing of the page
@@ -433,12 +428,6 @@ fn every_other_answer_about_a_tab_that_came_to_a_fenced_site_is_without_its_page
         for (tool, arguments) in calls {
             let what = format!("{tool} (dialog {dialog})");
             let answer = call(&agents, "claude-code", tool, arguments.clone(), cx);
-            // A handoff's card is its own, not the fence's.
-            let asked = browser.asked.borrow().clone();
-            assert!(
-                asked.is_none_or(|asked| asked.handoff.is_some()),
-                "{what} asked"
-            );
             let answer = match *tool {
                 "hand_off" if !dialog => {
                     assert!(
@@ -509,7 +498,6 @@ fn a_download_from_a_fenced_site_gives_the_agent_no_name(cx: &mut TestAppContext
             .try_recv()
             .expect("the download wasn't answered at once");
         assert_eq!(answer, ToolResult::text(fence::download("mybank.example")));
-        assert_eq!(*browser.asked.borrow(), None, "the download asked");
         assert_eq!(
             browser.downloads.borrow().last(),
             Some(&(id, false)),

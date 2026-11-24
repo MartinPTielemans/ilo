@@ -253,13 +253,12 @@ impl Shell {
     }
 
     /// The key system behind the note of the tab shown, if its page needs one. A page's question
-    /// takes the note's place until it's answered, as an agent's does, as all hang from the same
-    /// place. Each note is its engine's: Chromium's until the tab is in Safari's, which has the
+    /// takes the note's place until it's answered, as both hang from the same place. Each note is its engine's: Chromium's until the tab is in Safari's, which has the
     /// output's and the move's. The move's stays reported until Chromium's page commits, so a tab
     /// on its way back never shows it as Chromium's.
     pub(super) fn drm_note(&self) -> Option<&SharedString> {
         let playing = self.page(self.selected).system_engine;
-        let asked = self.page_asks() || self.agent_question.is_some();
+        let asked = self.page_asks();
         self.drm_notes
             .get(&self.selected)
             .filter(|key_system| safaris(key_system) == playing && !asked)

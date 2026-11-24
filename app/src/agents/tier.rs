@@ -36,6 +36,12 @@ impl Tier {
         }
     }
 
+    /// The lowest tier above this one at which an act refused for `why` happens, which its
+    /// refusal offers, or None if none does.
+    pub fn lifting(self, why: Why) -> Option<Tier> {
+        (Tier::ALL.into_iter()).find(|tier| *tier as usize > self as usize && tier.allows(why))
+    }
+
     /// What it lets a task do, under its name in Settings › Agents' Access, each past the one below.
     pub fn explained(self) -> &'static str {
         match self {
@@ -367,9 +373,11 @@ mod tests {
         assert_eq!(at(SignIn), [false, true, true]);
         assert_eq!(at(SignInBank), [false, false, true]);
         assert_eq!(Tier::default(), Work);
-        assert_eq!(Look.up(), Some(Work));
-        assert_eq!(Work.up(), Some(Full));
-        assert_eq!(Full.up(), None);
+        assert_eq!(Look.lifting(Act), Some(Work));
+        assert_eq!(Look.lifting(Message), Some(Full));
+        assert_eq!(Work.lifting(Order), Some(Full));
+        assert_eq!(Full.lifting(Order), None);
+        assert_eq!(Look.lifting(Fenced), None);
     }
 
     #[test]
