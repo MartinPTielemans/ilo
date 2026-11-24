@@ -904,8 +904,9 @@ fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
             "Send a daily usage count",
             "Send crash reports",
             "Let agents use the browser",
-            "Continue",
-            "Skip"
+            "Back",
+            "Skip",
+            "Continue"
         ],
         "the stops ⇥ goes along, the step's buttons too, as a screen reader's user finds them (#3151)"
     );
@@ -922,9 +923,10 @@ fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
         let said: Vec<String> = said.into_iter().map(str::to_string).collect();
         assert_eq!(host.take(), said, "Space on switch {at}");
     }
-    // Round past Continue and Skip to the first, and back to the last switch.
-    cx.simulate_keystrokes("tab tab tab");
-    cx.simulate_keystrokes("shift-tab shift-tab shift-tab");
+    // Round past the sheet's foot, Back, Skip and Continue, to the first, and back to the last
+    // switch.
+    cx.simulate_keystrokes("tab tab tab tab");
+    cx.simulate_keystrokes("shift-tab shift-tab shift-tab shift-tab");
     press("space", cx);
     assert_eq!(
         offered(&shell, cx),
@@ -937,14 +939,18 @@ fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
     );
 }
 
-/// The opt-ins rest on Continue, and the switches are a ⇥ or ⇧⇥ from it: ⇥ goes past Skip to the
-/// count's, the first, and ⇧⇥ back to the agents', the last (#3498).
+/// The opt-ins rest on Continue, the last of the sheet's foot, and the switches are a ⇥ from it:
+/// ⇥ goes round to the count's, the first, and ⇧⇥ back past Skip and Back to the agents', the
+/// last (#3498).
 #[gpui::test]
 fn the_switches_are_a_tab_from_continue(cx: &mut TestAppContext) {
     for (keys, at) in [
-        ("tab", "Skip"),
-        ("tab tab", "Send a daily usage count"),
-        ("shift-tab", "Let agents use the browser"),
+        ("tab", "Send a daily usage count"),
+        ("shift-tab", "Skip"),
+        (
+            "shift-tab shift-tab shift-tab",
+            "Let agents use the browser",
+        ),
     ] {
         let (_, cx, _) = at_three_switches(cx);
         cx.simulate_a11y_activation();
@@ -971,8 +977,8 @@ fn return_and_escape_leave_from_a_focused_switch(cx: &mut TestAppContext) {
         ("escape", false),
     ] {
         let (shell, cx, host) = at_three_switches(cx);
-        // From Continue, where the step rests, past Skip to the count's switch.
-        cx.simulate_keystrokes("tab tab");
+        // From Continue, where the step rests, round to the count's switch.
+        cx.simulate_keystrokes("tab");
         if turned {
             press("space", cx);
         }
@@ -2570,5 +2576,136 @@ fn the_sync_loop_carries_a_tab_across_and_a_favorite_back(cx: &mut TestAppContex
     assert!(
         placed("phone-tab", cx).is_some() && placed("tile-back", cx).is_some(),
         "the still last frame has both landed"
+    );
+}
+
+/// The assistant's step comes after the account's, on the sheet, its foot with Back and Skip, and
+/// under its rows the room kept for the sign-in's switch, a row high, with nothing in it.
+#[gpui::test]
+fn the_assistant_step_is_on_the_sheet_with_room_for_its_switch(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    host.agents.set(Some(false));
+    started(&shell, cx);
+    assert!(
+        steps(&shell, cx).ends_with(&[Step::Assistant, Step::OptIns]),
+        "the assistant's step comes before Up to you: {:?}",
+        steps(&shell, cx)
+    );
+    skip_to(&shell, cx, Step::Assistant);
+    later(&shell, cx, STEP_MOTION);
+    assert!(
+        super::sheet::on_sheet(Step::Assistant) && super::sheet::on_sheet(Step::OptIns),
+        "the assistant's step and Up to you show on the sheet"
+    );
+    assert!(
+        placed("skip", cx).is_some() && placed("back", cx).is_some(),
+        "the sheet's foot has Back and Skip"
+    );
+    let room = placed("switch-place", cx).expect("the switch's room is laid out");
+    assert_eq!(
+        room.size.height,
+        px(crate::tokens::settings::ROW_HEIGHT),
+        "a row high"
+    );
+    cx.simulate_keystrokes("escape");
+    assert_eq!(step(&shell, cx), Some(Step::OptIns), "Esc goes on, as Skip");
+}
+
+/// The assistant's loop: one ask, three pages opened at once in the small window's sidebar, a
+/// price read from each in turn, then the answer; nothing is open as it starts, and its still
+/// last frame is the answer.
+#[gpui::test]
+fn the_assistant_loop_reads_a_price_from_each_page_then_answers(cx: &mut TestAppContext) {
+    use crate::tokens::shell::onboarding::loops::{
+        ASSISTANT_ANSWER, ASSISTANT_OPEN, ASSISTANT_READ, ASSISTANT_STAGGER, IMPORT_FADE,
+        IMPORT_LAND,
+    };
+    let (shell, cx, host) = first_window(cx);
+    host.agents.set(Some(false));
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Assistant);
+    later(&shell, cx, STEP_MOTION);
+    held_at(&shell, cx, 0.);
+    assert!(
+        placed("tab-0", cx).is_none(),
+        "nothing is open as it starts"
+    );
+    held_at(&shell, cx, ASSISTANT_OPEN + IMPORT_LAND);
+    let sidebar = placed("sidebar", cx).expect("the loop's sidebar is drawn");
+    for tab in ["tab-0", "tab-1", "tab-2"] {
+        let drawn = placed(tab, cx).unwrap_or_else(|| panic!("{tab} opened with the others"));
+        assert!(
+            inside(drawn, sidebar),
+            "{tab} lands inside the sidebar at {sidebar:?}, but it was at {drawn:?}"
+        );
+    }
+    assert!(
+        placed("price-0", cx).is_none(),
+        "no price is read as the pages open"
+    );
+    for (index, price) in ["price-0", "price-1", "price-2"].into_iter().enumerate() {
+        held_at(
+            &shell,
+            cx,
+            ASSISTANT_READ + index as f32 * ASSISTANT_STAGGER + IMPORT_FADE,
+        );
+        assert!(placed(price, cx).is_some(), "{price} is read in its turn");
+        assert!(placed("answer", cx).is_none(), "before the answer");
+    }
+    held_at(&shell, cx, ASSISTANT_ANSWER + IMPORT_FADE);
+    assert!(placed("answer", cx).is_some(), "the answer comes last");
+    held_at(&shell, cx, PERIOD);
+    assert!(
+        placed("answer", cx).is_some() && placed("price-2", cx).is_some(),
+        "the still last frame is the answer"
+    );
+}
+
+/// Up to you's loop: today's count fills in a line at a time, all it holds, then a week goes by
+/// under it a day at a time; it's empty as it starts, and its still last frame is the week counted.
+#[gpui::test]
+fn the_up_to_you_loop_fills_the_count_then_a_week(cx: &mut TestAppContext) {
+    use crate::tokens::shell::onboarding::loops::{
+        COUNT_AT, COUNT_DAY, COUNT_STAGGER, COUNT_WEEK, IMPORT_FADE,
+    };
+    let (shell, cx, host) = first_window(cx);
+    host.daily_count.set(Some(false));
+    host.crash_reports.set(Some(false));
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::OptIns);
+    later(&shell, cx, STEP_MOTION);
+    held_at(&shell, cx, 0.);
+    assert!(
+        placed("line-0", cx).is_none(),
+        "the count is empty as it starts"
+    );
+    let lines = ["line-0", "line-1", "line-2", "line-3", "line-4"];
+    for (index, line) in lines.into_iter().enumerate() {
+        held_at(
+            &shell,
+            cx,
+            COUNT_AT + index as f32 * COUNT_STAGGER + IMPORT_FADE,
+        );
+        assert!(placed(line, cx).is_some(), "{line} fills in its turn");
+        if let Some(next) = lines.get(index + 1) {
+            assert!(placed(next, cx).is_none(), "{next} not yet");
+        }
+    }
+    assert!(
+        placed("day-0", cx).is_none(),
+        "no day goes by while it fills"
+    );
+    let card = placed("card", cx).expect("the card is drawn");
+    let week = placed("week", cx).expect("the week is drawn");
+    assert!(
+        week.origin.y >= card.origin.y + card.size.height,
+        "the week is under the card at {card:?}, but it was at {week:?}"
+    );
+    held_at(&shell, cx, COUNT_WEEK + 6. * COUNT_DAY + IMPORT_FADE);
+    assert!(placed("day-6", cx).is_some(), "the week is counted");
+    held_at(&shell, cx, PERIOD);
+    assert!(
+        placed("line-4", cx).is_some() && placed("day-6", cx).is_some(),
+        "the still last frame is the card full and the week counted"
     );
 }
