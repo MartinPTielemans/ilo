@@ -70,5 +70,16 @@ TEST(AgentLookRuleTest, OnlyALateLookIsUnchecked) {
   }
 }
 
+// A page keeps no more looks than the cap: past it a call hears it wasn't checked at once, and
+// sends nothing a renderer that never answers would keep.
+TEST(AgentLookRuleTest, APageKeepsNoMoreLooksThanTheCap) {
+  for (size_t kept = 0; kept < kMostKeptLooks; ++kept) {
+    EXPECT_TRUE(LooksAgain(kept)) << kept;
+  }
+  EXPECT_FALSE(LooksAgain(kMostKeptLooks));
+  EXPECT_FALSE(LooksAgain(kMostKeptLooks + 100));
+  EXPECT_EQ(CutOfLook(LookCut::kLate).call, LookEnd::kUnchecked);
+}
+
 }  // namespace
 }  // namespace browser_core

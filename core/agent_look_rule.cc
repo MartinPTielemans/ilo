@@ -16,4 +16,8 @@ CutLook CutOfLook(LookCut cut) {
   return {.call = LookEnd::kWithheld, .kept = cut == LookCut::kSessionEnded};
 }
 
+bool LooksAgain(size_t kept) {
+  return kept < kMostKeptLooks;
+}
+
 }  // namespace browser_core

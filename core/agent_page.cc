@@ -2134,6 +2134,13 @@ void AgentPage::Paint(gfx::Rect source,
 }
 
 void AgentPage::Freeze(base::OnceCallback<void(LookEnd)> then) {
+  // Past the cap the page has left its looks unanswered: this call hears so, as one cut for time
+  // does, and nothing more is sent. Posted, as it may answer the app inside its own call.
+  if (!LooksAgain(looks_.size() - Waiting())) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(then), CutOfLook(LookCut::kLate).call));
+    return;
+  }
   std::vector<int> slots;
   for (size_t slot = 0; slot < targets_.size(); ++slot) {
     if (!slot || !targets_[slot].session.empty()) {

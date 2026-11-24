@@ -1,6 +1,8 @@
 #ifndef BROWSER_CORE_AGENT_LOOK_RULE_H_
 #define BROWSER_CORE_AGENT_LOOK_RULE_H_
 
+#include <cstddef>
+
 namespace browser_core {
 
 // Where the document a look asked (AgentPage::Freeze) is when its answer comes, which may be after
@@ -62,6 +64,15 @@ struct CutLook {
 // a call cut for time hears it wasn't checked, and may be made again. A session's end answers
 // its calls as a withheld page's, and a page let go has no answer left to hear.
 CutLook CutOfLook(LookCut cut);
+
+// The most looks a page keeps for their own answers. A session runs its commands in order, so a
+// new look waits behind every kept one: a renderer that never answers would otherwise keep one more
+// for each call an agent makes, until the tab closes or its renderer goes.
+inline constexpr size_t kMostKeptLooks = 4;
+
+// Whether a call on a page keeping |kept| looks looks too. One that doesn't is answered at once as
+// a look cut for time is, and sends nothing to the page.
+bool LooksAgain(size_t kept);
 
 }  // namespace browser_core
 
