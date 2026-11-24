@@ -11,7 +11,7 @@
 
 use std::{cell::RefCell, sync::Arc};
 
-use gpui::{App, RenderImage, Rgba, canvas, div, prelude::*, px};
+use gpui::{App, Bounds, Pixels, RenderImage, Rgba, canvas, div, point, prelude::*, px, size};
 use image::{Frame, RgbaImage};
 
 use crate::tokens::palette::{
@@ -110,8 +110,10 @@ pub fn glow_scaled(
             |_, _, _| {},
             move |bounds, _, window, cx| {
                 let picture = picture(corner, mirrored, color, window, cx);
+                // The whole picture a texel past the box on each side, shown only in the box.
+                let whole = picture_bounds(corner, bounds);
                 window
-                    .paint_image(bounds, bounds, px(0.).into(), picture, 0, false)
+                    .paint_image(bounds, whole, px(0.).into(), picture, 0, false)
                     .ok();
             },
         )
@@ -152,17 +154,45 @@ fn picture(
     found
 }
 
-/// The picture: `color` everywhere, its alpha the glow's strength, in BGRA as GPUI keeps images.
-fn make(corner: Corner, mirrored: bool, color: Rgba) -> Arc<RenderImage> {
+/// The glow's texels across and down its box, at `DETAIL`, without the picture's clear border.
+fn texels(corner: Corner) -> (u32, u32) {
     let (width, height) = corner.extent();
-    let (columns, rows) = (
+    (
         (width * DETAIL).ceil().max(1.) as u32,
         (height * DETAIL).ceil().max(1.) as u32,
-    );
+    )
+}
+
+/// Where the whole picture, its clear border with it, is drawn for a glow in `bounds`: a texel
+/// further out on each side, so the box shows exactly the glow's texels. GPUI keeps every picture
+/// in one atlas with no room between them and samples it linearly at four pixels a texel, so a
+/// box drawn to the picture's own edge took its last two pixels half from the picture packed
+/// beside it, a bright line at the foot's edge (#4093); here that edge samples the clear border.
+fn picture_bounds(corner: Corner, bounds: Bounds<Pixels>) -> Bounds<Pixels> {
+    let (columns, rows) = texels(corner);
+    let across = bounds.size.width / columns as f32;
+    let down = bounds.size.height / rows as f32;
+    Bounds {
+        origin: point(bounds.origin.x - across, bounds.origin.y - down),
+        size: size(
+            bounds.size.width + across * 2.,
+            bounds.size.height + down * 2.,
+        ),
+    }
+}
+
+/// The picture: `color` everywhere, its alpha the glow's strength, in BGRA as GPUI keeps images,
+/// with a clear texel all round it (`picture_bounds`).
+fn make(corner: Corner, mirrored: bool, color: Rgba) -> Arc<RenderImage> {
+    let (width, height) = corner.extent();
+    let (columns, rows) = texels(corner);
     let channel = |value: f32| (value.clamp(0., 1.) * 255.).round() as u8;
     let (r, g, b) = (channel(color.r), channel(color.g), channel(color.b));
-    let mut pixels = Vec::with_capacity((columns * rows * 4) as usize);
+    let mut pixels = Vec::with_capacity(((columns + 2) * (rows + 2) * 4) as usize);
+    let clear = [b, g, r, 0];
+    pixels.extend(clear.repeat(columns as usize + 2));
     for row in 0..rows {
+        pixels.extend(clear);
         for column in 0..columns {
             // Each pixel's middle, in points from the glow's corner.
             let x = (column as f32 + 0.5) / columns as f32 * width;
@@ -177,8 +207,10 @@ fn make(corner: Corner, mirrored: bool, color: Rgba) -> Arc<RenderImage> {
             };
             pixels.extend([b, g, r, channel(corner.strength(dx, dy))]);
         }
+        pixels.extend(clear);
     }
-    let picture = RgbaImage::from_raw(columns, rows, pixels).expect("sized to fit");
+    pixels.extend(clear.repeat(columns as usize + 2));
+    let picture = RgbaImage::from_raw(columns + 2, rows + 2, pixels).expect("sized to fit");
     Arc::new(RenderImage::new(vec![Frame::new(picture)]))
 }
 
@@ -198,6 +230,81 @@ mod tests {
             assert!(
                 corner.strength(width / 4., height / 4.) > corner.strength(width / 2., height / 2.)
             );
+        }
+    }
+
+    /// The picture's outer texels are clear all round, so a glow drawn from the sprite atlas
+    /// samples them at its box's edge rather than the next picture packed beside it, whose
+    /// brightest column showed as a 2 px line at the foot glow's edge, x 403 (#4093).
+    #[test]
+    fn a_pictures_edge_is_clear_all_round() {
+        let red = Rgba {
+            r: 1.,
+            g: 0.,
+            b: 0.,
+            a: 1.,
+        };
+        for corner in [Corner::Foot, Corner::Far] {
+            for mirrored in [false, true] {
+                let picture = make(corner, mirrored, red);
+                let size = picture.size(0);
+                let (columns, rows) = (size.width.0 as usize, size.height.0 as usize);
+                let bytes = picture.as_bytes(0).expect("one frame");
+                let alpha = |column: usize, row: usize| bytes[(row * columns + column) * 4 + 3];
+                for row in 0..rows {
+                    for column in [0, columns - 1] {
+                        assert_eq!(
+                            alpha(column, row),
+                            0,
+                            "{corner:?} {mirrored}: column {column}, row {row}"
+                        );
+                    }
+                }
+                for column in 0..columns {
+                    for row in [0, rows - 1] {
+                        assert_eq!(
+                            alpha(column, row),
+                            0,
+                            "{corner:?} {mirrored}: column {column}, row {row}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Drawn a texel past its box on each side, the picture's glow texels fill the box exactly.
+    #[test]
+    fn the_glows_texels_fill_its_box() {
+        for corner in [Corner::Foot, Corner::Far] {
+            let (width, height) = corner.extent();
+            let (columns, rows) = texels(corner);
+            for scale in [1., 0.4] {
+                let bounds = Bounds {
+                    origin: point(px(12.), px(30.)),
+                    size: size(px(width * scale), px(height * scale)),
+                };
+                let whole = picture_bounds(corner, bounds);
+                let across = whole.size.width / (columns + 2) as f32;
+                let down = whole.size.height / (rows + 2) as f32;
+                let near = |a: Pixels, b: Pixels| (f32::from(a) - f32::from(b)).abs() < 1e-3;
+                assert!(
+                    near(whole.origin.x + across, bounds.origin.x),
+                    "{corner:?} {scale}"
+                );
+                assert!(
+                    near(whole.origin.y + down, bounds.origin.y),
+                    "{corner:?} {scale}"
+                );
+                assert!(
+                    near(whole.size.width - across * 2., bounds.size.width),
+                    "{corner:?} {scale}"
+                );
+                assert!(
+                    near(whole.size.height - down * 2., bounds.size.height),
+                    "{corner:?} {scale}"
+                );
+            }
         }
     }
 
