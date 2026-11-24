@@ -18,6 +18,9 @@ use std::time::SystemTime;
 use super::runner::Cli;
 use super::tier::Tier;
 
+#[cfg(unix)]
+mod links;
+
 /// Why this system can't wall a task in, for the menu's file and folder rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unavailable {
@@ -116,7 +119,7 @@ pub fn put_up(task: &WallFor) -> Result<Wall, WallRefused> {
 /// A link in the granted folder that leads out of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LeavingLink {
-    /// Where it is, under the folder.
+    /// Where it is, relative to the folder.
     pub path: PathBuf,
     /// Where it points, as read at the walk.
     pub target: PathBuf,
@@ -147,17 +150,29 @@ pub struct Removed {
 }
 
 /// The links the task made, moved or retargeted that leave its folder: once, as the task ends,
-/// off the UI thread. No wall has a folder until a launcher is built, so there are none yet.
+/// off the UI thread, never on a timer or while the task runs. It reads directories and links only
+/// (links.rs), and stops at a million entries or 30 s, saying so.
+#[cfg(unix)]
 pub fn links_outside(wall: &Wall) -> Walked {
-    let _ = wall;
+    links::outside(wall, links::LIMITS)
+}
+
+/// Windows walls no task in, so no wall has a folder.
+#[cfg(not(unix))]
+pub fn links_outside(_: &Wall) -> Walked {
     Walked::default()
 }
 
-/// The user's Delete Links: exactly the listed links, each only if it is still a link with the
-/// target the walk read, still leading out. No task can ask for it, and a list of every leaving
-/// link offers none.
+/// The user's Delete Links: exactly the listed links, each only if it is still a link the task
+/// made, with the target the walk read, still leading out. No task can ask for it, and where the
+/// folder keeps no change time to trust, the list was every leaving link, and it deletes none.
+#[cfg(unix)]
 pub fn remove_links(wall: &Wall, links: &[LeavingLink]) -> Removed {
-    let _ = wall;
+    self::links::remove(wall, links, self::links::LIMITS)
+}
+
+#[cfg(not(unix))]
+pub fn remove_links(_: &Wall, links: &[LeavingLink]) -> Removed {
     Removed {
         removed: 0,
         left: links.len(),
