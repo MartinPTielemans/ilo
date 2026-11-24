@@ -46,6 +46,7 @@
 #include "browser_core/site_controls.h"
 #include "browser_core/space.h"
 #include "browser_core/system_engine.h"
+#include "browser_core/tile.h"
 #include "browser_core/window.h"
 #include "build/build_config.h"
 #include "chrome/browser/favicon/favicon_service_factory.h"
@@ -2172,6 +2173,7 @@ void Tab::BeforeUnloadFired(bool proceed) {
 
 void Tab::WebContentsDestroyed() {
   user_load_.Closed();
+  tiles::End(id_);
   // The driver is the page's too, and may go before the tab does, as may its infobars.
   favicon_observation_.Reset();
   infobar_observation_.Reset();

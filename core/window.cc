@@ -50,6 +50,7 @@
 #include "browser_core/suggest.h"
 #include "browser_core/sync.h"
 #include "browser_core/tab.h"
+#include "browser_core/tile.h"
 #include "browser_core/window_frames.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
@@ -876,6 +877,12 @@ void Window::DialogPressed(views::Widget* window, views::Widget* dialog) {
 // static
 void Window::ActivateContents(content::WebContents* contents) {
   const bc_id tab = Tab::IdOf(contents);
+  // A tile is watched, never used: its page's focus() doesn't bring its tab to a window.
+  if (tiles::Holds(tab)) {
+    fprintf(stderr, "browser: tile %llu refused focus (page)\n",
+            static_cast<unsigned long long>(tab));
+    return;
+  }
   // A tab the window shows already stays as it is: a notification's click brings its tab forward,
   // and the page's own window.focus() in its click handler then asks again (#685).
   if (Window* window = tab ? Holding(tab) : nullptr; window && window->selected_ != tab) {
@@ -2013,6 +2020,10 @@ void Window::Show(content::WebContents* contents, const gfx::Rect& frame) {
     if (!std::ranges::contains(panes, pane)) {
       SeenUntilNow(pane);
     }
+  }
+  // The window takes a tile's page, with its input, from the tile.
+  for (bc_id pane : panes) {
+    tiles::End(pane);
   }
   panes_ = std::move(panes);
   const bool newly_shown = shown_.get() != contents;

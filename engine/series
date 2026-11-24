@@ -103,3 +103,4 @@ ours/chromium-same-document-keeps-beforeunload.patch
 mac/chromium-crashpad-mac-handler.patch
 mac/chromium-crashpad-mac-async-start.patch
 mac/chromium-core-touch-id-keychain-group.patch
+mac/chromium-core-page-tile.patch
