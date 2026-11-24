@@ -2940,6 +2940,73 @@ fn a_lowered_task_is_refused_from_its_next_act(cx: &mut TestAppContext) {
     );
 }
 
+/// A site the user answered Never for this agent is refused at every tier, in the words of an
+/// answer of theirs, while Settings lists it; revoked there, the act goes as the tier allows.
+#[gpui::test]
+fn a_site_set_to_never_is_refused_at_every_tier_until_revoked(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    page_done(&agents, &browser, answer, shop_tree(), cx);
+    agents.update(cx, |agents, _| {
+        let sites = agents.grants.entry("claude-code".into()).or_default();
+        sites.insert("example.com".into(), false);
+    });
+    let coupon = |cx: &mut TestAppContext| {
+        call(
+            &agents,
+            "claude-code",
+            "click",
+            json!({ "tab": 20, "ref": "e1" }),
+            cx,
+        )
+    };
+    let what = "click “Coupon” on example.com";
+    let pages = browser.pages.borrow().len();
+    for tier in Tier::ALL {
+        give(&agents, tier, cx);
+        let told = refused(
+            &agents,
+            &browser,
+            coupon(cx),
+            what,
+            Why::Never,
+            "click “Coupon”",
+            cx,
+        );
+        assert!(
+            told.text
+                .contains("set example.com to Never for this agent"),
+            "{}",
+            told.text
+        );
+        assert_eq!(
+            browser.pages.borrow().len(),
+            pages,
+            "it clicked at {tier:?}"
+        );
+    }
+    // A read still goes.
+    let answer = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+
+    agents.update(cx, |agents, cx| {
+        agents.revoke("claude-code", Some("example.com"), cx)
+    });
+    give(&agents, Tier::Look, cx);
+    refused(
+        &agents,
+        &browser,
+        coupon(cx),
+        what,
+        Why::Act,
+        "click “Coupon”",
+        cx,
+    );
+    give(&agents, Tier::Work, cx);
+    let clicked = coupon(cx);
+    assert!(!page_done(&agents, &browser, clicked, shop_tree(), cx).error);
+}
+
 /// A task's Sites, set to the pages the user gave it, refuse a page on another site at every tier,
 /// and Any site settles the refusal and lets it go.
 #[gpui::test]

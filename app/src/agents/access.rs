@@ -44,6 +44,12 @@ impl Agents {
         }
     }
 
+    /// Whether the user answered Never for `agent` on `site`, an answer Settings lists and revokes.
+    pub(super) fn said_never(&self, agent: &str, site: &str) -> bool {
+        let answers = self.grants.get(&self.answers_of(agent));
+        answers.and_then(|sites| sites.get(site)) == Some(&false)
+    }
+
     /// Whether the task's Sites leave out where `act` goes or what it's on: an open's address, or
     /// its tab's page. A download comes from wherever the site keeps its files, so it isn't asked.
     pub(super) fn off_sites(&self, act: &Act, cx: &gpui::App) -> bool {

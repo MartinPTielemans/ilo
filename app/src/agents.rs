@@ -3443,7 +3443,14 @@ impl Agents {
             false => why,
         };
         let tier = self.tier_of(&act.agent, act.connection, act.call);
-        match Self::why_of(&act, &site, why) {
+        // A site the user answered Never for this agent stays refused at every tier until they
+        // revoke it, while Settings still lists it (#4086 step 3 moves these to Off limits).
+        let why = Self::why_of(&act, &site, why).map(|why| match why {
+            tier::Why::Fenced | tier::Why::OtherSite => why,
+            _ if self.said_never(&act.agent, &site) => tier::Why::Never,
+            _ => why,
+        });
+        match why {
             Some(why) if !tier.allows(why) => self.stopped(act, site, why, tier, cx),
             // What the tier allowed has its answer: a request's changes go with it.
             _ if act.action == "request" => self.send(act, true, cx),

@@ -82,6 +82,9 @@ pub enum Why {
     Fenced,
     /// A site outside the task's Sites, which no tier lifts either.
     OtherSite,
+    /// A site the user answered Never for this agent, which no tier lifts until they revoke it in
+    /// Settings.
+    Never,
     /// Signs in with what the browser keeps (#4098): a stub row until that tool comes.
     SignIn,
     /// Signs in on a bank's site.
@@ -93,12 +96,12 @@ struct Row {
     why: Why,
     allowed: [bool; 3],
     /// The user's line's whole sentence on the refusal, `{level}` standing for the tier: one per
-    /// act, whose first words also name the act in the activity log. Fenced and OtherSite name
-    /// the site instead (`why_line`).
+    /// act, whose first words also name the act in the activity log. Fenced, OtherSite and Never
+    /// name the site instead (`why_line`).
     refused: &'static str,
 }
 
-const ROWS: [Row; 11] = [
+const ROWS: [Row; 12] = [
     Row {
         why: Why::Act,
         allowed: [false, true, true],
@@ -141,6 +144,11 @@ const ROWS: [Row; 11] = [
     },
     Row {
         why: Why::OtherSite,
+        allowed: [false, false, false],
+        refused: "",
+    },
+    Row {
+        why: Why::Never,
         allowed: [false, false, false],
         refused: "",
     },
@@ -208,6 +216,7 @@ pub fn why_line(why: Why, tier: Tier, site: &str) -> String {
     match why {
         Why::Fenced => format!("{site} is on your Off limits list."),
         Why::OtherSite => format!("{site} isn't one of the sites you added."),
+        Why::Never => format!("{site} is set to Never for this agent."),
         _ => {
             let row = ROWS.iter().find(|row| row.why == why).unwrap();
             row.refused.replace("{level}", tier.label())
@@ -229,6 +238,11 @@ pub fn told(why: Why, tier: Tier, what: &str, site: &str) -> String {
             "ilo stopped this: {what}. {site} is outside the sites this task may use. Only the user \
              can change that, in ilo. Don't try another way to the same end; if they change it, \
              the same call will go through."
+        ),
+        Why::Never => format!(
+            "ilo stopped this: {what}. The user set {site} to Never for this agent, whatever a \
+             task's access. Only the user can change that, in ilo. Don't try another way to the \
+             same end."
         ),
         _ => format!(
             "ilo stopped this: {what}. It isn't part of this task's access ({}). Only the user can \
@@ -322,6 +336,7 @@ mod tests {
         // A fence and the task's Sites are the user's own, and no tier lifts them.
         assert_eq!(at(Fenced), [false, false, false]);
         assert_eq!(at(OtherSite), [false, false, false]);
+        assert_eq!(at(Never), [false, false, false]);
         assert_eq!(at(SignIn), [false, true, true]);
         assert_eq!(at(SignInBank), [false, false, true]);
         assert_eq!(Tier::default(), Work);
@@ -357,7 +372,9 @@ mod tests {
                 let line = why_line(row.why, tier, "shop.example");
                 assert!(line.ends_with('.') && !line.contains('{'), "{line}");
                 match row.why {
-                    Why::Fenced | Why::OtherSite => assert!(line.starts_with("shop.example ")),
+                    Why::Fenced | Why::OtherSite | Why::Never => {
+                        assert!(line.starts_with("shop.example "))
+                    }
                     _ => assert!(
                         line.ends_with(&format!(" isn't part of {}.", tier.label())),
                         "{line}"
