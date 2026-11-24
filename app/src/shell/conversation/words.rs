@@ -2,6 +2,7 @@
 //! composer's row. One table, so a change of wording after the owner has used a build is an edit
 //! here (#4086). The tiers' names are the tier table's (agents/tier.rs).
 
+use crate::agents::kept;
 use crate::agents::task::ilo::{IloButton, IloKind, SignedInWith};
 use crate::agents::tier::{Tier, Why};
 
@@ -28,8 +29,25 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
             (format!("you gave this task {}", to.label()), None)
         }
         IloKind::TierChanged { to, .. } => (format!("you set this task to {}", to.label()), None),
+        IloKind::Resumed { tier } => (format!("resumed this task at {}", tier.label()), None),
+        // Where the assistant is the subject, a middle dot sets ilo's mark off from the sentence.
+        // A kept task takes a reply while the browser runs, and the words promise no more.
+        IloKind::KeptHere => (
+            format!(
+                "· {agent} keeps this conversation on {} until you quit {}, so you can reply.",
+                kept::COMPUTER,
+                env!("APP_NAME")
+            ),
+            None,
+        ),
+        IloKind::Gone => (format!("· {agent} no longer has this conversation."), None),
+        IloKind::NotKept => (format!("· {agent} didn't keep this conversation."), None),
+        IloKind::KeepsNothing => (format!("· {agent} doesn't keep finished tasks."), None),
     }
 }
+
+/// Where the switch that keeps finished tasks is, under the line that says they're kept.
+const KEPT_IN: &str = "Settings › Agents";
 
 /// What a line says under its head, if anything: why ilo stopped, in the user's terms, or what it
 /// signed in with. `at` is the line's name, already cut to its length.
@@ -45,6 +63,9 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
             SignedInWith::Extension(name) => format!("With {name}."),
         }),
         IloKind::Yours { .. } | IloKind::TabBack { .. } | IloKind::TierChanged { .. } => None,
+        IloKind::KeptHere => Some(KEPT_IN.into()),
+        IloKind::Resumed { .. } => None,
+        IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing => None,
     }
 }
 
@@ -80,6 +101,7 @@ pub fn button(button: IloButton) -> &'static str {
         IloButton::AnySite => "Any site",
         IloButton::HandBack => "Hand back",
         IloButton::NotNow => "Not now",
+        IloButton::StartAgain => "Start Again",
     }
 }
 

@@ -2695,7 +2695,8 @@ fn task_conversation(agent: SharedString) -> Conversation {
 
 /// PREVIEW_TASK=<state> (#4095's bench) shows the working task's conversation beside its page in
 /// one of the states ilo's own lines are made for, from made-up data: working, refused,
-/// off-limits, yours, tab-back, signed-in, raised or notes.
+/// off-limits, yours, tab-back, signed-in, raised or notes; or of a task that has ended (#4105):
+/// ended, ended-first, picked-up, gone, not-kept or codex-ended.
 fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
     let Ok(state) = std::env::var("PREVIEW_TASK") else {
         return;
@@ -2785,6 +2786,40 @@ fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 ),
                 working(10, "Clicking “Place order”"),
             ]
+        }
+        // A task that has ended (#4105): with its reply field, the first one's line saying where
+        // the conversation lives, a reply that took it up, and the three lines that stand in the
+        // field's place.
+        "ended" | "ended-first" | "picked-up" | "gone" | "not-kept" | "codex-ended" => {
+            let ended = state != "picked-up";
+            if state == "codex-ended" {
+                talk.name = "Codex".into();
+            }
+            talk.about = match ended {
+                true => format!("{} · Done at 14:02", talk.name).into(),
+                false => talk.about.clone(),
+            };
+            talk.stoppable = !ended;
+            if ended {
+                talk.on = None;
+            }
+            let mut lines = vec![
+                done(0, &items),
+                Line::Said("Two seats in row 12 of the stalls are in your basket on tickets.example.".into()),
+            ];
+            match state.as_str() {
+                "ended-first" => lines.push(line(100, IloKind::KeptHere)),
+                "picked-up" => lines.extend([
+                    line(100, IloKind::Resumed { tier: Tier::Work }),
+                    Line::You("Are there two together for Sunday too?".into()),
+                    working(10, "Reading this page"),
+                ]),
+                "gone" => lines.push(line(100, IloKind::Gone)),
+                "not-kept" => lines.push(line(100, IloKind::NotKept)),
+                "codex-ended" => lines.push(line(100, IloKind::KeepsNothing)),
+                _ => {}
+            }
+            lines
         }
         // A step whose answer carried a site's notes (#4122), which the line under it says.
         "notes" => {
