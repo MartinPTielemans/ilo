@@ -3782,7 +3782,8 @@ impl Settings {
             true => self.kept_rows(agents, cx),
             false => Vec::new(),
         };
-        // Whether agents may ask ilo to fill a saved login (#4098), shown while agents are on.
+        // Whether agents may ask ilo to fill a saved login (#4098), shown under Access while tasks
+        // are on, and off wherever it isn't shown (Agents::sign_in_on).
         let sign_in = on.then(|| {
             use agents::signing;
             let sign_in_on = agents.read(cx).sign_in_on();
@@ -3929,8 +3930,8 @@ impl Settings {
 
     /// Access: what each tier lets a task do, in words only, since only a task's own menu sets
     /// one. The level's menu opens Settings here, flashing the group (settings::show_row).
-    /// The saved-logins switch (#4098) comes first, under the heading, where keeping a task doesn't
-    /// move it.
+    /// The saved-logins switch (#4098) is its own card under the levels', since it means something
+    /// at two of the three; keeping a task doesn't move it.
     fn access(&self, sign_in: Option<Row>) -> Vec<Block> {
         use agents::tier::{ACCESS, Tier};
         let look = &self.look;
@@ -3944,9 +3945,11 @@ impl Settings {
             .div
         });
         let heading: SharedString = ACCESS.into();
-        let mut blocks = vec![Block::Heading(heading.clone())];
+        let mut blocks = vec![
+            Block::Heading(heading.clone()),
+            Block::Group(self.flashed(&heading, group(look, rows))),
+        ];
         blocks.extend(sign_in.map(|row| Block::Rows(vec![row])));
-        blocks.push(Block::Group(self.flashed(&heading, group(look, rows))));
         blocks
     }
 

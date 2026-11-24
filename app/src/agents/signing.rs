@@ -21,7 +21,7 @@ pub(super) const KEY: &str = "sign_in_chosen";
 /// The switch's name (N1) and its one line (N2), on or off, which Settings › Agents and first
 /// run's assistant step both draw with it (settings::sign_in_row).
 pub const HEADING: &str = "Sign tasks in with your saved logins";
-pub const SWITCH_LINE: &str = "Your assistant never sees the login.";
+pub const SWITCH_LINE: &str = "Your assistant never sees those logins.";
 
 /// What the agent hears while Settings' switch is off.
 const OFF: &str =
@@ -44,9 +44,10 @@ pub(super) struct Signing {
 const FILLED: usize = usize::MAX / 2;
 
 impl Agents {
-    /// Whether Settings › Agents' Sign tasks in with your saved logins is on.
+    /// Whether Settings › Agents' Sign tasks in with your saved logins is on. Settings shows it
+    /// only while tasks are on, so it's off while they aren't, whatever it was left at.
     pub fn sign_in_on(&self) -> bool {
-        self.sign_in_chosen == Some(true)
+        !self.tasks_off && self.sign_in_chosen == Some(true)
     }
 
     /// Settings › Agents' Sign tasks in with your saved logins. Off, no agent's sign_in reaches

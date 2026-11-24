@@ -140,6 +140,23 @@ fn sign_in_for_agents_off_asks_nothing_of_the_core(cx: &mut TestAppContext) {
     );
 }
 
+/// With tasks from the command bar off, Settings shows no switch, so it's off for an app that
+/// connects too, and on again as the user left it once tasks are.
+#[gpui::test]
+fn sign_in_while_tasks_are_off_asks_nothing_of_the_core(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    agents.update(cx, |agents, cx| agents.set_tasks_on(false, cx));
+    // Refused at once, before the core: an answer waiting on the core would never come here.
+    let answer = sign_in(&agents, 20, cx).try_recv().unwrap();
+    assert!(answer.error);
+    assert_eq!(answer.kind, Some(tools::Kind::Outside));
+    assert!(browser.saved_sign_ins.borrow().is_empty());
+
+    agents.update(cx, |agents, cx| agents.set_tasks_on(true, cx));
+    let _answer = sign_in(&agents, 20, cx);
+    assert_eq!(browser.saved_sign_ins.borrow().len(), 1);
+}
+
 /// The task's access decides as for any act, before the core: a site on the Off limits list at
 /// every tier, a bank's site above Work on pages, and any site at Look only. Full access signs in
 /// on a bank's site.

@@ -518,7 +518,7 @@ impl gpui::Render for PicturesPage {
                                 ))
                             })
                             .into();
-                        // The saved-logins switch, on, first under Access (#4098).
+                        // The saved-logins switch, on, under Access's levels (#4098).
                         let sign_in = {
                             use browser::agents::signing::{HEADING, SWITCH_LINE};
                             frame()
@@ -540,8 +540,8 @@ impl gpui::Render for PicturesPage {
                                     another(),
                                 ],
                             ),
-                            (Some(ACCESS), vec![sign_in]),
-                            (None, access),
+                            (Some(ACCESS), access),
+                            (None, vec![sign_in]),
                             (Some(browser::needs_you::NOTIFICATIONS), vec![when]),
                         ]
                     }
