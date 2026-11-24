@@ -101,7 +101,7 @@ impl gpui::Render for PicturesPage {
             HEADING_TOP, NAME, POPUP_WIDTH, SHARE_TOP, SIDE_ROOM, TEXT_X,
         };
         use browser::tokens::text;
-        use gpui::{FontWeight, ParentElement, Styled, div, rgb};
+        use gpui::{ParentElement, Styled, div, rgb};
         // Settings takes Light's or Dark's look when it's chosen, and the system's for Automatic.
         let dark = match self.shown {
             Pictures::Appearance {
@@ -576,7 +576,6 @@ impl gpui::Render for PicturesPage {
                         .px(px(TEXT_X))
                         .mb(px(HEADING_BOTTOM))
                         .text_size(px(text::SMALL))
-                        .font_weight(FontWeight::MEDIUM)
                         .text_color(look.heading)
                         .child(heading)
                 });

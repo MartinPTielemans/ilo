@@ -30,10 +30,10 @@ use browser::theme::Appearance;
 use browser::updates::{self, NightlyRow, Track, VersionRow};
 use browser::widevine::{self, Widevine, WidevineRow};
 use gpui::{
-    AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, FontWeight,
-    Global, Hsla, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, PathPromptOptions, Rgba,
-    SharedString, Subscription, Window, WindowHandle, WindowOptions, actions, canvas, div, point,
-    prelude::*, px, rgb, rgba, size, svg,
+    AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, Global, Hsla,
+    KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, PathPromptOptions, Rgba, SharedString,
+    Subscription, Window, WindowHandle, WindowOptions, actions, canvas, div, point, prelude::*, px,
+    rgb, rgba, size, svg,
 };
 
 use crate::{bc, ns_view, platform, show_menu};
@@ -970,8 +970,9 @@ fn open(cx: &mut App) {
                 settings.follow_appearance(window, cx)
             })
             .detach();
-            // Settings takes the keyboard back from the dialog once it has gone, as the dialog's
-            // focus still counts as focused then, though nothing draws it.
+            // The keyboard goes back to what had it as the dialog asked, or to Settings, once the
+            // dialog has gone, as the dialog's focus still counts as focused then, though nothing
+            // draws it.
             #[cfg(target_os = "linux")]
             {
                 let mut asked = false;
@@ -981,7 +982,7 @@ fn open(cx: &mut App) {
                     move |settings: &mut Settings, dialog, window, cx| {
                         let asks = dialog::asks(&dialog, cx);
                         if asked && !asks {
-                            window.focus(&settings.focus, cx);
+                            dialog::give_back(&dialog, &settings.focus, window, cx);
                         }
                         asked = asks;
                     },
@@ -1527,7 +1528,6 @@ impl Settings {
                 Block::Crumb(heading, inside) => {
                     let inside = div()
                         .text_color(self.look.detail)
-                        .font_weight(FontWeight::NORMAL)
                         .child(format!(" › {inside}"));
                     self.heading(heading)
                         .flex()
@@ -1559,7 +1559,6 @@ impl Settings {
             .child(self.card.mark(heading.clone()))
             .px(px(TEXT_X))
             .text_size(px(text::SMALL))
-            .font_weight(FontWeight::MEDIUM)
             .text_color(self.look.heading)
             .child(heading)
     }
@@ -3629,10 +3628,10 @@ impl Settings {
             return;
         }
         let (message, detail) = passwords::question(&login);
-        // Not yet past Linux's question, Settings' own dialog, whose answer has no window to
-        // hand the keyboard on in.
+        // Settings' observer has given the keyboard back to this Remove by the time the answer
+        // runs, so it hands on from there.
         #[cfg(target_os = "linux")]
-        let _ = (listed, from_keys);
+        let handle = window.window_handle();
         #[cfg(target_os = "linux")]
         dialog::ask_in(
             &self.dialog,
@@ -3640,7 +3639,13 @@ impl Settings {
             detail,
             "Remove",
             dialog::Return::Action,
-            Box::new(move |_| crate::remove_login(profile, &login)),
+            Box::new(move |cx| {
+                (handle.update(cx, |_, window, cx| {
+                    list_keys::removing(&login, &listed, Named::ByRow, from_keys, window, cx)
+                }))
+                .ok();
+                crate::remove_login(profile, &login);
+            }),
             window,
             cx,
         );

@@ -454,11 +454,10 @@ fn a_release_on_what_cant_be_chosen_leaves_the_menu_open() {
 fn the_log_tells_how_a_menu_closed_and_names_none_of_its_items() {
     let all = [
         Closing::Chose(0),
-        Closing::PressedAt(at(600., 400.)),
+        Closing::PressedOutside,
         Closing::Left,
         Closing::Escape,
         Closing::Shortcut,
-        Closing::ScrolledOutside,
         Closing::ReleasedOutside,
         Closing::Replaced,
     ];
@@ -483,19 +482,11 @@ fn the_log_tells_how_a_menu_closed_and_names_none_of_its_items() {
         assert_eq!(named, None, "the line names an item: {line}");
     }
     let answers: Vec<Closed> = all.iter().map(|closing| closing.closed()).collect();
-    assert_eq!(
-        answers[..3],
-        [
-            Closed::Chose(0),
-            Closed::PressedAt(at(600., 400.)),
-            Closed::Left
-        ]
-    );
-    assert!(
-        answers[3..]
-            .iter()
-            .all(|closed| *closed == Closed::Otherwise)
-    );
+    assert_eq!(answers[0], Closed::Chose(0));
+    assert_eq!(answers[2], Closed::Left);
+    for way in [1, 3, 4, 5, 6] {
+        assert_eq!(answers[way], Closed::Otherwise, "{:?}", all[way]);
+    }
 }
 
 #[test]
@@ -720,6 +711,34 @@ fn where_the_window_cant_blend_it_holds_the_open_panels_alone(cx: &mut TestAppCo
     assert_eq!(*host.calls.borrow(), ["show", "show", "show", "hide"]);
 }
 
+/// A scroll is the menu's while it shows, over it or outside it: the host hears it's taken, so
+/// nothing under the pointer scrolls, and the menu stays open with the keys.
+#[gpui::test]
+fn a_scroll_leaves_the_menu_open_and_goes_no_further(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let window = cx
+        .update(|cx| super::open(host.clone(), cx))
+        .expect("no window for the menu");
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+
+    let chosen = show_menu(cx);
+    let menu_at = host.shown.borrow().last().expect("no menu shown").0.origin;
+    let over = point(px(150.), px(100. + PADDING + 12.)) - menu_at;
+    let outside = point(px(60.), px(40.)) - menu_at;
+    for (place, at) in [("over the menu", over), ("outside it", outside)] {
+        assert!(
+            cx.cx
+                .update(|cx: &mut App| super::pointer(Pointer::Scrolled, at, cx)),
+            "a scroll {place} went on to what's under it"
+        );
+        cx.run_until_parked();
+        assert_eq!(chosen.get(), None, "a scroll {place} closed the menu");
+    }
+    assert_eq!(*host.calls.borrow(), ["show"]);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(chosen.get(), Some(Closed::Otherwise));
+}
+
 /// The menu in its window, driven the ways the host drives it: keys through the window, pointer
 /// events and the driver's choose and dismiss. Each closes it from inside the menu's update, which
 /// must leave its window alone until the update is over, or drawing it finds the menu held.
@@ -768,8 +787,8 @@ fn the_host_drives_the_menu_and_the_menu_closes_outside_its_update(cx: &mut Test
     cx.run_until_parked();
     assert_eq!(chosen.get(), Some(Closed::Left));
 
-    // A press outside it, which it takes, says where it landed in the browser window, so a field
-    // whose menu it was knows whether the user went away from it.
+    // A press outside it, which it takes, was spent on the menu: it answers as the menu's keys do,
+    // with nothing of where the press was, so whatever had the menu goes on as it was.
     let chosen = show_menu(cx);
     let page = point(px(60.), px(40.));
     let menu_at = host.shown.borrow().last().expect("no menu shown").0.origin;
@@ -778,7 +797,7 @@ fn the_host_drives_the_menu_and_the_menu_closes_outside_its_update(cx: &mut Test
             .update(|cx: &mut App| super::pointer(Pointer::Pressed, page - menu_at, cx))
     );
     cx.run_until_parked();
-    assert_eq!(chosen.get(), Some(Closed::PressedAt(page)));
+    assert_eq!(chosen.get(), Some(Closed::Otherwise));
 
     // A menu opened over one that shows takes its place and stays.
     show_menu(cx);

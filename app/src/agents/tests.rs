@@ -2880,6 +2880,20 @@ fn no_tool_touches_a_tasks_access() {
     }
 }
 
+/// No tool reads a task's card or another task's steps: a card is made only for the windows
+/// (`Agents::cards` and `shown_cards`, which the windows' observer alone calls), and no tool's
+/// name offers one.
+#[test]
+fn no_tool_reads_a_card_or_another_tasks_steps() {
+    for agent in ["claude-code", "task-1"] {
+        for name in tools::names(agent) {
+            for word in ["card", "task", "trace", "activity", "history", "recent"] {
+                assert!(!name.contains(word), "{agent} has {name}");
+            }
+        }
+    }
+}
+
 /// Every tool an agent from outside or a ⌘T task is offered, and every step run_steps takes, is in
 /// exactly one class the tier table judges, so a new one fails here until it's placed: one that
 /// acts on a page would otherwise run at Look only.
@@ -6130,7 +6144,7 @@ mod tasks {
     fn start(agents: &Entity<Agents>, asked: &str, cx: &mut TestAppContext) -> String {
         agents
             .update(cx, |agents, cx| {
-                agents.start_task(Cli::Claude, asked, page(), 1, cx)
+                agents.start_task(Cli::Claude, asked, page(), 1, Tier::default(), cx)
             })
             .expect("started")
     }
@@ -6255,7 +6269,7 @@ mod tasks {
             );
         });
         let started = agents.update(cx, |agents, cx| {
-            agents.start_task(Cli::Claude, "Another", page(), 1, cx)
+            agents.start_task(Cli::Claude, "Another", page(), 1, Tier::default(), cx)
         });
         assert_eq!(started, None, "a task started with tasks off");
         assert!(!card_of(&agents, cx).retry, "the card still offers Retry");
@@ -6374,7 +6388,8 @@ mod tasks {
             .collect();
         assert_eq!(
             actions,
-            ["finish", "answered", "ask", "title"],
+            // The oldest is the start's, which keeps the level it starts at.
+            ["finish", "answered", "ask", "title", "access"],
             "newest first"
         );
         // The core's auto-archive taking its page leaves the card saying where it went.
@@ -7984,6 +7999,64 @@ mod tasks {
         assert_eq!(tier, Tier::Look);
     }
 
+    /// A task starts at the level it's given, the composer's pick, and the log's entry for its
+    /// start names it, as a change's entry does. Without a pick (the window's bar and the
+    /// composer, which pass the default) it starts at Work on pages.
+    #[gpui::test]
+    fn a_task_starts_at_the_level_it_was_given_and_the_log_names_it(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let full = agents
+            .update(cx, |agents, cx| {
+                agents.start_task(Cli::Claude, "Pay the bill", page(), 1, Tier::Full, cx)
+            })
+            .expect("started");
+        let plain = start(&agents, "Check my balance", cx);
+        for (agent, tier) in [(&full, Tier::Full), (&plain, Tier::Work)] {
+            let at = agents.read_with(cx, |agents, _| agents.task(agent).unwrap().tier);
+            assert_eq!(at, tier);
+            let logged: Vec<String> = agents.read_with(cx, |agents, _| {
+                (agents.activity(agent))
+                    .filter(|entry| entry.action.as_ref() == crate::agents::access::ACCESS_ACTION)
+                    .map(|entry| entry.target.to_string())
+                    .collect()
+            });
+            assert_eq!(logged, vec![crate::agents::tier::started_logged(tier)]);
+        }
+    }
+
+    /// A card lists the task's last three steps this turn, oldest first, as the conversation's
+    /// trace lines say them, and names the site of the last page it was on; before its first
+    /// step it has none of either.
+    #[gpui::test]
+    fn a_card_lists_the_last_three_steps_and_names_the_last_site(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Find two tickets", cx);
+        agents.update(cx, |agents, _| {
+            let task = agents.task_mut(&agent).unwrap();
+            task.ended = None;
+            task.state = State::Working;
+        });
+        let card = card_of(&agents, cx);
+        assert!(card.steps.is_empty(), "{:?}", card.steps);
+        assert_eq!(card.last_site, None);
+        for site in ["a.example", "b.example", "c.example", "d.example"] {
+            let _ = call(&agents, &agent, "open_tab", json!({ "url": site }), cx);
+        }
+        let card = card_of(&agents, cx);
+        assert_eq!(
+            card.steps,
+            // Each is still under way, as the test's pages never finish loading.
+            [
+                "Opening b.example",
+                "Opening c.example",
+                "Opening d.example"
+            ]
+            .map(SharedString::from)
+            .to_vec()
+        );
+        assert_eq!(card.last_site.as_deref(), Some("d.example"));
+    }
+
     /// A Stopped line's step up and Any site reach the task through the user's press, as Stop
     /// does, and a task outside its Sites goes on once the user has said any site.
     #[gpui::test]
@@ -9250,6 +9323,22 @@ mod sessions {
         hello(&agents, "claude-code", "claude-code", cx);
         let claude = agents.read_with(cx, |agents, _| agents.agent_name("claude-code"));
         assert_eq!(claude, "Claude Code");
+    }
+
+    /// An outside agent's task starts at Work on pages, as it did before the composer had a level
+    /// to pick: nothing of the composer reaches it.
+    #[gpui::test]
+    fn an_outside_agents_task_starts_at_work_on_pages(cx: &mut TestAppContext) {
+        let (agents, _, _) = connected(cx);
+        hello(&agents, "claude-code", "claude-code", cx);
+        let _ = call_as(&agents, 1, "open_tab", json!({ "url": "example.com" }), cx);
+        let tier = agents.read_with(cx, |agents, _| {
+            (agents.tasks.tasks.iter())
+                .find(|task| task.session.is_some())
+                .expect("its session")
+                .tier
+        });
+        assert_eq!(tier, Tier::Work);
     }
 
     /// A session's card, once it ends, is its receipt (#1080): the orders it placed, done, and not
