@@ -368,6 +368,9 @@ pub struct Task {
     pub sites: Sites,
     /// What ilo stopped, as its conversation shows each, oldest first.
     pub stops: Vec<Stop>,
+    /// ilo's other lines of what happened to it: its steps handed to the user, the tabs its
+    /// agent asked back and the changes of its access, oldest first.
+    pub(super) placed: Vec<super::lines::Placed>,
     /// What ilo tells its CLI with the user's next turn: a change of tier while it wasn't working.
     pub(super) told: Option<String>,
     /// While it's thinking, what ends the turn if its CLI never answers (NO_ANSWER). It goes as
@@ -731,8 +734,9 @@ impl Agents {
                 }
                 self.take_over_stopped(agent, tab, cx)
             }
-            // The surface's other buttons, which the hand-off's step wires.
-            TaskAction::HandBack(_) | TaskAction::NotNow(_) => {}
+            // A step's line: the tab goes back to the agent, or stays the user's for now.
+            TaskAction::HandBack(tab) => self.hand_back(tab, cx),
+            TaskAction::NotNow(key) => self.not_now(agent, key, cx),
         }
         (None, None)
     }
@@ -775,6 +779,8 @@ impl Agents {
         }
         // ilo's line of each time it stopped the task at its helpers' limit (#4102).
         helpers::lines(task, &mut lines);
+        // ilo's lines of its refusals, its steps handed to the user and its changes of access.
+        self.ilo_lines(task, &mut lines, cx);
         // ilo's own lines of a task that can be replied to after it ended (#4105).
         self.kept_lines(task, &mut lines);
         let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
@@ -871,7 +877,7 @@ impl Agents {
     }
 
     /// A task's pages: its Space's tabs, or of its client's Space, a session's own.
-    fn pages(&self, task: &Task, cx: &App) -> Vec<u64> {
+    pub(super) fn pages(&self, task: &Task, cx: &App) -> Vec<u64> {
         let tabs = self.browser.space_tab_ids(task.space, cx);
         match &task.session {
             Some(session) => session
@@ -1238,6 +1244,7 @@ impl Agents {
             tier: Tier::default(),
             sites: Sites::default(),
             stops: Vec::new(),
+            placed: Vec::new(),
             told: None,
             helpers: Helpers::of_task(self.helpers_on() && cli == Cli::Claude),
         };
@@ -2363,6 +2370,7 @@ impl Agents {
             tier: Tier::default(),
             sites: Sites::default(),
             stops: Vec::new(),
+            placed: Vec::new(),
             told: None,
             helpers: Helpers::default(),
         });

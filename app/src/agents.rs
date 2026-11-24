@@ -23,6 +23,7 @@ pub mod fence;
 mod held;
 mod helpers;
 pub mod kept;
+mod lines;
 pub mod notes;
 pub mod page;
 #[cfg(windows)]
@@ -2977,6 +2978,8 @@ impl Agents {
         let (agent, connection) = (self.held.get(&tab)).map_or((String::new(), 0), |held| {
             (held.agent.clone(), held.connection)
         });
+        // Its task's conversation says so, while the hold's entry still names whose it is.
+        self.held_lines(tab, event, life);
         if actions.has(A::ANSWER) || actions.has(A::DROP) {
             let held = self
                 .held
@@ -5556,6 +5559,13 @@ fn answer_of(tab: u64, event: held::Event) -> ToolResult {
         held::Event::Keep => ToolResult::error(format!(
             "The user keeps tab {tab}. Don't ask for it again unless they say so."
         )),
+        held::Event::NotNow => ToolResult::failed(
+            tools::Kind::Yours,
+            format!(
+                "The user won't do the step on tab {tab} now. It stays theirs; ask them where you \
+                 started the task before you go on there."
+            ),
+        ),
         held::Event::Timer => ToolResult::failed(
             tools::Kind::Yours,
             format!(

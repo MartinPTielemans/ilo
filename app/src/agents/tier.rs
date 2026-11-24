@@ -29,13 +29,10 @@ impl Tier {
         }
     }
 
-    /// The tier one up, which a refusal offers, or None from the top.
-    pub fn up(self) -> Option<Tier> {
-        match self {
-            Tier::Look => Some(Tier::Work),
-            Tier::Work => Some(Tier::Full),
-            Tier::Full => None,
-        }
+    /// The lowest tier above this one at which an act refused for `why` happens, which its
+    /// refusal offers, or None if none does.
+    pub fn lifting(self, why: Why) -> Option<Tier> {
+        (Tier::ALL.into_iter()).find(|tier| *tier as usize > self as usize && tier.allows(why))
     }
 
     /// Whether an act refused for `why` happens at this tier.
@@ -345,9 +342,11 @@ mod tests {
         assert_eq!(at(SignIn), [false, true, true]);
         assert_eq!(at(SignInBank), [false, false, true]);
         assert_eq!(Tier::default(), Work);
-        assert_eq!(Look.up(), Some(Work));
-        assert_eq!(Work.up(), Some(Full));
-        assert_eq!(Full.up(), None);
+        assert_eq!(Look.lifting(Act), Some(Work));
+        assert_eq!(Look.lifting(Message), Some(Full));
+        assert_eq!(Work.lifting(Order), Some(Full));
+        assert_eq!(Full.lifting(Order), None);
+        assert_eq!(Look.lifting(Fenced), None);
     }
 
     #[test]

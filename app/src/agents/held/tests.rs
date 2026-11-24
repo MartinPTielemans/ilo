@@ -173,6 +173,9 @@ impl World {
         if self.life == Life::Asked {
             go("the user keeps it", &|w| _ = w.app(Event::Keep));
         }
+        if self.life != Life::Free {
+            go("the user says Not Now", &|w| _ = w.app(Event::NotNow));
+        }
         if self.timer {
             go("the handoff's 15 minutes pass", &|w| {
                 w.timer = false;

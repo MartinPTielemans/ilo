@@ -1008,7 +1008,7 @@ fn a_site_is_never_in_quotes_and_a_pages_words_are(_: &mut TestAppContext) {
     };
     let said = |kind: &IloKind| {
         let (own, name) = super::words::head(kind, "Claude");
-        super::words::with_name(kind, &own, &name.unwrap())
+        super::words::with_name(kind, &own, &name.unwrap()).0
     };
     assert_eq!(
         said(&stopped(Why::Fenced)),
@@ -1035,6 +1035,15 @@ fn a_site_is_never_in_quotes_and_a_pages_words_are(_: &mut TestAppContext) {
         said(&order),
         "stopped Claude at \u{201c}Place order\u{201d}"
     );
+    // O1: a step on one of several pages names its site, in the middle of ilo's words.
+    let yours = IloKind::Yours {
+        tab: 30,
+        site: Some("boxoffice.example".into()),
+    };
+    assert_eq!(said(&yours), "handed this step on boxoffice.example to you");
+    let (own, name) = super::words::head(&yours, "Claude");
+    let (line, at) = super::words::with_name(&yours, &own, &name.unwrap());
+    assert_eq!(&line[at], "boxoffice.example");
 }
 
 /// An ilo line's head is a sentence: where ilo is its subject the mark is its first word and a verb
@@ -1061,7 +1070,11 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             tier: Tier::Work,
             count: 1,
         },
-        IloKind::Yours { tab: 1 },
+        IloKind::Yours { tab: 1, site: None },
+        IloKind::Yours {
+            tab: 1,
+            site: Some("boxoffice.example".into()),
+        },
         IloKind::TabBack { tab: 1 },
         IloKind::SignedIn {
             tab: 1,

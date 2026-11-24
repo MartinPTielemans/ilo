@@ -10341,6 +10341,8 @@ mod fenced;
 mod helpers;
 mod holds;
 mod kept;
+#[cfg(unix)]
+mod lines;
 mod notes;
 mod sign_ins;
 mod uploads;

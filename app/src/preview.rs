@@ -2325,6 +2325,8 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
                         let (tab, _) = helper_tabs().swap_remove(HELPER_WAITING);
                         vec![(tab, "Sign in".into())]
                     }
+                    // Its one page, handed to the user for a sign-in.
+                    false if bench_yours() => vec![(tab, "Sign in".into())],
                     false => Vec::new(),
                 };
                 let status = browser::agents::Status {
@@ -2335,7 +2337,10 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
                     held,
                 };
                 shell.set_agent_status(vec![status], cx);
-                shell.agent_acted(agent, tab, cx);
+                // A page handed to the user has nothing at work on it, so no ring.
+                if !bench_yours() {
+                    shell.agent_acted(agent, tab, cx);
+                }
             })
             .ok();
         // Once the page is in place, which is when the ring reaches it.

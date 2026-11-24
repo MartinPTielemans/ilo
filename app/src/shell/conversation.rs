@@ -761,6 +761,12 @@ impl TalkView {
         });
     }
 
+    /// The task's page in place beside the conversation, if one is: a step on it offers it back.
+    fn beside(&self, cx: &gpui::App) -> Option<u64> {
+        let shell = self.shell.upgrade()?;
+        shell.read(cx).watched_task_page().map(|(_, tab)| tab)
+    }
+
     fn act(&self, action: TaskAction, cx: &mut Context<Self>) {
         let agent = self.agent.clone();
         self.shell
@@ -1789,11 +1795,14 @@ impl TalkView {
         let answered =
             (self.motion.answered.as_ref()).filter(|_| !look.still && shown.answers.is_empty());
         // A button no longer drawn starts its wait again if it comes back.
+        let beside = self.beside(cx);
         let buttons: Vec<(usize, IloButton)> = (shown.lines.iter())
             .filter_map(|line| match line {
-                Line::Ilo(line) => {
-                    Some(ilo::buttons(line).into_iter().map(|each| (line.key, each)))
-                }
+                Line::Ilo(line) => Some(
+                    ilo::drawn(line, beside)
+                        .into_iter()
+                        .map(|each| (line.key, each)),
+                ),
                 _ => None,
             })
             .flatten()
@@ -2096,8 +2105,7 @@ impl TalkView {
         let name = name.map(|name| clip(&name, QUOTED_CHARS as usize));
         let (said, highlights) = match &name {
             Some(name) => {
-                let said = words::with_name(&line.kind, &own, name);
-                let quoted = own.len() + 1..said.len();
+                let (said, quoted) = words::with_name(&line.kind, &own, name);
                 let style = HighlightStyle {
                     color: Some(palette.text(TITLE)),
                     ..Default::default()
@@ -2169,7 +2177,7 @@ impl TalkView {
                 )
                 .on_click(cx.listener(|view, _, _, cx| view.open_off_limits(cx)))
         });
-        let buttons = ilo::buttons(line);
+        let buttons = ilo::drawn(line, self.beside(cx));
         let note = words::note(&buttons).map(|note| {
             div()
                 .pl(under)
@@ -2265,6 +2273,13 @@ impl TalkView {
             IloButton::Raise(tier) => Some(TaskAction::SetTier(tier)),
             IloButton::AnySite => Some(TaskAction::AnySite),
             IloButton::HandBack => tab.map(TaskAction::HandBack),
+            // It only shows the page, as its picture's click does.
+            IloButton::ShowPage => {
+                if let Some(tab) = tab {
+                    self.watch(tab, cx);
+                }
+                None
+            }
             IloButton::NotNow => Some(TaskAction::NotNow(line)),
             IloButton::StartAgain => {
                 self.start_again(cx);
