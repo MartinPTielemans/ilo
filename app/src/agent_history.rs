@@ -38,6 +38,8 @@ pub struct Step {
     pub target: String,
     pub url: String,
     pub sent: Vec<Sent>,
+    /// The access its task had as it was judged, by its name, or empty for a step kept before.
+    pub tier: String,
 }
 
 /// A past task or session, as its receipt showed it.
@@ -136,6 +138,9 @@ impl Past {
                     kept["url"] = json!(step.url);
                     kept["sent"] = json!(sent);
                 }
+                if !step.tier.is_empty() {
+                    kept["tier"] = json!(step.tier);
+                }
                 kept
             })
             .collect();
@@ -186,6 +191,7 @@ impl Past {
                 target: field("target").unwrap_or_default(),
                 url: field("url").unwrap_or_default(),
                 sent,
+                tier: field("tier").unwrap_or_default(),
             })
         })
         .collect();
