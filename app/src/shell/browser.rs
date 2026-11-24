@@ -1037,6 +1037,8 @@ pub trait Browser {
     /// Opens the Settings window on Agents' Access group, which explains each level: the level
     /// menu's Settings….
     fn agent_access(&self, _cx: &mut App) {}
+    /// Opens the Settings window on Agents, for what first run's assistant step leaves to it.
+    fn agents_settings(&self, _cx: &mut App) {}
     /// Opens the Settings window on its Shortcuts tab.
     fn shortcuts(&self, cx: &mut App);
     /// Opens the Settings window on its About tab.
