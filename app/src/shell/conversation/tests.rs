@@ -1077,6 +1077,11 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
         IloKind::Gone,
         IloKind::NotKept,
         IloKind::KeepsNothing,
+        IloKind::Helpers {
+            tab: 1,
+            deep: false,
+        },
+        IloKind::Helpers { tab: 1, deep: true },
     ];
     for kind in &every {
         // Every kind is in the list above: a new one fails to compile here until it's added.
@@ -1090,7 +1095,8 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             | IloKind::KeptHere
             | IloKind::Gone
             | IloKind::NotKept
-            | IloKind::KeepsNothing => {}
+            | IloKind::KeepsNothing
+            | IloKind::Helpers { .. } => {}
         }
         let (own, _) = head(kind, "Claude");
         let verb = VERBS.iter().any(|verb| own.split(' ').next() == Some(verb));
