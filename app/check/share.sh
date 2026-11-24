@@ -37,13 +37,14 @@ mkfifo "$share_dir/port"
 python3 -I -u check/share-server.py "$share_dir" "$served_log" > "$share_dir/port" \
   2> "$share_dir/server.err" 3>&- 4>&- 5>&- &
 collector=$!
-read -r port < "$share_dir/port" || true
-[ -n "$port" ] || fail "the stand-in server didn't start: $(cat "$share_dir/server.err")"
+# Under a name of its own: $port is the check's site's, which the runs after this one read (#4152).
+read -r share_port < "$share_dir/port" || true
+[ -n "$share_port" ] || fail "the stand-in server didn't start: $(cat "$share_dir/server.err")"
 # A link is typed whole, so a carriage return in one would be Enter in the command bar.
-case "$port" in *[!0-9]*) fail "the stand-in said its port as \"$port\", not digits alone" ;; esac
+case "$share_port" in *[!0-9]*) fail "the stand-in said its port as \"$share_port\", not digits alone" ;; esac
 ! grep -q "$(printf '\r')" "$share_dir/links" "$share_dir/secrets" ||
   fail "the stand-in's links or secrets end their lines in a carriage return"
-host="http://127.0.0.1:$port"
+host="http://127.0.0.1:$share_port"
 link() { echo "$host$(sed -n "s/^$1 //p" "$share_dir/links")"; }
 
 # requests <path>: how many requests the stand-in has had for <path>.
