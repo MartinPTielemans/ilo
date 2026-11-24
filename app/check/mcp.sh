@@ -3077,8 +3077,8 @@ frame.addEventListener('load', () => setTimeout(() => {
     *) fail "withheld value shown again: step 7 read: $answer" ;;
   esac
   # Step 8: the page leaves while a read's look waits on its busy frame, asked as step 7's is, 1 s
-  # into the frame's busy time. A look whose document left withholds nothing, so neither the read
-  # out then nor the next one is refused on a page with no password field.
+  # into the frame's busy time. A look that finds nothing to withhold stays a no when its page
+  # leaves under it, so neither the read out then nor the next one is refused.
   printf '%s' "<!doctype html><meta charset=utf-8><title>loading</title><p>Leaving page</p>
 <iframe src=\"http://localhost:$port/frame-busy.html\"></iframe>
 <script>const frame = document.querySelector('iframe');
