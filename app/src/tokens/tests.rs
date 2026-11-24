@@ -46,6 +46,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "FontWeight::BOLD",
         "the badge's count, a pictogram inside its pill",
     ),
+    (
+        "agents/wall/rules.rs",
+        "0x8001_7472",
+        "the Mac's TIOCSTI ioctl, which a walled task's rules deny, and no colour",
+    ),
 ];
 
 #[test]
