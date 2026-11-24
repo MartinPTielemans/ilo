@@ -9,7 +9,7 @@ use std::{
 use gpui::{Modifiers, TestAppContext, VisualTestContext};
 
 use super::*;
-use crate::tokens::menu::OVERLAP;
+use crate::tokens::menu::{OVERLAP, SUBMENU_REST};
 
 const TAB: u64 = 7;
 
@@ -832,7 +832,7 @@ fn the_pointer_opens_add_to_board_and_a_click_adds_to_the_board(cx: &mut TestApp
 }
 
 /// Another of the menu's rows under the pointer closes the submenu, but on the pointer's way to
-/// it the submenu stays, until the pointer rests, as menu.rs's safe triangle keeps one.
+/// it the submenu stays, until the pointer rests as long as menu.rs's safe triangle keeps one.
 #[gpui::test]
 fn the_submenu_stays_on_the_pointers_way_to_it(cx: &mut TestAppContext) {
     let mut mode = Mode::shown(cx);
@@ -847,7 +847,17 @@ fn the_submenu_stays_on_the_pointers_way_to_it(cx: &mut TestAppContext) {
     // Across New Board, toward the submenu.
     mode.point_to(menu.x + MENU_WIDTH - 12., new);
     assert_eq!(mode.menu_state(), (parent, true, [parent, parent]));
-    mode.cx.executor().advance_clock(Duration::from_millis(300));
+    let rest = Duration::from_secs_f32(SUBMENU_REST);
+    mode.cx
+        .executor()
+        .advance_clock(rest - Duration::from_millis(1));
+    mode.cx.run_until_parked();
+    assert_eq!(
+        mode.menu_state(),
+        (parent, true, [parent, parent]),
+        "not yet"
+    );
+    mode.cx.executor().advance_clock(Duration::from_millis(1));
     mode.cx.run_until_parked();
     let lit = Some(Action::NewBoard);
     assert_eq!(mode.menu_state(), (lit, false, [lit, None]));
