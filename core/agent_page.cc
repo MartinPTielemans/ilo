@@ -2224,19 +2224,16 @@ void AgentPage::Yes(const content::WeakDocumentPtr& document) {
                                : asked                      ? LookedDocument::kCached
                                : !main->IsRenderFrameLive() ? LookedDocument::kRendererGone
                                                             : LookedDocument::kLeft;
-  switch (AnswerOfLook(/*shows=*/true, where)) {
-    case LookAnswer::kWithhold:
-      WithholdShownPage(GetWebContents());
-      return;
-    case LookAnswer::kKeepFromCache:
-      content::BackForwardCache::DisableForRenderFrameHost(
-          asked, content::BackForwardCache::DisabledReason(
-                     content::BackForwardCache::DisabledSource::kEmbedder, kNoBackForwardCache,
-                     "ilo withholds this document from agents",
-                     /*context=*/"", /*report_string=*/"masked"));
-      return;
-    case LookAnswer::kNothing:
-      return;
+  const LookAnswer answer = AnswerOfLook(/*shows=*/true, where);
+  if (answer.keep_from_cache) {
+    content::BackForwardCache::DisableForRenderFrameHost(
+        asked, content::BackForwardCache::DisabledReason(
+                   content::BackForwardCache::DisabledSource::kEmbedder, kNoBackForwardCache,
+                   "ilo withholds this document from agents",
+                   /*context=*/"", /*report_string=*/"masked"));
+  }
+  if (answer.withhold) {
+    WithholdShownPage(GetWebContents());
   }
 }
 

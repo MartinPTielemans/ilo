@@ -551,7 +551,7 @@ class AgentPage : public content::WebContentsObserver,
   // Watch took the tab, which keeps DevTools until the session ends, acted on or not.
   bool watching_ = false;
   // A look out: what hears its answer, gone once the session's end has answered it, and the
-  // document it asked, whose alone its yes is.
+  // document it asked, which its yes keeps from the cache if it's there.
   struct Look {
     base::OnceCallback<void(bool withheld)> then;
     content::WeakDocumentPtr document;

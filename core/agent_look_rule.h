@@ -16,17 +16,17 @@ enum class LookedDocument {
   kRendererGone,
 };
 
-enum class LookAnswer {
-  kNothing,
+struct LookAnswer {
   // The tab's page is withheld (WithholdShownPage).
-  kWithhold,
-  // The document never comes back from the cache.
-  kKeepFromCache,
+  bool withhold = false;
+  // The document asked never comes back from the cache.
+  bool keep_from_cache = false;
 };
 
-// What a look's answer does: a yes is its own document's alone, so one the tab has left withholds
-// nothing, and no answer clears a withhold. A renderer gone answers as the page it showed. Apart
-// from content so browser_core_unittests tests the rule alone.
+// What a look's answer does: a yes withholds the page the tab shows, wherever the document asked
+// went, as an answer can't be told from the next document's, and keeps that document from the
+// cache too. No answer clears a withhold. Apart from content so browser_core_unittests tests the
+// rule alone.
 LookAnswer AnswerOfLook(bool shows, LookedDocument where);
 
 }  // namespace browser_core
