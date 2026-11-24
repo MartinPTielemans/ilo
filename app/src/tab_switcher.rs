@@ -362,7 +362,9 @@ impl TabSwitcher {
             .rounded(px(PLATE_RADIUS))
             .text_color(title)
             .when(selected, |line| line.bg(accent))
-            .when(hovered, |line| line.bg(palette.plate(HOVERED)))
+            .when(hovered, |line| {
+                line.bg(palette.on_float(Float::TabSwitcher, palette.plate(HOVERED)))
+            })
             .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
             .on_hover(cx.listener(move |switcher, hovered: &bool, _, cx| {
                 let was = switcher.hovered;

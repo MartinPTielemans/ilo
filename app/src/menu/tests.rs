@@ -1250,3 +1250,36 @@ fn every_label_reads_at_4_5_to_1_in_both_looks() {
         }
     }
 }
+
+/// A disabled row keeps its ink at every level, never fainter and held to no ratio, while a
+/// shortcut, chevron, detail or heading takes at least what a word on what floats takes.
+#[test]
+fn a_disabled_row_keeps_its_ink_and_the_secondary_takes_the_floor() {
+    use crate::palette::{Float, Tone};
+    use crate::tokens::menu::{DARK_DISABLED, DARK_SECONDARY, LIGHT_DISABLED, LIGHT_SECONDARY};
+    use crate::transparency::Transparency;
+    for level in [
+        Transparency::Less,
+        Transparency::Standard,
+        Transparency::More,
+    ] {
+        crate::palette::set_transparency(level);
+        for (light, tone, disabled, secondary) in [
+            (false, Tone::Dark, DARK_DISABLED, DARK_SECONDARY),
+            (true, Tone::Light, LIGHT_DISABLED, LIGHT_SECONDARY),
+        ] {
+            let look = Look::plain(light);
+            assert_eq!(look.disabled(), gpui::rgba(disabled), "at {level:?}");
+            let ink = look.secondary();
+            let token = gpui::rgba(secondary).a;
+            assert!(ink.a >= token && ink.a == Float::Menu.word(tone, token));
+            assert_eq!(
+                gpui::Rgba { a: 1., ..ink },
+                gpui::Rgba {
+                    a: 1.,
+                    ..gpui::rgba(secondary)
+                }
+            );
+        }
+    }
+}

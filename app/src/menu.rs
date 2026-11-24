@@ -157,13 +157,31 @@ impl Look {
         Highlight::plate(self.light)
     }
 
+    /// The secondary ink of a shortcut, a chevron, a detail or a heading: the look's where it
+    /// reads over the material, or as much more as does (`palette::float_ink`).
+    pub fn secondary(self) -> Rgba {
+        let ink = rgba(self.palette().secondary);
+        Rgba {
+            a: crate::palette::Float::Menu.word(self.tone(), ink.a),
+            ..ink
+        }
+    }
+
+    /// A disabled row's ink: the look's at every level, held to no ratio, and never fainter.
+    pub fn disabled(self) -> Rgba {
+        rgba(self.palette().disabled)
+    }
+
     /// The panel as drawn: frosted where the host blurs under the menu's window (#4090).
     pub fn fill(self) -> Rgba {
-        let tone = match self.light {
+        crate::palette::Float::Menu.fill(self.tone())
+    }
+
+    fn tone(self) -> crate::palette::Tone {
+        match self.light {
             true => crate::palette::Tone::Light,
             false => crate::palette::Tone::Dark,
-        };
-        crate::palette::Float::Menu.fill(tone)
+        }
     }
 }
 
@@ -1643,16 +1661,16 @@ impl ContextMenu {
             false => (highlight.fill, highlight.label),
         };
         let label: Hsla = match (lit, entry.enabled, entry.destructive) {
-            _ if entry.header => rgba(palette.secondary).into(),
+            _ if entry.header => shown.look.secondary().into(),
             (true, ..) => on_fill.into(),
-            (false, false, _) => rgba(palette.disabled).into(),
+            (false, false, _) => shown.look.disabled().into(),
             (false, true, true) => rgba(palette.destructive).into(),
             (false, true, false) => rgba(palette.label).into(),
         };
         let secondary: Hsla = match (lit, entry.enabled) {
             (true, _) => on_fill.into(),
-            (false, false) => rgba(palette.disabled).into(),
-            (false, true) => rgba(palette.secondary).into(),
+            (false, false) => shown.look.disabled().into(),
+            (false, true) => shown.look.secondary().into(),
         };
         let submenu = tracking.layout.level_of(item).is_some();
         let shortcut = entry.shortcut.as_deref().map(keystroke_label);

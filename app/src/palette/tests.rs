@@ -1530,3 +1530,176 @@ fn secondary_text_reads_as_gray_beside_primary_at_every_level() {
         }
     }
 }
+
+/// Every word that floats over the window, gray or not, as its float draws it: the menu's label and
+/// its shortcut, chevron, detail and heading; Site Controls' text, link and secondary; the tab
+/// switcher's title and host; the hover card's title and host and its rows' hint; the link
+/// preview's secondary; the dialog's lines. Each as (dark alpha, light alpha), raised to the floor.
+fn float_words() -> Vec<(&'static str, f32, f32)> {
+    use crate::tokens::{
+        command_bar, dialog, folder_preview, hover_card, menu, shell, site_controls,
+    };
+    let alpha = |colour: u32| (colour & 0xff) as f32 / 255.;
+    vec![
+        ("the menu's label", 1., 1.),
+        (
+            "the menu's secondary",
+            alpha(menu::DARK_SECONDARY),
+            alpha(menu::LIGHT_SECONDARY),
+        ),
+        (
+            "Site Controls' text",
+            site_controls::TEXT,
+            site_controls::TEXT,
+        ),
+        (
+            "Site Controls' link",
+            site_controls::LINK,
+            site_controls::LINK,
+        ),
+        (
+            "Site Controls' secondary",
+            site_controls::SECONDARY,
+            site_controls::SECONDARY,
+        ),
+        (
+            "the tab switcher's title",
+            command_bar::TITLE,
+            command_bar::TITLE,
+        ),
+        (
+            "the tab switcher's host",
+            command_bar::DIM,
+            command_bar::DIM,
+        ),
+        (
+            "the hover card's title",
+            hover_card::TITLE,
+            hover_card::TITLE,
+        ),
+        ("the hover card's host", hover_card::HOST, hover_card::HOST),
+        (
+            "the hover card's hint",
+            folder_preview::HINT,
+            folder_preview::HINT,
+        ),
+        (
+            "the link preview's secondary",
+            shell::SECONDARY,
+            shell::SECONDARY,
+        ),
+        (
+            "the dialog's subline",
+            dialog::SUBLINE_TEXT,
+            dialog::SUBLINE_TEXT,
+        ),
+        ("the dialog's detail", dialog::DETAIL, dialog::DETAIL),
+        ("the dialog's Esc", dialog::ESC_TEXT, dialog::ESC_TEXT),
+        (
+            "the dialog's Cancel",
+            dialog::CANCEL_TEXT,
+            dialog::CANCEL_TEXT,
+        ),
+        ("the dialog's field", dialog::FIELD_TEXT, dialog::FIELD_TEXT),
+        (
+            "the dialog's placeholder",
+            dialog::FIELD_PLACEHOLDER,
+            dialog::FIELD_PLACEHOLDER,
+        ),
+    ]
+}
+
+const FLOAT_LEVELS: [Option<Transparency>; 4] = [
+    None,
+    Some(Transparency::Less),
+    Some(Transparency::Standard),
+    Some(Transparency::More),
+];
+
+/// Every word on what floats holds 4.5:1 at all three levels and opaque, at rest and on a row's
+/// plate under the pointer with its shade, over the material's worst for its ink (#4090); and a
+/// glyph 3:1 at its floor. The menu's words take the floor at rest alone, as its row under the
+/// pointer draws them whole.
+#[test]
+fn every_word_that_floats_reads_at_rest_and_under_the_pointer_at_every_level() {
+    for level in FLOAT_LEVELS {
+        for tone in [Tone::Dark, Tone::Light] {
+            let ink = tone.ink();
+            let float = float_ink(tone, level);
+            for (fill, (ground, colour)) in float_grounds(tone, level).into_iter().enumerate() {
+                let hovered = over(over(ground, ink, FLOAT_HOVERED), colour, float.shades[fill]);
+                for (at, where_) in [(ground, "at rest"), (hovered, "under the pointer")] {
+                    for (word, dark, light) in float_words() {
+                        let alpha = match tone {
+                            Tone::Dark => dark,
+                            Tone::Light => light,
+                        };
+                        let alpha = match (word.starts_with("the menu's"), at == ground) {
+                            (true, true) => float.word(ink, ground, fill, alpha),
+                            (true, false) => 1.,
+                            (false, _) => alpha.max(float.text),
+                        };
+                        let read = contrast(over(at, ink, alpha), at);
+                        assert!(
+                            read >= TEXT,
+                            "{word} read {read:.2} {where_} on fill {fill} in {tone:?} at {level:?}"
+                        );
+                    }
+                    let glyph = contrast(over(at, ink, float.glyph), at);
+                    assert!(
+                        glyph >= GLYPH,
+                        "a glyph read {glyph:.2} {where_} at {level:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// The material's worst under a float is what the check VM's menu showed (#4090): its panel over
+/// a white page in dark and a deep blue one in light, within one step of 8 bits a channel.
+#[test]
+fn the_worst_ground_under_a_float_is_the_panel_the_check_vm_measured() {
+    for (tone, level, panel) in [
+        (Tone::Dark, Transparency::Standard, 0x262520),
+        (Tone::Dark, Transparency::More, 0x252421),
+        (Tone::Light, Transparency::Standard, 0xdddcd8),
+        (Tone::Light, Transparency::More, 0xbbbaba),
+    ] {
+        let (ground, measured) = (float_grounds(tone, Some(level))[0].0, rgb(panel));
+        for (ours, theirs) in [
+            (ground.r, measured.r),
+            (ground.g, measured.g),
+            (ground.b, measured.b),
+        ] {
+            assert!(
+                (ours - theirs).abs() <= 1.5 / 255.,
+                "{tone:?} at {level:?}: {ground:?} against {measured:?}"
+            );
+        }
+    }
+}
+
+/// Off the material a row's plate under the pointer takes no shade, as its words read there at
+/// the floor, so a float without one draws as it did.
+#[test]
+fn off_the_material_the_plate_under_the_pointer_takes_no_shade() {
+    for tone in [Tone::Dark, Tone::Light] {
+        assert_eq!(float_ink(tone, None).shades, [0.; 2], "{tone:?}");
+    }
+}
+
+/// A word on what floats is never fainter over the material than it is on the opaque fill.
+#[test]
+fn a_float_over_the_material_is_never_grayer_than_it_is_opaque() {
+    for tone in [Tone::Dark, Tone::Light] {
+        let opaque = float_ink(tone, None);
+        for level in FLOAT_LEVELS {
+            let float = float_ink(tone, level);
+            assert!(float.text >= opaque.text && float.glyph >= opaque.glyph);
+            for fill in 0..2 {
+                assert!(float.rest[fill] <= float.text, "{tone:?} at {level:?}");
+            }
+        }
+    }
+}

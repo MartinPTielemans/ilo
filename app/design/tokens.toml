@@ -920,6 +920,13 @@ material-over-white = 0xa0a0a0
 material-over-grey = 0x585858
 material-over-black = 0x131313
 material-lift = 13.0
+# The material under what floats at its worst for its ink (#4090), at Standard and at More: what
+# the menu's panel implied under its fill in the check VM at 57b22e75d, over a white page in dark
+# (262520 and 252421) and a deep blue one in light (dddcd8 and bbbaba). The material's own tint
+# takes a white page this dark under a float, far from the window's over white. Less takes
+# Standard's; it wasn't measured.
+float-material = 0x3f4140
+float-material-more = 0x2d2d2e
 # What stands in for the material where the window's look has to be opaque, under rows it covers
 # or in the reveal's panel over the page: the ground over grey at Standard. The palette works out
 # each level's from the tokens above; this one is for what reads it without a palette, and a test
@@ -959,6 +966,8 @@ light-material-over-white = 0xe9e9e9
 light-material-over-grey = 0xb0b0b0
 light-material-over-black = 0x707070
 light-material-lift = 13.0
+light-float-material = 0x6a7384
+light-float-material-more = 0x60626f
 light-stand-in = 0xebebeb
 light-material-solid = 0xffffff
 # What floats over the window at each level, for the transparency picker: the dark fill over the
