@@ -230,6 +230,44 @@ mod walled {
         assert!(!outside.join("made").exists());
     }
 
+    const MADE: &str = r#"echo made > "$1/made" && echo wrote || echo unwritten"#;
+
+    #[test]
+    fn a_parameter_with_a_space_a_plus_and_a_dot_reaches_the_system_whole() {
+        // The twin's name is one the first's would match if any of the three were read as a
+        // pattern's, or the name cut at its space.
+        let (named, twin) = (Folder::new("a b+c.d"), Folder::new("a bbcxd"));
+        let rules = format!(
+            "{OPEN}(deny file-write*)(allow file-write* \
+             (regex (string-append \"^\" (regex-quote (param \"IN\")) \"/[^/]+$\")))"
+        );
+        let wall = wall(&rules, &[("IN", &named.0)], &[]);
+        for (folder, said) in [(&named, "wrote\n"), (&twin, "unwritten\n")] {
+            let ran = run(&wall, "/bin/sh", &["-c", MADE, "sh", &folder.text()]);
+            assert_eq!((ran.risen, ran.out.as_str()), (Ok(()), said));
+        }
+        assert!(named.join("made").exists() && !twin.join("made").exists());
+    }
+
+    #[test]
+    fn a_parameter_by_a_links_name_matches_nothing() {
+        let folder = Folder::new("link");
+        let (real, link) = (folder.join("real"), folder.join("link"));
+        std::fs::create_dir(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let rules = format!("{OPEN}(deny file-write*)(allow file-write* (subpath (param \"IN\")))");
+        // The system asks its rules by a path's real name, and the launcher hands a parameter on
+        // as it came: who names the folder gives its real name, or the rule allows nothing.
+        for (given, said) in [(&link, "unwritten\n"), (&real, "wrote\n")] {
+            let wall = wall(&rules, &[("IN", given)], &[]);
+            for by in [&real, &link] {
+                let by = by.display().to_string();
+                let ran = run(&wall, "/bin/sh", &["-c", MADE, "sh", &by]);
+                assert_eq!((ran.risen, ran.out.as_str()), (Ok(()), said));
+            }
+        }
+    }
+
     #[test]
     fn a_program_reaches_the_one_port_and_the_one_socket_and_no_other() {
         let listen = || std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -356,10 +394,12 @@ mod walled {
         let outside = Folder::new("looser-out");
         let rules = format!("{OPEN}(deny file-write* (subpath (param \"OUT\")))");
         let wall = wall(&rules, &[("OUT", &outside.0)], &[]);
-        let write = r#"echo made > "$1/made""#;
+        let write = r#"echo ran; echo made > "$1/made""#;
         let args = ["-p", OPEN, "/bin/sh", "-c", write, "sh", &outside.text()];
         let ran = run(&wall, "/usr/bin/sandbox-exec", &args);
         assert_eq!(ran.risen, Ok(()));
+        // The system puts no second set of rules on a process inside one, so nothing ran at all.
+        assert_eq!(ran.out, "");
         assert!(!outside.join("made").exists());
     }
 
