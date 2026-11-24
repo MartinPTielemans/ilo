@@ -3169,8 +3169,9 @@ fn a_site_set_to_never_is_refused_at_every_tier_until_revoked(cx: &mut TestAppCo
 }
 
 /// A press on a refusal's line just after it appears is taken as meant for what was there, and does
-/// nothing; one after that changes the task's access. Take over holds the tab and settles the
-/// refusal there, and the access stays as it was.
+/// nothing; one after that changes the task's access. A pick in the level's menu, which the user
+/// opened, is theirs at once: nothing moved under the pointer. Take over holds the tab and settles
+/// the refusal there, and the access stays as it was.
 #[gpui::test]
 fn a_refusals_buttons_wait_and_take_over_keeps_the_access(cx: &mut TestAppContext) {
     use super::task::TaskAction;
@@ -3215,6 +3216,18 @@ fn a_refusals_buttons_wait_and_take_over_keeps_the_access(cx: &mut TestAppContex
         "a press as the line appeared changed it"
     );
     assert_eq!(stops(&agents, cx).len(), 1);
+    press(TaskAction::PickTier(Tier::Work), cx);
+    assert_eq!(tier(cx), Tier::Work, "the menu's pick was dropped");
+    assert!(stops(&agents, cx).is_empty());
+
+    give(&agents, Tier::Look, cx);
+    coupon(cx);
+    press(TaskAction::SetTier(Tier::Work), cx);
+    assert_eq!(
+        tier(cx),
+        Tier::Look,
+        "a press as the line appeared changed it"
+    );
     agents.update(cx, |agents, _| {
         for stop in &mut agents.task_mut(&key).unwrap().stops {
             stop.appeared -= super::tier::PROTECT;

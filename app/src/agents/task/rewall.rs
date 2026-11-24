@@ -9,9 +9,16 @@
 //! a higher level's leaves the task at the level it runs at; a start's or a lower level's lets the
 //! task go on without its files, which then needs no wall; and files taken back whose task can't
 //! be started again without them leave it stopped. Each is kept on the task (`Rewalled`) for the
-//! line that says it, whose words aren't here.
+//! line that says it (lines.rs), whose words aren't here. A task that goes on without its files,
+//! or stops for them, is in the activity log too, as an event with no file's name: the first on
+//! the row of the start it came at, the second a row of its own.
+//!
+//! Ending a run can leave some of what its assistant started running, which the sweep that ends
+//! it says. That, and that a later sweep ended it, are kept the same way (`left_running`,
+//! `ended_left`), from the sweep's own answer.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use gpui::Context;
 
@@ -19,7 +26,6 @@ use super::{State, Task, conversation};
 use crate::agents::Agents;
 use crate::agents::access::ACCESS_ACTION;
 use crate::agents::files::Given;
-use crate::agents::lines;
 use crate::agents::runner::{Cli, Failure};
 use crate::agents::tier::{self, Tier};
 use crate::agents::wall::{self, Wall, WallFor, WallRefused};
@@ -54,22 +60,96 @@ pub enum Change {
     TookBack(Given),
 }
 
-/// What came of a wall that wasn't put up, with what its line names.
+/// The activity log's words, each its entry's target as a change of level's is
+/// `tier::changed_logged`: the event, and never a file's name or a path. What a start's row ends
+/// with where it left the task's files out, after the level it started at.
+pub const LEFT_OUT_LOGGED: &str = " · files left out";
+/// A task that stopped as it couldn't be started again without the folder the user took back,
+/// or without the files they attached.
+pub const STOPPED_FOLDER_LOGGED: &str = "Stopped · couldn't restart without its folder";
+pub const STOPPED_FILES_LOGGED: &str = "Stopped · couldn't restart without its files";
+/// A run ended with some of what its assistant started still running.
+pub const LEFT_RUNNING_LOGGED: &str = "Couldn't end everything it started";
+
+/// A later sweep ended the `count` processes a run had left running.
+pub fn ended_left_logged(count: usize) -> String {
+    match count {
+        1 => "Ended 1 process left running".into(),
+        count => format!("Ended {count} processes left running"),
+    }
+}
+
+/// What came of a wall that wasn't put up, or of ending a run inside one, with what its line
+/// names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rewalled {
-    /// The wall of `refused`, a higher level: the task stays at `at`, as it ran.
-    Stays { at: Tier, refused: Tier },
+    /// The wall of `refused`, a higher level the task never had: it stays at `at`, as it ran,
+    /// with `files`.
+    Stays {
+        at: Tier,
+        refused: Tier,
+        files: Given,
+    },
+    /// The same by the system's own no, which came once the task was at `refused`: it's back at
+    /// `at`.
+    SetBack {
+        at: Tier,
+        refused: Tier,
+        files: Given,
+    },
     /// Its wall at a start or at a lower level: the task goes on without `files`.
     WithoutFiles { files: Given },
     /// Its assistant couldn't be started again without `files`, which the user took back: the
     /// task stopped.
     Stopped { files: Given },
+    /// Its assistant couldn't be started again at `refused`, the level the user raised it to:
+    /// the task stopped.
+    NotRaised { refused: Tier },
+    /// Not everything its assistant started could be ended with its run, which was inside the
+    /// wall of `files`.
+    LeftRunning { files: Given },
+    /// A later sweep ended what a run of its had left running.
+    EndedLeft,
+}
+
+/// What came of a wall as its task keeps it: with how many of the task's messages and steps came
+/// before it, which place its line among them as a refusal's are placed (lines.rs), and when.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Came {
+    pub after: usize,
+    pub traced: usize,
+    pub appeared: Instant,
+    pub what: Rewalled,
 }
 
 impl Task {
-    /// Keeps what came of a wall that wasn't put up, with the turn under way.
-    fn rewalled(&mut self, came: Rewalled) {
-        self.rewalled.push((lines::turn(self), came));
+    /// Keeps what came of a wall that wasn't put up, after the messages and steps the task has
+    /// now.
+    fn rewalled(&mut self, what: Rewalled) {
+        self.rewalled.push(Came {
+            after: self.messages.len(),
+            traced: self.trace.len(),
+            appeared: Instant::now(),
+            what,
+        });
+    }
+
+    /// Its assistant couldn't be started again at `refused`, the level the user raised it to,
+    /// and the task is stopped: what the wait on a raise's restart found.
+    pub(in crate::agents) fn not_raised(&mut self, refused: Tier) {
+        self.rewalled(Rewalled::NotRaised { refused });
+    }
+
+    /// The sweep that ended a run of its couldn't end everything the assistant had started.
+    /// `had` is what that run was given, which what's left can still reach: the app's own
+    /// record of the user's pick, and nothing an assistant or a page says.
+    pub(in crate::agents) fn left_running(&mut self, had: Given) {
+        self.rewalled(Rewalled::LeftRunning { files: had });
+    }
+
+    /// A later sweep ended what a run of its had left running.
+    pub(in crate::agents) fn ended_left(&mut self) {
+        self.rewalled(Rewalled::EndedLeft);
     }
 }
 
@@ -98,20 +178,50 @@ impl Agents {
     }
 
     /// The wall a start of `agent`'s task goes inside: none for a task with no files, which
-    /// starts as it always has, and none for one whose wall isn't put up, which then starts
+    /// starts as it always has. Err for one whose wall isn't put up, which from then goes on
     /// without its files.
-    pub(super) fn wall_to_start(&mut self, agent: &str) -> Option<Arc<Wall>> {
-        let task = self.task(agent)?;
-        if !task.files.any() {
-            return None;
-        }
+    fn wall_or_without(&mut self, agent: &str) -> Result<Option<Arc<Wall>>, ()> {
+        let Some(task) = self.task(agent).filter(|task| task.files.any()) else {
+            return Ok(None);
+        };
         match self.put_up(agent, task.tier) {
-            Ok(wall) => Some(Arc::new(wall)),
+            Ok(wall) => Ok(Some(Arc::new(wall))),
             Err(_) => {
                 self.without_files(agent);
-                None
+                Err(())
             }
         }
+    }
+
+    /// The wall the task's first start goes inside, with the log's row of that start: the level
+    /// it starts at, the `pages` the user added to it, and on the same row that its files were
+    /// left out, where its wall wasn't put up.
+    pub(super) fn wall_to_begin(&mut self, agent: &str, pages: usize) -> Option<Arc<Wall>> {
+        let wall = self.wall_or_without(agent);
+        self.log_start(agent, pages, wall.is_err());
+        wall.unwrap_or_default()
+    }
+
+    /// The wall a later start of `agent`'s task goes inside. One that leaves its files out is in
+    /// the log as that start's row, which a later start otherwise has none of.
+    pub(super) fn wall_to_start(&mut self, agent: &str) -> Option<Arc<Wall>> {
+        let wall = self.wall_or_without(agent);
+        if wall.is_err() {
+            self.log_start(agent, 0, true);
+        }
+        wall.unwrap_or_default()
+    }
+
+    /// The log's row for a start of `agent`'s task at the level it has.
+    fn log_start(&mut self, agent: &str, pages: usize, left_out: bool) {
+        let Some(task) = self.task(agent) else {
+            return;
+        };
+        let mut started = tier::started_logged(task.tier, pages);
+        if left_out {
+            started.push_str(LEFT_OUT_LOGGED);
+        }
+        self.note_on(agent, 0, ACCESS_ACTION, "", &started, "");
     }
 
     /// `agent`'s task goes on without its files.
@@ -145,7 +255,8 @@ impl Agents {
                 ..
             }) => {
                 let refused = std::mem::replace(&mut task.tier, at);
-                task.rewalled(Rewalled::Stays { at, refused });
+                let files = task.files.clone();
+                task.rewalled(Rewalled::SetBack { at, refused, files });
                 // What it was told of the raise is no longer so.
                 let first = conversation(task);
                 // The log had the raise, and has that it didn't hold.
@@ -155,6 +266,7 @@ impl Agents {
             }
             Some(rising) => {
                 self.without_files(agent);
+                self.log_start(agent, 0, true);
                 rising.first
             }
             // No start of ilo's was rising: it couldn't start, as any start that can't.
@@ -199,6 +311,7 @@ impl Agents {
             let stays = Rewalled::Stays {
                 at: from,
                 refused: to,
+                files: task.files.clone(),
             };
             task.rewalled(stays);
         }
@@ -267,7 +380,12 @@ impl Agents {
                 if !self.launch_in(key, &first, wall, cx)
                     && let Some(task) = self.task_mut(key)
                 {
+                    let stopped = match files.attached {
+                        Some(_) => STOPPED_FILES_LOGGED,
+                        None => STOPPED_FOLDER_LOGGED,
+                    };
                     task.rewalled(Rewalled::Stopped { files });
+                    self.note_on(key, 0, ACCESS_ACTION, "", stopped, "");
                 }
                 return self.wait_for_answer(key, cx);
             }
