@@ -33,8 +33,6 @@ struct Made {
     navigated: RefCell<Vec<(u64, String)>>,
     /// Whether the core can't send a tab where navigate asks.
     cant_go: RefCell<bool>,
-    /// The question each window shows, as the agents last told them.
-    asked: RefCell<Option<Question>>,
     /// The tabs the user holds from agents, as the core keeps them.
     held: RefCell<HashSet<u64>>,
     /// Each action the agents asked the core whether they may take (bc_agent_may_act).
@@ -61,11 +59,8 @@ struct Made {
     muted: RefCell<Vec<(u64, bool)>>,
     /// Tabs the core holds in a Space that its list of the Space's tabs leaves out.
     unlisted: RefCell<HashSet<u64>>,
-    /// The file fields the user chose a file for, with the window, and those dropped; and whether
-    /// the file dialog can't open.
-    chosen: RefCell<Vec<(u64, u64)>>,
+    /// The file fields the agents dropped.
     dropped: RefCell<Vec<u64>>,
-    no_dialog: std::cell::Cell<bool>,
     /// Words the core refuses with in place of its own, as a later core may word them.
     reworded: RefCell<Option<&'static str>>,
     /// The sign-in pages opened, each with its tab, and the tabs and windows closed; and whether
@@ -228,10 +223,6 @@ impl Browser for Made {
         })
     }
 
-    fn ask(&self, question: Option<Question>, _: &mut App) {
-        *self.asked.borrow_mut() = question;
-    }
-
     fn hand_off(&self, _: &str, tab: u64) -> bool {
         self.held.borrow_mut().insert(tab)
     }
@@ -247,11 +238,6 @@ impl Browser for Made {
     // As the core does, without a dialog.
     fn close_user_tab(&self, tab: u64, _: &mut App) {
         self.tabs.borrow_mut().retain(|each| each.0 != tab);
-    }
-
-    fn file_field_choose(&self, field: u64, window: u64) -> bool {
-        self.chosen.borrow_mut().push((field, window));
-        !self.no_dialog.get()
     }
 
     fn file_field_drop(&self, field: u64) {
@@ -712,7 +698,7 @@ fn refused(
         "{}",
         refused.text
     );
-    assert_eq!(*browser.asked.borrow(), None, "{what} asked");
+    assert_eq!(shown(&agents, cx), None, "{what} asked");
     // The same refusal again counts on the line it showed as, so it's found by what it stopped.
     // The line shows the page's words capped, as it shows them.
     let at = super::tier::plain(at);
@@ -725,6 +711,11 @@ fn refused(
 
 /// The switch is off at first, and the server runs only while it's on: on, its socket or pipe is
 /// in place for the user alone and takes a connection; off, it's gone.
+/// The step that waits on the user now, as the task's card says it.
+fn shown(agents: &Entity<Agents>, cx: &mut TestAppContext) -> Option<Question> {
+    agents.read_with(cx, |agents, _| agents.question())
+}
+
 #[gpui::test]
 fn agents_are_off_until_the_user_turns_them_on(cx: &mut TestAppContext) {
     let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
@@ -1484,7 +1475,7 @@ fn a_change_from_a_tab_the_ui_doesnt_list_is_refused_unasked(cx: &mut TestAppCon
     ] });
     let answer = call(&agents, "claude-code", "request", requests, cx);
     cx.run_until_parked();
-    assert!(browser.asked.borrow().is_none(), "the change asked");
+    assert_eq!(shown(&agents, cx), None, "the change asked");
     let sent = browser.requests.borrow().clone();
     assert_eq!(sent.len(), 1, "{sent:?}");
     assert_eq!(sent[0].2.method, "GET");
@@ -2381,9 +2372,8 @@ fn a_key_press_that_activates_a_control_is_refused_as_a_click_on_it(cx: &mut Tes
     };
     // Calls `tool`, which goes to the page without a question, and the page answers with `tree`.
     let answered = |tool: &str, arguments: Value, tree: String, cx: &mut TestAppContext| {
-        *browser.asked.borrow_mut() = None;
         let answer = call(&agents, "claude-code", tool, arguments.clone(), cx);
-        assert!(browser.asked.borrow().is_none(), "{tool} {arguments} asked");
+        assert_eq!(shown(&agents, cx), None, "{tool} {arguments} asked");
         assert!(!page_done(&agents, &browser, answer, tree, cx).error);
     };
     let goes = |tool: &str, arguments: Value, cx: &mut TestAppContext| {
@@ -3331,7 +3321,7 @@ fn a_handoff_not_handed_back_answers_after_15_minutes(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
     let reason = json!({ "tab": 20, "reason": "Sign in to example.com" });
     let handed = call(&agents, "claude-code", "hand_off", reason, cx);
-    assert!(browser.asked.borrow().is_some(), "the handoff didn't ask");
+    assert!(shown(&agents, cx).is_some(), "the handoff didn't ask");
 
     cx.executor()
         .advance_clock(HANDOFF_WAIT - Duration::from_secs(1));
@@ -3344,7 +3334,7 @@ fn a_handoff_not_handed_back_answers_after_15_minutes(cx: &mut TestAppContext) {
             .text
             .starts_with("The user hasn't handed tab 20 back in 15 minutes.")
     );
-    assert_eq!(*browser.asked.borrow(), None);
+    assert_eq!(shown(&agents, cx), None);
     assert!(browser.held.borrow().contains(&20), "the tab left the user");
     let status = agents.read_with(cx, |agents, _| agents.status());
     assert_eq!(status[0].held, [(20, "Sign in to example.com".into())]);
@@ -3353,6 +3343,54 @@ fn a_handoff_not_handed_back_answers_after_15_minutes(cx: &mut TestAppContext) {
     agents.update(cx, |agents, cx| agents.hand_back(20, cx));
     assert!(browser.held.borrow().is_empty());
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "handed back");
+}
+
+/// A hand-off is its tab's alone: two tabs handed off at once are both the user's, and each
+/// call is answered when its own tab comes back, handed back in the other order.
+#[gpui::test]
+fn two_tabs_handed_off_at_once_come_back_in_either_order(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    (browser.tabs.borrow_mut()).push((21, 2, "Example Org", "https://www.example.org/"));
+    let first = json!({ "tab": 20, "reason": "Sign in to example.com" });
+    let first = call(&agents, "claude-code", "hand_off", first, cx);
+    let second = json!({ "tab": 21, "reason": "Sign in to example.org" });
+    let second = call(&agents, "claude-code", "hand_off", second, cx);
+    if let Ok(answer) = second.try_recv() {
+        panic!("tab 21's hand-off was answered before it was handed back: {answer:?}");
+    }
+    assert_eq!(
+        browser
+            .held
+            .borrow()
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>(),
+        [20, 21].into(),
+        "a second tab's hand-off waited for the first's"
+    );
+
+    agents.update(cx, |agents, cx| agents.hand_back(21, cx));
+    cx.run_until_parked();
+    assert!(
+        !second.recv().unwrap().error,
+        "tab 21's call wasn't answered"
+    );
+    assert!(
+        first.try_recv().is_err(),
+        "tab 20's call was answered by tab 21's hand-back"
+    );
+    assert!(
+        browser.held.borrow().contains(&20),
+        "tab 20 left the user with tab 21"
+    );
+
+    agents.update(cx, |agents, cx| agents.hand_back(20, cx));
+    cx.run_until_parked();
+    assert!(
+        !first.recv().unwrap().error,
+        "tab 20's call wasn't answered"
+    );
+    assert!(browser.held.borrow().is_empty());
 }
 
 /// The core's report of a download the page in tab `tab` started, held, as the answer to
@@ -3385,7 +3423,7 @@ fn an_agents_download_goes_at_work_on_pages_and_answers_with_its_file(cx: &mut T
     let answer = call(&agents, "claude-code", "open_tab", url, cx);
     let request = browser.pages.borrow().last().unwrap().1;
     download_started(&agents, 30, request, 900, cx);
-    assert_eq!(*browser.asked.borrow(), None, "the download asked");
+    assert_eq!(shown(&agents, cx), None, "the download asked");
     assert!(
         browser.tabs.borrow().iter().all(|tab| tab.0 != 30),
         "the empty tab stayed"
@@ -3451,7 +3489,7 @@ fn a_download_at_look_only_is_refused_and_leaves_no_file(cx: &mut TestAppContext
 
     download_started(&agents, 20, 0, 901, cx);
     assert_eq!(*browser.downloads.borrow(), [(900, false), (901, false)]);
-    assert_eq!(*browser.asked.borrow(), None);
+    assert_eq!(shown(&agents, cx), None);
 }
 /// A bank's site is refused below Full access, at Look only too, each time and logged, and opens
 /// once the user gives Full access.
@@ -3936,12 +3974,8 @@ fn a_handoff_waits_for_the_user_to_hand_the_tab_back(cx: &mut TestAppContext) {
     assert!(answer.recv().unwrap().text.starts_with("reason is"));
     let reason = json!({ "tab": 20, "reason": "Sign in to example.com" });
     let handed = call(&agents, "claude-code", "hand_off", reason, cx);
-    let question = browser
-        .asked
-        .borrow()
-        .clone()
-        .expect("the handoff didn't ask");
-    assert_eq!(question.handoff, Some(20));
+    let question = shown(&agents, cx).expect("the handoff didn't ask");
+    assert_eq!(question.tab, 20);
     assert_eq!(question.why, "Sign in to example.com");
     assert!(browser.held.borrow().contains(&20));
     let status = agents.read_with(cx, |agents, _| agents.status());
@@ -3959,7 +3993,7 @@ fn a_handoff_waits_for_the_user_to_hand_the_tab_back(cx: &mut TestAppContext) {
     agents.update(cx, |agents, cx| agents.hand_back(20, cx));
     let back = handed.recv().unwrap();
     assert!(back.text.starts_with("The user handed tab 20 back."));
-    assert_eq!(*browser.asked.borrow(), None);
+    assert_eq!(shown(&agents, cx), None);
     assert!(browser.held.borrow().is_empty());
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "handed back");
 }
@@ -3971,7 +4005,7 @@ fn the_user_takes_over_and_stops_an_agent(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
     agents.update(cx, |agents, cx| agents.take_over("claude-code", 20, cx));
     assert!(browser.held.borrow().contains(&20));
-    assert_eq!(*browser.asked.borrow(), None);
+    assert_eq!(shown(&agents, cx), None);
     let status = agents.read_with(cx, |agents, _| agents.status());
     assert_eq!(status[0].held, [(20, "".into())]);
     let refused = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
@@ -3991,7 +4025,7 @@ fn the_user_takes_over_and_stops_an_agent(cx: &mut TestAppContext) {
     agents.update(cx, |agents, cx| agents.stop_agent("claude-code", cx));
     let stopped = click.recv().unwrap();
     assert!(stopped.error && stopped.text.starts_with("The user stopped you."));
-    assert_eq!(*browser.asked.borrow(), None);
+    assert_eq!(shown(&agents, cx), None);
     assert_eq!(*browser.disconnected.borrow(), ["claude-code"]);
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "stopped by the user");
 }
@@ -4063,12 +4097,8 @@ fn a_tab_the_user_took_back_stays_theirs_until_they_hand_it_back(cx: &mut TestAp
 
     let reason = json!({ "tab": 20, "reason": "To finish the order" });
     let kept = call(&agents, "claude-code", "ask_for_tab", reason.clone(), cx);
-    let question = browser
-        .asked
-        .borrow()
-        .clone()
-        .expect("asking for the tab didn't ask");
-    assert_eq!((question.handoff, question.back), (Some(20), true));
+    let question = shown(&agents, cx).expect("asking for the tab didn't ask");
+    assert_eq!((question.tab, question.back), (20, true));
     assert_eq!(question.why, "To finish the order");
     let again = call(&agents, "claude-code", "ask_for_tab", reason.clone(), cx);
     assert!(
@@ -4078,12 +4108,10 @@ fn a_tab_the_user_took_back_stays_theirs_until_they_hand_it_back(cx: &mut TestAp
             .text
             .starts_with("You're waiting on the user")
     );
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Never, cx)
-    });
+    agents.update(cx, |agents, cx| agents.let_go(20, held::Event::Keep, cx));
     let kept = kept.recv().unwrap();
     assert!(kept.error && kept.text.starts_with("The user keeps tab 20."));
-    assert_eq!(*browser.asked.borrow(), None);
+    assert_eq!(shown(&agents, cx), None);
     assert!(
         browser.held.borrow().contains(&20),
         "Keep gave the tab back"
@@ -4091,14 +4119,8 @@ fn a_tab_the_user_took_back_stays_theirs_until_they_hand_it_back(cx: &mut TestAp
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "kept");
 
     let back = call(&agents, "claude-code", "ask_for_tab", reason, cx);
-    let question = browser
-        .asked
-        .borrow()
-        .clone()
-        .expect("asking again didn't ask");
-    agents.update(cx, |agents, cx| {
-        agents.answer(question.id, Answer::Once, cx)
-    });
+    assert!(shown(&agents, cx).is_some(), "asking again didn't ask");
+    agents.update(cx, |agents, cx| agents.hand_back(20, cx));
     assert!(
         back.recv()
             .unwrap()
@@ -4120,7 +4142,7 @@ fn a_pages_passkey_hands_its_tab_to_the_user(cx: &mut TestAppContext) {
     });
     let status = agents.read_with(cx, |agents, _| agents.status());
     assert_eq!(status[0].held, vec![(20, SharedString::from(PASSKEY))]);
-    assert_eq!(*browser.asked.borrow(), None);
+    assert_eq!(shown(&agents, cx), None);
     let entry = log(&agents, "claude-code", cx).remove(0);
     assert_eq!(entry.0, "passkey");
     assert_eq!(
@@ -4254,9 +4276,9 @@ fn a_sign_in_the_browser_asks_for_hands_the_tab_to_the_user(cx: &mut TestAppCont
     );
     cx.run_until_parked();
     asks_for_sign_in(&agents, &browser, 30, "http://auth.example:8080", cx);
-    let question = (browser.asked.borrow().clone()).expect("the sign-in didn't ask");
+    let question = shown(&agents, cx).expect("the sign-in didn't ask");
     let why = "auth.example asks you to sign in. Hand the tab back when you’re done.";
-    assert_eq!((question.handoff, question.why.as_ref()), (Some(30), why));
+    assert_eq!((question.tab, question.why.as_ref()), (30, why));
     assert!(browser.held.borrow().contains(&30));
     let status = agents.read_with(cx, |agents, _| agents.status());
     assert_eq!(status[0].held, [(30, why.into())]);
@@ -4288,7 +4310,7 @@ fn a_sign_in_the_browser_asks_for_hands_the_tab_to_the_user(cx: &mut TestAppCont
         "{}",
         back.text
     );
-    assert_eq!(*browser.asked.borrow(), None);
+    assert_eq!(shown(&agents, cx), None);
     assert_eq!(log(&agents, "claude-code", cx)[0].0, "handed back");
 
     // Handed back with the dialog still up, the agent is told to hand it off.
@@ -4332,7 +4354,7 @@ fn a_sign_in_handoff_answers_after_15_minutes(cx: &mut TestAppContext) {
         "The proxy http://proxy.example:3128 requires a username and password",
         cx,
     );
-    let question = (browser.asked.borrow().clone()).expect("the sign-in didn't ask");
+    let question = shown(&agents, cx).expect("the sign-in didn't ask");
     assert_eq!(
         question.why,
         "A proxy asks you to sign in. Hand the tab back when you’re done."
@@ -4453,7 +4475,7 @@ fn a_page_showing_its_dialog_closes_at_once(cx: &mut TestAppContext) {
         (false, "Closed tab 30.")
     );
     assert_eq!(*browser.closes.borrow(), [(30, true)]);
-    assert_eq!(*browser.asked.borrow(), None, "asked the user");
+    assert_eq!(shown(&agents, cx), None, "asked the user");
 }
 
 /// A tab in the agent's Space that it didn't open, as one its page opened, may hold what the user
@@ -4514,7 +4536,7 @@ fn a_page_the_user_gave_showing_its_dialog_is_discarded_only_at_full_access(
         )
     );
     assert_eq!(*browser.closes.borrow(), [], "asked the page");
-    assert_eq!(*browser.asked.borrow(), None, "asked the user");
+    assert_eq!(shown(&agents, cx), None, "asked the user");
 
     let closed = call(
         &agents,
@@ -4624,11 +4646,6 @@ fn an_agent_discards_only_a_page_it_opened(cx: &mut TestAppContext) {
         ("discard_tab".into(), "docs.example".into(), "".into())
     );
     assert_eq!(tools::describe(&entry.0), "Closed a tab without saving");
-    assert_eq!(
-        *browser.asked.borrow(),
-        None,
-        "the agent's own tab asked the user"
-    );
 }
 
 /// A page whose handler doesn't ask closes at the first call, discard or not, with nothing lost
@@ -4647,7 +4664,7 @@ fn a_page_that_doesnt_ask_closes_at_the_first_call(cx: &mut TestAppContext) {
     assert!(!closed.error);
     assert_eq!(closed.text, "Closed tab 10.");
     assert_eq!(*browser.closes.borrow(), [(10, false)]);
-    assert_eq!(*browser.asked.borrow(), None, "asked the user");
+    assert_eq!(shown(&agents, cx), None, "asked the user");
     let entry = log(&agents, "claude-code", cx).remove(0);
     assert_eq!(
         entry,
@@ -5117,7 +5134,7 @@ fn run_steps_runs_its_steps_in_order(cx: &mut TestAppContext) {
         "{}",
         stopped.text
     );
-    assert_eq!(*browser.asked.borrow(), None, "the run asked");
+    assert_eq!(shown(&agents, cx), None, "the run asked");
 }
 
 /// A run's wait step looks at the page until its text shows, checked as a snapshot and logged once
@@ -5757,7 +5774,7 @@ mod requests {
         let (agents, browser, _) = connected(cx);
         let read = json!({ "tab": 20, "requests": [{ "method": "GET", "path": "/api/me" }] });
         let answer = call(&agents, "claude-code", "request", read, cx);
-        assert_eq!(*browser.asked.borrow(), None, "a read asked");
+        assert_eq!(shown(&agents, cx), None, "a read asked");
         assert_eq!(sent(&browser), ["GET https://www.example.com/api/me"]);
         answered(
             &agents,
@@ -5828,7 +5845,7 @@ mod requests {
 
         give(&agents, Tier::Full, cx);
         let answer = call(&agents, "claude-code", "request", changes, cx);
-        assert_eq!(*browser.asked.borrow(), None, "a change asked");
+        assert_eq!(shown(&agents, cx), None, "a change asked");
         for status in [200, 201, 204] {
             answered(&agents, &browser, status, "", cx);
         }
@@ -5903,7 +5920,7 @@ mod requests {
             let answer = call(&agents, "claude-code", "request", arguments, cx);
             let answer = answer.recv().unwrap();
             assert!(answer.error, "{}", answer.text);
-            assert_eq!(*browser.asked.borrow(), None, "a refused call asked");
+            assert_eq!(shown(&agents, cx), None, "a refused call asked");
             answer.text
         };
         let cookie = json!([{ "method": "GET", "path": "/", "headers": { "Cookie": "a=1" } }]);
@@ -6180,18 +6197,6 @@ mod tasks {
         (agents, browser)
     }
 
-    /// Whether `agent` opening a bank's site asks the user first.
-    fn asks_to_open_the_bank(
-        agents: &Entity<Agents>,
-        browser: &Made,
-        agent: &str,
-        cx: &mut TestAppContext,
-    ) -> Option<Question> {
-        browser.asked.replace(None);
-        let _ = call(agents, agent, "open_tab", json!({ "url": "chase.com" }), cx);
-        browser.asked.borrow().clone()
-    }
-
     fn start(agents: &Entity<Agents>, asked: &str, cx: &mut TestAppContext) -> String {
         agents
             .update(cx, |agents, cx| {
@@ -6207,6 +6212,7 @@ mod tasks {
     fn said(agents: &Entity<Agents>, agent: &str, out: Out, cx: &mut TestAppContext) {
         let event = runner::Event {
             agent: agent.into(),
+            run: agents.read_with(cx, |agents, _| agents.run_of(agent)),
             out,
         };
         agents.update(cx, |agents, cx| agents.task_said(event, cx));
@@ -6346,6 +6352,23 @@ mod tasks {
         assert!(card_of(&agents, cx).retry);
     }
 
+    /// With tasks off, a reply to the agent's ask still answers it, so the task can finish.
+    #[gpui::test]
+    fn with_tasks_off_a_reply_still_answers_the_ask(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Move the ten cases to Closed", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        let ask = json!({ "question": "Close all ten?", "answers": ["Yes", "No"] });
+        let asked = call(&agents, &agent, "ask", ask, cx);
+        agents.update(cx, |agents, cx| agents.set_tasks_on(false, cx));
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&agent, TaskAction::Reply("Yes".into()), cx);
+        });
+        assert!(!asked.recv().unwrap().error, "the ask went unanswered");
+    }
+
     #[gpui::test]
     fn the_task_tools_are_a_tasks_alone(cx: &mut TestAppContext) {
         let names = tools::names("task-1");
@@ -6404,12 +6427,8 @@ mod tasks {
             (card.status.as_ref(), card.dot),
             ("Which day?", Dot::Waiting)
         );
-        assert_eq!(
-            card.answers,
-            vec![SharedString::from("Friday"), SharedString::from("Saturday")]
-        );
         assert!(asked.try_recv().is_err(), "ask waits for the user");
-        agents.update(cx, |agents, cx| agents.answer_task(&agent, "Saturday", cx));
+        agents.update(cx, |agents, cx| agents.reply(&agent, "Saturday", cx));
         assert_eq!(
             asked.recv().unwrap(),
             ToolResult::text("The user answered: Saturday")
@@ -6514,7 +6533,7 @@ mod tasks {
             cx,
         );
         follow(cx);
-        agents.update(cx, |agents, cx| agents.answer_task(&agent, "Saturday", cx));
+        agents.update(cx, |agents, cx| agents.reply(&agent, "Saturday", cx));
         asked.recv().unwrap();
         follow(cx);
         browser
@@ -7032,7 +7051,6 @@ mod tasks {
             }),
             cx,
         );
-        assert!(card_of(&agents, cx).answers.is_empty());
         // A reply answers it.
         agents.update(cx, |agents, cx| agents.reply(&agent, "Porto", cx));
         assert_eq!(
@@ -7062,7 +7080,7 @@ mod tasks {
             ("Stopped at chase.com", Dot::Waiting)
         );
         assert!(card.question.is_none(), "a refusal asked");
-        assert_eq!(*browser.asked.borrow(), None);
+        assert_eq!(shown(&agents, cx), None);
         browser
             .tabs
             .borrow_mut()
@@ -7079,10 +7097,7 @@ mod tasks {
             (card.status.as_ref(), card.dot),
             ("Needs you · Sign in, please", Dot::Waiting)
         );
-        assert_eq!(
-            card.question.and_then(|question| question.handoff),
-            Some(31)
-        );
+        assert_eq!(card.question.map(|question| question.tab), Some(31));
     }
 
     /// An agent's calls on several tabs go at once (#1476), so its prompts can come together: they
@@ -7107,18 +7122,11 @@ mod tasks {
             card.asks && card.question.is_none(),
             "the handoff went first"
         );
-        assert_eq!(
-            (card.status.as_ref(), card.answers.len()),
-            ("Close all ten?", 2)
-        );
-        assert_eq!(*browser.asked.borrow(), None, "a window asked out of turn");
-        agents.update(cx, |agents, cx| agents.answer_task(&agent, "Yes", cx));
+        assert_eq!(card.status.as_ref(), "Close all ten?");
+        assert_eq!(shown(&agents, cx), None, "a window asked out of turn");
+        agents.update(cx, |agents, cx| agents.reply(&agent, "Yes", cx));
         assert!(!asked.recv().unwrap().error);
-        let question = browser
-            .asked
-            .borrow()
-            .clone()
-            .expect("the handoff never asked");
+        let question = shown(&agents, cx).expect("the handoff never asked");
         assert_eq!(question.from.as_ref(), agent);
         let card = card_of(&agents, cx);
         assert_eq!(
@@ -7456,7 +7464,7 @@ mod tasks {
         let steps: Vec<_> = (trace.items.iter())
             .filter_map(|item| match item {
                 TraceItem::Step(step) => Some(step),
-                TraceItem::Said(_) | TraceItem::Helper(_) => None,
+                TraceItem::Said(_) | TraceItem::Helper { .. } => None,
             })
             .collect();
         let titles: Vec<_> = steps
@@ -8006,7 +8014,7 @@ mod tasks {
                 .map(|item| match item {
                     TraceItem::Step(step) => step.clone(),
                     TraceItem::Said(said) => panic!("{said}"),
-                    TraceItem::Helper(step) => panic!("{}", step.title),
+                    TraceItem::Helper { step, .. } => panic!("{}", step.title),
                 })
                 .collect::<Vec<_>>()
         };
@@ -8320,10 +8328,7 @@ mod tasks {
         let seen = |cx: &mut TestAppContext| {
             let card = card_of(&agents, cx);
             let asked = (browser.made.borrow().len(), browser.pages.borrow().len());
-            let read = (
-                browser.reads.borrow().len(),
-                browser.asked.borrow().is_some(),
-            );
+            let read = browser.reads.borrow().len();
             let card = (card.title, card.status, card.question.is_some());
             (card, log(&agents, &agent, cx), asked, read)
         };
@@ -8360,6 +8365,34 @@ mod tasks {
         );
         assert!(!named.recv().unwrap().error);
         assert_eq!(card_of(&agents, cx).title.as_ref(), "Three shops");
+    }
+
+    #[gpui::test]
+    fn a_wall_that_does_not_go_up_fails_a_task_but_not_one_the_user_stopped(
+        cx: &mut TestAppContext,
+    ) {
+        let (agents, _) = ready(None, cx);
+        let refused = || {
+            let ended = "the launcher ended before the program started";
+            Out::Walled(Err(crate::agents::wall::WallRefused::Failed(ended.into())))
+        };
+        let state = |agents: &Entity<Agents>, agent: &str, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| agents.task(agent).unwrap().state.clone())
+        };
+        let agent = start(&agents, "Tidy my notes", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        said(&agents, &agent, refused(), cx);
+        assert!(matches!(state(&agents, &agent, cx), State::Failed { .. }));
+        // Stop while the wall goes up ends the launcher, which then says nothing started.
+        let agent = start(&agents, "Tidy my letters", cx);
+        agents.update(cx, |agents, cx| {
+            agents.task_mut(&agent).unwrap().state = State::Working;
+            agents.stop_task(&agent, cx);
+        });
+        said(&agents, &agent, refused(), cx);
+        assert_eq!(state(&agents, &agent, cx), State::Stopped);
     }
 
     #[gpui::test]
@@ -9287,14 +9320,14 @@ mod sessions {
             cx,
         );
         let second = cards(&agents, cx)[0].agent.to_string();
-        assert!(browser.asked.borrow().is_some());
+        assert!(shown(&agents, cx).is_some());
 
         closed(&agents, 1, cx);
         assert_eq!(card(&agents, &first, cx).dot, Dot::Done);
         let waiting = card(&agents, &second, cx);
         assert_eq!(waiting.dot, Dot::Waiting, "{}", waiting.status);
         assert!(waiting.question.is_some());
-        assert!(browser.asked.borrow().is_some(), "its handoff went");
+        assert!(shown(&agents, cx).is_some(), "its handoff went");
         assert!(matches!(handing.try_recv(), Err(mpsc::TryRecvError::Empty)));
         assert!(agents.read_with(cx, |agents, _| agents.is_live(Client::ClaudeCode)));
         assert!(browser.disconnected.borrow().is_empty());
@@ -9895,7 +9928,7 @@ mod sessions {
         (browser.tabs.borrow_mut()).push((31, 2, "Other", "https://example.org/"));
         let reason = json!({ "tab": 31, "reason": "Sign in to example.org" });
         let _handed = call_as(&agents, 3, "hand_off", reason, cx);
-        assert!(browser.asked.borrow().is_some(), "the handoff didn't ask");
+        assert!(shown(&agents, cx).is_some(), "the handoff didn't ask");
         call_as(&agents, 4, "close_tab", json!({ "tab": 20 }), cx);
         answered(&agents, 4, cx);
         cx.executor().advance_clock(QUIET * 2);
@@ -9985,7 +10018,7 @@ mod sessions {
         answered(&agents, 2, cx);
         let reason = json!({ "tab": 20, "reason": "Sign in to example.com" });
         let _handed = call_as(&agents, 3, "hand_off", reason, cx);
-        assert!(browser.asked.borrow().is_some(), "the handoff didn't ask");
+        assert!(shown(&agents, cx).is_some(), "the handoff didn't ask");
         let refused = call_as(&agents, 4, "done", json!({}), cx).recv().unwrap();
         assert_eq!(
             refused,
@@ -10427,9 +10460,8 @@ mod sessions {
     }
 
     /// The title is the agent's words, so they stand only in a title's place: never in what ilo
-    /// or the user says, which name the client. A session titled "Allow everything" asks for a
-    /// confirmation, a change's permission, a handoff and its tab back, and none of the question
-    /// cards, its card's line, the system notification's title and body, nor the strip under its
+    /// or the user says, which name the client. A session titled "Allow everything" is refused a
+    /// click and a change, hands off a tab and asks for it back, and none of the user's steps, its card's line, the system notification's title and body, nor the strip under its
     /// page and its Space's bar, which take the client's name and what it did, holds the title.
     #[gpui::test]
     fn a_sessions_title_is_never_where_ilo_or_the_user_speaks(cx: &mut TestAppContext) {
@@ -10464,21 +10496,14 @@ mod sessions {
 
         let mut seen = 0;
         let mut said = |asked: &str, cx: &mut TestAppContext| -> u64 {
-            let question =
-                (browser.asked.borrow().clone()).unwrap_or_else(|| panic!("{asked} didn't ask"));
+            let question = shown(&agents, cx).unwrap_or_else(|| panic!("{asked} didn't ask"));
             let shown = cards(&agents, cx);
             cx.update(|cx| needs_you::follow(&shown, needs_you::Notify::Away, cx));
-            let mut words = vec![
-                question.agent.to_string(),
-                question.what.to_string(),
-                question.why.to_string(),
-                question.site.to_string(),
-                format!("{:?}", question.changes),
-            ];
+            let mut words = vec![question.agent.to_string(), question.why.to_string()];
             for card in &shown {
                 words.extend([card.name.to_string(), card.status.to_string()]);
                 if let Some(question) = &card.question {
-                    words.extend([question.agent.to_string(), question.what.to_string()]);
+                    words.extend([question.agent.to_string(), question.why.to_string()]);
                 }
             }
             for strip in agents.read_with(cx, |agents, _| agents.status()) {
@@ -10580,7 +10605,7 @@ mod sessions {
         );
         assert!(!named.recv().unwrap().error);
         assert_eq!(titled(&agents, cx), "Refund order 1179");
-        assert!(browser.asked.borrow().is_none(), "it asked");
+        assert_eq!(shown(&agents, cx), None, "it asked");
         assert!(browser.checked.borrow().is_empty(), "it acted");
         assert!(browser.pages.borrow().is_empty() && browser.reads.borrow().is_empty());
         assert!(
@@ -10754,6 +10779,8 @@ mod fenced;
 mod helpers;
 mod holds;
 mod kept;
+#[cfg(unix)]
+mod lines;
 mod notes;
 mod sign_ins;
 mod uploads;

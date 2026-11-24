@@ -84,8 +84,8 @@ pub enum Command {
     RevealTab,
     /// Gives the sidebar the keyboard, its arrows moving over the rows (sidebar_keys.rs).
     FocusSidebar,
-    /// Gives an agent's question card the keyboard, or with the keyboard on it, gives it back
-    /// (agent_card_keys.rs).
+    /// Gives the newest of the task's ilo lines the keyboard, or with the keyboard on it, gives it
+    /// back (conversation/ilo_keys.rs).
     FocusAgentQuestion,
     /// Off the Mac, rings the footer's menu control, which Return opens, as Chrome's F10 rings its
     /// menu button (menu_keys.rs).
@@ -409,8 +409,8 @@ pub(super) const SHORTCUTS: &[(&str, Command, bool)] = &[
     // is Stop Loading here.
     ("f6", Command::FocusSidebar, false),
     // Chrome's Focus Inactive Popup, which gives its permission bubbles the keyboard: ⌥⇧⌘A on the
-    // Mac and Alt+Shift+A elsewhere (#3869). Unreserved, and kept from the page only while a card
-    // shows (agent_card_keys.rs).
+    // Mac and Alt+Shift+A elsewhere (#3869). Unreserved, and kept from the page only while a task's
+    // conversation shows (conversation/ilo_keys.rs).
     ("alt-shift-cmd-a", Command::FocusAgentQuestion, false),
     ("ctrl-shift-a", Command::FocusAgentQuestion, false),
     // Chrome's key for its menu button, unreserved as Chrome's is, off the Mac alone, whose menu
@@ -1359,7 +1359,6 @@ pub fn bind_keys(cx: &mut App) {
     translate::bind(cx);
     boost::bind(cx);
     sidebar_keys::bind(cx);
-    super::agent_card_keys::bind(cx);
     super::library::keys::bind(cx);
 }
 
@@ -1471,6 +1470,12 @@ impl Shell {
     pub fn run(&mut self, command: Command, from: &str, cx: &mut Context<Self>) {
         // check.sh waits for these lines.
         log!("browser: command {} via {from}", command.name());
+        // And a command of the user's after a close a page hasn't answered is no answer to it,
+        // so the view kept for its refusal goes. The same close again keeps it (#4202).
+        let closes = matches!(command, Command::CloseWindow | Command::Quit);
+        if users_own(from) && !closes {
+            self.forget_closing(cx);
+        }
         // A command after a ⌘L still waiting for the tab shown next is the one the user wants.
         self.edit_url_waits = None;
         // And so is any but another ⌘W after one waiting to close the tab shown next (#3570).
@@ -1580,6 +1585,7 @@ impl Shell {
             Command::CloseWindow => {
                 // As ⌘W does, from a window of Chrome's it closes that one.
                 if !self.browser.close_other_window(cx) {
+                    self.about_to_close(cx);
                     self.browser.close_window(cx);
                 }
                 return;
@@ -1734,11 +1740,12 @@ impl Shell {
             }
             Command::Quit => {
                 // A task's view stands while Quit asks, so Cancel leaves the window as it was
-                // (#4202). Once the quit is decided the area goes, and the core shows the user's
-                // Space again, which the session then keeps for the window.
+                // (#4202). Once the quit is decided it's as the window's close: the core shows the
+                // user's Space again, which the session then keeps for the window, and a page that
+                // refuses brings the view back.
                 let shell = cx.weak_entity();
                 let going = std::rc::Rc::new(move |cx: &mut App| {
-                    shell.update(cx, |shell, cx| shell.leave_task_area(cx)).ok();
+                    shell.update(cx, |shell, cx| shell.about_to_close(cx)).ok();
                 });
                 return self.browser.quit(going, cx);
             }
@@ -2278,7 +2285,7 @@ impl Shell {
             Command::FocusSidebar => {
                 self.library.is_none() && !self.page_fullscreen && !self.sidebar_rows().is_empty()
             }
-            Command::FocusAgentQuestion => self.agent_question().is_some(),
+            Command::FocusAgentQuestion => self.talk.is_some(),
             Command::FocusMenu => self.menu_reaches(),
             Command::ExpandFolders => self.shown_space().is_some_and(|space| {
                 space
@@ -2535,6 +2542,14 @@ impl Shell {
 pub(super) fn space_tabs(space: &Space) -> impl Iterator<Item = u64> + '_ {
     let pinned = space.pinned.iter().filter(|&&row| !space.is_folder(row));
     pinned.chain(&space.today).copied()
+}
+
+/// Whether a command from `from` is the user's own act in this window. Every key, menu, click and
+/// gesture is, and so is Chrome's Downloads after the user stopped a quit for them. No agent's path
+/// runs a command. What isn't: another launch asking the window in front for a new one, the bar ilo
+/// opens by itself as the onboarding ends and in a new window, and the preview's start.
+fn users_own(from: &str) -> bool {
+    !matches!(from, "launch" | "onboarding" | "new window" | "preview")
 }
 
 /// Whether a private window runs `command`. It has one Space, unsaved, so nothing that keeps a tab
