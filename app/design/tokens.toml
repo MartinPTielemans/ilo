@@ -912,8 +912,10 @@ gray-text-more = 3.0
 # it, on a black desktop, as the app draws it on a Mac with the tint off, measured from its
 # window's pixels: the darkest the window can be. The desktop picture comes through what's behind
 # as well, and a light one lifts the material over each by up to `material-lift` levels of 255 (13
-# over the check VM's own picture, 12 to 13 at every grey). The window's ground over each is the
-# tint's colour at its alpha over these; its lightest is over white, lifted.
+# over the check VM's own picture, 12 to 13 at every grey). These are the reads with the Mac's
+# desktop tinting on, the system's default; with it off there's no lift, and the material reads
+# between these and the lifted ones in both looks, so the same range holds it. The window's ground
+# over each is the tint's colour at its alpha over these; its lightest is over white, lifted.
 material-over-white = 0xa0a0a0
 material-over-grey = 0x585858
 material-over-black = 0x131313
@@ -956,6 +958,7 @@ light-tint-more = 0.58
 light-material-over-white = 0xf6f6f6
 light-material-over-grey = 0xb6b6b6
 light-material-over-black = 0x717171
+light-material-lift = 13.0
 light-stand-in = 0xebebeb
 light-material-solid = 0xffffff
 # What floats over the window at each level, for the transparency picker: the dark fill over the

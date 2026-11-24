@@ -1598,16 +1598,17 @@ check_layout "after a double-click on the sidebar's edge"
 # The sidebar over a backdrop of black, grey 20, grey 60 and white (sRGB levels) is the window ilo
 # reckons (docs/ux-spec.md › Window material), in the Mac's dark appearance and then its light one.
 # The app logs what its palette makes there from the material's tokens, measured over a window of
-# black, grey 128 and white on a black desktop, under the tint of the transparency level, Standard
-# in a fresh profile, with the black Space's shade and glow over that. The desktop picture comes
-# through the backdrop window too and lifts all of it by about as much, and the check sets no
-# picture, as check.sh runs on the owner's Mac too. So it holds what a picture can't move, each
-# grey's rise over black, within 3 levels of the reckoned rise, and the sidebar over black between
-# the black desktop's and the most a picture lifts it (the material's lift token), 3 either side.
-# The blur comes
-# from the window server, which a capture of the window alone leaves out, so this captures the
-# screen, and only a check VM's screen, and its appearance, are the check's to change: check.sh
-# runs it dark, and this turns it light for the light pass and back after.
+# black, grey 128 and white on a black desktop with the Mac's desktop tinting on, its default,
+# under the tint of the transparency level, Standard in a fresh profile, with the black Space's
+# shade and glow over that. The desktop picture comes through the backdrop window too and lifts all
+# of it by about as much, and the check sets no picture, as check.sh runs on the owner's Mac too.
+# So it holds what a picture can't move, each grey's rise over black, within 3 levels of the
+# reckoned rise, and the sidebar over black between the black desktop's and the most a picture
+# lifts it (the material's lift token), 3 either side. With desktop tinting off nothing lifts it,
+# and the material reads inside that range in both looks. The blur comes from the window server,
+# which a capture of the window alone leaves out, so this captures the screen, and only a check
+# VM's screen, and its appearance, are the check's to change: check.sh runs it dark, and this
+# turns it light for the light pass and back after.
 # Colours the Space black from the theme picker's field, which is black at its middle.
 black_space() {
   post rightclick 100 112
