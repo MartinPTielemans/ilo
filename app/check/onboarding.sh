@@ -5,7 +5,8 @@
 # Linux), never the Mac's own browsers, and ↩ there shows its choices, with Import and Back, which
 # Esc goes back from to the list; Esc or Skip goes on from a step, the colour step's Return
 # gives the first Space the swatch picked, and the last step leaves the flow for the first Space's
-# welcome with the command bar up and a line under it. The default browser's step shows only while
+# welcome with the command bar up and a line under it. On the Mac, Transparency's step comes after
+# the colour's, as it shows only over the window's glass. The default browser's step shows only while
 # ilo isn't the default, and is skipped everywhere but a Linux CI VM, where its button makes ilo
 # the default for a moment, so the run never changes a desk's. The search engine's comes after it
 # with the profile's list: Esc sets none, and the dark pass's ↓ and Return set the engine after the
@@ -66,6 +67,9 @@ import_choices() {
 # The account's step, while the build names a server to sign in to.
 account=
 [ ! -s branding/sync-server ] || account="account "
+# Transparency's step, only over the window's glass, which only the Mac has.
+glass=
+[ "$(uname)" != Darwin ] || glass="transparency "
 # Launches a new profile, whose saved Spaces are gone and which isn't signed in, in appearance $1,
 # and reads the steps it shows into $steps.
 launch_new() {
@@ -81,8 +85,8 @@ launch_new() {
   await '^browser: onboarding step intro settled$' || fail "$1: the intro didn't draw"
   steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
   case "$steps" in
-    "intro import "*"color ${account}opt-ins") ;;
-    *) fail "$1: the steps were '$steps', not the intro, the import, the rest, ${account}the opt-ins" ;;
+    "intro import "*"color ${glass}${account}opt-ins") ;;
+    *) fail "$1: the steps were '$steps', not the intro, the import, the rest, the color, ${glass}${account}the opt-ins" ;;
   esac
 }
 
@@ -272,6 +276,12 @@ capture_step dark-color
 send key return
 expect '^browser: onboarding picked color f0eae5$' "dark: → and Return didn't pick the first swatch"
 expect '^browser: onboarding left color via return$' "dark: Return didn't leave the colour step"
+if [ -n "$glass" ]; then
+  expect '^browser: onboarding step transparency settled$' "dark: Transparency's step didn't come after the colour's"
+  capture_step dark-transparency
+  send key escape
+  expect '^browser: onboarding left transparency via escape$' "dark: Esc didn't leave Transparency's step"
+fi
 if [ -n "$account" ]; then
   expect '^browser: onboarding step account settled$' "dark: the account step didn't come"
   capture_step dark-account
@@ -421,8 +431,9 @@ BROWSER_IMPORT_HOME="$fav_import_home" BROWSER_DRIVE=1 BROWSER_ONBOARDING=dark \
 pid=$!
 exec 3> "$out/drive"
 await '^browser: onboarding step intro settled$' || fail "favorites: the intro didn't draw"
-send key escape
-expect '^browser: onboarding left intro via key$' "favorites: a key didn't skip the intro"
+# Return, as the welcome waits for it and Esc there skips the whole setup (#4093).
+send key return
+expect '^browser: onboarding left intro via return$' "favorites: Return didn't go on from the welcome"
 expect '^browser: onboarding step import settled$' "favorites: the import step didn't come"
 send key return
 expect '^browser: import pick Chrome$' "favorites: ↩ didn't bring the made-up Chrome"
@@ -441,4 +452,4 @@ expect '^browser: onboarding left favorites via escape$' "favorites: Esc didn't 
 exec 3>&-
 quit
 
-echo "ok: a new profile's first launch plays the intro, which goes on by itself or at a key, then the import of the fixture's $found, the default browser's step while ilo isn't the default, the colour, the account while the build names a sync server and the opt-ins, each left by Esc or Skip and the colour kept by Return, for the welcome with the command bar up, in light and dark; Help › Welcome to $app_name plays it again, in a new window over a page; a launch that brings Spaces back doesn't. Captures: $out/onboarding-*.png, and the replayed intro's motion in $out/onboarding-intro.mp4"
+echo "ok: a new profile's first launch plays the intro, which waits for Return and skips the setup at Esc, then the import of the fixture's $found, the default browser's step while ilo isn't the default, the colour, Transparency on the Mac, the account while the build names a sync server and the opt-ins, each left by Esc or Skip and the colour kept by Return, for the welcome with the command bar up, in light and dark; Help › Welcome to $app_name plays it again, in a new window over a page; a launch that brings Spaces back doesn't. Captures: $out/onboarding-*.png, and the replayed intro's motion in $out/onboarding-intro.mp4"
