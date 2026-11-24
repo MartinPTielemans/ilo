@@ -83,7 +83,7 @@ fn run_of(run: &Run, agent: &str, cx: &mut TestAppContext) -> u32 {
 }
 
 /// The task's level, whether it has files, and what came of its walls that weren't put up.
-fn stands(run: &Run, agent: &str, cx: &mut TestAppContext) -> (Tier, bool, Vec<Rewalled>) {
+fn stands(run: &Run, agent: &str, cx: &mut TestAppContext) -> (Tier, bool, Vec<(usize, Rewalled)>) {
     (run.agents).read_with(cx, |agents, _| {
         let task = agents.task(agent).unwrap();
         (task.tier, task.files.any(), task.rewalled.clone())
@@ -234,10 +234,32 @@ fn a_raise_whose_wall_isnt_put_up_leaves_the_task_as_it_runs(cx: &mut TestAppCon
         at: Tier::Work,
         refused: Tier::Full,
     };
-    assert_eq!(stands(&run, &agent, cx), (Tier::Work, true, vec![stays]));
+    assert_eq!(
+        stands(&run, &agent, cx),
+        (Tier::Work, true, vec![(0, stays)])
+    );
     assert_eq!((run_of(&run, &agent, cx), logged(&run, &agent, cx)), before);
     assert_eq!(run.state(&agent, cx), State::Working);
     assert_eq!(sent(&run, 1, 1).len(), 1);
+}
+
+/// What came of a wall is kept with the turn it came in, as an ilo line's is, so its line stands
+/// where it happened: one refused after the user's reply is the next turn's, and the first's
+/// stays the first's.
+#[gpui::test]
+fn what_came_of_a_wall_is_kept_with_its_turn(cx: &mut TestAppContext) {
+    let (run, walls, agent) = started("turns", folder(), cx);
+    run.ran(1);
+    walls.refuses.set(true);
+    set(&run, &agent, Tier::Full, cx);
+    (run.agents).update(cx, |agents, cx| agents.reply(&agent, "And a hotel", cx));
+    set(&run, &agent, Tier::Full, cx);
+    let stays = Rewalled::Stays {
+        at: Tier::Work,
+        refused: Tier::Full,
+    };
+    let kept = stands(&run, &agent, cx).2;
+    assert_eq!(kept, vec![(0, stays.clone()), (1, stays)]);
 }
 
 /// A lower whose wall isn't put up still lowers the task, at once: it goes on at the new level
@@ -258,7 +280,10 @@ fn a_lower_whose_wall_isnt_put_up_goes_on_without_its_files(cx: &mut TestAppCont
     );
     assert_ne!(run_of(&run, &agent, cx), before);
     let without = Rewalled::WithoutFiles { files: folder() };
-    assert_eq!(stands(&run, &agent, cx), (Tier::Look, false, vec![without]));
+    assert_eq!(
+        stands(&run, &agent, cx),
+        (Tier::Look, false, vec![(0, without)])
+    );
     assert_eq!(run.state(&agent, cx), State::Working);
     // With no files left, a change of level is any task's.
     walls.refuses.set(false);
@@ -288,7 +313,10 @@ fn a_raise_the_system_refuses_goes_back_to_its_level(cx: &mut TestAppContext) {
         at: Tier::Work,
         refused: Tier::Full,
     };
-    assert_eq!(stands(&run, &agent, cx), (Tier::Work, true, vec![stays]));
+    assert_eq!(
+        stands(&run, &agent, cx),
+        (Tier::Work, true, vec![(0, stays)])
+    );
     assert_eq!(run.state(&agent, cx), State::Working);
     assert_eq!(
         logged(&run, &agent, cx)[1..],
@@ -315,7 +343,10 @@ fn a_start_the_system_refuses_goes_on_without_its_files(cx: &mut TestAppContext)
     assert_eq!(first, asked);
     assert_eq!(walls.asked().len(), 1);
     let without = Rewalled::WithoutFiles { files: folder() };
-    assert_eq!(stands(&run, &agent, cx), (Tier::Work, false, vec![without]));
+    assert_eq!(
+        stands(&run, &agent, cx),
+        (Tier::Work, false, vec![(0, without)])
+    );
     assert_eq!(run.state(&agent, cx), State::Working);
 }
 
@@ -351,7 +382,10 @@ fn files_taken_back_start_it_again_without_them(cx: &mut TestAppContext) {
     });
     take_back(&run, &agent, cx);
     let stopped = Rewalled::Stopped { files: folder() };
-    assert_eq!(stands(&run, &agent, cx), (Tier::Work, false, vec![stopped]));
+    assert_eq!(
+        stands(&run, &agent, cx),
+        (Tier::Work, false, vec![(0, stopped)])
+    );
     assert_eq!(run_of(&run, &agent, cx), 0);
     assert!(matches!(run.state(&agent, cx), State::Failed { .. }));
 }

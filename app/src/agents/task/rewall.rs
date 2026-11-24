@@ -15,10 +15,11 @@ use std::sync::Arc;
 
 use gpui::Context;
 
-use super::{State, conversation};
+use super::{State, Task, conversation};
 use crate::agents::Agents;
 use crate::agents::access::ACCESS_ACTION;
 use crate::agents::files::Given;
+use crate::agents::lines;
 use crate::agents::runner::{Cli, Failure};
 use crate::agents::tier::{self, Tier};
 use crate::agents::wall::{self, Wall, WallFor, WallRefused};
@@ -63,6 +64,13 @@ pub enum Rewalled {
     /// Its assistant couldn't be started again without `files`, which the user took back: the
     /// task stopped.
     Stopped { files: Given },
+}
+
+impl Task {
+    /// Keeps what came of a wall that wasn't put up, with the turn under way.
+    fn rewalled(&mut self, came: Rewalled) {
+        self.rewalled.push((lines::turn(self), came));
+    }
 }
 
 impl Agents {
@@ -112,7 +120,7 @@ impl Agents {
             return;
         };
         let files = std::mem::take(&mut task.files);
-        task.rewalled.push(Rewalled::WithoutFiles { files });
+        task.rewalled(Rewalled::WithoutFiles { files });
     }
 
     /// The system says `agent`'s assistant is inside its wall.
@@ -137,7 +145,7 @@ impl Agents {
                 ..
             }) => {
                 let refused = std::mem::replace(&mut task.tier, at);
-                task.rewalled.push(Rewalled::Stays { at, refused });
+                task.rewalled(Rewalled::Stays { at, refused });
                 // What it was told of the raise is no longer so.
                 let first = conversation(task);
                 // The log had the raise, and has that it didn't hold.
@@ -192,7 +200,7 @@ impl Agents {
                 at: from,
                 refused: to,
             };
-            task.rewalled.push(stays);
+            task.rewalled(stays);
         }
         wall.map(Some).ok_or(())
     }
@@ -250,7 +258,7 @@ impl Agents {
                 if !self.launch_in(key, &first, wall, cx)
                     && let Some(task) = self.task_mut(key)
                 {
-                    task.rewalled.push(Rewalled::Stopped { files });
+                    task.rewalled(Rewalled::Stopped { files });
                 }
                 return self.wait_for_answer(key, cx);
             }
