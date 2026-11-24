@@ -1581,6 +1581,238 @@ fn the_focus_command_alone_brings_the_keys_to_an_ilo_lines_buttons(cx: &mut Test
     );
 }
 
+/// The Focus command, `from` the UI's keys or the page's.
+fn focus_command(shell: &Entity<Shell>, from: &str, cx: &mut VisualTestContext) {
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::FocusAgentQuestion, from, cx)
+    });
+    cx.run_until_parked();
+}
+
+/// Task-1's page 30 watched over its conversation from a picture's place, by the user.
+fn watch_page(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+    use gpui::{Bounds, size};
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, thumb, None, false, cx)
+    });
+    cx.run_until_parked();
+}
+
+/// Whether GPUI's focus is on one of the view's ilo buttons' handles.
+fn on_an_ilo_button(view: &Entity<super::TalkView>, cx: &mut VisualTestContext) -> bool {
+    cx.update(|window, cx| {
+        let stops = &view.read(cx).ilo_stops;
+        stops.iter().any(|stop| stop.is_focused(window))
+    })
+}
+
+/// Over a page of the task's watched from its conversation the Focus command keys no line, whose
+/// buttons aren't in sight: with the keyboard the window's it goes back to the conversation, to
+/// its reply field, and rings nothing, and the command again, with the line drawn, is what rings
+/// a button.
+#[gpui::test]
+fn the_focus_command_over_a_page_watched_goes_back_and_keys_no_line(cx: &mut TestAppContext) {
+    let (shell, host, view, cx) = stopped_at_order(cx);
+    watch_page(&shell, cx);
+    host.take();
+    focus_command(&shell, "ui", cx);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, None)),
+        "the key didn't go back to the conversation"
+    );
+    assert!(
+        view.read_with(cx, |view, _| view.ilo_keys.is_none()),
+        "the key over a page watched keyed a line"
+    );
+    let calls = host.take();
+    assert!(
+        !calls.iter().any(|call| call == "focus page"),
+        "the key gave a page the keyboard: {calls:?}"
+    );
+    let reply = view.read_with(cx, |view, cx| view.reply.focus_handle(cx));
+    assert!(
+        cx.update(|window, _| reply.is_focused(window)),
+        "the reply field hasn't the keyboard"
+    );
+    cx.simulate_keystrokes("enter space");
+    assert!(
+        !host
+            .take()
+            .iter()
+            .any(|line| line.contains("SetTier") || line.contains("TakeOver")),
+        "a key after it pressed an ilo line's button"
+    );
+    focus_command(&shell, "ui", cx);
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
+}
+
+/// A page the user has keeps the view and the key: one they hold from its agent, as a sign-in
+/// handed to them or one taken over, whoever has the keyboard, and one with the keyboard. The
+/// key from the page stays the page's.
+#[gpui::test]
+fn the_focus_command_does_nothing_on_a_page_the_user_has(cx: &mut TestAppContext) {
+    use crate::agents::Status;
+    let (shell, host, view, cx) = stopped_at_order(cx);
+    watch_page(&shell, cx);
+    let nothing = |why: &str, cx: &mut VisualTestContext| {
+        host.take();
+        focus_command(&shell, "ui", cx);
+        focus_command(&shell, "page", cx);
+        assert_eq!(host.take(), Vec::<String>::new(), "{why}");
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.task_shown()),
+            Some((3, Some(30))),
+            "{why}: the page was left"
+        );
+        assert!(
+            view.read_with(cx, |view, _| view.ilo_keys.is_none()),
+            "{why}: a line was keyed"
+        );
+        for key in ["alt-shift-cmd-a", "ctrl-shift-a"] {
+            assert!(
+                !shell.update(cx, |shell, cx| shell.run_ilo_page_key(key, false, cx)),
+                "{why}: the key was kept from the page"
+            );
+        }
+    };
+    // The page has the keyboard, as after a click in it.
+    host.page_keys.set(Some(true));
+    nothing("the page has the keyboard", cx);
+    // The user holds it, with the keyboard in the UI, as after a click in the sidebar.
+    host.page_keys.set(Some(false));
+    let held = Status {
+        agent: "task-1".into(),
+        name: "Claude".into(),
+        space: 3,
+        doing: "".into(),
+        held: vec![(30, "Sign in".into())],
+    };
+    shell.update(cx, |shell, cx| shell.set_agent_status(vec![held], cx));
+    cx.run_until_parked();
+    nothing("the user holds the page", cx);
+}
+
+/// The keys on a line end the moment its conversation is no longer what the area draws, under a
+/// page watched over it or with the area closed, and never come back by themselves: drawn again,
+/// no button is ringed and no key presses one until the Focus command, whose guard counts from
+/// then.
+#[gpui::test]
+fn the_keys_end_as_the_conversation_stops_being_drawn(cx: &mut TestAppContext) {
+    let (shell, host, view, cx) = stopped_at_order(cx);
+    let pressed = |host: &Rc<Recorder>| -> Vec<String> {
+        (host.take().into_iter())
+            .filter(|line| line.contains("SetTier") || line.contains("TakeOver"))
+            .collect()
+    };
+    let stood = |view: &Entity<super::TalkView>, cx: &mut VisualTestContext| {
+        view.update(cx, |view, _| {
+            for (_, since) in view.ilo_drawn.borrow_mut().values_mut() {
+                *since -= std::time::Duration::from_secs(5);
+            }
+        });
+    };
+    let unkeyed = |what: &str, cx: &mut VisualTestContext| {
+        assert!(
+            view.read_with(cx, |view, _| view.ilo_keys.is_none()),
+            "{what}: the keys stayed"
+        );
+        assert!(
+            !on_an_ilo_button(&view, cx),
+            "{what}: a button kept the focus"
+        );
+    };
+    focus_command(&shell, "ui", cx);
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
+    watch_page(&shell, cx);
+    unkeyed("a page watched over it", cx);
+    // Back at the conversation, long after: nothing is keyed, and no key presses.
+    shell.update(cx, |shell, cx| shell.task_page_back(cx));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), None);
+    unkeyed("drawn again", cx);
+    stood(&view, cx);
+    host.take();
+    cx.simulate_keystrokes("enter space");
+    assert_eq!(pressed(&host), Vec::<String>::new(), "a key pressed");
+    // The command keys it again, and a key at once presses nothing: the guard counts from here.
+    focus_command(&shell, "ui", cx);
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        pressed(&host),
+        Vec::<String>::new(),
+        "the guard didn't count"
+    );
+
+    // The area closes with the keys on the line, and shows the conversation again.
+    shell.update(cx, |shell, cx| shell.close_task(cx));
+    cx.run_until_parked();
+    unkeyed("the area closed", cx);
+    shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), None);
+    unkeyed("shown again", cx);
+    stood(&view, cx);
+    host.take();
+    cx.simulate_keystrokes("enter space");
+    assert_eq!(pressed(&host), Vec::<String>::new(), "a key pressed");
+}
+
+/// Keys that end as a window of the app's own takes the keyboard, as the command bar opened over
+/// the line, leave GPUI's focus where the key again would have put the keyboard, on what the
+/// window draws: its keys are heard once the keyboard is back, the Focus command's too, with no
+/// click (#3869). Nothing is keyed by itself, and no key presses.
+#[gpui::test]
+fn keys_ended_by_a_window_over_the_line_leave_the_windows_keys_heard(cx: &mut TestAppContext) {
+    let (shell, host, view, cx) = stopped_at_order(cx);
+    let reply = view.read_with(cx, |view, cx| view.reply.focus_handle(cx));
+    assert!(cx.update(|window, _| reply.is_focused(window)));
+    focus_command(&shell, "ui", cx);
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
+    assert!(on_an_ilo_button(&view, cx));
+    host.app_active.set(true);
+    host.take();
+    shell.update(cx, |shell, cx| shell.ilo_keys_window_inactive(cx));
+    cx.run_until_parked();
+    assert!(
+        view.read_with(cx, |view, _| view.ilo_keys.is_none()),
+        "the keys stayed under the window"
+    );
+    assert!(
+        cx.update(|window, _| reply.is_focused(window)),
+        "the focus isn't where the keyboard came from"
+    );
+    let calls = host.take();
+    assert!(
+        !calls.iter().any(|call| call.starts_with("focus")),
+        "the keyboard moved under the window: {calls:?}"
+    );
+    view.update(cx, |view, _| {
+        for (_, since) in view.ilo_drawn.borrow_mut().values_mut() {
+            *since -= std::time::Duration::from_secs(5);
+        }
+    });
+    cx.simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), None);
+    assert!(
+        !host
+            .take()
+            .iter()
+            .any(|line| line.contains("SetTier") || line.contains("TakeOver")),
+        "a key after the window pressed an ilo line's button"
+    );
+    // The command's own key, through the window's bindings.
+    cx.simulate_keystrokes("alt-shift-cmd-a");
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |view, _| view.ilo_ring(7)),
+        Some(0),
+        "the Focus command's key wasn't heard"
+    );
+}
+
 /// A line that comes after the ring was drawn on another line's button is never pressed by the
 /// key meant for the ringed one: the keys end, and nothing is pressed.
 #[gpui::test]
