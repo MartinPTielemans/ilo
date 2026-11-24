@@ -490,14 +490,16 @@ mod tests {
 
     #[test]
     fn the_listener_stops_and_closes_its_tunnels_when_the_task_ends() {
-        let listener = listener();
-        let port = listener.port();
+        let mut listener = listener();
         let (reply, mut stream) = ask(&listener, b"CONNECT api.example.org:443 HTTP/1.1\r\n\r\n");
         assert!(reply.starts_with("HTTP/1.1 200"));
+        // The accept thread owns the bound socket, so its end is the port's close. A connect to
+        // the freed port could reach whatever took it since.
+        let accepting = listener.accepting.take().unwrap();
         drop(listener);
+        accepting.join().unwrap();
         let mut rest = Vec::new();
         assert_eq!(stream.read_to_end(&mut rest).ok(), Some(0));
-        assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
     }
 
     #[test]

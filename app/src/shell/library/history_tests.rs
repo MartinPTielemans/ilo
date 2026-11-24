@@ -379,8 +379,9 @@ fn task() -> crate::agents::task::ArchivedTask {
         title: "Lisbon museum hours".into(),
         asked: "Which museums in Lisbon open on Monday?".into(),
         dot: crate::agents::task::Dot::Done,
-        about: "Claude · Done 13:31 · 1 page".into(),
-        left: at(9, 13),
+        about: "Claude · Done".into(),
+        ended: at(9, 13),
+        pages: "1 page".into(),
     }
 }
 
@@ -571,6 +572,37 @@ fn a_click_on_a_past_tasks_row_opens_its_conversation(cx: &mut TestAppContext) {
     // The Space gone, as when the task goes for good, its area goes with it.
     spaces(None, cx);
     assert_eq!(shown(cx), None);
+}
+
+/// The search field's "Search History…" follows a switch between light and dark while the Library
+/// stays open, in the placeholder gray of the palette it's drawn in: a field that kept the gray of
+/// the look it opened in drew Paper on a light window's field, almost the field's own colour.
+#[gpui::test]
+fn the_search_placeholder_follows_the_appearance(cx: &mut TestAppContext) {
+    use crate::shell::Appearance;
+    use crate::tokens::shell::library::SEARCH_PLACEHOLDER;
+    let (shell, _, cx) = history(Vec::new(), cx);
+    let mut colours = Vec::new();
+    for appearance in [Appearance::Light, Appearance::Dark, Appearance::Light] {
+        shell.update(cx, |shell, cx| {
+            shell.run(Command::Appearance(appearance), "ui", cx)
+        });
+        cx.run_until_parked();
+        let (drawn, meant) = shell.read_with(cx, |shell, cx| {
+            let field = shell.library.as_ref().expect("the Library").search.read(cx);
+            (
+                field.placeholder_hsla(),
+                shell.palette.gray(SEARCH_PLACEHOLDER),
+            )
+        });
+        assert_eq!(drawn, meant, "{appearance:?}'s placeholder");
+        colours.push(drawn);
+    }
+    assert_ne!(
+        colours[0], colours[1],
+        "light and dark drew the same placeholder"
+    );
+    assert_eq!(colours[0], colours[2]);
 }
 
 /// A search asks the browser for the pages with its words. Until it answers, the pages listed are
@@ -942,6 +974,40 @@ fn row_times_follow_the_systems_clock() {
     assert_eq!(history_when(week, starts, true), "Tue 9:05 PM");
     assert_eq!(history_when(week, starts, false), "Tue 21:05");
     assert_eq!(history_when(at(1, 14), starts, true), "1 Nov");
+}
+
+/// A task is listed under the day it ended, whenever it left the foot, so the time its row says
+/// is its heading's day's, as the pages' rows around it: last night's task is under Yesterday
+/// with its time alone, though the user dismissed it this morning.
+#[gpui::test]
+fn a_task_is_listed_under_the_day_it_ended(cx: &mut TestAppContext) {
+    let minute = 5. * 60. * 1000.;
+    let (shell, host, cx) = history(vec![closed(5, "news", at(13, 9), false)], cx);
+    host.day_starts
+        .set([at(13, 0), at(12, 0), at(9, 0), at(2, 0)]);
+    let last_night = super::ArchivedTask {
+        ended: at(12, 23) + minute,
+        ..task()
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_archived_tasks(vec![last_night], cx)
+    });
+    cx.run_until_parked();
+    let listed = shell.read_with(cx, |shell, _| {
+        let library = shell.library.as_ref().unwrap();
+        let named = library.items.iter().map(|item| match item {
+            Item::Heading(heading) => heading.to_string(),
+            Item::Task(index) => shell.archived_task_about(&shell.archived_tasks[*index]),
+            _ => "a tab".to_string(),
+        });
+        named.collect::<Vec<_>>()
+    });
+    let time = match crate::clock::twelve_hour() {
+        true => "11:05 PM",
+        false => "23:05",
+    };
+    let row = format!("Claude · Done {time} · 1 page");
+    assert_eq!(listed, ["Today", "a tab", "Yesterday", row.as_str()]);
 }
 
 /// What the Library's row ring is on, as `items` names it.

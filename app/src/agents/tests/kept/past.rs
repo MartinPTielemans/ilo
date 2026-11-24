@@ -33,15 +33,17 @@ fn row(run: &Run, id: &Id) -> Value {
     found.unwrap_or_default()
 }
 
-/// The Archive's tasks, the last to leave first: each one's task, title and the line under it.
+/// The Archive's tasks, the last to leave first: each one's task, title and the line under it,
+/// with its end said as Settings › Agents' list says it, which has no days over its rows.
 fn archive(run: &Run, cx: &mut TestAppContext) -> Vec<(String, String, String)> {
     (run.agents).read_with(cx, |agents, cx| {
         (agents.archived_tasks(cx).into_iter())
             .map(|task| {
+                let when = crate::agents::time_or_day((task.ended / 1000.) as u64);
                 (
                     task.agent.to_string(),
                     task.title.to_string(),
-                    task.about.to_string(),
+                    task.about_at(&when),
                 )
             })
             .collect()
@@ -393,6 +395,28 @@ fn a_finished_task_is_there_after_a_quit_and_takes_a_reply(cx: &mut TestAppConte
     let lines = next.ilo_lines(&past, cx);
     let resumed = |kind: &&IloKind| matches!(kind, IloKind::Resumed { .. });
     assert_eq!(lines.iter().filter(resumed).count(), 1, "{lines:?}");
+}
+
+/// Full access picked on a task that has ended isn't kept across a quit: brought back, it takes a
+/// reply at Work on pages at most, as any does.
+#[gpui::test]
+fn full_access_picked_on_an_ended_task_isnt_kept_across_a_quit(cx: &mut TestAppContext) {
+    let run = Run::new("picked-quit", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    run.finish(&agent, cx);
+    act(&run, &agent, TaskAction::PickTier(Tier::Full), cx);
+    let tier = |run: &Run, agent: &str, cx: &mut TestAppContext| {
+        (run.agents).read_with(cx, |agents, _| agents.task(agent).unwrap().tier)
+    };
+    assert_eq!(tier(&run, &agent, cx), Tier::Full);
+    quit(&run, cx);
+    let next = next(&run, cx);
+    let past = archive(&next, cx)[0].0.clone();
+    restore(&next, &past, cx);
+    reply(&next, &past, "And for Sunday?", cx);
+    next.ran(2);
+    assert_eq!(tier(&next, &past, cx), Tier::Work);
 }
 
 /// A past task whose assistant no longer has its conversation, found by the reply: the reply never

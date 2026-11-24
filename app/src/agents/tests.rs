@@ -3169,8 +3169,9 @@ fn a_site_set_to_never_is_refused_at_every_tier_until_revoked(cx: &mut TestAppCo
 }
 
 /// A press on a refusal's line just after it appears is taken as meant for what was there, and does
-/// nothing; one after that changes the task's access. Take over holds the tab and settles the
-/// refusal there, and the access stays as it was.
+/// nothing; one after that changes the task's access. A pick in the level's menu, which the user
+/// opened, is theirs at once: nothing moved under the pointer. Take over holds the tab and settles
+/// the refusal there, and the access stays as it was.
 #[gpui::test]
 fn a_refusals_buttons_wait_and_take_over_keeps_the_access(cx: &mut TestAppContext) {
     use super::task::TaskAction;
@@ -3215,6 +3216,18 @@ fn a_refusals_buttons_wait_and_take_over_keeps_the_access(cx: &mut TestAppContex
         "a press as the line appeared changed it"
     );
     assert_eq!(stops(&agents, cx).len(), 1);
+    press(TaskAction::PickTier(Tier::Work), cx);
+    assert_eq!(tier(cx), Tier::Work, "the menu's pick was dropped");
+    assert!(stops(&agents, cx).is_empty());
+
+    give(&agents, Tier::Look, cx);
+    coupon(cx);
+    press(TaskAction::SetTier(Tier::Work), cx);
+    assert_eq!(
+        tier(cx),
+        Tier::Look,
+        "a press as the line appeared changed it"
+    );
     agents.update(cx, |agents, _| {
         for stop in &mut agents.task_mut(&key).unwrap().stops {
             stop.appeared -= super::tier::PROTECT;
@@ -8970,11 +8983,11 @@ mod tasks {
             set(&agents, cx);
             let row = agents.read_with(cx, |agents, cx| {
                 let mut rows = agents.archived_tasks(cx).into_iter();
-                rows.find(|row| row.agent.as_ref() == agent).unwrap().about
+                rows.find(|row| row.agent.as_ref() == agent).unwrap()
             });
-            // The row goes on with when it left the foot.
-            let word_then = format!("Claude · {after_name} ");
-            assert!(row.starts_with(&word_then), "{state:?}'s row: {row}");
+            // The row has when it left the foot to go on with.
+            assert_eq!(row.about, format!("Claude · {after_name}"), "{state:?}");
+            assert!(row.ended > 0., "{state:?}");
         }
         assert_eq!(Word::of(&State::Working, true), Word::NeedsYou);
 
@@ -9029,7 +9042,7 @@ mod tasks {
     }
 
     /// The Archive lists the dismissed tasks, the last to leave the foot first, each with how it
-    /// ended and when. Delete from Archive takes one out of the list and out of ⇧⌘T's reach, and
+    /// ended and when, which History says as it says its pages' times. Delete from Archive takes one out of the list and out of ⇧⌘T's reach, and
     /// ⌘Z's Undelete puts it back.
     #[gpui::test]
     fn the_archive_lists_dismissed_tasks_until_one_is_deleted(cx: &mut TestAppContext) {
@@ -9054,7 +9067,7 @@ mod tasks {
                 agents.read_with(cx, |agents, cx| {
                     let tasks = agents.archived_tasks(cx).into_iter();
                     tasks
-                        .map(|task| (task.agent.to_string(), task.about.to_string(), task.dot))
+                        .map(|task| (task.agent.to_string(), task.about_at("then"), task.dot))
                         .collect()
                 })
             };
@@ -9065,14 +9078,18 @@ mod tasks {
                 .collect::<Vec<_>>(),
             [second.clone(), first.clone()]
         );
-        let at = crate::agents::time_or_day(1_700_000_000);
         assert_eq!(
             now[1],
-            (first.clone(), format!("Claude · Done {at}"), Dot::Done)
+            (first.clone(), "Claude · Done then".to_string(), Dot::Done)
         );
         // Dismissed while it worked, it stopped then.
-        assert!(now[0].1.starts_with("Claude · Stopped "), "{}", now[0].1);
+        assert_eq!(now[0].1, "Claude · Stopped then");
         assert_eq!(now[0].2, Dot::Ended);
+        // The row has its end for History to list it by and say, however long after it left the
+        // foot; one that had none has when it left.
+        let rows = agents.read_with(cx, |agents, cx| agents.archived_tasks(cx));
+        assert_eq!(rows[1].ended, 1_700_000_000_000.);
+        assert!(rows[0].ended > rows[1].ended);
 
         agents.update(cx, |agents, cx| {
             agents.task_action(&second, TaskAction::Delete, cx)
