@@ -31,6 +31,31 @@ pub(crate) const TASK_PAGES: [(&str, &str); 3] = [
     ("Directions", "https://maps.example/taberna"),
 ];
 
+/// The pages of the four helpers PREVIEW_TASK=helpers shows (#4102), one each: their titles and
+/// addresses. The third is the one its helper handed the user, for the sign-in.
+pub(crate) const HELPER_PAGES: [(&str, &str); 4] = [
+    ("Seats · Saturday", "https://tickets.example/seats"),
+    ("Stalls · Saturday", "https://stalls.example/saturday"),
+    ("Sign in · Box Office", "https://boxoffice.example/sign-in"),
+    ("Saturday · Encore", "https://encore.example/saturday"),
+];
+
+/// Which of `HELPER_PAGES` waits on the user's sign-in.
+pub(crate) const HELPER_WAITING: usize = 2;
+
+/// Whether the bench shows the task with helpers.
+pub(crate) fn bench_helpers() -> bool {
+    states::var("PREVIEW_TASK").as_deref() == Ok("helpers")
+}
+
+/// The helpers' pages as the task's conversation lists them, each tab with its site: the tiles
+/// of Pages, and the task's group at the sidebar's foot.
+pub(crate) fn helper_tabs() -> Vec<(u64, SharedString)> {
+    let site = |url: &str| url.split('/').nth(2).unwrap_or("").to_string().into();
+    let pages = (FIRST_TASK + 200..).zip(HELPER_PAGES);
+    pages.map(|(tab, (_, url))| (tab, site(url))).collect()
+}
+
 /// A task's Space, as the core lists one: its agent's name in the agent column, its agent's id
 /// a task's (`Fake::space_agent`).
 pub(crate) fn task_space(id: u64) -> SpaceEntry {
@@ -196,7 +221,8 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
 /// PREVIEW_TASK=<state> (#4095's bench) shows the working task's conversation beside its page in
 /// one of the states ilo's own lines are made for, from made-up data: working, refused,
 /// off-limits, yours, tab-back, signed-in, raised or notes; or of a task that has ended (#4105):
-/// ended, ended-first, picked-up, gone, not-kept or codex-ended.
+/// ended, ended-first, picked-up, gone, not-kept or codex-ended; or of one at work with helpers
+/// (#4102): helpers.
 pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
     let Ok(state) = states::var("PREVIEW_TASK") else {
         return;
@@ -320,6 +346,42 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 _ => {}
             }
             lines
+        }
+        // A task at work with four helpers (#4102), each on a page of its own: the stretch counts
+        // them and opens to a line for each, a step's line in ilo's words for the helper's page.
+        // The third handed its page to the user for a sign-in, which ilo's line under them says,
+        // while the other three go on. The conversation opens with the task's first page alone,
+        // as the task did; `helper_tabs` are the rest, which the bench gives it once it shows.
+        "helpers" => {
+            let sites = helper_tabs();
+            let helper = |at: usize, tool: &str, did: &str, running| {
+                TraceItem::Helper(TraceStep {
+                    key: 10 + at,
+                    glyph: browser::agents::tools::step_glyph(tool),
+                    title: format!("{did} {}", sites[at].1).into(),
+                    description: "".into(),
+                    running,
+                    failed: false,
+                    opens: Opens::Nothing,
+                    under: "".into(),
+                })
+            };
+            let helpers = (0..sites.len()).map(|at| match at {
+                HELPER_WAITING => helper(at, "hand_off", "Handed you", false),
+                _ => helper(at, "read_page", "Reading", true),
+            });
+            let trace = Trace {
+                key: 10,
+                running: true,
+                took: None,
+                items: helpers.collect(),
+            };
+            vec![
+                done(0, before),
+                Line::Said("Four shops sell Saturday's stalls. I'll look at all four at once.".into()),
+                Line::Trace(trace),
+                line(100, IloKind::Yours { tab: sites[HELPER_WAITING].0 }),
+            ]
         }
         // A step whose answer carried a site's notes (#4122), which the line under it says.
         "notes" => {
