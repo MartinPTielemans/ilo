@@ -3,7 +3,7 @@
 //! the tests write themselves, in a profile folder of their own: never the user's own.
 
 #[cfg(unix)]
-mod past;
+pub(crate) mod past;
 
 use super::*;
 use crate::agents::kept::{self, Id};
