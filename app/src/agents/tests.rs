@@ -3328,14 +3328,13 @@ fn click_on(
     call(agents, "claude-code", "click", click, cx)
 }
 
-/// A check's `--agent-waits` shortens both waits so a run sees each end, and the quiet end's when
-/// it gives a third; a prod build, or a value that isn't two or three whole seconds, keeps the
-/// spec's.
+/// A check's `--agent-waits` shortens the handoff's wait, its second, so a run sees it end, and the
+/// quiet end's when it gives a third; its first, an ask's, is taken unread, as nothing asks; a prod
+/// build, or a value that isn't two or three parts, keeps the spec's.
 #[test]
 fn a_checks_waits_stand_in_for_the_specs_outside_prod() {
     let given = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
     let spec = Waits {
-        ask: ASK_WAIT,
         handoff: HANDOFF_WAIT,
         quiet: task::QUIET,
     };
@@ -3343,7 +3342,6 @@ fn a_checks_waits_stand_in_for_the_specs_outside_prod() {
     assert_eq!(
         Waits::new(&given(&["--agent-waits=2,3"]), false),
         Waits {
-            ask: Duration::from_secs(2),
             handoff: Duration::from_secs(3),
             quiet: task::QUIET,
         }
@@ -3360,8 +3358,9 @@ fn a_checks_waits_stand_in_for_the_specs_outside_prod() {
     );
     assert_eq!(Waits::new(&given(&["--agent-waits=2"]), false), spec);
     assert_eq!(
-        Waits::new(&given(&["--agent-waits=x,3"]), false).ask,
-        ASK_WAIT
+        Waits::new(&given(&["--agent-waits=x,3"]), false).handoff,
+        Duration::from_secs(3),
+        "the first part is an ask's, which nothing reads"
     );
 }
 
