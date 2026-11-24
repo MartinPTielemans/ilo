@@ -8620,11 +8620,11 @@ mod tasks {
             set(&agents, cx);
             let row = agents.read_with(cx, |agents, cx| {
                 let mut rows = agents.archived_tasks(cx).into_iter();
-                rows.find(|row| row.agent.as_ref() == agent).unwrap().about
+                rows.find(|row| row.agent.as_ref() == agent).unwrap()
             });
-            // The row goes on with when it left the foot.
-            let word_then = format!("Claude · {after_name} ");
-            assert!(row.starts_with(&word_then), "{state:?}'s row: {row}");
+            // The row has when it left the foot to go on with.
+            assert_eq!(row.about, format!("Claude · {after_name}"), "{state:?}");
+            assert!(row.ended > 0., "{state:?}");
         }
         assert_eq!(Word::of(&State::Working, true), Word::NeedsYou);
 
@@ -8679,7 +8679,7 @@ mod tasks {
     }
 
     /// The Archive lists the dismissed tasks, the last to leave the foot first, each with how it
-    /// ended and when. Delete from Archive takes one out of the list and out of ⇧⌘T's reach, and
+    /// ended and when, which History says as it says its pages' times. Delete from Archive takes one out of the list and out of ⇧⌘T's reach, and
     /// ⌘Z's Undelete puts it back.
     #[gpui::test]
     fn the_archive_lists_dismissed_tasks_until_one_is_deleted(cx: &mut TestAppContext) {
@@ -8704,7 +8704,7 @@ mod tasks {
                 agents.read_with(cx, |agents, cx| {
                     let tasks = agents.archived_tasks(cx).into_iter();
                     tasks
-                        .map(|task| (task.agent.to_string(), task.about.to_string(), task.dot))
+                        .map(|task| (task.agent.to_string(), task.about_at("then"), task.dot))
                         .collect()
                 })
             };
@@ -8715,14 +8715,18 @@ mod tasks {
                 .collect::<Vec<_>>(),
             [second.clone(), first.clone()]
         );
-        let at = crate::agents::time_or_day(1_700_000_000);
         assert_eq!(
             now[1],
-            (first.clone(), format!("Claude · Done {at}"), Dot::Done)
+            (first.clone(), "Claude · Done then".to_string(), Dot::Done)
         );
         // Dismissed while it worked, it stopped then.
-        assert!(now[0].1.starts_with("Claude · Stopped "), "{}", now[0].1);
+        assert_eq!(now[0].1, "Claude · Stopped then");
         assert_eq!(now[0].2, Dot::Ended);
+        // The row has its end for History to list it by and say, however long after it left the
+        // foot; one that had none has when it left.
+        let rows = agents.read_with(cx, |agents, cx| agents.archived_tasks(cx));
+        assert_eq!(rows[1].ended, 1_700_000_000_000.);
+        assert!(rows[0].ended > rows[1].ended);
 
         agents.update(cx, |agents, cx| {
             agents.task_action(&second, TaskAction::Delete, cx)
