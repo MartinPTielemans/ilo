@@ -88,6 +88,13 @@ launch_new() {
     "intro import "*"color ${glass}${account}opt-ins") ;;
     *) fail "$1: the steps were '$steps', not the intro, the import, the rest, the color, ${glass}${account}the opt-ins" ;;
   esac
+  # BROWSER_ONBOARDING gives the sheet its look but leaves the window's material the system's, so
+  # on a system of the other look the captures would show a sheet on glass no user can reach.
+  # ilo's own Appearance, picked as a user picks it, gives the window the same look (#4093).
+  look=Light
+  [ "$1" = light ] || look=Dark
+  send menu "$(cased "Appearance › $look")"
+  expect "^browser: appearance $1\$" "$1: View › Appearance › $look didn't set ilo's look"
 }
 
 # Light: the welcome waits once drawn, Return goes on from it, and Esc from every step after.
@@ -437,6 +444,10 @@ await '^browser: onboarding step favorites settled$' ||
 capture_step favorites
 send key escape
 expect '^browser: onboarding left favorites via escape$' "favorites: Esc didn't leave the step"
+# The look goes back to the system's, as the light and dark passes set ilo's own, for the runs after.
+send menu "$(cased 'Appearance › Automatic')"
+expect '^browser: appearance automatic$' \
+  "favorites: View › Appearance › Automatic didn't give the look back to the system"
 exec 3>&-
 quit
 

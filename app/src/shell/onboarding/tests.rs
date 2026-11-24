@@ -97,6 +97,8 @@ fn started(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
 fn skip_to(shell: &Entity<Shell>, cx: &mut VisualTestContext, to: Step) {
     while let Some(at) = step(shell, cx).filter(|&step| step != to) {
         cx.simulate_keystrokes(if at == Step::Intro { "enter" } else { "escape" });
+        // A step that stays, rather than this one never coming, fails here instead of spinning.
+        assert_ne!(step(shell, cx), Some(at), "the key at {at:?} didn't go on toward {to:?}");
     }
     assert_eq!(step(shell, cx), Some(to));
 }
@@ -289,9 +291,9 @@ fn a_loop_draws_only_while_its_step_shows(cx: &mut TestAppContext) {
     later(&shell, cx, 2. * PERIOD);
     assert!(looping(&shell, cx), "the welcome's loop plays");
     assert!(asks_for_frames(&shell, cx), "and draws");
-    skip_to(&shell, cx, Step::SearchEngine);
+    skip_to(&shell, cx, Step::DefaultBrowser);
     later(&shell, cx, STEP_MOTION);
-    assert!(!looping(&shell, cx), "the search engine's step has none");
+    assert!(!looping(&shell, cx), "the default browser's step has none");
     assert!(
         !asks_for_frames(&shell, cx),
         "so nothing draws once it's in"
