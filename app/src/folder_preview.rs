@@ -318,21 +318,30 @@ impl FolderPreview {
             }
             Next::Wait(delay) => {
                 self.resting = Some(rest);
-                self.wait = Some(cx.spawn_in(window, async move |preview, cx| {
-                    cx.background_executor().timer(delay).await;
-                    preview
-                        .update_in(cx, |preview, window, cx| {
-                            preview.wait = None;
-                            if preview.intent.due(cx.background_executor().now())
-                                && let Some(rest) = preview.resting.take()
-                            {
-                                preview.show(rest, window, cx)
-                            }
-                        })
-                        .ok();
-                }));
+                self.wake_after(delay, window, cx);
             }
         }
+    }
+
+    /// Wakes after `delay` for the row it waits on, and shows its preview once the pointer has
+    /// rested its whole delay; a wake that came early waits out the rest.
+    fn wake_after(&mut self, delay: Duration, window: &mut Window, cx: &mut Context<Self>) {
+        self.wait = Some(cx.spawn_in(window, async move |preview, cx| {
+            cx.background_executor().timer(delay).await;
+            preview
+                .update_in(cx, |preview, window, cx| {
+                    preview.wait = None;
+                    let now = cx.background_executor().now();
+                    if preview.intent.due(now) {
+                        if let Some(rest) = preview.resting.take() {
+                            preview.show(rest, window, cx)
+                        }
+                    } else if let Some(left) = preview.intent.early(now) {
+                        preview.wake_after(left, window, cx)
+                    }
+                })
+                .ok();
+        }));
     }
 
     fn left(&mut self, folder: u64, cx: &mut Context<Self>) {
