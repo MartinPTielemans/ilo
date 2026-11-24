@@ -52,6 +52,12 @@ pub fn display_text(
         .child(text.into())
 }
 
+/// The face's family, for a run of a text set in it, at medium, the one weight it has.
+pub(super) fn family(cx: &mut App) -> SharedString {
+    register(cx);
+    FAMILY.into()
+}
+
 /// How far below a line's top Outfit's cap height starts, set at `size` in a line `line` tall:
 /// GPUI centres the face's ascent and descent (1 and 0.26 of the size) in the line, and the caps
 /// are 0.7 of the size tall. Lets a heading's caps be put where they're measured.
