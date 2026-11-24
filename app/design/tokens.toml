@@ -2401,6 +2401,21 @@ sync-at = [0.6, 5.0]
 sync-cross = 1.2
 sync-phone = [76.0, 150.0]
 sync-phone-out = 48.0
+# The assistant's: the ask comes at `assistant-at`, its three pages open at `assistant-open`, a
+# price is read from each from `assistant-read`, `assistant-stagger` apart, and the answer comes
+# at `assistant-answer`, each fading in as the import's parts do.
+assistant-at = 0.4
+assistant-open = 1.4
+assistant-read = 2.6
+assistant-stagger = 0.7
+assistant-answer = 5.0
+# Up to you's: today's count, a card `count-card` wide, fills from `count-at`, a line every
+# `count-stagger`; from `count-week` a week goes by under it, a day every `count-day`.
+count-card = 200.0
+count-at = 0.5
+count-stagger = 0.5
+count-week = 3.8
+count-day = 0.6
 
 [shell.import]
 # Ours (#1673): while an import runs, each Space it makes is a card in its own colours, under the
