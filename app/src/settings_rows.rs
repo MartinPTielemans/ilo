@@ -34,7 +34,7 @@ use crate::tokens::settings::{SENT_CHEVRON, SENT_GAP, SENT_INDENT, SENT_LABEL, S
 use crate::tokens::text::SMALL;
 
 mod assistant;
-pub use assistant::{Act, another_agent_row, assistant_row};
+pub use assistant::{Act, another_agent_name_row, another_agent_row, assistant_row};
 
 /// The places `drawn` logged, one a control, shared by a view's controls.
 pub type Drawn = Rc<RefCell<DrawnLog>>;

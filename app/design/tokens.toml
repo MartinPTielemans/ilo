@@ -912,6 +912,16 @@ tint-more = 0.44
 gray-text-less = 4.5
 gray-text = 3.0
 gray-text-more = 3.0
+# Gray text on a plate in a dark window (the foot's card's second line while the card is shown or
+# under the pointer, a page's word on its shown row's plate): the plate is lighter than the window
+# beside it, so the gray that reads off it reads less on it, and on a plate it is Paper at this,
+# one ink wherever that is. It is Paper itself, the title's ink, as nothing under it holds the
+# palette's 4.5:1 and its margin on the shown card's plate at its lightest measured, with a white
+# window behind (#6d6d6b at Standard, from the real app's own pixels at 469483355): 4.55, where
+# 0.97 reads 4.40 and the state line's 0.75 read 3.39. Over the check VM's desktop alone (#6b6a65
+# at Standard, #696762 at More, at f98ded880) it reads 4.76 and 4.96, where the state line read
+# 3.51 and 4.28. A light window's gray reads 7.7 or more on its white plate and stays as it is.
+plate-gray = 1.0
 # The HUD window's material alone, untinted, over a window of white, grey 128 and black behind
 # it, on a black desktop, as the app draws it on a Mac with the tint off, measured from its
 # window's pixels: the darkest the window can be. The desktop picture comes through what's behind

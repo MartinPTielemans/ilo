@@ -1198,7 +1198,7 @@ impl Agents {
         self.notify
     }
 
-    /// Settings › Agents' When to notify.
+    /// Settings › Agents' Notify.
     pub fn set_notify(&mut self, notify: crate::needs_you::Notify, cx: &mut Context<Self>) {
         self.notify = notify;
         self.save();
@@ -1289,13 +1289,24 @@ impl Agents {
     }
 
     /// The clients Settings › Agents lists: those found here, any connected, whose Disconnect
-    /// stays though the client has gone, and any other MCP client.
+    /// stays though the client has gone, and any other MCP client. A client whose CLI Your
+    /// assistant's look found is here though its files aren't, as where CLAUDE_CONFIG_DIR moves
+    /// them, so Any MCP client's line never calls it missing beside its row saying it's signed in.
     pub fn listed(&self) -> Vec<Client> {
+        let ran = |client: Client| {
+            client.cli().is_some_and(|cli| {
+                !matches!(
+                    self.found(cli),
+                    ready::Ready::NotFound | ready::Ready::Unknown
+                )
+            })
+        };
         (Client::APPS.into_iter())
             .filter(|client| {
                 *client == Client::Other
                     || self.found.contains(client)
                     || self.is_connected(*client)
+                    || ran(*client)
             })
             .collect()
     }
