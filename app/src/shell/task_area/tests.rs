@@ -947,6 +947,7 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
+        page_steps: Vec::new(),
         retry: false,
         fix: None,
     };
@@ -1236,6 +1237,131 @@ fn the_strip_names_the_agent_as_its_card_does(cx: &mut TestAppContext) {
     assert_eq!(says(&shell, cx).0, "MCP client needs you");
 }
 
+/// While a task works on several pages, the strip under each says that page's own step, never
+/// another page's, and nothing under a page with no step yet; a task that says no page's steps
+/// has its card's words under its page, as it did (#4102).
+#[gpui::test]
+fn the_strip_under_a_page_says_that_pages_own_step(cx: &mut TestAppContext) {
+    use crate::agents::task::{Card, Dot};
+    let (shell, _host, cx) = shell_with_task(cx);
+    still(cx);
+    let card = |steps: &[(u64, &str)]| Card {
+        agent: "task-1".into(),
+        home: 1,
+        space: 3,
+        name: "Claude".into(),
+        replies: true,
+        title: "Find two seats".into(),
+        status: "Working · 2 helpers".into(),
+        asks: false,
+        dot: Dot::Working,
+        answers: Vec::new(),
+        question: None,
+        open: Vec::new(),
+        page_steps: (steps.iter())
+            .map(|(tab, step)| (*tab, step.to_string().into()))
+            .collect(),
+        retry: false,
+        fix: None,
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_task_cards(vec![card(&[])], cx);
+        shell.show_task("task-1".into(), cx);
+    });
+    let mut says = |steps: &[(u64, &str)], tab: u64| {
+        shell.update(cx, |shell, cx| {
+            shell.set_task_cards(vec![card(steps)], cx);
+            shell.task_strip_words(tab).1
+        })
+    };
+    let steps = [(30, "Reading tickets.example"), (31, "Clicking “Stalls”")];
+    assert_eq!(says(&steps, 30), steps[0].1);
+    assert_eq!(says(&steps, 31), steps[1].1);
+    assert_eq!(says(&steps[1..], 30), "");
+    assert_eq!(says(&[], 30), "Working · 2 helpers");
+}
+
+/// The strip under a page is that page's own, never the task's (#4102). While the task waits on
+/// the user at a page it handed them, the strip under another says the task works there, with
+/// that page's own step, its ring round it, and its Take Over takes that page and no other,
+/// wherever the task acted last. Hand Back is only under the page the user holds, which has no
+/// ring.
+#[gpui::test]
+fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
+    cx: &mut TestAppContext,
+) {
+    use crate::agents::task::{Card, Dot};
+    use crate::shell::page_ends::StripStop;
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    let steps = [
+        (30, "Reading tickets.example"),
+        (31, "Handing you boxoffice.example"),
+    ];
+    let card = Card {
+        agent: "task-1".into(),
+        home: 1,
+        space: 3,
+        name: "Claude".into(),
+        replies: true,
+        title: "Find two seats".into(),
+        status: "Needs you · Sign in".into(),
+        asks: false,
+        dot: Dot::Waiting,
+        answers: Vec::new(),
+        question: None,
+        open: Vec::new(),
+        page_steps: (steps.iter())
+            .map(|(tab, step)| (*tab, step.to_string().into()))
+            .collect(),
+        retry: false,
+        fix: None,
+    };
+    let held = |tab: u64| {
+        vec![Status {
+            agent: "task-1".into(),
+            name: "Claude".into(),
+            space: 3,
+            doing: "Read · tickets.example".into(),
+            held: vec![(tab, "Sign in".into())],
+        }]
+    };
+    // The page watched is 30; the task handed 31 to the user, where it acted last.
+    shell.update(cx, |shell, cx| {
+        shell.set_task_cards(vec![card], cx);
+        shell.show_task("task-1".into(), cx);
+    });
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    assert!(shell.update(cx, |shell, cx| shell.watch_task_page(30, thumb, None, cx)));
+    core_shows_task(&shell, cx, 30);
+    shell.update(cx, |shell, cx| {
+        shell.set_agent_status(held(31), cx);
+        shell.agent_acted("task-1".into(), 31, cx);
+    });
+    draw(&shell, cx);
+    host.take();
+    let strip = |cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| {
+            let (title, detail) = shell.task_strip_words(30);
+            let stops = shell.ring_stops();
+            let stop = |stop: StripStop| stops.contains(&Some(stop));
+            let chips = (stop(StripStop::TakeOver), stop(StripStop::HandBack));
+            (title, detail, chips, shell.task_drives(30))
+        })
+    };
+    let working = ("Claude is working".to_string(), steps[0].1.to_string());
+    assert_eq!(strip(cx), (working.0, working.1, (true, false), true));
+    shell.update(cx, |shell, cx| shell.agent_bar_primary(cx));
+    let calls = host.take();
+    assert_eq!(calls[0], "take over task-1 30", "{calls:?}");
+    assert!(!calls.iter().any(|call| call.ends_with(" 31")), "{calls:?}");
+
+    // The page watched is the one the user holds.
+    shell.update(cx, |shell, cx| shell.set_agent_status(held(30), cx));
+    let needs = ("Claude needs you".to_string(), "Sign in".to_string());
+    assert_eq!(strip(cx), (needs.0, needs.1, (false, true), false));
+}
+
 /// Quiet until it needs you (#1080): a card under the URL field only ever asks, so each has one
 /// primary, the answer its agent waits on; the strip under a page watched has one only while the
 /// user holds the page its card waits for, Hand Back, and none while the agent works, has done or
@@ -1416,6 +1542,7 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
+        page_steps: Vec::new(),
         retry: false,
         fix: None,
     };

@@ -397,19 +397,7 @@ pub fn show(window: u64, plate: Plate, frame: Bounds<Pixels>, side: Side, cx: &m
                     target.wait = None;
                     target.reveal(cx);
                 }
-                Next::Wait(delay) => {
-                    target.wait = Some(cx.spawn(async move |target, cx| {
-                        cx.background_executor().timer(delay).await;
-                        target
-                            .update(cx, |target, cx| {
-                                target.wait = None;
-                                if target.intent.due(cx.background_executor().now()) {
-                                    target.reveal(cx)
-                                }
-                            })
-                            .ok();
-                    }));
-                }
+                Next::Wait(delay) => target.wake_after(delay, cx),
             }
         })
         .ok();
@@ -511,6 +499,25 @@ pub fn over(cx: &App) -> Option<u64> {
 }
 
 impl LinkTarget {
+    /// Wakes after `delay` and reveals the plate once the pointer has rested its whole delay; a
+    /// wake that came early waits out the rest.
+    fn wake_after(&mut self, delay: Duration, cx: &mut Context<Self>) {
+        self.wait = Some(cx.spawn(async move |target, cx| {
+            cx.background_executor().timer(delay).await;
+            target
+                .update(cx, |target, cx| {
+                    target.wait = None;
+                    let now = cx.background_executor().now();
+                    if target.intent.due(now) {
+                        target.reveal(cx)
+                    } else if let Some(left) = target.intent.early(now) {
+                        target.wake_after(left, cx)
+                    }
+                })
+                .ok();
+        }));
+    }
+
     fn reveal(&mut self, cx: &mut Context<Self>) {
         if self.pending.is_some() && self.host.pressed() {
             return self.await_release(cx);

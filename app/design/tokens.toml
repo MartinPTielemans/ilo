@@ -11,6 +11,12 @@
 # Timings, springs and other motion stay in the code, as the design file has no motion, except a
 # surface's `motion` table, which design sync leaves out: seconds, and points for distances.
 
+[agents.helpers]
+# A task's helpers (#4102), which aren't a look: the most a task's assistant starts in one turn of
+# the user's, and how many levels under the task a helper may be, so a helper starts none.
+most = 4
+deep = 1
+
 [board]
 # A Board's page (#3073), which copy-board.sh writes as CSS custom properties, `--<key>`, each
 # `-dark` key the same property in dark mode: a colour as #rrggbb(aa), a `-share` as a percentage,
@@ -894,11 +900,20 @@ paper = 0xf3f0e8
 tint-less = 0.64
 tint = 0.52
 tint-more = 0.44
-# The material alone, untinted, over a white, a grey and a black backdrop (run 5); the window's
-# ground over each is the tint's colour at its alpha over these, which run 6 measured to the hex.
-material-over-white = 0xadacac
-material-over-grey = 0x646464
-material-over-black = 0x1f1f1f
+# What text holds over the window's worst backdrop at each level: primary text (titles, a field's
+# own text, a button's label, a chip's key) the palette's 4.5:1 at all three, and gray text
+# (placeholders, section labels, a row's detail) these, as the page shows through more. Where
+# primary text misses it, the plate right under it takes the least shade of the tint that brings
+# it back (#4090).
+gray-text-less = 4.5
+gray-text = 3.0
+gray-text-more = 3.0
+# The HUD window's material alone, untinted, over a white, a grey and a black backdrop, as the
+# app draws it on a Mac with the tint off, measured from its window's pixels; the window's ground
+# over each is the tint's colour at its alpha over these.
+material-over-white = 0xacacac
+material-over-grey = 0x5e5e5e
+material-over-black = 0x131313
 # What stands in for the material where the window's look has to be opaque, under rows it covers
 # or in the reveal's panel over the page: the ground over grey at Standard. The palette works out
 # each level's from the tokens above; this one is for what reads it without a palette, and a test
@@ -929,9 +944,9 @@ dialog-dark = 0x2a2720
 light-tint-less = 0.83
 light-tint = 0.7
 light-tint-more = 0.58
-light-material-over-white = 0xf5f5f4
-light-material-over-grey = 0xbcbcbb
-light-material-over-black = 0x7c7c7c
+light-material-over-white = 0xf6f6f6
+light-material-over-grey = 0xb6b6b6
+light-material-over-black = 0x717171
 light-stand-in = 0xebebeb
 # What floats over the window at each level, for the transparency picker: the dark fill over the
 # window's material at these, beside the window's own tints.
@@ -2235,6 +2250,92 @@ engine-row = 40.0
 engine-dot = 16.0
 engine-dot-center = 6.0
 
+# First run's sheet (#4093): over the window, not the brand's ground, at the modal level, with a
+# left half that asks one thing and a slot on the right where the step's feature plays as a loop.
+# The issue's fill over its blur of 34; GPUI draws no blur under a view, so until the sheet is a
+# window with the Mac's material the fill stands alone. Light's is the mock's glass.
+[shell.onboarding.sheet]
+width = 780.0
+height = 456.0
+radius = 20.0
+fill = 0x2a2720
+fill-alpha = 0.78
+light-fill = 0xf8f7f3
+light-fill-alpha = 0.8
+# The left half, and its padding: top, right, bottom, left.
+left = 350.0
+padding = [34.0, 30.0, 20.0, 32.0]
+# Where the step is among them, a dot each and the step's a bar, over the title.
+pager-dot = 6.0
+pager-on = 16.0
+pager-gap = 5.0
+pager-under = 24.0
+pager-off = 0.2
+pager-lit = 0.85
+# The welcome's wordmark, a third of the brand's units: 71 × 51.
+mark-scale = 0.33
+mark-under = 22.0
+title-size = 25.0
+title-line = 29.0
+title-under = 10.0
+line-size = 13.0
+line-line = 19.5
+line-quiet = 0.62
+line-under = 22.0
+# The foot's buttons, at the half's bottom: quiet ones in the ink, the step's own in the green.
+button-height = 30.0
+button-inset = 12.0
+button-size = 12.0
+button-gap = 6.0
+button-quiet = 0.6
+# The colour step's swatches, the theme picker's, at the half's width.
+swatch = 20.0
+swatch-pitch = 31.0
+# The loop's slot, inset from the sheet's edge, a hairline inside it, over a plain ground of the
+# ink, until the art fills it.
+slot-inset = 10.0
+slot-radius = 10.0
+slot-rim = 0.12
+slot-ground = 0.04
+
+# Each step's loop (#4093): ten seconds, drawn in the slot from the sidebar's own measures with
+# made-up pages, its last frame where it rests and what Reduce Motion shows.
+[shell.onboarding.loops]
+period = 10.0
+# A small window in the slot: its size, its sidebar's width, a row's height and the gap above the
+# rows, the radii of the window and of a row's plate, and of a tab's icon and a page's bars.
+window-width = 340.0
+window-height = 236.0
+sidebar = 116.0
+row = 22.0
+rows-top = 46.0
+window-radius = 10.0
+plate-radius = 6.0
+icon-radius = 2.0
+bar-radius = 3.0
+text-size = 8.0
+# The real window's glow at the small window's size: its width to a 1280-point window's.
+scale = 0.27
+# The Space dots at the sidebar's foot: a dot, the shown Space's, the others' alpha, the gap
+# between them and how far up from the window's foot.
+dot = 4.0
+dot-shown = 6.0
+dot-alpha = 0.35
+dot-gap = 6.0
+dots-bottom = 10.0
+# The pointer fades in as the loop starts and out before it ends, over `pointer-fade`.
+pointer-fade = 0.3
+# The welcome's: the pointer goes to the next tab over `move` and presses it `click` after,
+# once from each time here: 2nd, 3rd, then the 1st again. The press's ring grows and fades
+# over `press`; the tab and its page change on the press, as a tab switch does.
+welcome-at = [0.4, 3.4, 6.4]
+welcome-move = 0.8
+welcome-click = 0.2
+welcome-press = 0.5
+# The color's: the sidebar's rows swipe to the next Space from `at` over `swipe`, and back.
+color-at = [0.6, 5.0]
+color-swipe = 0.6
+
 [shell.import]
 # Ours (#1673): while an import runs, each Space it makes is a card in its own colours, under the
 # name of the profile it goes into, its count rolling up as its pinned tabs go in, and ticked once
@@ -2312,7 +2413,7 @@ change-gap = 6.0
 # each `change-top` below the last, numbered in a `number` column `number-gap` before the sentence.
 # An action on the page's question has the tab's site as that head, its sentence `change-alone-top`
 # under it (#3836).
-# "See the whole request" sits `see-top` below why it asks.
+# Why it asks sits `see-top` below the changes.
 facts-top = 4.0
 facts-line = 15.0
 change-alone-top = 2.0
@@ -2320,35 +2421,6 @@ change-top = 8.0
 number = 10.0
 number-gap = 6.0
 see-top = 10.0
-# The corners of the keyboard's ring around "See the whole request", which is a link's words.
-see-ring = 4.0
-# The whole request beside the card (#3548), over the page: `whole-width` wide, its sections
-# `whole-section` apart, each `whole-gap` under its label, its line under its title `whole-lead`
-# below it, the cookies' note `whole-note` below the headers, and kept `whole-inside` inside the
-# window, `whole-least` tall at least, and `whole-opening` tall until it has measured what it
-# shows, before it's on screen. A header's name is `whole-name` wide, `whole-name-gap`
-# before its value. An arrow key scrolls it `whole-step`.
-whole-width = 520.0
-whole-padding = 16.0
-whole-section = 14.0
-whole-gap = 3.0
-whole-lead = 2.0
-whole-note = 6.0
-whole-inside = 16.0
-whole-least = 120.0
-whole-opening = 400.0
-whole-name = 150.0
-whole-name-gap = 10.0
-whole-step = 40.0
-# What the agent wrote whole (an address, a header's value, a body) is set in a monospaced face on
-# a plate of its own, the ink at `whole-plate`, `whole-block` inside it with a control's corners,
-# so nothing in it can pass for the overlay's own labels. Its escapes are in the detail on a plate
-# of their own, the ink at `whole-escape`, so they're told from typed text without colour too.
-whole-plate = 0.06
-whole-escape = 0.14
-whole-block = 6.0
-# The line round its plate, as the other overlays' rims.
-whole-rim = 0.5
 
 [shell.boost]
 # Ours (#2347): the Boost card's list of what Arrange moved, between its words and its buttons.

@@ -38,8 +38,8 @@ pub(crate) const TASK_PAGES: [(&str, &str); 3] = [
     ("Directions", "https://maps.example/taberna"),
 ];
 
-/// The pages of the four helpers PREVIEW_TASK=helpers shows (#4102), one each: their titles and
-/// addresses. The third is the one its helper handed the user, for the sign-in.
+/// The pages of the helpers PREVIEW_TASK's helper states show (#4102), one each: their titles and
+/// addresses. With four, the third is the one its helper handed the user, for the sign-in.
 pub(crate) const HELPER_PAGES: [(&str, &str); 4] = [
     ("Seats · Saturday", "https://tickets.example/seats"),
     ("Stalls · Saturday", "https://stalls.example/saturday"),
@@ -47,12 +47,61 @@ pub(crate) const HELPER_PAGES: [(&str, &str); 4] = [
     ("Saturday · Encore", "https://encore.example/saturday"),
 ];
 
+/// What the bench's task says before it starts its four helpers.
+const FOUR_SHOPS: &str = "Four shops sell Saturday's stalls. I'll look at all four at once.";
+
 /// Which of `HELPER_PAGES` waits on the user's sign-in.
 pub(crate) const HELPER_WAITING: usize = 2;
 
-/// Whether the bench shows the task with helpers.
-pub(crate) fn bench_helpers() -> bool {
+/// How many helpers the bench's task has, if it shows one with helpers: four, one of them
+/// waiting on the user (helpers), stopped at the limit (helpers-limit) or after its turn ended
+/// (helpers-ended), or one (helper).
+pub(crate) fn bench_helpers() -> Option<usize> {
+    match states::var("PREVIEW_TASK").ok()?.as_str() {
+        "helpers" | "helpers-limit" | "helpers-ended" => Some(HELPER_PAGES.len()),
+        "helper" => Some(1),
+        _ => None,
+    }
+}
+
+/// Whether one of the bench's helpers waits on the user, which its task's header and card say.
+pub(crate) fn bench_helper_waits() -> bool {
     states::var("PREVIEW_TASK").as_deref() == Ok("helpers")
+}
+
+/// The helpers' lines of the bench's task: each on its page, reading it, and with `waits`, the
+/// one that handed its page to the user. None is `running` once the turn is over.
+fn helper_lines(count: usize, waits: bool, running: bool) -> Vec<TraceItem> {
+    let sites = helper_tabs();
+    let helper = |at: usize, tool: &str, did: &str, running| {
+        TraceItem::Helper(TraceStep {
+            key: 10 + at,
+            glyph: browser::agents::tools::step_glyph(tool),
+            title: format!("{did} {}", sites[at].1).into(),
+            description: "".into(),
+            running,
+            failed: false,
+            opens: Opens::Nothing,
+            under: "".into(),
+        })
+    };
+    (0..count)
+        .map(|at| match (at == HELPER_WAITING && waits, running) {
+            (true, _) => helper(at, "hand_off", "Handed you", false),
+            (false, true) => helper(at, "read_page", "Reading", true),
+            (false, false) => helper(at, "read_page", "Read", false),
+        })
+        .collect()
+}
+
+/// The stretch under way of the bench's task with helpers, whose line its card says too.
+fn helper_trace(count: usize, waits: bool) -> Trace {
+    Trace {
+        key: 10,
+        running: true,
+        took: None,
+        items: helper_lines(count, waits, true),
+    }
 }
 
 /// The helpers' pages as the task's conversation lists them, each tab with its site: the tiles
@@ -106,6 +155,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
             }
             _ => Vec::new(),
         },
+        page_steps: Vec::new(),
         retry: false,
         fix: None,
     };
@@ -138,6 +188,28 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         cards[0].status =
             "Step 3 · Comparing the seats in rows 12 to 18 for two on the aisle".into();
     }
+    // The bench's task with helpers (#4102) says on its card what its conversation does: that it
+    // needs the user while one of them waits, else the live line's own words.
+    match (bench_helpers(), bench_helper_waits()) {
+        (Some(_), true) => {
+            let (_, site) = helper_tabs().swap_remove(HELPER_WAITING);
+            cards[0].status =
+                format!("{} · Sign in to {site}", browser::agents::task::NEEDS_YOU).into();
+            cards[0].dot = Dot::Waiting;
+        }
+        (Some(count), false) => cards[0].status = helper_trace(count, false).line(),
+        (None, _) => {}
+    }
+    // Each helper's page has its own step, which the strip under it and its tile say.
+    if let Some(count) = bench_helpers().filter(|_| bench_ended().is_none()) {
+        let steps = helper_lines(count, bench_helper_waits(), true);
+        cards[0].page_steps = (helper_tabs().into_iter().zip(steps))
+            .filter_map(|((tab, _), step)| match step {
+                TraceItem::Helper(step) => Some((tab, step.title)),
+                _ => None,
+            })
+            .collect();
+    }
     // The bench's task that has ended (#4105) is done on its card too, which the strip under its
     // page and the page's ring follow, with the page it left the user.
     if let Some(name) = bench_ended() {
@@ -155,7 +227,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
 /// states: all but picked-up, which a reply set to work again.
 pub(crate) fn bench_ended() -> Option<&'static str> {
     match states::var("PREVIEW_TASK").ok()?.as_str() {
-        "ended" | "ended-first" | "gone" | "not-kept" => Some("Claude"),
+        "ended" | "ended-first" | "gone" | "not-kept" | "helpers-ended" => Some("Claude"),
         "codex-ended" => Some("Codex"),
         _ => None,
     }
@@ -235,8 +307,8 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
 /// PREVIEW_TASK=<state> (#4095's bench) shows the working task's conversation beside its page in
 /// one of the states ilo's own lines are made for, from made-up data: working, refused,
 /// off-limits, yours, tab-back, signed-in, raised or notes; or of a task that has ended (#4105):
-/// ended, ended-first, picked-up, gone, not-kept or codex-ended; or of one at work with helpers
-/// (#4102): helpers.
+/// ended, ended-first, picked-up, gone, not-kept or codex-ended; or of one with helpers (#4102):
+/// helpers, helper, helpers-limit or helpers-ended.
 pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
     let Ok(state) = states::var("PREVIEW_TASK") else {
         return;
@@ -364,37 +436,53 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
         // A task at work with four helpers (#4102), each on a page of its own: the stretch counts
         // them and opens to a line for each, a step's line in ilo's words for the helper's page.
         // The third handed its page to the user for a sign-in, which ilo's line under them says,
-        // while the other three go on. The conversation opens with the task's first page alone,
-        // as the task did; `helper_tabs` are the rest, which the bench gives it once it shows.
+        // while the other three go on, so the task needs the user. The conversation opens with
+        // the task's first page alone, as the task did; `helper_tabs` are the rest, which the
+        // bench gives it once it shows.
         "helpers" => {
-            let sites = helper_tabs();
-            let helper = |at: usize, tool: &str, did: &str, running| {
-                TraceItem::Helper(TraceStep {
-                    key: 10 + at,
-                    glyph: browser::agents::tools::step_glyph(tool),
-                    title: format!("{did} {}", sites[at].1).into(),
-                    description: "".into(),
-                    running,
-                    failed: false,
-                    opens: Opens::Nothing,
-                    under: "".into(),
-                })
-            };
-            let helpers = (0..sites.len()).map(|at| match at {
-                HELPER_WAITING => helper(at, "hand_off", "Handed you", false),
-                _ => helper(at, "read_page", "Reading", true),
-            });
-            let trace = Trace {
-                key: 10,
-                running: true,
-                took: None,
-                items: helpers.collect(),
+            talk.about = format!("{} · {}", talk.name, browser::agents::task::NEEDS_YOU).into();
+            let yours = IloKind::Yours {
+                tab: helper_tabs()[HELPER_WAITING].0,
             };
             vec![
                 done(0, before),
-                Line::Said("Four shops sell Saturday's stalls. I'll look at all four at once.".into()),
-                Line::Trace(trace),
-                line(100, IloKind::Yours { tab: sites[HELPER_WAITING].0 }),
+                Line::Said(FOUR_SHOPS.into()),
+                Line::Trace(helper_trace(HELPER_PAGES.len(), true)),
+                line(100, yours),
+            ]
+        }
+        // One helper, at work: the live line says "1 helper".
+        "helper" => vec![
+            done(0, before),
+            Line::Said("The stalls are on another page. A helper reads them while I go on.".into()),
+            Line::Trace(helper_trace(1, false)),
+        ],
+        // ilo stopped the task for starting a fifth: its line, with Take Over alone.
+        "helpers-limit" => vec![
+            done(0, before),
+            Line::Said(FOUR_SHOPS.into()),
+            Line::Trace(helper_trace(HELPER_PAGES.len(), false)),
+            line(100, IloKind::Helpers { tab, deep: false }),
+        ],
+        // The turn ended with its helpers: the stretch is over, and no helper's line is under way.
+        "helpers-ended" => {
+            talk.about = format!("{} · Done at 14:02", talk.name).into();
+            talk.stoppable = false;
+            talk.on = None;
+            vec![
+                done(0, before),
+                Line::Said(FOUR_SHOPS.into()),
+                Line::Trace(Trace {
+                    key: 10,
+                    running: false,
+                    took: Some(52),
+                    items: helper_lines(HELPER_PAGES.len(), false, false),
+                }),
+                Line::Said(
+                    "Two seats together in row 12 of the stalls are in your basket at \
+                     tickets.example, 38 € each. The other three shops have none left."
+                        .into(),
+                ),
             ]
         }
         // A step whose answer carried a site's notes (#4122), which the line under it says.

@@ -134,9 +134,12 @@ impl Shell {
     }
 
     /// How much of the card's mark and line show `now`: as the URL field's words, but none while
-    /// the bar is over the card, and along the same fade again once it has gone.
+    /// the bar is over the card, and along the same fade again once it has gone. Nor while the
+    /// first run's flow shows, as the window shows through its sheet: the welcome comes as the
+    /// flow fades.
     pub(super) fn card_opacity(&self, now: Instant) -> f32 {
-        if self.bar_over_card {
+        let flow = (self.onboarding.as_ref()).is_some_and(|flow| flow.ending.is_none());
+        if self.bar_over_card || flow {
             return 0.;
         }
         let back = self.card_back.map_or(1., |back| {

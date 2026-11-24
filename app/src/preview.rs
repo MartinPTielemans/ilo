@@ -2302,10 +2302,7 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
                 // The task's pages: its one, or with helpers (#4102) each helper's, which are the
                 // task's own in its group at the sidebar's foot and on Pages.
                 let helpers = bench_helpers();
-                let pages = match helpers {
-                    true => &HELPER_PAGES[..],
-                    false => &HELPER_PAGES[..1],
-                };
+                let pages = &HELPER_PAGES[..helpers.unwrap_or(1)];
                 let tabs: Vec<u64> = (tab..).take(pages.len()).collect();
                 shell.set_tabs(FIRST_TASK, Vec::new(), tabs.clone(), Vec::new(), none, cx);
                 for (&tab, &(title, url)) in tabs.iter().zip(pages) {
@@ -2318,9 +2315,10 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
                 }
                 // The helpers' pages came after the conversation opened, on Talk, so it stays
                 // there with all four on Pages.
-                if helpers {
+                if let Some(count) = helpers.filter(|count| *count > 1) {
                     let mut talk = task_conversation(agent.clone());
                     talk.tabs = helper_tabs();
+                    talk.tabs.truncate(count);
                     shell.set_conversation(Some(talk), cx);
                 }
                 shell.watch_task_page(tab, Bounds::default(), None, cx);
@@ -2331,10 +2329,12 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
                     return;
                 }
                 // With helpers, the user holds the page one of them handed over for a sign-in.
-                let held = match helpers {
+                let held = match bench_helper_waits() {
                     true => {
-                        let (tab, site) = helper_tabs().swap_remove(HELPER_WAITING);
-                        vec![(tab, format!("Sign in to {site}").into())]
+                        // What the helper asked of them, as it would word it: the page's tile
+                        // and strip have its site already.
+                        let (tab, _) = helper_tabs().swap_remove(HELPER_WAITING);
+                        vec![(tab, "Sign in".into())]
                     }
                     false => Vec::new(),
                 };
@@ -3201,6 +3201,29 @@ fn main() {
                         }
                         if parts.next() == Some("on") {
                             shell.onboarding_count_on(cx);
+                        }
+                        // PREVIEW_ONBOARDING_PICK=<n> picks the nth swatch at the color step.
+                        let pick = std::env::var("PREVIEW_ONBOARDING_PICK").ok();
+                        if let Some(index) = pick.and_then(|pick| pick.parse().ok()) {
+                            shell.onboarding_pick_swatch(index, cx);
+                        }
+                    }
+                    // PREVIEW_ONBOARDING_LOOP=<s> holds the step's loop <s> seconds in, for a still
+                    // capture, and =<s>,<ms> lets it play from the start <ms> in, for its frames.
+                    if let Ok(held) = std::env::var("PREVIEW_ONBOARDING_LOOP") {
+                        let mut parts = held.split(',').map(|part| part.trim().parse::<f32>().ok());
+                        if let Some(Some(at)) = parts.next() {
+                            shell.onboarding_hold_loop(Some(at), cx);
+                        }
+                        if let Some(Some(ms)) = parts.next() {
+                            cx.spawn(async move |shell, cx| {
+                                let after = Duration::from_millis(ms as u64);
+                                cx.background_executor().timer(after).await;
+                                shell
+                                    .update(cx, |shell, cx| shell.onboarding_hold_loop(None, cx))
+                                    .ok();
+                            })
+                            .detach();
                         }
                     }
                     shell

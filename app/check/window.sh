@@ -29,8 +29,8 @@
 # narrowest it hides the sidebar, keeping its width; a double-click on it puts the width back. A
 # page that hasn't drawn yet shows black, or white with View › Appearance on Light, and with
 # the window widened, the space a page hasn't drawn at its new size shows the page's own
-# background. In a check VM, the sidebar over grey backdrops is Dia's composite,
-# dark and then light, with the Mac's appearance, and View › Appearance turns the light window dark
+# background. In a check VM, the sidebar over grey backdrops is the window ilo reckons from its
+# material's and tints' tokens at the user's transparency level, Standard here, dark and then light, with the Mac's appearance, and View › Appearance turns the light window dark
 # and back. On the Mac, the Dock icon's dot takes the Space's color, and stays green with its switch
 # in Settings › General off; on Windows, the taskbar button's dot does, read off a check VM's screen.
 # On a hosted Windows runner, at Windows' Text size 110 % the page view keeps its margins.
@@ -1229,6 +1229,10 @@ send clickkey $at
 expect '^browser: edge reveals sidebar on$' "a click on the edge's switch didn't turn it on again"
 # The sidebar on the right, picked in Settings as a user does, comes out from the window's last
 # column, where on Linux the band at the right edge is the UI's too (#3219). Back on the left after.
+# Sidebar position is Appearance's (#4092).
+send clickkey $(drawn "toolbar Appearance")
+expect '^browser: settings tab Appearance$' "a click on Appearance didn't show its section"
+settings_drew Appearance
 in_sight "sidebar position option Right" || fail "Settings didn't draw Right's drawing"
 send clickkey $at
 expect '^browser: sidebar on the right$' "a click on Right's drawing didn't move the sidebar"
@@ -1247,8 +1251,8 @@ expect '^browser: reveal shown$' "the pointer at the window's right edge didn't 
 send key s cmd
 expect '^browser: sidebar shown$' "⌘S with the sidebar out on the right didn't dock it"
 send menu Settings…
-expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't show Tabs & Sidebar again"
-settings_drew "Tabs & Sidebar"
+expect '^browser: settings shown Appearance$' "Settings… didn't show Appearance again"
+settings_drew Appearance
 in_sight "sidebar position option Left" || fail "Settings didn't draw Left's drawing"
 send clickkey $at
 expect '^browser: sidebar on the left$' "a click on Left's drawing didn't move the sidebar back"
@@ -1590,10 +1594,11 @@ expect '^browser: sidebar width 228$' "a double-click on the sidebar's edge didn
 none_since '^browser: command new-tab' || fail "a double-click on the sidebar's edge opened a tab"
 check_layout "after a double-click on the sidebar's edge"
 
-# The sidebar over a backdrop of black, grey 20, grey 60 and white (sRGB levels) is Dia's composite
-# within 3 levels (docs/ux-spec.md › Window material), in the Mac's dark appearance and then its
-# light one: Dia's dark material reads 24 / 32 / 45 / 104 there, under its tint of black 0.4, and
-# its light one 137 / 146 / 165 / 243, under white 0.8, with the gradient over that. The blur comes
+# The sidebar over a backdrop of black, grey 20, grey 60 and white (sRGB levels) is the window ilo
+# reckons within 3 levels (docs/ux-spec.md › Window material), in the Mac's dark appearance and then
+# its light one: the app logs what its palette makes there from the material's tokens, measured
+# over black, grey 128 and white, under the tint of the transparency level, Standard in a fresh
+# profile, with the black Space's shade and glow over that. The blur comes
 # from the window server, which a capture of the window alone leaves out, so this captures the
 # screen, and only a check VM's screen, and its appearance, are the check's to change: check.sh
 # runs it dark, and this turns it light for the light pass and back after.
@@ -1672,16 +1677,15 @@ elif windows; then
 elif [ "$(sysctl -n kern.hv_vmm_present)" != 1 ]; then
   material="not measured outside a check VM"
 else
-  # Black is neutral, so the field's gradient is faint and known: stops at 0.06 in dark and 0.09
-  # in light, from black at the top to 0.25 · 255 at the bottom.
+  # Black is neutral, so its glow is faint, and the app reckons it with the rest.
   black_space
   [ "$active" = 1 ] || fail "the app isn't active, so the window shows AppKit's inactive fill"
   srgb="/System/Library/ColorSync/Profiles/sRGB Profile.icc"
   material=
   off=
   opaque=
-  # Each pass: its appearance, then each backdrop's grey and Dia's material over it.
-  for pass in "dark 0:24 20:32 60:45 255:104" "light 0:137 20:146 60:165 255:243"; do
+  # Each pass: its appearance, then each backdrop's grey.
+  for pass in "dark 0 20 60 255" "light 0 20 60 255"; do
     tone=${pass%% *}
     if [ "$tone" = light ]; then
       light_shots=", $out/light.png, $out/light-menu.png, $out/appearance-dark.png"
@@ -1696,8 +1700,7 @@ else
       expect '^browser: menu closed$' "escape didn't close the Space's menu"
       send move $page_point
     fi
-    for pair in ${pass#* }; do
-      level=${pair%:*}
+    for level in ${pass#* }; do
       send backdrop "$level"
       expect "^browser: backdrop $level drawn" "the backdrop in grey $level didn't draw"
       # The window's frame and its screen's size, in points from the screen's top left.
@@ -1711,30 +1714,24 @@ else
       sidebar=$(pixel "$shot" $(echo "$place" | awk '{ print ($1 + 60) / $5, ($2 + 450) / $6 }'))
       backdrop=$(pixel "$shot" $(echo "$place" |
         awk '{ x = $1 >= 50 ? $1 - 50 : $1 + $3 + 50; print x / $5, ($2 + 450) / $6 }'))
-      # Dia's composite there, 450 pt down: in dark 0.94 of its material under black 0.4, then 0.06
-      # of the gradient; in light 0.91 of it under white 0.8, then 0.09. The material alone is ours
-      # under our tint, black 0.25 or white 0.8, to tune the tint by.
-      line=$(echo "${pair#*:} $place $sidebar $backdrop" | awk -v level="$level" -v tone="$tone" '{
-        ours = ($8 + $9 + $10) / 3
-        seen = ($11 + $12 + $13) / 3
-        if (tone == "dark") {
-          gradient = 0.06 * 63.75 * 450 / $5
-          dia = 0.94 * 0.6 * $1 + gradient
-          alone = (ours - gradient) / (0.94 * 0.749)
-        } else {
-          gradient = 0.09 * 63.75 * 450 / $5
-          dia = 0.91 * (0.8 * 255 + 0.2 * $1) + gradient
-          alone = ((ours - gradient) / 0.91 - 0.8 * 255) / 0.2
-        }
-        printf "%.0f (Dia %.0f), the material alone %.0f (Dia %d), the backdrop read as %.0f",
-          ours, dia, alone, $1, seen
-        if (ours - dia > 3 || dia - ours > 3) printf ", off"
+      # What the app reckons the window there from its tokens, over black, grey 128 and white,
+      # last logged while this appearance is the window's; a grey between two of them reads as far
+      # between theirs, as everything over the material lies over it evenly.
+      reckons=$(sed -n 's/^browser: window reckons \([0-9]*\) \([0-9]*\) \([0-9]*\) at 60,450 in .*/\1 \2 \3/p' "$log" | tail -1)
+      [ "$(echo "$reckons" | wc -w)" -eq 3 ] || fail "the app didn't say what it reckons the window over grey"
+      line=$(echo "$reckons $place $sidebar $backdrop" | awk -v level="$level" '{
+        ours = ($10 + $11 + $12) / 3
+        seen = ($13 + $14 + $15) / 3
+        if (level <= 128) reckoned = $1 + ($2 - $1) * level / 128
+        else reckoned = $2 + ($3 - $2) * (level - 128) / 127
+        printf "%.0f (reckoned %.0f), the backdrop read as %.0f", ours, reckoned, seen
+        if (ours - reckoned > 3 || reckoned - ours > 3) printf ", off"
         if (seen - level > 2 || level - seen > 2) printf ", capture off"
       }')
       echo "$tone material over $level: $line"
       case "$line" in *", off"* | *"capture off"*) off="$off $tone $level," ;; esac
-      # Dia's reads 45 lighter over white than over black in dark, and 20 in light; an opaque
-      # material, as Reduce Transparency draws it, reads the same over both.
+      # The window reads lighter over white than over black, by about 60 in dark and 35 in light;
+      # an opaque material, as Reduce Transparency draws it, reads the same over both.
       case $level in
       0) over_black=${line%% *} ;;
       255) [ $((${line%% *} - over_black)) -ge 10 ] || opaque="$opaque $tone," ;;
@@ -1754,13 +1751,13 @@ else
   expect '^browser: window light false$' "the window didn't turn dark again with the Mac"
   [ -z "$opaque" ] ||
     fail "the sidebar read the same over black and white in${opaque%,}, so it's opaque: $material"
-  # GitHub's hosted Mac draws AppKit's material behind the window darker than the Mac Dia was
-  # measured on, 119 against 137 over black in light (#1554), so ours there is no measure of Dia's:
-  # the run goes on, saying so, and the check VMs keep the comparison.
+  # GitHub's hosted Mac draws AppKit's material behind the window darker than a check VM's,
+  # where the tokens were measured (#1554), so the window there is no measure of them: the run
+  # goes on, saying so, and the check VMs keep the comparison.
   if [ "${GITHUB_ACTIONS:-}" = true ]; then
-    echo "skip: the sidebar against Dia's composite, as the hosted Mac's AppKit material isn't the one Dia was measured over"
+    echo "skip: the sidebar against the window ilo reckons, as the hosted Mac's AppKit material isn't the one its tokens were measured over"
   else
-    [ -z "$off" ] || fail "the sidebar isn't Dia's composite within 3 levels over grey${off%,}: $material"
+    [ -z "$off" ] || fail "the sidebar isn't the window ilo reckons from its tokens within 3 levels over grey${off%,}: $material"
   fi
   material="over grey ${material%; }"
 fi

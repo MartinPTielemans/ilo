@@ -19,7 +19,7 @@ use gpui::{
 };
 
 use crate::hold::{Hold, Reason};
-use crate::palette::{Float, Palette, STATE_HOVERED, STATE_PRESSED};
+use crate::palette::{Float, Ground, Palette, STATE_HOVERED, STATE_PRESSED};
 use crate::shell::{CARD_INSET, cubic_bezier, scaled::scaled_from_top, spring};
 
 // Arc's, measured at 2× (docs/ux-spec.md › Toast): 46.5 tall, 8 inside the card's top right
@@ -722,9 +722,13 @@ impl Render for Toast {
                     .flex()
                     .items_center()
                     .rounded(px(CHIP_RADIUS))
-                    .bg(palette.plate(CHIP_FILL))
-                    .hover(move |style| style.bg(palette.state(CHIP_FILL, STATE_HOVERED)))
-                    .active(move |style| style.bg(palette.state(CHIP_FILL, STATE_PRESSED)))
+                    .bg(palette.ground_plate(Ground::Chip, CHIP_FILL))
+                    .hover(move |style| {
+                        style.bg(palette.ground_state(Ground::Chip, CHIP_FILL, STATE_HOVERED))
+                    })
+                    .active(move |style| {
+                        style.bg(palette.ground_state(Ground::Chip, CHIP_FILL, STATE_PRESSED))
+                    })
                     .font_weight(FontWeight::SEMIBOLD)
                     .when(a11y, |chip| {
                         let name = match &button.label {
@@ -805,7 +809,7 @@ impl Render for Toast {
                             .flex()
                             .items_center()
                             .rounded(px(CHIP_RADIUS))
-                            .bg(palette.plate(CHIP_FILL))
+                            .bg(palette.ground_plate(Ground::Chip, CHIP_FILL))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(key),
                     )

@@ -29,15 +29,16 @@ exec cat > "$0.in.$run"
 /// A run of the browser with a profile folder of its own, agents on, and Claude signed in at a
 /// stand-in in it.
 #[cfg(unix)]
-struct Run {
-    agents: Entity<Agents>,
+pub(super) struct Run {
+    pub(super) agents: Entity<Agents>,
+    pub(super) browser: Rc<Made>,
     profile: PathBuf,
-    program: PathBuf,
+    pub(super) program: PathBuf,
 }
 
 #[cfg(unix)]
 impl Run {
-    fn new(name: &str, cx: &mut TestAppContext) -> Run {
+    pub(super) fn new(name: &str, cx: &mut TestAppContext) -> Run {
         use std::os::unix::fs::PermissionsExt;
         static MADE: AtomicUsize = AtomicUsize::new(0);
         let made = MADE.fetch_add(1, Ordering::Relaxed);
@@ -98,12 +99,13 @@ impl Run {
         });
         Run {
             agents,
+            browser,
             profile,
             program,
         }
     }
 
-    fn start(&self, cli: Cli, cx: &mut TestAppContext) -> String {
+    pub(super) fn start(&self, cli: Cli, cx: &mut TestAppContext) -> String {
         let page = Some(AskedOn {
             url: "https://www.example.com/trains".into(),
             title: "Trains to Lisbon".into(),
@@ -122,7 +124,7 @@ impl Run {
             .expect("started")
     }
 
-    fn said(&self, agent: &str, out: Out, cx: &mut TestAppContext) {
+    pub(super) fn said(&self, agent: &str, out: Out, cx: &mut TestAppContext) {
         let event = runner::Event {
             agent: agent.into(),
             out,
@@ -137,18 +139,18 @@ impl Run {
         assert!(matches!(self.state(agent, cx), State::Done { .. }));
     }
 
-    fn state(&self, agent: &str, cx: &mut TestAppContext) -> State {
+    pub(super) fn state(&self, agent: &str, cx: &mut TestAppContext) -> State {
         (self.agents).read_with(cx, |agents, _| agents.task(agent).unwrap().state.clone())
     }
 
-    fn talk(&self, agent: &str, cx: &mut TestAppContext) -> Conversation {
+    pub(super) fn talk(&self, agent: &str, cx: &mut TestAppContext) -> Conversation {
         (self.agents)
             .read_with(cx, |agents, cx| agents.conversation(agent, cx))
             .expect("its conversation")
     }
 
     /// The kinds of ilo's lines in the task's conversation, in its order.
-    fn ilo_lines(&self, agent: &str, cx: &mut TestAppContext) -> Vec<IloKind> {
+    pub(super) fn ilo_lines(&self, agent: &str, cx: &mut TestAppContext) -> Vec<IloKind> {
         (self.talk(agent, cx).lines.iter())
             .filter_map(|line| match line {
                 Line::Ilo(line) => Some(line.kind.clone()),
@@ -172,7 +174,7 @@ impl Run {
 
     /// What the stand-in's `run` was started with, once it has the run's first message, and that
     /// message's text.
-    fn ran(&self, run: usize) -> (Vec<String>, String) {
+    pub(super) fn ran(&self, run: usize) -> (Vec<String>, String) {
         let sent = wait_for(&beside(&self.program, &format!("in.{run}")));
         let args = std::fs::read_to_string(beside(&self.program, &format!("args.{run}"))).unwrap();
         let first: Value = serde_json::from_str(sent.lines().next().unwrap()).unwrap();
@@ -217,7 +219,7 @@ impl Run {
 
 /// A file the stand-in writes beside itself.
 #[cfg(unix)]
-fn beside(program: &std::path::Path, what: &str) -> PathBuf {
+pub(super) fn beside(program: &std::path::Path, what: &str) -> PathBuf {
     PathBuf::from(format!("{}.{what}", program.display()))
 }
 
@@ -236,7 +238,7 @@ fn wait_for(path: &std::path::Path) -> String {
 
 /// The argument after `flag`.
 #[cfg(unix)]
-fn after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+pub(super) fn after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     let at = args.iter().position(|arg| arg == flag)?;
     args.get(at + 1).map(String::as_str)
 }

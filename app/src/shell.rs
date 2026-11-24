@@ -1891,11 +1891,6 @@ pub struct Shell {
     /// is in it, which the tests read.
     #[cfg(test)]
     agent_question_rows: RefCell<Vec<(gpui::TextLayout, std::ops::Range<usize>)>>,
-    /// Where the request card's "See the whole request" is, which check.sh clicks (#3548).
-    agent_request_see_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// The request card's "See the whole request", where Escape in the whole request puts the
-    /// keyboard back (#3548).
-    agent_request_see: FocusHandle,
     /// The agent card's buttons, in its buttons' order, which Focus Agent Question gives the
     /// keyboard (#3869).
     agent_card_buttons: [FocusHandle; agent_card_keys::MOST_BUTTONS],
@@ -2380,8 +2375,6 @@ impl Shell {
             agent_question_drawn: Rc::default(),
             #[cfg(test)]
             agent_question_rows: RefCell::default(),
-            agent_request_see_drawn: Rc::default(),
-            agent_request_see: cx.focus_handle(),
             agent_card_buttons: std::array::from_fn(|_| cx.focus_handle()),
             agent_card_room: Rc::default(),
             card_keys: None,
@@ -4635,7 +4628,6 @@ impl Render for Shell {
                 cx.defer_in(window, |shell, _, cx| shell.live_space_shown(cx));
             }
         }
-        self.see_gone_keyboard(window, cx);
         self.step_card_keys(window, cx);
         self.lone_header = cx
             .try_global::<LoneSpaceHeader>()

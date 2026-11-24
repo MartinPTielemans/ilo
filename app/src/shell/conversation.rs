@@ -34,7 +34,7 @@ use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
 use crate::agents::task::{
     ArchivedTask, Card, Conversation, Dot, Line, Opens, TaskAction, Trace, TraceItem, TraceStep,
 };
-use crate::palette::{STATE_HOVERED, STATE_PRESSED};
+use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
 use crate::text_input::TextInput;
 use crate::tokens::command_bar::{CHIP as BAR_CHIP, HINT_KEY_RIM, HINT_KEY_X};
 use crate::tokens::find_bar::NOT_FOUND;
@@ -102,9 +102,9 @@ pub(super) fn page_chip_keyed(
         .items_center()
         .gap(px(KEY_GAP))
         .rounded(px(CHIP_RADIUS))
-        .bg(palette.plate(CHIP_FILL))
-        .hover(move |style| style.bg(palette.state(CHIP_FILL, STATE_HOVERED)))
-        .active(move |style| style.bg(palette.state(CHIP_FILL, STATE_PRESSED)))
+        .bg(palette.ground_plate(Ground::Chip, CHIP_FILL))
+        .hover(move |style| style.bg(palette.ground_state(Ground::Chip, CHIP_FILL, STATE_HOVERED)))
+        .active(move |style| style.bg(palette.ground_state(Ground::Chip, CHIP_FILL, STATE_PRESSED)))
         .whitespace_nowrap()
         .text_size(px(text::BODY))
         .font_weight(FontWeight::MEDIUM)
@@ -226,6 +226,8 @@ pub struct TalkView {
     ilo_hovered: Rc<Cell<bool>>,
     /// Where each of ilo's lines' words were last drawn, and their layout, by its line.
     ilo_words_drawn: WordsDrawn,
+    /// Where each ilo line's link was drawn, by the line's key.
+    ilo_links: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     /// Where the level's chip under the reply field was drawn, if the last frame drew it.
     level_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Where the last frame drew Take Over on the lines: once, on the live line.
@@ -353,6 +355,7 @@ impl Shell {
                     ilo_drawn: Rc::default(),
                     ilo_hovered: Rc::default(),
                     ilo_words_drawn: Rc::default(),
+                    ilo_links: Rc::default(),
                     level_drawn: Rc::default(),
                     take_over_drawn: Rc::default(),
                     landed: Rc::default(),
@@ -1093,11 +1096,15 @@ impl TalkView {
             .unwrap_or_default();
         let on = self.shown.as_ref().and_then(|shown| shown.on);
         let step = self.running_step();
+        // Each page's own step, once the task works on several.
+        let pages = (self.shown.as_ref().zip(self.shell.upgrade()))
+            .map(|(shown, shell)| shell.read(cx).task_page_steps(&shown.agent).to_vec())
+            .unwrap_or_default();
         // The area's own width as it last drew, the grid taking its inset but a gap each side.
         let area = (self.drawn_at.get()).map_or(self.viewport.width, |bounds| bounds.size.width);
         let room = f32::from(area) - 2. * PICTURE_GAP;
-        let columns = (((room + PICTURE_GAP) / (PICTURE_WIDTH + PICTURE_GAP)).floor())
-            .clamp(1., PICTURES_COLUMNS) as usize;
+        let (columns, wide) = grid_shape(room, tabs.len());
+        let high = wide * PICTURE_HEIGHT / PICTURE_WIDTH;
         let tiles: Vec<_> = (tabs.iter().enumerate())
             .map(|(index, (tab, site))| {
                 let tab = *tab;
@@ -1133,7 +1140,10 @@ impl TalkView {
                 )
                 .absolute()
                 .size_full();
-                let working = on == Some(tab);
+                // A page the user holds says why under its site, in the title's ink, where the
+                // agent's page has its step: the bar over the page says the same.
+                let held = (self.shell.upgrade()).and_then(|shell| shell.read(cx).held_why(tab));
+                let (working, step) = picture_work(tab, on, step.clone(), &pages, held.is_some());
                 // Until its picture comes, the tile says it has none yet, rather than show nothing,
                 // and once the core had none to give, that the next action takes one.
                 let empty = (!pictured).then(|| {
@@ -1163,8 +1173,8 @@ impl TalkView {
                 });
                 let picture = div()
                     .relative()
-                    .w(px(PICTURE_WIDTH))
-                    .h(px(PICTURE_HEIGHT))
+                    .w(px(wide))
+                    .h(px(high))
                     .rounded(px(PICTURE_RADIUS))
                     .bg(look.palette.plate(gpui::rgba(KEYS_FILL).a))
                     .overflow_hidden()
@@ -1182,7 +1192,7 @@ impl TalkView {
                     });
                 let line = |words: SharedString, color: Hsla| {
                     div()
-                        .w(px(PICTURE_WIDTH))
+                        .w(px(wide))
                         .h(px(SITE))
                         .truncate()
                         .text_size(px(text::SMALL))
@@ -1220,10 +1230,7 @@ impl TalkView {
                     .items_center()
                     .children(sound)
                     .child(line(site.clone(), look.palette.text(TITLE)));
-                // A page the user holds says why under its site, in the title's ink, where the
-                // agent's page has its step: the bar over the page says the same.
-                let held = (self.shell.upgrade()).and_then(|shell| shell.read(cx).held_why(tab));
-                let status = picture_status(held.as_ref(), step.clone().filter(|_| working));
+                let status = picture_status(held.as_ref(), step.filter(|_| working));
                 if let Some(words) = &status {
                     let mut said = self.said_logged.borrow_mut();
                     if said.get(&tab) != Some(words) {
@@ -1236,12 +1243,13 @@ impl TalkView {
                     Some(_) => {
                         line(words, look.palette.text(TITLE)).font_weight(FontWeight::MEDIUM)
                     }
-                    None => line(words, rgb(SIGNAL).into()),
+                    // The ring says it's working: no text is written in the working green.
+                    None => line(words, look.palette.text(SECONDARY)),
                 });
                 div()
                     .id(("conversation-page", tab))
                     .flex_none()
-                    .w(px(PICTURE_WIDTH))
+                    .w(px(wide))
                     .when(index % columns > 0, |tile| tile.ml(px(PICTURE_GAP)))
                     .mb(px(PICTURES_ROW_GAP))
                     .opacity(opacity)
@@ -1252,7 +1260,7 @@ impl TalkView {
                     .on_click(cx.listener(move |view, _, _, cx| view.watch(tab, cx)))
             })
             .collect();
-        let width = columns as f32 * PICTURE_WIDTH + (columns as f32 - 1.) * PICTURE_GAP;
+        let width = columns as f32 * wide + (columns as f32 - 1.) * PICTURE_GAP;
         div()
             .id("conversation-pages")
             .flex_1()
@@ -1798,6 +1806,9 @@ impl TalkView {
         (self.ilo_words_drawn.borrow_mut()).retain(|key, _| {
             (shown.lines.iter()).any(|line| matches!(line, Line::Ilo(line) if line.key == *key))
         });
+        (self.ilo_links.borrow_mut()).retain(|key, _| {
+            (shown.lines.iter()).any(|line| matches!(line, Line::Ilo(line) if line.key == *key))
+        });
         if !buttons.iter().any(|(_, button)| button.widens()) {
             self.ilo_hovered.set(false);
         }
@@ -2083,11 +2094,11 @@ impl TalkView {
             font_weight: Some(FontWeight::MEDIUM),
             ..Default::default()
         };
-        // A page's words are cut short and quoted, in the title's ink, so they read as a name.
+        // A page's words or a site are cut short, in the title's ink, so they read as a name.
         let name = name.map(|name| clip(&name, QUOTED_CHARS as usize));
         let (said, highlights) = match &name {
             Some(name) => {
-                let said = format!("{own} \u{201c}{name}\u{201d}");
+                let said = words::with_name(&line.kind, &own, name);
                 let quoted = own.len() + 1..said.len();
                 let style = HighlightStyle {
                     color: Some(palette.text(TITLE)),
@@ -2102,7 +2113,7 @@ impl TalkView {
             _ => None,
         };
         let glyph = match &line.kind {
-            IloKind::Stopped { .. } => "icons/ban.svg",
+            IloKind::Stopped { .. } | IloKind::Helpers { .. } => "icons/ban.svg",
             IloKind::Yours { .. } => "icons/user.svg",
             IloKind::TabBack { .. } => "icons/undo-2.svg",
             IloKind::SignedIn { .. } => "icons/key-round.svg",
@@ -2135,6 +2146,31 @@ impl TalkView {
                 .text_color(ink)
                 .child(body)
         });
+        let link = words::link(&line.kind).map(|words| {
+            let drawn = self.ilo_links.clone();
+            let key = line.key;
+            div()
+                .id(SharedString::from(format!("ilo-{key}-link")))
+                .relative()
+                .pl(under)
+                .mt(px(NOTE_TOP))
+                .text_size(px(text::SMALL))
+                .text_color(palette.text(NOTE_INK))
+                .cursor_pointer()
+                .child(words)
+                .child(
+                    canvas(
+                        move |bounds, _, _| _ = drawn.borrow_mut().insert(key, bounds),
+                        |_, _, _, _| {},
+                    )
+                    // Pinned to the corner: unpinned, it would stand after the words, a line below.
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+                )
+                .on_click(cx.listener(|view, _, _, cx| view.open_off_limits(cx)))
+        });
         let buttons = ilo::buttons(line);
         let note = words::note(&buttons).map(|note| {
             div()
@@ -2162,6 +2198,7 @@ impl TalkView {
             .mb(px(ILO_BELOW))
             .child(head)
             .children(body)
+            .children(link)
             .children(row)
             .children(note)
             .into_any_element()
@@ -2203,6 +2240,14 @@ impl TalkView {
                 chip.on_hover(move |over, _, _| hovered.set(*over))
             })
             .on_click(cx.listener(move |view, _, _, cx| view.press_ilo(key, tab, cx)))
+    }
+
+    /// The link under a fence's refusal: Settings, on its Off limits list. It only opens it, so
+    /// nothing it does lifts a fence or raises a task's access.
+    fn open_off_limits(&mut self, cx: &mut Context<Self>) {
+        self.shell
+            .update(cx, |shell, cx| shell.browser.off_limits(cx))
+            .ok();
     }
 
     /// A press on an ilo line's button. One that widens what the agent may do counts only once it
@@ -2825,6 +2870,37 @@ fn unpressed() -> gpui::Div {
         .top_0()
         .size_full()
         .block_mouse_except_scroll()
+}
+
+/// How many pictures a row of Pages holds in `room`, and how wide each is, for `pages` of them:
+/// as many at their full size as fit, up to `PICTURES_COLUMNS`. Where only one fits, three pages
+/// or more go two across, each half the room at the picture's own shape, so four pages beside a
+/// page aren't a column the user scrolls for the third (#4102).
+pub(super) fn grid_shape(room: f32, pages: usize) -> (usize, f32) {
+    let fit = (((room + PICTURE_GAP) / (PICTURE_WIDTH + PICTURE_GAP)).floor())
+        .clamp(1., PICTURES_COLUMNS) as usize;
+    match (fit, pages) {
+        (1, 3..) => (2, ((room - PICTURE_GAP) / 2.).floor().max(1.)),
+        _ => (fit, PICTURE_WIDTH),
+    }
+}
+
+/// Whether the task works on `tab`'s page, which rings its picture, and the step the picture says
+/// then. A task on one page works on the page it's `on`, at the step under way, `running`. One
+/// that works on several, `pages` having each one's own step, works on every page that has one
+/// and that the user doesn't hold: each says its own step, never another page's (#4102).
+pub(super) fn picture_work(
+    tab: u64,
+    on: Option<u64>,
+    running: Option<SharedString>,
+    pages: &[(u64, SharedString)],
+    held: bool,
+) -> (bool, Option<SharedString>) {
+    let own = pages.iter().find(|(each, _)| *each == tab);
+    match pages.is_empty() {
+        true => (on == Some(tab), running),
+        false => (own.is_some() && !held, own.map(|(_, step)| step.clone())),
+    }
 }
 
 /// What a page's picture says under its site: why the user holds it from the agent, `held`, as

@@ -18,6 +18,7 @@ use gpui::{
     WindowKind, WindowOptions, actions, div, img, point, prelude::*, px, size, svg, uniform_list,
 };
 
+use crate::dismissal::{By, Close, Why};
 use crate::elevation::Level;
 use crate::hover_card::{Anchor, Icon};
 use crate::hover_intent::{Intent, Next};
@@ -267,23 +268,15 @@ pub fn ask(ask: Ask, cx: &mut App) {
     update(cx, |preview, window, cx| match ask {
         Ask::Rest(rest) => preview.rest(rest, window, cx),
         Ask::Left(folder) => preview.left(folder, cx),
-        Ask::Close => preview.close(cx),
+        Ask::Close => preview.close(Close::new(Why::FocusLeft, By::Code), cx),
     });
 }
 
 /// The user left the preview without choosing a tab, such as with a click outside it, and the
 /// host has hidden it.
 pub fn dismissed(cx: &mut App) {
-    update(cx, |preview, _, cx| {
-        preview.wait = None;
-        preview.on_card = false;
-        preview.on_row = false;
-        if preview.shown.take().is_some() {
-            preview.intent.close(cx.background_executor().now());
-            log!("browser: folder preview dismissed");
-            cx.notify();
-        }
-    });
+    let close = Close::left(cx.active_window().is_none());
+    update(cx, |preview, _, cx| preview.close(close, cx));
 }
 
 impl FolderPreview {
@@ -318,21 +311,30 @@ impl FolderPreview {
             }
             Next::Wait(delay) => {
                 self.resting = Some(rest);
-                self.wait = Some(cx.spawn_in(window, async move |preview, cx| {
-                    cx.background_executor().timer(delay).await;
-                    preview
-                        .update_in(cx, |preview, window, cx| {
-                            preview.wait = None;
-                            if preview.intent.due(cx.background_executor().now())
-                                && let Some(rest) = preview.resting.take()
-                            {
-                                preview.show(rest, window, cx)
-                            }
-                        })
-                        .ok();
-                }));
+                self.wake_after(delay, window, cx);
             }
         }
+    }
+
+    /// Wakes after `delay` for the row it waits on, and shows its preview once the pointer has
+    /// rested its whole delay; a wake that came early waits out the rest.
+    fn wake_after(&mut self, delay: Duration, window: &mut Window, cx: &mut Context<Self>) {
+        self.wait = Some(cx.spawn_in(window, async move |preview, cx| {
+            cx.background_executor().timer(delay).await;
+            preview
+                .update_in(cx, |preview, window, cx| {
+                    preview.wait = None;
+                    let now = cx.background_executor().now();
+                    if preview.intent.due(now) {
+                        if let Some(rest) = preview.resting.take() {
+                            preview.show(rest, window, cx)
+                        }
+                    } else if let Some(left) = preview.intent.early(now) {
+                        preview.wake_after(left, window, cx)
+                    }
+                })
+                .ok();
+        }));
     }
 
     fn left(&mut self, folder: u64, cx: &mut Context<Self>) {
@@ -368,7 +370,7 @@ impl FolderPreview {
             preview
                 .update(cx, |preview, cx| {
                     preview.wait = None;
-                    preview.close(cx)
+                    preview.close(Close::new(Why::PointerLeft, By::Pointer), cx)
                 })
                 .ok();
         }));
@@ -484,39 +486,45 @@ impl FolderPreview {
         };
         if let Some(at) = shown.selected {
             let tab = shown.rest.items[shown.found[at]].tab;
-            self.choose(tab, cx);
+            self.choose(tab, By::Keyboard, cx);
         }
     }
 
-    fn choose(&mut self, tab: u64, cx: &mut Context<Self>) {
+    fn choose(&mut self, tab: u64, by: By, cx: &mut Context<Self>) {
         let Some(shown) = &self.shown else {
             return;
         };
         let chosen = shown.rest.chosen.clone();
         // check.sh reads this line.
         log!("browser: folder preview chose {tab}");
-        self.close(cx);
+        self.close(Close::new(Why::Chosen, by), cx);
         chosen(tab, cx);
     }
 
     /// Esc closes the preview, unless it was an input method's, composing in the search.
     fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
-        if crate::dismissal::Close::escape_from([&self.search.clone()], cx).is_some() {
-            self.close(cx);
+        if let Some(close) = Close::escape_from([&self.search.clone()], cx) {
+            self.close(close, cx);
         }
     }
 
-    /// The preview goes, and the browser window gets the keyboard back.
-    fn close(&mut self, cx: &mut Context<Self>) {
+    /// The preview goes for `close`, and the browser window gets the keyboard back. The host has
+    /// hidden it already when the user left it for outside it, and the folder it waited on to show
+    /// waits no more either way, so a rest on it begins again.
+    fn close(&mut self, close: Close, cx: &mut Context<Self>) {
         self.wait = None;
         self.resting = None;
         self.intent.close(cx.background_executor().now());
         self.on_card = false;
         self.on_row = false;
         if self.shown.take().is_some() {
-            self.host.hide();
-            // check.sh reads this line.
-            log!("browser: folder preview hidden");
+            if matches!(close.why, Why::PressOutside | Why::WindowLeft) {
+                log!("browser: folder preview dismissed");
+            } else {
+                self.host.hide();
+                // check.sh reads this line.
+                log!("browser: folder preview hidden");
+            }
             cx.notify();
         }
     }
@@ -578,7 +586,9 @@ impl FolderPreview {
                             }),
                     )
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |preview, _, _, cx| preview.choose(tab, cx)));
+                    .on_click(
+                        cx.listener(move |preview, _, _, cx| preview.choose(tab, By::Pointer, cx)),
+                    );
                 div().h(px(ROW)).w_full().child(plate).into_any_element()
             })
             .collect()

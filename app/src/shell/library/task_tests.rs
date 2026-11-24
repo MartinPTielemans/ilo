@@ -54,6 +54,7 @@ fn card() -> Card {
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
+        page_steps: Vec::new(),
         retry: false,
         fix: None,
     }

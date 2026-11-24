@@ -3,11 +3,11 @@
 //! Library's (shell/library/keys.rs), the one surface that already gave the keyboard back to the
 //! element rather than to a window.
 //!
-//! The rule: closed by Escape, by the key or command that opened it, or by a choice in it, the
-//! surface gives the keyboard back to its opener, or to the fallback its caller names when the
-//! opener has gone (a row's menu whose choice closed the row: the row that took its place, by
-//! `list_keys::took_place`, is the caller's fallback); closed as the user left it (a press
-//! outside, focus or the window leaving), to the fallback. Either way only while the surface still
+//! The rule: closed by Escape, by its own close, by the key or command that opened it, or by a
+//! choice in it, the surface gives the keyboard back to its opener, or to the fallback its caller
+//! names when the opener has gone (a row's menu whose choice closed the row: the row that took its
+//! place, by `list_keys::took_place`, is the caller's fallback); closed as the user left it (a
+//! press outside, focus, the window or the pointer leaving), to the fallback. Either way only while the surface still
 //! has the keyboard: what the user moved the keyboard to in the meantime keeps it, and so does
 //! what a choice's own result gave it to, such as the field Rename opens.
 //!
@@ -24,7 +24,7 @@
 //! fallback, and on `Returned::Page` hand the page the keyboard as the surface may: it comes only
 //! while no other window of ours, such as an overlay, has the keyboard.
 
-use gpui::{App, Entity, FocusHandle, WeakFocusHandle, Window};
+use gpui::{App, ClickEvent, Entity, FocusHandle, WeakFocusHandle, Window};
 
 use crate::text_input::TextInput;
 
@@ -45,12 +45,16 @@ pub enum Why {
     Escape,
     /// The key or command that opens it, again.
     Toggled,
+    /// Its own close: a close key such as ⌘W, or its close button.
+    CloseCommand,
     /// A press outside it.
     PressOutside,
     /// The keyboard went elsewhere in its window.
     FocusLeft,
     /// Its window, or the app, isn't the active one any more.
     WindowLeft,
+    /// The pointer left a surface that resting it opened.
+    PointerLeft,
     /// Something chosen in it, which closes it as it acts.
     Chosen,
 }
@@ -64,6 +68,16 @@ pub enum By {
     Code,
     /// An agent, through the core's API.
     Agent,
+}
+
+impl By {
+    /// Who clicked: the keys, as Space or Return on a control does, or the pointer.
+    pub fn of(click: &ClickEvent) -> Self {
+        match click.is_keyboard() {
+            true => Self::Keyboard,
+            false => Self::Pointer,
+        }
+    }
 }
 
 /// A surface's close: why, and who.
@@ -100,10 +114,14 @@ impl Close {
     }
 
     /// Whether this close gives the keyboard back to the surface's opener, rather than to the
-    /// fallback: Escape and the surface's own key or command do, as they're how a user goes back
-    /// to what they were doing, and so does a choice, which doesn't take the user anywhere else.
+    /// fallback: Escape, its own close and the surface's own key or command do, as they're how a
+    /// user goes back to what they were doing, and so does a choice, which doesn't take the user
+    /// anywhere else.
     pub fn gives_back(&self) -> bool {
-        matches!(self.why, Why::Escape | Why::Toggled | Why::Chosen)
+        matches!(
+            self.why,
+            Why::Escape | Why::Toggled | Why::CloseCommand | Why::Chosen
+        )
     }
 }
 

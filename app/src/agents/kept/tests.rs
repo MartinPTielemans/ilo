@@ -63,6 +63,7 @@ fn launch() -> Launch {
         model: None,
         instructions: "Work in the browser.".into(),
         tools: vec!["open_tab".into(), "finish".into()],
+        helpers: false,
     }
 }
 

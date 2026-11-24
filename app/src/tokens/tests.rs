@@ -129,6 +129,12 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "transparency.menu-row-radius",
     // A card's recent rows, inside its picture's box (#3074).
     "hover-card.recent-row-radius",
+    // First run's sheet (#4093): its slot inset in its corner, the sheet's less the inset, and the
+    // loop's small window at the drawing's scale.
+    "shell.onboarding.sheet.slot-radius",
+    "shell.onboarding.loops.window-radius",
+    "shell.onboarding.loops.icon-radius",
+    "shell.onboarding.loops.bar-radius",
     // The composer's switch round its parts, and a card's page inside the card (#4140).
     "shell.composer.switch-radius",
     "shell.composer.page-radius",
