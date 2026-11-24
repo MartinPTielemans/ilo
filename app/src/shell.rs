@@ -108,6 +108,7 @@ mod little;
 #[cfg(test)]
 mod little_tests;
 mod live_folders;
+mod live_tiles;
 mod media_player;
 mod menu_bar;
 mod menu_keys;
