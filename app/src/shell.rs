@@ -2040,7 +2040,7 @@ pub struct Shell {
     /// What the chrome draws with, for the Space shown (palette.rs), and each theme's, worked
     /// out once.
     palette: Palette,
-    palettes: RefCell<Vec<((Option<Theme>, Tone), Palette)>>,
+    palettes: RefCell<Vec<(themes::PaletteKey, Palette)>>,
     /// The system's appearance as the window last drew, or the one View › Appearance chose in its
     /// place, which a Space without a theme, or with an automatic one, follows; the preview's own
     /// where it forces one; whether the window is the active one, as its texture shows; and the

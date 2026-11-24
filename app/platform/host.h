@@ -132,6 +132,12 @@ void host_set_window_title(void* ui_view, const char* title);
 // dark, its material 29 (docs/ux-spec.md › Window material).
 void host_set_window_light(void* ui_view, bool light);
 
+// Whether this host's windows have a material behind them, the page and the desktop blurred, that
+// the transparency level can drive: the browser window's and the overlays' (#4090). The Mac's do.
+// Linux's and Windows' windows are opaque (#3676), so the level isn't offered there and what
+// floats stays opaque. Fixed while the app runs.
+bool host_has_window_material(void);
+
 // Gives the whole app, its menus, alerts and pages, an appearance of its own, 1 light or 2 dark, in
 // place of the system's, or with 0 the system's again (View › Appearance).
 void host_set_app_appearance(int appearance);

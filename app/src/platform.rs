@@ -23,6 +23,7 @@ pub fn keeps_passkeys() -> bool {
 }
 
 unsafe extern "C" {
+    pub fn host_has_window_material() -> bool;
     #[cfg(target_os = "macos")]
     pub fn host_set_scripting(scripting: *const host_scripting);
     // Apple's Translation (platform/mac/translate.swift): the user's language, where the Mac
