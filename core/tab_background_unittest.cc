@@ -123,13 +123,15 @@ TEST(TabBackgroundTest, ABurstTellsTheFirstAndTheSettledColour) {
 // A page that never stops changing: the first colour and nothing more, on one wait at a time.
 TEST(TabBackgroundTest, AnEndlessRunTellsOnce) {
   Run run;
-  for (int frame = 0; frame < 600; ++frame) {
+  // Two seconds of frames.
+  for (int frame = 0; frame < 125; ++frame) {
     run.Change(0xff000000 | frame);
     run.Pass(kFrame);
   }
   EXPECT_EQ(run.told.size(), 1u);
-  // The wait went on about once per settle time, not once per change.
-  EXPECT_LE(run.waits, 2 * 600 * kFrame / TabBackground::kSettle);
+  // The wait went on once per settle time, not once per change: 8 or 9 timer tasks, not 125.
+  EXPECT_GE(run.waits, 8);
+  EXPECT_LE(run.waits, 9);
 }
 
 // A change long after the last is told at once again.
