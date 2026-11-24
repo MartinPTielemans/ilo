@@ -457,7 +457,6 @@ use crate::tokens::shell::SPACE_GLYPH;
 // What's in a folder sits this far in from it (Arc).
 use crate::tokens::shell::FOLDER_INDENT;
 const NEW_FOLDER: &str = "New Folder";
-use crate::tokens::shell::DROP;
 use crate::tokens::shell::DROP_LINE;
 use crate::tokens::shell::DROP_LINE_END;
 use crate::tokens::shell::DROP_RING;
@@ -5531,12 +5530,13 @@ impl Shell {
     /// `depth` folders in, with a ring at its start, as Arc's (docs/ux-spec.md › Tab rows).
     fn drop_line(&self, y: f32, depth: usize, room: f32) -> impl IntoElement + use<> {
         let left = PLATE_INSET + depth as f32 * FOLDER_INDENT + DROP_RING_X;
+        let colour = self.palette.drop_line();
         let ring = div()
             .flex_none()
             .size(px(DROP_RING))
             .rounded_full()
             .border(px(DROP_LINE))
-            .border_color(rgba(DROP));
+            .border_color(colour);
         div()
             .absolute()
             .top(px(room + y - DROP_RING / 2.))
@@ -5546,7 +5546,7 @@ impl Shell {
             .flex()
             .items_center()
             .child(ring)
-            .child(div().flex_1().h(px(DROP_LINE)).bg(rgba(DROP)))
+            .child(div().flex_1().h(px(DROP_LINE)).bg(colour))
     }
 
     /// What the reveal's window shows: the sidebar in a panel, as far out as it is.
@@ -5643,7 +5643,7 @@ impl Shell {
                     .bottom(px(REVEAL_INSET))
                     .w(px(self.width()))
                     .rounded(px(REVEAL_RADIUS))
-                    .border(px(0.5))
+                    .border(px(HAIRLINE))
                     .border_color(gpui::black().opacity(REVEAL_BORDER))
                     .shadow(vec![BoxShadow {
                         color: gpui::white().opacity(crate::tokens::shell::REVEAL_RIM),
