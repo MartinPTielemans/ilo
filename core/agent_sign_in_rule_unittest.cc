@@ -337,5 +337,49 @@ TEST(AgentSignInRule, TheSubmittersSelectorNamesEachWay) {
   }
 }
 
+// The user held tab 4 (or a sign-in filled it), and its page slept and woke as a new one: the mark
+// is the tab's, so it holds until a look started after it answers.
+TEST(AgentSignInRule, ATabWaitsForALookStartedAfterItWasMarked) {
+  LookFirstTabs tabs;
+  const uint64_t before = tabs.Started();
+  tabs.Mark(4);
+  EXPECT_TRUE(tabs.Marked(4));
+  EXPECT_FALSE(tabs.Marked(5));
+  // A look out before the mark, answering after it, asked before what the user did.
+  tabs.Answered(4, before);
+  EXPECT_TRUE(tabs.Marked(4));
+  // Another tab's look leaves it.
+  tabs.Answered(5, tabs.Started());
+  EXPECT_TRUE(tabs.Marked(4));
+  const uint64_t after = tabs.Started();
+  tabs.Answered(4, after);
+  EXPECT_FALSE(tabs.Marked(4));
+  // Marked again while a look is out: that look doesn't clear it.
+  const uint64_t out = tabs.Started();
+  tabs.Mark(4);
+  tabs.Answered(4, out);
+  EXPECT_TRUE(tabs.Marked(4));
+  tabs.Forget(4);
+  EXPECT_FALSE(tabs.Marked(4));
+}
+
+// Tab 4's page was withheld, and it slept and woke as a new page at the same address: what was
+// withheld is the tab's, so it holds through the sleep, and only until the tab closes.
+TEST(AgentSignInRule, AWithheldPageOutlivesItsTabsSleep) {
+  WithheldTabs tabs;
+  const GURL shown("https://example.org/account?step=2");
+  tabs.Of(4).Withhold(shown, {});
+  EXPECT_FALSE(tabs.Find(5));
+  // Asleep, with no page to ask about.
+  ASSERT_TRUE(tabs.Find(4));
+  EXPECT_TRUE(tabs.Find(4)->Shows(GURL()));
+  // Awake, its new page commits the address again, then goes elsewhere.
+  EXPECT_TRUE(tabs.Find(4)->Committed(7, shown, /*same_document=*/false));
+  EXPECT_FALSE(tabs.Find(4)->Committed(8, GURL("https://example.org/home"), false));
+  EXPECT_TRUE(tabs.Find(4)->Committed(9, shown, false));
+  tabs.Forget(4);
+  EXPECT_FALSE(tabs.Find(4));
+}
+
 }  // namespace
 }  // namespace browser_core

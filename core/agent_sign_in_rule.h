@@ -120,6 +120,52 @@ class WithheldHistory {
   bool shown_ = false;
 };
 
+// Each tab's WithheldHistory, kept by tab rather than by page as LookFirstTabs keeps its mark, so a
+// tab that sleeps and wakes with a new page still withholds what it did, until it closes.
+class WithheldTabs {
+ public:
+  WithheldTabs();
+  WithheldTabs(const WithheldTabs&) = delete;
+  WithheldTabs& operator=(const WithheldTabs&) = delete;
+  ~WithheldTabs();
+
+  // |tab|'s, made the first time something in it is withheld.
+  WithheldHistory& Of(uint64_t tab);
+  // |tab|'s, if anything in it was withheld.
+  WithheldHistory* Find(uint64_t tab);
+  // The tab closed.
+  void Forget(uint64_t tab);
+
+ private:
+  std::map<uint64_t, WithheldHistory> tabs_;
+};
+
+// The tabs whose titles and addresses wait for their next look (AgentPage::LookFirst), kept by
+// tab rather than by page, so a tab that sleeps and wakes with a new page still waits. A look
+// clears a mark only if it started after it: one already out when the user took the tab was
+// asked before what they did there.
+class LookFirstTabs {
+ public:
+  LookFirstTabs();
+  LookFirstTabs(const LookFirstTabs&) = delete;
+  LookFirstTabs& operator=(const LookFirstTabs&) = delete;
+  ~LookFirstTabs();
+
+  void Mark(uint64_t tab);
+  // A look starts, on any tab: its number, which its answer gives back.
+  uint64_t Started();
+  // Look |look| on |tab| answered.
+  void Answered(uint64_t tab, uint64_t look);
+  bool Marked(uint64_t tab) const;
+  // The tab closed.
+  void Forget(uint64_t tab);
+
+ private:
+  // Each marked tab, with the first look that clears it.
+  std::map<uint64_t, uint64_t> marks_;
+  uint64_t next_look_ = 1;
+};
+
 // The origins where an agent's sign-in submitted a login and didn't sign in, by agent, in memory
 // until the user hands a tab at the origin back or the browser restarts: another sign-in there is
 // the user's step, so an agent never tries a login again into a site's lock-out, and no agent can

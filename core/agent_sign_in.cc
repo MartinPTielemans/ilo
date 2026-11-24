@@ -42,7 +42,10 @@
 #include "components/password_manager/content/browser/content_password_manager_driver.h"
 #include "components/password_manager/core/browser/form_parsing/form_data_parser.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_form_cache.h"
 #include "components/password_manager/core/browser/password_form_digest.h"
+#include "components/password_manager/core/browser/password_form_manager.h"
+#include "components/password_manager/core/browser/password_manager_interface.h"
 #include "components/password_manager/core/browser/password_store/password_store_consumer.h"
 #include "components/password_manager/core/browser/password_store/password_store_interface.h"
 #include "components/password_manager/core/browser/password_store/stored_credential.h"
@@ -268,9 +271,16 @@ SignInTries& Tries() {
   return *tries;
 }
 
-// A tab whose pages a sign-in withheld as they showed what was filled (WithheldHistory), for the
+// The tabs' pages withheld as they showed what a sign-in filled or what a look found, for each
 // tab's life: while one is shown, agents get neither its title nor its address, and may only take
 // the tab to another page or close it.
+WithheldTabs& Withheld() {
+  static base::NoDestructor<WithheldTabs> tabs;
+  return *tabs;
+}
+
+// Hears what a tab's page commits for the tab's WithheldHistory. Made with the page the first
+// withholding is in, and again with each page the tab wakes with (HearWithheld).
 class WithheldPage : public content::WebContentsUserData<WithheldPage>,
                      public content::WebContentsObserver {
  public:
@@ -281,23 +291,23 @@ class WithheldPage : public content::WebContentsUserData<WithheldPage>,
   // The page |contents| shows now is withheld, and what each of |pending| commits.
   static void Withhold(content::WebContents& contents, const base::flat_set<int64_t>& pending) {
     CreateForWebContents(&contents);
-    FromWebContents(&contents)->history_.Withhold(
-        contents.GetPrimaryMainFrame()->GetLastCommittedURL(),
-        std::set<int64_t>(pending.begin(), pending.end()));
+    Withheld()
+        .Of(FromWebContents(&contents)->tab_)
+        .Withhold(contents.GetPrimaryMainFrame()->GetLastCommittedURL(),
+                  std::set<int64_t>(pending.begin(), pending.end()));
   }
-
-  bool Shows(const GURL& now) const { return history_.Shows(now); }
 
   // content::WebContentsObserver:
   void DidFinishNavigation(content::NavigationHandle* navigation) override {
-    if (!navigation->IsInPrimaryMainFrame()) {
+    WithheldHistory* history = Withheld().Find(tab_);
+    if (!history || !navigation->IsInPrimaryMainFrame()) {
       return;
     }
     if (!navigation->HasCommitted()) {
-      history_.Ended(navigation->GetNavigationId());
+      history->Ended(navigation->GetNavigationId());
       return;
     }
-    history_.Committed(navigation->GetNavigationId(), navigation->GetURL(),
+    history->Committed(navigation->GetNavigationId(), navigation->GetURL(),
                        navigation->IsSameDocument());
   }
 
@@ -306,9 +316,10 @@ class WithheldPage : public content::WebContentsUserData<WithheldPage>,
 
   explicit WithheldPage(content::WebContents* contents)
       : content::WebContentsUserData<WithheldPage>(*contents),
-        content::WebContentsObserver(contents) {}
+        content::WebContentsObserver(contents),
+        tab_(Tab::IdOf(contents)) {}
 
-  WithheldHistory history_;
+  const bc_id tab_;
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
@@ -572,7 +583,7 @@ class SignIn : public content::WebContentsUserData<SignIn>,
       return;
     }
     if (next == 0) {
-      AgentPage::LookFirst(&GetWebContents());
+      AgentPage::LookFirst(Tab::IdOf(&GetWebContents()));
       // The document never goes into the back-forward cache, where a page kept with the filled
       // fields would come back as it was, past the emptying. Its report string, which pages read
       // through the NotRestoredReasons API, says nothing.
@@ -907,19 +918,60 @@ bool SigningIn(bc_id tab) {
 }
 
 bool WithheldFromAgents(bc_id tab) {
+  // The mark is the tab's, so a tab asleep with no page keeps it too.
+  if (AgentPage::LooksFirst(tab)) {
+    return true;
+  }
   content::WebContents* contents = Tab::FromId(tab);
-  return contents && (SignIn::FromWebContents(contents) || PageWithheld(tab) ||
-                      AgentPage::LooksFirst(contents));
+  return PageWithheld(tab) || (contents && SignIn::FromWebContents(contents));
 }
 
 bool PageWithheld(bc_id tab) {
+  const WithheldHistory* history = Withheld().Find(tab);
   content::WebContents* contents = Tab::FromId(tab);
-  const WithheldPage* page = contents ? WithheldPage::FromWebContents(contents) : nullptr;
-  return page && page->Shows(contents->GetPrimaryMainFrame()->GetLastCommittedURL());
+  // Asleep, it shows what it showed as it slept.
+  return history &&
+         history->Shows(contents ? contents->GetPrimaryMainFrame()->GetLastCommittedURL() : GURL());
+}
+
+void HearWithheld(content::WebContents& contents) {
+  if (Withheld().Find(Tab::IdOf(&contents))) {
+    WithheldPage::CreateForWebContents(&contents);
+  }
+}
+
+void ForgetWithheld(bc_id tab) {
+  Withheld().Forget(tab);
 }
 
 void WithholdShownPage(content::WebContents& contents) {
   WithheldPage::Withhold(contents, {});
+}
+
+bool SendsPasswordForm(content::NavigationHandle& navigation) {
+  if (!navigation.IsFormSubmission() || !navigation.GetInitiatorFrameToken()) {
+    return false;
+  }
+  // The frame the form was in, whose password manager driver the form's manager has.
+  content::RenderFrameHost* from =
+      content::RenderFrameHost::FromFrameToken(content::GlobalRenderFrameHostToken(
+          navigation.GetInitiatorProcessId(), *navigation.GetInitiatorFrameToken()));
+  auto* driver =
+      from ? password_manager::ContentPasswordManagerDriver::GetForRenderFrameHost(from) : nullptr;
+  auto* client = ChromePasswordManagerClient::FromWebContents(navigation.GetWebContents());
+  password_manager::PasswordManagerInterface* manager =
+      client ? client->GetPasswordManager() : nullptr;
+  password_manager::PasswordFormCache* forms = manager ? manager->GetPasswordFormCache() : nullptr;
+  if (!driver || !forms) {
+    return false;
+  }
+  // The password manager's mark; what it keeps of the form isn't touched here.
+  for (const auto& form : forms->GetFormManagers()) {
+    if (form->is_submitted() && form->GetDriver().get() == driver) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void ForgiveSignInTries(const url::Origin& origin) {

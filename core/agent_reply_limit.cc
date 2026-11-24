@@ -15,16 +15,28 @@ AgentReplyLimit::~AgentReplyLimit() = default;
 
 void AgentReplyLimit::Started() {
   working_ = true;
-  timer_.Stop();
+  // A look out keeps counting from the page's last word.
+  if (!looks_) {
+    timer_.Stop();
+  }
 }
 
 void AgentReplyLimit::Ended() {
   working_ = false;
-  timer_.Stop();
+  if (!looks_) {
+    timer_.Stop();
+  }
+}
+
+void AgentReplyLimit::Looking(size_t looks) {
+  looks_ = looks;
+  if (!waits()) {
+    timer_.Stop();
+  }
 }
 
 void AgentReplyLimit::Sent() {
-  if (!working_) {
+  if (!waits()) {
     return;
   }
   // Unretained: the timer is this object's, and stops with it.
@@ -40,7 +52,7 @@ void AgentReplyLimit::Reached() {
 }
 
 void AgentReplyLimit::Replied(size_t owed) {
-  if (!working_) {
+  if (!waits()) {
     return;
   }
   if (owed) {
@@ -51,7 +63,7 @@ void AgentReplyLimit::Replied(size_t owed) {
 }
 
 void AgentReplyLimit::DialogShown(std::string_view what) {
-  if (!working_) {
+  if (!waits()) {
     return;
   }
   static constexpr std::string_view kStuck =
@@ -65,7 +77,8 @@ void AgentReplyLimit::DialogShown(std::string_view what) {
 }
 
 void AgentReplyLimit::End(std::string why, std::optional<std::string> unstarted) {
-  // Once: the job is over whether or not its page has said Ended().
+  // Once: the job is over whether or not its page has said Ended(), and the looks out with it.
+  looks_ = 0;
   Ended();
   ends_.Run(std::move(why), std::move(unstarted));
 }

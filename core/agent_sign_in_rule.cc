@@ -224,6 +224,48 @@ bool WithheldHistory::Shows(const GURL& now) const {
   return shown_ || addresses_.contains(now.GetWithoutRef());
 }
 
+WithheldTabs::WithheldTabs() = default;
+WithheldTabs::~WithheldTabs() = default;
+
+WithheldHistory& WithheldTabs::Of(uint64_t tab) {
+  return tabs_.try_emplace(tab).first->second;
+}
+
+WithheldHistory* WithheldTabs::Find(uint64_t tab) {
+  const auto found = tabs_.find(tab);
+  return found == tabs_.end() ? nullptr : &found->second;
+}
+
+void WithheldTabs::Forget(uint64_t tab) {
+  tabs_.erase(tab);
+}
+
+LookFirstTabs::LookFirstTabs() = default;
+LookFirstTabs::~LookFirstTabs() = default;
+
+void LookFirstTabs::Mark(uint64_t tab) {
+  marks_[tab] = next_look_;
+}
+
+uint64_t LookFirstTabs::Started() {
+  return next_look_++;
+}
+
+void LookFirstTabs::Answered(uint64_t tab, uint64_t look) {
+  const auto mark = marks_.find(tab);
+  if (mark != marks_.end() && look >= mark->second) {
+    marks_.erase(mark);
+  }
+}
+
+bool LookFirstTabs::Marked(uint64_t tab) const {
+  return marks_.contains(tab);
+}
+
+void LookFirstTabs::Forget(uint64_t tab) {
+  marks_.erase(tab);
+}
+
 SignInTries::SignInTries() = default;
 SignInTries::~SignInTries() = default;
 

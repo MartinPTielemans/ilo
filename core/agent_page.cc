@@ -18,6 +18,7 @@
 #include "base/json/json_reader.h"
 #include "base/json/json_writer.h"
 #include "base/logging.h"
+#include "base/no_destructor.h"
 #include "base/strings/strcat.h"
 #include "base/scoped_multi_source_observation.h"
 #include "base/strings/string_number_conversions.h"
@@ -411,6 +412,12 @@ base::ScopedClosureRunner LiftWhileWorking(content::WebContents& contents) {
         }
       },
       page));
+}
+
+// Every tab's look-first mark, and the looks' numbers.
+LookFirstTabs& LookFirsts() {
+  static base::NoDestructor<LookFirstTabs> tabs;
+  return *tabs;
 }
 
 }  // namespace
@@ -2133,24 +2140,19 @@ void AgentPage::Freeze(base::OnceCallback<void(bool withheld)> then) {
   if (slots.empty()) {
     slots.push_back(0);
   }
-  looking_ = true;
+  // Counted before the first Send, which the limit counts for it.
+  const uint64_t look = LookFirsts().Started();
+  looks_[look] = std::move(then);
+  limit_.Looking(looks_.size());
   auto answered = base::BarrierCallback<bool>(
       slots.size(),
       base::BindOnce(
-          [](base::WeakPtr<AgentPage> page, base::OnceCallback<void(bool)> then,
-             std::vector<bool> shown) {
-            if (!page) {
-              return;
+          [](base::WeakPtr<AgentPage> page, uint64_t look, std::vector<bool> shown) {
+            if (page) {
+              page->Looked(look, std::ranges::any_of(shown, std::identity()));
             }
-            page->looking_ = false;
-            page->look_first_ = false;
-            const bool shows = std::ranges::any_of(shown, std::identity());
-            if (shows) {
-              WithholdShownPage(page->GetWebContents());
-            }
-            std::move(then).Run(PageWithheld(Tab::IdOf(&page->GetWebContents())));
           },
-          weak_factory_.GetWeakPtr(), std::move(then)));
+          weak_factory_.GetWeakPtr(), look));
   for (const int slot : slots) {
     // A session that couldn't answer counts as showing one, as the sign-in's look counts what it
     // couldn't read; but a frame's session that ended while asked had its document go, which
@@ -2174,27 +2176,56 @@ void AgentPage::Freeze(base::OnceCallback<void(bool withheld)> then) {
   }
 }
 
+void AgentPage::Looked(uint64_t look, bool shows) {
+  auto out = looks_.find(look);
+  // Answered already, unheard.
+  if (out == looks_.end()) {
+    return;
+  }
+  base::OnceCallback<void(bool)> then = std::move(out->second);
+  looks_.erase(out);
+  limit_.Looking(looks_.size());
+  LookFirsts().Answered(tab_, look);
+  if (shows) {
+    WithholdShownPage(GetWebContents());
+  }
+  std::move(then).Run(PageWithheld(tab_));
+}
+
 void AgentPage::LookUnheard() {
   // The renderer may have looked, and closed what it looked for, with its answer lost: so it
   // counts as a yes.
-  if (std::exchange(looking_, false)) {
+  if (!looks_.empty()) {
     WithholdShownPage(GetWebContents());
+    AnswerLooks();
+  }
+}
+
+void AgentPage::AnswerLooks() {
+  base::flat_map<uint64_t, base::OnceCallback<void(bool)>> looks = std::exchange(looks_, {});
+  limit_.Looking(0);
+  // Posted, as each may answer the app, which may be inside its own call into the core. A job's
+  // look hears it for a job that's been answered by then, and does nothing.
+  for (auto& [look, then] : looks) {
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+        FROM_HERE, base::BindOnce(std::move(then), /*withheld=*/true));
   }
 }
 
 // static
-void AgentPage::LookFirst(content::WebContents* contents) {
-  if (!contents) {
-    return;
-  }
-  CreateForWebContents(contents);
-  FromWebContents(contents)->look_first_ = true;
+void AgentPage::LookFirst(bc_id tab) {
+  LookFirsts().Mark(tab);
 }
 
 // static
-bool AgentPage::LooksFirst(content::WebContents* contents) {
-  const AgentPage* page = contents ? FromWebContents(contents) : nullptr;
-  return page && page->look_first_;
+bool AgentPage::LooksFirst(bc_id tab) {
+  return LookFirsts().Marked(tab);
+}
+
+// static
+void AgentPage::TabClosed(bc_id tab) {
+  LookFirsts().Forget(tab);
+  ForgetWithheld(tab);
 }
 
 // static
@@ -2210,7 +2241,7 @@ void AgentPage::Watch(content::WebContents* contents) {
 }
 
 void AgentPage::Rest() {
-  if (!acted_ && !watching_ && !pictures_ && !job_ && jobs_.empty() && !looking_) {
+  if (!acted_ && !watching_ && !pictures_ && !job_ && jobs_.empty() && looks_.empty()) {
     Detach();
   }
 }
@@ -3376,7 +3407,10 @@ void AgentPage::EndWaiting(std::string why, std::optional<std::string> unstarted
   // The jobs queued behind it would each send to a page that can't answer while its dialog is up,
   // and wait out the limit in turn, so they end now with their own answer, after this one's.
   std::deque<Job> queued = unstarted ? std::exchange(jobs_, {}) : std::deque<Job>();
-  Fail(std::move(why));
+  // A look with no job, a read's or a request's, has no job to answer.
+  if (job_) {
+    Fail(std::move(why));
+  }
   for (Job& job : queued) {
     Owe(job, *unstarted);
   }
@@ -3451,6 +3485,8 @@ void AgentPage::LetGo() {
   for (Job& job : owed) {
     Owe(job, "The agent's session with the tab ended.");
   }
+  // A look still out as the tab closes: its read or request is answered as a withheld page's.
+  AnswerLooks();
   if (idle_) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(FROM_HERE, std::move(idle_));
   }
@@ -3519,6 +3555,10 @@ void AgentPage::Send(const char* method, base::DictValue params, Reply reply, in
     // field holds for Freeze (chromium-agent-withheld-values.patch). DevTools turns it on again in
     // a frame's new renderer before its page runs.
     Send("DOM.enable", base::DictValue(), base::DoNothing(), 0);
+    // No page is prerendered from it: one would run before DOM is on in its sessions. Chromium
+    // refuses that already for a session of this kind; this holds for any.
+    Send("Page.setPrerenderingAllowed", base::DictValue().Set("isAllowed", false),
+         base::DoNothing(), 0);
   }
   if (slot < 0 || static_cast<size_t>(slot) >= targets_.size() ||
       (slot && targets_[slot].session.empty())) {
@@ -3668,7 +3708,19 @@ void AgentPage::DidStopLoading() {
   }
 }
 
+void AgentPage::DidStartNavigation(content::NavigationHandle* navigation) {
+  // A navigation that may show a withheld field's value again commits withheld, as a look that
+  // found the value would (SendsPasswordForm).
+  if (navigation->IsInPrimaryMainFrame() && !navigation->IsPost() && IsHeld(tab_) &&
+      SendsPasswordForm(*navigation)) {
+    sends_password_.insert(navigation->GetNavigationId());
+  }
+}
+
 void AgentPage::DidFinishNavigation(content::NavigationHandle* navigation) {
+  if (sends_password_.erase(navigation->GetNavigationId()) && navigation->HasCommitted()) {
+    WithholdShownPage(GetWebContents());
+  }
   // A new document's fields hold nothing the agent typed.
   if (navigation->IsInPrimaryMainFrame() && navigation->HasCommitted() &&
       !navigation->IsSameDocument()) {

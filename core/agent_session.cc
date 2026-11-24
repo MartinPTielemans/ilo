@@ -133,7 +133,11 @@ std::string RefusedAction(std::string_view action) {
 
 void Hold(bc_id tab) {
   Held().insert(tab);
-  AgentPage::LookFirst(Tab::FromId(tab));
+  AgentPage::LookFirst(tab);
+  // Its page's navigations are heard while the user has it (AgentPage::DidStartNavigation).
+  if (content::WebContents* contents = Tab::FromId(tab)) {
+    AgentPage::CreateForWebContents(contents);
+  }
   // Chrome kept its saved logins from the agent's page, which is the user's now.
   FillForUser(tab);
 }
@@ -142,6 +146,9 @@ bool HandBack(bc_id tab) {
   if (!Held().erase(tab)) {
     return false;
   }
+  // Marked again: a read the app asked for before the user took the tab may have looked while they
+  // held it, and cleared the mark Hold made.
+  AgentPage::LookFirst(tab);
   Blur(tab);
   // What Chrome filled for the user while they held it never reaches the agent.
   EmptyForAgent(tab);

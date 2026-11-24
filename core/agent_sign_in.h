@@ -8,6 +8,7 @@
 #include "browser_core/public/browser_core.h"
 
 namespace content {
+class NavigationHandle;
 class WebContents;
 }
 
@@ -34,14 +35,24 @@ bool SigningIn(bc_id tab);
 bool WithheldFromAgents(bc_id tab);
 
 // Whether |tab| shows a page a sign-in withheld as it showed what was filled, or one at its address
-// again, for the tab's life (WithheldHistory): agents may only navigate it elsewhere or close it
-// (BC_AGENT_FAILURE_WITHHELD_PAGE), and nothing reads its text.
+// again, for the tab's life, asleep too (WithheldTabs): agents may only navigate it elsewhere or
+// close it (BC_AGENT_FAILURE_WITHHELD_PAGE), and nothing reads its text.
 bool PageWithheld(bc_id tab);
+
+// |contents| is the page a tab woke with: what the tab withholds hears its commits too.
+void HearWithheld(content::WebContents& contents);
+
+// The tab closed, and what it withheld goes with it.
+void ForgetWithheld(bc_id tab);
 
 // |contents|' page showed, at an agent's first call since a password field held a value, that
 // value outside the field (AgentPage::Freeze): it's withheld as a sign-in withholds one, for as
 // long (PageWithheld).
 void WithholdShownPage(content::WebContents& contents);
+
+// Whether |navigation|'s page may show a withheld field's value again, by the password manager's
+// own mark on the form (PasswordFormManager::is_submitted). The value isn't read.
+bool SendsPasswordForm(content::NavigationHandle& navigation);
 
 // What an agent hears for any other act in such a page.
 inline constexpr char kWithheldPageRefusal[] =

@@ -129,5 +129,55 @@ TEST_F(AgentReplyLimitTest, ADialogWithNoJobEndsNothing) {
   EXPECT_TRUE(ended_.empty());
 }
 
+// A read or a request looks with no job running: a renderer that never answers the look ends it at
+// the same limit, so the page is withheld and the call answered.
+TEST_F(AgentReplyLimitTest, ALookWithNoJobEndsAtTheLimit) {
+  limit_.Looking(1);
+  limit_.Sent();
+  EXPECT_TRUE(limit_.counting());
+  clock_.FastForwardBy(AgentReplyLimit::kLimit - kTick);
+  EXPECT_TRUE(ended_.empty());
+  clock_.FastForwardBy(kTick);
+  EXPECT_EQ(ended_.size(), 1u);
+  // The look went with it, so what's sent after doesn't count.
+  limit_.Sent();
+  EXPECT_FALSE(limit_.counting());
+}
+
+TEST_F(AgentReplyLimitTest, ALookAnsweredStopsTheLimit) {
+  limit_.Looking(2);
+  limit_.Sent();
+  limit_.Looking(1);
+  EXPECT_TRUE(limit_.counting());
+  limit_.Looking(0);
+  EXPECT_FALSE(limit_.counting());
+  clock_.FastForwardBy(AgentReplyLimit::kLimit * 2);
+  EXPECT_TRUE(ended_.empty());
+}
+
+// A job that ends, or one that starts, while a look with no job is out leaves it counting.
+TEST_F(AgentReplyLimitTest, ALookOutlivesTheJobsAroundIt) {
+  limit_.Started();
+  limit_.Sent();
+  limit_.Looking(1);
+  limit_.Sent();
+  limit_.Ended();
+  EXPECT_TRUE(limit_.counting());
+  limit_.Started();
+  EXPECT_TRUE(limit_.counting());
+  limit_.Ended();
+  clock_.FastForwardBy(AgentReplyLimit::kLimit);
+  EXPECT_EQ(ended_.size(), 1u);
+}
+
+// A dialog keeps the renderer from answering a look as it does a job's command.
+TEST_F(AgentReplyLimitTest, ADialogEndsALookWithNoJob) {
+  limit_.Looking(1);
+  limit_.Sent();
+  limit_.DialogShown("an alert");
+  EXPECT_EQ(ended_.size(), 1u);
+  EXPECT_FALSE(limit_.counting());
+}
+
 }  // namespace
 }  // namespace browser_core
