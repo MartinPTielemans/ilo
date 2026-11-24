@@ -26,6 +26,7 @@ use gpui::{
 };
 use image::{Frame, RgbaImage};
 
+use crate::dismissal::{By, Close, Why};
 use crate::{
     icon_picker,
     palette::{self, Palette, Swatch, Tone},
@@ -408,7 +409,10 @@ pub fn show(
 /// The user left the picker, such as with a click outside it.
 pub fn dismissed(cx: &mut App) {
     if let Some(window) = cx.try_global::<ThemePickerWindow>().map(|picker| picker.0) {
-        window.update(cx, |picker, _, cx| picker.close(cx)).ok();
+        let close = Close::left(cx.active_window().is_none());
+        window
+            .update(cx, |picker, _, cx| picker.close(close, cx))
+            .ok();
     }
 }
 
@@ -417,8 +421,8 @@ pub fn dismissed(cx: &mut App) {
 pub fn leave(cx: &mut App) {
     if let Some(window) = cx.try_global::<ThemePickerWindow>().map(|picker| picker.0) {
         window
-            .update(cx, |picker, window, cx| {
-                picker.dismiss(&Dismiss, window, cx)
+            .update(cx, |picker, _, cx| {
+                picker.close(Close::new(Why::FocusLeft, By::Code), cx)
             })
             .ok();
     }
@@ -628,21 +632,23 @@ impl ThemePicker {
         card_x(self.editing.as_ref().is_some_and(|editing| editing.left))
     }
 
-    fn close(&mut self, cx: &mut Context<Self>) {
-        if let Some(editing) = self.editing.as_mut().filter(|editing| editing.open) {
-            editing.open = false;
-            editing.drag = None;
-            cx.notify();
+    /// Closes the picker for `close`, hiding it unless the host already has, as the user left it.
+    fn close(&mut self, close: Close, cx: &mut Context<Self>) {
+        let Some(editing) = self.editing.as_mut().filter(|editing| editing.open) else {
+            return;
+        };
+        editing.open = false;
+        editing.drag = None;
+        cx.notify();
+        if !matches!(close.why, Why::PressOutside | Why::WindowLeft) {
+            // check.sh reads this line.
+            log!("browser: theme picker dismissed");
+            self.host.hide();
         }
     }
 
     fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
-        if self.editing.as_ref().is_some_and(|editing| editing.open) {
-            // check.sh reads this line.
-            log!("browser: theme picker dismissed");
-            self.close(cx);
-            self.host.hide();
-        }
+        self.close(Close::new(Why::Escape, By::Keyboard), cx);
     }
 
     /// Hands the theme on: kept, once `done`.

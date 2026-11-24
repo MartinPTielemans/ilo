@@ -20,6 +20,7 @@ mod codex;
 pub mod command;
 pub mod fence;
 mod held;
+pub mod kept;
 pub mod notes;
 pub mod page;
 #[cfg(windows)]
@@ -1228,6 +1229,11 @@ impl Agents {
         }))
         .collect();
         self.tasks_off = tasks.get("on").and_then(Value::as_bool) == Some(false);
+        self.tasks.kept.off = tasks.get("keep").and_then(Value::as_bool) == Some(false);
+        self.tasks.kept.told = tasks.get("kept_told").and_then(Value::as_bool) == Some(true);
+        // The conversations kept for the tasks of a run before go, as its tasks went (#4105): now
+        // that the assistants found are known, as each removes its own.
+        self.remove_old_kept(cx);
         self.notes_off = saved.get("notes").and_then(Value::as_bool) == Some(false);
         self.on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
         self.scripts = saved
@@ -5483,6 +5489,8 @@ impl Agents {
             "default": self.tasks.default.map(runner::Cli::id),
             "models": models,
             "found": found,
+            "keep": !self.tasks.kept.off,
+            "kept_told": self.tasks.kept.told,
         });
         let saved = json!({
             "on": self.on,
