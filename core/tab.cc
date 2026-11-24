@@ -410,11 +410,12 @@ Tab::~Tab() = default;
 
 void Tab::Attach(content::WebContents* contents) {
   Observe(contents);
-  // A page that painted before the tab had it tells of its colour only once it changes. One with
-  // none yet leaves the tab the colour it kept without a page.
-  if (const std::optional<SkColor> color = contents->GetBackgroundColor()) {
-    reported_background_ = color;
-    background_.Changed(color, /*shown=*/false, base::TimeTicks::Now());
+  // A page that painted before the tab had it tells of its colour only once it changes. One that
+  // hasn't painted tells of it when it does, as Chromium has it, and until then the tab has the
+  // colour it kept without a page: the empty document a tab starts with never gives it one.
+  if (contents->CompletedFirstVisuallyNonEmptyPaint()) {
+    reported_background_ = contents->GetBackgroundColor();
+    background_.Changed(reported_background_, /*shown=*/false, base::TimeTicks::Now());
   }
   TabLink::CreateForWebContents(contents, id_);
   // Its page's camera, microphone and sharing, as Chrome's tab strip marks them. Not once quitting,
