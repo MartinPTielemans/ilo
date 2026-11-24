@@ -160,6 +160,8 @@ mod split_fold_tests;
 mod split_targets;
 pub(crate) mod swap;
 mod swipe;
+#[cfg(test)]
+mod tab_background_tests;
 mod task_area;
 mod themes;
 mod tile_theme;
@@ -659,6 +661,9 @@ struct Tab {
     theme: RefCell<Option<(u64, Option<Rc<TileTheme>>)>>,
     /// Its page is on another host than the URL it's pinned or a favorite at, which its row names.
     left_pinned_host: bool,
+    /// Its page's own background colour, 0xRRGGBB in sRGB, which the open tab's line takes. None
+    /// while the page has no single opaque one.
+    background: Option<u32>,
 }
 
 impl Tab {
@@ -673,6 +678,10 @@ impl Tab {
 
     fn keep_page(&mut self, page: Page) -> bool {
         replace(&mut self.page, page)
+    }
+
+    fn keep_background(&mut self, color: Option<u32>) -> bool {
+        replace(&mut self.background, color)
     }
 }
 
@@ -3780,6 +3789,19 @@ impl Shell {
             self.card_changed(tab, cx);
         }
         self.tab_changed(tab, changed, cx);
+    }
+
+    /// The page of `tab` has the background colour `color`, 0xRRGGBB in sRGB, or with None no
+    /// single opaque one (tab_background_color_changed, and bc_tab_background_color as a tab is
+    /// shown).
+    pub fn set_tab_background(&mut self, tab: u64, color: Option<u32>, cx: &mut Context<Self>) {
+        let changed = self.tabs.entry(tab).or_default().keep_background(color);
+        self.tab_changed(tab, changed, cx);
+    }
+
+    /// The background colour of the page of `tab`, as set_tab_background last had it.
+    pub fn tab_background(&self, tab: u64) -> Option<u32> {
+        self.tabs.get(&tab)?.background
     }
 
     fn tab_changed(&self, tab: u64, changed: bool, cx: &mut Context<Self>) {

@@ -203,10 +203,17 @@ pub(crate) unsafe extern "C" fn space_changed(_: *mut c_void, space: bc::bc_id) 
     let Some(cx) = CX.with_borrow(Clone::clone) else {
         return;
     };
+    // A tab that joins a split view on screen comes into view with no selection to read its page's
+    // colour at, so the panes' kept ones are read as the split views are told.
+    let panes: Vec<_> = splits.iter().flat_map(|split| split.tabs.clone()).collect();
+    let backgrounds = tabs::kept_backgrounds(&panes);
     cx.update(|cx| {
         update_shells_in(cx, |shell, cx| {
             let (pinned, today) = (pinned.clone(), today.clone());
-            shell.set_tabs(space, pinned, today, splits.clone(), folders.clone(), cx)
+            shell.set_tabs(space, pinned, today, splits.clone(), folders.clone(), cx);
+            for &(pane, color) in &backgrounds {
+                shell.set_tab_background(pane, color, cx);
+            }
         });
         // A tab the user held from an agent that left its Space ends its hold.
         browser::agents::space_changed(space, cx);
