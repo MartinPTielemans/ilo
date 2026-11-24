@@ -515,10 +515,11 @@ pub fn start(cx: &mut App) {
             );
         }
         let archived = agents.read(cx).archived_tasks(cx);
+        let kept = agents.read(cx).kept_cards(cx);
         let shells: Vec<_> = WINDOWS
             .with_borrow(|windows| windows.iter().map(|window| window.shell.clone()).collect());
         let conversation = |agent: &str, cx: &App| agents.read(cx).conversation(agent, cx);
-        browser::shell::send_agents(status, cards, archived, conversation, &shells, cx);
+        browser::shell::send_agents(status, cards, archived, kept, conversation, &shells, cx);
         browser::command_bar::task_agents_changed(cx);
     })
     .detach();

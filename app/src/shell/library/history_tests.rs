@@ -384,6 +384,93 @@ fn task() -> crate::agents::task::ArchivedTask {
     }
 }
 
+/// After a quit and a launch, the composer's Latest tasks lists the task that run left (#4105), in
+/// the Spaces of its own profile and no other's, with no card at the sidebar's foot. A click on
+/// it opens its conversation, which has ilo's one line and the reply field, and from then it's a
+/// card at the foot as any task opened in this run. The click is made by the card's own call:
+/// the composer keeps no record of where a card is drawn.
+#[cfg(unix)]
+#[gpui::test]
+fn latest_tasks_lists_a_task_a_run_before_left(cx: &mut TestAppContext) {
+    use crate::agents::task::{Line, TaskAction};
+    use crate::agents::tests::kept::past::after_a_quit;
+
+    let (agents, past) = after_a_quit("Lisbon seats", cx);
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+    cx.update(|window, _| window.activate_window());
+    // No tab is shown in either Space, so each shows the composer.
+    shell.update(cx, |shell, cx| {
+        shell.set_spaces(vec![space(1, PROFILE), space(2, 8)], cx);
+        shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+        shell.set_tabs(2, Vec::new(), vec![20], Vec::new(), Folders::default(), cx);
+        shell.set_space(1, cx);
+    });
+    cx.run_until_parked();
+    let give = |cx: &mut VisualTestContext| {
+        let (status, cards, archived, kept) = agents.read_with(cx, |agents, cx| {
+            (
+                agents.status(),
+                agents.shown_cards(cx),
+                agents.archived_tasks(cx),
+                agents.kept_cards(cx),
+            )
+        });
+        let conversation = |agent: &str, cx: &gpui::App| agents.read(cx).conversation(agent, cx);
+        let shells = [shell.downgrade()];
+        cx.update(|_, cx| {
+            crate::shell::send_agents(status, cards, archived, kept, conversation, &shells, cx)
+        });
+        cx.run_until_parked();
+    };
+    // What the composer lists, by the tasks' ids.
+    let listed = |cx: &mut VisualTestContext| {
+        let cards = shell.read_with(cx, |shell, _| shell.latest_tasks(3));
+        (cards.into_iter().map(|card| card.agent)).collect::<Vec<_>>()
+    };
+    // The composer draws without it, and its card comes in as the agents send it.
+    assert!(listed(cx).is_empty());
+    give(cx);
+    assert_eq!(listed(cx), [past.as_str()]);
+    assert!(shell.read_with(cx, |shell, _| shell.task_cards.is_empty()));
+    // Another profile's Space lists none of it.
+    shell.update(cx, |shell, cx| shell.set_space(2, cx));
+    cx.run_until_parked();
+    assert!(listed(cx).is_empty());
+    shell.update(cx, |shell, cx| shell.set_space(1, cx));
+    cx.run_until_parked();
+    assert_eq!(listed(cx), [past.as_str()]);
+
+    // The card's click.
+    made(&host);
+    let agent: gpui::SharedString = past.clone().into();
+    shell.update(cx, |shell, cx| shell.open_latest(agent, cx));
+    let asked = made(&host);
+    assert!(asked.contains(&format!("task {past} Restore")), "{asked:?}");
+    agents.update(cx, |agents, cx| {
+        _ = agents.task_action(&past, TaskAction::Restore, cx)
+    });
+    give(cx);
+    let shown = shell.read_with(cx, |shell, _| shell.talk_agent());
+    assert_eq!(shown.as_deref(), Some(past.as_str()));
+    // The window asked for its conversation, which the agents send as they send the rest.
+    give(cx);
+    shell.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(shell.read_with(cx, |shell, cx| shell.reply_drawn(cx).is_some()));
+    let talk = agents.read_with(cx, |agents, cx| agents.conversation(&past, cx).unwrap());
+    assert!(
+        matches!(&talk.lines[..], [Line::Ilo(_)]),
+        "{:?}",
+        talk.lines
+    );
+    shell.read_with(cx, |shell, _| {
+        assert!(shell.kept_cards.is_empty());
+        assert_eq!(shell.task_cards.len(), 1);
+    });
+}
+
 /// A task that ended in a run before is there to reply to after a quit (#4105), on the agents as
 /// they are after that quit and the launch (`after_a_quit`), the test doing the app's part between
 /// them and the window. Its row is in History; a click on it brings its card back to the Space of
@@ -404,11 +491,12 @@ fn a_click_on_a_past_tasks_row_opens_its_conversation(cx: &mut TestAppContext) {
     let (shell, host, cx) = history(Vec::new(), cx);
     // What the app sends its windows as the agents change, by the way it sends it.
     let give = |cx: &mut VisualTestContext| {
-        let (status, cards, archived) = agents.read_with(cx, |agents, cx| {
+        let (status, cards, archived, kept) = agents.read_with(cx, |agents, cx| {
             (
                 agents.status(),
                 agents.shown_cards(cx),
                 agents.archived_tasks(cx),
+                agents.kept_cards(cx),
             )
         });
         assert!(
@@ -418,7 +506,7 @@ fn a_click_on_a_past_tasks_row_opens_its_conversation(cx: &mut TestAppContext) {
         let conversation = |agent: &str, cx: &gpui::App| agents.read(cx).conversation(agent, cx);
         let shells = [shell.downgrade()];
         cx.update(|_, cx| {
-            crate::shell::send_agents(status, cards, archived, conversation, &shells, cx)
+            crate::shell::send_agents(status, cards, archived, kept, conversation, &shells, cx)
         });
         cx.run_until_parked();
     };

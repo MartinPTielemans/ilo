@@ -1495,7 +1495,7 @@ impl Shell {
 
     /// The task `agent` comes back from the Archive, as ⇧⌘T brings it: its card to the foot, with
     /// its conversation open, and the Library closes.
-    fn restore_archived_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+    pub(super) fn restore_archived_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
         // check.sh waits for this line.
         log!("browser: restore archived task {agent}");
         self.show_restored = Some(agent.clone());

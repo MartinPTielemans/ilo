@@ -2151,7 +2151,6 @@ impl Agents {
     /// task is in the Archive to reply to if its assistant kept it (#4105).
     pub fn end_old_tasks(&mut self, cx: &mut Context<Self>) {
         for space in self.browser.task_spaces() {
-            // check.sh reads this line.
             log!("browser: deleting space {space} of a task before");
             self.browser.delete_space(space, cx);
         }
@@ -2160,7 +2159,6 @@ impl Agents {
             if space == 0 {
                 continue;
             }
-            // check.sh reads this line.
             log!(
                 "browser: deleting space {space} of agent {} before",
                 client.id()
