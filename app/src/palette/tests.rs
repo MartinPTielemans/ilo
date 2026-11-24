@@ -1530,3 +1530,68 @@ fn secondary_text_reads_as_gray_beside_primary_at_every_level() {
         }
     }
 }
+
+/// The plate under the foot's shown card in a dark window with no Space colour, as the real app
+/// composed it, read from its own pixels: over the check VM's desktop at Standard and at More
+/// (f98ded880), and at Standard with a white window behind (469483355), its lightest measured.
+/// And a shown page row's at More, from another capture, over a lighter spot of what was behind.
+const CARD_PLATE_DARK: [u32; 3] = [0x6b6a65, 0x696762, 0x6d6d6b];
+const PAGE_PLATE_DARK_MORE: u32 = 0x706e69;
+
+/// Gray text on a plate in a dark window is one ink at every level, whatever alpha its place gives
+/// it off a plate, and holds text's 4.5:1 with the palette's margin on the shown card's plate as
+/// measured, where the state line's own gray read 3.39 to 4.28. A light window's is the gray it
+/// has off a plate.
+///
+/// A test has no window material, so this knows the token's ink over the grounds measured on one
+/// desktop and one window behind it, and no others: what another backdrop makes of the plate is
+/// the real app's to be measured on. On the page row's measured plate Paper itself is under 4.5:1,
+/// so no ink holds it there and it is the plate that would have to give; the gray is held to
+/// within 1.05:1 of the title's ink beside it, the most a plate that light lets it read.
+#[test]
+fn gray_on_a_dark_plate_is_one_ink_that_reads_on_the_measured_card() {
+    use crate::tokens::palette::PLATE_GRAY;
+    use crate::tokens::shell::task::{PAGE_WORD, PAGE_WORD_WORKING, STATUS};
+    let places = [
+        STATUS,
+        PAGE_WORD,
+        PAGE_WORD_WORKING,
+        crate::tokens::shell::SECONDARY,
+    ];
+    for level in Transparency::ALL {
+        set_transparency(level);
+        let dark = Palette::of(None, Tone::Dark);
+        let inks = places.map(|alpha| dark.gray_on_plate(alpha));
+        assert!(
+            inks.iter().all(|&ink| ink == inks[0]),
+            "{level:?}: {inks:?}"
+        );
+        let ink = Rgba::from(inks[0]);
+        assert!(ink.a >= PLATE_GRAY && ink.a >= dark.gray_floor, "{level:?}");
+        for plate in CARD_PLATE_DARK.map(rgb) {
+            let ratio = contrast(over(plate, ink, ink.a), plate);
+            assert!(
+                ratio >= TEXT + BETWEEN,
+                "{level:?} on {:06x}: {ratio:.2}",
+                hex(plate)
+            );
+        }
+        let plate = rgb(PAGE_PLATE_DARK_MORE);
+        let (title, gray) = (
+            contrast(dark.ink, plate),
+            contrast(over(plate, ink, ink.a), plate),
+        );
+        assert!(
+            title < TEXT,
+            "the page row's plate holds text now: {title:.2}"
+        );
+        assert!(
+            title / gray <= 1.05,
+            "{level:?}: {gray:.2} under {title:.2}"
+        );
+        let light = Palette::of(None, Tone::Light);
+        for alpha in places {
+            assert_eq!(light.gray_on_plate(alpha), light.gray(alpha), "{level:?}");
+        }
+    }
+}
