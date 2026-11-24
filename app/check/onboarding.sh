@@ -16,7 +16,8 @@
 # start, and turns the count's on and off again from the keyboard. The account's comes between
 # the colour and the opt-ins while
 # the build names a sync server (branding/sync-server), and Esc leaves it signed out: the run never
-# signs in to the hosted server, as sync-account signs in on a server of its own. Help › Welcome to
+# signs in to the hosted server, as sync-account signs in on a server of its own. The assistant's
+# comes before the opt-ins', and Esc leaves it with no assistant signed in. Help › Welcome to
 # ilo plays it again, in the window while it shows no page and in a new window while it shows one. A
 # launch that brings Spaces back never starts it. Every other run sets BROWSER_ONBOARDING=skip
 # (check.sh); this one sets the appearance instead.
@@ -85,8 +86,8 @@ launch_new() {
   await '^browser: onboarding step intro settled$' || fail "$1: the intro didn't draw"
   steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
   case "$steps" in
-    "intro import "*"color ${glass}${account}opt-ins") ;;
-    *) fail "$1: the steps were '$steps', not the intro, the import, the rest, the color, ${glass}${account}the opt-ins" ;;
+    "intro import "*"color ${glass}${account}assistant opt-ins") ;;
+    *) fail "$1: the steps were '$steps', not the intro, the import, the rest, the color, ${glass}${account}the assistant, the opt-ins" ;;
   esac
   # BROWSER_ONBOARDING gives the sheet its look but leaves the window's material the system's, so
   # on a system of the other look the captures would show a sheet on glass no user can reach.
@@ -284,6 +285,10 @@ if [ -n "$account" ]; then
   expect '^browser: onboarding left account via escape$' "dark: Esc didn't leave the account step"
   ! grep -q '^browser: onboarding sign in via ' "$log" || fail "dark: Esc at the account step signed in"
 fi
+expect '^browser: onboarding step assistant settled$' "dark: the assistant's step didn't come after the account's"
+capture_step dark-assistant
+send key escape
+expect '^browser: onboarding left assistant via escape$' "dark: Esc didn't leave the assistant's step"
 expect '^browser: onboarding step opt-ins settled$' "dark: the opt-ins step didn't come"
 capture_step dark-opt-ins
 expect '^browser: onboarding daily-count at ' \
@@ -294,14 +299,14 @@ expect '^browser: onboarding agents at ' "dark: the opt-ins step didn't draw the
 send click $(grep '^browser: onboarding agents at ' "$log" | tail -1 | cut -d' ' -f5-6)
 expect '^browser: onboarding agents on$' "dark: a click on the agents' row didn't turn them on"
 expect '^browser: agents server on ' "dark: the agents' switch didn't start their server"
-# The keyboard reaches the switches too: from Continue, where the step rests (#3498), ⇥ past Skip
-# to the count's, the first, where Space turns it on, ⇥ on and ⇧⇥ back to it, and Space turns it
-# off again, so Esc still leaves it as it was (#2985). The click on the agents' row moved no focus.
-send key tab
+# The keyboard reaches the switches too: from Continue, the last of the sheet's foot, where the step
+# rests (#3498), ⇥ round to the count's, the first, where Space turns it on, ⇥ on and ⇧⇥ back to
+# it, and Space turns it off again, so Esc still leaves it as it was (#2985). The click on the
+# agents' row moved no focus.
 send key tab
 send key space
 expect '^browser: onboarding daily-count on$' \
-  "dark: ⇥ twice from Continue, past Skip, then Space didn't turn the count's switch on"
+  "dark: ⇥ from Continue, round to the first switch, then Space didn't turn the count's switch on"
 # Captured once the knob has slid all the way on.
 expect '^browser: onboarding daily-count slid$' "dark: the count's switch didn't finish its slide on"
 capture_step dark-opt-ins-keys
