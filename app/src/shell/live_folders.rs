@@ -730,7 +730,7 @@ impl Shell {
                 .items_center()
                 .text_size(px(text::SMALL))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(self.palette.text(SECONDARY))
+                .text_color(self.palette.gray(SECONDARY))
                 .child(list.heading())
                 .into_any_element(),
             LiveRow::Item { item, new } => self.live_row(folder, inset, item, *new, cx),

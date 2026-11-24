@@ -11,7 +11,9 @@ use gpui::{
 use super::Fold;
 
 use crate::agents::task::ilo::{IloButton, IloKind, IloLine};
-use crate::agents::task::{Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep};
+use crate::agents::task::{
+    Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep, Word,
+};
 use crate::agents::tier::{Tier, Why};
 use crate::shell::picture::PagePicture;
 use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
@@ -34,6 +36,7 @@ fn card() -> Card {
         last_site: None,
         asks: false,
         dot: Dot::Working,
+        word: Word::for_dot(Dot::Working),
         answers: Vec::new(),
         question: None,
         open: Vec::new(),
@@ -898,7 +901,7 @@ fn the_reply_placeholder_follows_the_appearance(cx: &mut TestAppContext) {
             let reply = talk.view.read(cx).reply.read(cx).placeholder_hsla();
             (
                 reply,
-                gpui::Hsla::from(shell.palette.text(FORM_PLACEHOLDER)),
+                gpui::Hsla::from(shell.palette.gray(FORM_PLACEHOLDER)),
             )
         });
         assert_eq!(drawn, meant, "{appearance:?}'s placeholder");

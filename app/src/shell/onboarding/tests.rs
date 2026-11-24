@@ -19,7 +19,8 @@ use crate::theme::Theme;
 use crate::theme_picker::{SWATCHES, swatch_name};
 use crate::tokens::shell::onboarding::IMPORT_HOLD;
 use crate::tokens::shell::onboarding::loops::{
-    COLOR_AT, COLOR_SWIPE, IMPORT_CAME, PERIOD, WELCOME_AT, WELCOME_CLICK, WELCOME_MOVE,
+    COLOR_AT, COLOR_SWIPE, DEFAULT_AT, DEFAULT_OPEN, FAVORITES_CAME, IMPORT_CAME, PERIOD,
+    WELCOME_AT, WELCOME_CLICK, WELCOME_MOVE,
 };
 use crate::transparency::{self, Transparency};
 
@@ -282,13 +283,20 @@ fn reduce_motion_gives_the_still_welcome(cx: &mut TestAppContext) {
     );
 }
 
-/// A step's loop asks for frames only while its step shows: going on from it, ending the flow
-/// there, or going back from it to a step with none ends them.
+/// A step's loop plays only while its step shows: the next step's, going on or back, starts from
+/// its own beginning rather than where the one before was, and ending the flow ends them all.
 #[gpui::test]
 fn a_loop_draws_only_while_its_step_shows(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     let looping = |shell: &Entity<Shell>, cx: &VisualTestContext| {
         shell.read_with(cx, |shell, _| shell.onboarding_looping())
+    };
+    // How long the loop shown has played.
+    let played = |shell: &Entity<Shell>, cx: &VisualTestContext| {
+        shell.read_with(cx, |shell, _| {
+            let onboarding = shell.onboarding.as_ref()?;
+            (onboarding.loop_since).map(|at| onboarding.secs_since(at))
+        })
     };
     started(&shell, cx);
     later(&shell, cx, 2. * PERIOD);
@@ -296,25 +304,29 @@ fn a_loop_draws_only_while_its_step_shows(cx: &mut TestAppContext) {
     assert!(asks_for_frames(&shell, cx), "and draws");
     skip_to(&shell, cx, Step::DefaultBrowser);
     later(&shell, cx, STEP_MOTION);
-    assert!(!looping(&shell, cx), "the default browser's step has none");
+    assert!(looping(&shell, cx), "the default browser's loop plays");
     assert!(
-        !asks_for_frames(&shell, cx),
-        "so nothing draws once it's in"
+        played(&shell, cx).is_some_and(|played| played <= STEP_MOTION),
+        "from its own start as its step came, not the welcome's: {:?}",
+        played(&shell, cx)
     );
-
     skip_to(&shell, cx, Step::Color);
-    later(&shell, cx, STEP_MOTION);
-    assert!(looping(&shell, cx), "the colour's loop plays");
+    later(&shell, cx, 2. * STEP_MOTION);
     click_back(cx);
     later(&shell, cx, STEP_MOTION);
-    assert!(!looping(&shell, cx), "Back leaves it");
-    assert!(!asks_for_frames(&shell, cx), "and its frames");
+    assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser));
+    assert!(
+        played(&shell, cx).is_some_and(|played| played <= STEP_MOTION),
+        "Back starts the step's loop again, not the colour's: {:?}",
+        played(&shell, cx)
+    );
 
     started(&shell, cx);
     later(&shell, cx, 1.);
     cx.simulate_keystrokes("escape");
     later(&shell, cx, END_FADE);
     assert_eq!(step(&shell, cx), None);
+    assert!(!asks_for_frames(&shell, cx), "an ended flow draws nothing");
 }
 
 /// Clicks the sheet's Back.
@@ -1767,6 +1779,9 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
     );
 
     skip_to(&shell, cx, Step::DefaultBrowser);
+    // On the sheet, ⇥ from the step's button goes round to Back, then Skip.
+    cx.simulate_keystrokes("tab");
+    assert_eq!(keyed(cx), Some((Role::Button, "Back".into())));
     cx.simulate_keystrokes("tab");
     assert_eq!(keyed(cx), Some((Role::Button, "Skip".into())));
     press("enter", cx);
@@ -2309,5 +2324,152 @@ fn the_imports_loop_lands_each_in_the_sidebar(cx: &mut TestAppContext) {
     assert!(
         placed("came", cx).is_some() && placed("tab-3", cx).is_some(),
         "the still last frame is what came"
+    );
+}
+
+/// The favorites step, from an import whose history offers `offered`, each ticked.
+fn at_favorites<'a>(
+    offered: &[&str],
+    cx: &'a mut TestAppContext,
+) -> (
+    Entity<Shell>,
+    &'a mut VisualTestContext,
+    Entity<crate::import::ImportView>,
+) {
+    let (shell, cx, _) = first_window(cx);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Import);
+    let view = shell
+        .read_with(cx, |shell, _| {
+            shell.importing.as_ref().map(|i| i.view.clone())
+        })
+        .expect("the import view");
+    let offered = (offered.iter())
+        .map(|&url| crate::import::found::Tab {
+            url: url.into(),
+            name: String::new(),
+        })
+        .collect();
+    view.update(cx, |view, _| view.offer(offered));
+    view.update(cx, |_, cx| {
+        cx.emit(ImportEvent::Started);
+        cx.emit(ImportEvent::Placed);
+    });
+    waited(cx, IMPORT_HOLD);
+    assert_eq!(step(&shell, cx), Some(Step::Favorites));
+    later(&shell, cx, STEP_MOTION);
+    (shell, cx, view)
+}
+
+/// The favorites step is on the sheet: its tiles on the left, which a click on one unticks, and
+/// its foot's Back, Skip and button.
+#[gpui::test]
+fn the_favorites_step_is_on_the_sheet(cx: &mut TestAppContext) {
+    let (shell, cx, view) = at_favorites(&["https://example.com/", "https://example.org/"], cx);
+    assert!(
+        super::sheet::on_sheet(Step::Favorites),
+        "the favorites step shows on the sheet"
+    );
+    let drawn = |name: &str, cx: &mut VisualTestContext| {
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| view.drawn_place(name))
+    };
+    let tile = drawn("import-favorite example.com", cx).expect("the first site's tile is drawn");
+    cx.simulate_click(tile, gpui::Modifiers::none());
+    cx.run_until_parked();
+    let ticked = shell.read_with(cx, |shell, cx| {
+        (shell.favorites_ticked(cx).into_iter())
+            .map(|tab| tab.url)
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        ticked,
+        ["https://example.org/"],
+        "a click on a tile on the sheet unticks it"
+    );
+    assert!(
+        placed("skip", cx).is_some() && placed("back", cx).is_some(),
+        "the sheet's foot has Back and Skip"
+    );
+}
+
+/// The favorites' loop ticks the sites in turn but the last, each ticked landing in the small
+/// window's sidebar as a tile, the first within its first second and none outside the sidebar;
+/// the last never lands, and the still last frame is what came.
+#[gpui::test]
+fn the_favorites_loop_lands_each_ticked_site_in_the_sidebar(cx: &mut TestAppContext) {
+    let (shell, cx, _) = at_favorites(&["https://example.com/"], cx);
+    held_at(&shell, cx, 0.);
+    assert!(
+        placed("tile-0", cx).is_none(),
+        "nothing has landed as the loop starts"
+    );
+    held_at(&shell, cx, 1.);
+    assert!(
+        placed("tile-0", cx).is_some(),
+        "the first ticked site lands in the loop's first second"
+    );
+    held_at(&shell, cx, FAVORITES_CAME);
+    let sidebar = placed("sidebar", cx).expect("the loop's sidebar is drawn");
+    for name in ["tile-0", "tile-1", "tile-2"] {
+        let part = placed(name, cx).unwrap_or_else(|| panic!("{name} has landed by then"));
+        assert!(
+            inside(part, sidebar),
+            "{name} lands inside the sidebar at {sidebar:?}, but it was at {part:?}"
+        );
+    }
+    held_at(&shell, cx, PERIOD);
+    assert!(
+        placed("came", cx).is_some() && placed("tile-2", cx).is_some(),
+        "the still last frame is what came"
+    );
+    assert!(
+        placed("tile-3", cx).is_none(),
+        "the site left unticked never lands"
+    );
+}
+
+/// The default browser's step is on the sheet, its button in the foot, and its loop's pointer
+/// clicks the other app's link, which then opens in the small window's sidebar as a new tab, with
+/// its page; nothing has opened as the loop starts, and the still last frame is the link open.
+#[gpui::test]
+fn the_default_browsers_loop_opens_the_link_as_a_tab(cx: &mut TestAppContext) {
+    use crate::tokens::shell::onboarding::loops::IMPORT_LAND;
+    let (shell, cx, _) = first_window(cx);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::DefaultBrowser);
+    later(&shell, cx, STEP_MOTION);
+    assert!(
+        super::sheet::on_sheet(Step::DefaultBrowser),
+        "the default browser's step shows on the sheet"
+    );
+    assert!(
+        placed("skip", cx).is_some() && placed("back", cx).is_some(),
+        "the sheet's foot has Back and Skip"
+    );
+    held_at(&shell, cx, 0.);
+    assert!(
+        placed("tab-new", cx).is_none(),
+        "nothing has opened as the loop starts"
+    );
+    let press = DEFAULT_AT + WELCOME_MOVE + WELCOME_CLICK;
+    held_at(&shell, cx, press);
+    let pointer = placed("pointer", cx).expect("the pointer is drawn");
+    let link = placed("link", cx).expect("the link is drawn");
+    assert!(
+        link.contains(&pointer.origin),
+        "the pointer's tip clicks the link at {link:?}, but it was at {pointer:?}"
+    );
+    held_at(&shell, cx, press + DEFAULT_OPEN + IMPORT_LAND);
+    let sidebar = placed("sidebar", cx).expect("the loop's sidebar is drawn");
+    let tab = placed("tab-new", cx).expect("the link has opened as a tab");
+    assert!(
+        inside(tab, sidebar),
+        "the new tab lands inside the sidebar at {sidebar:?}, but it was at {tab:?}"
+    );
+    held_at(&shell, cx, PERIOD);
+    assert!(
+        placed("tab-new", cx).is_some() && placed("page-new", cx).is_some(),
+        "the still last frame is the link open, its page shown"
     );
 }
