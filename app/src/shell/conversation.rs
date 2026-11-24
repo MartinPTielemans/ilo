@@ -180,8 +180,9 @@ pub(super) struct Talk {
 
 impl Talk {
     /// Its pages leave their tiles, as a page watched over it hides it and it isn't drawn.
-    pub(super) fn end_tiles(&self, cx: &gpui::App) {
-        self.view.read(cx).tiles.end_all();
+    pub(super) fn end_tiles(&self, cx: &mut gpui::App) {
+        let tiles = self.view.read(cx).tiles.clone();
+        tiles.end_all(cx);
     }
 }
 
@@ -696,10 +697,16 @@ impl TalkView {
         picture: &Option<PagePicture>,
         cx: &mut Context<Self>,
     ) -> Option<Vec<Arc<RenderImage>>> {
+        // One a tile's end asked for stands from then, unless the conversation asked again since.
+        let at_end = self.tiles.asked_at_end(request);
         let entry = self
             .pictures
             .iter_mut()
-            .find(|(_, each, _)| *each == request)?;
+            .find(|(tab, each, _)| *each == request || (at_end == Some(*tab) && *each < request));
+        let Some(entry) = entry else {
+            return at_end.map(|_| picture.iter().map(PagePicture::image).collect());
+        };
+        entry.1 = request;
         let tab = entry.0;
         self.unpictured.retain(|each| *each != tab);
         let Some(picture) = picture else {
@@ -716,7 +723,7 @@ impl TalkView {
 
     /// Its pictures go, as it no longer shows, and are taken again when it does.
     fn let_go(&mut self) -> Vec<Arc<RenderImage>> {
-        self.tiles.end_all();
+        self.tiles.let_go();
         self.stale = true;
         self.motion.reset();
         let pictures = std::mem::take(&mut self.pictures);
@@ -3145,7 +3152,7 @@ impl Render for TalkView {
         });
         if !pages {
             self.drawn.borrow_mut().clear();
-            self.tiles.end_all();
+            self.tiles.end_all(cx);
         }
         let column = div().size_full().flex().child(column).children(rail);
         let drawn = self.drawn_at.clone();
