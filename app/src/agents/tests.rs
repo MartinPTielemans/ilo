@@ -5539,6 +5539,8 @@ fn agents_get_only_the_allowlisted_tools(cx: &mut TestAppContext) {
     );
 
     let (agents, browser, _) = connected(cx);
+    // The user's switch on, so sign_in asks the core as the rest do.
+    agents.update(cx, |agents, cx| agents.set_sign_in_on(true, cx));
     let tab = |more: Value| {
         let mut arguments = json!({ "tab": 20 });
         arguments

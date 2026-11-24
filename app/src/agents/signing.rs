@@ -14,17 +14,26 @@ use super::task::ilo::{Account, IloKind, IloLine, SignedInWith};
 use super::tier::{self, Why};
 use super::{Act, Agents, Failure, Held, Refused, ToolResult, act_of, held, page, site, tools};
 
-/// Whether signing tasks in with saved logins is on until the user changes it: in a dev build,
-/// not yet in the owner's daily one, which waits on their word.
-pub(super) const STARTS_ON: bool = !cfg!(feature = "prod");
+/// The profile's saved settings' key for the switch, written only once the user sets it, in
+/// Settings or first run: off until then, in every build.
+pub(super) const KEY: &str = "sign_in_chosen";
 
-/// Settings › Agents' switch, and the words beside it.
+/// The switch's words (N1, N2, N3), which Settings › Agents and first run's assistant step both
+/// draw with it (settings::sign_in_row).
 pub const HEADING: &str = "Sign tasks in with your saved logins";
 pub const SWITCH_LINE: &str = "At Work on pages and Full access, ilo fills in your saved login \
     and sends the form when a task asks to sign in on that login's site. Your assistant never \
     sees the login. A page that misleads a task can get the task signed in to any site you have \
     a login saved for.";
 pub const SWITCH_OFF_LINE: &str = "Off: a task that reaches a sign-in hands that step to you.";
+
+/// The line beside the switch, for where it stands.
+pub fn switch_line(on: bool) -> &'static str {
+    match on {
+        true => SWITCH_LINE,
+        false => SWITCH_OFF_LINE,
+    }
+}
 
 /// What the agent hears while Settings' switch is off.
 const OFF: &str =
@@ -49,16 +58,16 @@ const FILLED: usize = usize::MAX / 2;
 impl Agents {
     /// Whether Settings › Agents' Sign tasks in with your saved logins is on.
     pub fn sign_in_on(&self) -> bool {
-        self.sign_in_on
+        self.sign_in_chosen == Some(true)
     }
 
     /// Settings › Agents' Sign tasks in with your saved logins. Off, no agent's sign_in reaches
     /// the core.
     pub fn set_sign_in_on(&mut self, on: bool, cx: &mut Context<Self>) {
-        if on == self.sign_in_on {
+        if self.sign_in_chosen == Some(on) {
             return;
         }
-        self.sign_in_on = on;
+        self.sign_in_chosen = Some(on);
         self.save();
         cx.notify();
     }
@@ -85,7 +94,7 @@ impl Agents {
             what: "sign in with the user's saved login".into(),
             ..act_of(agent, connection, call, tab, reply)
         };
-        if !self.sign_in_on {
+        if !self.sign_in_on() {
             return self.refuse(act, &at, Refused::of(tools::Kind::Outside, OFF), cx);
         }
         if let Err(refused) = self.may_act(agent, tab, "sign_in", cx) {

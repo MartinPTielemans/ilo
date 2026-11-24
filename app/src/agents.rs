@@ -961,9 +961,9 @@ pub struct Agents {
     /// The site notes each task has had (#4122), and Settings › Agents' Site notes turned off.
     noted: notes::Given,
     notes_off: bool,
-    /// Settings › Agents' Sign tasks in with your saved logins (#4098), and the sign-ins the core is doing, by their
-    /// request.
-    sign_in_on: bool,
+    /// Settings › Agents' Sign tasks in with your saved logins (#4098), as the user set it, None
+    /// until they do (off), and the sign-ins the core is doing, by their request.
+    sign_in_chosen: Option<bool>,
     signing: HashMap<u64, signing::Signing>,
     /// The log's last entry, by its id.
     logged: u64,
@@ -1176,7 +1176,7 @@ impl Agents {
             had: HashMap::new(),
             noted: notes::Given::default(),
             notes_off: false,
-            sign_in_on: signing::STARTS_ON,
+            sign_in_chosen: None,
             signing: HashMap::new(),
             logged: 0,
             asking: Vec::new(),
@@ -1271,8 +1271,9 @@ impl Agents {
         // that the assistants found are known, as each removes its own.
         self.remove_old_kept(cx);
         self.notes_off = saved.get("notes").and_then(Value::as_bool) == Some(false);
-        self.sign_in_on =
-            (saved.get("sign_in").and_then(Value::as_bool)).unwrap_or(signing::STARTS_ON);
+        // Only the user's own setting: the key "sign_in" every save once wrote, on or not, is
+        // never read and goes at the next save.
+        self.sign_in_chosen = saved.get(signing::KEY).and_then(Value::as_bool);
         self.on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
         self.scripts = saved
             .get("scripts")
@@ -5510,8 +5511,11 @@ impl Agents {
             "tasks": tasks,
             "scripts": self.scripts,
             "notes": !self.notes_off,
-            "sign_in": self.sign_in_on,
         });
+        let mut saved = saved;
+        if let Some(on) = self.sign_in_chosen {
+            saved[signing::KEY] = on.into();
+        }
         if let Err(error) = clients::write_private(path, saved.to_string().as_bytes()) {
             log!("couldn't save the agents' settings: {error}");
         }

@@ -15,6 +15,14 @@ const MARKER: &str = "made-up-marker-4121";
 const SIGNED: &str = "ilo filled the login saved for this site and sent the form. Read the page.";
 const USER_STEP: &str = "The site asks for a step only the user can take.";
 
+/// Connected, with Settings' switch set on by the user, as each test here but the switch's own
+/// starts: it's off until they set it.
+fn connected(cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>, Arc<Configs>) {
+    let (agents, browser, configs) = super::connected(cx);
+    agents.update(cx, |agents, cx| agents.set_sign_in_on(true, cx));
+    (agents, browser, configs)
+}
+
 fn hello(agents: &Entity<Agents>, cx: &mut TestAppContext) {
     let event = Event::Hello {
         agent: "claude-code".into(),
@@ -84,10 +92,6 @@ fn at(browser: &Made, tab: u64, title: &str, url: &str) {
 #[gpui::test]
 fn a_sign_in_past_the_apps_checks_is_the_cores_in_its_words(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
-    assert!(
-        agents.read_with(cx, |agents, _| agents.sign_in_on()),
-        "on in a dev build"
-    );
     let answer = sign_in(&agents, 20, cx);
     assert!(browser.checked.borrow().contains(&"sign_in".to_string()));
     let request = asked(&browser);
@@ -500,6 +504,46 @@ fn the_account_formats_nowhere_but_the_users_line() {
     assert_eq!(account.drawn(), ACCOUNT);
 }
 
+/// The switch is off until the user sets it, in every build: a profile that never set it reads
+/// off, and so does one whose file holds the "sign_in" every save once wrote, which no save
+/// writes again.
+#[gpui::test]
+fn signing_tasks_in_is_off_until_the_user_sets_it(cx: &mut TestAppContext) {
+    let (agents, _, _) = super::connected(cx);
+    assert!(!agents.read_with(cx, |agents, _| agents.sign_in_on()));
+    agents.update(cx, |agents, cx| agents.load(r#"{"sign_in":true}"#, cx));
+    assert!(!agents.read_with(cx, |agents, _| agents.sign_in_on()));
+    let refused = sign_in(&agents, 20, cx).recv().unwrap();
+    assert!(refused.error);
+}
+
+/// Set, on or off, the switch survives a save and the next launch, and the save drops the old key.
+#[gpui::test]
+fn the_users_setting_survives_a_save_and_a_relaunch(cx: &mut TestAppContext) {
+    let dir = std::env::temp_dir().join(format!("sign-in-switch-{}", random_token()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("agents.json");
+    std::fs::write(&path, r#"{"sign_in":true}"#).unwrap();
+    let launch = |cx: &mut TestAppContext| {
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let agents = agents(&browser, &configs, Some(path.clone()), cx);
+        let saved = std::fs::read_to_string(&path).unwrap_or_default();
+        agents.update(cx, |agents, cx| agents.load(&saved, cx));
+        agents
+    };
+    for on in [true, false] {
+        let agents = launch(cx);
+        agents.update(cx, |agents, cx| agents.set_sign_in_on(on, cx));
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved.get("sign_in"), None, "{saved}");
+        assert_eq!(
+            launch(cx).read_with(cx, |agents, _| agents.sign_in_on()),
+            on
+        );
+    }
+    _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Only the user turns signing tasks in with saved logins on or off: outside tests, Settings is the
 /// one caller of set_sign_in_on, the switch is written only there and where the saved settings are
 /// read at launch, and no tool's name or description names it, so no handler can be asked for it.
@@ -530,7 +574,7 @@ fn only_settings_turns_signing_tasks_in_on_or_off() {
         let calls = source.matches("set_sign_in_on(").count();
         let defined = source.matches("fn set_sign_in_on(").count();
         callers.extend(std::iter::repeat_n(file.clone(), calls - defined));
-        let writes = source.matches("self.sign_in_on =").count();
+        let writes = source.matches("self.sign_in_chosen = ").count();
         writers.extend(std::iter::repeat_n(file.clone(), writes));
     }
     assert_eq!(callers, ["settings.rs"]);
@@ -539,7 +583,13 @@ fn only_settings_turns_signing_tasks_in_on_or_off() {
 
     for agent in ["claude-code", "codex", "task-1"] {
         let listed = tools::list(agent).to_string().to_lowercase();
-        for word in ["setting", "sign_in_on", "sign tasks in", "switch"] {
+        for word in [
+            "setting",
+            "sign_in_on",
+            "sign_in_chosen",
+            "sign tasks in",
+            "switch",
+        ] {
             assert!(!listed.contains(word), "{agent}'s tools say {word:?}");
         }
         for name in tools::names(agent) {

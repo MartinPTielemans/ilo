@@ -677,7 +677,10 @@ fn an_assistants_words_never_make_a_line_of_ilos(cx: &mut TestAppContext) {
 fn a_saved_logins_account_is_in_nothing_the_assistant_is_handed(cx: &mut TestAppContext) {
     const ACCOUNT: &str = "made-up-account-4121@example.org";
     let run = Run::new("account", cx);
-    (run.agents).update(cx, |agents, cx| agents.set_keeps_tasks(false, cx));
+    (run.agents).update(cx, |agents, cx| {
+        agents.set_keeps_tasks(false, cx);
+        agents.set_sign_in_on(true, cx);
+    });
     let agent = run.start(Cli::Claude, cx);
     run.ran(1);
     let space = run.browser.agent_space(&agent);

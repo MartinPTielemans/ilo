@@ -3791,11 +3791,13 @@ impl Settings {
                     cx,
                 )
             };
-            let line = match sign_in_on {
-                true => signing::SWITCH_LINE,
-                false => signing::SWITCH_OFF_LINE,
-            };
-            setting(look, signing::HEADING, Some(line.into()), vec![switch])
+            Row {
+                div: sign_in_row(look, sign_in_on, switch),
+                name: signing::HEADING.into(),
+                line: Some(signing::switch_line(sign_in_on).into()),
+                keys: None,
+                nested: false,
+            }
         });
         let rows = [master]
             .into_iter()
@@ -5637,6 +5639,16 @@ fn line_row(
     frame()
         .child(text(look, name, line))
         .when(!controls.is_empty(), |row| row.child(end(controls)))
+}
+
+/// The switch that lets tasks be signed in with the user's saved logins (#4098), its name and the
+/// line for where it stands, with `switch`, the caller's stop_switch, whose click calls
+/// Agents::set_sign_in_on: one component, which Settings › Agents and first run's assistant step
+/// both draw.
+pub fn sign_in_row(look: &RowLook, on: bool, switch: AnyElement) -> gpui::Div {
+    use agents::signing;
+    let line = signing::switch_line(on);
+    line_row(look, signing::HEADING, Some(line.into()), vec![switch])
 }
 
 /// A feature's row, or a thing's in a list: its glyph on its quiet plate before its name.
