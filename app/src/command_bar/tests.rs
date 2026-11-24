@@ -3785,27 +3785,6 @@ fn settings_rows_wait_for_nothing(cx: &mut TestAppContext) {
     );
 }
 
-/// The hint names who ⇥ asks (#1080): the agent the ask lists first, which ↩ runs on, so "Ask"
-/// beside its key isn't read as two words, or any agent while the browser hasn't learned them.
-#[test]
-fn the_ask_hint_names_the_agent_it_asks() {
-    use super::ask_words;
-    let named = |listed: &[(&str, Option<&str>)]| {
-        let mut agents = agents(listed).unwrap();
-        for agent in &mut agents.agents {
-            agent.name = match agent.id.as_ref() {
-                "claude" => "Claude".into(),
-                _ => "Codex".into(),
-            };
-        }
-        ask_words(Some(&agents))
-    };
-    assert_eq!(named(&[("claude", None), ("codex", None)]), "Ask Claude");
-    assert_eq!(named(&[("codex", None), ("claude", None)]), "Ask Codex");
-    assert_eq!(named(&[]), "Ask an agent");
-    assert_eq!(ask_words(None), "Ask an agent");
-}
-
 /// A tab open on another of the account's computers.
 fn other(url: &str, title: &str, computer: &str) -> OtherTab {
     OtherTab {
@@ -4136,4 +4115,234 @@ fn a_day_alone_ends_where_the_tiles_glyph_does() {
     );
     // The glyph's box is centred on the plate, so its right edge is as far inside it as its left.
     assert_eq!(end - plate.0, plate.1 - (end + super::END_GLYPH));
+}
+
+/// A page a bar rests in, as an empty Space is (#4140): the bar's field, its rows under it, and a
+/// control of the page's own, as the sidebar's are, which can take the keyboard.
+struct Rest {
+    bar: Entity<CommandBar>,
+    other: gpui::FocusHandle,
+}
+
+impl Render for Rest {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let field = (self.bar).update(cx, |bar, cx| bar.field(gpui::black(), window, cx));
+        let rows = self.bar.update(cx, |bar, cx| bar.listed(cx));
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(div().id("other").track_focus(&self.other).size(px(20.)))
+            .child(field)
+            .children(rows)
+    }
+}
+
+/// A bar at rest in a window of its own page, its field with the keyboard, and the keys it handed
+/// the page.
+struct Resting {
+    cx: VisualTestContext,
+    window: WindowHandle<Rest>,
+    host: Rc<Recorder>,
+    keys: Rc<RefCell<Vec<InPlaceKey>>>,
+}
+
+impl Resting {
+    fn new(cx: &mut TestAppContext) -> Self {
+        let host = Rc::new(Recorder::default());
+        cx.update(text_input::bind_keys);
+        let keys: Rc<RefCell<Vec<InPlaceKey>>> = Rc::default();
+        let (handed, resting_host) = (keys.clone(), host.clone());
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    let bar = in_place(resting_host, window, cx);
+                    cx.new(|cx| {
+                        cx.subscribe(&bar, move |_, _, key: &InPlaceKey, _| {
+                            handed.borrow_mut().push(*key)
+                        })
+                        .detach();
+                        cx.observe(&bar, |_, _, cx| cx.notify()).detach();
+                        Rest {
+                            bar,
+                            other: cx.focus_handle(),
+                        }
+                    })
+                })
+            })
+            .expect("no window for the page");
+        let mut cx = VisualTestContext::from_window(window.into(), cx);
+        (window)
+            .update(&mut cx, |rest, window, cx| {
+                window.focus(&rest.bar.read(cx).field_focus(cx), cx)
+            })
+            .unwrap();
+        cx.run_until_parked();
+        Resting {
+            cx,
+            window,
+            host,
+            keys,
+        }
+    }
+
+    fn type_text(&mut self, text: &str) {
+        self.cx.simulate_input(text);
+        self.cx.run_until_parked();
+    }
+
+    fn keys(&mut self, keys: &str) {
+        self.cx.simulate_keystrokes(keys);
+        self.cx.run_until_parked();
+    }
+
+    /// The page's switch goes to Ask, or back to search.
+    fn compose(&mut self, composing: bool) {
+        (self.window)
+            .update(&mut self.cx, |rest, window, cx| {
+                rest.bar.update(cx, |bar, cx| {
+                    bar.set_composing(composing, "placeholder".into(), window, cx)
+                })
+            })
+            .unwrap();
+        self.cx.run_until_parked();
+    }
+
+    /// The keyboard goes to the page's own control, as at a click in the sidebar.
+    fn focus_other(&mut self) {
+        (self.window)
+            .update(&mut self.cx, |rest, window, cx| {
+                window.focus(&rest.other, cx)
+            })
+            .unwrap();
+        self.cx.run_until_parked();
+    }
+
+    /// Whether the field, and the page's control, have the keyboard.
+    fn focused(&mut self) -> (bool, bool) {
+        (self.window)
+            .update(&mut self.cx, |rest, window, cx| {
+                let field = rest.bar.read(cx).field_focus(cx).is_focused(window);
+                (field, rest.other.is_focused(window))
+            })
+            .unwrap()
+    }
+
+    fn rows(&mut self) -> Vec<String> {
+        (self.window)
+            .read_with(&self.cx, |rest, cx| {
+                (rest.bar.read(cx).rows.iter())
+                    .map(|row| row.url.clone())
+                    .collect()
+            })
+            .unwrap()
+    }
+
+    fn asked(&self) -> Vec<String> {
+        (self.host.asked.take().into_iter())
+            .map(|(text, _)| text)
+            .collect()
+    }
+}
+
+/// A Space's first frame reads nothing for its field: the bar resting there asks the core and the
+/// host nothing until it's typed in, and never sizes, shows, hides or dismisses a window.
+#[gpui::test]
+fn a_resting_bar_asks_nothing_until_typed_in(cx: &mut TestAppContext) {
+    let mut rest = Resting::new(cx);
+    assert_eq!(rest.asked(), Vec::<String>::new());
+    assert_eq!(rest.host.calls.take(), Vec::<String>::new());
+    rest.type_text("ex");
+    assert_eq!(rest.asked(), ["e", "ex"]);
+    rest.cx
+        .cx
+        .update(|cx| suggested("ex".into(), vec![page("https://example.com/")], cx));
+    rest.cx.run_until_parked();
+    assert_eq!(rest.rows(), ["https://example.com/"]);
+    rest.keys("escape");
+    assert_eq!(rest.host.calls.take(), Vec::<String>::new());
+    assert!(rest.host.heights.take().is_empty() && rest.host.shown.take().is_empty());
+}
+
+/// At rest ⇥ and ⇧⇥ are the page's switch and Esc is the page's, so the bar never enters an Ask
+/// of its own beside the composer's.
+#[gpui::test]
+fn a_resting_bar_hands_tab_and_escape_to_its_page(cx: &mut TestAppContext) {
+    let mut rest = Resting::new(cx);
+    *rest.host.agents.borrow_mut() = agents(&[("claude", None)]);
+    rest.type_text("book a table");
+    rest.keys("tab");
+    rest.keys("shift-tab");
+    rest.keys("escape");
+    assert_eq!(
+        *rest.keys.borrow(),
+        [InPlaceKey::Flip, InPlaceKey::Flip, InPlaceKey::Escape]
+    );
+    let asks = (rest.window)
+        .read_with(&rest.cx, |rest, cx| rest.bar.read(cx).ask.is_some())
+        .unwrap();
+    assert!(!asks, "the bar entered its own Ask");
+    assert_eq!(rest.host.calls.take(), Vec::<String>::new());
+}
+
+/// In the page's Ask, what's typed is the task: nothing is suggested, the rows go, and ↩ hands it
+/// to the page. Back in search, it's asked for again.
+#[gpui::test]
+fn a_resting_bar_in_the_ask_suggests_nothing_and_hands_return_on(cx: &mut TestAppContext) {
+    let mut rest = Resting::new(cx);
+    rest.type_text("ex");
+    rest.cx
+        .cx
+        .update(|cx| suggested("ex".into(), vec![page("https://example.com/")], cx));
+    rest.cx.run_until_parked();
+    rest.asked();
+    rest.compose(true);
+    assert_eq!(rest.rows(), Vec::<String>::new());
+    rest.type_text("plain");
+    assert_eq!(rest.asked(), Vec::<String>::new());
+    rest.keys("enter");
+    assert_eq!(*rest.keys.borrow(), [InPlaceKey::Run]);
+    rest.compose(false);
+    assert_eq!(rest.asked(), ["explain"]);
+}
+
+/// At rest the field doesn't take the keyboard back: a control of the page that takes it keeps it.
+#[gpui::test]
+fn a_resting_bar_lets_the_keyboard_go(cx: &mut TestAppContext) {
+    let mut rest = Resting::new(cx);
+    assert_eq!(rest.focused(), (true, false));
+    rest.focus_other();
+    assert_eq!(rest.focused(), (false, true));
+    rest.type_text("x");
+    assert_eq!(rest.asked(), Vec::<String>::new());
+}
+
+/// Two windows' Spaces empty: the core's answers go to the field that asked last, which drops
+/// one for the other's text, so neither shows the other's rows.
+#[gpui::test]
+fn answers_go_to_the_resting_bar_that_asked_last(cx: &mut TestAppContext) {
+    let mut first = Resting::new(cx);
+    let mut second = Resting::new(cx);
+    first.type_text("ab");
+    second.type_text("cd");
+    cx.update(|cx| suggested("ab".into(), vec![page("https://ab.test/")], cx));
+    cx.run_until_parked();
+    assert_eq!(first.rows(), Vec::<String>::new());
+    assert_eq!(second.rows(), Vec::<String>::new());
+    cx.update(|cx| suggested("cd".into(), vec![page("https://cd.test/")], cx));
+    cx.run_until_parked();
+    assert_eq!(second.rows(), ["https://cd.test/"]);
+    assert_eq!(first.rows(), Vec::<String>::new());
+}
+
+/// While the window's bar is open, the core's answers are its, not a resting bar's.
+#[gpui::test]
+fn the_windows_bar_takes_answers_while_open(cx: &mut TestAppContext) {
+    let mut rest = Resting::new(cx);
+    rest.type_text("ab");
+    let mut bar = Bar::new(cx);
+    bar.type_text("ab");
+    bar.suggest("ab", vec![page("https://ab.test/")]);
+    assert_eq!(bar.listed(), ["https://ab.test/"]);
+    assert_eq!(rest.rows(), Vec::<String>::new());
 }

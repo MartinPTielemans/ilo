@@ -1448,12 +1448,13 @@ void WatchHeldEscape() {
 
 namespace {
 
-// Dia's window material (docs/ux-spec.md › Window material): what's behind the window, blurred,
+// The window's material (docs/ux-spec.md › Window material): what's behind the window, blurred,
 // under the UI, which tints it, dark or light. AppKit swaps it for an opaque fill while the window
 // is inactive, and with Reduce Transparency or Increase Contrast.
 void SetWindowMaterialLight(NSVisualEffectView* material, bool light) {
-  // Dia's dark material is one AppKit doesn't name; its light one is the HUD window's.
-  material.material = light ? NSVisualEffectMaterialHUDWindow : (NSVisualEffectMaterial)29;
+  // The HUD window's in both looks, ilo's own pick: the same glass dark and light, a material
+  // AppKit names, and the one the transparency levels' tints are reckoned against.
+  material.material = NSVisualEffectMaterialHUDWindow;
   material.appearance =
       [NSAppearance appearanceNamed:light ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua];
 }
