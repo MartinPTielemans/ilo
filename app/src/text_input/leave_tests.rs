@@ -182,11 +182,12 @@ fn a_profile_name_is_kept_however_the_field_loses_the_keyboard(cx: &mut TestAppC
     }
 }
 
-/// The field's own menu has the window's keyboard while it shows. Closed by a press away from the
-/// field, which it takes, or by the user going to another window or app, it ends the field, keeping
-/// the name; closed by a press on the field or by its keys, it leaves it open.
+/// The field's own menu has the window's keyboard while it shows. Closed by a press, wherever it
+/// was, or by its keys, it leaves the field open: the press was spent on the menu, and the next one
+/// away from the field ends it as any press does. Closed by the user going to another window or
+/// app, it ends the field, keeping the name.
 #[gpui::test]
-fn a_profile_name_is_kept_as_its_menu_closes_away_from_it(cx: &mut TestAppContext) {
+fn a_profile_name_is_kept_as_the_user_leaves_with_its_menu_up(cx: &mut TestAppContext) {
     let (profiles, cx) = settings(cx);
     let shown: Rc<RefCell<Option<Chosen>>> = Rc::default();
     let menu = shown.clone();
@@ -195,37 +196,44 @@ fn a_profile_name_is_kept_as_its_menu_closes_away_from_it(cx: &mut TestAppContex
             *menu.borrow_mut() = Some(chosen);
         })))
     });
+    // The field's menu, shown over a name being typed.
     let show_menu = |cx: &mut VisualTestContext| {
-        press(cx, FIELD, MouseButton::Right);
-        shown
-            .take()
-            .expect("a right-click in the field showed no menu")
-    };
-    for (closed, ends) in [
-        (Closed::PressedAt(FIELD), false),
-        (Closed::Otherwise, false),
-        (Closed::PressedAt(TOOLBAR_TAB), true),
-        (Closed::PressedAt(NOTHING), true),
-        (Closed::Left, true),
-    ] {
         rename(&profiles, cx);
         cx.simulate_input("Work");
-        let chosen = show_menu(cx);
+        press(cx, FIELD, MouseButton::Right);
+        let chosen = shown
+            .take()
+            .expect("a right-click in the field showed no menu");
         cx.deactivate_window();
         assert!(
             renaming(&profiles, cx),
             "the menu taking the keyboard closed the field"
         );
-        cx.update(|window, cx| chosen(closed, window, cx));
-        cx.run_until_parked();
-        assert_eq!(!renaming(&profiles, cx), ends, "{closed:?}");
-        if ends {
-            assert_eq!(kept(&profiles, cx), ["Work"], "{closed:?}");
-        } else {
-            cx.simulate_keystrokes("escape");
-            assert!(kept(&profiles, cx).is_empty(), "{closed:?}");
-        }
-    }
+        chosen
+    };
+
+    let chosen = show_menu(cx);
+    cx.update(|window, cx| chosen(Closed::Otherwise, window, cx));
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    assert!(renaming(&profiles, cx), "the menu closing closed the field");
+    press(cx, NOTHING, MouseButton::Left);
+    assert!(!renaming(&profiles, cx), "the next press away left it open");
+    assert_eq!(kept(&profiles, cx), ["Work"]);
+
+    let chosen = show_menu(cx);
+    cx.update(|window, cx| chosen(Closed::Otherwise, window, cx));
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    assert!(!renaming(&profiles, cx), "escape left the field open");
+    assert!(kept(&profiles, cx).is_empty(), "escape kept the name");
+
+    let chosen = show_menu(cx);
+    cx.update(|window, cx| chosen(Closed::Left, window, cx));
+    cx.run_until_parked();
+    assert!(!renaming(&profiles, cx), "leaving left the field open");
+    assert_eq!(kept(&profiles, cx), ["Work"]);
 }
 
 /// GPUI can hear the window lost the keyboard once the window has it back, as when a menu's
