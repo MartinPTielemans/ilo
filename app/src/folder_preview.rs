@@ -419,7 +419,7 @@ impl FolderPreview {
         // check.sh reads this line, to see the preview is beside its row.
         log!("browser: folder preview shown {folder} at {left} {top} {WIDTH} {height}");
         // Under Reduce Motion nothing scales, and the fades stay (docs/ux-spec.md › Motion).
-        let from = if cx.reduce_motion() { 1. } else { FROM };
+        let from = if crate::motion::still(cx) { 1. } else { FROM };
         self.host.show(over, left, top, height, from);
         cx.notify();
     }

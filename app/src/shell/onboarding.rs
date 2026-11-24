@@ -1115,7 +1115,7 @@ impl Shell {
             onboarding.focused_step = Some(onboarding.step);
             window.focus(&rest, cx);
         }
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         let elapsed = onboarding.secs_since(onboarding.since);
         let step = onboarding.step;
         let came = match step {

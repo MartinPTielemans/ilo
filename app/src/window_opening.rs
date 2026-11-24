@@ -407,7 +407,7 @@ pub(crate) fn open_window_as(
         log!("browser: window back windowed until its UI shows");
     }
     if let Some(Own::Little { .. }) = own {
-        unsafe { platform::host_set_window_little(ui_view, !cx.reduce_motion()) };
+        unsafe { platform::host_set_window_little(ui_view, !browser::motion::still(cx)) };
     }
     // A later window comes on screen drawn, as the overlays do: AppKit reports a new window
     // visible, which GPUI on the Mac draws only once it has, about 100 ms after it's ordered in,
