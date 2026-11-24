@@ -9,6 +9,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::time::Instant;
@@ -17,6 +18,7 @@ use futures::channel::mpsc::UnboundedSender;
 use serde_json::{Value, json};
 
 use super::kept::Keep;
+use super::wall::{Wall, WallRefused};
 
 /// A CLI that runs tasks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -108,6 +110,8 @@ pub struct Launch {
     pub tools: Vec<String>,
     /// Whether it gets its helper tool (#4102), which only Claude's arguments read.
     pub helpers: bool,
+    /// The wall it starts inside (#4101), or None for a start that asked for none.
+    pub wall: Option<Arc<Wall>>,
 }
 
 /// What a task's CLI says, as the reader thread hands it to the UI thread.
@@ -126,6 +130,9 @@ pub enum Out {
     Ended(Option<Failure>),
     /// The process has gone: its output closed. What it last said on stderr.
     Gone(String),
+    /// A start inside a wall with files: the assistant is inside it, or nothing started and why.
+    /// Before anything else of the run's, and Gone follows a no.
+    Walled(Result<(), WallRefused>),
     /// What its output tells of a helper (#4102), by the call of the task's that asked for it.
     Helper { id: String, told: Helper },
     /// Its CLI says a helper started, by the call of the task's that asked for it if it names
@@ -184,6 +191,8 @@ pub struct Process {
     id: u32,
     /// Codex's thread and turn, once it has them.
     codex: Option<Arc<super::codex::State>>,
+    /// Whether it's still the wall's launcher, which reads nothing it's sent.
+    rising: Arc<AtomicBool>,
 }
 
 impl Process {
@@ -212,7 +221,10 @@ impl Process {
         if let Some(folder) = launch.config.parent() {
             std::fs::create_dir_all(folder)?;
         }
-        let mut command = crate::child::command(&launch.program);
+        let mut command = match &launch.wall {
+            Some(wall) => wall.command(&launch.program),
+            None => crate::child::command(&launch.program),
+        };
         match launch.cli {
             Cli::Claude => {
                 super::clients::write_private(
@@ -233,7 +245,12 @@ impl Process {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         environment(&mut command, launch);
-        let mut child = command.spawn()?;
+        let (mut child, rising) = match &launch.wall {
+            Some(wall) => wall.start(&mut command)?,
+            None => (command.spawn()?, None),
+        };
+        let walled = rising.is_some();
+        let still_rising = Arc::new(AtomicBool::new(walled));
         let stdin = Arc::new(Mutex::new(child.stdin.take()));
         let stdout = child.stdout.take().expect("piped");
         let stderr = child.stderr.take().expect("piped");
@@ -245,6 +262,7 @@ impl Process {
             id,
             stdin: stdin.clone(),
             codex: codex.clone(),
+            rising: still_rising.clone(),
         };
         let said = Arc::new(Mutex::new(String::new()));
         let err = std::thread::Builder::new()
@@ -258,6 +276,20 @@ impl Process {
         std::thread::Builder::new()
             .name("task-output".into())
             .spawn(move || {
+                // The one wait for the wall, here, as this thread may wait and the UI's may not.
+                if let Some(rising) = rising {
+                    let out = Out::Walled(rising.risen());
+                    still_rising.store(false, Ordering::Release);
+                    let agent = agent.clone();
+                    let event = Event {
+                        agent,
+                        run: id,
+                        out,
+                    };
+                    if events.unbounded_send(event).is_err() {
+                        return;
+                    }
+                }
                 let mut turn = Turn::default();
                 for line in BufReader::new(stdout).lines() {
                     let Ok(line) = line else { break };
@@ -290,12 +322,16 @@ impl Process {
                 });
             })?;
         let mut process = process;
-        match launch.cli {
-            Cli::Claude => process.say(first)?,
+        let began = match launch.cli {
+            Cli::Claude => process.say(first),
             Cli::Codex => {
                 let state = process.codex.as_ref().expect("Codex's");
-                super::codex::begin(&process.stdin, state, first)?
+                super::codex::begin(&process.stdin, state, first)
             }
+        };
+        // A launcher that ended has closed its input, and Walled says why: one account of it.
+        if !walled {
+            began?;
         }
         Ok(process)
     }
@@ -321,6 +357,13 @@ impl Process {
 
     /// Stops the turn under way at once, leaving the process to take the next message.
     pub fn interrupt(&mut self) {
+        // Still the wall's launcher, which reads no line: Stop ends it, and the wait for it.
+        if self.rising.load(Ordering::Acquire) {
+            if let Some(child) = &mut self.child {
+                _ = child.kill();
+            }
+            return;
+        }
         let sent = match (self.cli, &self.codex) {
             (Cli::Codex, Some(state)) => super::codex::interrupt(&self.stdin, state),
             _ => write_line(
