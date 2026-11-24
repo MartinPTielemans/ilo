@@ -215,8 +215,12 @@ impl Browser for Made {
         }
     }
 
-    /// A name with a dot is a site's, as the address bar takes it; other words are a search.
+    /// A name with a dot is a site's, as the address bar takes it; other words are a search. Text
+    /// with a NUL in it can't reach the core, which gives no address for it, as the app's does.
     fn url_for(&self, text: &str) -> Option<String> {
+        if text.contains('\0') {
+            return None;
+        }
         Some(match (text.contains("://"), text.contains('.')) {
             (true, _) => text.into(),
             (false, true) => format!("https://{text}/"),
@@ -8244,6 +8248,39 @@ mod tasks {
         assert_eq!(card.last_site.as_deref(), Some("d.example"));
     }
 
+    /// An address the browser didn't take names no page: its step's site is the agent's own
+    /// words, which the card's plate never shows. A task whose only open is one has no plate, and
+    /// one that reached a page before keeps that page's site.
+    #[gpui::test]
+    fn an_address_the_browser_didnt_take_puts_no_site_on_the_card(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Find two tickets", cx);
+        agents.update(cx, |agents, _| {
+            let task = agents.task_mut(&agent).unwrap();
+            task.ended = None;
+            task.state = State::Working;
+        });
+        let words = "two tickets\0 for friday";
+        let _ = call(&agents, &agent, "open_tab", json!({ "url": words }), cx);
+        let card = card_of(&agents, cx);
+        assert!(
+            !card.steps.is_empty(),
+            "the open wasn't a step, so this tests nothing"
+        );
+        assert_eq!(card.last_site, None, "the plate shows the agent's words");
+
+        let _ = call(
+            &agents,
+            &agent,
+            "open_tab",
+            json!({ "url": "a.example" }),
+            cx,
+        );
+        let _ = call(&agents, &agent, "navigate", json!({ "url": words }), cx);
+        let card = card_of(&agents, cx);
+        assert_eq!(card.last_site.as_deref(), Some("a.example"));
+    }
+
     /// A Stopped line's step up and Any site reach the task through the user's press, as Stop
     /// does, and a task outside its Sites goes on once the user has said any site.
     #[gpui::test]
@@ -8315,6 +8352,68 @@ mod tasks {
             card_of(&agents, cx).status.as_ref(),
             "Stopped after 2 steps"
         );
+    }
+
+    /// After Stop no call of the task's is handled, one that waited its turn behind a slow page
+    /// included: each kind that can wait is answered as stopped, and nothing of it is run, shown
+    /// or kept. Once the task is at work again its calls go on (#4209).
+    #[gpui::test]
+    fn a_stopped_tasks_calls_are_answered_as_stopped(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Compare three shops", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        // A page that is slow to open holds its call, and in the server the calls behind it.
+        let shop = json!({ "url": "https://example.org/" });
+        let opening = call(&agents, &agent, "open_tab", shop.clone(), cx);
+        agents.update(cx, |agents, cx| agents.stop_task(&agent, cx));
+        let stopped = ToolResult::failed(tools::Kind::Stopped, STOPPED);
+        assert_eq!(opening.recv().unwrap(), stopped);
+
+        let seen = |cx: &mut TestAppContext| {
+            let card = card_of(&agents, cx);
+            let asked = (browser.made.borrow().len(), browser.pages.borrow().len());
+            let read = (
+                browser.reads.borrow().len(),
+                browser.asked.borrow().is_some(),
+            );
+            let card = (card.title, card.status, card.question.is_some());
+            (card, log(&agents, &agent, cx), asked, read)
+        };
+        let before = seen(cx);
+        for (tool, arguments) in [
+            ("title", json!({ "text": "Probe" })),
+            ("ask", json!({ "question": "Can you see this?" })),
+            (
+                "finish",
+                json!({ "result": "Compared them.", "summary": "Compared" }),
+            ),
+            ("open_tab", shop),
+            // Calls without a tab, which wait for every tab's calls before them.
+            ("snapshot", json!({})),
+            ("list_tabs", json!({})),
+        ] {
+            let answer = call(&agents, &agent, tool, arguments, cx);
+            assert_eq!(answer.recv().unwrap(), stopped, "{tool}");
+        }
+        assert_eq!(seen(cx), before);
+        let state = agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().state.clone());
+        assert_eq!(state, State::Stopped);
+
+        // At work again, as the user's next message sets it, it names itself.
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        let named = call(
+            &agents,
+            &agent,
+            "title",
+            json!({ "text": "Three shops" }),
+            cx,
+        );
+        assert!(!named.recv().unwrap().error);
+        assert_eq!(card_of(&agents, cx).title.as_ref(), "Three shops");
     }
 
     #[gpui::test]

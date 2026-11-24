@@ -213,6 +213,9 @@ pub(super) struct Recorder {
     pub(super) site_search_settings: Cell<usize>,
     /// Each of Settings, About, Import and Quit the app asked for, in order.
     pub(super) app_asks: RefCell<Vec<&'static str>>,
+    /// What the last Quit runs once its quit is decided: a test answers Quit by calling it, and
+    /// Cancel by leaving it.
+    pub(super) quit_going: RefCell<Option<Rc<dyn Fn(&mut App)>>>,
     pub(super) clear_browsing_data: Cell<usize>,
     /// Each profile's folder, which the test makes.
     pub(super) profile_folders: RefCell<HashMap<u64, std::path::PathBuf>>,
@@ -2095,8 +2098,9 @@ impl Browser for Recorder {
 
     fn jump_to_selection(&self, _: u64, _: &mut App) {}
 
-    fn quit(&self, _: &mut App) {
+    fn quit(&self, going: Rc<dyn Fn(&mut App)>, _: &mut App) {
         self.app_asks.borrow_mut().push("quit");
+        *self.quit_going.borrow_mut() = Some(going);
     }
 
     fn new_window(&self, _: &mut App) {

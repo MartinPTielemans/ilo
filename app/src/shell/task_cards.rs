@@ -33,6 +33,7 @@ use gpui::{
     prelude::*, px, rgb,
 };
 
+use super::agent_bar;
 use super::library::LIBRARY_BACK_INSET;
 use super::page_ends::StripStop;
 use super::{
@@ -42,7 +43,7 @@ use super::{
 };
 use crate::agents::runner::Cli;
 use crate::agents::sign_in::Offer;
-use crate::agents::task::{Card, Dot, TaskAction, Word};
+use crate::agents::task::{Card, Dot, NEEDS_YOU, TaskAction, Word};
 use crate::agents::tier::Tier;
 use crate::palette::FIELD_PLATE as URL_FIELD;
 use crate::tokens::shell::task::motion::{
@@ -202,21 +203,29 @@ fn state_lead(line: &str) -> usize {
     if leads { full.len() } else { 0 }
 }
 
-/// The one word at the end of a page's row.
+/// What a task's page is to it now, in the words every place that names the page says: the end of
+/// its row at the sidebar's foot, and its tile's head line.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum PageWord {
     /// The task works in it now, which Signal's dot before the word says too.
     Reading,
     Done,
-    /// The user holds it, or its task waits, stopped or broke off.
+    /// Its task waits for the user here: the page it handed them. In the title's ink, as the
+    /// glyph is while the task asks.
+    NeedsYou,
+    /// The user took it over: the bar's title on that page, in the title's ink too.
+    Driving,
+    /// Its task waits, stopped or broke off, or the user holds it for a task that went on.
     Paused,
 }
 
 impl PageWord {
-    fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             PageWord::Reading => "Reading",
             PageWord::Done => "Done",
+            PageWord::NeedsYou => NEEDS_YOU,
+            PageWord::Driving => agent_bar::DRIVING,
             PageWord::Paused => "Paused",
         }
     }
@@ -705,10 +714,16 @@ impl Shell {
         self.sync_foot(None, cx);
     }
 
-    /// The stopped ring's colour: the ink at `stopped`, under the floor text keeps, as it's a mark
-    /// beside words that say the task stopped.
-    fn stopped_ring(&self) -> Hsla {
-        Hsla::from(self.palette.ink).opacity(STOPPED)
+    /// The glyph's colours: Signal, a header's title's ink and its state line's, and the stopped
+    /// ring's, the ink at `stopped`, under the floor text keeps, as it's a mark beside words that
+    /// say the task stopped.
+    fn glyph_inks(&self) -> glyph::Inks {
+        glyph::Inks {
+            signal: rgb(STATUS_AGENT).into(),
+            title: self.palette.text(TITLE),
+            status: self.palette.gray(STATUS),
+            stopped: Hsla::from(self.palette.ink).opacity(STOPPED),
+        }
     }
 
     /// A finished task's mark at rest, as its header shows it: Done's tick, or the grey ring of
@@ -716,13 +731,10 @@ impl Shell {
     pub(super) fn status_mark(&self, dot: Dot) -> impl IntoElement + use<> {
         let now = clock();
         let drawn = Glyph::new(State::from(dot), now, true).drawn(now);
-        let signal: Hsla = rgb(STATUS_AGENT).into();
-        let stopped = self.stopped_ring();
+        let inks = self.glyph_inks();
         canvas(
             |_, _, _| {},
-            move |bounds, _, window, _| {
-                glyph::paint(&drawn, bounds, signal, stopped, false, window)
-            },
+            move |bounds, _, window, _| glyph::paint(&drawn, bounds, inks, false, window),
         )
         .size(px(GLYPH))
     }
@@ -738,13 +750,10 @@ impl Shell {
             return self.status_mark(dot).into_any_element();
         };
         let drawn = face.glyph.drawn(now);
-        let signal: Hsla = rgb(STATUS_AGENT).into();
-        let stopped = self.stopped_ring();
+        let inks = self.glyph_inks();
         canvas(
             |_, _, _| {},
-            move |bounds, _, window, _| {
-                glyph::paint(&drawn, bounds, signal, stopped, false, window)
-            },
+            move |bounds, _, window, _| glyph::paint(&drawn, bounds, inks, false, window),
         )
         .flex_none()
         .size(px(GLYPH))
@@ -1002,11 +1011,18 @@ impl Shell {
         }
     }
 
-    /// The word at the end of `tab`'s row in `card`'s group: Paused where the user holds the page
-    /// or its task waits, stopped or broke off, Reading where the task works in it now, else Done.
+    /// What `tab` is to `card`'s task now, of the five words a task's page has: You're driving
+    /// where the user took it over, Needs you where its task waits for them at the page it handed
+    /// them, Reading where the task works in it now, Paused where its task waits, stopped or broke
+    /// off, or went on from a page it handed them, else Done. The row at the sidebar's foot ends
+    /// in it and a tile's head line says it, so a page reads the same in both.
     pub(super) fn page_word(&self, card: &Card, tab: u64) -> PageWord {
-        if self.held_why(tab).is_some() {
-            return PageWord::Paused;
+        match self.held_why(tab) {
+            // What the task asked of them there: a page they took over has none.
+            Some(asked) if asked.is_empty() => return PageWord::Driving,
+            Some(_) if card.word == Word::NeedsYou => return PageWord::NeedsYou,
+            Some(_) => return PageWord::Paused,
+            None => {}
         }
         match card.word {
             Word::Working => {
@@ -1594,10 +1610,9 @@ impl Shell {
     /// the ring is drawn brighter, to read as on the others.
     fn header_glyph(&self, face: &Face, lit: bool, now: Instant) -> impl IntoElement + use<> {
         let drawn = face.glyph.drawn(now);
-        let signal: Hsla = rgb(STATUS_AGENT).into();
-        let stopped = self.stopped_ring();
+        let inks = self.glyph_inks();
         let paint = move |bounds, _, window: &mut Window, _: &mut gpui::App| {
-            glyph::paint(&drawn, bounds, signal, stopped, lit, window)
+            glyph::paint(&drawn, bounds, inks, lit, window)
         };
         canvas(|_, _, _| {}, paint)
             .absolute()
@@ -1918,10 +1933,11 @@ impl Shell {
             .items_center()
             .gap(px(PAGE_DOT_GAP))
             .text_size(px(text::SMALL))
-            .text_color(self.palette.gray(match working {
-                true => PAGE_WORD_WORKING,
-                false => PAGE_WORD,
-            }))
+            .text_color(match word {
+                PageWord::NeedsYou | PageWord::Driving => self.palette.text(TITLE),
+                PageWord::Reading => self.palette.gray(PAGE_WORD_WORKING),
+                PageWord::Done | PageWord::Paused => self.palette.gray(PAGE_WORD),
+            })
             .children(dot)
             .child(word.label());
         let drawn = {
