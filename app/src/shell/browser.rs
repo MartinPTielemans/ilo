@@ -928,6 +928,18 @@ pub trait Browser {
     /// Whether this window's page has the keyboard rather than its UI, where the core keeps that
     /// itself (Linux), or None where the shell follows the host's word (`Shell::keyboard_left`).
     fn page_has_keyboard(&self, cx: &App) -> Option<bool>;
+    /// Whether the key being handled now is a held key's repeat, where the host can say: the
+    /// Mac's and Windows' for every key, Wayland's for the UI's by GPUI's number for each press.
+    /// X11's repeats can't be told from presses.
+    fn key_repeated(&self) -> bool {
+        false
+    }
+    /// Whether the app is the active one: with its window not active, one of the app's own windows
+    /// has the keyboard, as the command bar, a menu or Peek does over it, rather than another
+    /// app's.
+    fn app_active(&self) -> bool {
+        false
+    }
     /// The window shows another Space: the command bar, if it shows over this window, lists
     /// `tabs` from it, or `open_tabs` for Search Tabs, and its profile's suggestions (decision 5).
     /// Returns whether its pick opens a new tab, for New Tab to keep its plate.
@@ -1030,6 +1042,9 @@ pub trait Browser {
     /// The page area shows the conversation of `agent`'s task: the Agents send it now, and as it
     /// changes.
     fn show_task(&self, agent: SharedString, cx: &mut App);
+    /// The command bar, just opened for a new tab, takes `asked` as an ask, as if the user had
+    /// typed it and pressed ⇥: an ended task's Start Again (#4105). Nothing is sent.
+    fn ask_again(&self, _asked: SharedString, _cx: &mut App) {}
     /// Asks for a picture of a task's page for its conversation, which the browser answers with
     /// `Shell::page_pictured` and `request`.
     fn task_picture(&self, tab: u64, request: u64, cx: &mut App);

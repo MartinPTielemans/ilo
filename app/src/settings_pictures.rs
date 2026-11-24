@@ -1,6 +1,7 @@
 //! Settings' rows chosen from drawings: a row of small pictures, the chosen one ringed in the text
-//! colour and its name beneath in the row's ink (#4092). A click on one picks it, and so do ← and →
-//! while the row has the keyboard; an assistive app reads them as options with one chosen.
+//! colour and its name beneath in the row's ink (#4092). A click on one picks it, and so do ←, →,
+//! Home and End while the row has the keyboard, a radio group's keys (list_keys); an assistive app
+//! reads them as options with one chosen.
 //!
 //! Sidebar position (#2407) draws the window with the sidebar on each side and Appearance (#2429)
 //! draws it light, dark, and split between the two for Automatic, each the control at its row's
@@ -17,8 +18,10 @@ use gpui::{
     px, rgb,
 };
 
+use crate::keyboard_ring::ring;
+use crate::list_keys::{Axis, Ends, ListKeys, Step};
 use crate::palette::{INK, PAPER};
-use crate::settings_rows::{Look, drawn, ring};
+use crate::settings_rows::{Look, drawn};
 use crate::shell::FavoritesScope;
 use crate::theme::Appearance;
 use crate::tokens::command_bar::site_colors::{
@@ -48,18 +51,9 @@ pub struct Choice {
     pub drawing: gpui::Div,
 }
 
-/// The choice a key moves to among `count`, if it's ← or → alone and there's one that way.
-pub fn keyed(event: &KeyDownEvent, chosen: usize, count: usize) -> Option<usize> {
-    let keys = &event.keystroke;
-    if keys.modifiers.modified() {
-        return None;
-    }
-    match keys.key.as_str() {
-        "left" => chosen.checked_sub(1),
-        "right" => Some(chosen + 1).filter(|&next| next < count),
-        _ => None,
-    }
-}
+/// What a row's pictures call with the index picked, by a click or a key, when it isn't the one
+/// chosen.
+pub type Picked = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 
 /// The row's pictures, `chosen` ringed, on a row's plate in `look`, the others with a hairline in
 /// the window's `base` ink. `name` is the row's, which an assistive app reads for the group, and
@@ -77,61 +71,98 @@ pub fn pictures(
     logged: crate::settings_rows::Drawn,
     pick: impl Fn(usize, &mut Window, &mut App) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
-    let pick = Rc::new(pick);
-    let keyed_pick = pick.clone();
+    let pick: Picked = Rc::new(pick);
     let count = choices.len();
-    let logged_name = name.to_lowercase();
     let options = choices.into_iter().enumerate().map(|(index, choice)| {
-        let is_chosen = index == chosen;
-        let pick = pick.clone();
-        let label = div()
-            .text_size(px(SMALL))
-            .text_color(if is_chosen { look.ink } else { look.detail })
-            .child(choice.title);
-        // GPUI paints a later shadow over an earlier one, so the plate's gap goes over the ring.
-        let ring = match is_chosen {
-            true => vec![
-                spread(look.on, SIDE_RING_GAP + SIDE_RING),
-                spread(look.surface, SIDE_RING_GAP),
-            ],
-            false => vec![],
-        };
-        let ring = ring
-            .into_iter()
-            .chain([inset(base.opacity(SIDE_OTHER))])
-            .collect();
-        div()
-            .id((name, index))
-            .when(a11y, |option| {
-                let toggled = if is_chosen {
-                    Toggled::True
-                } else {
-                    Toggled::False
-                };
-                option
-                    .role(Role::RadioButton)
-                    .aria_label(choice.title)
-                    .aria_toggled(toggled)
-                    .a11y_synthetic_children(|builder| {
-                        builder.parent_node().add_action(Action::Click)
-                    })
-            })
-            .flex()
-            .flex_col()
-            .items_center()
-            .gap(px(SIDE_LABEL_GAP))
-            .child(choice.drawing.shadow(ring).relative().child(drawn(
-                format!("{logged_name} option {}", choice.title),
-                logged.clone(),
-            )))
-            .child(label)
-            .on_click(move |_, window, cx| {
-                if !is_chosen {
-                    pick(index, window, cx)
-                }
-            })
-            .into_any_element()
+        option(
+            look,
+            base,
+            name,
+            index,
+            index == chosen,
+            choice,
+            a11y,
+            &logged,
+            &pick,
+        )
     });
+    let options: Vec<_> = options.collect();
+    group(look, name, chosen, count, a11y, pick).children(options)
+}
+
+/// One of a row's pictures, its drawing ringed while it's `chosen`, with a hairline in `base` inside
+/// its edge, and its name under it, as `pictures` draws each. A row whose pictures share its width
+/// gives each `flex_1`.
+#[allow(clippy::too_many_arguments)]
+pub fn option(
+    look: &Look,
+    base: Rgba,
+    name: &'static str,
+    index: usize,
+    is_chosen: bool,
+    choice: Choice,
+    a11y: bool,
+    logged: &crate::settings_rows::Drawn,
+    pick: &Picked,
+) -> gpui::Stateful<gpui::Div> {
+    let pick = pick.clone();
+    let label = div()
+        .text_size(px(SMALL))
+        .text_color(if is_chosen { look.ink } else { look.detail })
+        .child(choice.title);
+    // GPUI paints a later shadow over an earlier one, so the plate's gap goes over the ring.
+    let ring = match is_chosen {
+        true => vec![
+            spread(look.on, SIDE_RING_GAP + SIDE_RING),
+            spread(look.surface, SIDE_RING_GAP),
+        ],
+        false => vec![],
+    };
+    let ring = ring.into_iter().chain([inset(other(base))]).collect();
+    div()
+        .id((name, index))
+        .when(a11y, |option| {
+            let toggled = if is_chosen {
+                Toggled::True
+            } else {
+                Toggled::False
+            };
+            option
+                .role(Role::RadioButton)
+                .aria_label(choice.title)
+                .aria_toggled(toggled)
+                .a11y_synthetic_children(|builder| builder.parent_node().add_action(Action::Click))
+        })
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(SIDE_LABEL_GAP))
+        .child(choice.drawing.shadow(ring).relative().child(drawn(
+            format!("{} option {}", name.to_lowercase(), choice.title),
+            logged.clone(),
+        )))
+        .child(label)
+        .on_click(move |_, window, cx| {
+            if !is_chosen {
+                pick(index, window, cx)
+            }
+        })
+}
+
+/// A row of pictures' keys: a radio group's, so ← and → pick the one beside the chosen one, Home and
+/// End the first and the last, and they stop at the ends.
+const KEYS: ListKeys = ListKeys::radio(Axis::Horizontal, Ends::Stop);
+
+/// The group a row's pictures go in, `count` of them with `chosen` the one chosen: one stop for ⇥,
+/// ringed while it has the keyboard, where the keys (`KEYS`) pick another.
+pub fn group(
+    look: &Look,
+    name: &'static str,
+    chosen: usize,
+    count: usize,
+    a11y: bool,
+    pick: Picked,
+) -> gpui::Stateful<gpui::Div> {
     div()
         .id(name)
         .when(a11y, |row| row.role(Role::RadioGroup).aria_label(name))
@@ -143,12 +174,31 @@ pub fn pictures(
         .flex()
         .gap(px(SIDE_GAP))
         .on_key_down(move |event: &KeyDownEvent, window, cx| {
-            if let Some(index) = keyed(event, chosen, count) {
-                cx.stop_propagation();
-                keyed_pick(index, window, cx);
+            let Some(step) = KEYS.step(event, Some(chosen), count) else {
+                return;
+            };
+            cx.stop_propagation();
+            if let Step::Choose(index) = step
+                && index != chosen
+            {
+                pick(index, window, cx);
             }
         })
-        .children(options)
+}
+
+/// The hairline `option` draws inside a picture's edge, in the window's `base` ink, as a layer for
+/// a drawing whose own layers cover its plate, and so the hairline under them, to put on top: its
+/// corners at the drawing's `radius`.
+pub fn edge_over(base: Rgba, radius: f32) -> gpui::Div {
+    div()
+        .absolute()
+        .inset_0()
+        .rounded(px(radius))
+        .shadow(vec![inset(other(base))])
+}
+
+fn other(base: Rgba) -> Rgba {
+    base.opacity(SIDE_OTHER)
 }
 
 /// A side's name, as the drawing's label and an assistive app say it.

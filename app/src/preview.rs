@@ -2695,7 +2695,8 @@ fn task_conversation(agent: SharedString) -> Conversation {
 
 /// PREVIEW_TASK=<state> (#4095's bench) shows the working task's conversation beside its page in
 /// one of the states ilo's own lines are made for, from made-up data: working, refused,
-/// off-limits, yours, tab-back, signed-in or raised.
+/// off-limits, yours, tab-back, signed-in, raised or notes; or of a task that has ended (#4105):
+/// ended, ended-first, picked-up, gone, not-kept or codex-ended.
 fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
     let Ok(state) = std::env::var("PREVIEW_TASK") else {
         return;
@@ -2785,6 +2786,71 @@ fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 ),
                 working(10, "Clicking “Place order”"),
             ]
+        }
+        // A task that has ended (#4105): with its reply field, the first one's line saying where
+        // the conversation lives, a reply that took it up, and the three lines that stand in the
+        // field's place.
+        "ended" | "ended-first" | "picked-up" | "gone" | "not-kept" | "codex-ended" => {
+            let ended = state != "picked-up";
+            if state == "codex-ended" {
+                talk.name = "Codex".into();
+            }
+            talk.about = match ended {
+                true => format!("{} · Done at 14:02", talk.name).into(),
+                false => talk.about.clone(),
+            };
+            talk.stoppable = !ended;
+            if ended {
+                talk.on = None;
+            }
+            let mut lines = vec![
+                done(0, &items),
+                Line::Said("Two seats in row 12 of the stalls are in your basket on tickets.example.".into()),
+            ];
+            match state.as_str() {
+                "ended-first" => lines.push(line(100, IloKind::KeptHere)),
+                "picked-up" => lines.extend([
+                    line(100, IloKind::Resumed { tier: Tier::Work }),
+                    Line::You("Are there two together for Sunday too?".into()),
+                    working(10, "Reading this page"),
+                ]),
+                "gone" => lines.push(line(100, IloKind::Gone)),
+                "not-kept" => lines.push(line(100, IloKind::NotKept)),
+                "codex-ended" => lines.push(line(100, IloKind::KeepsNothing)),
+                _ => {}
+            }
+            lines
+        }
+        // A step whose answer carried a site's notes (#4122), which the line under it says.
+        "notes" => {
+            let github = &browser::agents::notes::NOTES[0];
+            let opened = TraceStep {
+                key: 10,
+                glyph: "icons/globe.svg",
+                title: "Opened github.com".into(),
+                description: "2 s".into(),
+                running: false,
+                failed: false,
+                opens: Opens::Nothing,
+                under: github.with().into(),
+            };
+            let reading = TraceStep {
+                key: 11,
+                glyph: "icons/text-align-start.svg",
+                title: "Reading github.com".into(),
+                description: "".into(),
+                running: true,
+                failed: false,
+                opens: Opens::Nothing,
+                under: "".into(),
+            };
+            let trace = Trace {
+                key: 10,
+                running: true,
+                took: None,
+                items: vec![TraceItem::Step(opened), TraceItem::Step(reading)],
+            };
+            vec![done(0, before), Line::Trace(trace)]
         }
         _ => vec![done(0, before), working(10, "Reading this page")],
     };
@@ -3099,6 +3165,13 @@ fn main() {
                 preview_pictures(Pictures::Assistants { signed_in }, cx);
                 return;
             }
+            // PREVIEW_SITE_NOTES=open or closed shows Settings › Agents' Site notes (#4122), its
+            // switch and its row a site, the first one's note open to read or none.
+            if let Ok(state) = std::env::var("PREVIEW_SITE_NOTES") {
+                let open = state == "open";
+                preview_pictures(Pictures::SiteNotes { open }, cx);
+                return;
+            }
             // PREVIEW_ACCOUNT=signed-out, no-server, words, waiting or signed-in shows Settings ›
             // Account in that state, alone, no-server's for a build that names no sync server; =approve
             // shows another device's request over the browser window.
@@ -3233,8 +3306,13 @@ fn main() {
                     // second Space, for its colour, =private in a private window with no tabs, and =new
                     // in a Space with no tabs and no favorites, as a new user's after the onboarding.
                     // PREVIEW_WELCOME=1 shows no page with the first run's welcome, and
-                    // PREVIEW_ONBOARDING=1, =light or =dark the onboarding over it first.
-                    let onboarding = std::env::var("PREVIEW_ONBOARDING").ok();
+                    // PREVIEW_ONBOARDING=1, =light or =dark the onboarding over it first, and
+                    // PREVIEW_ONBOARDING_STEP=transparency, or a step's number from 1, opens it at
+                    // that step.
+                    let onboarding_step = std::env::var("PREVIEW_ONBOARDING_STEP").ok();
+                    let onboarding = std::env::var("PREVIEW_ONBOARDING")
+                        .ok()
+                        .or(onboarding_step.as_ref().map(|_| "1".into()));
                     let welcome =
                         std::env::var_os("PREVIEW_WELCOME").is_some() || onboarding.is_some();
                     let empty = std::env::var("PREVIEW_EMPTY")
@@ -3602,9 +3680,10 @@ fn main() {
                     // daily count's switch on there.
                     if let Some(given) = &onboarding {
                         let mut parts = given.split(':');
-                        shell.start_onboarding(parts.next(), cx);
-                        if let Some(step) = parts.next() {
-                            shell.onboarding_to(step, cx);
+                        let appearance = parts.next();
+                        match parts.next().or(onboarding_step.as_deref()) {
+                            Some(step) => shell.onboarding_at(appearance, step, cx),
+                            None => shell.start_onboarding(appearance, cx),
                         }
                         if parts.next() == Some("on") {
                             shell.onboarding_count_on(cx);
@@ -4750,6 +4829,8 @@ enum Pictures {
     CommandLine(CommandLine),
     /// Your assistant's rows in their states, `signed_in` or before (#4100).
     Assistants { signed_in: bool },
+    /// Agents' Site notes (#4122): the switch, on, and the sites' rows, the first `open`.
+    SiteNotes { open: bool },
 }
 
 /// Where the ilo command is (#3667).
@@ -4778,10 +4859,8 @@ fn preview_pictures(shown: Pictures, cx: &mut App) {
         point(px(x as f32), px(y as f32)),
         size(px(width), px(HEIGHT)),
     );
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
-        ..Default::default()
-    };
+    // As the app opens Settings, so a capture shows what it draws (#4129).
+    let options = browser::settings_column::window_options(bounds, "Settings".into());
     let opened = cx.open_window(options, |_, cx| {
         cx.new(|cx| {
             let look = browser::settings_rows::Look::settings(true);
@@ -4828,8 +4907,8 @@ impl gpui::Render for PicturesPage {
         use browser::theme::Appearance;
         use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
         use browser::tokens::settings::{
-            CONTROL_GAP, FIRST_GROUP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, NAME, POPUP_WIDTH,
-            SHARE_TOP, SIDE_ROOM, TEXT_X,
+            BUTTONS_TOP, CONTROL_GAP, DETAIL_LINE, FIRST_GROUP, GROUP_GAP, HEADING_BOTTOM,
+            HEADING_TOP, NAME, POPUP_WIDTH, SHARE_TOP, SIDE_ROOM, TEXT_X,
         };
         use browser::tokens::text;
         use gpui::{FontWeight, ParentElement, Styled, div, rgb};
@@ -4860,6 +4939,7 @@ impl gpui::Render for PicturesPage {
             Pictures::Appearance { .. } => Section::Appearance,
             Pictures::General => Section::General,
             Pictures::CommandLine(_) | Pictures::Assistants { .. } => Section::Agents,
+            Pictures::SiteNotes { .. } => Section::Agents,
         };
         let column = settings_column::column(
             &Default::default(),
@@ -4878,6 +4958,8 @@ impl gpui::Render for PicturesPage {
                 &look, name, name, on, 1., look.on, a11y,
             ))])
         };
+        // A line under the first group, as Settings' Reduce Transparency line is.
+        let mut under: Option<&str> = None;
         let blocks: Vec<(Option<&str>, Vec<gpui::Div>)> = match self.shown {
             Pictures::Appearance { appearance, right } => {
                 let three = appearance_picker(
@@ -4947,26 +5029,43 @@ impl gpui::Render for PicturesPage {
                         ),
                     ))
                     .child(switch("top bar", false));
-                vec![
-                    (
-                        None,
-                        vec![pictured(&look, "Appearance", line.into(), three), zoom],
-                    ),
-                    (
-                        Some("Layout"),
-                        vec![
-                            pictured(
-                                &look,
-                                "Sidebar position",
-                                "The side of the window the sidebar, the Library and the \
+                // Transparency under Appearance, at the level kept, as Settings has it (#4129).
+                let transparency = browser::transparency::row(
+                    &look,
+                    browser::transparency::has_glass(),
+                    self.logged.clone(),
+                    cx,
+                );
+                let mut looks = vec![pictured(&look, "Appearance", line.into(), three)];
+                let mut groups = Vec::new();
+                match transparency {
+                    Some(transparency) if cfg!(target_os = "macos") => {
+                        looks.push(transparency);
+                        under = Some(browser::transparency::REDUCE_TRANSPARENCY_WINS);
+                        groups.push((None, looks));
+                        groups.push((None, vec![zoom]));
+                    }
+                    transparency => {
+                        looks.extend(transparency);
+                        looks.push(zoom);
+                        groups.push((None, looks));
+                    }
+                }
+                groups.extend([(
+                    Some("Layout"),
+                    vec![
+                        pictured(
+                            &look,
+                            "Sidebar position",
+                            "The side of the window the sidebar, the Library and the \
                                  window's buttons are on."
-                                    .into(),
-                                pair,
-                            ),
-                            top_bar,
-                        ],
-                    ),
-                ]
+                                .into(),
+                            pair,
+                        ),
+                        top_bar,
+                    ],
+                )]);
+                groups
             }
             Pictures::General => {
                 let button = |id: &'static str, title: &'static str| {
@@ -5255,6 +5354,24 @@ impl gpui::Render for PicturesPage {
                     ],
                 }
             }
+            Pictures::SiteNotes { open } => {
+                use browser::agents::notes;
+                use browser::settings_rows::site_note_row;
+                let on = frame()
+                    .child(row_text(
+                        &look,
+                        notes::HEADING,
+                        Some(notes::SWITCH_LINE.into()),
+                    ))
+                    .child(switch(notes::HEADING, true));
+                let rows = (notes::NOTES.iter().enumerate())
+                    .map(|(index, note)| {
+                        let (opened, logged) = (open && index == 0, self.logged.clone());
+                        site_note_row(&look, note, opened, a11y, logged, |_, _, _| {})
+                    })
+                    .collect();
+                vec![(None, vec![on]), (None, rows)]
+            }
         };
         let blocks = blocks
             .into_iter()
@@ -5274,10 +5391,20 @@ impl gpui::Render for PicturesPage {
                     (_, true) => HEADING_TOP,
                     (_, false) => GROUP_GAP,
                 };
+                let under = under.filter(|_| index == 0).map(|line| {
+                    div()
+                        .mt(px(BUTTONS_TOP))
+                        .px(px(TEXT_X))
+                        .text_size(px(text::SMALL))
+                        .line_height(px(DETAIL_LINE))
+                        .text_color(look.detail)
+                        .child(line)
+                });
                 div()
                     .mt(px(top))
                     .children(heading)
                     .child(group(&look, rows))
+                    .children(under)
             });
         // The page's name, and General's sentence and Make Default, as Settings draws them.
         let title = browser::shell::display_text(

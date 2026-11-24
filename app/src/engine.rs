@@ -677,6 +677,10 @@ impl Browser for Engine {
         });
     }
 
+    fn ask_again(&self, asked: SharedString, cx: &mut App) {
+        with_overlays(move |cx| command_bar::ask_again(asked, cx), cx);
+    }
+
     fn show_task(&self, _: SharedString, _: &mut App) {
         // The Agents send a window its conversation as it changes; this sends it now.
         agents_core::update(|_, cx| cx.notify());
@@ -1925,6 +1929,29 @@ impl Browser for Engine {
             || icon_picker::typing(cx)
             || boost_editor::typing(cx)
             || folder_preview::typing(cx)
+    }
+
+    fn key_repeated(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            // The press GPUI numbered for the key held, the same for each of its repeats.
+            thread_local!(static LAST_HELD: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) });
+            let held = gpui_linux::held_key().map(|(_, press)| press);
+            held.is_some() && LAST_HELD.replace(held) == held
+        }
+        #[cfg(not(target_os = "linux"))]
+        unsafe {
+            platform::host_key_repeated()
+        }
+    }
+
+    fn app_active(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        return needs_you::app_active();
+        #[cfg(not(target_os = "linux"))]
+        unsafe {
+            platform::host_app_active()
+        }
     }
 
     fn page_has_keyboard(&self, _: &App) -> Option<bool> {

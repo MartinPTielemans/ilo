@@ -281,6 +281,16 @@ fn arrows_walk_the_three_and_stop_at_the_ends(cx: &mut TestAppContext) {
     );
 }
 
+/// End picks the last of the three and Home the first, and either on the one chosen picks nothing.
+#[gpui::test]
+fn home_and_end_pick_the_ends(cx: &mut TestAppContext) {
+    let (view, cx) = appearances(Appearance::Automatic, cx);
+    cx.update(|window, cx| window.focus_next(cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("home end end home");
+    assert_eq!(picked(&view, cx), [Appearance::Dark, Appearance::Automatic]);
+}
+
 #[gpui::test]
 fn voiceover_reads_appearance_as_three_options_with_one_chosen(cx: &mut TestAppContext) {
     let (view, cx) = appearances(Appearance::Light, cx);

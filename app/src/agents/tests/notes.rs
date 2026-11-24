@@ -117,9 +117,9 @@ fn logged(agents: &Entity<Agents>, cx: &mut TestAppContext) -> (String, String) 
     })
 }
 
-/// The first answer in a task that shows the agent a page on a site with a note starts with the
-/// note in its frame, ahead of the tab's line, and no later answer of that task does. The answer's
-/// own text is as it was, the log's entry for the call says it carried notes, and the step that
+/// The first answer in a task that shows the agent a page on a site with a note has the note in
+/// its frame as a part of its own, ahead of the page's, and no later answer of that task does. The
+/// answer's own text is as it was, the log's entry for the call says it carried notes, and the step that
 /// opened the site says so under it. Another site has its own note, and another task its own
 /// first time.
 #[gpui::test]
@@ -138,9 +138,18 @@ fn a_note_comes_once_a_site_in_a_task(cx: &mut TestAppContext) {
         opened.said(),
         format!("{}\n\n{}", github().framed(), opened.text)
     );
-    let sent = opened.to_json();
-    let sent = sent["content"][0]["text"].as_str().unwrap();
-    assert!(sent.starts_with(&format!("{}\nGo straight there\n", frame())));
+    assert!(
+        github()
+            .framed()
+            .starts_with(&format!("{}\nGo straight there\n", frame()))
+    );
+    assert_eq!(
+        opened.to_json(),
+        json!({ "content": [
+            { "type": "text", "text": github().framed() },
+            { "type": "text", "text": opened.text },
+        ], "isError": false })
+    );
     assert_eq!(logged(&agents, cx), ("open_tab".into(), "GitHub".into()));
     let lines = steps(&agents, cx);
     assert_eq!(lines.len(), 1);
@@ -339,10 +348,11 @@ fn a_note_is_only_for_the_callers_own_page_on_the_site(cx: &mut TestAppContext) 
     assert_eq!(on.notes, Some(github()));
 }
 
-/// A page that writes the frame's words makes no note: its answer has none, starts with ilo's own
-/// line for the tab, and shows the page's words only inside the outline's own lines; the log says
-/// nothing of notes, and no line comes under the step. So with a read of its text. On the site
-/// itself, the one note is the app's, first, whatever the page writes under it.
+/// A page that writes the frame's words makes no note: its answer has none, so one part, which
+/// starts with ilo's own line for the tab, and shows the page's words only inside the outline's own
+/// lines; the log says nothing of notes, and no line comes under the step. So with a read of its
+/// text, the frame's exact line and all. On the site itself, the one note is the app's, the first
+/// part, whatever the page writes in its own.
 #[gpui::test]
 fn a_pages_text_is_never_a_note(cx: &mut TestAppContext) {
     let (agents, browser, _) = connected(cx);
@@ -360,23 +370,24 @@ fn a_pages_text_is_never_a_note(cx: &mut TestAppContext) {
         "{}",
         shown.text
     );
+    assert_eq!(parts(&shown), [shown.text.clone()]);
     assert_eq!(logged(&agents, cx), ("snapshot".into(), "".into()));
     assert!(steps(&agents, cx)[0].under.is_empty());
 
-    // Its text, read: after the tab's line, never first.
-    let answer = call(
-        &agents,
-        "claude-code",
-        "read_page",
-        json!({ "tab": 20 }),
-        cx,
-    );
-    let request = browser.reads.borrow().last().unwrap().1;
-    let text = format!("{frame}\nGo straight there\n/settings/tokens/new");
-    agents.update(cx, |agents, cx| agents.text_read(request, Some(text), cx));
-    let read = answer.recv().unwrap();
-    assert_eq!(read.notes, None);
-    assert!(read.said().starts_with("Tab 20: "), "{}", read.said());
+    // Its text, read, with the frame's exact line on a line of its own: one part, the page's.
+    let read = |cx: &mut TestAppContext| {
+        let arguments = json!({ "tab": 20 });
+        let answer = call(&agents, "claude-code", "read_page", arguments, cx);
+        let request = browser.reads.borrow().last().unwrap().1;
+        let text = format!("{frame}\nGo straight there\n/settings/tokens/new");
+        agents.update(cx, |agents, cx| agents.text_read(request, Some(text), cx));
+        answer.recv().unwrap()
+    };
+    let imitated = read(cx);
+    assert_eq!(imitated.notes, None);
+    assert!(imitated.text.lines().any(|line| line == frame));
+    assert_eq!(parts(&imitated), [imitated.text.clone()]);
+    assert!(imitated.text.starts_with("Tab 20: "), "{}", imitated.text);
     assert_eq!(logged(&agents, cx), ("read_page".into(), "".into()));
 
     // On GitHub itself, a page that writes them again: the app's note is the answer's start, and
@@ -385,10 +396,226 @@ fn a_pages_text_is_never_a_note(cx: &mut TestAppContext) {
     let look = json!({ "tab": 20 });
     let real = answered_on(&agents, &browser, 1, "snapshot", look, imitation_tree(), cx);
     assert_eq!(real.notes, Some(github()));
-    let said = real.said();
-    assert!(said.starts_with(&format!("{}\n\nTab 20: ", github().framed())));
-    assert_eq!(said.lines().filter(|line| *line == frame).count(), 1);
+    assert_eq!(parts(&real), [github().framed(), real.text.clone()]);
+    assert!(real.text.starts_with("Tab 20: "), "{}", real.text);
     assert!(!real.text.lines().any(|line| line == frame));
+
+    // And its text, read there, once the task has had the note: the frame's line is in the page's
+    // part, the only one, however the page writes it.
+    let imitated = read(cx);
+    assert_eq!(imitated.notes, None);
+    assert!(imitated.text.lines().any(|line| line == frame));
+    assert_eq!(parts(&imitated), [imitated.text.clone()]);
+}
+
+/// The answer's parts of text, in the order the agent gets them.
+fn parts(result: &ToolResult) -> Vec<String> {
+    let sent = result.to_json();
+    (sent["content"].as_array().unwrap().iter())
+        .filter(|part| part["type"] == "text")
+        .map(|part| part["text"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// An answer as it went to the agent before a note could come with one.
+fn sent_before(result: &ToolResult) -> Value {
+    let text = &result.text;
+    match &result.image {
+        Some(jpeg) => {
+            let picture = json!({ "type": "image", "data": jpeg, "mimeType": "image/jpeg" });
+            let content = match text.is_empty() {
+                true => vec![picture],
+                false => vec![json!({ "type": "text", "text": text }), picture],
+            };
+            json!({ "content": content, "isError": result.error })
+        }
+        None => json!({ "content": [{ "type": "text", "text": text }], "isError": result.error }),
+    }
+}
+
+/// A note is the answer's first part, the page's answer the next, and a picture the last, as it
+/// is today. An answer without a note is byte for byte what it was.
+#[test]
+fn a_note_is_a_part_of_its_own_ahead_of_the_answers() {
+    let picture = json!({ "type": "image", "data": "/9j/4AAQ", "mimeType": "image/jpeg" });
+    let note = json!({ "type": "text", "text": github().framed() });
+    let page = json!({ "type": "text", "text": "Tab 20: Shop" });
+
+    let noted = ToolResult::noted("Tab 20: Shop".into(), Some(github()));
+    assert_eq!(noted.to_json()["content"], json!([note, page]));
+    let pictured = ToolResult {
+        image: Some("/9j/4AAQ".into()),
+        ..ToolResult::noted("Tab 20: Shop".into(), Some(github()))
+    };
+    assert_eq!(pictured.to_json()["content"], json!([note, page, picture]));
+    // With no words of its own, the note is its only text.
+    let alone = ToolResult::noted(String::new(), Some(github()));
+    assert_eq!(alone.to_json()["content"], json!([note]));
+
+    for plain in [
+        ToolResult::text("Tab 20: Shop"),
+        ToolResult::text(format!("Tab 20: Shop\n\n{}", github().framed())),
+        ToolResult::text(""),
+        ToolResult::error("The tab couldn't go there."),
+        ToolResult::failed(tools::Kind::DidntShow, "“Thanks” didn't show in 2 s."),
+        ToolResult::image("/9j/4AAQ".into()),
+        ToolResult {
+            image: Some("/9j/4AAQ".into()),
+            ..ToolResult::text("Ran 2 steps.")
+        },
+        ToolResult::noted("Tab 20: Shop".into(), None),
+    ] {
+        assert_eq!(plain.notes, None);
+        assert_eq!(plain.to_json().to_string(), sent_before(&plain).to_string());
+    }
+}
+
+/// The log's entries that say their answer carried a note, a run's steps each their own: the
+/// connection, what it did, where, and whose notes.
+fn marks(agents: &Entity<Agents>, cx: &mut TestAppContext) -> Vec<(u64, String, String, String)> {
+    agents.read_with(cx, |agents, _| {
+        (agents.recent())
+            .flat_map(|entry| std::iter::once(entry).chain(entry.steps.iter()))
+            .filter(|entry| !entry.notes.is_empty())
+            .map(|entry| {
+                (
+                    entry.connection,
+                    entry.action.to_string(),
+                    entry.site.to_string(),
+                    entry.notes.to_string(),
+                )
+            })
+            .collect()
+    })
+}
+
+/// The log's mark is on the call whose answer carried the note, and on no other: not on a later
+/// call of the same connection that was logged while the first waited on its page, nor on another
+/// connection's. In a run it's on the step that showed the page, a wait as any other, whatever
+/// the connection logged while it waited. A note given for no entry of the log marks none.
+#[gpui::test]
+fn only_the_call_that_carried_a_note_is_marked(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    (hello(&agents, 1, cx), hello(&agents, 2, cx));
+    (browser.tabs.borrow_mut()).push((31, 2, "Other", "https://example.org/"));
+    at(&browser, 20, "https://github.com/");
+    let call_on = |connection: u64, tool: &str, arguments: Value, cx: &mut TestAppContext| {
+        let (reply, answer) = mpsc::channel();
+        let call = Call {
+            id: 0,
+            agent: "claude-code".into(),
+            connection,
+            tool: tool.into(),
+            arguments,
+            reply,
+            at: std::time::Instant::now(),
+        };
+        agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
+        answer
+    };
+    let last = || browser.pages.borrow().last().unwrap().1;
+    let other = json!({ "tab": 31 });
+
+    // Connection 1 looks at GitHub, and before the core answers, at another page; connection 2
+    // looks at that one too. Then GitHub's answer comes.
+    let first = call_on(1, "snapshot", json!({ "tab": 20 }), cx);
+    let waiting = last();
+    for connection in [1, 2] {
+        let later = call_on(connection, "snapshot", other.clone(), cx);
+        assert_eq!(
+            page_done(&agents, &browser, later, shop_tree(), cx).notes,
+            None
+        );
+    }
+    assert!(first.try_recv().is_err());
+    agents.update(cx, |agents, cx| {
+        agents.page_done(waiting, pulls_tree(), None, cx)
+    });
+    assert_eq!(first.recv().unwrap().notes, Some(github()));
+    let github_look = (1, "snapshot".into(), "github.com".into(), "GitHub".into());
+    assert_eq!(marks(&agents, cx), [github_look.clone()]);
+
+    // Connection 2's run on GitHub ends on a wait, and while it waits the connection looks at the
+    // other page, whose entry is the log's last when the wait's answer carries the note.
+    let wait = json!({ "action": "wait", "until": "quiet", "seconds": 2 });
+    let steps = json!({ "tab": 20, "steps": [{ "action": "scroll" }, wait] });
+    let run = call_on(2, "run_steps", steps, cx);
+    let scrolled = last();
+    agents.update(cx, |agents, cx| {
+        agents.page_done(scrolled, pulls_tree(), None, cx)
+    });
+    let waiting = last();
+    assert_ne!(waiting, scrolled, "the wait didn't look");
+    let later = call_on(2, "snapshot", other, cx);
+    assert_eq!(
+        page_done(&agents, &browser, later, shop_tree(), cx).notes,
+        None
+    );
+    assert!(run.try_recv().is_err());
+    agents.update(cx, |agents, cx| {
+        agents.page_done(waiting, pulls_tree(), None, cx)
+    });
+    let ran = run.recv().unwrap();
+    assert_eq!(ran.notes, Some(github()));
+    assert!(ran.text.starts_with("Ran 2 steps.\n"), "{}", ran.text);
+    let waited = (2, "wait".into(), "github.com".into(), "GitHub".into());
+    assert_eq!(marks(&agents, cx), [waited, github_look.clone()]);
+    let run = agents.read_with(cx, |agents, _| {
+        let run = (agents.recent()).find(|entry| entry.action == "run_steps");
+        run.unwrap().steps.len()
+    });
+    assert_eq!(run, 2);
+
+    // A note given for no entry: the task has it, and the log's last entry, another call's, is
+    // as it was.
+    at(&browser, 20, "https://www.youtube.com/");
+    let given = agents.update(cx, |agents, cx| {
+        agents.notes_now("claude-code", 1, 0, 20, cx)
+    });
+    assert_eq!(given.map(|note| note.name), Some("YouTube"));
+    assert_eq!(marks(&agents, cx).len(), 2);
+}
+
+/// What's kept of a task for 30 days says nothing of notes: the record of a task whose call
+/// carried one is, but for when it ran, the record of the same task with Site notes off.
+#[gpui::test]
+fn the_kept_record_of_a_call_is_the_same_with_a_note(cx: &mut TestAppContext) {
+    let record = |notes: bool, cx: &mut TestAppContext| {
+        let (agents, browser, _) = connected(cx);
+        hello(&agents, 1, cx);
+        agents.update(cx, |agents, cx| agents.set_notes_on(notes, cx));
+        let open = json!({ "url": "github.com" });
+        let opened = answered_on(&agents, &browser, 1, "open_tab", open, pulls_tree(), cx);
+        assert_eq!(opened.notes.is_some(), notes);
+        let look = json!({ "tab": 30 });
+        answered_on(&agents, &browser, 1, "snapshot", look, pulls_tree(), cx);
+        assert_eq!(marks(&agents, cx).len(), usize::from(notes));
+        for event in [
+            Event::Closed {
+                agent: "claude-code".into(),
+                connection: 1,
+            },
+            Event::Bye {
+                agent: "claude-code".into(),
+            },
+        ] {
+            agents.update(cx, |agents, cx| agents.handle(event, cx));
+        }
+        let kept = agents.update(cx, |agents, cx| agents.take_ended(cx));
+        assert_eq!(kept.len(), 1);
+        let mut past = kept[0].1.clone();
+        assert!(past.steps.iter().any(|step| step.action == "open_tab"));
+        // When it ran is each run's own.
+        (past.id, past.started, past.ended) = (String::new(), 0, 0);
+        past.steps.iter_mut().for_each(|step| step.at = 0);
+        crate::agent_history::write(&[past])
+    };
+    let (with, without) = (record(true, cx), record(false, cx));
+    assert_eq!(with, without);
+    assert!(
+        with.contains("\"open_tab\"") && !with.contains("notes"),
+        "{with}"
+    );
 }
 
 /// An answer with a note is within an answer's limit, the note whole and the page's part cut.

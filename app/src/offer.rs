@@ -391,8 +391,12 @@ impl OfferPrompt {
         }
     }
 
+    /// Escape declines, unless an input method is composing in the field, whose Escape it is
+    /// (dismissal's rule), as Return waits for it.
     fn not_now(&mut self, _: &NotNow, _: &mut Window, cx: &mut Context<Self>) {
-        self.answer(Answer::NotNow, cx);
+        if crate::dismissal::Close::escape(self.input.read(cx).composing()).is_some() {
+            self.answer(Answer::NotNow, cx);
+        }
     }
 
     /// Shows the page's usernames under the field, and puts the one chosen in it.

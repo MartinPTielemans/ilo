@@ -760,7 +760,7 @@ pub enum Offer {
     Nothing,
     /// Get Claude Code or Get Codex: its maker's install page.
     Get,
-    /// Sign in to Claude Code or Sign in to Codex.
+    /// Sign In to Claude Code or Sign In to Codex.
     SignIn,
     /// Cancel, while it signs in.
     Cancel,
@@ -776,7 +776,7 @@ impl Offer {
         let name = cli.assistant();
         match self {
             Offer::Get => Some(format!("Get {name}")),
-            Offer::SignIn => Some(format!("Sign in to {name}")),
+            Offer::SignIn => Some(format!("Sign In to {name}")),
             Offer::TryAgain => Some("Try Again".into()),
             Offer::Cancel => Some("Cancel".into()),
             Offer::Nothing | Offer::SignedIn => None,
@@ -789,6 +789,17 @@ impl Offer {
 pub struct Shown {
     pub line: String,
     pub offer: Offer,
+}
+
+/// What Claude Code's line says to run where its sign-in needs a terminal.
+pub const CLAUDE_SIGN_IN: &str = "claude auth login";
+
+impl Shown {
+    /// Where in its line a command to type is, set in the face a terminal shows it in.
+    pub fn command(&self) -> Option<std::ops::Range<usize>> {
+        let at = self.line.find(CLAUDE_SIGN_IN)?;
+        Some(at..at + CLAUDE_SIGN_IN.len())
+    }
 }
 
 impl Cli {
@@ -828,11 +839,11 @@ pub fn shown(cli: Cli, ready: super::ready::Ready, plan: Option<&str>, row: &Row
         // Claude Code's command ends this way when it asks for a code in a terminal, which ilo
         // never gives it.
         (Row::Failed(None), _) if cli == Cli::Claude => shown(
-            "Finish with “claude auth login” in a terminal",
+            &format!("Run {CLAUDE_SIGN_IN} in a terminal"),
             Offer::TryAgain,
         ),
         (Row::Failed(None), _) => shown("The sign-in didn't finish", Offer::TryAgain),
-        (Row::Idle, Ready::Unknown) => shown("Looking…", Offer::Nothing),
+        (Row::Idle, Ready::Unknown) => shown("Checking…", Offer::Nothing),
         (Row::Idle, Ready::NotFound) => shown("Not installed", Offer::Get),
         (Row::Idle, Ready::SignedOut) => shown("Not signed in", Offer::SignIn),
         (Row::Idle, Ready::SignedIn) => match plan {

@@ -378,7 +378,7 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::CollapseFolders | Command::CollapsePinned => "icons/fold-vertical.svg",
         Command::ExpandFolders => "icons/folder-open.svg",
         Command::ExpandPinned => "icons/chevrons-up-down.svg",
-        Command::FocusSidebar => "icons/keyboard.svg",
+        Command::FocusSidebar | Command::FocusAgentQuestion => "icons/keyboard.svg",
         Command::FocusMenu => "icons/nav-menu.svg",
         Command::NewFolder => "icons/folder-plus.svg",
         Command::TogglePin | Command::PinToSpace(_) => "icons/pin.svg",
@@ -947,6 +947,27 @@ pub fn show(
         }
         None => host.show(true, 0., ABOVE_MIDDLE, WIDTH, RADIUS, Level::Modal),
     }
+}
+
+/// The bar, open for a new tab, takes `asked` as an ask, as if the user had typed it and pressed
+/// ⇥: an ended task's Start Again (#4105). It's theirs to send or change; nothing is sent here.
+/// With tasks off or no assistant to ask, it stays what's typed.
+pub fn ask_again(asked: SharedString, cx: &mut App) {
+    let Some(window) = cx.try_global::<CommandBarWindow>().cloned() else {
+        return;
+    };
+    _ = window.update(cx, |bar, window, cx| {
+        if !bar.open.get() || !matches!(bar.target, Target::NewTab) {
+            return;
+        }
+        let caret = asked.len();
+        bar.input.update(cx, |input, cx| {
+            input.set_text(asked.clone(), caret, window, cx)
+        });
+        if bar.offers_ask(cx) {
+            bar.enter_ask(window, cx);
+        }
+    });
 }
 
 /// Shows the command bar at `bar` in the window, with the keyboard, on `editing`'s URL, selected, or

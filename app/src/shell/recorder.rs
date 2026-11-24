@@ -197,6 +197,10 @@ pub(super) struct Recorder {
     /// Whether the page has the keyboard, as a core that keeps it says, or None to leave it to the
     /// host's word, as the Mac's and Windows' do.
     pub(super) page_keys: Cell<Option<bool>>,
+    /// What key_repeated answers: the key handled now repeats a held one's.
+    pub(super) key_repeated: Cell<bool>,
+    /// What app_active answers: the app is the active one, its window or not.
+    pub(super) app_active: Cell<bool>,
     /// Each New Note: the Space whose profile's service it opens, and the tab it splits with.
     pub(super) notes: RefCell<Vec<(u64, Option<u64>)>>,
     /// The Spaces New Board made a Board in. Each opens as tab 900 and on.
@@ -1510,6 +1514,10 @@ impl Browser for Recorder {
     }
 
     fn focus_ui(&self, _: &mut App) {
+        // Where the core keeps who has the keys, as on Linux, the UI has them now.
+        if self.page_keys.get().is_some() {
+            self.page_keys.set(Some(false));
+        }
         self.record("focus ui".into())
     }
 
@@ -1518,6 +1526,9 @@ impl Browser for Recorder {
     }
 
     fn focus_page(&self, _: &mut App) {
+        if self.page_keys.get().is_some() {
+            self.page_keys.set(Some(true));
+        }
         self.record("focus page".into())
     }
 
@@ -1853,6 +1864,14 @@ impl Browser for Recorder {
         self.page_keys.get()
     }
 
+    fn key_repeated(&self) -> bool {
+        self.key_repeated.get()
+    }
+
+    fn app_active(&self) -> bool {
+        self.app_active.get()
+    }
+
     /// A bar that follows opens a new tab, as one ⌘T opened.
     fn command_bar_follows(&self, tabs: Vec<BarTab>, _: Vec<BarTab>, _: &mut App) -> bool {
         let open = self.bar_open.get();
@@ -2008,6 +2027,10 @@ impl Browser for Recorder {
 
     fn show_task(&self, agent: SharedString, _: &mut App) {
         self.record(format!("show task {agent}"));
+    }
+
+    fn ask_again(&self, asked: SharedString, _: &mut App) {
+        self.record(format!("ask again {asked}"));
     }
 
     fn task_picture(&self, tab: u64, _: u64, _: &mut App) {

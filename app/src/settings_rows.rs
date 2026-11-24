@@ -13,6 +13,7 @@ use gpui::{
 };
 
 use crate::agents::request::Sent;
+pub use crate::keyboard_ring::{ring, ring_round};
 use crate::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
 use crate::tokens::palette::{ACCENT_HOVERED, ACCENT_PRESSED, DIALOG_LIGHT};
 use crate::tokens::radius;
@@ -30,8 +31,10 @@ use crate::tokens::settings::{
     SWITCH_WIDTH,
 };
 use crate::tokens::settings::{SENT_CHEVRON, SENT_GAP, SENT_INDENT, SENT_LABEL, SENT_LINES};
-use crate::tokens::shell::{KEYED, KEYED_RING};
 use crate::tokens::text::SMALL;
+
+mod assistant;
+pub use assistant::{Act, another_agent_row, assistant_row};
 
 /// The places `drawn` logged, one a control, shared by a view's controls.
 pub type Drawn = Rc<RefCell<DrawnLog>>;
@@ -154,36 +157,6 @@ pub fn named_popup<E: StatefulInteractiveElement>(
         .aria_label(name)
         .aria_value(item)
         .a11y_synthetic_children(|builder| builder.parent_node().set_has_popup(HasPopup::Menu))
-}
-
-/// The keyboard's ring, Focus Sidebar's: `shell.keyed-ring` wide inside the control's plate, in
-/// the ink `ink` is in at `shell.keyed`, while it has the keyboard from a key. A click shows none.
-pub fn ring(ink: Rgba) -> impl FnOnce(gpui::StyleRefinement) -> gpui::StyleRefinement {
-    let color = Rgba { a: KEYED, ..ink };
-    move |style| {
-        style.shadow(vec![BoxShadow {
-            color: color.into(),
-            offset: point(px(0.), px(0.)),
-            blur_radius: px(0.),
-            spread_radius: px(KEYED_RING),
-            inset: true,
-        }])
-    }
-}
-
-/// The same ring round a control whose own plate fills it, as a switch's pill does, which would
-/// cover a ring inside: just outside its edge, as Site Controls ring a round control.
-pub fn ring_round(ink: Rgba) -> impl FnOnce(gpui::StyleRefinement) -> gpui::StyleRefinement {
-    let color = Rgba { a: KEYED, ..ink };
-    move |style| {
-        style.shadow(vec![BoxShadow {
-            color: color.into(),
-            offset: point(px(0.), px(0.)),
-            blur_radius: px(0.),
-            spread_radius: px(KEYED_RING),
-            inset: false,
-        }])
-    }
 }
 
 /// Settings' push button: a tab stop as every button here is, which an assistive app, while one
@@ -498,26 +471,29 @@ pub fn frame() -> gpui::Div {
         .items_center()
 }
 
+/// A row's line's type, which says more under its name, and any line that describes as a row's
+/// does.
+pub fn detail_type() -> gpui::Div {
+    div().text_size(px(SMALL)).line_height(px(DETAIL_LINE))
+}
+
 /// A row's text: its name, at medium, and the line under it that says more, if any, which wraps.
 pub fn text(look: &Look, name: impl Into<SharedString>, line: Option<SharedString>) -> gpui::Div {
     let line = line.map(|line| {
-        div()
+        detail_type()
             .mt(px(DETAIL_TOP))
-            .text_size(px(SMALL))
-            .line_height(px(DETAIL_LINE))
             .text_color(look.detail)
             .child(line)
     });
+    div().flex_1().min_w_0().child(name_of(name)).children(line)
+}
+
+/// A row's name, at medium, on one line.
+fn name_of(name: impl Into<SharedString>) -> gpui::Div {
     div()
-        .flex_1()
-        .min_w_0()
-        .child(
-            div()
-                .truncate()
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .child(name.into()),
-        )
-        .children(line)
+        .truncate()
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .child(name.into())
 }
 
 /// A row's text whose line sets what the user or an agent types in `mono`, the face a terminal
@@ -547,17 +523,11 @@ pub fn command_text(
         None => vec![run(line.len(), crate::face::UI)],
     };
     let runs: Vec<_> = runs.into_iter().filter(|run| run.len > 0).collect();
-    let small = || {
-        div()
-            .mt(px(DETAIL_TOP))
-            .text_size(px(SMALL))
-            .line_height(px(DETAIL_LINE))
-            .text_color(look.detail)
-    };
+    let small = || detail_type().mt(px(DETAIL_TOP)).text_color(look.detail);
     div()
         .flex_1()
         .min_w_0()
-        .child(div().truncate().child(name.into()))
+        .child(name_of(name))
         .child(small().child(gpui::StyledText::new(line.clone()).with_runs(runs)))
 }
 
@@ -594,7 +564,7 @@ pub fn end(controls: impl IntoIterator<Item = gpui::AnyElement>) -> gpui::Div {
 /// A row: its name, and its control at the end.
 pub fn row(name: impl Into<SharedString>, control: gpui::AnyElement) -> gpui::Div {
     frame()
-        .child(div().flex_1().min_w_0().truncate().child(name.into()))
+        .child(name_of(name).flex_1().min_w_0())
         .child(end([control]))
 }
 
@@ -1283,106 +1253,36 @@ pub mod spoken {
     }
 }
 
-/// What a press on an assistant's row asks for.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Act {
-    /// Get: the maker's install page.
-    Get,
-    /// Sign in or Try Again.
-    SignIn,
-    Cancel,
-    /// The mark, which has tasks run on it.
-    Mark,
-    /// The ⋯ menu, a press on its button.
-    Menu,
-}
-
-/// An assistant's row (#4100), one component for Settings › Agents' Your assistant and first run's
-/// assistant step: Claude Code's or Codex's glyph, its name and what `shown` says of it, then Get,
-/// Sign in, Cancel or Try Again, or, signed in, its ⋯ menu, opening at `menu_at`, and the mark,
-/// `marked` when tasks run on it. A press calls `act`.
-pub fn assistant_row(
+/// A site's note in Settings › Agents' Site notes (#4122): the site's name over what its note
+/// holds, and a button that opens the note's own text under them, as an agent gets it, and
+/// closes it again. A press calls `toggle`.
+pub fn site_note_row(
     look: &Look,
-    cli: crate::agents::runner::Cli,
-    shown: &crate::agents::sign_in::Shown,
-    marked: bool,
+    note: &'static crate::agents::notes::Note,
+    opened: bool,
     a11y: bool,
-    menu_at: impl IntoElement,
-    act: Rc<dyn Fn(Act, &mut gpui::Window, &mut gpui::App)>,
+    logged: Drawn,
+    toggle: impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> gpui::Div {
-    use crate::agents::sign_in::Offer;
-    let index = cli as usize;
-    let name = cli.assistant();
-    let press = |id: &'static str, title: SharedString, what: Act| {
-        let act = act.clone();
-        stop_button(look, (id, index), title, a11y)
-            .on_click(move |_, window, cx| act(what, window, cx))
-            .into_any_element()
-    };
-    let title = |offer: Offer| offer.label(cli).unwrap_or_default().into();
-    let controls = match shown.offer {
-        Offer::Nothing => Vec::new(),
-        Offer::Get => vec![press("assistant-get", title(Offer::Get), Act::Get)],
-        Offer::SignIn => vec![press(
-            "assistant-sign-in",
-            title(Offer::SignIn),
-            Act::SignIn,
-        )],
-        Offer::TryAgain => vec![press(
-            "assistant-try-again",
-            title(Offer::TryAgain),
-            Act::SignIn,
-        )],
-        Offer::Cancel => vec![press("assistant-cancel", title(Offer::Cancel), Act::Cancel)],
-        Offer::SignedIn => {
-            let more = {
-                let act = act.clone();
-                icon_button(look, ("assistant-more", index), "icons/ellipsis.svg")
-                    .relative()
-                    .child(menu_at)
-                    .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
-                        act(Act::Menu, window, cx)
-                    })
-                    .when(a11y, |more| named_button(more, format!("{name} options")))
-            };
-            let mark = {
-                let act = act.clone();
-                div()
-                    .id(("assistant-mark", index))
-                    .when(a11y, |mark| {
-                        named_check(mark, format!("Run tasks on {name}"), marked)
-                    })
-                    .size(px(CONTROL_HEIGHT))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(self::mark(look, marked, look.on, look.knob_on))
-                    .on_click(move |_, window, cx| act(Act::Mark, window, cx))
-            };
-            vec![more.into_any_element(), mark.into_any_element()]
-        }
-    };
-    frame()
-        .child(glyph_plate(look, cli.glyph(), true))
-        .child(text(look, name, Some(shown.line.clone().into())))
-        .when(!controls.is_empty(), |row| row.child(end(controls)))
-}
-
-/// Your assistant's last row: another agent, which connects as Apps that connect has it, where
-/// How goes.
-pub fn another_agent_row(
-    look: &Look,
-    a11y: bool,
-    how: impl Fn(&mut gpui::Window, &mut gpui::App) + 'static,
-) -> gpui::Div {
-    let how = stop_button(look, "assistant-another-how", "How", a11y)
-        .on_click(move |_, window, cx| how(window, cx));
-    frame()
-        .child(glyph_plate(look, "icons/cable.svg", true))
-        .child(text(
-            look,
-            "Another agent",
-            Some("Anything that speaks MCP".into()),
-        ))
-        .child(end([how.into_any_element()]))
+    use crate::agents::notes::{CLOSE, READ};
+    let host = note.host;
+    let title = if opened { CLOSE } else { READ };
+    let id = gpui::ElementId::Name(format!("agent-note-read-{host}").into());
+    let read = stop_button(look, id, title, a11y)
+        .relative()
+        .child(drawn(format!("note {host}"), logged))
+        .on_click(toggle);
+    let head = frame()
+        .child(text(look, note.name, Some(note.about.into())))
+        .child(end([read.into_any_element()]));
+    let words = opened.then(|| {
+        div()
+            .px(px(ROW_X))
+            .pb(px(PADDING))
+            .text_size(px(SMALL))
+            .line_height(px(DETAIL_LINE))
+            .text_color(look.detail)
+            .child(note.text.trim_end())
+    });
+    div().child(head).children(words)
 }
