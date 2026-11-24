@@ -129,6 +129,30 @@ for file in lib site ilo-server webstore $git_bash ${*:-$runs}; do
     exit 1
   }
 done
+# Every run is sourced into the check's one shell, so a run that skips itself with exit 0 ends it,
+# and the runs named after it never started while the check read as passed (#4182). So the runs go
+# in a check of their own, a part, which notes in CHECK_LEFT the runs after the one it's at, and
+# this one starts another part with those, until a part leaves none or fails. A later part keeps
+# build/check as the parts before left it (CHECK_GOES_ON).
+if [ -z "${CHECK_LEFT:-}" ]; then
+  CHECK_LEFT=$(mktemp 2>&1) || {
+    echo "FAIL: the check couldn't make its note of the runs left: $CHECK_LEFT" >&2
+    exit 1
+  }
+  export CHECK_LEFT
+  # bash, the Mac's sh, runs this too when a signal ends the check, so its part ends with it, by
+  # the part's own cleanup.
+  trap 'pkill -P $$ 2> /dev/null || true; wait 2> /dev/null || true; rm -f "$CHECK_LEFT"' EXIT
+  while :; do
+    ./check.sh "$@"
+    runs_left=$(cat "$CHECK_LEFT")
+    [ -n "$runs_left" ] || break
+    # shellcheck disable=SC2086 # the runs left, a word each
+    set -- $runs_left
+    export CHECK_GOES_ON=1
+  done
+  exit 0
+fi
 out=build/check
 windows() {
   case "$(uname)" in MINGW* | MSYS*) return 0 ;; esac
@@ -195,12 +219,20 @@ else
   browser="$app/Contents/MacOS/Browser"
   procs="$app/Contents"
 fi
-# Another Browser holds the profile directory, so this one couldn't start.
+# Another Browser holds the profile directory, so this one couldn't start. The part before this one
+# ended at a run whose app may still be going, which gets the time the runs give each other's.
+if [ -n "${CHECK_GOES_ON:-}" ]; then
+  for _ in $(seq 200); do
+    pgrep -f "$procs" > /dev/null || break
+    sleep 0.1
+  done
+fi
 if pgrep -f "$procs" > /dev/null; then
   echo "FAIL: Browser is already running. Quit it first." >&2
   exit 1
 fi
-said=$(rm -rf "$out" 2>&1) || { echo "FAIL: couldn't empty $out: $said" >&2; exit 1; }
+[ -n "${CHECK_GOES_ON:-}" ] ||
+  said=$(rm -rf "$out" 2>&1) || { echo "FAIL: couldn't empty $out: $said" >&2; exit 1; }
 said=$(mkdir -p "$out/downloads" 2>&1) || { echo "FAIL: couldn't make $out: $said" >&2; exit 1; }
 # Each run starts on a profile no earlier run wrote to, as each hosted job's first run does on a
 # machine of its own: what one run left filled the rows a later one expects, as keys' history of
@@ -247,13 +279,21 @@ if [ "$(uname)" = Darwin ] && [ "$(sysctl -n kern.hv_vmm_present)" = 1 ]; then
     exit 1
   }
 fi
-# The runs send the app's driver its commands through it.
-said=$(mkfifo "$out/drive" 2>&1) || {
+# The runs send the app's driver its commands through it, a new one where a part before left its
+# own.
+said=$({ rm -f "$out/drive" && mkfifo "$out/drive"; } 2>&1) || {
   failed=1
   echo "FAIL: the check couldn't make the drivers' pipe: $said" >&2
   exit 1
 }
+runs_left=
 for run in ${*:-$runs}; do
+  runs_left="$runs_left$run "
+done
+for run in ${*:-$runs}; do
+  runs_left=${runs_left#* }
+  { printf '%s\n' "$runs_left" > "$CHECK_LEFT"; } 2> /dev/null ||
+    setup_failed "noting the runs left in $CHECK_LEFT"
   # The last run's app may still be writing its profile as it ends, and Windows doesn't delete a
   # file a process holds.
   for _ in $(seq 200); do
