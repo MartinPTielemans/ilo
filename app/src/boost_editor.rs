@@ -631,7 +631,7 @@ impl BoostEditor {
     /// input method composes in the name, it's the composition's.
     fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
         let renaming = (self.editing.as_ref()).and_then(|editing| editing.renaming.clone());
-        let Some(close) = Close::escape_from(&renaming, window, cx) else {
+        let Some(close) = Close::escape_from(&renaming, cx) else {
             return;
         };
         let Some(editing) = self.editing.as_mut().filter(|editing| editing.open) else {
@@ -653,7 +653,7 @@ impl BoostEditor {
     /// rule).
     fn commit(&mut self, _: &Commit, window: &mut Window, cx: &mut Context<Self>) {
         let renaming = (self.editing.as_ref()).and_then(|editing| editing.renaming.clone());
-        if crate::dismissal::submits(&renaming, window, cx) {
+        if crate::dismissal::submits(&renaming, cx) {
             self.commit_rename(window, cx);
         }
     }

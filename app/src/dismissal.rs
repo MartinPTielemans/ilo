@@ -30,12 +30,8 @@ use crate::text_input::TextInput;
 
 /// Whether Return acts on the surface: not while an input method composes in one of its
 /// `fields`, whose Return commits the composition instead.
-pub fn submits<'a>(
-    fields: impl IntoIterator<Item = &'a Entity<TextInput>>,
-    window: &mut Window,
-    cx: &mut App,
-) -> bool {
-    !composition_takes(true, fields, window, cx)
+pub fn submits<'a>(fields: impl IntoIterator<Item = &'a Entity<TextInput>>, cx: &mut App) -> bool {
+    !composition_takes(true, fields, cx)
 }
 
 /// Whether the key was the composition's in one of `fields`, which it then ends: kept as typed
@@ -43,13 +39,12 @@ pub fn submits<'a>(
 fn composition_takes<'a>(
     keep: bool,
     fields: impl IntoIterator<Item = &'a Entity<TextInput>>,
-    window: &mut Window,
     cx: &mut App,
 ) -> bool {
     let Some(field) = (fields.into_iter()).find(|field| field.read(cx).composing()) else {
         return false;
     };
-    field.update(cx, |field, cx| field.end_composition(keep, window, cx));
+    field.update(cx, |field, cx| field.end_composition(keep, cx));
     true
 }
 
@@ -103,11 +98,9 @@ impl Close {
     /// Escape there drops the composition, and the surface stays.
     pub fn escape_from<'a>(
         fields: impl IntoIterator<Item = &'a Entity<TextInput>>,
-        window: &mut Window,
         cx: &mut App,
     ) -> Option<Self> {
-        (!composition_takes(false, fields, window, cx))
-            .then_some(Self::new(Why::Escape, By::Keyboard))
+        (!composition_takes(false, fields, cx)).then_some(Self::new(Why::Escape, By::Keyboard))
     }
 
     /// The close of an overlay the host hid as the user left it: a press outside it, or, with no

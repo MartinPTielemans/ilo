@@ -475,8 +475,8 @@ impl FolderPreview {
 
     /// ↩ shows the tab selected, unless it was an input method's, composing in the search
     /// (dismissal's rule).
-    fn choose_selected(&mut self, _: &Choose, window: &mut Window, cx: &mut Context<Self>) {
-        if !crate::dismissal::submits([&self.search.clone()], window, cx) {
+    fn choose_selected(&mut self, _: &Choose, _: &mut Window, cx: &mut Context<Self>) {
+        if !crate::dismissal::submits([&self.search.clone()], cx) {
             return;
         }
         let Some(shown) = &self.shown else {
@@ -500,8 +500,8 @@ impl FolderPreview {
     }
 
     /// Esc closes the preview, unless it was an input method's, composing in the search.
-    fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
-        if crate::dismissal::Close::escape_from([&self.search.clone()], window, cx).is_some() {
+    fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
+        if crate::dismissal::Close::escape_from([&self.search.clone()], cx).is_some() {
             self.close(cx);
         }
     }

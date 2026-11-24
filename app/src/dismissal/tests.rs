@@ -64,13 +64,13 @@ impl Render for Host {
                         .child(self.field.clone())
                         .on_action(cx.listener(|host, _: &Escape, window, cx| {
                             let field = host.field.clone();
-                            if let Some(close) = Close::escape_from([&field], window, cx) {
+                            if let Some(close) = Close::escape_from([&field], cx) {
                                 host.close(close, window, cx);
                             }
                         }))
-                        .on_action(cx.listener(|host, _: &Submit, window, cx| {
+                        .on_action(cx.listener(|host, _: &Submit, _, cx| {
                             let field = host.field.clone();
-                            if submits([&field], window, cx) {
+                            if submits([&field], cx) {
                                 host.submitted += 1;
                             }
                         }))

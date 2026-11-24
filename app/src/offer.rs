@@ -385,15 +385,15 @@ impl OfferPrompt {
     }
 
     /// Return saves, unless it was an input method's, composing in the field (dismissal's rule).
-    fn accept(&mut self, _: &Accept, window: &mut Window, cx: &mut Context<Self>) {
-        if crate::dismissal::submits([&self.input.clone()], window, cx) {
+    fn accept(&mut self, _: &Accept, _: &mut Window, cx: &mut Context<Self>) {
+        if crate::dismissal::submits([&self.input.clone()], cx) {
             self.answer(Answer::Accept, cx);
         }
     }
 
     /// Escape declines, unless it was an input method's, composing in the field.
-    fn not_now(&mut self, _: &NotNow, window: &mut Window, cx: &mut Context<Self>) {
-        if crate::dismissal::Close::escape_from([&self.input.clone()], window, cx).is_some() {
+    fn not_now(&mut self, _: &NotNow, _: &mut Window, cx: &mut Context<Self>) {
+        if crate::dismissal::Close::escape_from([&self.input.clone()], cx).is_some() {
             self.answer(Answer::NotNow, cx);
         }
     }

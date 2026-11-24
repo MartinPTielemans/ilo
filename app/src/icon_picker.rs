@@ -617,8 +617,8 @@ impl IconPicker {
 
     /// Esc closes the picker, unless it was an input method's, composing in the search
     /// (dismissal's rule).
-    fn dismiss(&mut self, _: &Dismiss, window: &mut Window, cx: &mut Context<Self>) {
-        if crate::dismissal::Close::escape_from([&self.search.clone()], window, cx).is_some() {
+    fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
+        if crate::dismissal::Close::escape_from([&self.search.clone()], cx).is_some() {
             self.close(cx);
         }
     }
@@ -634,7 +634,7 @@ impl IconPicker {
 
     /// ↩ on the Emoji tab picks the emoji on the plate, unless it was an input method's,
     /// composing in the search.
-    fn keep(&mut self, _: &Keep, window: &mut Window, cx: &mut Context<Self>) {
+    fn keep(&mut self, _: &Keep, _: &mut Window, cx: &mut Context<Self>) {
         let Some(picking) = self
             .picking
             .as_ref()
@@ -643,7 +643,7 @@ impl IconPicker {
             return;
         };
         let selected = picking.selected;
-        if !crate::dismissal::submits([&self.search.clone()], window, cx) {
+        if !crate::dismissal::submits([&self.search.clone()], cx) {
             return;
         }
         if let Some(item) = selected {

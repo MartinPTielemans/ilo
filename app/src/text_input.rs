@@ -532,8 +532,11 @@ impl TextInput {
     }
 
     /// Ends what an input method composes in the field, as its Return or Escape does when the
-    /// method passes the key on (`dismissal::submits`): kept as typed if `keep`, else gone.
-    pub fn end_composition(&mut self, keep: bool, window: &mut Window, cx: &mut Context<Self>) {
+    /// method passes the key on (`dismissal::submits`): kept as typed if `keep`, else gone. With no
+    /// window, as a key can come through a global action with none: the platform isn't told the
+    /// text changed, which only the iOS and web hosts listen for, not the Mac's, Linux's or
+    /// Windows'.
+    pub fn end_composition(&mut self, keep: bool, cx: &mut Context<Self>) {
         let Some(marked) = self.marked_range.take() else {
             return;
         };
@@ -543,7 +546,6 @@ impl TextInput {
             self.selected_range = marked.start..marked.start;
             self.selection_reversed = false;
         }
-        window.notify_text_input_changed(&self.focus_handle);
         cx.notify();
     }
 
