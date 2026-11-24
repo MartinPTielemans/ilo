@@ -270,7 +270,7 @@ mod tests {
     }
 
     /// The folder at the picked path is checked again at the grant, so one swapped meanwhile isn't
-    /// granted.
+    /// granted. Windows keeps no identity, as it has no wall, so there it's refused for that.
     #[test]
     fn a_folder_swapped_since_the_pick_is_not_granted() {
         let made = picked("swapped");
@@ -280,7 +280,11 @@ mod tests {
         std::fs::rename(&folder, made.join("away")).unwrap();
         std::fs::create_dir(&folder).unwrap();
         let refused = put_up(&task(Some(&granted), None)).unwrap_err();
-        assert_eq!(refused, WallRefused::Refused(Refusal::Gone));
+        let expected = match cfg!(unix) {
+            true => WallRefused::Refused(Refusal::Gone),
+            false => WallRefused::Unavailable(available().unwrap_err()),
+        };
+        assert_eq!(refused, expected);
         std::fs::remove_dir_all(made).unwrap();
     }
 
