@@ -1241,7 +1241,8 @@ impl TalkView {
                     Some(_) => {
                         line(words, look.palette.text(TITLE)).font_weight(FontWeight::MEDIUM)
                     }
-                    None => line(words, rgb(SIGNAL).into()),
+                    // The ring says it's working: no text is written in the working green.
+                    None => line(words, look.palette.text(SECONDARY)),
                 });
                 div()
                     .id(("conversation-page", tab))
