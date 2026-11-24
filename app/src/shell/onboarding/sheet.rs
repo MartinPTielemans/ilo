@@ -16,12 +16,22 @@ pub(super) use crate::tokens::shell::onboarding::sheet::{
 
 /// The steps the sheet shows, over the window, rather than the whole window's ground.
 pub(super) fn on_sheet(step: Step) -> bool {
-    matches!(step, Step::Intro | Step::Import | Step::Color)
+    matches!(
+        step,
+        Step::Intro
+            | Step::Import
+            | Step::Favorites
+            | Step::DefaultBrowser
+            | Step::SearchEngine
+            | Step::Color
+            | Step::Account
+    )
 }
 
 /// A step's choice that may be taller than the room under its words, such as the import's
-/// view in its states: as wide as the left half, scrolling in it above the foot.
-pub(super) fn choice(view: gpui::AnyView) -> Stateful<gpui::Div> {
+/// view in its states or the favorites' tiles: as wide as the left half, scrolling in it above
+/// the foot.
+pub(super) fn choice(view: impl IntoElement) -> Stateful<gpui::Div> {
     div()
         .id("onboarding-choice")
         .flex_1()
@@ -256,6 +266,12 @@ impl Shell {
         match step {
             Step::Intro => loops::welcome(looped, colors, &place).into_any_element(),
             Step::Import => loops::import(looped, colors, &place).into_any_element(),
+            Step::Favorites => loops::favorites(looped, colors, &place).into_any_element(),
+            Step::DefaultBrowser => {
+                loops::default_browser(looped, colors, &place).into_any_element()
+            }
+            Step::SearchEngine => loops::search(looped, colors, &place).into_any_element(),
+            Step::Account => loops::sync(looped, colors, &place).into_any_element(),
             Step::Color => {
                 let picked = (self.onboarding.as_ref()).and_then(|onboarding| onboarding.picked);
                 let other = (picked.unwrap_or_default() + SWATCHES.len() / 2) % SWATCHES.len();

@@ -1750,8 +1750,8 @@ else
       # The window reads lighter over white than over black, by about 60 in dark and 35 in light;
       # an opaque material, as Reduce Transparency draws it, reads the same over both.
       case $level in
-      0) over_black=${line%% *} ;;
-      255) [ $((${line%% *} - over_black)) -ge 10 ] || opaque="$opaque $tone," ;;
+      0) over_black=${line%%[ ,]*} ;;
+      255) [ $((${line%%[ ,]*} - over_black)) -ge 10 ] || opaque="$opaque $tone," ;;
       esac
       material="$material$tone over $level $line; "
     done

@@ -2371,6 +2371,36 @@ import-spaces = 4.2
 import-came = 4.8
 import-fade = 0.4
 import-out = 0.6
+# The favorites': the sites the history visited most in a strip over ilo's window, as the import's
+# other browser is. From `at`, one every `stagger`, a site's tick fills and `tick` later it lands in
+# the sidebar as a tile, as the import's favorites land; the last site stays unticked and never
+# lands. What came is said at `came`; the import's land, drop, fade and out are theirs too.
+favorites-at = 0.6
+favorites-stagger = 0.7
+favorites-tick = 0.3
+favorites-came = 3.6
+# The default browser's: a message in another app over ilo's window, its link `default-link` in
+# from the message's corner. From `default-at` the pointer goes to the link over the welcome's
+# move, clicks it and fades, and `default-open` after the press the link lands in ilo's sidebar as
+# a new tab at the top, over the import's land and drop, taking the selected plate as its page
+# shows.
+default-link = [40.0, 34.0]
+default-at = 0.6
+default-open = 0.3
+# The search engine's: from `search-at` the bar comes up over the page, its corner `search-bar` in
+# from the window's, as the import's parts fade in; the words are typed over `search-type`, and
+# `search-return` later ↩ opens the results as a new tab, over the import's land and drop.
+search-at = 0.6
+search-bar = [40.0, 60.0]
+search-type = 1.4
+search-return = 0.5
+# The sync's: a phone `sync-phone` big, as round as the window, standing `sync-phone-out` past
+# the window's right edge. At the first of `sync-at` a tab is pinned, and it crosses to the
+# phone over `sync-cross`; at the second a favorite added on the phone crosses back the same way.
+sync-at = [0.6, 5.0]
+sync-cross = 1.2
+sync-phone = [76.0, 150.0]
+sync-phone-out = 48.0
 
 [shell.import]
 # Ours (#1673): while an import runs, each Space it makes is a card in its own colours, under the
