@@ -104,7 +104,7 @@ pub fn button(button: IloButton) -> &'static str {
         IloButton::Raise(Tier::Look) => "Look only",
         IloButton::Raise(Tier::Work) => "Give Work on pages",
         IloButton::Raise(Tier::Full) => "Give Full access",
-        IloButton::AnySite => "Any Site",
+        IloButton::AnySite => "Any site",
         IloButton::HandBack => "Hand Back",
         IloButton::NotNow => "Not Now",
         IloButton::StartAgain => "Start Again",
