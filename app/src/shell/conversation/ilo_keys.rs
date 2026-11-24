@@ -82,7 +82,6 @@ impl TalkView {
         let Some((line, _, buttons)) = self.keyed_line(beside) else {
             return false;
         };
-        // check.sh waits for this line.
         log!("browser: ilo keys on {line} {:?}", buttons[0]);
         self.ilo_keys = Some(IloKeys {
             line,
@@ -147,7 +146,6 @@ impl TalkView {
         let Some(keys) = self.ilo_keys.take() else {
             return;
         };
-        // check.sh waits for this line.
         log!("browser: ilo keys back by {why}");
         if keys.page {
             if let Some(shell) = self.shell.upgrade() {
@@ -174,7 +172,6 @@ impl TalkView {
         let after = now.saturating_duration_since(keys.last);
         keys.last = now;
         if after < PROTECT {
-            // check.sh waits for this line.
             log!(
                 "browser: ilo key ignored, {} ms after the last",
                 after.as_millis()
