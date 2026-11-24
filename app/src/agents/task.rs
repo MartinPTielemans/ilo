@@ -488,6 +488,10 @@ pub struct Card {
     pub dot: Dot,
     /// Its state in one word, as every place that names it says it.
     pub word: Word,
+    /// Its pages now, in its Space's order: the rows of its group at the sidebar's foot.
+    pub pages: Vec<u64>,
+    /// Its access, which its group's line leads with at Full access.
+    pub tier: Tier,
     /// An ask's answers, as buttons.
     pub answers: Vec<SharedString>,
     /// A confirmation or a handoff of the task's, which the card asks instead of the windows'.
@@ -1092,6 +1096,8 @@ impl Agents {
             asks,
             dot,
             word: Word::of(&task.state, dot == Dot::Waiting),
+            pages: self.pages(task, cx),
+            tier: task.tier,
             answers: match &task.state {
                 State::Asking { answers, .. } if asks => answers.clone(),
                 _ => Vec::new(),
@@ -3373,26 +3379,6 @@ fn needs_you(question: &Question) -> SharedString {
     }
 }
 
-/// The words a card's foot shows of its `status`, which `fits` its lines or not. A request's that
-/// doesn't fit is "Needs your OK" alone, as the card above says the rest, rather than the words
-/// cut with dots left hanging; any other status shows as it is.
-pub fn foot_words(status: &SharedString, fits: bool) -> SharedString {
-    let request = (status.strip_prefix(NEEDS_OK))
-        .and_then(|rest| rest.strip_prefix(" · "))
-        .is_some_and(|rest| {
-            use super::request::Does;
-            [Does::Sends, Does::Changes, Does::Deletes]
-                .iter()
-                .any(|does| does.noun() == rest)
-                || (rest.strip_suffix(" changes"))
-                    .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
-        });
-    match request && !fits {
-        true => NEEDS_OK.into(),
-        false => status.clone(),
-    }
-}
-
 /// How much of a card's `status` leads it, set in the title's ink and heavier: the step count
 /// while it works ("Step 5"), and "Needs you" or "Needs your OK" while a confirmation or a handoff
 /// waits, the one state that asks for the user. Zero for the rest. By the words alone, as a status
@@ -3948,7 +3934,7 @@ fn names_the_browser(name: &str) -> bool {
 }
 
 #[cfg(test)]
-mod foot_tests {
+mod needs_you_tests {
     use super::*;
     use crate::agents::request::Request;
 
@@ -3963,34 +3949,27 @@ mod foot_tests {
         }
     }
 
-    /// A request's foot that doesn't fit is "Needs your OK" alone; a confirmation's, which says
-    /// what the agent would do, shows as it did before requests asked, fitting or not.
+    /// A confirmation's status says what the agent would do; a request's, the kind of its one
+    /// change, or how many it has.
     #[test]
-    fn only_a_requests_foot_gives_up_its_words() {
+    fn a_waiting_status_says_what_the_ok_is_for() {
         let order = Question {
-            what: "click “Place order” on shop.example, a long way past the foot's two lines"
-                .into(),
+            what: "click “Place order” on shop.example".into(),
             ..Question::default()
         };
-        let status = needs_you(&order);
         assert_eq!(
-            status.as_ref(),
-            "Needs your OK · click “Place order” on shop.example, a long way past the foot's two lines"
+            needs_you(&order).as_ref(),
+            "Needs your OK · click “Place order” on shop.example"
         );
-        assert_eq!(foot_words(&status, false), status);
-        assert_eq!(foot_words(&status, true), status);
-
         let one = Question {
             changes: vec![change("DELETE")].into(),
             ..Question::default()
         };
         assert_eq!(needs_you(&one).as_ref(), "Needs your OK · a delete");
-        assert_eq!(foot_words(&needs_you(&one), true), needs_you(&one));
-        assert_eq!(foot_words(&needs_you(&one), false).as_ref(), NEEDS_OK);
         let many = Question {
             changes: vec![change("PATCH"), change("DELETE")].into(),
             ..Question::default()
         };
-        assert_eq!(foot_words(&needs_you(&many), false).as_ref(), NEEDS_OK);
+        assert_eq!(needs_you(&many).as_ref(), "Needs your OK · 2 changes");
     }
 }
