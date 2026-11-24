@@ -1470,7 +1470,7 @@ impl Shell {
             .map(|view| {
                 view.update(cx, |view, cx| view.set_look(look, cx));
                 match sheet::on_sheet(step) {
-                    true => sheet::choice(view.into()).into_any_element(),
+                    true => sheet::choice(gpui::AnyView::from(view)).into_any_element(),
                     false => embedded(view.into()).into_any_element(),
                 }
             });
@@ -1545,6 +1545,7 @@ impl Shell {
             let left = left
                 .children(swatches)
                 .children(import)
+                .children(favorites)
                 .child(self.sheet_foot(step, button, colors, cx));
             let art = self.sheet_art(step, looped, colors);
             let dialog = |pane: gpui::Stateful<gpui::Div>| {
@@ -1754,14 +1755,15 @@ impl Shell {
             .into_any_element()
     }
 
-    /// The favorites offered, as the import view's tiles at its width, on the flow's ground, a
-    /// click ticking or unticking one. Tiles like the favorites they become say where they go.
+    /// The favorites offered, as the import view's tiles across the sheet's left half, scrolling
+    /// there above its foot, a click ticking or unticking one. Tiles like the favorites they become
+    /// say where they go.
     fn favorite_tiles(
         &self,
         colors: Colors,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Option<gpui::Div> {
+    ) -> Option<gpui::AnyElement> {
         let look = Look::on(
             colors.ground.blend(colors.ink(IMPORT_SURFACE)),
             colors.ink(1.),
@@ -1772,16 +1774,7 @@ impl Shell {
             view.set_look(look, cx);
             view.favorite_tiles(window, cx)
         })?;
-        Some(
-            div()
-                .mt(px(BUTTON_GAP))
-                .w(px(IMPORT_WIDTH))
-                .flex()
-                .flex_col()
-                .items_center()
-                .text_size(px(crate::tokens::text::BODY))
-                .child(div().w_full().child(tiles)),
-        )
+        Some(sheet::choice(tiles).into_any_element())
     }
 
     /// Skip, quiet at the window's bottom right, with Esc's chip.
