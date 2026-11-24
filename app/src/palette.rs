@@ -599,6 +599,7 @@ impl Palette {
         shades[Ground::Hovered as usize] = shades[Ground::Hovered as usize].max(beside);
         palette.ground_shades = shades;
         palette.pointed_shade = palette.solve_pointed(window);
+        palette.ground_shades[Ground::Selected as usize] = palette.solve_selected(window);
         let grounds = palette.grounds(window);
         palette.text_floor = least_alpha(ink, &grounds, TEXT + BETWEEN);
         palette.glyph_floor = least_alpha(ink, &grounds, GLYPH + BETWEEN);
@@ -738,6 +739,44 @@ impl Palette {
             .map(|step| row.min(step as f32 * TELLS_STEP))
             .find(|&shade| tells(shade))
             .unwrap_or(0.)
+    }
+
+    /// The selected plate's shade where the one `solve_ground` gave leaves the plate too faint to
+    /// tell from the window, which a dark window with no Space's colour does where most comes
+    /// through: the least at which the ink still reads on the plate at TEXT, whatever step it
+    /// falls on. It has nothing to spare there, and needs none: that window is its material alone,
+    /// one colour over each backdrop, with no points between to dip. A plate that tells already
+    /// keeps its shade, and so does any with a Space's colour or on a light window, where what
+    /// tells is the plate's shadow.
+    fn solve_selected(&self, window: &Window) -> f32 {
+        let coarse = self.ground_shades[Ground::Selected as usize];
+        if self.tone == Tone::Light || self.shown.is_some() {
+            return coarse;
+        }
+        let plain = window.samples(self.layer_alpha);
+        let (colour, alphas) = self.ground_plates(Ground::Selected);
+        let tint = self.tone.tint_color();
+        let plates = |shade: f32| {
+            let plain = &plain;
+            alphas.iter().flat_map(move |&alpha| {
+                (plain.iter()).map(move |&at| (over(over(at, colour, alpha), tint, shade), at))
+            })
+        };
+        if plates(coarse).all(|(plate, at)| contrast(plate, at) >= TELLS_AIM) {
+            return coarse;
+        }
+        // The ink reads more the more shade its plate has, so the least shade lies between one it
+        // doesn't read at and one it does: halved until the plate's colour no longer changes.
+        let reads = |shade: f32| plates(shade).all(|(plate, _)| contrast(self.ink, plate) >= TEXT);
+        let (mut short, mut least) = (0., coarse);
+        for _ in 0..12 {
+            let middle = (short + least) / 2.;
+            match reads(middle) {
+                true => least = middle,
+                false => short = middle,
+            }
+        }
+        least
     }
 
     /// `plate` drawn on `ground`: with the ground's shade of the tint's colour over it, as one
