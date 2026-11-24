@@ -296,7 +296,8 @@ fn change_takes_the_servers_address(cx: &mut TestAppContext) {
 }
 
 /// ↩ and esc while an input method composes in the server's address are the composition's: ↩
-/// commits it and keeps no address, esc drops it and leaves the field open; the next ↩ keeps it.
+/// keeps no address, esc leaves the field open, and both leave the marked text for the method.
+/// Once the method has committed it, the next ↩ keeps the address.
 #[gpui::test]
 fn return_and_escape_while_composing_are_the_compositions(cx: &mut TestAppContext) {
     use gpui::EntityInputHandler as _;
@@ -306,30 +307,35 @@ fn return_and_escape_while_composing_are_the_compositions(cx: &mut TestAppContex
     let field = tab
         .account
         .read_with(tab.cx, |account, _| account.open_field().unwrap());
-    let compose = |tab: &mut Shown| {
-        tab.cx.update(|window, cx| {
-            field.update(cx, |field, cx| {
-                field.replace_and_mark_text_in_range(None, "ぴ", None, window, cx)
-            })
-        });
-        tab.cx.run_until_parked();
+    tab.cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_and_mark_text_in_range(None, "ぴ", None, window, cx)
+        })
+    });
+    tab.cx.run_until_parked();
+    let marked = |tab: &mut Shown| {
+        field.read_with(tab.cx, |field, _| {
+            (field.text().to_string(), field.composing())
+        })
     };
-    compose(&mut tab);
     tab.keys("enter");
     assert!(
         tab.host.take().is_empty(),
         "↩ kept the address while composing"
     );
-    compose(&mut tab);
     tab.keys("escape");
     let open = tab
         .account
         .read_with(tab.cx, |account, _| account.server.is_some());
     assert!(open, "esc left the field while composing");
-    let typed = field.read_with(tab.cx, |field, _| {
-        (field.text().to_string(), field.composing())
+    assert_eq!(marked(&mut tab), ("https://ilo.example.ぴ".into(), true));
+    tab.cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_text_in_range(None, "ぴ", window, cx)
+        })
     });
-    assert_eq!(typed, ("https://ilo.example.ぴ".into(), false));
+    tab.cx.run_until_parked();
+    assert_eq!(marked(&mut tab), ("https://ilo.example.ぴ".into(), false));
     tab.keys("enter");
     assert_eq!(tab.host.take(), ["server https://ilo.example.ぴ"]);
 }

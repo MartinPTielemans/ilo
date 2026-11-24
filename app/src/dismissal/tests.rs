@@ -191,8 +191,24 @@ fn compose(host: &Entity<Host>, cx: &mut VisualTestContext) -> Entity<TextInput>
     field
 }
 
-/// Escape while an input method composes drops the composition and closes nothing; the next
-/// Escape closes the panel.
+/// The input method ends its composition as it does when it takes the key itself: committing
+/// `text` in its place, or with `text` empty dropping it.
+fn end_composition(field: &Entity<TextInput>, text: &str, cx: &mut VisualTestContext) {
+    cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_text_in_range(None, text, window, cx)
+        })
+    });
+    cx.run_until_parked();
+}
+
+/// What the field shows, and whether it's still marked.
+fn marked(field: &Entity<TextInput>, cx: &mut VisualTestContext) -> (String, bool) {
+    field.read_with(cx, |field, _| (field.text().to_string(), field.composing()))
+}
+
+/// Escape while an input method composes is the composition's: the panel stays and the marked
+/// text is left for the method. Once the method has dropped it, the next Escape closes the panel.
 #[gpui::test]
 fn escape_while_an_input_method_composes_closes_nothing(cx: &mut TestAppContext) {
     let (host, cx) = opened(cx);
@@ -203,26 +219,31 @@ fn escape_while_an_input_method_composes_closes_nothing(cx: &mut TestAppContext)
         host.read_with(cx, |host, _| host.open.is_some()),
         "the panel closed"
     );
-    field.read_with(cx, |field, _| {
-        assert!(!field.composing(), "the composition went on");
-        assert_eq!(field.text(), "", "Escape kept what was composed");
-    });
+    assert_eq!(
+        marked(&field, cx),
+        ("ぴ".into(), true),
+        "Escape ended the composition"
+    );
+    end_composition(&field, "", cx);
     cx.simulate_keystrokes("escape");
     assert_eq!(closes(&host, cx).0, [Close::new(Why::Escape, By::Keyboard)]);
 }
 
-/// Return while an input method composes commits what it composed and submits nothing; the next
-/// Return submits it.
+/// Return while an input method composes is the composition's: nothing is submitted and the
+/// marked text is left for the method. Once the method has committed it, the next Return submits.
 #[gpui::test]
-fn return_while_an_input_method_composes_commits_and_submits_nothing(cx: &mut TestAppContext) {
+fn return_while_an_input_method_composes_submits_nothing(cx: &mut TestAppContext) {
     let (host, cx) = opened(cx);
     let field = compose(&host, cx);
     cx.simulate_keystrokes("enter");
     assert_eq!(host.read_with(cx, |host, _| host.submitted), 0);
-    field.read_with(cx, |field, _| {
-        assert!(!field.composing(), "the composition went on");
-        assert_eq!(field.text(), "ぴ", "Return dropped what was composed");
-    });
+    assert_eq!(
+        marked(&field, cx),
+        ("ぴ".into(), true),
+        "Return ended the composition"
+    );
+    end_composition(&field, "ぴ", cx);
+    assert_eq!(marked(&field, cx), ("ぴ".into(), false));
     cx.simulate_keystrokes("enter");
     assert_eq!(host.read_with(cx, |host, _| host.submitted), 1);
     assert!(
@@ -284,17 +305,55 @@ fn the_page_gets_the_keyboard_back_only_while_no_other_overlay_has_it(cx: &mut T
     assert!(focused(|host, _| host.window.clone(), &host, cx));
 }
 
-#[test]
-fn only_escape_and_the_surfaces_own_key_give_the_keyboard_back() {
-    for why in [Why::Escape, Why::Toggled] {
-        assert!(Close::new(why, By::Keyboard).gives_back(), "{why:?}");
-    }
-    for why in [
-        Why::PressOutside,
-        Why::FocusLeft,
-        Why::WindowLeft,
-        Why::Chosen,
-    ] {
-        assert!(!Close::new(why, By::Pointer).gives_back(), "{why:?}");
+/// The rule for every reason a surface closes: Escape, its own key and a choice in it give the
+/// keyboard back to the opener, leaving it goes to the fallback, and whatever took the keyboard
+/// in the meantime, the user or the choice's own result, keeps it.
+#[gpui::test]
+fn where_the_keyboard_goes_for_each_reason_a_surface_closes(cx: &mut TestAppContext) {
+    let reasons = [
+        (Why::Escape, Returned::Opener),
+        (Why::Toggled, Returned::Opener),
+        (Why::Chosen, Returned::Opener),
+        (Why::PressOutside, Returned::Fallback),
+        (Why::FocusLeft, Returned::Fallback),
+        (Why::WindowLeft, Returned::Fallback),
+    ];
+    let (host, cx) = opened(cx);
+    for (why, back) in reasons {
+        for moved in [false, true] {
+            cx.update(|window, cx| {
+                let opener = host.read(cx).opener.clone().unwrap();
+                window.focus(&opener, cx);
+                host.update(cx, |host, cx| host.open(window, cx));
+                if moved {
+                    window.focus(&host.read(cx).other.clone(), cx);
+                }
+                host.update(cx, |host, cx| {
+                    host.close(Close::new(why, By::Keyboard), window, cx)
+                });
+            });
+            cx.run_until_parked();
+            let returned = host.read_with(cx, |host, _| *host.returned.last().unwrap());
+            let (expected, has) = match moved {
+                true => (
+                    Returned::Left,
+                    focused(|host, _| host.other.clone(), &host, cx),
+                ),
+                false => (
+                    back,
+                    match back {
+                        Returned::Opener => {
+                            focused(|host, _| host.opener.clone().unwrap(), &host, cx)
+                        }
+                        _ => focused(|host, _| host.window.clone(), &host, cx),
+                    },
+                ),
+            };
+            assert_eq!(returned, expected, "{why:?}, moved in between: {moved}");
+            assert!(
+                has,
+                "{why:?}, moved in between: {moved}: the keyboard isn't where it went"
+            );
+        }
     }
 }

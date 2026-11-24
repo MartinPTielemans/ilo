@@ -95,8 +95,9 @@ fn escape_cancels(cx: &mut TestAppContext) {
     assert_eq!(asked(&host), ["cancel pair 10"]);
 }
 
-/// ↩ and esc while an input method composes in the PIN are the composition's: ↩ commits it and
-/// pairs nothing, esc drops it and cancels nothing; the next ↩ pairs.
+/// ↩ and esc while an input method composes in the PIN are the composition's: ↩ pairs nothing,
+/// esc cancels nothing, and both leave the marked text for the method. Once the method has
+/// committed it, the next ↩ pairs.
 #[gpui::test]
 fn return_and_escape_while_composing_are_the_compositions(cx: &mut TestAppContext) {
     use gpui::EntityInputHandler as _;
@@ -105,15 +106,17 @@ fn return_and_escape_while_composing_are_the_compositions(cx: &mut TestAppContex
     cx.run_until_parked();
     cx.simulate_input("12");
     let pin = shell.read_with(cx, |shell, _| shell.pairs[&10].pin.clone());
-    let compose = |cx: &mut VisualTestContext| {
+    // The input method marks "３", or with Some ends its composition with that text.
+    let input_method = |commit: Option<&str>, cx: &mut VisualTestContext| {
         cx.update(|window, cx| {
-            pin.update(cx, |pin, cx| {
-                pin.replace_and_mark_text_in_range(None, "３", None, window, cx)
+            pin.update(cx, |pin, cx| match commit {
+                None => pin.replace_and_mark_text_in_range(None, "３", None, window, cx),
+                Some(text) => pin.replace_text_in_range(None, text, window, cx),
             })
         });
         cx.run_until_parked();
     };
-    compose(cx);
+    input_method(None, cx);
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     assert_eq!(
@@ -121,7 +124,6 @@ fn return_and_escape_while_composing_are_the_compositions(cx: &mut TestAppContex
         Vec::<String>::new(),
         "↩ paired while composing"
     );
-    compose(cx);
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     assert_eq!(
@@ -129,6 +131,9 @@ fn return_and_escape_while_composing_are_the_compositions(cx: &mut TestAppContex
         Vec::<String>::new(),
         "esc cancelled while composing"
     );
+    let marked = pin.read_with(cx, |pin, _| (pin.text().to_string(), pin.composing()));
+    assert_eq!(marked, ("12３".into(), true));
+    input_method(Some("３"), cx);
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     assert_eq!(asked(&host), ["pair 10 12３"]);

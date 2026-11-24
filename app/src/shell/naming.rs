@@ -731,17 +731,18 @@ impl Shell {
     }
 
     /// Gives the keyboard back from the closed field: to the New Space form's name from its
-    /// Profile row, unless a click put it elsewhere, else to the window.
+    /// Profile row, else to the window, unless another element took it as the field closed, which
+    /// keeps it (dismissal's rule).
     fn leave_name(&mut self, renaming: &Renaming, window: &mut Window, cx: &mut Context<Self>) {
+        let keys = renaming.name.focus_handle(cx).is_focused(window);
+        let taken = !keys && window.focused(cx).is_some();
         match renaming.naming {
-            Naming::Profile(_) => {
-                self.focus_form = renaming.name.focus_handle(cx).is_focused(window);
-            }
+            Naming::Profile(_) => self.focus_form = keys,
+            _ if taken => log!("browser: field left the keyboard where it went"),
             // A Board New Board just made, its name kept or left with ↩ or esc, gives its page
             // the keyboard, where its first note's field waits for the first key (#3073's
             // condition 13). A press that took the keyboard elsewhere leaves it there.
             Naming::Tab(tab) if self.board_named.take() == Some(tab) => {
-                let keys = renaming.name.focus_handle(cx).is_focused(window);
                 window.focus(&self.focus_handle, cx);
                 if keys && tab == self.selected {
                     log!("browser: board {tab} has the keyboard");
@@ -829,30 +830,35 @@ mod tests {
     }
 
     /// ↩ and esc while an input method composes in a Space's name are the composition's: ↩
-    /// commits it and renames nothing, esc drops it and leaves the field; the next ↩ renames.
+    /// renames nothing, esc leaves the field, and both leave the marked text for the method. Once
+    /// the method has committed it, the next ↩ renames.
     #[gpui::test]
     fn return_and_escape_while_composing_are_the_compositions(cx: &mut TestAppContext) {
         use gpui::EntityInputHandler as _;
         let (shell, cx, host) = renaming(cx);
         cx.simulate_input("Work");
         let field = shell.read_with(cx, |shell, _| shell.renaming.as_ref().unwrap().name.clone());
-        let compose = |cx: &mut VisualTestContext| {
+        // The input method marks "ぴ", or with Some ends its composition with that text.
+        let input_method = |commit: Option<&str>, cx: &mut VisualTestContext| {
             cx.update(|window, cx| {
-                field.update(cx, |field, cx| {
-                    field.replace_and_mark_text_in_range(None, "ぴ", None, window, cx)
+                field.update(cx, |field, cx| match commit {
+                    None => field.replace_and_mark_text_in_range(None, "ぴ", None, window, cx),
+                    Some(text) => field.replace_text_in_range(None, text, window, cx),
                 })
             });
             cx.run_until_parked();
         };
-        compose(cx);
+        input_method(None, cx);
         cx.simulate_keystrokes("enter");
         assert!(host.take_edits().is_empty(), "↩ renamed while composing");
-        compose(cx);
         cx.simulate_keystrokes("escape");
         assert!(
             shell.read_with(cx, |shell, _| shell.renaming.is_some()),
             "esc left the field while composing"
         );
+        let marked = field.read_with(cx, |field, _| (field.text().to_string(), field.composing()));
+        assert_eq!(marked, ("Workぴ".into(), true));
+        input_method(Some("ぴ"), cx);
         cx.simulate_keystrokes("enter");
         assert_eq!(host.take_edits(), ["rename space 1 Workぴ"]);
     }

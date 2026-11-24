@@ -253,7 +253,9 @@ impl Render for Searched {
                 window.focus(&view.input.read(cx).focus_handle(cx), cx)
             }))
             .on_action(cx.listener(|view, _: &EndSearch, window, cx| {
-                end(&view.input, window, cx);
+                if crate::dismissal::Close::escape_from([&view.input.clone()], cx).is_some() {
+                    end(&view.input, window, cx);
+                }
                 cx.notify();
             }))
             .size_full()
@@ -405,5 +407,22 @@ fn a_composition_finds_nothing_until_it_commits(cx: &mut TestAppContext) {
         "pipあ",
         "Esc ended the search while composing"
     );
+    assert!(
+        input.read_with(cx, |input, _| input.composing()),
+        "Esc ended the composition"
+    );
     assert!(!drew(&view, "page", cx));
+    cx.update(|window, cx| {
+        input.update(cx, |input, cx| {
+            input.replace_text_in_range(None, "", window, cx)
+        })
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(
+        field_text(&view, cx),
+        "",
+        "the next Esc didn't end the search"
+    );
 }

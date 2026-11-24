@@ -2124,7 +2124,7 @@ impl Breath {
 
     /// Once a frame is built: if it drew a loading dot, draws the next in a moment.
     pub(super) fn arm(&self, cx: &mut Context<Shell>) {
-        self.still.set(cx.reduce_motion());
+        self.still.set(crate::motion::still(cx));
         if !self.drawn.take() || self.still.get() || self.pending.replace(true) {
             return;
         }

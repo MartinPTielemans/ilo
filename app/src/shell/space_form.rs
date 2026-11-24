@@ -734,8 +734,9 @@ mod tests {
         }
     }
 
-    /// ↩ while an input method composes in the Space's name commits it and makes no Space; the
-    /// next ↩ makes it, with the name as committed.
+    /// ↩ while an input method composes in the Space's name is the composition's: it makes no
+    /// Space and leaves the marked text for the method. Once the method has committed it, the
+    /// next ↩ makes the Space, with the name as committed.
     #[gpui::test]
     fn return_while_composing_makes_no_space(cx: &mut TestAppContext) {
         use gpui::EntityInputHandler as _;
@@ -758,7 +759,15 @@ mod tests {
             "↩ closed the form while composing"
         );
         let typed = name.read_with(cx, |name, _| (name.text().to_string(), name.composing()));
-        assert!(!typed.1, "the composition went on");
+        assert!(typed.1, "↩ ended the composition");
+        cx.update(|window, cx| {
+            name.update(cx, |name, cx| {
+                name.replace_text_in_range(None, "ぴ", window, cx)
+            })
+        });
+        cx.run_until_parked();
+        let typed = name.read_with(cx, |name, _| (name.text().to_string(), name.composing()));
+        assert!(!typed.1);
         cx.simulate_keystrokes("enter");
         assert_eq!(host.take_edits(), [format!("rename space 7 {}", typed.0)]);
     }
