@@ -240,8 +240,8 @@ impl Shell {
     pub(super) fn page_took_keyboard(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.page_keyboard = Some(window.focused(cx).map(|focused| focused.downgrade()));
         self.field_let_go(cx);
-        // A press in the page ends the agent card's keys there, before any of its keys.
-        self.leave_card_keys(cx);
+        // A press in the page ends an ilo line's keys there, before any of its keys.
+        self.leave_ilo_keys(cx);
     }
 
     /// Gives the UI the keyboard, from the page if the page has it. Every way the shell takes it

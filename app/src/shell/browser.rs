@@ -325,11 +325,6 @@ pub trait Browser {
     fn set_developer_mode(&self, tab: u64, on: bool, cx: &mut App);
     /// Answers what the tab's page asks (Shell::set_question), if it still asks.
     fn answer_permission(&self, tab: u64, answer: Answer, cx: &mut App);
-    /// Answers what an agent asks (Shell::set_agent_question), if it still asks.
-    fn answer_agent(&self, question: u64, answer: crate::agents::Answer, cx: &mut App);
-    /// The user pressed Choose File… on an agent's question for a page's file field: the system's
-    /// file dialog opens over `window`.
-    fn choose_agent_file(&self, question: u64, window: u64, cx: &mut App);
     /// Asks the dialog a tab's page asks over the tab's card, with the corners of its radius, or
     /// takes back the one it asks (None).
     fn show_page_dialog(&self, shown: Option<ShownPageDialog>, cx: &mut App);
