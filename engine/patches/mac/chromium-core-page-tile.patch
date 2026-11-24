@@ -1,0 +1,250 @@
+Lets the core show an agent's page live in a view of the app's, as a tile the user watches it work
+in (#4115), through content::SetPageTile. A tile's views take no pointer, cursor, tooltip or drop,
+never take the keyboard, and don't tell the page the frame or screen the tile moves them to, so the
+page keeps its size and screen and the core scales its layer into the tile. Its select opens no menu,
+which would open over the user's window at the tile and take the pointer and keys. Visibility is
+untouched: the page draws while the tile is on screen, as one its window shows does. A hook only:
+the core decides which pages are tiles.
+
+--- a/content/app_shim_remote_cocoa/render_widget_host_view_cocoa.mm
++++ b/content/app_shim_remote_cocoa/render_widget_host_view_cocoa.mm
+@@ -26,6 +26,7 @@
+ #include "components/input/web_input_event_builders_mac.h"
+ #include "components/remote_cocoa/app_shim/immersive_mode_controller_cocoa.h"
+ #include "components/remote_cocoa/app_shim/ns_view_ids.h"
++#import "content/app_shim_remote_cocoa/web_contents_view_cocoa.h"
+ #import "content/browser/cocoa/system_hotkey_helper_mac.h"
+ #import "content/browser/cocoa/system_hotkey_map.h"
+ #include "content/browser/renderer_host/render_widget_host_view_mac.h"
+@@ -237,6 +238,18 @@ gfx::PointF GetSanitizedFlippedPoint(NSPoint point, CGFloat height) {
+                      gfx::ClampFloatGeometry(height - point.y));
+ }
+ 
++// browser_core: whether |view|'s page is a tile (content::SetPageTile), which takes no pointer,
++// cursor, tooltip or keyboard, and keeps the frame and screen it had.
++bool InPageTile(NSView* view) {
++  for (NSView* above = view.superview; above; above = above.superview) {
++    if (WebContentsViewCocoa* page =
++            base::apple::ObjCCast<WebContentsViewCocoa>(above)) {
++      return page.browserCoreTile;
++    }
++  }
++  return false;
++}
++
+ }  // namespace
+ 
+ @implementation RenderWidgetHostViewCocoa {
+@@ -462,7 +475,7 @@ static NSWindow* __weak _deferredResignKeyWindow;
+ - (void)sendViewBoundsInWindowToHost {
+   TRACE_EVENT0("browser",
+                "RenderWidgetHostViewCocoa::sendViewBoundsInWindowToHost");
+-  if (_inSetFrame)
++  if (_inSetFrame || InPageTile(self))
+     return;
+ 
+   NSRect viewBoundsInView = [self bounds];
+@@ -786,7 +799,7 @@ static NSWindow* __weak _deferredResignKeyWindow;
+   TRACE_EVENT0("browser",
+                "RenderWidgetHostViewCocoa::sendWindowFrameInScreenToHost");
+   NSWindow* enclosingWindow = [self window];
+-  if (!enclosingWindow)
++  if (!enclosingWindow || InPageTile(self))
+     return;
+   _host->OnWindowFrameInScreenChanged(
+       gfx::ScreenRectFromNSRect([enclosingWindow frame]));
+@@ -799,7 +812,7 @@ static NSWindow* __weak _deferredResignKeyWindow;
+ }
+ 
+ - (void)resetCursorRects {
+-  if (_currentCursor)
++  if (_currentCursor && !InPageTile(self))
+     [self addCursorRect:[self visibleRect] cursor:_currentCursor];
+ }
+ 
+@@ -898,6 +911,10 @@ static NSWindow* __weak _deferredResignKeyWindow;
+   return AcceptTooltipEvents::kWhenInKeyWindow;
+ }
+ 
++- (void)setToolTipAtMousePoint:(NSString*)string {
++  [super setToolTipAtMousePoint:InPageTile(self) ? nil : string];
++}
++
+ - (void)setCloseOnDeactivate:(BOOL)b {
+   _closeOnDeactivate = b;
+ }
+@@ -1018,6 +1035,9 @@ static NSWindow* __weak _deferredResignKeyWindow;
+ }
+ 
+ - (BOOL)shouldIgnoreMouseEvent:(NSEvent*)theEvent {
++  if (InPageTile(self)) {
++    return YES;
++  }
+   NSWindow* window = self.window;
+   if (theEvent.type == NSEventTypeMouseMoved) {
+     AcceptMouseEvents option = [self acceptsMouseEventsOption];
+@@ -1989,6 +2009,9 @@ static NSWindow* __weak _deferredResignKeyWindow;
+ }
+ 
+ - (void)updateScreenProperties {
++  if (InPageTile(self)) {
++    return;
++  }
+   // This does not require enclosing window to exist, and allowing screen
+   // properties change to propagate when it does not ensures that screen infos
+   // are properly updated when running headless.
+@@ -2046,7 +2069,7 @@ static NSWindow* __weak _deferredResignKeyWindow;
+ }
+ 
+ - (BOOL)canBecomeKeyView {
+-  if ([self hostIsDisconnected]) {
++  if ([self hostIsDisconnected] || InPageTile(self)) {
+     return NO;
+   }
+ 
+@@ -2061,7 +2084,7 @@ static NSWindow* __weak _deferredResignKeyWindow;
+ }
+ 
+ - (BOOL)acceptsFirstResponder {
+-  if ([self hostIsDisconnected])
++  if ([self hostIsDisconnected] || InPageTile(self))
+     return NO;
+ 
+   return _canBeKeyView;
+@@ -3059,6 +3082,9 @@ extern NSString* NSTextInputReplacementRangeAttributeName;
+     return;
+ 
+   _currentCursor = cursor;
++  if (InPageTile(self)) {
++    return;
++  }
+   [[self window] invalidateCursorRectsForView:self];
+ 
+   // NSWindow's invalidateCursorRectsForView: resets cursor rects but does not
+--- a/content/app_shim_remote_cocoa/web_contents_view_cocoa.h
++++ b/content/app_shim_remote_cocoa/web_contents_view_cocoa.h
+@@ -36,6 +36,10 @@ CONTENT_EXPORT
+ 
+ - (void)setMouseDownCanMoveWindow:(BOOL)canMove;
+ 
++// browser_core: the page is a tile in a view of the app's (content::SetPageTile). It takes no
++// drops, and its RenderWidgetHostViewCocoa no input or focus.
++@property(nonatomic, assign) BOOL browserCoreTile;
++
+ // Enable the workaround for https://crbug.com/1148078. This is called by
+ // in-PWA-process instances, to limit the workaround's effect to just PWAs.
+ - (void)enableDroppedScreenShotCopier;
+--- a/content/app_shim_remote_cocoa/web_contents_view_cocoa.mm
++++ b/content/app_shim_remote_cocoa/web_contents_view_cocoa.mm
+@@ -204,6 +204,20 @@ gfx::PointF GetSanitizedFlippedPoint(NSPoint point, CGFloat height) {
+   return YES;
+ }
+ 
++@synthesize browserCoreTile = _browserCoreTile;
++
++- (void)setBrowserCoreTile:(BOOL)tile {
++  if (_browserCoreTile == tile) {
++    return;
++  }
++  _browserCoreTile = tile;
++  if (tile) {
++    [self unregisterDraggedTypes];
++  } else {
++    [self registerDragTypes];
++  }
++}
++
+ // Registers for the view for the appropriate drag types.
+ - (void)registerDragTypes {
+   [self registerForDraggedTypes:@[
+@@ -215,7 +229,7 @@ gfx::PointF GetSanitizedFlippedPoint(NSPoint point, CGFloat height) {
+ }
+ 
+ - (void)mouseEvent:(NSEvent*)theEvent {
+-  if (!_host)
++  if (!_host || _browserCoreTile)
+     return;
+   _host->OnMouseEvent(ui::EventFromNative(base::apple::OwnedNSEvent(theEvent)));
+ }
+--- a/content/browser/web_contents/web_contents_view_mac.mm
++++ b/content/browser/web_contents/web_contents_view_mac.mm
+@@ -12,6 +12,7 @@
+ #include <string>
+ #include <utility>
+ 
++#include "base/apple/foundation_util.h"
+ #include "base/compiler_specific.h"
+ #include "base/containers/span.h"
+ #import "base/mac/mac_util.h"
+@@ -37,10 +38,12 @@
+ #include "content/common/web_contents_ns_view_bridge.mojom-shared.h"
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/clipboard_types.h"
++#include "content/public/browser/page_tile_mac.h"
+ #include "content/public/browser/web_contents_delegate.h"
+ #include "content/public/browser/web_contents_view_delegate.h"
+ #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
+ #include "mojo/public/cpp/bindings/pending_associated_remote.h"
++#include "mojo/public/cpp/bindings/remote.h"
+ #include "third_party/blink/public/common/tokens/tokens.h"
+ #include "ui/base/dragdrop/mojom/drag_drop_types.mojom.h"
+ #include "ui/display/display_util.h"
+@@ -394,6 +397,12 @@ void WebContentsViewMac::ShowPopupMenu(
+     std::vector<blink::mojom::MenuItemPtr> menu_items,
+     bool right_aligned,
+     bool allow_multiple_selection) {
++  // browser_core: a tile's page opens no menu, which would open over the user's window, at the
++  // tile, and take the pointer and keys until it closed. Its select stays shut.
++  if (GetInProcessNSView().browserCoreTile) {
++    mojo::Remote<blink::mojom::PopupMenuClient>(std::move(popup_client))->DidCancel();
++    return;
++  }
+   popup_menu_helper_ = std::make_unique<PopupMenuHelper>(
+       this, render_frame_host, std::move(popup_client));
+   popup_menu_helper_->ShowPopupMenu(bounds, item_font_size, selected_item,
+@@ -896,4 +905,12 @@ WebContentsViewMac::ViewsHostableGetAccessibilityElement() {
+   return rwhv->GetNativeViewAccessible();
+ }
+ 
++void SetPageTile(WebContents* contents, bool tile) {
++  WebContentsViewCocoa* view =
++      contents ? base::apple::ObjCCast<WebContentsViewCocoa>(
++                     contents->GetNativeView().GetNativeNSView())
++               : nil;
++  view.browserCoreTile = tile;
++}
++
+ }  // namespace content
+--- a/content/public/browser/BUILD.gn
++++ b/content/public/browser/BUILD.gn
+@@ -719,6 +719,7 @@ source_set("browser_sources") {
+       "native_event_processor_mac.h",
+       "native_event_processor_observer_mac.h",
+       "native_event_processor_observer_mac.mm",
++      "page_tile_mac.h",
+       "remote_cocoa.h",
+       "stretch_content_on_resize_mac.h",
+     ]
+--- /dev/null
++++ b/content/public/browser/page_tile_mac.h
+@@ -0,0 +1,20 @@
++// browser_core: lets the core show an agent's page live in a view of the app's, as a tile (#4115).
++
++#ifndef CONTENT_PUBLIC_BROWSER_PAGE_TILE_MAC_H_
++#define CONTENT_PUBLIC_BROWSER_PAGE_TILE_MAC_H_
++
++#include "content/common/content_export.h"
++
++namespace content {
++
++class WebContents;
++
++// Whether |contents|' page is a tile: its views take no pointer, cursor, tooltip or drop, never
++// take the keyboard, and don't tell the page the frame or screen the tile moves them to, so it
++// keeps the size and screen it had. Set before the core moves the view into the tile, and cleared
++// after it moves it out.
++CONTENT_EXPORT void SetPageTile(WebContents* contents, bool tile);
++
++}  // namespace content
++
++#endif  // CONTENT_PUBLIC_BROWSER_PAGE_TILE_MAC_H_
