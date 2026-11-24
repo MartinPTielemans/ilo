@@ -189,6 +189,50 @@ fn the_tasks_a_run_before_left_are_listed_by_their_profile(cx: &mut TestAppConte
     assert_eq!(kept(&next, cx), []);
 }
 
+/// However many tasks a run before left, a profile's cards are no more than the composer shows,
+/// the last to end, so a change of a task never makes a card nobody sees. Another profile has its
+/// own, older than those left out or not.
+#[gpui::test]
+fn a_profile_has_no_more_kept_cards_than_the_composer_shows(cx: &mut TestAppContext) {
+    let most = crate::tokens::shell::composer::CARDS as usize;
+    let run = Run::new("cap", cx);
+    for at in 0..most + 3 {
+        let agent = run.start(Cli::Claude, cx);
+        run.ran(at + 1);
+        name_it(&run, &agent, &format!("Task {at}"), cx);
+        run.finish(&agent, cx);
+    }
+    quit(&run, cx);
+    // As the file would say had each ended a minute after the one before, and the first been
+    // asked in another profile.
+    let mut saved = rows(&run);
+    assert_eq!(saved.len(), most + 3);
+    for row in &mut saved {
+        let title = row["title"].as_str().unwrap().to_string();
+        let at: u64 = title.trim_start_matches("Task ").parse().unwrap();
+        row["ended"] = json!(1_700_000_000 + at * 60);
+        if at == 0 {
+            row["profile"] = json!("Profile 2");
+        }
+    }
+    std::fs::write(index(&run), serde_json::to_vec(&saved).unwrap()).unwrap();
+
+    let next = next(&run, cx);
+    next.browser.profiles.borrow_mut().push((2, "Profile 2"));
+    let kept: Vec<(String, u64)> = (next.agents).read_with(cx, |agents, cx| {
+        (agents.kept_cards(cx).into_iter())
+            .map(|card| (card.title.to_string(), card.home))
+            .collect()
+    });
+    let mut newest: Vec<(String, u64)> = (0..most)
+        .map(|back| (format!("Task {}", most + 2 - back), 1))
+        .collect();
+    newest.push(("Task 0".to_string(), 2));
+    assert_eq!(kept, newest);
+    // Those left out are in the Archive, where each is still brought back.
+    assert_eq!(archive(&next, cx).len(), most + 3);
+}
+
 /// For the shell's test of the same road (shell/library/history_tests.rs): a task named `title`
 /// ended Done with a page open, and the browser quit with no window left, which leaves the task's
 /// Space as a crash does. The next launch finds the Space and its page, and gives none of it to
