@@ -1227,7 +1227,11 @@ impl TalkView {
                     .flex()
                     .items_center()
                     .children(sound)
-                    .child(line(site.clone(), look.palette.text(TITLE)));
+                    // The site is the tile's title, its step under it the same size and regular.
+                    .child(
+                        line(site.clone(), look.palette.text(TITLE))
+                            .font_weight(FontWeight::MEDIUM),
+                    );
                 let status = picture_status(held.as_ref(), step.filter(|_| working));
                 if let Some(words) = &status {
                     let mut said = self.said_logged.borrow_mut();
