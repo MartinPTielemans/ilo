@@ -227,6 +227,8 @@ row-end = 12.0
 input-icon = 18.0
 input-text = 18.0
 input-line = 23.0
+# Between the chips before the input: a page's each, as the composer can add several.
+chip-gap = 6.0
 input-icon-x = 23.0
 input-text-x = 53.0
 # The hint after the input ends this far from the panel's side, 11 after the field.

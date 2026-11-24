@@ -1063,3 +1063,69 @@ fn closing_the_last_tab_returns_to_the_field_in_search(cx: &mut TestAppContext) 
         "the field came back without the keyboard"
     );
 }
+
+/// A page added is a chip in the field, before what's typed, as ⌘T's ask has its page; nothing on
+/// Ask's line moves for it. ⌫ at the field's start takes the last one off, and a run takes them
+/// all.
+#[gpui::test]
+fn an_added_page_is_a_chip_in_the_field(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window_with_no_tab(cx);
+    cx.update(|_, cx| crate::text_input::bind_keys(cx));
+    shell.update(cx, |shell, cx| {
+        let page = Page {
+            url: "https://fieldbook.example/lakeside".into(),
+            ..Page::default()
+        };
+        shell.set_page(1, page, cx);
+        shell.set_title(1, "The Lakeside loop".into(), cx);
+    });
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    let line = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| {
+            let resting = shell.resting.as_ref().unwrap();
+            (resting.tier_chip.get(), resting.model_chip.get())
+        })
+    };
+    let chips = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            let bar = shell.read(cx).resting.as_ref().unwrap().bar.read(cx);
+            (bar.added().iter())
+                .map(|(url, title)| format!("{title} {url}"))
+                .collect::<Vec<_>>()
+        })
+    };
+    let before = line(&shell, cx);
+    assert!(before.0.is_some(), "the level's chip wasn't drawn");
+    shell.update(cx, |shell, cx| shell.toggle_page(1, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        chips(&shell, cx),
+        ["The Lakeside loop https://fieldbook.example/lakeside"],
+        "the page added isn't a chip in the field"
+    );
+    assert_eq!(line(&shell, cx), before, "Ask's line moved for the page");
+
+    cx.simulate_input("plan");
+    cx.simulate_keystrokes("backspace");
+    assert_eq!(
+        chips(&shell, cx).len(),
+        1,
+        "⌫ after typing took the page off"
+    );
+    cx.simulate_keystrokes("backspace backspace backspace backspace");
+    cx.run_until_parked();
+    assert!(chips(&shell, cx).is_empty(), "⌫ at the start left the page");
+    let pages = shell.read_with(cx, |shell, _| shell.resting.as_ref().unwrap().pages.len());
+    assert_eq!(
+        pages, 0,
+        "the chip went but the task would still have the page"
+    );
+
+    shell.update(cx, |shell, cx| shell.toggle_page(1, cx));
+    cx.simulate_input("plan a walk");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(chips(&shell, cx).is_empty(), "the run left the page's chip");
+}

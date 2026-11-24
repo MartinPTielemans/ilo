@@ -260,6 +260,15 @@ impl Shell {
             InPlaceKey::Escape if on_ask => self.set_on_ask(false, window, cx),
             InPlaceKey::Escape => {}
             InPlaceKey::Run => self.run_composed(window, cx),
+            InPlaceKey::DropPage => {
+                if let Some(page) = self
+                    .resting
+                    .as_ref()
+                    .and_then(|resting| resting.pages.last())
+                {
+                    self.toggle_page(page.tab, cx);
+                }
+            }
         }
     }
 
@@ -559,7 +568,15 @@ impl Shell {
                 FIELD_SHADOW_FAR,
             ),
         };
-        let field = bar.update(cx, |bar, cx| bar.field(fill, window, cx));
+        // The pages added are chips in the field, before what's typed, as ⌘T's ask has its page.
+        let added: Vec<_> = (self.resting.iter())
+            .flat_map(|resting| &resting.pages)
+            .map(|page| (page.url.clone().into(), page.title.clone()))
+            .collect();
+        let field = bar.update(cx, |bar, cx| {
+            bar.set_added(added, cx);
+            bar.field(fill, window, cx)
+        });
         let on_ask = bar.read(cx).on_ask();
         // A narrow window keeps the field inside the card's gutters.
         let field_width = FIELD_WIDTH.min(width - 2. * FIELD_GUTTER).max(0.);
@@ -687,7 +704,8 @@ impl Shell {
             .child(part(ASK, on_ask, cx))
     }
 
-    /// Ask's line under the field: add a page, the task's access, and the assistant and its model.
+    /// Ask's line under the field: add a page, the task's access, and the assistant and its model,
+    /// which a page added leaves where they are, as its chip is in the field.
     /// It keeps its room in Search, so nothing moves as the switch flips.
     fn ask_line(&mut self, on_ask: bool, width: f32, cx: &mut Context<Self>) -> gpui::Div {
         let palette = self.palette;
@@ -722,15 +740,6 @@ impl Shell {
         let tier_chip = (self.resting.as_ref()).map(|resting| resting.tier_chip.clone());
         let model_chip = (self.resting.as_ref()).map(|resting| resting.model_chip.clone());
         let plus_chip = (self.resting.as_ref()).map(|resting| resting.plus_chip.clone());
-        let added: Vec<SharedString> = (self.resting.as_ref())
-            .map(|resting| {
-                resting
-                    .pages
-                    .iter()
-                    .map(|page| page.title.clone())
-                    .collect()
-            })
-            .unwrap_or_default();
         let assistant = (self.resting.as_ref()).and_then(|resting| {
             let agent = resting.bar.update(cx, |bar, cx| bar.assistant(cx))?;
             Some(model_words(
@@ -754,12 +763,6 @@ impl Shell {
                     glyph.text_color(palette.glyph(CHIP_DISABLED))
                 })),
         )
-        .children(added.into_iter().map(|title| {
-            chip()
-                .min_w_0()
-                .flex_shrink(1.)
-                .child(div().min_w_0().truncate().child(title))
-        }))
         .child(
             chip()
                 .id("composer-tier")
