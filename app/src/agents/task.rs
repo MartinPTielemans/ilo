@@ -1234,6 +1234,7 @@ impl Agents {
     pub fn task_model_menu(&self, cli: Cli) -> (Vec<(String, String)>, Vec<MenuEntry>) {
         model_menu(
             self.task_model(cli),
+            &model_default(cli),
             self.task_default_model(cli),
             self.task_models(cli),
         )
@@ -1272,7 +1273,13 @@ impl Agents {
         Some(name.into())
     }
 
+    /// Sets the model `cli` runs tasks with, only one its Model menu lists, so nothing else, typed
+    /// or from a page, an agent or a file, is ever passed to the CLI as one.
     pub fn set_task_model(&mut self, cli: Cli, model: &str, cx: &mut Context<Self>) {
+        let listed = self.task_models(cli).iter().any(|(id, _)| id == model);
+        if !model.is_empty() && !listed {
+            return;
+        }
         match model.is_empty() {
             true => self.tasks.models.remove(&cli),
             false => self.tasks.models.insert(cli, model.to_string()),
@@ -3860,15 +3867,27 @@ fn receipt(session: &Session, ended: &str) -> String {
     }
 }
 
-/// A CLI's Model menu, as its ids and items, with `chosen` checked: Default first, followed by the
-/// name of the model it is where the CLI says, then `models`.
+/// Settings › Agents' row under each assistant's: what its new tasks start with. Its name carries
+/// it, so it has no line.
+pub const MODEL: &str = "Model";
+/// Model's first choice, `{assistant}` its name: the assistant's own default, passing it no model.
+const MODEL_DEFAULT: &str = "{assistant}'s default";
+
+/// `cli`'s Model's first choice, as its pop-up and menu say it.
+pub fn model_default(cli: Cli) -> String {
+    MODEL_DEFAULT.replace("{assistant}", cli.assistant())
+}
+
+/// A CLI's Model menu, as its ids and items, with `chosen` checked: its own default first, as
+/// `first` says it, followed by the name of the model it is where the CLI says, then `models`.
 pub fn model_menu(
     chosen: &str,
+    first: &str,
     default: Option<&str>,
     models: Vec<(String, String)>,
 ) -> (Vec<(String, String)>, Vec<MenuEntry>) {
     let default = default.map(|name| SharedString::from(name.to_string()));
-    let mut all = vec![(String::new(), MenuEntry::label("Default").to_string())];
+    let mut all = vec![(String::new(), first.to_string())];
     all.extend(models);
     let items = (all.iter().enumerate())
         .map(|(at, (id, name))| {
