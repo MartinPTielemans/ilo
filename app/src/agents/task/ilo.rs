@@ -1,5 +1,7 @@
 //! ilo's own lines in a task's conversation: what the browser stopped, a step that's the user's, a
-//! tab the agent needs back, a sign-in ilo did and a change of the task's access.
+//! tab the agent needs back, a sign-in ilo did and a change of the task's access. And of a task
+//! that has ended (#4105): that the user's reply took it up, and in the reply field's place, that
+//! its assistant no longer has the conversation or keeps none.
 //!
 //! An ilo line is its own kind of entry, never a message. Only the app makes one, from its own
 //! events: nothing an agent sends, no tool's argument and no page's text becomes one, so nothing
@@ -50,6 +52,26 @@ pub enum IloKind {
     },
     /// The user changed the task's access.
     TierChanged { from: Tier, to: Tier },
+    /// The user's reply took up the task after it had ended, at `tier`, which the app decided.
+    Resumed { tier: Tier },
+    /// The assistant keeps the task's conversation on the user's computer, said once per profile.
+    KeptHere,
+    /// The assistant no longer has the task's conversation, which it kept. In the reply field's
+    /// place.
+    Gone,
+    /// The assistant kept no conversation of the task, which ended while Settings' switch was
+    /// off. In the reply field's place.
+    NotKept,
+    /// The assistant keeps no finished task's conversation. In the reply field's place.
+    KeepsNothing,
+}
+
+/// Whether a line stands in the reply field's place, under the log, as the task takes no reply.
+pub fn in_field(kind: &IloKind) -> bool {
+    matches!(
+        kind,
+        IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing
+    )
 }
 
 /// What ilo signed in with.
@@ -74,6 +96,9 @@ pub enum IloButton {
     HandBack,
     /// The user leaves the step for now.
     NotNow,
+    /// The command bar opens with what the task was first asked, to ask it anew: nothing is sent
+    /// until the user sends it.
+    StartAgain,
 }
 
 impl IloButton {
@@ -105,6 +130,8 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
         IloKind::Yours { .. } => vec![IloButton::HandBack, IloButton::NotNow],
         IloKind::TabBack { .. } => vec![IloButton::HandBack],
         IloKind::SignedIn { .. } | IloKind::TierChanged { .. } => Vec::new(),
+        IloKind::Resumed { .. } | IloKind::KeptHere => Vec::new(),
+        IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing => vec![IloButton::StartAgain],
     }
 }
 
@@ -116,6 +143,8 @@ pub fn tab(kind: &IloKind) -> Option<u64> {
         | IloKind::TabBack { tab }
         | IloKind::SignedIn { tab, .. } => Some(*tab),
         IloKind::TierChanged { .. } => None,
+        IloKind::Resumed { .. } | IloKind::KeptHere => None,
+        IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing => None,
     }
 }
 
