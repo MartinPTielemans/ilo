@@ -126,7 +126,10 @@ pub(crate) unsafe extern "C" fn tab_text(
     tab: bc::bc_id,
     request: u64,
     text: *const c_char,
+    failure: c_int,
 ) {
+    // The kind of a read that gave nothing, which no answer here tells apart yet.
+    let _ = failure;
     let text = (!text.is_null()).then(|| {
         unsafe { CStr::from_ptr(text) }
             .to_string_lossy()

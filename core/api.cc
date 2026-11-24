@@ -2450,7 +2450,8 @@ void bc_tab_read_text(bc_id id, uint64_t request) {
   // task of its own.
   const auto nothing = [](bc_id tab, uint64_t request) {
     if (browser_core::Host().tab_text) {
-      browser_core::Host().tab_text(browser_core::Host().context, tab, request, nullptr);
+      browser_core::Host().tab_text(browser_core::Host().context, tab, request, nullptr,
+                                    BC_AGENT_FAILURE_NONE);
     }
   };
   content::WebContents* contents =

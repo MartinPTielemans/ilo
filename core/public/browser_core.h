@@ -553,6 +553,10 @@ typedef enum bc_agent_failure {
   // The tab shows a withheld page (bc_tab_withheld_from_agents): nothing but a navigation to
   // another page, or closing the tab.
   BC_AGENT_FAILURE_WITHHELD_PAGE = 13,
+  // The page's one look before an agent's call (bc_agent_page, bc_agent_request, bc_tab_read_text)
+  // didn't answer in time. It comes before the call does or gives anything, so nothing was done
+  // and nothing of the page given, and the page isn't withheld: the same call may be made again.
+  BC_AGENT_FAILURE_UNCHECKED = 14,
 } bc_agent_failure;
 
 // An agent's call the core checked, for the activity log (bc_agent_may_act).
@@ -1418,8 +1422,9 @@ typedef struct bc_host {
   void (*history_deleted)(void* context, bc_id profile, bool all, int64_t begin, int64_t end,
                           const char* const* urls, size_t count);
   // The text bc_tab_read_text asked for as |request|, UTF-8, or null if the tab had no page loaded
-  // or closed first.
-  void (*tab_text)(void* context, bc_id tab, uint64_t request, const char* text);
+  // or closed first. With null, |failure| is BC_AGENT_FAILURE_UNCHECKED if the page's look didn't
+  // answer in time, else BC_AGENT_FAILURE_NONE.
+  void (*tab_text)(void* context, bc_id tab, uint64_t request, const char* text, int failure);
   // The language of |tab|'s page, a BCP 47 tag such as "es" or "pt-BR", as Chrome's language
   // detection finds it: the language the page declares in its html lang or Content-Language, as
   // there's no model on the device to read its words; "und" if it declares none. Empty as each
@@ -3512,8 +3517,9 @@ BC_EXPORT void bc_tab_picture(bc_id tab, uint64_t request, int width, int height
 // for this one read, without running the page's JavaScript or turning accessibility on for the tab.
 // A page that's loading is read once it stops, or after 15 s. Before reading, the page takes the
 // one look an agent's call takes, and a page that look withholds (bc_tab_withheld_from_agents),
-// like a tab without its page loaded, has nothing to read. Then tab_text with |request|, from a
-// task of its own. Each read is checked with bc_agent_may_act first.
+// like a tab without its page loaded, has nothing to read, as has one whose look didn't answer in
+// time (BC_AGENT_FAILURE_UNCHECKED). Then tab_text with |request|, from a task of its own. Each
+// read is checked with bc_agent_may_act first.
 BC_EXPORT void bc_tab_read_text(bc_id tab, uint64_t request);
 
 // Gathers the text of the tab's page for the app to translate on the device: its title, then
