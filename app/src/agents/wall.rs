@@ -95,7 +95,9 @@ pub enum WallRefused {
     Unavailable(Unavailable),
     /// The folder can't be granted now: on the never-grantable list, moved or gone.
     Refused(Refusal),
-    /// The launcher couldn't apply its rules, and nothing started.
+    /// The launcher couldn't apply its rules, and nothing started. The string is for the dev log
+    /// only and never holds a path or a folder's name (#3656); whatever fills it from the
+    /// launcher's exit keeps it so.
     Failed(String),
 }
 
@@ -157,8 +159,9 @@ pub enum Stop {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Walked {
     pub links: Vec<LeavingLink>,
-    /// Set when no change time could be trusted or the system's change record dropped some, so the
-    /// list is every leaving link in the folder, offered to reveal only and never to delete.
+    /// Set by pip's walk when no change time could be trusted or the system's change record dropped
+    /// some, so the list is every leaving link in the folder, offered to reveal only and never to
+    /// delete.
     pub every_leaving: bool,
     /// Set when the walk stopped short, so the line says it checked part of the folder.
     pub stopped: Option<Stop>,
