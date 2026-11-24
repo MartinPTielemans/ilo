@@ -889,7 +889,7 @@ impl Shell {
             log!("browser: task area {space} back");
         }
         self.lay_out_page(cx);
-        self.reshape_foot(cx);
+        self.restore_foot(cx);
         // The Agents send its conversation as it is now, as they sent none while it was aside.
         if let Some(agent) = self.talk_agent() {
             self.browser.show_task(agent, cx);

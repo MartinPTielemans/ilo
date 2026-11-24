@@ -373,7 +373,8 @@ pub struct Task {
     /// Its steps, oldest first.
     pub trace: Vec<Traced>,
     pub dismissed: bool,
-    /// When it last left the foot for the Archive, which lists it by then. Kept in memory only.
+    /// When it last left the foot for the Archive, which a task with no end is listed by. Kept
+    /// in memory only.
     pub left: Option<SystemTime>,
     /// Deleted from the Archive: listed nowhere and out of ⇧⌘T's reach, until ⌘Z brings it back
     /// or it goes for good with the dismissed tasks past the last few.
@@ -393,6 +394,9 @@ pub struct Task {
     /// The turns the user stopped, each by how many of their messages came before its answer: a
     /// stopped turn has no answer, so all it said stays in its stretch of work.
     pub stopped_turns: Vec<usize>,
+    /// The level it ended at, once the user has picked another in the level's menu since: the
+    /// pick is the level its next reply starts at, and this the one its wall was last put up at.
+    pub(super) picked_from: Option<Tier>,
     /// ilo's other lines of what happened to it: its steps handed to the user, the tabs its
     /// agent asked back and the changes of its access, oldest first.
     pub(super) placed: Vec<super::lines::Placed>,
@@ -410,10 +414,10 @@ pub struct Task {
     pub(in crate::agents) files: Given,
     /// Its start inside a wall, until the system says the wall is up (rewall.rs).
     pub(super) rising: Option<rewall::Rising>,
-    /// What came of each wall of its that wasn't put up, in order, each with the turn it came in
-    /// as an ilo line's is counted (lines.rs), so its line stands where it happened: what its
-    /// lines about them are written from, by the conversation's words table.
-    pub(in crate::agents) rewalled: Vec<(usize, rewall::Rewalled)>,
+    /// What came of each wall of its that wasn't put up, in order, each with where it came among
+    /// the task's messages and steps, so its line stands where it happened: what its lines about
+    /// them are written from, by the conversation's words table.
+    pub(in crate::agents) rewalled: Vec<rewall::Came>,
 }
 
 /// The message an agent is writing as the turn's last, which shows under its trace as it comes,
@@ -651,11 +655,16 @@ pub enum TaskAction {
     CancelSignIn,
     /// An ilo line's Take over: the tab is the user's.
     TakeOver(u64),
-    /// A Stopped line's step up, or the composer's tier chip, up or down: only the user's press
-    /// sets a task's access.
+    /// A Stopped line's step up: only the user's press sets a task's access.
     SetTier(Tier),
     /// A Sites line's Any site.
     AnySite,
+    /// The level the user picked in the level's menu, which they opened: nothing moved under the
+    /// pointer, so no guard holds it, and on a task that has ended it's the level its next reply
+    /// starts at.
+    PickTier(Tier),
+    /// The level's menu's Any site.
+    PickAnySite,
     /// An ilo line's Hand back: the tab goes back to the agent.
     HandBack(u64),
     /// A step's Not now, by its line's key.
@@ -711,11 +720,34 @@ pub struct ArchivedTask {
     pub asked: SharedString,
     /// Done's tick, or Stopped's and Failed's grey dot, as its card had.
     pub dot: Dot,
-    /// Who worked on it, how it ended and when, and the pages it still holds:
-    /// "Claude · Done 13:31 · 1 page".
+    /// Who worked on it and how it ended, "Claude · Done".
     pub about: SharedString,
-    /// When it left the foot, in milliseconds since the Unix epoch, as the archive dates its tabs.
-    pub left: f64,
+    /// When it ended, or left the foot with no end, in milliseconds since the Unix epoch as the
+    /// archive dates its tabs, or 0 if nothing says. History lists it by then, under that day,
+    /// and says it as it says its pages' times (`about_at`).
+    pub ended: f64,
+    /// The pages it still holds, "1 page", or nothing.
+    pub pages: SharedString,
+}
+
+impl ArchivedTask {
+    /// What its row says under its title, with `when` it ended as the list it's in says a time:
+    /// "Claude · Done 13:31 · 1 page".
+    pub fn about_at(&self, when: &str) -> String {
+        about_at(&self.about, when, &self.pages)
+    }
+}
+
+/// A finished task's row under its title: who worked on it and how it ended, when, and the pages
+/// it still holds.
+fn about_at(about: &str, when: &str, pages: &str) -> String {
+    let mut about = about.to_string();
+    for (between, part) in [(" ", when), (" · ", pages)] {
+        if !part.is_empty() {
+            about = format!("{about}{between}{part}");
+        }
+    }
+    about
 }
 
 /// Open's words, for the tabs a task left the user: its site for one, and how many for several.
@@ -832,38 +864,45 @@ impl Agents {
                     State::Done { .. } => Dot::Done,
                     _ => Dot::Ended,
                 };
-                let about = self.about(task, cx);
-                let left = task
-                    .left
-                    .and_then(|at| at.duration_since(SystemTime::UNIX_EPOCH).ok());
+                let (about, pages) = self.about_parts(task, cx);
+                let since = |at: Option<SystemTime>| {
+                    at.and_then(|at| at.duration_since(SystemTime::UNIX_EPOCH).ok())
+                        .map_or(0., |since| since.as_secs_f64() * 1000.)
+                };
                 ArchivedTask {
                     agent: task.agent.clone().into(),
                     title: task.title.clone(),
                     asked: task.asked.clone(),
                     dot,
                     about: about.into(),
-                    left: left.map_or(0., |since| since.as_secs_f64() * 1000.),
+                    ended: since(task.ended.or(task.left)),
+                    pages: pages.into(),
                 }
             })
             .collect()
     }
 
-    /// What a finished task's row says under its title, in the Archive and in Settings › Agents'
-    /// list of the kept: who worked on it, how it ended and when, and the pages it still holds,
-    /// "Claude · Done 13:31 · 1 page". One that ended on an earlier day says the day instead,
-    /// "Claude · Done 21 Nov", as a time alone reads as today's.
+    /// What a finished task's row says under its title in Settings › Agents' list of the kept:
+    /// who worked on it, how it ended and when, and the pages it still holds, "Claude · Done 13:31
+    /// · 1 page". One that ended on an earlier day says the day instead, "Claude · Done 21 Nov",
+    /// as a time alone reads as today's in a list with no days over its rows. History's has them,
+    /// and says when as its pages' rows do (`ArchivedTask::about_at`).
     pub(super) fn about(&self, task: &Task, cx: &App) -> String {
+        let (about, pages) = self.about_parts(task, cx);
+        let when = (task.ended.or(task.left)).map(|at| super::time_or_day(seconds(at)));
+        about_at(&about, &when.unwrap_or_default(), &pages)
+    }
+
+    /// A finished task's row around when it ended: who worked on it and how it ended, "Claude ·
+    /// Done", and the pages it still holds, "1 page" or nothing.
+    fn about_parts(&self, task: &Task, cx: &App) -> (String, String) {
         let words = Word::of(&task.state, false).after_name();
-        let mut about = format!("{} · {words}", task.name);
-        if let Some(at) = task.ended.or(task.left) {
-            about = format!("{about} {}", super::time_or_day(seconds(at)));
-        }
-        match self.open_tabs(task, cx).len() {
-            0 => {}
-            1 => about.push_str(" · 1 page"),
-            pages => about.push_str(&format!(" · {pages} pages")),
-        }
-        about
+        let pages = match self.open_tabs(task, cx).len() {
+            0 => String::new(),
+            1 => "1 page".to_string(),
+            pages => format!("{pages} pages"),
+        };
+        (format!("{} · {words}", task.name), pages)
     }
 
     /// Does what the user did to `agent`'s task. Returns the tab Open moved into the user's
@@ -905,15 +944,19 @@ impl Agents {
             TaskAction::Undelete => self.delete_task(agent, false, cx),
             TaskAction::SignIn => self.sign_in_for_task(agent, cx),
             TaskAction::CancelSignIn => self.cancel_sign_in_for_task(agent),
-            // A Stopped line's step up and the chip: the user's own press, the one way a tier
-            // or a task's Sites change, but not a press meant for what was there before a
-            // refusal's line appeared.
+            // A Stopped line's step up and the level's menu: the user's own press, the one way a
+            // tier or a task's Sites change. A line's button isn't pressed for what was there
+            // before a refusal's line appeared, nor once its task has ended.
             TaskAction::SetTier(_) | TaskAction::AnySite if self.just_stopped(agent) => {}
-            // Nor one meant for what was there before the helpers' limit's line appeared.
+            // Nor for what was there before the helpers' limit's line appeared.
             TaskAction::SetTier(_) | TaskAction::AnySite
                 if (self.task(agent)).is_some_and(|task| task.helpers.just_stopped()) => {}
-            TaskAction::SetTier(tier) => self.set_tier(agent, tier, cx),
-            TaskAction::AnySite => self.set_sites(agent, Sites::Any, cx),
+            TaskAction::SetTier(_) | TaskAction::AnySite
+                if (self.task(agent)).is_some_and(|task| task.ended.is_some()) => {}
+            TaskAction::SetTier(tier) | TaskAction::PickTier(tier) => {
+                self.set_tier(agent, tier, cx)
+            }
+            TaskAction::AnySite | TaskAction::PickAnySite => self.set_sites(agent, Sites::Any, cx),
             TaskAction::TakeOver(tab) => {
                 if let Some(task) = self.task_mut(agent) {
                     task.helpers.settle(Some(tab));
@@ -1468,6 +1511,7 @@ impl Agents {
             },
             stops: Vec::new(),
             stopped_turns: Vec::new(),
+            picked_from: None,
             placed: Vec::new(),
             told: None,
             helpers: Helpers::of_task(self.helpers_on() && cli == Cli::Claude),
@@ -1477,13 +1521,13 @@ impl Agents {
         };
         self.tasks.tasks.push(task);
         self.tokens_changed();
-        // The log keeps the tier it starts at, as it keeps a change of it.
-        let started = super::tier::started_logged(tier, pages.len());
-        self.note_on(&agent, 0, super::access::ACCESS_ACTION, "", &started, "");
+        // The log keeps the tier it starts at, as it keeps a change of it, and on the same row
+        // that it started without its files, which its wall's answer says (rewall.rs).
+        let wall = self.wall_to_begin(&agent, pages.len());
         let task = self.task(&agent);
         let first = first_message(asked, task.and_then(|task| task.page.as_ref()));
         let first = with_added(first, task.map_or(&[], |task| &task.added));
-        self.launch(&agent, &first, cx);
+        self.launch_in(&agent, &first, wall, cx);
         self.wait_for_answer(&agent, cx);
         cx.notify();
         Some(agent)
@@ -2232,7 +2276,7 @@ impl Agents {
             self.browser.delete_space(space, cx);
         }
         if let Some(dir) = &self.tasks.dir {
-            _ = std::fs::remove_dir_all(dir.join("Tasks"));
+            end_old_task_files(&dir.join("Tasks"));
         }
     }
 
@@ -2694,6 +2738,7 @@ impl Agents {
             sites: Sites::default(),
             stops: Vec::new(),
             stopped_turns: Vec::new(),
+            picked_from: None,
             placed: Vec::new(),
             told: None,
             helpers: Helpers::default(),
@@ -4294,4 +4339,38 @@ fn names_the_browser(name: &str) -> bool {
             .iter()
             .any(|browser| read.contains(&reads_as(browser)))
         || read == reads_as("browser")
+}
+
+/// The files of the tasks a run before left, but for the places walled tasks left, which are swept
+/// first (leftovers.rs). They're listed here, before any task can make one, and swept off the UI
+/// thread, as a sweep walks every process.
+fn end_old_task_files(tasks: &std::path::Path) {
+    use super::wall::leftovers;
+    let root = tasks.join(leftovers::ROOT);
+    let left = leftovers::left_in(&root);
+    if left.is_empty() {
+        _ = std::fs::remove_dir_all(tasks);
+        return;
+    }
+    for entry in std::fs::read_dir(tasks).into_iter().flatten().flatten() {
+        if entry.file_name() == leftovers::ROOT {
+            continue;
+        }
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => _ = std::fs::remove_dir_all(entry.path()),
+            Ok(_) => _ = std::fs::remove_file(entry.path()),
+            Err(_) => {}
+        }
+    }
+    _ = std::thread::Builder::new()
+        .name("task-leftovers".into())
+        .spawn(move || {
+            let cleaned = leftovers::clean_up(&root, &left);
+            log!(
+                "browser: walled tasks a run before left: {} ended, {} places removed, {} kept",
+                cleaned.ended,
+                cleaned.removed,
+                cleaned.kept
+            );
+        });
 }

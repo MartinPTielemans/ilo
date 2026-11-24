@@ -174,22 +174,30 @@ impl Agents {
     /// The user changes the task `key`'s access to `tier`: from its line or its chip, never from
     /// an agent. Its refusals are settled, the log keeps the change, and a task ilo runs is told.
     /// One with files goes up only if its wall of the new level does, and starts again inside
-    /// the wall of whichever level it's set to (rewall.rs).
+    /// the wall of whichever level it's set to (rewall.rs). On a task that has ended nothing
+    /// starts: the level is the one its next reply starts at, walled then (`pick_up`).
     pub fn set_tier(&mut self, key: &str, tier: Tier, cx: &mut Context<Self>) {
-        let Some(task) = self.task(key).filter(|task| task.ended.is_none()) else {
+        let Some(task) = self.task(key) else {
             return;
         };
-        let from = task.tier;
+        let (from, ended) = (task.tier, task.ended.is_some());
         if from == tier {
             return;
         }
-        let Ok(raised) = self.wall_to_raise(key, from, tier) else {
-            return cx.notify();
+        let raised = match ended {
+            true => None,
+            false => match self.wall_to_raise(key, from, tier) {
+                Ok(raised) => raised,
+                Err(()) => return cx.notify(),
+            },
         };
         let Some(task) = self.task_mut(key) else {
             return;
         };
         task.tier = tier;
+        if ended {
+            task.picked_from.get_or_insert(from);
+        }
         for stop in &mut task.stops {
             stop.settled = true;
         }
@@ -208,16 +216,17 @@ impl Agents {
         );
         let changed = tier::changed_logged(from, tier);
         self.note_on(&agent, connection, ACCESS_ACTION, "", &changed, "");
-        if runs {
+        if runs && !ended {
             let change = Change::Level { from, raised };
             self.rewall(key, change, tier::changed_turn(from, tier), cx);
         }
         cx.notify();
     }
 
-    /// The user sets the sites the task `key` may use.
+    /// The user sets the sites the task `key` may use: on one that has ended, those its next reply
+    /// works on.
     pub fn set_sites(&mut self, key: &str, sites: Sites, cx: &mut Context<Self>) {
-        let Some(task) = self.task_mut(key).filter(|task| task.ended.is_none()) else {
+        let Some(task) = self.task_mut(key) else {
             return;
         };
         if task.sites == sites {

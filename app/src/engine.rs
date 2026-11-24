@@ -1931,12 +1931,19 @@ impl Browser for Engine {
         start: browser::agents::task::Start,
         _: &mut App,
     ) {
-        let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
-            return;
-        };
-        let asked = asked.to_string();
+        let (agent, asked, window) = (agent.to_string(), asked.to_string(), self.window);
         agents_core::update(move |agents, cx| {
-            agents.start_task(cli, &asked, None, home, start, cx);
+            let cli = browser::agents::runner::Cli::from_id(&agent);
+            let started = cli.and_then(|cli| agents.start_task(cli, &asked, None, home, start, cx));
+            // The composer's ↩ opens the view of the task it started alone, or of none.
+            let shell = WINDOWS.with_borrow(|windows| {
+                (windows.iter().find(|w| w.id == window)).and_then(|w| w.shell.upgrade())
+            });
+            if let Some(shell) = shell {
+                shell.update(cx, |shell, _| {
+                    shell.composed_started(started.map(Into::into))
+                });
+            }
         });
     }
 
