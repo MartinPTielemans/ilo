@@ -798,6 +798,10 @@ min-width = 200.0
 max-width = 320.0
 # How far a submenu lies over its parent, so their rows line up.
 overlap = 4.0
+# The safe triangle keeps a submenu open while the pointer is on its way to it, and ends once the
+# pointer rests this long in it, in seconds, what's under it lit then: in every menu, the capture
+# menu's Add to Board too (#4108).
+submenu-rest = 0.3
 # How far inside the screen's work area a menu stays.
 edge = 8.0
 # How far a menu a control opens lies off the control's plate, so the plate shows whole beside it
