@@ -7055,6 +7055,16 @@ mod tasks {
             ("Stopped at chase.com", Dot::Waiting)
         );
         assert!(card.question.is_none(), "a refusal asked");
+        // One state, one word: the conversation's header follows the card.
+        assert_eq!(
+            agents
+                .read_with(cx, |agents, cx| agents.conversation(&agent, cx))
+                .expect("its conversation")
+                .about
+                .as_ref(),
+            "Claude · Needs you",
+            "the header and the card say different things at a refusal"
+        );
         assert_eq!(shown(&agents, cx), None);
         browser
             .tabs
@@ -7387,6 +7397,89 @@ mod tasks {
     /// A task's calls are its conversation's trace, each titled by what it did and opening to what
     /// it saw or why it failed. What it typed shows, but never what it typed into a password
     /// field, though the field refused it.
+    /// ilo's line goes where it happened among the task's steps (#4132): the steps before a
+    /// refusal, its line, then the steps after, never every ilo line after the turn's work.
+    #[gpui::test]
+    fn an_ilo_line_stands_where_it_came_among_the_steps(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, TraceItem};
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Check my balance", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        browser
+            .tabs
+            .borrow_mut()
+            .push((30, 100, "Shop", "https://shop.example/basket"));
+        let snapshot = json!({ "tab": 30 });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "snapshot",
+            snapshot.clone(),
+            Some(shop_tree()),
+            cx,
+        );
+        let bank = json!({ "url": "https://www.chase.com/" });
+        assert!(traced(&agents, &browser, &agent, "open_tab", bank, None, cx).error);
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "snapshot",
+            snapshot,
+            Some(shop_tree()),
+            cx,
+        );
+        let lines = agents.read_with(cx, |agents, cx| {
+            agents.conversation(&agent, cx).unwrap().lines
+        });
+        let tools = |line: &Line| match line {
+            Line::Trace(trace) => (trace.items.iter())
+                .filter_map(|item| match item {
+                    TraceItem::Step(step) => Some(step.title.to_string()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+            Line::Ilo(_) => "ilo".into(),
+            other => format!("{other:?}"),
+        };
+        let order: Vec<String> = lines.iter().map(tools).collect();
+        assert_eq!(
+            order.len(),
+            3,
+            "the steps before the refusal, its line, the steps after: {order:?}"
+        );
+        assert_eq!(order[1], "ilo", "{order:?}");
+        assert!(
+            matches!(lines[2], Line::Trace(ref trace) if trace.running),
+            "{order:?}"
+        );
+        // The refused row stands alone in the refusal's red, and the line under it says why in
+        // the step's own under-way words (B1).
+        let Line::Trace(before) = &lines[0] else {
+            panic!("{order:?}")
+        };
+        let Some(TraceItem::Step(refused)) = before.items.last() else {
+            panic!("{order:?}")
+        };
+        assert!(refused.failed, "{order:?}");
+        assert_eq!(
+            refused.description.as_ref(),
+            "",
+            "the refused row keeps a tail"
+        );
+        let Line::Ilo(line) = &lines[1] else {
+            panic!("{order:?}")
+        };
+        let crate::agents::task::ilo::IloKind::Stopped { doing, .. } = &line.kind else {
+            panic!("{line:?}")
+        };
+        assert_eq!(doing.as_ref(), "opening chase.com");
+    }
+
     #[gpui::test]
     fn a_tasks_calls_are_its_trace_and_never_show_a_password(cx: &mut TestAppContext) {
         use crate::agents::task::{Line, Opens, TraceItem};
@@ -7610,7 +7703,7 @@ mod tasks {
             (None, ""),
             (Some(Kind::Stopped), "stopped"),
             (Some(Kind::SaidNo), "you said no"),
-            (Some(Kind::Outside), "outside its access"),
+            (Some(Kind::Outside), ""),
             (Some(Kind::Password), "password field"),
             (Some(Kind::NotWebPage), "not a web page"),
             (Some(Kind::NotFound), "not found"),
@@ -7640,7 +7733,15 @@ mod tasks {
             close: None,
             notes: None,
         };
-        let lines = fold(&[], &[failed], true, false, None, &Default::default());
+        let lines = fold(
+            &[],
+            &[failed],
+            true,
+            false,
+            None,
+            &Default::default(),
+            Vec::new(),
+        );
         let [Line::Trace(trace)] = lines.as_slice() else {
             panic!("{lines:?}")
         };
@@ -7684,7 +7785,15 @@ mod tasks {
                 close: None,
                 notes: None,
             };
-            let lines = fold(&[], &[failed], true, false, None, &Default::default());
+            let lines = fold(
+                &[],
+                &[failed],
+                true,
+                false,
+                None,
+                &Default::default(),
+                Vec::new(),
+            );
             let [Line::Trace(trace)] = lines.as_slice() else {
                 panic!("{lines:?}")
             };
@@ -7698,7 +7807,6 @@ mod tasks {
         let once = [
             ("The user stopped the agent.", Kind::Stopped),
             ("The user said no.", Kind::SaidNo),
-            ("ilo stopped this: click “Pay”.", Kind::Outside),
             ("That's a password field.", Kind::Password),
             ("Tab 30 isn't an http or https page.", Kind::NotWebPage),
             ("There's no element e12 in tab 30.", Kind::NotFound),
@@ -7870,7 +7978,15 @@ mod tasks {
         messages.push(message(Who::Agent, "Looking at MAAT first.", 3));
         trace.push(step("read_page", 2, 4, None));
 
-        let lines = fold(&messages, &trace, false, true, None, &Default::default());
+        let lines = fold(
+            &messages,
+            &trace,
+            false,
+            true,
+            None,
+            &Default::default(),
+            Vec::new(),
+        );
         let [Line::You(_), Line::Trace(working)] = lines.as_slice() else {
             panic!("{lines:?}")
         };
@@ -7886,7 +8002,15 @@ mod tasks {
 
         trace[1].ended = Some(at(6));
         messages.push(message(Who::Agent, "MAAT opens at 10:00.", 41));
-        let lines = fold(&messages, &trace, true, false, None, &Default::default());
+        let lines = fold(
+            &messages,
+            &trace,
+            true,
+            false,
+            None,
+            &Default::default(),
+            Vec::new(),
+        );
         let [Line::You(_), Line::Trace(worked), Line::Said(said)] = lines.as_slice() else {
             panic!("{lines:?}")
         };
@@ -7940,9 +8064,25 @@ mod tasks {
             message(Who::User, "Museum hours", 0),
             message(Who::Result, "MAAT opens at 10:00.", 5),
         ];
-        let before = fold(&messages, &trace, true, false, None, &Default::default());
+        let before = fold(
+            &messages,
+            &trace,
+            true,
+            false,
+            None,
+            &Default::default(),
+            Vec::new(),
+        );
         messages.push(message(Who::User, "And on Sunday?", 9));
-        let lines = fold(&messages, &trace, false, true, None, &Default::default());
+        let lines = fold(
+            &messages,
+            &trace,
+            false,
+            true,
+            None,
+            &Default::default(),
+            Vec::new(),
+        );
         assert_eq!(lines[..before.len()], before[..], "{lines:?}");
         assert_eq!(lines.last(), Some(&Line::You("And on Sunday?".into())));
     }
@@ -7981,7 +8121,15 @@ mod tasks {
             at: at(0),
         }];
         let lines = |trace: &[Traced]| {
-            let lines = fold(&messages, trace, false, true, None, &Default::default());
+            let lines = fold(
+                &messages,
+                trace,
+                false,
+                true,
+                None,
+                &Default::default(),
+                Vec::new(),
+            );
             let [Line::You(_), Line::Trace(trace)] = lines.as_slice() else {
                 panic!("{lines:?}")
             };

@@ -100,18 +100,25 @@ impl Agents {
         };
         let key = (self.acting_task(&act.agent, act.connection, act.call)).map(|t| t.agent.clone());
         if let Some(task) = key.as_deref().and_then(|key| self.task_mut(key)) {
-            let after = task.messages.len();
+            let (after, traced) = (task.messages.len(), task.trace.len());
+            // The refused call came as a step before it was judged, so the line names it as it is
+            // under way.
+            let doing = (task.trace.iter().rfind(|step| step.call == act.call))
+                .map(|step| lowered(&tools::step_title(&step.did, tools::Tense::Now)))
+                .unwrap_or_default();
             match (task.stops.iter_mut()).find(|stop| stop.same(act.tab, &at, why, tier)) {
                 Some(stop) => stop.count += 1,
                 None => task.stops.push(Stop {
                     tab: act.tab,
                     at: at.clone(),
                     site: tier::plain(&site),
+                    doing,
                     why,
                     tier,
                     count: 1,
                     appeared: std::time::Instant::now(),
                     after,
+                    traced,
                     settled: false,
                 }),
             }
@@ -250,4 +257,12 @@ impl Agents {
             .flat_map(|task| task.stops.iter().filter(|stop| !stop.settled).cloned())
             .collect()
     }
+}
+
+/// `text` with its first letter lowered, as a step's phrase reads after "from".
+fn lowered(text: &str) -> String {
+    let mut chars = text.chars();
+    (chars.next())
+        .map(|first| first.to_lowercase().chain(chars).collect())
+        .unwrap_or_default()
 }

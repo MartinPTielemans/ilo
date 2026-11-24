@@ -865,6 +865,8 @@ impl Agents {
             working,
             task.writing.as_ref(),
             &task.helpers,
+            // ilo's lines of its refusals, its steps handed to the user and its changes of access.
+            self.ilo_lines(task, cx),
         );
         // A session's conversation is in its agent's terminal: here, only its steps, one by one.
         if task.session.is_some() {
@@ -890,14 +892,12 @@ impl Agents {
         }
         // ilo's line of each time it stopped the task at its helpers' limit (#4102).
         helpers::lines(task, &mut lines);
-        // ilo's lines of its refusals, its steps handed to the user and its changes of access.
-        self.ilo_lines(task, &mut lines, cx);
         // ilo's own lines of a task that can be replied to after it ended (#4105).
         self.kept_lines(task, &mut lines);
         let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
             .map(|tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
             .collect();
-        // The state's word, whoever of the task's waits: the task itself or a helper. Done says
+        // The card's own word, so a refusal waiting on the user says Needs you in both. Done says
         // when, and a limit when it resets if the assistant said; without that it's the word, as
         // the name before it says whose limit it is.
         let about = match &task.state {
@@ -905,9 +905,7 @@ impl Agents {
                 done_at(&super::time_or_day(seconds(at)))
             }
             State::Limit { resets } if resets.is_some() => limit_words(&task.name, resets),
-            state => Word::of(state, self.waits_on_user(task))
-                .after_name()
-                .to_string(),
+            _ => self.card(task, cx).word.after_name().to_string(),
         };
         // A session's title is the agent's words or its sites, so the line under it leads with its
         // client's name, and its state goes on as a fact, in lower case (#3690).
@@ -938,11 +936,6 @@ impl Agents {
             // The tier model (#4086 step 2) keeps each task's own.
             tier: Tier::default(),
         })
-    }
-
-    /// Whether a step of the task's waits on the user.
-    fn waits_on_user(&self, task: &Task) -> bool {
-        self.task_question(task).is_some()
     }
 
     fn task_question(&self, task: &Task) -> Option<Question> {
@@ -3442,11 +3435,22 @@ thread_local! {
     pub(super) static FOLDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// An ilo line, and how many of its task's messages and steps came before it, which places it
+/// among them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Mark {
+    pub after: usize,
+    pub traced: usize,
+    pub line: ilo::IloLine,
+}
+
 /// A conversation's lines from its `messages` and its `trace`, oldest first. Each turn, from a
 /// message of the user's to the next, shows its questions and, once it has `ended`, its last
 /// message; the steps between those are a trace each, with what the agent said along the way in
 /// it. The last stretch is under way while the task is `working`, and what the agent is `writing`
 /// shows under it, as it comes and once it's whole, until the turn ends or a call takes it in.
+/// ilo's lines, `marks`, each go where it came among the messages and the steps, ending the
+/// stretch of steps before it.
 pub fn fold(
     messages: &[Message],
     trace: &[Traced],
@@ -3454,6 +3458,7 @@ pub fn fold(
     working: bool,
     writing: Option<&Writing>,
     helpers: &Helpers,
+    marks: Vec<Mark>,
 ) -> Vec<Line> {
     #[cfg(test)]
     FOLDS.with(|folds| folds.set(folds.get() + 1));
@@ -3487,10 +3492,20 @@ pub fn fold(
         ..Stretch::default()
     };
     let mut steps = trace.iter().enumerate().peekable();
+    let mut marks = marks.into_iter().peekable();
+    // The marks that came before the step `key` of the trace and the message `index`.
+    let mut place = |lines: &mut Vec<Line>, stretch: &mut Stretch, key: usize, index: usize| {
+        while let Some(mark) = marks.next_if(|mark| mark.traced <= key && mark.after <= index) {
+            stretch.flush(lines, false, None);
+            lines.push(Line::Ilo(mark.line));
+        }
+    };
     for (index, message) in messages.iter().enumerate() {
         while let Some((key, step)) = steps.next_if(|(_, step)| step.after <= index) {
+            place(&mut lines, &mut stretch, key, index);
             stretch.step(key, step, helpers.of(key, step.did.tab));
         }
+        place(&mut lines, &mut stretch, trace.len(), index);
         if Some(index) == held {
             continue;
         }
@@ -3506,24 +3521,30 @@ pub fn fold(
         });
     }
     for (key, step) in steps {
+        place(&mut lines, &mut stretch, key, messages.len());
         stretch.step(key, step, helpers.of(key, step.did.tab));
     }
     stretch.flush(&mut lines, working, None);
     lines.extend(writing.map(|writing| Line::Said(writing.text.clone())));
+    lines.extend(marks.map(|mark| Line::Ilo(mark.line)));
     lines
 }
 
 /// A session's lines: its traces' steps, each a line of its own, newest last.
 fn steps(lines: Vec<Line>) -> Vec<Line> {
-    let steps = lines.into_iter().flat_map(|line| match line {
-        Line::Trace(trace) => trace.items,
-        _ => Vec::new(),
-    });
-    (steps.filter_map(|item| match item {
-        TraceItem::Step(step) => Some(Line::Step(step)),
-        TraceItem::Said(_) | TraceItem::Helper { .. } => None,
-    }))
-    .collect()
+    (lines.into_iter())
+        .flat_map(|line| match line {
+            Line::Trace(trace) => (trace.items.into_iter())
+                .filter_map(|item| match item {
+                    TraceItem::Step(step) => Some(Line::Step(step)),
+                    TraceItem::Said(_) | TraceItem::Helper { .. } => None,
+                })
+                .collect(),
+            // ilo's lines are a session's too.
+            Line::Ilo(line) => vec![Line::Ilo(line)],
+            _ => Vec::new(),
+        })
+        .collect()
 }
 
 /// The stretch of work a trace is made of, as it gathers.

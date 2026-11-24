@@ -983,7 +983,7 @@ impl Shell {
     /// A page's row's click: stands on that page, as its picture's click in the task's view does,
     /// and nothing else. Says whether it did. The page zooms out of its picture there, or of its
     /// row where the view has drawn none.
-    fn watch_row(&mut self, tab: u64, cx: &mut Context<Self>) -> bool {
+    pub(super) fn watch_row(&mut self, tab: u64, cx: &mut Context<Self>) -> bool {
         if self
             .watched_task_page()
             .is_some_and(|(_, shown)| shown == tab)

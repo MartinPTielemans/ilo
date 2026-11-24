@@ -9,7 +9,7 @@ use gpui::{App, Context};
 
 use super::held;
 use super::task::ilo::{IloKind, IloLine};
-use super::task::{Line, Task, Who};
+use super::task::{Mark, Task};
 use super::tier::{self, Tier};
 use super::{Agents, site};
 
@@ -22,8 +22,9 @@ const PLACED: usize = usize::MAX / 4;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Placed {
     pub kind: Happened,
-    /// How many messages the user had written, which places it at the end of that turn.
-    turn: usize,
+    /// How many of the task's messages and steps came before it, which places it among them.
+    after: usize,
+    traced: usize,
     appeared: Instant,
     /// Acted on, or passed: its tab came back, or the user kept it.
     pub settled: bool,
@@ -49,20 +50,6 @@ impl Happened {
     }
 }
 
-/// The turn of `task` under way, as its user's messages count it.
-fn turn(task: &Task) -> usize {
-    (task.messages.iter())
-        .filter(|m| m.who == Who::User)
-        .count()
-}
-
-/// The user's messages among `task`'s first `after` messages.
-fn turn_at(task: &Task, after: usize) -> usize {
-    (task.messages.iter().take(after))
-        .filter(|m| m.who == Who::User)
-        .count()
-}
-
 impl Agents {
     /// Puts `made` in the conversation of the task `agent`'s act on `connection`, for its call
     /// `call`, is of.
@@ -78,7 +65,7 @@ impl Agents {
         let Some(task) = self.task_mut(key) else {
             return;
         };
-        let turn = turn(task);
+        let (after, traced) = (task.messages.len(), task.trace.len());
         // A tab comes once at a time: the same step on it isn't said twice while it stands.
         let standing = |placed: &Placed| !placed.settled && placed.kind == made;
         if made.tab().is_some() && task.placed.iter().any(standing) {
@@ -88,7 +75,8 @@ impl Agents {
         let settled = matches!(made, Happened::TierChanged { .. });
         task.placed.push(Placed {
             kind: made,
-            turn,
+            after,
+            traced,
             appeared: Instant::now(),
             settled,
         });
@@ -158,25 +146,34 @@ impl Agents {
         cx.notify();
     }
 
-    /// ilo's lines of `task`'s refusals and of the rest that happened to it, each at the end of
-    /// the turn it came in, in the order they came. An ended task's have no buttons.
-    pub(super) fn ilo_lines(&self, task: &Task, lines: &mut Vec<Line>, cx: &App) {
+    /// ilo's lines of `task`'s refusals and of the rest that happened to it, in the order they
+    /// came, each with how many of the task's messages and steps came before it, for `fold` to
+    /// place among them. An ended task's have no buttons.
+    pub(super) fn ilo_lines(&self, task: &Task, cx: &App) -> Vec<Mark> {
         let ended = task.ended.is_some();
         let pages = self.pages(task, cx);
-        let mut made: Vec<(usize, Instant, IloLine)> = Vec::new();
+        let mut made: Vec<(Instant, Mark)> = Vec::new();
         for (index, stop) in task.stops.iter().enumerate() {
             let line = IloLine {
                 key: STOPS + index,
                 kind: IloKind::Stopped {
                     tab: stop.tab,
                     at: stop.at.clone().into(),
+                    doing: stop.doing.clone().into(),
                     why: stop.why,
                     tier: stop.tier,
                     count: stop.count,
                 },
                 settled: stop.settled || ended,
             };
-            made.push((turn_at(task, stop.after), stop.appeared, line));
+            made.push((
+                stop.appeared,
+                Mark {
+                    after: stop.after,
+                    traced: stop.traced,
+                    line,
+                },
+            ));
         }
         for (index, placed) in task.placed.iter().enumerate() {
             let kind = match placed.kind {
@@ -194,17 +191,14 @@ impl Agents {
                 kind,
                 settled: placed.settled || ended,
             };
-            made.push((placed.turn, placed.appeared, line));
+            let mark = Mark {
+                after: placed.after,
+                traced: placed.traced,
+                line,
+            };
+            made.push((placed.appeared, mark));
         }
-        made.sort_by_key(|(turn, appeared, _)| (*turn, *appeared));
-        // In the order they came: each goes before the user's next message, after those of its
-        // turn already placed, as placing one moves no message of the user's.
-        for (turn, _, line) in made {
-            let next = (lines.iter().enumerate())
-                .filter(|(_, line)| matches!(line, Line::You(_)))
-                .nth(turn)
-                .map(|(at, _)| at);
-            lines.insert(next.unwrap_or(lines.len()), Line::Ilo(line));
-        }
+        made.sort_by_key(|(appeared, mark)| (mark.after, mark.traced, *appeared));
+        made.into_iter().map(|(_, mark)| mark).collect()
     }
 }

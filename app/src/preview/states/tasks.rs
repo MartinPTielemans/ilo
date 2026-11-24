@@ -532,6 +532,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
     let stopped = |why, at: &str, count| IloKind::Stopped {
         tab,
         at: at.to_string().into(),
+        doing: format!("clicking \u{201c}{at}\u{201d}").into(),
         why,
         tier: Tier::Work,
         count,

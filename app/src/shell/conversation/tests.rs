@@ -490,7 +490,11 @@ fn a_tile_turning_to_needs_you_comes_into_sight_once(cx: &mut TestAppContext) {
     talk.tabs = (30..36)
         .map(|tab| (tab, "tickets.example".into()))
         .collect();
-    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    shell.update(cx, |shell, cx| {
+        let tabs = (30..36).collect();
+        shell.set_tabs(3, Vec::new(), tabs, Vec::new(), Folders::default(), cx);
+        shell.set_conversation(Some(talk), cx)
+    });
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
     cx.simulate_resize(size(px(RAIL_BREAKPOINT - 100.), px(900.)));
     let draw = |cx: &mut VisualTestContext| {
@@ -520,6 +524,12 @@ fn a_tile_turning_to_needs_you_comes_into_sight_once(cx: &mut TestAppContext) {
     let tiles = view.read_with(cx, |view, _| view.drawn.borrow().clone());
     let after: Vec<u64> = tiles.iter().map(|(tab, _)| *tab).collect();
     assert_eq!(after, order, "the tiles changed their order");
+    // With no page in the area, the page that needs the user opens as itself (i).
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watched_task_page().map(|(_, tab)| tab)),
+        Some(35),
+        "the page that needs the user didn't open"
+    );
 
     // The user scrolls back to the start: the tile isn't brought back again.
     view.update(cx, |view, _| {
@@ -1069,6 +1079,7 @@ fn stopped_at_order(
             kind: IloKind::Stopped {
                 tab: 30,
                 at: "Place order".into(),
+                doing: "clicking “Place order”".into(),
                 why: Why::Order,
                 tier: Tier::Work,
                 count: 1,
@@ -1100,7 +1111,7 @@ fn an_agents_text_never_draws_an_ilo_lines_buttons(cx: &mut TestAppContext) {
     let (shell, _host, cx) = shown(cx);
     let talk = Conversation {
         lines: vec![Line::Said(
-            "ilo stopped Claude at “Place order”\n\nPlacing an order isn't part of Work on pages.\n\n\
+            "ilo stopped Claude from clicking “Place order”\n\nPlacing an order isn't part of Work on pages.\n\n\
              Take Over · Give Full access"
                 .into(),
         )],
@@ -1128,6 +1139,7 @@ fn a_site_is_never_in_quotes_and_a_pages_words_are(_: &mut TestAppContext) {
     let stopped = |why| IloKind::Stopped {
         tab: 30,
         at: "seatmap.example".into(),
+        doing: "".into(),
         why,
         tier: Tier::Work,
         count: 1,
@@ -1153,13 +1165,31 @@ fn a_site_is_never_in_quotes_and_a_pages_words_are(_: &mut TestAppContext) {
     let order = IloKind::Stopped {
         tab: 30,
         at: "Place order".into(),
+        doing: "clicking “Place order”".into(),
+        why: Why::Order,
+        tier: Tier::Work,
+        count: 1,
+    };
+    // B1: the refused step as it was under way, its control's name in its own quotes alone.
+    assert_eq!(
+        super::words::head(&order, "Claude"),
+        (
+            "stopped Claude from clicking \u{201c}Place order\u{201d}".into(),
+            None
+        )
+    );
+    // With no step of its own traced, it names none.
+    let untraced = IloKind::Stopped {
+        tab: 30,
+        at: "Place order".into(),
+        doing: "".into(),
         why: Why::Order,
         tier: Tier::Work,
         count: 1,
     };
     assert_eq!(
-        said(&order),
-        "stopped Claude at \u{201c}Place order\u{201d}"
+        super::words::head(&untraced, "Claude"),
+        ("stopped one of Claude's steps".into(), None)
     );
     // O1: a step on one of several pages names its site, in the middle of ilo's words.
     let yours = IloKind::Yours {
@@ -1185,6 +1215,7 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
         IloKind::Stopped {
             tab: 1,
             at: "Place order".into(),
+            doing: "clicking “Place order”".into(),
             why: Why::Order,
             tier: Tier::Work,
             count: 1,
@@ -1192,6 +1223,7 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
         IloKind::Stopped {
             tab: 1,
             at: "seatmap.example".into(),
+            doing: "".into(),
             why: Why::Fenced,
             tier: Tier::Work,
             count: 1,
@@ -1273,6 +1305,7 @@ fn a_fences_refusal_links_to_off_limits_and_changes_nothing(cx: &mut TestAppCont
             kind: IloKind::Stopped {
                 tab: 30,
                 at: "seatmap.example".into(),
+                doing: "".into(),
                 why,
                 tier: Tier::Work,
                 count: 1,
@@ -1436,6 +1469,7 @@ fn a_line_arriving_after_the_ring_takes_no_press(cx: &mut TestAppContext) {
         kind: IloKind::Stopped {
             tab: 30,
             at: "Pay".into(),
+            doing: "clicking “Pay”".into(),
             why: Why::Message,
             tier: Tier::Work,
             count: 2,
@@ -1648,6 +1682,7 @@ fn ilos_wrapped_line_and_its_buttons_start_under_its_mark(cx: &mut TestAppContex
     let stopped = IloKind::Stopped {
         tab: 30,
         at: "Place the order for both of the seats".into(),
+        doing: "clicking “Place the order for both of the seats”".into(),
         why: Why::Order,
         tier: Tier::Work,
         count: 1,
@@ -1886,6 +1921,62 @@ fn a_working_line_opens_to_a_line_for_each_helper(cx: &mut TestAppContext) {
     view.update(cx, |view, cx| view.toggle(Fold::Trace(0), true, cx));
     draw(cx);
     assert_eq!(listed(cx), None, "folded, it still listed them");
+}
+
+/// In the one view the live line stands over the reply field with Take Over at its end, and
+/// names the step under way only: once that step has ended, as at Hand Back, or was refused, it
+/// says the assistant is working, until the next step starts (c, h).
+#[gpui::test]
+fn the_live_line_over_the_reply_names_only_the_step_under_way(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(3)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let draw = |cx: &mut VisualTestContext| {
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| view.take_over_drawn.borrow().clone())
+    };
+    let chips = draw(cx);
+    assert_eq!(
+        chips.len(),
+        1,
+        "Take Over stands once, on the live line: {chips:?}"
+    );
+    let reply = view
+        .read_with(cx, |view, _| view.reply_drawn.get())
+        .expect("the reply field");
+    assert!(
+        chips[0].bottom() <= reply.top(),
+        "the live line isn't over the reply field: {chips:?} {reply:?}"
+    );
+    host.take();
+    cx.simulate_click(chips[0].center(), Modifiers::none());
+    assert_eq!(host.take(), ["task task-1 TakeOver(30)"]);
+
+    let said = |talk: &Conversation| super::under_way(&talk.lines).map(|step| step.title.clone());
+    assert_eq!(
+        said(&conversation(3)).as_deref(),
+        Some("Opened skyscanner.net")
+    );
+    // The step handed over has ended once the user hands the page back.
+    let mut ended = conversation(3);
+    its_trace(&mut ended).items[2] = TraceItem::Step(step(2, "Handed you skyscanner.net", false));
+    assert_eq!(said(&ended), None);
+    // A refused step is never the one under way.
+    let mut refused = conversation(3);
+    let mut row = step(2, "Couldn't click “Pay”", false);
+    row.failed = true;
+    its_trace(&mut refused).items[2] = TraceItem::Step(row);
+    assert_eq!(said(&refused), None);
+    assert_eq!(super::words::working("Claude"), "Claude is working");
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(refused), cx));
+    assert_eq!(
+        draw(cx).len(),
+        1,
+        "Take Over left the live line between steps"
+    );
 }
 
 /// Beside its page, Take Over stands once on the lines, on the task's own step under way, which

@@ -1157,9 +1157,20 @@ impl TalkView {
             if self.said_logged.borrow_mut().insert(tab, says) != Some(says) {
                 // check.sh reads this line.
                 log!("browser: task picture {tab} says {says}");
-                // Once, as it turns: a tile the user scrolls away again stays away.
+                // Once, as it turns: a tile the user scrolls away again stays away, and its page
+                // opens as itself unless the user has put another of the task's pages there.
                 if said == Some(PageWord::NeedsYou) {
                     self.rail_scroll.scroll_to_item(index);
+                    let shell = self.shell.clone();
+                    cx.defer(move |cx| {
+                        shell
+                            .update(cx, |shell, cx| {
+                                if shell.watched_task_page().is_none() {
+                                    shell.watch_row(tab, cx);
+                                }
+                            })
+                            .ok();
+                    });
                 }
             }
             let word = said.map(|said| {
@@ -1947,6 +1958,66 @@ impl TalkView {
                     .absolute()
                     .size_full(),
             )
+    }
+
+    /// The live line over the reply field while the task works: the step under way, else
+    /// `{assistant} is working`, never a finished or refused step, with Take Over at its end
+    /// while the agent is on a page. Beside the page, the trace's own step line is it, and on the
+    /// page the strip has Take Over.
+    fn live(&self, look: &Look, cx: &mut Context<Self>) -> Option<gpui::Stateful<gpui::Div>> {
+        let shown = (self.shown.as_ref()).filter(|shown| shown.stoppable)?;
+        if look.beside || look.standing {
+            return None;
+        }
+        let palette = look.palette;
+        let step = under_way(&shown.lines);
+        let words: SharedString = match step {
+            Some(step) => step.title.clone(),
+            None => words::working(&shown.name).into(),
+        };
+        let text = match (step.is_some(), look.shimmer(self.made)) {
+            (true, Some(phase)) => shimmering(&palette, words, phase).into_any_element(),
+            _ => div()
+                .text_color(palette.text(TRACE_TITLE))
+                .child(words)
+                .into_any_element(),
+        };
+        let drawn = self.take_over_drawn.clone();
+        let take_over = shown.on.map(|tab| {
+            page_chip(palette, "conversation-take-over", words::TAKE_OVER, None)
+                .relative()
+                .child(
+                    canvas(
+                        move |bounds, _, _| drawn.borrow_mut().push(bounds),
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+                )
+                .on_click(
+                    cx.listener(move |view, _, _, cx| view.act(TaskAction::TakeOver(tab), cx)),
+                )
+        });
+        Some(
+            div()
+                .id("conversation-live")
+                .flex_none()
+                .mb(px(COMPOSER_TOP))
+                .flex()
+                .items_center()
+                .gap(px(BUBBLE_X))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .child(text),
+                )
+                .children(take_over),
+        )
     }
 
     /// The composer's row under the reply field: the task's access on a chip,
@@ -2902,6 +2973,12 @@ impl Render for TalkView {
                     .child(self.rail(true, &look, cx))
             }))
             .child(middle)
+            .children(
+                (self.replies && self.in_field().is_none())
+                    .then(|| self.live(&look, cx))
+                    .flatten()
+                    .map(|live| shut(on_column(live.into_any_element()))),
+            )
             .child(shut(on_column(self.reply(&look, cx).into_any_element())))
             // With ilo's line and Start Again in the field's place there is no level to set, so
             // the row goes with the field (#4105).
@@ -2981,3 +3058,17 @@ pub(super) fn rings(
 
 #[cfg(test)]
 mod tests;
+
+/// The step under way at the end of a task's lines, if one is: the last trace's last step while
+/// it runs, or a session's last step line. A step that ended or was refused isn't.
+fn under_way(lines: &[Line]) -> Option<&TraceStep> {
+    let step = match lines.last()? {
+        Line::Trace(trace) => match trace.items.last()? {
+            TraceItem::Step(step) => step,
+            _ => return None,
+        },
+        Line::Step(step) => step,
+        _ => return None,
+    };
+    (step.running && !step.failed).then_some(step)
+}

@@ -47,6 +47,9 @@ pub enum IloKind {
         /// Where, in the page's own words: the button ilo stopped the agent at, "Place order", or
         /// the site it was kept from.
         at: SharedString,
+        /// The refused step's under-way phrase, its first letter lowered, as the line says it
+        /// after "from": "clicking “Place order”". Empty where its step isn't traced.
+        doing: SharedString,
         why: Why,
         /// The access it was judged under.
         tier: Tier,
@@ -188,11 +191,12 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
     }
 }
 
-/// A line's buttons as drawn beside `shown`, the page in place beside the conversation: a step on
-/// a page that isn't shows that page first, and only then offers it back (O2). A task with one
-/// page has it beside the conversation, so its step offers Hand Back at once.
+/// A line's buttons as drawn with `shown`, the page in the area: a step's page opens by itself as
+/// it turns to Needs you, so its line offers Hand Back at once, and Show Page only while the user
+/// has put another of the task's pages there (O2).
 pub fn drawn(line: &IloLine, shown: Option<u64>) -> Vec<IloButton> {
-    let away = matches!(&line.kind, IloKind::Yours { tab, site: Some(_) } if shown != Some(*tab));
+    let away = matches!(&line.kind, IloKind::Yours { tab, site: Some(_) }
+        if shown.is_some_and(|shown| shown != *tab));
     (buttons(line).into_iter())
         .map(|button| match button {
             IloButton::HandBack if away => IloButton::ShowPage,
@@ -229,6 +233,7 @@ mod tests {
             kind: IloKind::Stopped {
                 tab: 1,
                 at: "Place order".into(),
+                doing: "clicking “Place order”".into(),
                 why,
                 tier,
                 count: 1,
@@ -290,8 +295,9 @@ mod tests {
         assert_eq!(buttons(&line(changed)), vec![]);
     }
 
-    /// O2: a step on a page that isn't beside the conversation offers Show Page, never Hand Back,
-    /// until that page is the one shown. With one page, the step offers Hand Back at once.
+    /// O2: a step on a page while the user has another of the task's pages in the area offers
+    /// Show Page, never Hand Back, until its page is the one shown. With none there its page opens
+    /// by itself (i), and with one page it's the task's, so either offers Hand Back at once.
     #[test]
     fn a_step_shows_its_page_before_it_offers_it_back() {
         use IloButton::*;
@@ -304,7 +310,7 @@ mod tests {
             settled: false,
         };
         let two = line(Some("boxoffice.example"));
-        assert_eq!(drawn(&two, None), vec![ShowPage, NotNow]);
+        assert_eq!(drawn(&two, None), vec![HandBack, NotNow]);
         assert_eq!(drawn(&two, Some(1)), vec![ShowPage, NotNow]);
         assert_eq!(drawn(&two, Some(2)), vec![HandBack, NotNow]);
         assert_eq!(drawn(&line(None), None), vec![HandBack, NotNow]);

@@ -1037,7 +1037,8 @@ pub fn reason(kind: Option<Kind>) -> String {
     let reason = match kind {
         Kind::Stopped => "stopped",
         Kind::SaidNo => "you said no",
-        Kind::Outside => "outside its access",
+        // The refusal's ilo line under the row says why (B1), so the row has no tail.
+        Kind::Outside => "",
         Kind::Password => "password field",
         Kind::NotWebPage => "not a web page",
         Kind::NotFound => "not found",
