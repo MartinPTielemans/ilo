@@ -272,6 +272,58 @@ fn the_plate_shows_after_its_delay_with_no_button_down(cx: &mut TestAppContext) 
     assert_eq!(after(cx, &host, DELAY), vec![shown_at(frame)]);
 }
 
+/// Whether the plate's window has a timer it waits on.
+fn waiting(cx: &mut TestAppContext) -> bool {
+    cx.update(|cx| {
+        let window = cx.global::<super::LinkTargetWindow>().0;
+        window.read(cx).is_ok_and(|target| target.wait.is_some())
+    })
+}
+
+/// The pointer crossing from one link to the next: the next plate shows at once within GRACE of
+/// the last going, and waits its delay again after it.
+#[gpui::test]
+fn the_next_links_plate_shows_at_once_within_its_grace_and_not_after(cx: &mut TestAppContext) {
+    let host = open_plate(cx);
+    let frame = place(card(), 120., Side::Left);
+    on_link(cx, frame);
+    assert_eq!(after(cx, &host, DELAY), vec![shown_at(frame)]);
+    off_link(cx);
+    assert_eq!(after(cx, &host, GRACE / 2), vec!["hide".to_string()]);
+    on_link(cx, frame);
+    assert_eq!(
+        host.asked.take(),
+        vec![shown_at(frame)],
+        "it waited within its grace"
+    );
+    off_link(cx);
+    assert_eq!(after(cx, &host, GRACE), vec!["hide".to_string()]);
+    on_link(cx, frame);
+    assert_eq!(
+        after(cx, &host, DELAY / 2),
+        Vec::<String>::new(),
+        "it showed at once past its grace"
+    );
+    assert_eq!(after(cx, &host, DELAY), vec![shown_at(frame)]);
+}
+
+/// The pointer leaving a link before the delay: nothing shows, no timer is left to wake the
+/// browser, and the next link waits its delay, as none went.
+#[gpui::test]
+fn leaving_a_link_before_the_delay_shows_nothing_and_leaves_no_timer(cx: &mut TestAppContext) {
+    let host = open_plate(cx);
+    let frame = place(card(), 120., Side::Left);
+    on_link(cx, frame);
+    assert!(waiting(cx));
+    after(cx, &host, DELAY / 2);
+    off_link(cx);
+    assert!(!waiting(cx), "a timer was left with nothing hovered");
+    assert_eq!(after(cx, &host, DELAY * 2), Vec::<String>::new());
+    on_link(cx, frame);
+    assert_eq!(after(cx, &host, DELAY / 2), Vec::<String>::new());
+    assert_eq!(after(cx, &host, DELAY), vec![shown_at(frame)]);
+}
+
 #[gpui::test]
 fn a_plate_due_while_a_button_is_down_shows_at_its_release(cx: &mut TestAppContext) {
     let host = open_plate(cx);
