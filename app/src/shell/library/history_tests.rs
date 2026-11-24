@@ -894,3 +894,25 @@ fn a_section_stop_leaves_the_windows_shortcuts_as_they_are(cx: &mut TestAppConte
     );
     assert_eq!(calls(with), calls(without));
 }
+
+/// A ringed row removed by code, here a closed tab reopened elsewhere, gives the ring to the row
+/// that took its place, as one the user closes does (#4108).
+#[gpui::test]
+fn a_ringed_row_removed_gives_the_ring_to_the_row_in_its_place(cx: &mut TestAppContext) {
+    let (shell, host, cx) = history(vec![closed(5, "news", at(9, 15), false)], cx);
+    cx.update(|_, cx| crate::shell::commands::bind_keys(cx));
+    next_frame(cx);
+    let (first, _) = one_ask(&host);
+    let pages = vec![page("mail", at(9, 14)), page("docs", at(8, 10))];
+    answer(&shell, first, pages, false, cx);
+    let search = shell.read_with(cx, |shell, cx| {
+        gpui::Focusable::focus_handle(&*shell.library.as_ref().unwrap().search.read(cx), cx)
+    });
+    cx.update(|window, cx| window.focus(&search, cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down");
+    assert_eq!(ringed(&shell, cx).as_deref(), Some("closed news"));
+    shell.update(cx, |shell, cx| shell.set_archive(Vec::new(), cx));
+    cx.run_until_parked();
+    assert_eq!(ringed(&shell, cx).as_deref(), Some("visited mail"));
+}

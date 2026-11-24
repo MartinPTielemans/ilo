@@ -450,6 +450,8 @@ pub(super) struct Library {
     /// Spaces' keyboard, which has no search field, and the card its ring is on, by its Space.
     cards: gpui::FocusHandle,
     keyed_card: Option<u64>,
+    /// The cards' Spaces as the ring last saw them, for the card that takes a gone one's place.
+    cards_seen: Vec<u64>,
     /// The row the field's keys ring, by its line in `items` and, in Media, its tile's column, and
     /// where it was last drawn, for return to open it from there as a click does.
     keyed_row: Option<(usize, usize)>,
@@ -522,11 +524,26 @@ impl Only {
 }
 
 /// Where the ring goes as the list's lines change under it: the same line, where it is now, else
-/// none.
+/// the row that took its place (`list_keys::took_place`), else none.
 fn rekeyed(library: &Library, items: &[Item]) -> Option<(usize, usize)> {
     let (line, column) = library.keyed_row?;
     let item = library.items.get(line)?;
-    let at = items.iter().position(|each| each == item)?;
+    if let Some(at) = items.iter().position(|each| each == item) {
+        return Some((at, column));
+    }
+    // Headings, Clear and a past page's sites take no ring, so none takes its place.
+    let rows = |items: &[Item]| -> Vec<Item> {
+        let rings = |each: &&Item| {
+            *each == item || !matches!(each, Item::Heading(_) | Item::Clear | Item::PastSite(_))
+        };
+        items.iter().filter(rings).copied().collect()
+    };
+    let took = crate::list_keys::took_place(item, &rows(&library.items), &rows(items))?;
+    let at = items.iter().position(|each| *each == took)?;
+    let column = match took {
+        Item::Media(tiles) => tiles.iter().position(Option::is_some)?,
+        _ => 0,
+    };
     Some((at, column))
 }
 
@@ -573,6 +590,13 @@ enum Medium {
 const FIELD: &str = "space-field";
 
 impl Shell {
+    /// Whether the Library's search field has the keyboard, for tests outside the Library.
+    #[cfg(test)]
+    pub(in crate::shell) fn library_search_keys(&self, window: &Window, cx: &App) -> bool {
+        (self.library.as_ref())
+            .is_some_and(|library| library.search.focus_handle(cx).is_focused(window))
+    }
+
     /// The archive changed, all of it, newest first.
     pub fn set_archive(&mut self, archive: Vec<Archived>, cx: &mut Context<Self>) {
         // A tab closed since a task was dismissed is what ⇧⌘T reopens: the core's to reopen, as
@@ -1066,6 +1090,7 @@ impl Shell {
             _search: observe,
             cards: cx.focus_handle().tab_stop(true),
             keyed_card: None,
+            cards_seen: Vec::new(),
             keyed_row: None,
             row_drawn: Rc::default(),
             new_board_drawn: Rc::default(),

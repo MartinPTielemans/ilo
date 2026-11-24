@@ -13,6 +13,7 @@ use std::rc::Rc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::list_keys::Named;
 use gpui::{
     App, Bounds, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
     Global, KeyBinding, Pixels, Render, SharedString, Window, actions, canvas, div, prelude::*, px,
@@ -1208,6 +1209,10 @@ impl Account {
                 .child(div().flex_none().child(sign_out)),
         );
 
+        let removable: Vec<_> = (self.devices.iter().flatten())
+            .filter(|device| !device.current)
+            .map(|device| device.id.clone())
+            .collect();
         let devices = self.devices.iter().flatten().map(|device| {
             let control = match device.current {
                 true => div()
@@ -1222,6 +1227,16 @@ impl Account {
                             cx.notify();
                         };
                     let spoken = format!("Remove {}", device.name);
+                    // From the keys, the keyboard goes on to the Remove of the device that takes
+                    // its place (list_keys' rule).
+                    let (gone, listed) = (device.id.clone(), removable.clone());
+                    let hand_on = move |_: &mut Self,
+                                        click: &gpui::ClickEvent,
+                                        window: &mut Window,
+                                        cx: &mut Context<Self>| {
+                        let keys = click.is_keyboard();
+                        crate::list_keys::removing(&gone, &listed, Named::ByRow, keys, window, cx)
+                    };
                     self.button_said(
                         format!("remove {}", device.id),
                         "Remove",
@@ -1229,6 +1244,7 @@ impl Account {
                         cx,
                         remove,
                     )
+                    .on_click(cx.listener(hand_on))
                     .into_any_element()
                 }
             };
