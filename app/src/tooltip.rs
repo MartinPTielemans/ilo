@@ -15,19 +15,22 @@ use gpui::{
 
 /// How long the pointer rests on a tile, row or button, from its last move, before its tooltip
 /// shows (Arc 1.170, twice), so a pointer passing over on its way somewhere brings none.
-pub const DELAY: Duration = Duration::from_millis(1600);
+pub const DELAY: Duration = ms(motion::DELAY);
 /// How soon after a tooltip went the next shows at once, as the pointer crosses the gap between
 /// two tiles (ours: the system's half second).
-pub const GRACE: Duration = Duration::from_millis(500);
+pub const GRACE: Duration = ms(motion::GRACE);
 /// It shows in a frame and fades out over 0.27 s, ease-out (Arc).
 pub const FADE_IN: Duration = Duration::ZERO;
-pub const FADE_OUT: Duration = Duration::from_millis(270);
+pub const FADE_OUT: Duration = ms(motion::FADE_OUT);
+use crate::motion::ms;
 pub use crate::tokens::tooltip::BESIDE;
 pub use crate::tokens::tooltip::EDGE_INSET;
 pub use crate::tokens::tooltip::GAP;
 use crate::tokens::tooltip::HEIGHT;
+// Its times, as tokens (#4108).
 /// Its window, wide enough for a long name, which truncates past it.
 pub use crate::tokens::tooltip::WINDOW_WIDTH;
+use crate::tokens::tooltip::motion;
 pub use crate::tokens::tooltip::{BUTTON_X, BUTTON_Y};
 use crate::tokens::tooltip::{DETAIL, DETAIL_GAP};
 pub const WINDOW_HEIGHT: f32 = HEIGHT;
