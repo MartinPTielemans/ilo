@@ -8541,6 +8541,80 @@ mod tasks {
         );
     }
 
+    /// A task that waits on the user is at its own access still. Asking, At limit and Interrupted
+    /// are states of a task ilo runs alone, and such a task is found by its own name in every
+    /// state, so a call on any connection of its assistant's, a helper's too, is judged as the
+    /// task's: at Look only with its question up, a click on its page from a second connection
+    /// is refused as Look only refuses it, the line is the task's and its question waits on. At
+    /// its limit, the same.
+    #[gpui::test]
+    fn a_task_that_waits_is_at_its_own_access_whichever_connection_acts(cx: &mut TestAppContext) {
+        let (agents, browser) = ready(None, cx);
+        let agent = agents
+            .update(cx, |agents, cx| {
+                agents.start_task(Cli::Claude, "Check my basket", page(), 1, Tier::Look, cx)
+            })
+            .expect("started");
+        agents.update(cx, |agents, _| {
+            let task = agents.task_mut(&agent).unwrap();
+            task.ended = None;
+            task.state = State::Working;
+        });
+        (browser.tabs.borrow_mut()).push((30, 100, "Shop", "https://shop.example/basket"));
+        let tab = json!({ "tab": 30 });
+        let seen = Some(shop_tree());
+        traced(&agents, &browser, &agent, "snapshot", tab, seen, cx);
+        let asking = json!({ "question": "Which day?", "answers": ["Friday", "Saturday"] });
+        let asked = call(&agents, &agent, "ask", asking, cx);
+        let state = |cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| agents.task(&agent).unwrap().state.clone())
+        };
+        assert!(matches!(state(cx), State::Asking { .. }));
+
+        let pages = browser.pages.borrow().len();
+        let click = |id, cx: &mut TestAppContext| {
+            let (reply, answer) = mpsc::channel();
+            let call = Call {
+                id,
+                agent: agent.clone(),
+                connection: 2,
+                tool: "click".into(),
+                arguments: json!({ "tab": 30, "ref": "e1" }),
+                reply,
+                at: std::time::Instant::now(),
+            };
+            agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
+            answer.try_recv().expect("the click wasn't refused at once")
+        };
+        let refused = click(9_001, cx);
+        assert!(refused.error, "it clicked: {}", refused.text);
+        assert!(refused.text.contains("(Look only)"), "{}", refused.text);
+        assert!(matches!(state(cx), State::Asking { .. }));
+        assert!(
+            asked.try_recv().is_err(),
+            "the refusal answered the question"
+        );
+
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Limit { resets: None };
+        });
+        let refused = click(9_002, cx);
+        assert!(refused.error, "it clicked: {}", refused.text);
+        assert!(refused.text.contains("(Look only)"), "{}", refused.text);
+
+        assert_eq!(
+            browser.pages.borrow().len(),
+            pages,
+            "a click reached the page"
+        );
+        let stops = agents.read_with(cx, |agents, _| agents.stops(&agent));
+        assert_eq!(stops.len(), 1, "{stops:?}");
+        assert_eq!(
+            (stops[0].why, stops[0].tier, stops[0].count),
+            (Why::Act, Tier::Look, 2)
+        );
+    }
+
     /// Pages the user added reach the task as their addresses, http(s) only; Only the pages you
     /// add limits it to their sites; and the start's entry gains their count, never an address.
     #[gpui::test]
