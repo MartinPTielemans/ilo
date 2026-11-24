@@ -42,8 +42,8 @@ use crate::tokens::shell::FORM_PLACEHOLDER;
 use crate::tokens::shell::agent_pointer::{COLOR as SIGNAL, RING};
 use crate::tokens::shell::conversation::ilo::{
     ARM, BELOW as ILO_BELOW, BUTTONS_GAP, BUTTONS_TOP, COMPOSER_CHEVRON, COMPOSER_CHEVRON_GAP,
-    COMPOSER_TOP, GLYPH as ILO_GLYPH, INK as ILO_INK, MARK as MARK_SIZE, MARK_GAP, NOTE_INK,
-    NOTE_TOP, QUOTED_CHARS, TEXT_LINE as ILO_TEXT_LINE, TEXT_TOP,
+    COMPOSER_TOP, GLYPH as ILO_GLYPH, INK as ILO_INK, NOTE_INK, NOTE_TOP, QUOTED_CHARS,
+    TEXT_LINE as ILO_TEXT_LINE, TEXT_TOP,
 };
 use crate::tokens::shell::conversation::motion::{CHEVRON, LAND, PICK_FADE, RISE, STEPS_FADE};
 use crate::tokens::shell::conversation::{
@@ -224,7 +224,7 @@ pub struct TalkView {
     ilo_drawn: Rc<RefCell<HashMap<(usize, IloButton), (Bounds<Pixels>, Instant)>>>,
     /// Whether the pointer rests on such a button, which holds the lines still as more come.
     ilo_hovered: Rc<Cell<bool>>,
-    /// Where each of ilo's lines' words were last drawn, by its line.
+    /// Where each of ilo's lines' words were last drawn, and their layout, by its line.
     ilo_words_drawn: WordsDrawn,
     /// Where the level's chip under the reply field was drawn, if the last frame drew it.
     level_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -2009,6 +2009,8 @@ impl TalkView {
             .child(
                 canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
                     .absolute()
+                    .top_0()
+                    .left_0()
                     .size_full(),
             );
         div()
@@ -2033,6 +2035,14 @@ impl TalkView {
         let palette = look.palette;
         let ink = palette.text(ILO_INK);
         let (own, name) = words::head(&line.kind, agent);
+        // ilo's mark is the first word of what it says, in the display face, so its words wrap
+        // under it: an ilo line has one left edge, its mark's.
+        let mark = 0..words::MARK.len();
+        let own = format!("{} {own}", words::MARK);
+        let marked = HighlightStyle {
+            font_weight: Some(FontWeight::MEDIUM),
+            ..Default::default()
+        };
         // A page's words are cut short and quoted, in the title's ink, so they read as a name.
         let name = name.map(|name| clip(&name, QUOTED_CHARS as usize));
         let (said, highlights) = match &name {
@@ -2043,9 +2053,9 @@ impl TalkView {
                     color: Some(palette.text(TITLE)),
                     ..Default::default()
                 };
-                (said, vec![(quoted, style)])
+                (said, vec![(mark.clone(), marked), (quoted, style)])
             }
-            None => (own, Vec::new()),
+            None => (own, vec![(mark.clone(), marked)]),
         };
         let count = match &line.kind {
             IloKind::Stopped { count, .. } => words::count(*count),
@@ -2061,16 +2071,11 @@ impl TalkView {
             IloKind::KeptHere => "icons/save.svg",
             IloKind::Gone | IloKind::NotKept | IloKind::KeepsNothing => "icons/message-circle.svg",
         };
-        // Its words follow the mark closer than the line's gap.
-        let mark = super::display_face::display_text(words::MARK, MARK_SIZE, TRACE_LINE, cx)
-            .flex_none()
-            .mr(px(MARK_GAP - TRACE_GAP))
-            .into_any_element();
         let head = trace_line(
             look,
             TraceLine {
                 glyph: Some(glyph),
-                mark: Some(mark),
+                mark: Some((mark, super::display_face::family(cx))),
                 highlights,
                 words_drawn: Some((line.key, self.ilo_words_drawn.clone())),
                 ..TraceLine::new(
@@ -2147,7 +2152,11 @@ impl TalkView {
                     },
                     |_, _, _, _| {},
                 )
+                // At the chip's own corner: with no place given it would start inside the
+                // chip's padding.
                 .absolute()
+                .top_0()
+                .left_0()
                 .size_full(),
             )
             .when(button.widens(), |chip| {
@@ -2329,8 +2338,8 @@ fn steps(lines: &[Line]) -> usize {
         .sum()
 }
 
-/// Where the words of ilo's lines were drawn, by line.
-type WordsDrawn = Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>;
+/// Where the words of ilo's lines were drawn and how they were laid out, by line.
+type WordsDrawn = Rc<RefCell<HashMap<usize, (Bounds<Pixels>, gpui::TextLayout)>>>;
 
 /// A line of a trace as it draws: its glyph, its title, what it took or why it failed, and how
 /// open its chevron is if it opens. The step under way's title `shimmers`, as far through its pass
@@ -2339,9 +2348,10 @@ type WordsDrawn = Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>;
 struct TraceLine {
     key: LineKey,
     glyph: Option<&'static str>,
-    /// ilo's mark before its words, which makes it one of ilo's lines: its glyph and words in
-    /// ilo's ink and size.
-    mark: Option<gpui::AnyElement>,
+    /// ilo's mark, the first word of its title, and the display face's family it's set in, which
+    /// makes it one of ilo's lines: its glyph and words in ilo's ink and size, its words wrapping
+    /// under its mark.
+    mark: Option<(std::ops::Range<usize>, SharedString)>,
     /// Its words' parts set apart, as an ilo line's name from a page.
     highlights: Vec<(std::ops::Range<usize>, HighlightStyle)>,
     /// Where its words were drawn goes here, by its line.
@@ -2496,6 +2506,7 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
             .into_any_element(),
     };
     let hover = group.clone();
+    let mut laid = None;
     let title = div()
         .min_w_0()
         .map(|title| match ilos {
@@ -2514,14 +2525,22 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         )
         .child(match shimmers {
             Some(Some(phase)) => shimmering(&palette, title, phase),
-            _ => StyledText::new(title).with_highlights(highlights),
+            _ => {
+                let text = StyledText::new(title)
+                    .with_highlights(highlights)
+                    .with_font_family_overrides(mark);
+                laid = Some(text.layout().clone());
+                text
+            }
         })
-        .children(words_drawn.map(|(key, drawn)| {
+        .children(words_drawn.zip(laid).map(|((key, drawn), laid)| {
             canvas(
-                move |bounds, _, _| _ = drawn.borrow_mut().insert(key, bounds),
+                move |bounds, _, _| _ = drawn.borrow_mut().insert(key, (bounds, laid)),
                 |_, _, _, _| {},
             )
             .absolute()
+            .top_0()
+            .left_0()
             .size_full()
         }));
     div()
@@ -2547,8 +2566,6 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
                 .hover(move |style| style.bg(palette.plate(TRACE_HOVER)))
         })
         .children(glyph.map(|glyph| first(glyph.into_any_element())))
-        // ilo's mark stays whole before its words.
-        .children(mark)
         .child(title)
         .when(noted, |line| {
             line.child(first(
