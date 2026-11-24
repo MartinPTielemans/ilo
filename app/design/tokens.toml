@@ -3115,26 +3115,16 @@ chip-text-size = 11.0
 chip-lip-fill = 0.55
 
 [transparency]
-# The Transparency picker (#4129), in Settings and the onboarding: three pictures 12 apart, each a
-# small ilo over a drawn desktop with a bright window on it, drawn from its level's own tints in
-# `palette` (tint-less … overlay-fill-more over the material), the same on every OS. The material
-# is drawn as the fill that gives its measured colour over white and over black, without the blur.
-# A picture is 118 tall at a drawing's corner, with a hairline of the window's ink inside its edge;
-# the chosen one is ringed 2 out, 2 clear of it, in the accent, its name under it at full strength
-# and the others' at 0.6, 9 under. The line under the three says what the chosen level does, 12
-# under their names. The keyboard's ring goes round the three, 4 out from the accent's room.
-gap = 12.0
-room = 4.0
+# The Transparency picker (#4129), in Settings and the onboarding: three pictures across the row,
+# ringed, spaced and named as Settings' other pictures are (`settings` side-*), each a small ilo
+# over a drawn desktop with a bright window on it, drawn from its level's own tints in `palette`
+# (tint-less … overlay-fill-more over the material), the same on every OS. The material is drawn
+# as the fill that gives its measured colour over white and over black, without the blur. A
+# picture is 118 tall at a drawing's corner. The line under the three says what the chosen level
+# does, as a row's line does, 12 under their names.
 height = 118.0
 picture-radius = 9.0
-edge = 0.14
-edge-width = 1.0
-ring = 2.0
-ring-gap = 2.0
-label-gap = 9.0
-label-off = 0.6
 line-top = 12.0
-line = 0.92
 # The desktop: orange to violet, then into teal, at 125°.
 desktop-angle = 125.0
 desktop-from = 0xe9a13b

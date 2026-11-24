@@ -448,8 +448,9 @@ pub struct ToolResult {
     pub image: Option<String>,
     /// Of an error, the kind a task's card says it in, if any.
     pub kind: Option<tools::Kind>,
-    /// The site's note the answer starts with (#4122). It's apart from `text`, which may hold a
-    /// page's words, so only the app's own note is ever one: the user's line and the log go by it.
+    /// The site's note the answer comes with (#4122). It's apart from `text`, which may hold a
+    /// page's words, here and where it leaves for the agent, so only the app's own note is ever
+    /// one: the user's line and the log go by it.
     pub notes: Option<&'static notes::Note>,
 }
 
@@ -503,7 +504,8 @@ impl ToolResult {
         }
     }
 
-    /// What the agent reads: the site's note first, in its frame, then the answer's text.
+    /// The answer whole, as one text: the site's note first, in its frame, then the answer's text.
+    /// The agent gets the two as parts of their own (`to_json`).
     pub fn said(&self) -> String {
         match self.notes {
             Some(note) if self.text.is_empty() => note.framed(),
@@ -512,21 +514,20 @@ impl ToolResult {
         }
     }
 
+    /// The answer as the agent gets it: its text, then its picture. A site's note is a part of
+    /// its own, first, so no words in the part that holds a page's are ilo's note, wherever in it
+    /// a page writes them.
     pub fn to_json(&self) -> Value {
-        let text = self.said();
-        match &self.image {
-            Some(jpeg) => {
-                let picture = json!({ "type": "image", "data": jpeg, "mimeType": "image/jpeg" });
-                let content = match text.is_empty() {
-                    true => vec![picture],
-                    false => vec![json!({ "type": "text", "text": text }), picture],
-                };
-                json!({ "content": content, "isError": self.error })
-            }
-            None => {
-                json!({ "content": [{ "type": "text", "text": text }], "isError": self.error })
-            }
+        let part = |text: String| json!({ "type": "text", "text": text });
+        let mut content: Vec<Value> = self.notes.iter().map(|note| part(note.framed())).collect();
+        // An answer of no words is its picture alone, or its note's; with neither, an empty text.
+        if !self.text.is_empty() || content.is_empty() && self.image.is_none() {
+            content.push(part(self.text.clone()));
         }
+        if let Some(jpeg) = &self.image {
+            content.push(json!({ "type": "image", "data": jpeg, "mimeType": "image/jpeg" }));
+        }
+        json!({ "content": content, "isError": self.error })
     }
 }
 
@@ -1018,6 +1019,8 @@ struct Wait {
     look: Option<mpsc::Sender<ToolResult>>,
     /// The next look, which goes with the run, as a run stopped or gone looks no more.
     timer: Option<Task<()>>,
+    /// Its own entry in the log, by its id, or 0 if it has none.
+    entry: u64,
 }
 
 /// What a wait step waits for.
@@ -1848,6 +1851,7 @@ impl Agents {
                         }
                     },
                 };
+                let before = next_entry_id();
                 if !self.act(&agent, connection, tab, "read_page", &reply, cx) {
                     return;
                 }
@@ -1855,7 +1859,9 @@ impl Agents {
                 self.read_page(Reading {
                     agent,
                     connection,
-                    entry: self.logged,
+                    entry: Some(self.logged)
+                        .filter(|entry| *entry >= before)
+                        .unwrap_or(0),
                     tab,
                     reply,
                     note,
@@ -2445,6 +2451,7 @@ impl Agents {
         };
         self.stepping = Some((run.agent.clone(), run.connection));
         let logged = if check { "check" } else { "wait" };
+        let before = next_entry_id();
         let may = self.act_as(
             &run.agent,
             run.connection,
@@ -2455,6 +2462,7 @@ impl Agents {
             cx,
         );
         self.stepping = None;
+        let entry = Some(self.logged).filter(|entry| *entry >= before);
         if may {
             let id = self.next_request;
             self.next_request += 1;
@@ -2470,6 +2478,7 @@ impl Agents {
                 until,
                 look: None,
                 timer: None,
+                entry: entry.unwrap_or(0),
             };
             match wait.what {
                 WaitFor::Time => {
@@ -2504,7 +2513,7 @@ impl Agents {
         cx: &mut Context<Self>,
     ) -> Option<ToolResult> {
         let (agent, connection) = (run.agent.clone(), run.connection);
-        let (tab, seconds) = (run.tab, wait.seconds);
+        let (tab, seconds, entry) = (run.tab, wait.seconds, wait.entry);
         // The tab came to a fenced site while it waited: the wait ends with that alone, whatever
         // the page shows or does, so no try tells the agent anything of it (#3724).
         if let Some(site) = self.came_to(tab, cx) {
@@ -2524,22 +2533,22 @@ impl Agents {
         match &wait.what {
             WaitFor::Time => {
                 let note = format!("Waited {seconds} s.");
-                return Some(self.page_answer(&agent, connection, 0, tab, note, show, cx));
+                return Some(self.page_answer(&agent, connection, entry, tab, note, show, cx));
             }
             WaitFor::Quiet => match answer.text.starts_with(BUSY) {
                 // What it shows held still, though a poll's request may never end.
                 false if answer.text.starts_with(REQUESTS) => {
                     let note = REQUESTS.to_string();
-                    return Some(self.page_answer(&agent, connection, 0, tab, note, show, cx));
+                    return Some(self.page_answer(&agent, connection, entry, tab, note, show, cx));
                 }
                 false => {
                     let note = "The page settled.".to_string();
-                    return Some(self.page_answer(&agent, connection, 0, tab, note, show, cx));
+                    return Some(self.page_answer(&agent, connection, entry, tab, note, show, cx));
                 }
                 // A page that never settles, as one that polls, is no reason to stop the run.
                 true if late => {
                     let note = format!("The page was still busy after {seconds} s.");
-                    return Some(self.page_answer(&agent, connection, 0, tab, note, show, cx));
+                    return Some(self.page_answer(&agent, connection, entry, tab, note, show, cx));
                 }
                 true => next = Duration::ZERO,
             },
@@ -2582,7 +2591,9 @@ impl Agents {
                         });
                     }
                     Some((note, None)) => {
-                        return Some(self.page_answer(&agent, connection, 0, tab, note, show, cx));
+                        return Some(
+                            self.page_answer(&agent, connection, entry, tab, note, show, cx),
+                        );
                     }
                     None => {}
                 }
@@ -4734,7 +4745,7 @@ impl Agents {
     /// The note for the site `agent`'s `tab` is on, the first time its task is shown a page there,
     /// and never after: only for a tab of its own Space that the user doesn't hold, on a page that
     /// isn't off limits or on a fenced site it came to, with Site notes on. The log's entry for the
-    /// call says it carried them, and nothing else is kept.
+    /// call, `entry`, says it carried them, and nothing else is kept.
     fn notes_now(
         &mut self,
         agent: &str,
@@ -4766,28 +4777,20 @@ impl Agents {
         if !self.noted.first(&task, note) {
             return None;
         }
-        self.log_notes(agent, connection, entry, note);
+        self.log_notes(entry, note);
         Some(note)
     }
 
-    /// Marks the log's entry `entry`, or with 0 the last one of the agent's connection, a run's
-    /// last step if it's a run, as one whose answer carried `note`.
-    fn log_notes(&mut self, agent: &str, connection: u64, entry: u64, note: &notes::Note) {
-        let mine = |each: &&mut Activity| each.agent == agent && each.connection == connection;
-        let found = match entry {
-            0 => (self.log.iter_mut().rev())
-                .find(mine)
-                .map(|each| match each.steps.is_empty() {
-                    true => each,
-                    false => each.steps.last_mut().expect("it has steps"),
-                }),
-            entry => (self.log.iter_mut().rev())
-                .flat_map(|each| match each.id == entry {
-                    true => vec![each],
-                    false => each.steps.iter_mut().collect(),
-                })
-                .find(|each| each.id == entry),
-        };
+    /// Marks the log's entry `entry`, a call's or a run's step's, as the one whose answer carried
+    /// `note`. A call that brought no entry of its own (0) marks none: the log's last entry may
+    /// be another call's, as calls on different tabs are under way at once.
+    fn log_notes(&mut self, entry: u64, note: &notes::Note) {
+        let found = (self.log.iter_mut().rev())
+            .flat_map(|each| match each.id == entry {
+                true => vec![each],
+                false => each.steps.iter_mut().collect(),
+            })
+            .find(|each| entry != 0 && each.id == entry);
         if let Some(found) = found {
             found.notes = note.name.into();
         }

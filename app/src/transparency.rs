@@ -9,34 +9,31 @@
 use std::rc::Rc;
 
 use gpui::{
-    App, BoxShadow, FontWeight, Hsla, IntoElement, KeyDownEvent, Rgba, Window,
-    accesskit::{Action, Role, Toggled},
-    black, div, linear_color_stop, linear_gradient, point,
-    prelude::*,
-    px, rgb, rgba, transparent_black, white,
+    App, BoxShadow, Hsla, IntoElement, Rgba, Window, black, div, linear_color_stop,
+    linear_gradient, point, prelude::*, px, rgb, rgba, transparent_black, white,
 };
 
-use crate::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
-use crate::settings_pictures::keyed;
-use crate::settings_rows::{Look, ring, stacked};
+use crate::palette::{INK, OVERLAY_DARK, PAPER};
+use crate::settings_pictures::{Choice, Picked, edge_over, group, option};
+use crate::settings_rows::{Drawn, Look, detail_type, stacked};
 use crate::tokens::palette::{
     LIGHT_MATERIAL_OVER_BLACK, LIGHT_MATERIAL_OVER_WHITE, LIGHT_TINT, LIGHT_TINT_LESS,
     LIGHT_TINT_MORE, MATERIAL_OVER_BLACK, MATERIAL_OVER_WHITE, OVERLAY_FILL, OVERLAY_FILL_LESS,
     OVERLAY_FILL_MORE, OVERLAY_LIGHT, TINT, TINT_LESS, TINT_MORE,
 };
-use crate::tokens::text::SMALL;
+use crate::tokens::settings::SIDE_ROOM;
 use crate::tokens::transparency::{
     BRIGHT, BRIGHT_HEIGHT, BRIGHT_LINE, BRIGHT_LINE_FIRST, BRIGHT_LINE_GAP, BRIGHT_LINE_HEIGHT,
     BRIGHT_LINE_WIDTH, BRIGHT_LINE_X, BRIGHT_LINE_Y, BRIGHT_RADIUS, BRIGHT_WIDTH, BRIGHT_X,
     BRIGHT_Y, DESKTOP_ANGLE, DESKTOP_FROM, DESKTOP_LAST, DESKTOP_TO, DESKTOP_TO_STOP, DOT,
-    DOT_ALPHA, DOT_GAP, DOT_INSET, EDGE, EDGE_WIDTH, GAP, HAIRLINE, HEIGHT, LABEL_GAP, LABEL_OFF,
-    LINE, LINE_TOP, MENU_HAIRLINE, MENU_PADDING, MENU_PLATE, MENU_RADIUS, MENU_RIM, MENU_ROW,
-    MENU_ROW_PADDING, MENU_ROW_RADIUS, MENU_SHADOW, MENU_SHADOW_BLUR, MENU_SHADOW_Y, MENU_WIDTH,
-    MENU_X, MENU_Y, PAGE, PAGE_HEADING, PAGE_HEADING_HEIGHT, PAGE_HEADING_WIDTH, PAGE_LINE,
-    PAGE_LINE_HEIGHT, PAGE_LINE_WIDTH, PAGE_LINE_X, PAGE_LINE_Y, PAGE_LINES, PAGE_RADIUS,
-    PAGE_RIGHT, PAGE_TOP, PICTURE_RADIUS, QUIET, RING, RING_GAP, ROOM, ROW_HEIGHT, ROW_PADDING,
-    ROW_PLATE, ROW_RADIUS, SIDEBAR_TOP, SIDEBAR_WIDTH, SIDEBAR_X, WINDOW_HAIRLINE, WINDOW_RADIUS,
-    WINDOW_RIGHT, WINDOW_SHADOW, WINDOW_SHADOW_BLUR, WINDOW_SHADOW_Y, WINDOW_X, WINDOW_Y, WORDS,
+    DOT_ALPHA, DOT_GAP, DOT_INSET, HAIRLINE, HEIGHT, LINE_TOP, MENU_HAIRLINE, MENU_PADDING,
+    MENU_PLATE, MENU_RADIUS, MENU_RIM, MENU_ROW, MENU_ROW_PADDING, MENU_ROW_RADIUS, MENU_SHADOW,
+    MENU_SHADOW_BLUR, MENU_SHADOW_Y, MENU_WIDTH, MENU_X, MENU_Y, PAGE, PAGE_HEADING,
+    PAGE_HEADING_HEIGHT, PAGE_HEADING_WIDTH, PAGE_LINE, PAGE_LINE_HEIGHT, PAGE_LINE_WIDTH,
+    PAGE_LINE_X, PAGE_LINE_Y, PAGE_LINES, PAGE_RADIUS, PAGE_RIGHT, PAGE_TOP, PICTURE_RADIUS, QUIET,
+    ROW_HEIGHT, ROW_PADDING, ROW_PLATE, ROW_RADIUS, SIDEBAR_TOP, SIDEBAR_WIDTH, SIDEBAR_X,
+    WINDOW_HAIRLINE, WINDOW_RADIUS, WINDOW_RIGHT, WINDOW_SHADOW, WINDOW_SHADOW_BLUR,
+    WINDOW_SHADOW_Y, WINDOW_X, WINDOW_Y, WORDS,
 };
 
 /// How see-through ilo is. One value for the app, not per Space; Standard until the user picks.
@@ -205,11 +202,11 @@ pub fn set(level: Transparency, cx: &mut App) {
 
 /// Settings' row, where the host has `glass` behind the window: the setting's name, what it does,
 /// and the picker under them across the row at the level the app is at, the pictures' edges in
-/// line with the text.
-pub fn row(look: &Look, glass: bool, cx: &mut App) -> Option<gpui::Div> {
+/// line with the text. `logged` is Settings' (settings_rows::drawn), for check.sh.
+pub fn row(look: &Look, glass: bool, logged: Drawn, cx: &mut App) -> Option<gpui::Div> {
     let chosen = level(cx);
-    let picker = picker(chosen, !look.light(), |level, _, cx| set(level, cx));
-    glass.then(|| stacked(look, NAME, ABOUT.into(), ROOM + RING + RING_GAP, picker))
+    let picker = picker(chosen, look, logged, |level, _, cx| set(level, cx));
+    glass.then(|| stacked(look, NAME, ABOUT.into(), SIDE_ROOM, picker))
 }
 
 /// Whether ilo's window has a material behind it for the levels to show, and so the setting to
@@ -222,122 +219,77 @@ pub fn has_glass() -> bool {
 /// What the picker calls with the level picked, by a click or a key, when it isn't the one chosen.
 pub type Pick = Rc<dyn Fn(Transparency, &mut Window, &mut App)>;
 
-/// The three pictures, `chosen` ringed, and the line under them, drawn in the dark look or the light
-/// one as the window they're in is.
+/// The three pictures, `chosen` ringed as every picture choice in Settings is
+/// (settings_pictures), across the width they're given, and the line under them, in `look`.
 #[derive(IntoElement)]
 pub struct Picker {
     chosen: Transparency,
-    dark: bool,
+    look: Look,
+    logged: Drawn,
     pick: Pick,
 }
 
+/// The picker at `chosen` in `look`. `logged` is Settings' (settings_rows::drawn), so check.sh can
+/// click a picture as "transparency option <level>"; elsewhere, one of its own.
 pub fn picker(
     chosen: Transparency,
-    dark: bool,
+    look: &Look,
+    logged: Drawn,
     pick: impl Fn(Transparency, &mut Window, &mut App) + 'static,
 ) -> Picker {
     Picker {
         chosen,
-        dark,
+        look: *look,
+        logged,
         pick: Rc::new(pick),
     }
 }
 
 impl RenderOnce for Picker {
     fn render(self, window: &mut Window, _: &mut App) -> impl IntoElement {
-        let Picker { chosen, dark, pick } = self;
+        let Picker {
+            chosen,
+            look,
+            logged,
+            pick,
+        } = self;
         let a11y = window.is_a11y_active();
-        let ink = rgb(if dark { PAPER } else { INK });
-        let options =
-            Transparency::ALL.map(|level| option(level, level == chosen, dark, ink, a11y, &pick));
-        let keyed_pick = pick.clone();
-        let line = div()
-            .mt(px(LINE_TOP))
-            .mx(px(ROOM + RING + RING_GAP))
-            .text_size(px(SMALL))
-            .text_color(ink.opacity(LINE))
-            .child(chosen.line());
-        div()
-            .child(
-                div()
-                    .id("transparency")
-                    .when(a11y, |group| {
-                        group
-                            .role(Role::RadioGroup)
-                            .aria_label("Transparency")
-                            .aria_description(chosen.line())
-                    })
-                    .tab_index(0)
-                    .focus_from_keys_only()
-                    .rounded(px(PICTURE_RADIUS + RING_GAP + RING + ROOM))
-                    .focus_visible(ring(ink))
-                    .p(px(ROOM))
-                    .flex()
-                    .gap(px(GAP - 2. * (RING_GAP + RING)))
-                    .on_key_down(move |event: &KeyDownEvent, window, cx| {
-                        let to = keyed(event, chosen.index(), Transparency::ALL.len());
-                        if let Some(index) = to {
-                            cx.stop_propagation();
-                            keyed_pick(Transparency::ALL[index], window, cx);
-                        }
-                    })
-                    .children(options),
+        let dark = !look.light();
+        let base = rgb(if dark { PAPER } else { INK });
+        let picked: Picked =
+            Rc::new(move |index, window, cx| pick(Transparency::ALL[index], window, cx));
+        let options = Transparency::ALL.map(|level| {
+            let choice = Choice {
+                title: level.title(),
+                drawing: picture(level, dark, base),
+            };
+            let chosen = level == chosen;
+            option(
+                &look,
+                base,
+                NAME,
+                level.index(),
+                chosen,
+                choice,
+                a11y,
+                &logged,
+                &picked,
             )
-            .child(line)
+            .flex_1()
+            .min_w_0()
+        });
+        let count = Transparency::ALL.len();
+        let group = group(&look, NAME, chosen.index(), count, a11y, picked)
+            .when(a11y, |group| group.aria_description(chosen.line()))
+            .children(options);
+        // It says what the chosen picture does, as a row's line says what its row does, and as quietly.
+        let line = detail_type()
+            .mt(px(LINE_TOP))
+            .mx(px(SIDE_ROOM))
+            .text_color(look.detail)
+            .child(chosen.line());
+        div().child(group).child(line)
     }
-}
-
-/// One level's picture, ringed in the accent while it's chosen, and its name under it.
-fn option(
-    level: Transparency,
-    chosen: bool,
-    dark: bool,
-    ink: Rgba,
-    a11y: bool,
-    pick: &Pick,
-) -> gpui::Stateful<gpui::Div> {
-    let pick = pick.clone();
-    let ringed = div()
-        .rounded(px(PICTURE_RADIUS + RING_GAP + RING))
-        .border(px(RING))
-        .border_color(match chosen {
-            true => rgb(NO_THEME_ACCENT),
-            false => transparent_black().into(),
-        })
-        .p(px(RING_GAP))
-        .child(picture(level, dark, ink));
-    let label = div()
-        .mt(px(LABEL_GAP - RING_GAP - RING))
-        .text_size(px(SMALL))
-        .when(chosen, |label| label.font_weight(FontWeight::MEDIUM))
-        .text_color(if chosen { ink } else { ink.opacity(LABEL_OFF) })
-        .child(level.title());
-    let toggled = if chosen {
-        Toggled::True
-    } else {
-        Toggled::False
-    };
-    div()
-        .id(("transparency", level.index()))
-        .when(a11y, |option| {
-            option
-                .role(Role::RadioButton)
-                .aria_label(level.title())
-                .aria_toggled(toggled)
-                .a11y_synthetic_children(|builder| builder.parent_node().add_action(Action::Click))
-        })
-        .flex_1()
-        .min_w_0()
-        .flex()
-        .flex_col()
-        .items_center()
-        .child(ringed.w_full())
-        .child(label)
-        .on_click(move |_, window, cx| {
-            if !chosen {
-                pick(level, window, cx)
-            }
-        })
 }
 
 /// The material behind ilo's window, drawn as the fill that gives the colour it was measured at
@@ -380,26 +332,21 @@ fn shadow(color: u32, y: f32, blur: f32) -> BoxShadow {
     }
 }
 
-/// A line `width` wide round an edge, in `color`, inside it or out.
-fn edge(color: Rgba, width: f32, inset: bool) -> BoxShadow {
+/// A hairline round an edge, in `color`, inside it or out.
+fn hairline(color: Rgba, inset: bool) -> BoxShadow {
     BoxShadow {
         color: color.into(),
         offset: point(px(0.), px(0.)),
         blur_radius: px(0.),
-        spread_radius: px(width),
+        spread_radius: px(HAIRLINE),
         inset,
     }
 }
 
-/// A hairline round an edge, in `color`, inside it or out.
-fn hairline(color: Rgba, inset: bool) -> BoxShadow {
-    edge(color, HAIRLINE, inset)
-}
-
 /// A small ilo at `level` over the desktop: its window's glass at the level's tint, the sidebar's
 /// rows on it, two at full strength and two quiet, the page, and a menu floating at the level's
-/// fill. `ink` is the window's around the picture, for its hairline.
-fn picture(level: Transparency, dark: bool, ink: Rgba) -> gpui::Div {
+/// fill. `base` is the window's ink around the picture, for its hairline.
+fn picture(level: Transparency, dark: bool, base: Rgba) -> gpui::Div {
     let words = rgb(if dark { PAPER } else { INK });
     let tint = if dark { black() } else { white() };
     let desktop = div()
@@ -509,7 +456,8 @@ fn picture(level: Transparency, dark: bool, ink: Rgba) -> gpui::Div {
         .children(page_lines);
     let fill = rgb(if dark { OVERLAY_DARK } else { OVERLAY_LIGHT });
     let items = [
-        ("Copy Link", Some("⇧⌘C"), false),
+        // A name and its keys need room between them: only the short name has its keys.
+        ("Copy Link", None, false),
         ("Pin Tab", None, true),
         ("Close", Some("⌘W"), false),
     ]
@@ -566,6 +514,7 @@ fn picture(level: Transparency, dark: bool, ink: Rgba) -> gpui::Div {
         .child(menu);
     div()
         .relative()
+        .w_full()
         .h(px(HEIGHT))
         .rounded(px(PICTURE_RADIUS))
         .overflow_hidden()
@@ -574,11 +523,7 @@ fn picture(level: Transparency, dark: bool, ink: Rgba) -> gpui::Div {
         .child(desktop.rounded(px(PICTURE_RADIUS)))
         .child(bright)
         .child(window)
-        .child(
-            layer(transparent_black())
-                .rounded(px(PICTURE_RADIUS))
-                .shadow(vec![edge(at(ink, EDGE), EDGE_WIDTH, true)]),
-        )
+        .child(edge_over(base, PICTURE_RADIUS))
 }
 
 #[cfg(test)]
