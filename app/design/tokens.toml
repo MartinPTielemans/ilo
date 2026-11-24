@@ -2640,34 +2640,51 @@ drawer = 0.2
 
 [shell.task]
 # Ours, as Arc had no tasks: the window's agent tasks at the sidebar's foot, over the media
-# players, each a plate of a player's shape and fill, oldest lowest, the list's rows above never
-# moving as they come and go. The favicon's column holds the state's glyph, centred on the two
-# lines; the title is a row's over a status line small and secondary, or the agent's question on
-# up to two. Chips under that, as a toast's at the sidebar's scale. ✕ shows under the pointer, a
-# player's button. Three show, waiting first, then working, then done; a fourth plate says how
-# many more and opens the foot to all of them, which scrolls past this share of the sidebar's
-# height. ⌘T's ask opens an empty slot a plate tall at the top, marked by the Library card's
-# dashes at slot-dash, which its task fills.
+# players, each a group, oldest lowest, the list's rows above never moving as they come and go. A
+# group's header is a sidebar row in every measure, with no plate at rest: the favicon's column
+# holds the state's glyph, centred on the two lines, the title is a row's, and the line under it
+# says who works on it and its state, small. Its pages are rows under it while its task is the
+# one shown. ✕ shows under the pointer, a player's button. Three show, waiting first, then
+# working, then done; a fourth row says how many more and opens the foot to all of them. The foot
+# scrolls past this share of the sidebar's height. ⌘T's ask opens an empty slot a row's plate
+# tall at the top, marked by the Library card's dashes at slot-dash, which its task fills.
 slot-dash = 0.3
-height = 40.0
-gap = 6.0
-top = 5.0
 line = 16.0
 status-gap = 1.0
 status-line = 14.0
-question-line = 15.0
-bottom = 4.0
 foot-share = 0.5
+# A task's pages (the approved mock's measures): rows one step in from the header, a hairline
+# down their left under the middle of the glyph's column, each a favicon, the page's title and
+# one word at its end, with the sidebar's two plates and no other: under the pointer, and on the
+# page shown. A page being worked in has the working dot before its word, in Signal, and its word
+# in the stronger ink.
+pages-top = 2.0
+pages-bottom = 4.0
+pages-line = 1.5
+pages-line-ink = 0.13
+pages-gap = 9.0
+page-height = 26.0
+# A control's corner, the smallest of the four radii, for a row this low.
+page-radius = 6.0
+page-start = 7.0
+page-end = 8.0
+page-gap = 8.0
+page-favicon = 12.0
+page-title = 12.0
+page-ink = 0.74
+page-word = 0.4
+page-word-working = 0.8
+page-dot = 5.0
+page-dot-gap = 5.0
 # The glyph: a box at the favicon's column, a ring in Signal round a dot that circles it while
 # the task works, at this alpha, and goes to the middle, grown, while it asks; done, the ring
 # shrinks away for a tick; stopped, the dot goes and the ring shrinks, in the ink at `stopped`.
 # The rings are drawn at these values, under the floor text keeps (palette), as they're marks
 # beside a status that says the same in words. On the selected plate's fill, which Signal stands
 # out from less, the ring is as much brighter as `ring-working-selected` is than `ring-working`:
-# a dark window's selected fill takes 0.5 for the ring to stand out from it as 0.28 does from a
-# card's own fill, over a black backdrop and a white one.
+# a dark window's selected fill takes 0.5 for the ring to stand out from it as 0.28 does from the
+# sidebar's own ground, over a black backdrop and a white one.
 glyph = 18.0
-glyph-top = 11.0
 ring = 5.25
 ring-stroke = 1.5
 ring-working = 0.28
@@ -2679,10 +2696,9 @@ dot = 1.9
 dot-asks = 1.58
 dot-done = 0.3
 tick-stroke = 1.6
-# The status line's ink, above the sidebar's secondary so its 11 pt reads at 4.5:1 or more on the
-# card's plate over a white backdrop, where secondary's 0.62 measured 4.3:1 (#1080). What leads it
-# while the agent works, its step count, and while it needs the user, "Needs you", is in the title's
-# ink at medium.
+# The state line's ink, above the sidebar's secondary so its 11 pt reads at 4.5:1 or more over a
+# white backdrop, where secondary's 0.62 measured 4.3:1 (#1080). At Full access the level's name
+# leads it, in the title's ink at medium.
 status = 0.75
 # The status while it works: a highlight sweeping along it, from the status's own colour to the
 # ink at `shimmer-high`, over `shimmer-reach` of the line's width either side of its middle, which
@@ -2694,29 +2710,30 @@ shimmer-high = 1.0
 shimmer-reach = 0.312
 shimmer-from = -0.3
 shimmer-to = 2.26
-# Its chips: the URL field's plate 22 tall at a control's corners, 11 pt medium, each as wide as
-# its words. The first one's words start on the title's column, its plate hanging out to the left
-# by its padding, and they may run to 6 from the plate's edge. They wrap to a second row; past
-# that none show, and the card's click opens the conversation.
+# A chip at the sidebar's scale, as Safe Start's card has them: the URL field's plate 22 tall at a
+# control's corners, 11 pt medium, as wide as its words, `chips-top` under what it follows, a row
+# of them `chip-gap` apart and running to `chip-end` from the card's edge. A task's one chip, an
+# act that is the user's and has no page (Retry, Sign in to …, Get …), is quieter: a row's text
+# on the sidebar's hovered plate, of this height and padding, its words on the title's column.
 chips-top = 7.0
 chip-height = 22.0
 chip-x = 8.0
 chip-gap = 6.0
 chip-end = 6.0
-chips-bottom = 4.0
-# A page Open sends to Today flies there from the chip as a plate going from a chip's corners and
-# fill to a row's hover plate.
+# A page the strip's Open sends to Today flies there from the chip as a plate going from a chip's
+# corners and fill to a row's hover plate.
 ghost-radius = 6.0
 
 [shell.task.motion]
 # Seconds, on the motion's ease, and points: the design file has no motion, so tools/design-sync.md
-# leaves this table out. ⌘T's bar folds into the slot as its drawing fades, and the card's
-# content fades in once it lands.
+# leaves this table out. ⌘T's bar folds into the slot as its drawing fades, and the header's
+# content fades in once it lands, as the plate the bar landed on goes.
 ease = [0.2, 0.8, 0.2, 1.0]
 fold = 0.38
 fold-fade = 0.11
 content = 0.15
-# A plate grows to its content, or folds to nothing as it goes, and fades as it comes and goes.
+# A group grows to its content, its pages' rows as it opens, or folds to nothing as it goes, and
+# fades as it comes and goes.
 height = 0.28
 fade = 0.2
 # A new status rolls in from under the old, which goes up; a new title crossfades.

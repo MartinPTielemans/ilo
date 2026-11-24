@@ -759,7 +759,7 @@ impl Shell {
     }
 
     /// `tab`'s icon in a box `size` wide, as tab_icon draws it in a favicon's.
-    fn tab_icon_sized(&self, tab: u64, size: f32) -> gpui::AnyElement {
+    pub(super) fn tab_icon_sized(&self, tab: u64, size: f32) -> gpui::AnyElement {
         let page = self.page(tab);
         if size >= FAVICON_SIZE || !page.icon.is_empty() {
             return self.tab_icon(tab);

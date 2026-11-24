@@ -136,7 +136,7 @@ fn an_id_is_a_uuid_that_nothing_prints() {
 fn the_file_of_ids_holds_each_id_and_its_assistant_and_nothing_else() {
     let root = profile("file").join(FOLDER);
     let (mut kept, id) = (Kept::default(), Id::new());
-    kept.hold("task-1", Cli::Claude, id.clone());
+    kept.hold("task-1", Cli::Claude, id.clone(), "Default");
     kept.write(&root);
     let saved: Value = serde_json::from_slice(&std::fs::read(root.join(INDEX)).unwrap()).unwrap();
     assert_eq!(saved, json!([{ "id": id.as_str(), "cli": "claude" }]));
@@ -217,7 +217,7 @@ fn a_removal_that_failed_removes_nothing_of_ilos_either() {
     assert!(folder(&root, &id).exists());
     // The id stays held, marked, and goes once a later try removes it.
     let mut kept = Kept::default();
-    kept.hold("task-1", Cli::Claude, id.clone());
+    kept.hold("task-1", Cli::Claude, id.clone(), "Default");
     assert!(!kept.had("task-1"));
     assert_eq!(kept.removing(|_| true), [(id.clone(), Cli::Claude)]);
     assert_eq!(kept.removing(|_| true), [], "removed twice at once");
@@ -281,4 +281,101 @@ fn no_code_asks_an_assistant_to_remove_everything() {
         }
     }
     assert!(read > 20, "read only {read} files");
+}
+
+/// Of a task that has ended the file says its title, how and when it ended and its profile, and
+/// no more; a run after takes them back as they were written, and of a file someone changed,
+/// only what has their shape: an end it doesn't know leaves an id alone, a profile with a path
+/// in it names none, and a title is one line of a title's length.
+#[test]
+fn the_file_says_of_an_ended_task_its_title_its_end_and_its_profile() {
+    let root = profile("past").join(FOLDER);
+    let (mut kept, id) = (Kept::default(), Id::new());
+    kept.hold("task-1", Cli::Claude, id.clone(), "Profile 2");
+    kept.of_mut("task-1").unwrap().past = Some(Past {
+        title: "Lisbon seats".into(),
+        end: End::Limit,
+        at: 1_795_000_000,
+    });
+    kept.write(&root);
+    let saved: Value = serde_json::from_slice(&std::fs::read(root.join(INDEX)).unwrap()).unwrap();
+    let row = json!({
+        "id": id.as_str(), "cli": "claude", "title": "Lisbon seats", "state": "limit",
+        "ended": 1_795_000_000u64, "profile": "Profile 2",
+    });
+    assert_eq!(saved, json!([row]));
+    let mut after = Kept::default();
+    assert!(after.read(&root));
+    let left = after.left();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].2, kept.of("task-1").unwrap().past.clone().unwrap());
+    after.give(&id, "task-9");
+    assert_eq!(after.of("task-9").unwrap().profile, "Profile 2");
+    assert_eq!(after.listed().collect::<Vec<_>>(), ["task-9"]);
+    assert!(after.left().is_empty());
+
+    // Every end has its own word in the file and reads back as itself.
+    for end in End::ALL {
+        assert_eq!(
+            End::ALL.into_iter().find(|each| each.id() == end.id()),
+            Some(end)
+        );
+    }
+    let (unknown, elsewhere, long) = (Id::new(), Id::new(), Id::new());
+    let changed = json!([
+        { "id": unknown.as_str(), "cli": "claude", "title": "A", "state": "paused", "ended": 5 },
+        { "id": elsewhere.as_str(), "cli": "claude", "title": "B", "state": "done", "ended": 6,
+          "profile": "../Default" },
+        { "id": long.as_str(), "cli": "claude", "title": format!("C\n{}", "c".repeat(200)),
+          "state": "done", "ended": 7, "profile": "Default" },
+    ]);
+    std::fs::write(root.join(INDEX), changed.to_string()).unwrap();
+    let mut after = Kept::default();
+    assert!(after.read(&root));
+    let left = after.left();
+    // The newest to end first, and the one with no end the file knows isn't among them.
+    assert_eq!(
+        left.iter().map(|(id, ..)| id.clone()).collect::<Vec<_>>(),
+        [long.clone(), elsewhere.clone()]
+    );
+    assert_eq!(left[0].2.title.chars().count(), 80);
+    assert!(!left[0].2.title.contains('\n'));
+    after.give(&elsewhere, "task-1");
+    assert_eq!(after.of("task-1").unwrap().profile, "");
+}
+
+/// A task deleted from the Archive, one whose conversation has gone and one being removed have
+/// an id alone in the file, as a conversation held only to be removed has.
+#[test]
+fn a_task_that_takes_no_reply_has_an_id_alone_in_the_file() {
+    let root = profile("unlisted").join(FOLDER);
+    let past = || {
+        Some(Past {
+            title: "Lisbon seats".into(),
+            end: End::Done,
+            at: 1_795_000_000,
+        })
+    };
+    let rows = |kept: &Kept| -> Value {
+        kept.write(&root);
+        serde_json::from_slice(&std::fs::read(root.join(INDEX)).unwrap()).unwrap()
+    };
+    let (mut kept, id) = (Kept::default(), Id::new());
+    kept.hold("task-1", Cli::Claude, id.clone(), "Default");
+    kept.of_mut("task-1").unwrap().past = past();
+    assert_eq!(rows(&kept)[0]["title"], json!("Lisbon seats"));
+    let alone = json!([{ "id": id.as_str(), "cli": "claude" }]);
+    // Deleted from the Archive.
+    kept.of_mut("task-1").unwrap().past = None;
+    assert_eq!(rows(&kept), alone);
+    // Its assistant no longer has it.
+    kept.of_mut("task-1").unwrap().past = past();
+    kept.of_mut("task-1").unwrap().gone = true;
+    assert_eq!(rows(&kept), alone);
+    assert_eq!(kept.listed().count(), 0);
+    // Being removed.
+    kept.of_mut("task-1").unwrap().gone = false;
+    assert_eq!(kept.removing(|_| true).len(), 1);
+    assert_eq!(rows(&kept), alone);
+    assert_eq!(kept.listed().count(), 0);
 }
