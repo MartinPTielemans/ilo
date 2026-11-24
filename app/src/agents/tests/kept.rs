@@ -137,7 +137,7 @@ impl Run {
     }
 
     /// The task's turn ends well, with its answer.
-    fn finish(&self, agent: &str, cx: &mut TestAppContext) {
+    pub(super) fn finish(&self, agent: &str, cx: &mut TestAppContext) {
         self.said(agent, Out::Said("Two seats at 9:05, car 4.".into()), cx);
         self.said(agent, Out::Ended(None), cx);
         assert!(matches!(self.state(agent, cx), State::Done { .. }));

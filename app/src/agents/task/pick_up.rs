@@ -13,12 +13,13 @@ use std::time::{Duration, SystemTime};
 use gpui::{App, AppContext, Context, SharedString};
 
 use super::ilo::{IloKind, IloLine};
-use super::{KEPT, Line, State, Task, Who, seconds};
+use super::{Card, KEPT, Line, State, Task, Who, seconds};
 use crate::agents::Agents;
 use crate::agents::helpers::Helpers;
 use crate::agents::kept::{self, Keep, Keeps, Nowhere};
 use crate::agents::runner::Cli;
 use crate::agents::tier::{Sites, Tier};
+use crate::tokens::shell::composer::CARDS;
 
 /// The title of a task a run before left whose agent never named it: what was asked stood as
 /// its title, and isn't kept.
@@ -65,10 +66,13 @@ impl Agents {
         let Some(root) = self.kept_root() else {
             return (Keep::Nothing, None);
         };
+        // A task with files runs where its assistant can keep no conversation, and reach none
+        // it kept (wall.rs).
+        let walled = self.walled(agent);
         let keep = match self.tasks.kept.of(agent) {
-            Some(record) if record.gone => Keep::Nothing,
+            Some(record) if record.gone || walled => Keep::Nothing,
             Some(record) => Keep::Resume(record.id.clone()),
-            None => kept::decide(cli, self.keeps_tasks()),
+            None => kept::decide(cli, self.keeps_tasks(), walled),
         };
         let folder = match &keep {
             Keep::Nothing => None,
@@ -88,10 +92,16 @@ impl Agents {
         self.tasks.kept.write(&root);
     }
 
+    /// Whether `agent`'s task has files, and so runs inside a wall.
+    fn walled(&self, agent: &str) -> bool {
+        self.task(agent).is_some_and(|task| task.files.any())
+    }
+
     /// Whether `agent`'s next run goes on with a conversation its assistant kept, and so takes
-    /// only what's new as its first message.
+    /// only what's new as its first message. A task with files never does: it starts from its
+    /// own words, whatever was kept of it.
     pub(super) fn resumes(&self, agent: &str) -> bool {
-        (self.tasks.kept.of(agent)).is_some_and(|record| !record.gone)
+        !self.walled(agent) && (self.tasks.kept.of(agent)).is_some_and(|record| !record.gone)
     }
 
     /// The user replies to `agent`'s task: if it had ended and its conversation is kept, the reply
@@ -99,8 +109,10 @@ impl Agents {
     /// reply says so only where there's something to say: the task comes back at another access
     /// than it ended at, or it's one a run before left, whose assistant ilo starts again. A reply
     /// to a task done or stopped in this run, at the access it had, is the resume and has no line.
-    /// Nothing the assistant or a page says has a part in it.
-    pub(super) fn pick_up(&mut self, agent: &str) {
+    /// Nothing the assistant or a page says has a part in it, and its assistant is told nothing
+    /// of the access: ilo's own check holds it. A run inside a wall the lower access changes is
+    /// over, so the reply starts one inside the new level's (rewall.rs).
+    pub(super) fn pick_up(&mut self, agent: &str, cx: &mut Context<Self>) {
         let Some(task) = self.task(agent) else {
             return;
         };
@@ -125,6 +137,10 @@ impl Agents {
         log!("browser: task {agent} picked up");
         // The activity log's entry for it, under the task's own name.
         self.note(agent, 0, "resumed", "", "");
+        let same = (self.task(agent)).is_none_or(|task| task.files.same_rules(ended_at, back));
+        if !same {
+            self.wall_outgrown(agent, cx);
+        }
     }
 
     /// `agent`'s run went, saying `said`. If it was to go on with a conversation its assistant no
@@ -406,6 +422,50 @@ impl Agents {
             .collect()
     }
 
+    /// The tasks a run before left that haven't been brought back, the last to end first, as the
+    /// composer's Latest tasks lists them until one is opened: each as its card, which has its
+    /// title and how it ended and no more, and for its home the user's Space of the profile it was
+    /// asked in, by which a window lists those of the profile in front alone. One whose
+    /// conversation takes no reply, or whose profile has no Space of the user's, is in the
+    /// Archive alone, as is one older than the newest a profile's composer has room for. Made
+    /// from what a launch already holds: nothing is read for it, and no tool of an agent's
+    /// reaches it.
+    pub fn kept_cards(&self, cx: &App) -> Vec<Card> {
+        let mut left: Vec<&Task> = (self.tasks.kept.listed())
+            .filter_map(|agent| self.task(agent))
+            .filter(|task| task.from_before() && task.home == 0)
+            .filter(|task| task.dismissed && !task.deleted)
+            .collect();
+        left.sort_by_key(|task| std::cmp::Reverse(task.ended));
+        // Each profile is asked for its Space once, and has no more cards made than the composer
+        // shows, however many tasks are kept: this runs at every change of a task.
+        let most = CARDS as usize;
+        let mut profiles: Vec<(&str, u64, usize)> = Vec::new();
+        (left.into_iter())
+            .filter_map(|task| {
+                let profile = self.tasks.kept.of(&task.agent)?.profile.as_str();
+                let known = profiles.iter().position(|(each, ..)| *each == profile);
+                let at = known.unwrap_or_else(|| {
+                    let home = match profile.is_empty() {
+                        true => 0,
+                        false => self.browser.profile_space(profile),
+                    };
+                    profiles.push((profile, home, 0));
+                    profiles.len() - 1
+                });
+                let (_, home, listed) = &mut profiles[at];
+                if *home == 0 || *listed == most {
+                    return None;
+                }
+                *listed += 1;
+                Some(Card {
+                    home: *home,
+                    ..self.card(task, cx)
+                })
+            })
+            .collect()
+    }
+
     /// Settings › Agents' Remove on a kept task's row: its conversation goes and its row leaves
     /// the file at once. The task stays where it is, and says its conversation is gone. One still
     /// at work keeps its own, as its assistant is writing it.
@@ -646,6 +706,9 @@ impl Task {
             placed: Vec::new(),
             told: None,
             helpers: Helpers::of_task(helpers),
+            files: crate::agents::files::Given::default(),
+            rising: None,
+            rewalled: Vec::new(),
         }
     }
 }

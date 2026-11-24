@@ -9,7 +9,7 @@ use gpui::{App, Context};
 
 use super::held;
 use super::task::ilo::{IloKind, IloLine};
-use super::task::{Mark, Task};
+use super::task::{Mark, Task, Who};
 use super::tier::{self, Tier};
 use super::{Agents, site};
 
@@ -48,6 +48,13 @@ impl Happened {
             Happened::TierChanged { .. } => None,
         }
     }
+}
+
+/// The turn of `task` under way, as its user's messages count it.
+pub(super) fn turn(task: &Task) -> usize {
+    (task.messages.iter())
+        .filter(|m| m.who == Who::User)
+        .count()
 }
 
 impl Agents {

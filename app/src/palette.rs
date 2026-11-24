@@ -38,7 +38,7 @@ use crate::tokens::palette::{
     NEUTRAL_GRADIENT_ALPHA, OVERLAY_LIGHT, STAND_IN,
 };
 use crate::tokens::palette::{FAR_GLOW, LIGHT_SHOWN, LIGHT_SHOWN_HOVERED, SHOWN, SHOWN_HOVERED};
-use crate::tokens::palette::{GRAY_TEXT, GRAY_TEXT_LESS, GRAY_TEXT_MORE};
+use crate::tokens::palette::{GRAY_TEXT, GRAY_TEXT_LESS, GRAY_TEXT_MORE, PLATE_GRAY};
 pub use crate::tokens::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
 use crate::tokens::palette::{
     LIGHT_SELECTED, LIGHT_SELECTED_HOVERED, LIGHT_SELECTED_SHADOW, LIGHT_SELECTED_SHADOW_BLUR,
@@ -830,6 +830,17 @@ impl Palette {
     /// so where the window shows more through it stays dimmer than the text beside it.
     pub fn gray(&self, alpha: f32) -> Hsla {
         Hsla::from(self.ink).opacity(alpha.max(self.gray_floor))
+    }
+
+    /// Gray text at `alpha` on a row's or a card's plate. A dark window's plate is lighter than
+    /// the window beside it, so gray reads less on it than off it, and there it is one ink
+    /// wherever it lies, PLATE_GRAY, or more where `alpha` or the floor asks more. A light
+    /// window's plate is lighter than its gray's ground too, which the ink gains by.
+    pub fn gray_on_plate(&self, alpha: f32) -> Hsla {
+        match self.tone {
+            Tone::Dark => self.gray(alpha.max(PLATE_GRAY)),
+            Tone::Light => self.gray(alpha),
+        }
     }
 
     /// Ink or Paper at `alpha` on the opaque `fill`, or as much more as text needs to read on it.
