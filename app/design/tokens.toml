@@ -2657,8 +2657,6 @@ lines-below = 16.0
 # `quoted-chars` and drawn in the title's ink, apart from ilo's words. A refusal repeated is one
 # line, its count at its end in the trace's note ink.
 glyph = 13.0
-mark = 13.0
-mark-gap = 5.0
 ink = 0.8
 quoted-chars = 40.0
 text-top = 1.0

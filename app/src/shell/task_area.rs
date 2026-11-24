@@ -399,7 +399,7 @@ impl Shell {
         if !self.task_tabs(area.space).contains(&tab) {
             return false;
         }
-        let zoom = if cx.reduce_motion() {
+        let zoom = if crate::motion::still(cx) {
             Zoom::Rest
         } else {
             Zoom::Out(Instant::now())
@@ -438,7 +438,7 @@ impl Shell {
     /// Back to the conversation: the page shrinks into its thumbnail, from a picture of it as it
     /// is now.
     pub fn task_page_back(&mut self, cx: &mut Context<Self>) {
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         let Some(page) = self.task_area.as_mut().and_then(|area| area.page.as_mut()) else {
             return;
         };
@@ -814,7 +814,7 @@ impl Shell {
 
     /// Steps the area's motion for a frame: the page's zoom.
     pub(super) fn step_task_area(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let still = cx.reduce_motion();
+        let still = crate::motion::still(cx);
         let now = Instant::now();
         let Some(area) = &mut self.task_area else {
             return;
