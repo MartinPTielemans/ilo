@@ -1755,6 +1755,7 @@ fn a_named_helpers_line_says_its_name_and_its_pages_word() {
     for word in [PageWord::Working, PageWord::Done, PageWord::Paused] {
         let page = HelperPage {
             tab: 30,
+            title: "Lamps".into(),
             favicon: None,
             word: word.label(),
         };
@@ -1771,6 +1772,7 @@ fn a_named_helpers_line_says_its_name_and_its_pages_word() {
     let favicon = std::sync::Arc::new(gpui::Image::empty());
     let page = HelperPage {
         tab: 30,
+        title: "".into(),
         favicon: Some(favicon),
         word: PageWord::Working.label(),
     };
@@ -1780,6 +1782,53 @@ fn a_named_helpers_line_says_its_name_and_its_pages_word() {
     let line = helper_line(&reading, &name, None).expect("named");
     assert_eq!(line.text(), "Northwick Home price");
     assert!(helper_line(&reading, &"".into(), Some(&page)).is_none());
+}
+
+/// A started helper its task gave no name has no empty line: its row appears with its first
+/// words, its page's title once it has a page with one, said as a name is with the page's word
+/// after it. Until then it draws nothing, and its stretch's count alone shows it. One with a step
+/// and no titled page has its step's line.
+#[test]
+fn a_helper_with_no_name_has_no_line_until_its_page_has_a_title() {
+    use super::{HelperPage, HelperRow, helper_row};
+    use crate::shell::task_cards::PageWord;
+    let none = gpui::SharedString::default();
+    let page = |title: &'static str| HelperPage {
+        tab: 30,
+        title: title.into(),
+        favicon: None,
+        word: PageWord::Working.label(),
+    };
+    // Started, with no step yet: its line has no words of its own.
+    let began = step(10, "", true);
+    assert!(matches!(
+        helper_row(&began, &none, None),
+        HelperRow::Nothing
+    ));
+    let untitled = page("");
+    let row = helper_row(&began, &none, Some(&untitled));
+    assert!(matches!(row, HelperRow::Nothing));
+    let titled = page("Lamps · Northwick Home");
+    for on in [&began, &step(11, "Reading shop.example", true)] {
+        let HelperRow::Known(line) = helper_row(on, &none, Some(&titled)) else {
+            panic!("its page has a title");
+        };
+        assert_eq!(line.text(), "Lamps · Northwick Home Working");
+    }
+    // Its count is its stretch's, with or without a line.
+    let trace = Trace {
+        key: 1,
+        running: true,
+        took: None,
+        items: vec![helper(began.clone()), helper(began)],
+    };
+    assert_eq!(trace.helpers(), 2);
+    // With a step and no titled page, the step's line.
+    let reading = step(11, "Reading shop.example", true);
+    assert!(matches!(helper_row(&reading, &none, None), HelperRow::Step));
+    // Named, it has its line from its start.
+    let row = helper_row(&step(10, "", true), &"Lamp prices".into(), None);
+    assert!(matches!(row, HelperRow::Known(line) if line.text() == "Lamp prices"));
 }
 
 /// Task-1's conversation as it works with `helpers` helpers (#4102), each reading its shop's
