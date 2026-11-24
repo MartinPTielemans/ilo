@@ -139,14 +139,9 @@ fn hint_key(key: &str, off_the_mac: bool) -> String {
     shell::key_name(key, off_the_mac)
 }
 
-/// What the hint says ⇥ does where it would make what's typed a task: ask the agent it would run
-/// on, the default the ask lists first, by name, or any while none is known yet.
-fn ask_words(agents: Option<&TaskAgents>) -> String {
-    match agents.and_then(|agents| agents.agents.first()) {
-        Some(agent) => format!("Ask {}", agent.name),
-        None => "Ask an agent".to_string(),
-    }
-}
+/// What the hint says ⇥ does where it would make what's typed a task: one word, as the composer's
+/// switch says it, whoever the ask runs on (#4140).
+const ASK_WORDS: &str = "Ask";
 
 /// One of the core's suggestions for what's typed.
 #[derive(Default)]
@@ -3262,10 +3257,9 @@ impl CommandBar {
             None if self.ask.is_some() => {
                 ("Run".to_string(), hint_key("enter", shell::OFF_THE_MAC))
             }
-            None if self.offers_ask(cx) => (
-                ask_words(self.task_agents.as_ref()),
-                hint_key("tab", shell::OFF_THE_MAC),
-            ),
+            None if self.offers_ask(cx) => {
+                (ASK_WORDS.to_string(), hint_key("tab", shell::OFF_THE_MAC))
+            }
             None => return None,
         };
         let palette = palette::current(cx);
