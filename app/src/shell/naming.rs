@@ -731,17 +731,18 @@ impl Shell {
     }
 
     /// Gives the keyboard back from the closed field: to the New Space form's name from its
-    /// Profile row, unless a click put it elsewhere, else to the window.
+    /// Profile row, else to the window, unless another element took it as the field closed, which
+    /// keeps it (dismissal's rule).
     fn leave_name(&mut self, renaming: &Renaming, window: &mut Window, cx: &mut Context<Self>) {
+        let keys = renaming.name.focus_handle(cx).is_focused(window);
+        let taken = !keys && window.focused(cx).is_some();
         match renaming.naming {
-            Naming::Profile(_) => {
-                self.focus_form = renaming.name.focus_handle(cx).is_focused(window);
-            }
+            Naming::Profile(_) => self.focus_form = keys,
+            _ if taken => log!("browser: field left the keyboard where it went"),
             // A Board New Board just made, its name kept or left with ↩ or esc, gives its page
             // the keyboard, where its first note's field waits for the first key (#3073's
             // condition 13). A press that took the keyboard elsewhere leaves it there.
             Naming::Tab(tab) if self.board_named.take() == Some(tab) => {
-                let keys = renaming.name.focus_handle(cx).is_focused(window);
                 window.focus(&self.focus_handle, cx);
                 if keys && tab == self.selected {
                     log!("browser: board {tab} has the keyboard");
