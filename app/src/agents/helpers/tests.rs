@@ -30,6 +30,7 @@ fn launch(helpers: bool) -> Launch {
             .map(String::from)
             .into(),
         helpers,
+        wall: None,
     }
 }
 
