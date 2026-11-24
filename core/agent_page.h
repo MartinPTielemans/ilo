@@ -552,12 +552,12 @@ class AgentPage : public content::WebContentsObserver,
   bool watching_ = false;
   // A look out: what hears its answer, gone once the session's end has answered it, and the
   // document it asked, which its yes keeps from the cache if it's there.
-  struct Look {
+  struct LookOut {
     base::OnceCallback<void(bool withheld)> then;
     content::WeakDocumentPtr document;
   };
   // Freeze's looks out, their answers not all in, by number (LookFirstTabs::Started).
-  base::flat_map<uint64_t, Look> looks_;
+  base::flat_map<uint64_t, LookOut> looks_;
   // The commands Freeze sent that are still owed, which outlive the agent's session.
   std::set<int> look_commands_;
   // The agent's session ended with a look out, which keeps DevTools until it's answered.

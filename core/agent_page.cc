@@ -2198,7 +2198,7 @@ void AgentPage::Looked(uint64_t look, bool shows) {
   if (out == looks_.end()) {
     return;
   }
-  Look done = std::move(out->second);
+  LookOut done = std::move(out->second);
   looks_.erase(out);
   limit_.Looking(looks_.size());
   if (looks_.empty()) {
@@ -2251,7 +2251,7 @@ void AgentPage::LookUnheard() {
 }
 
 void AgentPage::AnswerLooks() {
-  base::flat_map<uint64_t, Look> looks = std::exchange(looks_, {});
+  base::flat_map<uint64_t, LookOut> looks = std::exchange(looks_, {});
   look_commands_.clear();
   limit_.Looking(0);
   // Posted, as each may answer the app, which may be inside its own call into the core. A job's
@@ -3584,8 +3584,9 @@ void AgentPage::LetGo(Looks looks) {
   if (keep) {
     kept_ = true;
     // Only the looks' commands are still owed: the rest were the agent's.
-    base::EraseIf(replies_,
-                  [this](const auto& reply) { return !look_commands_.contains(reply.first); });
+    for (auto reply = replies_.begin(); reply != replies_.end();) {
+      reply = look_commands_.contains(reply->first) ? std::next(reply) : replies_.erase(reply);
+    }
     Unlisten();
     return;
   }
