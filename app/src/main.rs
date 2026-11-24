@@ -612,6 +612,9 @@ unsafe extern "C" fn started(_: *mut c_void) {
         });
         dock_dot::open(Rc::new(DockDot), cx);
         settings::read_switches(cx);
+        // The transparency level the window and what floats over it are drawn at, before the
+        // first window draws (#4128).
+        browser::transparency::level(cx);
         // The jump list's task off the Mac, which runs the browser for a new Little ilo window,
         // which the host writes as the first window opens, under its AppUserModelID.
         if let (Ok(title), Ok(switch)) = (

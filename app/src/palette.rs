@@ -32,9 +32,8 @@ pub use crate::tokens::palette::{
 };
 use crate::tokens::palette::{
     DIALOG_DARK, DIALOG_LIGHT, GRADIENT_ALPHA, LIGHT_GRADIENT_ALPHA, LIGHT_MATERIAL_OVER_BLACK,
-    LIGHT_MATERIAL_OVER_WHITE, LIGHT_NEUTRAL_GRADIENT_ALPHA, LIGHT_STAND_IN, LIGHT_TINT,
-    MATERIAL_OVER_BLACK, MATERIAL_OVER_WHITE, NEUTRAL, NEUTRAL_GRADIENT_ALPHA, OVERLAY_LIGHT,
-    STAND_IN, TINT,
+    LIGHT_MATERIAL_OVER_WHITE, LIGHT_NEUTRAL_GRADIENT_ALPHA, LIGHT_STAND_IN, MATERIAL_OVER_BLACK,
+    MATERIAL_OVER_WHITE, NEUTRAL, NEUTRAL_GRADIENT_ALPHA, OVERLAY_LIGHT, STAND_IN,
 };
 use crate::tokens::palette::{FAR_GLOW, LIGHT_SHOWN, LIGHT_SHOWN_HOVERED, SHOWN, SHOWN_HOVERED};
 pub use crate::tokens::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
@@ -127,12 +126,9 @@ impl Tone {
         }
     }
 
-    /// How much of `tint_color` lies over the material.
+    /// How much of `tint_color` lies over the material, at the user's transparency level.
     fn tint(self) -> f32 {
-        match self {
-            Tone::Dark => TINT,
-            Tone::Light => LIGHT_TINT,
-        }
+        transparency().tint(self == Tone::Dark)
     }
 
     /// The end of the scale the ink runs toward, which an accent has to stand out from the window
@@ -238,9 +234,21 @@ pub fn window_material() -> bool {
     WINDOW_MATERIAL.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// The level what floats is drawn at: Standard, until the palette holds the user's (#4128).
+thread_local! {
+    /// The user's transparency level, which transparency.rs hands over as it reads or sets it. Only
+    /// the thread that draws reads it, and each test's own thread keeps its own.
+    static TRANSPARENCY: std::cell::Cell<Transparency> = const {
+        std::cell::Cell::new(Transparency::Standard)
+    };
+}
+
+pub fn set_transparency(level: Transparency) {
+    TRANSPARENCY.set(level);
+}
+
+/// The level the window's tint and what floats over it are drawn at (#4128).
 pub fn transparency() -> Transparency {
-    Transparency::Standard
+    TRANSPARENCY.get()
 }
 
 /// What floats over the window and takes its fill by one rule (#4090): its colour at the

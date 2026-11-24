@@ -1,5 +1,6 @@
 use super::*;
 use crate::theme::Appearance;
+use crate::tokens::palette::{LIGHT_TINT, TINT};
 
 /// A theme as the design sweep (#320) names one: `count` colours, the main one at `hue` degrees,
 /// HSL `saturation` and `lightness` (its distance from the field's centre).
@@ -1252,5 +1253,25 @@ fn what_floats_is_opaque_with_no_material_under_it() {
             let ratio = contrast(over(opaque, surface.ink(tone), 0.6), opaque);
             assert!(ratio >= TEXT, "{surface:?} {tone:?}: {ratio:.2}");
         }
+    }
+}
+
+#[test]
+fn the_window_takes_the_users_level_and_shows_more_of_what_is_behind_it_at_each_step() {
+    for tone in [Tone::Dark, Tone::Light] {
+        let tints = Transparency::ALL.map(|level| {
+            set_transparency(level);
+            Palette::of(None, tone).tint.a
+        });
+        set_transparency(Transparency::Standard);
+        assert!(
+            tints.windows(2).all(|step| step[0] > step[1]),
+            "{tone:?}: {tints:?}, from Less to More"
+        );
+        assert_eq!(
+            tints[1],
+            Palette::of(None, tone).tint.a,
+            "{tone:?}: Standard is the window as it was"
+        );
     }
 }
