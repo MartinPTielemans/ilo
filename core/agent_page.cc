@@ -798,6 +798,12 @@ void AgentPage::Run() {
 void AgentPage::RunLooked(bool withheld) {
   const int action = job_->action;
   const bool history = action == BC_AGENT_PAGE_BACK || action == BC_AGENT_PAGE_FORWARD;
+  // The user may have taken the tab since the agent's call was let in. The core's own steps, a
+  // sign-in's and the user's files for a file field, aren't the agent's.
+  if (action >= 0 && IsHeld(tab_)) {
+    Fail(kHeldRefusal, BC_AGENT_FAILURE_HELD);
+    return;
+  }
   // Taking the tab to another page is all an agent may do there, as api.cc's bc_agent_may_act says.
   if (withheld && !history) {
     Fail(kWithheldPageRefusal, BC_AGENT_FAILURE_WITHHELD_PAGE);

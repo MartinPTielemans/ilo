@@ -1697,9 +1697,10 @@ impl Agents {
                 ToolResult::noted(text, notes)
             }
             // The page's one look found it showing what a password field held (the core's
-            // AgentPage::Freeze), which withholds it: the core's refusal, in its words, and the
-            // call's one entry in the log is that refusal.
-            (None, _, _) if self.browser.withheld(id) => {
+            // AgentPage::Freeze), which withholds it, or the user took the tab while the look was
+            // out, and the core read nothing: its refusal, in its words, and the call's one entry
+            // in the log is that refusal.
+            (None, _, _) if self.browser.withheld(id) || self.browser.held(id) => {
                 match self.browser.may_act(&agent, id, "read_page", cx) {
                     Err((failure, why)) => {
                         let logged = self.log_words(id, &why, cx);

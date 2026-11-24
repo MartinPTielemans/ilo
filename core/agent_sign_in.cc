@@ -883,9 +883,7 @@ void StartAgentSignIn(const std::string& agent, bc_id tab, uint64_t request) {
     return;
   }
   if (IsHeld(tab)) {
-    Refuse(tab, request,
-           "The user has this tab until they hand it back. Ask for it with ask_for_tab.",
-           BC_AGENT_FAILURE_HELD);
+    Refuse(tab, request, kHeldRefusal, BC_AGENT_FAILURE_HELD);
     return;
   }
   if (SigningIn(tab)) {

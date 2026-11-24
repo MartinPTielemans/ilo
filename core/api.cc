@@ -637,7 +637,7 @@ bool bc_agent_may_act(const char* agent,
     code = BC_AGENT_FAILURE_NOT_ITS_SPACE;
   }
   if (refused.empty() && browser_core::IsHeld(tab)) {
-    refused = "The user has this tab until they hand it back. Ask for it with ask_for_tab.";
+    refused = browser_core::kHeldRefusal;
     code = BC_AGENT_FAILURE_HELD;
   }
   if (refused.empty() && browser_core::SigningIn(tab)) {
@@ -2465,7 +2465,9 @@ void bc_tab_read_text(bc_id id, uint64_t request) {
   browser_core::AgentPage::FromWebContents(contents)->Freeze(base::BindOnce(
       [](decltype(nothing) nothing, base::WeakPtr<content::WebContents> contents, bc_id tab,
          uint64_t request, bool withheld) {
-        if (withheld || !contents) {
+        // The user may have taken the tab while the look was out: their page isn't read for the
+        // agent then, and the app answers the call as any on a held tab.
+        if (withheld || !contents || browser_core::IsHeld(tab)) {
           nothing(tab, request);
           return;
         }

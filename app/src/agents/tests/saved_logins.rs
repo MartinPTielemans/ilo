@@ -403,6 +403,39 @@ fn a_read_the_pages_look_withholds_answers_the_cores_refusal(cx: &mut TestAppCon
     assert_ne!(none.text, WITHHELD_REFUSAL);
 }
 
+/// A read whose tab the user took while the page's one look was out comes back with no text: the
+/// agent hears what any call on a held tab hears, and the log's one entry is that refusal.
+#[gpui::test]
+fn a_read_of_a_tab_the_user_took_meanwhile_answers_as_a_held_tabs_call(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    hello(&agents, cx);
+    let answer = call(
+        &agents,
+        "claude-code",
+        "read_page",
+        json!({ "tab": 20 }),
+        cx,
+    );
+    let (_, request) = *browser
+        .reads
+        .borrow()
+        .last()
+        .expect("its text asked of the core");
+    browser.held.borrow_mut().insert(20);
+    agents.update(cx, |agents, cx| agents.text_read(request, None, cx));
+    let refused = answer.recv().unwrap();
+    assert!(refused.error);
+    assert_eq!(refused.text, HELD);
+    let reads: Vec<Activity> = agents.read_with(cx, |agents, _| {
+        (agents.activity("claude-code"))
+            .filter(|entry| entry.action == "read_page")
+            .cloned()
+            .collect()
+    });
+    assert_eq!(reads.len(), 1, "{reads:?}");
+    assert_eq!(reads[0].refused.as_ref(), HELD);
+}
+
 /// The activity log and the 30-day record name the site a login was filled at, never its account.
 #[gpui::test]
 fn the_log_and_the_record_name_the_site_never_the_account(cx: &mut TestAppContext) {
