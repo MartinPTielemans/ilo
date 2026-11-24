@@ -17,8 +17,8 @@ use std::time::Instant;
 
 use super::{
     ARCHIVED_FAVICON_X, ARCHIVED_LEFT, ARCHIVED_PITCH, ARCHIVED_PLATE, ARCHIVED_RADIUS,
-    ARCHIVED_RIGHT, ARCHIVED_TEXT_X, Item, MenuEntry, Only, SECONDARY, STATE_HOVERED,
-    STATE_PRESSED, Section, Shell, UNSELECTED_TITLE, favicon, host, text, text_line,
+    ARCHIVED_RIGHT, ARCHIVED_TEXT_X, Item, MenuEntry, Only, POINTED_ROW, SECONDARY, STATE_PRESSED,
+    Section, Shell, UNSELECTED_TITLE, favicon, host, text, text_line,
 };
 use crate::agent_history::{self, Past};
 use crate::shell::access::Accessible;
@@ -173,6 +173,7 @@ pub(super) fn history_text(
     trash: bool,
     palette: &crate::palette::Palette,
 ) -> gpui::Div {
+    let on_plate = palette.gray_on_plate(SECONDARY);
     div()
         .flex_1()
         .min_w_0()
@@ -188,7 +189,11 @@ pub(super) fn history_text(
             17.,
             palette.text(UNSELECTED_TITLE),
         ))
-        .child(text_line(about, text::SMALL, 15., palette.gray(SECONDARY)))
+        // On a row that names itself as one under the pointer, a plate's gray while it is.
+        .child(
+            text_line(about, text::SMALL, 15., palette.gray(SECONDARY))
+                .group_hover(POINTED_ROW, move |style| style.text_color(on_plate)),
+        )
 }
 
 /// The agent whose past task's tab visited `page`: one that recorded the page, and ran when it was
@@ -507,7 +512,8 @@ impl Shell {
                     .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
                         shell.point_history(Pointed::Visited(index), *hovered, cx)
                     }))
-                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .group(POINTED_ROW)
+                    .hover(|style| style.bg(self.palette.hovered_plate()))
                     .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
                     .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
                         shell.open_visited(open.clone(), event.position(), event.modifiers(), cx)
