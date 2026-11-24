@@ -650,6 +650,13 @@ recent-title-bar-height = 9.0
 recent-detail-bar-height = 7.0
 recent-bar-gap = 6.0
 
+[hover-card.motion]
+# Seconds: how long the pointer rests on a row before its card shows, how long the card stays
+# after the pointer leaves the row, and its fade (hover_card.rs says whose each is; #4108).
+dwell = 0.5
+leave = 0.15
+fade = 0.1
+
 [folder-preview]
 # Resting on a closed folder shows a searchable list of its tabs beside its row (Arc's Folder
 # Preview, #690). Arc 1.171's layout (outside measurement, #1405): 240 wide, the search 48 tall
@@ -682,6 +689,14 @@ age-size = 11.0
 age-line = 14.0
 title = 0.9
 hint = 0.55
+
+[folder-preview.motion]
+# Seconds: the rest on a folder's row before the preview shows, how soon it goes after the
+# pointer leaves both, and its coming in and going out (folder_preview.rs; #4108).
+dwell = 0.45
+leave = 0.04
+in = 0.09
+out = 0.08
 
 [link-preview]
 # Ours (the owner, 2026-11-02, #1373), as nothing of Arc's preview is recorded: a quick look over
@@ -731,6 +746,14 @@ rim = 0.5
 text-size = 11.0
 secondary = 0.6
 primary = 1.0
+
+[link-target.motion]
+# Seconds: the rest on a link before its target shows, how soon after one went the next shows
+# at once, its fade out, and the rest that shows the whole address (link_target.rs; #4108).
+delay = 0.15
+grace = 0.4
+fade-out = 0.12
+whole-after = 1.5
 
 [link-card]
 # ⇧ on a link grows its plate into a card of what the page says about itself (#3080), in the hover
@@ -3313,6 +3336,13 @@ chip-text-size = 11.0
 # #D2D3FC over a lip of #8486E3, their glyphs #1F2AFF. Ours (#319): the overlay's dark fill, Paper
 # text, Paper chips with Ink glyphs, over a lip of Paper at this on the fill.
 chip-lip-fill = 0.55
+
+[tooltip.motion]
+# Seconds: the rest before a tooltip shows, how soon after one went the next shows at once, and
+# its fade out (tooltip.rs says whose each is; #4108).
+delay = 1.6
+grace = 0.5
+fade-out = 0.27
 
 [transparency]
 # The Transparency picker (#4129), in Settings and the onboarding: three pictures across the row,
