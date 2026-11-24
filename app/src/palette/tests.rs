@@ -1417,3 +1417,24 @@ fn the_selected_plate_reads_apart_from_the_hovered_one_at_every_level() {
         }
     }
 }
+
+/// What the palette reckons the window over black, grey 128 and white, which check/window.sh reads
+/// the sidebar against, is the window it draws over black and white, glows and all.
+#[test]
+fn the_window_reckoned_over_greys_is_the_one_drawn() {
+    for (theme, tone) in [
+        (None, Tone::Dark),
+        (Some(Theme::at(0., 0.)), Tone::Dark),
+        (Some(Theme::of_color(0x5a2a9a)), Tone::Light),
+    ] {
+        let palette = Palette::of(theme.as_ref(), tone);
+        for (foot, far) in [(0., 0.), (0.4, 0.), (1., 1.)] {
+            let [black, _, white] = palette.window_over_greys(foot, far).map(hex);
+            assert_eq!(
+                [black, white],
+                palette.window_at(foot, far).map(hex),
+                "{tone:?} {foot} {far}"
+            );
+        }
+    }
+}
