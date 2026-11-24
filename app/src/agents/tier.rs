@@ -2,6 +2,13 @@
 //! and refuses what's above it, never asking, and only the user changes it (#4086). What each one
 //! refuses is a row of this table, so nothing else decides.
 
+/// Settings › Agents' group that explains each tier, the one place that does; the level's menu
+/// opens Settings there by this name (settings::show_row).
+pub const ACCESS: &str = "Access";
+
+/// Settings › Agents' line under its name, the one place it says what a task never gets.
+pub const NEVER_GETS: &str = "A task never gets passwords, cookies or your other tabs.";
+
 /// A task's access, lowest first, which their order follows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Tier {
@@ -26,6 +33,15 @@ impl Tier {
             Tier::Look => "Look only",
             Tier::Work => "Work on pages",
             Tier::Full => "Full access",
+        }
+    }
+
+    /// What it lets a task do, under its name in Settings › Agents' Access, each past the one below.
+    pub fn explained(self) -> &'static str {
+        match self {
+            Tier::Look => "Reads pages.",
+            Tier::Work => "Also clicks, types and submits forms.",
+            Tier::Full => "Also pays, orders, sends messages and uses bank sites.",
         }
     }
 
