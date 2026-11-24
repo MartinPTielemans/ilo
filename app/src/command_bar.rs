@@ -700,10 +700,20 @@ pub enum InPlaceKey {
 
 /// A chip after the pages in Ask's field at rest: the files attached to the next task, named by
 /// their count, or the folder granted to it, by its name.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum Given {
     Files(SharedString),
     Folder(SharedString),
+}
+
+impl std::fmt::Debug for Given {
+    /// Its kind alone: a folder's name is never logged (#3656), as `Names` keeps it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Files(_) => "Files",
+            Self::Folder(_) => "Folder",
+        })
+    }
 }
 
 impl gpui::EventEmitter<InPlaceKey> for CommandBar {}

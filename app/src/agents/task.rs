@@ -1553,24 +1553,50 @@ impl Agents {
     /// Starts `agent`'s task with what the user picked on the `+`: the folder, if ilo may give
     /// it, and ilo's copies of the files attached, made off the UI thread before its assistant
     /// starts, as a file may be large. A system that can't wall a task in gives it neither.
-    fn start_with(&mut self, agent: &str, first: String, picked: Picked, cx: &mut Context<Self>) {
+    fn start_with(
+        &mut self,
+        agent: &str,
+        first: String,
+        mut picked: Picked,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.files_available() {
+            picked = Picked::default();
+        }
+        // The folder is checked again by its real path, as it may have moved since the panel
+        // gave it: one that no longer resolves to itself, or that ilo never gives, isn't given,
+        // and its line says so by the name the user saw (X6).
         let never = Never::here(Some(self.tasks_dir()));
-        let folder = (picked.folder).filter(|folder| !never_grantable(folder.root(), &never));
-        let picked = match self.files_available() {
-            true => Picked { folder, ..picked },
-            false => Picked::default(),
+        let refuses = |folder: &super::wall::Granted| {
+            let root = folder.root();
+            files::resolved(root).as_deref() != Some(root) || never_grantable(root, &never)
         };
+        let refused = match &picked.folder {
+            Some(folder) if refuses(folder) => picked.folder.take(),
+            _ => None,
+        };
+        let names = Names::of(&Picked {
+            folder: refused.clone().or(picked.folder.clone()),
+            files: picked.files.clone(),
+        });
         if let Some(task) = self.task_mut(agent)
-            && (picked.folder.is_some() || !picked.files.is_empty())
+            && (picked.folder.is_some() || refused.is_some() || !picked.files.is_empty())
         {
             task.files.folder = picked.folder.clone();
-            task.names = Names::of(&picked);
+            task.names = names;
+            if let Some(folder) = &refused {
+                let files = Given {
+                    folder: Some(folder.clone()),
+                    attached: None,
+                };
+                task.rewalled(rewall::Rewalled::WithoutFiles { files });
+            }
         }
         let with = StartedWith {
             pages: self.task(agent).map_or(0, |task| task.added.len()),
             folder: picked.folder.is_some(),
             files: picked.files.len(),
-            left_out: false,
+            left_out: refused.is_some(),
         };
         if picked.files.is_empty() {
             let wall = self.wall_to_begin(agent, with);
@@ -1596,7 +1622,7 @@ impl Agents {
 
     /// Where ilo's copies of `agent`'s attached files are, beside its own folder and not in it,
     /// as the assistant writes in its own and only reads these.
-    fn attached_dir(&self, agent: &str) -> PathBuf {
+    pub(super) fn attached_dir(&self, agent: &str) -> PathBuf {
         self.tasks_dir().join(format!("{agent} files"))
     }
 
@@ -1649,7 +1675,7 @@ impl Agents {
         }
         // The start's log row counts what it starts with, and that its files were left out
         // where their copies couldn't be made or its wall wasn't put up (rewall.rs).
-        let left_out = copied_none;
+        let left_out = with.left_out || copied_none;
         let wall = self.wall_to_begin(agent, StartedWith { left_out, ..with });
         self.launch_in(agent, first, wall, cx);
         self.wait_for_answer(agent, cx);

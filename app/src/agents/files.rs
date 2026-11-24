@@ -220,6 +220,10 @@ impl Never {
             "/var",
             "/cores",
             "/Network",
+            // What these hold runs outside any wall: the Mac's apps, and what's added beside the
+            // system.
+            "/Applications",
+            "/opt",
             // Linux's.
             "/proc",
             "/sys",
@@ -240,6 +244,8 @@ impl Never {
             [
                 // The Mac's: its keychains, cloud drives, apps' data and every browser's profiles.
                 "Library",
+                // The user's own apps, which run outside any wall.
+                "Applications",
                 // Keys and sign-ins.
                 ".ssh",
                 ".aws",
@@ -455,6 +461,11 @@ mod tests {
             "/srv/ilo/Tasks/task-1",
             "work",
             "/Users/sam/Documents/../.ssh",
+            "/Applications",
+            "/Applications/Utilities",
+            "/Users/sam/Applications",
+            "/opt",
+            "/opt/homebrew",
         ] {
             assert!(never_grantable(Path::new(folder), &never), "{folder}");
         }

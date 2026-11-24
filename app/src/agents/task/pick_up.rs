@@ -511,6 +511,7 @@ impl Agents {
         };
         // Its run ends first, so nothing writes the conversation back.
         task.process = None;
+        self.remove_copies(agent, cx);
         let task = agent.to_string();
         self.remove_kept(
             move |record| record.task.as_deref() == Some(task.as_str()),
@@ -529,16 +530,34 @@ impl Agents {
         self.tasks.kept.forget(agent);
     }
 
+    /// ilo's copies of the files attached to `agent`'s task go with its conversation, off the
+    /// UI's thread, as they may be large: nothing can take its reply that would read them.
+    fn remove_copies(&mut self, agent: &str, cx: &mut Context<Self>) {
+        if let Some(task) = self.task_mut(agent) {
+            task.files.attached = None;
+        }
+        let copies = self.attached_dir(agent);
+        cx.background_spawn(async move { _ = std::fs::remove_dir_all(copies) })
+            .detach();
+    }
+
     /// Settings › Agents' Remove All: every finished task's conversation goes, and those an
     /// earlier try couldn't remove are tried again. A task still at work keeps its own, as its
     /// assistant is writing it; a finished one's run ends first, so nothing writes it back.
     pub fn remove_kept_tasks(&mut self, cx: &mut Context<Self>) {
         let mut working = Vec::new();
+        let mut over = Vec::new();
         for task in &mut self.tasks.tasks {
             match ended(task) {
-                true => task.process = None,
+                true => {
+                    task.process = None;
+                    over.push(task.agent.clone());
+                }
                 false => working.push(task.agent.clone()),
             }
+        }
+        for agent in &over {
+            self.remove_copies(agent, cx);
         }
         self.remove_kept(
             move |record| !(record.task.as_ref()).is_some_and(|task| working.contains(task)),

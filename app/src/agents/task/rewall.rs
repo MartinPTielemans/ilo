@@ -132,7 +132,7 @@ pub struct Came {
 impl Task {
     /// Keeps what came of a wall that wasn't put up, after the messages and steps the task has
     /// now.
-    fn rewalled(&mut self, what: Rewalled) {
+    pub(in crate::agents) fn rewalled(&mut self, what: Rewalled) {
         self.rewalled.push(Came {
             after: self.messages.len(),
             traced: self.trace.len(),

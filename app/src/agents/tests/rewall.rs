@@ -1194,4 +1194,64 @@ mod copying {
         assert!(!copies(&run, &agent, cx).exists(), "the copies stayed");
         _ = std::fs::remove_dir_all(folder);
     }
+
+    /// At the start the folder is checked again by its real path: one moved, or reached through a
+    /// link, since the panel gave it isn't given, and the task starts without it, its line saying so
+    /// by the name the user saw (X6). Its files still go.
+    #[gpui::test]
+    fn a_folder_that_isnt_itself_at_the_start_is_left_out_and_said(cx: &mut TestAppContext) {
+        let real = real_folder("linked-real");
+        let link = real.with_file_name(format!("linked-{}", std::process::id()));
+        _ = std::fs::remove_file(&link);
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let moved = real_folder("moved");
+        std::fs::remove_dir(&moved).unwrap();
+        for (case, folder) in [("link", link.clone()), ("moved", moved)] {
+            let (run, walls, agent) = picked(&format!("not-itself-{case}"), folder.clone(), cx);
+            cx.run_until_parked();
+            run.ran(1);
+            assert_eq!(walls.asked(), [(Tier::Work, false, true)], "{case}");
+            let name = crate::agents::files::shown_name(&folder);
+            let left = LeftOut::Folder(name.into());
+            assert_eq!(
+                lines(&run, &agent, cx),
+                [IloKind::StartedWithout { left }],
+                "{case}"
+            );
+            let started = tier::started_logged(
+                Tier::Work,
+                tier::StartedWith {
+                    files: 1,
+                    left_out: true,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(logged(&run, &agent, cx), [started], "{case}");
+            assert_eq!(in_use(&run, cx), [], "{case}");
+        }
+        _ = std::fs::remove_file(link);
+        _ = std::fs::remove_dir_all(real);
+    }
+
+    /// ilo's copies of a finished task's files go with its conversation, on Remove and on Remove All.
+    #[gpui::test]
+    fn a_finished_tasks_copies_go_on_remove_and_remove_all(cx: &mut TestAppContext) {
+        for all in [false, true] {
+            let folder = real_folder(&format!("removed-{all}"));
+            let (run, _, agent) = picked(&format!("copies-removed-{all}"), folder.clone(), cx);
+            cx.run_until_parked();
+            run.ran(1);
+            let copies = copies(&run, &agent, cx);
+            let made = std::fs::read_dir(&copies).map_or(0, |copied| copied.count());
+            assert_eq!(made, 1, "no copy made");
+            run.finish(&agent, cx);
+            (run.agents).update(cx, |agents, cx| match all {
+                true => agents.remove_kept_tasks(cx),
+                false => agents.remove_kept_task(&agent, cx),
+            });
+            cx.run_until_parked();
+            assert!(!copies.exists(), "Remove All {all} left the copies");
+            _ = std::fs::remove_dir_all(folder);
+        }
+    }
 }

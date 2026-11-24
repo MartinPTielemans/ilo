@@ -11,7 +11,7 @@ use gpui::{
 
 use crate::agents::task::{Card, Dot};
 use crate::agents::tier::Tier;
-use crate::command_bar::PLACEHOLDER_TEXT;
+use crate::command_bar::{Given, PLACEHOLDER_TEXT};
 use crate::shell::{
     Folders, Page, ROW_HEIGHT, SECONDARY, Shell, Slot,
     empty::{FADE, MARK_HEIGHT, composer::group_top},
@@ -1247,7 +1247,10 @@ fn files_and_a_folder_are_chips_in_the_field_and_go_with_the_start(cx: &mut Test
         cx.update(|_, cx| {
             let bar = shell.read(cx).resting.as_ref().unwrap().bar.read(cx);
             (bar.given().iter())
-                .map(|given| format!("{given:?}"))
+                .map(|given| match given {
+                    Given::Files(count) => format!("Files {count}"),
+                    Given::Folder(name) => format!("Folder {name}"),
+                })
                 .collect::<Vec<_>>()
         })
     };
@@ -1258,7 +1261,7 @@ fn files_and_a_folder_are_chips_in_the_field_and_go_with_the_start(cx: &mut Test
     cx.run_until_parked();
     assert_eq!(
         given(&shell, cx),
-        [r#"Files("2 files")"#, r#"Folder("Lakeside walk")"#],
+        ["Files 2 files", "Folder Lakeside walk"],
         "each file once, by count, then the folder by its name"
     );
 
@@ -1266,12 +1269,12 @@ fn files_and_a_folder_are_chips_in_the_field_and_go_with_the_start(cx: &mut Test
     cx.run_until_parked();
     assert_eq!(
         given(&shell, cx),
-        [r#"Files("2 files")"#],
+        ["Files 2 files"],
         "⌫ at the start took the folder off first"
     );
     cx.simulate_keystrokes("backspace");
     cx.run_until_parked();
-    assert_eq!(given(&shell, cx), [r#"Files("1 file")"#], "then a file");
+    assert_eq!(given(&shell, cx), ["Files 1 file"], "then a file");
 
     shell.update(cx, |shell, cx| shell.grant_folder("/".into(), cx));
     let (folder, refused) = shell.read_with(cx, |shell, _| {
@@ -1353,4 +1356,13 @@ fn a_private_window_composes_no_task(cx: &mut TestAppContext) {
         (true, true),
         "⇥ didn't go to Ask in a profile's window"
     );
+}
+
+/// A chip of what the next task is given says its kind alone wherever it's logged: never the
+/// folder's name, nor the count of files (#3656).
+#[test]
+fn a_given_chip_is_logged_by_its_kind_alone() {
+    let folder = Given::Folder("Lakeside walk".into());
+    let files = Given::Files("2 files".into());
+    assert_eq!(format!("{folder:?} {files:?}"), "Folder Files");
 }
