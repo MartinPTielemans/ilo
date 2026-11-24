@@ -239,6 +239,9 @@ impl Shell {
     /// field still drawn with the focus no longer has the keys.
     pub(super) fn page_took_keyboard(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.page_keyboard = Some(window.focused(cx).map(|focused| focused.downgrade()));
+        // The page has it, which Show Tab asked for, or an overlay of the app's does, as Windows'
+        // host says of one: either way it isn't asked again.
+        self.handed_keys = None;
         self.field_let_go(cx);
         // A press in the page ends the agent card's keys there, before any of its keys.
         self.leave_card_keys(cx);
@@ -248,6 +251,9 @@ impl Shell {
     /// comes here, so the note that the page has the keys never outlives them.
     pub(crate) fn take_keyboard(&mut self, cx: &mut App) {
         self.page_keyboard = None;
+        // The keyboard Show Tab asked for the handed page goes with it: the user has gone on in
+        // the UI, and a late show mustn't take it from them.
+        self.handed_keys = None;
         self.browser.focus_ui(cx);
     }
 
