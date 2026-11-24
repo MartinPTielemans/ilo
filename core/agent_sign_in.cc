@@ -748,6 +748,11 @@ class SignIn : public content::WebContentsUserData<SignIn>,
   // address again.
   void Withhold() {
     const bc_id tab = tab_;
+    // A look that found the password counts as a try, forgiven as one is, so text placed in the
+    // page before can't be tested sign-in after sign-in. Finish counts a form that was sent.
+    if (!submitted_) {
+      Tries().Failed(agent_, origin_);
+    }
     WithheldPage::Withhold(GetWebContents(), navigations_);
     Finish(false, BC_AGENT_FAILURE_USER_STEP, kUserStep);
     Hold(tab);

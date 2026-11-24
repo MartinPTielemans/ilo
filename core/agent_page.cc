@@ -837,13 +837,28 @@ void AgentPage::Run() {
     case kCheckSubmitters:
       Submitters();
       return;
-    case kRead:
-      ReadTrees(0, Frames(), 0, {},
+    case kRead: {
+      std::vector<Frame> frames = Frames();
+      std::vector<int> slots;
+      for (const Frame& frame : frames) {
+        slots.push_back(frame.slot);
+      }
+      ReadTrees(0, std::move(frames), 0, {},
                 base::BindOnce(
-                    [](base::WeakPtr<AgentPage> page,
+                    [](base::WeakPtr<AgentPage> page, std::vector<int> slots,
                        std::optional<std::vector<base::ListValue>> trees) {
                       if (!page || !page->job_) {
                         return;
+                      }
+                      // A field holding just what the agent typed tells the look nothing.
+                      for (size_t each = 0; trees && each < trees->size(); ++each) {
+                        std::map<int, std::u16string> typed;
+                        for (const auto& [element, text] : page->typed_) {
+                          if (SlotOfElement(element) == slots[each]) {
+                            typed[NodeOfElement(element)] = text;
+                          }
+                        }
+                        (*trees)[each] = WithoutOwnTyping(std::move((*trees)[each]), typed);
                       }
                       // Posted, as what hears them may end the agent's session with the page.
                       base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
@@ -851,8 +866,9 @@ void AgentPage::Run() {
                           base::BindOnce(std::move(page->job_->trees), std::move(trees)));
                       page->Answer(std::string(), /*error=*/false);
                     },
-                    weak_factory_.GetWeakPtr()));
+                    weak_factory_.GetWeakPtr(), std::move(slots)));
       return;
+    }
     case kStep:
       std::move(job_->step)
           .Run(base::BindOnce(

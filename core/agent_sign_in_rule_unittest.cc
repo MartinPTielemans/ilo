@@ -1,5 +1,7 @@
 #include "browser_core/agent_sign_in_rule.h"
 
+#include "base/strings/utf_string_conversions.h"
+#include "base/values.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -182,6 +184,80 @@ TEST(AgentSignInRule, AnotherOriginsHandBackForgivesNothing) {
   tries.Forgive(url::Origin::Create(GURL("https://login.example.org/")));
   tries.Forgive(url::Origin::Create(GURL("http://shop.example.org/")));
   EXPECT_FALSE(tries.MayTry("claude", Page()));
+}
+
+// A frame's tree as the look after a fill reads it: a text field (DOM node 7) holding |field|
+// with its text under it, the page's own text beside it.
+base::ListValue FieldTree(std::string_view field, std::string_view beside) {
+  base::DictValue text = base::DictValue()
+                             .Set("nodeId", "3")
+                             .Set("role", base::DictValue().Set("value", "StaticText"))
+                             .Set("name", base::DictValue().Set("value", field));
+  return base::ListValue()
+      .Append(base::DictValue()
+                  .Set("nodeId", "1")
+                  .Set("role", base::DictValue().Set("value", "RootWebArea"))
+                  .Set("childIds", base::ListValue().Append("2").Append("4")))
+      .Append(base::DictValue()
+                  .Set("nodeId", "2")
+                  .Set("backendDOMNodeId", 7)
+                  .Set("role", base::DictValue().Set("value", "textbox"))
+                  .Set("value", base::DictValue().Set("value", field))
+                  .Set("childIds", base::ListValue().Append("3")))
+      .Append(std::move(text))
+      .Append(base::DictValue()
+                  .Set("nodeId", "4")
+                  .Set("role", base::DictValue().Set("value", "StaticText"))
+                  .Set("name", base::DictValue().Set("value", beside)));
+}
+
+bool LookFinds(const base::ListValue& nodes, std::u16string_view password) {
+  for (const base::Value& node : nodes) {
+    const base::DictValue& dict = node.GetDict();
+    for (const char* key : {"value.value", "name.value"}) {
+      const std::string* text = dict.FindStringByDottedPath(key);
+      if (text && ShowsPassword(base::UTF8ToUTF16(*text), password)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+TEST(AgentSignInRule, AFieldHoldingExactlyTheAgentsOwnTypingIsLeftOutOfTheLook) {
+  const std::map<int, std::u16string> typed = {{7, u"made-up-guess-4098"}};
+  const base::ListValue nodes =
+      WithoutOwnTyping(FieldTree("made-up-guess-4098", "Welcome"), typed);
+  EXPECT_FALSE(LookFinds(nodes, u"made-up-guess-4098"));
+  // The field stays, without its value, and the page's own text beside it is looked at.
+  ASSERT_EQ(nodes.size(), 3u);
+  EXPECT_FALSE(nodes[1].GetDict().Find("value"));
+  EXPECT_TRUE(LookFinds(WithoutOwnTyping(FieldTree("made-up-guess-4098", "made-up-guess-4098"),
+                                         typed),
+                        u"made-up-guess-4098"));
+}
+
+TEST(AgentSignInRule, AFieldHoldingAnythingElseIsLookedAt) {
+  // The page changed a letter, or added to the agent's text.
+  const std::map<int, std::u16string> typed = {{7, u"made-up-guess-4098"}};
+  EXPECT_TRUE(LookFinds(WithoutOwnTyping(FieldTree("made-up-guess-4099", ""), typed),
+                        u"made-up-guess-4099"));
+  EXPECT_TRUE(LookFinds(WithoutOwnTyping(FieldTree("made-up-guess-4098 ", ""), typed),
+                        u"made-up-guess-4098"));
+  // Another field's typing, or none.
+  EXPECT_TRUE(LookFinds(WithoutOwnTyping(FieldTree("made-up-guess-4098", ""),
+                                         {{8, u"made-up-guess-4098"}}),
+                        u"made-up-guess-4098"));
+  EXPECT_TRUE(LookFinds(WithoutOwnTyping(FieldTree("made-up-guess-4098", ""), {}),
+                        u"made-up-guess-4098"));
+}
+
+TEST(AgentSignInRule, OnlyAFieldIsLeftOutForTheAgentsTyping) {
+  // Text that isn't a field's, at a node the agent once typed in, is the page's.
+  base::ListValue nodes = FieldTree("made-up-guess-4098", "");
+  nodes[1].GetDict().Set("role", base::DictValue().Set("value", "generic"));
+  EXPECT_TRUE(LookFinds(WithoutOwnTyping(std::move(nodes), {{7, u"made-up-guess-4098"}}),
+                        u"made-up-guess-4098"));
 }
 
 TEST(AgentSignInRule, AWithheldPageIsWithheldWhereverItComesBackFrom) {

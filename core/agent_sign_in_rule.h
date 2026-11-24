@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "base/values.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -82,6 +83,13 @@ bool SendsElsewhere(const std::vector<std::pair<std::string, std::string>>& attr
 // or more shows in any text holding it. A shorter one, which ordinary words hold by chance, shows
 // only as all of a text, spaces around it aside.
 bool ShowsPassword(std::u16string_view text, std::u16string_view password);
+
+// A frame's accessibility tree for the look after a fill, as Accessibility.getFullAXTree gives its
+// nodes, without the agent's own typing: a field whose value is still exactly what the agent's last
+// type left in it, by its DOM node's id in |typed|, loses its value and the nodes under it, where
+// Chromium puts that text again. The agent knows that text, so it tells the look nothing; anything
+// else in the field, even a letter the page changed, is looked at.
+base::ListValue WithoutOwnTyping(base::ListValue nodes, const std::map<int, std::u16string>& typed);
 
 // A tab's pages withheld from agents as they showed what a sign-in filled, for the tab's life: the
 // page held then, the commit of any navigation under way as it was, and later any page at one of

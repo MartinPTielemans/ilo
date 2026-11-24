@@ -261,6 +261,7 @@ source_set("agent_sign_in_rule") {
     "agent_sign_in_rule.h",
   ]
   deps = [
+    ":ax_text",
     "//base",
     "//net",
     "//url",

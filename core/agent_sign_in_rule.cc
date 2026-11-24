@@ -2,10 +2,13 @@
 
 #include <iterator>
 #include <set>
+#include <vector>
 
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/strings/utf_string_conversions.h"
+#include "browser_core/ax_text.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -136,6 +139,61 @@ bool ShowsPassword(std::u16string_view text, std::u16string_view password) {
     return text.find(password) != std::u16string_view::npos;
   }
   return base::TrimWhitespace(text, base::TRIM_ALL) == password;
+}
+
+base::ListValue WithoutOwnTyping(base::ListValue nodes, const std::map<int, std::u16string>& typed) {
+  if (typed.empty()) {
+    return nodes;
+  }
+  std::map<std::string, base::DictValue*> by_id;
+  std::vector<base::DictValue*> own;
+  for (base::Value& node : nodes) {
+    base::DictValue* dict = node.GetIfDict();
+    if (!dict) {
+      continue;
+    }
+    if (const std::string* id = dict->FindString("nodeId")) {
+      by_id[*id] = dict;
+    }
+    const std::optional<int> backend = dict->FindInt("backendDOMNodeId");
+    const auto left = backend ? typed.find(*backend) : typed.end();
+    if (left == typed.end() || !IsField(*dict)) {
+      continue;
+    }
+    const std::optional<std::string> value = ValueOf(*dict);
+    if (value && base::UTF8ToUTF16(*value) == left->second) {
+      own.push_back(dict);
+    }
+  }
+  std::set<std::string> under;
+  std::vector<std::string> steps;
+  const auto children_of = [&steps](const base::DictValue& node) {
+    if (const base::ListValue* children = node.FindList("childIds")) {
+      for (const base::Value& child : *children) {
+        if (const std::string* id = child.GetIfString()) {
+          steps.push_back(*id);
+        }
+      }
+    }
+  };
+  for (base::DictValue* field : own) {
+    children_of(*field);
+    field->Remove("value");
+  }
+  while (!steps.empty()) {
+    std::string id = std::move(steps.back());
+    steps.pop_back();
+    const auto found = by_id.find(id);
+    if (found != by_id.end() && under.insert(id).second) {
+      children_of(*found->second);
+    }
+  }
+  nodes.EraseIf([&under](const base::Value& node) {
+    const base::DictValue* dict = node.GetIfDict();
+    const std::string* id = dict ? dict->FindString("nodeId") : nullptr;
+    return id && under.contains(*id);
+  });
+  return nodes;
 }
 
 WithheldHistory::WithheldHistory() = default;
