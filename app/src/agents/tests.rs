@@ -11340,6 +11340,7 @@ mod notes;
 mod rewall;
 mod sign_ins;
 mod uploads;
+mod went_to;
 
 /// An agent's http:// is never one the user typed (#2417): open_tab and navigate hand the core the
 /// address as the agent wrote it through `open_tab` and `navigate`, bc_agent_open_tab's and

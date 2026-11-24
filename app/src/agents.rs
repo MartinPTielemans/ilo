@@ -4154,6 +4154,7 @@ impl Agents {
         else {
             return;
         };
+        self.went_to(entry, tab, cx);
         // What it did, as a look again for the text it waits for says it too.
         let did_note = note.clone();
         if !opened_tabs.is_empty() {
@@ -4428,15 +4429,42 @@ impl Agents {
     /// `note`. A call that brought no entry of its own (0) marks none: the log's last entry may
     /// be another call's, as calls on different tabs are under way at once.
     fn log_notes(&mut self, entry: u64, note: &notes::Note) {
-        let found = (self.log.iter_mut().rev())
+        if let Some(found) = self.logged_mut(entry) {
+            found.notes = note.name.into();
+        }
+    }
+
+    /// The log's entry `entry`, a call's or a run's step's, or None for 0, a call with none.
+    fn logged_mut(&mut self, entry: u64) -> Option<&mut Activity> {
+        (self.log.iter_mut().rev())
             .flat_map(|each| match each.id == entry {
                 true => vec![each],
                 false => each.steps.iter_mut().collect(),
             })
-            .find(|each| entry != 0 && each.id == entry);
-        if let Some(found) = found {
-            found.notes = note.name.into();
+            .find(|each| entry != 0 && each.id == entry)
+    }
+
+    /// Names the log's entry `entry`, a navigate's, a back's or a forward's the core let go, by
+    /// the site `tab` is on now that its page has answered: the host of the address the core has
+    /// for it, never one the agent wrote, and never the site it left. Once, so a call that looks
+    /// at its page again keeps the name its first answer gave it.
+    fn went_to(&mut self, entry: u64, tab: u64, cx: &mut Context<Self>) {
+        let site = site(&self.browser.tab(tab, cx).url);
+        let Some(found) = (self.logged_mut(entry)).filter(|found| {
+            goes(&found.action) && found.site.is_empty() && found.refused.is_empty()
+        }) else {
+            return;
+        };
+        if site.is_empty() {
+            return;
         }
+        found.site = site.clone().into();
+        // What the agent is doing says where too, unless it has done something else since.
+        let (agent, did) = (found.agent.to_string(), tools::describe(&found.action));
+        if (self.doing.get(&agent)).is_some_and(|doing| doing.as_ref() == did) {
+            self.doing.insert(agent, format!("{did} · {site}").into());
+        }
+        cx.notify();
     }
 
     /// `note`, what an action did, then the tab's latest outline as `show` says, which is the
@@ -4694,7 +4722,12 @@ impl Agents {
         cx: &mut Context<Self>,
     ) -> bool {
         let checked = self.may_act(agent, tab, action, cx);
-        let site = site(&self.browser.tab(tab, cx).url);
+        // A tab that's let go somewhere is named by where it went, which only the core's answer
+        // knows (`went_to`): the site it's on now is the one it leaves. One refused stays there.
+        let site = match checked.is_ok() && goes(logged) {
+            true => String::new(),
+            false => site(&self.browser.tab(tab, cx).url),
+        };
         let refused = checked.as_ref().err().map_or(String::new(), |refused| {
             self.log_words(tab, &refused.why, cx)
         });
@@ -5660,6 +5693,11 @@ pub fn random_token() -> String {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).expect("the system has no random numbers");
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Whether `action` takes a tab to another page, so that the log names where it went.
+fn goes(action: &str) -> bool {
+    matches!(action, "navigate" | "back" | "forward")
 }
 
 /// A URL's host, without "www.", for the log. Only a web page's host names its site: another
