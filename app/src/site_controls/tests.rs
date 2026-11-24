@@ -705,6 +705,23 @@ fn a_value_chosen_sets_the_permission(cx: &mut TestAppContext) {
     );
 }
 
+/// Escape goes to the topmost layer (#4108): a value's menu over the panel, closed with Escape
+/// (no choice), closes alone, and the next Escape closes the panel.
+#[gpui::test]
+fn escape_in_a_values_menu_closes_the_menu_and_the_next_the_panel(cx: &mut TestAppContext) {
+    let mut panel = Panel::new(cx, site());
+    panel.calls();
+    panel.host.answer.set(None);
+    panel.click(line(1));
+    assert_eq!(
+        panel.calls(),
+        ["menu Allow*, Block, Ask"],
+        "the panel closed with its menu"
+    );
+    panel.keys("escape");
+    assert_eq!(panel.calls(), ["release", "stop", "hide"]);
+}
+
 fn device(name: &str, removable: bool) -> Device {
     Device {
         name: name.to_owned().into(),
