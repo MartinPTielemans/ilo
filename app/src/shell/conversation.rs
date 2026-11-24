@@ -841,7 +841,7 @@ impl TalkView {
                     ));
                     (trace.items.iter())
                         .filter_map(|item| match item {
-                            TraceItem::Step(step) | TraceItem::Helper(step) => Some(step),
+                            TraceItem::Step(step) | TraceItem::Helper { step, .. } => Some(step),
                             TraceItem::Said(_) => None,
                         })
                         .collect()
@@ -1552,10 +1552,19 @@ impl TalkView {
         for (index, item) in trace.items.iter().enumerate() {
             nest = match item {
                 TraceItem::Step(step) => nest.children(self.step(step, true, look, cx)),
-                // A helper's line is a step's, without the live line's Take Over, which is the
-                // one page's the task stands on.
-                TraceItem::Helper(step) => {
-                    nest.children(self.step_line(step, true, false, look, cx))
+                // A helper's line has no Take Over, which is the one page's the task stands on.
+                // Named by its task, it says that name and its page's word; else it's its step's.
+                TraceItem::Helper { step, name, tab } => {
+                    let page = tab.and_then(|tab| look.helper_page(tab));
+                    match helper_line(step, name, page) {
+                        Some(mut line) => {
+                            line.shimmers = step.running.then(|| look.shimmer(self.made));
+                            self.crossfade(Fold::Step(step.key), &mut line, look);
+                            let line = trace_line(look, line).into_any_element();
+                            nest.child(risen(line, self.motion.came(Key::Step(step.key)), look))
+                        }
+                        None => nest.children(self.step_line(step, true, false, look, cx)),
+                    }
                 }
                 TraceItem::Said(text) => {
                     let said = div()
@@ -1647,7 +1656,7 @@ impl TalkView {
             shown.lines.iter().any(|line| match line {
                 Line::Trace(trace) => {
                     let under_way = |item: &TraceItem| match item {
-                        TraceItem::Step(step) | TraceItem::Helper(step) => step.running,
+                        TraceItem::Step(step) | TraceItem::Helper { step, .. } => step.running,
                         TraceItem::Said(_) => false,
                     };
                     trace.running
@@ -2463,6 +2472,8 @@ type WordsDrawn = Rc<RefCell<HashMap<usize, (Bounds<Pixels>, gpui::TextLayout)>>
 struct TraceLine {
     key: LineKey,
     glyph: Option<&'static str>,
+    /// A page's favicon, in its glyph's place: a helper's line's (#4102).
+    icon: Option<Arc<Image>>,
     /// ilo's mark, the first word of its title, and the display face's family it's set in, which
     /// makes it one of ilo's lines: its glyph and words in ilo's ink and size, its words wrapping
     /// under its mark.
@@ -2491,6 +2502,7 @@ impl TraceLine {
         TraceLine {
             key: key.into(),
             glyph: None,
+            icon: None,
             mark: None,
             highlights: Vec::new(),
             words_drawn: None,
@@ -2530,6 +2542,25 @@ impl TraceLine {
     }
 }
 
+/// A helper's line where its task named it (#4102): its page's favicon, that name, and at its end
+/// its page's word, the one its row in the sidebar ends with. Where the page has no favicon, its
+/// step's glyph. Nothing on it is the helper's own text or what it found. None for a helper its
+/// task gave no name, whose line is its step's.
+fn helper_line(
+    step: &TraceStep,
+    name: &SharedString,
+    page: Option<&HelperPage>,
+) -> Option<TraceLine> {
+    if name.is_empty() {
+        return None;
+    }
+    let word = page.map_or("", |page| page.word);
+    let mut line = TraceLine::new(Fold::Step(step.key), name.clone(), word.into());
+    line.icon = page.and_then(|page| page.favicon.clone());
+    line.glyph = line.icon.is_none().then_some(step.glyph);
+    Some(line)
+}
+
 /// A stretch's summary line: its title and what it counts, joined as one string.
 fn summary_line(trace: &Trace) -> TraceLine {
     let (title, counted) = trace.summary();
@@ -2560,6 +2591,7 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
     let TraceLine {
         key,
         glyph,
+        icon,
         mark,
         highlights,
         words_drawn,
@@ -2722,6 +2754,14 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
                 .hover(move |style| style.bg(palette.plate(TRACE_HOVER)))
         })
         .children(glyph.map(|glyph| first(glyph.into_any_element())))
+        .children(icon.map(|icon| {
+            first(
+                img(icon)
+                    .flex_none()
+                    .size(px(TRACE_GLYPH))
+                    .into_any_element(),
+            )
+        }))
         .map(|line| {
             let note = noted.then(|| {
                 first(
@@ -2771,6 +2811,8 @@ struct Look {
     now: Instant,
     still: bool,
     asked_favicon: Option<Arc<Image>>,
+    /// The pages its helpers' lines are of (#4102).
+    helper_pages: Vec<HelperPage>,
     /// A page watched is going back into its picture over it, which hides what's under it.
     behind: bool,
     /// The conversation stands beside the page it watches (`Shell::talk_beside`).
@@ -2779,7 +2821,19 @@ struct Look {
     standing: bool,
 }
 
+/// What a helper's line shows of its page: its favicon, and the word its row in the sidebar ends
+/// with.
+struct HelperPage {
+    tab: u64,
+    favicon: Option<Arc<Image>>,
+    word: &'static str,
+}
+
 impl Look {
+    fn helper_page(&self, tab: u64) -> Option<&HelperPage> {
+        self.helper_pages.iter().find(|page| page.tab == tab)
+    }
+
     /// How far through its pass the shimmer is, or None under Reduce Motion.
     fn shimmer(&self, since: Instant) -> Option<f32> {
         (!self.still).then(|| ((self.now - since).as_secs_f32() / SHIMMER_PERIOD).fract())
@@ -2793,6 +2847,34 @@ impl Shell {
             .find(|tab| tab.page.url.as_ref() == url)
             .and_then(|tab| tab.favicon.clone())
     }
+
+    /// What `agent`'s task's helpers' lines show of their pages, `tabs`: each one's favicon and
+    /// its word, as the task's group in the sidebar has them. None for a task with no card.
+    fn helper_pages(&self, agent: &SharedString, tabs: Vec<u64>) -> Vec<HelperPage> {
+        let Some(card) = self.task_cards.iter().find(|card| card.agent == *agent) else {
+            return Vec::new();
+        };
+        let page = |tab: u64| HelperPage {
+            tab,
+            favicon: self.tabs.get(&tab).and_then(|tab| tab.favicon.clone()),
+            word: self.page_word(card, tab).label(),
+        };
+        tabs.into_iter().map(page).collect()
+    }
+}
+
+/// The tabs of the helpers `lines` name.
+fn helper_tabs(lines: &[Line]) -> Vec<u64> {
+    let traces = lines.iter().filter_map(|line| match line {
+        Line::Trace(trace) => Some(&trace.items),
+        _ => None,
+    });
+    (traces.flatten())
+        .filter_map(|item| match item {
+            TraceItem::Helper { tab, .. } => *tab,
+            _ => None,
+        })
+        .collect()
 }
 
 impl Render for TalkView {
@@ -2804,6 +2886,8 @@ impl Render for TalkView {
             .as_ref()
             .and_then(|shown| shown.page.as_ref())
             .map(|page| page.url.clone());
+        let helpers =
+            (self.shown.as_ref()).map_or_else(Vec::new, |shown| helper_tabs(&shown.lines));
         let Some(look) = self.shell.upgrade().map(|shell| {
             let shell = shell.read(cx);
             let asked_favicon = asked.and_then(|url| shell.favicon_at(&url));
@@ -2812,6 +2896,7 @@ impl Render for TalkView {
                 now,
                 still,
                 asked_favicon,
+                helper_pages: shell.helper_pages(&self.agent, helpers),
                 behind: shell.task_page_going_back(),
                 beside: shell.talk_beside,
                 standing: shell.task_standing(),
