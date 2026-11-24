@@ -648,6 +648,18 @@ impl Shell {
         cx.notify();
     }
 
+    /// The window is about to close, which its pages may still refuse (#4202): a task's page
+    /// watched goes back to the conversation first, as the core shows the task's Space while one
+    /// is, and the session keeps for the window the Space the core shows. The conversation stays.
+    pub(super) fn unwatch_to_close(&mut self, cx: &mut Context<Self>) {
+        // One on its way back into its thumbnail too, as ⌘T takes it.
+        let page = (self.task_area.as_ref()).is_some_and(|area| area.page.is_some());
+        if page {
+            self.leave_task_page_now(cx);
+            self.take_keyboard(cx);
+        }
+    }
+
     /// Lays the page out for the area as it is, then has the core show the Space's page again, if
     /// it showed a task's: out of the window behind the conversation, at the card's size.
     fn show_users_page(&mut self, cx: &mut Context<Self>) {
@@ -706,7 +718,8 @@ impl Shell {
     /// The page's own commands act on the task's page in place, the window's leave the area as it
     /// is, and the rest act on the user's Space, so they leave the area first: the core shows
     /// the user's Space again before a tab opens in it. Quit leaves it once its quit is decided
-    /// (commands.rs), so the session keeps the user's Space and Cancel keeps the view.
+    /// (commands.rs), so the session keeps the user's Space and Cancel keeps the view. Close
+    /// Window keeps the conversation, which only the window's close takes (`unwatch_to_close`).
     pub(super) fn run_in_task_area(
         &mut self,
         command: Command,
@@ -796,12 +809,13 @@ impl Shell {
             // cleared, leave the user where they were (#4202).
             | Command::Quit
             | Command::ClearArchive
+            // The core asks the window's pages before it closes, and theirs is the same Cancel.
+            | Command::CloseWindow
             // The agent's card shows over the area as over the user's Space.
             | Command::FocusAgentQuestion
             // The ring goes to the task shown, at the foot: its pages' rows are there only while
             // its view is.
             | Command::FocusSidebar => return false,
-            // Close Window too, so the session keeps the user's Space for the window.
             _ => {
                 self.leave_task_area(cx);
                 return false;

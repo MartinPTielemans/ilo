@@ -1580,6 +1580,7 @@ impl Shell {
             Command::CloseWindow => {
                 // As ⌘W does, from a window of Chrome's it closes that one.
                 if !self.browser.close_other_window(cx) {
+                    self.unwatch_to_close(cx);
                     self.browser.close_window(cx);
                 }
                 return;

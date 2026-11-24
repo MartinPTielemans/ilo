@@ -609,6 +609,46 @@ fn quit_leaves_the_tasks_view_until_the_quit_is_decided(cx: &mut TestAppContext)
     assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
 }
 
+/// ⇧⌘W with a task's view shown leaves its conversation standing: the close is the core's, which
+/// asks the window's pages first, and their Cancel leaves the window as it was (#4202). A page of
+/// the task's watched goes back to the conversation before the close, so the core shows the
+/// user's Space again, which the session keeps for the window.
+#[gpui::test]
+fn close_window_leaves_the_tasks_conversation(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    let view = conversation(cx);
+    shell.update(cx, |shell, cx| shell.open_task(3, view, cx));
+    draw(&shell, cx);
+    host.take();
+    shell.update(cx, |shell, cx| shell.run(Command::CloseWindow, "ui", cx));
+    assert!(host.take().contains(&"close window".to_string()));
+    // Cancel is the core never saying the window closed.
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, None)),
+        "the view closed before the page's answer"
+    );
+    assert!(
+        host.shown.borrow().is_empty(),
+        "the core was shown a Space it already showed"
+    );
+
+    watching(&shell, &host, cx);
+    shell.update(cx, |shell, cx| shell.run(Command::CloseWindow, "ui", cx));
+    assert!(host.take().contains(&"close window".to_string()));
+    assert_eq!(
+        *host.shown.borrow(),
+        [1],
+        "the window closed with the core showing the task's Space"
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, None)),
+        "the conversation went with the page watched"
+    );
+}
+
 /// Clear Archive with a task's view shown leaves it standing: with nothing to clear, while it
 /// asks, and once the archive is cleared (#4202).
 #[gpui::test]
