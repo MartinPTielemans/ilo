@@ -1475,6 +1475,9 @@ pub struct Shell {
     beside_frames: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
     /// The plates the sidebar's buttons with a tooltip were last drawn in, by their command.
     button_frames: Rc<RefCell<HashMap<&'static str, Bounds<Pixels>>>>,
+    /// The sidebar button whose press ended its tooltip, by its command, which asks for none until
+    /// the pointer has left it: GPUI calls a held button left, and at the release hovered again.
+    tip_pressed: Cell<Option<&'static str>>,
     /// The icon slots the Library's Space cards were last drawn with, by Space, for their
     /// tooltips and the icon picker to hang from.
     slot_frames: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
@@ -2172,6 +2175,7 @@ impl Shell {
             #[cfg(test)]
             beside_frames: Rc::default(),
             button_frames: Rc::default(),
+            tip_pressed: Cell::default(),
             slot_frames: Rc::default(),
             brush_frames: Rc::default(),
             card_press_closes: false,
