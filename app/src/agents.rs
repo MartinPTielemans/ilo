@@ -283,7 +283,8 @@ pub trait Browser {
     /// `tab`'s title and URL, as the user sees them.
     fn shown(&self, tab: u64, cx: &App) -> TabInfo;
     /// Whether `tab`'s title and address are withheld from agents (bc_tab_withheld_from_agents):
-    /// while the core signs it in, and while it shows a page a sign-in withheld.
+    /// while the core signs it in, from a fill or the user's hold until the page's next look, and
+    /// while it shows a withheld page.
     fn withheld(&self, tab: u64) -> bool;
     /// `tab`'s title and URL as agents, and all the app keeps or shows of them, may have them:
     /// neither of a withheld tab, which is said to be withheld in its title's place.
@@ -1695,13 +1696,20 @@ impl Agents {
                 ToolResult::noted(text, notes)
             }
             // The page's one look found it showing what a password field held (the core's
-            // AgentPage::Freeze), which withholds it: the core's refusal, in its words.
+            // AgentPage::Freeze), which withholds it: the core's refusal, in its words, and the
+            // call's one entry in the log is that refusal.
             (None, _, _) if self.browser.withheld(id) => {
                 match self.browser.may_act(&agent, id, "read_page", cx) {
-                    Err((failure, why)) => ToolResult {
-                        kind: failure.kind(),
-                        ..ToolResult::error(why)
-                    },
+                    Err((failure, why)) => {
+                        let logged = self.log_words(id, &why, cx);
+                        if let Some(found) = self.entry_mut(entry) {
+                            found.refused = logged.into();
+                        }
+                        ToolResult {
+                            kind: failure.kind(),
+                            ..ToolResult::error(why)
+                        }
+                    }
                     Ok(()) => ToolResult::error(NO_PAGE),
                 }
             }
@@ -4777,15 +4785,19 @@ impl Agents {
     /// `note`. A call that brought no entry of its own (0) marks none: the log's last entry may
     /// be another call's, as calls on different tabs are under way at once.
     fn log_notes(&mut self, entry: u64, note: &notes::Note) {
-        let found = (self.log.iter_mut().rev())
+        if let Some(found) = self.entry_mut(entry) {
+            found.notes = note.name.into();
+        }
+    }
+
+    /// The log's entry `entry`, a call's or a run's step's, or none for 0.
+    fn entry_mut(&mut self, entry: u64) -> Option<&mut Activity> {
+        (self.log.iter_mut().rev())
             .flat_map(|each| match each.id == entry {
                 true => vec![each],
                 false => each.steps.iter_mut().collect(),
             })
-            .find(|each| entry != 0 && each.id == entry);
-        if let Some(found) = found {
-            found.notes = note.name.into();
-        }
+            .find(|each| entry != 0 && each.id == entry)
     }
 
     /// `note`, what an action did, then the tab's latest outline as `show` says, which is the

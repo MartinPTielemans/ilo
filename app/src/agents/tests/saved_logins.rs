@@ -374,6 +374,15 @@ fn a_read_the_pages_look_withholds_answers_the_cores_refusal(cx: &mut TestAppCon
     let refused = answer.recv().unwrap();
     assert!(refused.error);
     assert_eq!(refused.text, WITHHELD_REFUSAL);
+    // The call's one entry is the refusal.
+    let reads: Vec<Activity> = agents.read_with(cx, |agents, _| {
+        (agents.activity("claude-code"))
+            .filter(|entry| entry.action == "read_page")
+            .cloned()
+            .collect()
+    });
+    assert_eq!(reads.len(), 1, "{reads:?}");
+    assert_eq!(reads[0].refused.as_ref(), WITHHELD_REFUSAL);
 
     browser.withheld.borrow_mut().remove(&20);
     let answer = call(

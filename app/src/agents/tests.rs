@@ -17,9 +17,9 @@ use super::*;
 /// The core's refusal of a tab the user holds.
 const HELD: &str = "The user has this tab until they hand it back. Ask for it with ask_for_tab.";
 
-/// The core's refusal of an act on a page a sign-in withheld (kWithheldPageRefusal).
-const WITHHELD_REFUSAL: &str =
-    "This tab's page shows what ilo filled when signing in. Go to another page first.";
+/// The core's refusal of an act on a page ilo withholds (kWithheldPageRefusal).
+const WITHHELD_REFUSAL: &str = "ilo won't give you this tab's page: it may show what a password \
+     field on it held. Go to another page in this tab, or work in your other tabs.";
 
 /// The user's Space 1 with the tab 10, on Wikipedia, and Claude Code's Space 2 with the tab 20, on
 /// example.com, once it has one.
