@@ -34,6 +34,9 @@ __weak NSWindow* g_had_keyboard;
 bool g_give_back;
 // Bumped by each show and hide, so a show posted before a hide doesn't put the menu back.
 unsigned g_showing;
+// The button whose press the menu took, or -1. A press outside closes the menu and goes no
+// further, and the menu is hidden by the time that button comes up.
+NSInteger g_press_taken = -1;
 
 enum Pointer { kMoved, kPressed, kRightPressed, kReleased, kScrolled };
 
@@ -74,6 +77,32 @@ void Dismiss(bool give_back) {
 
 NSEvent* Track(NSEvent* event) {
   if (!g_shown) {
+    // The rest of a click whose press the menu took goes no further either: a page that heard
+    // the release, or the drag before it, would have half of the click that closed the menu.
+    switch (event.type) {
+      case NSEventTypeLeftMouseDown:
+      case NSEventTypeRightMouseDown:
+      case NSEventTypeOtherMouseDown:
+        g_press_taken = -1;
+        break;
+      case NSEventTypeLeftMouseUp:
+      case NSEventTypeRightMouseUp:
+      case NSEventTypeOtherMouseUp:
+        if (event.buttonNumber == g_press_taken) {
+          g_press_taken = -1;
+          return nil;
+        }
+        break;
+      case NSEventTypeLeftMouseDragged:
+      case NSEventTypeRightMouseDragged:
+      case NSEventTypeOtherMouseDragged:
+        if (event.buttonNumber == g_press_taken) {
+          return nil;
+        }
+        break;
+      default:
+        break;
+    }
     return event;
   }
   if (event.type == NSEventTypeKeyDown) {
@@ -115,6 +144,12 @@ NSEvent* Track(NSEvent* event) {
     at = [event.window convertPointToScreen:at];
   }
   const bool taken = g_pointer(kind, at.x - NSMinX(g_frame), NSMaxY(g_frame) - at.y);
+  if (kind == kPressed || kind == kRightPressed) {
+    g_press_taken = taken ? event.buttonNumber : -1;
+  } else if (kind == kReleased && event.buttonNumber == g_press_taken) {
+    g_press_taken = -1;
+    return nil;
+  }
   return taken ? nil : event;
 }
 
