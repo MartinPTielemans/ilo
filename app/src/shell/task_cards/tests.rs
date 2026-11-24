@@ -17,7 +17,7 @@ use crate::shell::{
     recorder::Recorder,
 };
 
-fn card(n: u64, dot: Dot) -> Card {
+pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
     Card {
         agent: format!("task-{n}").into(),
         home: 1,
@@ -1427,4 +1427,19 @@ fn an_ended_task_keeps_its_group_while_it_has_pages_open(cx: &mut TestAppContext
     shell.update(cx, |shell, cx| shell.set_task_cards(working(&[1020]), cx));
     shell.update(cx, |shell, cx| shell.set_task_cards(working(&[]), cx));
     assert!(folds(&shell, cx).is_empty());
+}
+
+/// A task asked from ⌘T over a page leaves the page: its card comes in at the foot, and no view
+/// takes the page's place.
+#[gpui::test]
+fn a_task_asked_over_a_page_leaves_the_page(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shell_with(cx, Vec::new());
+    shell.update(cx, |shell, cx| {
+        shell.set_task_cards(cards(&[(1, Dot::Working)]), cx)
+    });
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.talk_agent(), None, "a view took the page's place");
+        assert_eq!(shell.selected, 10, "the page went");
+        assert_eq!(shell.task_cards.len(), 1, "no card came in");
+    });
 }

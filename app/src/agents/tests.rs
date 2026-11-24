@@ -8248,8 +8248,32 @@ mod tasks {
                 .filter(|entry| entry.action.as_ref() == crate::agents::access::ACCESS_ACTION)
                 .map(|entry| entry.target.to_string())
                 .collect();
-            assert_eq!(logged, ["Starts at Work on pages · 2 pages"]);
+            assert_eq!(logged, ["Started at Work on pages · 2 pages"]);
         });
+    }
+
+    /// The pages the user added reach the task each on a line of its own under the sentence, so an
+    /// address's comma or bracket is never read as the sentence's.
+    #[test]
+    fn each_added_address_is_a_line_of_its_own() {
+        use crate::agents::task::{added_address, with_added};
+        let pages: Vec<String> = ["https://a.example/x,y", "https://b.example/(z).)"]
+            .into_iter()
+            .map(|url| added_address(url).expect("an address the task may get"))
+            .collect();
+        let first = with_added("Plan a walk".into(), &pages);
+        assert_eq!(
+            first,
+            "Plan a walk\n\nPages I added, to open in tabs of your own:\n\
+             https://a.example/x,y\nhttps://b.example/(z).)"
+        );
+        for page in &pages {
+            assert!(
+                first.lines().any(|line| line == page),
+                "{page} on a line of its own"
+            );
+        }
+        assert_eq!(with_added("Plan a walk".into(), &[]), "Plan a walk");
     }
 
     /// An added page's address reaches the task without the user name and password a tab's

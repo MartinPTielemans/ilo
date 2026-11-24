@@ -17,7 +17,7 @@
 mod glyph;
 mod motion;
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;
 
 use std::cell::{Cell, RefCell};
 use std::cmp::Reverse;
@@ -652,7 +652,12 @@ impl Shell {
                 log!("browser: task card {} titled {}", card.agent, card.title);
             }
         }
-        let fresh = |card: &&Card| !self.task_cards.iter().any(|old| old.agent == card.agent);
+        let was: Vec<SharedString> = self
+            .task_cards
+            .iter()
+            .map(|card| card.agent.clone())
+            .collect();
+        let fresh = |card: &&Card| !was.contains(&card.agent);
         let ran = self
             .foot
             .groups
@@ -693,6 +698,19 @@ impl Shell {
             && self.task_cards.iter().any(|card| card.agent == agent)
         {
             self.show_task(agent, cx);
+        }
+        // The composer's ↩ shows the task it started, as its Space has no page to stay on; ⌘T's
+        // ask over a page leaves the page, and its card comes in at the foot.
+        if let Some(home) = self.show_started
+            && let Some(card) = self
+                .task_cards
+                .iter()
+                .find(|card| card.home == home && !was.contains(&card.agent))
+        {
+            self.show_started = None;
+            if self.selected == 0 && self.space() == home && self.talk_agent().is_none() {
+                self.show_task(card.agent.clone(), cx);
+            }
         }
         cx.notify();
     }
