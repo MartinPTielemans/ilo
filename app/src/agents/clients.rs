@@ -34,6 +34,15 @@ impl Client {
     /// The clients under Apps that connect.
     pub const APPS: [Client; 3] = [Client::ClaudeCode, Client::Codex, Client::Other];
 
+    /// The CLI that is this client, which Your assistant's row looks for.
+    pub fn cli(self) -> Option<super::runner::Cli> {
+        match self {
+            Client::ClaudeCode => Some(super::runner::Cli::Claude),
+            Client::Codex => Some(super::runner::Cli::Codex),
+            Client::Other | Client::Command => None,
+        }
+    }
+
     /// The id of its agent, which its Space and the core know it by.
     pub fn id(self) -> &'static str {
         match self {

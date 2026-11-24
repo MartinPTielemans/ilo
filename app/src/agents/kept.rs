@@ -132,9 +132,11 @@ pub const fn keeps(cli: Cli) -> Keeps {
 }
 
 /// What a new run of `cli` keeps. `wanted` is why it would be kept at all: today Settings ›
-/// Agents' switch alone. The runner is told only what comes of it, never the reason.
-pub fn decide(cli: Cli, wanted: bool) -> Keep {
-    match (keeps(cli), wanted) {
+/// Agents' switch alone. A `walled` run, a task's with files, keeps nothing whatever is wanted:
+/// its assistant can't write where it keeps conversations. The runner is told only what comes
+/// of it, never the reason.
+pub fn decide(cli: Cli, wanted: bool, walled: bool) -> Keep {
+    match (keeps(cli), wanted && !walled) {
         (Keeps::WhenWanted, true) => Keep::New(Id::new()),
         (Keeps::WhenWanted, false) | (Keeps::Never, _) => Keep::Nothing,
     }
@@ -238,15 +240,11 @@ pub struct Record {
     pub profile: String,
     /// Why its task has nowhere to work, if it hasn't, so it takes no reply.
     pub nowhere: Option<Nowhere>,
-    /// The access the task last ended at.
-    pub tier: Tier,
     /// The assistant no longer has it: a reply found none.
     pub gone: bool,
     /// The user's replies that took the task up again, each by how many messages of theirs came
     /// before it and the access it came back at: ilo's line goes over each.
     pub resumed: Vec<(usize, Tier)>,
-    /// Whether its log says, at its foot, where the conversation lives: the profile's first.
-    pub told: bool,
     /// Its removal is under way.
     removing: bool,
     /// Its removal failed: it's still there, for the user to try again.
@@ -259,8 +257,6 @@ pub struct Kept {
     records: Vec<Record>,
     /// Settings › Agents' Keep finished tasks, off.
     pub off: bool,
-    /// Whether a task's log has said where its conversation lives, which one says once.
-    pub told: bool,
     /// The tasks whose conversation was removed from under them, as Remove All does: each had
     /// one, where a task that started with the switch off never did, and the two say so apart.
     removed_from: Vec<String>,
@@ -307,10 +303,8 @@ impl Kept {
             past: None,
             profile: profile.to_string(),
             nowhere: None,
-            tier: Tier::default(),
             gone: false,
             resumed: Vec::new(),
-            told: false,
             removing: false,
             stuck: false,
         });

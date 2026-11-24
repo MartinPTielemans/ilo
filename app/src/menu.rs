@@ -36,8 +36,6 @@ pub const LIGHT_FILL: u32 = (crate::tokens::palette::OVERLAY_LIGHT << 8) | 0xff;
 
 /// A release this close to the press that opened the menu leaves it open, as a click.
 const DRAG_SLOP: f32 = 4.;
-/// The safe triangle ends after the pointer rests this long in it.
-const SAFE_TIMEOUT: Duration = Duration::from_millis(300);
 
 /// The colours of one look, 0xRRGGBBAA, which capture's menu shares.
 pub struct Palette {
@@ -790,7 +788,7 @@ impl Tracking {
     }
 
     /// The pointer moved to `at` at `now`. Returns whether it's resting in the safe triangle, for
-    /// `rested` to be called once SAFE_TIMEOUT has passed.
+    /// `rested` to be called once SUBMENU_REST has passed.
     pub(crate) fn moved(&mut self, at: Point<Pixels>, now: Instant) -> bool {
         if let Some(press) = self.press.as_mut() {
             press.get_or_insert(at);
@@ -810,13 +808,14 @@ impl Tracking {
         false
     }
 
-    /// The pointer has rested since its last move: in the safe triangle for SAFE_TIMEOUT, what's
+    /// The pointer has rested since its last move: in the safe triangle for SUBMENU_REST, what's
     /// under it takes the highlight. Returns how much longer it has to rest when that's not yet:
     /// a timer can fire a little early, as Windows' do by up to a clock tick (#2158).
     pub(crate) fn rested(&mut self, now: Instant) -> Option<Duration> {
         let rested = now.duration_since(self.resting?);
-        if rested < SAFE_TIMEOUT {
-            return Some(SAFE_TIMEOUT - rested);
+        let rest = Duration::from_secs_f32(SUBMENU_REST);
+        if rested < rest {
+            return Some(rest - rested);
         }
         self.resting = None;
         if let Some(at) = self.pointer {
@@ -1474,7 +1473,7 @@ impl ContextMenu {
     /// highlight.
     fn wait_for_rest(&mut self, cx: &mut Context<Self>) {
         self._rest = Some(cx.spawn(async move |menu, cx| {
-            let mut wait = SAFE_TIMEOUT;
+            let mut wait = Duration::from_secs_f32(SUBMENU_REST);
             loop {
                 cx.background_executor().timer(wait).await;
                 let more = menu.update(cx, |menu, cx| {

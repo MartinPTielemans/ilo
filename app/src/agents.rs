@@ -1147,7 +1147,6 @@ impl Agents {
         .collect();
         self.tasks_off = tasks.get("on").and_then(Value::as_bool) == Some(false);
         self.tasks.kept.off = tasks.get("keep").and_then(Value::as_bool) == Some(false);
-        self.tasks.kept.told = tasks.get("kept_told").and_then(Value::as_bool) == Some(true);
         // The conversations kept for the tasks of a run before go, as its tasks went (#4105): now
         // that the assistants found are known, as each removes its own.
         self.take_old_kept(cx);
@@ -1199,7 +1198,7 @@ impl Agents {
         self.notify
     }
 
-    /// Settings › Agents' When to notify.
+    /// Settings › Agents' Notify.
     pub fn set_notify(&mut self, notify: crate::needs_you::Notify, cx: &mut Context<Self>) {
         self.notify = notify;
         self.save();
@@ -1290,13 +1289,24 @@ impl Agents {
     }
 
     /// The clients Settings › Agents lists: those found here, any connected, whose Disconnect
-    /// stays though the client has gone, and any other MCP client.
+    /// stays though the client has gone, and any other MCP client. A client whose CLI Your
+    /// assistant's look found is here though its files aren't, as where CLAUDE_CONFIG_DIR moves
+    /// them, so Any MCP client's line never calls it missing beside its row saying it's signed in.
     pub fn listed(&self) -> Vec<Client> {
+        let ran = |client: Client| {
+            client.cli().is_some_and(|cli| {
+                !matches!(
+                    self.found(cli),
+                    ready::Ready::NotFound | ready::Ready::Unknown
+                )
+            })
+        };
         (Client::APPS.into_iter())
             .filter(|client| {
                 *client == Client::Other
                     || self.found.contains(client)
                     || self.is_connected(*client)
+                    || ran(*client)
             })
             .collect()
     }
@@ -5113,7 +5123,6 @@ impl Agents {
             "models": models,
             "found": found,
             "keep": !self.tasks.kept.off,
-            "kept_told": self.tasks.kept.told,
             "notify": self.notify.id(),
         });
         let saved = json!({
@@ -5742,7 +5751,7 @@ pub fn ago(at: SystemTime, now: SystemTime) -> String {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// Whether the agent with the id `agent` runs a task the user asked from ⌘T (Agent task).
 pub fn is_task(agent: &str) -> bool {

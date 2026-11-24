@@ -1376,8 +1376,9 @@ impl Browser for Fake {
         _: Option<Bounds<Pixels>>,
         cx: &mut App,
     ) {
-        // No command bar here: a new tab opens at once.
-        if editing.is_some() {
+        // No command bar here: a new tab opens at once. PREVIEW_BAR's bar is ⌘T's, up already
+        // when the shell's command asks for it, so there is nothing to open.
+        if editing.is_some() || command_bar::is_open(cx) {
             return;
         }
         let tab = self.next_id.get();
@@ -2264,6 +2265,36 @@ fn preview_profiles() -> Vec<(u64, SharedString)> {
 
 /// PREVIEW_APPEARANCE=light or =dark draws the window as if the system's appearance were that,
 /// as a headless session has none to switch.
+/// The assistants' rows for PREVIEW_ONBOARDING_ASSISTANTS, and the one marked.
+fn onboarding_assistants(
+    state: &str,
+) -> Option<(
+    Vec<(
+        browser::agents::runner::Cli,
+        browser::agents::sign_in::Shown,
+    )>,
+    Option<browser::agents::runner::Cli>,
+)> {
+    use browser::agents::ready::Ready;
+    use browser::agents::runner::Cli;
+    use browser::agents::sign_in::{Row, shown};
+    let ([claude, codex], plan, marked) = match state {
+        "checking" => ([Ready::Unknown, Ready::Unknown], None, None),
+        "start" => ([Ready::SignedOut, Ready::NotFound], None, None),
+        "signed-in" => (
+            [Ready::SignedIn, Ready::SignedIn],
+            Some("Plus"),
+            Some(Cli::Claude),
+        ),
+        _ => return None,
+    };
+    let rows = vec![
+        (Cli::Claude, shown(Cli::Claude, claude, None, &Row::Idle)),
+        (Cli::Codex, shown(Cli::Codex, codex, plan, &Row::Idle)),
+    ];
+    Some((rows, marked))
+}
+
 fn preview_tone() -> Option<Tone> {
     match states::var("PREVIEW_APPEARANCE").ok()?.as_str() {
         "light" => Some(Tone::Light),
@@ -3164,6 +3195,13 @@ fn main() {
                         if parts.next() == Some("on") {
                             shell.onboarding_count_on(cx);
                         }
+                        // PREVIEW_ONBOARDING_ASSISTANTS=checking, =start or =signed-in gives
+                        // the assistants' step its rows in each state they read.
+                        let assistants = states::var("PREVIEW_ONBOARDING_ASSISTANTS").ok();
+                        if let Some(rows) = assistants.as_deref().and_then(onboarding_assistants) {
+                            let (rows, marked) = rows;
+                            shell.onboarding_show_assistants(rows, marked, cx);
+                        }
                         // PREVIEW_ONBOARDING_PICK=<n> picks the nth swatch at the color step.
                         let pick = std::env::var("PREVIEW_ONBOARDING_PICK").ok();
                         if let Some(index) = pick.and_then(|pick| pick.parse().ok()) {
@@ -3251,6 +3289,14 @@ fn main() {
                 let top = y as f32 + command_bar::centered_top(height as f32);
                 let at = point(px(left as f32), px(top));
                 preview_bar(&mode, at, cx);
+                // The bar is ⌘T's, so the shell runs ⌘T's command as it does in the app and New
+                // Tab's row has the plate under it: a frame without it differs from the app in
+                // what a look is judged by (#4091).
+                if let Some(shell) = shell_window {
+                    shell
+                        .update(cx, |shell, _, cx| shell.run(Command::NewTab, "preview", cx))
+                        .ok();
+                }
             }
             if account.as_deref() == Some("approve") {
                 if !DIALOG_OPEN.replace(true) {

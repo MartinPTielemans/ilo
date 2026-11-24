@@ -117,13 +117,15 @@ pub(super) fn page_chip_keyed(
 }
 
 /// Sends the windows' `shells` what the Agents show as they change: their status, the task cards,
-/// the tasks in the Archive and, to a window showing a task's conversation, that conversation, as
-/// `conversation` makes it for the task's agent. Each is made before any shell changes, since making one reads its pages
+/// the tasks in the Archive, those of them a run before left that Latest tasks lists (`kept`) and,
+/// to a window showing a task's conversation, that conversation, as `conversation` makes it for
+/// the task's agent. Each is made before any shell changes, since making one reads its pages
 /// from a shell (the core's `Browser::tab`), which can't be read while it's being changed.
 pub fn send_agents(
     status: Vec<Status>,
     cards: Vec<Card>,
     archived: Vec<ArchivedTask>,
+    kept: Vec<Card>,
     conversation: impl Fn(&str, &gpui::App) -> Option<Conversation>,
     shells: &[WeakEntity<Shell>],
     cx: &mut gpui::App,
@@ -140,6 +142,7 @@ pub fn send_agents(
         shell.update(cx, |shell, cx| {
             shell.set_agent_status(status.clone(), cx);
             shell.set_archived_tasks(archived.clone(), cx);
+            shell.set_kept_cards(kept.clone(), cx);
             shell.set_task_cards(cards.clone(), cx);
             // Only a window that still shows the task's conversation is sent it.
             if let Some((agent, made)) = talk
@@ -275,12 +278,31 @@ impl Shell {
         self.talk.as_ref()?.view.read(cx).thumb(tab)
     }
 
+    /// Where the conversation shown drew its reply field, for a test outside this file.
+    #[cfg(test)]
+    pub(super) fn reply_drawn(&self, cx: &gpui::App) -> Option<Bounds<Pixels>> {
+        self.talk.as_ref()?.view.read(cx).reply_drawn.get()
+    }
+
     /// The task whose conversation is kept for `space`'s area.
     pub(super) fn talk_in(&self, space: u64) -> Option<SharedString> {
         self.talk
             .as_ref()
             .filter(|talk| talk.space == space)
             .map(|talk| talk.agent.clone())
+    }
+
+    /// The task whose conversation is kept had no Space of its own, as one a run before left has
+    /// none until its run opens a page, and its card has one the window knows now: the Space.
+    pub(super) fn talk_takes_space(&mut self) -> Option<u64> {
+        let talk = self.talk.as_mut().filter(|talk| talk.space == 0)?;
+        let card = (self.task_cards.iter()).find(|card| card.agent == talk.agent)?;
+        let space = card.space;
+        let known = space != 0 && self.task_spaces.iter().any(|each| each.id == space);
+        known.then(|| {
+            talk.space = space;
+            space
+        })
     }
 
     /// The card's click: its conversation in the page area, or, shown already, the Space's tab
@@ -299,6 +321,48 @@ impl Shell {
     pub fn show_needed_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
         if self.talk_agent().as_ref() != Some(&agent) {
             self.show_task(agent, cx);
+        }
+    }
+
+    /// The tasks a run before left that haven't been brought back, the last to end first, each
+    /// with the user's Space of its profile for its home (`Agents::kept_cards`). They have no card
+    /// at the foot, which is for what's live or was opened in this run. A private window, which
+    /// offers no tasks, lists none.
+    pub fn set_kept_cards(&mut self, mut cards: Vec<Card>, cx: &mut Context<Self>) {
+        if self.one_space() {
+            cards.clear();
+        }
+        if cards != self.kept_cards {
+            self.kept_cards = cards;
+            cx.notify();
+        }
+    }
+
+    /// The composer's Latest tasks, at most `most`: the tasks the user talks to here, the newest
+    /// first, then those a run before left in the profile in front, which no other profile's
+    /// Space lists, as one comes back only in its own.
+    pub(super) fn latest_tasks(&self, most: usize) -> Vec<Card> {
+        let profile = |space: u64| {
+            let space = self.spaces.iter().find(|each| each.id == space);
+            space.map(|space| space.profile)
+        };
+        let here = self.shown_space().map(|space| space.profile);
+        let kept =
+            (self.kept_cards.iter()).filter(|card| here.is_some() && profile(card.home) == here);
+        (self.task_cards.iter())
+            .filter(|card| card.replies)
+            .chain(kept)
+            .take(most)
+            .cloned()
+            .collect()
+    }
+
+    /// A click on a card of Latest tasks: one a run before left comes back from the Archive with
+    /// its conversation open, as its row there brings it; any other shows its conversation.
+    pub(super) fn open_latest(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+        match self.kept_cards.iter().any(|card| card.agent == agent) {
+            true => self.restore_archived_task(agent, cx),
+            false => self.show_task(agent, cx),
         }
     }
 
@@ -1429,17 +1493,19 @@ impl TalkView {
             nest = match item {
                 TraceItem::Step(step) => nest.children(self.step(step, true, look, cx)),
                 // A helper's line has no Take Over, which is the one page's the task stands on.
-                // Named by its task, it says that name and its page's word; else it's its step's.
                 TraceItem::Helper { step, name, tab } => {
                     let page = tab.and_then(|tab| look.helper_page(tab));
-                    match helper_line(step, name, page) {
-                        Some(mut line) => {
+                    match helper_row(step, name, page) {
+                        HelperRow::Known(mut line) => {
                             line.shimmers = step.running.then(|| look.shimmer(self.made));
                             self.crossfade(Fold::Step(step.key), &mut line, look);
                             let line = trace_line(look, line).into_any_element();
                             nest.child(risen(line, self.motion.came(Key::Step(step.key)), look))
                         }
-                        None => nest.children(self.step_line(step, true, false, look, cx)),
+                        HelperRow::Step => {
+                            nest.children(self.step_line(step, true, false, look, cx))
+                        }
+                        HelperRow::Nothing => nest,
                     }
                 }
                 TraceItem::Said(text) => {
@@ -2443,20 +2509,41 @@ impl TraceLine {
     }
 }
 
-/// A helper's line where its task named it (#4102): its page's favicon, that name, and at its end
-/// its page's word, the one its row in the sidebar ends with. Where the page has no favicon, its
-/// step's glyph. Nothing on it is the helper's own text or what it found. None for a helper its
-/// task gave no name, whose line is its step's.
+/// What a helper's item draws.
+enum HelperRow {
+    /// Its own line: the words it's known by, then its page's word.
+    Known(TraceLine),
+    /// Its step's line, as it's known by no words of its own.
+    Step,
+    /// No line yet: it has no name, no page with a title and no step, so it would be a glyph
+    /// alone. Its stretch's count is all that shows it until it has its first words.
+    Nothing,
+}
+
+fn helper_row(step: &TraceStep, name: &SharedString, page: Option<&HelperPage>) -> HelperRow {
+    match helper_line(step, name, page) {
+        Some(line) => HelperRow::Known(line),
+        None if step.title.is_empty() => HelperRow::Nothing,
+        None => HelperRow::Step,
+    }
+}
+
+/// The line of a helper known by words of its own (#4102): the name its task gave it, or with
+/// none its page's title, as the page's row in the sidebar says it. Its page's word follows, as
+/// that row ends, and its page's favicon stands in its step's glyph's place, which a page without
+/// one keeps. Nothing on it is the helper's own text or what it found. None for one with neither
+/// a name nor a titled page.
 fn helper_line(
     step: &TraceStep,
     name: &SharedString,
     page: Option<&HelperPage>,
 ) -> Option<TraceLine> {
-    if name.is_empty() {
-        return None;
-    }
+    let known = match name.is_empty() {
+        false => name.clone(),
+        true => (page.map(|page| page.title.clone())).filter(|title| !title.is_empty())?,
+    };
     let word = page.map_or("", |page| page.word);
-    let mut line = TraceLine::new(Fold::Step(step.key), name.clone(), word.into());
+    let mut line = TraceLine::new(Fold::Step(step.key), known, word.into());
     line.icon = page.and_then(|page| page.favicon.clone());
     line.glyph = line.icon.is_none().then_some(step.glyph);
     Some(line)
@@ -2722,10 +2809,11 @@ struct Look {
     standing: bool,
 }
 
-/// What a helper's line shows of its page: its favicon, and the word its row in the sidebar ends
-/// with.
+/// What a helper's line shows of its page: its title, which a helper its task gave no name is
+/// known by, its favicon, and the word its row in the sidebar ends with.
 struct HelperPage {
     tab: u64,
+    title: SharedString,
     favicon: Option<Arc<Image>>,
     word: &'static str,
 }
@@ -2757,6 +2845,8 @@ impl Shell {
         };
         let page = |tab: u64| HelperPage {
             tab,
+            title: (self.tabs.get(&tab))
+                .map_or_else(SharedString::default, |tab| tab.title.clone()),
             favicon: self.tabs.get(&tab).and_then(|tab| tab.favicon.clone()),
             word: self.page_word(card, tab).label(),
         };
