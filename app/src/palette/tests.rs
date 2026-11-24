@@ -101,10 +101,19 @@ fn failures_over(
         check(name, on(palette.text(1.), &shown), TEXT);
     }
     check("unselected title", on(palette.text(0.78), &grained), TEXT);
+    // A dark window's plate under the pointer tells from the window first, and its title reads
+    // what that leaves: 4.5, at More 4.2, and on a Space's colour, fitted to 4.5 on the bare
+    // window, 3.6 (`a_plate_under_the_pointer_tells_and_its_title_reads_at_every_level`).
+    let under_the_pointer = match (tone, theme, transparency()) {
+        (Tone::Light, ..) => TEXT,
+        (Tone::Dark, Some(_), _) => 3.6,
+        (Tone::Dark, None, Transparency::More) => 4.2,
+        (Tone::Dark, None, _) => TEXT,
+    };
     check(
         "title on hovered plate",
         on(palette.text(0.78), &laid(palette.hovered_row())),
-        TEXT,
+        under_the_pointer,
     );
     check(
         "URL host on field",
@@ -1414,6 +1423,10 @@ fn reduce_transparency_holds_the_windows_text_at_every_level() {
 /// shaded grounds and all: the lighter of the two by 1.15:1 at every point of the window. With no
 /// shade they're 1.18:1 apart at worst, at More over white, where a hovered plate shaded less than
 /// the selected one ended the lighter (#4090).
+///
+/// A dark window at More is the one place it doesn't hold: there a plate under the pointer has
+/// to tell from a bright window at 1.2:1, the selected one, held to its title's 4.5:1, tells
+/// less, and over a white backdrop the pointer's is the lighter, by under 1.08:1.
 #[test]
 fn the_selected_plate_reads_apart_from_the_hovered_one_at_every_level() {
     const APART: f32 = 1.15;
@@ -1423,12 +1436,14 @@ fn the_selected_plate_reads_apart_from_the_hovered_one_at_every_level() {
             let palette = Palette::of(None, tone);
             let selected = Rgba::from(palette.selected(0.));
             let hovered = Rgba::from(palette.hovered_row());
+            let bright = (tone, level) == (Tone::Dark, Transparency::More);
             for at in fine_window(&palette) {
                 let (selected, hovered) =
                     (over(at, selected, selected.a), over(at, hovered, hovered.a));
+                let apart = luminance(selected) > luminance(hovered)
+                    && contrast(selected, hovered) >= APART;
                 assert!(
-                    luminance(selected) > luminance(hovered)
-                        && contrast(selected, hovered) >= APART,
+                    apart || (bright && contrast(selected, hovered) < 1.08),
                     "{tone:?} {level:?}: {:06x} beside {:06x}",
                     hex(selected),
                     hex(hovered)
@@ -1730,6 +1745,38 @@ fn a_plate_under_the_pointer_tells_and_its_title_reads_at_every_level() {
             assert!(
                 read >= TEXT,
                 "{level:?} {theme:?} light: its title reads {read:.2}"
+            );
+        }
+    }
+}
+
+/// A sidebar row's plate under the pointer on a dark window is the plate anything has under the
+/// pointer there, with a Space's colour and with none, at every level, so a row's and a card's at
+/// the sidebar's foot are one form and what the test above holds of one it holds of the other. A
+/// light window's row keeps the ink at its own fainter step.
+#[test]
+fn a_rows_plate_under_the_pointer_is_the_one_a_card_has_on_a_dark_window() {
+    use crate::tokens::shell::LIGHT_HOVERED;
+    let themes = grid(
+        &[0., 60., 120., 180., 240., 300.],
+        &[0.4, 1.],
+        &[0.2, 0.45, 0.8],
+        &[crate::theme::DEFAULT_INTENSITY],
+    );
+    for level in Transparency::ALL {
+        set_transparency(level);
+        for theme in themes.iter().map(Some).chain([None]) {
+            let dark = Palette::of(theme, Tone::Dark);
+            assert_eq!(
+                dark.hovered_row(),
+                dark.hovered_plate(),
+                "{level:?} {theme:?}"
+            );
+            let light = Palette::of(theme, Tone::Light);
+            assert_eq!(
+                light.hovered_row(),
+                light.ground_plate(Ground::Hovered, LIGHT_HOVERED),
+                "{level:?} {theme:?}"
             );
         }
     }

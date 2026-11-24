@@ -438,8 +438,8 @@ pub struct Palette {
     /// Each ground's shade, by `Ground`: the least step of the tint's colour over its plate at
     /// which the ink reads on it in every state, worked out with the palette.
     pub ground_shades: [f32; Ground::ALL.len()],
-    /// The shade of a plate under the pointer that isn't a row's: a row's, or as much of it as
-    /// leaves the plate telling from the window.
+    /// The shade of a dark window's plate under the pointer: what its text asks, or as much of
+    /// it as leaves the plate telling from the window.
     pub pointed_shade: f32,
 }
 
@@ -707,8 +707,9 @@ impl Palette {
             .unwrap_or(1.)
     }
 
-    /// The shade of a plate under the pointer that isn't a row's: a row's there, or as much of
-    /// it, in finer steps, as leaves the plate telling from every point of the window. Where the
+    /// The shade of a dark window's plate under the pointer: the least at which the ink reads on
+    /// it beside the selected row's (`Ground::Hovered`), or as much of that, in finer steps, as
+    /// leaves the plate telling from every point of the window. Where the
     /// window is bright, at More or in a Space's colour, the two pull apart, and the plate is
     /// seen first: its title, under the pointer alone, reads what that leaves it. A light
     /// window's takes none.
@@ -1034,18 +1035,19 @@ impl Palette {
         Hsla::from(self.ink).opacity(alpha)
     }
 
-    /// A sidebar row's plate under the pointer, the only one a row has but the tab shown's.
+    /// A sidebar row's plate under the pointer, the only one a row has but the tab shown's: on a
+    /// dark window the plate anything has under the pointer, so a row's and a card's are one and
+    /// both are seen; on a light one the ink at a row's fainter step.
     pub fn hovered_row(&self) -> Hsla {
-        let alpha = match self.tone {
-            Tone::Dark => crate::tokens::shell::HOVERED,
-            Tone::Light => crate::tokens::shell::LIGHT_HOVERED,
-        };
-        self.ground_plate(Ground::Hovered, alpha)
+        match self.tone {
+            Tone::Dark => self.hovered_plate(),
+            Tone::Light => self.ground_plate(Ground::Hovered, crate::tokens::shell::LIGHT_HOVERED),
+        }
     }
 
-    /// Any other plate under the pointer over the window, a card's at the sidebar's foot or a
-    /// form's row: the ink at the ladder's step in both looks, and on a dark window with the
-    /// shade a row's plate takes there, so what's written on it reads however much of a bright
+    /// A plate under the pointer over the window, a sidebar row's on a dark window, a card's at
+    /// the sidebar's foot or a form's row: the ink at the ladder's step in both looks, and on a
+    /// dark window with the shade that makes what's written on it read however much of a bright
     /// window comes through, held to what leaves the plate itself to be seen (`solve_pointed`).
     pub fn hovered_plate(&self) -> Hsla {
         self.shaded(
