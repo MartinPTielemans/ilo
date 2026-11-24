@@ -6,6 +6,11 @@
 /// opens Settings there by this name (settings::show_row).
 pub const ACCESS: &str = "Access";
 
+/// The level's menu's rows for where a task may go: every site, the default, or only the sites of
+/// the pages the user added to it.
+pub const ANY_SITE: &str = "Any site";
+pub const ONLY_ADDED: &str = "Only the sites you add";
+
 /// Settings › Agents' line under its name, the one place it says what a task never gets.
 pub const NEVER_GETS: &str = "A task never gets passwords, cookies or your other tabs.";
 

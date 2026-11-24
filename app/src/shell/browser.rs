@@ -1034,6 +1034,9 @@ pub trait Browser {
     fn settings(&self, cx: &mut App);
     /// Opens the Settings window on Agents' Off limits list, scrolled to it.
     fn off_limits(&self, _cx: &mut App) {}
+    /// Opens the Settings window on Agents' Access group, which explains each level: the level
+    /// menu's Settings….
+    fn agent_access(&self, _cx: &mut App) {}
     /// Opens the Settings window on its Shortcuts tab.
     fn shortcuts(&self, cx: &mut App);
     /// Opens the Settings window on its About tab.

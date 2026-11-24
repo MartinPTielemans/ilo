@@ -1946,6 +1946,8 @@ chip-ink = 0.6
 chip-size = 12.0
 chip-glyph = 14.0
 chip-chevron = 10.0
+# A chip's menu hangs 4 under it, its names under the chip's word (the names-only drawing).
+menu-drop = 4.0
 # "Recent tasks", 600 wide, 14 semibold on an 18 line in full ink, 34 under the line and 12 over
 # the cards, 4 in.
 label-width = 600.0

@@ -343,6 +343,72 @@ fn pick(shell: &Entity<Shell>, tier: Tier, cx: &mut VisualTestContext) {
     shell.update(cx, |shell, cx| shell.pick_tier(tier, cx));
 }
 
+/// The level's menu shows names only: the levels, where the task may go, and Settings, which opens
+/// Settings › Agents at Access. Only the sites you add waits for a page the user added. It hangs
+/// 4 under the chip, its names under the chip's word.
+#[gpui::test]
+fn the_level_menu_names_the_levels_the_sites_and_settings(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    let chip = shell.read_with(cx, |shell, _| {
+        shell
+            .resting
+            .as_ref()
+            .and_then(|resting| resting.tier_chip.get())
+    });
+    let chip = chip.expect("the level chip drawn on Ask's line");
+    shell.update(cx, |shell, cx| shell.tier_menu(point(px(0.), px(0.)), cx));
+    let titles = host.menus.borrow().last().cloned().expect("a menu shown");
+    let titles: Vec<(String, bool)> = (titles.into_iter())
+        .map(|(title, enabled)| (title.to_string(), enabled))
+        .collect();
+    let row = |title: &str, enabled: bool| (title.to_string(), enabled);
+    assert_eq!(
+        titles,
+        vec![
+            row("Look only", true),
+            row("Work on pages", true),
+            row("Full access", true),
+            row("", false),
+            row("Any site", true),
+            row("Only the sites you add", false),
+            row("", false),
+            row("Settings…", true),
+        ],
+        "the level menu's rows"
+    );
+    let checked: Vec<bool> = host.entries.borrow().iter().map(|e| e.checked).collect();
+    assert_eq!(
+        checked,
+        [false, true, false, false, true, false, false, false],
+        "Work on pages and Any site checked"
+    );
+    let at = host.menu_at.get().expect("where the menu was shown");
+    assert_eq!(
+        at.y,
+        chip.bottom() + px(4.),
+        "the menu hangs 4 under the chip"
+    );
+    assert!(
+        at.x < chip.left(),
+        "the menu's check column sits left of the chip's word"
+    );
+    host.take();
+    cx.update(|_, cx| host.choose("Settings…", cx));
+    assert_eq!(
+        host.take(),
+        vec!["agent access".to_string()],
+        "Settings… opens Access"
+    );
+    assert_eq!(
+        tier(&shell, cx),
+        Tier::Work,
+        "Settings… left the level as it was"
+    );
+}
+
 /// A task starts at the level picked for it, and the next at Work on pages: the pick holds for one
 /// run. The chip shows the level each ↩ starts at.
 #[gpui::test]

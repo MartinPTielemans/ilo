@@ -4,13 +4,15 @@
 //! keys it takes. Nothing of the tasks is read for the page's first frame, and the bar asks the
 //! core nothing until it's typed in.
 
+use std::{cell::Cell, rc::Rc};
+
 use gpui::{
     Bounds, BoxShadow, Context, Entity, FontWeight, Hsla, Pixels, SharedString, Subscription,
-    Window, div, point, prelude::*, px, rgb, rgba, svg,
+    Window, canvas, div, point, prelude::*, px, rgb, rgba, svg,
 };
 
 use crate::agents::task::{Card, Dot};
-use crate::agents::tier::Tier;
+use crate::agents::tier::{ANY_SITE, ONLY_ADDED, Tier};
 use crate::command_bar::{self, CommandBar, InPlaceKey};
 use crate::palette::{Palette, Tone};
 use crate::tokens::shell::composer::*;
@@ -51,6 +53,19 @@ pub(in crate::shell) struct Resting {
     tier: Tier,
     /// The Space the pick was made in.
     space: u64,
+    /// Where the level's chip was last drawn, which its menu hangs from.
+    pub(in crate::shell) tier_chip: Rc<Cell<Option<Bounds<Pixels>>>>,
+}
+
+/// The level's menu's last row, which opens Settings › Agents at Access.
+const SETTINGS: &str = "Settings…";
+
+/// Records where the element it's put in is drawn, for a menu to hang from it.
+fn drawn_at(at: &Rc<Cell<Option<Bounds<Pixels>>>>) -> impl IntoElement {
+    let at = at.clone();
+    canvas(move |bounds, _, _| at.set(Some(bounds)), |_, _, _, _| {})
+        .absolute()
+        .size_full()
 }
 
 impl Shell {
@@ -83,6 +98,7 @@ impl Shell {
             painted: false,
             tier: Tier::default(),
             space,
+            tier_chip: Rc::default(),
         });
         cx.on_next_frame(window, |shell, _, cx| {
             if let Some(resting) = &mut shell.resting {
@@ -172,11 +188,17 @@ impl Shell {
             .unwrap_or_default()
     }
 
-    /// The level chip's menu: the three levels, the one the next task starts at checked and under
-    /// the pointer. A pick holds for the next run only.
-    fn tier_menu(&mut self, position: gpui::Point<gpui::Pixels>, cx: &mut Context<Self>) {
+    /// The level chip's menu, names only: the three levels, the one the next task starts at
+    /// checked; where it may go, which is any site until the composer holds a page the user added;
+    /// and Settings, the one place the levels are explained. A pick holds for the next run only. It
+    /// hangs under the chip, its names under the chip's own word.
+    pub(in crate::shell) fn tier_menu(
+        &mut self,
+        clicked: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
         let current = self.composer_tier();
-        let items: Vec<(MenuEntry, MenuAction)> = (Tier::ALL.into_iter())
+        let mut items: Vec<(MenuEntry, MenuAction)> = (Tier::ALL.into_iter())
             .map(|tier| {
                 let pick: MenuAction = Box::new(move |shell, cx| shell.pick_tier(tier, cx));
                 (
@@ -185,8 +207,23 @@ impl Shell {
                 )
             })
             .collect();
-        let over = Tier::ALL.iter().position(|&tier| tier == current);
-        self.show_menu(items, position, over, cx);
+        let none: fn() -> MenuAction = || Box::new(|_, _| {});
+        items.push((MenuEntry::line(), none()));
+        items.push((MenuEntry::named(ANY_SITE, true).checked(true), none()));
+        items.push((MenuEntry::named(ONLY_ADDED, false), none()));
+        items.push((MenuEntry::line(), none()));
+        let settings: MenuAction = Box::new(|shell, cx| shell.browser.agent_access(cx));
+        items.push((MenuEntry::new(SETTINGS, true), settings));
+        let chip = (self.resting.as_ref()).and_then(|resting| resting.tier_chip.get());
+        let at = match chip {
+            Some(chip) => {
+                let names = crate::menu::PADDING + crate::menu::ROW_X;
+                let names = names + crate::menu::CHECK + crate::menu::GAP;
+                chip.origin + point(px(CHIP_INSET - names), chip.size.height + px(MENU_DROP))
+            }
+            None => clicked,
+        };
+        self.show_menu(items, at, None, cx);
     }
 
     /// The user's pick on the level menu, while the field is in Ask.
@@ -386,6 +423,7 @@ impl Shell {
                 .size(px(size))
                 .text_color(palette.glyph(CHIP_INK))
         };
+        let tier_chip = (self.resting.as_ref()).map(|resting| resting.tier_chip.clone());
         let assistant = (self.resting.as_ref())
             .and_then(|resting| resting.bar.update(cx, |bar, cx| bar.assistant(cx)))
             .map(|agent| match agent.model {
@@ -396,9 +434,11 @@ impl Shell {
             .child(
                 chip()
                     .id("composer-tier")
+                    .relative()
                     .on_click(cx.listener(|shell, event: &gpui::ClickEvent, _, cx| {
                         shell.tier_menu(event.position(), cx)
                     }))
+                    .children(tier_chip.as_ref().map(drawn_at))
                     .child(self.composer_tier().label())
                     .child(glyph("icons/chevron-down.svg", CHIP_CHEVRON)),
             )
