@@ -343,6 +343,261 @@ fn pick(shell: &Entity<Shell>, tier: Tier, cx: &mut VisualTestContext) {
     shell.update(cx, |shell, cx| shell.pick_tier(tier, cx));
 }
 
+/// The level's menu shows names only: the levels, where the task may go, and Settings, which opens
+/// Settings › Agents at Access. Only the sites you add waits for a page the user added. It hangs
+/// 4 under the chip, its names under the chip's word.
+#[gpui::test]
+fn the_level_menu_names_the_levels_the_sites_and_settings(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    let chip = shell.read_with(cx, |shell, _| {
+        shell
+            .resting
+            .as_ref()
+            .and_then(|resting| resting.tier_chip.get())
+    });
+    let chip = chip.expect("the level chip drawn on Ask's line");
+    shell.update(cx, |shell, cx| shell.tier_menu(point(px(0.), px(0.)), cx));
+    let titles = host.menus.borrow().last().cloned().expect("a menu shown");
+    let titles: Vec<(String, bool)> = (titles.into_iter())
+        .map(|(title, enabled)| (title.to_string(), enabled))
+        .collect();
+    let row = |title: &str, enabled: bool| (title.to_string(), enabled);
+    assert_eq!(
+        titles,
+        vec![
+            row("Look only", true),
+            row("Work on pages", true),
+            row("Full access", true),
+            row("", false),
+            row("Any site", true),
+            row("Only the sites you add", false),
+            row("", false),
+            row("Settings…", true),
+        ],
+        "the level menu's rows"
+    );
+    let checked: Vec<bool> = host.entries.borrow().iter().map(|e| e.checked).collect();
+    assert_eq!(
+        checked,
+        [false, true, false, false, true, false, false, false],
+        "Work on pages and Any site checked"
+    );
+    let at = host.menu_at.get().expect("where the menu was shown");
+    assert_eq!(
+        at.y,
+        chip.bottom() + px(4.),
+        "the menu hangs 4 under the chip"
+    );
+    assert!(
+        at.x < chip.left(),
+        "the menu's check column sits left of the chip's word"
+    );
+    host.take();
+    cx.update(|_, cx| host.choose("Settings…", cx));
+    assert_eq!(
+        host.take(),
+        vec!["agent access".to_string()],
+        "Settings… opens Access"
+    );
+    assert_eq!(
+        tier(&shell, cx),
+        Tier::Work,
+        "Settings… left the level as it was"
+    );
+}
+
+/// The assistant's chip names the model the next task starts on, Settings' (Opus here) till the
+/// user picks on its menu: its default first, then the models from Settings' list. The pick starts
+/// that task alone; the next starts on Settings' again, as does a trip out of Ask.
+#[gpui::test]
+fn the_model_chip_picks_for_one_task(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    let chip = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            let resting = shell.resting.as_ref().unwrap();
+            let agent = resting.bar.update(cx, |bar, cx| bar.assistant(cx)).unwrap();
+            super::composer::model_words(
+                &agent,
+                &super::composer::next_model(resting.model.as_ref(), &agent),
+            )
+        })
+    };
+    assert_eq!(
+        chip(&shell, cx),
+        "Claude · Opus",
+        "the chip says Settings' model"
+    );
+    shell.update(cx, |shell, cx| shell.model_menu(point(px(0.), px(0.)), cx));
+    let rows: Vec<String> = (host.entries.borrow().iter())
+        .map(|entry| {
+            format!(
+                "{}{}",
+                entry.title,
+                if entry.checked { " (checked)" } else { "" }
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        ["Claude Code's default", "Opus (checked)", "Sonnet", "Haiku"],
+        "the model menu's rows"
+    );
+    cx.update(|_, cx| host.choose("Haiku", cx));
+    assert_eq!(chip(&shell, cx), "Claude · Haiku", "the chip says the pick");
+    host.take();
+    cx.simulate_input("book a table");
+    cx.simulate_keystrokes("enter");
+    let calls = host.take();
+    assert!(
+        calls.contains(
+            &"start task claude book a table from 1 at Work on pages on \"haiku\"".to_string()
+        ),
+        "the pick didn't reach its task: {calls:?}"
+    );
+    assert_eq!(
+        chip(&shell, cx),
+        "Claude · Opus",
+        "the next task starts on Settings' again"
+    );
+
+    shell.update(cx, |shell, cx| {
+        shell.pick_model("claude".into(), String::new(), cx)
+    });
+    assert_eq!(
+        chip(&shell, cx),
+        "Claude Code's default",
+        "the default picked"
+    );
+    cx.simulate_keystrokes("tab");
+    cx.simulate_keystrokes("tab");
+    assert_eq!(
+        chip(&shell, cx),
+        "Claude · Opus",
+        "out of Ask forgets the pick"
+    );
+}
+
+/// The `+` menu lists the Space's http(s) pages by title (Add a Page's list, a menu of its own till
+/// files and folders join it), and a pick adds one, whose
+/// title shows on Ask's line and whose address alone the task gets; Only the sites you add waits
+/// for one. A second pick takes it off, and the picks go with the run. Files and folders aren't
+/// offered yet.
+#[gpui::test]
+fn add_a_page_gives_the_task_its_address_alone(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    shell.update(cx, |shell, cx| {
+        let page = |url: &str| Page {
+            url: url.into(),
+            ..Page::default()
+        };
+        shell.set_page(1, page("https://fieldbook.example/lakeside"), cx);
+        shell.set_title(1, "The Lakeside loop".into(), cx);
+        shell.set_page(2, page("file:///Users/someone/notes.txt"), cx);
+    });
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    let rows = |host: &Recorder| -> Vec<String> {
+        (host.entries.borrow().iter())
+            .map(|entry| {
+                let under = if entry.parent.is_some() { "  " } else { "" };
+                let on = if entry.checked { " (checked)" } else { "" };
+                let off = if entry.enabled { "" } else { " (off)" };
+                format!("{under}{}{on}{off}", entry.title)
+            })
+            .collect()
+    };
+    shell.update(cx, |shell, cx| shell.tier_menu(point(px(0.), px(0.)), cx));
+    assert!(
+        rows(&host).contains(&"Only the sites you add (off)".to_string()),
+        "Only the sites you add waits for a page"
+    );
+    shell.update(cx, |shell, cx| shell.pages_menu(point(px(0.), px(0.)), cx));
+    assert_eq!(
+        rows(&host),
+        ["The Lakeside loop"],
+        "the + menu lists the Space's web page, and no file"
+    );
+    cx.update(|_, cx| host.choose("The Lakeside loop", cx));
+    shell.update(cx, |shell, cx| shell.pages_menu(point(px(0.), px(0.)), cx));
+    assert_eq!(rows(&host), ["The Lakeside loop (checked)"]);
+    cx.update(|_, cx| host.choose("The Lakeside loop", cx));
+    let added = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.resting.as_ref().unwrap().pages.len())
+    };
+    assert_eq!(added(&shell, cx), 0, "a second pick takes it off");
+
+    shell.update(cx, |shell, cx| {
+        shell.toggle_page(1, cx);
+        shell.tier_menu(point(px(0.), px(0.)), cx);
+    });
+    cx.update(|_, cx| host.choose("Only the sites you add", cx));
+    host.take();
+    cx.simulate_input("find a place to stay");
+    cx.simulate_keystrokes("enter");
+    let calls = host.take();
+    let started = "start task claude find a place to stay from 1 at Work on pages \
+                   with [\"https://fieldbook.example/lakeside\"] only them";
+    assert!(
+        calls.contains(&started.to_string()),
+        "the page's address didn't reach the task: {calls:?}"
+    );
+    assert_eq!(added(&shell, cx), 0, "the pages go with the run");
+    let only = shell.read_with(cx, |shell, _| shell.resting.as_ref().unwrap().only_added);
+    assert!(!only, "the next task may go to any site");
+}
+
+/// A tab's address can carry a user name and password, which the task never gets; a page whose
+/// address is too long to give a task isn't offered.
+#[gpui::test]
+fn an_added_page_carries_no_login_and_a_long_one_isnt_offered(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    let long = format!("https://fieldbook.example/{}", "a".repeat(2048));
+    shell.update(cx, |shell, cx| {
+        let page = |url: &str| Page {
+            url: url.into(),
+            ..Page::default()
+        };
+        shell.set_page(
+            1,
+            page("https://sam:hunter2@fieldbook.example/lakeside"),
+            cx,
+        );
+        shell.set_title(1, "The Lakeside loop".into(), cx);
+        shell.set_page(2, page(&long), cx);
+        shell.set_title(2, "A long one".into(), cx);
+    });
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    shell.update(cx, |shell, cx| shell.pages_menu(point(px(0.), px(0.)), cx));
+    let titles: Vec<String> = (host.entries.borrow().iter())
+        .map(|entry| entry.title.to_string())
+        .collect();
+    assert_eq!(
+        titles,
+        ["The Lakeside loop"],
+        "a page over the cap is offered"
+    );
+    cx.update(|_, cx| host.choose("The Lakeside loop", cx));
+    host.take();
+    cx.simulate_input("find a place to stay");
+    cx.simulate_keystrokes("enter");
+    let started = "start task claude find a place to stay from 1 at Work on pages \
+                   with [\"https://fieldbook.example/lakeside\"]";
+    let calls = host.take();
+    assert!(
+        calls.contains(&started.to_string()),
+        "the task got more than the page's address: {calls:?}"
+    );
+}
+
 /// A task starts at the level picked for it, and the next at Work on pages: the pick holds for one
 /// run. The chip shows the level each ↩ starts at.
 #[gpui::test]

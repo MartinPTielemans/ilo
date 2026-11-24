@@ -208,7 +208,7 @@ fn state_lead(line: &str) -> usize {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum PageWord {
     /// The task works in it now, which Signal's dot before the word says too.
-    Reading,
+    Working,
     Done,
     /// Its task waits for the user here: the page it handed them. In the title's ink, as the
     /// glyph is while the task asks.
@@ -222,7 +222,7 @@ pub(super) enum PageWord {
 impl PageWord {
     pub(super) fn label(self) -> &'static str {
         match self {
-            PageWord::Reading => "Reading",
+            PageWord::Working => "Working",
             PageWord::Done => "Done",
             PageWord::NeedsYou => NEEDS_YOU,
             PageWord::Driving => agent_bar::DRIVING,
@@ -1014,7 +1014,7 @@ impl Shell {
 
     /// What `tab` is to `card`'s task now, of the five words a task's page has: You're driving
     /// where the user took it over, Needs you where its task waits for them at the page it handed
-    /// them, Reading where the task works in it now, Paused where its task waits, stopped or broke
+    /// them, Working where the task works in it now, Paused where its task waits, stopped or broke
     /// off, or went on from a page it handed them, else Done. The row at the sidebar's foot ends
     /// in it and a tile's head line says it, so a page reads the same in both.
     pub(super) fn page_word(&self, card: &Card, tab: u64) -> PageWord {
@@ -1033,7 +1033,7 @@ impl Shell {
                     true => card.pages.len() == 1 || self.agents_at.get(&card.agent) == Some(&tab),
                 };
                 if at {
-                    PageWord::Reading
+                    PageWord::Working
                 } else {
                     PageWord::Done
                 }
@@ -1888,7 +1888,7 @@ impl Shell {
     fn page_row(&self, card: &Card, tab: u64, cx: &mut Context<Self>) -> AnyElement {
         let shown = self.shown_at_foot() == Some(StripStop::Row(tab));
         let word = self.page_word(card, tab);
-        let working = word == PageWord::Reading;
+        let working = word == PageWord::Working;
         let row = div()
             .h(px(PAGE_HEIGHT))
             .flex()
@@ -1936,7 +1936,7 @@ impl Shell {
             .text_size(px(text::SMALL))
             .text_color(match word {
                 PageWord::NeedsYou | PageWord::Driving => self.palette.text(TITLE),
-                PageWord::Reading => self.palette.gray(PAGE_WORD_WORKING),
+                PageWord::Working => self.palette.gray(PAGE_WORD_WORKING),
                 PageWord::Done | PageWord::Paused => self.palette.gray(PAGE_WORD),
             })
             .children(dot)

@@ -106,7 +106,8 @@ use crate::tokens::command_bar::SELECTED_DIM;
 use crate::tokens::command_bar::TITLE;
 use crate::tokens::command_bar::site_colors;
 use crate::tokens::text;
-pub(crate) const PLACEHOLDER_TEXT: &str = "Search or Enter URL…";
+/// What the field says with nothing typed: in the bar, the sidebar's field and the composer.
+pub(crate) const PLACEHOLDER_TEXT: &str = "Search or enter address";
 /// What its input says for Search Tabs (ours, after the command's name).
 const TABS_PLACEHOLDER: &str = "Search Tabs…";
 const SPACES_PLACEHOLDER: &str = "Search Spaces…";
@@ -237,7 +238,7 @@ impl TaskRow {
 }
 
 /// An agent ⌘T's ask lists (Agent task).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct TaskAgent {
     pub id: SharedString,
     pub name: SharedString,
@@ -245,6 +246,14 @@ pub struct TaskAgent {
     pub glyph: &'static str,
     /// The model it runs tasks on, by name, or None for its own default.
     pub model: Option<SharedString>,
+    /// That model by id, empty for its own default: Settings' Model row.
+    pub model_id: String,
+    /// Its Model menu's first row, `{assistant}'s default`, and which model that is where it said.
+    pub default_row: SharedString,
+    pub default_model: Option<SharedString>,
+    /// The models it offers after its default, as id and name: the one list Settings' Model row
+    /// is built from.
+    pub models: Vec<(String, String)>,
     /// When its plan's limit resets, if it's at it.
     pub resets: Option<SharedString>,
 }

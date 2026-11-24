@@ -6,6 +6,11 @@
 /// opens Settings there by this name (settings::show_row).
 pub const ACCESS: &str = "Access";
 
+/// The level's menu's rows for where a task may go: every site, the default, or only the sites of
+/// the pages the user added to it.
+pub const ANY_SITE: &str = "Any site";
+pub const ONLY_ADDED: &str = "Only the sites you add";
+
 /// Settings › Agents' line under its name, the one place it says what a task never gets.
 pub const NEVER_GETS: &str = "A task never gets passwords, cookies or your other tabs.";
 
@@ -301,9 +306,14 @@ pub fn changed_logged(from: Tier, to: Tier) -> String {
 }
 
 /// The activity log's words for the tier a task starts at, which its start's entry keeps as its
-/// target, as a change's keeps `changed_logged`.
-pub fn started_logged(tier: Tier) -> String {
-    format!("Starts at {}", tier.label())
+/// target, as a change's keeps `changed_logged`, with how many pages the user added to it: their
+/// count alone, never an address or title.
+pub fn started_logged(tier: Tier, added: usize) -> String {
+    match added {
+        0 => format!("Starts at {}", tier.label()),
+        1 => format!("Starts at {} · 1 page", tier.label()),
+        added => format!("Starts at {} · {added} pages", tier.label()),
+    }
 }
 
 /// The most of a page's text a line carries.

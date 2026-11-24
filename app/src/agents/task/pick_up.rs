@@ -618,6 +618,8 @@ impl Task {
             page: None,
             title,
             model: SharedString::default(),
+            model_id: None,
+            added: Vec::new(),
             state,
             ended: Some(at),
             end_entry: 0,

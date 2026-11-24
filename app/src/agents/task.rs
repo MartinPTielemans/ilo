@@ -129,9 +129,6 @@ pub struct Conversation {
     pub title: SharedString,
     /// The agent, its model and where the task is, under the title: "Claude · Haiku · Working".
     pub about: SharedString,
-    /// How far it has got while it works, after where it is, from its own steps: "step 5 · 4
-    /// pages", or empty.
-    pub progress: SharedString,
     /// What was asked, and the page it was asked on, by its title.
     pub asked: SharedString,
     pub page: Option<AskedOn>,
@@ -343,6 +340,11 @@ pub struct Task {
     pub(super) named: Option<Instant>,
     /// The model it runs on, by name, or empty for its CLI's own default.
     pub model: SharedString,
+    /// The model it was started on by the user's pick in the composer, by id, empty for its CLI's
+    /// own default; None for Settings' Model, read at each launch.
+    pub(super) model_id: Option<String>,
+    /// The addresses of the pages the user added to it, which its first message names.
+    pub(super) added: Vec<String>,
     pub state: State,
     /// When it finished, done, stopped or failed, for its conversation and the Archive.
     pub ended: Option<SystemTime>,
@@ -636,6 +638,47 @@ pub enum TaskAction {
     NotNow(usize),
 }
 
+/// What the composer starts a task with beside what was asked: the user's picks on its line, which
+/// hold for this task alone and change nothing in Settings.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Start {
+    pub tier: Tier,
+    /// The model picked for it, by id, empty for its CLI's own default; None for Settings' Model.
+    pub model: Option<String>,
+    /// The addresses of the pages the user added on the `+` menu, which the task opens in tabs of
+    /// its own: never a tab of the user's, nor its title or anything of its state.
+    pub pages: Vec<String>,
+    /// Only the sites you add: the task may go only to the sites of the pages added.
+    pub only_added: bool,
+}
+
+/// The longest address a task gets for a page the user added: a page's over it isn't offered.
+pub const ADDED_MOST: usize = 2048;
+
+/// The address a task gets for a page the user added: an http(s) one alone, at most ADDED_MOST
+/// long, without the user name or password a tab's address can carry, which a task never gets.
+pub fn added_address(url: &str) -> Option<String> {
+    if url.len() > ADDED_MOST {
+        return None;
+    }
+    let mut parsed = url::Url::parse(url).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    _ = parsed.set_username("");
+    _ = parsed.set_password(None);
+    Some(parsed.into())
+}
+
+impl From<Tier> for Start {
+    fn from(tier: Tier) -> Self {
+        Start {
+            tier,
+            ..Start::default()
+        }
+    }
+}
+
 /// A task the user dismissed, as the Library's Archived Tabs lists it among the tabs.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ArchivedTask {
@@ -900,10 +943,6 @@ impl Agents {
         let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
             .map(|tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
             .collect();
-        let progress = match task.state == State::Working && !self.waits_on_user(task) {
-            true => progress(turn_steps(task).len(), tabs.len()),
-            false => String::new(),
-        };
         // The state's word, whoever of the task's waits: the task itself or a helper. Done says
         // when, and a limit when it resets if the assistant said; without that it's the word, as
         // the name before it says whose limit it is.
@@ -928,7 +967,6 @@ impl Agents {
             name: task.name.clone(),
             title: task.title.clone(),
             about: about.into(),
-            progress: progress.into(),
             asked: task.asked.clone(),
             page: task.page.clone(),
             lines,
@@ -1257,6 +1295,14 @@ impl Agents {
         self.tasks.found.get(&cli)?.models.as_ref()
     }
 
+    /// The model `agent`'s run passes its CLI, None for the CLI's own default: the one the user
+    /// picked in the composer for it, or else Settings' Model as it is now.
+    pub(super) fn launch_model(&self, agent: &str, cli: Cli) -> Option<String> {
+        let picked = self.task(agent).and_then(|task| task.model_id.clone());
+        let model = picked.unwrap_or_else(|| self.task_model(cli).to_string());
+        Some(model).filter(|model| !model.is_empty())
+    }
+
     /// Run tasks with, in Settings › Agents.
     pub fn set_default_task_agent(&mut self, cli: Cli, cx: &mut Context<Self>) {
         self.tasks.default = Some(cli);
@@ -1305,9 +1351,20 @@ impl Agents {
         asked: &str,
         page: Option<AskedOn>,
         home: u64,
-        tier: Tier,
+        start: impl Into<Start>,
         cx: &mut Context<Self>,
     ) -> Option<String> {
+        let Start {
+            tier,
+            model: picked,
+            pages,
+            only_added,
+        } = start.into();
+        // Only an http(s) page is added, and only its address: the composer lists no other, and
+        // nothing else is opened.
+        let pages: Vec<String> = (pages.iter())
+            .filter_map(|url| added_address(url))
+            .collect();
         let asked = asked.trim();
         if asked.is_empty() || !self.tasks_on() {
             return None;
@@ -1321,7 +1378,22 @@ impl Agents {
         );
         let space = self.browser.make_task_space(&agent, cli.name(), home, cx);
         let title: SharedString = page::clip(asked, 80).into();
-        let model = self.task_model_name(cli).unwrap_or_default();
+        // A model the CLI no longer offers falls back to its own default, saying nothing, as
+        // Settings' does.
+        let model_id = picked.map(|id| {
+            let listed = self
+                .task_models(cli)
+                .into_iter()
+                .find(|(each, _)| *each == id);
+            listed.map_or(String::new(), |(id, _)| id)
+        });
+        let model = match &model_id {
+            None => self.task_model_name(cli).unwrap_or_default(),
+            Some(id) => (self.task_models(cli).into_iter())
+                .find(|(each, _)| each == id)
+                .map(|(_, name)| name.into())
+                .unwrap_or_default(),
+        };
         let task = Task {
             agent: agent.clone(),
             cli: Some(cli),
@@ -1333,6 +1405,8 @@ impl Agents {
             page,
             title,
             model,
+            model_id,
+            added: pages.clone(),
             state: State::Working,
             ended: None,
             end_entry: 0,
@@ -1352,7 +1426,15 @@ impl Agents {
             writing: None,
             named: None,
             tier,
-            sites: Sites::default(),
+            sites: match only_added && !pages.is_empty() {
+                true => Sites::Only(
+                    pages
+                        .iter()
+                        .filter_map(|url| self.browser.url_site(url))
+                        .collect(),
+                ),
+                false => Sites::default(),
+            },
             stops: Vec::new(),
             placed: Vec::new(),
             told: None,
@@ -1361,9 +1443,11 @@ impl Agents {
         self.tasks.tasks.push(task);
         self.tokens_changed();
         // The log keeps the tier it starts at, as it keeps a change of it.
-        let started = super::tier::started_logged(tier);
+        let started = super::tier::started_logged(tier, pages.len());
         self.note_on(&agent, 0, super::access::ACCESS_ACTION, "", &started, "");
-        let first = first_message(asked, self.task(&agent).and_then(|task| task.page.as_ref()));
+        let task = self.task(&agent);
+        let first = first_message(asked, task.and_then(|task| task.page.as_ref()));
+        let first = with_added(first, task.map_or(&[], |task| &task.added));
         self.launch(&agent, &first, cx);
         self.wait_for_answer(&agent, cx);
         cx.notify();
@@ -1437,7 +1521,7 @@ impl Agents {
         let mut args = self.bridge.clone();
         args.push(self.socket.to_string_lossy().into_owned());
         let command = args.remove(0);
-        let model = Some(self.task_model(cli).to_string()).filter(|model| !model.is_empty());
+        let model = self.launch_model(agent, cli);
         // A kept run's folder is its conversation's own, which outlives the run (kept.rs).
         let (keep, kept_in) = self.keep_for(agent, cli);
         let launch = Launch {
@@ -2519,6 +2603,8 @@ impl Agents {
             asked: SharedString::default(),
             page: None,
             model: SharedString::default(),
+            model_id: None,
+            added: Vec::new(),
             state: State::Working,
             ended: None,
             end_entry: 0,
@@ -3189,9 +3275,21 @@ pub fn first_message(asked: &str, page: Option<&AskedOn>) -> String {
     }
 }
 
+/// `first` with the addresses of the pages the user added, for the task to open in tabs of its own:
+/// their addresses alone, as the user's own tabs are never the task's.
+fn with_added(first: String, pages: &[String]) -> String {
+    match pages {
+        [] => first,
+        pages => format!(
+            "{first}\n\n(Pages I added, to open in tabs of your own: {}.)",
+            pages.join(", ")
+        ),
+    }
+}
+
 /// The conversation so far, for a new run of a task whose CLI went.
 fn conversation(task: &Task) -> String {
-    let mut text = first_message(&task.asked, task.page.as_ref());
+    let mut text = with_added(first_message(&task.asked, task.page.as_ref()), &task.added);
     for message in &task.messages {
         let who = if message.who == Who::User {
             "Me"
@@ -3381,22 +3479,6 @@ fn lower_first(text: &str) -> String {
         .next()
         .map(|first| first.to_lowercase().chain(chars).collect())
         .unwrap_or_default()
-}
-
-/// The header's progress while the task works: its steps this turn and its pages, each left out
-/// while there are none.
-fn progress(steps: usize, pages: usize) -> String {
-    let steps = (steps > 0).then(|| format!("step {steps}"));
-    let pages = match pages {
-        0 => None,
-        1 => Some("1 page".to_string()),
-        pages => Some(format!("{pages} pages")),
-    };
-    steps
-        .into_iter()
-        .chain(pages)
-        .collect::<Vec<_>>()
-        .join(" · ")
 }
 
 /// A stopped task's status: how far it got before the user stopped it, by its steps, its thoughts

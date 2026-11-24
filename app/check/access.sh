@@ -1,7 +1,7 @@
 # check.sh runs this at 300.
 # VoiceOver reads ilo's own tree: the sidebar's Space name is a heading, and the tab shown a
 # selected tab named by its page's title in the Today tab group, after New Tab. ⌘T's bar has the
-# keyboard in a text field called "Search or Enter URL", lists its suggestions with the first
+# keyboard in a text field called "Search or enter address", lists its suggestions with the first
 # selected, and ↓ selects the next; ⇧F10 opens its field's menu on the first item. A tab's menu is
 # the app's window in front and a menu of menu items and separators, whose Move to opens a submenu.
 # ⌘F's find bar names its buttons and reads its count as Matches, a status that says it politely.
@@ -129,7 +129,7 @@ else
     expect '^browser: command bar suggestions "docs"' "the command bar didn't suggest for \"docs\""
     bar="$out/access-bar.txt"
     read_tree '"Suggestions"' > "$bar"
-    grep -q " $field \"Search or Enter URL\" value=docs" "$bar" ||
+    grep -q " $field \"Search or enter address\" value=docs" "$bar" ||
       fail "the command bar's field isn't a text field with what was typed: $bar"
     rows=$(under '"Suggestions"' "$bar")
     [ "$(echo "$rows" | grep -c " $suggestion")" -ge 2 ] ||
