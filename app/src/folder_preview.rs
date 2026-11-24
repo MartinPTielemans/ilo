@@ -22,7 +22,7 @@ use crate::dismissal::{By, Close, Why};
 use crate::elevation::Level;
 use crate::hover_card::{Anchor, Icon};
 use crate::hover_intent::{Intent, Next};
-use crate::palette::{Palette, STATE_SELECTED};
+use crate::palette::{Float, Palette, STATE_SELECTED};
 use crate::shell::KEY_CONTEXT;
 use crate::text_input::TextInput;
 use crate::tokens::folder_preview::{
@@ -537,7 +537,7 @@ impl FolderPreview {
         let palette = crate::palette::current(cx);
         // The row under the pointer has the selected row's fill, both at once, and the pointer
         // doesn't move the selection (Arc 1.171).
-        let fill = palette.plate(STATE_SELECTED);
+        let fill = palette.on_float(Float::FolderPreview, palette.plate(STATE_SELECTED));
         let line = |text: SharedString, size: f32, height: f32, alpha: f32| {
             div()
                 .h(px(height))
@@ -717,7 +717,7 @@ impl Render for FolderPreview {
                 .flex()
                 .flex_col()
                 .rounded(px(RADIUS))
-                .bg(palette.overlay)
+                .bg(Float::FolderPreview.fill(palette.tone))
                 .font_weight(FontWeight::NORMAL)
                 .child(search)
                 .child(divider)

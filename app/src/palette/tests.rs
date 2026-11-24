@@ -1680,6 +1680,25 @@ fn the_worst_ground_under_a_float_is_the_panel_the_check_vm_measured() {
     }
 }
 
+/// The pickers' card is what floats' fill over the material (#4090), dark in both looks: its hint
+/// and its segments' labels read on it at every level, over the material's worst.
+#[test]
+fn the_pickers_hint_and_labels_read_on_their_card_at_every_level() {
+    for level in FLOAT_LEVELS {
+        for tone in [Tone::Dark, Tone::Light] {
+            let fill = Float::Picker.fill_at(tone, level);
+            let card = over(float_worst(Tone::Dark, level), fill, fill.a);
+            let segments = over(card, WHITE, rgba(CARD_SEGMENTS).a);
+            let hint = contrast(over(card, WHITE, rgba(CARD_HINT).a), card);
+            let label = contrast(rgb(CARD_LABEL), segments);
+            assert!(
+                hint >= TEXT && label >= TEXT,
+                "{tone:?} at {level:?}: hint {hint:.2}, label {label:.2}"
+            );
+        }
+    }
+}
+
 /// Off the material a row's plate under the pointer takes no shade, as its words read there at
 /// the floor, so a float without one draws as it did.
 #[test]

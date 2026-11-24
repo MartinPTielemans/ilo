@@ -443,10 +443,13 @@ pub enum Float {
     TabSwitcher,
     Dialog,
     FindBar,
+    /// The theme picker's, the icon picker's and the boost editor's card.
+    Picker,
+    FolderPreview,
 }
 
 impl Float {
-    pub const ALL: [Float; 10] = [
+    pub const ALL: [Float; 12] = [
         Float::Menu,
         Float::SiteControls,
         Float::Toast,
@@ -457,12 +460,22 @@ impl Float {
         Float::TabSwitcher,
         Float::Dialog,
         Float::FindBar,
+        Float::Picker,
+        Float::FolderPreview,
     ];
 
     /// Whether the host has its windows' material under it (host.h): the Mac's overlays, Site
     /// Controls and menus. The rest have none under them yet.
     pub fn over_material(self) -> bool {
-        window_material() && matches!(self, Float::Menu | Float::SiteControls | Float::TabSwitcher)
+        window_material()
+            && matches!(
+                self,
+                Float::Menu
+                    | Float::SiteControls
+                    | Float::TabSwitcher
+                    | Float::Picker
+                    | Float::FolderPreview
+            )
     }
 
     /// The alpha a word drawn at `alpha` takes at rest on it in a `tone` window on this host, where
@@ -493,11 +506,11 @@ impl Float {
         Rgba { a, ..colour }
     }
 
-    /// The look it's drawn in: the find bar and tooltips are dark in both, so their white text
-    /// holds on any page.
+    /// The look it's drawn in: the find bar, tooltips and the pickers are dark in both, so their
+    /// white text holds on any page.
     fn tone(self, tone: Tone) -> Tone {
         match self {
-            Float::FindBar | Float::Tooltip => Tone::Dark,
+            Float::FindBar | Float::Tooltip | Float::Picker => Tone::Dark,
             _ => tone,
         }
     }
@@ -1189,11 +1202,14 @@ impl Palette {
         window.samples(self.layer_alpha)
     }
 
-    /// The pickers' card as they draw it: translucent where the host blurs what's behind a
-    /// picker, the Mac's always and Linux's where its compositor can. Elsewhere what's behind
-    /// shows sharp through the card and reads as noise, so there the card is opaque over the dark
-    /// overlay.
+    /// The pickers' card as they draw it: what floats' fill where the host has its material under
+    /// them; translucent where the host blurs what's behind a picker otherwise, as Linux's
+    /// compositor can. Elsewhere what's behind shows sharp through the card and reads as noise, so
+    /// there the card is opaque over the dark overlay.
     pub fn card_drawn(&self) -> Rgba {
+        if Float::Picker.over_material() {
+            return Float::Picker.fill(self.tone);
+        }
         #[cfg(target_os = "linux")]
         let blurred = gpui_linux::overlays_blur();
         #[cfg(not(target_os = "linux"))]
