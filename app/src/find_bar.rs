@@ -395,6 +395,14 @@ impl FindBar {
             .update(cx, |input, cx| input.reset(text, window, cx));
     }
 
+    /// Escape closes the bar, unless an input method is composing in its field, whose Escape it
+    /// is (dismissal's rule).
+    fn escape(&mut self, _: &Close, window: &mut Window, cx: &mut Context<Self>) {
+        if crate::dismissal::Close::escape(self.input.read(cx).composing()).is_some() {
+            self.close(&Close, window, cx);
+        }
+    }
+
     fn close(&mut self, _: &Close, _: &mut Window, cx: &mut Context<Self>) {
         self.end_tip(cx);
         unsafe { bc::bc_tab_find_close(self.tab) };
@@ -600,7 +608,7 @@ impl Render for FindBar {
                             cx.listener(|bar, _: &FindPrevious, _, cx| bar.find_next(false, cx)),
                         )
                         .on_action(cx.listener(Self::select_all))
-                        .on_action(cx.listener(Self::close))
+                        .on_action(cx.listener(Self::escape))
                         .size_full()
                         .relative()
                         .flex()

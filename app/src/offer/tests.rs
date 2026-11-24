@@ -189,6 +189,28 @@ fn the_offer_takes_no_answer_for_good_for_its_first_moment(cx: &mut TestAppConte
     assert_eq!(prompt.calls(), ["NotNow 1 check@example.test", "hide"]);
 }
 
+/// Escape while an input method composes in the field is the composition's: the offer stays,
+/// and the next Escape declines.
+#[gpui::test]
+fn escape_while_composing_declines_nothing(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let mut prompt = Prompt::new(cx);
+    prompt.offered(1, Some(offer(Kind::Save, &["check@example.test"])));
+    prompt.calls();
+    prompt.cx.update(|window, cx| {
+        let offer = window
+            .root::<OfferPrompt>()
+            .flatten()
+            .expect("the offer's view");
+        let input = offer.read(cx).input.clone();
+        input.update(cx, |input, cx| {
+            input.replace_and_mark_text_in_range(None, "ぴ", None, window, cx)
+        });
+    });
+    prompt.keys("escape");
+    assert!(prompt.calls().is_empty(), "escape declined while composing");
+}
+
 #[gpui::test]
 fn escape_is_not_now(cx: &mut TestAppContext) {
     let mut prompt = Prompt::new(cx);

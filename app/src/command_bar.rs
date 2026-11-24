@@ -949,6 +949,27 @@ pub fn show(
     }
 }
 
+/// The bar, open for a new tab, takes `asked` as an ask, as if the user had typed it and pressed
+/// ⇥: an ended task's Start Again (#4105). It's theirs to send or change; nothing is sent here.
+/// With tasks off or no assistant to ask, it stays what's typed.
+pub fn ask_again(asked: SharedString, cx: &mut App) {
+    let Some(window) = cx.try_global::<CommandBarWindow>().cloned() else {
+        return;
+    };
+    _ = window.update(cx, |bar, window, cx| {
+        if !bar.open.get() || !matches!(bar.target, Target::NewTab) {
+            return;
+        }
+        let caret = asked.len();
+        bar.input.update(cx, |input, cx| {
+            input.set_text(asked.clone(), caret, window, cx)
+        });
+        if bar.offers_ask(cx) {
+            bar.enter_ask(window, cx);
+        }
+    });
+}
+
 /// Shows the command bar at `bar` in the window, with the keyboard, on `editing`'s URL, selected, or
 /// empty, listing `tabs`: a Little ilo window's for ⌘L and ⌘T, inside it (Arc).
 pub fn show_in(

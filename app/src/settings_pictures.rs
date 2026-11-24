@@ -1,6 +1,7 @@
 //! Settings' rows chosen from drawings: a row of small pictures, the chosen one ringed in the text
-//! colour and its name beneath in the row's ink (#4092). A click on one picks it, and so do ← and →
-//! while the row has the keyboard; an assistive app reads them as options with one chosen.
+//! colour and its name beneath in the row's ink (#4092). A click on one picks it, and so do ←, →,
+//! Home and End while the row has the keyboard, a radio group's keys (list_keys); an assistive app
+//! reads them as options with one chosen.
 //!
 //! Sidebar position (#2407) draws the window with the sidebar on each side and Appearance (#2429)
 //! draws it light, dark, and split between the two for Automatic, each the control at its row's
@@ -17,8 +18,10 @@ use gpui::{
     px, rgb,
 };
 
+use crate::keyboard_ring::ring;
+use crate::list_keys::{Axis, Ends, ListKeys, Step};
 use crate::palette::{INK, PAPER};
-use crate::settings_rows::{Look, drawn, ring};
+use crate::settings_rows::{Look, drawn};
 use crate::shell::FavoritesScope;
 use crate::theme::Appearance;
 use crate::tokens::command_bar::site_colors::{
@@ -46,19 +49,6 @@ use crate::tokens::text::SMALL;
 pub struct Choice {
     pub title: &'static str,
     pub drawing: gpui::Div,
-}
-
-/// The choice a key moves to among `count`, if it's ← or → alone and there's one that way.
-pub fn keyed(event: &KeyDownEvent, chosen: usize, count: usize) -> Option<usize> {
-    let keys = &event.keystroke;
-    if keys.modifiers.modified() {
-        return None;
-    }
-    match keys.key.as_str() {
-        "left" => chosen.checked_sub(1),
-        "right" => Some(chosen + 1).filter(|&next| next < count),
-        _ => None,
-    }
 }
 
 /// What a row's pictures call with the index picked, by a click or a key, when it isn't the one
@@ -159,8 +149,12 @@ pub fn option(
         })
 }
 
+/// A row of pictures' keys: a radio group's, so ← and → pick the one beside the chosen one, Home and
+/// End the first and the last, and they stop at the ends.
+const KEYS: ListKeys = ListKeys::radio(Axis::Horizontal, Ends::Stop);
+
 /// The group a row's pictures go in, `count` of them with `chosen` the one chosen: one stop for ⇥,
-/// ringed while it has the keyboard, where ← and → pick the one beside the chosen one.
+/// ringed while it has the keyboard, where the keys (`KEYS`) pick another.
 pub fn group(
     look: &Look,
     name: &'static str,
@@ -180,8 +174,13 @@ pub fn group(
         .flex()
         .gap(px(SIDE_GAP))
         .on_key_down(move |event: &KeyDownEvent, window, cx| {
-            if let Some(index) = keyed(event, chosen, count) {
-                cx.stop_propagation();
+            let Some(step) = KEYS.step(event, Some(chosen), count) else {
+                return;
+            };
+            cx.stop_propagation();
+            if let Step::Choose(index) = step
+                && index != chosen
+            {
                 pick(index, window, cx);
             }
         })
