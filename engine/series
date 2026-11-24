@@ -87,6 +87,7 @@ ours/chromium-agent-extension-nodes.patch
 ours/chromium-agent-extension-listeners.patch <157
 ours/chromium-agent-extension-listeners-157.patch >=157
 ours/chromium-agent-field-sources.patch
+ours/chromium-agent-withheld-values.patch
 ours/chromium-shared-dictionary-wal.patch
 ours/chromium-scrollbar-thumb-fast-corner.patch
 ours/chromium-link-alt-click-threshold.patch

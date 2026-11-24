@@ -1,0 +1,359 @@
+Tells the core's agent whether a document shows, anywhere outside the field, what one of its
+password fields held (//browser_core/agent_page.cc), so that a withheld field's value reads withheld
+wherever the page shows it again. DevTools' DOM domain gets freezeWithheldValues, a command of its
+own outside the protocol's list, which DevTools' own front end never sends. Only a tab with the
+core's DevTools session keeps a value, in the renderer, and never sends it anywhere.
+
+--- a/third_party/blink/public/devtools_protocol/domains/DOM.pdl
++++ b/third_party/blink/public/devtools_protocol/domains/DOM.pdl
+@@ -757,6 +757,12 @@
+   # Undoes the last performed action.
+   experimental command undo
+ 
++  # ilo: whether a document of this target shows, anywhere outside the field, what one of its
++  # password fields held since the last call. Only an agent's tab keeps them.
++  experimental command freezeWithheldValues
++    returns
++      boolean shows
++
+   # Returns iframe node that owns iframe with the given domain.
+   experimental command getFrameOwner
+     parameters
+--- a/third_party/blink/renderer/core/html/build.gni
++++ b/third_party/blink/renderer/core/html/build.gni
+@@ -286,6 +286,8 @@
+   "forms/validity_state.h",
+   "forms/week_input_type.cc",
+   "forms/week_input_type.h",
++  "forms/withheld_values.cc",
++  "forms/withheld_values.h",
+   "frame_edge_info.h",
+   "html_all_collection.cc",
+   "html_all_collection.h",
+--- a/third_party/blink/renderer/core/html/forms/html_input_element.cc
++++ b/third_party/blink/renderer/core/html/forms/html_input_element.cc
+@@ -80,6 +80,7 @@
+ #include "third_party/blink/renderer/core/html/forms/radio_button_group_scope.h"
+ #include "third_party/blink/renderer/core/html/forms/search_input_type.h"
+ #include "third_party/blink/renderer/core/html/forms/text_input_type.h"
++#include "third_party/blink/renderer/core/html/forms/withheld_values.h"
+ #include "third_party/blink/renderer/core/html/html_collection.h"
+ #include "third_party/blink/renderer/core/html/html_image_loader.h"
+ #include "third_party/blink/renderer/core/html/parser/html_parser_idioms.h"
+@@ -938,6 +939,8 @@
+       needs_to_update_view_value_ = true;
+     }
+     SetNeedsValidityCheck();
++    // ilo: what a password field holds (withheld_values.h).
++    RecordWithheldValue(*this, SanitizeValue(value));
+     input_type_->WarnIfValueIsInvalidAndElementIsVisible(value);
+     input_type_->InRangeChanged();
+     if (input_type_view_->HasCreatedShadowSubtree() ||
+@@ -1161,6 +1164,8 @@
+ 
+   has_been_password_field_ = new_value;
+   UpdatePasswordTracking();
++  // ilo: what a field that becomes a password field already holds (withheld_values.h).
++  RecordWithheldValue(*this, Value());
+ }
+ 
+ bool HTMLInputElement::IsNativeOrHeuristicPassword() const {
+@@ -1451,6 +1456,7 @@
+   // This is a common code for ValueMode::kValue.
+   DCHECK_EQ(input_type_->GetValueMode(), ValueMode::kValue);
+   non_attribute_value_ = sanitized_value;
++  RecordWithheldValue(*this, sanitized_value);
+   has_dirty_value_ = true;
+   SetNeedsValidityCheck();
+   input_type_->InRangeChanged();
+@@ -1538,6 +1544,7 @@
+   DCHECK(!value.IsNull());
+   SetValueBeforeFirstUserEditIfNotSet();
+   non_attribute_value_ = value;
++  RecordWithheldValue(*this, value);
+   has_dirty_value_ = true;
+   if (InnerEditorElement()) {
+     needs_to_update_view_value_ = false;
+--- /dev/null
++++ b/third_party/blink/renderer/core/html/forms/withheld_values.cc
+@@ -0,0 +1,208 @@
++// ilo: see withheld_values.h.
++
++#include "third_party/blink/renderer/core/html/forms/withheld_values.h"
++
++#include <utility>
++
++#include "third_party/blink/renderer/core/core_probe_sink.h"
++#include "third_party/blink/renderer/core/dom/attribute_collection.h"
++#include "third_party/blink/renderer/core/dom/container_node.h"
++#include "third_party/blink/renderer/core/dom/document.h"
++#include "third_party/blink/renderer/core/dom/element.h"
++#include "third_party/blink/renderer/core/dom/node_traversal.h"
++#include "third_party/blink/renderer/core/dom/shadow_root.h"
++#include "third_party/blink/renderer/core/dom/text.h"
++#include "third_party/blink/renderer/core/frame/local_frame.h"
++#include "third_party/blink/renderer/core/html/forms/html_input_element.h"
++#include "third_party/blink/renderer/core/html/forms/text_control_element.h"
++#include "third_party/blink/renderer/core/html_names.h"
++#include "third_party/blink/renderer/core/probe/core_probes.h"
++#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
++#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
++#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
++#include "third_party/blink/renderer/platform/heap/member.h"
++#include "third_party/blink/renderer/platform/heap/persistent.h"
++#include "third_party/blink/renderer/platform/weborigin/kurl.h"
++#include "third_party/blink/renderer/platform/wtf/std_lib_extras.h"
++
++namespace blink {
++
++namespace {
++
++// As the core's floor: a value shorter than this, which ordinary words hold by chance, shows only
++// as all of a text.
++constexpr unsigned kAnywhere = 6;
++constexpr wtf_size_t kMostFields = 16;
++
++// The last value a field held, and whether it's open: kept or changed since the last freeze.
++class WithheldValue final : public GarbageCollected<WithheldValue> {
++ public:
++  WithheldValue(const HTMLInputElement& field, const String& value)
++      : field(&field), value(value) {}
++
++  void Trace(Visitor* visitor) const { visitor->Trace(field); }
++
++  // Weak: the value stays kept after the field goes.
++  WeakMember<const HTMLInputElement> field;
++  String value;
++  bool open = true;
++};
++
++class WithheldRecord final : public GarbageCollected<WithheldRecord> {
++ public:
++  void Trace(Visitor* visitor) const { visitor->Trace(values); }
++
++  bool Holds(const Element& element) const {
++    for (const auto& kept : values) {
++      if (kept->field == &element) {
++        return true;
++      }
++    }
++    return false;
++  }
++
++  HeapVector<Member<WithheldValue>> values;
++};
++
++using Records = HeapHashMap<WeakMember<const Document>, Member<WithheldRecord>>;
++
++Records& AllRecords() {
++  DEFINE_STATIC_LOCAL(Persistent<Records>, records, (MakeGarbageCollected<Records>()));
++  return *records;
++}
++
++bool Shows(const String& text, const String& value) {
++  if (value.length() >= kAnywhere) {
++    return text.contains(value);
++  }
++  return text.StripWhiteSpace() == value;
++}
++
++// Whether |text| shows one of |record|'s open values, as it is or URL-unescaped: the same rule as
++// the core's ShowsPassword (//browser_core/agent_sign_in_rule.cc), which Blink can't link.
++bool ShowsOpen(const WithheldRecord& record, const String& text) {
++  if (text.empty()) {
++    return false;
++  }
++  // As a form sent with GET puts a field in an address: escaped, with a space as +.
++  String unescaped;
++  String plus;
++  if (text.contains('%') || text.contains('+')) {
++    unescaped = DecodeUrlEscapeSequences(text, DecodeUrlMode::kUtf8OrIsomorphic);
++    String spaced = text;
++    spaced.Replace(u'+', u' ');
++    plus = DecodeUrlEscapeSequences(spaced, DecodeUrlMode::kUtf8OrIsomorphic);
++  }
++  for (const auto& kept : record.values) {
++    if (kept->open &&
++        (Shows(text, kept->value) || (!unescaped.IsNull() && Shows(unescaped, kept->value)) ||
++         (!plus.IsNull() && Shows(plus, kept->value)))) {
++      return true;
++    }
++  }
++  return false;
++}
++
++// One look at the document outside the fields that held the values.
++bool Walk(const Document& document, const WithheldRecord& record) {
++  if (ShowsOpen(record, document.title()) || ShowsOpen(record, document.Url().GetString())) {
++    return true;
++  }
++  HeapVector<Member<const ContainerNode>> roots;
++  roots.push_back(&document);
++  while (!roots.empty()) {
++    const ContainerNode* root = roots.back();
++    roots.pop_back();
++    for (const Node& node : NodeTraversal::DescendantsOf(*root)) {
++      if (const auto* text = DynamicTo<Text>(node)) {
++        if (ShowsOpen(record, text->data())) {
++          return true;
++        }
++        continue;
++      }
++      const auto* element = DynamicTo<Element>(node);
++      if (!element) {
++        continue;
++      }
++      const bool field = record.Holds(*element);
++      for (const Attribute& attribute : element->Attributes()) {
++        // A field's own value attribute is where its value came from, not a copy.
++        if (field && attribute.GetName() == html_names::kValueAttr) {
++          continue;
++        }
++        if (ShowsOpen(record, attribute.Value())) {
++          return true;
++        }
++      }
++      // A text control's text is in its own user-agent shadow tree: its value is read instead.
++      if (const auto* control = DynamicTo<TextControlElement>(element)) {
++        if (!field && ShowsOpen(record, control->Value())) {
++          return true;
++        }
++        continue;
++      }
++      if (const ShadowRoot* shadow = element->GetShadowRoot()) {
++        roots.push_back(shadow);
++      }
++    }
++  }
++  return false;
++}
++
++}  // namespace
++
++void RecordWithheldValue(HTMLInputElement& input, const String& value) {
++  if (value.empty() || !input.HasBeenPasswordField()) {
++    return;
++  }
++  Document& document = input.GetDocument();
++  // An agent's tab only: the core turns DOM on in its DevTools session there as it attaches, and
++  // DevTools turns it on again in a frame's new renderer before its page runs. The user's own
++  // DevTools counts too, which keeps a value only while it's open.
++  LocalFrame* frame = document.GetFrame();
++  if (!frame || !probe::ToCoreProbeSink(frame) ||
++      !probe::ToCoreProbeSink(frame)->HasInspectorDOMAgents()) {
++    return;
++  }
++  auto it = AllRecords().find(&document);
++  WithheldRecord* record = it == AllRecords().end() ? nullptr : it->value.Get();
++  if (!record) {
++    record = MakeGarbageCollected<WithheldRecord>();
++    AllRecords().Set(&document, record);
++  }
++  for (auto& kept : record->values) {
++    if (kept->field == &input) {
++      if (kept->value != value) {
++        kept->value = value;
++        kept->open = true;
++      }
++      return;
++    }
++  }
++  if (record->values.size() == kMostFields) {
++    record->values.EraseAt(0);
++  }
++  record->values.push_back(MakeGarbageCollected<WithheldValue>(input, value));
++}
++
++bool FreezeWithheldValues(Document& document) {
++  auto it = AllRecords().find(&document);
++  if (it == AllRecords().end()) {
++    return false;
++  }
++  WithheldRecord& record = *it->value;
++  bool open = false;
++  for (const auto& kept : record.values) {
++    open = open || kept->open;
++  }
++  if (!open) {
++    return false;
++  }
++  const bool shows = Walk(document, record);
++  for (auto& kept : record.values) {
++    kept->open = false;
++  }
++  return shows;
++}
++
++}  // namespace blink
+--- /dev/null
++++ b/third_party/blink/renderer/core/html/forms/withheld_values.h
+@@ -0,0 +1,29 @@
++// ilo: whether a document shows, anywhere outside the field, what one of its password fields held,
++// for the core's agent (//browser_core/agent_page.cc). Kept only in an agent's tab, in the
++// renderer: never sent anywhere, logged or put in a crash key.
++
++#ifndef THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FORMS_WITHHELD_VALUES_H_
++#define THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FORMS_WITHHELD_VALUES_H_
++
++#include "third_party/blink/renderer/core/core_export.h"
++#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
++
++namespace blink {
++
++class Document;
++class HTMLInputElement;
++
++// Keeps |value| as the last that |input| held, if it is or was a password field and the core's
++// DevTools session has DOM on in its frame, as it does in an agent's tab. A value kept or changed
++// is open until the next FreezeWithheldValues. At most 16 fields a document, for as long as it
++// lives.
++void RecordWithheldValue(HTMLInputElement& input, const String& value);
++
++// Whether |document| shows, anywhere outside the field, one of its open values. Then none is
++// looked for again until a field holds a new one. A document with no open value answers false at
++// once.
++CORE_EXPORT bool FreezeWithheldValues(Document& document);
++
++}  // namespace blink
++
++#endif  // THIRD_PARTY_BLINK_RENDERER_CORE_HTML_FORMS_WITHHELD_VALUES_H_
+--- a/third_party/blink/renderer/core/inspector/inspector_dom_agent.cc
++++ b/third_party/blink/renderer/core/inspector/inspector_dom_agent.cc
+@@ -78,6 +78,7 @@
+ #include "third_party/blink/renderer/core/frame/frame.h"
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
+ #include "third_party/blink/renderer/core/frame/location.h"
++#include "third_party/blink/renderer/core/html/forms/withheld_values.h"
+ #include "third_party/blink/renderer/core/frame/remote_frame.h"
+ #include "third_party/blink/renderer/core/html/forms/html_button_element.h"
+ #include "third_party/blink/renderer/core/html/forms/html_form_control_element.h"
+@@ -3472,6 +3473,17 @@
+   return protocol::Response::Success();
+ }
+ 
++protocol::Response InspectorDOMAgent::freezeWithheldValues(bool* shows) {
++  *shows = false;
++  // Every document of the target is walked, so each is frozen, whichever shows one.
++  for (LocalFrame* frame : *inspected_frames_) {
++    if (Document* document = frame->GetDocument()) {
++      *shows = FreezeWithheldValues(*document) || *shows;
++    }
++  }
++  return protocol::Response::Success();
++}
++
+ protocol::Response InspectorDOMAgent::getFrameOwner(
+     const String& frame_id,
+     int* backend_node_id,
+--- a/third_party/blink/renderer/core/inspector/inspector_dom_agent.h
++++ b/third_party/blink/renderer/core/inspector/inspector_dom_agent.h
+@@ -243,6 +243,9 @@
+       std::optional<String> object_id,
+       std::unique_ptr<protocol::DOM::Rect> rect) override;
+ 
++  // ilo: see DOM.pdl.
++  protocol::Response freezeWithheldValues(bool* shows) override;
++
+   protocol::Response getFrameOwner(const String& frame_id,
+                                    int* backend_node_id,
+                                    std::optional<int>* node_id) override;
