@@ -904,8 +904,9 @@ fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
             "Send a daily usage count",
             "Send crash reports",
             "Let agents use the browser",
-            "Continue",
-            "Skip"
+            "Back",
+            "Skip",
+            "Continue"
         ],
         "the stops ⇥ goes along, the step's buttons too, as a screen reader's user finds them (#3151)"
     );
@@ -922,9 +923,10 @@ fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
         let said: Vec<String> = said.into_iter().map(str::to_string).collect();
         assert_eq!(host.take(), said, "Space on switch {at}");
     }
-    // Round past Continue and Skip to the first, and back to the last switch.
-    cx.simulate_keystrokes("tab tab tab");
-    cx.simulate_keystrokes("shift-tab shift-tab shift-tab");
+    // Round past the sheet's foot, Back, Skip and Continue, to the first, and back to the last
+    // switch.
+    cx.simulate_keystrokes("tab tab tab tab");
+    cx.simulate_keystrokes("shift-tab shift-tab shift-tab shift-tab");
     press("space", cx);
     assert_eq!(
         offered(&shell, cx),
@@ -937,14 +939,18 @@ fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
     );
 }
 
-/// The opt-ins rest on Continue, and the switches are a ⇥ or ⇧⇥ from it: ⇥ goes past Skip to the
-/// count's, the first, and ⇧⇥ back to the agents', the last (#3498).
+/// The opt-ins rest on Continue, the last of the sheet's foot, and the switches are a ⇥ from it:
+/// ⇥ goes round to the count's, the first, and ⇧⇥ back past Skip and Back to the agents', the
+/// last (#3498).
 #[gpui::test]
 fn the_switches_are_a_tab_from_continue(cx: &mut TestAppContext) {
     for (keys, at) in [
-        ("tab", "Skip"),
-        ("tab tab", "Send a daily usage count"),
-        ("shift-tab", "Let agents use the browser"),
+        ("tab", "Send a daily usage count"),
+        ("shift-tab", "Skip"),
+        (
+            "shift-tab shift-tab shift-tab",
+            "Let agents use the browser",
+        ),
     ] {
         let (_, cx, _) = at_three_switches(cx);
         cx.simulate_a11y_activation();
@@ -971,8 +977,8 @@ fn return_and_escape_leave_from_a_focused_switch(cx: &mut TestAppContext) {
         ("escape", false),
     ] {
         let (shell, cx, host) = at_three_switches(cx);
-        // From Continue, where the step rests, past Skip to the count's switch.
-        cx.simulate_keystrokes("tab tab");
+        // From Continue, where the step rests, round to the count's switch.
+        cx.simulate_keystrokes("tab");
         if turned {
             press("space", cx);
         }
@@ -1390,9 +1396,25 @@ fn the_first_devices_words_go_on_with_done(cx: &mut TestAppContext) {
         .expect("the account shows");
     let skip = shell.read_with(cx, |shell, cx| shell.keeping_words(cx));
     assert!(skip, "no Skip while the words show");
-    let done = view
-        .read_with(cx, |view, _| view.drawn("done"))
-        .expect("Done is drawn");
+    // Taller than the sheet's room, the words scroll in it above the foot, Done at their end.
+    let done = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| view.drawn("done"))
+            .expect("Done is drawn")
+    };
+    let foot = placed("back", cx).expect("Back is drawn");
+    let over_the_words = point(done(cx).center().x, foot.top() - px(40.));
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: over_the_words,
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-400.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    let done = done(cx);
+    assert!(
+        done.bottom() <= foot.top(),
+        "scrolled to their end, Done at {done:?} is above the foot at {foot:?}"
+    );
     cx.simulate_click(done.center(), Modifiers::none());
     assert_eq!(step(&shell, cx), Some(Step::OptIns));
 }
@@ -2020,6 +2042,15 @@ fn a_screen_reader_reads_the_engines_as_one_choice(cx: &mut TestAppContext) {
         said.contains(&(Role::Dialog, "Pick a search engine.".into(), None)),
         "{said:?}"
     );
+    let line = cx
+        .a11y_tree()
+        .unwrap()
+        .nodes
+        .into_iter()
+        .find_map(|(_, node)| {
+            (node.role() == Role::Dialog).then(|| node.description().map(str::to_string))
+        });
+    assert_eq!(line, Some(None), "the step's title has no line after it");
     assert!(
         said.iter()
             .any(|(role, name, _)| *role == Role::RadioGroup && name == "Search engine")
@@ -2471,5 +2502,400 @@ fn the_default_browsers_loop_opens_the_link_as_a_tab(cx: &mut TestAppContext) {
     assert!(
         placed("tab-new", cx).is_some() && placed("page-new", cx).is_some(),
         "the still last frame is the link open, its page shown"
+    );
+}
+
+/// The search engine's step is on the sheet, the engines in a box under its words, and its loop
+/// types a few words in the bar, then opens the results as a new tab in the small window's
+/// sidebar as the bar goes; nothing has opened while the words are typed, and the still last frame
+/// is the results.
+#[gpui::test]
+fn the_search_engines_loop_opens_the_words_typed_as_a_tab(cx: &mut TestAppContext) {
+    use crate::tokens::shell::onboarding::loops::{
+        IMPORT_FADE, IMPORT_LAND, SEARCH_AT, SEARCH_RETURN, SEARCH_TYPE,
+    };
+    let (shell, cx, host) = first_window(cx);
+    with_engines(&host);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::SearchEngine);
+    later(&shell, cx, STEP_MOTION);
+    assert!(
+        super::sheet::on_sheet(Step::SearchEngine),
+        "the search engine's step shows on the sheet"
+    );
+    assert!(
+        placed("skip", cx).is_some() && placed("back", cx).is_some(),
+        "the sheet's foot has Back and Skip"
+    );
+    let typed = SEARCH_AT + IMPORT_FADE + SEARCH_TYPE;
+    held_at(&shell, cx, typed);
+    assert!(placed("words", cx).is_some(), "the words are in the bar");
+    assert!(
+        placed("tab-new", cx).is_none(),
+        "nothing has opened while the words are typed"
+    );
+    held_at(&shell, cx, typed + SEARCH_RETURN + IMPORT_LAND);
+    let sidebar = placed("sidebar", cx).expect("the loop's sidebar is drawn");
+    let tab = placed("tab-new", cx).expect("↩ has opened the results as a tab");
+    assert!(
+        inside(tab, sidebar),
+        "the new tab lands inside the sidebar at {sidebar:?}, but it was at {tab:?}"
+    );
+    held_at(&shell, cx, PERIOD);
+    assert!(
+        placed("tab-new", cx).is_some() && placed("page-new", cx).is_some(),
+        "the still last frame is the results, their page shown"
+    );
+    assert!(placed("bar", cx).is_none(), "and the bar has gone");
+}
+
+/// The sync's step is on the sheet, and its loop carries a pinned tab from the small window to the
+/// phone under the lock, and a favorite added on the phone back to the window's sidebar; nothing
+/// is on the phone as the loop starts, and the still last frame has both landed.
+#[gpui::test]
+fn the_sync_loop_carries_a_tab_across_and_a_favorite_back(cx: &mut TestAppContext) {
+    use crate::tokens::shell::onboarding::loops::{IMPORT_FADE, IMPORT_LAND, SYNC_AT, SYNC_CROSS};
+    let (shell, cx, host) = first_window(cx);
+    host.sync_server.set(true);
+    synced(cx, Status::SignedOut, "https://sync.example.org");
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Account);
+    later(&shell, cx, STEP_MOTION);
+    assert!(
+        super::sheet::on_sheet(Step::Account),
+        "the sync's step shows on the sheet"
+    );
+    assert!(
+        placed("skip", cx).is_some() && placed("back", cx).is_some(),
+        "the sheet's foot has Back and Skip"
+    );
+    let [there, back] = SYNC_AT;
+    held_at(&shell, cx, 0.);
+    assert!(
+        placed("phone-tab", cx).is_none(),
+        "nothing is on the phone as the loop starts"
+    );
+    // Halfway across, the tab is at the lock.
+    held_at(&shell, cx, there + IMPORT_FADE + SYNC_CROSS / 2.);
+    let moving = placed("moving", cx).expect("the pinned tab is on its way");
+    let lock = placed("lock", cx).expect("the lock is drawn");
+    assert!(
+        moving.intersects(&lock),
+        "the tab crosses under the lock at {lock:?}, but it was at {moving:?}"
+    );
+    held_at(&shell, cx, there + IMPORT_FADE + SYNC_CROSS + IMPORT_LAND);
+    let phone = placed("phone", cx).expect("the phone is drawn");
+    let tab = placed("phone-tab", cx).expect("the tab has come to the phone");
+    assert!(
+        inside(tab, phone),
+        "the tab lands on the phone at {phone:?}, but it was at {tab:?}"
+    );
+    // Its name keeps the row's inset on the right as on the left, and ends in the fade.
+    let icon = placed("phone-icon", cx).expect("the phone's row has its icon");
+    let name = placed("phone-name", cx).expect("the phone's row has its name");
+    let fade = placed("phone-fade", cx).expect("the name ends in a fade");
+    assert_eq!(
+        tab.right() - name.right(),
+        icon.left() - tab.left(),
+        "the name at {name:?} is inset as the icon at {icon:?} in the row at {tab:?}"
+    );
+    assert_eq!(fade.right(), name.right(), "the fade is at the name's end");
+    held_at(&shell, cx, back + IMPORT_FADE + SYNC_CROSS + IMPORT_LAND);
+    let sidebar = placed("sidebar", cx).expect("the loop's sidebar is drawn");
+    let tile = placed("tile-back", cx).expect("the phone's favorite has come back");
+    assert!(
+        inside(tile, sidebar),
+        "the favorite lands in the sidebar at {sidebar:?}, but it was at {tile:?}"
+    );
+    held_at(&shell, cx, PERIOD);
+    assert!(
+        placed("phone-tab", cx).is_some() && placed("tile-back", cx).is_some(),
+        "the still last frame has both landed"
+    );
+    // The lock rests on the seam between the window and the phone, where the tab went over.
+    let lock = placed("lock", cx).expect("the lock is drawn at rest");
+    let phone = placed("phone", cx).expect("the phone is drawn");
+    // The phone's place is inside its 1 pt border, the lock's centre on the border.
+    assert!(
+        (lock.center().x - phone.left()).abs() <= px(1.),
+        "the lock at {lock:?} rests on the phone's edge at {phone:?}"
+    );
+}
+
+/// The assistant's step comes after the account's, on the sheet, its foot with Back and Skip, and
+/// under its rows the room kept for the sign-in's switch, a row high, with nothing in it.
+#[gpui::test]
+fn the_assistant_step_is_on_the_sheet_with_room_for_its_switch(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    host.agents.set(Some(false));
+    started(&shell, cx);
+    assert!(
+        steps(&shell, cx).ends_with(&[Step::Assistant, Step::OptIns]),
+        "the assistant's step comes before Up to you: {:?}",
+        steps(&shell, cx)
+    );
+    skip_to(&shell, cx, Step::Assistant);
+    later(&shell, cx, STEP_MOTION);
+    assert!(
+        super::sheet::on_sheet(Step::Assistant) && super::sheet::on_sheet(Step::OptIns),
+        "the assistant's step and Up to you show on the sheet"
+    );
+    assert!(
+        placed("skip", cx).is_some() && placed("back", cx).is_some(),
+        "the sheet's foot has Back and Skip"
+    );
+    let room = placed("switch-place", cx).expect("the switch's room is laid out");
+    assert_eq!(
+        room.size.height,
+        px(crate::tokens::settings::ROW_HEIGHT),
+        "a row high"
+    );
+    cx.simulate_keystrokes("escape");
+    assert_eq!(step(&shell, cx), Some(Step::OptIns), "Esc goes on, as Skip");
+}
+
+/// The sheet's foot is in the same place on every step, the assistants' too with all its rows: a
+/// list taller than its room scrolls in it, and the foot never moves down for it.
+#[gpui::test]
+fn the_sheets_foot_is_in_the_same_place_on_every_step(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    host.agents.set(Some(false));
+    let _agents = cx.update(|_, cx| crate::agents::tests::stand_in(Vec::new(), cx));
+    started(&shell, cx);
+    let mut feet = Vec::new();
+    // A flow that never ends fails rather than spins.
+    for _ in 0..32 {
+        let Some(at) = step(&shell, cx) else {
+            break;
+        };
+        if at != Step::Intro && super::sheet::on_sheet(at) {
+            later(&shell, cx, STEP_MOTION);
+            if let Some(skip) = placed("skip", cx) {
+                feet.push((at, skip.origin.y));
+            }
+        }
+        cx.simulate_keystrokes(if at == Step::Intro { "enter" } else { "escape" });
+    }
+    assert!(
+        feet.iter().any(|(at, _)| *at == Step::Assistant),
+        "the assistants' step showed its foot: {feet:?}"
+    );
+    let (_, first) = feet[0];
+    assert!(
+        feet.iter().all(|(_, y)| *y == first),
+        "Skip is where it is on every step: {feet:?}"
+    );
+}
+
+/// The assistants' step looks for them once as it shows, off the UI thread, and each row then
+/// says what was found, as Settings › Agents' does, and offers what it offers there. Nothing asks
+/// again while the step stands; shown again, it looks again.
+#[gpui::test]
+fn the_assistant_step_looks_for_the_assistants_as_it_shows(cx: &mut TestAppContext) {
+    use crate::agents::ready::{Found, Ready};
+    use crate::agents::runner::Cli;
+    let (shell, cx, host) = first_window(cx);
+    host.agents.set(Some(false));
+    let signed_out = Found {
+        ready: Ready::SignedOut,
+        ..Default::default()
+    };
+    let (agents, looks) =
+        cx.update(|_, cx| crate::agents::tests::stand_in(vec![(Cli::Claude, signed_out)], cx));
+    cx.simulate_a11y_activation();
+    started(&shell, cx);
+    let lines = |cx: &mut VisualTestContext| {
+        agents.read_with(cx, |agents, _| {
+            Cli::ALL.map(|cli| agents.assistant_row(cli).line)
+        })
+    };
+    let all = steps(&shell, cx);
+    let at = all
+        .iter()
+        .position(|&each| each == Step::Assistant)
+        .unwrap();
+    skip_to(&shell, cx, all[at - 1]);
+    assert_eq!(looks(), 0, "nothing looked before the step");
+    assert_eq!(lines(cx), ["Checking…", "Checking…"]);
+
+    cx.simulate_keystrokes("escape");
+    assert_eq!(step(&shell, cx), Some(Step::Assistant));
+    later(&shell, cx, STEP_MOTION);
+    assert_eq!(looks(), 1, "the step's showing looked once");
+    assert_eq!(lines(cx), ["Not signed in", "Not installed"]);
+    let said: Vec<String> = read(cx).into_iter().map(|(_, name, _)| name).collect();
+    for offer in ["Sign In to Claude Code", "Get Codex"] {
+        assert!(said.iter().any(|name| name == offer), "{offer} in {said:?}");
+    }
+    later(&shell, cx, 5.);
+    assert_eq!(looks(), 1, "nothing looked again while it stood");
+
+    cx.simulate_keystrokes("escape");
+    later(&shell, cx, STEP_MOTION);
+    click_back(cx);
+    assert_eq!(step(&shell, cx), Some(Step::Assistant));
+    cx.run_until_parked();
+    assert_eq!(looks(), 2, "shown again, it looked again");
+}
+
+/// In the sheet's narrow half no assistant's name is cut by its button: each button is beside the
+/// whole name, or, where the row has no room for both, under it.
+#[gpui::test]
+fn the_assistants_names_are_whole_beside_or_over_their_buttons(cx: &mut TestAppContext) {
+    use crate::agents::ready::{Found, Ready};
+    use crate::agents::runner::Cli;
+    use crate::tokens::settings::{
+        CONTROL_GAP, END_GAP, GLYPH_PLATE, GLYPH_PLATE_GAP, PADDING, ROW_X,
+    };
+    let (shell, cx, host) = first_window(cx);
+    host.agents.set(Some(false));
+    let signed_out = Found {
+        ready: Ready::SignedOut,
+        ..Default::default()
+    };
+    let (agents, _) =
+        cx.update(|_, cx| crate::agents::tests::stand_in(vec![(Cli::Claude, signed_out)], cx));
+    cx.simulate_a11y_activation();
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Assistant);
+    later(&shell, cx, STEP_MOTION);
+    let lines = agents.read_with(cx, |agents, _| {
+        Cli::ALL.map(|cli| agents.assistant_row(cli).line)
+    });
+    assert_eq!(lines, ["Not signed in", "Not installed"]);
+
+    let scale = cx.update(|window, _| window.scale_factor());
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    let button = |label: &str| {
+        let node = (tree.nodes.iter())
+            .map(|(_, node)| node)
+            .find(|node| node.role() == Role::Button && node.label().as_deref() == Some(label))
+            .unwrap_or_else(|| panic!("no {label} button"));
+        let bounds = node.bounds().expect("a button has bounds");
+        (bounds.x0 as f32 / scale, bounds.y0 as f32 / scale)
+    };
+    let system = cx.update(|_, cx| gpui::WindowTextSystem::new(cx.text_system().clone()));
+    for (row, name, offer) in [
+        ("claude", "Claude Code", "Sign In to Claude Code"),
+        ("codex", "Codex", "Get Codex"),
+        ("another", "Another app", "How to Connect"),
+    ] {
+        let row = placed(row, cx).unwrap_or_else(|| panic!("{name}'s row wasn't drawn"));
+        let whole = crate::tooltip::text_width(
+            &name.into(),
+            crate::tokens::text::BODY,
+            gpui::FontWeight::MEDIUM,
+            &system,
+        );
+        let name_left = f32::from(row.left()) + ROW_X + GLYPH_PLATE + GLYPH_PLATE_GAP;
+        let (left, top) = button(offer);
+        let beside = left + 0.5 >= name_left + whole + END_GAP;
+        // Under is on a line of its own, below the name's, which is at least the glyph's height,
+        // not centred on a row its line made tall.
+        let under = top + 0.5 >= f32::from(row.top()) + PADDING + GLYPH_PLATE + CONTROL_GAP;
+        assert!(
+            beside || under,
+            "{offer} at ({left}, {top}) cuts {name}, {whole} wide from {name_left}, in its row at \
+             {row:?}"
+        );
+    }
+}
+
+/// The assistant's loop: one ask, three pages opened at once in the small window's sidebar, a
+/// price read from each in turn, then the answer; nothing is open as it starts, and its still
+/// last frame is the answer.
+#[gpui::test]
+fn the_assistant_loop_reads_a_price_from_each_page_then_answers(cx: &mut TestAppContext) {
+    use crate::tokens::shell::onboarding::loops::{
+        ASSISTANT_ANSWER, ASSISTANT_OPEN, ASSISTANT_READ, ASSISTANT_STAGGER, IMPORT_FADE,
+        IMPORT_LAND,
+    };
+    let (shell, cx, host) = first_window(cx);
+    host.agents.set(Some(false));
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Assistant);
+    later(&shell, cx, STEP_MOTION);
+    held_at(&shell, cx, 0.);
+    assert!(
+        placed("tab-0", cx).is_none(),
+        "nothing is open as it starts"
+    );
+    held_at(&shell, cx, ASSISTANT_OPEN + IMPORT_LAND);
+    let sidebar = placed("sidebar", cx).expect("the loop's sidebar is drawn");
+    for tab in ["tab-0", "tab-1", "tab-2"] {
+        let drawn = placed(tab, cx).unwrap_or_else(|| panic!("{tab} opened with the others"));
+        assert!(
+            inside(drawn, sidebar),
+            "{tab} lands inside the sidebar at {sidebar:?}, but it was at {drawn:?}"
+        );
+    }
+    assert!(
+        placed("price-0", cx).is_none(),
+        "no price is read as the pages open"
+    );
+    for (index, price) in ["price-0", "price-1", "price-2"].into_iter().enumerate() {
+        held_at(
+            &shell,
+            cx,
+            ASSISTANT_READ + index as f32 * ASSISTANT_STAGGER + IMPORT_FADE,
+        );
+        assert!(placed(price, cx).is_some(), "{price} is read in its turn");
+        assert!(placed("answer", cx).is_none(), "before the answer");
+    }
+    held_at(&shell, cx, ASSISTANT_ANSWER + IMPORT_FADE);
+    assert!(placed("answer", cx).is_some(), "the answer comes last");
+    held_at(&shell, cx, PERIOD);
+    assert!(
+        placed("answer", cx).is_some() && placed("price-2", cx).is_some(),
+        "the still last frame is the answer"
+    );
+}
+
+/// Up to you's loop: today's count fills in a line at a time, all it holds, then a week goes by
+/// under it a day at a time; it's empty as it starts, and its still last frame is the week counted.
+#[gpui::test]
+fn the_up_to_you_loop_fills_the_count_then_a_week(cx: &mut TestAppContext) {
+    use crate::tokens::shell::onboarding::loops::{
+        COUNT_AT, COUNT_DAY, COUNT_STAGGER, COUNT_WEEK, IMPORT_FADE,
+    };
+    let (shell, cx, host) = first_window(cx);
+    host.daily_count.set(Some(false));
+    host.crash_reports.set(Some(false));
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::OptIns);
+    later(&shell, cx, STEP_MOTION);
+    held_at(&shell, cx, 0.);
+    assert!(
+        placed("line-0", cx).is_none(),
+        "the count is empty as it starts"
+    );
+    let lines = ["line-0", "line-1", "line-2", "line-3", "line-4"];
+    for (index, line) in lines.into_iter().enumerate() {
+        held_at(
+            &shell,
+            cx,
+            COUNT_AT + index as f32 * COUNT_STAGGER + IMPORT_FADE,
+        );
+        assert!(placed(line, cx).is_some(), "{line} fills in its turn");
+        if let Some(next) = lines.get(index + 1) {
+            assert!(placed(next, cx).is_none(), "{next} not yet");
+        }
+    }
+    assert!(
+        placed("day-0", cx).is_none(),
+        "no day goes by while it fills"
+    );
+    let card = placed("card", cx).expect("the card is drawn");
+    let week = placed("week", cx).expect("the week is drawn");
+    assert!(
+        week.origin.y >= card.origin.y + card.size.height,
+        "the week is under the card at {card:?}, but it was at {week:?}"
+    );
+    held_at(&shell, cx, COUNT_WEEK + 6. * COUNT_DAY + IMPORT_FADE);
+    assert!(placed("day-6", cx).is_some(), "the week is counted");
+    held_at(&shell, cx, PERIOD);
+    assert!(
+        placed("line-4", cx).is_some() && placed("day-6", cx).is_some(),
+        "the still last frame is the card full and the week counted"
     );
 }

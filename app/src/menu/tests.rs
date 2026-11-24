@@ -10,8 +10,9 @@ use gpui::{
 };
 
 use super::{
-    CHECK, Closed, Closing, DETAIL_GAP, GAP, Key, Layout, Look, Outcome, PADDING, Pointer, ROW_X,
-    Request, Swatch, Tracking, as_held, described, described_held, key_of, lay_out, lay_out_over,
+    CHECK, Closed, Closing, DETAIL_GAP, GAP, Key, Layout, Look, Outcome, PADDING, Pointer,
+    QUIET_RADIUS, RADIUS, ROW_X, Request, SUBMENU_REST, Swatch, Tracking, as_held, described,
+    described_held, key_of, lay_out, lay_out_over,
 };
 use crate::shell::MenuEntry;
 
@@ -537,13 +538,14 @@ fn on_its_way_to_the_submenu_the_pointer_crosses_other_rows_without_closing_it()
     );
 
     // Measured from the move, as a timer can fire a little early (#2158).
+    let rested = now + Duration::from_millis(30) + Duration::from_secs_f32(SUBMENU_REST);
     assert_eq!(
-        menu.rested(now + Duration::from_millis(320)),
+        menu.rested(rested - Duration::from_millis(10)),
         Some(Duration::from_millis(10)),
         "10 ms more to rest"
     );
     assert_eq!(menu.highlights(), [Some(5), None], "not yet");
-    assert_eq!(menu.rested(now + Duration::from_millis(330)), None);
+    assert_eq!(menu.rested(rested), None);
     assert_eq!(
         menu.highlights(),
         [Some(10)],
@@ -587,6 +589,8 @@ struct Recorder {
     calls: RefCell<Vec<&'static str>>,
     /// Each window the menu asked for, and its panels in it.
     shown: RefCell<Vec<(Bounds<Pixels>, Vec<Bounds<Pixels>>)>>,
+    /// The panels the host was asked to put its material under each time, and whether light.
+    glass: RefCell<Vec<(Vec<(Bounds<Pixels>, f32)>, bool)>>,
     /// Whether its window can't blend (`Host::blends`).
     opaque: bool,
 }
@@ -595,6 +599,10 @@ impl super::Host for Recorder {
     fn show(&self, frame: Bounds<Pixels>, panels: &[Bounds<Pixels>]) {
         self.calls.borrow_mut().push("show");
         self.shown.borrow_mut().push((frame, panels.to_vec()));
+    }
+
+    fn glass(&self, panels: &[(Bounds<Pixels>, f32)], light: bool) {
+        self.glass.borrow_mut().push((panels.to_vec(), light));
     }
 
     fn hide(&self) {
@@ -709,6 +717,67 @@ fn where_the_window_cant_blend_it_holds_the_open_panels_alone(cx: &mut TestAppCo
     );
     cx.simulate_keystrokes("escape");
     assert_eq!(*host.calls.borrow(), ["show", "show", "show", "hide"]);
+}
+
+/// The host's material goes under the panels that show, each with its own corner, and follows a
+/// submenu as it opens and closes (#4090), so no glass shows in the shadows' room round them or
+/// where a closed submenu was.
+#[gpui::test]
+fn the_material_goes_under_the_open_panels_alone(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let window = cx
+        .update(|cx| super::open(host.clone(), cx))
+        .expect("no window for the menu");
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+
+    show_menu(cx);
+    let panels = host.shown.borrow()[0].1.clone();
+    let last = || {
+        host.glass
+            .borrow()
+            .last()
+            .cloned()
+            .expect("no glass asked for")
+    };
+    assert_eq!(
+        last(),
+        (vec![(panels[0], RADIUS)], false),
+        "the tab menu's panel alone, in its dark look, though the window holds Move to's too"
+    );
+
+    cx.simulate_keystrokes("m right");
+    assert_eq!(
+        last().0,
+        [(panels[0], RADIUS), (panels[1], QUIET_RADIUS)],
+        "and Move to's as it opens, with a list of choices' quieter corner"
+    );
+
+    cx.simulate_keystrokes("escape");
+    assert_eq!(last().0, [(panels[0], RADIUS)], "Move to's closed");
+}
+
+/// Where the window can't blend, the panels are square, and so is what the host puts under them.
+#[gpui::test]
+fn where_the_window_cant_blend_the_material_is_square(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder {
+        opaque: true,
+        ..Recorder::default()
+    });
+    let window = cx
+        .update(|cx| super::open(host.clone(), cx))
+        .expect("no window for the menu");
+    let cx = &mut VisualTestContext::from_window(window.into(), cx);
+
+    show_menu(cx);
+    cx.simulate_keystrokes("m right");
+    let (glass, _) = host
+        .glass
+        .borrow()
+        .last()
+        .cloned()
+        .expect("no glass asked for");
+    let panels = host.shown.borrow().last().unwrap().1.clone();
+    assert_eq!(glass, [(panels[0], 0.), (panels[1], 0.)]);
 }
 
 /// A scroll is the menu's while it shows, over it or outside it: the host hears it's taken, so

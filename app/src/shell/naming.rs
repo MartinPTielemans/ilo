@@ -702,7 +702,7 @@ impl Shell {
         if to_page {
             self.page_took_keyboard(window, cx);
         } else {
-            self.card_keys_window_left("app", cx);
+            self.ilo_keys_window_left("app", cx);
         }
     }
 

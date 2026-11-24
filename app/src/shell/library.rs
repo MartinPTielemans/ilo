@@ -1312,8 +1312,9 @@ impl Shell {
                     .filter(|(_, task)| {
                         query.is_empty() || found(&task.title) || found(&task.asked)
                     })
-                    .filter(|(_, task)| shown(task.left))
-                    .map(|(index, task)| (Item::Task(index), task.left));
+                    // By its end, so the time its row says is its heading's day's.
+                    .filter(|(_, task)| shown(task.ended))
+                    .map(|(index, task)| (Item::Task(index), task.ended));
                 let mut listed: Vec<_> = tabs.chain(tasks).collect();
                 // Closed tabs say they were Little ilo's while some of the others' are listed.
                 let little = |little: bool| {
@@ -1495,7 +1496,7 @@ impl Shell {
 
     /// The task `agent` comes back from the Archive, as ⇧⌘T brings it: its card to the foot, with
     /// its conversation open, and the Library closes.
-    fn restore_archived_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
+    pub(super) fn restore_archived_task(&mut self, agent: SharedString, cx: &mut Context<Self>) {
         // check.sh waits for this line.
         log!("browser: restore archived task {agent}");
         self.show_restored = Some(agent.clone());
@@ -2835,6 +2836,18 @@ impl Shell {
             .into_any_element()
     }
 
+    /// What a task's row says under its title: who worked on it and how it ended, when, as the
+    /// rows of the day it's listed under say when, and the pages it still holds.
+    fn archived_task_about(&self, task: &ArchivedTask) -> String {
+        let when = match &self.library {
+            Some(library) if task.ended > 0. => {
+                history_when(task.ended, library.starts, crate::clock::twelve_hour())
+            }
+            _ => String::new(),
+        };
+        task.about_at(&when)
+    }
+
     /// A task's line in the archive, as a tab's: its card's mark in the favicon's place, its title
     /// over its CLI, how it ended and when. A click brings its card back with its conversation
     /// open, and a right-click shows its menu.
@@ -2848,6 +2861,7 @@ impl Shell {
         } else {
             task.title.clone()
         };
+        let about = SharedString::from(self.archived_task_about(task));
         let mark = self.status_mark(task.dot);
         let menu_agent = agent.clone();
         div()
@@ -2904,7 +2918,7 @@ impl Shell {
                                 self.palette.text(UNSELECTED_TITLE),
                             ))
                             .child(text_line(
-                                task.about.clone(),
+                                about,
                                 text::SMALL,
                                 15.,
                                 self.palette.gray(SECONDARY),
@@ -2966,6 +2980,13 @@ impl Shell {
             crate::settings_rows::drawn(format!("library past {id}"), library.drawn.clone())
         });
         let group: SharedString = format!("past-{index}").into();
+        // When it ended, as History's rows say when, under the same headings.
+        let when = (self.library.as_ref()).map(|library| {
+            // The Library's times are milliseconds.
+            let ended = past.ended as f64 * 1000.;
+            history_when(ended, library.starts, crate::clock::twelve_hour())
+        });
+        let about = SharedString::from(past.about(&when.unwrap_or_default()));
         let mark = self.status_mark(crate::agents::task::Dot::Done);
         let close = div()
             .id(("past-delete", index))
@@ -3030,7 +3051,7 @@ impl Shell {
                                 self.palette.text(UNSELECTED_TITLE),
                             ))
                             .child(text_line(
-                                past.about().into(),
+                                about,
                                 text::SMALL,
                                 15.,
                                 self.palette.gray(SECONDARY),
@@ -3990,14 +4011,20 @@ impl Shell {
                 .text_color(self.palette.text(SECONDARY)))
             .into_any_element(),
         };
+        // Over the window, so the plate anything has under the pointer there, and the gray on it.
+        let (lit, on_plate) = (
+            self.palette.hovered_plate(),
+            self.palette.gray_on_plate(SECONDARY),
+        );
         div()
             .h(px(ARCHIVED_PITCH))
             .pl(px(ARCHIVED_LEFT))
             .pr(px(ARCHIVED_RIGHT))
             .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
             .child(
-                self.download_row(div().id(("download", id)), id, "row", cx)
+                self.download_row(div().id(("download", id)), id, "row", lit, cx)
                     .map(|plate| self.library_row(plate, Item::Download(index), 0, ARCHIVED_RADIUS))
+                    .group(POINTED_ROW)
                     .block_mouse_except_scroll()
                     .size_full()
                     .relative()
@@ -4026,12 +4053,12 @@ impl Shell {
                                 17.,
                                 self.palette.text(UNSELECTED_TITLE),
                             ))
-                            .child(text_line(
-                                status,
-                                text::SMALL,
-                                15.,
-                                self.palette.gray(SECONDARY),
-                            )),
+                            .child(
+                                text_line(status, text::SMALL, 15., self.palette.gray(SECONDARY))
+                                    .group_hover(POINTED_ROW, move |style| {
+                                        style.text_color(on_plate)
+                                    }),
+                            ),
                     )
                     .children(progress.map(|done| {
                         div()
@@ -4055,13 +4082,15 @@ impl Shell {
     }
 
     /// What a download's row does, in the Library or the Library button's recent downloads, with
-    /// its plate lit under the pointer: a press that can drag the file out, a click that opens a
-    /// finished file or shows a held one's menu, and a right-click that shows the menu.
+    /// its plate `lit` under the pointer, which is as its ground asks, the window or a fill: a
+    /// press that can drag the file out, a click that opens a finished file or shows a held one's
+    /// menu, and a right-click that shows the menu.
     pub(super) fn download_row(
         &self,
         row: Stateful<Div>,
         id: u64,
         source: &'static str,
+        lit: Hsla,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let Some(download) = self.downloads.iter().find(|each| each.id == id) else {
@@ -4071,7 +4100,7 @@ impl Shell {
         // GPUI never hears the release that ends the system's drag, and would keep the row
         // pressed.
         let dragged = matches!(self.download_press, Some((pressed, _, true)) if pressed == id);
-        row.hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+        row.hover(move |style| style.bg(lit))
             .when(!dragged, |row| {
                 row.active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
             })
@@ -4436,6 +4465,10 @@ fn panel_at_rest(edge: f32, width: f32) -> bool {
 pub(super) fn library_band(way: f32) -> f32 {
     super::band(way, LIBRARY_BAND, LIBRARY_BAND_STIFFNESS)
 }
+
+/// What a Library row over the window is named as a group, so the gray words on it take a plate's
+/// gray while the pointer is on the row.
+pub(super) const POINTED_ROW: &str = "library-row";
 
 /// A line of a row's text, cut short with an ellipsis.
 fn text_line(text: SharedString, size: f32, height: f32, color: Hsla) -> gpui::Div {

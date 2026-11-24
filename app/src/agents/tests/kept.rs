@@ -2,12 +2,15 @@
 //! its conversation says where it can't, and how what was kept goes. The assistant is a stand-in
 //! the tests write themselves, in a profile folder of their own: never the user's own.
 
+#[cfg(unix)]
+pub(crate) mod past;
+
 use super::*;
 use crate::agents::kept::{self, Id};
 use crate::agents::ready::{Found, Ready};
 use crate::agents::runner::{self, Cli, Out};
 use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
-use crate::agents::task::{AskedOn, Conversation, Line, State};
+use crate::agents::task::{AskedOn, Conversation, Line, State, TaskAction, Word};
 use crate::agents::tier::Tier;
 
 /// A stand-in for `claude`. A run of it writes what it was started with and where beside itself,
@@ -127,13 +130,14 @@ impl Run {
     pub(super) fn said(&self, agent: &str, out: Out, cx: &mut TestAppContext) {
         let event = runner::Event {
             agent: agent.into(),
+            run: (self.agents).read_with(cx, |agents, _| agents.run_of(agent)),
             out,
         };
         (self.agents).update(cx, |agents, cx| agents.task_said(event, cx));
     }
 
     /// The task's turn ends well, with its answer.
-    fn finish(&self, agent: &str, cx: &mut TestAppContext) {
+    pub(super) fn finish(&self, agent: &str, cx: &mut TestAppContext) {
         self.said(agent, Out::Said("Two seats at 9:05, car 4.".into()), cx);
         self.said(agent, Out::Ended(None), cx);
         assert!(matches!(self.state(agent, cx), State::Done { .. }));
@@ -200,7 +204,7 @@ impl Run {
     }
 
     /// Every file under the profile's folder but the stand-in's own, as text.
-    fn files(&self) -> Vec<(PathBuf, String)> {
+    pub(super) fn files(&self) -> Vec<(PathBuf, String)> {
         let (mut folders, mut files) = (vec![self.profile.clone()], Vec::new());
         while let Some(folder) = folders.pop() {
             for entry in std::fs::read_dir(&folder).unwrap() {
@@ -244,8 +248,7 @@ pub(super) fn after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
 }
 
 /// A kept task's run starts with an id of ilo's making, in a folder of its own under the
-/// profile's, named by the id, with nothing in it. ilo holds the id and counts it; the profile's
-/// first says, once it has ended, where its conversation lives, and no other does.
+/// profile's, named by the id, with nothing in it. ilo holds the id and counts it.
 #[cfg(unix)]
 #[gpui::test]
 fn a_kept_task_runs_under_an_id_of_ilos_in_a_folder_of_its_own(cx: &mut TestAppContext) {
@@ -260,23 +263,12 @@ fn a_kept_task_runs_under_an_id_of_ilos_in_a_folder_of_its_own(cx: &mut TestAppC
     assert_eq!(run.ran_in(1), run.folder(&id));
     assert_eq!(std::fs::read_dir(run.folder(&id)).unwrap().count(), 0);
     assert_eq!(run.kept(cx), (1, 0));
-    // While it works its conversation has none of ilo's lines; ended, the one that says where.
-    assert_eq!(run.ilo_lines(&agent, cx), []);
-    run.finish(&agent, cx);
-    assert_eq!(run.ilo_lines(&agent, cx), [IloKind::KeptHere]);
-    assert!(matches!(
-        run.talk(&agent, cx).lines.last(),
-        Some(Line::Ilo(_))
-    ));
-    // The next task's says nothing of it: once per profile, which the settings keep.
     let second = run.start(Cli::Claude, cx);
     run.ran(2);
     run.finish(&second, cx);
-    assert_eq!(run.ilo_lines(&second, cx), []);
     assert_eq!(run.kept(cx), (2, 0));
     let saved = std::fs::read_to_string(run.profile.join("agents.json")).unwrap();
     let saved: Value = serde_json::from_str(&saved).unwrap();
-    assert_eq!(saved["tasks"]["kept_told"], json!(true));
     assert_eq!(saved["tasks"]["keep"], json!(true));
 }
 
@@ -291,14 +283,12 @@ fn a_reply_takes_an_ended_task_up_at_work_on_pages(cx: &mut TestAppContext) {
     let agent = run.start(Cli::Claude, cx);
     let (new, _) = run.ran(1);
     let id = run.id(&agent, cx);
+    // The user gives it the highest access while it works, and it ends there.
+    (run.agents).update(cx, |agents, cx| agents.set_tier(&agent, Tier::Full, cx));
     run.finish(&agent, cx);
     // Its run went, as at its assistant's own end.
     run.said(&agent, Out::Gone(String::new()), cx);
     assert!(matches!(run.state(&agent, cx), State::Done { .. }));
-    // As the task's access will be saved once tasks have one each: it ended at the highest.
-    run.agents.update(cx, |agents, _| {
-        agents.tasks.kept.of_mut(&agent).unwrap().tier = Tier::Full
-    });
     let reply = "Are there two together for Sunday too?";
     (run.agents).update(cx, |agents, cx| agents.reply(&agent, reply, cx));
 
@@ -315,8 +305,10 @@ fn a_reply_takes_an_ended_task_up_at_work_on_pages(cx: &mut TestAppContext) {
         })
         .collect();
     assert_eq!(as_new, new);
-    let tier = (run.agents).read_with(cx, |agents, _| agents.tasks.kept.of(&agent).unwrap().tier);
-    assert_eq!(tier, Tier::Work);
+    let tier = |cx: &mut TestAppContext| {
+        (run.agents).read_with(cx, |agents, _| agents.task(&agent).unwrap().tier)
+    };
+    assert_eq!(tier(cx), Tier::Work);
 
     // ilo's line is right over the reply, under the first run's work and answer.
     let talk = run.talk(&agent, cx);
@@ -330,7 +322,9 @@ fn a_reply_takes_an_ended_task_up_at_work_on_pages(cx: &mut TestAppContext) {
             ..
         })
     ));
-    assert!(matches!(&talk.lines[at - 2], Line::Said(said) if said.contains("9:05")));
+    let answer = (talk.lines[..at - 1].iter())
+        .any(|line| matches!(line, Line::Said(said) if said.contains("9:05")));
+    assert!(answer, "the first run's answer");
     assert_eq!(run.state(&agent, cx), State::Working);
     assert_eq!(run.kept(cx), (1, 0), "a pick-up is the same conversation");
     // The activity log has it once, under the task.
@@ -342,8 +336,54 @@ fn a_reply_takes_an_ended_task_up_at_work_on_pages(cx: &mut TestAppContext) {
     let resumed = |kind: &IloKind| matches!(kind, IloKind::Resumed { .. });
     let lines = run.ilo_lines(&agent, cx);
     assert_eq!(lines.iter().filter(|kind| resumed(kind)).count(), 1);
+    // Done again at Work on pages, the next reply takes it up there: the reply is the resume, and
+    // ilo has no second line.
+    run.finish(&agent, cx);
+    (run.agents).update(cx, |agents, cx| agents.reply(&agent, "And Monday?", cx));
+    assert_eq!(run.state(&agent, cx), State::Working);
+    assert_eq!(tier(cx), Tier::Work);
+    let lines = run.ilo_lines(&agent, cx);
+    assert_eq!(lines.iter().filter(|kind| resumed(kind)).count(), 1);
     // And a task that only looked comes back only looking.
     assert_eq!(kept::comes_back(Tier::Look), Tier::Look);
+}
+
+/// A reply to a task done or stopped in this run, at the access it had, has no line of ilo's over
+/// it: the reply is the resume. The activity log still has each.
+#[cfg(unix)]
+#[gpui::test]
+fn a_reply_at_the_access_a_task_had_has_no_line_of_ilos(cx: &mut TestAppContext) {
+    let run = Run::new("same-access", cx);
+    let done = run.start(Cli::Claude, cx);
+    run.ran(1);
+    run.finish(&done, cx);
+    run.said(&done, Out::Gone(String::new()), cx);
+    (run.agents).update(cx, |agents, cx| agents.reply(&done, "And for Sunday?", cx));
+    let (resumed, _) = run.ran(2);
+    assert!(resumed.iter().any(|arg| arg == "--resume"));
+    assert_eq!(run.state(&done, cx), State::Working);
+    assert_eq!(run.ilo_lines(&done, cx), []);
+
+    // One that only looks, stopped, comes back only looking, with no line either.
+    let stopped = run.start(Cli::Claude, cx);
+    run.ran(3);
+    (run.agents).update(cx, |agents, cx| {
+        agents.set_tier(&stopped, Tier::Look, cx);
+        _ = agents.task_action(&stopped, TaskAction::Stop, cx);
+    });
+    assert_eq!(run.state(&stopped, cx), State::Stopped);
+    (run.agents).update(cx, |agents, cx| agents.reply(&stopped, "Go on", cx));
+    assert_eq!(run.state(&stopped, cx), State::Working);
+    let resumed = |kind: &IloKind| matches!(kind, IloKind::Resumed { .. });
+    assert!(!run.ilo_lines(&stopped, cx).iter().any(resumed));
+    (run.agents).read_with(cx, |agents, _| {
+        assert_eq!(agents.task(&stopped).unwrap().tier, Tier::Look)
+    });
+    for agent in [&done, &stopped] {
+        let noted = log(&run.agents, agent, cx);
+        let resumes = (noted.iter()).filter(|(action, _, _)| action == "resumed");
+        assert_eq!(resumes.count(), 1, "{noted:?}");
+    }
 }
 
 /// A task whose run still waits when the reply comes is taken up the same, on that run.
@@ -366,8 +406,9 @@ fn a_reply_to_a_run_that_still_waits_takes_the_task_up_on_it(cx: &mut TestAppCon
     let second: Value = serde_json::from_str(sent.lines().nth(1).expect("the reply")).unwrap();
     assert_eq!(second["message"]["content"], json!("And for Sunday?"));
     assert!(!beside(&run.program, "args.2").exists(), "a second run");
-    let lines = run.ilo_lines(&agent, cx);
-    assert!(lines.contains(&IloKind::Resumed { tier: Tier::Work }));
+    assert_eq!(run.state(&agent, cx), State::Working);
+    // At the access it had: the reply is the resume, with no line of ilo's.
+    assert_eq!(run.ilo_lines(&agent, cx), []);
 }
 
 /// Settings › Agents' switch off: a task's run keeps nothing, ilo holds no id and makes no folder,
@@ -463,6 +504,47 @@ fn a_conversation_its_assistant_no_longer_has_says_so(cx: &mut TestAppContext) {
     assert_eq!(run.kept(cx), (0, 0));
 }
 
+/// A reply that reached a task still under way, whose run had gone, starts a run that finds the
+/// conversation gone. Nobody stopped that task: it's Interrupted, why is the line in its reply
+/// field's place, and with Start Again there, it takes no reply.
+#[cfg(unix)]
+#[gpui::test]
+fn a_task_under_way_whose_conversation_went_is_interrupted(cx: &mut TestAppContext) {
+    let run = Run::new("gone-under-way", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    let id = run.id(&agent, cx);
+    (run.agents).update(cx, |agents, _| agents.run_went_unheard(&agent));
+    (run.agents).update(cx, |agents, cx| agents.reply(&agent, "And for Sunday?", cx));
+    let (args, _) = run.ran(2);
+    assert!(args.iter().any(|arg| arg == id.as_str()), "{args:?}");
+    let said = format!("No conversation found with session ID: {}", id.as_str());
+    run.said(&agent, Out::Gone(said), cx);
+
+    let why = "Claude no longer has this conversation.";
+    assert_eq!(
+        run.state(&agent, cx),
+        State::Failed {
+            why: why.into(),
+            assistant: false,
+        }
+    );
+    let card = (run.agents).read_with(cx, |agents, cx| {
+        let mut cards = agents.shown_cards(cx).into_iter();
+        cards.find(|card| card.agent.as_ref() == agent).unwrap()
+    });
+    assert_eq!(card.word, Word::Interrupted);
+    assert_eq!(card.status.as_ref(), why);
+    let talk = run.talk(&agent, cx);
+    assert_eq!(talk.about.as_ref(), "Claude · Interrupted");
+    assert_eq!(run.ilo_lines(&agent, cx), [IloKind::Gone]);
+    let Some(Line::Ilo(last)) = talk.lines.last() else {
+        panic!("ilo's line isn't last");
+    };
+    assert!(ilo::in_field(&last.kind));
+    assert_eq!(ilo::buttons(last), [IloButton::StartAgain]);
+}
+
 /// Removing a task removes what its assistant kept of it: the assistant is asked for that task's
 /// folder alone, then the folder, the id and the file of ids go.
 #[cfg(unix)]
@@ -537,32 +619,6 @@ fn a_removal_that_failed_stays_listed_and_remove_all_tries_again(cx: &mut TestAp
     assert_eq!(run.ilo_lines(&agent, cx).last(), Some(&IloKind::Gone));
 }
 
-/// The conversations a run of the browser left go at the next launch, as its tasks went: by the
-/// ids in the file alone, each asked of its assistant.
-#[cfg(unix)]
-#[gpui::test]
-fn the_next_launch_removes_what_the_run_before_kept(cx: &mut TestAppContext) {
-    let run = Run::new("launch", cx);
-    let agent = run.start(Cli::Claude, cx);
-    run.ran(1);
-    let id = run.id(&agent, cx);
-    run.finish(&agent, cx);
-    // Quit: its tasks end, and what was kept waits for the next launch.
-    (run.agents).update(cx, |agents, cx| agents.end_tasks(true, cx));
-    assert!(run.folder(&id).exists());
-    assert!(run.purged(cx).is_empty());
-
-    let next = Run::again(run.profile.clone(), run.program.clone(), cx);
-    let folder = run.folder(&id);
-    assert_eq!(
-        next.purged(cx),
-        ["purge", folder.to_str().unwrap(), "--yes"]
-    );
-    assert!(!folder.exists());
-    assert_eq!(next.kept(cx), (0, 0));
-    assert!(!next.profile.join(kept::FOLDER).exists());
-}
-
 /// A launch after a run that kept nothing looks for the file of ids and does no more: no process
 /// is started, nothing is spawned, nothing is made in the profile, and no one is told of a change.
 #[cfg(unix)]
@@ -577,7 +633,7 @@ fn a_launch_with_no_file_of_ids_starts_and_spawns_nothing(cx: &mut TestAppContex
         let told = told.clone();
         cx.observe(&run.agents, move |_, _| told.set(told.get() + 1))
     });
-    (run.agents).update(cx, |agents, cx| agents.remove_old_kept(cx));
+    (run.agents).update(cx, |agents, cx| agents.take_old_kept(cx));
     assert!(!cx.executor().tick(), "the launch spawned something");
     assert_eq!(told.get(), 0);
     assert!(run.purged(cx).is_empty());

@@ -43,6 +43,8 @@ pub(super) enum Event {
     HandBack,
     /// The user answered an agent's ask with Keep.
     Keep,
+    /// The user won't do the step the agent handed them now (Not Now): the tab stays theirs.
+    NotNow,
     /// HANDOFF_WAIT passed since the handoff.
     Timer,
     /// The user stopped an agent. `holder` is whether it's the agent the tab is held from.
@@ -62,6 +64,7 @@ impl Event {
         match self {
             Event::HandBack => "handed back",
             Event::Keep => "kept",
+            Event::NotNow => "not now",
             Event::Timer => "not handed back",
             Event::Closed => "closed",
             Event::Moved => "moved",
@@ -132,7 +135,7 @@ pub(super) fn step(life: Life, event: Event) -> (Life, Actions) {
         (Free, HandBack) => (Free, A::HAND_BACK),
         (_, HandBack) => (Free, A::HAND_BACK | answer | A::NOTE | A::CARD),
         (Asked, Keep) => (Held, A::ANSWER | A::NOTE | A::CARD),
-        (HandedOff, Timer) => (Held, A::ANSWER | A::NOTE | A::CARD),
+        (HandedOff, Timer | NotNow) => (Held, A::ANSWER | A::NOTE | A::CARD),
         (HandedOff | Asked, Stop { holder: true }) => (Held, A::ANSWER | A::CARD),
         (HandedOff | Asked, Gone { holder: true }) => (Held, A::DROP | A::CARD),
         (Free, Closed | Moved) => (Free, A::NONE),
@@ -142,7 +145,7 @@ pub(super) fn step(life: Life, event: Event) -> (Life, Actions) {
         // its page, which is the user's now, and the core refuses agents a tab outside their
         // Space anyway.
         (_, Moved) => (Free, answer | A::NOTE | A::CARD),
-        (_, Keep | Timer | Stop { .. } | Gone { .. }) => (life, A::NONE),
+        (_, Keep | Timer | NotNow | Stop { .. } | Gone { .. }) => (life, A::NONE),
     }
 }
 
