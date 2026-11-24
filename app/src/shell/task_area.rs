@@ -277,6 +277,7 @@ impl Shell {
             {
                 page.tab = tab;
             }
+            self.handed_tab_shown(tab, cx);
             cx.notify();
             return true;
         }
@@ -1268,6 +1269,9 @@ fn strip_chip(
         Look::Quiet | Look::Text => page_chip(palette, id, words, key),
     }
 }
+
+mod show_handed;
+pub(super) use show_handed::HandedKeys;
 
 #[cfg(test)]
 mod tests;
