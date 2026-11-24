@@ -61,6 +61,8 @@ pub(super) struct Recorder {
     calls: RefCell<Vec<String>>,
     /// What the window's resting bars asked of the core, in order (#4140).
     pub(super) resting: Rc<RefCell<Vec<String>>>,
+    /// The in-place bar's profile is new: it has learned no agent till this goes false.
+    pub(super) unlearned: Rc<std::cell::Cell<bool>>,
     /// How many detents the trackpad was asked for.
     pub(super) detents: Cell<usize>,
     /// How many tabs and folders it was asked to move.
@@ -1863,6 +1865,7 @@ impl Browser for Recorder {
         self.record("command bar in place".into());
         let host = resting_bar::RestingBar {
             asked: self.resting.clone(),
+            unlearned: self.unlearned.clone(),
         };
         crate::command_bar::in_place(Rc::new(host), window, cx)
     }
