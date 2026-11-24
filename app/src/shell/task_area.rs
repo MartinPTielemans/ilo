@@ -618,7 +618,6 @@ impl Shell {
                 (tile.shown, tile.placed, tile.pressed) = (false, None, None);
             }
             self.browser.end_tile(tab);
-            // check.sh reads this line.
             log!("browser: task page {tab} out of its tile");
             self.browser.select(tab, cx);
             self.lay_out_page(cx);
