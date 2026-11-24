@@ -2015,6 +2015,10 @@ impl Browser for Recorder {
         self.record("off limits".into());
     }
 
+    fn agents_settings(&self, _: &mut App) {
+        self.record("agents settings".into());
+    }
+
     fn shortcuts(&self, _: &mut App) {}
 
     fn about(&self, _: &mut App) {

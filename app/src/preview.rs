@@ -2659,9 +2659,15 @@ fn main() {
             // PREVIEW_ASSISTANTS=start or signed-in shows Settings › Agents' Your assistant, its
             // rows in each state before a sign-in and while and after it fails, or signed in and
             // signing out, with the same rows as Settings draws (#4100).
+            // =models shows one signed in, its Model chosen, and one not, then Notifications.
             if let Ok(state) = states::var("PREVIEW_ASSISTANTS") {
-                let signed_in = state == "signed-in";
-                preview_pictures(Pictures::Assistants { signed_in }, cx);
+                let shown = match state.as_str() {
+                    "models" => Pictures::Models,
+                    _ => Pictures::Assistants {
+                        signed_in: state == "signed-in",
+                    },
+                };
+                preview_pictures(shown, cx);
                 return;
             }
             // PREVIEW_SITE_NOTES=open or closed shows Settings › Agents' Site notes (#4122), its
@@ -3757,8 +3763,10 @@ fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
         ))),
     }
     .unwrap_or_default();
+    let first = (browser::agents::runner::Cli::from_id(cli))
+        .map_or_else(String::new, browser::agents::task::model_default);
     let (_, items) =
-        browser::agents::task::model_menu(chosen, models.default.as_deref(), models.listed);
+        browser::agents::task::model_menu(chosen, &first, models.default.as_deref(), models.listed);
     let light = preview_tone() == Some(Tone::Light);
     if menu::open_at(Rc::new(PreviewMenu), bounds, cx).is_none() {
         return;

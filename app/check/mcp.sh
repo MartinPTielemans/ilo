@@ -4485,10 +4485,11 @@ if [ "$driven" = 1 ]; then
       need=$(sed -n "s/^browser: needs you notified \([0-9]*\) $needing\$/\1/p" "$log" | tail -1)
       await_log "^browser: needs you posted $need\$" \
         "the notification didn't reach the desktop: $(grep '^browser: needs you ' "$log" | tail -1)"
-      note=$(grep '^notify [0-9]* check needs you$' "$notes" | tail -1 | cut -d' ' -f2)
-      [ -n "$note" ] || fail "the desktop's server got no \"check needs you\": $(cat "$notes")"
-      grep -qx "body $note Sign in once more" "$notes" ||
-        fail "the notification's body isn't the handoff's step: $(grep "^body $note " "$notes")"
+      # Named by its client, never by its title or its step, which are the agent's words.
+      note=$(grep '^notify [0-9]* check · Needs you$' "$notes" | tail -1 | cut -d' ' -f2)
+      [ -n "$note" ] || fail "the desktop's server got no \"check · Needs you\": $(cat "$notes")"
+      grep -qx "body $note " "$notes" ||
+        fail "the notification says more than its title: $(grep "^body $note " "$notes")"
       grep -x "hints $note .*" "$notes" | grep -q ' suppress-sound' ||
         fail "the notification may sound: $(grep "^hints $note " "$notes")"
       [ "$(grep -c '^notify ' "$notes")" = 1 ] || fail "a need posted more than once: $(cat "$notes")"

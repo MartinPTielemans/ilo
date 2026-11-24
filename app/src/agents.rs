@@ -974,6 +974,8 @@ pub struct Agents {
     /// until they do (off), and the sign-ins the core is doing, by their request.
     sign_in_chosen: Option<bool>,
     signing: HashMap<u64, signing::Signing>,
+    /// When a task's notification is posted, from Settings › Agents › Notifications.
+    notify: crate::needs_you::Notify,
     /// The log's last entry, by its id.
     logged: u64,
     /// The actions waiting on the user, the first asked now.
@@ -1187,6 +1189,7 @@ impl Agents {
             notes_off: false,
             sign_in_chosen: None,
             signing: HashMap::new(),
+            notify: Default::default(),
             logged: 0,
             asking: Vec::new(),
             downloading: HashMap::new(),
@@ -1283,6 +1286,9 @@ impl Agents {
         // Only the user's own setting: the key "sign_in" every save once wrote, on or not, is
         // never read and goes at the next save.
         self.sign_in_chosen = saved.get(signing::KEY).and_then(Value::as_bool);
+        self.notify = (tasks.get("notify").and_then(Value::as_str))
+            .and_then(crate::needs_you::Notify::from_id)
+            .unwrap_or_default();
         self.on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
         self.scripts = saved
             .get("scripts")
@@ -1320,6 +1326,18 @@ impl Agents {
     /// Whether Settings › Agents' Site notes is on, as it is unless the user turned it off.
     pub fn notes_on(&self) -> bool {
         !self.notes_off
+    }
+
+    /// When a task's notification is posted.
+    pub fn notify(&self) -> crate::needs_you::Notify {
+        self.notify
+    }
+
+    /// Settings › Agents' When to notify.
+    pub fn set_notify(&mut self, notify: crate::needs_you::Notify, cx: &mut Context<Self>) {
+        self.notify = notify;
+        self.save();
+        cx.notify();
     }
 
     /// Settings › Agents' Site notes. Off, no answer carries a site's notes from then on.
@@ -5511,6 +5529,7 @@ impl Agents {
             "found": found,
             "keep": !self.tasks.kept.off,
             "kept_told": self.tasks.kept.told,
+            "notify": self.notify.id(),
         });
         let saved = json!({
             "on": self.on,
