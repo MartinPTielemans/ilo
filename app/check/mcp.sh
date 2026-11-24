@@ -2993,25 +2993,42 @@ function again() {
     *"Again: Ag4in-held-x"*) ;;
     *) fail "withheld value shown again: step 6 read: $answer" ;;
   esac
-  # Step 7's frame is from another site, so it has a renderer and a session of its own. The page's
-  # title says when the frame is busy, and the page removes it a while after.
+  # Step 7's frame is from another site, so it has a renderer and a session of its own. Asked,
+  # it says on a channel of its own until when it'll be busy, then is; the page's title says the
+  # word came while it was (a frame's postMessage comes only once it's free). The read starts then,
+  # and the page removes the frame 3 s into its busy time: the read's text saying the frame left
+  # shows the read's look was out across the frame's session ending.
   printf '%s' "<!doctype html><meta charset=utf-8><title>Frame</title><p>In the frame</p>
-<script>addEventListener('load', () => setTimeout(() => {
-  parent.postMessage('busy', '*');
-  const until = Date.now() + 5000;
-  while (Date.now() < until) {}
-}, 4000));</script>" > "$out/site/frame-busy.html"
-  printf '%s' "<!doctype html><meta charset=utf-8><title>loading</title><p>Frame page</p>
-<iframe src=\"http://localhost:$port/frame-busy.html\"></iframe>
 <script>addEventListener('message', (event) => {
-  if (event.data !== 'busy') return;
-  document.title = 'frame busy';
-  setTimeout(() => document.querySelector('iframe').remove(), 3000);
-});</script>" > "$out/site/frame-gone.html"
-  go_shown frame-gone 'frame busy'
+  const until = Date.now() + 5000;
+  event.ports[0].postMessage(until);
+  while (Date.now() < until) {}
+});</script>" > "$out/site/frame-busy.html"
+  printf '%s' "<!doctype html><meta charset=utf-8><title>loading</title><p id=state>Frame page</p>
+<iframe src=\"http://localhost:$port/frame-busy.html\"></iframe>
+<script>const frame = document.querySelector('iframe');
+frame.addEventListener('load', () => setTimeout(() => {
+  const channel = new MessageChannel();
+  channel.port1.onmessage = (event) => {
+    document.title = Date.now() < event.data - 4000 ? 'frame busy' : 'frame free';
+    setTimeout(() => {
+      document.title = 'frame left';
+      state.textContent = 'Frame page, its frame left';
+      frame.remove();
+    }, 3000);
+  };
+  frame.contentWindow.postMessage('ask', '*', [channel.port2]);
+}, 4000));</script>" > "$out/site/frame-gone.html"
+  go_shown frame-gone 'frame \(busy\|free\)'
+  grep -q "^browser: title $shown_tab frame busy\$" "$log" ||
+    fail "withheld value shown again: step 7's frame wasn't busy when its word came"
+  grep -q "^browser: title $shown_tab frame left\$" "$log" &&
+    fail "withheld value shown again: step 7's frame left before the read"
   answer=$(call read_page "{\"tab\":$shown_tab}")
   case "$answer" in
-    *"Frame page"*) ;;
+    *"Frame page, its frame left"*) ;;
+    *"Frame page"*)
+      fail "withheld value shown again: step 7's read didn't wait for the busy frame: $answer" ;;
     *) fail "withheld value shown again: step 7 read: $answer" ;;
   esac
   call close_tab "{\"tab\":$shown_tab}" > /dev/null
