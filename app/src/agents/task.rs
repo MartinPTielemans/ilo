@@ -486,6 +486,8 @@ pub struct Card {
     /// Whether the status is the agent's question, which may take two lines.
     pub asks: bool,
     pub dot: Dot,
+    /// Its state in one word, as every place that names it says it.
+    pub word: Word,
     /// An ask's answers, as buttons.
     pub answers: Vec<SharedString>,
     /// A confirmation or a handoff of the task's, which the card asks instead of the windows'.
@@ -520,6 +522,68 @@ pub enum Dot {
     Done,
     /// A hollow ring: stopped, at its limit, or it couldn't go on.
     Ended,
+}
+
+/// A task's state in one word. Its card, the list of tasks, the Archive's rows and the strip under
+/// its page all name it from here, so no two of them say it differently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Word {
+    Working,
+    /// A question, a handoff or a refusal waits on the user.
+    NeedsYou,
+    Done,
+    /// The user stopped it.
+    Stopped,
+    /// Its assistant's program quit or broke.
+    Interrupted,
+    /// Its assistant is at its own usage limit.
+    AtLimit,
+}
+
+impl Word {
+    /// The word for `state`; `waits` says whether something of the task's waits on the user.
+    pub fn of(state: &State, waits: bool) -> Self {
+        match state {
+            State::Working if waits => Self::NeedsYou,
+            State::Working => Self::Working,
+            State::Asking { .. } => Self::NeedsYou,
+            State::Done { .. } => Self::Done,
+            State::Stopped => Self::Stopped,
+            State::Failed { .. } => Self::Interrupted,
+            State::Limit { .. } => Self::AtLimit,
+        }
+    }
+
+    /// After the assistant's name and a middle dot: "Claude · At limit".
+    pub fn after_name(self) -> &'static str {
+        match self {
+            Self::Working => "Working",
+            Self::NeedsYou => NEEDS_YOU,
+            Self::Done => "Done",
+            Self::Stopped => "Stopped",
+            Self::Interrupted => "Interrupted",
+            Self::AtLimit => "At limit",
+        }
+    }
+
+    /// The word of a card drawn without its task, as the tests and the preview draw them, for its
+    /// `dot`: an ended one says Stopped.
+    pub fn for_dot(dot: Dot) -> Self {
+        match dot {
+            Dot::Working => Self::Working,
+            Dot::Waiting => Self::NeedsYou,
+            Dot::Done => Self::Done,
+            Dot::Ended => Self::Stopped,
+        }
+    }
+
+    /// On its own, which names the assistant only when the limit is its: "Claude at limit".
+    pub fn alone(self, name: &str) -> SharedString {
+        match self {
+            Self::AtLimit => format!("{name} at limit").into(),
+            word => word.after_name().into(),
+        }
+    }
 }
 
 /// What the user does to a task from its card or its conversation.
@@ -654,11 +718,11 @@ impl Agents {
             .filter_map(|agent| self.task(agent))
             .filter(|task| task.dismissed && !task.deleted)
             .map(|task| {
-                let (words, dot) = match task.state {
-                    State::Done { .. } => ("Done", Dot::Done),
-                    State::Failed { .. } => ("Failed", Dot::Ended),
-                    _ => ("Stopped", Dot::Ended),
+                let dot = match task.state {
+                    State::Done { .. } => Dot::Done,
+                    _ => Dot::Ended,
                 };
+                let words = Word::of(&task.state, false).after_name();
                 let mut about = format!("{} · {words}", task.name);
                 if let Some(at) = task.ended.or(task.left) {
                     about = format!("{about} {}", super::local_time(seconds(at)));
@@ -789,17 +853,16 @@ impl Agents {
             true => progress(turn_steps(task).len(), tabs.len()),
             false => String::new(),
         };
+        // The state's word, whoever of the task's waits: the task itself or a helper. Done says
+        // when, and a limit its longer line.
         let about = match &task.state {
-            // What the card says, whoever of the task's waits: the task itself or a helper.
-            State::Working if self.waits_on_user(task) => NEEDS_YOU.to_string(),
-            State::Working => "Working".to_string(),
-            State::Asking { .. } => "Waiting for you".to_string(),
-            State::Done { .. } => match task.ended {
-                Some(at) => done_at(&super::local_time(seconds(at))),
-                None => "Done".to_string(),
-            },
+            State::Done { .. } if let Some(at) = task.ended => {
+                done_at(&super::local_time(seconds(at)))
+            }
             State::Limit { resets } => limit_words(&task.name, resets),
-            State::Stopped | State::Failed { .. } => "Stopped".to_string(),
+            state => Word::of(state, self.waits_on_user(task))
+                .after_name()
+                .to_string(),
         };
         // A session's title is the agent's words or its sites, so the line under it leads with its
         // client's name, and its state goes on as a fact, in lower case (#3690).
@@ -1005,6 +1068,7 @@ impl Agents {
             last_site: last_site(task),
             asks,
             dot,
+            word: Word::of(&task.state, dot == Dot::Waiting),
             answers: match &task.state {
                 State::Asking { answers, .. } if asks => answers.clone(),
                 _ => Vec::new(),

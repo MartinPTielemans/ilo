@@ -8177,6 +8177,81 @@ mod tasks {
 
     /// The Archive lists the dismissed tasks, the last to leave the foot first, each with how it
     /// ended and when. Delete from Archive takes one out of the list and out of ⇧⌘T's reach, and
+    /// Each state has one word, which a task's card, its conversation's line and its Archive row all
+    /// say: one whose assistant's program quit or broke is Interrupted, never Failed or Stopped;
+    /// one waiting on the user Needs you; one at its assistant's limit says so, with the
+    /// assistant's name when the word stands alone. The conversation's line keeps the limit's
+    /// longer words.
+    #[gpui::test]
+    fn every_state_has_one_word_and_every_place_says_it(cx: &mut TestAppContext) {
+        use crate::agents::task::Word;
+        let (agents, _) = ready(None, cx);
+        let done = State::Done {
+            result: "Did it.".into(),
+            summary: None,
+            tabs: Vec::new(),
+        };
+        let asking = State::Asking {
+            question: "Which day?".into(),
+            answers: Vec::new(),
+        };
+        let failed = State::Failed {
+            why: "Claude quit.".into(),
+            assistant: false,
+        };
+        let states = [
+            (State::Working, Word::Working, "Working", "Working"),
+            (asking, Word::NeedsYou, "Needs you", "Needs you"),
+            (done, Word::Done, "Done", "Done"),
+            (State::Stopped, Word::Stopped, "Stopped", "Stopped"),
+            (failed, Word::Interrupted, "Interrupted", "Interrupted"),
+            (
+                State::Limit { resets: None },
+                Word::AtLimit,
+                "At limit",
+                "Claude at limit",
+            ),
+        ];
+        for (state, word, after_name, alone) in states {
+            assert_eq!(Word::of(&state, false), word, "{state:?}");
+            assert_eq!(
+                (word.after_name(), word.alone("Claude").as_ref()),
+                (after_name, alone)
+            );
+            let agent = start(&agents, "Find two seats", cx);
+            let set = |agents: &Entity<Agents>, cx: &mut TestAppContext| {
+                agents.update(cx, |agents, _| {
+                    let task = agents.task_mut(&agent).unwrap();
+                    (task.state, task.ended) = (state.clone(), None);
+                })
+            };
+            set(&agents, cx);
+            let card = agents.read_with(cx, |agents, cx| {
+                let mut cards = agents.cards(1, cx).into_iter();
+                cards.find(|card| card.agent.as_ref() == agent).unwrap()
+            });
+            assert_eq!(card.word, word, "the card of {state:?}");
+            let about = agents.read_with(cx, |agents, cx| {
+                agents.conversation(&agent, cx).unwrap().about.to_string()
+            });
+            match word {
+                Word::AtLimit => assert_eq!(about, "Claude · Claude hit its usage limit"),
+                _ => assert_eq!(about, format!("Claude · {after_name}"), "{state:?}"),
+            }
+            // Dismissing stops a task under way, so its row is read with the state put back.
+            agents.update(cx, |agents, cx| agents.dismiss_task(&agent, cx));
+            set(&agents, cx);
+            let row = agents.read_with(cx, |agents, cx| {
+                let mut rows = agents.archived_tasks(cx).into_iter();
+                rows.find(|row| row.agent.as_ref() == agent).unwrap().about
+            });
+            // The row goes on with when it left the foot.
+            let word_then = format!("Claude · {after_name} ");
+            assert!(row.starts_with(&word_then), "{state:?}'s row: {row}");
+        }
+        assert_eq!(Word::of(&State::Working, true), Word::NeedsYou);
+    }
+
     /// ⌘Z's Undelete puts it back.
     #[gpui::test]
     fn the_archive_lists_dismissed_tasks_until_one_is_deleted(cx: &mut TestAppContext) {

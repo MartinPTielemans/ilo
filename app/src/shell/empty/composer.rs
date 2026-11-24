@@ -420,12 +420,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let palette = self.palette;
-        let state = match card.dot {
-            Dot::Working => "Working",
-            Dot::Waiting => "Needs you",
-            Dot::Done => "Done",
-            Dot::Ended => "Ended",
-        };
+        let state = card.word.alone(&card.name);
         let dot = (card.dot == Dot::Working).then(|| {
             div()
                 .flex_none()
