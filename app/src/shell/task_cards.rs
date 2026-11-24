@@ -33,6 +33,7 @@ use gpui::{
     prelude::*, px, rgb,
 };
 
+use super::agent_bar;
 use super::library::LIBRARY_BACK_INSET;
 use super::page_ends::StripStop;
 use super::{
@@ -202,7 +203,8 @@ fn state_lead(line: &str) -> usize {
     if leads { full.len() } else { 0 }
 }
 
-/// The one word at the end of a page's row.
+/// What a task's page is to it now, in the words every place that names the page says: the end of
+/// its row at the sidebar's foot, and its tile's head line.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum PageWord {
     /// The task works in it now, which Signal's dot before the word says too.
@@ -211,16 +213,19 @@ pub(super) enum PageWord {
     /// Its task waits for the user here: the page it handed them. In the title's ink, as the
     /// glyph is while the task asks.
     NeedsYou,
-    /// The user holds it, or its task waits, stopped or broke off.
+    /// The user took it over: the bar's title on that page, in the title's ink too.
+    Driving,
+    /// Its task waits, stopped or broke off, or the user holds it for a task that went on.
     Paused,
 }
 
 impl PageWord {
-    fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             PageWord::Reading => "Reading",
             PageWord::Done => "Done",
             PageWord::NeedsYou => NEEDS_YOU,
+            PageWord::Driving => agent_bar::DRIVING,
             PageWord::Paused => "Paused",
         }
     }
@@ -1006,15 +1011,16 @@ impl Shell {
         }
     }
 
-    /// The word at the end of `tab`'s row in `card`'s group: Needs you where its task waits for
-    /// the user at the page it handed them, Paused where the user holds the page otherwise or its
-    /// task waits, stopped or broke off, Reading where the task works in it now, else Done.
+    /// What `tab` is to `card`'s task now, of the five words a task's page has: You're driving
+    /// where the user took it over, Needs you where its task waits for them at the page it handed
+    /// them, Reading where the task works in it now, Paused where its task waits, stopped or broke
+    /// off, or went on from a page it handed them, else Done. The row at the sidebar's foot ends
+    /// in it and a tile's head line says it, so a page reads the same in both.
     pub(super) fn page_word(&self, card: &Card, tab: u64) -> PageWord {
         match self.held_why(tab) {
             // What the task asked of them there: a page they took over has none.
-            Some(asked) if card.word == Word::NeedsYou && !asked.is_empty() => {
-                return PageWord::NeedsYou;
-            }
+            Some(asked) if asked.is_empty() => return PageWord::Driving,
+            Some(_) if card.word == Word::NeedsYou => return PageWord::NeedsYou,
             Some(_) => return PageWord::Paused,
             None => {}
         }
@@ -1928,7 +1934,7 @@ impl Shell {
             .gap(px(PAGE_DOT_GAP))
             .text_size(px(text::SMALL))
             .text_color(match word {
-                PageWord::NeedsYou => self.palette.text(TITLE),
+                PageWord::NeedsYou | PageWord::Driving => self.palette.text(TITLE),
                 PageWord::Reading => self.palette.gray(PAGE_WORD_WORKING),
                 PageWord::Done | PageWord::Paused => self.palette.gray(PAGE_WORD),
             })

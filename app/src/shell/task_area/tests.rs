@@ -628,6 +628,65 @@ fn the_strip_takes_over_hands_back_and_stops(cx: &mut TestAppContext) {
     );
 }
 
+/// A page the user took over says so in the same words under it and at the end of its row at the
+/// sidebar's foot, while the task works on or waits for them elsewhere; the page it handed them
+/// has the bar's own title, which names the agent, and its row's own word.
+#[gpui::test]
+fn a_taken_over_pages_row_ends_in_its_bars_title(cx: &mut TestAppContext) {
+    use crate::agents::task::{Card, Dot, Word};
+    use crate::shell::task_cards::PageWord;
+    let (shell, host, cx) = shell_with_task(cx);
+    watching(&shell, &host, cx);
+    let card = |dot: Dot| Card {
+        agent: "task-1".into(),
+        home: 1,
+        space: 3,
+        name: "Claude".into(),
+        replies: true,
+        title: "Find a flight".into(),
+        status: SharedString::default(),
+        steps: Vec::new(),
+        last_site: None,
+        asks: false,
+        dot,
+        word: Word::for_dot(dot),
+        pages: vec![30, 31],
+        tier: Default::default(),
+        answers: Vec::new(),
+        question: None,
+        open: Vec::new(),
+        page_steps: Vec::new(),
+        retry: false,
+        fix: None,
+    };
+    let hold = |why: &str, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            let status = Status {
+                agent: "task-1".into(),
+                name: "Claude".into(),
+                space: 3,
+                doing: "Typed · flights.example".into(),
+                held: vec![(30, why.to_string().into())],
+            };
+            shell.set_agent_status(vec![status], cx);
+        });
+    };
+    hold("", cx);
+    for dot in [Dot::Working, Dot::Waiting] {
+        shell.read_with(cx, |shell, _| {
+            let row = shell.page_word(&card(dot), 30);
+            assert_eq!(row, PageWord::Driving);
+            assert_eq!(shell.task_strip_words(30).0, row.label());
+        });
+    }
+    hold("Sign in", cx);
+    shell.read_with(cx, |shell, _| {
+        let row = shell.page_word(&card(Dot::Waiting), 30);
+        assert_eq!(row, PageWord::NeedsYou);
+        assert_ne!(shell.task_strip_words(30).0, PageWord::Driving.label());
+    });
+}
+
 /// A press in the agent's page watched takes it over, as Take Over did, and the press is the page's
 /// (#1080): the Agents hear the same take over, so nothing else moves. Pressed again while the user
 /// holds it, nothing more happens; ⌘↩ then hands it back. A press in the page beside it in its
