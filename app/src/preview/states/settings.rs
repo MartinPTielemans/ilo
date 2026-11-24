@@ -55,12 +55,7 @@ pub(crate) fn preview_pictures(shown: Pictures, cx: &mut App) {
     let options = browser::settings_column::window_options(bounds, "Settings".into());
     let opened = cx.open_window(options, |_, cx| {
         cx.new(|cx| {
-            let look = browser::settings_rows::Look::settings(true);
-            let search = cx.new(|cx| {
-                browser::text_input::TextInput::new("Search", cx)
-                    .placeholder_color(look.detail)
-                    .caret_color(look.ink)
-            });
+            let search = cx.new(|cx| browser::text_input::TextInput::new("Search", cx));
             PicturesPage {
                 shown,
                 card: Card::default(),
@@ -120,6 +115,11 @@ impl gpui::Render for PicturesPage {
             _ => preview_tone() != Some(Tone::Light),
         };
         let look = Look::settings(dark);
+        // The page's look is this frame's, so its field gets it as the page draws.
+        let colors = look.field();
+        self.search.update(cx, |search, _| {
+            search.set_colors(colors.placeholder, colors.caret, colors.selection)
+        });
         let base = if dark { rgb(PAPER) } else { rgb(INK) };
         let a11y = window.is_a11y_active();
         let field = browser::settings_search::field(

@@ -218,6 +218,15 @@ impl Granted {
             identity: Identity::of(Path::new("/")).expect("the root is a folder"),
         }
     }
+
+    /// The same by a name of the test's own, for a test of where a folder's name reaches.
+    #[cfg(test)]
+    pub(crate) fn named_for_test(name: &str) -> Granted {
+        Granted {
+            root: Path::new("/nonexistent").join(name),
+            ..Granted::for_test()
+        }
+    }
 }
 
 /// Puts the wall up for a task's start, a raise or a take-back. A task with no files needs none and

@@ -9,7 +9,7 @@
 use gpui::{Context, Entity, Focusable, FontWeight, SharedString, Window, div, prelude::*, px};
 
 use super::{
-    CancelName, FORM_PLACEHOLDER, FORM_PLATE, FORM_TEXT, KeepName, NAV_RADIUS, Shell, TITLE,
+    CancelName, FORM_PLATE, FORM_TEXT, KeepName, NAV_RADIUS, Shell, TITLE,
     permission::{BESIDE_CLOSE, BUTTONS_TOP, card_button, card_close, card_listener},
 };
 use crate::text_input::TextInput;
@@ -75,10 +75,10 @@ impl Shell {
     pub fn set_pair(&mut self, tab: u64, pair: Option<Pair>, cx: &mut Context<Self>) {
         match pair {
             Some(pair) => {
-                let placeholder = self.palette.gray(FORM_PLACEHOLDER);
+                let colors = Self::form_colors(cx);
                 let pin = cx.new(|cx| {
                     TextInput::new("PIN", cx)
-                        .placeholder_color(placeholder)
+                        .follows(colors)
                         .spoken("Bluetooth PIN")
                 });
                 let asks_pin = pair.kind == PairKind::Pin;
