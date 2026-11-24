@@ -2032,7 +2032,8 @@ impl Browser for Fake {
         dialog::ask(None, message, detail, action, confirmed, cx);
     }
 
-    fn quit(&self, cx: &mut App) {
+    // The preview keeps no session, so there's nothing to do first.
+    fn quit(&self, _: Rc<dyn Fn(&mut App)>, cx: &mut App) {
         cx.quit();
     }
 

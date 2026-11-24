@@ -1724,7 +1724,16 @@ impl Shell {
                 }
                 return;
             }
-            Command::Quit => return self.browser.quit(cx),
+            Command::Quit => {
+                // A task's view stands while Quit asks, so Cancel leaves the window as it was
+                // (#4202). Once the quit is decided the area goes, and the core shows the user's
+                // Space again, which the session then keeps for the window.
+                let shell = cx.weak_entity();
+                let going = std::rc::Rc::new(move |cx: &mut App| {
+                    shell.update(cx, |shell, cx| shell.leave_task_area(cx)).ok();
+                });
+                return self.browser.quit(going, cx);
+            }
             Command::AddSplit => return self.add_pane(cx),
             Command::NewNote => return self.browser.new_note(self.space, None, cx),
             Command::NewBoard => return self.new_board(cx),

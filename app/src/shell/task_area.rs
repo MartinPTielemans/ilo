@@ -701,7 +701,8 @@ impl Shell {
     /// the strip's, as in an agent's Space, and Escape with the UI's keyboard and ⌘W step back.
     /// The page's own commands act on the task's page in place, the window's leave the area as it
     /// is, and the rest act on the user's Space, so they leave the area first: the core shows
-    /// the user's Space again before a tab opens in it, or before the session keeps it at a quit.
+    /// the user's Space again before a tab opens in it. Quit leaves it once its quit is decided
+    /// (commands.rs), so the session keeps the user's Space and Cancel keeps the view.
     pub(super) fn run_in_task_area(
         &mut self,
         command: Command,
@@ -787,9 +788,13 @@ impl Shell {
             | Command::CheckForUpdates
             | Command::Appearance(_)
             | Command::CopyBuildInfo
+            // Each asks first, and what it asks about isn't the view: Cancel, and the Archive
+            // cleared, leave the user where they were (#4202).
+            | Command::Quit
+            | Command::ClearArchive
             // The agent's card shows over the area as over the user's Space.
             | Command::FocusAgentQuestion => return false,
-            // Quit and Close Window too, so the session keeps the user's Space for the window.
+            // Close Window too, so the session keeps the user's Space for the window.
             _ => {
                 self.leave_task_area(cx);
                 return false;
