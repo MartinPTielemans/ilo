@@ -877,6 +877,57 @@ fn a_prompt_answers_what_was_typed(cx: &mut TestAppContext) {
     assert_eq!(dialog.calls(), left(&["show over 100"], "accept Grace"));
 }
 
+/// An input method composes "ぴ" in the prompt's field.
+fn compose(dialog: &mut Asking) {
+    use gpui::EntityInputHandler as _;
+    // The test's window is the dialog's.
+    dialog.cx.update(|window, cx| {
+        let dialog = window
+            .root::<Dialog>()
+            .flatten()
+            .expect("the dialog's view");
+        let field = dialog.read(cx).asked.as_ref().unwrap().fields[0].clone();
+        field.update(cx, |field, cx| {
+            field.replace_and_mark_text_in_range(None, "ぴ", None, window, cx)
+        });
+    });
+    dialog.cx.run_until_parked();
+}
+
+/// ↩ while an input method composes in a prompt's field commits what it composed and answers
+/// nothing; the next ↩ answers it.
+#[gpui::test]
+fn return_while_composing_answers_nothing(cx: &mut TestAppContext) {
+    let mut dialog = Asking::page(page_question(vec![field("", false)], None), cx);
+    dialog.cx.simulate_input("a");
+    compose(&mut dialog);
+    dialog.keys("enter");
+    assert_eq!(
+        dialog.calls(),
+        ["show over 100"],
+        "↩ answered while composing"
+    );
+    dialog.keys("enter");
+    assert_eq!(dialog.calls(), left(&[], "accept aぴ"));
+}
+
+/// Esc while an input method composes in a prompt's field drops what it composed and cancels
+/// nothing; the next Esc cancels.
+#[gpui::test]
+fn escape_while_composing_cancels_nothing(cx: &mut TestAppContext) {
+    let mut dialog = Asking::page(page_question(vec![field("", false)], None), cx);
+    dialog.cx.simulate_input("a");
+    compose(&mut dialog);
+    dialog.keys("escape");
+    assert_eq!(
+        dialog.calls(),
+        ["show over 100"],
+        "esc cancelled while composing"
+    );
+    dialog.keys("enter");
+    assert_eq!(dialog.calls(), left(&[], "accept a"));
+}
+
 #[gpui::test]
 fn tab_moves_to_the_next_field(cx: &mut TestAppContext) {
     let fields = vec![field("", false), field("", true)];
