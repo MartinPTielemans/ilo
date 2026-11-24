@@ -33,6 +33,7 @@ use gpui::{
     prelude::*, px, rgb,
 };
 
+use super::ShowStarted;
 use super::agent_bar;
 use super::library::LIBRARY_BACK_INSET;
 use super::page_ends::StripStop;
@@ -701,15 +702,16 @@ impl Shell {
         }
         // The composer's ↩ shows the task it started, as its Space has no page to stay on; ⌘T's
         // ask over a page leaves the page, and its card comes in at the foot.
-        if let Some(home) = self.show_started
-            && let Some(card) = self
-                .task_cards
-                .iter()
-                .find(|card| card.home == home && !was.contains(&card.agent))
-        {
+        let started = |card: &&Card| match &self.show_started {
+            Some(ShowStarted::Asked(home)) => card.home == *home && !was.contains(&card.agent),
+            Some(ShowStarted::Task(agent)) => card.agent == *agent,
+            None => false,
+        };
+        if let Some(card) = self.task_cards.iter().find(started) {
+            let (agent, home) = (card.agent.clone(), card.home);
             self.show_started = None;
             if self.selected == 0 && self.space() == home && self.talk_agent().is_none() {
-                self.show_task(card.agent.clone(), cx);
+                self.show_task(agent, cx);
             }
         }
         cx.notify();
