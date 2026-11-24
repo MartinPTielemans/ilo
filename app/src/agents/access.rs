@@ -76,16 +76,19 @@ impl Agents {
         tier: Tier,
         cx: &mut Context<Self>,
     ) {
-        // A tab the UI doesn't list in the agent's Space is the core's to refuse, in its words,
-        // so the agent learns nothing of a tab not its own.
+        // A tab can leave the agent's Space, close or turn off limits while its page answers, as
+        // before a discard: the core refuses it then, in its own words, so the agent learns
+        // nothing of a tab not its own and nothing runs. One the core still calls its own is
+        // refused as any other.
         let space = self.browser.agent_space(&act.agent);
         if act.tab != 0
             && !self
                 .tabs_seen(space, cx)
                 .iter()
                 .any(|tab| tab.id == act.tab)
+            && let Err(refused) = self.may_act(&act.agent, act.tab, act.action, cx)
         {
-            return self.run(act, cx);
+            return self.refuse(act, &site, refused, cx);
         }
         let at = match act.asks.is_empty() {
             true => tier::plain(&site),

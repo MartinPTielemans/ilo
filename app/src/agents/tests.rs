@@ -4578,6 +4578,37 @@ fn discarding_a_page_the_user_gave_needs_full_access(cx: &mut TestAppContext) {
     );
 }
 
+/// A tab that leaves the agent's Space while its page answers is refused as the core refuses any
+/// tab not the agent's, word for word: no refusal of the task's access shows, and nothing closes.
+#[gpui::test]
+fn a_tab_moved_away_while_its_page_answers_is_the_cores_to_refuse(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let space = |space: u64| {
+        for each in (browser.tabs.borrow_mut().iter_mut()).filter(|each| each.0 == 10) {
+            each.1 = space;
+        }
+    };
+    space(2);
+    browser.asks.borrow_mut().insert(10);
+    let discard = json!({ "tab": 10, "discard": true });
+    let answer = call(&agents, "claude-code", "close_tab", discard, cx);
+    assert!(
+        answer.try_recv().is_err(),
+        "refused before the page answered"
+    );
+    // The user moves it to a Space of their own before the page's answer comes.
+    space(1);
+    page_answers(&agents, &browser, 10, Closed::Asks, cx);
+    let refused = answer.recv().unwrap();
+    assert!(refused.error);
+    assert_eq!(refused.text, "The tab isn't in the agent's own Space.");
+    assert!(stops(&agents, cx).is_empty(), "{:?}", stops(&agents, cx));
+    assert!(
+        browser.tabs.borrow().iter().any(|tab| tab.0 == 10),
+        "it closed the tab"
+    );
+}
+
 /// A pinned tab is the user's to close, and the answer says so alone.
 #[gpui::test]
 fn a_pinned_tab_stays_open(cx: &mut TestAppContext) {
