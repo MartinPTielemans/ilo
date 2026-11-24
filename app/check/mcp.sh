@@ -3423,6 +3423,33 @@ STRIP
   printf '%s\n' "$listed" | grep -q "^. $file_tab  " && fail "the download's empty tab stayed open"
   [ "$(grep -c '^browser: agent mcp-client stopped ' "$log" || true)" = "$stops" ] ||
     fail "ilo stopped a download at Work on pages: $(grep '^browser: agent mcp-client stopped ' "$log" | tail -1)"
+  # As does one a tab the agent's tab opened starts (#2660): the tab is the agent's from when it's
+  # made, so its download lands at Work on pages too, in the activity log as the agent's.
+  if [ -n "$opened_said" ]; then
+    rm -f "$out/downloads/opened"*
+    printf 'opened\n' > "$out/site/opened.docx"
+    printf '%s' "<!doctype html><title>Files</title><a href=\"//files.localhost:$port/opened.docx\" target=\"_blank\">Report</a>" \
+      > "$out/site/files.html"
+    opened=$(call open_tab "{\"url\":\"localhost:$port/files.html\"}")
+    files=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+    ref=$(printf '%s\n' "$opened" | sed -n 's/.*- link "Report" \[\(e[0-9]*\)\].*/\1/p' | head -1)
+    [ -n "$files" ] && [ -n "$ref" ] || fail "the page with a link to a file didn't open with its link: $opened"
+    landed='^browser: agent logged mcp-client download files\.localhost$'
+    before=$(grep -c "$landed" "$log" || true)
+    call click "{\"tab\":$files,\"ref\":\"$ref\"}" > /dev/null
+    await_more "$landed" "$before" ||
+      fail "a download a tab the agent's tab opened started isn't in the activity log as the agent's; the last download lines:
+$(grep 'browser: agent .*download' "$log" | tail -3)"
+    for _ in $(seq 50); do
+      [ -f "$out/downloads/opened.docx" ] && break
+      sleep 0.1
+    done
+    [ -f "$out/downloads/opened.docx" ] ||
+      fail "the opened tab's download isn't in the check's folder: $(ls -A "$out/downloads" | tr '\n' ' ')"
+    [ "$(grep -c '^browser: agent mcp-client stopped ' "$log" || true)" = "$stops" ] ||
+      fail "ilo stopped a download a tab the agent's tab opened started: $(grep '^browser: agent mcp-client stopped ' "$log" | tail -1)"
+    # Left open: the agent is at work in it, which the session's end below ends.
+  fi
   # A site whose page's download link the agent clicks with another app in front below (#3183). A
   # .docx, which the check's server sends as a file, where a .txt would open as a page. The link
   # opens a tab, which the download closes at once, as many sites' do: before #3104 that tab's
