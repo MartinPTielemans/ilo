@@ -215,8 +215,12 @@ impl Browser for Made {
         }
     }
 
-    /// A name with a dot is a site's, as the address bar takes it; other words are a search.
+    /// A name with a dot is a site's, as the address bar takes it; other words are a search. Text
+    /// with a NUL in it can't reach the core, which gives no address for it, as the app's does.
     fn url_for(&self, text: &str) -> Option<String> {
+        if text.contains('\0') {
+            return None;
+        }
         Some(match (text.contains("://"), text.contains('.')) {
             (true, _) => text.into(),
             (false, true) => format!("https://{text}/"),
@@ -8163,6 +8167,39 @@ mod tasks {
             .to_vec()
         );
         assert_eq!(card.last_site.as_deref(), Some("d.example"));
+    }
+
+    /// An address the browser didn't take names no page: its step's site is the agent's own
+    /// words, which the card's plate never shows. A task whose only open is one has no plate, and
+    /// one that reached a page before keeps that page's site.
+    #[gpui::test]
+    fn an_address_the_browser_didnt_take_puts_no_site_on_the_card(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Find two tickets", cx);
+        agents.update(cx, |agents, _| {
+            let task = agents.task_mut(&agent).unwrap();
+            task.ended = None;
+            task.state = State::Working;
+        });
+        let words = "two tickets\0 for friday";
+        let _ = call(&agents, &agent, "open_tab", json!({ "url": words }), cx);
+        let card = card_of(&agents, cx);
+        assert!(
+            !card.steps.is_empty(),
+            "the open wasn't a step, so this tests nothing"
+        );
+        assert_eq!(card.last_site, None, "the plate shows the agent's words");
+
+        let _ = call(
+            &agents,
+            &agent,
+            "open_tab",
+            json!({ "url": "a.example" }),
+            cx,
+        );
+        let _ = call(&agents, &agent, "navigate", json!({ "url": words }), cx);
+        let card = card_of(&agents, cx);
+        assert_eq!(card.last_site.as_deref(), Some("a.example"));
     }
 
     /// A Stopped line's step up and Any site reach the task through the user's press, as Stop

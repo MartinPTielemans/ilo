@@ -1517,6 +1517,14 @@ impl Shell {
         if matches!(command, Command::Stop) && key && self.escape_unused(cx) {
             return;
         }
+        // With no page the Space rests on its field, which ⌘T and ⌘L give the keyboard rather than
+        // opening a bar over it. The other ways to a new tab (the sidebar's row, a new window,
+        // Start Again's ask) open the bar, as they did.
+        if matches!(command, Command::NewTab | Command::EditUrl) && key && self.keys_to_resting(cx)
+        {
+            self.leave_keys("new tab", cx);
+            return;
+        }
         // The command bar opens over the page, and the reveal's panel makes way for it.
         if matches!(
             command,
