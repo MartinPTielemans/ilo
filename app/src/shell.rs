@@ -1898,6 +1898,8 @@ pub struct Shell {
     /// The Space whose composer just started a task: that task's view opens as its card comes in,
     /// if the Space still shows no page.
     show_started: Option<u64>,
+    /// The tasks a run before left that Latest tasks lists until one is opened (`set_kept_cards`).
+    kept_cards: Vec<crate::agents::task::Card>,
     /// The task's conversation shown in the page's place, and whether its field takes the keyboard
     /// once drawn (Agent task).
     talk: Option<conversation::Talk>,
@@ -2366,6 +2368,7 @@ impl Shell {
             agent_history: Vec::new(),
             show_restored: None,
             show_started: None,
+            kept_cards: Vec::new(),
             talk: None,
             focus_talk: false,
             agent_status: Vec::new(),

@@ -628,11 +628,7 @@ impl Shell {
             false => field,
         };
         let cards: Vec<Card> = match painted {
-            true => (self.task_cards.iter())
-                .filter(|card| card.replies)
-                .take(CARDS as usize)
-                .cloned()
-                .collect(),
+            true => self.latest_tasks(CARDS as usize),
             false => Vec::new(),
         };
         let row = command_bar::centered_row_middle(f32::from(self.viewport.height))
@@ -864,7 +860,7 @@ impl Shell {
             .border_color(rim(&palette, CARD_RIM))
             .overflow_hidden()
             .text_size(px(text::BODY))
-            .on_click(cx.listener(move |shell, _, _, cx| shell.show_task(agent.clone(), cx)))
+            .on_click(cx.listener(move |shell, _, _, cx| shell.open_latest(agent.clone(), cx)))
             .child(
                 div()
                     .h(px(CARD_WORDS))
