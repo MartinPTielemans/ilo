@@ -2162,9 +2162,10 @@ requestAnimationFrame(() => setTimeout(() => document.title = "google " +
     *" search-engine "*) ;;
     *) fail "Google: the new profile's first launch had no search engine step: '$steps'" ;;
   esac
-  # The intro goes on by itself, before any key is sent, so the step after it is waited for in the
-  # whole log, and each later one after the key that left the one before, as count.sh does.
-  await '^browser: onboarding left intro via time$' || fail "Google: the intro didn't go on by itself"
+  # The welcome waits for Return, and each step after for the key that left the one before, as
+  # count.sh does.
+  send key return
+  expect '^browser: onboarding left intro via return$' "Google: Return didn't go on from the welcome"
   for each in $steps; do
     [ "$each" = intro ] && continue
     if [ "$step" = 0 ]; then

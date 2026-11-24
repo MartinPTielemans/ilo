@@ -2134,6 +2134,92 @@ engine-row = 40.0
 engine-dot = 16.0
 engine-dot-center = 6.0
 
+# First run's sheet (#4093): over the window, not the brand's ground, at the modal level, with a
+# left half that asks one thing and a slot on the right where the step's feature plays as a loop.
+# The issue's fill over its blur of 34; GPUI draws no blur under a view, so until the sheet is a
+# window with the Mac's material the fill stands alone. Light's is the mock's glass.
+[shell.onboarding.sheet]
+width = 780.0
+height = 456.0
+radius = 20.0
+fill = 0x2a2720
+fill-alpha = 0.78
+light-fill = 0xf8f7f3
+light-fill-alpha = 0.8
+# The left half, and its padding: top, right, bottom, left.
+left = 350.0
+padding = [34.0, 30.0, 20.0, 32.0]
+# Where the step is among them, a dot each and the step's a bar, over the title.
+pager-dot = 6.0
+pager-on = 16.0
+pager-gap = 5.0
+pager-under = 24.0
+pager-off = 0.2
+pager-lit = 0.85
+# The welcome's wordmark, a third of the brand's units: 71 × 51.
+mark-scale = 0.33
+mark-under = 22.0
+title-size = 25.0
+title-line = 29.0
+title-under = 10.0
+line-size = 13.0
+line-line = 19.5
+line-quiet = 0.62
+line-under = 22.0
+# The foot's buttons, at the half's bottom: quiet ones in the ink, the step's own in the green.
+button-height = 30.0
+button-inset = 12.0
+button-size = 12.0
+button-gap = 6.0
+button-quiet = 0.6
+# The colour step's swatches, the theme picker's, at the half's width.
+swatch = 20.0
+swatch-pitch = 31.0
+# The loop's slot, inset from the sheet's edge, a hairline inside it, over a plain ground of the
+# ink, until the art fills it.
+slot-inset = 10.0
+slot-radius = 10.0
+slot-rim = 0.12
+slot-ground = 0.04
+
+# Each step's loop (#4093): ten seconds, drawn in the slot from the sidebar's own measures with
+# made-up pages, its last frame where it rests and what Reduce Motion shows.
+[shell.onboarding.loops]
+period = 10.0
+# A small window in the slot: its size, its sidebar's width, a row's height and the gap above the
+# rows, the radii of the window and of a row's plate, and of a tab's icon and a page's bars.
+window-width = 340.0
+window-height = 236.0
+sidebar = 116.0
+row = 22.0
+rows-top = 46.0
+window-radius = 10.0
+plate-radius = 6.0
+icon-radius = 2.0
+bar-radius = 3.0
+text-size = 8.0
+# The real window's glow at the small window's size: its width to a 1280-point window's.
+scale = 0.27
+# The Space dots at the sidebar's foot: a dot, the shown Space's, the others' alpha, the gap
+# between them and how far up from the window's foot.
+dot = 4.0
+dot-shown = 6.0
+dot-alpha = 0.35
+dot-gap = 6.0
+dots-bottom = 10.0
+# The pointer fades in as the loop starts and out before it ends, over `pointer-fade`.
+pointer-fade = 0.3
+# The welcome's: the pointer goes to the next tab over `move` and presses it `click` after,
+# once from each time here: 2nd, 3rd, then the 1st again. The press's ring grows and fades
+# over `press`; the tab and its page change on the press, as a tab switch does.
+welcome-at = [0.4, 3.4, 6.4]
+welcome-move = 0.8
+welcome-click = 0.2
+welcome-press = 0.5
+# The color's: the sidebar's rows swipe to the next Space from `at` over `swipe`, and back.
+color-at = [0.6, 5.0]
+color-swipe = 0.6
+
 [shell.import]
 # Ours (#1673): while an import runs, each Space it makes is a card in its own colours, under the
 # name of the profile it goes into, its count rolling up as its pinned tabs go in, and ticked once
