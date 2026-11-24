@@ -740,3 +740,27 @@ fn a_revoked_folders_assistant_is_told_the_leads_words_alone() {
         }
     }
 }
+
+/// The folder's chip under a live task's reply field names the folder the task holds, and its
+/// Revoke is the user's press on Folders in use: the folder goes, and the chip with it.
+#[gpui::test]
+fn the_reply_fields_revoke_takes_the_folder_and_its_chip(cx: &mut TestAppContext) {
+    use crate::agents::task::TaskAction;
+    let (run, _, agent) = started("reply-revoke", folder(), cx);
+    run.ran(1);
+    let shown = |run: &Run, cx: &mut TestAppContext| {
+        (run.agents).read_with(cx, |agents, cx| {
+            agents.conversation(&agent, cx).and_then(|talk| talk.folder)
+        })
+    };
+    assert_eq!(shown(&run, cx).as_deref(), Some(FOLDER));
+    (run.agents).update(cx, |agents, cx| {
+        agents.task_action(&agent, TaskAction::RevokeFolder, cx)
+    });
+    assert_eq!(in_use(&run, cx), []);
+    assert_eq!(shown(&run, cx), None, "the chip outlived the folder");
+    let revoked = IloKind::Revoked {
+        folder: FOLDER.into(),
+    };
+    assert_eq!(lines(&run, &agent, cx), [revoked]);
+}

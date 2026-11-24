@@ -86,6 +86,7 @@ fn conversation(steps: usize) -> Conversation {
         answers: Vec::new(),
         writing: false,
         tier: Default::default(),
+        folder: None,
     }
 }
 
@@ -2130,4 +2131,59 @@ fn a_helpers_line_under_way_shimmers_unless_motion_is_reduced(cx: &mut TestAppCo
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
     assert!(!moving(cx), "nothing is under way");
     cx.update(|_, cx| cx.set_reduce_motion(true));
+}
+
+/// Where task-1's folder chip under the reply field was drawn, with its conversation `talk`.
+fn folder_chip_with(
+    talk: Conversation,
+    cx: &mut TestAppContext,
+) -> (
+    Option<gpui::Bounds<gpui::Pixels>>,
+    Rc<Recorder>,
+    &mut VisualTestContext,
+) {
+    let (shell, host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    shell.update(cx, |shell, cx| {
+        shell.set_talk_beside(true, cx);
+        shell.set_conversation(Some(talk), cx);
+    });
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let drawn = view.read_with(cx, |view, _| view.folder_drawn.get());
+    (drawn, host, cx)
+}
+
+/// The folder a live task holds is under its reply field by its name, and its one act, Revoke,
+/// takes it back (#4101). A reply carries no files or folder, so nothing there adds one.
+#[gpui::test]
+fn the_folder_a_task_holds_is_under_its_reply_field_with_revoke(cx: &mut TestAppContext) {
+    let talk = Conversation {
+        folder: Some("Notes".into()),
+        ..conversation(0)
+    };
+    let (drawn, host, cx) = folder_chip_with(talk, cx);
+    let chip = drawn.expect("the folder's chip under the reply field");
+    host.take();
+    cx.simulate_click(chip.center(), Modifiers::none());
+    let menu = host
+        .menus
+        .borrow()
+        .last()
+        .cloned()
+        .expect("the chip's menu");
+    assert_eq!(menu, vec![("Revoke".into(), true)], "the folder's one act");
+    cx.update(|_, cx| host.choose("Revoke", cx));
+    assert!(
+        host.take()
+            .contains(&"task task-1 RevokeFolder".to_string()),
+        "Revoke didn't take the task's folder back"
+    );
+}
+
+/// A task that holds no folder has no folder chip.
+#[gpui::test]
+fn a_task_without_a_folder_has_no_folder_chip(cx: &mut TestAppContext) {
+    let (drawn, _, _) = folder_chip_with(conversation(0), cx);
+    assert!(drawn.is_none(), "a folder chip for a task that holds none");
 }

@@ -153,6 +153,9 @@ pub struct Conversation {
     pub writing: bool,
     /// Its access, which the composer's chip shows and changes.
     pub tier: Tier,
+    /// The folder a live task holds, by its name as the system's panel showed it, which the chip
+    /// under the reply field shows with its one act, Revoke.
+    pub folder: Option<SharedString>,
 }
 
 /// A line of a task's conversation.
@@ -652,6 +655,9 @@ pub enum TaskAction {
     HandBack(u64),
     /// A step's Not now, by its line's key.
     NotNow(usize),
+    /// Revoke on the folder's chip under the reply field: only the user's press takes a folder
+    /// back, as on Settings › Agents › Folders in use.
+    RevokeFolder,
 }
 
 /// What the composer starts a task with beside what was asked: the user's picks on its line, which
@@ -920,6 +926,7 @@ impl Agents {
             // A step's line: the tab goes back to the agent, or stays the user's for now.
             TaskAction::HandBack(tab) => self.hand_back(tab, cx),
             TaskAction::NotNow(key) => self.not_now(agent, key, cx),
+            TaskAction::RevokeFolder => self.revoke_folder(agent, cx),
         }
         (None, None)
     }
@@ -1010,6 +1017,9 @@ impl Agents {
             writing: working && task.writing.as_ref().is_some_and(|writing| !writing.said),
             // The tier model (#4086 step 2) keeps each task's own.
             tier: Tier::default(),
+            folder: (task.ended.is_none() && task.files.folder.is_some())
+                .then(|| task.names.folder.clone().map(Into::into))
+                .flatten(),
         })
     }
 
