@@ -409,6 +409,80 @@ fn the_level_menu_names_the_levels_the_sites_and_settings(cx: &mut TestAppContex
     );
 }
 
+/// The assistant's chip names the model the next task starts on, Settings' (Opus here) till the
+/// user picks on its menu: its default first, then the models from Settings' list. The pick starts
+/// that task alone; the next starts on Settings' again, as does a trip out of Ask.
+#[gpui::test]
+fn the_model_chip_picks_for_one_task(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    let chip = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            let resting = shell.resting.as_ref().unwrap();
+            let agent = resting.bar.update(cx, |bar, cx| bar.assistant(cx)).unwrap();
+            super::composer::model_words(
+                &agent,
+                &super::composer::next_model(resting.model.as_ref(), &agent),
+            )
+        })
+    };
+    assert_eq!(
+        chip(&shell, cx),
+        "Claude · Opus",
+        "the chip says Settings' model"
+    );
+    shell.update(cx, |shell, cx| shell.model_menu(point(px(0.), px(0.)), cx));
+    let rows: Vec<String> = (host.entries.borrow().iter())
+        .map(|entry| {
+            format!(
+                "{}{}",
+                entry.title,
+                if entry.checked { " (checked)" } else { "" }
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        ["Claude Code's default", "Opus (checked)", "Sonnet", "Haiku"],
+        "the model menu's rows"
+    );
+    cx.update(|_, cx| host.choose("Haiku", cx));
+    assert_eq!(chip(&shell, cx), "Claude · Haiku", "the chip says the pick");
+    host.take();
+    cx.simulate_input("book a table");
+    cx.simulate_keystrokes("enter");
+    let calls = host.take();
+    assert!(
+        calls.contains(
+            &"start task claude book a table from 1 at Work on pages on \"haiku\"".to_string()
+        ),
+        "the pick didn't reach its task: {calls:?}"
+    );
+    assert_eq!(
+        chip(&shell, cx),
+        "Claude · Opus",
+        "the next task starts on Settings' again"
+    );
+
+    shell.update(cx, |shell, cx| {
+        shell.pick_model("claude".into(), String::new(), cx)
+    });
+    assert_eq!(
+        chip(&shell, cx),
+        "Claude Code's default",
+        "the default picked"
+    );
+    cx.simulate_keystrokes("tab");
+    cx.simulate_keystrokes("tab");
+    assert_eq!(
+        chip(&shell, cx),
+        "Claude · Opus",
+        "out of Ask forgets the pick"
+    );
+}
+
 /// A task starts at the level picked for it, and the next at Work on pages: the pick holds for one
 /// run. The chip shows the level each ↩ starts at.
 #[gpui::test]

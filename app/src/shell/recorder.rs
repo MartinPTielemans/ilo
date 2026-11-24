@@ -1877,12 +1877,14 @@ impl Browser for Recorder {
         agent: &str,
         asked: &str,
         home: u64,
-        tier: crate::agents::tier::Tier,
+        start: crate::agents::task::Start,
         _: &mut App,
     ) {
+        // The model only when the user picked one: "on " and its id, empty for the default.
+        let model = (start.model.as_ref()).map_or(String::new(), |id| format!(" on {id:?}"));
         self.record(format!(
-            "start task {agent} {asked} from {home} at {}",
-            tier.label()
+            "start task {agent} {asked} from {home} at {}{model}",
+            start.tier.label()
         ));
     }
 

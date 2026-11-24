@@ -335,6 +335,9 @@ pub struct Task {
     pub(super) named: Option<Instant>,
     /// The model it runs on, by name, or empty for its CLI's own default.
     pub model: SharedString,
+    /// The model it was started on by the user's pick in the composer, by id, empty for its CLI's
+    /// own default; None for Settings' Model, read at each launch.
+    pub(super) model_id: Option<String>,
     pub state: State,
     /// When it finished, done, stopped or failed, for its conversation and the Archive.
     pub ended: Option<SystemTime>,
@@ -621,6 +624,24 @@ pub enum TaskAction {
     HandBack(u64),
     /// A step's Not now, by its line's key.
     NotNow(usize),
+}
+
+/// What the composer starts a task with beside what was asked: the user's picks on its line, which
+/// hold for this task alone and change nothing in Settings.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Start {
+    pub tier: Tier,
+    /// The model picked for it, by id, empty for its CLI's own default; None for Settings' Model.
+    pub model: Option<String>,
+}
+
+impl From<Tier> for Start {
+    fn from(tier: Tier) -> Self {
+        Start {
+            tier,
+            ..Start::default()
+        }
+    }
 }
 
 /// A task the user dismissed, as the Library's Archived Tabs lists it among the tabs.
@@ -1249,6 +1270,14 @@ impl Agents {
         self.tasks.found.get(&cli)?.models.as_ref()
     }
 
+    /// The model `agent`'s run passes its CLI, None for the CLI's own default: the one the user
+    /// picked in the composer for it, or else Settings' Model as it is now.
+    pub(super) fn launch_model(&self, agent: &str, cli: Cli) -> Option<String> {
+        let picked = self.task(agent).and_then(|task| task.model_id.clone());
+        let model = picked.unwrap_or_else(|| self.task_model(cli).to_string());
+        Some(model).filter(|model| !model.is_empty())
+    }
+
     /// Run tasks with, in Settings › Agents.
     pub fn set_default_task_agent(&mut self, cli: Cli, cx: &mut Context<Self>) {
         self.tasks.default = Some(cli);
@@ -1297,9 +1326,13 @@ impl Agents {
         asked: &str,
         page: Option<AskedOn>,
         home: u64,
-        tier: Tier,
+        start: impl Into<Start>,
         cx: &mut Context<Self>,
     ) -> Option<String> {
+        let Start {
+            tier,
+            model: picked,
+        } = start.into();
         let asked = asked.trim();
         if asked.is_empty() || !self.tasks_on() {
             return None;
@@ -1313,7 +1346,22 @@ impl Agents {
         );
         let space = self.browser.make_task_space(&agent, cli.name(), home, cx);
         let title: SharedString = page::clip(asked, 80).into();
-        let model = self.task_model_name(cli).unwrap_or_default();
+        // A model the CLI no longer offers falls back to its own default, saying nothing, as
+        // Settings' does.
+        let model_id = picked.map(|id| {
+            let listed = self
+                .task_models(cli)
+                .into_iter()
+                .find(|(each, _)| *each == id);
+            listed.map_or(String::new(), |(id, _)| id)
+        });
+        let model = match &model_id {
+            None => self.task_model_name(cli).unwrap_or_default(),
+            Some(id) => (self.task_models(cli).into_iter())
+                .find(|(each, _)| each == id)
+                .map(|(_, name)| name.into())
+                .unwrap_or_default(),
+        };
         let task = Task {
             agent: agent.clone(),
             cli: Some(cli),
@@ -1325,6 +1373,7 @@ impl Agents {
             page,
             title,
             model,
+            model_id,
             state: State::Working,
             ended: None,
             end_entry: 0,
@@ -1428,7 +1477,7 @@ impl Agents {
         let mut args = self.bridge.clone();
         args.push(self.socket.to_string_lossy().into_owned());
         let command = args.remove(0);
-        let model = Some(self.task_model(cli).to_string()).filter(|model| !model.is_empty());
+        let model = self.launch_model(agent, cli);
         // A kept run's folder is its conversation's own, which outlives the run (kept.rs).
         let (keep, kept_in) = self.keep_for(agent, cli);
         let launch = Launch {
@@ -2476,6 +2525,7 @@ impl Agents {
             asked: SharedString::default(),
             page: None,
             model: SharedString::default(),
+            model_id: None,
             state: State::Working,
             ended: None,
             end_entry: 0,

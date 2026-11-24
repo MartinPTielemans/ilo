@@ -1937,7 +1937,7 @@ impl Browser for Engine {
         agent: &str,
         asked: &str,
         home: u64,
-        tier: browser::agents::tier::Tier,
+        start: browser::agents::task::Start,
         _: &mut App,
     ) {
         let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
@@ -1945,7 +1945,7 @@ impl Browser for Engine {
         };
         let asked = asked.to_string();
         agents_core::update(move |agents, cx| {
-            agents.start_task(cli, &asked, None, home, tier, cx);
+            agents.start_task(cli, &asked, None, home, start, cx);
         });
     }
 

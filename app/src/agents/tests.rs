@@ -8617,6 +8617,65 @@ mod tasks {
         });
     }
 
+    /// The composer's pick on the assistant's chip is the model its task's run passes, and the
+    /// task's own name for it; Settings' Model is untouched, and the next task starts on it. A
+    /// pick the CLI no longer offers runs on its default, saying nothing.
+    #[gpui::test]
+    fn a_composer_pick_runs_its_task_alone(cx: &mut TestAppContext) {
+        use crate::agents::task::Start;
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        let agents = agents(&browser, &configs, None, cx);
+        let start = |model: Option<&str>| Start {
+            model: model.map(str::to_string),
+            ..Start::default()
+        };
+        agents.update(cx, |agents, cx| {
+            agents.set_on(true, cx);
+            agents.set_task_model(Cli::Claude, "sonnet", cx);
+        });
+        let picked = agents.update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, "Pick", None, 1, start(Some("haiku")), cx)
+        });
+        let settings = agents.update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, "Settings", None, 1, Tier::default(), cx)
+        });
+        let unknown = agents.update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, "Gone", None, 1, start(Some("opus-9")), cx)
+        });
+        let default = agents.update(cx, |agents, cx| {
+            agents.start_task(Cli::Claude, "Default", None, 1, start(Some("")), cx)
+        });
+        let [picked, settings, unknown, default] =
+            [picked, settings, unknown, default].map(|agent| agent.expect("a task started"));
+        agents.read_with(cx, |agents, _| {
+            let run = |agent: &str| agents.launch_model(agent, Cli::Claude);
+            let named = |agent: &str| agents.task(agent).unwrap().model.to_string();
+            assert_eq!(
+                run(&picked).as_deref(),
+                Some("haiku"),
+                "the pick runs its task"
+            );
+            assert_eq!(named(&picked), "Haiku");
+            assert_eq!(
+                run(&settings).as_deref(),
+                Some("sonnet"),
+                "the next starts on Settings'"
+            );
+            assert_eq!(named(&settings), "Sonnet");
+            assert_eq!(
+                run(&unknown),
+                None,
+                "a model not offered runs on the default"
+            );
+            assert_eq!(run(&default), None, "the default picked passes no model");
+            assert_eq!(
+                agents.task_model(Cli::Claude),
+                "sonnet",
+                "Settings' Model untouched"
+            );
+        });
+    }
+
     #[gpui::test]
     fn the_default_and_models_are_saved(cx: &mut TestAppContext) {
         let folder = std::env::temp_dir().join(format!("ilo-task-settings-{}", std::process::id()));

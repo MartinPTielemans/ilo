@@ -12,8 +12,9 @@ use gpui::{
 };
 
 use crate::agents::task::{Card, Dot};
+use crate::agents::task::{Start, model_menu};
 use crate::agents::tier::{ANY_SITE, ONLY_ADDED, Tier};
-use crate::command_bar::{self, CommandBar, InPlaceKey};
+use crate::command_bar::{self, CommandBar, InPlaceKey, TaskAgent};
 use crate::palette::{Palette, Tone};
 use crate::tokens::shell::composer::*;
 use crate::tokens::text;
@@ -55,6 +56,42 @@ pub(in crate::shell) struct Resting {
     space: u64,
     /// Where the level's chip was last drawn, which its menu hangs from.
     pub(in crate::shell) tier_chip: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The model the next task starts on, picked on the assistant's chip for the assistant it
+    /// names, by id, empty for its own default. It's in this view's memory alone, never Settings',
+    /// and goes as the level does.
+    pub(in crate::shell) model: Option<(SharedString, String)>,
+    /// Where the assistant's chip was last drawn, which its menu hangs from.
+    pub(in crate::shell) model_chip: Rc<Cell<Option<Bounds<Pixels>>>>,
+}
+
+/// Where a chip's menu hangs: 4 under the chip, its names under the chip's own word, or at the
+/// click before the chip is drawn.
+fn hung_under(chip: Option<Bounds<Pixels>>, clicked: gpui::Point<Pixels>) -> gpui::Point<Pixels> {
+    let Some(chip) = chip else {
+        return clicked;
+    };
+    let names = crate::menu::PADDING + crate::menu::ROW_X + crate::menu::CHECK + crate::menu::GAP;
+    chip.origin + point(px(CHIP_INSET - names), chip.size.height + px(MENU_DROP))
+}
+
+/// The model the next task on `agent` starts on, by id, empty for its own default: the pick for
+/// it, or Settings'. A pick it no longer offers is its default, as in Settings.
+pub(super) fn next_model(picked: Option<&(SharedString, String)>, agent: &TaskAgent) -> String {
+    let picked = picked.filter(|(on, _)| *on == agent.id).map(|(_, id)| id);
+    let id = picked.unwrap_or(&agent.model_id);
+    match agent.models.iter().any(|(each, _)| each == id) {
+        true => id.clone(),
+        false => String::new(),
+    }
+}
+
+/// What the assistant's chip says: its name and the model the next task starts on, or its Model
+/// menu's first row for its own default.
+pub(super) fn model_words(agent: &TaskAgent, id: &str) -> String {
+    match agent.models.iter().find(|(each, _)| each == id) {
+        Some((_, name)) => format!("{} · {name}", agent.name),
+        None => agent.default_row.to_string(),
+    }
 }
 
 /// The level's menu's last row, which opens Settings › Agents at Access.
@@ -82,6 +119,7 @@ impl Shell {
         if let Some(resting) = &mut self.resting {
             if resting.space != space {
                 (resting.tier, resting.space) = (Tier::default(), space);
+                resting.model = None;
             }
             return;
         }
@@ -99,6 +137,8 @@ impl Shell {
             tier: Tier::default(),
             space,
             tier_chip: Rc::default(),
+            model: None,
+            model_chip: Rc::default(),
         });
         cx.on_next_frame(window, |shell, _, cx| {
             if let Some(resting) = &mut shell.resting {
@@ -144,6 +184,7 @@ impl Shell {
         };
         if !on_ask {
             resting.tier = Tier::default();
+            resting.model = None;
         }
         let bar = resting.bar.clone();
         bar.update(cx, |bar, cx| {
@@ -167,17 +208,71 @@ impl Shell {
             return;
         };
         let tier = std::mem::take(&mut resting.tier);
+        let model = resting
+            .model
+            .take()
+            .filter(|(on, _)| *on == agent)
+            .map(|(_, id)| id);
         log!("browser: composer runs a task on {agent}");
         let home = self.space();
-        self.browser.start_task(&agent, &asked, home, tier, cx);
+        self.browser
+            .start_task(&agent, &asked, home, Start { tier, model }, cx);
         cx.notify();
     }
 
-    /// Puts the composer's level back to Work on pages.
+    /// Puts the composer's level back to Work on pages, and its model back to Settings'.
     pub(in crate::shell) fn forget_composer_tier(&mut self) {
         if let Some(resting) = &mut self.resting {
             resting.tier = Tier::default();
+            resting.model = None;
         }
+    }
+
+    /// The assistant's chip's menu: its own default first, then the models it offers, from the
+    /// list Settings' Model row is built from, the one the next task starts on checked. A pick
+    /// holds for the next run only, and Settings keeps its own.
+    pub(in crate::shell) fn model_menu(
+        &mut self,
+        clicked: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(resting) = &self.resting else {
+            return;
+        };
+        let (bar, chip) = (resting.bar.clone(), resting.model_chip.get());
+        let Some(agent) = bar.update(cx, |bar, cx| bar.assistant(cx)) else {
+            return;
+        };
+        let chosen = next_model(resting.model.as_ref(), &agent);
+        let default = agent.default_model.as_deref();
+        let (ids, entries) = model_menu(&chosen, &agent.default_row, default, agent.models.clone());
+        let items: Vec<(MenuEntry, MenuAction)> = (ids.into_iter().zip(entries))
+            .map(|((id, _), entry)| {
+                let on = agent.id.clone();
+                let pick: MenuAction = Box::new(move |shell, cx| shell.pick_model(on, id, cx));
+                (entry, pick)
+            })
+            .collect();
+        self.show_menu(items, hung_under(chip, clicked), None, cx);
+    }
+
+    /// The user's pick on the assistant's menu, while the field is in Ask: for the next task on
+    /// `agent` alone.
+    pub(in crate::shell) fn pick_model(
+        &mut self,
+        agent: SharedString,
+        id: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(resting) = &mut self.resting else {
+            return;
+        };
+        if !resting.bar.read(cx).on_ask() {
+            return;
+        }
+        log!("browser: composer model picked");
+        resting.model = Some((agent, id));
+        cx.notify();
     }
 
     /// The level the next ↩ in Ask starts a task at.
@@ -215,15 +310,7 @@ impl Shell {
         let settings: MenuAction = Box::new(|shell, cx| shell.browser.agent_access(cx));
         items.push((MenuEntry::new(SETTINGS, true), settings));
         let chip = (self.resting.as_ref()).and_then(|resting| resting.tier_chip.get());
-        let at = match chip {
-            Some(chip) => {
-                let names = crate::menu::PADDING + crate::menu::ROW_X;
-                let names = names + crate::menu::CHECK + crate::menu::GAP;
-                chip.origin + point(px(CHIP_INSET - names), chip.size.height + px(MENU_DROP))
-            }
-            None => clicked,
-        };
-        self.show_menu(items, at, None, cx);
+        self.show_menu(items, hung_under(chip, clicked), None, cx);
     }
 
     /// The user's pick on the level menu, while the field is in Ask.
@@ -424,12 +511,14 @@ impl Shell {
                 .text_color(palette.glyph(CHIP_INK))
         };
         let tier_chip = (self.resting.as_ref()).map(|resting| resting.tier_chip.clone());
-        let assistant = (self.resting.as_ref())
-            .and_then(|resting| resting.bar.update(cx, |bar, cx| bar.assistant(cx)))
-            .map(|agent| match agent.model {
-                Some(model) => format!("{} · {model}", agent.name),
-                None => agent.name.to_string(),
-            });
+        let model_chip = (self.resting.as_ref()).map(|resting| resting.model_chip.clone());
+        let assistant = (self.resting.as_ref()).and_then(|resting| {
+            let agent = resting.bar.update(cx, |bar, cx| bar.assistant(cx))?;
+            Some(model_words(
+                &agent,
+                &next_model(resting.model.as_ref(), &agent),
+            ))
+        });
         line.child(chip().child(glyph("icons/plus.svg", CHIP_GLYPH)))
             .child(
                 chip()
@@ -445,6 +534,12 @@ impl Shell {
             .child(div().flex_1())
             .children(assistant.map(|assistant| {
                 chip()
+                    .id("composer-model")
+                    .relative()
+                    .on_click(cx.listener(|shell, event: &gpui::ClickEvent, _, cx| {
+                        shell.model_menu(event.position(), cx)
+                    }))
+                    .children(model_chip.as_ref().map(drawn_at))
                     .child(assistant)
                     .child(glyph("icons/chevron-down.svg", CHIP_CHEVRON))
             }))
