@@ -184,6 +184,45 @@ fn escape_while_an_input_method_composes_closes_nothing(cx: &mut TestAppContext)
     );
 }
 
+/// Opened from the page, the panel gives the page the keyboard back on Escape, but not while
+/// another window of ours, as an overlay is, has the keyboard: the window's own focus takes it.
+#[gpui::test]
+fn the_page_gets_the_keyboard_back_only_while_no_other_overlay_has_it(cx: &mut TestAppContext) {
+    let (host, cx) = opened(cx);
+    let from_page = |host: &Entity<Host>, cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            host.update(cx, |host, cx| {
+                host.open = Some(FocusReturn {
+                    opener: Some(Opener::Page),
+                });
+                window.focus(&host.field.focus_handle(cx), cx);
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+    };
+    from_page(&host, cx);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(closes(&host, cx).1, [Returned::Page]);
+
+    from_page(&host, cx);
+    let overlay = cx.update(|_, cx| {
+        cx.open_window(Default::default(), |_, cx| cx.new(|_| gpui::Empty))
+            .unwrap()
+    });
+    cx.update(|_, cx| {
+        overlay
+            .update(cx, |_, window, _| window.activate_window())
+            .unwrap()
+    });
+    cx.run_until_parked();
+    host.update_in(cx, |host, window, cx| {
+        host.close(Close::new(Why::Escape, By::Keyboard), window, cx)
+    });
+    assert_eq!(closes(&host, cx).1, [Returned::Page, Returned::Fallback]);
+    assert!(focused(|host, _| host.window.clone(), &host, cx));
+}
+
 #[test]
 fn only_escape_and_the_surfaces_own_key_give_the_keyboard_back() {
     for why in [Why::Escape, Why::Toggled] {

@@ -14,7 +14,8 @@
 //! (the page, if its key came from there, as GPUI's focus doesn't see the page's). Every way it
 //! closes makes a `Close` (`Close::escape` for Escape, so a composition keeps it); then, while
 //! its own elements may still have the keyboard, `FocusReturn::give_back` with them and the
-//! fallback, and on `Returned::Page` hand the page the keyboard as the surface may.
+//! fallback, and on `Returned::Page` hand the page the keyboard as the surface may: it comes only
+//! while no other window of ours, such as an overlay, has the keyboard.
 
 use gpui::{App, FocusHandle, WeakFocusHandle, Window};
 
@@ -106,7 +107,8 @@ pub enum Returned {
     Left,
     /// Back to the element that had it.
     Opener,
-    /// To the fallback, and the page had it: the caller hands it on to the page if it may.
+    /// To the fallback, and the page had it, with no other overlay of ours holding the keyboard:
+    /// the caller hands it on to the page if it may.
     Page,
     /// To the fallback.
     Fallback,
@@ -153,7 +155,15 @@ impl FocusReturn {
             },
             Some(Opener::Page) => {
                 window.focus(fallback, cx);
-                Returned::Page
+                // Another overlay of ours, a window of its own, has the keyboard: the page
+                // doesn't take it from under it.
+                let elsewhere =
+                    (cx.active_window()).is_some_and(|active| active != window.window_handle());
+                if elsewhere {
+                    Returned::Fallback
+                } else {
+                    Returned::Page
+                }
             }
             None => {
                 window.focus(fallback, cx);
