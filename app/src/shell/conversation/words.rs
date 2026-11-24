@@ -3,7 +3,7 @@
 //! here (#4086). The tiers' names are the tier table's (agents/tier.rs).
 
 use crate::agents::kept;
-use crate::agents::task::ilo::{IloButton, IloKind, SignedInWith};
+use crate::agents::task::ilo::{HelpersLimit as Limit, IloButton, IloKind, SignedInWith};
 use crate::agents::tier::{self, Tier, Why};
 
 /// ilo's mark, before each of its lines' words.
@@ -30,11 +30,16 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         IloKind::SignedIn { site, .. } => ("signed in to".into(), Some(site.to_string())),
         IloKind::TierChanged { to, .. } => (format!("· You set this task to {}", to.label()), None),
         // The helpers' limit (#4102), by the app's own count, each a whole sentence.
-        IloKind::Helpers { deep, .. } => (
-            match (*deep, crate::tokens::agents::helpers::MOST) {
-                (true, _) => format!("stopped {agent} when a helper started a helper of its own"),
-                (false, 1) => format!("stopped {agent} after it started more than 1 helper"),
-                (false, most) => {
+        IloKind::Helpers { limit, .. } => (
+            match (*limit, crate::tokens::agents::helpers::MOST) {
+                (Limit::Depth, _) => {
+                    format!("stopped {agent} when a helper started a helper of its own")
+                }
+                (Limit::Kind, _) => {
+                    format!("stopped {agent} after it started a helper ilo doesn't allow")
+                }
+                (Limit::Count, 1) => format!("stopped {agent} after it started more than 1 helper"),
+                (Limit::Count, most) => {
                     format!("stopped {agent} after it started more than {most} helpers")
                 }
             },
