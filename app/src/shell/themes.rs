@@ -334,9 +334,7 @@ impl Shell {
                 ]
                 .into_iter()
                 .filter(move |(_, color)| color.a > 0. && weight > 0.)
-                .map(move |(corner, color)| {
-                    glow::glow(corner, right, color, color.a * weight)
-                })
+                .map(move |(corner, color)| glow::glow(corner, right, color, color.a * weight))
             })),
         };
         let dimmed = if self.window_active {
