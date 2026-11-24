@@ -173,7 +173,7 @@ pub enum Line {
 }
 
 /// A stretch of the agent's work between two messages: a summary line, "Working · 5 steps" or
-/// "Worked for 41s · 8 steps", with its steps under it.
+/// "Worked for 41 s · 8 steps", with its steps under it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Trace {
     /// Its first step's key, which keeps the user's opening or folding of it.
@@ -3114,12 +3114,13 @@ fn address(url: &str) -> String {
     page::clip(rest.strip_suffix('/').unwrap_or(rest), 60)
 }
 
-/// A duration in whole seconds as a trace says it: "41s", "2m 5s".
+/// A duration in whole seconds as a trace says it, in the units the app's other times have:
+/// "41 s", "2 min 5 s".
 pub fn duration(seconds: u64) -> String {
     match seconds {
-        0..60 => format!("{seconds}s"),
-        _ if seconds % 60 == 0 => format!("{}m", seconds / 60),
-        _ => format!("{}m {}s", seconds / 60, seconds % 60),
+        0..60 => format!("{seconds} s"),
+        _ if seconds % 60 == 0 => format!("{} min", seconds / 60),
+        _ => format!("{} min {} s", seconds / 60, seconds % 60),
     }
 }
 

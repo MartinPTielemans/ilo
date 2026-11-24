@@ -398,7 +398,7 @@ impl FindBar {
     /// Escape closes the bar, unless an input method is composing in its field, whose Escape it
     /// is (dismissal's rule).
     fn escape(&mut self, _: &Close, window: &mut Window, cx: &mut Context<Self>) {
-        if crate::dismissal::Close::escape(self.input.read(cx).composing()).is_some() {
+        if browser::dismissal::Close::escape(self.input.read(cx).composing()).is_some() {
             self.close(&Close, window, cx);
         }
     }
