@@ -2401,6 +2401,8 @@ sync-at = [0.6, 5.0]
 sync-cross = 1.2
 sync-phone = [76.0, 150.0]
 sync-phone-out = 48.0
+# A name too long for the phone's row ends in a fade `sync-fade` wide, into the row's colour.
+sync-fade = 14.0
 # The assistant's: the ask comes at `assistant-at`, its three pages open at `assistant-open`, a
 # price is read from each from `assistant-read`, `assistant-stagger` apart, and the answer comes
 # at `assistant-answer`, each fading in as the import's parts do.
