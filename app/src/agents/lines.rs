@@ -50,7 +50,7 @@ impl Happened {
 }
 
 /// The turn of `task` under way, as its user's messages count it.
-fn turn(task: &Task) -> usize {
+pub(super) fn turn(task: &Task) -> usize {
     (task.messages.iter())
         .filter(|m| m.who == Who::User)
         .count()
