@@ -726,7 +726,7 @@ expect '^browser: page zoom 100% (default)$' "↑ and Return didn't choose the d
 send key escape
 expect '^browser: settings search cleared$' "⎋ didn't empty the search"
 # The command bar finds settings too (#1636), by what Settings' search reads: "peek" in ⌘T lists
-# Peek — Settings, and ↩ on it opens Settings › Features at the row, which flashes once.
+# Peek — Settings, and ↩ on it opens Settings › General at the row, which flashes once.
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 send key t cmd
@@ -740,9 +740,9 @@ done
 logged '^browser: command bar selected Peek — Settings$' || fail "↓ didn't reach Peek — Settings"
 ../tools/window-screenshot.sh "$pid" "$out/command-bar-setting.png" || fail "no window to capture"
 send key return
-expect '^browser: command bar shows setting Features › Peek$' "↩ on Peek — Settings didn't open it"
-expect '^browser: settings found Features › Peek$' "Settings didn't show Features at Peek"
-settings_drew Features
+expect '^browser: command bar shows setting General › Peek$' "↩ on Peek — Settings didn't open it"
+expect '^browser: settings found General › Peek$' "Settings didn't show General at Peek"
+settings_drew General
 ../tools/window-screenshot.sh "$pid" "$out/settings-from-bar.png" || fail "no window to capture"
 grep -q '^browser: settings index [0-9]* rows in ' "$log" || fail "the bar didn't read Settings' index"
 send clickkey $(drawn "toolbar Shortcuts")
@@ -750,10 +750,10 @@ settings_drew Shortcuts
 send clickkey $(drawn "search")
 # It reads every section's rows: "archive" finds five in three sections, live under their names,
 # and the column dims the rest. Esc empties the field, ⌘F takes the keyboard back to it, and a
-# click on Features' name shows Features at its row.
+# click on General's name shows General at its row.
 send key a cmd
 send type archive
-found='Archive Today tabs after, Archive windows left unused after, Archive Tab, View Archive, Clear Archive'
+found='Archive windows left unused after, Archive Tab, View Archive, Clear Archive, Archive Today tabs after'
 expect "^browser: settings search \"archive\" finds $found\$" \
   "the search for archive didn't find its five rows: $(grep '"archive" finds' "$log" | tail -1)"
 ../tools/window-screenshot.sh "$pid" "$out/settings-search.png" || fail "no window to capture"
@@ -762,18 +762,18 @@ expect '^browser: settings search cleared$' "Esc didn't empty the search"
 send key f cmd
 send type archive
 expect "^browser: settings search \"archive\" finds $found\$" "⌘F didn't search again"
-click_in_sight "found Features Archive windows left unused after"
-expect '^browser: settings found Features › Archive windows left unused after$' \
-  "a click on Features' name didn't show its row"
-settings_drew Features
+click_in_sight "found General Archive windows left unused after"
+expect '^browser: settings found General › Archive windows left unused after$' \
+  "a click on General's name didn't show its row"
+settings_drew General
 ../tools/window-screenshot.sh "$pid" "$out/settings-found.png" || fail "no window to capture"
 send clickkey $(drawn "toolbar Shortcuts")
 settings_drew Shortcuts
-# Settings › Agents' Tasks from the command bar (#1636), under Let agents use the browser while
+# Settings › Threads' Tasks from the command bar (#1636), under Let agents use the browser while
 # agents are on: on, ⇥ in ⌘T makes what's typed a task; off, it doesn't, and agents stay on.
 # Agents go off again after.
-send clickkey $(drawn "toolbar Agents")
-settings_drew Agents
+send clickkey $(drawn "toolbar Threads")
+settings_drew Threads
 click_in_sight "switch agents"
 expect '^browser: agents on$' "a click on Let agents use the browser didn't turn agents on"
 tasks_switch=$(drawn "switch agent tasks") || fail "Tasks from the command bar didn't show with agents on"
@@ -791,8 +791,8 @@ none_while '^browser: command bar asks an agent$' || fail "⇥ made a task with 
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 send menu Settings…
-expect '^browser: settings shown Agents$' "Settings… didn't show Agents again"
-settings_drew Agents
+expect '^browser: settings shown Threads$' "Settings… didn't show Threads again"
+settings_drew Threads
 click_in_sight "switch agent tasks"
 expect '^browser: agent tasks on$' "a click on Tasks from the command bar didn't turn tasks on"
 send key w cmd
@@ -805,8 +805,8 @@ expect '^browser: command bar asks an agent$' "⇥ didn't make a task with tasks
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar from the composer"
 send menu Settings…
-expect '^browser: settings shown Agents$' "Settings… didn't show Agents again"
-settings_drew Agents
+expect '^browser: settings shown Threads$' "Settings… didn't show Threads again"
+settings_drew Threads
 click_in_sight "switch agents"
 expect '^browser: agents off$' "a click on Let agents use the browser didn't turn agents off"
 send clickkey $(drawn "toolbar Shortcuts")
