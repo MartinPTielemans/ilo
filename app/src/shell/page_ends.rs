@@ -211,16 +211,17 @@ impl Shell {
     }
 
     /// The ring's stops in order, a row's as None: with a task's page watched, the task's header,
-    /// then what the panel's page row draws, its words standing for the page, its button and an
-    /// outside app's Stop; otherwise the row and the page.
+    /// then the page where the row's words stand for it or the user holds it, the row's button
+    /// and an outside app's Stop; otherwise the row and the page.
     pub(super) fn ring_stops(&self, cx: &gpui::App) -> Vec<Option<StripStop>> {
         let Some((_, tab)) = self.watched_task_page() else {
             return vec![None, Some(StripStop::Page)];
         };
         let row = self.page_row_shown(tab, cx);
-        let page = (row.case.as_ref())
-            .and_then(|case| case.said())
-            .map(|_| StripStop::Page);
+        // The page is a stop where the row's words stand for it, and wherever the user holds it,
+        // as a page handed to them is with no words on the row, so the ring goes into it.
+        let said = (row.case.as_ref()).and_then(|case| case.said()).is_some();
+        let page = (said || self.strip_held()).then_some(StripStop::Page);
         let button = row.case.as_ref().map(|case| case.button());
         let stop = row.stop.then_some(StripStop::Stop);
         // The card while the list draws it, so the ring never sits where it can't be seen.

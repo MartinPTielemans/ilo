@@ -3958,6 +3958,16 @@ fn row_cases() -> Vec<RowCaseShown> {
             )
         },
         RowCaseShown {
+            ring: vec!["into the page"],
+            command: Some("hand back 30"),
+            ..case(
+                "handed",
+                &waits,
+                live(Live::Handed),
+                Some(held("task-1", "Claude", "Sign in")),
+            )
+        },
+        RowCaseShown {
             command: task_take_over,
             ..case(
                 "refused",
