@@ -826,10 +826,14 @@ pub(crate) unsafe extern "C" fn tab_link_target(
     let url = unsafe { CStr::from_ptr(url) }
         .to_string_lossy()
         .into_owned();
-    // check.sh reads this line.
+    // check.sh reads this line. A link on a sign-in's page is on its host (#4100), so it names none.
     log!(
         "browser: link target {}",
-        if url.is_empty() { "none" } else { url.as_str() }
+        if url.is_empty() {
+            "none"
+        } else {
+            browser::agents::sign_in::logged(tab, &url)
+        }
     );
     let target = (!url.is_empty()).then(|| link_target::Target {
         text: url.into(),

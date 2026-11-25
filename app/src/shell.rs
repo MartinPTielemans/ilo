@@ -138,7 +138,7 @@ mod recent_tabs;
 #[cfg(test)]
 mod recent_tabs_tests;
 #[cfg(test)]
-mod recorder;
+pub(crate) mod recorder;
 mod return_mark;
 mod rows;
 mod safe_start;
@@ -3831,14 +3831,18 @@ impl Shell {
 
     pub fn set_page(&mut self, tab: u64, page: Page, cx: &mut Context<Self>) {
         let developer_mode = self.developer_mode(tab);
-        // check.sh reads these lines.
+        // check.sh reads these lines. A sign-in's page's address can hold its code or a token
+        // (#4100), so its line names none of it.
         let flag = |on| if on { 1 } else { 0 };
+        let url = match crate::agents::sign_in::quiet(tab) {
+            true => "(a sign-in's page)",
+            false => &*page.url,
+        };
         log!(
-            "browser: page {tab} back {} forward {} loading {} {}",
+            "browser: page {tab} back {} forward {} loading {} {url}",
             flag(page.can_go_back),
             flag(page.can_go_forward),
             flag(page.loading),
-            page.url
         );
         // Asked here, once a report, as the row drawn each frame needs only the answer.
         let left_pinned_host =

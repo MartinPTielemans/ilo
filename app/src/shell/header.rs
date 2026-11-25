@@ -595,8 +595,12 @@ impl Shell {
         let url = self.url(self.field_tab());
         let (words, color) = self.url_field_words(&url, cx);
         if *self.url_field_drawn.borrow() != words {
-            // check.sh reads this line.
-            log!("browser: url field {words}");
+            // check.sh reads this line. A sign-in's page's address can hold its code or a token
+            // (#4100), so its line names none of it, its host neither.
+            match crate::agents::sign_in::quiet(self.field_tab()) {
+                true => log!("browser: url field (a sign-in's page)"),
+                false => log!("browser: url field {words}"),
+            }
             self.url_field_drawn.replace(words.clone());
         }
         // The pinned extensions' actions, at the field's end, and Copy URL and Site Controls

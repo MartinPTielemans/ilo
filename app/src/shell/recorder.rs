@@ -53,7 +53,7 @@ impl Core {
 }
 
 #[derive(Default)]
-pub(super) struct Recorder {
+pub(crate) struct Recorder {
     /// The core this window shares with the others a test makes with `Recorder::beside`.
     pub(super) core: Rc<Core>,
     /// This window's Clears, by id, the last ten.
