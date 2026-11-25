@@ -103,6 +103,17 @@ launch_new() {
 launch_new light
 grep -q '^browser: onboarding started$' "$log" || fail "a new profile didn't start the onboarding"
 capture_step light-intro
+if [ "$(uname)" = Darwin ]; then
+  # A reopen, which a click on the Dock's icon sends, brings first run's window to the front and
+  # makes no window: the browser's stays held and Chromium makes none of its own.
+  send reopen
+  expect '^browser: reopen brought first run to the front$' "light: a reopen didn't come to first run"
+  send front
+  grep '^browser: front ' "$log" | tail -1 | grep -q '^browser: front GPUIWindow .*, key GPUIWindow ' ||
+    fail "light: a reopen put a window in front of first run's: $(grep '^browser: front ' "$log" | tail -1)"
+  ! grep -q '^browser: window on screen after first run$' "$log" ||
+    fail "light: a reopen showed the browser's window while first run showed"
+fi
 send key return
 expect '^browser: onboarding left intro via return$' "light: Return didn't go on from the welcome"
 expect '^browser: onboarding step import settled$' "light: the import step didn't come"
