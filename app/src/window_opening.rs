@@ -436,10 +436,11 @@ pub(crate) fn open_window_as(
     // starts it keeps the browser window off screen till then; the timer below finishes opening.
     let held = first && window.read(cx).is_ok_and(|shell| shell.first_run_open());
     match (&from, saved) {
-        _ if held => {
+        _ if held => unsafe {
+            platform::host_hold_window(ui_view);
             HELD_FOR_FIRST_RUN.set(Some(ui_view));
             log!("browser: window held for first run");
-        }
+        },
         (Some(from), Some(_)) => unsafe {
             platform::host_show_window_behind(ui_view, from.ui_view)
         },
