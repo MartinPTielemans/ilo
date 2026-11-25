@@ -2788,7 +2788,11 @@ fn a_model_that_cant_change_opens_nothing(cx: &mut TestAppContext) {
     });
     shell.update(cx, |shell, cx| {
         let talk = Conversation {
-            model: Some(("icons/claude.svg", "Claude Code \u{b7} Opus".into(), false)),
+            model: Some((
+                "icons/terminal.svg",
+                "Claude Code \u{b7} Opus".into(),
+                false,
+            )),
             ..conversation(1)
         };
         shell.set_conversation(Some(talk), cx);
