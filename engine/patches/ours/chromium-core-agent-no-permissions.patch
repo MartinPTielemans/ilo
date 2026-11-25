@@ -27,6 +27,11 @@ asks g_browser_core_no_print for the frame, saying whether the browser's own com
 One the core refuses takes the road Chrome has for a restricted preview: the print ends and its
 page goes on.
 
+chrome/browser/webshare/share_service_impl.cc. ShareServiceImpl::RunShareOperation, which every
+share a page asks for passes once Chrome's own checks have let it by and before a file of it is
+read or the system's sheet is shown, asks g_browser_core_no_share for the frame after Chrome's own
+refusals there, and answers a refused one as it answers those: PERMISSION_DENIED.
+
 chrome/browser/download/chrome_download_manager_delegate.cc.
 ChromeDownloadManagerDelegate::RequestConfirmation, which Chrome asks before it puts a sheet up
 for where a download's file goes, asks g_browser_core_takes_download_question first, with the
@@ -159,6 +164,36 @@ diff --color -ruN a/chrome/browser/printing/print_view_manager.cc b/chrome/brows
    std::move(callback).Run(/*should_proceed=*/true);
  #endif
  }
+diff --color -ruN a/chrome/browser/webshare/share_service_impl.cc b/chrome/browser/webshare/share_service_impl.cc
+--- a/chrome/browser/webshare/share_service_impl.cc
++++ b/chrome/browser/webshare/share_service_impl.cc
+@@ -42,6 +42,11 @@
+ #include "components/safe_browsing/core/browser/db/database_manager.h"
+ #include "components/safe_browsing/core/browser/db/v5_get_hash_protocol_manager.h"
+ #endif
++
++// browser_core: whether the page in |frame| is refused the system's sheet to
++// share with, which the core says of a page in an agent's Space the user
++// doesn't hold (//browser_core/hooks.h).
++bool (*g_browser_core_no_share)(content::RenderFrameHost* frame) = nullptr;
+ 
+ // IsDangerousFilename() and IsDangerousMimeType() should be kept in sync with
+ // //third_party/blink/renderer/modules/webshare/FILE_TYPES.md
+@@ -336,6 +341,14 @@
+     return;
+   }
+ 
++  // browser_core: a share the core refuses is answered as one from a tab that
++  // isn't in front is, before a file is read or anything is shown.
++  if (g_browser_core_no_share &&
++      g_browser_core_no_share(&render_frame_host())) {
++    std::move(callback).Run(blink::mojom::ShareError::PERMISSION_DENIED);
++    return;
++  }
++
+ #if BUILDFLAG(IS_CHROMEOS)
+   sharesheet_client_.Share(title, text, share_url, std::move(files),
+                            std::move(callback));
 diff --color -ruN a/components/permissions/permission_context_base.cc b/components/permissions/permission_context_base.cc
 --- a/components/permissions/permission_context_base.cc
 +++ b/components/permissions/permission_context_base.cc
