@@ -18,6 +18,8 @@ class LinkPreviewAsk {
   // Whether the preview opening at |url| is the link kept. Forgets it either way: one ask is one
   // preview.
   bool Take(std::string_view url);
+  // The page that asked is gone, its tab at another: its link is no later page's.
+  void Forget();
 
  private:
   std::string asked_;

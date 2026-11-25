@@ -25,6 +25,14 @@ TEST(LinkPreviewRuleTest, APreviewOfAnotherAddressIsNoPagesLink) {
   EXPECT_FALSE(ask.Take("https://example.com/b"));
 }
 
+// The tab's next page never sends itself with a link the page before it asked for.
+TEST(LinkPreviewRuleTest, ALinkAskedIsForgottenWithThePageThatAsked) {
+  LinkPreviewAsk ask;
+  ask.Keep(kLink);
+  ask.Forget();
+  EXPECT_FALSE(ask.Take(kLink));
+}
+
 // Nor is the link asked, once another preview has opened from the tab.
 TEST(LinkPreviewRuleTest, OneAskIsOnePreview) {
   LinkPreviewAsk ask;

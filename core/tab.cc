@@ -1508,6 +1508,8 @@ void Tab::DidFinishNavigation(content::NavigationHandle* navigation) {
     ClearHang();
     // The page that was changing its background is gone, and its wait with it.
     background_wait_.Stop();
+    // As is the page that asked for a link preview, and its ask with it.
+    link_preview_ask_.Forget();
     TellBackground(background_.LeftPage(Window::Showing(id_) != nullptr));
     if (std::exchange(crashed_, false)) {
       LayOutSoon();

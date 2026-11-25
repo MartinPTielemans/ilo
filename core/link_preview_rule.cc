@@ -13,4 +13,8 @@ bool LinkPreviewAsk::Take(std::string_view url) {
   return !url.empty() && asked == url;
 }
 
+void LinkPreviewAsk::Forget() {
+  asked_.clear();
+}
+
 }  // namespace browser_core
