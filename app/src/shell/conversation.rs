@@ -185,6 +185,11 @@ impl Talk {
         let tiles = self.view.read(cx).tiles.clone();
         tiles.end_all(cx);
     }
+
+    /// The tiles its pages show live in, which a watch borrows one of.
+    pub(super) fn tiles(&self, cx: &gpui::App) -> Rc<LiveTiles> {
+        self.view.read(cx).tiles.clone()
+    }
 }
 
 /// The view the page area draws.
@@ -912,9 +917,10 @@ impl TalkView {
             .and_then(|(_, _, picture)| picture.clone());
         // check.sh reads this line.
         log!("browser: task {} page {tab}", self.agent);
+        let tiles = Some(self.tiles.clone());
         self.shell
             .update(cx, |shell, cx| {
-                shell.watch_task_page(tab, from, picture, false, cx)
+                shell.watch_task_page_from(tab, from, picture, false, tiles, cx)
             })
             .ok();
     }

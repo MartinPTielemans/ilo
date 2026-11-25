@@ -580,6 +580,7 @@ fn a_tile_turning_to_needs_you_comes_into_sight_once(cx: &mut TestAppContext) {
         space: 3,
         doing: "".into(),
         held: vec![(35, "Sign in".into())],
+        taken: Vec::new(),
     };
     shell.update(cx, |shell, cx| shell.set_agent_status(vec![held], cx));
     assert!(
@@ -680,6 +681,7 @@ fn needs_you_beside_typing(
         space: 3,
         doing: "".into(),
         held: vec![(31, "Sign in".into())],
+        taken: Vec::new(),
     };
     shell.update(cx, |shell, cx| shell.set_agent_status(vec![held], cx));
     for _ in 0..2 {
@@ -1852,6 +1854,7 @@ fn the_focus_command_does_nothing_on_a_page_the_user_has(cx: &mut TestAppContext
         space: 3,
         doing: "".into(),
         held: vec![(30, "Sign in".into())],
+        taken: Vec::new(),
     };
     shell.update(cx, |shell, cx| shell.set_agent_status(vec![held], cx));
     cx.run_until_parked();
@@ -2873,9 +2876,9 @@ fn a_helpers_line_under_way_shimmers_unless_motion_is_reduced(cx: &mut TestAppCo
     cx.update(|_, cx| cx.set_reduce_motion(true));
 }
 
-/// Its pages show live in their pictures in the rail, where the core can (#4115): not under the
-/// page a tile's click watches over the conversation, again once it's back, and every tile ends as
-/// the task closes.
+/// Its pages show live in their pictures in the rail, where the core can (#4115): a tile's click
+/// watches its page as that tile grown to the area, never the window's page (#3788), which goes
+/// back to its picture once the page is back, and every tile ends as the task closes.
 #[gpui::test]
 fn its_pages_are_live_in_the_rail_and_end_as_it_goes(cx: &mut TestAppContext) {
     let (shell, host, cx) = shown(cx);
@@ -2903,15 +2906,19 @@ fn its_pages_are_live_in_the_rail_and_end_as_it_goes(cx: &mut TestAppContext) {
         Some((3, Some(30)))
     );
     assert!(
-        did.contains(&"end tile 30".to_string()),
-        "live under its watched page: {did:?}"
+        did.iter().any(|line| line.starts_with("tile 30 at ")),
+        "the watch didn't grow the tile: {did:?}"
+    );
+    assert!(
+        !did.contains(&"end tile 30".to_string()) && !did.contains(&"select 30".to_string()),
+        "the watched page left its tile: {did:?}"
     );
 
     cx.simulate_keystrokes("escape");
     let did = draw(cx);
     assert!(
         did.iter().any(|line| line.starts_with("tile 30 at ")),
-        "not live again with its page back: {did:?}"
+        "not back in its picture with its page back: {did:?}"
     );
 
     shell.update(cx, |shell, cx| shell.close_task(cx));
@@ -2919,6 +2926,72 @@ fn its_pages_are_live_in_the_rail_and_end_as_it_goes(cx: &mut TestAppContext) {
     assert!(
         host.take().contains(&"end tile 30".to_string()),
         "live with the task closed"
+    );
+}
+
+/// A close a page of the user's refuses brings a page watched in its tile back in that tile grown
+/// to the area (#3788, #4202): it goes back to its picture for the close, and the window never
+/// shows the agent's tab.
+#[gpui::test]
+fn a_refused_close_brings_the_watched_tile_back(cx: &mut TestAppContext) {
+    use crate::shell::{DialogKind, PageDialog, PageReply};
+    let (shell, host, cx) = shown(cx);
+    host.shows_tiles.set(Some(true));
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let draw = |cx: &mut VisualTestContext| {
+        shell.update(cx, |_, cx| cx.notify());
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        host.take()
+    };
+    draw(cx);
+    let (_, at) = view.read_with(cx, |view, _| view.drawn.borrow()[0]);
+    cx.simulate_click(at.center(), Modifiers::none());
+    draw(cx);
+
+    shell.update(cx, |shell, cx| shell.run(Command::CloseWindow, "ui", cx));
+    let did = draw(cx);
+    assert!(
+        !did.contains(&"end tile 30".to_string()),
+        "the tile ended for the close: {did:?}"
+    );
+    let dialog = PageDialog {
+        id: 7,
+        kind: DialogKind::Leave,
+        title: "".into(),
+        message: "".into(),
+        text: "".into(),
+        accept: "Leave".into(),
+        cancel: "Stay".into(),
+        check: "".into(),
+        username: "".into(),
+        password: "".into(),
+    };
+    shell.update(cx, |shell, cx| shell.set_page_dialog(10, Some(dialog), cx));
+    draw(cx);
+    let stay = PageReply {
+        accept: false,
+        text: String::new(),
+        password: String::new(),
+        checked: false,
+    };
+    shell.update(cx, |shell, cx| shell.answer_page_dialog(10, 7, stay, cx));
+    let did = draw(cx);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(30))),
+        "Stay didn't bring the page watched back: {did:?}"
+    );
+    assert!(
+        did.iter().any(|line| line.starts_with("tile 30 at ")),
+        "the page watched isn't its tile again: {did:?}"
+    );
+    assert!(
+        !did.contains(&"select 30".to_string()),
+        "the window showed the agent's tab: {did:?}"
     );
 }
 
@@ -2964,5 +3037,67 @@ fn only_a_picture_wholly_in_the_rails_view_is_live(cx: &mut TestAppContext) {
     assert!(
         first_ended,
         "the first picture, scrolled away, is still live: {did:?}"
+    );
+}
+
+/// Every door to a page goes through its tile where the core shows them, as the sidebar's row and
+/// the strip's key stop do through watch_task_page: the page only watched is never the window's.
+/// A handoff while the user types in the reply field beside it leaves the field its keyboard and
+/// its words, and asks no "focus page".
+#[gpui::test]
+fn a_watch_from_any_door_is_a_tile_and_a_handoff_leaves_the_reply_field(cx: &mut TestAppContext) {
+    use crate::agents::Status;
+    let (shell, host, cx) = shown(cx);
+    host.shows_tiles.set(Some(true));
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let draw = |cx: &mut VisualTestContext| {
+        view.update(cx, |_, cx| cx.notify());
+        shell.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        host.take()
+    };
+    draw(cx);
+
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, Default::default(), None, false, cx)
+    }));
+    let did = draw(cx);
+    assert!(
+        did.iter().any(|line| line.starts_with("tile 30 at ")),
+        "the watch didn't grow the tile: {did:?}"
+    );
+    assert!(
+        !did.contains(&"select 30".to_string()),
+        "a page only watched is the window's: {did:?}"
+    );
+
+    shell.update(cx, |shell, cx| shell.set_talk_beside(true, cx));
+    let reply = view.read_with(cx, |view, cx| view.reply.focus_handle(cx));
+    cx.update(|window, cx| window.focus(&reply, cx));
+    cx.simulate_input("Ryanair");
+    draw(cx);
+    let held = Status {
+        agent: "task-1".into(),
+        name: "Claude".into(),
+        space: 3,
+        doing: "".into(),
+        held: vec![(30, "Sign in".into())],
+        taken: Vec::new(),
+    };
+    shell.update(cx, |shell, cx| shell.set_agent_status(vec![held], cx));
+    let mut did = draw(cx);
+    shell.update(cx, |shell, _| shell.age_watch_press());
+    did.extend(draw(cx));
+    assert!(
+        !did.iter().any(|line| line.starts_with("focus page")),
+        "{did:?}"
+    );
+    assert!(cx.update(|window, _| reply.is_focused(window)), "{did:?}");
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.reply.read(cx).text().to_string()),
+        "Ryanair"
     );
 }

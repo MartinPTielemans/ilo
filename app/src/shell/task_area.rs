@@ -6,8 +6,11 @@
 //! from a thumbnail in it, one of the task's pages, which zooms out of the thumbnail to fill the
 //! area and shrinks back into it, with the Agent Space's bar (#365) laid under it as a strip, as
 //! GPUI can't draw over a page. The core shows the task's tab only while its page is watched, and
-//! the user's again as it goes. Nothing here runs for a window that shows no task.
+//! the user's again as it goes. Where the core shows pages in tiles (the Mac), a watched page is
+//! its tile grown to the area instead, at its own size, and the window shows the task's tab only
+//! once the user holds it (#3788). Nothing here runs for a window that shows no task.
 
+use std::rc::Rc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -19,13 +22,14 @@ use gpui::{
 };
 
 use super::{
-    Command, DialogKind, Folders, NAV_RADIUS, PagePicture, Palette, SECONDARY, Shell, Space,
-    SpaceEntry, TITLE, Theme,
+    CARD_INSET, Command, DialogKind, Folders, NAV_RADIUS, PagePicture, Palette, SECONDARY,
+    SIDEBAR_WIDTH, Shell, Space, SpaceEntry, TITLE, Theme,
     agent_bar::{Bar, bar_words, stop_keys},
     card,
     conversation::{page_chip, page_chip_keyed},
     cubic_bezier,
     keys::user_keys,
+    live_tiles::{LiveTiles, TILE_RADIUS, page_in},
     permission::{Look, card_listener},
     picture::next_request,
     task_cards::act,
@@ -73,12 +77,35 @@ struct Watched {
     /// Whether `picture` is one this window asked for, and so its own to let go of.
     asked: bool,
     zoom: Zoom,
+    /// Its tile, where the core shows the page in one: the page is never the window's while it's
+    /// only watched (#3788).
+    tile: Option<WatchTile>,
     /// Whether ilo opened it by itself, as at a handoff, rather than the user: it never takes the
     /// keyboard, and until ARM has passed (`guarded`) it stays out of the window behind its
     /// picture, so a click meant for what stood there a moment ago never reaches the page.
     by_ilo: bool,
     /// Held behind its picture since ilo opened it, till a timer of ARM lets it in place.
     guarded: bool,
+}
+
+/// A page watched as its tile grown to the area: it keeps its own size, takes no input and hears
+/// nothing of where it shows, until the user takes it over and it's the window's page, the user's
+/// tab. Handed back, it's a tile again.
+struct WatchTile {
+    /// The conversation's tiles, which lent it and take it back as the watch ends.
+    tiles: Rc<LiveTiles>,
+    /// Whether the core shows the page in it now, rather than as the window's page.
+    shown: bool,
+    /// Where it was put last, and its corners' radius.
+    placed: Option<(Bounds<Pixels>, f32)>,
+    /// When a press on it took the page over. It stays a tile till ARM after, so the press and any
+    /// that follow it, a double-click's second, land on nothing the agent left under the pointer.
+    pressed: Option<Instant>,
+    /// When the agent made the page the user's while it was watched, at a handoff or an ask. It
+    /// stays a tile till ARM after, so a click meant for what stood there reaches nothing, then
+    /// it's the window's page with the keyboard left where it was: the user's first click in the
+    /// page gives it the keyboard.
+    handed: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -105,6 +132,37 @@ impl Zoom {
             }
         }
     }
+}
+
+/// The size a window opens at by default, the app's (window_opening.rs, WINDOW_SIZE), which a test
+/// reads there.
+const DEFAULT_WINDOW: (f32, f32) = (1280., 800.);
+
+/// An agent's page's own size, which the core gives it (core/window.cc, kAgentPageSize) and a tile
+/// never changes: the area a page watched has in a window at its default size, so a watch there
+/// shows it at 1:1 (#3788).
+pub(super) fn agent_page_size() -> Size<Pixels> {
+    size(
+        px(DEFAULT_WINDOW.0 - SIDEBAR_WIDTH - CARD_INSET),
+        px(DEFAULT_WINDOW.1 - 2. * CARD_INSET - PAGE_ROOM),
+    )
+}
+
+/// Where an agent's page shows whole in `area`: at its own shape, by the one factor that fits it
+/// both ways and never past its own size, its top at the area's and centred across.
+fn fitted(area: Bounds<Pixels>) -> Bounds<Pixels> {
+    let own = agent_page_size();
+    let scale = (f32::from(area.size.width) / f32::from(own.width))
+        .min(f32::from(area.size.height) / f32::from(own.height))
+        .min(1.);
+    let shown = size(own.width * scale, own.height * scale);
+    Bounds::new(
+        point(
+            area.left() + (area.size.width - shown.width) / 2.,
+            area.top(),
+        ),
+        shown,
+    )
 }
 
 /// Where a watched page goes in the card: its top, the card's width, with room under it for the
@@ -285,7 +343,9 @@ impl Shell {
             self.task_core = space;
             // check.sh reads this line.
             log!("browser: task space {space} shown");
-            if !self.watched_task_page().is_some_and(|(at, _)| at == space) {
+            if !self.watched_task_page().is_some_and(|(at, _)| at == space)
+                || self.watch_tile_shown().is_some()
+            {
                 self.show_users_space(cx);
             }
             cx.notify();
@@ -355,10 +415,19 @@ impl Shell {
             self.drop_task_area(cx);
             return false;
         }
+        let tiled = self.watch_tile_shown();
         match self.task_area.as_mut().and_then(|area| area.page.as_mut()) {
+            // A page in its tile takes no keyboard; once the user holds it, it's the window's
+            // page with it (`settle_watch_tile`).
+            Some(page) if page.tab == tab && tiled == Some(tab) => {}
             Some(page) if page.tab == tab => self.browser.focus_page(cx),
             Some(page) => {
+                let old = page.tab;
                 page.tab = tab;
+                if let Some(tile) = page.tile.take() {
+                    let at = (tile.placed.filter(|_| tile.shown)).map(|(at, _)| at);
+                    tile.tiles.take_back(old, at);
+                }
                 self.browser.select(tab, cx);
             }
             // The conversation watches a page from its thumbnail (`watch_task_page`).
@@ -438,6 +507,27 @@ impl Shell {
         by_ilo: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        // Every door goes through the tile where the core shows them, so a page only watched is
+        // never the window's: the area's conversation lends it. Only show_task opens an area, and
+        // with its conversation.
+        let space = self.task_area.as_ref().map(|area| area.space);
+        let tiles = (space.and_then(|space| self.talk_in(space)))
+            .and(self.talk.as_ref())
+            .map(|talk| talk.tiles(cx));
+        self.watch_task_page_from(tab, from, picture, by_ilo, tiles, cx)
+    }
+
+    /// The same, from the conversation, whose `tiles` show its pages live where the core can: the
+    /// page's tile grows to the area, and the page is never the window's while it's only watched.
+    pub(super) fn watch_task_page_from(
+        &mut self,
+        tab: u64,
+        from: Bounds<Pixels>,
+        picture: Option<PagePicture>,
+        by_ilo: bool,
+        tiles: Option<Rc<LiveTiles>>,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(area) = &self.task_area else {
             return false;
         };
@@ -449,6 +539,13 @@ impl Shell {
         } else {
             Zoom::Out(Instant::now())
         };
+        if let Some(old) = self.task_area.as_mut().and_then(|area| area.page.take()) {
+            self.let_go_of_watch(old, true);
+        }
+        let tile = self.watch_tile(tab, from, tiles);
+        // A tile takes no input, so only a page that's the window's at once waits behind its
+        // picture.
+        let guarded = by_ilo && !tile.as_ref().is_some_and(|tile| tile.shown);
         self.show_watched(
             Watched {
                 tab,
@@ -456,26 +553,75 @@ impl Shell {
                 picture,
                 asked: false,
                 zoom,
+                tile,
                 by_ilo,
-                guarded: by_ilo,
+                guarded,
             },
             cx,
         );
         true
     }
 
-    /// The area watches `page`, in place of the one it watched, and the core shows it.
+    /// The tile a watch of `tab` from `from` has, which `tiles` lend it, where the core shows them:
+    /// the page its agent has stays in its tile, which grows out of its picture; one the user
+    /// holds, a handoff too, is theirs at once, as the window's page, and a tile once handed back.
+    fn watch_tile(
+        &mut self,
+        tab: u64,
+        from: Bounds<Pixels>,
+        tiles: Option<Rc<LiveTiles>>,
+    ) -> Option<WatchTile> {
+        let tiles = tiles?;
+        let was = tiles.lend(tab);
+        if self.task_page_held(tab) {
+            if was.is_some() {
+                self.browser.end_tile(tab);
+            }
+            return (was.is_some() || tiles.shown_any()).then_some(WatchTile {
+                tiles,
+                shown: false,
+                placed: None,
+                pressed: None,
+                handed: None,
+            });
+        }
+        let at = page_in(from);
+        if self.browser.show_tile(tab, at, TILE_RADIUS) {
+            return Some(WatchTile {
+                tiles,
+                shown: true,
+                placed: Some((at, TILE_RADIUS)),
+                pressed: None,
+                handed: None,
+            });
+        }
+        tiles.take_back(tab, was);
+        None
+    }
+
+    /// The area watches `page`, in place of the one it watched, and the core shows it: in its
+    /// tile, or as the window's page.
     fn show_watched(&mut self, page: Watched, cx: &mut Context<Self>) {
-        let (tab, page_by_ilo) = (page.tab, page.by_ilo);
-        if let Some(area) = &mut self.task_area {
-            let old = area.page.replace(page);
-            self.let_go_of(old);
+        let (tab, by_ilo) = (page.tab, page.by_ilo);
+        let tiled = page.tile.as_ref().is_some_and(|tile| tile.shown);
+        if let Some(area) = &mut self.task_area
+            && let Some(old) = area.page.replace(page)
+        {
+            self.let_go_of_watch(old, true);
         }
         // check.sh reads this line.
         log!("browser: task page {tab} watched");
+        if tiled {
+            // A tile takes no input, so the UI has the keyboard, unless ilo opened the page by
+            // itself: then the keyboard stays where it was, in the reply field too.
+            if !by_ilo {
+                self.take_keyboard(cx);
+            }
+            cx.notify();
+            return;
+        }
         // Shown first, at the frame the user's page had out of the window, then laid out at its own
         // size there, so the user's page keeps its size.
-        let by_ilo = page_by_ilo;
         self.browser.select(tab, cx);
         self.lay_out_page(cx);
         match self.agent_bar() {
@@ -507,15 +653,206 @@ impl Shell {
         cx.notify();
     }
 
-    /// Lets go of the picture a page no longer watched was asked for.
+    /// Lets go of a page no longer watched, kept for a close a page might refuse: its picture, and
+    /// its tile, if it still has one.
     fn let_go_of(&mut self, page: Option<Watched>) {
-        if let Some(Watched {
+        if let Some(page) = page {
+            self.let_go_of_watch(page, true);
+        }
+    }
+
+    /// Whether the user holds `tab` from its agent: taken over, handed to them, or asked for.
+    fn task_page_held(&self, tab: u64) -> bool {
+        (self.agent_status.iter()).any(|status| status.held.iter().any(|(held, _)| *held == tab))
+    }
+
+    /// Whether the user took `tab` over, their own act, rather than the agent handing it to them
+    /// or asking for it: by the hold's kind, never by the words an agent wrote for it.
+    fn task_page_taken(&self, tab: u64) -> bool {
+        (self.agent_status.iter()).any(|status| status.taken.contains(&tab))
+    }
+
+    /// Lets go of a watch that's over: the picture it asked for, and its tile, which the
+    /// conversation's tiles take back where it is, to move to its picture or end, or which ends
+    /// with no conversation to go back to.
+    fn let_go_of_watch(&mut self, page: Watched, to_conversation: bool) {
+        if let Watched {
             picture: Some(picture),
             asked: true,
             ..
-        }) = page
+        } = &page
         {
             self.stale_pictures.push(picture.image());
+        }
+        if let Some(tile) = page.tile {
+            self.give_back_tile(page.tab, tile, to_conversation);
+        }
+    }
+
+    /// `tab`'s tile, which a watch had, goes back to the conversation's tiles where it is, to move
+    /// to its picture or end, or ends with no conversation to go back to.
+    fn give_back_tile(&mut self, tab: u64, tile: WatchTile, to_conversation: bool) {
+        let at = (tile.placed.filter(|_| tile.shown)).map(|(at, _)| at);
+        if at.is_some() && !to_conversation {
+            self.browser.end_tile(tab);
+            log!("browser: task tile {tab} ended");
+            return tile.tiles.take_back(tab, None);
+        }
+        tile.tiles.take_back(tab, at);
+    }
+
+    /// The watched page's tile, if it has one.
+    fn watch_tile_mut(&mut self) -> Option<&mut WatchTile> {
+        (self.task_area.as_mut())
+            .and_then(|area| area.page.as_mut())
+            .and_then(|page| page.tile.as_mut())
+    }
+
+    /// The page watched in its tile now, if it is.
+    pub(super) fn watch_tile_shown(&self) -> Option<u64> {
+        let page = self.task_area.as_ref()?.page.as_ref()?;
+        page.tile.as_ref().filter(|tile| tile.shown)?;
+        Some(page.tab)
+    }
+
+    /// Where the watched page's tile goes at `now`, and its corners: out of its picture's place as
+    /// it zooms, then whole in the area, at the page's own shape.
+    fn watch_tile_frame(&self, page: &Watched, now: Instant) -> (Bounds<Pixels>, f32) {
+        let (card, _) = self.page_frame(self.viewport);
+        let place = fitted(watched(self.page_part(card)));
+        let way = page.zoom.at(now);
+        let radius = TILE_RADIUS + (self.card_radius() - TILE_RADIUS) * way;
+        (between(page_in(page.thumb), place, way), radius)
+    }
+
+    /// Swaps the watched page between its tile and the window as the hold changes, and keeps the
+    /// tile where it goes. Held, taken over or handed to the user, it's the window's page, the
+    /// user's tab, though not before ARM is past; handed back, it's a tile again. Only the user's
+    /// own press or Take Over gives it the keyboard.
+    fn settle_watch_tile(&mut self, now: Instant, cx: &mut Context<Self>) {
+        let Some(page) = self.task_area.as_ref().and_then(|area| area.page.as_ref()) else {
+            return;
+        };
+        let Some(tile) = &page.tile else {
+            return;
+        };
+        let (tab, zoom, shown, pressed, handed) =
+            (page.tab, page.zoom, tile.shown, tile.pressed, tile.handed);
+        let within = |at: Option<Instant>| {
+            at.is_some_and(|at| now.saturating_duration_since(at).as_secs_f32() < ARM)
+        };
+        let held = self.task_page_held(tab);
+        let users = pressed.is_some() || self.task_page_taken(tab);
+        if shown && held && !users && handed.is_none() {
+            if let Some(tile) = self.watch_tile_mut() {
+                tile.handed = Some(now);
+            }
+            // Once its ARM is past, the page handed to the user is the window's.
+            cx.spawn(async move |shell, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_secs_f32(ARM))
+                    .await;
+                shell.update(cx, |_, cx| cx.notify()).ok();
+            })
+            .detach();
+            return self.place_watch_tile(now, cx);
+        }
+        if shown && held && !within(pressed) && (users || !within(handed)) {
+            if let Some(tile) = self.watch_tile_mut() {
+                (tile.shown, tile.placed, tile.pressed, tile.handed) = (false, None, None, None);
+            }
+            self.browser.end_tile(tab);
+            log!("browser: task page {tab} out of its tile");
+            self.browser.select(tab, cx);
+            self.lay_out_page(cx);
+            if users {
+                self.browser.focus_page(cx);
+            }
+            return;
+        }
+        if !shown && !held && zoom == Zoom::Rest {
+            if let Some(tile) = self.watch_tile_mut() {
+                tile.shown = true;
+            }
+            self.show_users_page(cx);
+        }
+        if !held
+            && !within(pressed)
+            && let Some(tile) = self.watch_tile_mut()
+        {
+            // A press that took nothing over, as with the agent's session ended.
+            (tile.pressed, tile.handed) = (None, None);
+        }
+        self.place_watch_tile(now, cx);
+    }
+
+    /// Puts the watched page's tile where it goes now, if it moved. Where the core says no, the
+    /// page is the window's, as where it shows no tiles.
+    fn place_watch_tile(&mut self, now: Instant, cx: &mut Context<Self>) {
+        let Some(page) = self.task_area.as_ref().and_then(|area| area.page.as_ref()) else {
+            return;
+        };
+        let Some(tile) = page.tile.as_ref().filter(|tile| tile.shown) else {
+            return;
+        };
+        let placed = self.watch_tile_frame(page, now);
+        if tile.placed == Some(placed) {
+            return;
+        }
+        let tab = page.tab;
+        if self.browser.show_tile(tab, placed.0, placed.1) {
+            if let Some(tile) = self.watch_tile_mut() {
+                tile.placed = Some(placed);
+            }
+            return;
+        }
+        if let Some(tile) = (self.task_area.as_mut())
+            .and_then(|area| area.page.as_mut())
+            .and_then(|page| page.tile.take())
+        {
+            tile.tiles.take_back(tab, None);
+        }
+        self.browser.select(tab, cx);
+        self.lay_out_page(cx);
+    }
+
+    /// A press on the watched page's tile takes the page over, as Take Over does, and goes no
+    /// further: neither it nor one in the ARM after it reaches the page.
+    fn press_watch_tile(&mut self, cx: &mut Context<Self>) {
+        let now = Instant::now();
+        let Some(page) = self.task_area.as_mut().and_then(|area| area.page.as_mut()) else {
+            return;
+        };
+        if matches!(page.zoom, Zoom::Out(_)) {
+            page.zoom = Zoom::Rest;
+        }
+        let tab = page.tab;
+        let Some(tile) = page.tile.as_mut().filter(|tile| tile.shown) else {
+            return;
+        };
+        cx.notify();
+        if tile.pressed.is_some() {
+            return;
+        }
+        tile.pressed = Some(now);
+        self.page_pressed(tab, cx);
+        // Once its ARM is past, the page the user took is the window's.
+        cx.spawn(async move |shell, cx| {
+            cx.background_executor()
+                .timer(Duration::from_secs_f32(ARM))
+                .await;
+            shell.update(cx, |_, cx| cx.notify()).ok();
+        })
+        .detach();
+    }
+
+    /// The press on the watched tile, or its handing to the user, as if it were longer ago than its
+    /// ARM, for a test.
+    #[cfg(test)]
+    pub(super) fn age_watch_press(&mut self) {
+        if let Some(tile) = self.watch_tile_mut() {
+            let aged = |at: Option<Instant>| at.map(|at| at - Duration::from_secs_f32(ARM + 1.));
+            (tile.pressed, tile.handed) = (aged(tile.pressed), aged(tile.handed));
         }
     }
 
@@ -539,6 +876,10 @@ impl Shell {
             }
             _ if still => {
                 self.leave_task_page_now(cx);
+            }
+            // A tile goes back as it is, live, with no picture to take.
+            _ if page.tile.as_ref().is_some_and(|tile| tile.shown) => {
+                page.zoom = Zoom::In(Instant::now());
             }
             _ => {
                 let request = next_request();
@@ -591,19 +932,31 @@ impl Shell {
         }
     }
 
-    /// The task's tab whose page is in place in the area, live, as the core shows it.
+    /// The task's tab whose page is in place in the area, live, as the core shows it: in its
+    /// tile or as the window's page.
     pub(super) fn task_page_live(&self) -> Option<u64> {
         let area = self.task_area.as_ref()?;
         let page = area.page.as_ref()?;
+        let tiled = page.tile.as_ref().is_some_and(|tile| tile.shown);
         let live = matches!(page.zoom, Zoom::Rest | Zoom::Asked(_))
-            && self.task_core == area.space
+            && (tiled || self.task_core == area.space)
             && !page.guarded;
         live.then_some(page.tab)
+    }
+
+    /// The task's tab whose page is in place in the area as the window's page, not in a tile.
+    fn task_page_in_window(&self) -> Option<u64> {
+        let tab = self.task_page_live()?;
+        (self.watch_tile_shown() != Some(tab)).then_some(tab)
     }
 
     /// The task's page in place in the area, and where it is in the window.
     pub(super) fn task_page_place(&self) -> Option<(u64, Bounds<Pixels>)> {
         let tab = self.task_page_live()?;
+        if self.watch_tile_shown() == Some(tab) {
+            let page = self.task_area.as_ref()?.page.as_ref()?;
+            return Some((tab, self.watch_tile_frame(page, Instant::now()).0));
+        }
         let (card, _) = self.page_frame(self.viewport);
         Some((
             tab,
@@ -666,6 +1019,10 @@ impl Shell {
         let Some(page) = &area.page else {
             return pushed(card, away);
         };
+        // A page in its tile is never the window's, which stays the user's, out of the window.
+        if page.tile.as_ref().is_some_and(|tile| tile.shown) {
+            return pushed(card, away);
+        }
         let live = self.task_core == area.space;
         let part = self.page_part(card);
         let live = live && !page.guarded;
@@ -689,16 +1046,11 @@ impl Shell {
     /// The area goes at once, the Space's page laid out back in the card, for whatever the window
     /// shows next. Laid out first, so the page shown next is laid out there once.
     pub(super) fn drop_task_area(&mut self, cx: &mut Context<Self>) {
-        let Some(area) = self.task_area.take() else {
+        let Some(mut area) = self.task_area.take() else {
             return;
         };
-        if let Some(Watched {
-            picture: Some(picture),
-            asked: true,
-            ..
-        }) = area.page
-        {
-            self.stale_pictures.push(picture.image());
+        if let Some(page) = area.page.take() {
+            self.let_go_of_watch(page, false);
         }
         // check.sh reads this line.
         log!("browser: task area {} closed", area.space);
@@ -718,14 +1070,7 @@ impl Shell {
         let Some(page) = self.task_area.as_mut().and_then(|area| area.page.take()) else {
             return;
         };
-        if let Watched {
-            picture: Some(picture),
-            asked: true,
-            ..
-        } = page
-        {
-            self.stale_pictures.push(picture.image());
-        }
+        self.let_go_of_watch(page, true);
         // check.sh waits for this line, as at the end of the zoom back with motion.
         log!("browser: task page in its thumbnail");
         self.show_users_page(cx);
@@ -773,7 +1118,13 @@ impl Shell {
         if matches!(page.zoom, Zoom::In(_)) {
             self.leave_task_page_now(cx);
         }
-        let watched = (self.task_area.as_mut()).and_then(|area| area.page.take());
+        let mut watched = (self.task_area.as_mut()).and_then(|area| area.page.take());
+        // Its tile goes back to the conversation with it; a refused close lends it again.
+        if let Some(page) = &mut watched
+            && let Some(tile) = page.tile.take()
+        {
+            self.give_back_tile(page.tab, tile, true);
+        }
         if watched.is_some() {
             // check.sh waits for this line, as wherever a page watched goes back.
             log!("browser: task page in its thumbnail");
@@ -839,9 +1190,12 @@ impl Shell {
                 // The window doesn't wait to hear it: a frame drawn meanwhile had the page back
                 // and the sidebar, the URL field and the strip still the user's page's (#4202).
                 self.task_core = space;
-                // In place at once, as it stood.
+                // In place at once, as it stood, in its tile again where the core shows them.
+                let tiles = self.talk.as_ref().map(|talk| talk.tiles(cx));
+                let tile = self.watch_tile(page.tab, page.thumb, tiles);
                 let page = Watched {
                     zoom: Zoom::Rest,
+                    tile,
                     by_ilo: false,
                     guarded: false,
                     ..page
@@ -966,8 +1320,12 @@ impl Shell {
             return false;
         }
         let live = self.task_page_live();
+        let in_window = self.task_page_in_window();
         match command {
             Command::BackToPinnedUrl if self.agent_bar().is_some() => self.agent_bar_primary(cx),
+            // A page in its tile is only watched: nothing finds in it, zooms it or prints it.
+            Command::Find | Command::Print | Command::ActualSize | Command::ZoomIn | Command::ZoomOut
+                if live.is_some() && in_window.is_none() => {}
             // Esc steps back, from a page watched too, whose page has the keyboard (the menu's
             // Stop comes from elsewhere).
             Command::Stop if matches!(from, "ui" | "page") => self.task_step_back(cx),
@@ -1077,32 +1435,26 @@ impl Shell {
         let Some(area) = &mut self.task_area else {
             return;
         };
-        let mut retake = false;
+        let mut ended = None;
         if let Some(page) = &mut area.page {
             match page.zoom {
                 Zoom::Out(start) if still || now.duration_since(start).as_secs_f32() >= OPEN => {
                     page.zoom = Zoom::Rest;
                 }
                 Zoom::In(start) if still || now.duration_since(start).as_secs_f32() >= CLOSE => {
-                    if let Some(Watched {
-                        picture: Some(picture),
-                        asked: true,
-                        ..
-                    }) = area.page.take()
-                    {
-                        self.stale_pictures.push(picture.image());
-                    }
-                    // check.sh waits for this line.
-                    log!("browser: task page in its thumbnail");
-                    retake = true;
+                    ended = area.page.take();
                 }
                 Zoom::Out(_) | Zoom::In(_) => window.request_animation_frame(),
                 Zoom::Rest | Zoom::Asked(_) => {}
             }
         }
-        if retake {
+        if let Some(page) = ended {
+            self.let_go_of_watch(page, true);
+            // check.sh waits for this line.
+            log!("browser: task page in its thumbnail");
             self.retake_talk_pictures(cx);
         }
+        self.settle_watch_tile(now, cx);
         let live = self.task_page_live();
         if live != self.task_live_logged {
             self.task_live_logged = live;
@@ -1170,6 +1522,15 @@ impl Shell {
         };
         let part = self.page_part(card_frame);
         let place = watched(part);
+        if let Some(tile) = page.tile.as_ref().filter(|tile| tile.shown) {
+            let at = (tile.placed).map_or_else(|| self.watch_tile_frame(page, now).0, |(at, _)| at);
+            return Some(
+                layer
+                    .child(self.watch_tile_ground(page.tab, place, at, zoom, cx))
+                    .child(self.task_strip(part, page.tab, zoom, cx))
+                    .into_any_element(),
+            );
+        }
         let in_place = self.task_page_live() == Some(page.tab);
         if in_place && self.page_fullscreen {
             return Some(layer.into_any_element());
@@ -1203,6 +1564,55 @@ impl Shell {
                 .child(self.task_strip(part, page.tab, zoom, cx))
                 .into_any_element(),
         )
+    }
+
+    /// What the area draws under a page watched in its tile, which the core draws over it: the
+    /// area's ground round the page, fading in as it zooms; the agent's ring round it while the
+    /// agent drives; and where the tile is, what takes a press on it, which takes the page over.
+    /// Nothing takes a scroll or a key there.
+    fn watch_tile_ground(
+        &self,
+        tab: u64,
+        place: Bounds<Pixels>,
+        at: Bounds<Pixels>,
+        zoom: f32,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let radius = self.card_radius();
+        let ring = (zoom >= 1. && self.task_drives(tab)).then(|| {
+            let ring = at.dilate(px(RING));
+            div()
+                .absolute()
+                .left(ring.left())
+                .top(ring.top())
+                .w(ring.size.width)
+                .h(ring.size.height)
+                .rounded(px(radius + RING))
+                .border(px(RING))
+                .border_color(rgb(COLOR))
+        });
+        let press = div()
+            .id("task-page-tile")
+            .absolute()
+            .left(at.left())
+            .top(at.top())
+            .w(at.size.width)
+            .h(at.size.height)
+            .occlude()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|shell, _, _, cx| {
+                    cx.stop_propagation();
+                    shell.press_watch_tile(cx);
+                }),
+            );
+        div()
+            .absolute()
+            .size_full()
+            .child(card(place, radius, self.palette.page).opacity(zoom))
+            .children(ring)
+            .child(press)
+            .into_any_element()
     }
 
     /// The page watched as it zooms: its picture, or its card till there is one, which a press

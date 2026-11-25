@@ -9,10 +9,10 @@ use std::time::Instant;
 
 use gpui::{
     AnyElement, App, Bounds, Context, Pixels, Point, SharedString, Task, Window, div, point,
-    prelude::*, px, rgb, svg,
+    prelude::*, px, rgb, size, svg,
 };
 
-use super::{Shell, panes::pane_frames};
+use super::{Shell, panes::pane_frames, task_area::agent_page_size};
 use crate::tokens::shell::agent_pointer::{
     COLOR, LABEL_HEIGHT, LABEL_INSET, LABEL_SIZE, POINTER, RING, RING_OUTSET, RING_RADIUS,
     TAG_HEIGHT, TAG_INSET, TAG_RADIUS, TAG_SIZE, TEXT,
@@ -130,10 +130,15 @@ impl Shell {
             .into_any_element()
     }
 
-    /// The pane `tab`'s page is in, in the window.
-    fn pane_of(&self, tab: u64) -> Option<Bounds<Pixels>> {
+    /// The pane `tab`'s page is in, in the window, and how much smaller the page is drawn there:
+    /// a page watched in its tile is drawn at the tile's own factor, its page its own size.
+    fn pane_of(&self, tab: u64) -> Option<(Bounds<Pixels>, f32)> {
         if let Some((watched, place)) = self.task_page_place() {
-            return (watched == tab).then_some(place);
+            let scale = match self.watch_tile_shown() == Some(tab) {
+                true => place.size.width / agent_page_size().width,
+                false => 1.,
+            };
+            return (watched == tab).then_some((place, scale));
         }
         let (frame, _) = self.page_frame(self.viewport);
         let panes = self.panes(self.selected);
@@ -141,7 +146,7 @@ impl Shell {
         let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
         pane_frames(frame, panes.len(), stacked, &shares)
             .get(index)
-            .copied()
+            .map(|&pane| (pane, 1.))
     }
 
     fn agent_pointer_drawn(&self, window: &mut Window, cx: &App) -> Option<AnyElement> {
@@ -149,7 +154,7 @@ impl Shell {
             return None;
         }
         let pointer = self.agent_pointer.as_ref()?;
-        let pane = self.pane_of(pointer.tab)?;
+        let (pane, scale) = self.pane_of(pointer.tab)?;
         let name = self.agent_bar().map(|bar| bar.name()).unwrap_or_default();
         let t = pointer.since.elapsed().as_secs_f32();
         let still = crate::motion::still(cx);
@@ -164,7 +169,13 @@ impl Shell {
         };
         let shown = 1. - ((t - GLIDE - HOLD) / FADE).clamp(0., 1.);
         let tip = pointer.tip(t, still);
-        let ring = pointer.element.dilate(px(RING_OUTSET));
+        let tip = point(tip.x * scale, tip.y * scale);
+        let element = pointer.element;
+        let element = Bounds::new(
+            point(element.origin.x * scale, element.origin.y * scale),
+            size(element.size.width * scale, element.size.height * scale),
+        );
+        let ring = element.dilate(px(RING_OUTSET));
         // The tag sits on the ring's top left, or under the ring where the page's top cuts it.
         let tag_top = match ring.top() - px(TAG_HEIGHT) < px(0.) {
             true => ring.bottom() + px(2.),

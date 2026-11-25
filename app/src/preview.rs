@@ -2368,6 +2368,7 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
                     space: FIRST_TASK,
                     doing: "Clicking “Tickets”".into(),
                     held,
+                    taken: Vec::new(),
                 };
                 shell.set_agent_status(vec![status], cx);
                 // A page handed to the user has nothing at work on it, so no ring.
@@ -3035,6 +3036,8 @@ fn main() {
                             space: first_space + 1,
                             doing: "Clicked · en.wikipedia.org".into(),
                             held,
+                            // =back's tab is the one the user took over.
+                            taken: (back.then_some(reading[3])).into_iter().collect(),
                         };
                         shell.set_agent_status(vec![status], cx);
                         if handoff {
@@ -3127,6 +3130,7 @@ fn main() {
                                 space: card.space,
                                 doing: SharedString::default(),
                                 held: vec![(FIRST_TASK + 202, "Sign in".into())],
+                                taken: Vec::new(),
                             };
                             shell.set_agent_status(vec![status], cx);
                         }
