@@ -5,6 +5,7 @@
 use super::*;
 use crate::agents::runner::Failure;
 use crate::agents::task::TaskAction;
+use crate::agents::task::handed::NEW_THREAD;
 
 /// Quit: the tasks end, as the app ends them.
 fn quit(run: &Run, cx: &mut TestAppContext) {
@@ -14,6 +15,12 @@ fn quit(run: &Run, cx: &mut TestAppContext) {
 /// The next launch, on the folder and the stand-in `run` left.
 fn next(run: &Run, cx: &mut TestAppContext) -> Run {
     Run::again(run.profile.clone(), run.program.clone(), cx)
+}
+
+/// The launch after `run`'s quit, for the test of a thread with no title (agents/tests/handed.rs).
+pub(in crate::agents::tests) fn relaunched(run: &Run, cx: &mut TestAppContext) -> Run {
+    quit(run, cx);
+    next(run, cx)
 }
 
 fn index(run: &Run) -> PathBuf {
@@ -540,7 +547,7 @@ fn a_task_its_agent_never_named_keeps_no_title(cx: &mut TestAppContext) {
     let next = next(&run, cx);
     let archived = archive(&next, cx);
     assert_eq!(archived.len(), 1);
-    assert_eq!(archived[0].1, "Untitled task");
+    assert_eq!(archived[0].1, NEW_THREAD);
     assert!(archived[0].2.starts_with("Claude · Done "));
     // Out of the Archive and back, it has no more of a title than it had.
     act(&next, &archived[0].0, TaskAction::Delete, cx);
@@ -1075,7 +1082,7 @@ fn a_past_task_whose_profile_is_gone_offers_start_again_alone(cx: &mut TestAppCo
     let next = next(&run, cx);
     let archived = archive(&next, cx);
     assert_eq!(archived.len(), 2);
-    let past = (archived.iter().find(|task| task.1 == "Untitled task"))
+    let past = (archived.iter().find(|task| task.1 == NEW_THREAD))
         .unwrap()
         .0
         .clone();

@@ -142,6 +142,18 @@ impl std::fmt::Debug for Chip {
 /// The title of a thread that has none yet and no tab's to take (table Z2b's word).
 pub const NEW_THREAD: &str = "New Thread";
 
+/// The title a thread reads wherever one is drawn, on its card, in its panel and in its row in
+/// the Archive and in History: its `own`, or while it has none `first`, the first tab its first
+/// message handed (`Sends::first`), else NEW_THREAD. So no row of a thread reads an empty title,
+/// and each reads what the others do.
+pub fn titled(own: SharedString, first: Option<&SharedString>) -> SharedString {
+    match (own.is_empty(), first) {
+        (false, _) => own,
+        (true, Some(first)) => first.clone(),
+        (true, None) => SharedString::new_static(NEW_THREAD),
+    }
+}
+
 /// What a thread's messages of the user's carried of their tabs. In memory alone, and gone with
 /// the thread.
 #[derive(Default)]
@@ -195,10 +207,10 @@ impl Sends {
         self.unsent.extend(held.map(|(reply, _)| reply));
     }
 
-    /// What a thread with no title yet is titled by, on its card and in its panel: the first tab
-    /// its first message handed, else NEW_THREAD.
-    pub(super) fn stand_in(&self) -> SharedString {
-        (self.first.clone()).unwrap_or_else(|| SharedString::new_static(NEW_THREAD))
+    /// What a thread with no title yet is titled by (`titled`): the first tab its first message
+    /// handed, if one went and had a title.
+    pub(super) fn first(&self) -> Option<&SharedString> {
+        self.first.as_ref()
     }
 
     /// The user's message `said` showed `chips`.

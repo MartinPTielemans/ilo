@@ -203,6 +203,25 @@ fn own_title(run: &Run, agent: &str, cx: &mut TestAppContext) -> String {
     })
 }
 
+/// The launch after a quit of the run a test was given: its agents.
+pub(crate) type Relaunch = Box<dyn FnOnce(&mut TestAppContext) -> Entity<Agents>>;
+
+/// For the shell's test of the rows of a thread with no title (shell/library/agents_tests.rs): a
+/// thread of this run started with a tab and no words, which ended before its assistant named it.
+/// Its agents, the thread, the tab's title, and the quit and the launch after it.
+pub(crate) fn an_unnamed_thread_ended(
+    cx: &mut TestAppContext,
+) -> (Entity<Agents>, String, &'static str, Relaunch) {
+    let run = run("handed-unnamed-rows", cx);
+    let agent = send(&run, "", USERS, &[TRAINS.0], cx).expect("started");
+    run.ran(1);
+    run.finish(&agent, cx);
+    let agents = run.agents.clone();
+    let relaunch: Relaunch =
+        Box::new(move |cx| super::kept::past::relaunched(&run, cx).agents.clone());
+    (agents, agent, TRAINS.1, relaunch)
+}
+
 /// `agent`'s assistant names its thread `text`.
 fn names(run: &Run, agent: &str, text: &str, cx: &mut TestAppContext) {
     let named = call(&run.agents, agent, "title", json!({ "text": text }), cx);

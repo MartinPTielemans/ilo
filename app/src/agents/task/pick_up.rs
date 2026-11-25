@@ -21,10 +21,6 @@ use crate::agents::runner::Cli;
 use crate::agents::tier::{Sites, Tier};
 use crate::tokens::shell::composer::CARDS;
 
-/// The title of a task a run before left whose agent never named it: what was asked stood as
-/// its title, and isn't kept.
-const UNTITLED: &str = "Untitled task";
-
 /// The keys of the lines made here, from the top of the range, apart from the lines that count
 /// up from a task's events.
 const IN_FIELD: usize = usize::MAX;
@@ -461,7 +457,7 @@ impl Agents {
         (listed.into_iter())
             .map(|task| {
                 let agent = SharedString::from(task.agent.clone());
-                (agent, task.title.clone(), self.about(task, cx).into())
+                (agent, task.shown_title(), self.about(task, cx).into())
             })
             .collect()
     }
@@ -682,7 +678,7 @@ fn ended(task: &Task) -> bool {
 /// before left, as the file had it, else none. What the user asked stands as a task's title until
 /// its agent names it, and is never kept.
 fn title_of(task: &Task) -> String {
-    let named = task.named.is_some() || (task.from_before() && task.title != UNTITLED);
+    let named = task.named.is_some() || task.from_before();
     match named {
         true => task.title.to_string(),
         false => String::new(),
@@ -734,10 +730,9 @@ impl Task {
             },
             kept::End::Limit => State::Limit { resets: None },
         };
-        let title = match past.title.is_empty() {
-            true => UNTITLED.into(),
-            false => past.title.clone().into(),
-        };
+        // One its agent never named has no title of its own, here as in the file: every row of
+        // it reads `New Thread` (`handed::titled`).
+        let title: SharedString = past.title.clone().into();
         Task {
             agent,
             cli: Some(cli),

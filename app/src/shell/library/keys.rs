@@ -445,7 +445,7 @@ impl Shell {
 
     /// What a screen reader says for the row at `item`, or its tile at `column`: its title, or
     /// its address or name where it has none.
-    fn row_name(&self, item: Item, column: usize) -> SharedString {
+    pub(super) fn row_name(&self, item: Item, column: usize) -> SharedString {
         let titled = |title: &SharedString, or: &SharedString| match title.is_empty() {
             true => or.clone(),
             false => title.clone(),
@@ -461,9 +461,7 @@ impl Shell {
             Item::Task(task) => {
                 (self.archived_tasks.get(task)).map(|task| titled(&task.title, &task.asked))
             }
-            Item::Past(past) => {
-                (self.agent_history.get(past)).map(|past| past.title.clone().into())
-            }
+            Item::Past(past) => (self.agent_history.get(past)).map(|past| self.past_title(past)),
             Item::PastHead(_) => Some("Back".into()),
             Item::PastStep(past, step) => self.past_step_title(past, step).map(Into::into),
             Item::Boost(boost) => self.boost_list.get(boost).map(|boost| boost.site.clone()),

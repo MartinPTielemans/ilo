@@ -555,7 +555,9 @@ pub fn start(cx: &mut App) {
         let shells: Vec<_> = WINDOWS
             .with_borrow(|windows| windows.iter().map(|window| window.shell.clone()).collect());
         let conversation = |agent: &str, cx: &App| agents.read(cx).conversation(agent, cx);
+        let stood = agents.read(cx).past_stand_ins();
         browser::shell::send_agents(status, cards, archived, kept, conversation, &shells, cx);
+        browser::shell::send_past_stand_ins(&stood, &shells, cx);
         browser::command_bar::task_agents_changed(cx);
     })
     .detach();

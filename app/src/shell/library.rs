@@ -637,6 +637,31 @@ impl Shell {
         }
     }
 
+    /// What stands in for the title of each of this run's threads that has none changed, by its
+    /// past's id (`Agents::past_stand_ins`). A private window, which lists no past threads, is
+    /// given none.
+    pub fn set_past_stand_ins(
+        &mut self,
+        mut titles: Vec<(String, SharedString)>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.one_space() {
+            titles.clear();
+        }
+        if titles == self.past_stand_ins {
+            return;
+        }
+        self.past_stand_ins = titles;
+        if self.section == Section::Agents {
+            self.filter(true, cx);
+        }
+    }
+
+    /// The title the row of the past thread `past` reads (`past_titled`).
+    pub(super) fn past_title(&self, past: &crate::agent_history::Past) -> SharedString {
+        past_titled(&self.past_stand_ins, past)
+    }
+
     /// Whether the window lists `download`: a private window its own session's, as nothing else
     /// may see them, and a regular window those of every profile's own (#669).
     pub(super) fn lists_download(&self, download: &Download) -> bool {
@@ -1340,7 +1365,7 @@ impl Shell {
             Section::Agents => (self.agent_history.iter().enumerate())
                 .filter(|(_, past)| {
                     query.is_empty()
-                        || found(&past.title.clone().into())
+                        || found(&past_titled(&self.past_stand_ins, past))
                         || found(&past.agent.clone().into())
                 })
                 .map(|(index, past)| (Item::Past(index), past.ended as f64 * 1000.)) // The Library's times are milliseconds.
@@ -3054,7 +3079,7 @@ impl Shell {
                             .pl(px(ARCHIVED_TEXT_X))
                             .pr(px(30.))
                             .child(text_line(
-                                past.title.clone().into(),
+                                self.past_title(past),
                                 text::BODY,
                                 17.,
                                 self.palette.text(UNSELECTED_TITLE),
@@ -3178,7 +3203,7 @@ impl Shell {
                             .pl(px(ARCHIVED_TEXT_X))
                             .pr(px(8.))
                             .child(text_line(
-                                past.title.clone().into(),
+                                self.past_title(past),
                                 text::BODY,
                                 17.,
                                 self.palette.text(UNSELECTED_TITLE),
@@ -4481,6 +4506,17 @@ pub(super) fn library_band(way: f32) -> f32 {
 /// What a Library row over the window is named as a group, so the gray words on it take a plate's
 /// gray while the pointer is on the row.
 pub(super) const POINTED_ROW: &str = "library-row";
+
+/// The title the row of the past thread `past` reads, as its card did and by the same function:
+/// its own, else what stood in for it in this run (`stood`, by the past's id), else `New Thread`,
+/// which is what the file's empty title reads after a quit.
+fn past_titled(
+    stood: &[(String, SharedString)],
+    past: &crate::agent_history::Past,
+) -> SharedString {
+    let stood = stood.iter().find(|(id, _)| *id == past.id);
+    crate::agents::task::handed::titled(past.title.clone().into(), stood.map(|(_, title)| title))
+}
 
 /// A line of a row's text, cut short with an ellipsis.
 fn text_line(text: SharedString, size: f32, height: f32, color: Hsla) -> gpui::Div {
