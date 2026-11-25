@@ -2126,30 +2126,50 @@ fn in_a_narrow_window_the_page_keeps_its_least_before_the_panel_gives_way() {
     let widths = |card: f32| {
         let card = Bounds::new(point(px(240.), px(8.)), size(px(card), px(700.)));
         let (page, panel) = split(card);
-        assert_eq!(page.right(), card.right(), "the page doesn't reach the card's right");
+        assert_eq!(
+            page.right(),
+            card.right(),
+            "the page doesn't reach the card's right"
+        );
         assert_eq!(page.left(), panel.right() + px(BESIDE_GAP));
         (f32::from(panel.size.width), f32::from(page.size.width))
     };
     let wide = BESIDE + BESIDE_GAP + PAGE_LEAST;
     let least = BESIDE_LEAST + BESIDE_GAP + PAGE_LEAST;
     for card in [wide, wide + 1., wide + 600.] {
-        assert_eq!(widths(card).0, BESIDE, "the panel gave way at a card of {card}");
+        assert_eq!(
+            widths(card).0,
+            BESIDE,
+            "the panel gave way at a card of {card}"
+        );
     }
     for card in [wide - 1., (wide + least) / 2., least] {
         let (panel, page) = widths(card);
-        assert_eq!(page, PAGE_LEAST, "the page gave way first at a card of {card}");
-        assert!((BESIDE_LEAST..BESIDE).contains(&panel), "{panel} at a card of {card}");
+        assert_eq!(
+            page, PAGE_LEAST,
+            "the page gave way first at a card of {card}"
+        );
+        assert!(
+            (BESIDE_LEAST..BESIDE).contains(&panel),
+            "{panel} at a card of {card}"
+        );
     }
     for card in [least - 1., least / 2., BESIDE_GAP + 1.] {
         let (panel, page) = widths(card);
-        assert!(page < PAGE_LEAST && panel < BESIDE_LEAST, "{panel}, {page} at {card}");
+        assert!(
+            page < PAGE_LEAST && panel < BESIDE_LEAST,
+            "{panel}, {page} at {card}"
+        );
         let share = panel / (panel + page);
         assert!((share - BESIDE_LEAST / (BESIDE_LEAST + PAGE_LEAST)).abs() < 1e-4);
     }
     // No jump where one range meets the next.
     for edge in [wide, least] {
         let (a, b) = (widths(edge - 0.5), widths(edge + 0.5));
-        assert!((a.0 - b.0).abs() <= 1. && (a.1 - b.1).abs() <= 1., "a jump at {edge}");
+        assert!(
+            (a.0 - b.0).abs() <= 1. && (a.1 - b.1).abs() <= 1.,
+            "a jump at {edge}"
+        );
     }
 }
 

@@ -3811,17 +3811,19 @@ fn ring_round(
 fn the_page_row_answers_the_pointer_and_the_ring_alike_in_each_case(cx: &mut TestAppContext) {
     use crate::shell::page_ends::STOPS_DRAWN;
     let (session, session_talk) = session_panel();
-    let cases = row_cases().into_iter().map(|(case, card, talk, status, button)| {
-        let ring = match case {
-            "working" => vec!["Page", "TakeOver"],
-            "yours" => vec!["into the page", "HandBack"],
-            "ended" => vec!["Open"],
-            _ => vec!["Page", "TakeOver", "Stop"],
-        };
-        // Only a held page's status changes the row; the agent at work is left out, as before.
-        let status = status.filter(|status| !status.held.is_empty());
-        (case, card, talk, status, ring, button)
-    });
+    let cases = row_cases()
+        .into_iter()
+        .map(|(case, card, talk, status, button)| {
+            let ring = match case {
+                "working" => vec!["Page", "TakeOver"],
+                "yours" => vec!["into the page", "HandBack"],
+                "ended" => vec!["Open"],
+                _ => vec!["Page", "TakeOver", "Stop"],
+            };
+            // Only a held page's status changes the row; the agent at work is left out, as before.
+            let status = status.filter(|status| !status.held.is_empty());
+            (case, card, talk, status, ring, button)
+        });
     for (case, card, talk, status, ring, button) in cases {
         let calls = |pressed: bool, cx: &mut TestAppContext| {
             let (shell, host, view, cx) = standing_with(card.clone(), talk.clone(), cx);
@@ -3906,10 +3908,22 @@ fn row_cases() -> Vec<(
     };
     let (session, session_talk) = session_panel();
     vec![
-        ("working", card(), conversation(3), Some(at_work("task-1", "Claude")), StripStop::TakeOver),
+        (
+            "working",
+            card(),
+            conversation(3),
+            Some(at_work("task-1", "Claude")),
+            StripStop::TakeOver,
+        ),
         ("yours", card(), yours, Some(held), StripStop::HandBack),
         ("ended", done, ended, None, StripStop::Open),
-        ("session", session, session_talk, Some(at_work("session-1", "Claude Code")), StripStop::Stop),
+        (
+            "session",
+            session,
+            session_talk,
+            Some(at_work("session-1", "Claude Code")),
+            StripStop::Stop,
+        ),
     ]
 }
 
@@ -3964,14 +3978,21 @@ fn from_the_page_the_commands_answer_and_return_and_space_press_nothing(cx: &mut
         for key in ["enter", "space"] {
             let (kept, calls) = from_page(key, cx);
             assert!(!kept, "{case}: {key} from the page was kept from it");
-            assert_eq!(calls, Vec::<String>::new(), "{case}: {key} from the page pressed");
+            assert_eq!(
+                calls,
+                Vec::<String>::new(),
+                "{case}: {key} from the page pressed"
+            );
         }
         let (kept, calls) = from_page("cmd-enter", cx);
         match case {
             "working" | "session" => {
                 let agent = agent.clone().unwrap();
                 assert!(kept, "{case}: ⌘↩ from the page went to it");
-                assert!(calls.contains(&format!("take over {agent} 30")), "{case}: {calls:?}");
+                assert!(
+                    calls.contains(&format!("take over {agent} 30")),
+                    "{case}: {calls:?}"
+                );
             }
             "yours" => assert!(calls.contains(&"hand back 30".to_string()), "{calls:?}"),
             _ => assert!(!kept && calls.is_empty(), "{case}: ⌘↩ answered: {calls:?}"),
@@ -3980,7 +4001,9 @@ fn from_the_page_the_commands_answer_and_return_and_space_press_nothing(cx: &mut
         match case {
             "ended" => assert!(!kept && calls.is_empty(), "{case}: ⌘. answered: {calls:?}"),
             _ => assert!(
-                kept && calls.iter().any(|call| call.contains("Stop") || call.starts_with("stop")),
+                kept && calls
+                    .iter()
+                    .any(|call| call.contains("Stop") || call.starts_with("stop")),
                 "{case}: ⌘. from the page didn't stop: {calls:?}"
             ),
         }
