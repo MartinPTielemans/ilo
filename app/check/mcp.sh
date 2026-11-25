@@ -1339,6 +1339,10 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   stopped="browser: tab [0-9]* not secure, not opened: an agent's tab\$"
   entry="^browser: agent activity mcp-client [0-9]* open_page site=$plain refused: not_secure\$"
   noted="^browser: agent logged mcp-client open_page $plain\$"
+  # The entry of a page the user went to and left at a Hand Back has an action of its own, as
+  # no step of the agent's asked for it: the app ends none on it, and the log reads the same.
+  by_step=$entry
+  at_hand_back="^browser: agent activity mcp-client [0-9]* handed_back_page site=$plain refused: not_secure\$"
   count_stopped() {
     stops=$(grep -c "$stopped" "$log" || true)
     entries=$(grep -c "$entry" "$log" || true)
@@ -1476,6 +1480,7 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
     send click $sidebar_point
     handed=$(grep -c "^browser: agent mcp-client handed back $warned\$" "$log" || true)
     puts=$(grep -c "$put_back" "$log" || true)
+    entry=$at_hand_back
     count_stopped
     send key return cmd
     await_more "^browser: agent mcp-client handed back $warned\$" "$handed" ||
@@ -1496,6 +1501,7 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
       [ "$(grep -c "$stopped" "$log" || true)" = "$stops" ] ||
         fail "tab $warned, handed back with no warning up, was put back as if a page hadn't opened"
     fi
+    entry=$by_step
   }
   # A click on the split's picture straight after Escape, while the page watched still goes back
   # into its own, watches the split: the page going back lets the click through (#3496). The
