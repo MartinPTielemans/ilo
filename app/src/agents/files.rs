@@ -1,7 +1,7 @@
 //! What a task's assistant may do with files on this computer, by its level (#4101). One table, so
 //! nothing else decides: the wall's rules and each assistant's start are made from it.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 
 use super::tier::Tier;
 use super::wall::Granted;
@@ -162,12 +162,16 @@ pub struct Never {
     ilo: Vec<PathBuf>,
     /// The task's own, where its run keeps what ilo gives it.
     task: Option<PathBuf>,
+    /// The cloud drives' roots where the system names them, as Windows does OneDrive's, whose
+    /// name may be a business's.
+    clouds: Vec<PathBuf>,
 }
 
 impl Never {
     /// For this user and this build, with the tasks' folder where there is one.
     pub fn here(task: Option<PathBuf>) -> Never {
-        let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+        let named = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+        let home = PathBuf::from(std::env::var_os(named).unwrap_or_default());
         let name = include_str!("../../branding/name").trim();
         let ilo = [
             PathBuf::from(crate::profile_dir()),
@@ -177,18 +181,32 @@ impl Never {
             home.join(".cache").join(name),
             home.join(".cache/browser-app"),
         ];
-        Never::of(home, ilo.to_vec(), task)
+        let mut never = Never::of(home, ilo.to_vec(), task);
+        never.clouds = ["OneDrive", "OneDriveCommercial", "OneDriveConsumer"]
+            .into_iter()
+            .filter_map(std::env::var_os)
+            .filter(|folder| !folder.is_empty())
+            .map(PathBuf::from)
+            .collect();
+        never
     }
 
     pub fn of(home: PathBuf, ilo: Vec<PathBuf>, task: Option<PathBuf>) -> Never {
-        Never { home, ilo, task }
+        let clouds = Vec::new();
+        Never {
+            home,
+            ilo,
+            task,
+            clouds,
+        }
     }
 
-    /// Folders refused as themselves only, as each holds the user's whole work: the disk's root,
-    /// the home folder and a cloud drive's root. One inside them may be granted.
+    /// Folders refused as themselves only, as each holds the user's whole work: the home folder
+    /// and a cloud drive's root (a disk's root is refused by `never_grantable`). One inside them
+    /// may be granted.
     fn themselves(&self) -> Vec<PathBuf> {
         let home = &self.home;
-        let mut folders = vec![PathBuf::from("/"), home.clone()];
+        let mut folders = vec![home.clone()];
         folders.extend(
             [
                 "Dropbox",
@@ -200,6 +218,7 @@ impl Never {
             ]
             .map(|drive| home.join(drive)),
         );
+        folders.extend(self.clouds.iter().cloned());
         folders
     }
 
@@ -282,7 +301,53 @@ impl Never {
         }
         folders.extend(self.ilo.iter().cloned());
         folders.extend(self.task.iter().cloned());
+        #[cfg(windows)]
+        folders.extend(windows(home));
         folders
+    }
+}
+
+/// Windows's own: its tree, the programs for every user and their data, and the user's app data,
+/// which holds every app's settings and sign-ins, every browser's profiles and ilo's own. Each
+/// where the system says it is, and where it is by default.
+#[cfg(windows)]
+fn windows(home: &Path) -> Vec<PathBuf> {
+    let said = [
+        "SystemRoot",
+        "windir",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+        "ProgramData",
+        "ALLUSERSPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+    ];
+    let mut folders: Vec<PathBuf> = said
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .filter(|folder| !folder.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    folders.extend(
+        [
+            r"C:\Windows",
+            r"C:\Program Files",
+            r"C:\Program Files (x86)",
+            r"C:\ProgramData",
+        ]
+        .map(PathBuf::from),
+    );
+    folders.push(home.join("AppData"));
+    folders
+}
+
+/// A path as `never_grantable` compares it: as it is, but on Windows, whose names are the same
+/// whatever their case, in lower case.
+fn key(path: &Path) -> PathBuf {
+    match cfg!(windows) {
+        true => PathBuf::from(path.to_string_lossy().to_lowercase()),
+        false => path.to_path_buf(),
     }
 }
 
@@ -301,7 +366,19 @@ pub fn never_grantable(folder: &Path, never: &Never) -> bool {
     if !folder.is_absolute() || folder.components().any(|part| part.as_os_str() == "..") {
         return true;
     }
-    if never.themselves().iter().any(|own| own == folder) {
+    // A disk's root: `/`, and on Windows a drive's or a network share's.
+    if folder.parent().is_none() {
+        return true;
+    }
+    // On Windows, a disk named other than as a drive or a share (a volume, a device, the verbatim
+    // forms) can reach any folder by a name none of `never`'s match.
+    if let Some(Component::Prefix(prefix)) = folder.components().next()
+        && !matches!(prefix.kind(), Prefix::Disk(_) | Prefix::UNC(..))
+    {
+        return true;
+    }
+    let folder = &key(folder);
+    if never.themselves().iter().any(|own| key(own) == *folder) {
         return true;
     }
     // A volume's root, and the folder volumes are mounted in, are refused; a folder on the volume
@@ -315,8 +392,9 @@ pub fn never_grantable(folder: &Path, never: &Never) -> bool {
             on_a_volume = true;
         }
     }
-    let home = &never.home;
+    let home = &key(&never.home);
     never.whole().iter().any(|whole| {
+        let whole = &key(whole);
         let system_mount = on_a_volume && whole == Path::new("/run");
         let inside = folder.starts_with(whole) && !system_mount;
         let holds = whole.starts_with(folder);
@@ -329,8 +407,34 @@ pub fn never_grantable(folder: &Path, never: &Never) -> bool {
 
 /// The path the panel gave, its links resolved, as the folder is checked and granted by it.
 pub fn resolved(picked: &Path) -> Option<PathBuf> {
-    let resolved = std::fs::canonicalize(picked).ok()?;
+    let resolved = plain(std::fs::canonicalize(picked).ok()?);
     resolved.is_dir().then_some(resolved)
+}
+
+/// A resolved path in the form the user and `Never` know it. Windows resolves to its `\\?\` form,
+/// which names a drive as `\\?\C:\` and a share as `\\?\UNC\server\share`; elsewhere it's as it is.
+fn plain(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let mut parts = path.components();
+        let head = match parts.next() {
+            Some(Component::Prefix(prefix)) => match prefix.kind() {
+                Prefix::VerbatimDisk(drive) => format!("{}:\\", drive as char),
+                Prefix::VerbatimUNC(server, share) => format!(
+                    "\\\\{}\\{}\\",
+                    server.to_string_lossy(),
+                    share.to_string_lossy()
+                ),
+                _ => return path,
+            },
+            _ => return path,
+        };
+        let mut plain = PathBuf::from(head);
+        plain.extend(parts.filter(|part| matches!(part, Component::Normal(_))));
+        return plain;
+    }
+    #[cfg(not(windows))]
+    path
 }
 
 /// ilo's copies of the files the user attached, read only to the task: each into `into`, a folder
@@ -416,6 +520,9 @@ pub mod words {
 mod tests {
     use super::*;
 
+    // Each system's own paths, so each list is read as that system reads it: on Windows, /Users/sam
+    // is a path on whichever drive is current, and refused as one.
+    #[cfg(not(windows))]
     fn never() -> Never {
         Never::of(
             PathBuf::from("/Users/sam"),
@@ -424,49 +531,132 @@ mod tests {
         )
     }
 
+    #[cfg(windows)]
+    fn never() -> Never {
+        let mut never = Never::of(
+            PathBuf::from(r"C:\Users\sam"),
+            vec![PathBuf::from(r"C:\Users\sam\AppData\Local\ilo\User Data")],
+            Some(PathBuf::from(r"D:\ilo\Tasks")),
+        );
+        never.clouds = vec![PathBuf::from(r"C:\Users\sam\OneDrive - Lakeside Studio")];
+        never
+    }
+
+    #[cfg(not(windows))]
+    const REFUSED: &[&str] = &[
+        "/",
+        "/Users",
+        "/Users/sam",
+        "/Users/kim",
+        "/Users/kim/Documents",
+        "/Users/sam/.ssh",
+        "/Users/sam/.ssh/keys",
+        "/Users/sam/.aws",
+        "/Users/sam/.gnupg",
+        "/Users/sam/.claude",
+        "/Users/sam/.codex",
+        "/Users/sam/Library",
+        "/Users/sam/Library/Keychains",
+        "/Users/sam/Library/CloudStorage/Dropbox",
+        "/Users/sam/Library/Application Support/Google/Chrome",
+        "/Users/sam/.config/google-chrome",
+        "/Users/sam/.mozilla/firefox",
+        "/Users/sam/Dropbox",
+        "/System/Library",
+        "/private/tmp/work",
+        "/etc",
+        "/usr/local",
+        "/var/log",
+        "/proc/1",
+        "/Volumes",
+        "/Volumes/Backup",
+        "/media/sam/Backup",
+        "/run/media/sam/Backup",
+        "/run/user/501",
+        "/srv/ilo",
+        "/srv/ilo/Tasks/task-1",
+        "work",
+        "/Users/sam/Documents/../.ssh",
+        "/Applications",
+        "/Applications/Utilities",
+        "/Users/sam/Applications",
+        "/opt",
+        "/opt/homebrew",
+    ];
+
+    #[cfg(windows)]
+    const REFUSED: &[&str] = &[
+        r"C:\",
+        r"D:\",
+        r"\\nas\share",
+        r"\\nas\share\",
+        r"\Users\sam\Documents",
+        "/Users/sam/Documents",
+        r"C:Users\sam\Documents",
+        r"C:\Windows",
+        r"C:\WINDOWS\System32",
+        r"c:\windows\Temp",
+        r"C:\Program Files",
+        r"C:\Program Files\Git",
+        r"C:\Program Files (x86)",
+        r"C:\ProgramData",
+        r"C:\ProgramData\Microsoft",
+        r"C:\Users",
+        r"C:\Users\kim",
+        r"C:\Users\kim\Documents",
+        r"C:\Users\sam",
+        r"c:\users\SAM",
+        r"C:\Users\sam\AppData",
+        r"C:\Users\sam\AppData\Roaming",
+        r"C:\Users\sam\AppData\Local\Google\Chrome\User Data",
+        r"C:\Users\sam\appdata\local\ilo",
+        r"C:\Users\sam\.ssh",
+        r"C:\Users\sam\.claude",
+        r"C:\Users\sam\.codex",
+        r"C:\Users\sam\OneDrive",
+        r"C:\Users\sam\Dropbox",
+        r"D:\ilo",
+        r"D:\ilo\Tasks\task-1",
+        r"d:\ILO\tasks",
+        "work",
+        r"C:\Users\sam\Documents\..\.ssh",
+        r"C:\Users\sam\OneDrive - Lakeside Studio",
+        r"c:\users\sam\onedrive - lakeside studio",
+        r"\\?\Volume{0c5a3f4e-1d2b-4c6d-8e9f-0a1b2c3d4e5f}\Photos",
+        r"\\.\C:\Users\sam\Documents",
+        r"\\?\C:\Users\sam\Documents",
+        r"\\?\UNC\nas\share\Photos",
+        r"\\?\Documents",
+    ];
+
+    #[cfg(not(windows))]
+    const GIVEN: &[&str] = &[
+        "/Users/sam/Documents",
+        "/Users/sam/Documents/Trip",
+        "/Users/sam/code/site",
+        "/Users/sam/Dropbox/Trip",
+        "/Volumes/Backup/Photos",
+        "/media/sam/Backup/Photos",
+        "/run/media/sam/Backup/Photos",
+        "/srv/site",
+    ];
+
+    #[cfg(windows)]
+    const GIVEN: &[&str] = &[
+        r"C:\Users\sam\Documents",
+        r"C:\Users\sam\Documents\Trip",
+        r"c:\users\sam\Documents",
+        r"C:\Users\sam\code\site",
+        r"C:\Users\sam\OneDrive\Trip",
+        r"C:\Users\sam\OneDrive - Lakeside Studio\Plans",
+        r"D:\Photos",
+        r"\\nas\share\Photos",
+    ];
+
     #[test]
     fn ilo_never_gives_a_folder_of_secrets_the_system_or_others() {
         let never = never();
-        for folder in [
-            "/",
-            "/Users",
-            "/Users/sam",
-            "/Users/kim",
-            "/Users/kim/Documents",
-            "/Users/sam/.ssh",
-            "/Users/sam/.ssh/keys",
-            "/Users/sam/.aws",
-            "/Users/sam/.gnupg",
-            "/Users/sam/.claude",
-            "/Users/sam/.codex",
-            "/Users/sam/Library",
-            "/Users/sam/Library/Keychains",
-            "/Users/sam/Library/CloudStorage/Dropbox",
-            "/Users/sam/Library/Application Support/Google/Chrome",
-            "/Users/sam/.config/google-chrome",
-            "/Users/sam/.mozilla/firefox",
-            "/Users/sam/Dropbox",
-            "/System/Library",
-            "/private/tmp/work",
-            "/etc",
-            "/usr/local",
-            "/var/log",
-            "/proc/1",
-            "/Volumes",
-            "/Volumes/Backup",
-            "/media/sam/Backup",
-            "/run/media/sam/Backup",
-            "/run/user/501",
-            "/srv/ilo",
-            "/srv/ilo/Tasks/task-1",
-            "work",
-            "/Users/sam/Documents/../.ssh",
-            "/Applications",
-            "/Applications/Utilities",
-            "/Users/sam/Applications",
-            "/opt",
-            "/opt/homebrew",
-        ] {
+        for folder in REFUSED {
             assert!(never_grantable(Path::new(folder), &never), "{folder}");
         }
     }
@@ -474,18 +664,41 @@ mod tests {
     #[test]
     fn a_folder_of_the_users_own_work_may_be_given() {
         let never = never();
-        for folder in [
-            "/Users/sam/Documents",
-            "/Users/sam/Documents/Trip",
-            "/Users/sam/code/site",
-            "/Users/sam/Dropbox/Trip",
-            "/Volumes/Backup/Photos",
-            "/media/sam/Backup/Photos",
-            "/run/media/sam/Backup/Photos",
-            "/srv/site",
-        ] {
+        for folder in GIVEN {
             assert!(!never_grantable(Path::new(folder), &never), "{folder}");
         }
+    }
+
+    #[test]
+    fn a_disks_root_resolves_to_a_root_and_is_refused() {
+        let root = resolved(Path::new("/")).unwrap();
+        assert_eq!(root.parent(), None, "{}", root.display());
+        assert!(never_grantable(&root, &never()));
+    }
+
+    #[test]
+    fn a_resolved_folder_is_named_as_the_user_knows_it() {
+        let here = resolved(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+        assert!(here.is_absolute(), "{}", here.display());
+        assert!(
+            !here.to_string_lossy().starts_with(r"\\?\"),
+            "{}",
+            here.display()
+        );
+        assert_eq!(resolved(&here).as_deref(), Some(here.as_path()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_resolved_forms_are_plain() {
+        let plain = |path: &str| super::plain(PathBuf::from(path));
+        assert_eq!(plain(r"\\?\C:\"), PathBuf::from(r"C:\"));
+        assert_eq!(plain(r"\\?\C:\Users\sam"), PathBuf::from(r"C:\Users\sam"));
+        assert_eq!(plain(r"\\?\UNC\nas\share"), PathBuf::from(r"\\nas\share\"));
+        assert_eq!(
+            plain(r"\\?\UNC\nas\share\Photos"),
+            PathBuf::from(r"\\nas\share\Photos")
+        );
     }
 
     #[test]

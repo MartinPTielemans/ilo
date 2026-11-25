@@ -31,7 +31,7 @@
 # there, there, and in a folder the shell doesn't search, light and dark, and its two longest
 # lines in Settings' narrowest window, and a Flatpak's, not there and there with the line to run
 # on the host, light and dark and in the narrowest window (#3667), and first run's sheet at its welcome and its
-# colour, light and dark, each loop held a moment in, with frames of each playing on Wayland (#4093). The preview's Linux host places no window, so sway
+# colour, light and dark (#4093). The preview's Linux host places no window, so sway
 # puts Site Controls, the icon picker and the tooltip in the middle rather than where the Mac's host
 # would.
 # It reports: a screen that won't capture is a gap in the sheet and a line on stderr, never a
@@ -110,10 +110,10 @@ screens=(
   "session-open-dark|drawn at|PREVIEW_TASKS=1 PREVIEW_SESSION=open PREVIEW_APPEARANCE=dark"
   "command-line-off-light|settings ilo-command|PREVIEW_COMMAND_LINE=off PREVIEW_APPEARANCE=light"
   "command-line-off-dark|settings ilo-command|PREVIEW_COMMAND_LINE=off PREVIEW_APPEARANCE=dark"
-  "onboarding-welcome-light|onboarding step intro settled|PREVIEW_ONBOARDING=light PREVIEW_ONBOARDING_STEP=1 PREVIEW_ONBOARDING_LOOP=2.2 PREVIEW_APPEARANCE=light"
-  "onboarding-welcome-dark|onboarding step intro settled|PREVIEW_ONBOARDING=dark PREVIEW_ONBOARDING_STEP=1 PREVIEW_ONBOARDING_LOOP=2.2 PREVIEW_APPEARANCE=dark"
-  "onboarding-color-light|onboarding step color settled|PREVIEW_ONBOARDING=light PREVIEW_ONBOARDING_STEP=6 PREVIEW_ONBOARDING_PICK=4 PREVIEW_ONBOARDING_LOOP=0.3 PREVIEW_APPEARANCE=light"
-  "onboarding-color-dark|onboarding step color settled|PREVIEW_ONBOARDING=dark PREVIEW_ONBOARDING_STEP=6 PREVIEW_ONBOARDING_PICK=4 PREVIEW_ONBOARDING_LOOP=0.3 PREVIEW_APPEARANCE=dark"
+  "onboarding-welcome-light|onboarding step intro settled|PREVIEW_ONBOARDING=light PREVIEW_ONBOARDING_STEP=1 PREVIEW_APPEARANCE=light"
+  "onboarding-welcome-dark|onboarding step intro settled|PREVIEW_ONBOARDING=dark PREVIEW_ONBOARDING_STEP=1 PREVIEW_APPEARANCE=dark"
+  "onboarding-color-light|onboarding step color settled|PREVIEW_ONBOARDING=light PREVIEW_ONBOARDING_STEP=6 PREVIEW_ONBOARDING_PICK=4 PREVIEW_APPEARANCE=light"
+  "onboarding-color-dark|onboarding step color settled|PREVIEW_ONBOARDING=dark PREVIEW_ONBOARDING_STEP=6 PREVIEW_ONBOARDING_PICK=4 PREVIEW_APPEARANCE=dark"
   "command-line-on-light|settings ilo-command|PREVIEW_COMMAND_LINE=on PREVIEW_APPEARANCE=light"
   "command-line-on-dark|settings ilo-command|PREVIEW_COMMAND_LINE=on PREVIEW_APPEARANCE=dark"
   "command-line-unsearched-light|settings ilo-command|PREVIEW_COMMAND_LINE=unsearched PREVIEW_APPEARANCE=light"
@@ -208,37 +208,6 @@ if [ "${systems[0]}" = wayland ]; then
       'live folder 9000 answered' "$preview" > "$out/wayland/live-folder-press-frames.log" 2>&1); then
     missing+=("wayland/live-folder-press-frames")
   fi
-  # Each first-run loop held at its start until the sheet is still, then a whole turn of it from
-  # the line it logs as it plays, named as the press's are (#4093).
-  # shellcheck disable=SC2016 # headless.sh runs it, with LOG its program's log.
-  play='set -e
-    ms() { date +%s%3N; }
-    ! grep -q "^browser: onboarding loop plays$" "$LOG" || { echo "played before the first frame" >&2; exit 1; }
-    start=$(ms) played= n=0
-    while [ -z "$played" ] || [ $(($(ms) - played)) -lt 10500 ]; do
-      [ $(($(ms) - start)) -lt 20000 ] || { echo "no loop playing in 20 s" >&2; exit 1; }
-      grim "$FRAMES/frame-$n.png"
-      echo "$n $(ms)" >> "$FRAMES/times"
-      n=$((n + 1))
-      [ -n "$played" ] || ! grep -q "^browser: onboarding loop plays$" "$LOG" || played=$(ms)
-    done
-    first=$(head -1 "$FRAMES/times" | cut -d" " -f2)
-    while read -r i at; do
-      mv "$FRAMES/frame-$i.png" "$FRAMES/$(printf %05d $((at - first))).png"
-    done < "$FRAMES/times"
-    echo $((played - first)) > "$FRAMES/plays"
-    rm "$FRAMES/times"'
-  for loop in welcome:1:intro color:6:color; do
-    IFS=: read -r name number step <<<"$loop"
-    frames=$out/wayland/onboarding-$name-frames
-    mkdir -p "$frames"
-    if ! (export PREVIEW_SIZE=1280x800 PREVIEW_ONBOARDING=dark PREVIEW_ONBOARDING_STEP=$number \
-      PREVIEW_ONBOARDING_PICK=4 PREVIEW_APPEARANCE=dark PREVIEW_ONBOARDING_LOOP=0,8000 FRAMES="$frames" &&
-      timeout 90 "$here/headless.sh" --moving 400 --then "$play" "$frames/start.png" \
-        "onboarding step $step settled" "$preview" > "$frames.log" 2>&1); then
-      missing+=("wayland/onboarding-$name-frames")
-    fi
-  done
 fi
 "${montage[@]}" -font "$face" -pointsize 20 -fill white -background '#101010' -tile 2x \
   -geometry +12+12 "${tiles[@]}" "$out/sheet.png"

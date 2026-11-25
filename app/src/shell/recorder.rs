@@ -53,7 +53,7 @@ impl Core {
 }
 
 #[derive(Default)]
-pub(super) struct Recorder {
+pub(crate) struct Recorder {
     /// The core this window shares with the others a test makes with `Recorder::beside`.
     pub(super) core: Rc<Core>,
     /// This window's Clears, by id, the last ten.
@@ -83,6 +83,8 @@ pub(super) struct Recorder {
     pub(super) pointer: Cell<Option<Point<Pixels>>>,
     /// What the broom shows, as `broom` answers: not drawn unless a test says.
     pub(super) broom: Cell<Option<super::Broom>>,
+    /// The folders `make_today_folders` makes, numbered from this, or none if it's 0.
+    pub(super) today_folders_from: Cell<u64>,
     /// The window over the page draws opaque, as `over_page_blends` answers.
     pub(super) over_page_opaque: Cell<bool>,
     /// This launch is a safe start, and Settings blocks ads, as `safe_start` and `ad_blocking`
@@ -112,6 +114,7 @@ pub(super) struct Recorder {
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
     pub(super) crash_reports: Cell<Option<bool>>,
     pub(super) agents: Cell<Option<bool>>,
+    pub(super) other_apps: Cell<Option<bool>>,
     pub(super) daily_count: Cell<Option<bool>>,
     /// Settings' switches first run shows too, as `setting` answers: only those a test offers.
     pub(super) settings: RefCell<HashMap<super::Setting, bool>>,
@@ -207,6 +210,8 @@ pub(super) struct Recorder {
     pub(super) searched_tabs: RefCell<Vec<Vec<u64>>>,
     /// The command bar shows, until a test plays the app's report that it was dismissed.
     pub(super) bar_open: Cell<bool>,
+    /// The tab the core shows already, before the shell hears of it, as a test sets it.
+    pub(super) shown_now: Cell<u64>,
     /// The find bar has the keyboard, as a test sets it.
     pub(super) find_typing: Cell<bool>,
     /// Whether the page has the keyboard, as a core that keeps it says, or None to leave it to the
@@ -777,6 +782,29 @@ impl Browser for Recorder {
 
     fn start_broom(&self, _: &mut App) {
         self.record("start broom".into())
+    }
+
+    fn make_today_folders(
+        &self,
+        space: u64,
+        new: &[(String, Vec<u64>)],
+        joins: &[(u64, Vec<u64>)],
+        _: &mut App,
+    ) -> Option<Vec<u64>> {
+        let from = self.today_folders_from.get();
+        for (name, tabs) in new {
+            self.edit(format!("today folder {name} in {space} of {tabs:?}"));
+        }
+        for (folder, tabs) in joins {
+            self.edit(format!("join {tabs:?} to today folder {folder}"));
+        }
+        (from != 0).then(|| (from..).take(new.len()).collect())
+    }
+
+    fn unsort_today(&self, space: u64, made: &[u64], joined: &[u64], rows: &[u64], _: &mut App) {
+        self.edit(format!(
+            "unsort {space} made {made:?} joined {joined:?} rows {rows:?}"
+        ));
     }
 
     fn link_cards(&self) -> bool {
@@ -1870,6 +1898,10 @@ impl Browser for Recorder {
         self.bar_open.get()
     }
 
+    fn shown_now(&self) -> u64 {
+        self.shown_now.get()
+    }
+
     fn command_bar_in_place(
         &self,
         window: &mut gpui::Window,
@@ -2178,6 +2210,15 @@ impl Browser for Recorder {
         self.read_shell(cx);
         self.agents.set(Some(on));
         self.record(format!("agents {on}"))
+    }
+
+    fn other_apps(&self, _: &App) -> Option<bool> {
+        self.other_apps.get()
+    }
+
+    fn set_other_apps(&self, on: bool, _: &mut App) {
+        self.other_apps.set(Some(on));
+        self.record(format!("other apps {on}"))
     }
 
     fn daily_count(&self, _: &App) -> Option<bool> {

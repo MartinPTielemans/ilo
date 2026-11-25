@@ -865,9 +865,35 @@ pub trait Browser {
     fn broom(&self) -> Option<super::Broom> {
         None
     }
-    /// The user's click on the broom: sorts the Today tabs of the Space the window shows into
-    /// folders. The user's alone: no command runs it and no agent reaches it.
+    /// The user's click on the broom, its menu item or its bar entry: sorts the Today tabs of the
+    /// Space the window shows into folders. The user's alone: no agent tool, page or typed text
+    /// reaches it.
     fn start_broom(&self, _cx: &mut App) {}
+    /// Makes Sort Tabs into Folders' folders in `space`'s today's list: each of `new` a folder of
+    /// its name holding its tabs, brought together at the first one's place in their order, and
+    /// each of `joins` its tabs put at the end of that today's folder. Returns the folders made,
+    /// or None if it made none, which a core without today's folders answers.
+    fn make_today_folders(
+        &self,
+        _space: u64,
+        _new: &[(String, Vec<u64>)],
+        _joins: &[(u64, Vec<u64>)],
+        _cx: &mut App,
+    ) -> Option<Vec<u64>> {
+        None
+    }
+    /// Takes back `make_today_folders`: the folders it `made` go, leaving their tabs, the tabs it
+    /// `joined` to a today's folder leave it, and `space`'s today's rows go back to the order
+    /// `rows`; the folders that were there before stay as they were.
+    fn unsort_today(
+        &self,
+        _space: u64,
+        _made: &[u64],
+        _joined: &[u64],
+        _rows: &[u64],
+        _cx: &mut App,
+    ) {
+    }
     /// Settings › Links' Link cards: whether ⇧ on a link shows what its page says about itself.
     fn link_cards(&self) -> bool {
         false
@@ -919,6 +945,11 @@ pub trait Browser {
     /// Whether the command bar shows, which stays true through a click outside it until the app
     /// calls `Shell::command_bar_dismissed`, so a click on what opens it can tell it has closed it.
     fn command_bar_open(&self, cx: &App) -> bool;
+    /// The tab the core shows in this window now, 0 for none. The shell hears of it only when
+    /// the core's report comes, which at launch can be after the user's first keys.
+    fn shown_now(&self) -> u64 {
+        0
+    }
     /// A command bar to rest in this window's empty Space, whose page draws its field and rows
     /// (#4140). It asks nothing of the core until it's typed in.
     fn command_bar_in_place(&self, window: &mut Window, cx: &mut App) -> Entity<CommandBar>;
@@ -1127,6 +1158,12 @@ pub trait Browser {
         None
     }
     fn set_agents(&self, _on: bool, _cx: &mut App) {}
+    /// Whether other apps' agents may connect while agents are on, as Settings › Other apps'
+    /// switch has it, or None in a build without the agents' server.
+    fn other_apps(&self, _cx: &App) -> Option<bool> {
+        None
+    }
+    fn set_other_apps(&self, _on: bool, _cx: &mut App) {}
     /// Whether the daily usage count is on, as Settings' switch has it, or None in a build that
     /// names no server for it.
     fn daily_count(&self, _cx: &App) -> Option<bool> {
@@ -1140,7 +1177,8 @@ pub trait Browser {
     }
     fn set_setting(&self, _space: u64, _setting: Setting, _on: bool, _cx: &mut App) {}
     /// How long, in seconds, a Today tab of `space`'s profile waits before it goes in the archive,
-    /// and the times Settings offers it, in its order; None before the profile has loaded.
+    /// and the times Settings offers it, in its order; None before the profile has loaded. A
+    /// thread's card done and seen goes after as long; below 0 is Never.
     fn archive_after(&self, _space: u64) -> Option<(f64, Vec<f64>)> {
         None
     }

@@ -490,7 +490,7 @@ pub fn sets(launch: &Launch) -> Vec<(&'static str, OsString)> {
 
 const PATH: &str = "PATH";
 /// What a walled Claude Code is started with, each on.
-const CLAUDE_WALLED: [&str; 5] = [
+pub(crate) const CLAUDE_WALLED: [&str; 5] = [
     "CLAUDE_CODE_SKIP_PROMPT_HISTORY",
     "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
     "CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING",

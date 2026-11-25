@@ -2,9 +2,9 @@
 # A new profile's first launch plays the onboarding in a window of its own, the only one on screen
 # until it ends, captured at each step in a light and a dark appearance: the intro, the welcome,
 # waits, where Return goes on and Skip Setup skips the setup (#4093); the import step lists the
-# made-up Arc in src/import/fixture (a made-up Chrome on Linux), never the Mac's own browsers, and
-# ↩ there shows its choices, with Import and Back, which Esc goes back from to the list; Skip goes
-# on from a step, where Esc is Back, the colour step's Return
+# made-up Arc in src/import/fixture (a made-up Chrome on Linux), never the Mac's own browsers, with
+# what comes from it as chips, which a click leaves out and another brings back, and ↩ there
+# imports it at once; Skip goes on from a step, where Esc is Back, the colour step's Return
 # gives the first Space the swatch picked, and the last step, the keys, has no Skip: its Return
 # leaves the flow for the first Space's welcome with the command bar up and a line under it. On the Mac, Transparency's step comes after
 # the colour's, as it shows only over the window's glass. The default browser's step shows only while
@@ -52,20 +52,19 @@ fi
 capture_step() {
   ../tools/window-screenshot.sh "$pid" "$out/onboarding-$1.png" || fail "no window to capture"
 }
-# ↩ at the import's list shows the choices of the browser used last, as "What comes from …", with
-# Import as the step's button and Back in its corner; Esc goes back to the list, keeping the step.
-# The choices are captured as onboarding-$1-import-choose.png once their counts are in.
+# The import's list says what comes from the browser used last as chips: a click on History leaves
+# it out and another brings it back, keeping the step. Captured as onboarding-$1-import-chips.png
+# with History left out.
 import_choices() {
-  send key return
-  expect "^browser: import pick $found\$" "$1: ↩ at the import didn't show $found's choices"
-  expect "^browser: import read $found: " "$1: picking $found didn't read it"
-  # Once its counts have drawn, which the driver waits for.
+  local at
+  at=$(drawn "import-chip History") || fail "$1: the import's list drew no History chip"
+  send click $at
+  expect '^browser: import chip History false$' "$1: a click on History didn't leave it out"
   send state
-  capture_step "$1-import-choose"
-  send key escape
-  expect '^browser: import escape$' "$1: Esc in $found's choices didn't reach the import"
-  expect '^browser: import drawn list$' "$1: Esc didn't go back from $found's choices to the list"
-  none_since '^browser: onboarding left import' || fail "$1: Esc in the choices left the import step"
+  capture_step "$1-import-chips"
+  send click $at
+  expect '^browser: import chip History true$' "$1: a second click on History didn't bring it back"
+  none_since '^browser: onboarding left import' || fail "$1: a click on a chip left the import step"
 }
 # The account's step, while the build names a server to sign in to.
 account=
@@ -104,6 +103,39 @@ launch_new() {
 launch_new light
 grep -q '^browser: onboarding started$' "$log" || fail "a new profile didn't start the onboarding"
 capture_step light-intro
+if [ "$(uname)" = Darwin ]; then
+  # A reopen, which a click on the Dock's icon sends, brings first run's window to the front and
+  # makes no window: the browser's stays held and Chromium makes none of its own.
+  send reopen
+  expect '^browser: reopen brought first run to the front$' "light: a reopen didn't come to first run"
+  send front
+  grep '^browser: front ' "$log" | tail -1 | grep -q '^browser: front GPUIWindow .*, key GPUIWindow ' ||
+    fail "light: a reopen put a window in front of first run's: $(grep '^browser: front ' "$log" | tail -1)"
+  ! grep -q '^browser: window on screen after first run$' "$log" ||
+    fail "light: a reopen showed the browser's window while first run showed"
+  # A link from another app opens in a Little window over first run's, as an assistant's sign-in
+  # page comes. Closing it gives first run's window the keyboard back at the welcome, which Return
+  # goes on from below, and the browser's window stays held.
+  open -a "$app" "${site}index.html"
+  little_link="^browser: link from another app ${site}index.html: tab [1-9][0-9]* in little window [0-9]* of space [0-9]*\$"
+  expect "$little_link" "light: a link while first run showed didn't open in a Little window"
+  tab=$(grep "$little_link" "$log" | tail -1 | sed 's/.*: tab \([0-9]*\) .*/\1/')
+  little=$(grep "$little_link" "$log" | tail -1 | sed 's/.* little window \([0-9]*\) .*/\1/')
+  expect "^browser: loaded $tab ${site}index.html\$" "light: the link didn't load in its Little window"
+  send key w cmd
+  expect "^browser: window closed $little\$" "light: ⌘W didn't close the link's Little window"
+  # As AppKit may hand the keyboard on a moment after.
+  for _ in $(seq 20); do
+    send front
+    case "$(grep '^browser: front ' "$log" | tail -1)" in *", key GPUIWindow "*) break ;; esac
+  done
+  grep '^browser: front ' "$log" | tail -1 | grep -q ', key GPUIWindow ' ||
+    fail "light: first run's window didn't get the keyboard back: $(grep '^browser: front ' "$log" | tail -1)"
+  ! grep -q '^browser: onboarding left ' "$log" ||
+    fail "light: the link's Little window took first run off its welcome"
+  ! grep -q '^browser: window on screen after first run$' "$log" ||
+    fail "light: a link showed the browser's window while first run showed"
+fi
 send key return
 expect '^browser: onboarding left intro via return$' "light: Return didn't go on from the welcome"
 for each in $steps; do
@@ -126,6 +158,9 @@ expect '^browser: onboarding done$' "light: the flow didn't end after its last s
 # First run is the only window until it ends, when the browser's, held off screen, comes on.
 grep -q '^browser: window held for first run$' "$log" ||
   fail "light: the browser's window came on screen while first run showed"
+# The Mac's Chromium puts the window on screen as it makes it, so the host takes it off again.
+[ "$(uname)" != Darwin ] || grep -q '^browser: window held off screen$' "$log" ||
+  fail "light: the Mac left the browser's window on screen while first run showed"
 expect '^browser: window on screen after first run$' \
   "light: the browser's window didn't come on screen as first run ended"
 grep -q '^browser: onboarding picked color ' "$log" && fail "light: Skip at the colour step gave the Space one"
@@ -401,8 +436,8 @@ exec 3>&-
 quit
 
 # Suggested favorites: a first launch on a made-up Chrome with tabs open, whose history visits two
-# sites three times and more, brings them in with ↩ at the browser and ↩ at its choices, and the
-# step after the import is Your favorites, offering those two, ticked.
+# sites three times and more, brings them in with ↩ at the browser, and the step after the import
+# is Your favorites, offering those two, ticked.
 fav_home="$PWD/$out/onboarding-favorites-home"
 rm -rf "$fav_home"
 if [ "$(uname)" = Darwin ]; then
@@ -471,7 +506,6 @@ expect '^browser: onboarding step import settled$' "favorites: the import step d
 send key return
 expect '^browser: import pick Chrome$' "favorites: ↩ didn't bring the made-up Chrome"
 expect '^browser: import read Chrome: ' "favorites: picking Chrome didn't read it"
-send key return
 expect '^browser: import suggests https://news\.example\.org/ https://mail\.example\.org/$' \
   "favorites: the import didn't work out the sites its history visited most: $(grep 'import suggests' "$log")"
 expect '^browser: import from Chrome: [0-9]* Spaces, 3 pinned tabs, 55 open tabs, ' \

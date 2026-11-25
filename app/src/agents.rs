@@ -972,6 +972,23 @@ const BUSY: &str = "The page was still busy after 5 s, so it may change yet.";
 /// keeps one, while what it shows held still: no reason to wait for it (#2355).
 const REQUESTS: &str = "The page held still, with requests it made still open after 5 s.";
 
+/// What a click is told after its usual answer when it landed on a field whose list or picker a
+/// click doesn't open on an agent's page, by the core's word for the field (`"shut"` in the page's
+/// answer), so that the agent doesn't spend steps on a list that stays shut.
+fn shut_line(field: &str) -> Option<&'static str> {
+    match field {
+        "select" => Some("A click doesn't open this list. Use select with the option's text."),
+        "date_time" => {
+            Some("A click doesn't open a calendar here. Type the date or time into the field.")
+        }
+        "color" => Some(
+            "This color field can't be set by a click or by typing. If it has to be set, hand the \
+             tab to the user with hand_off.",
+        ),
+        _ => None,
+    }
+}
+
 /// A tab the user holds from its agent: handed to them, or taken over.
 struct Held {
     agent: String,
@@ -1146,6 +1163,26 @@ impl Agents {
             .flatten();
         self.tasks.found = (found.filter_map(|(cli, found)| {
             Some((runner::Cli::from_id(cli)?, ready::Found::from_saved(found)))
+        }))
+        .collect();
+        let last = (tasks.get("last").and_then(Value::as_object))
+            .into_iter()
+            .flatten();
+        self.tasks.last = (last.filter_map(|(profile, last)| {
+            let tier = last.get("level").and_then(Value::as_str);
+            // Full access is never kept; a level this build doesn't know starts at the default.
+            let tier = tier
+                .and_then(tier::Tier::from_id)
+                .filter(|tier| *tier != tier::Tier::Full);
+            let model = (last.get("model").and_then(Value::as_array)).and_then(|model| {
+                let cli = runner::Cli::from_id(model.first()?.as_str()?)?;
+                Some((cli, model.get(1)?.as_str()?.to_string()))
+            });
+            let last = task::Last {
+                tier: tier.unwrap_or_default(),
+                model,
+            };
+            Some((profile.clone(), last))
         }))
         .collect();
         self.tasks_off = tasks.get("on").and_then(Value::as_bool) == Some(false);
@@ -1722,6 +1759,15 @@ impl Agents {
             _ = call
                 .reply
                 .send(ToolResult::error("This agent isn't connected."));
+            return;
+        }
+        // A call's word for its tool is its client's to choose, and the log and the trace word
+        // an entry from its action. So one that names no tool of the agent's ends here, before
+        // anything is run, shown or kept by that word: no call can leave an entry that reads as
+        // the browser's own or the user's.
+        if !tools::has(&call.agent, &call.tool) {
+            let none = format!("There's no tool {}.", call.tool);
+            _ = call.reply.send(ToolResult::error(none));
             return;
         }
         // A task the user stopped keeps its connection for their next message, so its calls still
@@ -4346,6 +4392,13 @@ impl Agents {
                 false => format!("{note} {unsettled}"),
             };
         }
+        // The core names the field only where its list would have stayed shut.
+        if let Some(shut) = tree["shut"].as_str().and_then(shut_line) {
+            note = match note.is_empty() {
+                true => shut.into(),
+                false => format!("{note} {shut}"),
+            };
+        }
         // A choice answers with what the field holds once it shows the option, as the core
         // names it, and else says the page may have undone it.
         if !field.is_empty() {
@@ -5298,11 +5351,21 @@ impl Agents {
         let found: serde_json::Map<String, Value> = (self.tasks.found.iter())
             .map(|(cli, found)| (cli.id().into(), found.saved()))
             .collect();
+        let last: serde_json::Map<String, Value> = (self.tasks.last.iter())
+            .map(|(profile, last)| {
+                let model = (last.model.as_ref()).map(|(cli, id)| json!([cli.id(), id]));
+                (
+                    profile.clone(),
+                    json!({ "level": last.tier.id(), "model": model }),
+                )
+            })
+            .collect();
         let tasks = json!({
             "on": !self.tasks_off,
             "default": self.tasks.default.map(runner::Cli::id),
             "models": models,
             "found": found,
+            "last": last,
             "keep": !self.tasks.kept.off,
             "notify": self.notify.id(),
         });

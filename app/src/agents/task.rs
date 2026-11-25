@@ -59,6 +59,9 @@ pub const QUIET: Duration = Duration::from_secs(60);
 /// model overshoots by a few, and each surface cuts at its own width as any title does (#3690).
 pub const TITLE_KEPT: usize = 40;
 
+/// How much of a done task's last answer its card keeps, before the card's three lines cut it
+/// (spec-thread-card).
+pub const FINDING_KEPT: usize = 160;
 /// How much of an answer's first line a screen reader is told: a sentence or two, where a card's
 /// line has the width of a title.
 pub const TOLD_KEPT: usize = 120;
@@ -610,8 +613,19 @@ pub struct Card {
     pub dot: Dot,
     /// Its state in one word, as every place that names it says it.
     pub word: Word,
-    /// Its pages now, in its Space's order: the rows of its group at the sidebar's foot.
+    /// Its pages now, in its Space's order: the icons on its card in the sidebar.
     pub pages: Vec<u64>,
+    /// Those of `pages` a step of its has been on, which its card shows at full strength.
+    pub visited: Vec<u64>,
+    /// When it ended in this run, in the user's time ("10:42"), or empty while it hasn't: a done
+    /// card's `Done · {time}`.
+    pub ended_time: SharedString,
+    /// Done, the first paragraph of its last answer as plain text (`finding`), from this run's
+    /// conversation alone: empty when it isn't done, ended with no answer, or came back after a
+    /// quit, which keeps no conversation.
+    pub finding: SharedString,
+    /// Done, what a screen reader is told of its finding (`told`): empty with none.
+    pub told: SharedString,
     /// Its access, which its group's line leads with at Full access.
     pub tier: Tier,
     /// A confirmation or a handoff of the task's, which the card asks instead of the windows'.
@@ -769,6 +783,16 @@ pub struct Start {
     pub files: super::files::Picked,
 }
 
+/// What the composer last started a thread with in a profile, which it opens with there next:
+/// its level, never Full access, and the model picked on its assistant. Nothing of the words.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Last {
+    pub tier: Tier,
+    /// The assistant, and the model picked on it by id, empty for its own default; None for
+    /// Settings' assistant and model.
+    pub model: Option<(Cli, String)>,
+}
+
 /// The longest address a task gets for a page the user added: a page's over it isn't offered.
 pub const ADDED_MOST: usize = 2048;
 
@@ -877,6 +901,9 @@ pub struct Tasks {
     pub default: Option<Cli>,
     /// Each CLI's model, or none for its own default.
     pub models: HashMap<Cli, String>,
+    /// What the composer last started a thread with, by the folder's name of the profile it
+    /// started in.
+    pub(super) last: HashMap<String, Last>,
     /// When each CLI's limit resets, as its last task learned.
     pub(super) limits: HashMap<Cli, Option<SharedString>>,
     pub(super) events: Option<(
@@ -904,6 +931,32 @@ pub struct Tasks {
 }
 
 impl Agents {
+    /// What the composer opens with in `space`'s profile: what it last started a thread with
+    /// there, or the level every thread starts at and Settings' assistant and model.
+    pub fn composer_last(&self, space: u64) -> Last {
+        let profile = self.browser.space_profile(space);
+        self.tasks.last.get(&profile).cloned().unwrap_or_default()
+    }
+
+    /// Keeps what the user's composer started a thread with in `space`'s profile, for the next
+    /// it opens there: its model, and its level unless that was Full access, which is set for one
+    /// thread and never remembered. Only the composer's own start calls it.
+    pub fn remember_composer(&mut self, space: u64, tier: Tier, model: Option<(Cli, String)>) {
+        let profile = self.browser.space_profile(space);
+        if profile.is_empty() {
+            return;
+        }
+        let tier = match tier {
+            Tier::Full => Tier::default(),
+            tier => tier,
+        };
+        let last = Last { tier, model };
+        if self.tasks.last.get(&profile) != Some(&last) {
+            self.tasks.last.insert(profile, last);
+            self.save();
+        }
+    }
+
     pub fn tasks(&self) -> impl Iterator<Item = &Task> {
         self.tasks.tasks.iter()
     }
@@ -1342,6 +1395,18 @@ impl Agents {
             asks,
             dot,
             word: Word::of(&task.state, dot == Dot::Waiting),
+            visited: visited(task, &pages),
+            ended_time: (task.ended)
+                .map(|at| super::local_time(seconds(at)).into())
+                .unwrap_or_default(),
+            finding: match task.state {
+                State::Done { .. } => finding(&task.messages),
+                _ => SharedString::default(),
+            },
+            told: match task.state {
+                State::Done { .. } => told(&task.messages),
+                _ => SharedString::default(),
+            },
             pages,
             tier: task.tier,
             question,
@@ -1383,6 +1448,18 @@ impl Agents {
             .map(|cli| AskAgent {
                 cli,
                 resets: self.tasks.limits.get(&cli).cloned().flatten(),
+            })
+            .collect()
+    }
+
+    /// The CLIs installed but not signed in, as last learned, which the composer offers to sign in.
+    pub fn signed_out_agents(&self) -> Vec<Cli> {
+        if !self.tasks_on() {
+            return Vec::new();
+        }
+        (Cli::ALL.into_iter())
+            .filter(|cli| {
+                (self.tasks.found.get(cli)).is_some_and(|found| found.ready == Ready::SignedOut)
             })
             .collect()
     }
@@ -1462,6 +1539,33 @@ impl Agents {
     /// The CLI ⌘T's ask lists first.
     pub fn default_task_agent(&self) -> Option<Cli> {
         self.tasks.default
+    }
+
+    /// What a sort of today's tabs into folders runs (#4252), from what the browser already knows:
+    /// the user's own Claude Code, while tasks are on, it runs them and it's signed in, as last
+    /// learned, with its task model. Codex has no switch that keeps a run to the list, so it sorts
+    /// nothing.
+    pub fn sort_program(&self) -> Option<crate::broom::Program> {
+        let found = self.sorter()?;
+        Some(crate::broom::Program {
+            program: found.program.clone()?,
+            path: found.path.clone(),
+            model: Some(self.task_model(Cli::Claude).to_string()).filter(|model| !model.is_empty()),
+        })
+    }
+
+    /// Whether a sort has a program to run, as `sort_program` finds it, without copying it: the
+    /// broom is drawn only then.
+    pub fn sorts(&self) -> bool {
+        self.sorter().is_some()
+    }
+
+    fn sorter(&self) -> Option<&Found> {
+        if !self.tasks_on() || self.tasks.default != Some(Cli::Claude) {
+            return None;
+        }
+        let found = self.tasks.found.get(&Cli::Claude)?;
+        (found.ready == Ready::SignedIn && found.program.is_some()).then_some(found)
     }
 
     /// The models `cli`'s Model pop-up offers after its own default, which is the empty id, as id
@@ -3268,6 +3372,7 @@ impl Agents {
                     .map_or(task.sent, |session| session.messages),
                 steps,
                 answers,
+                sorted: None,
             };
             // A session has no home of the user's, so its agent's Space says its profile.
             let home = if task.home != 0 {
@@ -3907,6 +4012,99 @@ fn limit_words(name: &str, resets: &Option<SharedString>) -> String {
     }
 }
 
+/// A done task's finding: the first paragraph of the agent's last answer, as plain text on one
+/// line, with no link, formatting or line break, kept to FINDING_KEPT characters and written out as
+/// its title is (#3690), so nothing in it can pose as ilo's words or turn the text around. It is
+/// the agent's words: shown on its card only, never logged.
+pub fn finding(messages: &[Message]) -> SharedString {
+    let Some(answer) = last_answer(messages) else {
+        return SharedString::default();
+    };
+    let paragraph: Vec<&str> = (answer.lines())
+        .map(str::trim)
+        .skip_while(|line| line.is_empty())
+        .take_while(|line| !line.is_empty())
+        .filter(|line| !line.starts_with("```"))
+        .map(|line| {
+            let line = line.trim_start_matches(['#', '>']).trim_start();
+            let unlisted = (line.split_once(". "))
+                .filter(|(number, _)| {
+                    !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
+                })
+                .map(|(_, rest)| rest);
+            match unlisted {
+                Some(rest) => rest,
+                None => (["- ", "* ", "+ "].iter())
+                    .find_map(|mark| line.strip_prefix(mark))
+                    .unwrap_or(line),
+            }
+        })
+        .collect();
+    let plain = plain_text(&paragraph.join(" "));
+    let kept = page::clip(&plain, FINDING_KEPT);
+    super::request::escaped(&kept, false).0.into()
+}
+
+/// What a screen reader is told of a done task's finding: its last answer's first line as the
+/// conversation tells it (`told_line`), up to TOLD_KEPT characters ending at a whole word, as
+/// nothing marks a cut in speech. Empty with no answer.
+pub fn told(messages: &[Message]) -> SharedString {
+    last_answer(messages)
+        .and_then(told_line)
+        .unwrap_or_default()
+}
+
+/// The agent's last answer, trimmed, if it gave one.
+fn last_answer(messages: &[Message]) -> Option<&str> {
+    (messages.iter().rev())
+        .filter(|message| matches!(message.who, Who::Agent | Who::Result))
+        .map(|message| message.text.trim())
+        .find(|text| !text.is_empty())
+}
+
+/// Markdown's inline marks taken out of `text`: a link or an image is its words, a bare link in
+/// angle brackets its address, and emphasis, code and strikethrough marks go. Runs of white space
+/// are one space.
+fn plain_text(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        let opens = rest.strip_prefix("![").or_else(|| rest.strip_prefix('['));
+        let link = opens.and_then(|inside| {
+            let (words, after) = inside.split_once("](")?;
+            let (_, after) = after.split_once(')')?;
+            (!words.contains(']')).then_some((words, after))
+        });
+        if let Some((words, after)) = link {
+            plain.push_str(words);
+            rest = after;
+            continue;
+        }
+        let autolink = (rest.strip_prefix('<'))
+            .and_then(|inside| inside.split_once('>'))
+            .filter(|(address, _)| {
+                address.contains("://") && !address.contains(char::is_whitespace)
+            });
+        if let Some((address, after)) = autolink {
+            plain.push_str(address);
+            rest = after;
+            continue;
+        }
+        if let Some(after) = ["**", "__", "~~"]
+            .iter()
+            .find_map(|mark| rest.strip_prefix(mark))
+        {
+            rest = after;
+            continue;
+        }
+        if !matches!(c, '*' | '`') {
+            plain.push(c);
+        }
+        rest = &rest[c.len_utf8()..];
+    }
+    plain.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// A result's first words for its card's line: its first line of text, or "Finished" with none.
 fn first_words(result: &str) -> SharedString {
     first_line(result).unwrap_or_else(|| "Finished".into())
@@ -4086,6 +4284,13 @@ fn last_steps(task: &Task) -> Vec<SharedString> {
         .collect();
     steps.reverse();
     steps
+}
+
+/// Those of `pages` a step of `task`'s has been on.
+fn visited(task: &Task, pages: &[u64]) -> Vec<u64> {
+    (pages.iter().copied())
+        .filter(|&tab| task.trace.iter().any(|step| step.did.tab == Some(tab)))
+        .collect()
 }
 
 /// Of a task's `pages` now, the last its steps acted on, else its last.

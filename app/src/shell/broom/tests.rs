@@ -3,7 +3,7 @@
 use std::rc::Rc;
 
 use gpui::{
-    Bounds, Entity, Modifiers, Pixels, TestAppContext, VisualTestContext,
+    Bounds, Entity, Modifiers, Pixels, SharedString, TestAppContext, VisualTestContext,
     accesskit::{Action, Live, Node, NodeId, Role},
     px,
 };
@@ -11,8 +11,10 @@ use gpui::{
 use super::{Broom, FRAME, NAME, SORTING, failed_said, glyph_ink};
 use crate::palette::{Palette, Tone};
 use crate::product::PRODUCT;
-use crate::shell::{CLEAR_HIT_OUT, Folders, Shell, recorder::Recorder};
-use crate::tokens::shell::{BROOM_SIZE, BROOM_UNAVAILABLE, DIVIDER_GAP};
+use crate::shell::{CLEAR_HIT_OUT, Command, Folders, Shell, TODAY_HAIRLINE, recorder::Recorder};
+use crate::tokens::shell::{
+    BROOM_SIZE, BROOM_UNAVAILABLE, DIVIDER_GAP, SIDEBAR_MIN, SIDEBAR_WIDTH,
+};
 
 const STATES: [Broom; 4] = [
     Broom::Idle,
@@ -197,6 +199,32 @@ fn a_click_starts_a_sort_only_where_the_broom_says_it_would(cx: &mut TestAppCont
     assert!(shell.read_with(cx, |shell, _| shell.new_tab));
 }
 
+/// A browser with no broom, as one whose core can't make today's folders has: no glyph, no
+/// item in the divider's menu or the Tabs menu, no bar entry, and the command run anyway asks
+/// for no sort.
+#[gpui::test]
+fn a_browser_with_no_broom_offers_a_sort_by_no_door(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx, vec![10, 11], None);
+    assert!(node(cx, Role::Button, NAME).is_none());
+    shell.update(cx, |shell, cx| {
+        shell.divider_menu(gpui::point(px(100.), px(200.)), cx)
+    });
+    let titles: Vec<SharedString> = (host.entries.borrow().iter())
+        .map(|entry| entry.title.clone())
+        .collect();
+    assert!(
+        !titles.iter().any(|title| title.as_ref() == NAME),
+        "{titles:?}"
+    );
+    assert!(!host.menu_bar.borrow().broom_offered);
+    let command = Command::SortIntoFolders;
+    assert!(!shell.read_with(cx, |shell, _| shell.offers(command)));
+    host.take();
+    shell.update(cx, |shell, cx| shell.run(command, "ui", cx));
+    cx.run_until_parked();
+    assert!(!host.take().contains(&"start broom".to_owned()));
+}
+
 /// A screen reader hears the broom by what it does, and as unavailable where a press would do
 /// nothing: under its other name while it sorts, and under its own with nothing to sort.
 #[gpui::test]
@@ -322,4 +350,64 @@ fn the_broom_says_its_name_under_the_pointer(cx: &mut TestAppContext) {
     cx.simulate_mouse_down(glyph.center(), gpui::MouseButton::Left, Modifiers::none());
     cx.run_until_parked();
     assert!(host.take().iter().any(|call| call == "tooltip none"));
+}
+
+/// As the sidebar narrows, the line's hairline is drawn while it has the line's own gap of room
+/// and not in less, where it would be a dot between the label and Clear: with Clear alone, with
+/// the broom after it, and with a failed sort's word in Clear's place.
+#[gpui::test]
+fn a_hairline_shorter_than_the_lines_gap_is_not_drawn(cx: &mut TestAppContext) {
+    for broom in [None, Some(Broom::Idle), Some(Broom::Failed)] {
+        let (shell, cx, _) = window(cx, vec![10, 11], broom);
+        let (mut whole, mut stub) = (false, false);
+        // From wider than the sidebar opens, where the failed sort's word still leaves the line
+        // room, to narrower than it goes.
+        for width in (SIDEBAR_MIN as u32 / 2..=SIDEBAR_WIDTH as u32 + 120).rev() {
+            TODAY_HAIRLINE.set(None);
+            shell.update(cx, |shell, cx| {
+                shell.sidebar_width = width as f32;
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let (room, drawn) = TODAY_HAIRLINE.get().unwrap_or((px(0.), false));
+            assert_eq!(drawn, room >= px(DIVIDER_GAP), "{broom:?} at {width}");
+            whole |= drawn;
+            stub |= !drawn && room > px(0.);
+        }
+        assert!(
+            whole && stub,
+            "{broom:?}: a line, then room for less than one"
+        );
+    }
+}
+
+/// A Space beside the one shown has a still broom, which can't know that Space's state. The
+/// moment it is the one shown, its broom is what the browser answers for it.
+#[gpui::test]
+fn a_space_shows_its_own_brooms_state_the_moment_it_is_the_one_shown(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx, vec![10, 11], Some(Broom::Idle));
+    shell.update(cx, |shell, cx| {
+        let space = |id| (id, "Space".into(), None, 1, "".into(), "".into(), "".into());
+        shell.set_spaces(vec![space(1), space(2)], cx);
+        shell.set_tabs(
+            2,
+            Vec::new(),
+            vec![20, 21],
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let (_, broom) = node(cx, Role::Button, NAME).expect("the first Space's");
+    assert!(!broom.is_disabled());
+
+    // The browser's answer is for the Space the window shows, and the other has nothing to sort.
+    host.broom.set(Some(Broom::NothingToSort));
+    shell.update(cx, |shell, cx| shell.set_space(2, cx));
+    cx.run_until_parked();
+    let (_, broom) = node(cx, Role::Button, NAME).expect("the second Space's");
+    assert!(broom.is_disabled());
+    let glyph = frame(&shell, cx, FRAME);
+    assert!(click(cx, &host, glyph).is_empty());
 }

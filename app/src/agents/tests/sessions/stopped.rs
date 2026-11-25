@@ -442,3 +442,60 @@ fn the_hand_backs_entry_counts_its_pages() {
     assert_eq!(title(1), "You handed it back · 1 page");
     assert_eq!(title(3), "You handed it back · 3 pages");
 }
+
+/// A call that names no tool of the agent's, in the words an entry of the browser's own or of the
+/// user's has, is answered as no tool and leaves nothing that could read as theirs: no entry in
+/// the activity log, which Settings › Agents and a past thread list, and no step in the task's
+/// trace. So while the task works on its page, and once the user stopped it, when every call on
+/// that page has an entry by its tool's name.
+#[gpui::test]
+fn a_call_by_an_entrys_name_is_no_tool_and_leaves_nothing(cx: &mut TestAppContext) {
+    const NAMES: [&str; 6] = [
+        "request_permission camera",
+        "request_permission midi",
+        "file_dialog file_input",
+        "file_dialog file_system_access",
+        "request_device usb",
+        "taken back",
+    ];
+    let (agents, browser, first) = lowered(Tier::Full, cx);
+    let now = std::time::Instant::now;
+    let no_tool = |name: &str, id: u64, arguments: Value, cx: &mut TestAppContext| {
+        let answer = call_on(&agents, 1, id, name, arguments, now(), cx);
+        let answer = answer.try_recv().expect("the call wasn't answered at once");
+        assert_eq!(
+            answer,
+            ToolResult::error(format!("There's no tool {name}."))
+        );
+    };
+    let left = |cx: &mut TestAppContext| {
+        let kept = log(&agents, "claude-code", cx);
+        let steps: Vec<String> = agents.read_with(cx, |agents, _| {
+            let trace = &agents.task(&first).expect("its task").trace;
+            trace.iter().map(|step| step.did.tool.clone()).collect()
+        });
+        (kept, steps, browser.pages.borrow().len())
+    };
+    let before = left(cx);
+    for (at, name) in NAMES.into_iter().enumerate() {
+        no_tool(name, 10 + at as u64, json!({ "tab": 20 }), cx);
+    }
+    assert_eq!(left(cx), before, "a call by an entry's name left something");
+
+    stop(&agents, &first, cx);
+    let before = left(cx);
+    for (at, name) in NAMES.into_iter().enumerate() {
+        no_tool(name, 20 + 2 * at as u64, json!({ "tab": 20 }), cx);
+        no_tool(name, 21 + 2 * at as u64, json!({}), cx);
+    }
+    assert_eq!(left(cx), before, "a call by an entry's name left something");
+
+    // Nothing the log holds reads as a permission the browser refused a page.
+    for (action, site, _) in &before.0 {
+        assert!(!NAMES.contains(&action.as_str()), "{action}");
+        assert_eq!(tools::permission_stopped(action, site), None);
+    }
+    for tool in &before.1 {
+        assert!(!NAMES.contains(&tool.as_str()), "{tool}");
+    }
+}

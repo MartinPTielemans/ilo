@@ -2090,6 +2090,14 @@ impl Browser for Engine {
         recent_host::fetch(self.window, tab);
     }
 
+    fn broom(&self) -> Option<shell::Broom> {
+        broom_host::shown(self.window)
+    }
+
+    fn start_broom(&self, cx: &mut App) {
+        broom_host::start(self.window, cx);
+    }
+
     fn card_picture(&self, tab: u64, scale: f32, cx: &mut App) {
         let request = hover_card::asking(tab, cx);
         // check.sh reads this line: a hidden page draws for its picture from here.
@@ -2100,6 +2108,10 @@ impl Browser for Engine {
 
     fn window(&self) -> u64 {
         self.window
+    }
+
+    fn shown_now(&self) -> u64 {
+        unsafe { bc::bc_window_selected(self.window) }
     }
 
     fn find_next(&self, tab: u64, forward: bool, cx: &mut App) {
@@ -2189,6 +2201,16 @@ impl Browser for Engine {
         agents_core::start(cx);
         if let Some(agents) = browser::agents::global(cx) {
             agents.update(cx, |agents, cx| agents.set_on(on, cx));
+        }
+    }
+
+    fn other_apps(&self, cx: &App) -> Option<bool> {
+        Some(browser::agents::global(cx).is_some_and(|agents| agents.read(cx).other_apps()))
+    }
+
+    fn set_other_apps(&self, on: bool, cx: &mut App) {
+        if let Some(agents) = browser::agents::global(cx) {
+            agents.update(cx, |agents, cx| agents.set_other_apps(on, cx));
         }
     }
 

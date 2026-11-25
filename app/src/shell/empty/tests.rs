@@ -1061,6 +1061,46 @@ fn an_empty_space_gives_its_field_the_keyboard_once_the_window_is_key(cx: &mut T
     );
 }
 
+/// A fresh window on an empty Space, with no click: the field the caret is drawn in has the
+/// keyboard, in GPUI and in the window, so ⇥ flips it to Ask. GPUI's focus alone draws the caret,
+/// while the Mac sends a key to its window's first responder, which only the host's hold gives
+/// the UI; a click gives it by itself, so ⇥ reached Ask only after one.
+#[gpui::test]
+fn a_fresh_windows_field_takes_tab_without_a_click(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    host.take();
+    key_window(cx);
+    assert!(
+        field_focused(&shell, cx),
+        "the key window's field has no keyboard"
+    );
+    assert_eq!(
+        host.take(),
+        ["hold keyboard for page"],
+        "the field took GPUI's focus, but the window's keys weren't given to the UI"
+    );
+    cx.simulate_keystrokes("tab");
+    assert_eq!(
+        switch(&shell, cx),
+        (true, "Ask Claude to do something".into()),
+        "⇥ with no click didn't reach the field"
+    );
+}
+
+/// At launch the core can show the window's page before the shell hears of it. The field doesn't
+/// take the window's keys then: they're that page's, which comes in a moment.
+#[gpui::test]
+fn the_field_takes_no_window_keys_from_a_page_the_core_already_shows(cx: &mut TestAppContext) {
+    let (_, cx, host) = window_with_no_tab(cx);
+    host.shown_now.set(1);
+    host.take();
+    key_window(cx);
+    assert!(
+        !host.take().contains(&"hold keyboard for page".to_string()),
+        "the field took the window's keys from the page the core shows"
+    );
+}
+
 /// ⌘T and ⌘L give the field the keyboard and open no bar over it. The sidebar's New Tab and URL
 /// field and Start Again's ask still open the bar, as they did.
 #[gpui::test]
@@ -1102,6 +1142,28 @@ fn cmd_t_and_cmd_l_give_the_field_the_keyboard_and_open_no_bar(cx: &mut TestAppC
         1,
         "Start Again opened no bar"
     );
+}
+
+/// ⌘T pressed before the shell has heard of the page the core shows, as one pressed as the window
+/// comes on screen with a page to open, opens the bar over that page: the field it would have gone
+/// to goes as the page is heard of, and took the key with it (#4268).
+#[gpui::test]
+fn cmd_t_before_the_shown_page_is_heard_of_opens_the_bar(cx: &mut TestAppContext) {
+    use crate::shell::Command;
+    let (shell, cx, host) = window_with_no_tab(cx);
+    key_window(cx);
+    host.shown_now.set(1);
+    for from in ["ui", "page"] {
+        shell.update(cx, |shell, cx| shell.run(Command::NewTab, from, cx));
+        cx.run_until_parked();
+        assert_eq!(
+            host.command_bars.take().len(),
+            1,
+            "⌘T via {from}, with the core showing a page the shell hadn't heard of, opened no bar"
+        );
+        host.bar_open.set(false);
+        shell.update(cx, |shell, cx| shell.command_bar_dismissed(cx));
+    }
 }
 
 /// An open overlay keeps the keyboard: ⌘T's field waits for it to close.

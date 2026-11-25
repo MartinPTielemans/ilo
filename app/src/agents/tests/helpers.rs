@@ -513,6 +513,32 @@ fn a_helpers_call_without_a_start_stops_the_task(cx: &mut TestAppContext) {
     stopped_over(&run, &agent, HelpersLimit::Kind, says, cx);
 }
 
+/// A helper's lines are never the task's, so the finding a done card says is the task's own last
+/// answer, though a helper wrote after it: nothing a helper says is in the conversation, and the
+/// finding has none of it.
+#[gpui::test]
+fn a_helpers_lines_are_never_the_tasks_finding(cx: &mut TestAppContext) {
+    let (run, agent) = with_helpers("finding", cx);
+    begun(&run, &agent, "toolu_a", cx);
+    run.said(&agent, Out::Said("Two seats at 9:05, car 4.".into()), cx);
+    let helper_says = "The helper booked row 12 for you.";
+    let says = json!({ "type": "assistant", "parent_tool_use_id": "toolu_a",
+        "message": { "content": [{ "type": "text", "text": helper_says }] } });
+    line(&run, &agent, says, cx);
+    told(&run, &agent, "toolu_a", Helper::Ended, cx);
+    run.said(&agent, Out::Ended(None), cx);
+    assert!(matches!(run.state(&agent, cx), State::Done { .. }));
+    (run.agents).read_with(cx, |agents, _| {
+        let task = agents.task(&agent).unwrap();
+        let said = |message: &crate::agents::task::Message| message.text.contains("row 12");
+        assert!(
+            !task.messages.iter().any(said),
+            "a helper's line is in the conversation"
+        );
+    });
+    assert_eq!(card(&run, cx).finding, "Two seats at 9:05, car 4.");
+}
+
 /// A helper is counted and shown from its start: before it has done anything its line stands,
 /// under way, with the name its task gave it, and the live line and the card count it. The page
 /// it opens is its own, never a step of the task's nor a group of them, and has its own step on
