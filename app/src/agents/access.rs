@@ -1,6 +1,8 @@
 //! How an act meets its task's access (tier.rs): the one decision point, `check`, runs what the
 //! tier allows and refuses the rest at once, telling the agent and putting ilo's line in the task's
-//! conversation. Nothing waits for the user, and only the user changes a tier or a task's Sites.
+//! conversation. Nothing waits for the user, and only the user raises a tier or changes a task's
+//! Sites: ilo lowers an outside client's task only to what the user left another of its at
+//! (`starting_tier`, `left_at`).
 
 use gpui::Context;
 
@@ -210,6 +212,10 @@ impl Agents {
         if ended {
             task.picked_from.get_or_insert(from);
         }
+        self.picked_past(key);
+        let Some(task) = self.task_mut(key) else {
+            return;
+        };
         for stop in &mut task.stops {
             stop.settled = true;
         }

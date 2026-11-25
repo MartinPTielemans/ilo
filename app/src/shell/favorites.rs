@@ -15,11 +15,11 @@ use crate::tooltip::{self, Anchor, Tip};
 
 use super::{
     Curve, DEVELOPER_TILE, DIVIDER, FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, FOLDER_TITLE_X,
-    FOOTER_HEIGHT, HAIRLINE, PLATE_INSET, Place, Row, SECONDARY, SEGMENT_LINE, SLEEPING_FAVICON,
-    Shell, Slot, Space, TALL_FAVORITES, TILE, TILE_COLUMNS, TILE_GAP, TILE_HEIGHT, TILE_MARK,
-    TILE_MARK_INSET, TILE_MIN, TILE_RADIUS, TILE_RING, TILE_UNTHEMED, TILE_UNTHEMED_LIGHT,
-    TITLE_END_INSET, TITLE_GAP, TURN_TITLE_FADE, TileTheme, access::Accessible, developer_outline,
-    rows::capture_glyph, tile_theme::RING_WIDTH, title,
+    FOOTER_HEIGHT, HAIRLINE, LIST_TOP, PLATE_INSET, Place, Row, SECONDARY, SEGMENT_LINE,
+    SLEEPING_FAVICON, Shell, Slot, Space, TALL_FAVORITES, TILE, TILE_COLUMNS, TILE_GAP,
+    TILE_HEIGHT, TILE_MARK, TILE_MARK_INSET, TILE_MIN, TILE_RADIUS, TILE_RING, TILE_UNTHEMED,
+    TILE_UNTHEMED_LIGHT, TITLE_END_INSET, TITLE_GAP, TURN_TITLE_FADE, TileTheme,
+    access::Accessible, developer_outline, rows::capture_glyph, tile_theme::RING_WIDTH, title,
 };
 use crate::palette::{Palette, Tone};
 
@@ -105,7 +105,7 @@ impl Shell {
                     tiles.role(Role::TabList).aria_label("Favorites")
                 })
                 .absolute()
-                .top(px(self.list_start()))
+                .top(px(LIST_TOP))
                 .left_0()
                 .w(px(self.width()))
                 .when(self.tiles_scroll(), |tiles| {
@@ -330,7 +330,7 @@ impl Shell {
             .tile_places(count)
             .last()
             .map_or(0., |&[_, top, _]| top + TILE_HEIGHT);
-        self.list_start() + if count > 0 { rows + TILE_GAP } else { 0. }
+        LIST_TOP + if count > 0 { rows + TILE_GAP } else { 0. }
     }
 
     /// Where the Space's pages start: under the tiles.
@@ -351,7 +351,7 @@ impl Shell {
     /// Whether the tiles scroll with the list, as they do while they're taller than
     /// TALL_FAVORITES of the window.
     pub(super) fn tiles_scroll(&self) -> bool {
-        self.list_top() - self.list_start() > TALL_FAVORITES * f32::from(self.viewport.height)
+        self.list_top() - LIST_TOP > TALL_FAVORITES * f32::from(self.viewport.height)
     }
 
     /// How far the tiles have gone up with the list.
@@ -364,14 +364,14 @@ impl Shell {
 
     /// Where the tiles' top is drawn.
     pub(super) fn tiles_top(&self) -> f32 {
-        self.list_start() - self.tiles_scrolled()
+        LIST_TOP - self.tiles_scrolled()
     }
 
     /// Where the Space's pages are drawn from: under the tiles, or under the URL field while the
     /// tiles scroll with them.
     pub(super) fn pages_top(&self) -> f32 {
         if self.tiles_scroll() {
-            self.list_start()
+            LIST_TOP
         } else {
             self.drawn_list_top()
         }
@@ -379,7 +379,7 @@ impl Shell {
 
     /// Where the sidebar under the tiles starts, as they're drawn.
     pub(super) fn under_tiles(&self) -> f32 {
-        (self.list_top() - self.tiles_scrolled()).max(self.list_start())
+        (self.list_top() - self.tiles_scrolled()).max(LIST_TOP)
     }
 
     /// The room a page leaves above its rows for the tiles that scroll with it.
@@ -856,7 +856,7 @@ impl Shell {
         (!favorites.is_empty()).then(|| {
             div()
                 .absolute()
-                .top(px(self.list_start()))
+                .top(px(LIST_TOP))
                 .left_0()
                 .w(px(self.width()))
                 .children(tiles)
