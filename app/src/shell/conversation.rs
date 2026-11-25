@@ -19,6 +19,8 @@ use gpui::{
     WeakEntity, Window, actions, canvas, div, img, point, prelude::*, px, rgb, size, svg,
 };
 
+use gpui::{Role, accesskit::Live as Telling};
+
 use self::markdown::{Block, Inline};
 use self::motion::{Answered, Follow, Key, Landing, Motion, Run, eased, linear};
 use super::{
@@ -36,7 +38,7 @@ use crate::agents::page::clip;
 use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
 use crate::agents::task::{
     ArchivedTask, Card, Conversation, Dot, Line, Live, Opens, TaskAction, Trace, TraceItem,
-    TraceStep,
+    TraceStep, first_line,
 };
 use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
 use crate::text_input::TextInput;
@@ -261,6 +263,15 @@ pub struct TalkView {
     hand_back_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     landed: Rc<Cell<Option<Bounds<Pixels>>>>,
     drawn_at: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Whether an assistive app reads the window, as the last frame found: its lines have roles
+    /// and names only then, so with none running a frame costs what it did (#4244).
+    a11y: bool,
+    /// What a screen reader is told as it comes while the conversation shows, and which telling
+    /// it is: a line of ilo's in its own words, or the answer's first line. Each is a node of its
+    /// own, so the same words coming again are told again.
+    spoken: Option<(usize, SharedString)>,
+    /// Its task finished, so the answer is told as the conversation comes with it.
+    answer_due: bool,
 }
 
 /// What opens in a conversation: a trace, a line of one, or a turn's same step on several tabs,
@@ -408,8 +419,7 @@ impl Shell {
             }
             old => {
                 if let Some(old) = old {
-                    let stale = old.view.update(cx, |view, _| view.let_go());
-                    self.stale_pictures.extend(stale);
+                    self.talk_let_go(&old.agent, &old.view, cx);
                 }
                 // The reply's placeholder follows the appearance, as the lines do (#1659).
                 let colors = Self::form_colors(cx);
@@ -458,9 +468,14 @@ impl Shell {
                     hand_back_drawn: Rc::default(),
                     landed: Rc::default(),
                     drawn_at: Rc::default(),
+                    a11y: false,
+                    spoken: None,
+                    answer_due: false,
                 })
             }
         };
+        // Its rail pictures its pages again, so its plate's goes.
+        self.drop_plate(&agent);
         // check.sh reads this line.
         log!("browser: task {agent} shown");
         self.talk = Some(Talk {
@@ -503,6 +518,14 @@ impl Shell {
         }
     }
 
+    /// The task whose conversation shows finished: a screen reader is told its answer as it
+    /// comes (`TalkView::tell_answer`).
+    pub(super) fn talk_answered(&mut self, cx: &mut Context<Self>) {
+        if let Some(talk) = &self.talk {
+            talk.view.update(cx, |view, _| view.tell_answer());
+        }
+    }
+
     /// A page watched over the conversation has gone back into its picture: the pictures are
     /// taken again if its pages changed meanwhile.
     pub(super) fn retake_talk_pictures(&mut self, cx: &mut Context<Self>) {
@@ -519,9 +542,59 @@ impl Shell {
     /// again.
     pub(super) fn talk_closed(&mut self, cx: &mut Context<Self>) {
         let Some(talk) = &self.talk else { return };
-        let view = talk.view.clone();
-        let stale = view.update(cx, |view, _| view.let_go());
+        let (agent, view) = (talk.agent.clone(), talk.view.clone());
+        self.talk_let_go(&agent, &view, cx);
+    }
+
+    /// `agent`'s conversation lets its pictures go, but for its card's page's, which its plate in
+    /// Latest tasks shows from then on.
+    fn talk_let_go(
+        &mut self,
+        agent: &SharedString,
+        view: &Entity<TalkView>,
+        cx: &mut Context<Self>,
+    ) {
+        let card = self.task_cards.iter().find(|card| card.agent == *agent);
+        let tab = card.and_then(|card| card.last_tab);
+        let (kept, stale) = view.update(cx, |view, _| {
+            let kept = tab.and_then(|tab| view.take_picture(tab));
+            (kept, view.let_go())
+        });
         self.stale_pictures.extend(stale);
+        if let (Some(tab), Some(picture)) = (tab, kept) {
+            self.drop_plate(agent);
+            self.card_plates.push((agent.clone(), tab, picture));
+        }
+    }
+
+    /// `agent`'s card's plate lets its picture go.
+    fn drop_plate(&mut self, agent: &SharedString) {
+        let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.card_plates)
+            .into_iter()
+            .partition(|(each, ..)| each == agent);
+        self.card_plates = kept;
+        self.stale_pictures
+            .extend(gone.into_iter().map(|(.., picture)| picture.image()));
+    }
+
+    /// The plates' pictures of cards that no longer picture that page, or are gone, go.
+    pub(super) fn keep_plates(&mut self) {
+        let cards = &self.task_cards;
+        let (kept, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut self.card_plates)
+            .into_iter()
+            .partition(|(agent, tab, _)| {
+                (cards.iter()).any(|card| card.agent == *agent && card.last_tab == Some(*tab))
+            });
+        self.card_plates = kept;
+        self.stale_pictures
+            .extend(gone.into_iter().map(|(.., picture)| picture.image()));
+    }
+
+    /// The picture a card of Latest tasks shows on its plate, if its conversation left one.
+    pub(super) fn plate_of(&self, card: &Card) -> Option<PagePicture> {
+        (self.card_plates.iter())
+            .find(|(agent, tab, _)| *agent == card.agent && card.last_tab == Some(*tab))
+            .map(|(.., picture)| picture.clone())
     }
 
     /// A picture the conversation asked for came: whether it was one of its own.
@@ -686,10 +759,76 @@ impl TalkView {
                     });
                 }
             }
+            // A line of ilo's that comes while it shows is told once, in its own words: not under
+            // a page watched over it, where it isn't drawn, and not beside a notification of what
+            // its task came to with it (never both).
+            if self.a11y
+                && !watched
+                && !crate::needs_you::notified(&conversation.agent, cx)
+                && let Some(old) = &self.shown
+            {
+                let had = |key: usize| {
+                    (old.lines.iter())
+                        .any(|line| matches!(line, Line::Ilo(line) if line.key == key))
+                };
+                // Not the line of the user's own Stop: a task they stopped isn't told at all.
+                let told = |line: &IloLine| !matches!(line.kind, IloKind::YouStopped { .. });
+                let came = conversation.lines.iter().rev().find_map(|line| match line {
+                    Line::Ilo(line) if !had(line.key) && told(line) => Some(line),
+                    _ => None,
+                });
+                if let Some(line) = came {
+                    self.tell(ilo_spoken(line, &conversation.name).into());
+                }
+            }
             self.shown = Some(conversation);
             cx.notify();
         }
+        if std::mem::take(&mut self.answer_due) {
+            // By the name the app has for the assistant, never one its answer gives. An answer
+            // with no words is told nothing, as the mark is only ever before the assistant's own.
+            let answer = self.shown.as_ref().and_then(|shown| {
+                let said = (shown.lines.iter().rev()).find_map(|line| match line {
+                    Line::Said(text) => Some(text),
+                    _ => None,
+                })?;
+                Some(words::says(&shown.name, &first_line(said)?))
+            });
+            if let Some(first) = answer {
+                self.tell(first.into());
+                cx.notify();
+            }
+        }
         Some(stale)
+    }
+
+    /// Tells a screen reader `said`, politely, once.
+    fn tell(&mut self, said: SharedString) {
+        let telling = self.spoken.as_ref().map_or(0, |(telling, _)| telling + 1);
+        self.spoken = Some((telling, said));
+    }
+
+    /// Its task finished while it shows (`Shell::set_task_cards`): the answer is told once as it
+    /// comes, as its first line, the one its card says, after the mark that says whose words they
+    /// are (`words::says`). The rest is read in order.
+    fn tell_answer(&mut self) {
+        self.answer_due = self.a11y;
+    }
+
+    /// What a screen reader says as it comes, wherever its cursor is: the Mac's AccessKit
+    /// announces a live region's value, and Windows' and Linux's its name (#3236).
+    fn announcer(&self) -> Option<impl IntoElement + use<>> {
+        let (telling, said) = self.spoken.clone().filter(|_| self.a11y)?;
+        Some(
+            div()
+                .id(("conversation-told", telling))
+                .absolute()
+                .size_0()
+                .role(Role::Status)
+                .aria_label(said.clone())
+                .aria_value(said)
+                .a11y_synthetic_children(|builder| builder.parent_node().set_live(Telling::Polite)),
+        )
     }
 
     /// Whether its lines are scrolled to their end, or all show.
@@ -722,6 +861,12 @@ impl TalkView {
         let old = entry.2.replace(picture.clone());
         cx.notify();
         Some(old.map(|old| old.image()).into_iter().collect())
+    }
+
+    /// `tab`'s picture, which it no longer holds.
+    fn take_picture(&mut self, tab: u64) -> Option<PagePicture> {
+        let at = self.pictures.iter().position(|(each, ..)| *each == tab)?;
+        self.pictures.remove(at).2
     }
 
     /// Its pictures go, as it no longer shows, and are taken again when it does.
@@ -1280,8 +1425,8 @@ impl TalkView {
                         shell
                             .update(cx, |shell, cx| {
                                 let covers = !shell.talk_beside;
-                                if shell.watched_task_page().is_none() && !(typing && covers) {
-                                    shell.watch_row(tab, true, cx);
+                                if !(typing && covers) {
+                                    shell.open_needing_page(tab, cx);
                                 }
                             })
                             .ok();
@@ -1476,6 +1621,7 @@ impl TalkView {
     /// sent goes there.
     fn you(
         &self,
+        id: ElementId,
         text: SharedString,
         page: Option<(SharedString, Option<Arc<Image>>)>,
         landing: bool,
@@ -1514,6 +1660,10 @@ impl TalkView {
             .mb(px(BLOCK_GAP))
             .child(
                 div()
+                    .id(id)
+                    .when(look.a11y, |plate| {
+                        plate.role(Role::Label).aria_label(text.clone())
+                    })
                     .max_w(gpui::relative(BUBBLE_WIDTH))
                     .pt(px(BUBBLE_TOP))
                     .pb(px(BUBBLE_BOTTOM))
@@ -1819,7 +1969,13 @@ impl TalkView {
         // A session was asked in its agent's terminal, so it has no ask.
         let mut lines = Vec::new();
         if !shown.asked.is_empty() {
-            lines.push(self.you(shown.asked.clone(), page, false, look));
+            lines.push(self.you(
+                "conversation-asked".into(),
+                shown.asked.clone(),
+                page,
+                false,
+                look,
+            ));
         }
         let landing = (self.motion.landing.as_ref())
             .and_then(|landing| landing.line)
@@ -1861,8 +2017,15 @@ impl TalkView {
                 lines.push(self.answered(answered, look));
             }
             let line = match line {
-                Line::You(text) => self.you(text.clone(), None, landing == Some(index), look),
+                Line::You(text) => {
+                    let id = ("conversation-you", index).into();
+                    self.you(id, text.clone(), None, landing == Some(index), look)
+                }
                 Line::Said(text) => div()
+                    .id(("conversation-said", index))
+                    .when(look.a11y, |said| {
+                        said.role(Role::Label).aria_label(plain(text))
+                    })
                     .mb(px(BLOCK_GAP))
                     .text_color(palette.text(TITLE))
                     .child(self.said("said", index, text, self.motion.runs(index), look))
@@ -2115,6 +2278,8 @@ impl TalkView {
             }
             _ => None,
         };
+        // Read by whoever walks there, and never told as it changes (#4244).
+        let read = look.a11y.then(|| words.clone());
         let text = match (step.is_some(), look.shimmer(self.made)) {
             (true, Some(phase)) => shimmering(&palette, words, phase).into_any_element(),
             _ => div()
@@ -2150,6 +2315,8 @@ impl TalkView {
                 .gap(px(BUBBLE_X))
                 .child(
                     div()
+                        .id("conversation-live-words")
+                        .when_some(read, |live, read| live.role(Role::Label).aria_label(read))
                         .flex_1()
                         .min_w_0()
                         .overflow_hidden()
@@ -2257,34 +2424,28 @@ impl TalkView {
     ) -> gpui::AnyElement {
         let palette = look.palette;
         let ink = palette.text(ILO_INK);
-        let (own, name) = words::head(&line.kind, agent);
         // ilo's mark is the first word of what it says, in the display face, so its words wrap
         // under it: an ilo line has one left edge, its mark's.
         let mark = 0..words::MARK.len();
-        let own = format!("{} {own}", words::MARK);
         let marked = HighlightStyle {
             font_weight: Some(FontWeight::MEDIUM),
             ..Default::default()
         };
-        // A page's words or a site are cut short, in the title's ink, so they read as a name.
-        let name = name.map(|name| clip(&name, QUOTED_CHARS as usize));
-        let (said, highlights) = match &name {
-            Some(name) => {
-                let (mut said, quoted) = words::with_name(&line.kind, &own, name);
-                // What its sentence says after the name.
-                said.extend(words::tail(&line.kind, agent));
-                let style = HighlightStyle {
-                    color: Some(palette.text(TITLE)),
-                    ..Default::default()
-                };
-                (said, vec![(mark.clone(), marked), (quoted, style)])
-            }
-            None => (own, vec![(mark.clone(), marked)]),
-        };
-        let count = match &line.kind {
-            IloKind::Stopped { count, .. } => words::count(*count),
-            _ => None,
-        };
+        let IloHead {
+            said,
+            name,
+            quoted,
+            count,
+        } = ilo_head(&line.kind, agent);
+        // A page's words or a site are in the title's ink, so they read as a name.
+        let named = quoted.map(|quoted| {
+            let style = HighlightStyle {
+                color: Some(palette.text(TITLE)),
+                ..Default::default()
+            };
+            (quoted, style)
+        });
+        let highlights: Vec<_> = [(mark.clone(), marked)].into_iter().chain(named).collect();
         let glyph = match &line.kind {
             // A task ilo stopped has the one glyph, whatever it stopped it over.
             IloKind::Stopped { .. }
@@ -2344,6 +2505,7 @@ impl TalkView {
             let key = line.key;
             div()
                 .id(SharedString::from(format!("ilo-{key}-link")))
+                .when(look.a11y, |link| link.role(Role::Link).aria_label(words))
                 .relative()
                 .pl(under)
                 .mt(px(NOTE_TOP))
@@ -2367,6 +2529,8 @@ impl TalkView {
         let buttons = ilo::drawn(line, self.beside(cx));
         let note = words::note(&buttons).map(|note| {
             div()
+                .id(("ilo-note", line.key))
+                .when(look.a11y, |under| under.role(Role::Label).aria_label(note))
                 .pl(under)
                 .mt(px(NOTE_TOP))
                 .text_size(px(text::SMALL))
@@ -2386,6 +2550,11 @@ impl TalkView {
                 )
         });
         div()
+            .id(("ilo-line", line.key))
+            // The line is a group by its own words as drawn, and its buttons are in it.
+            .when(look.a11y, |group| {
+                group.role(Role::Group).aria_label(ilo_spoken(line, agent))
+            })
             .flex()
             .flex_col()
             .items_start()
@@ -2419,6 +2588,9 @@ impl TalkView {
         let hovered = self.ilo_hovered.clone();
         let id = SharedString::from(format!("ilo-{}-{button:?}", line.key));
         page_chip(look.palette, id, words::button(button), None)
+            .when(look.a11y, |chip| {
+                chip.role(Role::Button).aria_label(words::button(button))
+            })
             .relative()
             .child(
                 canvas(
@@ -2808,6 +2980,12 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
     } = line;
     let [lead, count, rest] = parts;
     let space = if joined { " " } else { "" };
+    // A step reads as its words, in its place among the lines; one of ilo's is named as a whole
+    // (`TalkView::ilo`).
+    let read = (look.a11y && mark.is_none()).then(|| match description.is_empty() {
+        true => title.to_string(),
+        false => format!("{title} {description}"),
+    });
     let (id, group): (ElementId, SharedString) = match key {
         LineKey::Ilo(key) => (("ilo", key).into(), format!("ilo-{key}").into()),
         LineKey::Fold(Fold::Trace(key)) => (("trace", key).into(), format!("trace-{key}").into()),
@@ -2933,6 +3111,7 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         }));
     div()
         .id(id)
+        .when_some(read, |line, read| line.role(Role::Label).aria_label(read))
         .group(group)
         .flex_none()
         .max_w_full()
@@ -3019,6 +3198,8 @@ struct Look {
     beside: bool,
     /// The user stands on one of its pages, the conversation in a panel beside it.
     standing: bool,
+    /// An assistive app reads the window (`TalkView::a11y`).
+    a11y: bool,
 }
 
 /// What a helper's line shows of its page: its title, which a helper its task gave no name is
@@ -3084,6 +3265,7 @@ impl Render for TalkView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let reply = self.reply.read(cx);
         self.typing = reply.focus_handle(cx).is_focused(window) && !reply.text().is_empty();
+        self.a11y = window.is_a11y_active();
         self.step_ilo_keys(window, cx);
         let now = Instant::now();
         let still = crate::motion::still(cx);
@@ -3106,6 +3288,7 @@ impl Render for TalkView {
                 behind: shell.task_page_going_back(),
                 beside: shell.talk_beside,
                 standing: shell.task_standing(),
+                a11y: self.a11y,
             }
         }) else {
             return div().into_any_element();
@@ -3259,8 +3442,72 @@ impl Render for TalkView {
                     .size_full(),
             )
             .children(self.ghost(&look))
+            .children(self.announcer())
             .into_any_element()
     }
+}
+
+/// The head of one of ilo's lines as drawn: its mark and words, the name it took from a page cut
+/// short and where it stands in them, and how many times it came.
+struct IloHead {
+    said: String,
+    name: Option<String>,
+    quoted: Option<std::ops::Range<usize>>,
+    count: Option<String>,
+}
+
+fn ilo_head(kind: &IloKind, agent: &str) -> IloHead {
+    let (own, name) = words::head(kind, agent);
+    let own = format!("{} {own}", words::MARK);
+    // A page's words or a site are cut short.
+    let name = name.map(|name| clip(&name, QUOTED_CHARS as usize));
+    let (said, quoted) = match &name {
+        Some(name) => {
+            let (mut said, quoted) = words::with_name(kind, &own, name);
+            // What its sentence says after the name.
+            said.extend(words::tail(kind, agent));
+            (said, Some(quoted))
+        }
+        None => (own, None),
+    };
+    let count = match kind {
+        IloKind::Stopped { count, .. } => words::count(*count),
+        _ => None,
+    };
+    IloHead {
+        said,
+        name,
+        quoted,
+        count,
+    }
+}
+
+/// What a screen reader is told of one of ilo's lines: its own words as drawn, its head, how
+/// many times it came and what it says more, with a page's words cut short and quoted as they are
+/// on the line. Never anything an agent or a page wrote as ilo's.
+fn ilo_spoken(line: &IloLine, agent: &str) -> String {
+    let IloHead {
+        mut said,
+        name,
+        count,
+        ..
+    } = ilo_head(&line.kind, agent);
+    let body = words::body(&line.kind, name.as_deref().unwrap_or(""));
+    for more in count.into_iter().chain(body) {
+        said.push(' ');
+        said.push_str(&more);
+    }
+    said
+}
+
+/// What an agent said as its text is drawn, without the marks that style it: each paragraph and
+/// each item of a list, with its marker, on a line.
+fn plain(text: &str) -> String {
+    let lines = markdown::blocks(text).into_iter().map(|block| match block {
+        Block::Paragraph(text) => text.text,
+        Block::Item { marker, text, .. } => format!("{marker} {}", text.text),
+    });
+    lines.collect::<Vec<_>>().join("\n")
 }
 
 /// What covers a part of the conversation while a page goes back over it, which takes a press there
@@ -3274,6 +3521,8 @@ fn unpressed() -> gpui::Div {
         .block_mouse_except_scroll()
 }
 
+#[cfg(test)]
+mod spoken_tests;
 #[cfg(test)]
 mod tests;
 

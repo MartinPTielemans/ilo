@@ -104,6 +104,12 @@ fn look_values_come_from_the_token_file() {
 /// The `radius` keys that aren't one of the four: the shapes of a beak and a glyph, which round a
 /// point, not a corner, and what the rule derives, which the concentric test below checks.
 const NOT_ONE_OF_FOUR: &[&str] = &[
+    // First run's window, as its drawing has it (values-first-run.md): the indicator's track, the
+    // foot's buttons and their key, and the picture's panel.
+    "shell.onboarding.window.track-radius",
+    "shell.onboarding.window.button-radius",
+    "shell.onboarding.window.key-radius",
+    "shell.onboarding.window.panel-radius",
     "icon-picker.arrow-tip-radius",
     "icon-picker.arrow-foot-radius",
     "theme-picker.arrow-tip-radius",
@@ -123,6 +129,11 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     // A drawing of the window, its corners and its page card's at the drawing's scale (#2407).
     "settings.side-radius",
     "settings.side-page-radius",
+    // Settings in the owner's drawing (spec-settings.md): its pages' rows at 8, the page's plane
+    // at 10 inside the window's 12, and the search field's ⌘F chip at 5.
+    "settings.form.row-radius",
+    "settings.form.panel-radius",
+    "settings.form.chip-radius",
     // Share favorites' Spaces and their tiles at the drawing's scale (#2430).
     "settings.share-space-radius",
     "settings.share-tile-radius",

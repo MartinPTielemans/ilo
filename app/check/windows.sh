@@ -715,8 +715,8 @@ if [ "$(uname)" = Darwin ] || windows || x11; then
   # the first window: the driver stands in for that, as it does for another app's.
   send window $driven_sixth
   set -- $(row 0)
-  send dragover $1 $(($2 - 20)) tab $c
-  send dragdrop $1 $(($2 - 20))
+  send dragover $1 $(($2 - 17)) tab $c
+  send dragdrop $1 $(($2 - 17))
   expect '^browser: drag dropped$' "the second window's list didn't take the tab dragged from the first"
   expect "^browser: tab $c dropped from window $first in today 0\$" \
     "the second window's list didn't put the tab where its line was"
@@ -731,16 +731,16 @@ if [ "$(uname)" = Darwin ] || windows || x11; then
   send key z cmd shift
   expect "^browser: window $sixth shows $c\$" "⇧⌘Z didn't bring the tab back to the second window's list"
   if windows; then
-    # The picture a drag of its row shows (#1859): the row's band of the sidebar, 228 by 40 points,
+    # The picture a drag of its row shows (#1859): the row's band of the sidebar, 228 by 34 points,
     # as the window draws it, at the window's scale. The driver carries the drag without Windows'
     # own, which shows the picture (#1583), so it has the host make the picture and write it to a
     # file.
     set -- $(row_of $c)
-    send tabpicture 0 $(($2 - 20)) 228 40 "$(cygpath -aw "$out/windows-tab-picture.bmp")"
+    send tabpicture 0 $(($2 - 17)) 228 34 "$(cygpath -aw "$out/windows-tab-picture.bmp")"
     expect '^browser: tab picture [1-9][0-9]*x[1-9][0-9]*$' "the host made no picture of the tab's row"
     picture=$(grep '^browser: tab picture ' "$log" | tail -1 | cut -d' ' -f4)
-    echo "$picture" | awk -Fx '{ exit !($1 >= 228 && $2 >= 40 && $1 / $2 > 5.6 && $1 / $2 < 5.8) }' ||
-      fail "the picture of the tab's row is $picture, not the row's 228 by 40 at the window's scale"
+    echo "$picture" | awk -Fx '{ exit !($1 >= 228 && $2 >= 34 && $1 / $2 > 6.6 && $1 / $2 < 6.8) }' ||
+      fail "the picture of the tab's row is $picture, not the row's 228 by 34 at the window's scale"
   fi
   # Dragged past the second window's bottom edge, its row leaves as the system's drag, and let go
   # over the page, which takes no tab, it opens in a window of its own there, under the pointer.

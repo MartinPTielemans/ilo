@@ -30,10 +30,10 @@ use browser::theme::Appearance;
 use browser::updates::{self, NightlyRow, Track, VersionRow};
 use browser::widevine::{self, Widevine, WidevineRow};
 use gpui::{
-    AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, Global,
-    KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, PathPromptOptions, Rgba, SharedString,
-    Subscription, Window, WindowHandle, WindowOptions, actions, canvas, div, point, prelude::*, px,
-    rgb, rgba, size, svg,
+    AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, FontWeight,
+    Global, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, PathPromptOptions, Rgba,
+    SharedString, Subscription, Window, WindowHandle, WindowOptions, actions, canvas, div, point,
+    prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{bc, ns_view, platform, show_menu};
@@ -54,6 +54,7 @@ use browser::settings_search::{
 use browser::settings_shortcuts::{Keys, SHORTCUTS};
 use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
 use browser::tokens::radius;
+use browser::tokens::settings::form;
 use browser::tokens::settings::{
     BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS, DETAIL,
     DETAIL_LINE, DETAIL_TOP, END_GAP, FIELD_PADDING, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME,
@@ -61,7 +62,6 @@ use browser::tokens::settings::{
     LEDE_TOP, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SENT_TUCK, SHARE_TOP,
     SHORT_PADDING, SHORT_ROW, SIDE_ROOM, TEXT_X, TITLE, WIDTH,
 };
-use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
 use browser::tokens::shell::{
     WINDOW_BUTTON_GLYPH, WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y, WINDOWS_BUTTON_GLYPH,
     WINDOWS_BUTTON_PLATE, WINDOWS_CLOSE_HOVERED,
@@ -714,9 +714,9 @@ pub fn show_shortcuts(cx: &mut App) {
     show_on(Section::Shortcuts, cx);
 }
 
-/// Shows the Settings window on Agents, with each agent's activity.
+/// Shows the Settings window on Other apps, with each agent's activity.
 pub fn show_agents(cx: &mut App) {
-    show_on(Section::Agents, cx);
+    show_on(Section::OtherApps, cx);
 }
 
 /// Shows the Settings window on About.
@@ -724,9 +724,9 @@ pub fn show_about(cx: &mut App) {
     show_on(Section::About, cx);
 }
 
-/// Shows the Settings window on Import & Export.
+/// Shows the Settings window on Sync & Import.
 pub fn show_import(cx: &mut App) {
-    show_on(Section::ImportExport, cx);
+    show_on(Section::SyncImport, cx);
 }
 
 fn show_on(section: Section, cx: &mut App) {
@@ -813,10 +813,10 @@ fn show_now(cx: &mut App) {
             // Each show logs where its controls are drawn again, so check.sh can take a place from
             // this show rather than from one before it, which a hidden window's scroll left (#3841).
             settings.drawn_logged.borrow_mut().clear();
-            if settings.section == Section::Agents {
+            if settings.section == Section::OtherApps {
                 look_for_clients(cx);
             }
-            if settings.section == Section::Sync {
+            if settings.section == Section::SyncImport {
                 settings
                     .account
                     .update(cx, |account, cx| account.read_activity(cx));
@@ -1394,13 +1394,13 @@ impl Settings {
         self.shown = true;
         // Each section opens at its top.
         self.card.reset();
-        if section == Section::ImportExport {
+        if section == Section::SyncImport {
             self.show_import(cx);
         }
-        if section == Section::Agents {
+        if section == Section::OtherApps {
             look_for_clients(cx);
         }
-        if section == Section::Sync {
+        if section == Section::SyncImport {
             self.account
                 .update(cx, |account, cx| account.read_activity(cx));
         }
@@ -1503,8 +1503,10 @@ impl Settings {
             section => section.name(),
         };
         let base = self.base();
-        let title =
-            shell::display_text(title, TITLE_SIZE, TITLE_LINE, cx).text_color(base.opacity(TITLE));
+        // In the heading face, 22 on 28, semibold (spec-settings.md › The window).
+        let title = shell::display_text(title, form::TITLE_SIZE, form::TITLE_LINE, cx)
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(base.opacity(TITLE));
         let lede = (!lede.is_empty()).then(|| {
             div()
                 .mt(px(LEDE_TOP))
@@ -1881,7 +1883,7 @@ impl Settings {
             pair,
         );
         groups.extend([Block::Heading("Layout".into()), Block::Rows(vec![position])]);
-        Page::new(Section::Appearance, "", groups)
+        Page::new(Section::Window, "", groups)
     }
 
     /// Tabs & Sidebar: when Today tabs are archived and unloaded, whether Battery Saver comes on, who
@@ -2109,7 +2111,7 @@ impl Settings {
             )]));
         }
         Page::new(
-            Section::TabsAndSidebar,
+            Section::TabsAndSpaces,
             "When Today tabs leave, and how the sidebar comes and goes.",
             blocks,
         )
@@ -2408,7 +2410,7 @@ impl Settings {
             blocks.push(Block::Group(self.always_translated(&always.0, cx)));
         }
         Page::new(
-            Section::Features,
+            Section::General,
             concat!(
                 env!("APP_NAME"),
                 "'s own tools. Off takes every way into one away, and its switch brings it back."
@@ -2653,7 +2655,7 @@ impl Settings {
                 "'s own ad blocker, with the filter lists you turn on."
             ),
         };
-        Page::new(Section::AdBlocking, lede, blocks)
+        Page::new(Section::Privacy, lede, blocks)
     }
 
     /// Block with uBlock Origin: the way back to the extension and forward again, each taking
@@ -3208,7 +3210,7 @@ impl Settings {
             Block::Under(div().flex().child(new)),
         ];
         Page::new(
-            Section::Profiles,
+            Section::TabsAndSpaces,
             "A profile keeps its own logins, cookies, history and extensions. Several Spaces can \
              share one.",
             blocks,
@@ -3698,7 +3700,9 @@ impl Settings {
 
     /// Agents: the switch that lets agents in, the tasks ⇥ asks in ⌘T, the apps that connect,
     /// and each agent's permissions and what it did in this run, newest first.
-    fn agents(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> Page {
+    /// Agents' pages, Threads, Models, Access and Other apps, in that order: what was one page of
+    /// agents, each part on the page the owner drew it on (spec-settings.md › S8 to S11).
+    fn agents(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> [Page; 4] {
         let look = &self.look;
         let on = agents.read(cx).is_on();
         let switch = {
@@ -3716,7 +3720,7 @@ impl Settings {
         };
         let master = feature(
             look,
-            Section::Agents.glyph(),
+            Section::Threads.glyph(),
             "Let agents use the browser",
             Some(about),
             vec![switch],
@@ -3765,21 +3769,24 @@ impl Settings {
             false => Vec::new(),
         };
         let rows = [master].into_iter().chain(tasks).chain(keeps).chain(kept);
-        let mut blocks = vec![Block::Rows(rows.collect())];
+        let mut threads = vec![Block::Rows(rows.collect())];
+        let (mut models, mut access) = (Vec::new(), Vec::new());
         if tasks_on {
-            blocks.push(Block::Heading("Your assistant".into()));
-            blocks.push(Block::Group(self.assistants(agents, cx)));
-            blocks.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
-            blocks.extend(self.access());
-            blocks.extend(self.files_not_here(agents, cx));
-            blocks.extend(self.folders_in_use(agents, cx));
+            models.push(Block::Heading("Your assistant".into()));
+            models.push(Block::Group(self.assistants(agents, cx)));
+            models.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
+            access.extend(self.access());
+            // What a thread may reach: files and folders too, with the folders it holds to revoke.
+            access.extend(self.files_not_here(agents, cx));
+            access.extend(self.folders_in_use(agents, cx));
         }
         // ⌘T's tasks and outside agents' sessions notify alike, so it's here while agents are on.
         // The Mac, Windows and Linux each post them (needs_you_host.rs).
         if on {
-            blocks.push(Block::Heading(browser::needs_you::NOTIFICATIONS.into()));
-            blocks.push(Block::Rows(vec![self.when_to_notify(agents, cx)]));
+            threads.push(Block::Heading(browser::needs_you::NOTIFICATIONS.into()));
+            threads.push(Block::Rows(vec![self.when_to_notify(agents, cx)]));
         }
+        let mut blocks = Vec::new();
         blocks.push(Block::Heading(APPS_THAT_CONNECT.into()));
         let apps = SharedString::from(APPS_THAT_CONNECT);
         blocks.push(Block::Group(self.flashed(&apps, group(look, clients))));
@@ -3789,8 +3796,8 @@ impl Settings {
             blocks.push(Block::Heading("Command line".into()));
             blocks.push(Block::Rows(vec![self.command_line(agents, cx)]));
         }
-        blocks.extend(self.fenced_sites(agents, cx));
-        blocks.extend(self.site_notes(agents, accent, cx));
+        access.extend(self.fenced_sites(agents, cx));
+        access.extend(self.site_notes(agents, accent, cx));
         // AppleScript is the Mac's alone.
         if cfg!(target_os = "macos") {
             blocks.extend(self.scripts(agents, accent, cx));
@@ -3863,11 +3870,10 @@ impl Settings {
             if rows.is_empty() {
                 continue;
             }
-            listed_any = true;
-            blocks.push(Block::Heading(
+            access.push(Block::Heading(
                 format!("What {} may do from {bar}", cli.name()).into(),
             ));
-            blocks.push(Block::Group(group(look, rows)));
+            access.push(Block::Group(group(look, rows)));
         }
         if !listed_any {
             blocks.push(Block::Heading("Activity".into()));
@@ -3881,7 +3887,12 @@ impl Settings {
                 )],
             )));
         }
-        Page::new(Section::Agents, agents::tier::NEVER_GETS, blocks)
+        [
+            Page::new(Section::Threads, "", threads),
+            Page::new(Section::Models, "", models),
+            Page::new(Section::Access, agents::tier::NEVER_GETS, access),
+            Page::new(Section::OtherApps, "", blocks),
+        ]
     }
 
     /// Access: what each tier lets a task do, in words only, since only a task's own menu sets
@@ -4943,7 +4954,7 @@ impl Settings {
             true => "",
             false => "Bring your things from another browser, or take your Spaces with you.",
         };
-        Page::new(Section::ImportExport, lede, blocks)
+        Page::new(Section::SyncImport, lede, blocks)
     }
 
     /// About: the app's name as the page's heading, its version and its engine's, where its
@@ -6056,6 +6067,7 @@ impl Render for Settings {
             found.as_deref(),
             pick,
             foot,
+            settings_column::Version::of(cx),
             self.a11y,
         );
         // Once scrolled, the section's name and the heading gone under it hold at the card's top,
@@ -6134,6 +6146,24 @@ impl Render for Settings {
     }
 }
 
+/// `first`, with each of `rest`'s blocks after its own, on `first`'s page: today's pages that the
+/// owner's drawing puts on another's, until each part has its drawn place. A page that starts with
+/// rows of its own goes under its old `name`, so where it starts reads.
+fn joined<const N: usize>(first: Page, rest: [(&'static str, Page); N]) -> Page {
+    let mut page = first;
+    for (name, other) in rest {
+        let headed = matches!(
+            other.blocks.first(),
+            Some(Block::Heading(_) | Block::Crumb(..))
+        );
+        if !headed {
+            page.blocks.push(Block::Heading(name.into()));
+        }
+        page.blocks.extend(other.blocks);
+    }
+    page
+}
+
 impl Settings {
     /// `section`'s page, as it shows on the card.
     fn section_page(
@@ -6144,35 +6174,53 @@ impl Settings {
         cx: &mut Context<Self>,
     ) -> Page {
         match section {
-            Section::General => self.general(&profiles(), accent, cx),
-            Section::Appearance => self.appearance_page(cx),
-            Section::TabsAndSidebar => self.tabs_and_sidebar(&profiles(), accent, cx),
-            Section::Features => self.features(&profiles(), accent, cx),
-            Section::Agents => match agents::global(cx) {
-                Some(agents) => self.agents(&agents, accent, cx),
-                None => Page::new(Section::Agents, "", Vec::new()),
-            },
-            Section::Links => self.links(accent, cx),
-            Section::Shortcuts => self.shortcuts(accent, cx),
-            Section::Profiles => {
+            Section::General => {
                 let profiles = profiles();
-                self.focus_field(&profiles, window, cx);
-                self.profiles(&profiles, cx)
+                let general = self.general(&profiles, accent, cx);
+                joined(
+                    general,
+                    [("Features", self.features(&profiles, accent, cx))],
+                )
             }
-            Section::Passwords => self.passwords(&profiles(), accent, cx),
-            Section::Privacy => self.privacy(&profiles(), accent, cx),
-            Section::AdBlocking => {
+            Section::Window => self.appearance_page(cx),
+            Section::Privacy => {
+                let privacy = self.privacy(&profiles(), accent, cx);
                 let off_sites = off_sites();
                 self.log_off_sites(&off_sites);
-                self.ad_blocking(&off_sites, accent, cx)
+                let ad_blocking = self.ad_blocking(&off_sites, accent, cx);
+                joined(privacy, [("Ad Blocking", ad_blocking)])
             }
-            Section::Sync => Page::new(
-                Section::Sync,
-                "Sync Spaces, bookmarks, passwords and open tabs across your devices, encrypted \
-                 with a key only they hold.",
-                vec![Block::View(self.account.clone().into_any_element())],
-            ),
-            Section::ImportExport => self.import_export(cx),
+            Section::Passwords => self.passwords(&profiles(), accent, cx),
+            Section::SyncImport => {
+                let sync = Page::new(
+                    Section::SyncImport,
+                    "Sync Spaces, bookmarks, passwords and open tabs across your devices, \
+                     encrypted with a key only they hold.",
+                    vec![Block::View(self.account.clone().into_any_element())],
+                );
+                joined(sync, [("Import", self.import_export(cx))])
+            }
+            Section::Shortcuts => self.shortcuts(accent, cx),
+            Section::Threads | Section::Models | Section::Access | Section::OtherApps => {
+                match agents::global(cx) {
+                    Some(agents) => {
+                        let pages = self.agents(&agents, accent, cx);
+                        let at = pages.iter().position(|page| page.section == section);
+                        pages
+                            .into_iter()
+                            .nth(at.unwrap_or(0))
+                            .unwrap_or_else(|| Page::new(section, "", Vec::new()))
+                    }
+                    None => Page::new(section, "", Vec::new()),
+                }
+            }
+            Section::TabsAndSpaces => {
+                let profiles = profiles();
+                self.focus_field(&profiles, window, cx);
+                let tabs = self.tabs_and_sidebar(&profiles, accent, cx);
+                joined(tabs, [("Profiles", self.profiles(&profiles, cx))])
+            }
+            Section::Links => self.links(accent, cx),
             Section::About => self.about(accent, cx),
         }
     }
@@ -6215,7 +6263,7 @@ impl Settings {
             self.features(&profiles, accent, cx),
         ];
         if let Some(agents) = agents::global(cx) {
-            pages.push(self.agents(&agents, accent, cx));
+            pages.extend(self.agents(&agents, accent, cx));
         }
         pages.push(self.shortcuts(accent, cx));
         pages.push(self.privacy(&profiles, accent, cx));
@@ -6354,7 +6402,7 @@ impl Settings {
         if window.focused(cx).is_some() {
             return;
         }
-        let import = (self.section == Section::ImportExport)
+        let import = (self.section == Section::SyncImport)
             .then(|| {
                 self.import
                     .as_ref()

@@ -10,6 +10,7 @@ use crate::shell::{
 };
 use crate::theme::Appearance;
 use crate::theme_picker;
+use crate::tokens::shell::BLOCK_GAP;
 
 /// A Space `id` named `name`, with `icon`.
 fn space(id: u64, name: &str, icon: &str) -> SpaceEntry {
@@ -86,7 +87,7 @@ fn empty_space_menu(
 }
 
 /// With the browser's only Space named "Space 1" and with no icon, the name row hides and the rows
-/// rise as Arc's do, 39 under the URL field. Show Space Header, after Edit Theme Color… in the menu
+/// rise to where the name's line was, the block's gap under what's over them. Show Space Header, after Edit Theme Color… in the menu
 /// of the sidebar's empty space, brings it back in every window and keeps it for the next launch,
 /// and the item then says Hide Space Header, which hides it again.
 #[gpui::test]
@@ -98,8 +99,8 @@ fn a_lone_unnamed_space_hides_its_name_row_until_show_space_header(cx: &mut Test
     );
     assert_eq!(
         first_row(&shell, cx),
-        NAME_HEIGHT - 39.,
-        "the rows didn't rise as Arc's do"
+        BLOCK_GAP,
+        "the rows didn't rise to the name's place"
     );
 
     let menu = empty_space_menu(&shell, cx, &host);
@@ -127,7 +128,7 @@ fn a_lone_unnamed_space_hides_its_name_row_until_show_space_header(cx: &mut Test
     assert_eq!(host.lone_header.get(), Some(false));
     assert_eq!(
         first_row(&shell, cx),
-        NAME_HEIGHT - 39.,
+        BLOCK_GAP,
         "the name row didn't hide again"
     );
 }
@@ -179,18 +180,18 @@ fn the_accounts_space_header_and_appearance_redraw_the_window(cx: &mut TestAppCo
     cx.run_until_parked();
     assert_eq!(
         first_row(&shell, cx),
-        NAME_HEIGHT - 39.,
+        BLOCK_GAP,
         "the name row didn't hide again"
     );
 }
 
-/// Under the favorites the rows rise 36, as Arc's do.
+/// Under the favorites the rows rise as far, the block's gap under the tiles.
 #[gpui::test]
 fn under_the_favorites_the_rows_rise_less(cx: &mut TestAppContext) {
     let (shell, cx, _) = window(cx, vec![space(1, "Space 1", "")]);
     shell.update(cx, |shell, cx| shell.set_favorites(vec![(30, 1)], cx));
     cx.run_until_parked();
-    assert_eq!(first_row(&shell, cx), NAME_HEIGHT - 36.);
+    assert_eq!(first_row(&shell, cx), BLOCK_GAP);
 }
 
 /// A Space the user named or gave an icon, or one of two, keeps its name row, and its menu has no
@@ -227,7 +228,7 @@ fn renaming_shows_the_name_row_for_its_field(cx: &mut TestAppContext) {
     assert_eq!(first_row(&shell, cx), NAME_HEIGHT, "the field has no row");
     shell.update_in(cx, |shell, window, cx| shell.cancel_name(window, cx));
     cx.run_until_parked();
-    assert_eq!(first_row(&shell, cx), NAME_HEIGHT - 39.);
+    assert_eq!(first_row(&shell, cx), BLOCK_GAP);
 }
 
 struct Themes;

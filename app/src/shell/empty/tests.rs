@@ -442,6 +442,36 @@ fn return_in_ask_opens_its_task_when_its_space_comes_after_its_card(cx: &mut Tes
     );
 }
 
+/// ↩ in ⌘T's composer over a tab opens the task it started in that tab's place, though its card
+/// comes before its Space, as from the resting field; another tab shown by then stays, with the
+/// task's card at the foot.
+#[gpui::test]
+fn return_in_the_bars_composer_opens_its_task_over_the_tab(cx: &mut TestAppContext) {
+    for (another_shown, opened) in [(false, Some("task-2")), (true, None)] {
+        let (shell, cx, host) = window_with_no_tab(cx);
+        let started = card(2, Dot::Working);
+        shell.update(cx, |shell, cx| {
+            shell.set_selected(1, cx);
+            shell.bar_starting();
+            shell.composed_started(Some("task-2".into()));
+            shell.set_task_cards(vec![started.clone()], cx);
+            if another_shown {
+                shell.set_selected(2, cx);
+            }
+        });
+        made(std::slice::from_ref(&started), &shell, &host, cx);
+        cx.run_until_parked();
+        let shown = shell.read_with(cx, |shell, _| {
+            (shell.talk_agent(), shell.task_area.is_some())
+        });
+        assert_eq!(
+            shown,
+            (opened.map(SharedString::from), opened.is_some()),
+            "with another tab shown first: {another_shown}"
+        );
+    }
+}
+
 /// Once the Agents say which task ↩ started, that one's card alone opens a view: another of the
 /// same Space that comes first opens none.
 #[gpui::test]

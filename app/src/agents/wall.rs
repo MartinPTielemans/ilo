@@ -60,10 +60,17 @@ pub fn available() -> Result<(), Unavailable> {
 
 /// A folder the user granted, resolved at their pick, with its identity then. Only ilo's own
 /// folder panel makes one, so no agent tool, page or outside client can hand put_up a folder.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Granted {
     root: PathBuf,
     identity: Identity,
+}
+
+impl std::fmt::Debug for Granted {
+    /// Never its path or the folder's name, as whatever holds a Granted may reach a log (#3656).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Granted").finish_non_exhaustive()
+    }
 }
 
 impl Granted {
@@ -372,6 +379,25 @@ mod tests {
         let printed = format!("{wall:?}");
         assert!(printed.contains("folder: true"), "{printed}");
         assert!(!printed.contains("nonexistent") && !printed.contains("Letters"));
+    }
+
+    /// A Granted printed on its own, or as a task's folder, names no folder either.
+    #[test]
+    fn a_granted_folder_printed_names_no_folder() {
+        let granted = Granted::named_for_test("Private Letters");
+        let task = task(Some(&granted), None);
+        for printed in [
+            format!("{granted:?}"),
+            format!("{granted:#?}"),
+            format!("{:?}", Some(granted.clone())),
+            format!("{:?}", task.folder),
+        ] {
+            assert!(printed.starts_with("Granted") || printed.starts_with("Some"));
+            assert!(
+                !printed.contains("nonexistent") && !printed.contains("Letters"),
+                "{printed}"
+            );
+        }
     }
 
     #[test]
