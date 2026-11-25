@@ -429,7 +429,11 @@ fn return_in_the_composer_at_rest_starts_the_thread(cx: &mut TestAppContext) {
     cx.simulate_input("book a table");
     host.resting.take();
     cx.simulate_keystrokes("tab");
-    assert_eq!(rested(&host), Vec::<String>::new(), "⇥ asked the core");
+    assert_eq!(
+        host.resting.take(),
+        ["look for agents"],
+        "⇥ asked the core for more than the assistants"
+    );
     cx.simulate_keystrokes("enter");
     assert_eq!(
         rested(&host),
@@ -899,11 +903,14 @@ fn a_private_windows_bar_composes_no_thread(cx: &mut TestAppContext) {
         host.private_bar.set(private);
         cx.simulate_click(middle(&shell, cx), Modifiers::none());
         cx.simulate_input("book a table");
-        cx.simulate_keystrokes("tab enter");
+        cx.simulate_keystrokes("tab");
         assert_eq!(
-            composer(&shell, cx).0 || rested(&host).iter().any(|c| c.starts_with("run task")),
+            composer(&shell, cx).0,
             !private,
-            "private: {private}"
+            "⇥ grew the bar, private: {private}"
         );
+        cx.simulate_keystrokes("enter");
+        let ran = rested(&host).iter().any(|c| c.starts_with("run task"));
+        assert_eq!(ran, !private, "↩ started a thread, private: {private}");
     }
 }
