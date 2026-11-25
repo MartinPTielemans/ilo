@@ -12,7 +12,7 @@ use super::Fold;
 
 use crate::agents::task::ilo::{HelpersLimit, IloButton, IloKind, IloLine, LeftOut, Reach};
 use crate::agents::task::{
-    Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep, Word,
+    Card, Conversation, Dot, Line, Live, Opens, Trace, TraceItem, TraceStep, Word,
 };
 use crate::agents::tier::{Tier, Why};
 use crate::product::PRODUCT;
@@ -3023,7 +3023,6 @@ fn the_live_line_over_the_reply_names_only_the_step_under_way(cx: &mut TestAppCo
 /// Over or working then, whatever step its trace has under way.
 #[gpui::test]
 fn the_live_line_never_says_working_while_the_task_needs_the_user(cx: &mut TestAppContext) {
-    use crate::agents::task::Live;
     let (shell, host, cx) = shown(cx);
     shell.update(cx, |shell, cx| {
         shell.set_conversation(Some(conversation(3)), cx)
@@ -3276,5 +3275,69 @@ fn the_answers_links_go_only_to_the_threads_pages() {
     assert_eq!(
         super::thread_tab(&pages, "https://elsewhere.example/"),
         None
+    );
+}
+
+/// Standing on the page the thread works on, the panel's row over the reply field has the step
+/// under way with Take Over, which takes that page; on a page the user took over it says so with
+/// Hand Back; with the agent on no page of the user's, or nothing under way, there's no row.
+#[gpui::test]
+fn the_panels_page_row_takes_over_the_page_shown(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    shell.update(cx, |shell, cx| {
+        shell.set_talk_beside(true, cx);
+        shell.set_conversation(Some(conversation(3)), cx);
+    });
+    watch_page(&shell, cx);
+    let drawn = |cx: &mut VisualTestContext| {
+        view.update(cx, |view, cx| {
+            view.take_over_drawn.borrow_mut().clear();
+            view.hand_back_drawn.set(None);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            (
+                view.take_over_drawn.borrow().clone(),
+                view.hand_back_drawn.get(),
+            )
+        })
+    };
+    let (take_over, hand_back) = drawn(cx);
+    assert_eq!(take_over.len(), 1, "no Take Over in the page's row");
+    assert_eq!(hand_back, None);
+    host.take();
+    cx.simulate_click(take_over[0].center(), Modifiers::none());
+    assert_eq!(host.take(), ["task task-1 TakeOver(30)"]);
+
+    let mut taken = conversation(3);
+    taken.live = Live::Yours {
+        tab: 30,
+        site: None,
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(taken), cx));
+    let (take_over, hand_back) = drawn(cx);
+    assert!(take_over.is_empty(), "Take Over on a page the user has");
+    let hand_back = hand_back.expect("no Hand Back in the page's row");
+    host.take();
+    cx.simulate_click(hand_back.center(), Modifiers::none());
+    assert_eq!(host.take(), ["task task-1 HandBack(30)"]);
+
+    let mut elsewhere = conversation(3);
+    elsewhere.on = None;
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(elsewhere), cx));
+    assert_eq!(
+        drawn(cx),
+        (Vec::new(), None),
+        "a row for a page it isn't on"
+    );
+    let mut done = conversation(3);
+    done.stoppable = false;
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(done), cx));
+    assert_eq!(
+        drawn(cx),
+        (Vec::new(), None),
+        "a row with nothing under way"
     );
 }

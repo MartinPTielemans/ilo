@@ -3292,7 +3292,10 @@ composer-chevron-gap = 4.0
 # drawing's 590; then the thread's pages as buttons `pages-gap` apart, each `page` square at
 # `page-radius`, the page's icon at `page-icon`. The page shown wears `page-plate`, a page the user
 # hasn't been to is at `unvisited`. The log is under it, its text `body-x` in and `body-top` down,
-# and the reply field and its row are `foot` in from the panel's sides and foot.
+# and the reply field and its row are `foot` in from the panel's sides and foot. Over the field,
+# `foot-gap` above it, the page's row while the thread works on the page shown: `row` high, `row-left`
+# in, `row-gap` apart, the step's ring, the live line at `live`/`live-line` in text-2, then Take Over
+# as a held step's second button.
 head = 50.0
 head-left = 16.0
 head-right = 10.0
@@ -3308,6 +3311,12 @@ unvisited = 0.55
 body-x = 16.0
 body-top = 6.0
 foot = 12.0
+foot-gap = 8.0
+row = 28.0
+row-left = 4.0
+row-gap = 8.0
+live = 12.0
+live-line = 16.0
 
 [shell.conversation.motion]
 # Ours, in seconds on the task's ease ([shell.task.motion], whose roll, chips and crossfade it

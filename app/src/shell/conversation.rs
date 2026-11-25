@@ -1330,6 +1330,82 @@ impl TalkView {
             )
     }
 
+    /// The page's row over the panel's reply field, while the thread works on the page the user
+    /// stands on: the step's ring and the step under way, with Take Over; on a page the user took
+    /// over, what `words::live` says of it, with Hand Back. None otherwise.
+    fn page_row(&self, look: &Look, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let shown = (self.shown.as_ref()).filter(|shown| shown.stoppable)?;
+        let on = self.beside(cx)?;
+        let (working, said, action) = match &shown.live {
+            Live::Working if shown.on == Some(on) => {
+                let step = under_way(&shown.lines)?;
+                (true, step.title.clone(), TaskAction::TakeOver(on))
+            }
+            Live::Yours { tab, .. } if *tab == on => (
+                false,
+                words::live(&shown.live)?.into(),
+                TaskAction::HandBack(on),
+            ),
+            _ => return None,
+        };
+        let palette = look.palette;
+        let ring = working.then(|| {
+            ring::ring(
+                STEP_RING,
+                STEP_RING_STROKE,
+                self.turned(look, cx),
+                palette.text(RING_TRACK),
+                palette.text(TITLE),
+            )
+        });
+        let (id, label, drawn) = match action {
+            TaskAction::HandBack(_) => {
+                let drawn = self.hand_back_drawn.clone();
+                let drawn: Box<dyn Fn(Bounds<Pixels>)> = Box::new(move |at| drawn.set(Some(at)));
+                ("conversation-hand-back", words::HAND_BACK, drawn)
+            }
+            _ => {
+                let drawn = self.take_over_drawn.clone();
+                let drawn: Box<dyn Fn(Bounds<Pixels>)> =
+                    Box::new(move |at| drawn.borrow_mut().push(at));
+                ("conversation-take-over", words::TAKE_OVER, drawn)
+            }
+        };
+        let button = held_button(palette, id, label, false)
+            .relative()
+            .child(
+                canvas(move |bounds, _, _| drawn(bounds), |_, _, _, _| {})
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+            )
+            .on_click(cx.listener(move |view, _, _, cx| view.act(action.clone(), cx)));
+        Some(
+            div()
+                .flex_none()
+                .w_full()
+                .h(px(panel::ROW))
+                .mb(px(panel::FOOT_GAP))
+                .pl(px(panel::ROW_LEFT))
+                .flex()
+                .items_center()
+                .gap(px(panel::ROW_GAP))
+                .children(ring)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(panel::LIVE))
+                        .line_height(px(panel::LIVE_LINE))
+                        .text_color(palette.gray(TRACE_NOTE))
+                        .child(said),
+                )
+                .child(button),
+        )
+    }
+
     /// Stop ⌘., which comes and goes with the work it stops: at the end of a task's foot line, or
     /// of an outside agent's header.
     fn stop(&self, look: &Look, cx: &mut Context<Self>) -> Option<gpui::Stateful<gpui::Div>> {
@@ -3911,6 +3987,12 @@ impl Render for TalkView {
                     .then(|| self.live(&look, cx))
                     .flatten()
                     .map(|live| shut(foot(on_column(live.into_any_element())))),
+            )
+            .children(
+                (standing && self.replies && self.in_field().is_none())
+                    .then(|| self.page_row(&look, cx))
+                    .flatten()
+                    .map(|row| shut(foot(row))),
             )
             .child(shut(foot(on_column(
                 self.reply(&look, cx).into_any_element(),
