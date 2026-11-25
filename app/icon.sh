@@ -19,6 +19,12 @@ xcrun swiftc -O ../icon-outline.swift -o "$tmp/icon-outline"
 for drawing in knot knot-32 knot-16; do
   "$tmp/icon-outline" "../assets/brand/$drawing.svg" "outline/$drawing.svg" lines
 done
+# The Flatpak's icon is the layer's shape on a plate of its own. An icon file can't point at
+# another, so the shape is written into it: its path only, the plate and the colours stay its own.
+flatpak=../platform/linux/flatpak/$(cat id).svg
+shape=$(sed 's/.* d="\([^"]*\)".*/\1/' "$name.icon/Assets/knot.svg")
+sed "s| d=\"[^\"]*\"| d=\"$shape\"|" "$flatpak" > "$tmp/flatpak.svg"
+cp "$tmp/flatpak.svg" "$flatpak"
 xcrun actool "$name.icon" --compile "$tmp" --platform macosx --minimum-deployment-target 26.0 \
   --app-icon "$name" --output-partial-info-plist "$tmp/partial.plist" > /dev/null
 cp "$tmp/Assets.car" "$tmp/$name.icns" .
