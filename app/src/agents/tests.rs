@@ -7484,6 +7484,47 @@ mod tasks {
         heads_as_worked(task::Live::Refused, stretch_head(&agents, &agent, cx));
     }
 
+    /// What the assistant writes after a refused step shows as it comes while the task waits,
+    /// and the head over the stretch still doesn't say it's at work (the lead, 01:53Z).
+    #[gpui::test]
+    fn words_written_after_a_refused_step_show_while_the_stretch_heads_as_worked(
+        cx: &mut TestAppContext,
+    ) {
+        let (agents, browser, agent) = at_work(cx);
+        agents.update(cx, |agents, _| {
+            let task = agents.task_mut(&agent).unwrap();
+            task.tier = Tier::Look;
+            // Working, as a task under way is: its refusal's line keeps its buttons.
+            task.ended = None;
+        });
+        let click = json!({ "tab": 30, "ref": "e1" });
+        assert!(traced(&agents, &browser, &agent, "click", click, None, cx).error);
+        said(
+            &agents,
+            &agent,
+            Out::Writing("I can't apply the".into()),
+            cx,
+        );
+        heads_as_worked(task::Live::Refused, stretch_head(&agents, &agent, cx));
+        let lines = agents.read_with(cx, |agents, cx| {
+            agents.conversation(&agent, cx).unwrap().lines
+        });
+        let written = lines
+            .iter()
+            .position(|line| matches!(line, task::Line::Said(text) if text == "I can't apply the"));
+        let stretch = lines
+            .iter()
+            .rposition(|line| matches!(line, task::Line::Trace(_)));
+        assert!(
+            written.is_some_and(|written| stretch.is_some_and(|stretch| written > stretch)),
+            "the words being written should show under the stretch while it waits: {lines:?}"
+        );
+        assert!(
+            matches!(lines.last(), Some(task::Line::Ilo(_))),
+            "the refusal's line, with its buttons, should stay last, the words above it: {lines:?}"
+        );
+    }
+
     #[gpui::test]
     fn a_stretch_before_a_handed_step_heads_as_worked(cx: &mut TestAppContext) {
         let (agents, _browser, agent) = at_work(cx);
@@ -11037,6 +11078,72 @@ mod sessions {
         let pages = own.tabs.iter().map(|tab| tab.0).collect::<Vec<_>>();
         assert_eq!(pages, [30]);
         assert!(page_lines(&agents, &second, cx).is_empty());
+    }
+
+    /// An upload is the user's step as a hand-off is, so it stands where its page is too (#4086):
+    /// asked by a second connection of the client's on the first task's page, it makes no task,
+    /// and its line and Needs you are the first task's, until Hand Back answers the connection
+    /// that asked.
+    #[gpui::test]
+    fn an_upload_stands_where_its_page_is_whichever_connection_asks(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        // The page's one element is a file field, e1.
+        let form = json!({ "nodes": [
+            { "nodeId": "1", "role": { "value": "RootWebArea" }, "name": { "value": "Apply" },
+              "childIds": ["2"] },
+            { "nodeId": "2", "role": { "value": "button" }, "name": { "value": "Résumé" },
+              "backendDOMNodeId": 61 },
+        ]});
+        let outline = call_as(&agents, 3, "snapshot", json!({ "tab": 20 }), cx);
+        assert!(!page_done(&agents, &browser, outline, form.to_string(), cx).error);
+        answered(&agents, 3, cx);
+        let first = cards(&agents, cx)[0].agent.to_string();
+
+        hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        let field = json!({ "tab": 20, "ref": "e1" });
+        let asking = call_on(
+            &agents,
+            2,
+            4,
+            "upload",
+            field,
+            std::time::Instant::now(),
+            cx,
+        );
+        let (tab, request, action, element, _) = browser.pages.borrow().last().unwrap().clone();
+        assert_eq!((tab, action, element), (20, PageAction::FileField, 61));
+        // As the core writes it: Chromium's JSON writer gives every double a ".0".
+        let described = json!({ "field": 7.0, "label": "Résumé", "site": "example.com" });
+        agents.update(cx, |agents, cx| {
+            agents.page_done(request, described.to_string(), None, cx)
+        });
+        assert!(matches!(asking.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 1, "a task for a connection that only asked");
+        assert_eq!(shown[0].agent.to_string(), first);
+        assert_eq!(
+            (shown[0].dot, shown[0].word),
+            (Dot::Waiting, Word::NeedsYou)
+        );
+        let lines = page_lines(&agents, &first, cx);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!((lines[0].1, lines[0].2), (20, false));
+
+        agents.update(cx, |agents, cx| agents.hand_back(20, cx));
+        let answer = asking.recv().unwrap();
+        assert!(!answer.error, "{answer:?}");
+        assert!(
+            answer.text.contains("handed tab 20 back"),
+            "{}",
+            answer.text
+        );
+        answered(&agents, 4, cx);
+        let back = cards(&agents, cx);
+        assert_eq!(back.len(), 1, "the hand-back made the asker a task");
+        assert_eq!((back[0].dot, back[0].word), (Dot::Working, Word::Working));
+        let lines = page_lines(&agents, &first, cx);
+        assert_eq!((lines.len(), lines[0].2), (1, true), "{lines:?}");
     }
 
     /// Not Now on the line, in the conversation of the task that holds the page, answers the

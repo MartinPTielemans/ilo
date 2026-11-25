@@ -1333,12 +1333,21 @@ enum Switch {
     Tab(u64),
 }
 
-/// What the composer's ↩ started, as the shell knows it: a start asked from Space `Asked`, until
-/// the Agents say which task it made, or that it made none.
+/// What the composer's or ⌘T's ↩ started, as the shell knows it: a start asked from Space `home`,
+/// until the Agents say which task it made, or that it made none. `over` is the tab it was asked
+/// over, 0 for the empty page, which its conversation takes the place of while it still shows.
 #[derive(Clone, Debug, PartialEq)]
 enum ShowStarted {
-    Asked(u64),
-    Task(SharedString),
+    Asked { home: u64, over: u64 },
+    Task { agent: SharedString, over: u64 },
+}
+
+impl ShowStarted {
+    fn over(&self) -> u64 {
+        match self {
+            ShowStarted::Asked { over, .. } | ShowStarted::Task { over, .. } => *over,
+        }
+    }
 }
 
 pub struct Shell {
@@ -1616,6 +1625,9 @@ pub struct Shell {
     /// Whether an assistive app reads the window being drawn, so its elements say what they are
     /// (access.rs). Each render sets it from its window.
     a11y: bool,
+    /// What a screen reader is told of a task whose conversation isn't shown as it comes to need
+    /// the user or to be done, and which telling it is (`task_cards.rs`, #4244).
+    task_told: Option<(usize, SharedString)>,
     /// The row and favicon hovered when the rows were last drawn, and that row's button: "0" for
     /// none, "1" for ✕, "−" for − and "remove" for remove, for the line check.sh waits for.
     drawn_hover: (Option<Row>, Option<u64>, &'static str),
@@ -2234,6 +2246,7 @@ impl Shell {
             wheel_paged: None,
             hovered_favicon: None,
             a11y: false,
+            task_told: None,
             drawn_hover: (None, None, "0"),
             history: undo::History::default(),
             undo_offered: false,
@@ -3548,8 +3561,8 @@ impl Shell {
     }
 
     pub fn set_selected(&mut self, tab: u64, cx: &mut Context<Self>) {
-        // A page shown leaves the empty page the composer's start would have opened over.
-        if tab != 0 {
+        // Another page shown leaves the one the start would have opened its conversation over.
+        if (self.show_started.as_ref()).is_some_and(|started| started.over() != tab) {
             self.show_started = None;
         }
         // ⌘W's wait is for this selection only, whichever way it goes (#3570).
@@ -5071,6 +5084,7 @@ impl Render for Shell {
             .child(self.navigate_listener(cx))
             .children(self.onboarding_layer(window, cx))
             .children(self.resize_bands(cx))
+            .children(self.task_announcer())
     }
 }
 

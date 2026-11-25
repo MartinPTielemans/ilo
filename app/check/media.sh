@@ -412,19 +412,22 @@ floats() {
   expect '^browser: site controls hidden$' "escape didn't close the Site Controls"
   send click $page_point
 }
-# mini_player: Settings' Features switch for it, which says it went <on or off>.
+# mini_player: Settings › General's switch for it, which says it went <on or off>.
 mini_player() {
   send key , cmd
   expect '^browser: settings shown ' "⌘, from the page didn't show Settings"
   # A click before its first frame finds no tabs to land on.
   expect '^browser: settings drew ' "Settings didn't draw"
   # Settings opens at the section it last showed.
-  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Features$'; then
-    send clickkey $(drawn "toolbar Features")
-    expect '^browser: settings tab Features$' "a click on Features didn't show its section"
-    settings_drew Features
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' General$'; then
+    send clickkey $(drawn "toolbar General")
+    expect '^browser: settings tab General$' "a click on General didn't show its section"
+    settings_drew General
   fi
-  click_in_sight "switch mini player"
+  # The Mini Player is under General's own rows: in_sight scrolls it up, from this show's frame.
+  in_sight "switch mini player" '^browser: settings drew General$' ||
+    fail "Settings didn't draw the Mini Player's switch"
+  send clickkey $at
   expect "^browser: mini player $1\$" "a click on the Mini Player's switch didn't turn it $1"
   [ "$1" = on ] || ../tools/window-screenshot.sh "$pid" "$out/settings-mini-player.png" ||
     fail "no window to capture"
