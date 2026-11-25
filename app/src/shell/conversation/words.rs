@@ -32,6 +32,11 @@ pub fn says(assistant: &str, said: &str) -> String {
 /// A task the user stopped, as the last line of its log says it.
 const YOU_STOPPED: &str = "You stopped it";
 
+/// The line over a stretch's helpers (Z16), for two or more: the table has no line for one.
+pub fn split(strands: usize) -> Option<String> {
+    (strands > 1).then(|| format!("Split into {strands} strands"))
+}
+
 /// The fold over a stretch of work (Z14), the one place the weaving pair stands: at work, its word
 /// and the time so far; done, the time it took.
 pub fn fold(took: Option<u64>, so_far: u64) -> (String, String) {

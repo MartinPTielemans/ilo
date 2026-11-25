@@ -2921,8 +2921,9 @@ fn a_working_line_counts_the_tasks_helpers() {
     assert_eq!(summary(&mut talk), "Worked for 41 s · 4 strands");
 }
 
-/// Opened, as it is while it works, the Working line lists a line for each helper with the task's
-/// own steps, and folds them away with a press, as any trace's.
+/// Opened, as it is while it works, the Working line lists a line for each helper under the line
+/// that says the work split, with the task's own steps, and folds them away with a press, as any
+/// trace's.
 #[gpui::test]
 fn a_working_line_opens_to_a_line_for_each_helper(cx: &mut TestAppContext) {
     let (shell, _, cx) = shown(cx);
@@ -2943,8 +2944,8 @@ fn a_working_line_opens_to_a_line_for_each_helper(cx: &mut TestAppContext) {
     draw(cx);
     assert_eq!(
         listed(cx),
-        Some(lines_high(5.)),
-        "four helpers' lines and the task's own step"
+        Some(lines_high(6.)),
+        "the split's line, four helpers' lines and the task's own step"
     );
 
     // A fifth line as a helper comes, and none goes as one finishes.
@@ -2952,7 +2953,7 @@ fn a_working_line_opens_to_a_line_for_each_helper(cx: &mut TestAppContext) {
     its_trace(&mut talk).items[0] = helper(step(10, "Read shop.example", false));
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
     draw(cx);
-    assert_eq!(listed(cx), Some(lines_high(6.)));
+    assert_eq!(listed(cx), Some(lines_high(7.)));
 
     view.update(cx, |view, cx| view.toggle(Fold::Trace(0), true, cx));
     draw(cx);

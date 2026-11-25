@@ -1746,7 +1746,17 @@ impl TalkView {
         }
         let current = pages::current(&paged, trace.running);
         let mut nest = nest();
-        for each in &paged {
+        for (at, each) in paged.iter().enumerate() {
+            // A run of helpers has the line that says the work split over it.
+            let split = pages::split_at(&paged, at).and_then(words::split);
+            if let (Some(split), pages::Paged::Item(_, TraceItem::Helper { step, .. })) =
+                (split, each)
+            {
+                let mut line = TraceLine::new(LineKey::Split(step.key), split.into(), "".into());
+                line.glyph = Some(SPLIT_GLYPH);
+                let line = trace_line(look, line).into_any_element();
+                nest = nest.child(risen(line, self.motion.came(Key::Step(step.key)), look));
+            }
             let (index, item) = match each {
                 pages::Paged::Page(page) => {
                     nest = nest.children(self.page(page, current == Some(page.key), look, cx));
@@ -1761,7 +1771,12 @@ impl TalkView {
                     let page = tab.and_then(|tab| look.helper_page(tab));
                     match helper_row(step, name, page) {
                         HelperRow::Known(mut line) => {
-                            line.shimmers = step.running.then(|| look.shimmer(self.made));
+                            // At its right, the step it's at, with the ring.
+                            if step.running && !step.title.is_empty() {
+                                line.note = step.title.clone();
+                                line.ring_after = Some(self.turned(look, cx));
+                            }
+                            line.joined_above = true;
                             self.crossfade(Fold::Step(step.key), &mut line, look);
                             let line = trace_line(look, line).into_any_element();
                             nest.child(risen(line, self.motion.came(Key::Step(step.key)), look))
@@ -2895,6 +2910,8 @@ struct TraceLine {
     ring: Option<f32>,
     /// It joins the line above it with a connector, as a step under its page does.
     joined_above: bool,
+    /// A helper's step under way, at its right: the ring after its words, this far round.
+    ring_after: Option<f32>,
     /// A stretch's fold head, and whether its stretch is at work: its word then in the text's
     /// ink at medium, else in text-2.
     head: Option<bool>,
@@ -2930,6 +2947,7 @@ impl TraceLine {
             shimmers: None,
             ring: None,
             joined_above: false,
+            ring_after: None,
             head: None,
             page: None,
             icons: Vec::new(),
@@ -3028,6 +3046,8 @@ fn fold_words(trace: &Trace, now: Instant) -> (SharedString, SharedString) {
 enum LineKey {
     Fold(Fold),
     Ilo(usize),
+    /// The split's line over a run of helpers, by the first one's key.
+    Split(usize),
 }
 
 impl From<Fold> for LineKey {
@@ -3055,6 +3075,7 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         shimmers,
         ring,
         joined_above,
+        ring_after,
         head,
         page,
         icons,
@@ -3074,6 +3095,10 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
     });
     let (id, group): (ElementId, SharedString) = match key {
         LineKey::Ilo(key) => (("ilo", key).into(), format!("ilo-{key}").into()),
+        LineKey::Split(key) => (
+            ("trace-split", key).into(),
+            format!("trace-split-{key}").into(),
+        ),
         LineKey::Fold(Fold::Trace(key)) => (("trace", key).into(), format!("trace-{key}").into()),
         LineKey::Fold(Fold::Step(key)) => (
             ("trace-step", key).into(),
@@ -3295,6 +3320,15 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
                 false => line.child(title).children(note),
             }
         })
+        .children(ring_after.map(|turned| {
+            ring::ring(
+                STEP_RING,
+                STEP_RING_STROKE,
+                turned,
+                palette.text(RING_TRACK),
+                palette.text(TITLE),
+            )
+        }))
         .when(!icons.is_empty(), |line| {
             line.child(
                 div()
@@ -3328,6 +3362,9 @@ fn line_icons(icons: &mut Vec<Option<Arc<Image>>>, paged: &[pages::Paged], look:
             .and_then(|head| head.favicon.clone())
     }));
 }
+
+/// The split's line's glyph.
+const SPLIT_GLYPH: &str = "icons/network.svg";
 
 /// A page's glyph where its tab has no icon.
 const PAGE_GLYPH: &str = "icons/globe.svg";

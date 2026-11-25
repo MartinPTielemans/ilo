@@ -63,6 +63,14 @@ pub(super) fn paged(items: &[TraceItem]) -> Vec<Paged<'_>> {
     paged
 }
 
+/// How many strands the work split into, at `at`, the first of a run of helpers' lines, whose
+/// line says so over them; None at any other place.
+pub(super) fn split_at(paged: &[Paged], at: usize) -> Option<usize> {
+    let helper = |each: &Paged| matches!(each, Paged::Item(_, TraceItem::Helper { .. }));
+    let first = helper(paged.get(at)?) && (at == 0 || !helper(&paged[at - 1]));
+    first.then(|| paged[at..].iter().take_while(|each| helper(each)).count())
+}
+
 /// The page the assistant is on, by its key: a working stretch's last page. A stretch that's done
 /// is on none, so each of its pages folds to its one line.
 pub(super) fn current(paged: &[Paged], running: bool) -> Option<usize> {
@@ -188,6 +196,30 @@ mod tests {
         let paged = paged(&items);
         assert_eq!(current(&paged, true), Some(1));
         assert_eq!(current(&paged, false), None);
+    }
+
+    /// The split's line stands over the first of a run of helpers and counts that run alone.
+    #[test]
+    fn the_split_counts_the_helpers_under_it() {
+        let helper = |key| TraceItem::Helper {
+            step: match step(key, None) {
+                TraceItem::Step(step) => step,
+                _ => unreachable!(),
+            },
+            name: "".into(),
+            tab: None,
+        };
+        let items = [
+            step(0, None),
+            helper(1),
+            helper(2),
+            helper(3),
+            step(4, None),
+            helper(5),
+        ];
+        let paged = paged(&items);
+        let splits: Vec<_> = (0..paged.len()).map(|at| split_at(&paged, at)).collect();
+        assert_eq!(splits, [None, Some(3), None, None, None, Some(1)]);
     }
 
     /// The done fold shows each page once, the first time it came to it.
