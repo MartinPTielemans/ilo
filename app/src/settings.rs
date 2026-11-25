@@ -294,8 +294,9 @@ pub struct Settings {
     autofill: HashMap<u64, Vec<Saved>>,
     /// The profiles whose logins were asked for since Passwords showed.
     asked: HashSet<u64>,
-    /// The loose ends Overview's ✕ put away, from the profile's folder.
-    put_away: browser::settings_overview::PutAway,
+    /// The loose ends Overview's ✕ put away, read from the profile's folder at Overview's first
+    /// draw, never at launch, when the search's index makes Settings.
+    put_away: Option<browser::settings_overview::PutAway>,
     /// The assistants the user clicked on Models while the inside switch is off, looked up and
     /// shown as usual until the page is left.
     looked_up: HashSet<Cli>,
@@ -1193,7 +1194,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             logins: HashMap::new(),
             autofill: HashMap::new(),
             asked: HashSet::new(),
-            put_away: browser::settings_overview::PutAway::load(crate::profile_dir()),
+            put_away: None,
             looked_up: HashSet::new(),
             requests_opened: HashSet::new(),
             notes_opened: HashSet::new(),

@@ -12,6 +12,12 @@ impl Settings {
     /// Overview's page: the notice while the product isn't the default, the loose ends the app
     /// knows of, then the tiles and the line that points at the search.
     pub(super) fn overview(&mut self, cx: &mut Context<Self>) -> Page {
+        let put_away =
+            (self.put_away).get_or_insert_with(|| overview::PutAway::load(crate::profile_dir()));
+        let ends = match agents::global(cx) {
+            Some(agents) => overview::loose_ends(agents.read(cx), put_away),
+            None => Vec::new(),
+        };
         let look = &self.look;
         let mut blocks = Vec::new();
         let default = self.default_browser.read(cx);
@@ -46,10 +52,6 @@ impl Settings {
             .min_h(px(NOTICE));
             blocks.push(Block::Group(group(look, [notice])));
         }
-        let ends = match agents::global(cx) {
-            Some(agents) => overview::loose_ends(agents.read(cx), &self.put_away),
-            None => Vec::new(),
-        };
         if !ends.is_empty() {
             let rows = ends.into_iter().enumerate().map(|(index, end)| {
                 let act = Rc::new(move |_: &mut Window, cx: &mut App| match end {
@@ -70,7 +72,9 @@ impl Settings {
                 let away = Rc::new(move |_: &mut Window, cx: &mut App| {
                     log!("browser: loose end put away");
                     let put = |settings: &mut Settings, cx: &mut Context<Settings>| {
-                        settings.put_away.put_away(&end.key());
+                        if let Some(put_away) = &mut settings.put_away {
+                            put_away.put_away(&end.key());
+                        }
                         cx.notify();
                     };
                     settings.update(cx, put).ok();
