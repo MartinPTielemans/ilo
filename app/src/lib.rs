@@ -210,6 +210,7 @@ pub mod offer;
 pub mod overlay_life;
 pub mod palette;
 pub mod passwords;
+pub mod product;
 pub mod recent;
 pub mod safe_start;
 pub mod saved_reads;

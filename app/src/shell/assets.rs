@@ -6,7 +6,7 @@ use gpui::{AssetSource, SharedString};
 
 /// The shell's glyphs, built in: Lucide's outlines (NOTICE) at one stroke weight, and the nav
 /// buttons, the Library's cards, the loading ring, the window buttons' glyphs, the close button's
-/// bars, the baseball and the planet, which are ours.
+/// bars, the baseball and the planet, which are ours. The product's mark comes from `product`.
 pub struct Assets;
 
 // The close button's bars, as Arc's: 11.4 pt between the middles of their round ends, 2 wide,
@@ -875,6 +875,7 @@ impl AssetSource for Assets {
         }
         Ok(ICONS
             .iter()
+            .chain(&crate::product::MARKS)
             .find(|(name, _)| *name == path)
             .map(|&(_, icon)| Cow::Borrowed(icon)))
     }
@@ -882,6 +883,7 @@ impl AssetSource for Assets {
     fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
         Ok(ICONS
             .iter()
+            .chain(&crate::product::MARKS)
             .filter(|(name, _)| name.starts_with(path))
             .map(|&(name, _)| name.into())
             .collect())

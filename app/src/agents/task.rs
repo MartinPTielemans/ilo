@@ -496,6 +496,12 @@ pub struct Session {
     /// The user picked a level on another task of its client's after it ended, so its own is no
     /// longer one that client's tasks are held to.
     passed: bool,
+    /// When the user stopped it. A call of its client's that came before then is the stopped
+    /// task's own, whatever it would open, and is answered as stopped (#4209).
+    pub(super) stopped: Option<Instant>,
+    /// Its pages are refused to its client, on every connection and at every level, and no
+    /// other task takes one: from the user's Stop until they hand them back on its stopped line.
+    pub(super) withheld: bool,
 }
 
 impl Task {
@@ -706,6 +712,9 @@ pub enum TaskAction {
     PickAnySite,
     /// An ilo line's Hand back: the tab goes back to the agent.
     HandBack(u64),
+    /// The stopped line's Hand Back, on an outside agent's task: its pages are its client's
+    /// again. Only the user's press does it.
+    PagesBack,
     /// A step's Not now, by its line's key.
     NotNow(usize),
 }
@@ -1004,6 +1013,7 @@ impl Agents {
             }
             // A step's line: the tab goes back to the agent, or stays the user's for now.
             TaskAction::HandBack(tab) => self.hand_back(tab, cx),
+            TaskAction::PagesBack => self.pages_back(agent, cx),
             TaskAction::NotNow(key) => self.not_now(agent, key, cx),
         }
         (None, None)
@@ -1126,13 +1136,17 @@ impl Agents {
         (self.question()).filter(|question| question.from == from && question.id == first)
     }
 
-    /// The number of the first of the prompts a session's calls under way wait on: its client's
-    /// other connections' calls wait on theirs.
+    /// The number of the first of the prompts that wait on the user for a session: a wait on a
+    /// page is of the session under way that holds the page, whichever of its client's
+    /// connections asked, as ilo's line of it is (`place`), and its own call's where none does.
     fn session_prompt(&self, session: &Session) -> Option<u64> {
-        let ours = |agent: &str, call: u64| agent == session.agent && session.calls.contains(&call);
-        (self.held.values())
-            .filter(|held| held.reply.is_some() && ours(&held.agent, held.call))
-            .map(|held| held.question)
+        let ours = |tab: u64, held: &super::Held| match self.page_task(&held.agent, tab) {
+            Some(task) => (task.session.as_ref()).is_some_and(|its| std::ptr::eq(its, session)),
+            None => held.agent == session.agent && session.calls.contains(&held.call),
+        };
+        (self.held.iter())
+            .filter(|&(&tab, held)| held.reply.is_some() && ours(tab, held))
+            .map(|(_, held)| held.question)
             .min()
     }
 
@@ -2065,6 +2079,7 @@ impl Agents {
         if let Some(process) = task.process.as_mut() {
             process.interrupt();
         }
+        self.you_stopped(agent, cx);
         self.keep_ended(agent);
         self.stop_agent(agent, cx);
         cx.notify();
@@ -2435,9 +2450,14 @@ impl Agents {
                     && (task.session.as_ref()).is_some_and(|session| session.tabs.contains(&tab))
             })
         };
+        // Nor is a page of a task the user stopped taken, until they hand it back.
+        let stopped = |agents: &Self, tab: u64| {
+            let session = agents.task(key).and_then(|task| task.session.as_ref());
+            session.is_some_and(|session| agents.withheld(&session.agent, tab))
+        };
         let page = did
             .tab
-            .filter(|&tab| in_space(self, tab) && !others(self, tab));
+            .filter(|&tab| in_space(self, tab) && !others(self, tab) && !stopped(self, tab));
         let Some(task) = self.task_mut(key) else {
             return;
         };
@@ -2567,8 +2587,9 @@ impl Agents {
     }
 
     /// The task under way of `agent`'s whose session holds the page `tab`, among that client's
-    /// sessions only. A tab that left its Space may still be listed: the core refuses a call on it
-    /// before anything read here shows.
+    /// sessions only: what ilo says and judges about a page is that task's, whichever of its
+    /// client's connections calls. A tab that left its Space may still be listed: the core
+    /// refuses a call on it before anything read here shows.
     pub(super) fn page_task(&self, agent: &str, tab: u64) -> Option<&Task> {
         (self.tasks.tasks.iter()).find(|task| {
             task.state == State::Working
@@ -2801,6 +2822,16 @@ impl Agents {
         if matches!(call.tool.as_str(), "list_tabs" | "done") {
             return None;
         }
+        // Nor is handing the user a page another of its client's sessions holds, or asking for
+        // it back: ilo's line of it stands in that session's conversation (`place`), and this
+        // connection's task starts with work of its own. A tab the core will refuse is none.
+        if matches!(call.tool.as_str(), "hand_off" | "ask_for_tab" | "upload")
+            && let Ok(Some(tab)) = tools::tab_argument(&call.arguments)
+            && self.page_task(&call.agent, tab).is_some()
+            && self.owns(&call.agent, tab, cx)
+        {
+            return None;
+        }
         self.tasks.next += 1;
         let key = format!("session-{}", self.tasks.next);
         let named = self.tasks.names.get(&(call.agent.clone(), call.connection));
@@ -2822,6 +2853,8 @@ impl Agents {
             last: None,
             renamed: None,
             passed: false,
+            stopped: None,
+            withheld: false,
         };
         let tier = self.starting_tier(&call.agent);
         self.tasks.tasks.push(Task {
@@ -3048,8 +3081,10 @@ impl Agents {
     }
 
     /// The user stopped the outside agent `agent`: its sessions under way, on each connection,
-    /// are stopped.
-    pub(super) fn session_stopped(&mut self, agent: &str) {
+    /// are stopped, and their pages are withheld from it until the user hands them back.
+    pub(super) fn session_stopped(&mut self, agent: &str, cx: &App) {
+        let now = Instant::now();
+        let mut stopped = Vec::new();
         let live = (self.tasks.tasks.iter_mut()).filter(|task| {
             matches!(task.state, State::Working | State::Asking { .. })
                 && (task.session.as_ref()).is_some_and(|session| session.agent == agent)
@@ -3060,8 +3095,84 @@ impl Agents {
             if let Some(session) = &mut task.session {
                 session.idle = None;
                 session.quiet = None;
+                session.stopped = Some(now);
+                session.withheld = true;
             }
+            stopped.push(task.agent.clone());
         }
+        for key in stopped {
+            self.you_stopped(&key, cx);
+        }
+    }
+
+    /// Whether `tab` is a page of a task of the outside client `agent`'s that the user stopped
+    /// and hasn't handed back: refused to that client whichever connection calls and whatever
+    /// its level, and never taken to another task's rail. Read from the stopped task's own
+    /// state, never from what a call says.
+    pub(super) fn withheld(&self, agent: &str, tab: u64) -> bool {
+        (self.tasks.tasks.iter())
+            .filter_map(|task| task.session.as_ref())
+            .any(|session| {
+                session.withheld && session.agent == agent && session.tabs.contains(&tab)
+            })
+    }
+
+    /// Whether `tab` is a page of a session of the outside client `agent`'s, under way or ended.
+    pub(super) fn session_page(&self, agent: &str, tab: u64) -> bool {
+        (self.tasks.tasks.iter())
+            .filter_map(|task| task.session.as_ref())
+            .any(|session| session.agent == agent && session.tabs.contains(&tab))
+    }
+
+    /// Whether a call of the outside client `agent`'s that came at `at` came before the user
+    /// stopped a task of its: the stopped task's own then, whichever connection it came on.
+    pub(super) fn came_before_stop(&self, agent: &str, at: Instant) -> bool {
+        (self.tasks.tasks.iter())
+            .filter_map(|task| task.session.as_ref())
+            .any(|session| {
+                session.agent == agent && session.stopped.is_some_and(|stopped| at <= stopped)
+            })
+    }
+
+    /// Whether the stopped line of `task` still offers its pages back.
+    pub(super) fn offers_pages_back(task: &Task) -> bool {
+        (task.session.as_ref()).is_some_and(|session| session.withheld)
+    }
+
+    /// Hand Back on the stopped line of the outside agent's task `key`: its pages are its
+    /// client's again, as those of a task that ended by itself, so a task of that client's takes
+    /// one at no more than this task's access (`left_at`). Only the user's press comes here, and
+    /// not one meant for what was there before the line.
+    fn pages_back(&mut self, key: &str, cx: &mut Context<Self>) {
+        let Some(task) = self.task(key) else {
+            return;
+        };
+        let Some(session) = (task.session.as_ref()).filter(|session| session.withheld) else {
+            return;
+        };
+        if (session.stopped).is_some_and(|stopped| stopped.elapsed() < tier::PROTECT) {
+            log!("browser: task {key} pages back too soon");
+            return;
+        }
+        let agent = session.agent.clone();
+        // A count, never a page's title or its site.
+        let pages = tools::pages_counted(self.pages(task, cx).len()).unwrap_or_default();
+        if let Some(session) = self.task_mut(key).and_then(|task| task.session.as_mut()) {
+            session.withheld = false;
+        }
+        log!("browser: task {key} pages handed back");
+        self.note_on(&agent, 0, tools::PAGES_BACK, "", &pages, "");
+        cx.notify();
+    }
+
+    /// The user stopped the task `key`: the last line of its log says so, with how many pages it
+    /// held then.
+    fn you_stopped(&mut self, key: &str, cx: &App) {
+        let Some(task) = self.task(key) else {
+            return;
+        };
+        let pages = self.pages(task, cx).len();
+        self.place_in(key, super::lines::Happened::YouStopped { pages });
     }
 
     /// `agent`'s call `call` said its task is done (#3652): its session under way is, unless

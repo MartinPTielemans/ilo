@@ -1683,6 +1683,25 @@ impl Agents {
             _ = call.reply.send(stopped);
             return;
         }
+        // An outside client's task the user stopped: a call of it is answered the same, in the
+        // one text whatever its tool, and makes no task, step or line. The log has its refusal.
+        if let Some(tab) = self.stopped_call(&call) {
+            log!(
+                "browser: agent {} call {} refused, as the user stopped it",
+                call.agent,
+                call.tool
+            );
+            let site = tab.map_or(String::new(), |tab| site(&self.browser.tab(tab, cx).url));
+            let action = match call.tool.as_str() {
+                "select" => "select_option",
+                tool => tool,
+            };
+            self.note(&call.agent, call.connection, action, &site, STOPPED);
+            cx.notify();
+            let stopped = ToolResult::failed(tools::Kind::Stopped, STOPPED);
+            _ = call.reply.send(stopped);
+            return;
+        }
         self.trace_call(&call, cx);
         // check.sh reads this line.
         log!("browser: agent {} calls {}", call.agent, call.tool);
@@ -1690,6 +1709,34 @@ impl Agents {
         if let Some(call) = self.fence_call(call, cx) {
             self.dispatch(call, cx);
         }
+    }
+
+    /// Whether `call` is one of a task of an outside client's that the user stopped, and with
+    /// it the page it's on, if it has one: a call on a page of a stopped task they haven't
+    /// handed back, whichever connection it comes on and whatever that connection's task may
+    /// do, or one that came before the Stop, whatever it would open (#4209). Both are read from
+    /// the stopped task's own state: a later call that opens a page of its own is a new task's.
+    /// The page is only ever one of that client's sessions' own, so the log's entry has no site
+    /// from a tab a call merely named.
+    fn stopped_call(&self, call: &Call) -> Option<Option<u64>> {
+        Client::from_id(&call.agent)?;
+        let withheld = |tab: &u64| self.withheld(&call.agent, *tab);
+        let named = tools::tabs_named(&call.arguments);
+        if let Some(tab) = named.iter().copied().find(withheld) {
+            return Some(Some(tab));
+        }
+        // One that names no tab acts on the tab its connection used last.
+        let own = !tools::NO_TAB_OF_ITS_OWN.contains(&call.tool.as_str());
+        let last = (self
+            .current
+            .get(&(call.agent.clone(), call.connection))
+            .copied())
+        .filter(|_| own && tools::tab_argument(&call.arguments) == Ok(None));
+        if let Some(tab) = last.filter(withheld) {
+            return Some(Some(tab));
+        }
+        let own = |tab: &u64| self.session_page(&call.agent, *tab);
+        (self.came_before_stop(&call.agent, call.at)).then(|| named.into_iter().find(own))
     }
 
     /// A call on a tab that came to a site the user put off limits (#3724), or one outside its
@@ -1747,7 +1794,10 @@ impl Agents {
                 self.space(&agent, cx);
                 // A tab of its own off the web is listed by its number alone, so it can close it,
                 // and one the user holds by its number and theirs, so where they go stays theirs.
-                let tabs = self.browser.agent_tabs(&agent, cx);
+                let mut tabs = self.browser.agent_tabs(&agent, cx);
+                // A page of a task the user stopped isn't listed to its client, by number or
+                // otherwise, until they hand it back.
+                tabs.retain(|tab| !self.withheld(&agent, tab.id));
                 // A tab that came to a fenced site is listed without its page's title or address.
                 let came: HashSet<u64> = (tabs.iter())
                     .filter(|tab| self.came_to(tab.id, cx).is_some())
@@ -1779,10 +1829,11 @@ impl Agents {
                 self.note(&agent, connection, "list_tabs", "", "");
                 cx.notify();
                 let mine: Vec<u64> = (self.pins.iter())
-                    .filter(|(_, by)| **by == agent)
+                    .filter(|(tab, by)| **by == agent && !self.withheld(&agent, **tab))
                     .map(|(&tab, _)| tab)
                     .collect();
-                let current = self.current.get(&(agent.clone(), connection)).copied();
+                let current = (self.current.get(&(agent.clone(), connection)).copied())
+                    .filter(|tab| !self.withheld(&agent, *tab));
                 _ = reply.send(ToolResult::text(tools::tab_list(&tabs, current, &mine)));
             }
             "read_page" => {
@@ -3004,7 +3055,7 @@ impl Agents {
                     server.stop(agent);
                 }
                 self.note(agent, 0, "stopped by the user", "", "");
-                self.session_stopped(agent);
+                self.session_stopped(agent, cx);
                 // No connection of the `ilo` command's is left open to close (Event::Bye).
                 if agent == Client::Command.id() {
                     self.live.remove(agent);
@@ -4517,10 +4568,12 @@ impl Agents {
         cx: &mut Context<Self>,
     ) {
         // A tab the user holds stays where it is, as its place among the sites would tell its site.
+        // So does a page of a task the user stopped, which isn't its client's to move.
         let today = (self.browser.agent_tabs(agent, cx).into_iter()).filter(|tab| {
             !tab.pinned
                 && self.browser.off_limits(tab.id, cx).is_none()
                 && !self.held.contains_key(&tab.id)
+                && !self.withheld(agent, tab.id)
         });
         let mut rows: Vec<(u64, usize, Option<String>)> = Vec::new();
         for tab in today {
@@ -4662,6 +4715,11 @@ impl Agents {
     /// Closing one of its own off the web reads nothing of it, and is the agent's way out of a tab
     /// that went there.
     fn may_act(&self, agent: &str, tab: u64, action: &str, cx: &mut App) -> Result<(), Refused> {
+        // The floor under every tool: a page of a task the user stopped is refused to its
+        // client, whatever the act and its level, until they hand it back (`stopped_call`).
+        if self.withheld(agent, tab) {
+            return Err(Refused::of(tools::Kind::Stopped, STOPPED));
+        }
         match self.off_limits(agent, tab, cx) {
             Some(NOT_WEB_PAGE) if action == "close_tab" => {}
             Some(why) => return Err(off_limits_refused(why)),
@@ -4966,7 +5024,9 @@ impl Agents {
         cx: &mut Context<Self>,
     ) -> Result<u64, Refused> {
         let space = self.space(agent, cx);
-        let tabs = self.tabs_seen(space, cx);
+        let mut tabs = self.tabs_seen(space, cx);
+        // A call that names no tab never falls on a page of a task the user stopped.
+        tabs.retain(|tab| !self.withheld(agent, tab.id));
         // A task with helpers has several callers on its one connection, so the tab used last
         // may be another's: a call names its tab unless the task has only one (#4102).
         if (self.task(agent)).is_some_and(|task| task.helpers.on) {
