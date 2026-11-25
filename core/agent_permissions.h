@@ -88,6 +88,11 @@ bool TakesDownloadQuestion(download::DownloadItem* download,
 // Space the user doesn't hold, whoever asked, the page or a command. Notes the refusal.
 bool NoCast(content::WebContents* contents);
 
+// Whether the page in |contents| is refused the sheet that offers the user's accounts with another
+// site to sign in with, asked as each of its requests to sign in so starts: a page in an agent's
+// Space the user doesn't hold. Notes the refusal.
+bool NoFederatedSignIn(content::WebContents* contents);
+
 // Whether the page in |contents| is refused the question whether to add an extension, asked
 // before the question is put on a window: a page in an agent's Space the user doesn't hold, so
 // that no agent's click puts one on the user's window. Notes the refusal.

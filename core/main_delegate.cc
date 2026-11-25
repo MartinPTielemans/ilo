@@ -101,6 +101,7 @@
 #include "content/public/browser/video_picture_in_picture_window_controller.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_view_delegate.h"
+#include "content/public/browser/webid/identity_request_dialog_controller.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
 #include "net/ssl/client_cert_identity.h"
@@ -486,6 +487,18 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
     }
     return ChromeContentBrowserClient::SelectClientCertificate(
         context, process_id, contents, request, std::move(certificates), std::move(delegate));
+  }
+
+  // Chrome's, but a page in an agent's Space the user doesn't hold gets the engine's own
+  // controller, which shows nothing and ends each of its asks as dismissed: no sheet offers it the
+  // user's accounts with another site. One is made for each request to sign in, so the hold is
+  // read at each.
+  std::unique_ptr<content::IdentityRequestDialogController> CreateIdentityRequestDialogController(
+      content::WebContents* contents) override {
+    if (NoFederatedSignIn(contents)) {
+      return std::make_unique<content::IdentityRequestDialogController>();
+    }
+    return ChromeContentBrowserClient::CreateIdentityRequestDialogController(contents);
   }
 
   // Chrome's, but a page in an agent's Space opens no Picture in Picture window for a document,

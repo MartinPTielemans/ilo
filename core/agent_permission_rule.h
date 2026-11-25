@@ -58,6 +58,8 @@ enum class Kind {
   kCast,
   // The question whether to add an extension, which is put on the user's window.
   kExtensionInstall,
+  // The sheet that offers the user's accounts with another site to sign in with.
+  kFederatedSignIn,
   // A question of no kind above that the browser would have put to the user.
   kOther,
   // A kind that gives a page nothing of the user's device or person, such as a screen wake lock

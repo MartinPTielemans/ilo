@@ -306,6 +306,14 @@ bool NoCast(content::WebContents* contents) {
   return true;
 }
 
+bool NoFederatedSignIn(content::WebContents* contents) {
+  if (!contents || !agent_permission_rule::Refuses(Kind::kFederatedSignIn, RuleTabOf(contents))) {
+    return false;
+  }
+  NoteRefused(Kind::kFederatedSignIn, contents->GetOutermostWebContents());
+  return true;
+}
+
 bool NoExtensionInstall(content::WebContents* contents) {
   if (!contents || !agent_permission_rule::Refuses(Kind::kExtensionInstall, RuleTabOf(contents))) {
     return false;

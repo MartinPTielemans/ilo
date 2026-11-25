@@ -31,13 +31,13 @@ TEST(AgentPermissionRule, AnAgentsSpaceIsRefusedEveryKindButThoseLeftAsToday) {
 }
 
 // The user holding the tab changes these answers: their own copy writes the clipboard, and a
-// print, the choice of a certificate and of a device to cast to and the answer to an extension's
-// install are theirs to make.
+// print, the choice of a certificate, of a device to cast to and of an account to sign in with,
+// and the answer to an extension's install are theirs to make.
 TEST(AgentPermissionRule, AHeldTabIsRefusedAsOneNotHeldButForWhatTheUserDoesThemselves) {
   for (size_t at = 0; at < kKinds; ++at) {
     const Kind kind = KindAt(at);
     if (kind == Kind::kClipboardWrite || kind == Kind::kPrint || kind == Kind::kClientCertificate ||
-        kind == Kind::kCast || kind == Kind::kExtensionInstall) {
+        kind == Kind::kCast || kind == Kind::kExtensionInstall || kind == Kind::kFederatedSignIn) {
       EXPECT_FALSE(Refuses(kind, kHeld));
       continue;
     }
@@ -165,6 +165,20 @@ TEST(AgentPermissionRule, APageInAnAgentsSpaceAsksNothingOfAnExtensionsInstall) 
 // While the user holds the tab the question is theirs, as in a tab of their own.
 TEST(AgentPermissionRule, AHeldTabAsksWhetherToAddAnExtension) {
   EXPECT_FALSE(Refuses(Kind::kExtensionInstall, kHeld));
+}
+
+TEST(AgentPermissionRule, AUsersTabIsOfferedTheUsersAccountsToSignInWith) {
+  EXPECT_FALSE(Refuses(Kind::kFederatedSignIn, kUsers));
+}
+
+TEST(AgentPermissionRule, APageInAnAgentsSpaceIsOfferedNoAccountToSignInWith) {
+  EXPECT_TRUE(Refuses(Kind::kFederatedSignIn, kAgents));
+  EXPECT_STREQ(CodeWord(Kind::kFederatedSignIn), "federated_sign_in");
+}
+
+// While the user holds the tab the choice of an account is theirs, as in a tab of their own.
+TEST(AgentPermissionRule, AHeldTabIsOfferedTheUsersAccountsToSignInWith) {
+  EXPECT_FALSE(Refuses(Kind::kFederatedSignIn, kHeld));
 }
 
 TEST(AgentPermissionRule, AUsersTabIsShownTheCertificateChooser) {
