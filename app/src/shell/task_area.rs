@@ -1356,7 +1356,7 @@ impl Shell {
     }
 
     /// The card of the task the page area shows.
-    fn task_card_shown(&self) -> Option<&Card> {
+    pub(super) fn task_card_shown(&self) -> Option<&Card> {
         let agent = self.talk_in(self.task_open()?)?;
         self.task_cards.iter().find(|card| card.agent == agent)
     }

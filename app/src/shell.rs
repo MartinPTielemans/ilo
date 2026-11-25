@@ -222,8 +222,8 @@ pub use permission::{Answer, Question};
 pub(crate) use picture::next_request;
 pub use picture::{PagePicture, picture_answered};
 pub use portrait::PortraitBackground;
+pub use recent_downloads::FilePreview;
 use recent_downloads::RecentDownloads;
-pub use recent_downloads::{FilePreview, HOVER_ALL};
 pub use rows::LoneSpaceHeader;
 use rows::{Breath, UNLOAD};
 use scaled::scaled;
@@ -1521,6 +1521,8 @@ pub struct Shell {
     /// ilo's menu (#3148), and whether the menu up is the one it opened, which keeps it pressed.
     menu_control: bool,
     app_menu: bool,
+    /// Whether the menu up is the one the footer's + opened, which keeps its plate while it's up.
+    plus_menu: bool,
     /// The Space and whether its pinned rows were collapsed when last drawn, and when they last
     /// changed there, for the chevron's turn.
     pinned_seen: Option<(u64, bool)>,
@@ -2209,6 +2211,7 @@ impl Shell {
             name_menu: false,
             menu_control: OFF_THE_MAC,
             app_menu: false,
+            plus_menu: false,
             pinned_seen: None,
             pinned_turn: None,
             split_folds: HashMap::new(),
@@ -4996,7 +4999,7 @@ impl Render for Shell {
             .then(|| self.window_buttons(self.viewport.width, cx));
         let normal = self.task_area.is_none();
         let task_area = self.task_area_element(cx);
-        let empty_card = self.empty_card(window, cx);
+        let empty_card = self.empty_card(cx);
         self.breath.arm(cx);
         div()
             .id("shell")

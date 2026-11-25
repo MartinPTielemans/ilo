@@ -114,7 +114,8 @@ pub(super) enum Switch {
     /// while it shows (#2978).
     DailyCount,
     CrashReports,
-    /// Other apps' agents', offered only while agents are on: the just-the-browser path has none.
+    /// Settings › Other apps' switch, on both paths: an outside app is another kind of agent
+    /// from the assistant the assistant step asks about, so that answer doesn't touch it.
     OtherApps,
     /// One the host reads and sets for the Space's profile, turned at once.
     Setting(Setting),
@@ -171,10 +172,9 @@ impl Switch {
                 "Send a daily usage count",
                 crate::daily_count::words(env!("APP_NAME")).into(),
             ),
-            // The drawing's, as Settings › Other apps has no row of its own yet.
             Switch::OtherApps => (
                 concat!("Let other apps' agents use ", env!("APP_NAME")),
-                "Over MCP, each in a Space of its own".into(),
+                "Editors, terminal tools and scripts on this computer".into(),
             ),
             Switch::CrashReports => (
                 "Send crash reports",
@@ -215,7 +215,7 @@ impl Step {
             // The sheet's first page (#4093): what the flow is, and that each step can be skipped.
             Step::Intro => (
                 concat!("Welcome to ", env!("APP_NAME"), "."),
-                "A good tool. A few steps to make it yours, and you can skip any of them.",
+                "A few steps to make it yours, and you can skip any of them.",
                 "Get Started",
             ),
             // The import view's own buttons are the step's.
@@ -286,10 +286,12 @@ impl Step {
                 "Spaces, bookmarks and passwords, encrypted end to end.",
                 "Sign In",
             ),
-            // The lead's words, as the sheet adds none of its own.
             Step::Assistant => (
-                "Bring your own assistant",
-                "Tasks run on the assistant you already use.",
+                "An assistant, or just the browser?",
+                concat!(
+                    env!("APP_NAME"),
+                    " has no AI of its own. An assistant is your own Claude or ChatGPT, working here."
+                ),
                 "Continue",
             ),
             Step::OptIns => (
@@ -520,7 +522,7 @@ impl Shell {
                 Step::SearchEngine => true,
                 Step::Account => account.is_some(),
                 // Left out, as the agents' switch is, in a build without the agents' server.
-                Step::Assistant => self.browser.agents(cx).is_some(),
+                Step::Assistant => self.browser.threads(cx).is_some(),
                 Step::OptIns => opt_ins,
                 Step::Tidy => tidy.is_some(),
                 Step::Private => private,
@@ -806,7 +808,7 @@ impl Shell {
 
     /// Looks for the assistants' programs, once a showing of their step, only with agents on.
     fn onboarding_look(&mut self, cx: &mut Context<Self>) {
-        let agents_on = self.browser.agents(cx) == Some(true);
+        let agents_on = self.browser.threads(cx) == Some(true);
         let Some(onboarding) = self.onboarding.as_mut() else {
             return;
         };
@@ -1054,10 +1056,7 @@ impl Shell {
                 )
             }
             Switch::CrashReports => self.browser.crash_reports(cx),
-            Switch::OtherApps => match self.browser.agents(cx)? {
-                true => self.browser.other_apps(cx),
-                false => None,
-            },
+            Switch::OtherApps => self.browser.other_apps(cx),
             Switch::Setting(setting) => self.browser.setting(self.space, setting, cx),
         };
         (Switch::of(step).iter())
@@ -1098,10 +1097,9 @@ impl Shell {
     }
 
     /// The assistant step's pick: with an assistant turns agents on, just the browser turns them
-    /// off, Settings › Agents' one switch, set at once as the step's other switches are. The
-    /// opt-ins' step comes or goes as other apps' agents' row does with it.
+    /// off, Settings › Agents' one switch, set at once as the step's other switches are.
     pub(super) fn onboarding_agents(&mut self, on: bool, cx: &mut Context<Self>) {
-        if self.browser.agents(cx) != Some(!on) {
+        if self.browser.threads(cx) != Some(!on) {
             return;
         }
         log!(
@@ -1111,32 +1109,12 @@ impl Shell {
         let (browser, shell) = (self.browser.clone(), cx.entity());
         // Outside this update, as the host reads the shell as it turns agents off.
         cx.defer(move |cx| {
-            browser.set_agents(on, cx);
+            browser.set_threads(on, cx);
             shell.update(cx, |shell, cx| {
-                shell.onboarding_plan_opt_ins(cx);
                 shell.onboarding_look(cx);
                 cx.notify();
             });
         });
-    }
-
-    /// Puts the opt-ins' step in the flow's order while it has a row, and takes it out without.
-    fn onboarding_plan_opt_ins(&mut self, cx: &mut Context<Self>) {
-        let offered = !self.opt_ins(cx).is_empty();
-        let Some(onboarding) = self.onboarding.as_mut() else {
-            return;
-        };
-        let order = |step: Step| STEPS.iter().position(|&each| each == step);
-        match (onboarding.steps.contains(&Step::OptIns), offered) {
-            (true, false) => onboarding.steps.retain(|&each| each != Step::OptIns),
-            (false, true) => {
-                let at = (onboarding.steps.iter())
-                    .position(|&each| order(each) > order(Step::OptIns))
-                    .unwrap_or(onboarding.steps.len());
-                onboarding.steps.insert(at, Step::OptIns);
-            }
-            _ => {}
-        }
     }
 
     /// Picks swatch `index` at the colour step.
@@ -1492,15 +1470,12 @@ impl Shell {
         let tidy = (step == Step::Tidy).then(|| self.tidy_step(colors, cx));
         // Taller than its room, the list scrolls in it, and the foot stays where every step has it.
         // Just the browser folds the assistants' rows away for its line.
+        // Under the two choices a hint, then with an assistant its rows.
         let assistants = (step == Step::Assistant).then(|| {
-            let rows = match self.browser.agents(cx) == Some(true) {
-                true => self.assistant_rows(step, colors, cx),
-                // The drawing's, as the words table has none for it.
-                false => div()
-                    .w_full()
-                    .px(px(PADDING))
-                    .text_color(colors.ink(QUIET))
-                    .child("Agents stay off. Turn them on later in Settings › Agents."),
+            let agents = self.browser.threads(cx) == Some(true);
+            let hint = match agents {
+                true => "Sign in now, or later in Settings.",
+                false => "Turn an assistant on later in Settings › Threads.",
             };
             frame::choice(
                 div()
@@ -1509,7 +1484,14 @@ impl Shell {
                     .flex_col()
                     .gap(px(PADDING))
                     .child(self.agents_rows(colors, cx))
-                    .child(rows),
+                    .child(
+                        div()
+                            .w_full()
+                            .px(px(PADDING))
+                            .text_color(colors.ink(QUIET))
+                            .child(hint),
+                    )
+                    .children(agents.then(|| self.assistant_rows(step, colors, cx))),
             )
         });
         let engines = (step == Step::SearchEngine).then(|| self.engine_rows(colors, cx));
@@ -1746,13 +1728,14 @@ impl Shell {
             .child(group(&look, rows))
     }
 
-    /// The assistants tasks run on, as Settings › Agents' Your assistant has them, one component in
-    /// both places: each signs in with its maker's own sign-in, and another app connects as Settings
-    /// says. Under them, room kept for the switch the sign-in's head brings, with nothing in it until
+    /// The assistants tasks run on, as Settings › Models has them, one component in both places:
+    /// each signs in with its maker's own sign-in. Other apps' agents have no row in first run
+    /// (the lead's, 25 Nov), only in Settings. Under them, room kept for the switch the sign-in's
+    /// head brings, with nothing in it until
     /// then. Without the app's Agents, as in a test's shell, only that room.
     fn assistant_rows(&self, step: Step, colors: Colors, cx: &mut Context<Self>) -> gpui::Div {
         use crate::agents::runner::Cli;
-        use crate::settings_rows::{Act, another_agent_name_row, assistant_row};
+        use crate::settings_rows::{Act, assistant_row};
         let look = Look::on(
             colors.ground.blend(colors.ink(IMPORT_SURFACE)),
             colors.ink(1.),
@@ -1802,14 +1785,7 @@ impl Shell {
                 )
                 .children(self.place(step, cli.id()))
             });
-            let another = another_agent_name_row(&look, a11y, move |_, cx| {
-                let open = |shell: &mut Shell, cx: &mut Context<Shell>| {
-                    shell.browser.agents_settings(cx);
-                };
-                shell.update(cx, open).ok();
-            })
-            .children(self.place(step, "another"));
-            group(&look, rows.into_iter().chain([another]))
+            group(&look, rows)
         });
         let rows = rows.or_else(|| {
             let (shown, marked) = self.onboarding.as_ref()?.shown_assistants.clone()?;
@@ -1826,8 +1802,7 @@ impl Shell {
                     act,
                 )
             });
-            let another = another_agent_name_row(&look, a11y, |_, _| {});
-            Some(group(&look, rows.chain([another])))
+            Some(group(&look, rows))
         });
         div()
             .w_full()
@@ -1915,41 +1890,56 @@ impl Shell {
     fn agents_rows(&self, colors: Colors, cx: &mut Context<Self>) -> impl IntoElement {
         let surface = colors.ground.blend(colors.ink(IMPORT_SURFACE));
         let look = Look::on(surface, colors.ink(1.), rgb(SIGNAL));
-        let agents = self.browser.agents(cx) == Some(true);
+        let agents = self.browser.threads(cx) == Some(true);
         let a11y = self.a11y;
-        // The drawing's names, as the words table has none for them.
-        let rows =
-            [(true, "With an assistant"), (false, "Just the browser")].map(|(choice, name)| {
-                let on = agents == choice;
-                let row = div()
-                    .id(("onboarding-agents", usize::from(choice)))
-                    .when(a11y, |row| {
-                        row.role(Role::RadioButton)
-                            .aria_label(name)
-                            .aria_toggled(match on {
-                                true => Toggled::True,
-                                false => Toggled::False,
-                            })
-                    })
-                    .h(px(ENGINE_ROW))
-                    .px(px(PADDING))
-                    .flex()
-                    .items_center()
-                    .gap(px(PADDING))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(
-                        cx.listener(move |shell, _, _, cx| shell.onboarding_agents(choice, cx)),
-                    )
-                    .flex_row_reverse()
-                    .justify_between()
-                    .child(radio_dot(on, colors))
-                    .child(
-                        div()
-                            .when(on, |name| name.font_weight(gpui::FontWeight::MEDIUM))
-                            .child(name),
-                    );
-                div().child(row)
-            });
+        let rows = [
+            (
+                true,
+                "With an assistant",
+                "Works in its own tabs, on your plan",
+            ),
+            (
+                false,
+                "Just the browser",
+                concat!(
+                    "No assistant in ",
+                    env!("APP_NAME"),
+                    ", until you turn one on"
+                ),
+            ),
+        ]
+        .map(|(choice, name, sentence)| {
+            let on = agents == choice;
+            let row = div()
+                .id(("onboarding-agents", usize::from(choice)))
+                .when(a11y, |row| {
+                    row.role(Role::RadioButton)
+                        .aria_label(name)
+                        .aria_toggled(match on {
+                            true => Toggled::True,
+                            false => Toggled::False,
+                        })
+                })
+                .p(px(PADDING))
+                .flex()
+                .items_center()
+                .gap(px(PADDING))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |shell, _, _, cx| shell.onboarding_agents(choice, cx)))
+                .flex_row_reverse()
+                .justify_between()
+                .child(radio_dot(on, colors))
+                // Its name over its line, as the opt-ins' rows have theirs.
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .line_height(px(OPT_IN_LINE))
+                        .child(div().font_weight(gpui::FontWeight::MEDIUM).child(name))
+                        .child(div().text_color(colors.ink(QUIET)).child(sentence)),
+                );
+            div().child(row)
+        });
         group(&look, rows)
             .id("onboarding-agents")
             .when(a11y, |list| list.role(Role::RadioGroup))

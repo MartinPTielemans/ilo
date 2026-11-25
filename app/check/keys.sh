@@ -769,17 +769,27 @@ settings_drew General
 ../tools/window-screenshot.sh "$pid" "$out/settings-found.png" || fail "no window to capture"
 send clickkey $(drawn "toolbar Shortcuts")
 settings_drew Shortcuts
-# Settings › Threads' Tasks from the command bar (#1636), under Let agents use the browser while
-# agents are on: on, ⇥ in ⌘T makes what's typed a task; off, it doesn't, and agents stay on.
-# Agents go off again after.
+# Settings › Threads' first switch, the product's own threads (#1636, #4260): on, ⇥ in ⌘T makes
+# what's typed a task; off, it doesn't. It goes off again after.
 send clickkey $(drawn "toolbar Threads")
 settings_drew Threads
 click_in_sight "switch agents"
-expect '^browser: agents on$' "a click on Let agents use the browser didn't turn agents on"
-tasks_switch=$(drawn "switch agent tasks") || fail "Tasks from the command bar didn't show with agents on"
+expect '^browser: agents on$' "a click on Let agents use the browser didn't turn threads on"
 ../tools/window-screenshot.sh "$pid" "$out/settings-agent-tasks-on.png" || fail "no window to capture"
-send clickkey $tasks_switch
-expect '^browser: agent tasks off$' "a click on Tasks from the command bar didn't turn tasks off"
+send key w cmd
+expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+send key t cmd
+expect '^browser: command bar shown$' "⌘T didn't open the command bar"
+send type summarise this
+send key tab
+expect '^browser: command bar asks an agent$' "⇥ didn't make a task with threads on"
+send key escape
+expect '^browser: command bar hidden$' "escape didn't close the command bar from the composer"
+send menu Settings…
+expect '^browser: settings shown Threads$' "Settings… didn't show Threads again"
+settings_drew Threads
+click_in_sight "switch agents"
+expect '^browser: agents off$' "a click on Let agents use the browser didn't turn threads off"
 ../tools/window-screenshot.sh "$pid" "$out/settings-agent-tasks-off.png" || fail "no window to capture"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -787,28 +797,12 @@ send key t cmd
 expect '^browser: command bar shown$' "⌘T didn't open the command bar"
 send type summarise this
 send key tab
-none_while '^browser: command bar asks an agent$' || fail "⇥ made a task with tasks off"
+none_while '^browser: command bar asks an agent$' || fail "⇥ made a task with threads off"
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 send menu Settings…
 expect '^browser: settings shown Threads$' "Settings… didn't show Threads again"
 settings_drew Threads
-click_in_sight "switch agent tasks"
-expect '^browser: agent tasks on$' "a click on Tasks from the command bar didn't turn tasks on"
-send key w cmd
-expect '^browser: settings hidden$' "⌘W didn't hide Settings"
-send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open the command bar"
-send type summarise this
-send key tab
-expect '^browser: command bar asks an agent$' "⇥ didn't make a task with tasks on"
-send key escape
-expect '^browser: command bar hidden$' "escape didn't close the command bar from the composer"
-send menu Settings…
-expect '^browser: settings shown Threads$' "Settings… didn't show Threads again"
-settings_drew Threads
-click_in_sight "switch agents"
-expect '^browser: agents off$' "a click on Let agents use the browser didn't turn agents off"
 send clickkey $(drawn "toolbar Shortcuts")
 settings_drew Shortcuts
 click_in_sight "shortcut new-tab"

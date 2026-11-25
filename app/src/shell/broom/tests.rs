@@ -441,6 +441,36 @@ fn a_browser_with_no_broom_offers_a_sort_by_no_door(cx: &mut TestAppContext) {
     assert!(!host.take().contains(&"start broom".to_owned()));
 }
 
+/// The divider's menu lists the broom's command only where the broom would sort: not with nothing
+/// to sort, fewer than four of today's tabs outside a folder, nor while a sort runs.
+#[gpui::test]
+fn the_divider_menu_offers_a_sort_only_where_the_broom_sorts(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx, vec![10, 11], Some(Broom::Idle));
+    for (state, listed) in [
+        (Broom::Idle, true),
+        (Broom::Failed, true),
+        (Broom::NothingToSort, false),
+        (Broom::Sorting, false),
+    ] {
+        answer(&shell, cx, &host, Some(state));
+        shell.update(cx, |shell, cx| {
+            shell.divider_menu(gpui::point(px(100.), px(200.)), cx)
+        });
+        let entries: Vec<(SharedString, bool)> = (host.entries.borrow().iter())
+            .map(|entry| (entry.title.clone(), entry.enabled))
+            .collect();
+        let sort = entries.iter().find(|(title, _)| title.as_ref() == NAME);
+        match listed {
+            true => assert_eq!(
+                sort.map(|(_, on)| *on),
+                Some(true),
+                "{state:?}: {entries:?}"
+            ),
+            false => assert!(sort.is_none(), "{state:?}: {entries:?}"),
+        }
+    }
+}
+
 /// A screen reader hears the broom by what it does, there for it with no pointer, and as
 /// unavailable under its other name while it sorts. With nothing to sort it hears none.
 #[gpui::test]

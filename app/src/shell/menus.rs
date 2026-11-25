@@ -75,6 +75,17 @@ pub struct MenuEntry {
     pub header: bool,
     /// Words after its title in the secondary ink, which say more of it, as Default's model.
     pub detail: Option<SharedString>,
+    /// Whether it's the menu's search field, its first row, titled with its placeholder: what's
+    /// typed there narrows the rows after it (`menu::narrowed`).
+    pub field: bool,
+    /// Whether a search leaves it whatever is typed, as the model menu's Settings.
+    pub kept: bool,
+    /// Whether it's an offer beside the menu's choices, as a not-signed-in assistant's Sign In:
+    /// in the secondary ink, and gone, its heading with it, once anything is typed, as it names
+    /// nothing a search looks for.
+    pub offer: bool,
+    /// Whether it leaves the menu for a page of its own, with the out arrow after its title.
+    pub out: bool,
 }
 
 impl MenuEntry {
@@ -108,7 +119,37 @@ impl MenuEntry {
             favicon: None,
             header: false,
             detail: None,
+            field: false,
+            kept: false,
+            offer: false,
+            out: false,
         }
+    }
+
+    /// A search field over the rows after it, with the words table's `placeholder`.
+    pub fn search(placeholder: impl Into<SharedString>) -> Self {
+        MenuEntry {
+            field: true,
+            ..MenuEntry::named(placeholder, false)
+        }
+    }
+
+    /// Left by any search (`kept`).
+    pub fn kept(self) -> Self {
+        MenuEntry { kept: true, ..self }
+    }
+
+    /// An offer beside the menu's choices (`offer`).
+    pub fn offer(self) -> Self {
+        MenuEntry {
+            offer: true,
+            ..self
+        }
+    }
+
+    /// With the out arrow (`out`).
+    pub fn out(self) -> Self {
+        MenuEntry { out: true, ..self }
     }
 
     /// A heading over the items after it, in the platform's case.
@@ -306,8 +347,8 @@ impl Shell {
             (entry, action)
         };
         let mut items = vec![command(Command::SortBySite)];
-        // Where the broom is drawn, dimmed as it is.
-        if self.browser.broom().is_some() {
+        // Only where the broom would sort: with nothing to sort, or a sort running, it's not offered.
+        if self.browser.broom().is_some_and(super::Broom::sorts) {
             items.push(command(Command::SortIntoFolders));
         }
         items.push(command(Command::Clear));
@@ -502,9 +543,10 @@ impl Shell {
     ) {
         let look = self.menu_look();
         self.menu_open = true;
-        // The name row and the menu control say so after this if the menu is their own.
+        // The name row, the menu control and the + say so after this if the menu is their own.
         self.name_menu = false;
         self.app_menu = false;
+        self.plus_menu = false;
         let shell = cx.weak_entity();
         self.browser.context_menu(
             entries,
@@ -516,6 +558,7 @@ impl Shell {
                     .update(cx, |shell, cx| {
                         shell.menu_open = false;
                         shell.app_menu = false;
+                        shell.plus_menu = false;
                         chosen(index, shell, cx);
                         shell.settle_recent_downloads(cx);
                     })
@@ -1747,6 +1790,7 @@ impl Shell {
 
     /// The + button's menu, by Arc's menus' names for what it makes (ours: Arc's + menu isn't
     /// recorded), and the shown page's Boost, New Boost… or Edit Boost…, where it can have one.
+    /// The + keeps its plate while it's up.
     pub(super) fn plus_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let mut items = vec![
             ("New Space…", Command::NewSpace),
@@ -1786,6 +1830,8 @@ impl Shell {
             entries,
             position,
             Box::new(move |chosen, shell, cx| {
+                // The + lets its plate go.
+                cx.notify();
                 let Some(at) = chosen else {
                     return;
                 };
@@ -1801,6 +1847,8 @@ impl Shell {
             }),
             cx,
         );
+        self.plus_menu = self.menu_open;
+        cx.notify();
     }
 
     /// The menu control's menu, off the Mac (#3148): what the Mac's menu bar holds under ilo's

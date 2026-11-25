@@ -4,6 +4,10 @@ use super::*;
 
 /// An assistant's one button to sign in, as its row says it.
 pub const SIGN_IN: &str = "Sign In";
+/// The line under the assistants' rows (draft, the lead's): what a sign-in leaves where.
+pub const SIGN_INS_STAY: &str = "Sign-ins stay on this computer.";
+/// ChatGPT's row's line, signed in.
+const CHATGPT_SIGNED_IN: &str = "Your ChatGPT plan";
 /// The row's line while its sign-in is under way.
 const UNDER_WAY: &str = "Sign in on the page that opened";
 
@@ -129,6 +133,10 @@ pub fn assistant_row(
     let line: SharedString = match shown.offer {
         Offer::Get | Offer::SignIn => on_plan(cli).into(),
         Offer::Cancel => UNDER_WAY.into(),
+        // ChatGPT's signed in says whose plan, not the program it runs through (M2).
+        Offer::SignedIn if matches!(cli, crate::agents::runner::Cli::Codex) => {
+            CHATGPT_SIGNED_IN.into()
+        }
         _ => shown.line.clone().into(),
     };
     let text = match shown.command() {

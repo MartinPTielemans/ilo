@@ -884,6 +884,10 @@ pub struct Tasks {
     /// The profiles there are, each by its folder's name, as the core last said them: one that
     /// goes from among them was deleted, and its kept tasks go with it.
     pub(super) profiles: Vec<String>,
+    /// The last picture each kept task's card could keep of its last page (pick_up.rs).
+    card_tiles: HashMap<String, pick_up::CardTile>,
+    /// The cards' file work, in the order it's asked (kept/cards.rs).
+    card_jobs: super::kept::cards::Queue,
     /// The state each task was in when the user's reply took it up, which it goes back to if its
     /// assistant no longer has the conversation.
     pub(super) picked_up: HashMap<String, State>,
@@ -914,8 +918,9 @@ pub struct Tasks {
     pub dir: Option<PathBuf>,
     /// The sign-ins under way and what each row says of its last.
     pub(super) sign_ins: super::sign_in::SignIns,
-    /// Whether a look asked for while one ran waits for it to end, as after a sign-in.
-    pub(super) look_again: bool,
+    /// The assistants a look asked for while one ran waits to look for once it ends, as after a
+    /// sign-in, each with whether the user's click on its row asked for it.
+    pub(super) look_again: Vec<(Cli, bool)>,
     /// Helpers for the tasks a test starts, whatever the switch says.
     #[cfg(test)]
     pub(super) helpers: bool,
@@ -1065,8 +1070,8 @@ impl Agents {
         if session && asks {
             return (None, None);
         }
-        // With tasks off nothing more is asked of a task; an answer still lets one finish.
-        if !self.tasks_on() && asks {
+        // With threads off nothing more is asked of a task; an answer still lets one finish.
+        if !self.threads() && asks {
             return (None, None);
         }
         match action {
@@ -1415,7 +1420,7 @@ impl Agents {
                 State::Working => page_steps(task),
                 _ => Vec::new(),
             },
-            retry: matches!(task.state, State::Limit { .. }) && self.tasks_on(),
+            retry: matches!(task.state, State::Limit { .. }) && self.threads(),
             fix: match (&task.state, task.cli) {
                 (
                     State::Failed {
@@ -1430,7 +1435,7 @@ impl Agents {
 
     /// The CLIs ⌘T's ask lists: those signed in, as last learned, the default first.
     pub fn ask_agents(&self) -> Vec<AskAgent> {
-        if !self.tasks_on() {
+        if !self.threads() {
             return Vec::new();
         }
         let mut clis: Vec<Cli> = (Cli::ALL.into_iter())
@@ -1454,7 +1459,7 @@ impl Agents {
 
     /// The CLIs installed but not signed in, as last learned, which the composer offers to sign in.
     pub fn signed_out_agents(&self) -> Vec<Cli> {
-        if !self.tasks_on() {
+        if !self.threads() {
             return Vec::new();
         }
         (Cli::ALL.into_iter())
@@ -1493,15 +1498,48 @@ impl Agents {
 
     /// Learns again whether each CLI is installed and signed in, off the UI thread, unless it's
     /// learning already. Once a show: Settings › Agents and ⌘T's ask call it as they first show.
+    /// Nothing of an assistant's program runs while the inside switch is off: then a row's state
+    /// is looked up only at the user's click (`look_up_assistant`).
     pub fn look_for_task_agents(&mut self, cx: &mut Context<Self>) {
+        if self.threads() {
+            self.look_for(Cli::ALL.to_vec(), false, cx);
+        }
+    }
+
+    /// Learns whether `cli` alone is installed and signed in, at the user's click on its row, as
+    /// Models has it while the inside switch is off.
+    pub fn look_up_assistant(&mut self, cli: Cli, cx: &mut Context<Self>) {
+        self.look_for(vec![cli], true, cx);
+    }
+
+    /// Learns again what the user's click on `cli`'s row changed, as a sign-in or sign-out
+    /// ending: every assistant while the inside switch is on, else that one alone.
+    pub(super) fn look_after_click(&mut self, cli: Cli, cx: &mut Context<Self>) {
+        match self.threads() {
+            true => self.look_for_task_agents(cx),
+            false => self.look_up_assistant(cli, cx),
+        }
+    }
+
+    /// Looks for `clis`, `clicked` if the user's click on a row asked for it. While a look runs,
+    /// they wait for it to end, a click kept as one.
+    fn look_for(&mut self, clis: Vec<Cli>, clicked: bool, cx: &mut Context<Self>) {
         if self.tasks.looking {
-            self.tasks.look_again = true;
+            for cli in clis {
+                let again = &mut self.tasks.look_again;
+                match again.iter_mut().find(|(each, _)| *each == cli) {
+                    Some((_, was)) => *was |= clicked,
+                    None => again.push((cli, clicked)),
+                }
+            }
             return;
         }
         self.tasks.looking = true;
         let clients = self.clients.clone();
         let looked = cx.background_spawn(async move {
-            Cli::ALL.map(|cli| (cli, clients.look_for_task_cli(cli)))
+            (clis.into_iter())
+                .map(|cli| (cli, clients.look_for_task_cli(cli)))
+                .collect::<Vec<_>>()
         });
         cx.spawn(async move |agents, cx| {
             let found = looked.await;
@@ -1526,9 +1564,15 @@ impl Agents {
                         .find(|cli| agents.found(*cli) == Ready::SignedIn);
                     agents.tasks.default = ready.or(agents.tasks.default);
                 }
-                // A sign-in that ended while it looked may have changed what it found.
-                if std::mem::take(&mut agents.tasks.look_again) {
-                    agents.look_for_task_agents(cx);
+                // A sign-in that ended while it looked may have changed what it found. With the
+                // inside switch off now, only a row the user clicked is looked for.
+                let threads = agents.threads();
+                let again: Vec<Cli> = (std::mem::take(&mut agents.tasks.look_again).into_iter())
+                    .filter(|(_, clicked)| *clicked || threads)
+                    .map(|(cli, _)| cli)
+                    .collect();
+                if !again.is_empty() {
+                    agents.look_for(again, false, cx);
                 }
                 cx.notify();
             });
@@ -1561,7 +1605,7 @@ impl Agents {
     }
 
     fn sorter(&self) -> Option<&Found> {
-        if !self.tasks_on() || self.tasks.default != Some(Cli::Claude) {
+        if !self.threads() || self.tasks.default != Some(Cli::Claude) {
             return None;
         }
         let found = self.tasks.found.get(&Cli::Claude)?;
@@ -1673,7 +1717,7 @@ impl Agents {
             .filter_map(|url| added_address(url))
             .collect();
         let asked = asked.trim();
-        if asked.is_empty() || !self.tasks_on() {
+        if asked.is_empty() || !self.threads() {
             return None;
         }
         // A private window starts no task, whichever way it was asked: agents get no path into
@@ -2158,7 +2202,7 @@ impl Agents {
                     call: 0,
                     did: tools::Did {
                         tool: "thought".into(),
-                        text: page::clip(&text, 4000),
+                        text: page::clip(&text, THOUGHT_MOST),
                         ..Default::default()
                     },
                     after: task.messages.len(),
@@ -2170,6 +2214,14 @@ impl Agents {
                     close: None,
                     notes: None,
                 });
+            }
+            Out::Searched(query) => {
+                let Some(task) = self.task_mut(&agent) else {
+                    return;
+                };
+                let step = searched(&query, task.messages.len());
+                task.trace.push(step);
+                self.count_search(&agent);
             }
             Out::Helper { id, told } => self.helper_told(&agent, id, told, cx),
             Out::Started { id, deep } => self.helper_started(&agent, id, deep, cx),
@@ -2210,7 +2262,7 @@ impl Agents {
                     task.end(SystemTime::now());
                 }
                 // However it ended, and by the name it has now (#4105).
-                self.keep_ended(&agent);
+                self.keep_ended(&agent, cx);
             }
             // The turn the user stopped ends as an error; their stop is what the card says.
             Out::Ended(Some(_))
@@ -2295,7 +2347,7 @@ impl Agents {
             task.waiting = None;
             task.writing = None;
         }
-        self.keep_ended(agent);
+        self.keep_ended(agent, cx);
         self.forget_waiting(agent, None, cx);
         // What's ready may have changed.
         self.look_for_task_agents(cx);
@@ -2400,7 +2452,7 @@ impl Agents {
             process.interrupt();
         }
         self.you_stopped(agent, cx);
-        self.keep_ended(agent);
+        self.keep_ended(agent, cx);
         self.stop_agent(agent, cx);
         cx.notify();
     }
@@ -2477,7 +2529,7 @@ impl Agents {
             if deleted { "deleted" } else { "undeleted" }
         );
         // Its row leaves the file of the kept with it, and comes back with it (#4105).
-        self.keep_ended(agent);
+        self.keep_ended(agent, cx);
         cx.notify();
     }
 
@@ -3124,6 +3176,18 @@ impl Agents {
             .map_or(0, |session| session.connection)
     }
 
+    /// The user's Space a session's card shows in, as a task's shows in the Space it was asked
+    /// from: the one the window in front shows, else the first of the user's in the profile of the
+    /// agent's `space` (`user_space`). The browser's own state says it, never anything the client
+    /// sends, and a private window's Space is never one: then no Space lists the card.
+    fn session_home(&self, space: u64) -> u64 {
+        let home = self.browser.user_space(space);
+        match self.browser.private_space(home) {
+            true => 0,
+            false => home,
+        }
+    }
+
     /// The session under way of the call's client on the call's connection, or, for a call that
     /// opens or acts on a tab, a new one: its card shows from then. Its calls are its steps.
     fn session_for(&mut self, call: &super::Call, cx: &mut Context<Self>) -> Option<String> {
@@ -3163,6 +3227,7 @@ impl Agents {
             .cloned()
             .unwrap_or_else(|| super::name(&call.agent).into());
         let space = self.space(&call.agent, cx);
+        let home = self.session_home(space);
         // check.sh reads this line.
         log!("browser: session {key} of agent {} as {name}", call.agent);
         let session = Session {
@@ -3187,7 +3252,7 @@ impl Agents {
             title: name.clone(),
             name,
             session: Some(session),
-            home: 0,
+            home,
             space,
             asked: SharedString::default(),
             page: None,
@@ -3713,11 +3778,7 @@ impl Agents {
             "click" | "type" => {
                 did.target = element.as_ref().map(named).unwrap_or_default();
                 let typed = string("text");
-                // Never a password field's value, nor one whose name says it's a secret.
-                let shows = element.as_ref().is_some_and(|element| {
-                    let name = element.name.to_lowercase();
-                    !element.password && !name.contains("password") && !name.contains("passcode")
-                });
+                let shows = element.as_ref().is_some_and(page::Element::shows_typed);
                 if tool == "type" && shows && typed.chars().count() <= tools::TYPED_SHOWN {
                     did.text = typed;
                 }
@@ -3906,7 +3967,7 @@ impl Agents {
                     tabs,
                 };
                 task.end(SystemTime::now());
-                self.keep_ended(agent);
+                self.keep_ended(agent, cx);
                 self.note(agent, 0, "finish", &site, "");
                 _ = reply.send(ToolResult::text(
                     "Done. The user sees your result. Stop here.",
@@ -4178,11 +4239,84 @@ fn labels(text: &str) -> String {
     plain
 }
 
+/// The most characters of a thought a step holds, and of a search's words.
+const THOUGHT_MOST: usize = 4000;
+
+/// A search the assistant's program made, as a step of its trace after `after` messages: its words
+/// alone, one line, cut as a thought is. It's in memory only: the trace is kept nowhere, and a card
+/// leaves it out, as it does a thought.
+pub(super) fn searched(query: &str, after: usize) -> Traced {
+    let now = Instant::now();
+    Traced {
+        call: 0,
+        did: tools::Did {
+            tool: tools::SEARCHED.into(),
+            text: tier::capped(query, THOUGHT_MOST),
+            ..Default::default()
+        },
+        after,
+        started: now,
+        ended: Some(now),
+        error: None,
+        kind: None,
+        picture: None,
+        close: None,
+        notes: None,
+    }
+}
+
+impl Agents {
+    /// A search `agent`'s task's program made, its step already in the trace: the thread's one
+    /// activity entry, counting its searches by that trace, never their words. It's no call of
+    /// the browser's, so no line is logged of it and nothing waits on it.
+    pub(super) fn count_search(&mut self, agent: &str) {
+        let Some(task) = self.task(agent) else {
+            return;
+        };
+        let count = (task.trace.iter())
+            .filter(|step| step.did.tool == tools::SEARCHED)
+            .count();
+        let tier = self.entry_tier(agent, 0, 0).label();
+        let entry = (self.log.iter_mut().rev())
+            .find(|each| each.agent == agent && each.action == tools::SEARCHED);
+        if let Some(entry) = entry {
+            entry.target = count.to_string().into();
+            return;
+        }
+        if self.log.len() >= super::LOG_LENGTH {
+            self.log.remove(0);
+        }
+        self.log.push(super::Activity {
+            at: SystemTime::now(),
+            agent: agent.to_string().into(),
+            connection: 0,
+            action: tools::SEARCHED.into(),
+            site: SharedString::default(),
+            target: count.to_string().into(),
+            refused: SharedString::default(),
+            steps: Vec::new(),
+            by: SharedString::default(),
+            id: super::entry_id(),
+            url: SharedString::default(),
+            sent: Vec::new(),
+            said: SharedString::default(),
+            tier: tier.into(),
+            notes: SharedString::default(),
+        });
+    }
+}
+
+/// Whether a step is the assistant's own, a thought or a search, which acts on no page: a card
+/// counts and says none of them.
+fn own(step: &Traced) -> bool {
+    matches!(step.did.tool.as_str(), "thought" | tools::SEARCHED)
+}
+
 /// A stopped task's last finished step, as its trace line says it, its thoughts left out. A step
 /// under way at Stop, or one that failed, never is one, so a card never says `Couldn't …` of it.
 fn last_finished(task: &Task) -> Option<SharedString> {
     (task.trace.iter().rev())
-        .filter(|step| step.did.tool != "thought")
+        .filter(|step| !own(step))
         .find(|step| step.ended.is_some() && step.error.is_none())
         .map(|step| tools::step_title(&step.did, tools::Tense::Done).into())
 }
@@ -4285,7 +4419,7 @@ fn page_steps(task: &Task) -> Vec<(u64, SharedString)> {
     let turn = task.turn();
     let steps = (task.trace.iter().enumerate().rev())
         .take_while(|(_, step)| step.after >= turn)
-        .filter(|(_, step)| step.did.tool != "thought" && !step.stopped());
+        .filter(|(_, step)| !own(step) && !step.stopped());
     let mut pages: Vec<(u64, SharedString)> = Vec::new();
     let mut over: Vec<u64> = Vec::new();
     for (key, step) in steps {
@@ -4339,7 +4473,7 @@ fn went_on<T>(task: &Task, held: &HashMap<u64, T>) -> bool {
         .any(|stop| {
             task.trace[stop.traced.min(task.trace.len())..]
                 .iter()
-                .any(|step| step.did.tool != "thought")
+                .any(|step| !own(step))
         });
     let under_way = (task.trace.iter()).any(|step| {
         step.ended.is_none()
@@ -4356,7 +4490,7 @@ fn turn_steps(task: &Task) -> Vec<&Traced> {
     let turn = task.turn();
     (task.trace.iter().rev())
         .take_while(|step| step.after >= turn)
-        .filter(|step| step.did.tool != "thought" && !step.stopped())
+        .filter(|step| !own(step) && !step.stopped())
         .collect()
 }
 
@@ -4373,7 +4507,7 @@ fn lower_first(text: &str) -> String {
 /// left out.
 fn stopped(task: &Task) -> SharedString {
     match (task.trace.iter())
-        .filter(|step| step.did.tool != "thought" && !step.stopped())
+        .filter(|step| !own(step) && !step.stopped())
         .count()
     {
         0 => "Stopped".into(),
@@ -4826,7 +4960,7 @@ fn together(gathered: Vec<Gathered<'_>>) -> Vec<Together<'_>> {
             Some(Together::Steps(steps)) => steps.push((key, step)),
             _ => {
                 lines.push(Together::Steps(vec![(key, step)]));
-                if did.tool == "thought" {
+                if matches!(did.tool.as_str(), "thought" | tools::SEARCHED) {
                     from = lines.len();
                 }
             }

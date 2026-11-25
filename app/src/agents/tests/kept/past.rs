@@ -319,8 +319,14 @@ fn a_finished_task_is_there_after_a_quit_and_takes_a_reply(cx: &mut TestAppConte
         .map(String::as_str)
         .collect();
     keys.sort();
-    assert_eq!(keys, ["cli", "ended", "id", "profile", "state", "title"]);
+    assert_eq!(
+        keys,
+        ["card", "cli", "ended", "id", "profile", "state", "title"]
+    );
     assert_eq!(saved[0]["id"], json!(id.as_str()));
+    // The card's id is its own, never the conversation's.
+    let card = saved[0]["card"].as_str().unwrap();
+    assert!(kept::cards::CardId::parse(card).is_some() && !card.contains(id.as_str()));
     assert_eq!(saved[0]["cli"], json!("claude"));
     assert_eq!(saved[0]["title"], json!("Lisbon seats"));
     assert_eq!(saved[0]["state"], json!("done"));
@@ -652,7 +658,10 @@ fn a_task_at_work_when_the_browser_went_comes_back_interrupted(cx: &mut TestAppC
         .map(String::as_str)
         .collect();
     keys.sort();
-    assert_eq!(keys, ["cli", "ended", "id", "profile", "state", "title"]);
+    assert_eq!(
+        keys,
+        ["card", "cli", "ended", "id", "profile", "state", "title"]
+    );
     assert_eq!(saved[0]["title"], json!("Lisbon seats"));
     assert_eq!(saved[0]["state"], json!("failed"));
     assert_eq!(saved[0]["profile"], json!("Default"));
@@ -1175,4 +1184,33 @@ fn a_profiles_deletion_removes_its_kept_tasks(cx: &mut TestAppContext) {
     assert_eq!(rows(&next), [row(&next, &staying)]);
     assert_eq!(listed(&next, cx).len(), 1);
     assert_eq!(next.ilo_lines(&new, cx).last(), Some(&IloKind::Gone));
+}
+
+/// With the inside switch off at launch, the tasks a run before left are listed as ever and have
+/// no token, so nothing is let in as one of them; on again, each has its own.
+#[gpui::test]
+fn a_past_task_has_no_token_while_threads_are_off(cx: &mut TestAppContext) {
+    let run = Run::new("threads-off", cx);
+    let done = run.start(Cli::Claude, cx);
+    run.ran(1);
+    name_it(&run, &done, "Lisbon seats", cx);
+    run.finish(&done, cx);
+    quit(&run, cx);
+    let path = run.profile.join("agents.json");
+    let mut saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    saved["threads"] = json!(false);
+    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+    let agents = agents(&browser, &configs, Some(path), cx);
+    agents.update(cx, |agents, cx| agents.load(&saved.to_string(), cx));
+    let listed = agents.read_with(cx, |agents, cx| agents.archived_tasks(cx).len());
+    assert_eq!(listed, 1, "the past task isn't listed");
+    let tokens = |cx: &mut TestAppContext| {
+        agents.read_with(cx, |agents, _| {
+            let tokens = agents.tokens.lock().unwrap();
+            tokens.values().filter(|agent| is_task_id(agent)).count()
+        })
+    };
+    assert_eq!(tokens(cx), 0, "a past task has a token with threads off");
+    agents.update(cx, |agents, cx| agents.set_threads(true, cx));
+    assert_eq!(tokens(cx), 1, "on again, the past task has none");
 }

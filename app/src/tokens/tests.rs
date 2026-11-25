@@ -181,6 +181,11 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "shell.task-card.button-radius",
     // Settings' segmented track, concentric round its segments at the control radius.
     "settings.segment-radius",
+    // The foot's plates in the owner's drawing (spec-library-foot-theme.md): 28 square at 8.
+    "shell.foot-plate-radius",
+    // The downloads plate in the same drawing: a row at 9 and its tile at 7.
+    "shell.recent-downloads.row-radius",
+    "shell.recent-downloads.tile-radius",
 ];
 
 #[test]
@@ -219,8 +224,7 @@ fn every_corner_is_one_of_the_four_radii() {
 #[test]
 fn a_corner_inside_another_is_concentric() {
     use super::{
-        command_bar, foot_bar, hover_card, menu, mini_bar, radius, shell,
-        shell::{extensions, recent_downloads},
+        command_bar, foot_bar, hover_card, menu, mini_bar, radius, shell, shell::extensions,
         site_controls, toast,
     };
     // outer = inner + inset, where the inset is a token (or two).
@@ -262,11 +266,6 @@ fn a_corner_inside_another_is_concentric() {
     assert_eq!(
         shell::REVEAL_RADIUS,
         shell::PLATE_RADIUS + shell::PLATE_INSET
-    );
-    assert_eq!(
-        recent_downloads::PREVIEW_RADIUS,
-        recent_downloads::PLATE_RADIUS
-            - (recent_downloads::COLUMN_X - recent_downloads::PLATE_INSET)
     );
     // The toast's chips sit as far in from its top as its corner needs, to half a point.
     let inset = (toast::HEIGHT - toast::CHIP_HEIGHT) / 2.;
@@ -606,8 +605,8 @@ fn type_is_on_the_scale() {
             super::shell::recent_downloads::NAME_SIZE,
         ),
         (
-            "shell::recent_downloads::AGE_SIZE",
-            super::shell::recent_downloads::AGE_SIZE,
+            "shell::recent_downloads::DETAIL_SIZE",
+            super::shell::recent_downloads::DETAIL_SIZE,
         ),
         (
             "shell::side_panel::HEADER_TEXT",
