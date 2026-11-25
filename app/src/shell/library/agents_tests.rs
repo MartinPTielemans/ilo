@@ -169,6 +169,7 @@ fn page(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<String> {
             .map(|item| match *item {
                 Item::PastHead(index) => format!("head {}", shell.agent_history[index].id),
                 Item::Heading(heading) => heading.to_string(),
+                Item::Day(day) => super::day_heading(day),
                 Item::PastSite(index) => {
                     let (site, answer) = &library.sites[index];
                     format!("{site} {answer:?}")

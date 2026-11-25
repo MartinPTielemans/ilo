@@ -126,6 +126,7 @@ fn items(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<String> {
         let items = &shell.library.as_ref().unwrap().items;
         let named = items.iter().map(|item| match item {
             Item::Heading(heading) => heading.to_string(),
+            Item::Day(day) => super::day_heading(*day),
             Item::Tab(index) => format!("tab {}", shell.archive[*index].id),
             Item::Task(index) => shell.archived_tasks[*index].agent.to_string(),
             _ => "other".to_string(),

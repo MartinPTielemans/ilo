@@ -141,6 +141,7 @@ fn items(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> Vec<String> {
         let library = shell.library.as_ref().unwrap();
         let named = library.items.iter().map(|item| match item {
             Item::Heading(heading) => heading.to_string(),
+            Item::Day(day) => super::day_heading(*day),
             Item::Tab(index) => format!("closed {}", shell.archive[*index].title),
             Item::Visit(index) => {
                 let visit = &library.history.pages[*index];
@@ -998,6 +999,7 @@ fn a_task_is_listed_under_the_day_it_ended(cx: &mut TestAppContext) {
         let library = shell.library.as_ref().unwrap();
         let named = library.items.iter().map(|item| match item {
             Item::Heading(heading) => heading.to_string(),
+            Item::Day(day) => super::day_heading(*day),
             Item::Task(index) => shell.archived_task_about(&shell.archived_tasks[*index]),
             _ => "a tab".to_string(),
         });

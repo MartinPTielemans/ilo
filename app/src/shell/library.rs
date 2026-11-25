@@ -183,15 +183,9 @@ use crate::tokens::shell::library::PROGRESS_HEIGHT;
 use crate::tokens::shell::library::PROGRESS_TRACK;
 use crate::tokens::text;
 
-/// The headings, by how long ago a tab was archived: the starts of `Browser::day_starts`, then
-/// before them.
-const HEADINGS: [&str; 5] = [
-    "Today",
-    "Yesterday",
-    "Earlier This Week",
-    "Last Week",
-    "Older",
-];
+/// The headings of today and yesterday, by the starts of `Browser::day_starts`; a day before them
+/// is headed by its date (`Item::Day`), as drawn.
+const HEADINGS: [&str; 2] = ["Today", "Yesterday"];
 
 /// A tab in the archive, as the browser reports it.
 #[derive(Clone)]
@@ -550,7 +544,11 @@ fn rekeyed(library: &Library, items: &[Item]) -> Option<(usize, usize)> {
     // Headings, Clear and a past page's sites take no ring, so none takes its place.
     let rows = |items: &[Item]| -> Vec<Item> {
         let rings = |each: &&Item| {
-            *each == item || !matches!(each, Item::Heading(_) | Item::Clear | Item::PastSite(_))
+            *each == item
+                || !matches!(
+                    each,
+                    Item::Heading(_) | Item::Day(_) | Item::Clear | Item::PastSite(_)
+                )
         };
         items.iter().filter(rings).copied().collect()
     };
@@ -567,6 +565,8 @@ fn rekeyed(library: &Library, items: &[Item]) -> Option<(usize, usize)> {
 #[derive(Clone, Copy, PartialEq)]
 enum Item {
     Heading(&'static str),
+    /// A day before yesterday's heading, its date on the clock here: "Sunday 22 November".
+    Day(chrono::NaiveDate),
     /// The archived tab at this index of `Shell::archive`.
     Tab(usize),
     /// The visited page at this index of History's pages.
@@ -591,6 +591,11 @@ enum Item {
     Download(usize),
     /// A row of Media's tiles, from its left.
     Media([Option<Medium>; MEDIA_COLUMNS]),
+}
+
+/// A day's heading before yesterday, as drawn: its weekday, then its date, "Sunday 22 November".
+fn day_heading(day: chrono::NaiveDate) -> String {
+    day.format("%A %-d %B").to_string()
 }
 
 /// A tile of the Library's Media.
@@ -1379,10 +1384,13 @@ impl Shell {
         }
         let mut heading = None;
         for (item, time) in found {
-            let day = starts.iter().position(|&start| time >= start).unwrap_or(4);
+            let day = match starts.iter().position(|&start| time >= start) {
+                Some(day @ (0 | 1)) => Item::Heading(HEADINGS[day]),
+                _ => history_list::day(time).map_or(Item::Heading(""), Item::Day),
+            };
             if self.section != Section::Boosts && heading != Some(day) {
                 heading = Some(day);
-                items.push(Item::Heading(HEADINGS[day]));
+                items.push(day);
             }
             // A tile goes into the row before it, under the same heading, while it has room.
             if let (Item::Media([Some(medium), ..]), Some(Item::Media(row))) =
@@ -2672,25 +2680,27 @@ impl Shell {
         else {
             return div().into_any_element();
         };
+        let heading = |heading: SharedString| {
+            div()
+                .pt(px(HEADING_TOP))
+                .pb(px(HEADING_BOTTOM))
+                .pl(px(HEADING_X))
+                .child(
+                    div()
+                        .h(px(HEADING_HEIGHT))
+                        .flex()
+                        .items_center()
+                        .text_size(px(text::SMALL))
+                        .line_height(px(HEADING_HEIGHT))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(self.palette.gray(SECONDARY))
+                        .child(heading),
+                )
+                .into_any_element()
+        };
         let tab = match *item {
-            Item::Heading(heading) => {
-                return div()
-                    .pt(px(HEADING_TOP))
-                    .pb(px(HEADING_BOTTOM))
-                    .pl(px(HEADING_X))
-                    .child(
-                        div()
-                            .h(px(HEADING_HEIGHT))
-                            .flex()
-                            .items_center()
-                            .text_size(px(text::SMALL))
-                            .line_height(px(HEADING_HEIGHT))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(self.palette.gray(SECONDARY))
-                            .child(heading),
-                    )
-                    .into_any_element();
-            }
+            Item::Heading(name) => return heading(name.into()),
+            Item::Day(day) => return heading(day_heading(day).into()),
             Item::Tab(tab) => tab,
             Item::Visit(page) => return self.visited_item(page, cx),
             Item::Task(task) => return self.archived_task_item(task, cx),
@@ -4835,6 +4845,14 @@ mod tests {
         }
     }
 
+    /// Past yesterday a day is headed by its weekday and date, as drawn (LB4), not by how long ago.
+    #[test]
+    fn a_day_before_yesterday_is_headed_by_its_date() {
+        let day = |m, d| chrono::NaiveDate::from_ymd_opt(2026, m, d).unwrap();
+        assert_eq!(day_heading(day(11, 22)), "Sunday 22 November");
+        assert_eq!(day_heading(day(3, 1)), "Sunday 1 March");
+    }
+
     /// Downloads' row counts the files coming in, and none held as harmful or stopped.
     #[gpui::test]
     fn the_downloads_row_counts_what_runs(cx: &mut TestAppContext) {
@@ -5006,7 +5024,7 @@ mod tests {
                     Item::Heading("Today"),
                     Item::Media([Some(download(1)), Some(capture(0)), Some(download(2))]),
                     Item::Media([Some(capture(1)), None, None]),
-                    Item::Heading("Older"),
+                    Item::Day(history_list::day(-1.).unwrap()),
                     Item::Media([Some(capture(2)), None, None]),
                 ]
         );

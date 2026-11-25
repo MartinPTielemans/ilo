@@ -323,7 +323,7 @@ impl Shell {
         let mut stops = Vec::new();
         for (line, item) in library.items.iter().enumerate() {
             match item {
-                Item::Heading(_) | Item::Clear | Item::PastSite(_) => {}
+                Item::Heading(_) | Item::Day(_) | Item::Clear | Item::PastSite(_) => {}
                 Item::PastStep(past, step) => {
                     if self.past_step_opens(*past, *step) {
                         stops.push((line, 0));
@@ -482,7 +482,7 @@ impl Shell {
                 }
                 None => None,
             },
-            Item::Heading(_) | Item::Clear | Item::PastSite(_) => None,
+            Item::Heading(_) | Item::Day(_) | Item::Clear | Item::PastSite(_) => None,
         };
         name.unwrap_or_default()
     }
@@ -602,7 +602,7 @@ impl Shell {
                     self.open_media(&path, cx);
                 }
             }
-            Item::Heading(_) | Item::Clear | Item::PastSite(_) => {}
+            Item::Heading(_) | Item::Day(_) | Item::Clear | Item::PastSite(_) => {}
         }
     }
 
@@ -651,7 +651,7 @@ impl Shell {
                 None => None,
             },
             Item::Past(_) | Item::PastHead(_) | Item::PastStep(..) => None,
-            Item::Heading(_) | Item::Clear | Item::PastSite(_) => None,
+            Item::Heading(_) | Item::Day(_) | Item::Clear | Item::PastSite(_) => None,
         };
         if shown.is_some() {
             // check.sh waits for this line.
