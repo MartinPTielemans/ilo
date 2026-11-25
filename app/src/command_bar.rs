@@ -4163,6 +4163,14 @@ impl CommandBar {
         self.input.read(cx).placeholder().clone()
     }
 
+    /// The resting bar's page is another empty Space's now. A composer open in the Space before
+    /// doesn't carry over, since that Space may be another profile's, whose remembered level is
+    /// its own: the bar is search again with the words kept, as ⌘T's keeps them on a change of
+    /// Space, and the level and model picked go with the composer.
+    pub fn space_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_ask(window, cx);
+    }
+
     /// What the browser knows of the agents changed, as after it learned which are ready: a
     /// resting bar that has read them reads them again, so its New Thread row and composer show
     /// the ones found. Whether they changed.

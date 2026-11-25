@@ -78,6 +78,8 @@ impl Shell {
             if resting.space != space {
                 resting.space = space;
                 resting.wants_keys = Owed::Shown;
+                let bar = resting.bar.clone();
+                bar.update(cx, |bar, cx| bar.space_changed(window, cx));
             }
             return self.give_resting_keys(window, cx);
         }

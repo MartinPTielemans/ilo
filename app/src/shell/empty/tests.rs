@@ -331,6 +331,47 @@ fn tab_grows_the_bar_in_place_and_back_keeps_the_words(cx: &mut TestAppContext) 
     );
 }
 
+/// Another empty Space shown while the composer is open at rest: the bar there is search, with
+/// the words kept (the bar's own test holds that the picks go).
+#[gpui::test]
+fn another_space_takes_the_bar_at_rest_back_to_search(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window_with_no_tab(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_spaces(
+            vec![
+                (1, "Space".into(), None, 0, "".into(), "".into(), "".into()),
+                (2, "Other".into(), None, 0, "".into(), "".into(), "".into()),
+            ],
+            cx,
+        )
+    });
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_input("book a table");
+    cx.simulate_keystrokes("tab");
+    assert!(composer(&shell, cx).0, "⇥ didn't grow the bar");
+    shell.update(cx, |shell, cx| {
+        shell.set_space(2, cx);
+        shell.set_tabs(
+            2,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Folders::default(),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    let typed = cx.update(|_, cx| {
+        let resting = shell.read(cx).resting.as_ref().unwrap();
+        resting.bar.read(cx).typed_text(cx)
+    });
+    assert_eq!(
+        (composer(&shell, cx).0, typed.as_str()),
+        (false, "book a table"),
+        "the composer came into the other Space"
+    );
+}
+
 /// ↩ in the composer at rest starts what was typed as a thread on the assistant, where the bar
 /// rests, at the level the composer shows, and empties the field.
 #[gpui::test]

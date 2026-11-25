@@ -4786,6 +4786,73 @@ impl Resting {
             .map(|(text, _)| text)
             .collect()
     }
+
+    /// Picks row `at` of the composer's model menu, as `pick_level` does its level.
+    fn pick_model(&mut self, at: usize) {
+        let shown: Rc<RefCell<Option<Chosen>>> = Rc::default();
+        let into = shown.clone();
+        self.cx.update(|_, cx| {
+            cx.set_global(crate::menu::EntriesMenu(Rc::new(
+                move |_, _, _, _, chosen, _| *into.borrow_mut() = Some(chosen),
+            )))
+        });
+        (self.window)
+            .update(&mut self.cx, |rest, window, cx| {
+                rest.bar.update(cx, |bar, cx| bar.model_menu(window, cx))
+            })
+            .unwrap();
+        let chosen = shown.borrow_mut().take().expect("no model menu showed");
+        self.cx
+            .update(|window, cx| chosen(crate::menu::Closed::Chose(at), window, cx));
+        self.cx.run_until_parked();
+    }
+
+    /// The composer's level, and whether a model is picked on its menu, while it shows.
+    fn picks(&mut self) -> Option<(Tier, bool)> {
+        (self.window)
+            .read_with(&self.cx, |rest, cx| {
+                (rest.bar.read(cx).ask.as_ref()).map(|ask| (ask.tier, ask.model.is_some()))
+            })
+            .unwrap()
+    }
+
+    /// The page the bar rests in is another empty Space's now.
+    fn change_space(&mut self) {
+        (self.window)
+            .update(&mut self.cx, |rest, window, cx| {
+                rest.bar.update(cx, |bar, cx| bar.space_changed(window, cx))
+            })
+            .unwrap();
+        self.cx.run_until_parked();
+    }
+}
+
+/// A composer open at rest doesn't carry into another Space: the bar is search again there with
+/// the words kept, and the level and model picked are gone, so ⇥ there opens the composer as the
+/// host last started a thread, and ↩ starts nothing of the Space before's.
+#[gpui::test]
+fn a_composer_at_rest_doesnt_carry_into_another_space(cx: &mut TestAppContext) {
+    let mut rest = Resting::with_claude(cx);
+    rest.type_text("book a table");
+    rest.keys("tab");
+    rest.pick_level(2);
+    rest.pick_model(4);
+    assert_eq!(
+        rest.picks(),
+        Some((Tier::Full, true)),
+        "the picks didn't take"
+    );
+
+    rest.change_space();
+    assert_eq!(rest.composer(), (false, "book a table".into()));
+    rest.keys("tab");
+    assert_eq!(rest.picks(), Some((Tier::Work, false)), "a pick came along");
+    rest.host.calls.take();
+    rest.keys("enter");
+    assert_eq!(
+        rest.host.calls.take(),
+        ["task claude book a table", "at rest"]
+    );
 }
 
 /// A Space's first frame reads nothing for its field: the bar resting there asks the core and the
