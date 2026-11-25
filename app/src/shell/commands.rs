@@ -2126,7 +2126,7 @@ impl Shell {
     }
 
     /// `tabs`, those shown most recently first, then the rest in their order.
-    fn recent_first(&self, tabs: Vec<u64>) -> Vec<u64> {
+    pub(super) fn recent_first(&self, tabs: Vec<u64>) -> Vec<u64> {
         let recent = self.recent.iter().copied().filter(|tab| tabs.contains(tab));
         let mut order: Vec<u64> = recent.collect();
         for tab in tabs {

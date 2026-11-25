@@ -67,6 +67,15 @@ void ShowInCard(bc_id tab) {
   Ended(tab, Rule().ShowInCard(tab));
 }
 
+void PageViewChanged(bc_id tab) {
+  if (!Rule().Holds(tab)) {
+    return;
+  }
+  if (content::WebContents* contents = Tab::FromId(tab)) {
+    platform::TilePageChanged(contents);
+  }
+}
+
 bool Holds(bc_id tab) {
   return Rule().Holds(tab);
 }

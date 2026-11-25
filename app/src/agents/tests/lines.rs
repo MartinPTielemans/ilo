@@ -144,6 +144,11 @@ fn a_step_on_one_of_two_pages_names_its_site(cx: &mut TestAppContext) {
         ilo::drawn(line, Some(tab)),
         [IloButton::HandBack, IloButton::NotNow]
     );
+    // With no page in the area, the step's page opens by itself, so Hand Back is at once (i).
+    assert_eq!(
+        ilo::drawn(line, None),
+        [IloButton::HandBack, IloButton::NotNow]
+    );
 }
 
 /// Not Now leaves the tab the user's and tells the agent's call that waited they won't do the

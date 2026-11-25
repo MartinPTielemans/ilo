@@ -18,10 +18,9 @@ use super::{
     CANCEL_BOTTOM, CANCEL_HEIGHT, CREATE_BOTTOM, CREATE_UNNAMED, CreateSpace, FORM_CHEVRON,
     FORM_CHEVRON_GAP, FORM_FIELD_TOP, FORM_GLYPH, FORM_GLYPH_COLOR, FORM_GLYPH_X, FORM_INSET,
     FORM_LABEL_X, FORM_LEAVE, FORM_LEAVE_FIELD, FORM_LEAVE_ROWS, FORM_LEAVE_TITLE, FORM_PILL,
-    FORM_PILL_HEIGHT, FORM_PILL_LEFT, FORM_PILL_RIGHT, FORM_PILL_X, FORM_PLACEHOLDER, FORM_PLATE,
-    FORM_PLATE_HEIGHT, FORM_PROFILE_TOP, FORM_RADIUS, FORM_SINK, FORM_TEXT, FORM_TEXT_X,
-    FORM_THEME_TOP, FORM_TITLE_HEIGHT, FORM_TITLE_TOP, HOVERED, Naming, SECONDARY, Shell,
-    SpaceForm,
+    FORM_PILL_HEIGHT, FORM_PILL_LEFT, FORM_PILL_RIGHT, FORM_PILL_X, FORM_PLATE, FORM_PLATE_HEIGHT,
+    FORM_PROFILE_TOP, FORM_RADIUS, FORM_SINK, FORM_TEXT, FORM_TEXT_X, FORM_THEME_TOP,
+    FORM_TITLE_HEIGHT, FORM_TITLE_TOP, Naming, SECONDARY, Shell, SpaceForm,
 };
 use crate::dismissal::{By, Close, FocusReturn, Why};
 use crate::{text_input::TextInput, theme_picker};
@@ -64,10 +63,8 @@ impl Shell {
                     .filter(|space| space.agent.is_empty())
                     .map_or(0, |space| space.id);
                 let space = self.browser.create_space(&name, profile, after, cx);
-                let name = cx.new(|cx| {
-                    TextInput::new("Space name", cx)
-                        .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
-                });
+                let colors = Self::form_colors(cx);
+                let name = cx.new(|cx| TextInput::new("Space name", cx).follows(colors));
                 self.form = Some(SpaceForm {
                     space,
                     from: self.space,
@@ -339,7 +336,7 @@ impl Shell {
                 popup_named(row, said, HasPopup::Menu)
                     .child(pill)
                     .when(left.is_none(), |row| {
-                        row.hover(|style| style.bg(self.palette.plate(HOVERED)))
+                        row.hover(|style| style.bg(self.palette.hovered_plate()))
                             .on_mouse_down(MouseButton::Left, menu(Self::form_profile_menu))
                     })
             }
@@ -354,7 +351,7 @@ impl Shell {
         let theme_row = popup_named(theme_row, "Choose a Theme".into(), HasPopup::Dialog).when(
             left.is_none(),
             |row| {
-                row.hover(|style| style.bg(self.palette.plate(HOVERED)))
+                row.hover(|style| style.bg(self.palette.hovered_plate()))
                     .on_mouse_down(MouseButton::Left, menu(Self::form_theme_picker))
             },
         );

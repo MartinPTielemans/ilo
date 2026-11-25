@@ -296,18 +296,17 @@ impl Shell {
             _ => None,
         };
         let chosen = matches!(row, Row::Tab(tab) if self.chosen.contains(&tab)) && !selected;
-        let developer = selected && !folder && self.page(self.selected).developer_mode;
+        // Developer Mode's look is the shown tab's own: New Tab's row has the plate while ⌘T's bar
+        // is open, and none of it.
+        let developer = selected
+            && matches!(row, Row::Tab(_))
+            && !folder
+            && self.page(self.selected).developer_mode;
         let plate = content
             .relative()
             .children(ring)
             .when(selected, |plate| {
-                selected_plate(
-                    &self.palette,
-                    plate,
-                    plate_in,
-                    hover.unwrap_or(0.),
-                    developer,
-                )
+                selected_plate(&self.palette, plate, plate_in, hover.unwrap_or(0.))
             })
             .when(developer && !ghost, |plate| {
                 plate.child(self.logged_developer_outline(self.selected, PLATE_RADIUS))
@@ -4709,5 +4708,37 @@ mod tests {
         assert_eq!(chosen(cx), [3, 5]);
         cx.simulate_click(six, Modifiers::none());
         assert!(chosen(cx).is_empty());
+    }
+
+    /// Developer Mode's outline is the shown tab's. While ⌘T's bar gives New Tab the plate no row
+    /// has it, and the tab's row has it back where it was once the bar goes.
+    #[gpui::test]
+    fn new_tab_s_plate_has_no_developer_outline(cx: &mut TestAppContext) {
+        let host = Rc::new(Recorder::default());
+        let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host, cx));
+        shell.update(cx, |shell, cx| {
+            let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
+            shell.set_spaces(vec![space], cx);
+            shell.set_space(1, cx);
+            shell.set_tabs(1, Vec::new(), vec![1], Vec::new(), Folders::default(), cx);
+            let page = Page {
+                url: "http://localhost:3000/".into(),
+                developer_mode: true,
+                ..Page::default()
+            };
+            shell.set_page(1, page, cx);
+            shell.set_selected(1, cx);
+        });
+        let outlined = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+            shell.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+            shell.read_with(cx, |shell, _| shell.developer_outline_drawn.get())
+        };
+        let on_its_row = outlined(&shell, cx);
+        assert_eq!(on_its_row.map(|(tab, _)| tab), Some(1));
+        shell.update(cx, |shell, cx| shell.set_new_tab(true, cx));
+        assert_eq!(outlined(&shell, cx), None);
+        shell.update(cx, |shell, cx| shell.set_new_tab(false, cx));
+        assert_eq!(outlined(&shell, cx), on_its_row);
     }
 }

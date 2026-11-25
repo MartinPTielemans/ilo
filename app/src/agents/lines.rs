@@ -1,15 +1,19 @@
 //! ilo's lines of what happened to a task (#4086 step 3): each refusal, each step that's the
-//! user's, each time an agent asks for a tab back, and each change of the task's access. The app
+//! user's, each time an agent asks for a tab back, each change of the task's access, and each wall
+//! around its files that ilo couldn't put up, with what a run inside one left running (#4101,
+//! rewall.rs). The app
 //! makes each from the task's own state, at the end of the turn it came in: nothing an agent sends
 //! and no page's text makes one, names its buttons or gives it a link.
 
 use std::time::Instant;
 
-use gpui::{App, Context};
+use gpui::{App, Context, SharedString};
 
+use super::files::Given;
 use super::held;
-use super::task::ilo::{IloKind, IloLine};
-use super::task::{Line, Task, Who};
+use super::task::ilo::{IloKind, IloLine, LeftOut, Reach};
+use super::task::rewall::Rewalled;
+use super::task::{Mark, Task, Who};
 use super::tier::{self, Tier};
 use super::{Agents, site};
 
@@ -17,13 +21,91 @@ use super::{Agents, site};
 /// keys of its steps below and of the helpers' and the kept task's lines above.
 const STOPS: usize = usize::MAX / 8;
 const PLACED: usize = usize::MAX / 4;
+/// Where the keys of the lines of the walls that weren't put up start: two to each, as a start
+/// without a folder and without attached files says each on a line.
+const REWALLED: usize = usize::MAX / 8 * 3;
+
+/// What the user gave a task as a line names it: the folder, and each file they attached.
+#[derive(Default)]
+struct Shown {
+    folder: Option<SharedString>,
+    attached: Vec<SharedString>,
+}
+
+/// The names `files` are shown by: the one place a line takes a folder's or a file's name from,
+/// so nothing else of a line holds one. Until the names the user sees where they give a task its
+/// files are kept beside it, the folder's is its own name on the disk and an attached file has
+/// none, so no line says one.
+fn shown(files: &Given) -> Shown {
+    let folder = (files.folder.as_ref())
+        .and_then(|folder| folder.root().file_name())
+        .map(|name| name.to_string_lossy().into_owned().into());
+    Shown {
+        folder,
+        attached: Vec::new(),
+    }
+}
+
+/// What `files` are said as where a line says what a task is without: the folder first, then
+/// the attached files, one by its name and more by their count.
+fn left_out(files: &Given) -> impl Iterator<Item = LeftOut> {
+    let Shown { folder, attached } = shown(files);
+    let attached = match attached.as_slice() {
+        [] => None,
+        [file] => Some(LeftOut::File(file.clone())),
+        files => Some(LeftOut::Files(files.len())),
+    };
+    folder.map(LeftOut::Folder).into_iter().chain(attached)
+}
+
+/// The lines of one wall that wasn't put up, or of what a run left running: none where a line
+/// would have no name to say.
+fn rewalled(came: &Rewalled) -> Vec<IloKind> {
+    match came {
+        Rewalled::Stays { at, refused, files } => (shown(files).folder.into_iter())
+            .map(|folder| IloKind::KeptAt {
+                at: *at,
+                refused: *refused,
+                folder,
+            })
+            .collect(),
+        Rewalled::SetBack { at, refused, files } => (shown(files).folder.into_iter())
+            .map(|folder| IloKind::SetBack {
+                at: *at,
+                refused: *refused,
+                folder,
+            })
+            .collect(),
+        Rewalled::WithoutFiles { files } => (left_out(files))
+            .map(|left| IloKind::StartedWithout { left })
+            .collect(),
+        Rewalled::Stopped { files } => (left_out(files))
+            .map(|left| IloKind::NotRestarted { left })
+            .collect(),
+        Rewalled::NotRaised { refused } => vec![IloKind::NotRaised { refused: *refused }],
+        Rewalled::LeftRunning { files } => {
+            // The files the user attached are said as the task's, so need no name.
+            let reach = match (shown(files).folder, files.attached.is_some()) {
+                (Some(folder), true) => Some(Reach::Both(folder)),
+                (Some(folder), false) => Some(Reach::Folder(folder)),
+                (None, true) => Some(Reach::Files),
+                (None, false) => None,
+            };
+            (reach.into_iter())
+                .map(|reach| IloKind::LeftRunning { reach })
+                .collect()
+        }
+        Rewalled::EndedLeft => vec![IloKind::EndedLeft],
+    }
+}
 
 /// One of a task's lines other than a refusal, which a refusal's count keeps in `Task::stops`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Placed {
     pub kind: Happened,
-    /// How many messages the user had written, which places it at the end of that turn.
-    turn: usize,
+    /// How many of the task's messages and steps came before it, which places it among them.
+    after: usize,
+    traced: usize,
     appeared: Instant,
     /// Acted on, or passed: its tab came back, or the user kept it.
     pub settled: bool,
@@ -50,15 +132,8 @@ impl Happened {
 }
 
 /// The turn of `task` under way, as its user's messages count it.
-fn turn(task: &Task) -> usize {
+pub(super) fn turn(task: &Task) -> usize {
     (task.messages.iter())
-        .filter(|m| m.who == Who::User)
-        .count()
-}
-
-/// The user's messages among `task`'s first `after` messages.
-fn turn_at(task: &Task, after: usize) -> usize {
-    (task.messages.iter().take(after))
         .filter(|m| m.who == Who::User)
         .count()
 }
@@ -78,7 +153,7 @@ impl Agents {
         let Some(task) = self.task_mut(key) else {
             return;
         };
-        let turn = turn(task);
+        let (after, traced) = (task.messages.len(), task.trace.len());
         // A tab comes once at a time: the same step on it isn't said twice while it stands.
         let standing = |placed: &Placed| !placed.settled && placed.kind == made;
         if made.tab().is_some() && task.placed.iter().any(standing) {
@@ -88,7 +163,8 @@ impl Agents {
         let settled = matches!(made, Happened::TierChanged { .. });
         task.placed.push(Placed {
             kind: made,
-            turn,
+            after,
+            traced,
             appeared: Instant::now(),
             settled,
         });
@@ -158,25 +234,34 @@ impl Agents {
         cx.notify();
     }
 
-    /// ilo's lines of `task`'s refusals and of the rest that happened to it, each at the end of
-    /// the turn it came in, in the order they came. An ended task's have no buttons.
-    pub(super) fn ilo_lines(&self, task: &Task, lines: &mut Vec<Line>, cx: &App) {
+    /// ilo's lines of `task`'s refusals and of the rest that happened to it, in the order they
+    /// came, each with how many of the task's messages and steps came before it, for `fold` to
+    /// place among them. An ended task's have no buttons.
+    pub(super) fn ilo_lines(&self, task: &Task, cx: &App) -> Vec<Mark> {
         let ended = task.ended.is_some();
         let pages = self.pages(task, cx);
-        let mut made: Vec<(usize, Instant, IloLine)> = Vec::new();
+        let mut made: Vec<(Instant, Mark)> = Vec::new();
         for (index, stop) in task.stops.iter().enumerate() {
             let line = IloLine {
                 key: STOPS + index,
                 kind: IloKind::Stopped {
                     tab: stop.tab,
                     at: stop.at.clone().into(),
+                    doing: stop.doing.clone().into(),
                     why: stop.why,
                     tier: stop.tier,
                     count: stop.count,
                 },
                 settled: stop.settled || ended,
             };
-            made.push((turn_at(task, stop.after), stop.appeared, line));
+            made.push((
+                stop.appeared,
+                Mark {
+                    after: stop.after,
+                    traced: stop.traced,
+                    line,
+                },
+            ));
         }
         for (index, placed) in task.placed.iter().enumerate() {
             let kind = match placed.kind {
@@ -194,17 +279,31 @@ impl Agents {
                 kind,
                 settled: placed.settled || ended,
             };
-            made.push((placed.turn, placed.appeared, line));
+            let mark = Mark {
+                after: placed.after,
+                traced: placed.traced,
+                line,
+            };
+            made.push((placed.appeared, mark));
         }
-        made.sort_by_key(|(turn, appeared, _)| (*turn, *appeared));
-        // In the order they came: each goes before the user's next message, after those of its
-        // turn already placed, as placing one moves no message of the user's.
-        for (turn, _, line) in made {
-            let next = (lines.iter().enumerate())
-                .filter(|(_, line)| matches!(line, Line::You(_)))
-                .nth(turn)
-                .map(|(at, _)| at);
-            lines.insert(next.unwrap_or(lines.len()), Line::Ilo(line));
+        // What came of a wall stands where it came, as the rest does: after the messages and
+        // steps the task had then.
+        for (index, came) in task.rewalled.iter().enumerate() {
+            for (nth, kind) in rewalled(&came.what).into_iter().enumerate() {
+                let line = IloLine {
+                    key: REWALLED + 2 * index + nth,
+                    kind,
+                    settled: true,
+                };
+                let mark = Mark {
+                    after: came.after,
+                    traced: came.traced,
+                    line,
+                };
+                made.push((came.appeared, mark));
+            }
         }
+        made.sort_by_key(|(appeared, mark)| (mark.after, mark.traced, *appeared));
+        made.into_iter().map(|(_, mark)| mark).collect()
     }
 }

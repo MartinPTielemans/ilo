@@ -1396,9 +1396,25 @@ fn the_first_devices_words_go_on_with_done(cx: &mut TestAppContext) {
         .expect("the account shows");
     let skip = shell.read_with(cx, |shell, cx| shell.keeping_words(cx));
     assert!(skip, "no Skip while the words show");
-    let done = view
-        .read_with(cx, |view, _| view.drawn("done"))
-        .expect("Done is drawn");
+    // Taller than the sheet's room, the words scroll in it above the foot, Done at their end.
+    let done = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| view.drawn("done"))
+            .expect("Done is drawn")
+    };
+    let foot = placed("back", cx).expect("Back is drawn");
+    let over_the_words = point(done(cx).center().x, foot.top() - px(40.));
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: over_the_words,
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-400.))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.simulate_next_frame(cx));
+    let done = done(cx);
+    assert!(
+        done.bottom() <= foot.top(),
+        "scrolled to their end, Done at {done:?} is above the foot at {foot:?}"
+    );
     cx.simulate_click(done.center(), Modifiers::none());
     assert_eq!(step(&shell, cx), Some(Step::OptIns));
 }
@@ -2026,6 +2042,15 @@ fn a_screen_reader_reads_the_engines_as_one_choice(cx: &mut TestAppContext) {
         said.contains(&(Role::Dialog, "Pick a search engine.".into(), None)),
         "{said:?}"
     );
+    let line = cx
+        .a11y_tree()
+        .unwrap()
+        .nodes
+        .into_iter()
+        .find_map(|(_, node)| {
+            (node.role() == Role::Dialog).then(|| node.description().map(str::to_string))
+        });
+    assert_eq!(line, Some(None), "the step's title has no line after it");
     assert!(
         said.iter()
             .any(|(role, name, _)| *role == Role::RadioGroup && name == "Search engine")
@@ -2587,6 +2612,14 @@ fn the_sync_loop_carries_a_tab_across_and_a_favorite_back(cx: &mut TestAppContex
         placed("phone-tab", cx).is_some() && placed("tile-back", cx).is_some(),
         "the still last frame has both landed"
     );
+    // The lock rests on the seam between the window and the phone, where the tab went over.
+    let lock = placed("lock", cx).expect("the lock is drawn at rest");
+    let phone = placed("phone", cx).expect("the phone is drawn");
+    // The phone's place is inside its 1 pt border, the lock's centre on the border.
+    assert!(
+        (lock.center().x - phone.left()).abs() <= px(1.),
+        "the lock at {lock:?} rests on the phone's edge at {phone:?}"
+    );
 }
 
 /// The assistant's step comes after the account's, on the sheet, its foot with Back and Skip, and
@@ -2619,6 +2652,153 @@ fn the_assistant_step_is_on_the_sheet_with_room_for_its_switch(cx: &mut TestAppC
     );
     cx.simulate_keystrokes("escape");
     assert_eq!(step(&shell, cx), Some(Step::OptIns), "Esc goes on, as Skip");
+}
+
+/// The sheet's foot is in the same place on every step, the assistants' too with all its rows: a
+/// list taller than its room scrolls in it, and the foot never moves down for it.
+#[gpui::test]
+fn the_sheets_foot_is_in_the_same_place_on_every_step(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    host.agents.set(Some(false));
+    let _agents = cx.update(|_, cx| crate::agents::tests::stand_in(Vec::new(), cx));
+    started(&shell, cx);
+    let mut feet = Vec::new();
+    // A flow that never ends fails rather than spins.
+    for _ in 0..32 {
+        let Some(at) = step(&shell, cx) else {
+            break;
+        };
+        if at != Step::Intro && super::sheet::on_sheet(at) {
+            later(&shell, cx, STEP_MOTION);
+            if let Some(skip) = placed("skip", cx) {
+                feet.push((at, skip.origin.y));
+            }
+        }
+        cx.simulate_keystrokes(if at == Step::Intro { "enter" } else { "escape" });
+    }
+    assert!(
+        feet.iter().any(|(at, _)| *at == Step::Assistant),
+        "the assistants' step showed its foot: {feet:?}"
+    );
+    let (_, first) = feet[0];
+    assert!(
+        feet.iter().all(|(_, y)| *y == first),
+        "Skip is where it is on every step: {feet:?}"
+    );
+}
+
+/// The assistants' step looks for them once as it shows, off the UI thread, and each row then
+/// says what was found, as Settings › Agents' does, and offers what it offers there. Nothing asks
+/// again while the step stands; shown again, it looks again.
+#[gpui::test]
+fn the_assistant_step_looks_for_the_assistants_as_it_shows(cx: &mut TestAppContext) {
+    use crate::agents::ready::{Found, Ready};
+    use crate::agents::runner::Cli;
+    let (shell, cx, host) = first_window(cx);
+    host.agents.set(Some(false));
+    let signed_out = Found {
+        ready: Ready::SignedOut,
+        ..Default::default()
+    };
+    let (agents, looks) =
+        cx.update(|_, cx| crate::agents::tests::stand_in(vec![(Cli::Claude, signed_out)], cx));
+    cx.simulate_a11y_activation();
+    started(&shell, cx);
+    let lines = |cx: &mut VisualTestContext| {
+        agents.read_with(cx, |agents, _| {
+            Cli::ALL.map(|cli| agents.assistant_row(cli).line)
+        })
+    };
+    let all = steps(&shell, cx);
+    let at = all
+        .iter()
+        .position(|&each| each == Step::Assistant)
+        .unwrap();
+    skip_to(&shell, cx, all[at - 1]);
+    assert_eq!(looks(), 0, "nothing looked before the step");
+    assert_eq!(lines(cx), ["Checking…", "Checking…"]);
+
+    cx.simulate_keystrokes("escape");
+    assert_eq!(step(&shell, cx), Some(Step::Assistant));
+    later(&shell, cx, STEP_MOTION);
+    assert_eq!(looks(), 1, "the step's showing looked once");
+    assert_eq!(lines(cx), ["Not signed in", "Not installed"]);
+    let said: Vec<String> = read(cx).into_iter().map(|(_, name, _)| name).collect();
+    for offer in ["Sign In to Claude Code", "Get Codex"] {
+        assert!(said.iter().any(|name| name == offer), "{offer} in {said:?}");
+    }
+    later(&shell, cx, 5.);
+    assert_eq!(looks(), 1, "nothing looked again while it stood");
+
+    cx.simulate_keystrokes("escape");
+    later(&shell, cx, STEP_MOTION);
+    click_back(cx);
+    assert_eq!(step(&shell, cx), Some(Step::Assistant));
+    cx.run_until_parked();
+    assert_eq!(looks(), 2, "shown again, it looked again");
+}
+
+/// In the sheet's narrow half no assistant's name is cut by its button: each button is beside the
+/// whole name, or, where the row has no room for both, under it.
+#[gpui::test]
+fn the_assistants_names_are_whole_beside_or_over_their_buttons(cx: &mut TestAppContext) {
+    use crate::agents::ready::{Found, Ready};
+    use crate::agents::runner::Cli;
+    use crate::tokens::settings::{
+        CONTROL_GAP, END_GAP, GLYPH_PLATE, GLYPH_PLATE_GAP, PADDING, ROW_X,
+    };
+    let (shell, cx, host) = first_window(cx);
+    host.agents.set(Some(false));
+    let signed_out = Found {
+        ready: Ready::SignedOut,
+        ..Default::default()
+    };
+    let (agents, _) =
+        cx.update(|_, cx| crate::agents::tests::stand_in(vec![(Cli::Claude, signed_out)], cx));
+    cx.simulate_a11y_activation();
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Assistant);
+    later(&shell, cx, STEP_MOTION);
+    let lines = agents.read_with(cx, |agents, _| {
+        Cli::ALL.map(|cli| agents.assistant_row(cli).line)
+    });
+    assert_eq!(lines, ["Not signed in", "Not installed"]);
+
+    let scale = cx.update(|window, _| window.scale_factor());
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    let button = |label: &str| {
+        let node = (tree.nodes.iter())
+            .map(|(_, node)| node)
+            .find(|node| node.role() == Role::Button && node.label().as_deref() == Some(label))
+            .unwrap_or_else(|| panic!("no {label} button"));
+        let bounds = node.bounds().expect("a button has bounds");
+        (bounds.x0 as f32 / scale, bounds.y0 as f32 / scale)
+    };
+    let system = cx.update(|_, cx| gpui::WindowTextSystem::new(cx.text_system().clone()));
+    for (row, name, offer) in [
+        ("claude", "Claude Code", "Sign In to Claude Code"),
+        ("codex", "Codex", "Get Codex"),
+        ("another", "Another app", "How to Connect"),
+    ] {
+        let row = placed(row, cx).unwrap_or_else(|| panic!("{name}'s row wasn't drawn"));
+        let whole = crate::tooltip::text_width(
+            &name.into(),
+            crate::tokens::text::BODY,
+            gpui::FontWeight::MEDIUM,
+            &system,
+        );
+        let name_left = f32::from(row.left()) + ROW_X + GLYPH_PLATE + GLYPH_PLATE_GAP;
+        let (left, top) = button(offer);
+        let beside = left + 0.5 >= name_left + whole + END_GAP;
+        // Under is on a line of its own, below the name's, which is at least the glyph's height,
+        // not centred on a row its line made tall.
+        let under = top + 0.5 >= f32::from(row.top()) + PADDING + GLYPH_PLATE + CONTROL_GAP;
+        assert!(
+            beside || under,
+            "{offer} at ({left}, {top}) cuts {name}, {whole} wide from {name_left}, in its row at \
+             {row:?}"
+        );
+    }
 }
 
 /// The assistant's loop: one ask, three pages opened at once in the small window's sidebar, a

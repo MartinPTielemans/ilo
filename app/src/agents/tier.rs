@@ -6,6 +6,11 @@
 /// opens Settings there by this name (settings::show_row).
 pub const ACCESS: &str = "Access";
 
+/// The level's menu's rows for where a task may go: every site, the default, or only the sites of
+/// the pages the user added to it.
+pub const ANY_SITE: &str = "Any site";
+pub const ONLY_ADDED: &str = "Only the sites you add";
+
 /// Settings › Agents' line under its name, the one place it says what a task never gets.
 pub const NEVER_GETS: &str = "A task never gets passwords, cookies or your other tabs.";
 
@@ -219,6 +224,8 @@ pub struct Stop {
     /// What it stopped, as the step names it, such as a button's name: page text, plain and capped.
     pub at: String,
     pub site: String,
+    /// The refused step's under-way phrase, its first letter lowered (`IloKind::Stopped`).
+    pub doing: String,
     pub why: Why,
     pub tier: Tier,
     pub count: u32,
@@ -226,6 +233,8 @@ pub struct Stop {
     pub appeared: std::time::Instant,
     /// How many of the task's messages came before it, which places it among them.
     pub after: usize,
+    /// How many of the task's steps came before it, which places it among them.
+    pub traced: usize,
     /// Acted on, or passed: a change of tier, Take over, or the task's end.
     pub settled: bool,
 }
@@ -300,10 +309,26 @@ pub fn changed_logged(from: Tier, to: Tier) -> String {
     format!("{} → {}", from.label(), to.label())
 }
 
+/// The activity log's words for a change of the sites a task may use, as `changed_logged`'s for
+/// its level: the menu's names with how many sites, never an address.
+pub fn sites_logged(from: &Sites, to: &Sites) -> String {
+    let name = |sites: &Sites| match sites {
+        Sites::Any => ANY_SITE.to_string(),
+        Sites::Only(only) if only.len() == 1 => format!("{ONLY_ADDED} · 1 site"),
+        Sites::Only(only) => format!("{ONLY_ADDED} · {} sites", only.len()),
+    };
+    format!("{} → {}", name(from), name(to))
+}
+
 /// The activity log's words for the tier a task starts at, which its start's entry keeps as its
-/// target, as a change's keeps `changed_logged`.
-pub fn started_logged(tier: Tier) -> String {
-    format!("Starts at {}", tier.label())
+/// target, as a change's keeps `changed_logged`, with how many pages the user added to it: their
+/// count alone, never an address or title.
+pub fn started_logged(tier: Tier, added: usize) -> String {
+    match added {
+        0 => format!("Started at {}", tier.label()),
+        1 => format!("Started at {} · 1 page", tier.label()),
+        added => format!("Started at {} · {added} pages", tier.label()),
+    }
 }
 
 /// The most of a page's text a line carries.

@@ -394,12 +394,6 @@ $(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cu
 PLATE
 send click $((px + pw / 2)) $((py + ph / 2))
 expect "^browser: task $session shown\$" "a click on the agent's card didn't show its conversation"
-await '^browser: task pages at ' || fail "the agent's conversation drew no Pages"
-read -r gx gy gw gh <<CHIP
-$(grep '^browser: task pages at ' "$log" | tail -1 | cut -d' ' -f5-)
-CHIP
-send click $((gx + gw / 2)) $((gy + gh / 2))
-expect "^browser: task $session shows pages\$" "a click on Pages didn't show the agent's pages"
 await "^browser: task picture $agent_tab at " || fail "the agent's conversation didn't picture its tab"
 read -r wx wy ww wh <<PICTURE
 $(grep "^browser: task picture $agent_tab at " "$log" | tail -1 | cut -d' ' -f6-)

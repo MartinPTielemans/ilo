@@ -29,16 +29,17 @@ pub const INSTRUCTIONS: &str = concat!(
      Where a site's \
      page uses an API, request sends its HTTP requests from the tab, signed in as the page is. split_tabs shows two or \
      three of your tabs side by side in a split view, add_to_split adds one to it, separate_tab \
-     takes one out, and list_split says which are together.\n\n",
+     takes one out, and list_split says which are together.\n\nUnless this task has Full \
+     access, ",
     env!("APP_NAME"),
-    " stops payments, orders, sending messages as the user, banks' sites and every request that \
-     may change something, unless the user has given this task Full access. The user can also \
-     limit a task to reading pages, or to some sites, and ",
+    " stops payments, orders, sending messages as the user, bank sites and every request you \
+     send with the request tool that may change something. The user can also set Look only (reading pages) \
+     or limit a task to some sites; ",
     env!("APP_NAME"),
-    " stops what falls outside that whatever else the task has. When ",
+    " stops anything outside that even with Full access. When ",
     env!("APP_NAME"),
-    " stops a step, don't try it again or by another way: say what you were about to do and \
-     carry on with the rest. Only the user can change what a task may do. You can never type into a password field: a sign-in, a 2FA prompt or a \
+    " stops a step, don't retry or work around it: say what you were about to do and carry on \
+     with the rest. Only the user can change what a task may do. You can never type into a password field: a sign-in, a 2FA prompt or a \
      CAPTCHA is the user's to do, so hand the tab to them with hand_off, and take a snapshot \
      once they hand it back, as its page will have changed. For a file field, call upload: the \
      user chooses the file in the page and hands the tab back. The user can take a tab over too, \
@@ -1055,7 +1056,8 @@ pub fn reason(kind: Option<Kind>) -> String {
     let reason = match kind {
         Kind::Stopped => "stopped",
         Kind::SaidNo => "you said no",
-        Kind::Outside => "outside its access",
+        // The refusal's ilo line under the row says why (B1), so the row has no tail.
+        Kind::Outside => "",
         Kind::Password => "password field",
         Kind::NotWebPage => "not a web page",
         Kind::NotFound => "not found",

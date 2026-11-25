@@ -577,7 +577,6 @@ pub(crate) const TILE_HOVERED: f32 =
 use crate::tokens::shell::CREATE_UNNAMED;
 use crate::tokens::shell::DEVELOPER_OUTLINE;
 use crate::tokens::shell::DEVELOPER_OUTLINE_WIDTH;
-use crate::tokens::shell::DEVELOPER_SELECTED;
 use crate::tokens::shell::DEVELOPER_TILE;
 use crate::tokens::shell::FORM_GLYPH_COLOR;
 use crate::tokens::shell::FORM_PILL;
@@ -1353,6 +1352,14 @@ enum Switch {
     Tab(u64),
 }
 
+/// What the composer's ↩ started, as the shell knows it: a start asked from Space `Asked`, until
+/// the Agents say which task it made, or that it made none.
+#[derive(Clone, Debug, PartialEq)]
+enum ShowStarted {
+    Asked(u64),
+    Task(SharedString),
+}
+
 pub struct Shell {
     browser: Rc<dyn Browser>,
     /// Holds GPUI's focus while nothing in the shell takes it, so the shortcuts have their context.
@@ -1476,6 +1483,9 @@ pub struct Shell {
     beside_frames: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
     /// The plates the sidebar's buttons with a tooltip were last drawn in, by their command.
     button_frames: Rc<RefCell<HashMap<&'static str, Bounds<Pixels>>>>,
+    /// The sidebar button whose press ended its tooltip, by its command, which asks for none until
+    /// the pointer has left it: GPUI calls a held button left, and at the release hovered again.
+    tip_pressed: Cell<Option<&'static str>>,
     /// The icon slots the Library's Space cards were last drawn with, by Space, for their
     /// tooltips and the icon picker to hang from.
     slot_frames: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
@@ -1896,6 +1906,11 @@ pub struct Shell {
     agent_history: Vec<crate::agent_history::Past>,
     /// The task the Archive brought back, whose conversation opens once its card is back.
     show_restored: Option<SharedString>,
+    /// What the composer's ↩ started: that task's view opens as its card comes in, if its Space
+    /// still shows no page.
+    show_started: Option<ShowStarted>,
+    /// The tasks a run before left that Latest tasks lists until one is opened (`set_kept_cards`).
+    kept_cards: Vec<crate::agents::task::Card>,
     /// The task's conversation shown in the page's place, and whether its field takes the keyboard
     /// once drawn (Agent task).
     talk: Option<conversation::Talk>,
@@ -2168,6 +2183,7 @@ impl Shell {
             #[cfg(test)]
             beside_frames: Rc::default(),
             button_frames: Rc::default(),
+            tip_pressed: Cell::default(),
             slot_frames: Rc::default(),
             brush_frames: Rc::default(),
             card_press_closes: false,
@@ -2363,6 +2379,8 @@ impl Shell {
             archived_tasks: Vec::new(),
             agent_history: Vec::new(),
             show_restored: None,
+            show_started: None,
+            kept_cards: Vec::new(),
             talk: None,
             focus_talk: false,
             agent_status: Vec::new(),
@@ -3144,6 +3162,10 @@ impl Shell {
 
     /// The Space the window shows. Which of its tabs shows follows in set_selected.
     pub fn set_space(&mut self, space: u64, cx: &mut Context<Self>) {
+        // Another Space shown leaves the empty page the composer's start was made from.
+        if space != self.space() {
+            self.show_started = None;
+        }
         // Another Space shown ends ⌘W's wait for the tab its own showed next (#3570).
         if self.close_waits.is_some_and(|(waits, _)| waits != space) {
             self.close_waits = None;
@@ -3530,6 +3552,10 @@ impl Shell {
     }
 
     pub fn set_selected(&mut self, tab: u64, cx: &mut Context<Self>) {
+        // A page shown leaves the empty page the composer's start would have opened over.
+        if tab != 0 {
+            self.show_started = None;
+        }
         // ⌘W's wait is for this selection only, whichever way it goes (#3570).
         let close_waits = self.close_waits.take();
         if self.task_tab_shown(tab, cx) {
@@ -5322,7 +5348,7 @@ impl Shell {
                 return row.child(
                     split_plate(segments)
                         .when(panes.contains(&selected), |plate| {
-                            selected_plate(&self.palette, plate, 1., 0., developer)
+                            selected_plate(&self.palette, plate, 1., 0.)
                         })
                         .when(developer, |plate| {
                             plate.child(developer_outline(&self.palette, PLATE_RADIUS))
@@ -5348,7 +5374,7 @@ impl Shell {
                     title(&self.palette, self.title(tab), bright).pr(px(TITLE_END_INSET)),
                 )
                 .when(tab == selected, |plate| {
-                    selected_plate(&self.palette, plate, 1., 0., developer)
+                    selected_plate(&self.palette, plate, 1., 0.)
                 })
                 .when(developer, |plate| {
                     plate.child(developer_outline(&self.palette, PLATE_RADIUS))
@@ -6183,28 +6209,20 @@ fn split_plate(segments: impl IntoIterator<Item = impl IntoElement>) -> gpui::Di
         .children(segments)
 }
 
-/// The selected tab's plate, at `opacity` while it fades in, a step firmer at rest in Developer
-/// Mode, which the pointer takes to the same plate as another tab's.
-fn selected_plate(
-    palette: &Palette,
-    plate: gpui::Div,
-    opacity: f32,
-    hover: f32,
-    developer: bool,
-) -> gpui::Div {
-    let fill = palette.shown(hover);
-    let firmer = if developer {
-        DEVELOPER_SELECTED - crate::palette::STATE_SELECTED
-    } else {
-        0.
-    };
-    let fill = Hsla {
-        a: (fill.a + firmer * (1. - hover)).min(1.),
-        ..fill
-    };
-    plate
-        .bg(fill.opacity(opacity))
-        .shadow(palette.shown_shadow(opacity))
+/// The selected tab's plate, at `opacity` while it fades in. It's the palette's in every mode: a
+/// fill firmer than the one the palette reckoned takes its title under what text needs over a
+/// bright window, so Developer Mode's mark is its outline alone.
+fn selected_plate(palette: &Palette, plate: gpui::Div, opacity: f32, hover: f32) -> gpui::Div {
+    let fill = palette.shown(hover).opacity(opacity);
+    #[cfg(test)]
+    SHOWN_FILL.set(Some(fill));
+    plate.bg(fill).shadow(palette.shown_shadow(opacity))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The fill `selected_plate` last laid, for a test of what a row's plate is drawn in.
+    static SHOWN_FILL: Cell<Option<Hsla>> = const { Cell::new(None) };
 }
 
 /// The shown tab's outline in Developer Mode, inside its plate's or tile's `radius` corners, over

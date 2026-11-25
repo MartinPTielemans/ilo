@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use gpui::{AppContext as _, Entity, Modifiers, SharedString, TestAppContext, VisualTestContext};
 
 use super::{
-    Card, Chip, Cli, Dot, Holds, Offer, PLATE_TOP, PageWord, chip, group_height, pages_room,
-    state_line,
+    Card, Chip, Cli, Dot, GROW, Holds, Offer, PLATE_TOP, PageMark, PageWord, chip, group_height,
+    pages_room, state_line,
 };
 use crate::agents::task::Word;
 use crate::agents::tier::Tier;
@@ -17,7 +17,7 @@ use crate::shell::{
     recorder::Recorder,
 };
 
-fn card(n: u64, dot: Dot) -> Card {
+pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
     Card {
         agent: format!("task-{n}").into(),
         home: 1,
@@ -190,35 +190,50 @@ fn a_header_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
     });
 }
 
-/// A page's row ends in one word of five: Reading where the task works in the page now, Done where
-/// it has moved on or finished, Paused where the task waits or stopped, Needs you at the page it
-/// handed the user, and the bar's own title at one they took over.
+/// A page's word and its outline are one answer (`page_mark`), which the sidebar's row, the rail's
+/// tile and the card read. While its task works every page says Working and the outline alone
+/// marks the page it's in; Done only once the task is done; Paused where it waits or broke off;
+/// Stopped on every page of a task the user stopped; at a handoff the outline is on the page that needs the user; a page they took over
+/// says they drive it; a stopped or done task has no outline.
 #[gpui::test]
-fn a_pages_row_says_one_word(cx: &mut TestAppContext) {
+fn a_pages_word_and_outline_are_one_answer(cx: &mut TestAppContext) {
     let (shell, _, cx) = shell(cx);
+    let mark = |word, outline| PageMark { word, outline };
+    let (working_in, working, paused, done) = (
+        mark(PageWord::Working, true),
+        mark(PageWord::Working, false),
+        mark(PageWord::Paused, false),
+        mark(PageWord::Done, false),
+    );
     shell.read_with(cx, |shell, _| {
-        let mut working = card(1, Dot::Working);
-        working.pages = vec![30, 31];
-        working.page_steps = vec![(31, "Opening maat.pt".into())];
-        assert_eq!(shell.page_word(&working, 30), PageWord::Done);
-        assert_eq!(shell.page_word(&working, 31), PageWord::Reading);
-        // With one page, that's the one it works in.
-        working.pages = vec![30];
-        working.page_steps.clear();
-        assert_eq!(shell.page_word(&working, 30), PageWord::Reading);
+        let marks = |card: &Card| {
+            card.pages
+                .iter()
+                .map(|tab| shell.page_mark(card, *tab))
+                .collect::<Vec<_>>()
+        };
+        // Helpers on two of three pages: each has the outline, and all say Working.
+        let mut helpers = card(1, Dot::Working);
+        helpers.pages = vec![30, 31, 32];
+        helpers.page_steps = vec![(31, "Opening maat.pt".into()), (32, "Reading".into())];
+        assert_eq!(marks(&helpers), [working, working_in, working_in]);
+        // With one page, that is the one it is in.
+        let mut opened = card(1, Dot::Working);
+        opened.pages = vec![30];
+        assert_eq!(marks(&opened), [working_in]);
         let mut waits = card(2, Dot::Waiting);
         waits.pages = vec![40, 41, 42];
-        assert_eq!(shell.page_word(&waits, 40), PageWord::Paused);
-        let mut done = card(3, Dot::Done);
-        done.pages = vec![50];
-        assert_eq!(shell.page_word(&done, 50), PageWord::Done);
+        assert_eq!(marks(&waits), [paused; 3]);
+        let mut finished = card(3, Dot::Done);
+        finished.pages = vec![50, 51];
+        assert_eq!(marks(&finished), [done; 2]);
         let mut stopped = card(4, Dot::Ended);
         stopped.pages = vec![60];
-        assert_eq!(shell.page_word(&stopped, 60), PageWord::Paused);
+        assert_eq!(marks(&stopped), [mark(PageWord::Stopped, false)]);
     });
-    // The page the task handed the user says it needs them there, in the task's own word for it,
-    // one they took over says they drive it, and its others say Paused. Once it works again, the
-    // page it handed them is Paused, and the one they took is still theirs.
+    // The page the task handed the user needs them there and has the outline; one they took over
+    // says they drive it; its others are Paused. Once it works again, the page it handed them is
+    // Paused, and the one they took is still theirs.
     shell.update(cx, |shell, cx| {
         let status = crate::agents::Status {
             agent: "task-2".into(),
@@ -230,30 +245,38 @@ fn a_pages_row_says_one_word(cx: &mut TestAppContext) {
         shell.set_agent_status(vec![status], cx);
     });
     shell.read_with(cx, |shell, _| {
+        let marks = |card: &Card| [40, 41, 42].map(|tab| shell.page_mark(card, tab));
+        let driving = mark(PageWord::Driving, false);
         let mut waits = card(2, Dot::Waiting);
         waits.pages = vec![40, 41, 42];
-        let words = |card: &Card| [40, 41, 42].map(|tab| shell.page_word(card, tab));
         assert_eq!(
-            words(&waits),
-            [PageWord::NeedsYou, PageWord::Driving, PageWord::Paused]
+            marks(&waits),
+            [mark(PageWord::NeedsYou, true), driving, paused]
         );
-        let mut working = card(2, Dot::Working);
-        working.pages = vec![40, 41, 42];
-        working.page_steps = vec![(42, "Opening maat.pt".into())];
-        assert_eq!(
-            words(&working),
-            [PageWord::Paused, PageWord::Driving, PageWord::Reading]
-        );
-        // A page they took over is theirs whatever its task came to.
+        let mut working_again = card(2, Dot::Working);
+        working_again.pages = vec![40, 41, 42];
+        working_again.page_steps = vec![(42, "Opening maat.pt".into())];
+        assert_eq!(marks(&working_again), [paused, driving, working_in]);
         for dot in [Dot::Done, Dot::Ended] {
             let mut over = card(2, dot);
             over.pages = vec![40, 41, 42];
-            assert_eq!(shell.page_word(&over, 41), PageWord::Driving);
+            assert_eq!(shell.page_mark(&over, 41), driving);
+            assert!(
+                !marks(&over).iter().any(|mark| mark.outline),
+                "{dot:?} has an outline"
+            );
         }
     });
     assert_eq!(
-        [PageWord::Reading, PageWord::Done, PageWord::Paused].map(PageWord::label),
-        ["Reading", "Done", "Paused"]
+        [
+            PageWord::Working,
+            PageWord::Done,
+            PageWord::Paused,
+            PageWord::Stopped,
+            PageWord::Driving
+        ]
+        .map(PageWord::label),
+        ["Working", "Done", "Paused", "Stopped", "You're driving"]
     );
     assert_eq!(PageWord::NeedsYou.label(), Word::NeedsYou.after_name());
 }
@@ -1163,6 +1186,101 @@ fn the_group_shown_is_open_and_the_others_are_closed(cx: &mut TestAppContext) {
     assert_eq!(heights(&shell, cx), closed);
 }
 
+/// A page of the user's refuses the window's close with a task's view standing: the view is back
+/// at once as it stood (#4202), and the foot with it, its group open to its pages and nothing on
+/// it moving, whether the refusal comes with the foot at rest or while it still closes. The group
+/// closed with the foot's motion as the view stepped aside for the page's question; opening with
+/// that motion again, the view was back over a group whose pages' rows weren't yet. With more
+/// tasks than the foot has headers for, the one shown has its header back as well.
+#[gpui::test]
+fn a_refused_close_has_the_foot_back_at_once(cx: &mut TestAppContext) {
+    use crate::shell::{DialogKind, PageDialog, PageReply};
+    let one = vec![paged(1, Dot::Working, &[1010, 1011])];
+    let four = vec![
+        paged(4, Dot::Working, &[1040]),
+        paged(3, Dot::Working, &[1030]),
+        paged(2, Dot::Working, &[1020]),
+        paged(1, Dot::Working, &[1010, 1011]),
+    ];
+    let open = ROW_HEIGHT + pages_room(2);
+    // How long after the view steps aside the page's question is answered.
+    for (cards, answered) in [(one.clone(), 5.), (one, GROW / 2.), (four, GROW / 2.)] {
+        let (shell, _, cx) = with_task_spaces(cx, cards);
+        draw(&shell, cx);
+        shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
+        tick(5.);
+        draw(&shell, cx);
+        // Each group's task, whether it's going, its height now and its opacity now, and whether
+        // either still moves.
+        let foot = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+            shell.read_with(cx, |shell, _| {
+                let now = super::clock();
+                let moves = (shell.foot.groups.iter())
+                    .any(|group| group.height.moving(now) || group.opacity.moving(now));
+                let groups: Vec<(u64, bool, f32, f32)> = (shell.foot.groups.iter())
+                    .filter(|group| group.height.at(now) > 0. || !group.leaving)
+                    .map(|group| {
+                        (
+                            group.holds.key(),
+                            group.leaving,
+                            group.height.at(now),
+                            group.opacity.at(now),
+                        )
+                    })
+                    .collect();
+                (groups, moves)
+            })
+        };
+        let stood = foot(&shell, cx);
+        assert!(!stood.1, "the foot never came to rest");
+        assert!(
+            stood
+                .0
+                .contains(&(Holds::Task("task-1".into()).key(), false, open, 1.)),
+            "the task shown has no open group: {stood:?}"
+        );
+
+        shell.update(cx, |shell, cx| shell.run(Command::CloseWindow, "ui", cx));
+        let question = PageDialog {
+            id: 7,
+            kind: DialogKind::Leave,
+            title: "".into(),
+            message: "".into(),
+            text: "".into(),
+            accept: "Leave".into(),
+            cancel: "Cancel".into(),
+            check: "".into(),
+            username: "".into(),
+            password: "".into(),
+        };
+        shell.update(cx, |shell, cx| {
+            shell.set_page_dialog(10, Some(question), cx)
+        });
+        assert_ne!(
+            foot(&shell, cx),
+            stood,
+            "the group stayed open with its view aside"
+        );
+        tick(answered);
+        draw(&shell, cx);
+
+        let stay = PageReply {
+            accept: false,
+            text: String::new(),
+            password: String::new(),
+            checked: false,
+        };
+        shell.update(cx, |shell, cx| shell.answer_page_dialog(10, 7, stay, cx));
+        assert_eq!(
+            foot(&shell, cx),
+            stood,
+            "the foot isn't back as it stood, answered after {answered} s"
+        );
+        draw(&shell, cx);
+        assert_eq!(foot(&shell, cx), stood);
+    }
+}
+
 /// The sidebar shows one thing at a time. On the user's own tab its row has the shown plate and
 /// nothing at the foot does; in a task's view its header has it; on one of its pages that row has
 /// it and the header does not.
@@ -1240,7 +1358,7 @@ fn a_page_rows_click_watches_its_page_and_nothing_else(cx: &mut TestAppContext) 
     draw(&shell, cx);
     host.take();
     shell.update(cx, |shell, cx| {
-        assert!(shell.watch_task_page(1011, row, None, cx));
+        assert!(shell.watch_task_page(1011, row, None, false, cx));
     });
     cx.run_until_parked();
     assert_eq!(asked, host.take());
@@ -1427,4 +1545,19 @@ fn an_ended_task_keeps_its_group_while_it_has_pages_open(cx: &mut TestAppContext
     shell.update(cx, |shell, cx| shell.set_task_cards(working(&[1020]), cx));
     shell.update(cx, |shell, cx| shell.set_task_cards(working(&[]), cx));
     assert!(folds(&shell, cx).is_empty());
+}
+
+/// A task asked from ⌘T over a page leaves the page: its card comes in at the foot, and no view
+/// takes the page's place.
+#[gpui::test]
+fn a_task_asked_over_a_page_leaves_the_page(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shell_with(cx, Vec::new());
+    shell.update(cx, |shell, cx| {
+        shell.set_task_cards(cards(&[(1, Dot::Working)]), cx)
+    });
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.talk_agent(), None, "a view took the page's place");
+        assert_eq!(shell.selected, 10, "the page went");
+        assert_eq!(shell.task_cards.len(), 1, "no card came in");
+    });
 }

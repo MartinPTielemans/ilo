@@ -25,12 +25,12 @@ use browser::log;
 use browser::notes;
 use browser::passwords::{self, Login};
 use browser::shell::{self, CancelName, Command, Holder, KeepName, MenuEntry, Refused, UserKeys};
-use browser::text_input::{self, TextInput};
+use browser::text_input::{self, Colors, TextInput};
 use browser::theme::Appearance;
 use browser::updates::{self, NightlyRow, Track, VersionRow};
 use browser::widevine::{self, Widevine, WidevineRow};
 use gpui::{
-    AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, Global, Hsla,
+    AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, Global,
     KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, PathPromptOptions, Rgba, SharedString,
     Subscription, Window, WindowHandle, WindowOptions, actions, canvas, div, point, prelude::*, px,
     rgb, rgba, size, svg,
@@ -43,17 +43,16 @@ use browser::settings_card::{self, Card, Paging};
 use browser::settings_column::{self, Section};
 use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
-    Act, Chip, Look as RowLook, SLIDE, another_agent_row, assistant_row, chevron_slot, chip,
-    command_export, command_text, detailed_row, end, frame, glyph_plate, group, group_lined,
-    named_button, row, sent_part, stop_button, stop_chip, stop_popup, stop_restore, stop_switch,
-    text,
+    Act, Chip, Look as RowLook, SLIDE, assistant_row, chevron_slot, chip, command_export,
+    command_text, detailed_row, end, frame, glyph_plate, group, group_lined, named_button, row,
+    sent_part, stop_button, stop_chip, stop_popup, stop_restore, stop_switch, text,
 };
 use browser::settings_search::{
     self, EndSearch, Entry, NextControl, PageBottom, PageDown, PageTop, PageUp, PreviousControl,
     Search,
 };
 use browser::settings_shortcuts::{Keys, SHORTCUTS};
-use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
+use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
 use browser::tokens::radius;
 use browser::tokens::settings::{
     BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS, DETAIL,
@@ -184,7 +183,7 @@ enum Popup {
     Assistant(Cli),
     /// An assistant's Model, under its row in Agents › Your assistant.
     Model(Cli),
-    /// Agents › Notifications' When to notify.
+    /// Agents › Notifications' Notify.
     Notify,
     /// General's Page zoom.
     PageZoom,
@@ -1080,22 +1079,33 @@ fn view(cx: &mut App) -> Entity<Settings> {
         updates::observe_view(cx, |_, cx| cx.notify()).detach();
         let agents = agents::global(cx);
         let agents = agents.map(|agents| cx.observe(&agents, |_, _, cx| cx.notify()));
+        // Each field takes the look Settings has as it draws, which follows the window.
+        let settings: gpui::WeakEntity<Settings> = cx.weak_entity();
         let search = cx.new(|cx| {
-            TextInput::new("Search", cx)
-                .placeholder_color(look.detail)
-                .caret_color(look.ink)
+            TextInput::new("Search", cx).follows(move |cx| {
+                let Some(settings) = settings.upgrade() else {
+                    return Colors::default();
+                };
+                let settings = settings.read(cx);
+                // The field's "Search" is the rows' grey over the field's own plate, not over a
+                // group's.
+                Colors {
+                    placeholder: settings.base().opacity(DETAIL).into(),
+                    ..settings.look.field()
+                }
+            })
         });
         cx.observe(&search, |_, _, cx| cx.notify()).detach();
+        let colors = browser::settings_rows::field_colors(cx, |settings: &Settings| settings.look);
         let filter = cx.new(|cx| {
             TextInput::new("example.com##.banner", cx)
-                .placeholder_color(look.detail)
-                .caret_color(look.ink)
+                .follows(colors)
                 .spoken("New filter")
         });
+        let colors = browser::settings_rows::field_colors(cx, |settings: &Settings| settings.look);
         let fence_field = cx.new(|cx| {
             TextInput::new(agents::fence::PLACEHOLDER, cx)
-                .placeholder_color(look.detail)
-                .caret_color(look.ink)
+                .follows(colors)
                 .spoken(agents::fence::SPOKEN)
         });
         // ⇥ stops at the field, after the sections.
@@ -1459,17 +1469,6 @@ impl Settings {
         if let Some(links) = &self.links {
             links.update(cx, |links, cx| links.set_look(look, cx));
         }
-        let selection = Hsla::from(rgb(NO_THEME_ACCENT)).opacity(SELECTION);
-        // The field's "Search" is the rows' grey over the field's own plate, not over a group's.
-        let placeholder = self.base().opacity(DETAIL);
-        self.search.update(cx, |search, cx| {
-            search.set_colors(placeholder.into(), look.ink.into(), selection);
-            cx.notify();
-        });
-        self.filter.update(cx, |filter, cx| {
-            filter.set_colors(look.detail.into(), look.ink.into(), selection);
-            cx.notify();
-        });
         // check.sh waits for this line.
         log!(
             "browser: settings look {}",
@@ -3267,10 +3266,10 @@ impl Settings {
 
     /// Shows the profile's name in a field, all selected, to type a new one over.
     fn rename(&mut self, profile: u64, name: SharedString, cx: &mut Context<Self>) {
+        let colors = browser::settings_rows::field_colors(cx, |settings: &Self| settings.look);
         let name = cx.new(|cx| {
             TextInput::new("Profile name", cx)
-                .placeholder_color(self.look.detail)
-                .caret_color(self.look.ink)
+                .follows(colors)
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
@@ -3824,7 +3823,6 @@ impl Settings {
             blocks.push(Block::Rows(vec![self.when_to_notify(agents, cx)]));
         }
         blocks.push(Block::Heading(APPS_THAT_CONNECT.into()));
-        // Another app's How to Connect comes here.
         let apps = SharedString::from(APPS_THAT_CONNECT);
         blocks.push(Block::Group(self.flashed(&apps, group(look, clients))));
         // Shown as Apps that connect are, whether agents are on or off: the command says they're
@@ -5649,15 +5647,12 @@ fn method(target: &str) -> &str {
     target.split(' ').next().unwrap_or_default()
 }
 
-/// Apps that connect's heading, which Another app's How to Connect goes to.
+/// Apps that connect's heading.
 const APPS_THAT_CONNECT: &str = "Apps that connect";
 
 /// What Your assistant's rows never do, under them. That ilo has no assistant of its own is first
 /// run's to say.
-const NEVER_SEES_LOGIN: &str = concat!(
-    env!("APP_NAME"),
-    " never sees or keeps your assistant's login."
-);
+const NEVER_SEES_LOGIN: &str = concat!(env!("APP_NAME"), " never sees your assistant's login.");
 
 /// A line under a group that says more of it, in a row's line's grey, as Fenced sites' has.
 fn foot(look: &RowLook, line: impl Into<SharedString>) -> gpui::Div {
@@ -5708,7 +5703,7 @@ fn feature_row(
 /// and its buttons: a kept task's own, and the one for them all. An assistant that keeps none
 /// has no task in the list, which says it.
 const KEEP_TASKS: &str = "Keep finished tasks so you can reply";
-const KEPT_WHERE: &str = "Titles only. The conversation stays with your assistant.";
+const KEPT_WHERE: &str = "Titles only. Conversations stay with your assistant.";
 const REMOVE: &str = "Remove";
 const REMOVE_ALL: &str = "Remove All…";
 

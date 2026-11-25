@@ -1,8 +1,8 @@
 # check.sh runs this at 390.
 # What an agent a page has talked round still can't do (#2325): a scripted MCP client tries
 # everything the rules forbid, and pages of the run's own try to steer it. No model is in the loop:
-# the client does the worst a fully steered agent could, and the browser must refuse each try or
-# put it in front of the user, with each in the activity log, as Settings › Agents lists it.
+# the client does the worst a fully steered agent could, and the browser must refuse each try, with
+# nothing asked of the user (#4086) and each in the activity log, as Settings › Agents lists it.
 # - Outside its Space: every tool that takes a tab, on the user's tab and on another agent's.
 # - Pages that aren't http or https: open_tab and navigate to file:, chrome:, about:, data:,
 #   javascript:, view-source:, chrome-extension: and devtools: addresses. (Chromium can't load
@@ -11,16 +11,16 @@
 #   autofill, and a call by such a name is refused.
 # - Requests off the tab's site: another host, a port, https, a scheme-relative path, a redirect
 #   off the site, a Cookie or Authorization header and CONNECT or TRACE, none reaching a site.
-# - Writes: PUT, PATCH, DELETE and two changes in one call each ask first, nothing sent until the
-#   user answers, and Deny sends none. A change without a `what`, the sentence the user reads before
-#   allowing it, is refused with nothing sent and nothing asked (#3555).
+# - Writes: PUT, PATCH, DELETE and two changes in one call are each stopped at Work on pages, the
+#   access a task starts with, in ilo's own words and with nothing sent. A change without a `what`,
+#   the sentence that says what it does, is refused for that, with nothing sent (#3555).
 # - A held tab: while a hand_off waits on the user, every tool on that tab is refused.
 # - Hostile pages: text, hidden text, a title, labels, a comment and a frame of another site tell
 #   the agent to do each of the above, and one forges a tool's answer. What read_page and snapshot
 #   hand over has none of the page's secrets (a password, a hidden field, a typed value, its
 #   cookies and storage, the frame's password) nor the user's page, and comes as one answer. The
 #   tries above, made from that tab after reading it and pressing its "Allow always" button, are
-#   still refused or asked.
+#   still refused, and the task's access is what it was.
 # The pages are the check's server's, on localhost and other.localhost, in a profile of the run's
 # own. It tries every case and fails at the end with each try that got past a rule.
 
@@ -54,7 +54,7 @@ exec 3> "$out/drive"
 await_load
 user_tab=$(today | cut -d' ' -f1)
 await "^browser: title $user_tab yours\$" || fail "the user's page didn't load"
-# The cards' answers below are clicks, which a page takes only while Browser is the active app.
+# The user's click and key below, which the app takes only while Browser is the active one.
 send click $page_point
 driven=$active
 case "$(uname -s)" in
@@ -277,11 +277,11 @@ off_site() {
     "$2: a request to another port" "$own_site"
   refused request "{\"tab\":$1,\"requests\":[{\"method\":\"GET\",\"path\":\"https://localhost:$port/api/me?rules-https\"}]}" \
     "$2: a request over https" "$own_site"
-  asks=$(grep -c '^browser: agent mcp-client asks ' "$log" || true)
+  stops=$(grep -c '^browser: agent mcp-client stopped ' "$log" || true)
   refused request "{\"tab\":$1,\"requests\":[{\"method\":\"POST\",\"path\":\"$other_site/api/rules-change-host\",\"body\":{}}]}" \
     "$2: a change on another host" "$own_site"
-  [ "$(grep -c '^browser: agent mcp-client asks ' "$log" || true)" = "$asks" ] ||
-    missed "$2: a change on another host asked the user rather than being refused"
+  [ "$(grep -c '^browser: agent mcp-client stopped ' "$log" || true)" = "$stops" ] ||
+    missed "$2: a change on another host was stopped for the task's access, which the user can raise, rather than refused for its site"
   refused request "{\"tab\":$1,\"requests\":[{\"method\":\"GET\",\"path\":\"/api/me\",\"headers\":{\"Cookie\":\"api=stolen\"}}]}" \
     "$2: a request setting Cookie" "Agents can't set the Cookie header*"
   refused request "{\"tab\":$1,\"requests\":[{\"method\":\"GET\",\"path\":\"/api/me\",\"headers\":{\"Authorization\":\"Bearer stolen\"}}]}" \
@@ -302,48 +302,38 @@ off_site() {
 }
 off_site "$own_tab" "the agent's own tab"
 
-# A change says what it will do, for the user to read before they allow it: one that doesn't is
-# refused before it can ask, with nothing sent (#3555).
+# A change says what it will do: one that doesn't is refused for that, before the task's access
+# comes into it, with nothing sent (#3555).
 tries=$((tries + 1))
-asks=$(grep -c '^browser: agent mcp-client asks ' "$log" || true)
+stops=$(grep -c '^browser: agent mcp-client stopped ' "$log" || true)
 got=$(call request "{\"tab\":$own_tab,\"requests\":[{\"method\":\"PUT\",\"path\":\"/api/rules-change-unsaid\",\"body\":{}}]}")
 case "$got" in
   "error: Request 1 (PUT /api/rules-change-unsaid) may change something, so it needs a \`what\`"*"Nothing was sent.") ;;
   *) missed "the agent's own tab: a PUT with no \`what\` answered: $got" ;;
 esac
-[ "$(grep -c '^browser: agent mcp-client asks ' "$log" || true)" = "$asks" ] ||
-  missed "the agent's own tab: a PUT with no \`what\` asked the user rather than being refused"
+[ "$(grep -c '^browser: agent mcp-client stopped ' "$log" || true)" = "$stops" ] ||
+  missed "the agent's own tab: a PUT with no \`what\` was stopped for the task's access rather than refused for its sentence"
 if grep -q "rules-change-unsaid" "$out/site.log"; then missed "a PUT with no \`what\` reached the site"; fi
 
-# Changes, which ask first, every time: nothing goes until the user answers, and Deny sends none.
-# Asks for the change $2 with the requests $3 and answers with a click on the card's Deny.
-denied() {
+# Changes: sending one to a site without its page isn't part of Work on pages, the access a task
+# starts with, so ilo refuses each at once in its own words, with nothing asked of the user and
+# nothing sent (#4086). Only the user gives a task more, in ilo.
+at_work='^browser: agent mcp-client stopped Request at Work on pages: localhost$'
+# Sends the change $2 with the requests $3, which ilo's answer calls $4, from the tab $1.
+stopped() {
   tries=$((tries + 1))
-  before=$(grep -c '^browser: agent mcp-client asks [0-9]*: make ' "$log" || true)
-  ask request "{\"tab\":$1,\"requests\":$3}"
-  asked=$id
-  if ! await_more '^browser: agent mcp-client asks [0-9]*: make ' "$before"; then
-    got=$(next_answer | answered "$asked")
-    missed "$2 didn't ask first, and answered: $got"
-    return
-  fi
-  q=$(grep '^browser: agent mcp-client asks' "$log" | tail -1 | cut -d' ' -f5 | tr -d :)
-  await "^browser: agent question $q at " || fail "$2's question wasn't drawn"
-  read -r qx qy qw qh << CARD
-$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
-CARD
-  if grep -q "rules-change-" "$out/site.log"; then missed "$2 reached the site before the user answered"; fi
-  # Deny, at the left of the card's last row.
-  send click $((qx + qw / 4)) $((qy + qh - 26))
-  await "^browser: agent mcp-client answered $q Dismiss\$" || fail "Deny didn't answer $2's question"
-  got=$(next_answer | answered "$asked")
+  before=$(grep -c "$at_work" "$log" || true)
+  logged=$(grep -c "$refusals" "$log" || true)
+  got=$(call request "{\"tab\":$1,\"requests\":$3}")
   case "$got" in
-    "error: The user said no: you can't make "*) ;;
-    *) missed "$2, denied, answered: $got" ;;
+    "error: ilo stopped this: make $4 on localhost. It isn't part of this task's access (Work on pages). Only the user can change a task's access, in ilo."*) ;;
+    *) missed "$2 answered: $got" && return ;;
   esac
-  if grep -q "rules-change-" "$out/site.log"; then missed "$2 reached the site though the user said no"; fi
+  await_more "$at_work" "$before" || missed "$2 was refused, but isn't logged as ilo's stop"
+  await_more "$refusals" "$logged" || missed "$2 was refused, but the activity log doesn't have it"
+  if grep -q "rules-change-" "$out/site.log"; then missed "$2 reached the site"; fi
 }
-# The sentence a change by the method $1 gives the user to read: made up, as the page is.
+# The sentence a change by the method $1 says of itself: made up, as the page is.
 what() {
   case "$1" in
     PUT) echo "Replace the made-up note on the rules page." ;;
@@ -353,16 +343,17 @@ what() {
 }
 changes() {
   for method in PUT PATCH DELETE; do
-    denied "$1" "$2: a $method" "[{\"method\":\"$method\",\"path\":\"/api/rules-change-$method\",\"body\":{},\"what\":\"$(what "$method")\"}]"
+    stopped "$1" "$2: a $method" "[{\"method\":\"$method\",\"path\":\"/api/rules-change-$method\",\"body\":{},\"what\":\"$(what "$method")\"}]" \
+      "a change"
   done
-  denied "$1" "$2: two changes in one call" \
-    "[{\"method\":\"POST\",\"path\":\"/api/rules-change-a\",\"body\":{},\"what\":\"Add a made-up note to the rules page.\"},{\"method\":\"DELETE\",\"path\":\"/api/rules-change-b\",\"what\":\"Remove the made-up note b.\"}]"
+  stopped "$1" "$2: two changes in one call" \
+    "[{\"method\":\"POST\",\"path\":\"/api/rules-change-a\",\"body\":{},\"what\":\"Add a made-up note to the rules page.\"},{\"method\":\"DELETE\",\"path\":\"/api/rules-change-b\",\"what\":\"Remove the made-up note b.\"}]" \
+    "2 changes"
 }
-[ "$driven" = 1 ] && changes "$own_tab" "the agent's own tab"
+changes "$own_tab" "the agent's own tab"
 
 # A tab the agent hands to the user is theirs: every tool on it is refused until they hand it back.
 if [ "$driven" = 1 ]; then
-  cards=$(grep -c '^browser: agent question [0-9]* at ' "$log" || true)
   # From a second connection of the agent's: the server answers one connection's calls on a tab in
   # order, so on the first the tries would wait behind the hand_off and never meet the rule. An
   # agent may open as many as it likes.
@@ -386,7 +377,6 @@ if [ "$driven" = 1 ]; then
   printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"hand_off\",\"arguments\":{\"tab\":$own_tab,\"reason\":\"Sign in for the rules check\"}}}" >&6
   await "^browser: agent mcp-client hands off $own_tab: Sign in for the rules check\$" ||
     fail "hand_off didn't hand the tab to the user"
-  await_more '^browser: agent question [0-9]* at ' "$cards" || fail "the handoff wasn't drawn"
   # The core's words, or the app's for a tab the user took over: either says it's theirs.
   held="*hand it back*"
   for tool in read_page snapshot screenshot pin_tab; do
@@ -407,15 +397,31 @@ if [ "$driven" = 1 ]; then
   for tool in remove_tab close_tab; do
     refused "$tool" "{\"tab\":$own_tab}" "$tool of the held tab" "$held"
   done
-  q=$(grep '^browser: agent question [0-9]* at ' "$log" | tail -1 | cut -d' ' -f4)
-  read -r qx qy qw qh << CARD
-$(grep "^browser: agent question $q at " "$log" | tail -1 | cut -d' ' -f6-)
-CARD
-  # Hand Back, at the left of the card's buttons.
-  send click $((qx + 30)) $((qy + qh - 26))
+  # The user's step has no card (#4086): it's ilo's line in the conversation of the task that
+  # handed the tab over, which a click on that task's card shows. Hand Back, the line's first
+  # button, is pressed with the keys, as the user does: Focus Agent Question's key rings it, and ↩
+  # presses once the app says a key on it counts.
+  second=$(sed -n 's/^browser: session \(session-[0-9]*\) of agent mcp-client as rules-second$/\1/p' "$log" | tail -1)
+  [ -n "$second" ] || fail "the second connection's hand_off made no task of its own"
+  await "^browser: task plate task-${second#session-} at " || fail "the card of the task that handed the tab over wasn't drawn"
+  read -r px py pw ph << PLATE
+$(grep "^browser: task plate task-${second#session-} at " "$log" | tail -1 | cut -d' ' -f6-)
+PLATE
+  send click $((px + pw / 2)) $((py + ph / 2))
+  expect "^browser: task $second shown\$" "a click on the card of the task that handed the tab over didn't show its conversation"
+  await '^browser: ilo line [0-9]* Hand Back at ' || fail "the step's line drew no Hand Back"
+  if [ "$(uname)" = Darwin ]; then card_key="a alt shift cmd"; else card_key="a ctrl shift"; fi
+  send key $card_key
+  expect '^browser: ilo keys on [0-9]* HandBack$' "Focus Agent Question's key didn't give Hand Back on the step's line the keyboard"
+  expect '^browser: ilo keys ready on ' "the app never said a key on the step's line would press"
+  send key return
+  expect '^browser: ilo key pressed HandBack$' "↩ on the step's line didn't press Hand Back"
   await "^browser: agent mcp-client handed back $own_tab\$" || fail "Hand Back didn't hand the tab back"
   got=$(second_answer | answered 2)
   case "$got" in "The user handed tab $own_tab back."*) ;; *) fail "hand_off answered: $got" ;; esac
+  # Back to the user's own page, by its row in Today, as the window was.
+  send click $(row 0)
+  expect '^browser: task area [0-9]* closed$' "a click on the user's tab's row didn't put the conversation away"
   exec 6>&-
   for _ in $(seq 100); do kill -0 "$second_pid" 2> /dev/null || break; sleep 0.1; done
   exec 7<&-
@@ -483,7 +489,11 @@ refused navigate "{\"tab\":$hostile_tab,\"url\":\"file:///\"}" "the hostile page
 refused open_tab '{"url":"chrome://settings"}' "the hostile page: open_tab of chrome://settings" "$web_only"
 refused open_tab '{"url":"javascript:alert(document.cookie)"}' "the hostile page: open_tab of javascript:" "$web_only"
 off_site "$hostile_tab" "the hostile page"
-[ "$driven" = 1 ] && changes "$hostile_tab" "the hostile page"
+changes "$hostile_tab" "the hostile page"
+# Nothing the agent or a page did gave a task more access: only the user's press in ilo does.
+if grep -q '^browser: task [^ ]* access ' "$log"; then
+  missed "a task's access changed with no press of the user's: $(grep '^browser: task [^ ]* access ' "$log" | tail -1)"
+fi
 
 # Nothing off the site was reached, and no answer held a secret.
 for path in "other.localhost:$port/api/" "127.0.0.1:$port/api/" "rules-https" "rules-port" \
@@ -495,22 +505,22 @@ for secret in $secrets; do
 done
 
 # #2685's repro, on real input: the pointer rests on Today's first row until its tab's hover card is
-# drawn, and then the agent asks. On Windows the window drew nothing after the hover card, the
-# question's card included. The last Deny left the pointer where it clicked, which is that row once
-# the question's card has gone, so it leaves the row first, and its card hides if it showed.
+# drawn, and then the agent's change is stopped. On Windows the window drew nothing after the hover
+# card. The pointer leaves the row first, wherever the last click left it, and its card hides if it
+# showed.
 if [ "$driven" = 1 ] && [ "${BROWSER_DRIVE_REAL:-}" = 1 ] && [ -z "$missing" ]; then
   send move $page_point
   if grep '^browser: hover card \(shown \|hidden$\)' "$log" | tail -1 | grep -q shown; then
-    expect '^browser: hover card hidden$' "the hover card the last Deny left up didn't hide off its row"
+    expect '^browser: hover card hidden$' "the hover card the last click left up didn't hide off its row"
   fi
   send move $(row 0)
   expect '^browser: hover card shown ' "resting on Today's first row showed no hover card"
   # Its frame at rest, which each showing logs ("hover card drawn" is logged once a tab and picture,
   # and tab 4's card was drawn earlier in the run). In #2685's stall the card never settled.
   expect '^browser: hover card settled$' \
-    "the agent's own tab, asked with a tab's hover card shown: the card came on screen and never settled"
-  denied "$own_tab" "the agent's own tab, asked with a tab's hover card shown: a PUT" \
-    "[{\"method\":\"PUT\",\"path\":\"/api/rules-change-PUT\",\"body\":{},\"what\":\"$(what PUT)\"}]"
+    "the agent's own tab, with a tab's hover card shown: the card came on screen and never settled"
+  stopped "$own_tab" "the agent's own tab, with a tab's hover card shown: a PUT" \
+    "[{\"method\":\"PUT\",\"path\":\"/api/rules-change-PUT\",\"body\":{},\"what\":\"$(what PUT)\"}]" "a change"
 fi
 
 exec 4>&-
@@ -520,7 +530,7 @@ quit
 rm -f "$out/rules-in" "$out/rules-out"
 [ -z "$missing" ] || fail "of $tries tries, these got past a rule:$missing"
 if [ "$driven" = 1 ]; then
-  echo "ok: of $tries tries an MCP client made, every one was refused or asked the user first, and logged: every tool on the user's tab and on another agent's, pages that aren't http or https, tools agents don't have, requests off the tab's site, with the session's headers, CONNECT and TRACE, a redirect off the site stopped there, changes asking each time and none sent when denied, a change with no \`what\` refused before it asked, and every tool on a tab held for the user. A hostile page's text, hidden text, labels, frame and forged answer changed none of it, and no answer held a page's secrets or the user's page. What it handed over: $out/rules-hostile-read.txt, $out/rules-hostile-snapshot.txt"
+  echo "ok: of $tries tries an MCP client made, every one was refused, with nothing asked of the user, and logged: every tool on the user's tab and on another agent's, pages that aren't http or https, tools agents don't have, requests off the tab's site, with the session's headers, CONNECT and TRACE, a redirect off the site stopped there, changes stopped at Work on pages and none sent, a change with no \`what\` refused for that, and every tool on a tab held for the user. A hostile page's text, hidden text, labels, frame and forged answer changed none of it nor a task's access, and no answer held a page's secrets or the user's page. What it handed over: $out/rules-hostile-read.txt, $out/rules-hostile-snapshot.txt"
 else
-  echo "ok: of $tries tries an MCP client made, every one was refused and logged: every tool on the user's tab and on another agent's, pages that aren't http or https, tools agents don't have and requests off the tab's site, and a change with no \`what\` was refused with nothing sent; a hostile page changed none of it, and no answer held its secrets. skip: changes asking first and a held tab. Browser wasn't the active app, so the cards' buttons couldn't be clicked."
+  echo "ok: of $tries tries an MCP client made, every one was refused and logged: every tool on the user's tab and on another agent's, pages that aren't http or https, tools agents don't have, requests off the tab's site and changes, stopped at Work on pages with none sent, and a change with no \`what\` was refused with nothing sent; a hostile page changed none of it nor a task's access, and no answer held its secrets. skip: a held tab. Browser wasn't the active app, so the user's click and key to hand it back couldn't be made."
 fi

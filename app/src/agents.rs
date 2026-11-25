@@ -340,6 +340,9 @@ pub trait Browser {
     fn profile_space(&self, profile: &str) -> u64;
     /// Whether there is a profile whose folder is named `profile`.
     fn has_profile(&self, profile: &str) -> bool;
+    /// Whether `space` is a private window's own Space. No task starts from one, as agents get
+    /// no path into private windows.
+    fn private_space(&self, space: u64) -> bool;
     /// Sends `sent` from the page in the agent's `tab`, as the page's own script could, to its own
     /// site (bc_agent_request). Its answer comes to `Agents::request_done` with `request`.
     fn request(&self, agent: &str, tab: u64, request: u64, sent: &request::Request);
@@ -526,6 +529,9 @@ struct Act {
     asks: String,
     /// The download it lets go on, for "download", else 0.
     download: u64,
+    /// The tab whose page started the download, whose task it's judged at as an act there is,
+    /// while `tab` is 0 for one; else 0.
+    started_in: u64,
     /// The file field it asks the user to choose a file for, for "upload".
     file: Option<FileField>,
     /// The HTTP requests it sends (request).
@@ -1186,7 +1192,6 @@ impl Agents {
         .collect();
         self.tasks_off = tasks.get("on").and_then(Value::as_bool) == Some(false);
         self.tasks.kept.off = tasks.get("keep").and_then(Value::as_bool) == Some(false);
-        self.tasks.kept.told = tasks.get("kept_told").and_then(Value::as_bool) == Some(true);
         // The conversations kept for the tasks of a run before go, as its tasks went (#4105): now
         // that the assistants found are known, as each removes its own.
         self.take_old_kept(cx);
@@ -1241,7 +1246,7 @@ impl Agents {
         self.notify
     }
 
-    /// Settings › Agents' When to notify.
+    /// Settings › Agents' Notify.
     pub fn set_notify(&mut self, notify: crate::needs_you::Notify, cx: &mut Context<Self>) {
         self.notify = notify;
         self.save();
@@ -1332,13 +1337,24 @@ impl Agents {
     }
 
     /// The clients Settings › Agents lists: those found here, any connected, whose Disconnect
-    /// stays though the client has gone, and any other MCP client.
+    /// stays though the client has gone, and any other MCP client. A client whose CLI Your
+    /// assistant's look found is here though its files aren't, as where CLAUDE_CONFIG_DIR moves
+    /// them, so Any MCP client's line never calls it missing beside its row saying it's signed in.
     pub fn listed(&self) -> Vec<Client> {
+        let ran = |client: Client| {
+            client.cli().is_some_and(|cli| {
+                !matches!(
+                    self.found(cli),
+                    ready::Ready::NotFound | ready::Ready::Unknown
+                )
+            })
+        };
         (Client::APPS.into_iter())
             .filter(|client| {
                 *client == Client::Other
                     || self.found.contains(client)
                     || self.is_connected(*client)
+                    || ran(*client)
             })
             .collect()
     }
@@ -1929,6 +1945,7 @@ impl Agents {
                     note: String::new(),
                     show,
                     download: 0,
+                    started_in: 0,
                     file: None,
                     field: String::new(),
                     requests: Vec::new(),
@@ -2322,6 +2339,7 @@ impl Agents {
                     asks: String::new(),
                     field: String::new(),
                     download: 0,
+                    started_in: 0,
                     file: None,
                     requests,
                     wait: None,
@@ -3175,6 +3193,7 @@ impl Agents {
             what: String::new(),
             asks: String::new(),
             download: 0,
+            started_in: 0,
             file: None,
             requests: Vec::new(),
             wait: None,
@@ -3436,7 +3455,7 @@ impl Agents {
             true => Some(OTHER_SITE),
             false => why,
         };
-        let tier = self.tier_of(&act.agent, act.connection, act.call);
+        let tier = (self.judged_task(&act)).map_or(tier::Tier::default(), |task| task.tier);
         // A site the user answered Never for this agent stays refused at every tier until they
         // revoke it, while Settings still lists it (#4086 step 3 moves these to Off limits).
         let why = Self::why_of(&act, &site, why).map(|why| match why {
@@ -4012,6 +4031,7 @@ impl Agents {
             show: Show::Nothing,
             field: String::new(),
             download: id,
+            started_in: tab,
             file: None,
             requests: Vec::new(),
             wait: None,
@@ -5197,7 +5217,6 @@ impl Agents {
             "models": models,
             "found": found,
             "keep": !self.tasks.kept.off,
-            "kept_told": self.tasks.kept.told,
             "notify": self.notify.id(),
         });
         let saved = json!({
@@ -5479,6 +5498,7 @@ fn act_of(
         asks: String::new(),
         field: String::new(),
         download: 0,
+        started_in: 0,
         file: None,
         requests: Vec::new(),
         wait: None,
@@ -5789,23 +5809,28 @@ pub fn web_site(site: &str) -> bool {
 }
 
 /// The local time `at`, in seconds since 1970, reads on the clock here, such as "18:00", with
-/// its day if it's a day or more away, such as "Tue 18:00".
+/// its day if it's a day or more away, such as "Tue 18:00". On the system's clock, 12- or
+/// 24-hour, as every time a task says is and History's rows are (clock.rs).
 pub fn local_time(at: u64) -> String {
     use chrono::{Local, TimeZone};
     let Some(time) = Local.timestamp_opt(at as i64, 0).single() else {
         return String::new();
     };
     let soon = time.signed_duration_since(Local::now()) < chrono::Duration::hours(20);
-    time.format(if soon { "%H:%M" } else { "%a %H:%M" })
-        .to_string()
+    let hour = crate::clock::hour_minute(crate::clock::twelve_hour());
+    match soon {
+        true => time.format(hour).to_string(),
+        false => time.format(&format!("%a {hour}")).to_string(),
+    }
 }
 
 /// When `at` was, in seconds since 1970, as a finished task says it: the time on the clock here
-/// if it was today, "13:31", else its day, "21 Nov", as a time alone reads as today's.
+/// if it was today, "13:31" or "1:31 PM" as the system's clock is, else its day, "21 Nov", as a
+/// time alone reads as today's.
 pub fn time_or_day(at: u64) -> String {
     use chrono::{Local, TimeZone};
     match Local.timestamp_opt(at as i64, 0).single() {
-        Some(time) => time_or_day_on(time, Local::now()),
+        Some(time) => time_or_day_on(time, Local::now(), crate::clock::twelve_hour()),
         None => String::new(),
     }
 }
@@ -5813,13 +5838,17 @@ pub fn time_or_day(at: u64) -> String {
 fn time_or_day_on<Zone: chrono::TimeZone>(
     time: chrono::DateTime<Zone>,
     now: chrono::DateTime<Zone>,
+    twelve: bool,
 ) -> String
 where
     Zone::Offset: std::fmt::Display,
 {
     let today = time.date_naive() == now.date_naive();
-    time.format(if today { "%H:%M" } else { "%-d %b" })
-        .to_string()
+    let form = match today {
+        true => crate::clock::hour_minute(twelve),
+        false => "%-d %b",
+    };
+    time.format(form).to_string()
 }
 
 /// An agent's sentence for a request as an opened log entry shows it, marked as its words:
@@ -5845,7 +5874,7 @@ pub fn ago(at: SystemTime, now: SystemTime) -> String {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// Whether the agent with the id `agent` runs a task the user asked from ⌘T (Agent task).
 pub fn is_task(agent: &str) -> bool {
