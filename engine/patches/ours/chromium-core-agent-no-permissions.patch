@@ -27,6 +27,12 @@ asks g_browser_core_no_print for the frame, saying whether the browser's own com
 One the core refuses takes the road Chrome has for a restricted preview: the print ends and its
 page goes on.
 
+chrome/browser/download/chrome_download_manager_delegate.cc.
+ChromeDownloadManagerDelegate::RequestConfirmation, which Chrome asks before it puts a sheet up
+for where a download's file goes, asks g_browser_core_takes_download_question first, with the
+download, the path Chrome suggested, why it asks and the callback. One the core takes it has
+answered through the callback, and no sheet is made.
+
 content/browser/file_system_access/file_system_access_handle_base.cc. The constructor
 FileSystemAccessHandleBase::FileSystemAccessHandleBase, which every handle on a file or a folder
 runs, asks g_browser_core_no_file_handle for its frame, saying whether the handle is in the site's
@@ -41,6 +47,41 @@ already asked whether its context may write; a refused write is dropped as one f
 may not write is. The pointer is exported, since content is a library of its own in a component
 build and the core is outside it.
 
+diff --color -ruN a/chrome/browser/download/chrome_download_manager_delegate.cc b/chrome/browser/download/chrome_download_manager_delegate.cc
+--- a/chrome/browser/download/chrome_download_manager_delegate.cc
++++ b/chrome/browser/download/chrome_download_manager_delegate.cc
+@@ -186,6 +186,16 @@
+ #include "components/enterprise/connectors/core/reporting_event_router.h"  // nogncheck crbug.com/40147906
+ #endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+ #endif  // BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
++
++// browser_core: whether the core takes Chrome's question of where |download|'s
++// file goes, before any sheet is made for it, which it does for a download of
++// a page in an agent's Space the user doesn't hold (//browser_core/hooks.h).
++// One it takes it has answered through |callback|.
++bool (*g_browser_core_takes_download_question)(
++    download::DownloadItem* download,
++    const base::FilePath& suggested_path,
++    DownloadConfirmationReason reason,
++    DownloadTargetDeterminerDelegate::ConfirmationCallback* callback) = nullptr;
+ 
+ using content::BrowserThread;
+ using content::DownloadManager;
+@@ -1633,6 +1643,14 @@
+     DownloadTargetDeterminerDelegate::ConfirmationCallback callback) {
+   CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
+   CHECK(!download->IsTransient(), base::NotFatalUntil::M161);
++
++  // browser_core: a question the core takes is answered already, and no sheet
++  // is made for it.
++  if (g_browser_core_takes_download_question &&
++      g_browser_core_takes_download_question(download, suggested_path, reason,
++                                             &callback)) {
++    return;
++  }
+ 
+ // TODO(xingliu): We should abstract a DownloadFilePicker interface and make all
+ // platform use it.
 diff --color -ruN a/chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc b/chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc
 --- a/chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc
 +++ b/chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc
