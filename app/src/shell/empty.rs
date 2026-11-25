@@ -22,20 +22,7 @@ use crate::tokens::text;
 /// The mark and the line fade in over this long on the scroll edge's curve, as the hover card's
 /// opacity does, from nothing, so a window that shows a page a frame later never shows them.
 pub(super) const FADE: f32 = 0.1;
-use crate::tokens::shell::empty::KEYS_FILL;
-use crate::tokens::shell::empty::KEYS_GAP;
-use crate::tokens::shell::empty::KEYS_HEIGHT;
-use crate::tokens::shell::empty::KEYS_INSET;
-use crate::tokens::shell::empty::KEYS_RADIUS;
-use crate::tokens::shell::empty::KEYS_SIZE;
-use crate::tokens::shell::empty::WORDS_SIZE;
-/// ilo's mark, the app icon's lowercase i (branding/ilo.icon) drawn from its 1024 pt canvas at a
-/// sixteenth, so 39 tall: a 184.4 dot 81.9 over a 133.1 × 358.4 stem with round ends.
-const MARK_SCALE: f32 = 1. / 16.;
-const MARK_DOT: f32 = 184.4 * MARK_SCALE;
-const MARK_DOT_GAP: f32 = 81.9 * MARK_SCALE;
-const MARK_STEM_WIDTH: f32 = 133.1 * MARK_SCALE;
-const MARK_STEM_HEIGHT: f32 = 358.4 * MARK_SCALE;
+use crate::product;
 use crate::product::PRODUCT;
 use crate::tokens::shell::empty::BUTTON_FILL;
 use crate::tokens::shell::empty::BUTTON_GAP;
@@ -48,9 +35,14 @@ use crate::tokens::shell::empty::BUTTON_KEYS_RADIUS;
 use crate::tokens::shell::empty::BUTTON_RADIUS;
 use crate::tokens::shell::empty::BUTTON_TEXT;
 use crate::tokens::shell::empty::HINT_BOTTOM;
-use crate::tokens::shell::empty::MARK_DOT_FILL;
+use crate::tokens::shell::empty::KEYS_FILL;
+use crate::tokens::shell::empty::KEYS_GAP;
+use crate::tokens::shell::empty::KEYS_HEIGHT;
+use crate::tokens::shell::empty::KEYS_INSET;
+use crate::tokens::shell::empty::KEYS_RADIUS;
+use crate::tokens::shell::empty::KEYS_SIZE;
 use crate::tokens::shell::empty::MARK_GAP;
-use crate::tokens::shell::empty::MARK_STEM_FILL;
+use crate::tokens::shell::empty::MARK_SIZE;
 use crate::tokens::shell::empty::NAME;
 use crate::tokens::shell::empty::NAME_GAP;
 use crate::tokens::shell::empty::NAME_LINE;
@@ -61,6 +53,7 @@ use crate::tokens::shell::empty::TAGLINE_SIZE;
 use crate::tokens::shell::empty::WELCOME_LINE;
 use crate::tokens::shell::empty::WELCOME_MARK;
 use crate::tokens::shell::empty::WELCOME_SIZE;
+use crate::tokens::shell::empty::WORDS_SIZE;
 
 impl Shell {
     /// Shows the first run's welcome on the empty card until a page shows: the launch had no
@@ -264,7 +257,7 @@ impl Shell {
             .flex()
             .flex_col()
             .items_center()
-            .child(mark(1., &self.palette));
+            .child(product::mark(MARK_SIZE, &self.palette));
         match self
             .shown_space()
             .map(|space| space.name.clone())
@@ -281,29 +274,6 @@ impl Shell {
             None => sign.child(line.mt(px(MARK_GAP))),
         }
     }
-}
-
-/// ilo's mark, the app icon's i, at `scale` of its size on the card. Its stem takes the window's
-/// ink, as the icon's does on its light tile.
-fn mark(scale: f32, palette: &Palette) -> gpui::Div {
-    div()
-        .flex()
-        .flex_col()
-        .items_center()
-        .gap(px(MARK_DOT_GAP * scale))
-        .child(
-            div()
-                .size(px(MARK_DOT * scale))
-                .rounded_full()
-                .bg(rgba(MARK_DOT_FILL)),
-        )
-        .child(
-            div()
-                .w(px(MARK_STEM_WIDTH * scale))
-                .h(px(MARK_STEM_HEIGHT * scale))
-                .rounded_full()
-                .bg(palette.plate(rgba(MARK_STEM_FILL).a)),
-        )
 }
 
 /// The first run's welcome: a bigger mark, "Welcome to ilo" and "a good tool." in the display
@@ -338,7 +308,7 @@ fn welcome(palette: &Palette, cx: &mut Context<Shell>) -> gpui::Div {
         .flex()
         .flex_col()
         .items_center()
-        .child(mark(WELCOME_MARK, palette))
+        .child(product::mark(MARK_SIZE * WELCOME_MARK, palette))
         .child(
             display_text(
                 format!("Welcome to {PRODUCT}"),
