@@ -84,6 +84,12 @@ impl Shell {
     /// Where `space`'s glass sits on its Transparency bar: its own value, or the place of the app's
     /// level until it keeps one.
     pub(super) fn glass_of(&self, space: u64) -> f32 {
+        // The glass the panel is making for it, as it's made.
+        if let Some((previewed, glass)) = self.glass_preview
+            && previewed == space
+        {
+            return glass;
+        }
         let kept = self.spaces.iter().find(|each| each.id == space);
         kept.and_then(|space| space.transparency)
             .unwrap_or_else(|| crate::space_transparency::of_level(crate::palette::transparency()))
@@ -279,6 +285,21 @@ impl Shell {
             changed,
             cx,
         );
+        let (glassed, cleared) = (cx.weak_entity(), cx.weak_entity());
+        let also = theme_picker::Also {
+            transparency: self.glass_of(space),
+            glassed: Rc::new(move |value, done, cx| {
+                glassed
+                    .update(cx, |shell, cx| shell.glass_changed(space, value, done, cx))
+                    .ok();
+            }),
+            cleared: Rc::new(move |cx| {
+                cleared
+                    .update(cx, |shell, cx| shell.remove_space_theme(space, cx))
+                    .ok();
+            }),
+        };
+        theme_picker::also(also, cx);
     }
 
     /// The picker made `theme` for `space`: the window shows it at once, and once the user is

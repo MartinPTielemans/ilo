@@ -2079,6 +2079,8 @@ pub struct Shell {
     /// The theme the picker is making for a Space, which the window shows as it's made, until the
     /// core has it.
     theme_preview: Option<(u64, Theme)>,
+    /// The glass the theme panel is making for a Space, shown until the core has it.
+    glass_preview: Option<(u64, f32)>,
     /// Where the name row was drawn last, and the frame before; and the same for the pending
     /// tab's row, which draws it only while it is pending.
     name_row_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -2439,6 +2441,7 @@ impl Shell {
             page_keyboard: None,
             picker_pending: None,
             theme_preview: None,
+            glass_preview: None,
             name_row_drawn: Rc::default(),
             tab_row_drawn: Rc::default(),
             tile_icons_drawn: Rc::default(),
@@ -3116,6 +3119,7 @@ impl Shell {
         self.glide_spaces(places, kept(&order, &now) != kept(&now, &order), cx);
         self.live_profiles_changed(&reprofiled, cx);
         self.settle_theme_preview();
+        self.settle_glass_preview();
         self.carry_transparency(cx);
         if let Some(form) = &self.form
             && !self.spaces.iter().any(|space| space.id == form.space)
