@@ -4,7 +4,7 @@ use super::*;
 
 /// An assistant's one button to sign in, as its row says it.
 pub const SIGN_IN: &str = "Sign In";
-/// The line under the assistants' rows (draft, the lead's): what a sign-in leaves where.
+/// The line under the assistants' rows (M1): what a sign-in leaves where.
 pub const SIGN_INS_STAY: &str = "Sign-ins stay on this computer.";
 /// ChatGPT's row's line, signed in.
 const CHATGPT_SIGNED_IN: &str = "Your ChatGPT plan";
@@ -144,6 +144,30 @@ pub fn assistant_row(
         None => named(name, Some(lined(look).child(line))).into_any_element(),
     };
     wrapping(look, cli.glyph(), text, controls)
+}
+
+/// An assistant's row while the inside switch is off and the user hasn't clicked it on this
+/// showing of the page: its glyph and name alone, since its state would mean running its program.
+/// A click calls `look`; while that look is under way, `looking`, the ring turns at its end.
+pub fn assistant_name_alone(
+    look: &Look,
+    cli: crate::agents::runner::Cli,
+    looking: bool,
+    a11y: bool,
+    on_look: Rc<dyn Fn(&mut gpui::Window, &mut gpui::App)>,
+) -> gpui::Div {
+    let index = cli as usize;
+    let name = assistant_name(cli);
+    let controls = match looking {
+        true => vec![working(look, index).into_any_element()],
+        false => Vec::new(),
+    };
+    let row = wrapping(look, cli.glyph(), named(name, None), controls)
+        .id(("assistant-name-alone", index))
+        .cursor_pointer()
+        .when(a11y, |row| named_button(row, name))
+        .on_click(move |_, window, cx| on_look(window, cx));
+    div().child(row)
 }
 
 /// An assistant's row, or another app's: its glyph, its name and line, then its controls at the

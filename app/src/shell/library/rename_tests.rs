@@ -390,16 +390,14 @@ fn edit_theme_in_the_command_bar_opens_the_theme_picker(cx: &mut TestAppContext)
         cx.run_until_parked();
     }
     assert_eq!(shown(cx), (None, Some(1)), "the picker didn't open");
-    let edge = shell.read_with(cx, |shell, _| shell.width());
-    let arrow = crate::tokens::theme_picker::ARROW;
-    let card = themes
-        .borrow()
-        .last()
-        .map(|&(left, top)| (left + arrow, top));
+    let (edge, row) = shell.read_with(cx, |shell, _| (shell.width(), shell.name_row_before));
+    let top = row.map(|row| f32::from(row.top()));
+    let card = themes.borrow().last().map(|&(left, top)| (left, Some(top)));
+    // The panel hangs beside the Space's name, its top at the row's, 8 right of the sidebar.
     assert_eq!(
         card,
-        Some((edge + 14., 14.)),
-        "not against the sidebar's edge at the top"
+        Some((edge + crate::tokens::theme_panel::BESIDE, top)),
+        "not beside the Space's name"
     );
 }
 

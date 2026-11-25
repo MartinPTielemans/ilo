@@ -60,17 +60,22 @@ in_find_bar() {
 expect_find() {
   expect "^browser: find $1 $2\$" "$3: $(grep "^browser: find $1 " "$log" | tail -1)"
 }
-# The find bar is 300 points wide and 32 high, 20 from the window's top right corner, one of the
-# windows over the page, which in full screen can also be its toast. Sets $content to the window's
-# width.
+# The find bar is 300 points wide and 32 high, one of the windows over the page, which in full
+# screen can also be its toast. It's twice the card's inset from the window's top right corner
+# (find_bar.rs), and the page's right edge is the card's inset from the window's. Sets $content to
+# the window's width.
 check_find_bar() {
   send layout
   children=$(sed -n "/^browser: drive $step: /,\$p" "$log" |
     sed -n 's/^browser: layout child //p' | tr '\n' ';')
   content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
     sed 's/^browser: layout content \([0-9]*\)x.*/\1/')
+  page_right=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
+    sed -n 's/.*, WebContentsViewCocoa \([0-9]*\),[0-9]* \([0-9]*\)x.*/\1 + \2/p')
+  [ -n "$page_right" ] || fail "$1: the layout named no page"
+  page_inset=$((content - (page_right)))
   case ";$children" in
-  *";$((content - 320)),20 300x32;"*) ;;
+  *";$((content - 300 - 2 * page_inset)),$((2 * page_inset)) 300x32;"*) ;;
   *) fail "$1: no find bar among the windows over the page (${children:-none}), $content wide" ;;
   esac
 }

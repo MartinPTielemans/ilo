@@ -166,7 +166,7 @@ fn row(row: usize) -> gpui::Point<gpui::Pixels> {
 
 fn filter(host: &Recorder, choice: &str, cx: &mut VisualTestContext) {
     let filter = point(
-        px(FILTER_X + FILTER_WIDTH / 2.),
+        px(COLUMN_WIDTH + FILTER_X + FILTER_WIDTH / 2.),
         px(SEARCH_TOP + SEARCH_HEIGHT / 2.),
     );
     cx.simulate_click(filter, Modifiers::none());

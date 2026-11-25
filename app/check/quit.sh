@@ -149,8 +149,7 @@ if [ "$(uname)" = Linux ]; then
   send type two
   send key return
   expect "^browser: create space $second two\$" "$way: return didn't name the Space"
-  send key t cmd
-  expect '^browser: command bar shown$' "$way: ⌘T in the new Space didn't open the command bar"
+  resting_key t "$way: new Space"
   send type "${site}quit-two.html"
   send key return
   expect '^browser: today [0-9][0-9]*$' "$way: the page didn't open in the new Space"
@@ -159,8 +158,8 @@ if [ "$(uname)" = Linux ]; then
   expect '^browser: menu shown ' "$way: the Space's menu didn't show"
   send choose "$(cased 'Edit Theme Color…')"
   expect '^browser: theme picker drawn$' "$way: the theme picker didn't draw itself on screen"
-  send clickkey "$(swatch_x 1)" $swatch_y
-  expect "^browser: colored space $second [0-9a-f]*\$" "$way: the pink swatch didn't colour the Space"
+  send clickkey $(panel_at palette 1)
+  expect "^browser: colored space $second [0-9a-f]*\$" "$way: the first palette didn't colour the Space"
   send key escape
   expect '^browser: theme picker hidden$' "$way: escape didn't close the theme picker"
   quit_app

@@ -407,11 +407,11 @@ post rightclick 100 112
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, ")" "the Space's menu didn't offer its theme"
 send choose "$(cased 'Edit Theme Color…')"
 expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
-send clickkey "$(swatch_x 0)" $swatch_y
-expect '^browser: colored space [0-9]* [0-9a-f]*$' "the first swatch didn't colour the Space"
-other=dark other_at="231.7 49"
-[ "$look" != dark ] || other=light other_at="191.3 49"
-send clickkey $other_at
+send clickkey $(panel_at palette 1)
+expect '^browser: colored space [0-9]* [0-9a-f]*$' "the first palette didn't colour the Space"
+other=dark
+[ "$look" != dark ] || other=light
+send clickkey $(panel_at look $other)
 expect "^browser: themed space [0-9]* .*appearance=$other" "the theme picker didn't make the Space's theme $other"
 send key escape
 expect '^browser: theme picker hidden$' "escape didn't close the theme picker"

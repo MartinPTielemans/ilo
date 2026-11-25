@@ -44,7 +44,7 @@ use crate::tokens::text::SMALL;
 mod assistant;
 pub use assistant::{
     Act, SIGN_IN, SIGN_INS_STAY, another_agent_name_row, another_agent_row, assistant_name,
-    assistant_row,
+    assistant_name_alone, assistant_row,
 };
 
 /// The places `drawn` logged, one a control, shared by a view's controls.
@@ -77,10 +77,12 @@ impl DrawnLog {
         &self.logged
     }
 
-    /// Whether it logged `line`.
+    /// Whether it logged `line`, which is `what`'s: "browser: settings `what` at x y", or with
+    /// another view's word in "settings"' place.
     fn draw(&mut self, what: &str, line: String) -> bool {
         // Once a place: forget where it was drawn before.
-        let at = format!("browser: settings {what} at ");
+        let at = line.find(&format!(" {what} at "));
+        let at = line[..at.map_or(line.len(), |at| at + what.len() + 5)].to_owned();
         self.this_frame.retain(|each| !each.starts_with(&at));
         self.this_frame.push(line.clone());
         let new = !self.logged.contains(&line);
@@ -97,11 +99,16 @@ impl DrawnLog {
 /// as "browser: settings `what` at x y", each time it moves, for check.sh to click it there, and
 /// after a frame without it where the view starts each frame (`DrawnLog::frame`).
 pub fn drawn(what: String, logged: Drawn) -> gpui::Canvas<()> {
+    drawn_of("settings", what, logged)
+}
+
+/// `drawn` for a view that isn't Settings: the line is "browser: `of` `what` at x y".
+pub fn drawn_of(of: &'static str, what: String, logged: Drawn) -> gpui::Canvas<()> {
     canvas(
         |_, _, _| {},
         move |bounds, _, _, _| {
             let (x, y) = (f32::from(bounds.center().x), f32::from(bounds.center().y));
-            let line = format!("browser: settings {what} at {x:.0} {y:.0}");
+            let line = format!("browser: {of} {what} at {x:.0} {y:.0}");
             logged.borrow_mut().draw(&what, line);
         },
     )

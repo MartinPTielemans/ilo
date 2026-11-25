@@ -51,6 +51,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "FontWeight::BOLD",
         "the badge's count, a pictogram inside its pill",
     ),
+    (
+        "agents/wall/rules.rs",
+        "0x8001_7472",
+        "the Mac's TIOCSTI ioctl, which a walled task's rules deny, and no colour",
+    ),
 ];
 
 #[test]
@@ -184,6 +189,9 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "shell.conversation.ilo.held-button-radius",
     // The page buttons in the panel beside a page, at the drawing's 8.
     "shell.conversation.panel.page-radius",
+    // The theme panel's Auto · Light · Dark: a segment concentric inside its frame, as drawn.
+    "theme-panel.segment-frame-radius",
+    "theme-panel.segment-radius",
     // A thread card's button, at the drawing's 8 (spec-thread-card).
     "shell.task-card.button-radius",
     // Settings' segmented track, concentric round its segments at the control radius.

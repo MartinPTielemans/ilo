@@ -41,7 +41,7 @@ use crate::agents::task::{
     ArchivedTask, Card, Conversation, Dot, Line, Live, Opens, TaskAction, Trace, TraceItem,
     TraceStep, told_line,
 };
-use crate::agents::tier::{ANY_SITE, ONLY_ADDED, Tier};
+use crate::agents::tier::Tier;
 use crate::command_bar::choices;
 use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED, Tone};
 use crate::text_input::TextInput;
@@ -1143,14 +1143,6 @@ impl TalkView {
         };
         let menu = menu.0.clone();
         let mut items = choices::level_entries(shown.tier);
-        // A thread kept to the sites added keeps its way out to any site, which it can't narrow
-        // back to, as it never had the others.
-        let any_site = shown.only_added.then(|| {
-            items.push(MenuEntry::line());
-            items.push(MenuEntry::named(ANY_SITE, true));
-            items.push(MenuEntry::named(ONLY_ADDED, false).checked(true));
-            items.len() - 2
-        });
         items.push(MenuEntry::line());
         items.push(MenuEntry::named(super::empty::composer::SETTINGS, true));
         let settings = items.len() - 1;
@@ -1166,7 +1158,6 @@ impl TalkView {
                 }
             }
             let action = match picked {
-                Some(item) if Some(item) == any_site => Some(TaskAction::PickAnySite),
                 Some(item) => Tier::ALL.get(item).map(|tier| TaskAction::PickTier(*tier)),
                 None => None,
             };
@@ -3010,6 +3001,7 @@ impl TalkView {
             a11y: look.a11y,
             level: (tier, level),
             model,
+            effort: None,
             held: self
                 .folder_chip(look, cx)
                 .map(|chip| chip.into_any_element())
@@ -3289,7 +3281,6 @@ impl TalkView {
         let action = match button {
             IloButton::TakeOver => tab.map(TaskAction::TakeOver),
             IloButton::Raise(tier) => Some(TaskAction::SetTier(tier)),
-            IloButton::AnySite => Some(TaskAction::AnySite),
             IloButton::HandBack => tab.map(TaskAction::HandBack),
             IloButton::PagesBack => Some(TaskAction::PagesBack),
             // It only shows the page, as its picture's click does.

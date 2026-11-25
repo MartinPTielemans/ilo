@@ -437,7 +437,6 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         answers: Vec::new(),
         writing: false,
         tier: Default::default(),
-        only_added: false,
         finished: Vec::new(),
         folder: None,
         model: Some(model(Cli::Claude, Some("Opus"))),

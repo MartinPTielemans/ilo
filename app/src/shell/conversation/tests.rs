@@ -108,7 +108,6 @@ pub(super) fn conversation(steps: usize) -> Conversation {
         answers: Vec::new(),
         writing: false,
         tier: Default::default(),
-        only_added: false,
         finished: Vec::new(),
         folder: None,
         model: None,
@@ -1468,10 +1467,6 @@ fn a_site_is_never_in_quotes_and_a_pages_words_are(_: &mut TestAppContext) {
         said(&stopped(Why::Fenced)),
         "stopped Claude from going to seatmap.example"
     );
-    assert_eq!(
-        said(&stopped(Why::OtherSite)),
-        "stopped Claude from going to seatmap.example"
-    );
     let signed_in = IloKind::SignedIn {
         tab: 30,
         site: "tickets.example".into(),
@@ -2462,11 +2457,11 @@ fn a_buttons_place_for_the_checks_holds_no_word_of_its_line(cx: &mut TestAppCont
             })
             .expect("no ilo line")
     });
-    // The same stop at another site's door, where the line says the site.
+    // The same stop at an Off limits site's door, where the line says the site.
     let mut site = order.clone();
     if let IloKind::Stopped { at, why, .. } = &mut site {
         *at = "seatmap.example".into();
-        *why = Why::OtherSite;
+        *why = Why::Fenced;
     }
     let yours = IloKind::Yours {
         tab: 30,
@@ -2782,8 +2777,7 @@ fn a_model_that_cant_change_opens_nothing(cx: &mut TestAppContext) {
 /// The composer's level trigger says the thread's own level, at Look only and at Full access,
 /// and a click on it opens the bar's own level menu (choices.rs) under it, that level checked,
 /// wearing its plate while it's open. A pick there is the user's press on the thread, the one way
-/// its level changes. A thread kept to the sites added has its way out to any site there too. Last
-/// is the words table's `Settings…`, which opens Settings › Agents at Access.
+/// its level changes. Last is the words table's `Settings…`, which opens Settings › Agents at Access.
 #[gpui::test]
 fn the_level_trigger_says_the_threads_level_and_opens_the_bars_menu(cx: &mut TestAppContext) {
     type Shown = Rc<RefCell<Option<(Vec<MenuEntry>, crate::text_input::Chosen)>>>;
@@ -2796,12 +2790,11 @@ fn the_level_trigger_says_the_threads_level_and_opens_the_bars_menu(cx: &mut Tes
             move |items, _, _, _, chosen, _| *into.borrow_mut() = Some((items, chosen)),
         )))
     });
-    for (tier, only_added) in [(Tier::Look, false), (Tier::Full, false), (Tier::Work, true)] {
+    for tier in [Tier::Look, Tier::Full, Tier::Work] {
         shell.update(cx, |shell, cx| {
             shell.set_conversation(
                 Some(Conversation {
                     tier,
-                    only_added,
                     ..ended(IloKind::KeptHere)
                 }),
                 cx,
@@ -2820,13 +2813,6 @@ fn the_level_trigger_says_the_threads_level_and_opens_the_bars_menu(cx: &mut Tes
         let mut expected: Vec<(String, bool, bool)> = (choices::level_entries(tier).iter())
             .map(|item| (item.title.to_string(), item.enabled, item.checked))
             .collect();
-        if only_added {
-            expected.extend([
-                (String::new(), false, false),
-                ("Any site".into(), true, false),
-                ("Only the sites you add".into(), false, true),
-            ]);
-        }
         expected.extend([
             (String::new(), false, false),
             ("Settings…".into(), true, false),
@@ -2838,9 +2824,8 @@ fn the_level_trigger_says_the_threads_level_and_opens_the_bars_menu(cx: &mut Tes
             "the trigger wears its plate while its menu is open"
         );
         host.take();
-        let (pick, pressed) = match (tier, only_added) {
-            (_, true) => (expected.len() - 4, "task task-1 PickAnySite"),
-            (Tier::Full, _) => (expected.len() - 1, "agent access"),
+        let (pick, pressed) = match tier {
+            Tier::Full => (expected.len() - 1, "agent access"),
             _ => (1, "task task-1 PickTier(Work)"),
         };
         cx.update(|window, cx| chosen(crate::menu::Closed::Chose(pick), window, cx));

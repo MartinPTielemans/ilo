@@ -104,6 +104,9 @@ pub struct Row {
     /// The model's words, with the assistant's mark where the form leads with it; none where the
     /// app doesn't know the model, an outside agent's session.
     pub model: Option<(Option<&'static str>, SharedString, Trigger)>,
+    /// The effort's words and trigger, after the model, for an assistant whose program takes one;
+    /// none for any other.
+    pub effort: Option<(SharedString, Trigger)>,
     /// What stands between the level and the spring: what a thread holds, such as its folder.
     pub held: Vec<AnyElement>,
     /// The trigger whose menu is open, which alone wears its plate.
@@ -113,7 +116,8 @@ pub struct Row {
     pub round_at: Option<Box<dyn Fn(Bounds<Pixels>) + 'static>>,
 }
 
-/// The row: the level, what the thread holds, a spring, the model, then the round button.
+/// The row: the level, what the thread holds, a spring, the model, the effort, then the round
+/// button.
 pub fn row(row: Row) -> gpui::Div {
     let Row {
         form,
@@ -121,6 +125,7 @@ pub fn row(row: Row) -> gpui::Div {
         a11y,
         level: (tier, level),
         model,
+        effort,
         held,
         open,
         round: (round_id, round_said, round, go),
@@ -183,6 +188,17 @@ pub fn row(row: Row) -> gpui::Div {
                 model.child(glyph("icons/chevron-down.svg", TRIGGER_CHEVRON, inks.dim))
             })
     });
+    // The effort wears the dim ink before a pick and after, as the model's chevron does.
+    let effort = effort.map(|(said, effort)| {
+        trigger(effort)
+            .when(a11y, |effort| {
+                effort.role(Role::Button).aria_label(said.clone())
+            })
+            .px(px(TRIGGER_X))
+            .gap(px(TRIGGER_GAP))
+            .child(words(said, inks.dim))
+            .child(glyph("icons/chevron-down.svg", TRIGGER_CHEVRON, inks.dim))
+    });
     let round = round_button(
         form,
         inks,
@@ -204,6 +220,7 @@ pub fn row(row: Row) -> gpui::Div {
         .children(held)
         .child(div().flex_1())
         .children(model)
+        .children(effort)
         .child(round)
 }
 

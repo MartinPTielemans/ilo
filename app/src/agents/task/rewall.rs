@@ -169,13 +169,34 @@ impl Agents {
         // folder is its own under the tasks'.
         let dir = self.tasks_dir();
         let (task_dir, config) = (dir.join(agent), dir.join(format!("{agent}.json")));
+        let places = dir.join(wall::leftovers::ROOT);
+        let cli = task.cli.ok_or_else(refused)?;
+        let found = self.tasks.found.get(&cli);
+        // None resolves to nothing, so its wall isn't put up; its start then says it isn't there.
+        let program = (found.and_then(|found| found.program.clone())).unwrap_or_default();
+        let (cli_home, claude_config) = wall::cli_home(cli);
+        // None resolves to nothing too, so the start says it's without its files.
+        let bridge = wall::bridge().unwrap_or_default();
+        let home = crate::agents::clients::home();
+        // None is an empty path, which resolves to nothing, so the wall is refused.
+        let ilo = std::env::current_exe().unwrap_or_default();
+        let data = dir.parent().unwrap_or(&dir);
         let wall = WallFor {
-            cli: task.cli.ok_or_else(refused)?,
+            cli,
             level,
             folder: task.files.folder.as_ref(),
             attached: task.files.attached.as_deref(),
             task_dir: &task_dir,
             config: &config,
+            program: &program,
+            home: &home,
+            data,
+            ilo: &ilo,
+            socket: &self.socket,
+            bridge: &bridge,
+            places: &places,
+            cli_home: &cli_home,
+            claude_config: claude_config.as_deref(),
         };
         #[cfg(test)]
         if let Some(put_up) = &self.tasks.wall {

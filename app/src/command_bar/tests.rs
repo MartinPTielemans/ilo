@@ -251,6 +251,7 @@ impl Host for Recorder {
         page: Option<(SharedString, SharedString)>,
         tier: Tier,
         model: Option<String>,
+        effort: Option<&'static str>,
         _: &mut App,
     ) {
         let page = page.map_or(String::new(), |(url, _)| format!(" on {url}"));
@@ -259,7 +260,8 @@ impl Host for Recorder {
             tier => format!(" at {}", tier.id()),
         };
         let model = model.map_or(String::new(), |model| format!(" with {model:?}"));
-        self.record(format!("task {agent} {asked}{page}{tier}{model}"));
+        let effort = effort.map_or(String::new(), |effort| format!(" effort {effort}"));
+        self.record(format!("task {agent} {asked}{page}{tier}{model}{effort}"));
     }
 
     fn run_task_at_rest(
@@ -268,9 +270,10 @@ impl Host for Recorder {
         asked: &str,
         tier: Tier,
         model: Option<String>,
+        effort: Option<&'static str>,
         cx: &mut App,
     ) {
-        self.run_task(agent, asked, None, tier, model, cx);
+        self.run_task(agent, asked, None, tier, model, effort, cx);
         self.record("at rest".into());
     }
 
@@ -3571,6 +3574,30 @@ impl Bar {
     /// the secondary ink, ↗ after one with the out arrow, and its answer, which `pick` then gives
     /// the menu's pick.
     fn choice_menu(&mut self, model: bool) -> (Vec<String>, Chosen) {
+        self.shown_menu(match model {
+            true => CommandBar::model_menu,
+            false => CommandBar::level_menu,
+        })
+        .expect("no menu showed")
+    }
+
+    /// Opens the composer's effort menu as a click on its trigger does, as `choice_menu` does
+    /// the others; None where no menu shows.
+    fn effort_menu(&mut self) -> Option<(Vec<String>, Chosen)> {
+        self.shown_menu(CommandBar::effort_menu)
+    }
+
+    /// What the effort trigger reads, None where it isn't drawn.
+    fn effort_said(&mut self) -> Option<String> {
+        (self.window)
+            .read_with(&self.cx.cx, |bar, _| bar.effort_words().map(String::from))
+            .unwrap()
+    }
+
+    fn shown_menu(
+        &mut self,
+        open: fn(&mut CommandBar, &mut Window, &mut Context<CommandBar>),
+    ) -> Option<(Vec<String>, Chosen)> {
         let shown: Rc<RefCell<Option<(Vec<MenuEntry>, Chosen)>>> = Rc::default();
         let into = shown.clone();
         self.cx.update(|_, cx| {
@@ -3580,12 +3607,9 @@ impl Bar {
         });
         self.cx.run_until_parked();
         (self.window)
-            .update(&mut self.cx.cx, |bar, window, cx| match model {
-                true => bar.model_menu(window, cx),
-                false => bar.level_menu(window, cx),
-            })
+            .update(&mut self.cx.cx, |bar, window, cx| open(bar, window, cx))
             .unwrap();
-        let (items, chosen) = shown.borrow_mut().take().expect("no menu showed");
+        let (items, chosen) = shown.borrow_mut().take()?;
         let rows = (items.iter())
             .map(|item| {
                 let mark = match (item.header, item.checked, item.enabled) {
@@ -3603,7 +3627,7 @@ impl Bar {
                 }
             })
             .collect();
-        (rows, chosen)
+        Some((rows, chosen))
     }
 
     /// Gives the menu `choice_menu` showed the pick of its row `at`.
@@ -3795,6 +3819,79 @@ fn the_model_menus_search_picks_only_from_its_list(cx: &mut TestAppContext) {
     assert!(focused, "the composer lost the keyboard to the menu");
     assert_eq!(bar.choices().1, "claude · Sonnet");
     assert!(!bar.calls().iter().any(|call| call.contains("opus")));
+}
+
+/// Claude's effort trigger reads Effort and its menu has Default ticked before a pick; a level
+/// picked is what the trigger reads and goes with the start, and Default takes it back to none.
+#[gpui::test]
+fn the_effort_trigger_reads_its_pick_and_default_clears_it(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    bar.type_text("plan the week");
+    bar.keys("tab");
+    assert_eq!(bar.effort_said().as_deref(), Some("Effort"));
+    let (rows, chosen) = bar.effort_menu().expect("no effort menu for Claude");
+    let all = ["Low", "Medium", "High", "Extra high", "Max"];
+    assert_eq!(rows, [&["✓ Default"][..], &all].concat());
+    bar.pick(chosen, 3);
+    assert_eq!(bar.effort_said().as_deref(), Some("High"));
+    let (rows, chosen) = bar.effort_menu().unwrap();
+    assert_eq!(
+        rows,
+        ["Default", "Low", "Medium", "✓ High", "Extra high", "Max"]
+    );
+    bar.pick(chosen, 0);
+    assert_eq!(bar.effort_said().as_deref(), Some("Effort"));
+    bar.calls();
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["task claude plan the week"]);
+}
+
+/// The floor: every row on the effort menu gives the program a level from its own list, each a
+/// different one, and Default gives it none.
+#[gpui::test]
+fn every_effort_row_passes_a_level_from_the_programs_list(cx: &mut TestAppContext) {
+    let listed = crate::agents::runner::Cli::Claude.efforts();
+    let mut passed = Vec::new();
+    for row in 0..=listed.len() {
+        let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+        bar.type_text("plan the week");
+        bar.keys("tab");
+        let (rows, chosen) = bar.effort_menu().unwrap();
+        assert_eq!(
+            rows.len(),
+            listed.len() + 1,
+            "a row with no level: {rows:?}"
+        );
+        bar.pick(chosen, row);
+        bar.calls();
+        bar.keys("enter");
+        let call = bar.calls().concat();
+        passed.push(
+            call.split_once(" effort ")
+                .map(|(_, level)| level.to_string()),
+        );
+    }
+    assert_eq!(passed[0], None, "Default passed a level");
+    let levels: Vec<_> = passed[1..].iter().flatten().map(String::as_str).collect();
+    assert_eq!(levels, listed);
+}
+
+/// Codex's program takes no effort setting, so its composer draws no effort trigger and has no
+/// effort menu; a level picked for Claude doesn't go with Codex's start.
+#[gpui::test]
+fn codex_has_no_effort_trigger(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_agents(cx, &[("codex", None)], None);
+    bar.type_text("plan the week");
+    bar.keys("tab");
+    assert_eq!(bar.effort_said(), None);
+    assert!(bar.effort_menu().is_none(), "Codex takes no effort");
+}
+
+/// A level the table has no word for is drawn as the program gives it, first letter capital.
+#[test]
+fn a_level_with_no_word_is_the_programs_own_capitalised() {
+    assert_eq!(effort_name("xhigh"), "Extra high");
+    assert_eq!(effort_name("ultra"), "Ultra");
 }
 
 /// The composer opens at what it last started a thread with in the profile, as the host keeps it.
@@ -4802,6 +4899,48 @@ impl Resting {
             .map(|(text, _)| text)
             .collect()
     }
+
+    /// Picks row `at` of the composer's effort menu, as `pick_level` does its level.
+    fn pick_effort(&mut self, at: usize) {
+        let shown: Rc<RefCell<Option<Chosen>>> = Rc::default();
+        let into = shown.clone();
+        self.cx.update(|_, cx| {
+            cx.set_global(crate::menu::EntriesMenu(Rc::new(
+                move |_, _, _, _, chosen, _| *into.borrow_mut() = Some(chosen),
+            )))
+        });
+        (self.window)
+            .update(&mut self.cx, |rest, window, cx| {
+                rest.bar.update(cx, |bar, cx| bar.effort_menu(window, cx))
+            })
+            .unwrap();
+        let chosen = shown.borrow_mut().take().expect("no effort menu showed");
+        self.cx
+            .update(|window, cx| chosen(crate::menu::Closed::Chose(at), window, cx));
+        self.cx.run_until_parked();
+    }
+}
+
+/// A thread started from the composer at rest goes with the effort picked on its menu, as ⌘T's
+/// does, and with none where Default is picked.
+#[gpui::test]
+fn the_composer_at_rest_starts_the_thread_with_its_effort(cx: &mut TestAppContext) {
+    let mut rest = Resting::with_claude(cx);
+    rest.type_text("book a table");
+    rest.keys("tab");
+    rest.pick_effort(3);
+    rest.host.calls.take();
+    rest.keys("enter");
+    assert_eq!(
+        rest.host.calls.take(),
+        ["task claude book a table effort high", "at rest"]
+    );
+    rest.type_text("next");
+    rest.keys("tab");
+    rest.pick_effort(0);
+    rest.host.calls.take();
+    rest.keys("enter");
+    assert_eq!(rest.host.calls.take(), ["task claude next", "at rest"]);
 }
 
 /// A Space's first frame reads nothing for its field: the bar resting there asks the core and the

@@ -13,7 +13,7 @@ use crate::agents::ready::{Found, Ready};
 use crate::agents::runner::{self, Cli, Out};
 use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
 use crate::agents::task::{AskedOn, Conversation, Line, State, TaskAction, Word};
-use crate::agents::tier::{Sites, Tier};
+use crate::agents::tier::Tier;
 
 /// A stand-in for `claude`. A run of it writes what it was started with and where beside itself,
 /// numbered by run, then keeps what it's sent and never answers. Asked to purge, it writes what
@@ -396,13 +396,6 @@ fn a_level_picked_on_an_ended_task_is_the_one_its_reply_starts_at(cx: &mut TestA
         Tier::Full,
         "a line's button acted on an ended task"
     );
-    (run.agents).update(cx, |agents, _| {
-        agents.task_mut(&agent).unwrap().sites = Sites::Only(vec!["example.com".into()]);
-    });
-    act(TaskAction::PickAnySite, cx);
-    let sites = (run.agents).read_with(cx, |agents, _| agents.task(&agent).unwrap().sites.clone());
-    assert_eq!(sites, Sites::Any);
-    assert!(!started(), "Any site started a run");
 
     (run.agents).update(cx, |agents, cx| agents.reply(&agent, "And for Sunday?", cx));
     let (resumed, _) = run.ran(2);

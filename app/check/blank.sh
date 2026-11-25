@@ -35,8 +35,7 @@ expect "^browser: window opened $blank\$" "the Blank Window didn't open"
 none_since "^browser: spaces .*" || fail "opening a Blank Window changed the Spaces listed"
 # The driver numbers windows in the order they were made, the closed ones too.
 send window "$(grep -c '^browser: window opened ' "$log")"
-send key l cmd
-expect '^browser: command bar shown$' "⌘L didn't open the command bar in the Blank Window"
+resting_key l "Blank Window"
 send insert "${site}notes.txt"
 send key return
 expect "^browser: loaded [0-9]* ${site}notes.txt\$" "the Blank Window didn't load its page"

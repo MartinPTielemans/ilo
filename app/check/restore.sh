@@ -161,8 +161,7 @@ expect '^browser: field Space name has the keyboard$' "New Space's name didn't h
 send type reading list
 send key return
 expect "^browser: create space $second reading list\$" "return didn't name the Space"
-send key t cmd
-expect '^browser: command bar shown$' "⌘T in the new Space didn't open the command bar"
+resting_key t "new Space"
 send type "http://localhost:$port/one.html"
 send key return
 expect '^browser: today [0-9][0-9]*$' "the tab for one.html didn't open in the new Space"
@@ -172,14 +171,15 @@ post rightclick 100 112
 expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors, $profile, \
 New Folder…, Live Folders › GitHub Pull Requests, ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "the Space's menu didn't offer its theme"
-# The theme picker's pink swatch, and + for a second colour, which a relaunch brings back.
+# The theme panel's one-colour palette, the sixth, and + for a second colour, which a relaunch
+# brings back.
 choose_drawn "$(cased 'Edit Theme Color…')"
 expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
 expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
-send clickkey "$(swatch_x 1)" $swatch_y
-expect "^browser: colored space $second [0-9a-f]*\$" "the pink swatch didn't colour the Space"
+send clickkey $(panel_at palette 6)
+expect "^browser: colored space $second [0-9a-f]*\$" "the one-colour palette didn't colour the Space"
 color=$(grep "^browser: colored space $second " "$log" | tail -1 | cut -d' ' -f5)
-send clickkey 211.5 316.5
+send clickkey $(panel_at plus 1)
 expect "^browser: themed space $second x=[-0-9.]* y=[-0-9.]* colors=2 " \
   "+ didn't give the Space a second colour"
 theme=$(grep "^browser: themed space $second " "$log" | tail -1 | cut -d' ' -f5-)

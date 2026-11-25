@@ -35,9 +35,9 @@ pub const INSTRUCTIONS: &str = concat!(
     env!("APP_NAME"),
     " stops payments, orders, sending messages as the user, bank sites and every request you \
      send with the request tool that may change something. The user can also set Look only (reading pages) \
-     or limit a task to some sites; ",
+     or keep tasks off some sites; ",
     env!("APP_NAME"),
-    " stops anything outside that even with Full access. When ",
+    " enforces those limits even with Full access. When ",
     env!("APP_NAME"),
     " stops a step, don't retry or work around it: say what you were about to do and carry on \
      with the rest. Only the user can change what a task may do. You can never type into a password field: a sign-in, a 2FA prompt or a \
