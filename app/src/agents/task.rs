@@ -945,7 +945,8 @@ impl Agents {
 
     /// Keeps what the user's composer started a thread with in `space`'s profile, for the next
     /// it opens there: its model, and its level unless that was Full access, which is set for one
-    /// thread and never remembered. Only the composer's own start calls it.
+    /// thread and never remembered. The composer's start calls it, and Settings' `A new thread
+    /// starts with`, whose rows are this same memory: a pick there is a pick here.
     pub fn remember_composer(&mut self, space: u64, tier: Tier, model: Option<(Cli, String)>) {
         let profile = self.browser.space_profile(space);
         if profile.is_empty() {
