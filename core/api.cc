@@ -678,8 +678,9 @@ bool bc_agent_may_act(const char* agent,
   bc_agent_failure code = refused.empty() ? BC_AGENT_FAILURE_NONE : BC_AGENT_FAILURE_ACTION;
   if (refused.empty() && tab && !browser_core::Tab::Get(tab) &&
       browser_core::FromEarlierLaunch(tab)) {
-    // Its id is from before ilo last started, and names no tab now (#1449).
-    refused = "ilo restarted, so the tabs you knew are gone. Call list_tabs for the tabs open now.";
+    // Its id is from before the browser last started, and names no tab now (#1449).
+    refused = "The browser restarted, so the tabs you knew are gone. Call list_tabs for the tabs "
+              "open now.";
     code = BC_AGENT_FAILURE_RESTARTED;
   }
   if (refused.empty() && (!agent || !*agent || !browser_core::Space::AgentMayAct(agent, tab))) {
