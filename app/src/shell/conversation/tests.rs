@@ -94,6 +94,17 @@ pub(super) fn conversation(steps: usize) -> Conversation {
     }
 }
 
+/// The request the conversation's view holds out for `tab`'s picture, as it asked for it. Not the
+/// app's counter less one: the tests run on threads of one process, which all take from it.
+fn picture_request(shell: &Entity<Shell>, tab: u64, cx: &mut VisualTestContext) -> u64 {
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    view.read_with(cx, |view, _| {
+        let held = view.pictures.iter().find(|(each, ..)| *each == tab);
+        held.map(|(_, request, _)| *request)
+            .expect("the view asked for no picture of the tab")
+    })
+}
+
 /// The user's Space 1 with tabs 10 and 11, 10 shown, and task-1's Space 3 with tab 30, whose card
 /// is at the top of Space 1's Today; a click on the card shows its conversation. Without motion,
 /// so the area is in place at once.
@@ -789,7 +800,7 @@ fn a_picture_shows_its_page(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| {
         shell.set_conversation(Some(conversation(1)), cx)
     });
-    let request = crate::shell::picture::next_request() - 1;
+    let request = picture_request(&shell, 30, cx);
     let picture = PagePicture::from_bgra(vec![255; 4 * 4], 2, 2);
     shell.update(cx, |shell, cx| shell.page_pictured(request, picture, cx));
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
@@ -3120,7 +3131,7 @@ fn a_closed_conversation_leaves_its_card_the_picture_its_tile_ended_on(cx: &mut 
         shell.read_with(cx, |shell, _| shell.plate_of(card).map(|p| p.size()))
     };
     assert_eq!(plate(&shell, &card, cx), None, "a plate before any picture");
-    let request = crate::shell::picture::next_request() - 1;
+    let request = picture_request(&shell, 30, cx);
     let picture = PagePicture::from_bgra(vec![255; 4 * 4], 2, 2);
     shell.update(cx, |shell, cx| shell.page_pictured(request, picture, cx));
     assert_eq!(
