@@ -62,6 +62,7 @@ use crate::tokens::command_bar::LIST_X;
 use crate::tokens::command_bar::ROW_HEIGHT;
 pub use crate::tokens::command_bar::WIDTH;
 const ROWS_SHOWN: usize = 5;
+use crate::product;
 pub use crate::tokens::command_bar::ABOVE_MIDDLE;
 use crate::tokens::command_bar::FIELD_ABOVE;
 pub use crate::tokens::command_bar::FIELD_RADIUS;
@@ -80,7 +81,9 @@ use crate::tokens::command_bar::PLATE_RADIUS;
 pub use crate::tokens::command_bar::RADIUS;
 use crate::tokens::command_bar::ROW_END;
 use crate::tokens::command_bar::TITLE_X;
-use crate::tokens::command_bar::{FIELD_FADE, HINT_GAP, HINT_KEY_GAP, HINT_KEY_RIM, HINT_KEY_X};
+use crate::tokens::command_bar::{
+    FIELD_FADE, HINT_GAP, HINT_KEY_GAP, HINT_KEY_RIM, HINT_KEY_X, MARK,
+};
 /// There the input's row is a row tall, with no line under it, and its icon and text sit in
 /// the rows' icon and title columns.
 const FIELD_INPUT: f32 = ROW_HEIGHT;
@@ -319,6 +322,8 @@ enum Icon {
     Glyph(&'static str),
     /// A Space's mark, as Move to Space's menu shows it.
     Swatch(crate::menu::Swatch),
+    /// The product's mark, in the text's colour.
+    Mark,
     None,
 }
 
@@ -369,8 +374,7 @@ impl Suggestion {
             // Its CLI's terminal: an agent is named in words, never by its maker's logo or colour.
             Some(TaskRow::Agent { glyph, .. }) => return Icon::Glyph(glyph),
             Some(TaskRow::SetUp) => return Icon::Glyph("icons/settings.svg"),
-            // The product's mark goes here, which the app doesn't have yet, so the slot is empty.
-            Some(TaskRow::Thread) => return Icon::None,
+            Some(TaskRow::Thread) => return Icon::Mark,
             None => {}
         }
         if let Some((section, _)) = &self.setting {
@@ -3325,7 +3329,8 @@ impl CommandBar {
             Icon::Favicon => self.favicon(&row.url, size, color),
             Icon::Glyph(path) => glyph(path, size, color),
             Icon::Swatch(swatch) => swatch.dot(behind).into_any_element(),
-            Icon::None => return None,
+            // Drawn in the text's colour where a row has it (`row`).
+            Icon::Mark | Icon::None => return None,
         })
     }
 
@@ -3371,9 +3376,9 @@ impl CommandBar {
         if !self.page.is_empty() && self.asked == self.page {
             return self.favicon(&self.page, size, color);
         }
-        // The composer's slot is the product's mark, which the app doesn't have yet.
+        // The composer's slot is the product's mark.
         if self.ask.is_some() {
-            return div().size(px(size)).flex_none().into_any_element();
+            return product::mark(size, &palette::current(cx)).into_any_element();
         }
         // A Spaces menu searches, whichever Space is selected.
         let row = self
@@ -3538,7 +3543,11 @@ impl CommandBar {
             .justify_center()
             .rounded(px(CHIP_RADIUS))
             .when_some(tile, |icon, tile| icon.bg(tile))
-            .children(self.glyph(row, ICON_SIZE, glyph, Rgba::from(tile_behind)));
+            .children(match row.icon() {
+                // The product's mark is the text's colour, selected or not, a little over an icon.
+                Icon::Mark => Some(product::mark(MARK, &palette).into_any_element()),
+                _ => self.glyph(row, ICON_SIZE, glyph, Rgba::from(tile_behind)),
+            });
         // A key's chip: the accent's label with the accent on it on the selected row.
         let chip = |text: SharedString| {
             let (fill, text_color) = match selected {
