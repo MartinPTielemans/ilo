@@ -892,7 +892,13 @@ else
   # screen's top, its quick-maximize zone, as it does under a hand.
   drag 600 6 moves "the card's top margin"
 fi
-drag $((width - 4)) 300 moves "the card's right margin"
+# Down the margin, not across it: the press is 4 from the window's edge and a move starts 4 from
+# its press (DRAG_START), so 5 to the right would end past the edge, where the Mac's driver posts
+# nothing (#4076).
+send drag $((width - 4)) 300 $((width - 4)) 305
+count=$(grep -c '^browser: window move$' "$log" || true)
+[ "$count" -gt "$moves" ] || fail "a drag on the card's right margin didn't move the window"
+moves=$count
 # A double-click there does what System Settings › Desktop & Dock says a title bar's does: zoom,
 # unless it's set to something else. Sway, the Wayland session's compositor, maximizes no window:
 # its windows tile or float, so there's no zoom to see.
