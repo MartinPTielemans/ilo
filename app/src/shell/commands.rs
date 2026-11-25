@@ -116,6 +116,9 @@ pub enum Command {
     /// Brings each site's Today tabs in the Space shown together, at its first tab's place
     /// (`crate::sort_by_site`).
     SortBySite,
+    /// Sorts the Space shown's today's tabs into folders, as a click on the broom does
+    /// (Browser::start_broom, #4252): the user's alone, so no agent tool runs it.
+    SortIntoFolders,
     /// Undoes the last thing the user did that lost or moved something (`Shell::undo`).
     Undo,
     /// Does again what Undo undid.
@@ -485,6 +488,7 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     row(Command::CloseTab, &["close tab"]),
     row(Command::Clear, &["unpinned tabs"]),
     row(Command::SortBySite, &["group tabs by site", "tidy tabs"]),
+    row(Command::SortIntoFolders, &[]),
     row(Command::ClearCacheAndRefresh, &[]),
     row(Command::ClearCookiesAndRefresh, &[]),
     row(Command::ClearArchive, &[]),
@@ -1121,6 +1125,7 @@ impl Command {
             Command::Exit => "exit",
             Command::Clear => "clear",
             Command::SortBySite => "sort-by-site",
+            Command::SortIntoFolders => "sort-into-folders",
             Command::Undo => "undo",
             Command::Redo => "redo",
             Command::CopyUrl => "copy-url",
@@ -1612,6 +1617,13 @@ impl Shell {
             Command::Exit => return self.browser.toggle_full_screen(cx),
             Command::Clear => return self.clear(cx),
             Command::SortBySite => return self.sort_by_site(cx),
+            // What the browser says now, as the broom's click reads it.
+            Command::SortIntoFolders => {
+                if self.browser.broom().is_some_and(super::Broom::sorts) {
+                    self.browser.start_broom(cx);
+                }
+                return;
+            }
             // While Arrange is on, ⌘Z and the Edit menu's Undo take back its steps (shell/arrange.rs).
             Command::Undo if self.undo_arrange(self.field_tab(), cx) => return,
             Command::Undo => {
@@ -2273,6 +2285,9 @@ impl Shell {
             Command::Clear => !self.today().is_empty(),
             // With every site's tabs together already, it would change nothing.
             Command::SortBySite => self.sorted_by_site(self.space).is_some(),
+            // Where the broom is drawn and takes a click: never in a private window or an agent's
+            // Space, and never with fewer than two tabs to sort or a sort running.
+            Command::SortIntoFolders => self.browser.broom().is_some_and(super::Broom::sorts),
             Command::FavoriteTab => {
                 let tab = self.selected;
                 tab != 0 && !self.favorites.contains(&tab) && self.has_room_for(tab)
@@ -2560,6 +2575,7 @@ pub(super) fn private_runs(command: Command) -> bool {
             | Command::PreviousSpace
             | Command::ViewArchive
             | Command::ClearArchive
+            | Command::SortIntoFolders
             | Command::ViewAgents
             // It keeps nothing, so it makes no Boost, though it shows its profile's.
             | Command::NewBoost
