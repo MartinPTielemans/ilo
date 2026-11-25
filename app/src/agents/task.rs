@@ -57,6 +57,10 @@ pub const QUIET: Duration = Duration::from_secs(60);
 /// model overshoots by a few, and each surface cuts at its own width as any title does (#3690).
 pub const TITLE_KEPT: usize = 40;
 
+/// How much of an answer's first line a screen reader is told: a sentence or two, where a card's
+/// line has the width of a title.
+pub const TOLD_KEPT: usize = 120;
+
 /// How long a task's title stays before it may change, so it can't flicker (#3690).
 pub const RENAMING: Duration = Duration::from_secs(60);
 
@@ -3706,6 +3710,23 @@ fn first_words(result: &str) -> SharedString {
 /// bold, a link's address left for its label, then cleaned as a title is: clipped at TITLE_KEPT
 /// and what wouldn't show or would move the text around it written out. None with no text.
 pub fn first_line(result: &str) -> Option<SharedString> {
+    let kept = page::clip(&first_text(result)?, TITLE_KEPT);
+    Some(super::request::escaped(&kept, false).0.into())
+}
+
+/// A result's first line as a screen reader is told it: the card's line's text, cleaned the same,
+/// but up to TOLD_KEPT characters and ending with a whole word, as nothing marks a cut in speech.
+pub fn told_line(result: &str) -> Option<SharedString> {
+    let line = first_text(result)?;
+    Some(
+        super::request::escaped(words_within(&line, TOLD_KEPT), false)
+            .0
+            .into(),
+    )
+}
+
+/// A result's first line of text without its marks, a link its label. None with no text.
+fn first_text(result: &str) -> Option<String> {
     let line = (result.lines())
         .map(|line| {
             line.trim()
@@ -3713,8 +3734,26 @@ pub fn first_line(result: &str) -> Option<SharedString> {
                 .trim_end_matches(['*', ' '])
         })
         .find(|line| !line.is_empty())?;
-    let kept = page::clip(&labels(&line.replace("**", "")), TITLE_KEPT);
-    Some(super::request::escaped(&kept, false).0.into())
+    Some(labels(&line.replace("**", "")))
+}
+
+/// `text` whole, or the words of it that end within its first `chars` characters. A first word
+/// longer than that is cut there.
+fn words_within(text: &str, chars: usize) -> &str {
+    let Some((end, next)) = text.char_indices().nth(chars) else {
+        return text;
+    };
+    let head = &text[..end];
+    let whole = match next.is_whitespace() {
+        true => head,
+        false => head
+            .rfind(char::is_whitespace)
+            .map_or("", |space| &head[..space]),
+    };
+    match whole.trim_end() {
+        "" => head,
+        words => words,
+    }
 }
 
 /// `text` with each "[label](address)" its label alone.

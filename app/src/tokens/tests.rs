@@ -7,6 +7,16 @@ use std::{fs, path::Path};
 /// The literals that stay in the code: the file, a piece of the line, and why.
 const ALLOWED: &[(&str, &str, &str)] = &[
     (
+        "agents/wall/links.rs",
+        "0x2FC1_2FC1",
+        "ZFS's filesystem number, not a colour",
+    ),
+    (
+        "agents/wall/links.rs",
+        "0xCA45_1A4E",
+        "bcachefs's filesystem number, not a colour",
+    ),
+    (
         "theme.rs",
         "0x9e37_79b9",
         "the grain's random seed, not a colour",
