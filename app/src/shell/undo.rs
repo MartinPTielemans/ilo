@@ -121,6 +121,8 @@ pub(super) struct Folder {
     children: Vec<u64>,
     /// What filled it, if it was a Live Folder, which it's made again as.
     live: Option<LiveSource>,
+    /// Whether it was a today's folder, made again around the same tabs, where they are.
+    today: bool,
 }
 
 /// What a name, an icon or a colour belongs to. A Space's colour comes with the theme it's the
@@ -385,7 +387,7 @@ impl Edit {
             Edit::Return { tab, .. } => id(tab),
             Edit::Put { tab, spot, .. } => {
                 id(tab);
-                if let At::Pinned { folder, .. } = &mut spot.at {
+                if let At::Pinned { folder, .. } | At::Today { folder, .. } = &mut spot.at {
                     id(folder);
                 }
             }
@@ -1590,6 +1592,24 @@ impl Shell {
     fn folder_snapshot(&self, folder: u64) -> Option<Edit> {
         let space = self.spaces.iter().find(|space| space.is_folder(folder))?;
         let (name, open) = space.folders.folders.get(&folder)?.clone();
+        // Its tabs stay where they are, loose in Today, once it's deleted.
+        if space.today_folder(folder) {
+            let later = |tab: &u64| space.later(*tab);
+            let children = (space.today.iter().copied())
+                .filter(|&tab| space.folder_of(tab) == folder && !later(&tab))
+                .collect();
+            return Some(Edit::Restore(Folder {
+                id: folder,
+                space: space.id,
+                name,
+                open,
+                container: 0,
+                index: 0,
+                children,
+                live: None,
+                today: true,
+            }));
+        }
         let Spot {
             at: At::Pinned {
                 folder: container,
@@ -1610,6 +1630,7 @@ impl Shell {
             index,
             children,
             live: space.folders.live.get(&folder).copied(),
+            today: false,
         }))
     }
 
@@ -1622,6 +1643,9 @@ impl Shell {
         plain: bool,
         cx: &mut Context<Self>,
     ) -> Option<u64> {
+        if folder.today {
+            return self.restore_today_folder(folder, cx);
+        }
         let live = (folder.live)
             .map(|source| (self.browser).create_live_folder(folder.space, source, &folder.name, cx))
             .filter(|&made| made != 0);
@@ -1650,6 +1674,34 @@ impl Shell {
                 false => self.browser.move_tab(child, true, made, index, cx),
             }
             index += panes;
+        }
+        if !folder.open {
+            self.browser.set_folder_open(made, false, cx);
+        }
+        Some(made)
+    }
+
+    /// Makes today's `folder` again around the tabs it held, with the name it had, which only this
+    /// step kept. The core makes a today's folder of tabs in no split view, so a split it held
+    /// goes back in after, at its place. None, the tabs staying loose, if fewer than two of them
+    /// are single tabs still in Today.
+    fn restore_today_folder(&mut self, folder: &Folder, cx: &mut Context<Self>) -> Option<u64> {
+        let single = |shell: &Self, tab: u64| shell.panes_in(folder.space, tab) == 1;
+        let singles: Vec<u64> = (folder.children.iter().copied())
+            .filter(|&tab| single(self, tab))
+            .collect();
+        let made = self
+            .browser
+            .create_today_folder(folder.space, &folder.name, &singles, cx);
+        if made == 0 {
+            return None;
+        }
+        let mut index = 0;
+        for &tab in &folder.children {
+            if !single(self, tab) {
+                self.browser.move_tab(tab, false, made, index, cx);
+            }
+            index += self.panes_in(folder.space, tab);
         }
         if !folder.open {
             self.browser.set_folder_open(made, false, cx);

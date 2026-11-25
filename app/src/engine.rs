@@ -153,6 +153,11 @@ impl Browser for Engine {
         unsafe { bc::bc_folder_create(space, name.as_ptr(), folder, index) }
     }
 
+    fn create_today_folder(&self, space: u64, name: &str, tabs: &[u64], _: &mut App) -> u64 {
+        let name = CString::new(name).unwrap_or_default();
+        unsafe { bc::bc_folder_create_today(space, name.as_ptr(), tabs.as_ptr(), tabs.len()) }
+    }
+
     fn rename_folder(&self, folder: u64, name: &str, _: &mut App) {
         let name = CString::new(name).unwrap_or_default();
         unsafe { bc::bc_folder_rename(folder, name.as_ptr()) };

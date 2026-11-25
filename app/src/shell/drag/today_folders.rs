@@ -127,3 +127,14 @@ fn a_todays_folder_menu_renames_and_deletes(cx: &mut TestAppContext) {
     });
     assert_eq!(items, ["rename-folder", "delete-folder"]);
 }
+
+/// Delete Folder leaves a today's folder's tabs open and loose in Today, and ⌘Z puts the folder
+/// back around them with the name it had, as a pinned folder's ⌘Z does.
+#[gpui::test]
+fn undo_puts_a_deleted_todays_folder_back_around_its_tabs(cx: &mut TestAppContext) {
+    let (shell, host) = shell_with(cx, &[1], &[4, 5, 6, 7], today_folder(true));
+    shell.update(cx, |shell, cx| shell.delete_folder_now(20, cx));
+    assert_eq!(host.take_edits(), ["delete folder 20"]);
+    shell.update(cx, |shell, cx| assert!(shell.undo(cx)));
+    assert_eq!(host.take_edits(), ["today folder 1001 1 Trips [5, 6]"]);
+}

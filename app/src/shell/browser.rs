@@ -69,6 +69,12 @@ pub trait Browser {
     /// `space`, counted as `move_tab` counts, else at the bottom, and returns it.
     fn create_folder(&self, space: u64, name: &str, folder: u64, index: usize, cx: &mut App)
     -> u64;
+    /// Makes an open today's folder named `name` of `tabs`, Today tabs of `space` in no folder
+    /// and no split view, at least two, together at the first one's place, and returns it, or 0.
+    /// Only ⌘Z after Delete Folder calls it, with the name the folder had (#4252).
+    fn create_today_folder(&self, _space: u64, _name: &str, _tabs: &[u64], _cx: &mut App) -> u64 {
+        0
+    }
     fn rename_folder(&self, folder: u64, name: &str, cx: &mut App);
     /// Gives `folder` `icon`, an emoji, or takes its icon away with an empty one.
     fn set_folder_icon(&self, folder: u64, icon: &str, cx: &mut App);
