@@ -331,9 +331,17 @@ impl Float {
     ];
 
     /// Whether the host has its windows' material under it (host.h): the Mac's overlays, Site
-    /// Controls and menus. The rest have none under them yet.
+    /// Controls, menus, toasts and zoom HUD. The rest have none under them yet.
     pub fn over_material(self) -> bool {
-        window_material() && matches!(self, Float::Menu | Float::SiteControls | Float::TabSwitcher)
+        window_material()
+            && matches!(
+                self,
+                Float::Menu
+                    | Float::SiteControls
+                    | Float::TabSwitcher
+                    | Float::Toast
+                    | Float::ZoomHud
+            )
     }
 
     /// Its fill in a `tone` window, as drawn on this host.

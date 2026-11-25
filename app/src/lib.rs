@@ -235,6 +235,7 @@ pub mod find_status;
 pub mod flatpak;
 pub mod folder_preview;
 pub mod foot_bar;
+pub mod glass;
 pub mod glow;
 pub mod hold;
 pub mod hover_card;
