@@ -1224,8 +1224,19 @@ void Window::AdjustNavigate(NavigateParams& params) {
       // One with no page to start, which Navigate makes itself, is the agent's Space's as its tab
       // strip takes it (MadeFor).
       window->agents_source_ = source_id;
+      // Navigate may yet add no tab, and the next one added must not be taken for this page's.
+      window->ForgetNextTabsOpenerSoon();
     }
   }
+}
+
+void Window::ForgetNextTabsOpenerSoon() {
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&Window::ForgetNextTabsOpener, weak_factory_.GetWeakPtr()));
+}
+
+void Window::ForgetNextTabsOpener() {
+  agents_source_ = 0;
 }
 
 // static
