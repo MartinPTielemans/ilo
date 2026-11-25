@@ -4528,10 +4528,18 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
         }
         _ => Opens::Nothing,
     };
+    // A thought says how long it took in its words (Z15), from 1 s.
+    let (title, description) = match (step.did.tool.as_str(), took, &step.error) {
+        ("thought", Some(took), None) => (
+            format!("Thought for {}", duration(took.as_secs().max(1))),
+            String::new(),
+        ),
+        _ => (tools::step_title(&step.did, tense(step)), description),
+    };
     TraceStep {
         key,
         glyph: tools::step_glyph(&step.did.tool),
-        title: tools::step_title(&step.did, tense(step)).into(),
+        title: title.into(),
         description: description.into(),
         running: step.ended.is_none(),
         failed: step.error.is_some(),

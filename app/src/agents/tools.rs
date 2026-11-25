@@ -1011,7 +1011,8 @@ pub fn step_glyph(tool: &str) -> &'static str {
         "pin_tab" | "unpin_tab" => "icons/pin.svg",
         "ask" => "icons/circle-question-mark.svg",
         "upload" => "icons/file.svg",
-        "thought" => "icons/lightbulb.svg",
+        // Three dots, as the log draws a thought (spec-thread-stage.md).
+        "thought" => "icons/ellipsis.svg",
         _ => "icons/globe.svg",
     }
 }

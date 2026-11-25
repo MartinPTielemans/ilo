@@ -7026,6 +7026,50 @@ mod tasks {
         );
     }
 
+    /// A thought says how long it took in its own words, from 1 s, with nothing at its end
+    /// (Z15).
+    #[gpui::test]
+    fn a_thought_says_how_long_it_thought(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, TraceItem};
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "What's on at MAAT?", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        for took in [72_000, 300] {
+            said(
+                &agents,
+                &agent,
+                Out::Thought {
+                    text: "Look at its page.".into(),
+                    took: Duration::from_millis(took),
+                },
+                cx,
+            );
+        }
+        let lines = agents.read_with(cx, |agents, cx| {
+            agents.conversation(&agent, cx).unwrap().lines
+        });
+        let Some(Line::Trace(trace)) = lines.first() else {
+            panic!("no trace: {lines:?}");
+        };
+        let said: Vec<_> = (trace.items.iter())
+            .filter_map(|item| match item {
+                TraceItem::Step(step) => {
+                    Some((step.title.to_string(), step.description.to_string()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            said,
+            [
+                ("Thought for 1 min 12 s".to_string(), String::new()),
+                ("Thought for 1 s".to_string(), String::new()),
+            ]
+        );
+    }
+
     /// A turn the user sends says Thinking at once, under their message and on the card, before
     /// the CLI says anything; the agent's first step or message takes its place, and its result
     /// folds it. Nothing waits on the CLI once it has answered.
