@@ -2052,6 +2052,34 @@ open(sys.argv[1], "wb").write(base64.b64decode(content["data"]))' "$out/agent-ty
   ../tools/window-screenshot.sh "$pid" "$out/agent-pointer.png" || fail "no window to capture"
   await_log '^browser: agent pointer gone$' "the agent's pointer didn't go"
 
+  # A date field has a ref, and the agent's typing of its value form fills it: the core types each
+  # part into the segment the locale shows it in, as keys typed in order would give a wrong date
+  # (#4281). The page names the value the field then has, and the answer gives the field's line.
+  printf '%s' '<script src="painted.js"></script>
+<label>Day <input id=day type=date></label>
+<script>
+day.oninput = () => document.title = "dated " + day.value;
+painted(() => document.title = "date");
+</script>' > "$out/site/date.html"
+  call navigate "{\"tab\":$agent_tab,\"url\":\"localhost:$port/date.html\"}" > /dev/null
+  await_log "^browser: title $agent_tab date\$" "the date page didn't load in the agent's tab"
+  outline=$(call snapshot "{\"tab\":$agent_tab}")
+  printf '%s\n' "$outline" > "$out/mcp-date.txt"
+  day=$(ref_of Date Day)
+  [ -n "$day" ] || fail "the outline had no ref for the date field: $outline"
+  typed=$(call type "{\"tab\":$agent_tab,\"ref\":\"$day\",\"text\":\"2026-11-25\"}")
+  printf '%s\n' "$typed" >> "$out/mcp-date.txt"
+  case "$typed" in
+    "Typed into “Day”."*) ;;
+    *) fail "typing 2026-11-25 into the date field answered: $typed" ;;
+  esac
+  await_log "^browser: title $agent_tab dated 2026-11-25\$" \
+    "the date field's value didn't become 2026-11-25 from the agent's typing"
+  case "$typed" in
+    *'- Date "Day" [e'*'] (holds "2026-11-25")'*) ;;
+    *) fail "the date field's line after the agent's typing didn't hold 2026-11-25: $typed" ;;
+  esac
+
   # A page's frames are part of it: the outline has what's in a frame of the page's site and in
   # one of another, which Chromium puts in a process of its own, and the agent acts in both. A
   # password field in a frame is as off limits as one in the page. The page names itself once the

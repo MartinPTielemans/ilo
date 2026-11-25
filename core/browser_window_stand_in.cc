@@ -11,6 +11,7 @@
 
 #include "base/functional/bind.h"
 #include "base/task/single_thread_task_runner.h"
+#include "browser_core/agent_permissions.h"
 #include "browser_core/held_keys.h"
 #include "build/build_config.h"
 #include "browser_core/autofill_offer.h"
@@ -699,6 +700,11 @@ void BrowserWindowStandIn::ShowEmojiPanel() {
 std::unique_ptr<content::EyeDropper> BrowserWindowStandIn::OpenEyeDropper(
     content::RenderFrameHost* frame,
     content::EyeDropperListener* listener) {
+  // The picker is the system's and reads the screen where the user clicks, so a page in an agent's
+  // Space gets none (agent_permission_rule.h) and hears that nothing was picked.
+  if (NoColorPicker(frame)) {
+    return nullptr;
+  }
   return ShowEyeDropper(frame, listener);
 }
 

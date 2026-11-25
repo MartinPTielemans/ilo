@@ -10,11 +10,16 @@
 
 #include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
+#include "chrome/browser/download/download_confirmation_reason.h"
+#include "chrome/browser/download/download_target_determiner_delegate.h"
+#include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/permission_prompt.h"
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/passphrase_enums.h"
 #include "components/sync/engine/commit_and_get_updates_types.h"
+#include "content/common/content_export.h"
 #include "content/public/browser/bluetooth_delegate.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/login_delegate.h"
 #include "content/public/browser/weak_document_ptr.h"
 #include "extensions/browser/extension_install_prompt_client.h"
@@ -46,6 +51,7 @@ class NavigationHandle;
 class RenderFrameHost;
 class RenderWidgetHost;
 class WebContents;
+struct MediaStreamRequest;
 }
 
 namespace extensions {
@@ -67,6 +73,7 @@ class AuthChallengeInfo;
 
 namespace permissions {
 class ChooserController;
+class PermissionRequest;
 }
 
 namespace policy {
@@ -371,5 +378,77 @@ extern void (*g_browser_core_activate_contents)(content::WebContents* contents);
 // (kind 2), as it asks. False keeps it from opening, with no infobar, and the page hears a cancel.
 // The browser's own dialogs, as a download's Save As, aren't asked about.
 extern bool (*g_browser_core_page_file_dialog)(content::WebContents* contents, int kind);
+
+// components/permissions/permission_context_base.cc: whether the page in |frame| is refused the
+// permission |type| whatever is saved for its site, asked in GetPermissionStatus before any setting
+// is read, by a read of the status as much as by a request; and RequestPermission's word that a
+// request, not a read, was refused so (chromium-core-agent-no-permissions.patch).
+extern bool (*g_browser_core_no_permission)(content::RenderFrameHost* frame,
+                                            ContentSettingsType type);
+extern void (*g_browser_core_permission_refused)(content::RenderFrameHost* frame,
+                                                 ContentSettingsType type);
+
+// components/permissions/permission_request_manager.cc: whether the core takes |request|, asked by
+// the page in |frame|, first in AddRequest: before it is queued, shown, counted or recorded. One
+// taken the core has ended or left unanswered itself; the manager frees it as the call returns.
+extern bool (*g_browser_core_takes_permission_request)(content::RenderFrameHost* frame,
+                                                       permissions::PermissionRequest* request);
+
+// chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc: whether the page in |contents|
+// is refused |request|, first in ProcessMediaAccessRequest, before any handler and so any picker.
+// True answers the page as a denial does.
+extern bool (*g_browser_core_no_media_access)(content::WebContents* contents,
+                                              const content::MediaStreamRequest& request);
+
+// content/browser/renderer_host/clipboard_host_impl.cc: whether a write to the clipboard by the
+// page in |frame| is dropped, asked in FrameClipboardContext::CanWrite at each write. Exported by
+// content, which is a library of its own in a component build.
+CONTENT_EXPORT extern bool (*g_browser_core_no_clipboard_write)(content::RenderFrameHost* frame);
+
+// content/browser/file_system_access/file_system_access_handle_base.cc: whether a handle on a file
+// or a folder made for |frame| keeps fixed denied grants in place of those it came with, asked in
+// the constructor every such handle runs. |site_storage| says the handle is in the site's own
+// storage. Exported as the clipboard's is.
+CONTENT_EXPORT extern bool (*g_browser_core_no_file_handle)(content::GlobalRenderFrameHostId frame,
+                                                            bool site_storage);
+
+// chrome/browser/printing/print_view_manager.cc: whether the page in |frame| is refused a print
+// preview, asked in PrintViewManager::RejectPrintPreviewRequestIfRestricted, which every preview
+// passes before its dialog is made. |by_users_command| says the browser's own Print command
+// started it, not the page. One refused ends as a restricted preview does, and its page goes on.
+extern bool (*g_browser_core_no_print)(content::RenderFrameHost* frame, bool by_users_command);
+
+// chrome/browser/webshare/share_service_impl.cc: whether the page in |frame| is refused the
+// system's sheet to share with, asked in ShareServiceImpl::RunShareOperation once Chrome's own
+// checks have let the share by and before a file of it is read or the sheet is shown. One refused
+// is answered as Chrome answers its own refusals there. Chrome has the file, and so the pointer,
+// on the Mac and Windows only, where the core sets it.
+extern bool (*g_browser_core_no_share)(content::RenderFrameHost* frame);
+
+// chrome/browser/ui/web_applications/web_app_dialog_utils.cc: whether the page in |contents| is
+// refused the dialog that asks whether to install it as an app, asked in
+// ShowWebAppInstallFlowDialog, which every such dialog passes as it would be made, beside Chrome's
+// own refusal there for a page that isn't shown. One refused ends as that one does: the install is
+// declined, and a page that asked hears it was dismissed.
+extern bool (*g_browser_core_no_app_install)(content::WebContents* contents);
+
+// content/browser/renderer_host/render_frame_host_impl.cc and
+// content/browser/web_contents/web_contents_impl.cc: whether the page in |frame| is refused a list
+// or picker of its own drawn outside it, asked in RenderFrameHostImpl::ShowPopupMenu before the
+// system's menu for a select is shown (|system_menu|) and in WebContentsImpl::ShowCreatedWidget
+// before a popup window the page draws is. One refused ends as the engine ends one for a tab that
+// isn't shown. Exported by content.
+CONTENT_EXPORT extern bool (*g_browser_core_no_page_popup)(content::RenderFrameHost* frame,
+                                                           bool system_menu);
+
+// chrome/browser/download/chrome_download_manager_delegate.cc: whether the core takes Chrome's
+// question of where |download|'s file goes, asked first in
+// ChromeDownloadManagerDelegate::RequestConfirmation, before any sheet is made for it. One taken
+// the core has answered through |callback|.
+extern bool (*g_browser_core_takes_download_question)(
+    download::DownloadItem* download,
+    const base::FilePath& suggested_path,
+    DownloadConfirmationReason reason,
+    DownloadTargetDeterminerDelegate::ConfirmationCallback* callback);
 
 #endif  // BROWSER_CORE_HOOKS_H_

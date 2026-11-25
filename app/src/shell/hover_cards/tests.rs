@@ -401,7 +401,7 @@ fn hidden_tabs_are_pictured_once_the_switches_are_quiet(cx: &mut TestAppContext)
     cx.executor().advance_clock(PICTURE_HIDDEN / 2);
     cx.run_until_parked();
     assert!(pictured(&host).is_empty(), "another switch puts it off");
-    // Asked once the last switch has been quiet for the Dock dot's 400 ms, while the core may
+    // Asked once the last switch has been quiet for 400 ms, while the core may
     // still keep the page it left on screen, which it holds for the picture (#1658).
     cx.executor().advance_clock(PICTURE_HIDDEN / 2);
     cx.run_until_parked();

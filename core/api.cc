@@ -25,6 +25,7 @@
 #include "browser_core/agent_close.h"
 #include "browser_core/agent_file_field.h"
 #include "browser_core/agent_page.h"
+#include "browser_core/agent_permissions.h"
 #include "browser_core/agent_request.h"
 #include "browser_core/agent_session.h"
 #include "browser_core/archive.h"
@@ -755,6 +756,10 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
           .saved_login = browser_core::SavedLoginFits(contents),
           .device_or_location = UsesDeviceOrLocation(contents),
           .files = contents && contents->HasFileSystemAccessHandles(),
+          // Chrome says a video is in Picture in Picture at a media card too, which is no window.
+          .picture_in_picture = contents && (contents->HasPictureInPictureDocument() ||
+                                             (contents->HasPictureInPictureVideo() &&
+                                              !browser_core::CardShowsVideo(contents))),
       })) {
     return false;
   }
@@ -778,7 +783,14 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   if (!moved) {
     return false;
   }
+  // A card's video ends with the give, and only with one that happened: a page in an agent's
+  // Space has no Picture in Picture, at a card either (agent_space_rule.h).
+  browser_core::EndCardVideo(tab);
   browser_core::handed::Given(tab, home, left);
+  // A print preview the user had open over it doesn't ride into the agent's Space, nor a
+  // certificate chooser or anything else Chrome was asking them there.
+  browser_core::ClosePrintPreview(browser_core::Tab::FromId(tab));
+  browser_core::CloseTabDialogs(browser_core::Tab::FromId(tab));
   // No window shows it any more, and it had the size of the user's window: an agent's page's own
   // from here, as each of the agent's has, for what the agent reads and pictures of it. Back with
   // the user, it takes the size of the window that shows it.
@@ -2951,6 +2963,11 @@ void bc_tab_view_source(bc_id id) {
 void bc_tab_print(bc_id id) {
   content::WebContents* contents = browser_core::Tab::FromId(id);
   tabs::TabInterface* tab = contents ? tabs::TabInterface::MaybeGetFromContents(contents) : nullptr;
+  // A page in an agent's Space that the user doesn't hold isn't theirs to print.
+  if (contents &&
+      browser_core::NoPrint(contents->GetPrimaryMainFrame(), /*by_users_command=*/true)) {
+    return;
+  }
   // Chrome's command prints its Browser's active tab, which is the one its window shows.
   if (tab && tab->IsActivated() && chrome::CanPrint(tab->GetBrowserWindowInterface())) {
     chrome::Print(tab->GetBrowserWindowInterface());

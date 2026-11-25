@@ -27,6 +27,8 @@ pub struct MenuBar {
     pub pinned_offered: bool,
     /// Whether Tabs › Sort Today Tabs by Site would move a row now, else it's dimmed (#2344).
     pub sort_offered: bool,
+    /// Whether Tabs › Sort Tabs into Folders would sort now, as the broom takes a click (#4252).
+    pub broom_offered: bool,
     /// Whether the page shown is in Developer Mode, or None where it can't change: no web page, or
     /// a private window.
     pub developer_mode: Option<bool>,
@@ -149,6 +151,7 @@ impl Shell {
             pinned_offered: self.offers(Command::CollapsePinned)
                 || self.offers(Command::ExpandPinned),
             sort_offered: self.offers(Command::SortBySite),
+            broom_offered: self.offers(Command::SortIntoFolders),
             developer_mode: self.developer_mode(self.selected),
             tracing: trace::recording(cx),
             little_off: !self.little_windows,

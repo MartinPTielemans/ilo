@@ -190,8 +190,8 @@ fn the_tab_closing_ends_an_upload(cx: &mut TestAppContext) {
     );
 }
 
-/// A page's own file dialog the core refused in an agent's tab comes to the log as what the page
-/// tried, under the agent's name, for a file field's dialog and a File System Access picker alike.
+/// A page's own file dialog the core refused in an agent's tab comes to the log as the page's,
+/// under the agent's name, for a file field's dialog and a File System Access picker alike.
 #[gpui::test]
 fn a_pages_refused_file_dialog_is_logged_as_the_pages(cx: &mut TestAppContext) {
     let (agents, _, _) = connected(cx);
@@ -211,10 +211,7 @@ fn a_pages_refused_file_dialog_is_logged_as_the_pages(cx: &mut TestAppContext) {
     assert_eq!(log[0].0, "file_dialog file_system_access");
     assert_eq!(log[1].0, "file_dialog file_input");
     for entry in &log[..2] {
-        assert_eq!(
-            tools::describe(&entry.0),
-            "Page tried to open a file dialog"
-        );
+        assert!(tools::permission_stopped(&entry.0, &entry.1).is_some());
         assert_eq!(entry.2, why);
     }
 }

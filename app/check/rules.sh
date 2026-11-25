@@ -419,8 +419,13 @@ PLATE
   await_more "^browser: task page $own_tab watched\$" "$opens" ||
     fail "the page handed to the user didn't open by itself in the conversation of the task that holds it"
   await "^browser: task page $own_tab in place\$" || fail "the page handed to the user didn't come to rest in place"
+  thumbs=$(grep -c '^browser: task page in its thumbnail$' "$log" || true)
   send key escape
   await_more "^browser: task page $own_tab back\$" "$backs" || fail "Escape didn't step back from the page handed to the user"
+  # The conversation is drawn again once the page is in its thumbnail, and a key before that is
+  # not kept for it: the line's own log line is older than the page's opening, so it can't say when.
+  await_more '^browser: task page in its thumbnail$' "$thumbs" ||
+    fail "the page handed to the user didn't go back into its thumbnail after Escape"
   await '^browser: ilo line [0-9]* Hand Back at ' || fail "the step's line drew no Hand Back"
   if [ "$(uname)" = Darwin ]; then card_key="a alt shift cmd"; else card_key="a ctrl shift"; fi
   send key $card_key

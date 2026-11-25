@@ -5,8 +5,8 @@
 namespace browser_core::agent_space_rule {
 namespace {
 
-constexpr Ask kAsks[] = {Ask::kPaste, Ask::kFilePicker, Ask::kDevice, Ask::kLinkPreview,
-                         Ask::kPictureInPicture};
+constexpr Ask kAsks[] = {Ask::kPaste,  Ask::kCopy,        Ask::kFilePicker,
+                         Ask::kDevice, Ask::kLinkPreview, Ask::kPictureInPicture};
 
 TEST(AgentSpaceRuleTest, ATabOfTheUsersIsRefusedNothing) {
   for (Ask ask : kAsks) {
@@ -24,6 +24,11 @@ TEST(AgentSpaceRuleTest, APageInAnAgentsSpaceIsRefusedEachOfThem) {
 // At a step the user does themselves, what they paste is theirs to paste.
 TEST(AgentSpaceRuleTest, AHeldTabTakesTheUsersPaste) {
   EXPECT_FALSE(Refuses(Ask::kPaste, {.agents = true, .held = true}));
+}
+
+// And what they copy there is theirs to copy.
+TEST(AgentSpaceRuleTest, AHeldTabTakesTheUsersCopy) {
+  EXPECT_FALSE(Refuses(Ask::kCopy, {.agents = true, .held = true}));
 }
 
 // A file picked while they hold the tab would stay the page's once the agent has it again.

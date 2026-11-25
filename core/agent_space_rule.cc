@@ -8,6 +8,7 @@ bool Refuses(Ask ask, const Tab& tab) {
   }
   switch (ask) {
     case Ask::kPaste:
+    case Ask::kCopy:
     case Ask::kLinkPreview:
       return !tab.held;
     case Ask::kFilePicker:

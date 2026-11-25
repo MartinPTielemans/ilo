@@ -522,6 +522,17 @@ void ShowCardVideo(bc_id tab, bc_id window, const gfx::Rect& frame, double corne
   content::MediaSession::Get(contents)->EnterPictureInPicture();
 }
 
+void EndCardVideo(bc_id tab) {
+  std::optional<Ask>& asked = Asked();
+  if (asked && asked->tab == tab) {
+    asked.reset();
+  }
+  // One still on its way to the card stays marked as the card's, so it leaves as it comes.
+  if (VideoWindow* in_card = InCard(); in_card && in_card->tab() == tab) {
+    in_card->End();
+  }
+}
+
 bool FloatCardVideo(content::WebContents* contents) {
   // The user's own Picture in Picture, which a card's that never came mustn't end.
   Entering() = 0;

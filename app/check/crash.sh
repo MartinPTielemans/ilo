@@ -5,7 +5,7 @@
 # handler included. Nor does one outlive a quit.
 # A new profile's first launch offers Send Crash Reports at its onboarding's opt-ins step, as the
 # run names a collector, check/collector.py, where a prod build alone names the real one. Left off
-# there with Esc, nothing goes to the collector: the launch after a crash offers to send that
+# there with Skip, nothing goes to the collector: the launch after a crash offers to send that
 # crash's report in a toast, and keeps it. Turned on at a new first launch's step, the report goes
 # at once, the minidump and Sentry's field saying to keep no IP address, without cookies and with
 # no annotation naming the profile's folder or the home, and is deleted once the collector has it.
@@ -112,25 +112,29 @@ first_launch() {
   await '^browser: onboarding step intro settled$' || fail "the first launch didn't play the intro"
   steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
   case "$steps" in
-    *" opt-ins") ;;
+    *" opt-ins keys") ;;
     *) fail "the first launch's steps were '$steps', with no opt-ins step for crash reports" ;;
   esac
   for each in $steps; do
     case $each in
       intro) send key return && how=return ;;
       opt-ins) break ;;
-      *) send key escape && how=escape ;;
+      *)
+        expect "^browser: onboarding step $each settled\$" "the first launch's $each step didn't come"
+        skip_step "$each"
+        how=skip
+        ;;
     esac
     expect "^browser: onboarding left $each via $how\$" "$how didn't leave the first launch's $each"
   done
   expect '^browser: onboarding step opt-ins settled$' "the first launch's opt-ins step didn't come"
 }
 
-# The first launch offers crash reports, and Esc goes on with them off.
+# The first launch offers crash reports, and Skip goes on with them off.
 first_launch "$out/crash-first.log"
 ../tools/window-screenshot.sh "$pid" "$out/crash-opt-ins.png" || fail "no window to capture"
-send key escape
-expect '^browser: onboarding left opt-ins via escape$' "Esc didn't leave the opt-ins step"
+skip_step opt-ins
+expect '^browser: onboarding left opt-ins via skip$' "Skip didn't leave the opt-ins step"
 exec 3>&-
 quit
 
@@ -166,8 +170,8 @@ send click $(grep '^browser: onboarding crash-reports at ' "$log" | tail -1 | cu
 expect '^browser: onboarding crash-reports on$' \
   "a click on the crash reports' row didn't turn them on"
 await '^browser: crash report sent$' || fail "the report wasn't sent once the step turned them on"
-send key escape
-expect '^browser: onboarding left opt-ins via escape$' "Esc didn't leave the opt-ins step"
+skip_step opt-ins
+expect '^browser: onboarding left opt-ins via skip$' "Skip didn't leave the opt-ins step"
 grep -q '^refused' "$out/collector.log" &&
   fail "the collector refused the report: $(cat "$out/collector.log")"
 grep -q "^report [0-9]* /api/1/minidump/?sentry_key=check\$" "$out/collector.log" ||
