@@ -1072,10 +1072,15 @@ overshoot() {
   # A hand's moves on their way to the edge, heard twice in the strip: on Linux and Windows the
   # pointer over the page is Chromium's, and one heard once there may have jumped onto the page.
   # Recorded, for a look at the sidebar coming out (overshoot.mp4).
+  # The strip is the card's inset wide, where the page starts with the sidebar hidden.
+  send layout
+  strip_x=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
+    sed -n 's/.*, WebContentsViewCocoa \([0-9]*\),.*/\1/p')
+  [ -n "$strip_x" ] || fail "the layout named no page with the sidebar hidden"
   record overshoot 3
   send move 400 300
-  send move 8 300
-  send move 4 300
+  send move $((strip_x - 1)) 300
+  send move $((strip_x / 2)) 300
   from=$((step + 1))
   send move -20 300
   expect '^browser: reveal left across the edge$' \
@@ -1092,8 +1097,8 @@ overshoot() {
   expect '^browser: reveal hidden$' "the pointer past the sidebar out after an overshoot didn't send it away"
   send move 400 300
   from=$((step + 1))
-  send move 8 300
-  send move 4 300
+  send move $((strip_x - 1)) 300
+  send move $((strip_x / 2)) 300
   send move -20 300
   sleep 1.2 # past the second a return counts in
   send move 3 300
