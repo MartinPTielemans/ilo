@@ -319,8 +319,14 @@ fn a_finished_task_is_there_after_a_quit_and_takes_a_reply(cx: &mut TestAppConte
         .map(String::as_str)
         .collect();
     keys.sort();
-    assert_eq!(keys, ["cli", "ended", "id", "profile", "state", "title"]);
+    assert_eq!(
+        keys,
+        ["card", "cli", "ended", "id", "profile", "state", "title"]
+    );
     assert_eq!(saved[0]["id"], json!(id.as_str()));
+    // The card's id is its own, never the conversation's.
+    let card = saved[0]["card"].as_str().unwrap();
+    assert!(kept::cards::CardId::parse(card).is_some() && !card.contains(id.as_str()));
     assert_eq!(saved[0]["cli"], json!("claude"));
     assert_eq!(saved[0]["title"], json!("Lisbon seats"));
     assert_eq!(saved[0]["state"], json!("done"));
@@ -652,7 +658,10 @@ fn a_task_at_work_when_the_browser_went_comes_back_interrupted(cx: &mut TestAppC
         .map(String::as_str)
         .collect();
     keys.sort();
-    assert_eq!(keys, ["cli", "ended", "id", "profile", "state", "title"]);
+    assert_eq!(
+        keys,
+        ["card", "cli", "ended", "id", "profile", "state", "title"]
+    );
     assert_eq!(saved[0]["title"], json!("Lisbon seats"));
     assert_eq!(saved[0]["state"], json!("failed"));
     assert_eq!(saved[0]["profile"], json!("Default"));
