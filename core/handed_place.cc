@@ -25,4 +25,12 @@ size_t InSplit(const std::vector<bool>& was_before) {
   return at;
 }
 
+size_t InFolder(const std::vector<bool>& still_there) {
+  size_t in = 0;
+  while (in < still_there.size() && !still_there[in]) {
+    ++in;
+  }
+  return in;
+}
+
 }  // namespace browser_core::handed_place

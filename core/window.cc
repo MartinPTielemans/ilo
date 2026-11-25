@@ -1648,7 +1648,9 @@ void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent, bool follows) {
   if (!moved) {
     return;
   }
-  const bool pinned = from->IsPinned(tab);
+  // A pinned tab the user gives an agent goes as a tab alone: its pin stays the user's, kept with
+  // where it left (handed.h), and the agent's Space has it as any tab the agent works in.
+  const bool pinned = from->IsPinned(tab) && !to_agent;
   const GURL url = from->PinnedUrl(tab);
   const bc_id next = from->NextAfterLeaving(tab, &Tab::Loaded);
   // In a Space it's the user's or the agent's, and its page closes it no longer.
@@ -1658,7 +1660,8 @@ void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent, bool follows) {
     }
   }
   // A Today tab keeps its node's id, so sync moves it on the account's other devices rather than
-  // closing it into their archives and opening it again there.
+  // closing it into their archives and opening it again there. So does a pinned tab given to an
+  // agent, whose node is the user's still (handed.h).
   const Space::Node* node = pinned ? nullptr : from->NodeOf(tab);
   const base::Uuid kept = node ? node->id : base::Uuid();
   // In its new Space before it leaves the old, so the UI never hears of it in neither and forgets

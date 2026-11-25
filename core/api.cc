@@ -733,16 +733,9 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   }
   content::WebContents* contents = browser_core::Tab::FromId(tab);
   const browser_core::Tab::Captures captures = page->captures();
-  // Where it leaves, for its way back (handed.h).
-  const bc_id home = from->id();
-  const browser_core::Space::Node* node = from->NodeOf(tab);
-  const browser_core::Space::Node left = node ? *node : browser_core::Space::Node();
-  // The split view it leaves with the give, as a tab taken out of one by hand does, and goes back
-  // into.
-  std::vector<bc_id> split = from->Panes(tab);
-  if (split.size() < 2) {
-    split.clear();
-  }
+  // Where it leaves, for its way back (handed.h): its place, the split view it leaves with the
+  // give, as a tab taken out of one by hand does, and a pinned tab's pin, which it goes without.
+  browser_core::handed::Mark left = browser_core::handed::Leaving(*from, tab);
   // The page goes as it is, with its profile's logins, so never into another profile's Space,
   // where it would load again. And only a tab that may be handed: the app asks the same before it
   // gives one, and the rule holds here whatever asked.
@@ -750,7 +743,10 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
           .users = !from->agent() && !from->own(),
           .to_agent = to->agent().has_value(),
           .same_profile = from->profile() == to->profile(),
-          .pinned = from->IsPinned(tab),
+          .live_folder = left.pin && std::ranges::any_of(left.pin->folders,
+                                                         [&](const auto& folder) {
+                                                           return from->FolderLive(folder.id) != 0;
+                                                         }),
           .web_page = !page->system_page() && page->Url().SchemeIsHTTPOrHTTPS() &&
                       (!contents || contents->GetLastCommittedURL().SchemeIsHTTPOrHTTPS()),
           .camera = captures.camera,
@@ -788,7 +784,7 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   // window closes with it: a page in an agent's Space has neither (agent_space_rule.h).
   browser_core::EndCardVideo(tab);
   ClosePictureInPicture(contents);
-  browser_core::handed::Given(tab, home, left, std::move(split));
+  browser_core::handed::Given(tab, std::move(left));
   // A print preview the user had open over it doesn't ride into the agent's Space, nor a
   // certificate chooser or anything else Chrome was asking them there.
   browser_core::ClosePrintPreview(browser_core::Tab::FromId(tab));

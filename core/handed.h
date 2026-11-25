@@ -1,15 +1,18 @@
 // A tab of the user's that an agent has (bc_tab_give_to_agent), from the give until it leaves the
 // agent's Space: what the core keeps of it, so that it's the user's still wherever the user's tabs
 // are kept, and comes back where it left. Which tabs may be given is handed_give_rule's, where one
-// comes back handed_place's, and how far through its history one may be taken handed_history's.
+// comes back handed_place's, its way back into its Space handed_back's, and how far through its
+// history one may be taken handed_history's.
 
 #ifndef BROWSER_CORE_HANDED_H_
 #define BROWSER_CORE_HANDED_H_
 
 #include <cstddef>
 #include <map>
+#include <optional>
 #include <vector>
 
+#include "browser_core/handed_back.h"
 #include "browser_core/handed_history.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/space.h"
@@ -20,18 +23,25 @@ namespace browser_core::handed {
 struct Mark {
   // The Space it left.
   bc_id home = 0;
-  // Its node there, with its place among that Space's Today tabs.
+  // Its node there, with its place among that Space's Today tabs, or for a pinned tab among what
+  // its folder held.
   Space::Node node;
   // The tabs of the split view it left, left to right with itself among them, or none: it goes
-  // back into that split while one of them is still a Today tab there.
+  // back into that split while one of them is still in its list there.
   std::vector<bc_id> split;
+  // Its pin, for a tab that was pinned: an agent has it as a tab alone, and it comes back pinned
+  // as it was.
+  std::optional<handed_back::Pin> pin;
   // The history it had then, which stays the user's.
   handed_history::Bound history;
 };
 
-// |tab| was given to an agent, out of the Space |home|, where it had |node| and showed in a split
-// view with |split|, itself among them.
-void Given(bc_id tab, bc_id home, Space::Node node, std::vector<bc_id> split);
+// What's kept of |tab| as it leaves |from|, a Space of the user's, for an agent's: all but its
+// history, which Given takes once it's the agent's.
+Mark Leaving(const Space& from, bc_id tab);
+
+// |tab| was given to an agent, and |left| is what Leaving made of it before it went.
+void Given(bc_id tab, Mark left);
 
 // The mark on |tab|, or null if no agent has it from the user.
 const Mark* Of(bc_id tab);
@@ -65,8 +75,8 @@ bool AgentMayGoTo(bc_id tab, int entry);
 // holds it: its history is bound again as its page is made.
 bool MayStep(bc_id tab, int offset);
 
-// Where a tab that kept |node| goes among |rows|, the Today tabs of |home|, the Space it left,
-// each of them |home|'s own or another handed tab that left it.
+// Where a tab that kept |node| goes among |rows|, the Today tabs of |home|, the Space it left, or
+// what one of its folders holds, each of them |home|'s own or another handed tab that left it.
 size_t PlaceAmong(const Space& home, const std::vector<bc_id>& rows, const Space::Node& node);
 
 }  // namespace browser_core::handed

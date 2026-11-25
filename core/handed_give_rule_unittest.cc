@@ -5,12 +5,12 @@
 namespace browser_core::handed_give_rule {
 namespace {
 
-// A Today tab of the user's at a web page, given to an agent's Space of its profile.
+// A tab of the user's at a web page, in Today or pinned, given to an agent's Space of its profile.
 Tab Fit() {
   return {.users = true, .to_agent = true, .same_profile = true, .web_page = true};
 }
 
-TEST(HandedGiveRuleTest, ATodayTabAtAWebPageIsGiven) {
+TEST(HandedGiveRuleTest, ATabAtAWebPageIsGiven) {
   EXPECT_TRUE(MayGive(Fit()));
 }
 
@@ -30,9 +30,10 @@ TEST(HandedGiveRuleTest, OnlyIntoAnAgentsSpaceOfTheSameProfile) {
   EXPECT_FALSE(MayGive(tab));
 }
 
-TEST(HandedGiveRuleTest, APinnedTabIsRefused) {
+// A pinned tab in a folder that fills itself, or in a folder inside one.
+TEST(HandedGiveRuleTest, ATabInALiveFolderIsRefused) {
   Tab tab = Fit();
-  tab.pinned = true;
+  tab.live_folder = true;
   EXPECT_FALSE(MayGive(tab));
 }
 

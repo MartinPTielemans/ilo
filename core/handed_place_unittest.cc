@@ -73,5 +73,26 @@ TEST(HandedPlaceTest, ATabAddedToItsSplitSinceDoesntMoveIt) {
   EXPECT_EQ(InSplit({true, false, false}), 1u);
 }
 
+TEST(HandedPlaceTest, APinnedTabGoesBackIntoTheFolderThatHeldIt) {
+  EXPECT_EQ(InFolder({true}), 0u);
+  EXPECT_EQ(InFolder({true, true}), 0u);
+  // Whatever became of the folders around it.
+  EXPECT_EQ(InFolder({true, false}), 0u);
+}
+
+TEST(HandedPlaceTest, OnceItsFolderIsGoneIntoTheOneThatHeldThat) {
+  EXPECT_EQ(InFolder({false, true}), 1u);
+  EXPECT_EQ(InFolder({false, false, true}), 2u);
+}
+
+TEST(HandedPlaceTest, OutsideEveryFolderOnceAllItWasInAreGone) {
+  EXPECT_EQ(InFolder({false}), 1u);
+  EXPECT_EQ(InFolder({false, false}), 2u);
+}
+
+TEST(HandedPlaceTest, OutsideEveryFolderIfItWasInNone) {
+  EXPECT_EQ(InFolder({}), 0u);
+}
+
 }  // namespace
 }  // namespace browser_core::handed_place

@@ -1,13 +1,11 @@
 #include "browser_core/handed.h"
 
-#include <algorithm>
 #include <utility>
 
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_session.h"
-#include "browser_core/handed_place.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "components/sync/base/unique_position.h"
@@ -15,7 +13,6 @@
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
-#include "url/gurl.h"
 
 namespace browser_core::handed {
 
@@ -26,8 +23,8 @@ std::map<bc_id, Mark>& Marks() {
   return *marks;
 }
 
-// The place |row| has among |home|'s Today tabs: its own there, or the one it kept if it's a
-// handed tab that left |home|. Null if it has none.
+// The place |row| has among |home|'s rows: its own there, or the one it kept if it's a handed tab
+// that left |home|. Null if it has none.
 const syncer::UniquePosition* PlaceOf(const Space& home, bc_id row) {
   if (const Space::Node* node = home.NodeOf(row)) {
     return &node->position;
@@ -45,31 +42,22 @@ bool MayTraverse(bc_id tab, int index, bool from_page) {
   return !entry || MayGoTo(tab, entry->GetUniqueID(), from_page);
 }
 
-// Puts |tab|, back among |home|'s Today tabs, into the split view it left, which had |split|:
-// beside the first of them still a Today tab there, between the ones it was between. It stays
-// loose, where the split was, if none of them is left or their split is full by now.
-void RejoinSplit(Space& home, bc_id tab, const std::vector<bc_id>& split) {
-  const auto self = std::ranges::find(split, tab);
-  const auto with = std::ranges::find_if(
-      split, [&](bc_id pane) { return pane != tab && std::ranges::contains(home.today(), pane); });
-  if (self == split.end() || with == split.end() || !home.Split(tab, *with, GURL())) {
-    return;
-  }
-  std::vector<bool> was_before;
-  for (bc_id pane : home.Panes(tab)) {
-    if (pane != tab) {
-      was_before.push_back(std::ranges::find(split, pane) < self);
-    }
-  }
-  home.MoveInSplit(tab, handed_place::InSplit(was_before));
-  Window::PanesChanged();
-}
-
 }  // namespace
 
-void Given(bc_id tab, bc_id home, Space::Node node, std::vector<bc_id> split) {
-  Marks().insert_or_assign(tab,
-                           Mark{.home = home, .node = std::move(node), .split = std::move(split)});
+Mark Leaving(const Space& from, bc_id tab) {
+  const Space::Node* node = from.NodeOf(tab);
+  std::vector<bc_id> split = from.Panes(tab);
+  if (split.size() < 2) {
+    split.clear();
+  }
+  return {.home = from.id(),
+          .node = node ? *node : Space::Node(),
+          .split = std::move(split),
+          .pin = handed_back::PinOf(from, tab)};
+}
+
+void Given(bc_id tab, Mark left) {
+  Marks().insert_or_assign(tab, std::move(left));
   BoundHistory(tab);
 }
 
@@ -105,7 +93,8 @@ bool Return(bc_id tab) {
   if (!home || home->agent() || home->own() || home->profile() != in->profile()) {
     return false;
   }
-  // An agent may pin a tab in its own Space; the user's was a Today tab.
+  // An agent may pin a tab in its own Space; the user's goes back as it left, with the pin it had
+  // or none.
   if (in->IsPinned(tab)) {
     in->Unpin(tab);
   }
@@ -113,14 +102,9 @@ bool Return(bc_id tab) {
   if (Space::Holding(tab) != home) {
     return false;
   }
-  std::vector<bc_id> others = home->today();
-  std::erase(others, tab);
-  home->Move(tab, /*pinned=*/false, 0, PlaceAmong(*home, others, mark.node),
-             [](bc_id) { return GURL(); });
-  RejoinSplit(*home, tab, mark.split);
-  // Its node as it was, so the account's other devices see no move.
-  if (mark.node.id.is_valid()) {
-    home->RestoreNodes(home->node(), {{tab, mark.node}});
+  handed_back::Put(*home, tab, mark.node, mark.split, mark.pin);
+  if (!mark.split.empty()) {
+    Window::PanesChanged();
   }
   // The user's again, as a tab moved out of an agent's Space is (bc_tab_move_to_space).
   FillForUser(tab);
@@ -169,17 +153,7 @@ bool MayStep(bc_id tab, int offset) {
 }
 
 size_t PlaceAmong(const Space& home, const std::vector<bc_id>& rows, const Space::Node& node) {
-  std::vector<handed_place::Row> today;
-  today.reserve(rows.size());
-  for (size_t i = 0; i < rows.size(); ++i) {
-    const syncer::UniquePosition* place = PlaceOf(home, rows[i]);
-    today.push_back({
-        .before =
-            place && place->IsValid() && node.position.IsValid() && place->LessThan(node.position),
-        .joined_above = i > 0 && std::ranges::contains(home.Panes(rows[i]), rows[i - 1]),
-    });
-  }
-  return handed_place::Among(today);
+  return handed_back::Among(home, rows, node, [&](bc_id row) { return PlaceOf(home, row); });
 }
 
 }  // namespace browser_core::handed
