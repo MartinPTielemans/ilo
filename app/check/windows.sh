@@ -96,12 +96,14 @@ done
 [ "$(grep -c '^browser: empty card shown$' "$log")" -gt "$empties" ] ||
   fail "the new window's empty card didn't show its line"
 ../tools/window-screenshot.sh "$pid" "$out/empty-window.png" all || fail "no window to capture"
-# A click on the card with ⌘T's bar open only closes it: the host closes the bar at the press, and
-# the release mustn't open it again. Another driver step after the bar's report is in gives the
-# release time to have run.
-send key t cmd
-expect '^browser: command bar shown$' "⌘T didn't open the command bar in the new window"
-expect '^browser: new tab plate 1$' "⌘T didn't give New Tab the selected plate"
+# A click on the card with New Tab's bar open only closes it: the host closes the bar at the press,
+# and the release mustn't open it again. Another driver step after the bar's report is in gives the
+# release time to have run. The sidebar's "+ New Tab" opens the bar over the card, where ⌘T gives
+# the Space's resting bar the keyboard instead (#4140).
+send click 100 148
+expect '^browser: command new-tab via sidebar$' "a click on \"+ New Tab\" in the new window didn't run New Tab"
+expect '^browser: command bar shown$' "a click on \"+ New Tab\" didn't open the command bar in the new window"
+expect '^browser: new tab plate 1$' "a click on \"+ New Tab\" didn't give New Tab the selected plate"
 opened=$(grep -c '^browser: command new-tab via card$' "$log" || true)
 # Below the bar, which reaches y 410 and covers $page_point.
 send click 600 600

@@ -1405,8 +1405,7 @@ page_shortcut n new-window
 expect '^browser: window opened [0-9]' "⌘N didn't open a window for the page from its bar"
 new_window_bar
 send window "$(grep -c '^browser: window opened ' "$log")"
-send key t cmd
-expect '^browser: command bar shown$' "⌘T in a window with no page didn't open the command bar"
+resting_key t "new window"
 send insert 'data:text/html,<title>first</title>'
 send key return
 expect '^browser: loaded [0-9]* data:text/html,<title>first</title>$' \
