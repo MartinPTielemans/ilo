@@ -329,7 +329,7 @@ pub struct TraceStep {
     pub running: bool,
     pub failed: bool,
     pub opens: Opens,
-    /// The line under it, or empty: "With ilo's notes for GitHub" (#4122).
+    /// The line under it, or empty: "Included {product}’s notes on GitHub" (#4122).
     pub under: SharedString,
     /// The page it acted on, by which the log groups a page's steps under the page; None for a
     /// step off any one page (a thought, a question, a step on several tabs).
