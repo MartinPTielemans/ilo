@@ -545,6 +545,9 @@ typedef enum bc_agent_failure {
   BC_AGENT_FAILURE_PASSWORD_FIELD = 9,
   // The select has no option with the text asked for.
   BC_AGENT_FAILURE_NO_OPTION = 10,
+  // The page the open or the navigate itself asked for answered only over http and was stopped:
+  // the tab is back on the page it had, or closed if it had none.
+  BC_AGENT_FAILURE_NOT_SECURE = 11,
 } bc_agent_failure;
 
 // An agent's call the core checked, for the activity log (bc_agent_may_act).
