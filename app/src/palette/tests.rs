@@ -2390,7 +2390,8 @@ fn the_foots_plates_tell_from_the_window_at_every_level() {
 
 /// A dark window's palette as numbers a float's last bit can't move: each colour as it's drawn in
 /// 8 bits and each floor and shade in thousandths, at `glass`. A colour that is the palette's ink
-/// itself is written "ink", so the pin below holds what Dark solves and not what the ink is.
+/// itself is written "ink", so the pin below holds what Dark solves and not what the ink is. What
+/// floats is left to `dark_floats`: the palette's own answer for it follows the host's material.
 fn dark_solved(theme: Option<&Theme>, glass: f32) -> String {
     let palette = Palette::at(theme, Tone::Dark, glass);
     let colour = |c: Rgba| match hex(c) == INK && c.a == 1. {
@@ -2420,10 +2421,6 @@ fn dark_solved(theme: Option<&Theme>, glass: f32) -> String {
         palette.text_floor,
         palette.glyph_floor,
         palette.gray_floor,
-        palette.overlay_floor,
-        palette.overlay_glyph_floor,
-        palette.float_shades[0],
-        palette.float_shades[1],
         palette.pointed_shade,
     ]
     .into_iter()
@@ -2434,10 +2431,29 @@ fn dark_solved(theme: Option<&Theme>, glass: f32) -> String {
     format!("{colours} | {numbers}")
 }
 
+/// How a dark window's ink reads on what floats, in thousandths: with no material under it, then
+/// at each level over one, whichever this host has.
+fn dark_floats() -> String {
+    [None]
+        .into_iter()
+        .chain(Transparency::ALL.map(Some))
+        .map(|level| {
+            let ink = float_ink(Tone::Dark, level);
+            [ink.rest[0], ink.rest[1], ink.text, ink.glyph]
+                .into_iter()
+                .chain(ink.shades)
+                .map(|n| format!("{}", (n * 1000.).round() as i32))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
 /// Light's pass (#4276) moves the palette's ink and Light's plates, and a dark window draws as it
 /// did before it: with no theme, each of the picker's swatches and the field's extremes, at the
-/// bar's two ends and its three old levels. Only where Dark draws the ink itself, as a label on a
-/// light accent, does it follow the ink.
+/// bar's two ends and its three old levels, and what floats at each level. Only where Dark draws
+/// the ink itself, as a label on a light accent, does it follow the ink.
 #[test]
 fn lights_pass_leaves_a_dark_windows_palette_as_it_was() {
     let themes: Vec<Option<Theme>> = [
@@ -2449,7 +2465,8 @@ fn lights_pass_leaves_a_dark_windows_palette_as_it_was() {
     .chain([None])
     .collect();
     let glasses = [0., 1.].into_iter().chain(Transparency::ALL.map(of_level));
-    let mut all = String::new();
+    let mut all = dark_floats();
+    all.push('\n');
     for glass in glasses {
         for theme in &themes {
             all.push_str(&dark_solved(theme.as_ref(), glass));
@@ -2461,7 +2478,7 @@ fn lights_pass_leaves_a_dark_windows_palette_as_it_was() {
         (hash ^ byte as u64).wrapping_mul(0x0000_0100_0000_01b3)
     });
     assert_eq!(
-        pin, 329_911_903_870_600_431,
+        pin, 16_060_714_430_231_399_352,
         "a dark window's palette moved:\n{all}"
     );
 }
