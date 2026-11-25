@@ -579,12 +579,21 @@ fn slider(
         .on_a11y_action(Action::Decrement, move |_, _, cx| down(-KEY_STEP, cx))
 }
 
-/// A bar's value in the panel: Intensity's the theme's, none without a colour, and
+/// A bar's value in the panel: Intensity's and Grain's the theme's, none without a colour, and
 /// Transparency's the Space's glass.
 fn bar_value(bar: Bar, theme: Option<&Theme>, glass: f32) -> Option<f32> {
     match bar {
         Bar::Intensity => theme.map(|theme| theme.intensity),
         Bar::Transparency => Some(glass),
+        Bar::Grain => theme.map(|theme| theme.grain),
+    }
+}
+
+/// How bar `bar` reads beside its label: Grain at none is Off, as drawn.
+fn reading(bar: Bar, value: f32) -> String {
+    match bar {
+        Bar::Grain if value <= 0. => "Off".into(),
+        _ => percent(value),
     }
 }
 
@@ -755,6 +764,19 @@ impl ThemePicker {
                 }
                 editing.glass = value;
                 self.glassed(done, cx);
+            }
+            Bar::Grain => {
+                let Some(theme) = editing.theme else {
+                    return;
+                };
+                if theme.grain == value && !done {
+                    return;
+                }
+                editing.theme = Some(Theme {
+                    grain: value,
+                    ..theme
+                });
+                self.changed(done, cx);
             }
         }
     }
@@ -1761,10 +1783,11 @@ impl Render for ThemePicker {
                 layout::bar_top(bar),
                 bar.name().into(),
                 text_2,
-                value.map(percent),
+                value.map(|value| reading(bar, value)),
             );
             let first = colors.first().copied();
             let second = colors.get(1).copied().or(first);
+            let field = palette.plate(crate::palette::FIELD_PLATE);
             let track = canvas(
                 |_, _, _| {},
                 move |bounds, _, window, _| {
@@ -1849,6 +1872,29 @@ impl Render for ThemePicker {
                                 }
                             }
                         }
+                        Bar::Grain => {
+                            window.paint_quad(
+                                fill(part(0., 1.), field).corner_radii(gpui::Corners::all(round)),
+                            );
+                            // Three rows of dots, the middle one half a step along and a dot
+                            // shorter at each end, fading in from none at the left.
+                            let rows = [(2., 2.5, 270.), (4.5, 6., 270.5), (2., 9.5, 270.)];
+                            for (start, y, end) in rows {
+                                let mut x = start;
+                                while x <= end {
+                                    let along = (x / track_length).clamp(0., 1.);
+                                    let dot = Bounds::new(
+                                        o + point(px(x - GRAIN_DOT / 2.), px(y - GRAIN_DOT / 2.)),
+                                        size(px(GRAIN_DOT), px(GRAIN_DOT)),
+                                    );
+                                    window.paint_quad(
+                                        fill(dot, at_alpha(0xf3f0e8, GRAIN_DOTS * along))
+                                            .corner_radii(gpui::Corners::all(px(GRAIN_DOT / 2.))),
+                                    );
+                                    x += GRAIN_PITCH;
+                                }
+                            }
+                        }
                     }
                 },
             )
@@ -1894,7 +1940,7 @@ impl Render for ThemePicker {
                 .w(px(track_length))
                 .h(px(THUMB));
             let spoken = a11y.then(|| slider(spoken, bar.name(), value, stepper));
-            // With no colour Intensity is dimmed and doesn't move (the spec's).
+            // With no colour Intensity and Grain are dimmed and don't move (the spec's).
             div()
                 .absolute()
                 .size_full()

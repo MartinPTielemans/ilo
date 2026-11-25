@@ -3456,6 +3456,11 @@ glass-from = 0x565661
 glass-to = 0x1a1a1e
 glass-solid = 0.08
 glass-lines = 0.62
+# Grain's, as drawn: the field plate with three rows of dots 1.6 round, 5 apart, the middle row a
+# half step along, fading in across it to 85% off-white. Its word reads Off at none.
+grain-dot = 1.6
+grain-pitch = 5.0
+grain-dots = 0.85
 
 [toast]
 height = 46.5

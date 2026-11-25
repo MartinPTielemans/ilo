@@ -571,6 +571,39 @@ fn intensity_sets_the_theme_s_and_waits_for_a_colour(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn grain_sets_the_theme_s_kept_grain_reads_off_at_none_and_waits_for_a_colour(
+    cx: &mut TestAppContext,
+) {
+    let mut panel = Panel::new(None, cx);
+    let (x, y) = Panel::thumb(Bar::Grain, 0.);
+    panel.drag((x, y), (x + 60., y));
+    assert_eq!(panel.theme(), None);
+    assert_eq!(panel.handed_on(), Vec::<bool>::new());
+
+    // A Space's first colour starts with none.
+    panel.click(Panel::on_pad(0.3, 0.4));
+    assert_eq!(panel.theme().unwrap().grain, 0.);
+    assert_eq!(reading(Bar::Grain, 0.), "Off");
+    assert_eq!(reading(Bar::Grain, 0.35), "35%");
+
+    // A grain the Space has is the bar's, and the bar's is what's kept.
+    let mut panel = Panel::new(
+        Some(Theme {
+            grain: 0.6,
+            ..Theme::at(0.5, 0.)
+        }),
+        cx,
+    );
+    panel.click(Panel::thumb(Bar::Grain, 0.25));
+    let grain = panel.theme().unwrap().grain;
+    assert!((grain - 0.25).abs() < 0.01, "at {grain}");
+    assert_eq!(panel.handed_on(), vec![false, true]);
+    // A palette keeps it.
+    panel.click(layout::disc(2));
+    assert!((panel.theme().unwrap().grain - grain).abs() < 1e-6);
+}
+
+#[gpui::test]
 fn transparency_moves_the_space_s_glass_and_keeps_it_on_letting_go(cx: &mut TestAppContext) {
     let mut panel = Panel::new(None, cx);
     assert_eq!(panel.glass(), START);
@@ -710,6 +743,10 @@ fn the_keyboard_goes_round_every_part_and_moves_the_bars(cx: &mut TestAppContext
     panel.keys("shift-left");
     assert!((panel.glass() - (START - 0.09)).abs() < 1e-4);
     assert_eq!(panel.glassed().iter().filter(|(_, done)| *done).count(), 2);
+    panel.keys("tab");
+    assert_eq!(panel.keyed(), Some(Target::Bar(Bar::Grain)));
+    panel.keys("right");
+    assert!((panel.theme().unwrap().grain - 0.01).abs() < 1e-4);
     panel.keys("tab");
     assert_eq!(panel.keyed(), Some(Target::Reset));
     panel.keys("tab");

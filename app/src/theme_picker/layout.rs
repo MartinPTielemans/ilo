@@ -14,13 +14,14 @@ use crate::tokens::theme_panel::*;
 /// The panel's width inside its padding.
 pub const INNER: f32 = WIDTH - 2. * PADDING;
 /// The bars, top to bottom.
-pub const BARS: [Bar; 2] = [Bar::Intensity, Bar::Transparency];
+pub const BARS: [Bar; 3] = [Bar::Intensity, Bar::Transparency, Bar::Grain];
 
 /// One of the panel's bars.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Bar {
     Intensity,
     Transparency,
+    Grain,
 }
 
 impl Bar {
@@ -28,6 +29,7 @@ impl Bar {
         match self {
             Bar::Intensity => "Intensity",
             Bar::Transparency => "Transparency",
+            Bar::Grain => "Grain",
         }
     }
 
@@ -35,6 +37,7 @@ impl Bar {
         match self {
             Bar::Intensity => 0,
             Bar::Transparency => 1,
+            Bar::Grain => 2,
         }
     }
 }
