@@ -189,7 +189,7 @@ impl Shell {
             .left(px(x))
             .w(px(self.width()));
         let page = page
-            .children((!self.bar_on()).then(|| self.url_field(cx)))
+            .child(self.url_field(cx))
             .children(self.scroll_edge_line())
             .children(self.tiles(cx));
         Some(div().absolute().size_full().overflow_hidden().child(page))
@@ -813,7 +813,7 @@ mod tests {
         mid_leave(&shell, cx, &host);
         host.command_bars.take();
         cx.simulate_click(point(px(100.), px(64.)), Modifiers::none());
-        let field = Bounds::new(point(px(8.), px(46.)), size(px(212.), px(36.)));
+        let field = Bounds::new(point(px(8.), px(44.)), size(px(212.), px(36.)));
         assert_eq!(host.command_bars.take(), [Some(field)]);
     }
 

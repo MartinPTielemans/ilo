@@ -9,12 +9,14 @@ use gpui::{
 };
 
 use super::HOLD;
-use crate::shell::{Folders, HistoryPage, NAV_SIZE, NAV_TOP, Page, Shell, recorder::Recorder};
+use crate::shell::{
+    CONTROLS_PLATE, CONTROLS_TOP, Folders, HistoryPage, Page, Shell, recorder::Recorder,
+};
 
-/// Back, forward and reload in the 228 pt sidebar a window starts with (Arc 1.170).
-const BACK_X: f32 = 122.;
-const FORWARD_X: f32 = 156.;
-const RELOAD_X: f32 = 190.;
+/// Back's, forward's and reload's plates in the 228 pt sidebar a window starts with.
+const BACK_X: f32 = 146.;
+const FORWARD_X: f32 = 170.;
+const RELOAD_X: f32 = 194.;
 
 /// A drawn shell showing tab 10 of 10 and 11, whose page can go back but not forward.
 fn shell(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
@@ -47,7 +49,10 @@ fn shell(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<
 }
 
 fn button(x: f32) -> Point<Pixels> {
-    point(px(x + NAV_SIZE / 2.), px(NAV_TOP + NAV_SIZE / 2.))
+    point(
+        px(x + CONTROLS_PLATE / 2.),
+        px(CONTROLS_TOP + CONTROLS_PLATE / 2.),
+    )
 }
 
 fn pages() -> Vec<HistoryPage> {

@@ -876,21 +876,23 @@ drag() {
   moves=$count
 }
 drag 115 24 moves "the header"
-drag 138 24 stays "the back button"
+drag 158 24 stays "the back button"
 drag 110 64 stays "the URL field"
 drag 110 112 stays "the Space's name"
 drag 110 195 stays "a tab's row"
 drag 110 400 moves "the empty sidebar"
 # On Windows the frame keeps the top 8 points, Windows' resize border (platform/windows/host.cc's
-# FrameHit), as Windows' windows resize by theirs, and the card's margin under it moves the window:
-# design/tokens.toml's card-inset is 10.
+# FrameHit), as Windows' windows resize by theirs. The card starts where that ends, as
+# design/tokens.toml's card-inset is 8, so no margin over the card is left to move the window by
+# there.
 if windows; then
   drag 600 5 stays "the frame's top edge, which resizes"
+else
+  # Not nearer the top: KWin maximizes a window moved with the pointer within 5 pixels of the
+  # screen's top, its quick-maximize zone, as it does under a hand.
+  drag 600 6 moves "the card's top margin"
 fi
-# Not nearer the top: KWin maximizes a window moved with the pointer within 5 pixels of the screen's
-# top, its quick-maximize zone, as it does under a hand.
-drag 600 9 moves "the card's top margin"
-drag $((width - 8)) 300 moves "the card's right margin"
+drag $((width - 4)) 300 moves "the card's right margin"
 # A double-click there does what System Settings › Desktop & Dock says a title bar's does: zoom,
 # unless it's set to something else. Sway, the Wayland session's compositor, maximizes no window:
 # its windows tile or float, so there's no zoom to see.
@@ -920,7 +922,7 @@ expect '^browser: command bar shown$' "a double-click on the empty sidebar didn'
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 
-# ⌘S hides the sidebar, with the page focused or the UI, and the card takes its place, 10 in from
+# ⌘S hides the sidebar, with the page focused or the UI, and the card takes its place, 8 in from
 # every side, as the window's buttons go. ⌘S and the sidebar button bring both back.
 # toggle <from> <hidden|shown> <what>: waits for the sidebar to finish moving after the command.
 toggle() {

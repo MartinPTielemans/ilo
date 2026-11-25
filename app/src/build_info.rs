@@ -269,17 +269,6 @@ fn windows_system(product: Option<&str>, release: Option<&str>, build: Option<&s
 /// The first build of Windows 11.
 const WINDOWS_11: u32 = 22000;
 
-/// Whether this is Windows 11, which rounds a window's corners, by its build.
-#[cfg(windows)]
-pub fn windows_11() -> bool {
-    static BUILD: LazyLock<u32> = LazyLock::new(|| {
-        windows_current_version("CurrentBuildNumber")
-            .and_then(|build| build.trim().parse().ok())
-            .unwrap_or(0)
-    });
-    *BUILD >= WINDOWS_11
-}
-
 /// A text value of Windows's own key for its version, as the registry holds it.
 #[cfg(windows)]
 fn windows_current_version(name: &str) -> Option<String> {

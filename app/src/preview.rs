@@ -2635,10 +2635,6 @@ fn main() {
             if preview_recent().is_some() {
                 browser::recent::set_switches(true, Default::default(), cx);
             }
-            // PREVIEW_TOP_BAR=1 starts with Settings' Top bar on.
-            if states::var_os("PREVIEW_TOP_BAR").is_some() {
-                cx.set_global(shell::TopBar(true));
-            }
             // PREVIEW_UPDATE=ready or =available shows the update banner on a made-up 0.1.5, opened
             // as under the pointer with =ready-open or =available-open, and PREVIEW_UPDATE_CHECKS=off
             // as with the updater's automatic checks off.

@@ -5,7 +5,7 @@ use std::time::Instant;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::command_bar::PLACEHOLDER_TEXT;
-use crate::palette::Ground;
+use crate::palette::{Ground, Tone};
 use crate::site_controls::Place;
 
 use gpui::{
@@ -15,11 +15,11 @@ use gpui::{
 };
 
 use super::{
-    Command, FULL_SCREEN_SIDEBAR_BUTTON_X, HeldNav, NAV, NAV_AFTER_SIDEBAR, NAV_DISABLED,
-    NAV_GLYPH, NAV_HOVERED, NAV_INACTIVE, NAV_PITCH, NAV_PRESS_SCALE, NAV_RADIUS, NAV_SIZE,
-    NAV_TOP, NAV_TRAIL, PLATE_INSET, PLATE_RADIUS, SECONDARY, SIDEBAR_BUTTON_X, Shell, Swapped,
-    TILE_HOVERED, TOOLS_FADE, Translation, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE,
-    URL_FIELD, URL_FIELD_HEIGHT, URL_FIELD_TEXT_X, URL_FIELD_TOP,
+    CONTROLS_GAP, CONTROLS_GLYPH, CONTROLS_INSET, CONTROLS_PLATE, CONTROLS_SIDEBAR_GLYPH,
+    CONTROLS_TOP, Command, HeldNav, NAV, NAV_HOVERED, NAV_INACTIVE, NAV_PRESS_SCALE, NAV_RADIUS,
+    PLATE_INSET, PLATE_RADIUS, SECONDARY, Shell, Swapped, TILE_HOVERED, TOOLS_FADE, Translation,
+    URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD, URL_FIELD_HEIGHT,
+    URL_FIELD_TEXT_X, URL_FIELD_TOP, WINDOW_BUTTONS,
     access::Accessible,
     beside::AtRest,
     commands::BAR_COMMANDS,
@@ -46,6 +46,7 @@ use crate::tokens::shell::header::KEY_REACH;
 use crate::tokens::shell::header::SITE_CONTROLS_END;
 use crate::tokens::shell::header::TOOL_PITCH;
 use crate::tokens::shell::header::URL_PLACEHOLDER;
+use crate::tokens::shell::{CONTROLS_IDLE, CONTROLS_IDLE_LIGHT, ICON_INK, WINDOW_BUTTON_SIZE};
 use crate::tokens::text;
 
 impl Shell {
@@ -70,18 +71,18 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let color = self.nav_glyph(enabled);
+        let side = match command {
+            Command::ToggleSidebar => CONTROLS_SIDEBAR_GLYPH,
+            _ => CONTROLS_GLYPH,
+        };
         // Reload and stop are one button, which changes with the tab shown's page.
         let glyph = match matches!(command, Command::Reload | Command::Stop) {
-            true => self.swaps.glyph(
-                Swapped::Reload(self.field_tab()),
-                icon,
-                NAV_GLYPH,
-                color,
-                cx,
-            ),
+            true => self
+                .swaps
+                .glyph(Swapped::Reload(self.field_tab()), icon, side, color, cx),
             false => svg()
                 .path(icon)
-                .size(px(NAV_GLYPH))
+                .size(px(side))
                 .text_color(color)
                 .into_any_element(),
         };
@@ -89,8 +90,8 @@ impl Shell {
             .id(command.name())
             .absolute()
             .left(px(x))
-            .top(px(NAV_TOP))
-            .size(px(NAV_SIZE))
+            .top(px(CONTROLS_TOP))
+            .size(px(CONTROLS_PLATE))
             .flex()
             .items_center()
             .justify_center()
@@ -342,8 +343,11 @@ impl Shell {
     pub(super) fn nav_glyph(&self, enabled: bool) -> Hsla {
         match (self.window_main, enabled) {
             (false, _) => self.palette.faint(NAV_INACTIVE),
-            (true, true) => self.palette.glyph(NAV),
-            (true, false) => self.palette.glyph(NAV_DISABLED),
+            (true, true) => self.palette.glyph(ICON_INK),
+            (true, false) => self.palette.glyph(match self.palette.tone {
+                Tone::Dark => CONTROLS_IDLE,
+                Tone::Light => CONTROLS_IDLE_LIGHT,
+            }),
         }
     }
 
@@ -389,10 +393,15 @@ impl Shell {
                 Command::ToggleSidebar,
                 true,
             ),
-            (back, "icons/nav-back.svg", Command::Back, page.can_go_back),
+            (
+                back,
+                "icons/arrow-left.svg",
+                Command::Back,
+                page.can_go_back,
+            ),
             (
                 forward,
-                "icons/nav-forward.svg",
+                "icons/arrow-right.svg",
                 Command::Forward,
                 page.can_go_forward,
             ),
@@ -437,17 +446,21 @@ impl Shell {
 
     /// The URL field's box in the window, while the docked sidebar shows it.
     pub(super) fn url_field_bounds(&self) -> Option<Bounds<Pixels>> {
-        // The bar's is there whenever the bar is, the sidebar hidden too.
-        if self.bar_on() {
-            return Some(self.bar_field_bounds());
-        }
         let docked = !self.page_fullscreen && !self.sidebar_hidden && self.sidebar_motion.is_none();
-        (docked && self.form().is_none() && self.library.is_none()).then(|| {
-            Bounds::new(
-                point(px(self.column_x() + PLATE_INSET), px(URL_FIELD_TOP)),
-                size(px(self.width() - 2. * PLATE_INSET), px(URL_FIELD_HEIGHT)),
-            )
-        })
+        (docked && self.form().is_none() && self.library.is_none()).then(|| self.field_frame())
+    }
+
+    /// The URL field's box in the window, in the sidebar's column wherever that is.
+    pub(super) fn field_frame(&self) -> Bounds<Pixels> {
+        Bounds::new(
+            point(px(self.column_x() + PLATE_INSET), px(URL_FIELD_TOP)),
+            size(px(self.field_width()), px(URL_FIELD_HEIGHT)),
+        )
+    }
+
+    /// The URL field's width, as `url_field` lays it out and `field_part_at` reads it.
+    pub(super) fn field_width(&self) -> f32 {
+        self.width() - 2. * PLATE_INSET
     }
 
     /// Where the Site Controls button ends, in from the URL field's end: Arc's place, or before
@@ -789,15 +802,6 @@ impl Shell {
             .on_click(cx.listener(|shell, _, _, cx| {
                 shell.clicked_bar_target(Command::EditUrl, "sidebar", cx)
             }))
-            // In the bar, its right-click is the bar's, which its press keeps from the bar under it.
-            .when(self.bar_on(), |field| {
-                field.on_mouse_down(
-                    MouseButton::Right,
-                    cx.listener(|shell, event: &MouseDownEvent, _, cx| {
-                        shell.top_bar_menu(event.position, cx)
-                    }),
-                )
-            })
             .bg(self.palette.ground_plate(Ground::Field, URL_FIELD))
             // It brightens under the pointer as a tile does, from the same white 0.10 (ours).
             .hover(|style| style.bg(self.palette.ground_plate(Ground::Field, TILE_HOVERED)))
@@ -1040,42 +1044,47 @@ const DEVTOOLS_GLYPH: &str = "icons/code.svg";
 /// The header's reload, which is stop while the page loads.
 pub(super) fn reload_glyph(loading: bool) -> &'static str {
     if loading {
-        "icons/nav-stop.svg"
+        "icons/x.svg"
     } else {
-        "icons/nav-reload.svg"
+        "icons/rotate-cw.svg"
     }
 }
 
-/// Where the header's buttons' plates start in a sidebar `width` wide: the sidebar button, then
-/// back, forward and reload, each None where it doesn't fit. The sidebar button follows the traffic
-/// lights, or starts near the sidebar's edge in full screen, where they're gone (Arc 1.171). The
-/// others keep to the sidebar's right edge, NAV_TRAIL in and NAV_PITCH apart (Arc 1.170), and a
-/// narrow sidebar loses reload, then forward, while back would come nearer the sidebar button than
-/// NAV_AFTER_SIDEBAR. With the sidebar on the `right` the row is mirrored, the sidebar button by the
-/// window's buttons at the right edge, but back, forward and reload keep their order, back NAV_TRAIL
-/// from the page (#2375).
+/// Where the first row's buttons' plates start in a sidebar `width` wide: the sidebar button, then
+/// back, forward and reload, each None where it doesn't fit. The row's parts are CONTROLS_INSET in
+/// from the sidebar's own inset and CONTROLS_GAP apart, glyph to glyph: the sidebar button follows
+/// the window's buttons, or starts the row in full screen, where they're gone, and the others end
+/// it. A narrow sidebar loses reload, then forward, while back's glyph would come nearer the
+/// sidebar button's than the gap. With the sidebar on the `right` the row is mirrored, the sidebar
+/// button by the window's buttons at the right edge, but back, forward and reload keep their
+/// order, back nearest the page (#2375).
 pub(super) fn nav_places(width: f32, full_screen: bool, right: bool) -> [Option<f32>; 4] {
-    let sidebar = if full_screen {
-        FULL_SCREEN_SIDEBAR_BUTTON_X
-    } else {
-        SIDEBAR_BUTTON_X
-    };
-    let first = sidebar + NAV_SIZE + NAV_AFTER_SIDEBAR;
-    let last = width - NAV_TRAIL - NAV_SIZE;
+    let edge = PLATE_INSET + CONTROLS_INSET;
+    // A glyph is centred on its plate, which is the pitch across, so the plates meet.
+    let plate = |glyph_left: f32, glyph: f32| glyph_left - (CONTROLS_PLATE - glyph) / 2.;
+    let after_buttons = WINDOW_BUTTONS[2].0 + WINDOW_BUTTON_SIZE / 2. + CONTROLS_GAP;
+    let sidebar = plate(
+        if full_screen { edge } else { after_buttons },
+        CONTROLS_SIDEBAR_GLYPH,
+    );
+    let pitch = CONTROLS_GLYPH + CONTROLS_GAP;
+    let first = sidebar + (CONTROLS_PLATE + CONTROLS_SIDEBAR_GLYPH) / 2. + CONTROLS_GAP;
+    let last = plate(width - edge - CONTROLS_GLYPH, CONTROLS_GLYPH);
+    let glyph_left = |plate: f32| plate + (CONTROLS_PLATE - CONTROLS_GLYPH) / 2.;
     let count = (0..=3)
         .rev()
-        .find(|&count| last - (count as f32 - 1.) * NAV_PITCH >= first);
+        .find(|&count| glyph_left(last - (count as f32 - 1.) * pitch) >= first);
     let mut places = [Some(sidebar), None, None, None];
     if let Some(count) = count.filter(|&count| count > 0) {
         for index in 0..count {
             places[1 + index] = Some(match right {
-                true => NAV_TRAIL + index as f32 * NAV_PITCH,
-                false => last - (count - 1 - index) as f32 * NAV_PITCH,
+                true => width - last - CONTROLS_PLATE + index as f32 * pitch,
+                false => last - (count - 1 - index) as f32 * pitch,
             });
         }
     }
     if right {
-        places[0] = Some(width - sidebar - NAV_SIZE);
+        places[0] = Some(width - sidebar - CONTROLS_PLATE);
     }
     places
 }

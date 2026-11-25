@@ -37,12 +37,6 @@ fn rows() -> Vec<Entry> {
             Some("Every page's size, until you zoom a site, which keeps its own."),
         ),
         row(
-            Section::Appearance,
-            None,
-            "Top bar",
-            Some("The URL field and the sidebar's buttons in a row across the window's top."),
-        ),
-        row(
             Section::General,
             None,
             "Reopen your windows and tabs",
@@ -122,7 +116,6 @@ fn the_looks_rows_are_found_under_appearance() {
         ("dark mode", "Appearance"),
         ("zoom", "Page zoom"),
         ("font size", "Page zoom"),
-        ("top bar", "Top bar"),
         ("right sidebar", "Sidebar position"),
     ] {
         let found: Vec<&Entry> = find(typed, &rows).into_iter().map(|at| &rows[at]).collect();
