@@ -80,6 +80,7 @@
 #include "browser_core/profiles.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/search.h"
+#include "browser_core/secure_connections.h"
 #include "browser_core/session.h"
 #include "browser_core/share.h"
 #include "browser_core/site_controls.h"
@@ -1034,6 +1035,14 @@ bool bc_profile_set_offers_to_save(bc_id profile_id, int what, bool offer) {
   }
   prefs->SetBoolean(pref, offer);
   return true;
+}
+
+bool bc_profile_secure_connections(bc_id profile, bool* on) {
+  return browser_core::SecureConnections(browser_core::ProfileOrLoad(profile), on);
+}
+
+bool bc_profile_set_secure_connections(bc_id profile, bool on) {
+  return browser_core::SetSecureConnections(browser_core::ProfileOrLoad(profile), on);
 }
 
 void bc_profile_read(bc_id profile,

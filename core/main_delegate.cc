@@ -59,6 +59,7 @@
 #include "browser_core/platform/native_hosts.h"
 #include "browser_core/profiles.h"
 #include "browser_core/search.h"
+#include "browser_core/secure_connections.h"
 #include "browser_core/session.h"
 #include "browser_core/share.h"
 #include "browser_core/sign_in_dialog.h"
@@ -660,6 +661,8 @@ void Install(const bc_host& host) {
   g_browser_core_adjust_navigate = &Window::AdjustNavigate;
   // A tab's Cast dialog is the app's card, in place of the Views dialog.
   g_browser_core_cast_dialog = &CastDialog::For;
+  // An agent's tab never has Chrome's warning before http, whose Continue to site is the user's.
+  g_browser_core_no_http_warning = &TakesHttpWarning;
   g_browser_core_can_dock_devtools = &Window::CanDockDevTools;
   g_browser_core_update_devtools = &Window::UpdateDevTools;
   g_browser_core_show_devtools = &Window::ShowDevTools;

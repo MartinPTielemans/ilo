@@ -14,6 +14,7 @@
 #include "browser_core/agent_page.h"
 #include "browser_core/handed.h"
 #include "browser_core/host.h"
+#include "browser_core/secure_connections.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
 #include "content/public/browser/web_contents.h"
@@ -141,6 +142,8 @@ bool HandBack(bc_id tab) {
   // Where the user left a tab they handed the agent is where its history is theirs up to.
   handed::BoundHistory(tab);
   Blur(tab);
+  // Chrome's warning before http, up and unanswered, isn't the agent's to answer.
+  LeaveNoHttpWarning(tab);
   return true;
 }
 
