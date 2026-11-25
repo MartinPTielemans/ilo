@@ -77,6 +77,15 @@ const SHADE_STEP: f32 = 0.05;
 /// WCAG's minimums: text, and glyphs, boundaries and focus rings.
 pub const TEXT: f32 = 4.5;
 pub const GLYPH: f32 = 3.;
+/// A plate under the pointer tells from the window around it at this at least: what a dark
+/// window's has at Standard over a white backdrop, where it's plain to see. A shade that would
+/// take it under would leave the pointer on a plate nobody can see.
+pub const TELLS: f32 = 1.2;
+/// A plate aims past TELLS, so rounding to 8 bits can't take it under.
+const TELLS_AIM: f32 = 1.22;
+/// The steps a shade falls by where its plate has to tell: finer than SHADE_STEP, as each one it
+/// loses is taken from the text on it.
+const TELLS_STEP: f32 = 0.01;
 /// The accent's label aims past TEXT, so rounding to 8 bits can't take it under.
 const LABEL: f32 = 4.6;
 /// Grain at 1 moves the window toward the text's colour by half its strength on the whole, where
@@ -429,6 +438,9 @@ pub struct Palette {
     /// Each ground's shade, by `Ground`: the least step of the tint's colour over its plate at
     /// which the ink reads on it in every state, worked out with the palette.
     pub ground_shades: [f32; Ground::ALL.len()],
+    /// The shade of a dark window's plate under the pointer: what its text asks, or as much of
+    /// it as leaves the plate telling from the window.
+    pub pointed_shade: f32,
 }
 
 /// A plate primary text sits on over the window. The window stays as see-through as the user's
@@ -569,6 +581,7 @@ impl Palette {
             card: rgba(CARD),
             swatch: Swatch::of(None, window),
             ground_shades: [0.; Ground::ALL.len()],
+            pointed_shade: 0.,
         };
         // Text and glyphs on an overlay read on it and on a control's plate under the pointer.
         let under = state_alpha(OVERLAY_REST, STATE_HOVERED);
@@ -585,6 +598,8 @@ impl Palette {
         let beside = shades[Ground::Selected as usize].max(shades[Ground::Shown as usize]);
         shades[Ground::Hovered as usize] = shades[Ground::Hovered as usize].max(beside);
         palette.ground_shades = shades;
+        palette.pointed_shade = palette.solve_pointed(window);
+        palette.ground_shades[Ground::Selected as usize] = palette.solve_selected(window);
         let grounds = palette.grounds(window);
         palette.text_floor = least_alpha(ink, &grounds, TEXT + BETWEEN);
         palette.glyph_floor = least_alpha(ink, &grounds, GLYPH + BETWEEN);
@@ -693,10 +708,87 @@ impl Palette {
             .unwrap_or(1.)
     }
 
+    /// The shade of a dark window's plate under the pointer: the least at which the ink reads on
+    /// it beside the selected row's (`Ground::Hovered`), or as much of that, in finer steps, as
+    /// leaves the plate telling from every point of the window. Where the
+    /// window is bright, at More or in a Space's colour, the two pull apart, and the plate is
+    /// seen first: its title, under the pointer alone, reads what that leaves it. A light
+    /// window's takes none.
+    fn solve_pointed(&self, window: &Window) -> f32 {
+        // A light window's is the ink at its step: its rows' shade is worked out for a row's
+        // fainter plate, and isn't this one's.
+        if self.tone == Tone::Light {
+            return 0.;
+        }
+        let plain = window.samples(self.layer_alpha);
+        let tint = self.tone.tint_color();
+        let tells = |shade: f32| {
+            plain.iter().all(|&at| {
+                let plate = over(
+                    over(at, self.ink, crate::tokens::shell::HOVERED),
+                    tint,
+                    shade,
+                );
+                contrast(plate, at) >= TELLS_AIM
+            })
+        };
+        let row = self.ground_shades[Ground::Hovered as usize];
+        let steps = (row / TELLS_STEP).round() as i32;
+        (1..=steps)
+            .rev()
+            .map(|step| row.min(step as f32 * TELLS_STEP))
+            .find(|&shade| tells(shade))
+            .unwrap_or(0.)
+    }
+
+    /// The selected plate's shade where the one `solve_ground` gave leaves the plate too faint to
+    /// tell from the window, which a dark window with no Space's colour does where most comes
+    /// through: the least at which the ink still reads on the plate at TEXT, whatever step it
+    /// falls on, on the colour a screen shows, 8 bits a channel. It has nothing more to spare
+    /// there, and needs none: that window is its material alone, one colour over each backdrop,
+    /// with no points between to dip. A plate that tells already keeps its shade, and so does any
+    /// with a Space's colour or on a light window, where what tells is the plate's shadow.
+    fn solve_selected(&self, window: &Window) -> f32 {
+        let coarse = self.ground_shades[Ground::Selected as usize];
+        if self.tone == Tone::Light || self.shown.is_some() {
+            return coarse;
+        }
+        let plain = window.samples(self.layer_alpha);
+        let (colour, alphas) = self.ground_plates(Ground::Selected);
+        let tint = self.tone.tint_color();
+        let plates = |shade: f32| {
+            let plain = &plain;
+            alphas.iter().flat_map(move |&alpha| {
+                (plain.iter()).map(move |&at| (over(over(at, colour, alpha), tint, shade), at))
+            })
+        };
+        if plates(coarse).all(|(plate, at)| contrast(plate, at) >= TELLS_AIM) {
+            return coarse;
+        }
+        // The ink reads more the more shade its plate has, so the least shade lies between one it
+        // doesn't read at and one it does: halved until the plate's colour no longer changes.
+        // Read on the plate as drawn: one solved to TEXT exactly is under it once it's rounded.
+        let reads =
+            |shade: f32| plates(shade).all(|(plate, _)| contrast(self.ink, drawn(plate)) >= TEXT);
+        let (mut short, mut least) = (0., coarse);
+        for _ in 0..12 {
+            let middle = (short + least) / 2.;
+            match reads(middle) {
+                true => least = middle,
+                false => short = middle,
+            }
+        }
+        least
+    }
+
     /// `plate` drawn on `ground`: with the ground's shade of the tint's colour over it, as one
     /// colour at one alpha, so it's drawn as one fill. A plate not drawn takes no shade.
     pub fn on_ground(&self, ground: Ground, plate: Hsla) -> Hsla {
-        let shade = self.ground_shades[ground as usize];
+        self.shaded(plate, self.ground_shades[ground as usize])
+    }
+
+    /// `plate` with `shade` of the tint's colour over it, as one colour at one alpha.
+    fn shaded(&self, plate: Hsla, shade: f32) -> Hsla {
         if shade == 0. || plate.a == 0. {
             return plate;
         }
@@ -771,6 +863,7 @@ impl Palette {
                 let (from, to) = (self.ground_shades[ground], other.ground_shades[ground]);
                 from + (to - from) * t
             }),
+            pointed_shade: self.pointed_shade + (other.pointed_shade - self.pointed_shade) * t,
         }
     }
 
@@ -983,13 +1076,25 @@ impl Palette {
         Hsla::from(self.ink).opacity(alpha)
     }
 
-    /// A sidebar row's plate under the pointer, the only one a row has but the tab shown's.
+    /// A sidebar row's plate under the pointer, the only one a row has but the tab shown's: on a
+    /// dark window the plate anything has under the pointer, so a row's and a card's are one and
+    /// both are seen; on a light one the ink at a row's fainter step.
     pub fn hovered_row(&self) -> Hsla {
-        let alpha = match self.tone {
-            Tone::Dark => crate::tokens::shell::HOVERED,
-            Tone::Light => crate::tokens::shell::LIGHT_HOVERED,
-        };
-        self.ground_plate(Ground::Hovered, alpha)
+        match self.tone {
+            Tone::Dark => self.hovered_plate(),
+            Tone::Light => self.ground_plate(Ground::Hovered, crate::tokens::shell::LIGHT_HOVERED),
+        }
+    }
+
+    /// A plate under the pointer over the window, a sidebar row's on a dark window, a card's at
+    /// the sidebar's foot or a form's row: the ink at the ladder's step in both looks, and on a
+    /// dark window with the shade that makes what's written on it read however much of a bright
+    /// window comes through, held to what leaves the plate itself to be seen (`solve_pointed`).
+    pub fn hovered_plate(&self) -> Hsla {
+        self.shaded(
+            self.plate(crate::tokens::shell::HOVERED),
+            self.pointed_shade,
+        )
     }
 
     /// The window where its foot's glow is `foot` of its full strength and the far one `far` of
@@ -1575,6 +1680,11 @@ pub fn over(base: Rgba, color: Rgba, alpha: f32) -> Rgba {
         b: mix(base.b, color.b),
         a: 1.,
     }
+}
+
+/// `color` as a screen shows it, each channel one of 8 bits' 256 levels.
+pub fn drawn(color: Rgba) -> Rgba {
+    rgb(theme::packed(color))
 }
 
 /// WCAG's relative luminance.

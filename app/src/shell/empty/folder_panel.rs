@@ -70,7 +70,8 @@ impl Shell {
     }
 
     /// The folder the panel gave, its links resolved, granted to the next task, unless ilo never
-    /// gives it: then the line under the composer's says so (X4), and nothing is granted.
+    /// gives it: then the line under the composer's says so (X4), and nothing is granted. One that
+    /// is no longer a folder by now grants nothing and changes nothing, as a cancel.
     pub(in crate::shell) fn grant_folder(&mut self, picked: PathBuf, cx: &mut Context<Self>) {
         let Some(resting) = &mut self.resting else {
             return;
@@ -81,11 +82,14 @@ impl Shell {
         let never = Never::here(None);
         let resolved = files::resolved(&picked);
         match resolved.filter(|root| !files::never_grantable(root, &never)) {
-            Some(root) => {
-                resting.folder = Some(Granted::picked(root));
-                resting.refused = None;
-                log!("browser: composer folder granted");
-            }
+            Some(root) => match Granted::picked(root) {
+                Ok(granted) => {
+                    resting.folder = Some(granted);
+                    resting.refused = None;
+                    log!("browser: composer folder granted");
+                }
+                Err(_) => log!("browser: composer folder gone"),
+            },
             None => {
                 let named = files::shown_name(&picked);
                 resting.refused = Some(words::never_given(&named).into());

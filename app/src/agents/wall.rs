@@ -30,11 +30,15 @@ use super::runner::Cli;
 use super::tier::Tier;
 
 pub mod launch;
+pub mod leftovers;
 pub mod listener;
 /// The Mac's answers for ending what a walled task left running, which nothing asks yet.
 #[cfg(target_os = "macos")]
 #[path = "../../platform/mac/wall_walk.rs"]
 pub mod walk_mac;
+mod watch;
+
+pub use watch::{Gone, Identity, Watch};
 
 /// Why this system can't wall a task in, for the menu's file and folder rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,21 +58,32 @@ pub fn available() -> Result<(), Unavailable> {
     }
 }
 
-/// A folder the user granted, resolved at their pick. Only ilo's own folder panel makes one, so no
-/// agent tool, page or outside client can hand put_up a folder.
+/// A folder the user granted, resolved at their pick, with its identity then. Only ilo's own
+/// folder panel makes one, so no agent tool, page or outside client can hand put_up a folder.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Granted {
     root: PathBuf,
+    identity: Identity,
 }
 
 impl Granted {
-    /// The user's pick, its path already resolved: the folder panel's alone.
-    pub fn picked(resolved: PathBuf) -> Granted {
-        Granted { root: resolved }
+    /// The user's pick, its path already resolved: the folder panel's alone. Gone when the path
+    /// isn't a folder by then, or is a link.
+    pub fn picked(resolved: PathBuf) -> Result<Granted, Refusal> {
+        let identity = Identity::of(&resolved).ok_or(Refusal::Gone)?;
+        Ok(Granted {
+            root: resolved,
+            identity,
+        })
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Whether the folder at its path is still the one picked.
+    fn still_picked(&self) -> bool {
+        Identity::of(&self.root) == Some(self.identity)
     }
 }
 
@@ -116,7 +131,7 @@ pub enum Refusal {
 /// for the run and dropped with the process.
 pub struct Wall {
     /// The granted folder, or None for a task with no folder.
-    folder: Option<PathBuf>,
+    folder: Option<Granted>,
     /// When it went up: the task's own links are the ones made, moved or retargeted since.
     started: SystemTime,
     /// What starts a program inside it, or None for a task with no files, whose program starts
@@ -125,6 +140,8 @@ pub struct Wall {
     /// The task's own folder for temporary files, which put_up makes for it alone, or None
     /// until it makes one.
     tmp: Option<PathBuf>,
+    /// The task's TMP and mark, which its rules allow: what tells what is inside this wall.
+    place: Option<std::sync::Arc<leftovers::Place>>,
 }
 
 impl std::fmt::Debug for Wall {
@@ -138,7 +155,33 @@ impl std::fmt::Debug for Wall {
 
 impl Wall {
     pub fn folder(&self) -> Option<&Path> {
-        self.folder.as_deref()
+        self.folder.as_ref().map(Granted::root)
+    }
+
+    /// The watch on the task's granted folder, for the task to hold as long as its wall, or None
+    /// for a task with no folder. `gone` is called once, on the UI thread, when the folder goes:
+    /// moved, renamed, deleted or its volume gone, it or a folder above it. The grant ends then as
+    /// the user's Revoke ends it, and a folder put back at its path isn't granted again.
+    pub fn watch(
+        &self,
+        cx: &mut gpui::App,
+        gone: impl FnOnce(Gone, &mut gpui::App) + 'static,
+    ) -> Option<Watch> {
+        let (told, heard) = futures::channel::oneshot::channel();
+        let watch = self.watch_with(move |why| _ = told.send(why))?;
+        cx.spawn(async move |cx| {
+            // A watch ended with its task drops the sender, and nothing is called.
+            if let Ok(why) = heard.await {
+                cx.update(|cx| gone(why, cx));
+            }
+        })
+        .detach();
+        Some(watch)
+    }
+
+    fn watch_with(&self, gone: impl FnOnce(Gone) + Send + 'static) -> Option<Watch> {
+        let folder = self.folder.as_ref()?;
+        Some(Watch::start(folder.root(), folder.identity, gone))
     }
 
     pub fn started(&self) -> SystemTime {
@@ -159,24 +202,35 @@ impl Wall {
             started: SystemTime::now(),
             launcher: None,
             tmp,
+            place: None,
         }
     }
 }
 
 impl Granted {
     /// A folder granted in a test of what a task with one does, which is nowhere: the folder
-    /// panel alone grants a real one.
+    /// panel alone grants a real one. Its identity is the root folder's, which no such test reads,
+    /// as none puts a wall up with it.
     #[cfg(test)]
     pub(crate) fn for_test() -> Granted {
         Granted {
             root: PathBuf::from("/nonexistent/folder"),
+            identity: Identity::of(Path::new("/")).expect("the root is a folder"),
         }
     }
 
-    /// A folder of the test's own, which is there, as the panel would give it.
+    /// A folder of the test's own, which is there, with its identity, as the panel would give it.
     #[cfg(test)]
     pub(crate) fn at_for_test(root: PathBuf) -> Granted {
-        Granted { root }
+        let identity = Identity::of(&root).expect("the test's folder is there");
+        Granted { root, identity }
+    }
+
+    /// A folder granted at `root` while `was` was there: what's at `root` now isn't it.
+    #[cfg(test)]
+    pub(crate) fn was_for_test(root: PathBuf, was: &Path) -> Granted {
+        let identity = Identity::of(was).expect("the test's folder is there");
+        Granted { root, identity }
     }
 
     /// The same by a name of the test's own, for a test of where a folder's name reaches.
@@ -184,6 +238,7 @@ impl Granted {
     pub(crate) fn named_for_test(name: &str) -> Granted {
         Granted {
             root: Path::new("/nonexistent").join(name),
+            ..Granted::for_test()
         }
     }
 }
@@ -197,7 +252,12 @@ pub fn put_up(task: &WallFor) -> Result<Wall, WallRefused> {
             started: SystemTime::now(),
             launcher: None,
             tmp: None,
+            place: None,
         });
+    }
+    // The folder at its path is still the one picked, or nothing is granted.
+    if task.folder.is_some_and(|folder| !folder.still_picked()) {
+        return Err(WallRefused::Refused(Refusal::Gone));
     }
     available().map_err(WallRefused::Unavailable)?;
     Err(WallRefused::Failed("the launcher isn't built".into()))
@@ -300,10 +360,14 @@ mod tests {
     #[test]
     fn a_wall_printed_names_no_folder() {
         let wall = Wall {
-            folder: Some(PathBuf::from("/nonexistent/Private Letters")),
+            folder: Some(Granted {
+                root: PathBuf::from("/nonexistent/Private Letters"),
+                ..Granted::for_test()
+            }),
             started: SystemTime::now(),
             launcher: None,
             tmp: None,
+            place: None,
         };
         let printed = format!("{wall:?}");
         assert!(printed.contains("folder: true"), "{printed}");
@@ -319,20 +383,67 @@ mod tests {
         assert_eq!(available(), Err(expected));
     }
 
+    /// A folder of the test's own, as the folder panel resolves it.
+    fn picked(name: &str) -> PathBuf {
+        let folder = std::env::temp_dir().join(format!("ilo-wall-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        folder.canonicalize().unwrap()
+    }
+
     #[test]
     fn a_task_with_files_does_not_start_with_them() {
-        let folder = Granted::picked(PathBuf::from("/nonexistent/folder"));
+        let made = picked("files");
+        let folder = Granted::picked(made.clone()).unwrap();
         let attached = Path::new("/nonexistent/attached");
         for (folder, attached) in [(Some(&folder), None), (None, Some(attached))] {
             let refused = put_up(&task(folder, attached)).unwrap_err();
             assert_eq!(refused, WallRefused::Unavailable(available().unwrap_err()));
         }
+        std::fs::remove_dir_all(made).unwrap();
+    }
+
+    #[test]
+    fn only_a_folder_itself_is_picked() {
+        let made = picked("only");
+        let file = made.join("file");
+        std::fs::write(&file, "").unwrap();
+        assert_eq!(Granted::picked(file), Err(Refusal::Gone));
+        assert_eq!(Granted::picked(made.join("missing")), Err(Refusal::Gone));
+        #[cfg(unix)]
+        {
+            let link = made.join("link");
+            std::os::unix::fs::symlink(&made, &link).unwrap();
+            assert_eq!(Granted::picked(link), Err(Refusal::Gone));
+        }
+        assert!(Granted::picked(made.clone()).is_ok());
+        std::fs::remove_dir_all(made).unwrap();
+    }
+
+    /// The folder at the picked path is checked again at the grant, so one swapped meanwhile isn't
+    /// granted. Windows keeps no identity, as it has no wall, so there it's refused for that.
+    #[test]
+    fn a_folder_swapped_since_the_pick_is_not_granted() {
+        let made = picked("swapped");
+        let folder = made.join("folder");
+        std::fs::create_dir(&folder).unwrap();
+        let granted = Granted::picked(folder.clone()).unwrap();
+        std::fs::rename(&folder, made.join("away")).unwrap();
+        std::fs::create_dir(&folder).unwrap();
+        let refused = put_up(&task(Some(&granted), None)).unwrap_err();
+        let expected = match cfg!(unix) {
+            true => WallRefused::Refused(Refusal::Gone),
+            false => WallRefused::Unavailable(available().unwrap_err()),
+        };
+        assert_eq!(refused, expected);
+        std::fs::remove_dir_all(made).unwrap();
     }
 
     #[test]
     fn a_task_without_files_starts_as_it_always_has() {
         let wall = put_up(&task(None, None)).unwrap();
         assert_eq!(wall.folder(), None);
+        assert!(wall.watch_with(|_| ()).is_none(), "no folder, no watch");
         assert_eq!(links_outside(&wall), Walked::default());
         let link = LeavingLink {
             path: PathBuf::from("a"),

@@ -1063,12 +1063,9 @@ impl Shell {
             Section::Boosts => "Search Boosts…",
             Section::Boards => "Search Boards…",
         };
-        let search = cx.new(|cx| {
-            TextInput::new(placeholder, cx)
-                .placeholder_color(self.palette.gray(SEARCH_PLACEHOLDER))
-                .caret_color(self.palette.accent)
-                .selection_color(self.palette.selection())
-        });
+        // Its colours are the panel's to give as it draws, since the field outlives a change of
+        // the window's look.
+        let search = cx.new(|cx| TextInput::new(placeholder, cx));
         let observe = cx.observe(&search, |shell, _, cx| shell.filter(false, cx));
         // Tab stops at the field, as at each of the Library's controls (keys.rs).
         let _ = search.read(cx).focus_handle(cx).tab_stop(true);
@@ -1958,6 +1955,14 @@ impl Shell {
             .w(px(1.))
             .bg(self.palette.faint(COLUMN_EDGE));
         let search = library.search.clone();
+        // The field stays as the window goes from dark to light or to a Space of another colour,
+        // so its placeholder, caret and selection are this frame's palette's, as the glyph's is:
+        // the gray of the look it was made in is close to the other look's field.
+        let placeholder = self.palette.gray(SEARCH_PLACEHOLDER);
+        let (caret, selection) = (self.palette.accent.into(), self.palette.selection());
+        search.update(cx, |search, _| {
+            search.set_colors(placeholder, caret, selection)
+        });
         // The Filter button takes the field's end, while there's something to filter, and the
         // field what it leaves of the row.
         let filtered = self.archive_filtered();
@@ -1998,7 +2003,7 @@ impl Shell {
                     .left(px(SEARCH_GLYPH_X))
                     .top(px((SEARCH_HEIGHT - SEARCH_GLYPH) / 2.))
                     .size(px(SEARCH_GLYPH))
-                    .text_color(self.palette.gray(SEARCH_PLACEHOLDER)),
+                    .text_color(placeholder),
             )
             .child(library.search.clone());
         let field = self.with_row_keys(field, cx);
@@ -2666,7 +2671,7 @@ impl Shell {
         let label = title(&palette, self.title(tab), true).pr(px(PLATE_INSET));
         // A row lifted off its card, not the shown tab, so never Developer Mode's firmer fill.
         let row = plate(self.tab_icon_in(&palette, tab), label);
-        let row = selected_plate(&palette, row, 1., 0., false);
+        let row = selected_plate(&palette, row, 1., 0.);
         div()
             .w(px(CARD_WIDTH
                 - 2. * PLATE_INSET
@@ -4011,14 +4016,20 @@ impl Shell {
                 .text_color(self.palette.text(SECONDARY)))
             .into_any_element(),
         };
+        // Over the window, so the plate anything has under the pointer there, and the gray on it.
+        let (lit, on_plate) = (
+            self.palette.hovered_plate(),
+            self.palette.gray_on_plate(SECONDARY),
+        );
         div()
             .h(px(ARCHIVED_PITCH))
             .pl(px(ARCHIVED_LEFT))
             .pr(px(ARCHIVED_RIGHT))
             .py(px((ARCHIVED_PITCH - ARCHIVED_PLATE) / 2.))
             .child(
-                self.download_row(div().id(("download", id)), id, "row", cx)
+                self.download_row(div().id(("download", id)), id, "row", lit, cx)
                     .map(|plate| self.library_row(plate, Item::Download(index), 0, ARCHIVED_RADIUS))
+                    .group(POINTED_ROW)
                     .block_mouse_except_scroll()
                     .size_full()
                     .relative()
@@ -4047,12 +4058,12 @@ impl Shell {
                                 17.,
                                 self.palette.text(UNSELECTED_TITLE),
                             ))
-                            .child(text_line(
-                                status,
-                                text::SMALL,
-                                15.,
-                                self.palette.gray(SECONDARY),
-                            )),
+                            .child(
+                                text_line(status, text::SMALL, 15., self.palette.gray(SECONDARY))
+                                    .group_hover(POINTED_ROW, move |style| {
+                                        style.text_color(on_plate)
+                                    }),
+                            ),
                     )
                     .children(progress.map(|done| {
                         div()
@@ -4076,13 +4087,15 @@ impl Shell {
     }
 
     /// What a download's row does, in the Library or the Library button's recent downloads, with
-    /// its plate lit under the pointer: a press that can drag the file out, a click that opens a
-    /// finished file or shows a held one's menu, and a right-click that shows the menu.
+    /// its plate `lit` under the pointer, which is as its ground asks, the window or a fill: a
+    /// press that can drag the file out, a click that opens a finished file or shows a held one's
+    /// menu, and a right-click that shows the menu.
     pub(super) fn download_row(
         &self,
         row: Stateful<Div>,
         id: u64,
         source: &'static str,
+        lit: Hsla,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let Some(download) = self.downloads.iter().find(|each| each.id == id) else {
@@ -4092,7 +4105,7 @@ impl Shell {
         // GPUI never hears the release that ends the system's drag, and would keep the row
         // pressed.
         let dragged = matches!(self.download_press, Some((pressed, _, true)) if pressed == id);
-        row.hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+        row.hover(move |style| style.bg(lit))
             .when(!dragged, |row| {
                 row.active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
             })
@@ -4315,7 +4328,13 @@ impl Shell {
             .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
             // A button has one hover handler, so this one also carries the tooltip's.
             .on_hover(cx.listener(move |shell, hovered: &bool, window, cx| {
-                shell.hover_button(command, TipSide::Beside, *hovered, cx);
+                shell.hover_button(
+                    command,
+                    TipSide::Beside,
+                    *hovered,
+                    window.mouse_position(),
+                    cx,
+                );
                 shell.hover_recent_downloads(false, *hovered, window, cx)
             }))
             .on_click(cx.listener(move |shell, _, _, cx| shell.run(command, "sidebar", cx)))
@@ -4457,6 +4476,10 @@ fn panel_at_rest(edge: f32, width: f32) -> bool {
 pub(super) fn library_band(way: f32) -> f32 {
     super::band(way, LIBRARY_BAND, LIBRARY_BAND_STIFFNESS)
 }
+
+/// What a Library row over the window is named as a group, so the gray words on it take a plate's
+/// gray while the pointer is on the row.
+pub(super) const POINTED_ROW: &str = "library-row";
 
 /// A line of a row's text, cut short with an ellipsis.
 fn text_line(text: SharedString, size: f32, height: f32, color: Hsla) -> gpui::Div {

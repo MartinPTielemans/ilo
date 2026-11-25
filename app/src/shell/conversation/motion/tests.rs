@@ -50,6 +50,7 @@ fn conversation(lines: Vec<Line>) -> Conversation {
         tabs: Vec::new(),
         on: None,
         stoppable: true,
+        live: Default::default(),
         open: None,
         answers: Vec::new(),
         writing: false,
@@ -103,6 +104,7 @@ fn a_turns_answer_comes_once_its_trace_has_folded() {
     let new = Conversation {
         about: "Claude · Haiku · Done 13:31".into(),
         stoppable: false,
+        live: Default::default(),
         ..conversation(vec![
             Line::You("what's on".into()),
             trace(false, 2),

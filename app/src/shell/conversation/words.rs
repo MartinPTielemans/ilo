@@ -3,6 +3,7 @@
 //! here (#4086). The tiers' names are the tier table's (agents/tier.rs).
 
 use crate::agents::kept;
+use crate::agents::task::Live;
 use crate::agents::task::ilo::{
     HelpersLimit as Limit, IloButton, IloKind, LeftOut, Reach, SignedInWith,
 };
@@ -18,6 +19,25 @@ pub const STOP: &str = "Stop";
 /// access, until the next step starts.
 pub fn working(agent: &str) -> String {
     format!("{agent} is working")
+}
+
+/// The live line's button while the user has the task's page.
+pub const HAND_BACK: &str = "Hand Back";
+
+/// The live line's words in a state other than working, one entry each, or None for no line:
+/// waiting at a refused or a handed step, ilo's line with its own buttons is the last over the
+/// field (the lead, 20:22Z).
+pub fn live(live: &Live) -> Option<String> {
+    match live {
+        Live::Working => None,
+        Live::Refused | Live::Handed => None,
+        Live::Yours { site: None, .. } => Some("You're driving".into()),
+        Live::Yours {
+            site: Some(site), ..
+        } => Some(format!("You're driving {site}")),
+        // The question's own line says it, with its answers.
+        Live::Asked => None,
+    }
 }
 
 /// A line's words after the mark: ilo's own, then the name it takes from a page or a site, if it

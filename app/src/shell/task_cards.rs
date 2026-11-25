@@ -46,7 +46,7 @@ use crate::agents::runner::Cli;
 use crate::agents::sign_in::Offer;
 use crate::agents::task::{Card, Dot, NEEDS_YOU, TaskAction, Word};
 use crate::agents::tier::Tier;
-use crate::palette::{FIELD_PLATE as URL_FIELD, Ground};
+use crate::palette::FIELD_PLATE as URL_FIELD;
 use crate::tokens::shell::task::motion::{
     ARCHIVE, ARCHIVE_CLOSE, ARCHIVE_CLOSE_DELAY, ARCHIVE_CONTENT, ARCHIVE_EASE, ARCHIVE_HOLD,
     ARCHIVE_LEAVE, ARCHIVE_OPEN, BUMP, BUMP_EASE, BUMP_GLYPH, BUMP_PEAK, BUMP_SCALE, CONTENT,
@@ -223,8 +223,11 @@ pub(super) enum PageWord {
     NeedsYou,
     /// The user took it over: the bar's title on that page, in the title's ink too.
     Driving,
-    /// Its task waits, stopped or broke off, or the user holds it for a task that went on.
+    /// Its task waits at a refused step or broke off, or the user holds it for a task that went
+    /// on.
     Paused,
+    /// The user stopped its task: every page of it says so.
+    Stopped,
 }
 
 impl PageWord {
@@ -235,6 +238,7 @@ impl PageWord {
             PageWord::NeedsYou => NEEDS_YOU,
             PageWord::Driving => agent_bar::DRIVING,
             PageWord::Paused => "Paused",
+            PageWord::Stopped => "Stopped",
         }
     }
 }
@@ -494,10 +498,15 @@ impl Group {
         }
     }
 
-    /// Comes back as it went, its copy on the way to the Archive gone.
-    fn stay(&mut self, now: Instant, still: bool) {
+    /// Comes back as it went, its copy on the way to the Archive gone, at once if it shouldn't
+    /// move.
+    fn stay(&mut self, now: Instant, still: bool, animate: bool) {
         self.leaving = false;
         self.archived = None;
+        if !animate {
+            self.opacity = Ease::rest(1.);
+            return;
+        }
         let (length, curve) = if still {
             (CROSSFADE, Curve::Linear)
         } else {
@@ -742,6 +751,13 @@ impl Shell {
         self.sync_foot(None, cx);
     }
 
+    /// The page area has a task's view back as it stood, after a close a page refused: the foot
+    /// is as it stood too, at once. The view comes back with no motion, so a group opening with
+    /// the foot's was a view over a group whose pages' rows weren't there yet (#4202).
+    pub(super) fn restore_foot(&mut self, cx: &mut Context<Self>) {
+        self.bring_foot(None, false, cx);
+    }
+
     /// The glyph's colours: Signal, a header's title's ink and its state line's, and the stopped
     /// ring's, the ink at `stopped`, under the floor text keeps, as it's a mark beside words that
     /// say the task stopped.
@@ -792,9 +808,14 @@ impl Shell {
     /// grow in, and each task's group takes its card's changes, open to its pages if its task is
     /// the one the page area shows. `took` is the new card that fills the slot's group.
     fn sync_foot(&mut self, took: Option<SharedString>, cx: &mut Context<Self>) {
+        // What changes on a foot the window has drawn moves.
+        self.bring_foot(took, self.foot.primed, cx);
+    }
+
+    /// `sync_foot`, with what changes moving only if `animate`: else all of it is there at once.
+    fn bring_foot(&mut self, took: Option<SharedString>, animate: bool, cx: &mut Context<Self>) {
         let now = clock();
         let still = crate::motion::still(cx);
-        let animate = self.foot.primed;
         let moves = animate && !still;
         self.foot.still = still;
         let system = (self.text_system.take())
@@ -825,7 +846,7 @@ impl Shell {
         for group in &mut foot.groups {
             match (wanted.contains(&group.holds), group.leaving) {
                 (false, false) => group.leave(now, still, animate),
-                (true, true) => group.stay(now, still),
+                (true, true) => group.stay(now, still, animate),
                 _ => {}
             }
         }
@@ -1039,14 +1060,15 @@ impl Shell {
         }
     }
 
-    /// What `tab` is to `card`'s task now: its word, of the five a task's page has, and whether
+    /// What `tab` is to `card`'s task now: its word, of the six a task's page has, and whether
     /// it has the outline. The row at the sidebar's foot, a tile in the rail and the card all read
     /// this one answer, so a page's word and its outline never disagree. While the task works,
     /// each of its pages says Working and the outline alone marks the one it's in; Done is a
     /// page's word only once the task is done, as a page it left may be come back to. At a handoff
     /// the outline is on the page that needs the user. A page the user took over is theirs, one it
-    /// handed them and went on from is Paused, as are a stopped task's; a stopped or done task has
-    /// no outline.
+    /// handed them and went on from is Paused, as is one where it waits at a refused step or broke
+    /// off; every page of a task the user stopped says Stopped. A stopped or done task has no
+    /// outline.
     pub(super) fn page_mark(&self, card: &Card, tab: u64) -> PageMark {
         let mark = |word, outline| PageMark { word, outline };
         match self.held_why(tab) {
@@ -1066,9 +1088,8 @@ impl Shell {
                 mark(PageWord::Working, in_it)
             }
             Word::Done => mark(PageWord::Done, false),
-            Word::NeedsYou | Word::Stopped | Word::Interrupted | Word::AtLimit => {
-                mark(PageWord::Paused, false)
-            }
+            Word::Stopped => mark(PageWord::Stopped, false),
+            Word::NeedsYou | Word::Interrupted | Word::AtLimit => mark(PageWord::Paused, false),
         }
     }
 
@@ -1604,13 +1625,6 @@ impl Shell {
         }
     }
 
-    /// A card's, the count's or a page row's plate under the pointer: the ink at the foot's own
-    /// alpha, with the shade a sidebar row's plate takes there, so what's written on it reads
-    /// however much of a bright window comes through.
-    fn hovered_plate(&self) -> Hsla {
-        self.palette.ground_plate(Ground::Hovered, HOVERED)
-    }
-
     fn more_row(&self, group: &Group, now: Instant, cx: &mut Context<Self>) -> AnyElement {
         let words = self.more_words();
         let key = Holds::More.key();
@@ -1619,7 +1633,7 @@ impl Shell {
         let drawn = drawn_listener(&self.foot.plates_drawn, &self.foot.rested, key, rest);
         let row = self
             .header_plate(group, now)
-            .when(hovered, |row| row.bg(self.hovered_plate()))
+            .when(hovered, |row| row.bg(self.palette.hovered_plate()))
             .id("task-more");
         // A stop is placed in the flow; this one keeps its plate's place in its row.
         self.strip_stop(row, StripStop::More, words.clone(), PLATE_RADIUS)
@@ -1689,9 +1703,8 @@ impl Shell {
                 plate,
                 group.fill.at(now),
                 f32::from(u8::from(hovered)),
-                false,
             ),
-            (false, true) => plate.bg(self.hovered_plate()),
+            (false, true) => plate.bg(self.palette.hovered_plate()),
             // The bar's plate as it lands, which goes as the header comes.
             (false, false) => plate.bg(self.palette.plate(TILE).opacity(landed)),
         };
@@ -1955,12 +1968,14 @@ impl Shell {
             .pr(px(PAGE_END))
             .rounded(px(PAGE_RADIUS));
         let row = match shown {
-            true => selected_plate(&self.palette, row, 1., 0., false),
+            true => selected_plate(&self.palette, row, 1., 0.),
             false => row,
         };
-        let hover = self.hovered_plate();
+        let hover = self.palette.hovered_plate();
+        let pointed: SharedString = format!("task-page-{tab}").into();
         let row = row
             .id(("task-page", tab))
+            .group(pointed.clone())
             .when(!shown, |row| row.hover(move |style| style.bg(hover)));
         // The favicon is drawn in its box whole, as a row's is drawn smaller than its column.
         let icon = div()
@@ -1985,18 +2000,21 @@ impl Shell {
                 .rounded_full()
                 .bg(rgb(STATUS_AGENT))
         });
-        // A word in gray is at this, and on the shown row's plate in the gray that reads on one;
-        // one the user is needed at or drives is in the title's ink.
+        // A word in gray is at this, and on a plate, the shown row's or the one under the pointer,
+        // in the gray that reads on one; one the user is needed at or drives is in the title's ink.
         let gray = match word {
             PageWord::NeedsYou | PageWord::Driving => None,
             PageWord::Working => Some(PAGE_WORD_WORKING),
-            PageWord::Done | PageWord::Paused => Some(PAGE_WORD),
+            PageWord::Done | PageWord::Paused | PageWord::Stopped => Some(PAGE_WORD),
         };
         let ink = match gray {
             None => self.palette.text(TITLE),
             Some(alpha) if shown => self.palette.gray_on_plate(alpha),
             Some(alpha) => self.palette.gray(alpha),
         };
+        let on_plate = gray
+            .filter(|_| !shown)
+            .map(|alpha| self.palette.gray_on_plate(alpha));
         let state = div()
             .flex_none()
             .flex()
@@ -2004,6 +2022,9 @@ impl Shell {
             .gap(px(PAGE_DOT_GAP))
             .text_size(px(text::SMALL))
             .text_color(ink)
+            .when_some(on_plate, |state, ink| {
+                state.group_hover(pointed, move |style| style.text_color(ink))
+            })
             .children(dot)
             .child(word.label());
         let drawn = {

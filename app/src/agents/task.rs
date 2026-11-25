@@ -24,7 +24,7 @@ use super::helpers::{self, Helpers};
 use super::ready::{Found, Ready};
 use super::runner::{self, Cli, Failure, Launch, Out, Process};
 use super::sign_in::Offer;
-use super::tier::{Sites, StartedWith, Stop, Tier};
+use super::tier::{self, Sites, StartedWith, Stop, Tier};
 use super::{Agents, Client, Question, ToolResult, notes, page, site, tools};
 use crate::shell::MenuEntry;
 
@@ -144,6 +144,9 @@ pub struct Conversation {
     pub on: Option<u64>,
     /// Whether it works or waits on the user, which ⌘. stops.
     pub stoppable: bool,
+    /// What the live line over the reply field says of it, read where its card's word is, so the
+    /// two never disagree.
+    pub live: Live,
     /// Open under the result, which moves the tabs it left the user to them: "Open maat.pt", or
     /// "Open 2 pages".
     pub open: Option<SharedString>,
@@ -158,6 +161,28 @@ pub struct Conversation {
     /// The folder a live task holds, by its name as the system's panel showed it, which the chip
     /// under the reply field shows with its one act, Revoke.
     pub folder: Option<SharedString>,
+}
+
+/// Where a task under way is, as the live line over its reply field says it: working only while
+/// nothing of it waits on the user and the user doesn't have its page.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Live {
+    /// It works: the step under way, else `{assistant} is working`, with Take Over on its page.
+    #[default]
+    Working,
+    /// A step ilo refused waits on the user (its card says Needs you).
+    Refused,
+    /// The agent handed the user a step on its page, or asks for the page back, and its call
+    /// waits (its card says Needs you).
+    Handed,
+    /// The user took its page `tab` over, and the agent has no step under way on another: `site`
+    /// names it while the task has more than one page, as ilo's line of a handed page does.
+    Yours {
+        tab: u64,
+        site: Option<SharedString>,
+    },
+    /// Its own question waits on the user, which the question's line says with its answers.
+    Asked,
 }
 
 /// A line of a task's conversation.
@@ -330,6 +355,15 @@ pub struct Traced {
     pub notes: Option<&'static str>,
 }
 
+impl Traced {
+    /// Whether it was under way when the user pressed Stop, which answered it as stopped: no step
+    /// that failed, and it leaves no line, in the trace or on a card, as a stopped turn has no
+    /// answer.
+    pub fn stopped(&self) -> bool {
+        self.kind == Some(tools::Kind::Stopped)
+    }
+}
+
 /// The page the user was on when they asked, which goes as its address and title only.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AskedOn {
@@ -399,6 +433,9 @@ pub struct Task {
     /// The turns the user stopped, each by how many of their messages came before its answer: a
     /// stopped turn has no answer, so all it said stays in its stretch of work.
     pub stopped_turns: Vec<usize>,
+    /// The level it ended at, once the user has picked another in the level's menu since: the
+    /// pick is the level its next reply starts at, and this the one its wall was last put up at.
+    pub(super) picked_from: Option<Tier>,
     /// ilo's other lines of what happened to it: its steps handed to the user, the tabs its
     /// agent asked back and the changes of its access, oldest first.
     pub(super) placed: Vec<super::lines::Placed>,
@@ -671,11 +708,16 @@ pub enum TaskAction {
     CancelSignIn,
     /// An ilo line's Take over: the tab is the user's.
     TakeOver(u64),
-    /// A Stopped line's step up, or the composer's tier chip, up or down: only the user's press
-    /// sets a task's access.
+    /// A Stopped line's step up: only the user's press sets a task's access.
     SetTier(Tier),
     /// A Sites line's Any site.
     AnySite,
+    /// The level the user picked in the level's menu, which they opened: nothing moved under the
+    /// pointer, so no guard holds it, and on a task that has ended it's the level its next reply
+    /// starts at.
+    PickTier(Tier),
+    /// The level's menu's Any site.
+    PickAnySite,
     /// An ilo line's Hand back: the tab goes back to the agent.
     HandBack(u64),
     /// A step's Not now, by its line's key.
@@ -963,15 +1005,19 @@ impl Agents {
             TaskAction::Undelete => self.delete_task(agent, false, cx),
             TaskAction::SignIn => self.sign_in_for_task(agent, cx),
             TaskAction::CancelSignIn => self.cancel_sign_in_for_task(agent),
-            // A Stopped line's step up and the chip: the user's own press, the one way a tier
-            // or a task's Sites change, but not a press meant for what was there before a
-            // refusal's line appeared.
+            // A Stopped line's step up and the level's menu: the user's own press, the one way a
+            // tier or a task's Sites change. A line's button isn't pressed for what was there
+            // before a refusal's line appeared, nor once its task has ended.
             TaskAction::SetTier(_) | TaskAction::AnySite if self.just_stopped(agent) => {}
-            // Nor one meant for what was there before the helpers' limit's line appeared.
+            // Nor for what was there before the helpers' limit's line appeared.
             TaskAction::SetTier(_) | TaskAction::AnySite
                 if (self.task(agent)).is_some_and(|task| task.helpers.just_stopped()) => {}
-            TaskAction::SetTier(tier) => self.set_tier(agent, tier, cx),
-            TaskAction::AnySite => self.set_sites(agent, Sites::Any, cx),
+            TaskAction::SetTier(_) | TaskAction::AnySite
+                if (self.task(agent)).is_some_and(|task| task.ended.is_some()) => {}
+            TaskAction::SetTier(tier) | TaskAction::PickTier(tier) => {
+                self.set_tier(agent, tier, cx)
+            }
+            TaskAction::AnySite | TaskAction::PickAnySite => self.set_sites(agent, Sites::Any, cx),
             TaskAction::TakeOver(tab) => {
                 if let Some(task) = self.task_mut(agent) {
                     task.helpers.settle(Some(tab));
@@ -1033,6 +1079,27 @@ impl Agents {
         let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
             .map(|tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
             .collect();
+        let card = self.card(task, cx);
+        let on = (task.state == State::Working)
+            .then(|| self.on(task))
+            .flatten();
+        // The card's Needs you reads the same question and refusals, so the line can't say
+        // working while the card says the task waits on the user.
+        // A page the user took over is theirs on the line unless the agent works on another.
+        let taken = (tabs.iter())
+            .find(|(tab, _)| self.held.contains_key(tab))
+            .filter(|(tab, _)| on.is_none_or(|on| on == *tab));
+        let live = match (&task.state, &card.question) {
+            (State::Asking { .. }, None) => Live::Asked,
+            (_, Some(_)) => Live::Handed,
+            _ if task.stops.iter().any(|stop| !stop.settled) => Live::Refused,
+            _ if let Some((tab, _)) = taken => Live::Yours {
+                tab: *tab,
+                site: (tabs.len() > 1)
+                    .then(|| tier::plain(&site(&self.browser.tab(*tab, cx).url)).into()),
+            },
+            _ => Live::Working,
+        };
         // The card's own word, so a refusal waiting on the user says Needs you in both. Done says
         // when, and a limit when it resets if the assistant said; without that it's the word, as
         // the name before it says whose limit it is.
@@ -1041,7 +1108,7 @@ impl Agents {
                 done_at(&super::time_or_day(seconds(at)))
             }
             State::Limit { resets } if resets.is_some() => limit_words(&task.name, resets),
-            _ => self.card(task, cx).word.after_name().to_string(),
+            _ => card.word.after_name().to_string(),
         };
         // A session's title is the agent's words or its sites, so the line under it leads with its
         // client's name, and its state goes on as a fact, in lower case (#3690).
@@ -1059,10 +1126,9 @@ impl Agents {
             page: task.page.clone(),
             lines,
             tabs,
-            on: (task.state == State::Working)
-                .then(|| self.on(task))
-                .flatten(),
+            on,
             stoppable: matches!(task.state, State::Working | State::Asking { .. }),
+            live,
             open: open_label(&self.open_tabs(task, cx)),
             answers: match &task.state {
                 State::Asking { answers, .. } if self.ask_shown(task) => answers.clone(),
@@ -1531,6 +1597,7 @@ impl Agents {
             },
             stops: Vec::new(),
             stopped_turns: Vec::new(),
+            picked_from: None,
             placed: Vec::new(),
             told: None,
             helpers: Helpers::of_task(self.helpers_on() && cli == Cli::Claude),
@@ -2449,7 +2516,7 @@ impl Agents {
             self.browser.delete_space(space, cx);
         }
         if let Some(dir) = &self.tasks.dir {
-            _ = std::fs::remove_dir_all(dir.join("Tasks"));
+            end_old_task_files(&dir.join("Tasks"));
         }
     }
 
@@ -2675,6 +2742,17 @@ impl Agents {
                 && (task.session.as_ref()).is_some_and(|session| {
                     session.agent == agent && session.connection == connection
                 })
+        })
+    }
+
+    /// The task under way of `agent`'s whose session holds the page `tab`, among that client's
+    /// sessions only. A tab that left its Space may still be listed: the core refuses a call on it
+    /// before anything read here shows.
+    pub(super) fn page_task(&self, agent: &str, tab: u64) -> Option<&Task> {
+        (self.tasks.tasks.iter()).find(|task| {
+            task.state == State::Working
+                && (task.session.as_ref())
+                    .is_some_and(|session| session.agent == agent && session.tabs.contains(&tab))
         })
     }
 
@@ -2915,6 +2993,7 @@ impl Agents {
             sites: Sites::default(),
             stops: Vec::new(),
             stopped_turns: Vec::new(),
+            picked_from: None,
             placed: Vec::new(),
             told: None,
             helpers: Helpers::default(),
@@ -3734,7 +3813,7 @@ fn page_steps(task: &Task) -> Vec<(u64, SharedString)> {
     let turn = task.turn();
     let steps = (task.trace.iter().enumerate().rev())
         .take_while(|(_, step)| step.after >= turn)
-        .filter(|(_, step)| step.did.tool != "thought");
+        .filter(|(_, step)| step.did.tool != "thought" && !step.stopped());
     let mut pages: Vec<(u64, SharedString)> = Vec::new();
     let mut over: Vec<u64> = Vec::new();
     for (key, step) in steps {
@@ -3785,7 +3864,7 @@ fn turn_steps(task: &Task) -> Vec<&Traced> {
     let turn = task.turn();
     (task.trace.iter().rev())
         .take_while(|step| step.after >= turn)
-        .filter(|step| step.did.tool != "thought")
+        .filter(|step| step.did.tool != "thought" && !step.stopped())
         .collect()
 }
 
@@ -3802,7 +3881,7 @@ fn lower_first(text: &str) -> String {
 /// left out.
 fn stopped(task: &Task) -> SharedString {
     match (task.trace.iter())
-        .filter(|step| step.did.tool != "thought")
+        .filter(|step| step.did.tool != "thought" && !step.stopped())
         .count()
     {
         0 => "Stopped".into(),
@@ -3989,6 +4068,38 @@ struct Stretch<'a> {
     key: Option<usize>,
     started: Option<Instant>,
     ended: Option<Instant>,
+    /// Its steps that waited on the user, from their start to their end, and the rest, which
+    /// worked: what it took counts the time the first alone filled as none (`worked`).
+    waits: Vec<(Instant, Instant)>,
+    busy: Vec<(Instant, Instant)>,
+}
+
+/// The tools whose step waits on the user from its start to its end: none of that is work.
+const WAIT_ON_USER: [&str; 4] = ["hand_off", "upload", "ask_for_tab", "ask"];
+
+/// How long a stretch from `started` to `ended` worked: all of it but the time only `waits`
+/// filled, while no step of `busy` ran. From the steps' own marks, never a timer.
+fn worked(
+    started: Instant,
+    ended: Instant,
+    waits: &[(Instant, Instant)],
+    busy: &[(Instant, Instant)],
+) -> std::time::Duration {
+    let mut marks: Vec<Instant> = (waits.iter().chain(busy))
+        .flat_map(|&(from, to)| [from, to])
+        .map(|mark| mark.clamp(started, ended))
+        .chain([started, ended])
+        .collect();
+    marks.sort();
+    marks.dedup();
+    let within = |spans: &[(Instant, Instant)], from: Instant, to: Instant| {
+        spans.iter().any(|&(start, end)| start <= from && to <= end)
+    };
+    let idle: std::time::Duration = (marks.windows(2))
+        .filter(|pair| within(waits, pair[0], pair[1]) && !within(busy, pair[0], pair[1]))
+        .map(|pair| pair[1] - pair[0])
+        .sum();
+    ended.saturating_duration_since(started) - idle
 }
 
 /// A step of a stretch, with its place in the task's trace, or what the agent said in it.
@@ -4033,6 +4144,9 @@ impl<'a> Stretch<'a> {
     }
 
     fn step(&mut self, key: usize, step: &'a Traced, helper: Option<usize>) {
+        if step.stopped() {
+            return;
+        }
         self.key.get_or_insert(key);
         self.started = Some(
             self.started
@@ -4040,6 +4154,10 @@ impl<'a> Stretch<'a> {
         );
         let end = step.ended.unwrap_or(step.started);
         self.ended = Some(self.ended.map_or(end, |ended| ended.max(end)));
+        match WAIT_ON_USER.contains(&step.did.tool.as_str()) {
+            true => self.waits.push((step.started, end)),
+            false => self.busy.push((step.started, end)),
+        }
         self.gathered.push(match helper {
             Some(helper) => Gathered::Helper(helper, key, step),
             None => Gathered::Step(key, step),
@@ -4063,6 +4181,10 @@ impl<'a> Stretch<'a> {
     fn flush(&mut self, lines: &mut Vec<Line>, running: bool, end: Option<Instant>) {
         let gathered = std::mem::take(&mut self.gathered);
         let (key, started, ended) = (self.key.take(), self.started.take(), self.ended.take());
+        let (waits, busy) = (
+            std::mem::take(&mut self.waits),
+            std::mem::take(&mut self.busy),
+        );
         let Some(key) = key else {
             lines.extend(gathered.into_iter().filter_map(|item| match item {
                 Gathered::Said(text) => Some(Line::Said(text)),
@@ -4109,11 +4231,7 @@ impl<'a> Stretch<'a> {
         let took = (!running).then(|| {
             let started = started.unwrap_or_else(Instant::now);
             let ended = ended.into_iter().chain(end).max().unwrap_or(started);
-            (ended
-                .saturating_duration_since(started)
-                .as_secs_f32()
-                .round() as u64)
-                .max(1)
+            (worked(started, ended, &waits, &busy).as_secs_f32().round() as u64).max(1)
         });
         lines.push(Line::Trace(Trace {
             key,
@@ -4517,4 +4635,38 @@ fn names_the_browser(name: &str) -> bool {
             .iter()
             .any(|browser| read.contains(&reads_as(browser)))
         || read == reads_as("browser")
+}
+
+/// The files of the tasks a run before left, but for the places walled tasks left, which are swept
+/// first (leftovers.rs). They're listed here, before any task can make one, and swept off the UI
+/// thread, as a sweep walks every process.
+fn end_old_task_files(tasks: &std::path::Path) {
+    use super::wall::leftovers;
+    let root = tasks.join(leftovers::ROOT);
+    let left = leftovers::left_in(&root);
+    if left.is_empty() {
+        _ = std::fs::remove_dir_all(tasks);
+        return;
+    }
+    for entry in std::fs::read_dir(tasks).into_iter().flatten().flatten() {
+        if entry.file_name() == leftovers::ROOT {
+            continue;
+        }
+        match entry.file_type() {
+            Ok(kind) if kind.is_dir() => _ = std::fs::remove_dir_all(entry.path()),
+            Ok(_) => _ = std::fs::remove_file(entry.path()),
+            Err(_) => {}
+        }
+    }
+    _ = std::thread::Builder::new()
+        .name("task-leftovers".into())
+        .spawn(move || {
+            let cleaned = leftovers::clean_up(&root, &left);
+            log!(
+                "browser: walled tasks a run before left: {} ended, {} places removed, {} kept",
+                cleaned.ended,
+                cleaned.removed,
+                cleaned.kept
+            );
+        });
 }

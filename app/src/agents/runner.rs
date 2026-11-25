@@ -19,7 +19,7 @@ use futures::channel::mpsc::UnboundedSender;
 use serde_json::{Value, json};
 
 use super::kept::Keep;
-use super::wall::{Wall, WallRefused};
+use super::wall::{Wall, WallRefused, leftovers};
 
 /// A CLI that runs tasks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -194,6 +194,8 @@ pub struct Process {
     codex: Option<Arc<super::codex::State>>,
     /// Whether it's still the wall's launcher, which reads nothing it's sent.
     rising: Arc<AtomicBool>,
+    /// The wall of a walled start, whose group and leftovers its end ends.
+    walled: Option<Arc<Wall>>,
 }
 
 impl Process {
@@ -251,6 +253,7 @@ impl Process {
             None => (command.spawn()?, None),
         };
         let walled = rising.is_some();
+        let wall = launch.wall.clone().filter(|_| walled);
         let still_rising = Arc::new(AtomicBool::new(walled));
         let stdin = Arc::new(Mutex::new(child.stdin.take()));
         let stdout = child.stdout.take().expect("piped");
@@ -264,6 +267,7 @@ impl Process {
             stdin: stdin.clone(),
             codex: codex.clone(),
             rising: still_rising.clone(),
+            walled: wall.clone(),
         };
         let said = Arc::new(Mutex::new(String::new()));
         let err = std::thread::Builder::new()
@@ -279,7 +283,10 @@ impl Process {
             .spawn(move || {
                 // The one wait for the wall, here, as this thread may wait and the UI's may not.
                 if let Some(rising) = rising {
-                    let out = Out::Walled(rising.risen());
+                    let risen = rising.risen();
+                    // The control, before the program is taken to be inside: the system's word.
+                    let inside = |()| wall.as_ref().map_or(Ok(()), |wall| wall.control(id));
+                    let out = Out::Walled(risen.and_then(inside));
                     still_rising.store(false, Ordering::Release);
                     let agent = agent.clone();
                     let event = Event {
@@ -388,10 +395,21 @@ impl Drop for Process {
     fn drop(&mut self) {
         self.stdin.lock().unwrap().take();
         if let Some(mut child) = self.child.take() {
+            // A walled start's whole group first, while its leader isn't reaped and so no other
+            // process can have the group's id. What left the group is the sweep's, after.
+            let walled = self.walled.take();
+            if walled.is_some() {
+                leftovers::System::end_group(&leftovers::Os, self.id);
+            }
             _ = child.kill();
             _ = std::thread::Builder::new()
                 .name("task-reap".into())
-                .spawn(move || child.wait());
+                .spawn(move || {
+                    _ = child.wait();
+                    if let Some(wall) = walled {
+                        wall.sweep_after();
+                    }
+                });
         }
     }
 }

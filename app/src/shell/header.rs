@@ -10,8 +10,8 @@ use crate::site_controls::Place;
 
 use gpui::{
     App, Bounds, ClickEvent, Context, DispatchPhase, Div, Hsla, MouseButton, MouseDownEvent,
-    MouseUpEvent, NavigationDirection, Pixels, SharedString, Stateful, Window, canvas, div, point,
-    prelude::*, px, size, svg,
+    MouseUpEvent, NavigationDirection, Pixels, Point, SharedString, Stateful, Window, canvas, div,
+    point, prelude::*, px, size, svg,
 };
 
 use super::{
@@ -236,12 +236,15 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         button
-            .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
-                shell.hover_button(command, side, *hovered, cx)
+            .on_hover(cx.listener(move |shell, hovered: &bool, window, cx| {
+                shell.hover_button(command, side, *hovered, window.mouse_position(), cx)
             }))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|shell, _, _, cx| shell.browser.tooltip(None, cx)),
+                cx.listener(move |shell, _, _, cx| {
+                    shell.tip_pressed.set(Some(command.name()));
+                    shell.browser.tooltip(None, cx)
+                }),
             )
             .child(self.button_frame(command.name()))
     }
@@ -260,16 +263,24 @@ impl Shell {
         .size_full()
     }
 
-    /// The pointer has come onto or left the button that runs `command`.
+    /// The pointer, at `pointer`, has come onto or left the button that runs `command`. One whose
+    /// press ended its tooltip asks for none until the pointer has been off it.
     pub(super) fn hover_button(
         &self,
         command: Command,
         side: TipSide,
         hovered: bool,
+        pointer: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
         let busy = self.dragging().is_some() || self.menu_row.is_some();
         let frame = self.button_frames.borrow().get(command.name()).copied();
+        if self.tip_pressed.get() == Some(command.name()) {
+            if frame.is_some_and(|frame| frame.contains(&pointer)) {
+                return;
+            }
+            self.tip_pressed.set(None);
+        }
         let tip = (hovered && !busy)
             .then(|| self.button_name(command))
             .flatten()

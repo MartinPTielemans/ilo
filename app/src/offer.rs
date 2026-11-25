@@ -194,12 +194,8 @@ pub fn open(
         ..Default::default()
     };
     let window = cx.open_window(options, |window, cx| {
-        let input = cx.new(|cx| {
-            TextInput::new("Username", cx)
-                .placeholder_color(look(cx).1.gray(PLACEHOLDER))
-                .caret_color(look(cx).1.accent)
-                .selection_color(look(cx).1.selection())
-        });
+        // Its colours are the card's to give each time it draws.
+        let input = cx.new(|cx| TextInput::new("Username", cx));
         // The field has the keyboard whenever the window does, unless the offer has none.
         window.focus(&input.focus_handle(cx), cx);
         cx.new(|cx| OfferPrompt {

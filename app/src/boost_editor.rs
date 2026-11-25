@@ -39,7 +39,7 @@ use crate::{
     palette::{self, Palette},
     settings_rows::{self, Look},
     shell::KEY_CONTEXT,
-    text_input::TextInput,
+    text_input::{Colors, TextInput},
     theme_picker::{self, At},
 };
 
@@ -827,10 +827,18 @@ impl BoostEditor {
                     .clone()
                     .unwrap_or_else(|| editing.site.clone())
                     .into();
-                let palette = editing.palette;
+                // The editor's palette as the field draws, the one its other text is drawn in.
+                let editor = cx.weak_entity();
+                let colors = move |cx: &App| {
+                    let editing = editor
+                        .upgrade()
+                        .and_then(|editor| editor.read(cx).editing.as_ref());
+                    let palette = editing.map_or_else(Palette::default, |editing| editing.palette);
+                    Colors::placeholder(palette.on_overlay(DIM))
+                };
                 let input = cx.new(|cx| {
                     TextInput::new("Boost name", cx)
-                        .placeholder_color(palette.on_overlay(DIM))
+                        .follows(colors)
                         .spoken("Boost name")
                 });
                 input.update(cx, |input, cx| input.reset(name, window, cx));

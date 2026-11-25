@@ -35,12 +35,14 @@ use crate::agents::files::words as files_words;
 use crate::agents::page::clip;
 use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
 use crate::agents::task::{
-    ArchivedTask, Card, Conversation, Dot, Line, Opens, TaskAction, Trace, TraceItem, TraceStep,
+    ArchivedTask, Card, Conversation, Dot, Line, Live, Opens, TaskAction, Trace, TraceItem,
+    TraceStep,
 };
 use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
 use crate::text_input::TextInput;
 use crate::tokens::command_bar::{CHIP as BAR_CHIP, HINT_KEY_RIM, HINT_KEY_X};
 use crate::tokens::find_bar::NOT_FOUND;
+use crate::tokens::shell::HAIRLINE;
 use crate::tokens::shell::agent_pointer::{COLOR as SIGNAL, RING};
 use crate::tokens::shell::conversation::ilo::{
     ARM, BELOW as ILO_BELOW, BUTTONS_GAP, BUTTONS_TOP, COMPOSER_CHEVRON, COMPOSER_CHEVRON_GAP,
@@ -66,7 +68,6 @@ use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT};
 use crate::tokens::shell::task::{
     RAIL_BREAKPOINT, RAIL_DOT, RAIL_FAVICON, RAIL_GAP, RAIL_HEAD, RAIL_WIDTH, STATUS,
 };
-use crate::tokens::shell::{FORM_PLACEHOLDER, HAIRLINE};
 use crate::tokens::text;
 use crate::tokens::toast::{
     CHIP_FILL, CHIP_GAP, CHIP_HEIGHT, CHIP_RADIUS, CHIP_X, KEY_COLOR, KEY_GAP,
@@ -241,6 +242,8 @@ pub struct TalkView {
     /// buttons' handles, in their order on the line (ilo_keys.rs).
     ilo_keys: Option<ilo_keys::IloKeys>,
     ilo_stops: [gpui::FocusHandle; ilo_keys::MOST],
+    /// GPUI's focus still on a button whose keys ended, for the next frame to take from it.
+    ilo_left: Option<ilo_keys::Left>,
     /// Where each of ilo's lines' words were last drawn, and their layout, by its line.
     ilo_words_drawn: WordsDrawn,
     /// Where each ilo line's link was drawn, by the line's key.
@@ -254,6 +257,8 @@ pub struct TalkView {
     typing: bool,
     /// Where the last frame drew Take Over on the lines: once, on the live line.
     take_over_drawn: Rc<RefCell<Vec<Bounds<Pixels>>>>,
+    /// Where the last frame drew the live line's Hand Back, while the user has the task's page.
+    hand_back_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     landed: Rc<Cell<Option<Bounds<Pixels>>>>,
     drawn_at: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
@@ -406,9 +411,10 @@ impl Shell {
                     let stale = old.view.update(cx, |view, _| view.let_go());
                     self.stale_pictures.extend(stale);
                 }
-                let placeholder = self.palette.gray(FORM_PLACEHOLDER);
+                // The reply's placeholder follows the appearance, as the lines do (#1659).
+                let colors = Self::form_colors(cx);
                 let reply = cx.new(|cx| {
-                    (TextInput::new(format!("Reply to {name}"), cx).placeholder_color(placeholder))
+                    (TextInput::new(format!("Reply to {name}"), cx).follows(colors))
                         .placeholder_after_caret()
                 });
                 let shell = cx.weak_entity();
@@ -442,12 +448,14 @@ impl Shell {
                     ilo_hovered: Rc::default(),
                     ilo_keys: None,
                     ilo_stops,
+                    ilo_left: None,
                     ilo_words_drawn: Rc::default(),
                     ilo_links: Rc::default(),
                     level_drawn: Rc::default(),
                     folder_drawn: Rc::default(),
                     typing: false,
                     take_over_drawn: Rc::default(),
+                    hand_back_drawn: Rc::default(),
                     landed: Rc::default(),
                     drawn_at: Rc::default(),
                 })
@@ -570,6 +578,7 @@ impl Shell {
     /// takes it back while a page watched covers the field: GPUI sends the keys of a field that
     /// isn't drawn to no binding of ours, so Esc stepped back from nothing.
     pub(super) fn focus_talk(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.step_ilo_keys_drawn(window, cx);
         let Some(talk) = &self.talk else { return };
         let view = talk.view.read(cx);
         let (reply, replies) = (view.reply.focus_handle(cx), view.takes_reply());
@@ -717,6 +726,7 @@ impl TalkView {
 
     /// Its pictures go, as it no longer shows, and are taken again when it does.
     fn let_go(&mut self) -> Vec<Arc<RenderImage>> {
+        self.ilo_keys_undrawn("area");
         self.stale = true;
         self.motion.reset();
         let pictures = std::mem::take(&mut self.pictures);
@@ -2070,17 +2080,40 @@ impl TalkView {
     /// The live line over the reply field while the task works: the step under way, else
     /// `{assistant} is working`, never a finished or refused step, with Take Over at its end
     /// while the agent is on a page. Beside the page, the trace's own step line is it, and on the
-    /// page the strip has Take Over.
+    /// page the strip has Take Over. While the task waits on the user or the user has its page,
+    /// it says what `words::live` gives for that, never working: on a page the user took over,
+    /// with Hand Back, which goes as the ilo line's Hand Back does.
     fn live(&self, look: &Look, cx: &mut Context<Self>) -> Option<gpui::Stateful<gpui::Div>> {
         let shown = (self.shown.as_ref()).filter(|shown| shown.stoppable)?;
         if look.beside || look.standing {
             return None;
         }
         let palette = look.palette;
-        let step = under_way(&shown.lines);
+        let working = shown.live == Live::Working;
+        let step = under_way(&shown.lines).filter(|_| working);
         let words: SharedString = match step {
             Some(step) => step.title.clone(),
-            None => words::working(&shown.name).into(),
+            None if working => words::working(&shown.name).into(),
+            None => words::live(&shown.live)?.into(),
+        };
+        let hand_back = match shown.live {
+            Live::Yours { tab, .. } => {
+                let drawn = self.hand_back_drawn.clone();
+                let chip = page_chip(palette, "conversation-hand-back", words::HAND_BACK, None)
+                    .relative()
+                    .child(
+                        canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full(),
+                    )
+                    .on_click(
+                        cx.listener(move |view, _, _, cx| view.act(TaskAction::HandBack(tab), cx)),
+                    );
+                Some(chip)
+            }
+            _ => None,
         };
         let text = match (step.is_some(), look.shimmer(self.made)) {
             (true, Some(phase)) => shimmering(&palette, words, phase).into_any_element(),
@@ -2090,7 +2123,7 @@ impl TalkView {
                 .into_any_element(),
         };
         let drawn = self.take_over_drawn.clone();
-        let take_over = shown.on.map(|tab| {
+        let take_over = shown.on.filter(|_| working).map(|tab| {
             page_chip(palette, "conversation-take-over", words::TAKE_OVER, None)
                 .relative()
                 .child(
@@ -2123,7 +2156,8 @@ impl TalkView {
                         .whitespace_nowrap()
                         .child(text),
                 )
-                .children(take_over),
+                .children(take_over)
+                .children(hand_back),
         )
     }
 
@@ -2390,6 +2424,7 @@ impl TalkView {
                         let mut drawn = drawn.borrow_mut();
                         if drawn.get(&key).is_none_or(|(was, _)| *was != bounds) {
                             drawn.insert(key, (bounds, Instant::now()));
+                            log!("{}", ilo_keys::place(key, bounds));
                         }
                     },
                     |_, _, _, _| {},
@@ -3072,9 +3107,6 @@ impl Render for TalkView {
         }) else {
             return div().into_any_element();
         };
-        // The reply's placeholder follows the appearance, as the lines drawn in `look` do (#1659).
-        let placeholder = look.palette.gray(FORM_PLACEHOLDER);
-        (self.reply).update(cx, |reply, cx| reply.set_placeholder_color(placeholder, cx));
         self.settle_folds(now, still);
         // A shorter or narrower window keeps the newest line in view while the user reads at the
         // end, as the scroll keeps its distance from the top.
@@ -3085,6 +3117,7 @@ impl Render for TalkView {
         self.level_drawn.set(None);
         self.folder_drawn.set(None);
         self.take_over_drawn.borrow_mut().clear();
+        self.hand_back_drawn.set(None);
         let busy = self.motion.settle(now);
         self.follow_on(now);
         // What changes once it has shown moves.

@@ -129,11 +129,12 @@ fn handoff(rules: &Rules, kept: &[&str]) -> Option<Vec<u8>> {
 }
 
 impl Wall {
-    /// The wall around `folder` that holds `rules`, inside which a program keeps of its
-    /// environment the names in `kept` and nothing else. Nothing is started here: rules that the
-    /// launcher couldn't be handed are refused now, before anything is.
+    /// The wall around `folder`, the user's pick with its identity, so its watch knows the folder
+    /// it holds, that holds `rules`, inside which a program keeps of its environment the names in
+    /// `kept` and nothing else. Nothing is started here: rules that the launcher couldn't be handed
+    /// are refused now, before anything is.
     pub fn inside(
-        folder: Option<PathBuf>,
+        folder: Option<super::Granted>,
         rules: &Rules,
         kept: &[&str],
     ) -> Result<Wall, WallRefused> {
@@ -146,6 +147,7 @@ impl Wall {
             started: SystemTime::now(),
             launcher: Some(Launcher { program, handoff }),
             tmp: None,
+            place: None,
         })
     }
 
@@ -157,6 +159,9 @@ impl Wall {
             Some(launcher) => {
                 let mut command = crate::child::command(&launcher.program);
                 command.arg(program);
+                // A group of its own, which its end ends whole before it's reaped.
+                #[cfg(unix)]
+                std::os::unix::process::CommandExt::process_group(&mut command, 0);
                 command
             }
         }

@@ -82,12 +82,7 @@ pub(crate) fn preview_account(state: &str, cx: &mut App) {
                 }
                 account
             });
-            let look = browser::settings_rows::Look::settings(true);
-            let search = cx.new(|cx| {
-                browser::text_input::TextInput::new("Search", cx)
-                    .placeholder_color(look.detail)
-                    .caret_color(look.ink)
-            });
+            let search = cx.new(|cx| browser::text_input::TextInput::new("Search", cx));
             AccountPage {
                 account,
                 dialog,
@@ -139,6 +134,11 @@ impl gpui::Render for AccountPage {
         // Dark, as Settings is in a dark system, unless PREVIEW_APPEARANCE=light.
         let dark = preview_tone() != Some(Tone::Light);
         let look = Look::settings(dark);
+        // The page's look is this frame's, so its field gets it as the page draws.
+        let colors = look.field();
+        self.search.update(cx, |search, _| {
+            search.set_colors(colors.placeholder, colors.caret, colors.selection)
+        });
         self.account
             .update(cx, |account, cx| account.set_look(look, cx));
         let field = browser::settings_search::field(

@@ -958,11 +958,8 @@ fn new_bar(
     cx: &mut App,
 ) -> Entity<CommandBar> {
     let input = cx.new(|cx| {
-        TextInput::new(PLACEHOLDER_TEXT, cx)
-            .placeholder_color(palette::current(cx).on_overlay(PLACEHOLDER))
-            .caret_color(palette::current(cx).accent)
-            .selection_color(palette::current(cx).selection())
-            .paste_and_go()
+        // Its colours are the bar's to give each time it draws.
+        TextInput::new(PLACEHOLDER_TEXT, cx).paste_and_go()
     });
     cx.new(|cx| {
         cx.observe_in(&input, window, |bar: &mut CommandBar, _, window, cx| {

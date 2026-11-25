@@ -284,7 +284,6 @@ fn starts_from_its_words(args: &[String], first: &str, reply: &str) {
 
 /// A task with files never goes on with a conversation its assistant kept, which it can't reach
 /// inside a wall: a reply after its run went starts it from its own words.
-#[cfg(unix)]
 #[gpui::test]
 fn a_task_with_files_never_goes_on_with_a_kept_conversation(cx: &mut TestAppContext) {
     let (run, walls, agent) = kept_with_a_folder("unkept", cx);
@@ -334,7 +333,6 @@ fn a_reply_to_a_stopped_task_with_files_starts_it_inside_a_new_wall(cx: &mut Tes
 /// folder that changes its wall: the run inside Full access's wall is over and is sent nothing
 /// of the reply, which starts one inside the lower level's wall from the task's own words. Its
 /// assistant is told nothing of the access, as at any reply that takes a task up.
-#[cfg(unix)]
 #[gpui::test]
 fn a_level_lowered_at_a_reply_starts_it_inside_the_lower_levels_wall(cx: &mut TestAppContext) {
     let (run, walls, agent) = kept_with_a_folder("reply", cx);
@@ -1086,6 +1084,11 @@ mod copying {
     /// A task started from ⌘T with `folder` and one attached file, as the user picks them, its copy
     /// not made yet: nothing has run until the test lets the copy end.
     fn picked(name: &str, folder: PathBuf, cx: &mut TestAppContext) -> (Run, Walls, String) {
+        picked_as(name, Granted::at_for_test(folder), cx)
+    }
+
+    /// The same with a folder granted as the test made it, which may no longer be itself.
+    fn picked_as(name: &str, folder: Granted, cx: &mut TestAppContext) -> (Run, Walls, String) {
         use crate::agents::files::Picked;
         use crate::agents::task::Start;
         let (run, walls) = (Run::new(name, cx), Walls::default());
@@ -1102,7 +1105,7 @@ mod copying {
             only_added: false,
             files: Picked {
                 files: vec![file],
-                folder: Some(Granted::at_for_test(folder)),
+                folder: Some(folder),
             },
         };
         let agent = (run.agents)
@@ -1204,10 +1207,13 @@ mod copying {
         let link = real.with_file_name(format!("linked-{}", std::process::id()));
         _ = std::fs::remove_file(&link);
         std::os::unix::fs::symlink(&real, &link).unwrap();
+        // Each was granted while it was the folder, then became a link to one or went.
+        let linked = Granted::was_for_test(link.clone(), &real);
         let moved = real_folder("moved");
+        let gone = Granted::at_for_test(moved.clone());
         std::fs::remove_dir(&moved).unwrap();
-        for (case, folder) in [("link", link.clone()), ("moved", moved)] {
-            let (run, walls, agent) = picked(&format!("not-itself-{case}"), folder.clone(), cx);
+        for (case, folder, granted) in [("link", link.clone(), linked), ("moved", moved, gone)] {
+            let (run, walls, agent) = picked_as(&format!("not-itself-{case}"), granted, cx);
             cx.run_until_parked();
             run.ran(1);
             assert_eq!(walls.asked(), [(Tier::Work, false, true)], "{case}");
