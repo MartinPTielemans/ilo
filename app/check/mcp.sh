@@ -3244,8 +3244,9 @@ addEventListener("beforeunload", event => { if (dirty) event.preventDefault() })
   read -r px py pw ph <<PAGE
 $(grep "^browser: task page $opened_tab at " "$log" | tail -1 | cut -d' ' -f6-)
 PAGE
-  # In the page, near its foot, where nothing on the page takes the click.
-  send click $((px + pw / 2)) $((py + ph - 114))
+  # The middle of the page, from where the app logged it: the long page is plain text there,
+  # which takes no click, and the app draws nothing over it.
+  send click $((px + pw / 2)) $((py + ph / 2))
   await_log "^browser: agent page pressed in $opened_tab\$" "a press in the agent's page didn't reach the app"
   await_log "^browser: agent mcp-client taken over in $opened_tab\$" "a press in the agent's page didn't take it over"
   ../tools/window-screenshot.sh "$pid" "$out/agent-driving.png" || fail "no window to capture"
