@@ -136,8 +136,10 @@ pub fn names(agent: &str) -> Vec<String> {
         .collect()
 }
 
-/// Whether `agent` has a tool of this name: one of those tools/list gives it, which are a task's
-/// or an outside agent's, so each list is made once.
+/// Whether `agent` has a tool of this name: one of those tools/list gives it. Each list is made
+/// once and kept for the process's life, which is right only while a list depends on the kind of
+/// agent alone, a task's or an outside agent's. The day one varies by a setting, the kept list
+/// goes, or a tool switched on is refused here and one switched off is run.
 pub fn has(agent: &str, tool: &str) -> bool {
     static NAMES: [std::sync::OnceLock<Vec<String>>; 2] =
         [std::sync::OnceLock::new(), std::sync::OnceLock::new()];
