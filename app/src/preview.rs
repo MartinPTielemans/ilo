@@ -3882,8 +3882,7 @@ fn preview_composer_model_menu(bounds: Bounds<Pixels>, keys: &str, cx: &mut App)
         header: true,
         ..MenuEntry::named(name.to_string(), false)
     };
-    let first = task::model_default(Cli::Claude);
-    let (_, models) = task::model_menu("", &first, models.default.as_deref(), models.listed);
+    let (_, models) = task::model_menu("", "Default", models.default.as_deref(), models.listed);
     let mut items = vec![
         MenuEntry::search("Search models"),
         heading(browser::settings_rows::assistant_name(Cli::Claude)),

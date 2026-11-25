@@ -3671,11 +3671,11 @@ fn the_composers_menus_pick_its_level_and_model(cx: &mut TestAppContext) {
         [
             "? Search models",
             &settings_heading(Cli::Claude),
-            "claude's default",
+            "Default",
             "✓ Haiku",
             "Sonnet",
             &settings_heading(Cli::Codex),
-            "codex's default",
+            "Default",
             "- ",
             "Settings ↗",
         ]
@@ -4016,7 +4016,7 @@ fn agents_at_their_limit_or_none_ready(cx: &mut TestAppContext) {
         rows[1..5],
         [
             &settings_heading(Cli::Claude),
-            "- claude's default (Limit resets 18:00)",
+            "- Default (Limit resets 18:00)",
             "- Haiku (Limit resets 18:00)",
             "- Sonnet (Limit resets 18:00)",
         ]

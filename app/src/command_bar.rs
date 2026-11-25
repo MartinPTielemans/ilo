@@ -243,7 +243,8 @@ pub struct TaskAgent {
     pub model: Option<SharedString>,
     /// That model by id, empty for its own default: Settings' Model row.
     pub model_id: String,
-    /// Its Model menu's first row, `{assistant}'s default`, and which model that is where it said.
+    /// Settings' name for its default, `{assistant}'s default` (Y1), which the model trigger shows
+    /// while it's picked, and which model that is where it said. The menu's row is `Default` (D3).
     pub default_row: SharedString,
     pub default_model: Option<SharedString>,
     /// The models it offers after its default, as id and name: the one list Settings' Model row
@@ -323,6 +324,9 @@ const SIGN_IN: &str = "Sign In";
 const SETTINGS: &str = "Settings";
 /// The model menu's search field (Z9).
 const SEARCH_MODELS: &str = "Search models";
+/// The model menu's first row in each assistant's group (D3); Settings' picker keeps Y1's
+/// `{assistant}'s default`.
+const DEFAULT_ROW: &str = "Default";
 const NEVER_GETS: &str = "A thread never gets passwords, cookies or your other tabs.";
 /// The composer's triggers, by their elements' ids.
 const LEVEL: &str = "composer-level";
@@ -2486,7 +2490,7 @@ impl CommandBar {
             let default = agent.default_model.as_deref();
             let (ids, entries) = crate::agents::task::model_menu(
                 checked.unwrap_or("\0"),
-                &agent.default_row,
+                DEFAULT_ROW,
                 default,
                 agent.models.clone(),
             );
