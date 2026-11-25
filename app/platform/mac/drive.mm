@@ -578,14 +578,15 @@ void AddDisplay(unsigned width, unsigned height, bool main, void (^done)(void)) 
 // The browser window the window command picked, from 0.
 size_t g_driven = 0;
 
-// The browser window driven, once it's on screen, or first run's while it's the only one, as at a
-// new profile's first launch, which holds the browser window off screen until first run ends.
+// First run's window while it's on screen, at a new profile's first launch or played again from
+// Help over a browser window, since the user's input goes there then; else the browser window
+// driven, once it's on screen.
 NSWindow* MainWindow() {
-  NSWindow* window = (__bridge NSWindow*)host_browser_window(g_driven);
-  if (window.visible) {
-    return window;
+  if (NSWindow* first_run = (__bridge NSWindow*)host_first_run_window()) {
+    return first_run;
   }
-  return (__bridge NSWindow*)host_first_run_window();
+  NSWindow* window = (__bridge NSWindow*)host_browser_window(g_driven);
+  return window.visible ? window : nil;
 }
 
 // Where the driver's pointer last was, on screen, AppKit's way up, which host_pointer answers in a
