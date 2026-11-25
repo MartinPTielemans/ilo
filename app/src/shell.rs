@@ -140,6 +140,7 @@ mod recent_tabs_tests;
 #[cfg(test)]
 mod recorder;
 mod return_mark;
+mod ring;
 mod rows;
 mod safe_start;
 mod scripting;

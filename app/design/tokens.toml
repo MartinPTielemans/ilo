@@ -2998,18 +2998,40 @@ chip-end = 6.0
 # A page the strip's Open sends to Today flies there from the chip as a plate going from a chip's
 # corners and fill to a row's hover plate.
 ghost-radius = 6.0
-# Ours, from the approved drawing of the task's view: the task's pages stand in a rail down the
-# page area's right edge beside the conversation's column, each tile this wide (about a sixth of
-# the window), `rail-gap` from the next and from the column. Where the area is narrower than
-# `rail-breakpoint`, the column at its least and the rail no longer both fit, and the rail falls
-# to one row of tiles under the header, scrolling sideways. A tile's head line is `rail-head` tall,
-# its favicon `rail-favicon`, the word's dot `rail-dot` across.
-rail-width = 196.0
-rail-gap = 12.0
-rail-breakpoint = 760.0
-rail-head = 20.0
-rail-favicon = 12.0
+# The thread's stage (spec-thread-stage.md): its pages run down a rail at the page area's right,
+# `rail-edge` from its top, foot and right, beside the conversation's column, tiles `rail-gap`
+# apart. Where the area is narrower than `rail-breakpoint`, the column at its width and the rail
+# with the column's inset each side no longer both fit, and the rail goes; the pages fall to one
+# row of tiles under the head, scrolling sideways, so each stays a click away. A tile is a head
+# (the page's icon, its title, and its state at the right) over its live picture, cut at
+# `tile-picture`; on a plate with an inner line. The page the assistant is on has the stronger
+# line and the ring before its word, in the text's ink. Light's plate and line are the ink at the drawing's strength (light-values.md),
+# Proposed.
+rail-width = 280.0
+rail-gap = 8.0
+rail-edge = 8.0
+rail-breakpoint = 848.0
+rail-head = 32.0
+rail-head-x = 10.0
+rail-head-gap = 7.0
+rail-favicon = 14.0
+rail-title = 12.0
+rail-title-line = 15.0
+rail-word = 11.0
+rail-word-line = 15.0
 rail-dot = 6.0
+tile-radius = 10.0
+tile-picture = 136.0
+tile-fill = 0x1616184d
+light-tile-fill = 0x16161811
+tile-line = 0xffffff14
+light-tile-line = 0x00000014
+tile-line-on = 0xf3f0e880
+light-tile-line-on = 0x16161880
+tile-ring = 12.0
+tile-ring-stroke = 1.8
+# The ring's track under its turning quarter: the ink at this (light-values.md's ring track).
+ring-track = 0.2
 
 [shell.task.motion]
 # Seconds, on the motion's ease, and points: the design file has no motion, so tools/design-sync.md
@@ -3031,6 +3053,8 @@ title = 0.2
 chips = 0.18
 chips-delay = 0.12
 chips-stagger = 0.05
+# The running ring's quarter goes round once in this, the Cast card's turn.
+ring-turn = 1.0
 chips-rise = 4.0
 # The glyph's dot circles once in `orbit`, and the status's highlight sweeps in `shimmer`, both
 # linear.
@@ -3078,9 +3102,9 @@ crossfade = 0.2
 # which scrolls sideways rather than wrap. The user's messages are plates at a row's corners, the
 # page they asked on a chip inside the first. Its chips are the toast's, the page's scale. The reply
 # field at its foot is as tall as the URL field's row, and the lines meet a clean edge above it.
-column = 640.0
+column = 520.0
 inset = 24.0
-top = 16.0
+top = 30.0
 # The key on a page chip, Stop's and the strip's under a page watched, after its word, fainter:
 # 0.68 of the ink, the least that reads at 4.5:1 on the chip over the plain light window, where
 # the toast's 0.6 read 3.75:1 (#1080).
@@ -3174,7 +3198,7 @@ reply-inset = 12.0
 reply-fill = 0.1
 reply-rim = 0.14
 reply-key-end = 7.0
-reply-bottom = 16.0
+reply-bottom = 20.0
 reply-gap = 16.0
 # Room under the newest line at the end, over the reply gap. The lines meet a clean edge there:
 # the window's material under them is the system's, so no fade's colour can match it.

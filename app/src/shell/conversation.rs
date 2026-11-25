@@ -10,13 +10,13 @@ use std::collections::HashMap;
 use std::f32::consts::FRAC_PI_2;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui::{
     Bounds, Context, Corners, ElementId, Entity, Focusable, FontStyle, FontWeight, HighlightStyle,
     Hsla, Image, InteractiveText, IntoElement, MouseButton, ObjectFit, Pixels, Radians, Render,
     RenderImage, ScrollHandle, SharedString, Size, StyledText, Transformation, UnderlineStyle,
-    WeakEntity, Window, actions, canvas, div, img, point, prelude::*, px, rgb, size, svg,
+    WeakEntity, Window, actions, canvas, div, img, point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use gpui::{Role, accesskit::Live as Telling};
@@ -28,7 +28,7 @@ use super::{
     agent_bar::stop_keys,
     browser::{Browser, Page},
     picture::{PagePicture, next_request},
-    row_spring,
+    ring, row_spring,
     task_cards::PageWord,
 };
 use crate::agents::Status;
@@ -38,12 +38,11 @@ use crate::agents::task::{
     ArchivedTask, Card, Conversation, Dot, Line, Live, Opens, TaskAction, Trace, TraceItem,
     TraceStep, told_line,
 };
-use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
+use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED, Tone};
 use crate::text_input::TextInput;
 use crate::tokens::command_bar::{CHIP as BAR_CHIP, HINT_KEY_RIM, HINT_KEY_X};
 use crate::tokens::find_bar::NOT_FOUND;
 use crate::tokens::shell::HAIRLINE;
-use crate::tokens::shell::agent_pointer::{COLOR as SIGNAL, RING};
 use crate::tokens::shell::conversation::ilo::{
     ARM, BELOW as ILO_BELOW, BUTTONS_GAP, BUTTONS_TOP, COMPOSER_CHEVRON, COMPOSER_CHEVRON_GAP,
     COMPOSER_TOP, GLYPH as ILO_GLYPH, INK as ILO_INK, NOTE_INK, NOTE_TOP, QUOTED_CHARS,
@@ -56,17 +55,19 @@ use crate::tokens::shell::conversation::{
     LINK_LINE, LINK_UNDERLINE, LIST_MARKER, META_GAP, META_LINE, OPEN_BELOW, OPEN_TOP,
     PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG,
     PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PARAGRAPH_GAP, PICTURE_EMPTY_GLYPH, PICTURE_HEIGHT,
-    PICTURE_RADIUS, PICTURE_RIM, PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP,
-    REPLY_HEIGHT, REPLY_INSET, REPLY_KEY_END, REPLY_RIM, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD,
-    SITE_GAP, TEXT_LINE, TITLE_LINE, TOP, TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH,
-    TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER, TRACE_INDENT, TRACE_LINE, TRACE_NOTE,
-    TRACE_PICTURE_HEIGHT, TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH, TRACE_RULE, TRACE_RULE_FILL,
-    TRACE_RULE_X, TRACE_TITLE,
+    PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP, REPLY_HEIGHT, REPLY_INSET,
+    REPLY_KEY_END, REPLY_RIM, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD, SITE_GAP, TEXT_LINE,
+    TITLE_LINE, TOP, TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH, TRACE_GLYPH_ALPHA,
+    TRACE_HANG, TRACE_HOVER, TRACE_INDENT, TRACE_LINE, TRACE_NOTE, TRACE_PICTURE_HEIGHT,
+    TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH, TRACE_RULE, TRACE_RULE_FILL, TRACE_RULE_X,
+    TRACE_TITLE,
 };
-use crate::tokens::shell::empty::KEYS_FILL;
-use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT};
+use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT, RING_TURN};
 use crate::tokens::shell::task::{
-    RAIL_BREAKPOINT, RAIL_DOT, RAIL_FAVICON, RAIL_GAP, RAIL_HEAD, RAIL_WIDTH, STATUS,
+    LIGHT_TILE_FILL, LIGHT_TILE_LINE, LIGHT_TILE_LINE_ON, RAIL_BREAKPOINT, RAIL_EDGE, RAIL_FAVICON,
+    RAIL_GAP, RAIL_HEAD, RAIL_HEAD_GAP, RAIL_HEAD_X, RAIL_TITLE, RAIL_TITLE_LINE, RAIL_WIDTH,
+    RAIL_WORD, RAIL_WORD_LINE, RING_TRACK, STATUS, TILE_FILL, TILE_LINE, TILE_LINE_ON,
+    TILE_PICTURE, TILE_RADIUS, TILE_RING, TILE_RING_STROKE,
 };
 use crate::tokens::text;
 use crate::tokens::toast::{
@@ -1273,6 +1274,7 @@ impl TalkView {
         self.drawn.borrow_mut().clear();
         let palette = look.palette;
         let tabs = (self.shown.as_ref()).map_or_else(Vec::new, |shown| shown.tabs.clone());
+        // The picture's height at the page's own shape, of which the tile shows its top.
         let high = RAIL_WIDTH * PICTURE_HEIGHT / PICTURE_WIDTH;
         let shell = self.shell.upgrade();
         let tiles = tabs.iter().enumerate().map(|(index, (tab, site))| {
@@ -1322,9 +1324,16 @@ impl TalkView {
                         );
                     }
                     if let Some(image) = image {
-                        let corners = Corners::all(px(PICTURE_RADIUS));
+                        // The page's own shape from the picture's top, cut at the tile's foot,
+                        // whose corners it takes.
+                        let shape = Bounds::new(bounds.origin, size(bounds.size.width, px(high)));
+                        let corners = Corners {
+                            bottom_left: px(TILE_RADIUS),
+                            bottom_right: px(TILE_RADIUS),
+                            ..Corners::default()
+                        };
                         window
-                            .paint_image(bounds, bounds, corners, image, 0, false)
+                            .paint_image(bounds, shape, corners, image, 0, false)
                             .ok();
                     }
                 },
@@ -1352,33 +1361,14 @@ impl TalkView {
                     .justify_center()
                     .child(icon(PICTURE_EMPTY_GLYPH))
             });
+            // The picture at the page's own shape, cut at the tile's foot.
             let picture = div()
                 .relative()
-                .w(px(RAIL_WIDTH))
-                .h(px(high))
-                .rounded(px(PICTURE_RADIUS))
-                .bg(palette.plate(gpui::rgba(KEYS_FILL).a))
+                .w_full()
+                .h(px(TILE_PICTURE))
                 .overflow_hidden()
                 .children(blank)
-                .child(paint)
-                .child(
-                    div()
-                        .absolute()
-                        .size_full()
-                        .rounded(px(PICTURE_RADIUS))
-                        .border(px(HAIRLINE))
-                        .border_color(palette.plate(PICTURE_RIM)),
-                )
-                .when(acting, |picture| {
-                    picture.child(
-                        div()
-                            .absolute()
-                            .size_full()
-                            .rounded(px(PICTURE_RADIUS))
-                            .border(px(RING))
-                            .border_color(rgb(SIGNAL)),
-                    )
-                });
+                .child(paint);
             // While its page plays, its speaker before its title, crossed while it's muted, as
             // an agent's tabs start: a click on it unmutes or mutes it, as a row's does (#1080).
             let sound = page.audible.then(|| {
@@ -1423,29 +1413,52 @@ impl TalkView {
                     });
                 }
             }
+            // The page the assistant is on wears the ring before its word, turning while it works.
+            let ring = acting.then(|| {
+                let turned = match (&shell, said) {
+                    (Some(shell), Some(PageWord::Working)) => {
+                        let shell = shell.clone();
+                        let turned = (shell.read(cx).breath)
+                            .turned(Duration::from_secs_f32(RING_TURN), look.now);
+                        cx.defer(move |cx| shell.update(cx, |shell, cx| shell.breath.arm(cx)));
+                        turned
+                    }
+                    _ => 0.,
+                };
+                ring::ring(
+                    TILE_RING,
+                    TILE_RING_STROKE,
+                    turned,
+                    palette.text(RING_TRACK),
+                    palette.text(TITLE),
+                )
+            });
             let word = said.map(|said| {
                 div()
                     .flex_none()
                     .flex()
                     .items_center()
                     .gap(px(SITE_GAP))
-                    // A word that asks for the user is in the title's ink; the others are quiet.
+                    .text_size(px(RAIL_WORD))
+                    .line_height(px(RAIL_WORD_LINE))
+                    // The page the assistant is on, and a word that asks for the user, are in the
+                    // text's ink; the others are quiet.
                     .text_color(match said {
+                        _ if acting => palette.text(TITLE),
                         PageWord::NeedsYou | PageWord::Driving => palette.text(TITLE),
                         _ => palette.gray(STATUS),
                     })
-                    .when(said == PageWord::Working && acting, |word| {
-                        word.child(div().size(px(RAIL_DOT)).rounded_full().bg(rgb(SIGNAL)))
-                    })
+                    .children(ring)
                     .child(said.label())
             });
             let head = div()
+                .flex_none()
                 .h(px(RAIL_HEAD))
-                .w(px(RAIL_WIDTH))
+                .w_full()
+                .px(px(RAIL_HEAD_X))
                 .flex()
                 .items_center()
-                .gap(px(SITE_GAP))
-                .text_size(px(text::SMALL))
+                .gap(px(RAIL_HEAD_GAP))
                 .child(icon(RAIL_FAVICON))
                 .children(sound)
                 .child(
@@ -1453,22 +1466,47 @@ impl TalkView {
                         .flex_1()
                         .min_w_0()
                         .truncate()
+                        .text_size(px(RAIL_TITLE))
+                        .line_height(px(RAIL_TITLE_LINE))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(palette.text(TITLE))
                         .child(title),
                 )
                 .children(word);
+            let (fill, line) = match palette.tone {
+                Tone::Dark => (TILE_FILL, if acting { TILE_LINE_ON } else { TILE_LINE }),
+                Tone::Light => (
+                    LIGHT_TILE_FILL,
+                    if acting {
+                        LIGHT_TILE_LINE_ON
+                    } else {
+                        LIGHT_TILE_LINE
+                    },
+                ),
+            };
             div()
                 .id(("conversation-page", tab))
+                .relative()
                 .flex_none()
                 .w(px(RAIL_WIDTH))
+                .rounded(px(TILE_RADIUS))
+                .bg(rgba(fill))
+                .overflow_hidden()
                 .flex()
                 .flex_col()
-                .gap(px(SITE_GAP))
                 .opacity(opacity)
                 .cursor_pointer()
                 .child(head)
                 .child(picture)
+                // Its inner line, over the picture.
+                .child(
+                    div()
+                        .absolute()
+                        .size_full()
+                        .rounded(px(TILE_RADIUS))
+                        .border(px(HAIRLINE))
+                        .border_color(rgba(line)),
+                )
                 .on_click(cx.listener(move |view, _, _, cx| view.watch(tab, cx)))
         });
         let rail = div()
@@ -3318,6 +3356,9 @@ impl Render for TalkView {
             .flex_1()
             .min_w_0()
             .h_full()
+            .px(px(INSET))
+            .pt(px(TOP))
+            .pb(px(REPLY_BOTTOM))
             .flex()
             .flex_col()
             .text_size(px(text::BODY))
@@ -3350,7 +3391,8 @@ impl Render for TalkView {
                 .flex_none()
                 .w(px(RAIL_WIDTH))
                 .h_full()
-                .ml(px(RAIL_GAP))
+                .py(px(RAIL_EDGE))
+                .mr(px(RAIL_EDGE))
                 .child(self.rail(false, &look, cx))
         });
         if !pages {
@@ -3368,9 +3410,6 @@ impl Render for TalkView {
             .on_action(cx.listener(Self::ilo_leave))
             .size_full()
             .bg(palette.page)
-            .px(px(INSET))
-            .pt(px(TOP))
-            .pb(px(REPLY_BOTTOM))
             .flex()
             .justify_center()
             // A press here is the conversation's, not the window background's, which moves the
