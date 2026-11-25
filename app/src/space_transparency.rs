@@ -80,6 +80,12 @@ pub fn tint(value: f32, dark: bool) -> f32 {
         })
 }
 
+/// How much of the drawing's solid ground a dark window's tint is at `value` on the bar, in place
+/// of black: all of it at 0, none from where Less sits, so today's levels are as they were.
+pub fn solid_share(value: f32) -> f32 {
+    (1. - value.clamp(0., 1.) / SPACE_LESS).max(0.)
+}
+
 /// The texts `spaces` (each its id and theme text) take as today's `level` carries into them: every
 /// one, while none keeps a value; once one does, the carry is done and there's nothing.
 pub fn carry_in(level: Transparency, spaces: &[(u64, String)]) -> Vec<(u64, String)> {

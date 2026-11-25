@@ -119,6 +119,8 @@ use crate::tokens::command_bar::{
 use crate::tokens::text;
 /// What the field says with nothing typed: in the bar, the sidebar's field and the composer.
 pub(crate) const PLACEHOLDER_TEXT: &str = "Search or enter address";
+/// What the bar's field says with nothing typed where the bar can start a thread (Z2).
+const THREAD_PLACEHOLDER: &str = "Search, or start a thread";
 /// What its input says for Search Tabs (ours, after the command's name).
 const TABS_PLACEHOLDER: &str = "Search Tabs…";
 const SPACES_PLACEHOLDER: &str = "Search Spaces…";
@@ -319,6 +321,8 @@ enum ModelPick {
 /// Words on the composer's choices, from the words table (Z9, A5).
 const SIGN_IN: &str = "Sign In";
 const SETTINGS: &str = "Settings";
+/// The model menu's search field (Z9).
+const SEARCH_MODELS: &str = "Search models";
 const NEVER_GETS: &str = "A thread never gets passwords, cookies or your other tabs.";
 /// The composer's triggers, by their elements' ids.
 const LEVEL: &str = "composer-level";
@@ -1304,7 +1308,7 @@ fn reset(
             let placeholder = match target {
                 Target::Tabs => TABS_PLACEHOLDER,
                 Target::Spaces => SPACES_PLACEHOLDER,
-                _ => PLACEHOLDER_TEXT,
+                _ => bar.search_placeholder(),
             };
             bar.input.update(cx, |input, cx| {
                 input.set_placeholder(placeholder.into(), cx)
@@ -1438,6 +1442,11 @@ pub fn task_agents_changed(cx: &mut App) {
             bar.task_agents = agents;
             if bar.ask.is_some() {
                 bar.log_agents();
+            } else if bar.site.is_none() && bar.commands.is_none() && bar.lists_commands() {
+                let placeholder = bar.search_placeholder();
+                bar.input.update(cx, |input, cx| {
+                    input.set_placeholder(placeholder.into(), cx)
+                });
             }
             cx.notify();
         })
@@ -2049,8 +2058,9 @@ impl CommandBar {
         };
         // check.sh reads this line.
         log!("browser: command bar leaves commands");
+        let placeholder = self.search_placeholder();
         self.input.update(cx, |input, cx| {
-            input.set_placeholder(PLACEHOLDER_TEXT.into(), cx)
+            input.set_placeholder(placeholder.into(), cx)
         });
         let text = format!("{by}{}", self.input.read(cx).text());
         self.input.update(cx, |input, cx| {
@@ -2173,8 +2183,9 @@ impl CommandBar {
     /// Takes the bar out of its site search, if it's in one, and returns it.
     fn site_left(&mut self, cx: &mut Context<Self>) -> Option<Site> {
         let site = self.site.take()?;
+        let placeholder = self.search_placeholder();
         self.input.update(cx, |input, cx| {
-            input.set_placeholder(PLACEHOLDER_TEXT.into(), cx);
+            input.set_placeholder(placeholder.into(), cx);
             input.set_spoken(None, cx);
         });
         Some(site)
@@ -2281,11 +2292,22 @@ impl CommandBar {
     /// Whether the input's end says Ask ⇥: ⇥ makes a task, and an agent is ready, or the browser
     /// hasn't learned yet. With none ready, ⇥ offers to set one up, and nothing else of tasks shows.
     fn offers_ask(&self, cx: &App) -> bool {
-        let ready = self
-            .task_agents
-            .as_ref()
-            .is_some_and(|agents| !agents.known || !agents.agents.is_empty());
-        ready && self.may_ask(cx)
+        self.agents_ready() && self.may_ask(cx)
+    }
+
+    /// Whether an agent is ready for a thread, or the browser hasn't learned yet.
+    fn agents_ready(&self) -> bool {
+        (self.task_agents.as_ref()).is_some_and(|agents| !agents.known || !agents.agents.is_empty())
+    }
+
+    /// What the field says with nothing typed, outside a site search and the commands-only list:
+    /// Z2 where the bar can start a thread, as New Thread is offered; else E1, as with tasks off or
+    /// no assistant set up.
+    fn search_placeholder(&self) -> &'static str {
+        match self.surface == Surface::Window && self.lists_commands() && self.agents_ready() {
+            true => THREAD_PLACEHOLDER,
+            false => PLACEHOLDER_TEXT,
+        }
     }
 
     /// ⇥: what's typed becomes a thread's, with the page the user is on as a chip before it, and
@@ -2434,15 +2456,16 @@ impl CommandBar {
     /// The model trigger's menu, under it: each assistant by its own name, then the models it
     /// offers, its default first and the one the thread starts on checked; one at its limit says
     /// when it resets, and one not signed in has Sign In, which starts its own sign-in as
-    /// Settings' does; then Settings › Agents.
+    /// Settings' does; then Settings › Agents. Over them all a field narrows them as the user
+    /// types, leaving Sign In and Settings whatever is typed; a pick is still one of these rows.
     fn model_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let agents = self.task_agents.clone().unwrap_or_default();
         let (on, chosen) = match self.composer_assistant() {
             Some(agent) => (Some(agent.id.clone()), self.composer_model()),
             None => (None, None),
         };
-        let mut items = Vec::new();
-        let mut picks: Vec<ModelPick> = Vec::new();
+        let mut items = vec![MenuEntry::search(SEARCH_MODELS)];
+        let mut picks: Vec<ModelPick> = vec![ModelPick::Nothing];
         for agent in &agents.agents {
             items.push(heading(agent.name.clone()));
             picks.push(ModelPick::Nothing);
@@ -2472,12 +2495,12 @@ impl CommandBar {
         for (id, name) in &agents.signed_out {
             items.push(heading(name.clone()));
             picks.push(ModelPick::Nothing);
-            items.push(MenuEntry::named(SIGN_IN, true));
+            items.push(MenuEntry::named(SIGN_IN, true).kept());
             picks.push(ModelPick::SignIn(id.clone()));
         }
         items.push(MenuEntry::line());
         picks.push(ModelPick::Nothing);
-        items.push(MenuEntry::named(SETTINGS, true));
+        items.push(MenuEntry::named(SETTINGS, true).kept());
         picks.push(ModelPick::Settings);
         let bar = cx.entity().downgrade();
         let chosen = Box::new(

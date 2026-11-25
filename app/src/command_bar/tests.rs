@@ -3547,8 +3547,9 @@ impl Bar {
     }
 
     /// Opens the composer's level menu, or its model menu, as a click on its trigger does, and
-    /// gives its rows, each title with ✓ before it where it's checked, `-` where it's disabled
-    /// and `#` where it's a heading, and its answer, which `pick` then gives the menu's pick.
+    /// gives its rows, each title with ✓ before it where it's checked, `-` where it's disabled,
+    /// `#` where it's a heading and `?` where it's the search's field, and its answer, which `pick`
+    /// then gives the menu's pick.
     fn choice_menu(&mut self, model: bool) -> (Vec<String>, Chosen) {
         let shown: Rc<RefCell<Option<(Vec<MenuEntry>, Chosen)>>> = Rc::default();
         let into = shown.clone();
@@ -3568,6 +3569,7 @@ impl Bar {
         let rows = (items.iter())
             .map(|item| {
                 let mark = match (item.header, item.checked, item.enabled) {
+                    _ if item.field => "? ",
                     (true, _, _) => "# ",
                     (_, true, _) => "✓ ",
                     (_, _, false) => "- ",
@@ -3657,6 +3659,7 @@ fn the_composers_menus_pick_its_level_and_model(cx: &mut TestAppContext) {
     assert_eq!(
         rows,
         [
+            "? Search models",
             "# claude",
             "claude's default",
             "✓ Haiku",
@@ -3667,7 +3670,7 @@ fn the_composers_menus_pick_its_level_and_model(cx: &mut TestAppContext) {
             "Settings",
         ]
     );
-    bar.pick(chosen, 5);
+    bar.pick(chosen, 6);
     assert_eq!(
         bar.choices(),
         ("Full access".into(), "codex's default".into())
@@ -3712,6 +3715,64 @@ fn a_trigger_wears_its_plate_while_its_menu_is_open(cx: &mut TestAppContext) {
     bar.pick(chosen, 0);
     assert_eq!(open(&mut bar), None);
     assert_eq!(bar.choices().0, "Look only");
+}
+
+/// The model menu opens with the cursor in its search, in ilo's menu: what's typed narrows it,
+/// and ↩ picks a row of the list the menu was built from, so the model the assistant is given is
+/// one it offers, never the words typed; esc closes it with the composer's keyboard where it was
+/// and nothing changed.
+#[gpui::test]
+fn the_model_menus_search_picks_only_from_its_list(cx: &mut TestAppContext) {
+    use crate::menu;
+    let window = cx
+        .update(|cx| menu::open(Rc::new(MenuWindow), cx))
+        .expect("no window for the menu");
+    let mut in_menu = VisualTestContext::from_window(window.into(), cx);
+    cx.update(|cx| {
+        cx.set_global(menu::entries_menu(Rc::new(|_, request, cx| {
+            let area = gpui::Bounds::new(point(px(0.), px(0.)), gpui::size(px(2000.), px(2000.)));
+            menu::show(menu::Request { area, ..request }, cx);
+        })))
+    });
+    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    bar.type_text("plan the week");
+    bar.keys("tab");
+    let open = |bar: &mut Bar| {
+        (bar.window)
+            .update(&mut bar.cx.cx, |bar, window, cx| {
+                bar.model_menu(window, cx);
+            })
+            .unwrap();
+        bar.cx.run_until_parked();
+    };
+    open(&mut bar);
+    in_menu.simulate_keystrokes("s o n enter");
+    bar.cx.run_until_parked();
+    assert_eq!(bar.choices().1, "claude · Sonnet");
+
+    open(&mut bar);
+    in_menu.simulate_keystrokes("o p u s enter");
+    bar.cx.run_until_parked();
+    assert_eq!(
+        bar.choices().1,
+        "claude · Sonnet",
+        "a model named by what was typed"
+    );
+    in_menu.simulate_keystrokes("escape");
+    bar.cx.run_until_parked();
+    let (plate, focused) = bar
+        .window
+        .update(&mut bar.cx.cx, |bar, window, cx| {
+            (
+                bar.menu_open,
+                bar.input.read(cx).focus_handle(cx).is_focused(window),
+            )
+        })
+        .unwrap();
+    assert_eq!(plate, None, "the trigger kept its plate after esc");
+    assert!(focused, "the composer lost the keyboard to the menu");
+    assert_eq!(bar.choices().1, "claude · Sonnet");
+    assert!(!bar.calls().iter().any(|call| call.contains("opus")));
 }
 
 /// The composer opens at what it last started a thread with in the profile, as the host keeps it.
@@ -3778,6 +3839,51 @@ fn the_ask_is_left_as_site_search_is(cx: &mut TestAppContext) {
         "Esc left the composer rather than closing it"
     );
     assert_eq!(bar.calls(), ["asking false", "dismiss"]);
+}
+
+/// Where the bar can start a thread, its field says so with nothing typed (Z2); with tasks off,
+/// over a private window or with no assistant set up it says E1, as before. The words follow the
+/// assistants the browser learns while the bar shows.
+#[gpui::test]
+fn the_bar_says_it_starts_threads_where_it_can(cx: &mut TestAppContext) {
+    let placeholder = |bar: &mut Bar| {
+        (bar.window)
+            .read_with(&bar.cx.cx, |bar, cx| {
+                bar.input.read(cx).placeholder().to_string()
+            })
+            .unwrap()
+    };
+    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    assert_eq!(placeholder(&mut bar), "Search, or start a thread");
+
+    *bar.host.agents.borrow_mut() = agents(&[]);
+    bar.cx.cx.update(task_agents_changed);
+    bar.cx.run_until_parked();
+    assert_eq!(
+        placeholder(&mut bar),
+        "Search or enter address",
+        "the bar offers a thread with no assistant set up"
+    );
+    *bar.host.agents.borrow_mut() = agents(&[("codex", None)]);
+    bar.cx.cx.update(task_agents_changed);
+    bar.cx.run_until_parked();
+    assert_eq!(
+        placeholder(&mut bar),
+        "Search, or start a thread",
+        "an assistant set up while the bar shows"
+    );
+
+    let host = Recorder {
+        agents: RefCell::new(agents(&[("claude", None)])),
+        private: true,
+        ..Recorder::default()
+    };
+    let mut private = Bar::open(cx, Vec::new(), host);
+    assert_eq!(
+        placeholder(&mut private),
+        "Search or enter address",
+        "a private window's bar offers a thread"
+    );
 }
 
 /// Words typed put New Thread second, under the page or search ↩ takes, which ↩ on the first row
@@ -3897,7 +4003,7 @@ fn agents_at_their_limit_or_none_ready(cx: &mut TestAppContext) {
     assert_eq!(bar.choices().1, "codex's default");
     let (rows, _) = bar.choice_menu(true);
     assert_eq!(
-        rows[..4],
+        rows[1..5],
         [
             "# claude",
             "- claude's default (Limit resets 18:00)",
@@ -3919,14 +4025,17 @@ fn agents_at_their_limit_or_none_ready(cx: &mut TestAppContext) {
     assert!(!bar.calls().iter().any(|call| call.starts_with("task")));
     assert!(bar.is_open());
     let (rows, chosen) = bar.choice_menu(true);
-    assert_eq!(rows, ["# Codex", "Sign In", "- ", "Settings"]);
-    bar.pick(chosen, 1);
+    assert_eq!(
+        rows,
+        ["? Search models", "# Codex", "Sign In", "- ", "Settings"]
+    );
+    bar.pick(chosen, 2);
     assert_eq!(bar.calls(), ["sign in codex"]);
     assert!(bar.is_open());
     // Settings ends the ask as the bar hides, so Today's slot closes with it, and the next ⌘T,
     // which the Shell opens from inside its own update, has no ask to end (#2459).
     let (_, chosen) = bar.choice_menu(true);
-    bar.pick(chosen, 3);
+    bar.pick(chosen, 4);
     assert_eq!(bar.calls(), ["asking false", "hide", "set up agents"]);
     bar.cx
         .update(|_, cx| show(None, Vec::new(), Vec::new(), None, cx));

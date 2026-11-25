@@ -47,6 +47,10 @@ pub(super) fn card() -> Card {
         page_steps: Vec::new(),
         retry: false,
         fix: None,
+        visited: Vec::new(),
+        ended_time: Default::default(),
+        finding: Default::default(),
+        told: Default::default(),
     }
 }
 
@@ -493,8 +497,8 @@ fn one_view_at_every_width(cx: &mut TestAppContext) {
     );
 }
 
-/// While its task works every page says Working, where each reads `page_mark`: the rail's tile,
-/// the card's helper lines and the sidebar's row, as a screen reader names it. A page that has
+/// While its task works every page says Working, where each reads `page_mark`: the rail's tile and
+/// the card's helper lines. A page that has
 /// finished loading, or that the task isn't in, is still Working: Done comes only with the task.
 #[gpui::test]
 fn a_working_tasks_pages_all_say_working_where_each_is_read(cx: &mut TestAppContext) {
@@ -536,20 +540,6 @@ fn a_working_tasks_pages_all_say_working_where_each_is_read(cx: &mut TestAppCont
         pages.iter().map(|page| page.word).collect::<Vec<_>>()
     });
     assert_eq!(helpers, ["Working"; 2], "the card's helper lines");
-    let tree = cx.a11y_tree().expect("GPUI built a tree");
-    let rows: Vec<String> = (tree.nodes.iter())
-        .filter_map(|(_, node)| node.label().map(|label| label.to_string()))
-        .filter(|label| {
-            ["Working", "Done", "Paused"]
-                .iter()
-                .any(|word| label.ends_with(&format!(", {word}")))
-        })
-        .collect();
-    assert_eq!(rows.len(), 2, "the sidebar's rows: {rows:?}");
-    assert!(
-        rows.iter().all(|row| row.ends_with(", Working")),
-        "the sidebar's rows: {rows:?}"
-    );
 }
 
 /// A tile whose word turns to Needs you is brought into sight once, where the rail holds more
@@ -3258,4 +3248,77 @@ fn a_closed_conversation_leaves_its_card_the_picture_its_tile_ended_on(cx: &mut 
     assert_eq!(plate(&shell, &on, cx), None, "another page's picture");
     let held = shell.read_with(cx, |shell, _| shell.card_plates.len());
     assert_eq!(held, 0, "a picture no card shows is still held");
+}
+
+/// A picture the conversation takes goes to its task's kept card only if it could have been
+/// given to an agent both when it was asked and when it came: by the agents' rules, and not while
+/// the page uses the camera or the microphone, shares a screen, window or tab, or is captured. A
+/// private window tells the card nothing.
+#[gpui::test]
+fn a_kept_card_is_told_only_of_a_picture_an_agent_could_have_had(cx: &mut TestAppContext) {
+    let card = Card {
+        last_tab: Some(30),
+        pages: vec![30],
+        ..card()
+    };
+    let (shell, host, cx) = shown_with(card, cx);
+    host.keeps.borrow_mut().insert(30);
+    let steps = std::cell::Cell::new(0);
+    // The conversation moves on, which asks for its page's picture; the core answers, with one
+    // if `came`, once `before` has changed the page.
+    let answered = |before: &dyn Fn(&mut Shell, &mut gpui::Context<Shell>),
+                    came: bool,
+                    cx: &mut VisualTestContext| {
+        steps.set(steps.get() + 1);
+        shell.update(cx, |shell, cx| {
+            shell.set_conversation(Some(conversation(steps.get())), cx)
+        });
+        let request = picture_request(&shell, 30, cx);
+        shell.update(cx, |shell, cx| {
+            before(shell, cx);
+            let picture = PagePicture::from_bgra(vec![255; 4 * 4], 2, 2).filter(|_| came);
+            shell.page_pictured(request, picture, cx)
+        });
+        host.card_pictures.borrow_mut().pop()
+    };
+    let taken = |before: &dyn Fn(&mut Shell, &mut gpui::Context<Shell>),
+                 cx: &mut VisualTestContext| answered(before, true, cx);
+    let told = |keeps| Some(("task-1".into(), 30, keeps));
+    assert_eq!(taken(&|_, _| {}, cx), told(true));
+    type Use = fn(&mut Page);
+    let uses: [Use; 4] = [
+        |page| page.camera = true,
+        |page| page.microphone = true,
+        |page| page.sharing = true,
+        |page| page.shared = true,
+    ];
+    for using in uses {
+        let mut page = Page::default();
+        using(&mut page);
+        // In use when it came, and when it was asked.
+        let used = page.clone();
+        let set = move |shell: &mut Shell, cx: &mut gpui::Context<Shell>| {
+            shell.set_page(30, used.clone(), cx)
+        };
+        assert_eq!(taken(&set, cx), told(false));
+        assert_eq!(taken(&|_, _| {}, cx), told(false));
+        let unset = |shell: &mut Shell, cx: &mut gpui::Context<Shell>| {
+            shell.set_page(30, Page::default(), cx)
+        };
+        // Asked while in use, it came after: still not.
+        assert_eq!(taken(&unset, cx), told(false));
+        assert_eq!(taken(&|_, _| {}, cx), told(true));
+    }
+    // The agents' rules say no, as for a page the user held.
+    host.keeps.borrow_mut().clear();
+    assert_eq!(taken(&|_, _| {}, cx), told(false));
+    // With no picture either: the card's older one goes.
+    assert_eq!(answered(&|_, _| {}, false, cx), told(false));
+    host.keeps.borrow_mut().insert(30);
+    assert_eq!(taken(&|_, _| {}, cx), told(true));
+    // No picture of a page that could be kept: the card keeps what it had.
+    assert_eq!(answered(&|_, _| {}, false, cx), None);
+
+    shell.update(cx, |shell, _| shell.private = true);
+    assert_eq!(taken(&|_, _| {}, cx), None);
 }

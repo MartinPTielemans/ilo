@@ -1246,6 +1246,10 @@ fn a_taken_over_pages_row_ends_in_its_bars_title(cx: &mut TestAppContext) {
         page_steps: Vec::new(),
         retry: false,
         fix: None,
+        visited: Vec::new(),
+        ended_time: Default::default(),
+        finding: Default::default(),
+        told: Default::default(),
     };
     let hold = |why: &str, cx: &mut VisualTestContext| {
         shell.update(cx, |shell, cx| {
@@ -1603,6 +1607,10 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         page_steps: Vec::new(),
         retry: false,
         fix: None,
+        visited: Vec::new(),
+        ended_time: Default::default(),
+        finding: Default::default(),
+        told: Default::default(),
     };
     shell.update(cx, |shell, cx| {
         shell.set_page(
@@ -1785,6 +1793,77 @@ fn the_conversation_shows_no_page_in_the_url_field_or_the_rows(cx: &mut TestAppC
     });
 }
 
+/// On a thread, the URL field shows the thread's title, as its card has it (spec-sidebar), and
+/// that is all the title is: the field's click opens the bar with nothing in it, Copy URL copies
+/// nothing and the field's log line doesn't carry it. With the thread's page in place, the field
+/// has the page's site again.
+#[gpui::test]
+fn on_a_thread_the_url_field_shows_its_title_and_only_shows_it(cx: &mut TestAppContext) {
+    use crate::agents::task::Dot;
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    let title = "Find a flight to Lisbon";
+    let card = crate::shell::task_cards::tests::card(1, Dot::Working);
+    assert_eq!(
+        (card.agent.as_ref(), card.title.as_ref()),
+        ("task-1", title)
+    );
+    shell.update(cx, |shell, cx| {
+        let page = Page {
+            url: "https://www.gulbenkian.pt/tickets".into(),
+            ..Page::default()
+        };
+        shell.set_page(30, page, cx);
+        shell.set_task_cards(vec![crate::agents::task::Card { space: 3, ..card }], cx);
+        shell.show_task("task-1".into(), cx);
+    });
+    let words =
+        |shell: &Shell, cx: &gpui::App| shell.url_field_words(&shell.url(shell.field_tab()), cx);
+    // The field logs its words when they change, so it is built again as if it had said none.
+    crate::heard::listen();
+    shell.update(cx, |shell, cx| {
+        shell.url_field_drawn.replace(SharedString::default());
+        drop(shell.url_field(cx).into_any_element());
+    });
+    let heard: Vec<String> = (crate::heard::take().into_iter())
+        .filter(|line| line.starts_with("browser: url field"))
+        .collect();
+    shell.read_with(cx, |shell, cx| {
+        assert_eq!(shell.field_tab(), 0);
+        assert_eq!(words(shell, cx).0.as_ref(), title);
+        assert_eq!(
+            words(shell, cx).1,
+            shell.palette.text(crate::tokens::shell::SECONDARY).into()
+        );
+    });
+    assert!(heard.iter().all(|line| !line.contains(title)), "{heard:?}");
+    assert!(
+        heard.contains(&"browser: url field (a thread's title)".to_string()),
+        "{heard:?}"
+    );
+
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::CopyUrl, "ui", cx);
+        shell.clicked_bar_target(Command::EditUrl, "sidebar", cx);
+    });
+    assert!(host.copied.borrow().is_empty(), "Copy URL copied the title");
+    assert_eq!(
+        *host.bar_edits.borrow(),
+        [None],
+        "the bar opened on an address"
+    );
+
+    // The thread's page in place has its own address in the field.
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    assert!(shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, thumb, None, false, cx)
+    }));
+    core_shows_task(&shell, cx, 30);
+    shell.read_with(cx, |shell, cx| {
+        assert_eq!(words(shell, cx).0.as_ref(), "gulbenkian.pt");
+    });
+}
+
 /// ⌘R and Back act on the page watched; ⌘T opens the bar over the conversation, the core showing
 /// the user's Space again first, so a tab it opens is the user's.
 #[gpui::test]
@@ -1937,6 +2016,10 @@ fn the_strip_under_a_page_says_that_pages_own_step(cx: &mut TestAppContext) {
         last_tab: None,
         line: None,
         ended_at: None,
+        visited: Vec::new(),
+        ended_time: Default::default(),
+        finding: Default::default(),
+        told: Default::default(),
     };
     shell.update(cx, |shell, cx| {
         shell.set_task_cards(vec![card(&[])], cx);
@@ -1996,6 +2079,10 @@ fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
         last_tab: None,
         line: None,
         ended_at: None,
+        visited: Vec::new(),
+        ended_time: Default::default(),
+        finding: Default::default(),
+        told: Default::default(),
     };
     let held = |tab: u64| {
         vec![Status {
@@ -2198,6 +2285,10 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         page_steps: Vec::new(),
         retry: false,
         fix: None,
+        visited: Vec::new(),
+        ended_time: Default::default(),
+        finding: Default::default(),
+        told: Default::default(),
     };
     shell.update(cx, |shell, cx| {
         shell.set_task_cards(vec![card], cx);

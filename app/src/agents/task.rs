@@ -59,6 +59,9 @@ pub const QUIET: Duration = Duration::from_secs(60);
 /// model overshoots by a few, and each surface cuts at its own width as any title does (#3690).
 pub const TITLE_KEPT: usize = 40;
 
+/// How much of a done task's last answer its card keeps, before the card's three lines cut it
+/// (spec-thread-card).
+pub const FINDING_KEPT: usize = 160;
 /// How much of an answer's first line a screen reader is told: a sentence or two, where a card's
 /// line has the width of a title.
 pub const TOLD_KEPT: usize = 120;
@@ -610,8 +613,19 @@ pub struct Card {
     pub dot: Dot,
     /// Its state in one word, as every place that names it says it.
     pub word: Word,
-    /// Its pages now, in its Space's order: the rows of its group at the sidebar's foot.
+    /// Its pages now, in its Space's order: the icons on its card in the sidebar.
     pub pages: Vec<u64>,
+    /// Those of `pages` a step of its has been on, which its card shows at full strength.
+    pub visited: Vec<u64>,
+    /// When it ended in this run, in the user's time ("10:42"), or empty while it hasn't: a done
+    /// card's `Done · {time}`.
+    pub ended_time: SharedString,
+    /// Done, the first paragraph of its last answer as plain text (`finding`), from this run's
+    /// conversation alone: empty when it isn't done, ended with no answer, or came back after a
+    /// quit, which keeps no conversation.
+    pub finding: SharedString,
+    /// Done, what a screen reader is told of its finding (`told`): empty with none.
+    pub told: SharedString,
     /// Its access, which its group's line leads with at Full access.
     pub tier: Tier,
     /// A confirmation or a handoff of the task's, which the card asks instead of the windows'.
@@ -870,6 +884,10 @@ pub struct Tasks {
     /// The profiles there are, each by its folder's name, as the core last said them: one that
     /// goes from among them was deleted, and its kept tasks go with it.
     pub(super) profiles: Vec<String>,
+    /// The last picture each kept task's card could keep of its last page (pick_up.rs).
+    card_tiles: HashMap<String, pick_up::CardTile>,
+    /// The cards' file work, in the order it's asked (kept/cards.rs).
+    card_jobs: super::kept::cards::Queue,
     /// The state each task was in when the user's reply took it up, which it goes back to if its
     /// assistant no longer has the conversation.
     pub(super) picked_up: HashMap<String, State>,
@@ -1381,6 +1399,18 @@ impl Agents {
             asks,
             dot,
             word: Word::of(&task.state, dot == Dot::Waiting),
+            visited: visited(task, &pages),
+            ended_time: (task.ended)
+                .map(|at| super::local_time(seconds(at)).into())
+                .unwrap_or_default(),
+            finding: match task.state {
+                State::Done { .. } => finding(&task.messages),
+                _ => SharedString::default(),
+            },
+            told: match task.state {
+                State::Done { .. } => told(&task.messages),
+                _ => SharedString::default(),
+            },
             pages,
             tier: task.tier,
             question,
@@ -2132,7 +2162,7 @@ impl Agents {
                     call: 0,
                     did: tools::Did {
                         tool: "thought".into(),
-                        text: page::clip(&text, 4000),
+                        text: page::clip(&text, THOUGHT_MOST),
                         ..Default::default()
                     },
                     after: task.messages.len(),
@@ -2144,6 +2174,14 @@ impl Agents {
                     close: None,
                     notes: None,
                 });
+            }
+            Out::Searched(query) => {
+                let Some(task) = self.task_mut(&agent) else {
+                    return;
+                };
+                let step = searched(&query, task.messages.len());
+                task.trace.push(step);
+                self.count_search(&agent);
             }
             Out::Helper { id, told } => self.helper_told(&agent, id, told, cx),
             Out::Started { id, deep } => self.helper_started(&agent, id, deep, cx),
@@ -2184,7 +2222,7 @@ impl Agents {
                     task.end(SystemTime::now());
                 }
                 // However it ended, and by the name it has now (#4105).
-                self.keep_ended(&agent);
+                self.keep_ended(&agent, cx);
             }
             // The turn the user stopped ends as an error; their stop is what the card says.
             Out::Ended(Some(_))
@@ -2269,7 +2307,7 @@ impl Agents {
             task.waiting = None;
             task.writing = None;
         }
-        self.keep_ended(agent);
+        self.keep_ended(agent, cx);
         self.forget_waiting(agent, None, cx);
         // What's ready may have changed.
         self.look_for_task_agents(cx);
@@ -2374,7 +2412,7 @@ impl Agents {
             process.interrupt();
         }
         self.you_stopped(agent, cx);
-        self.keep_ended(agent);
+        self.keep_ended(agent, cx);
         self.stop_agent(agent, cx);
         cx.notify();
     }
@@ -2451,7 +2489,7 @@ impl Agents {
             if deleted { "deleted" } else { "undeleted" }
         );
         // Its row leaves the file of the kept with it, and comes back with it (#4105).
-        self.keep_ended(agent);
+        self.keep_ended(agent, cx);
         cx.notify();
     }
 
@@ -3687,11 +3725,7 @@ impl Agents {
             "click" | "type" => {
                 did.target = element.as_ref().map(named).unwrap_or_default();
                 let typed = string("text");
-                // Never a password field's value, nor one whose name says it's a secret.
-                let shows = element.as_ref().is_some_and(|element| {
-                    let name = element.name.to_lowercase();
-                    !element.password && !name.contains("password") && !name.contains("passcode")
-                });
+                let shows = element.as_ref().is_some_and(page::Element::shows_typed);
                 if tool == "type" && shows && typed.chars().count() <= tools::TYPED_SHOWN {
                     did.text = typed;
                 }
@@ -3880,7 +3914,7 @@ impl Agents {
                     tabs,
                 };
                 task.end(SystemTime::now());
-                self.keep_ended(agent);
+                self.keep_ended(agent, cx);
                 self.note(agent, 0, "finish", &site, "");
                 _ = reply.send(ToolResult::text(
                     "Done. The user sees your result. Stop here.",
@@ -3978,6 +4012,99 @@ fn limit_words(name: &str, resets: &Option<SharedString>) -> String {
     }
 }
 
+/// A done task's finding: the first paragraph of the agent's last answer, as plain text on one
+/// line, with no link, formatting or line break, kept to FINDING_KEPT characters and written out as
+/// its title is (#3690), so nothing in it can pose as ilo's words or turn the text around. It is
+/// the agent's words: shown on its card only, never logged.
+pub fn finding(messages: &[Message]) -> SharedString {
+    let Some(answer) = last_answer(messages) else {
+        return SharedString::default();
+    };
+    let paragraph: Vec<&str> = (answer.lines())
+        .map(str::trim)
+        .skip_while(|line| line.is_empty())
+        .take_while(|line| !line.is_empty())
+        .filter(|line| !line.starts_with("```"))
+        .map(|line| {
+            let line = line.trim_start_matches(['#', '>']).trim_start();
+            let unlisted = (line.split_once(". "))
+                .filter(|(number, _)| {
+                    !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
+                })
+                .map(|(_, rest)| rest);
+            match unlisted {
+                Some(rest) => rest,
+                None => (["- ", "* ", "+ "].iter())
+                    .find_map(|mark| line.strip_prefix(mark))
+                    .unwrap_or(line),
+            }
+        })
+        .collect();
+    let plain = plain_text(&paragraph.join(" "));
+    let kept = page::clip(&plain, FINDING_KEPT);
+    super::request::escaped(&kept, false).0.into()
+}
+
+/// What a screen reader is told of a done task's finding: its last answer's first line as the
+/// conversation tells it (`told_line`), up to TOLD_KEPT characters ending at a whole word, as
+/// nothing marks a cut in speech. Empty with no answer.
+pub fn told(messages: &[Message]) -> SharedString {
+    last_answer(messages)
+        .and_then(told_line)
+        .unwrap_or_default()
+}
+
+/// The agent's last answer, trimmed, if it gave one.
+fn last_answer(messages: &[Message]) -> Option<&str> {
+    (messages.iter().rev())
+        .filter(|message| matches!(message.who, Who::Agent | Who::Result))
+        .map(|message| message.text.trim())
+        .find(|text| !text.is_empty())
+}
+
+/// Markdown's inline marks taken out of `text`: a link or an image is its words, a bare link in
+/// angle brackets its address, and emphasis, code and strikethrough marks go. Runs of white space
+/// are one space.
+fn plain_text(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        let opens = rest.strip_prefix("![").or_else(|| rest.strip_prefix('['));
+        let link = opens.and_then(|inside| {
+            let (words, after) = inside.split_once("](")?;
+            let (_, after) = after.split_once(')')?;
+            (!words.contains(']')).then_some((words, after))
+        });
+        if let Some((words, after)) = link {
+            plain.push_str(words);
+            rest = after;
+            continue;
+        }
+        let autolink = (rest.strip_prefix('<'))
+            .and_then(|inside| inside.split_once('>'))
+            .filter(|(address, _)| {
+                address.contains("://") && !address.contains(char::is_whitespace)
+            });
+        if let Some((address, after)) = autolink {
+            plain.push_str(address);
+            rest = after;
+            continue;
+        }
+        if let Some(after) = ["**", "__", "~~"]
+            .iter()
+            .find_map(|mark| rest.strip_prefix(mark))
+        {
+            rest = after;
+            continue;
+        }
+        if !matches!(c, '*' | '`') {
+            plain.push(c);
+        }
+        rest = &rest[c.len_utf8()..];
+    }
+    plain.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// A result's first words for its card's line: its first line of text, or "Finished" with none.
 fn first_words(result: &str) -> SharedString {
     first_line(result).unwrap_or_else(|| "Finished".into())
@@ -4059,11 +4186,84 @@ fn labels(text: &str) -> String {
     plain
 }
 
+/// The most characters of a thought a step holds, and of a search's words.
+const THOUGHT_MOST: usize = 4000;
+
+/// A search the assistant's program made, as a step of its trace after `after` messages: its words
+/// alone, one line, cut as a thought is. It's in memory only: the trace is kept nowhere, and a card
+/// leaves it out, as it does a thought.
+pub(super) fn searched(query: &str, after: usize) -> Traced {
+    let now = Instant::now();
+    Traced {
+        call: 0,
+        did: tools::Did {
+            tool: tools::SEARCHED.into(),
+            text: tier::capped(query, THOUGHT_MOST),
+            ..Default::default()
+        },
+        after,
+        started: now,
+        ended: Some(now),
+        error: None,
+        kind: None,
+        picture: None,
+        close: None,
+        notes: None,
+    }
+}
+
+impl Agents {
+    /// A search `agent`'s task's program made, its step already in the trace: the thread's one
+    /// activity entry, counting its searches by that trace, never their words. It's no call of
+    /// the browser's, so no line is logged of it and nothing waits on it.
+    pub(super) fn count_search(&mut self, agent: &str) {
+        let Some(task) = self.task(agent) else {
+            return;
+        };
+        let count = (task.trace.iter())
+            .filter(|step| step.did.tool == tools::SEARCHED)
+            .count();
+        let tier = self.entry_tier(agent, 0, 0).label();
+        let entry = (self.log.iter_mut().rev())
+            .find(|each| each.agent == agent && each.action == tools::SEARCHED);
+        if let Some(entry) = entry {
+            entry.target = count.to_string().into();
+            return;
+        }
+        if self.log.len() >= super::LOG_LENGTH {
+            self.log.remove(0);
+        }
+        self.log.push(super::Activity {
+            at: SystemTime::now(),
+            agent: agent.to_string().into(),
+            connection: 0,
+            action: tools::SEARCHED.into(),
+            site: SharedString::default(),
+            target: count.to_string().into(),
+            refused: SharedString::default(),
+            steps: Vec::new(),
+            by: SharedString::default(),
+            id: super::entry_id(),
+            url: SharedString::default(),
+            sent: Vec::new(),
+            said: SharedString::default(),
+            tier: tier.into(),
+            notes: SharedString::default(),
+        });
+    }
+}
+
+/// Whether a step is the assistant's own, a thought or a search, which acts on no page: a card
+/// counts and says none of them.
+fn own(step: &Traced) -> bool {
+    matches!(step.did.tool.as_str(), "thought" | tools::SEARCHED)
+}
+
 /// A stopped task's last finished step, as its trace line says it, its thoughts left out. A step
 /// under way at Stop, or one that failed, never is one, so a card never says `Couldn't …` of it.
 fn last_finished(task: &Task) -> Option<SharedString> {
     (task.trace.iter().rev())
-        .filter(|step| step.did.tool != "thought")
+        .filter(|step| !own(step))
         .find(|step| step.ended.is_some() && step.error.is_none())
         .map(|step| tools::step_title(&step.did, tools::Tense::Done).into())
 }
@@ -4084,6 +4284,13 @@ fn last_steps(task: &Task) -> Vec<SharedString> {
         .collect();
     steps.reverse();
     steps
+}
+
+/// Those of `pages` a step of `task`'s has been on.
+fn visited(task: &Task, pages: &[u64]) -> Vec<u64> {
+    (pages.iter().copied())
+        .filter(|&tab| task.trace.iter().any(|step| step.did.tab == Some(tab)))
+        .collect()
 }
 
 /// Of a task's `pages` now, the last its steps acted on, else its last.
@@ -4159,7 +4366,7 @@ fn page_steps(task: &Task) -> Vec<(u64, SharedString)> {
     let turn = task.turn();
     let steps = (task.trace.iter().enumerate().rev())
         .take_while(|(_, step)| step.after >= turn)
-        .filter(|(_, step)| step.did.tool != "thought" && !step.stopped());
+        .filter(|(_, step)| !own(step) && !step.stopped());
     let mut pages: Vec<(u64, SharedString)> = Vec::new();
     let mut over: Vec<u64> = Vec::new();
     for (key, step) in steps {
@@ -4213,7 +4420,7 @@ fn went_on<T>(task: &Task, held: &HashMap<u64, T>) -> bool {
         .any(|stop| {
             task.trace[stop.traced.min(task.trace.len())..]
                 .iter()
-                .any(|step| step.did.tool != "thought")
+                .any(|step| !own(step))
         });
     let under_way = (task.trace.iter()).any(|step| {
         step.ended.is_none()
@@ -4230,7 +4437,7 @@ fn turn_steps(task: &Task) -> Vec<&Traced> {
     let turn = task.turn();
     (task.trace.iter().rev())
         .take_while(|step| step.after >= turn)
-        .filter(|step| step.did.tool != "thought" && !step.stopped())
+        .filter(|step| !own(step) && !step.stopped())
         .collect()
 }
 
@@ -4247,7 +4454,7 @@ fn lower_first(text: &str) -> String {
 /// left out.
 fn stopped(task: &Task) -> SharedString {
     match (task.trace.iter())
-        .filter(|step| step.did.tool != "thought" && !step.stopped())
+        .filter(|step| !own(step) && !step.stopped())
         .count()
     {
         0 => "Stopped".into(),
@@ -4700,7 +4907,7 @@ fn together(gathered: Vec<Gathered<'_>>) -> Vec<Together<'_>> {
             Some(Together::Steps(steps)) => steps.push((key, step)),
             _ => {
                 lines.push(Together::Steps(vec![(key, step)]));
-                if did.tool == "thought" {
+                if matches!(did.tool.as_str(), "thought" | tools::SEARCHED) {
                     from = lines.len();
                 }
             }

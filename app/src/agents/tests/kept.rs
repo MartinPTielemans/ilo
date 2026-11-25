@@ -3,6 +3,8 @@
 //! the tests write themselves, in a profile folder of their own: never the user's own.
 
 #[cfg(unix)]
+mod cards;
+#[cfg(unix)]
 pub(crate) mod past;
 
 use super::*;

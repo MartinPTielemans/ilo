@@ -529,14 +529,6 @@ impl Browser for Engine {
         list_captures(cx);
     }
 
-    fn hover_kinds(&self, _: &mut App) -> u32 {
-        unsafe { bc::bc_hover_kinds() as u32 }
-    }
-
-    fn set_hover_kinds(&self, kinds: u32, _: &mut App) {
-        unsafe { bc::bc_set_hover_kinds(kinds as c_int) };
-    }
-
     fn trash(&self, path: &str, _: &mut App) -> bool {
         CString::new(path).is_ok_and(|path| unsafe { platform::host_trash(path.as_ptr()) })
     }
@@ -675,6 +667,20 @@ impl Browser for Engine {
     fn show_task(&self, _: SharedString, _: &mut App) {
         // The Agents send a window its conversation as it changes; this sends it now.
         agents_core::update(|_, cx| cx.notify());
+    }
+
+    fn keeps_picture(&self, tab: u64, cx: &App) -> bool {
+        browser::agents::global(cx).is_some_and(|agents| agents.read(cx).keeps_picture(tab, cx))
+    }
+
+    fn card_pictured(
+        &self,
+        agent: SharedString,
+        tab: u64,
+        picture: Option<Arc<gpui::RenderImage>>,
+        _: &mut App,
+    ) {
+        agents_core::update(move |agents, cx| agents.card_pictured(&agent, tab, picture, cx));
     }
 
     fn task_picture(&self, tab: u64, request: u64, _: &mut App) {

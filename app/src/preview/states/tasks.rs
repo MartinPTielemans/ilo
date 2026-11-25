@@ -59,8 +59,8 @@ pub(crate) const TASK_PAGES: [(&str, &str); 3] = [
     ("Directions", "https://maps.example/taberna"),
 ];
 
-/// A task's pages by its place in `TASKS`, the tabs of its Space, which its group at the
-/// sidebar's foot lists: each one's tab, title and address.
+/// A task's pages by its place in `TASKS`, the tabs of its Space, whose icons its card shows:
+/// each one's tab, title and address.
 pub(crate) fn task_pages(at: usize) -> Vec<(u64, &'static str, &'static str)> {
     let (first, pages): (u64, &[(&str, &str)]) = match at {
         // The bench's task stands on its one page, or has one for each helper (#4102).
@@ -181,7 +181,7 @@ fn helper_trace(count: usize, waits: bool) -> Trace {
 }
 
 /// The helpers' pages as the task's conversation lists them, each tab with its site: the tiles
-/// of Pages, and the task's group at the sidebar's foot.
+/// of Pages, and the icons on the task's card.
 pub(crate) fn helper_tabs() -> Vec<(u64, SharedString)> {
     let site = |url: &str| url.split('/').nth(2).unwrap_or("").to_string().into();
     let pages = (FIRST_TASK + 200..).zip(HELPER_PAGES);
@@ -240,6 +240,10 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         page_steps: Vec::new(),
         retry: false,
         fix: None,
+        visited: Vec::new(),
+        ended_time: Default::default(),
+        finding: Default::default(),
+        told: Default::default(),
     };
     let mut cards: Vec<TaskCard> = (FIRST_TASK..).zip(TASKS).map(card).collect();
     // PREVIEW_SESSION=working, done or open shows an outside agent's card alone: at work after it

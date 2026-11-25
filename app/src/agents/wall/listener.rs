@@ -18,8 +18,9 @@ use crate::agents::runner::Cli;
 
 /// Claude Code's own hosts, from its docs' network table (code.claude.com/docs/en/network-config):
 /// the API and its sign-in's refresh. claude.ai is its account sign-in, which never happens in a
-/// wall. Updates, telemetry and claude.ai's connectors are turned off at a walled start, and its
-/// own WebFetch reaches these hosts and no other: a task's web is ilo's tools.
+/// wall. Updates, telemetry and claude.ai's connectors are turned off at a walled start. Its own
+/// search is its provider's, asked within the API's call, and its fetch is never given: a task's
+/// pages are ilo's tools.
 const CLAUDE: &[&str] = &["api.anthropic.com", "platform.claude.com"];
 /// Codex's own hosts, from its source at rust-v0.172.0: the backend for a ChatGPT sign-in, and the
 /// sign-in's refresh. Its docs list no proxy variables; its source reads them

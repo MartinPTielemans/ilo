@@ -2104,14 +2104,20 @@ impl Shell {
     pub(super) fn new_tab_row(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let (plus, label) = new_tab_label(&self.palette);
         let line = (!self.today().is_empty()).then(|| {
-            // The broom is drawn exactly when Clear is, and what it shows is the browser's answer.
+            // What the broom shows is the browser's answer, and it's drawn where that makes sense.
             let broom = self.browser.broom();
             let clear = match broom {
                 Some(Broom::Failed) => self.sort_failed(cx).into_any_element(),
                 _ => self.clear_button(cx).into_any_element(),
             };
-            let broom = broom.map(|state| self.broom_button(state, cx));
-            today_line(&self.palette, self.hairline(), clear, broom).on_mouse_down(
+            let broom = broom.and_then(|state| {
+                let shown = self.broom_shown(state, cx);
+                (shown > 0.).then_some((state, shown))
+            });
+            #[cfg(test)]
+            super::broom::DRAWN.set((super::broom::DRAWN.get().0 + 1, broom));
+            let broom = broom.map(|(state, shown)| self.broom_button(state, shown, cx));
+            today_line(&self.palette, self.hairline(), broom, clear).on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|shell, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();

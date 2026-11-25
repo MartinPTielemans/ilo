@@ -3265,6 +3265,25 @@ fn every_tool_and_step_is_in_one_class() {
     assert_eq!(acts, super::access::ACTS);
 }
 
+/// No tool lists or reads the user's downloads: the sidebar's plate of recent downloads and the
+/// Library's Downloads are the user's own, and an agent's only word of one is the activity log's
+/// line for a file its own page started.
+#[test]
+fn no_tool_reads_the_downloads() {
+    let every: Vec<String> = ["claude-code", "task-1"]
+        .into_iter()
+        .flat_map(tools::names)
+        .chain(tools::STEPS.map(String::from))
+        .collect();
+    assert!(!every.is_empty());
+    for name in &every {
+        assert!(
+            !name.contains("download") && !name.contains("librar"),
+            "{name} would read the downloads"
+        );
+    }
+}
+
 /// Lowered mid-task, the next act above the new tier is refused, the log keeps the change, and the
 /// task's refusals are settled by it.
 #[gpui::test]
@@ -6751,6 +6770,52 @@ mod tasks {
             agents.task_action(&agent, TaskAction::Reply("Yes".into()), cx);
         });
         assert!(!asked.recv().unwrap().error, "the ask went unanswered");
+    }
+
+    /// Every tool `dispatch` runs is listed for an agent that may call it, as a call by any other
+    /// name is answered as no tool before it gets there: an arm listed for nobody would never run,
+    /// and one only a task runs is listed for a task's. A made-up name is no tool, and leaves no
+    /// entry.
+    #[gpui::test]
+    fn every_tool_dispatch_runs_is_listed_and_no_other_is_one(cx: &mut TestAppContext) {
+        let source = include_str!("../agents.rs");
+        let body = &source[source.find("    fn dispatch(").expect("no dispatch")..];
+        let body = &body[..body[1..]
+            .find("\n    fn ")
+            .map_or(body.len(), |end| end + 1)];
+        let (task, outside) = (tools::names("task-1"), tools::names("claude-code"));
+        let mut arms = Vec::new();
+        for line in body.lines() {
+            // An arm of its match, at its depth, by a name or a few.
+            let Some(arm) = line.strip_prefix("            \"") else {
+                continue;
+            };
+            let Some((pattern, _)) = arm.split_once("=>") else {
+                continue;
+            };
+            let pattern = format!("\"{pattern}");
+            for name in pattern.split('"').skip(1).step_by(2) {
+                let listed = match pattern.contains("if is_task(") {
+                    true => task.iter().any(|each| each == name),
+                    false => task.iter().chain(&outside).any(|each| each == name),
+                };
+                assert!(
+                    listed,
+                    "dispatch runs {name}, which no agent that may call it is listed"
+                );
+                arms.push(name.to_string());
+            }
+        }
+        assert!(arms.len() > 15, "dispatch's arms weren't found: {arms:?}");
+
+        let (agents, _, _) = connected(cx);
+        let before = log(&agents, "claude-code", cx);
+        let answer = call(&agents, "claude-code", "sum_the_receipts", json!({}), cx);
+        assert_eq!(
+            answer.recv().unwrap(),
+            ToolResult::error("There's no tool sum_the_receipts.")
+        );
+        assert_eq!(log(&agents, "claude-code", cx), before);
     }
 
     #[gpui::test]
@@ -13071,6 +13136,8 @@ mod other_apps;
 mod permission_stopped;
 #[cfg(unix)]
 mod rewall;
+#[cfg(unix)]
+mod searches;
 mod sign_ins;
 mod uploads;
 mod went_to;

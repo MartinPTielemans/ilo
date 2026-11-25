@@ -43,8 +43,9 @@ pub fn app_appearance(cx: &App) -> Appearance {
 /// the Spaces whose swatches a frame draws, and the one the picker is making.
 const PALETTES: usize = 64;
 
-/// What a Space's palette is worked out for: its theme, its tone and the transparency level.
-pub(super) type PaletteKey = (Option<Theme>, Tone, crate::transparency::Transparency);
+/// What a Space's palette is worked out for: its theme, its tone and its glass, in thousandths of
+/// its Transparency bar as the Space keeps it.
+pub(super) type PaletteKey = (Option<Theme>, Tone, u16);
 
 impl Shell {
     /// The theme `space` shows: the one the picker is making for it, else its own.
@@ -78,6 +79,14 @@ impl Shell {
     /// the system's is, as Arc's follows it. A private window is dark, as Arc's is.
     pub(super) fn tone_of(&self, space: u64) -> Tone {
         self.tone_with(self.theme_of(space).as_ref())
+    }
+
+    /// Where `space`'s glass sits on its Transparency bar: its own value, or the place of the app's
+    /// level until it keeps one.
+    pub(super) fn glass_of(&self, space: u64) -> f32 {
+        let kept = self.spaces.iter().find(|each| each.id == space);
+        kept.and_then(|space| space.transparency)
+            .unwrap_or_else(|| crate::space_transparency::of_level(crate::palette::transparency()))
     }
 
     /// The tone a Space with `theme` draws in: the theme's, else the system's; dark in a private
@@ -177,7 +186,7 @@ impl Shell {
         let key = (
             self.space_theme(space),
             self.tone_of(space),
-            crate::palette::transparency(),
+            (self.glass_of(space) * 1000.).round() as u16,
         );
         let mut palettes = self.palettes.borrow_mut();
         if let Some(at) = palettes.iter().position(|(each, _)| *each == key) {
@@ -185,7 +194,7 @@ impl Shell {
             palettes.push(kept);
             return kept.1;
         }
-        let palette = Palette::of(key.0.as_ref(), key.1);
+        let palette = Palette::at(key.0.as_ref(), key.1, f32::from(key.2) / 1000.);
         if palettes.len() == PALETTES {
             palettes.remove(0);
         }

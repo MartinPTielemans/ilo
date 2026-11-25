@@ -1915,7 +1915,7 @@ impl Shell {
     /// in one frame, with no toast (Arc).
     fn clear(&mut self, cx: &mut Context<Self>) {
         let space = self.space;
-        // The tasks at the foot are the window's, not the Space's, so they stay (Agent task).
+        // The task cards in Today aren't tabs, so they stay (spec-thread-card).
         if let Some(clear) = self.clear_now(cx) {
             self.keep(What::CLEAR, Some(Edit::UndoClear { space, clear }), cx);
         }
@@ -2305,7 +2305,7 @@ impl Shell {
             // With every site's tabs together already, it would change nothing.
             Command::SortBySite => self.sorted_by_site(self.space).is_some(),
             // Where the broom is drawn and takes a click: never in a private window or an agent's
-            // Space, and never with fewer than two tabs to sort or a sort running.
+            // Space, and never with fewer than four tabs to sort or a sort running.
             Command::SortIntoFolders => self.browser.broom().is_some_and(super::Broom::sorts),
             Command::FavoriteTab => {
                 let tab = self.selected;
