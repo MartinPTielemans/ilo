@@ -72,13 +72,13 @@ switch "1 cmd" "$c"
 switch "3 cmd" "$b"
 
 # Dragging a row moves its tab, in the pinned tabs and between them and Today, and its press shows
-# it, as Arc's does. Today's top row is under the pinned rows, the divider and "+ New Tab".
-today_top="100 $((90 + 44 + 41 * 2 + 15 + 41 + 20))"
+# it, as Arc's does. Today's top row is under the pinned rows, the gap over Today and "+ New Tab".
+today_top="100 $((86 + 42 + 34 * 2 + 6 + 34 + 17))"
 clicks=$(detents)
 # Let go over the first row's bottom quarter, still nearer the gap before it, not its middle, where
 # a rest of SPLIT_REST before a late release, as Windows' real pointer can make, would join that
 # tab in a split view. Over its top quarter the tile the favorites would make room for is nearer.
-send drag $(pinned_row 1) 100 169
+send drag $(pinned_row 1) 100 157
 expect "^browser: dragged $a to pinned 0\$" "a drag of the second pinned tab up didn't move it"
 # It passed one row, so the trackpad clicked once, and letting go added none.
 passed=$(($(detents) - clicks))
@@ -91,18 +91,18 @@ clicks=$(detents)
 send press $today_top
 expect '^browser: pressed [0-9]*$' "the press on Today's row didn't reach the UI"
 none_since '^browser: detent$' || fail "pressing a row clicked the trackpad"
-send dragto 100 270
-send dragto 100 230
-# Between the pinned rows, as a rest on a row's middle would join that tab in a split view, and the
-# capture takes longer than that rest.
-send dragto 100 175
+send dragto 100 235
+send dragto 100 200
+# Just under where the pinned rows meet, off either's middle half, as a rest on a row's middle
+# would join that tab in a split view, and the capture takes longer than that rest.
+send dragto 100 165
 ../tools/window-screenshot.sh "$pid" "$out/drag.png" || fail "no window to capture"
 none_since '^browser: dragged' || fail "a row dropped before the pointer let go"
 [ "$(detents)" -gt "$clicks" ] || fail "a row dragged up past the pinned rows didn't click"
 # Holding the row at its place doesn't click again, nor does letting go.
 held=$((step + 1))
-send dragto 100 176
-send release 100 175
+send dragto 100 166
+send release 100 165
 expect "^browser: dragged $b to pinned 1\$" "a drag of the Today tab up didn't pin it"
 none_since '^browser: detent$' "$held" || fail "a row held at its place, or let go, clicked the trackpad"
 expect_lists "$a $b $c" " *" "after dragging the Today tab into the pinned tabs"
@@ -111,7 +111,7 @@ expect '^browser: rows settled$' "the pinned rows didn't settle after the drop"
 send drag $(pinned_row 1) 100 300
 expect "^browser: dragged $b to today 0\$" "a drag of a pinned tab down didn't unpin it"
 expect_lists "$a $c" "$b" "after dragging a pinned tab into Today"
-send drag $(pinned_row 0) 100 200
+send drag $(pinned_row 0) 100 180
 expect_lists "$c $a" "$b" "after dragging the first pinned tab down"
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "pressing the row dragged didn't show its tab"
 # The press now shows its row's tab, so it waits for the rows to stop under the pointer.
@@ -530,21 +530,21 @@ expect "^browser: renamed folder $f work\$" "the new folder didn't take the name
 # Dragged right of where it was, under the folder, a pinned tab goes in, and dragged left of it,
 # out. A folder drags as a row does.
 send press $(pinned_row 0)
-send dragto 110 180
+send dragto 110 170
 expect '^browser: detent$' "a row dragged under the folder and in didn't click the trackpad"
 held=$((step + 1))
-send dragto 120 200
-send release 120 200
+send dragto 120 185
+send release 120 185
 expect "^browser: dragged $c to folder $f 0\$" "a pinned tab dragged right under the folder didn't go in"
 none_since '^browser: detent$' "$held" || fail "a row held in the folder clicked again"
 expect "^browser: outline $f+\\[$c\\]\$" "the tab dragged in isn't in the folder: $(outline)"
 settled
 send press $(pinned_row 1)
-send dragto 90 197
+send dragto 90 181
 expect '^browser: detent$' "a row dragged left out of the folder didn't click the trackpad"
 held=$((step + 1))
-send dragto 76 199
-send release 76 199
+send dragto 76 183
+send release 76 183
 expect "^browser: dragged $c to pinned 1\$" "a tab dragged left out of the folder didn't come out"
 none_since '^browser: detent$' "$held" || fail "a row held out of the folder clicked again"
 expect "^browser: outline $f+\\[\\] $c\$" "the tab dragged out is still in the folder: $(outline)"
@@ -559,11 +559,11 @@ send click $(pinned_row 1)
 expect "^browser: outline $c $f+\\[\\]\$" "a click on the folder dragged didn't open it: $(outline)"
 # It's empty, so no row moves to wait for.
 send press $(pinned_row 0)
-send dragto 110 180
+send dragto 110 170
 expect '^browser: detent$' "a row dragged under the folder and in didn't click the trackpad"
 held=$((step + 1))
-send dragto 120 200
-send release 120 200
+send dragto 120 185
+send release 120 185
 expect "^browser: outline $f+\\[$c\\]\$" "the tab dragged under the folder didn't go in: $(outline)"
 none_since '^browser: detent$' "$held" || fail "a row held in the folder clicked again"
 settled
@@ -814,25 +814,26 @@ send key return
 expect "^browser: iconed folder $f 🌟\$" "the picker's pick didn't become the folder's icon"
 expect '^browser: icon picker hidden$' "picking an emoji didn't close the icon picker"
 ../tools/window-screenshot.sh "$pid" "$out/folder-icon.png" || fail "no window to capture"
-# Export… in Settings › Import & Export, under its Export heading, writes the Space's pinned
+# Export… in Settings › Sync & Import, under its Export heading, writes the Space's pinned
 # tabs as Markdown links, the folder a list of what it holds.
 send key , cmd
 expect '^browser: settings shown General$' "⌘, didn't show Settings on its General tab"
 # The run's first ⌘, opens the window, which takes no click until it has drawn (#1101).
 expect '^browser: settings drew General$' "Settings didn't draw General"
-send clickkey $(drawn "toolbar Import & Export")
-expect '^browser: settings tab Import & Export$' "a click on Import & Export didn't show its section"
-settings_drew 'Import & Export'
+send clickkey $(drawn "toolbar Sync & Import")
+expect '^browser: settings tab Sync & Import$' "a click on Sync & Import didn't show its section"
+settings_drew 'Sync & Import'
 # Copy All Links' toast is mostly still up, and the click lands all the same (#1134): a toast lets
 # clicks through, but on its plate while it has buttons, which this one hasn't. A slow run says
 # when the toast had gone first, so the click didn't have one to go past.
 shown=$(grep -n '^browser: toast shown Copied Links as Markdown$' "$log" | tail -1 | cut -d: -f1)
-section=$(grep -n '^browser: settings tab Import & Export$' "$log" | tail -1 | cut -d: -f1)
+section=$(grep -n '^browser: settings tab Sync & Import$' "$log" | tail -1 | cut -d: -f1)
 hidden=$(sed -n "${shown:-1},\$p" "$log" | grep -n '^browser: toast hidden$' | head -1 | cut -d: -f1)
 if [ -n "$hidden" ] && [ $((${shown:-1} + hidden - 1)) -lt "$section" ]; then
-  echo "skip: the click on Import & Export with a toast up, as Copy All Links' toast had gone first (#1134)."
+  echo "skip: the click on Sync & Import with a toast up, as Copy All Links' toast had gone first (#1134)."
 fi
-click_in_sight "export spaces"
+in_sight "export spaces" '^browser: settings drew Sync & Import$' || fail "Settings didn't draw Export…"
+send clickkey $at
 expect '^browser: exported [0-9]* links to .*/spaces\.md$' "Export… didn't write the Spaces' links"
 grep -qx -- '- later' "$out/spaces.md" ||
   fail "the export didn't list the folder: $(cat "$out/spaces.md")"
@@ -862,20 +863,20 @@ expect "^browser: outline $c\$" "⇧⌘Z didn't delete the folder again: $(outli
 t=$(today)
 ../tools/window-screenshot.sh "$pid" "$out/drop-before.png" || fail "no window to capture"
 # As Explorer would drag it on Windows, D:/a/..., which Chrome's file URL finds (#997).
-send dragover 100 150 file "$(app_path "$(cd "$out" && pwd)/site/notes.txt")"
+send dragover 100 140 file "$(app_path "$(cd "$out" && pwd)/site/notes.txt")"
 expect '^browser: drag over HostUIView taken$' "the list didn't take a file dragged over it"
 expect '^browser: drop line in pinned 0$' "no line marked the file's place above the pinned tab"
 ../tools/window-screenshot.sh "$pid" "$out/drop-line.png" || fail "no window to capture"
-send dragdrop 100 150
+send dragdrop 100 140
 expect '^browser: drag dropped$' "the list didn't take the file let go over it"
 expect '^browser: dropped 1 in pinned 0$' "the file didn't drop above the pinned tab"
 expect_lists "[0-9][0-9]* $c" "$t" "after dropping a file"
 e=$(pinned | cut -d' ' -f1)
 expect "^browser: selected $e\$" "the dropped file's tab didn't show"
 expect "^browser: loaded $e file:///.*/site/notes.txt\$" "the dropped file didn't load in its tab"
-# A link let go under the Today tab, whose row is centred at 292 under the two pinned tabs', the
-# divider and New Tab's, opens there.
-send dragdrop 100 330 url "${site}notes.txt"
+# A link let go under the Today tab, whose row is centred at 253 under the two pinned tabs', the
+# gap over Today and New Tab's, opens there.
+send dragdrop 100 287 url "${site}notes.txt"
 expect '^browser: dropped 1 in today 1$' "the link didn't drop under the Today tab"
 expect_lists "$e $c" "$t [0-9][0-9]*" "after dropping a link"
 d=$(today | cut -d' ' -f2)
@@ -887,10 +888,10 @@ send dragover 100 300 text "javascript:document.title='dropped'"
 expect '^browser: drag over HostUIView refused$' "the list took a javascript: URL dragged as text"
 left=$((step + 1))
 send dragleave
-# Other text, let go past the middle of the dropped link's row, centred at 333, goes in the gap
+# Other text, let go past the middle of the dropped link's row, centred at 287, goes in the gap
 # under it, the nearest, and is searched for there with the default engine, its spaces run
 # together.
-send dragdrop 100 345 text "dogs  and   cats"
+send dragdrop 100 295 text "dogs  and   cats"
 expect '^browser: dropped 1 in today 2$' "the dropped text wasn't taken under the dropped link"
 [ "$(since "$left" | grep -c '^browser: dropped')" = 1 ] || fail "dragged text that isn't a web link opened"
 expect_lists "$e $c" "$t $d [0-9][0-9]*" "after dropping text"
@@ -1042,7 +1043,7 @@ mkdir -p "$notes/sub"
 for file in b.txt A.txt .hidden sub/c.txt; do
   echo "$file" > "$notes/$file"
 done
-send dragdrop 100 150 file "$(app_path "$notes")"
+send dragdrop 100 140 file "$(app_path "$notes")"
 expect '^browser: dropped 1 in pinned 0$' "the folder didn't drop above the pinned tabs"
 expect '^browser: folder [0-9]* from disk 1 2 Notes$' \
   "the dropped folder didn't come in with its folder and two files, the hidden one left out"

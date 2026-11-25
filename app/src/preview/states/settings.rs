@@ -129,13 +129,12 @@ impl gpui::Render for PicturesPage {
             cx,
         );
         let section = match self.shown {
-            Pictures::Favorites(_) => Section::TabsAndSidebar,
-            Pictures::Appearance { .. } => Section::Appearance,
+            Pictures::Favorites(_) => Section::TabsAndSpaces,
+            Pictures::Appearance { .. } => Section::Window,
             Pictures::General => Section::General,
-            Pictures::CommandLine(_) | Pictures::Assistants { .. } | Pictures::Models => {
-                Section::Agents
-            }
-            Pictures::SiteNotes { .. } => Section::Agents,
+            Pictures::CommandLine(_) => Section::OtherApps,
+            Pictures::Assistants { .. } | Pictures::Models => Section::Models,
+            Pictures::SiteNotes { .. } => Section::Access,
         };
         let column = settings_column::column(
             &Default::default(),
@@ -146,6 +145,7 @@ impl gpui::Render for PicturesPage {
             None,
             Rc::new(|_, _, _| {}),
             Rc::new(|_, _| {}),
+            settings_column::Version::of(cx),
             a11y,
         );
         let page = cx.entity().downgrade();
@@ -372,7 +372,7 @@ impl gpui::Render for PicturesPage {
                         .child(end(controls))
                 };
                 let master = feature(
-                    Section::Agents.glyph(),
+                    Section::Threads.glyph(),
                     "Let agents use the browser",
                     "On: a connected client reaches the browser through the bridge beside it.",
                     vec![gpui::IntoElement::into_any_element(stop_switch(

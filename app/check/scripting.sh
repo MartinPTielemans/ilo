@@ -1,7 +1,7 @@
 # check.sh runs this at 500.
 # AppleScript (#704), the Mac's alone. The app declares ilo's dictionary (platform/mac/ilo.sdef),
 # never Chromium's: no execute, save or view source, and nothing that reads a page. Off at first,
-# Settings › Agents' "Let scripts control the browser" refuses every script, reads too, with
+# Settings › Other apps' "Let scripts control the browser" refuses every script, reads too, with
 # errAEEventNotPermitted, and logs it under its sender. Let in, a script reads the windows, the
 # user's Spaces and their tabs, never an agent's Space or a private window; focuses a Space and
 # selects a tab as a click does; makes a window as ⌘N does, and a tab loading a page in a window or
@@ -115,7 +115,7 @@ EOF
     fail "the refused read wasn't logged under its sender"
   quit
 
-  # Let in, as Settings › Agents' switch saves it.
+  # Let in, as Settings › Other apps' switch saves it.
   log="$out/scripting.log"
   step=0
   rm -f "$saved" "$launch_frame"
@@ -187,16 +187,16 @@ EOF
   answered "count windows" "a script couldn't count the windows"
   [ "$answer" = 2 ] || fail "a script counted $answer windows, not the 2 regular ones"
 
-  # Settings › Agents shows the switch on and what the scripts did.
+  # Settings › Other apps shows the switch on and what the scripts did.
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
   settings_drew
-  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Agents$'; then
-    send clickkey $(drawn "toolbar Agents")
-    expect '^browser: settings tab Agents$' "a click on Agents didn't show its section"
+  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Other apps$'; then
+    send clickkey $(drawn "toolbar Other apps")
+    expect '^browser: settings tab Other apps$' "a click on Other apps didn't show its section"
   fi
-  settings_drew Agents
-  drawn "switch scripts" > /dev/null || fail "Settings › Agents drew no switch for scripts"
+  settings_drew 'Other apps'
+  drawn "switch scripts" > /dev/null || fail "Settings › Other apps drew no switch for scripts"
   ../tools/window-screenshot.sh "$pid" "$out/scripting-settings.png" || fail "no window to capture"
   quit
   rm -f "$agents_file"

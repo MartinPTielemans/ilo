@@ -3048,13 +3048,6 @@ std::map<HWND, bool>& WindowButtonsShown() {
   return shown;
 }
 
-// The browser windows whose buttons are at the right with the sidebar on the left
-// (host_set_window_buttons_right).
-std::set<HWND>& ButtonsRight() {
-  static std::set<HWND> right;
-  return right;
-}
-
 // How far down the top edge resizes, as thick as Windows' resize border on the other edges.
 int TopEdge(HWND root) {
   const UINT dpi = GetDpiForWindow(root);
@@ -3103,10 +3096,10 @@ int FrameHit(HWND root, POINT at) {
   }
   // Maximize, the second of shell.rs's WINDOW_BUTTONS in Windows' order (windows_buttons), 43
   // from the left and window-button-y (24) down, its plate windows-button-plate (22) across
-  // (design/tokens.toml): kept in step with them. With the sidebar on the right, or the top bar
-  // on, the group is at the right, close at the corner, and maximize 43 from the right.
+  // (design/tokens.toml): kept in step with them. With the sidebar on the right the group is at
+  // the right, close at the corner, and maximize 43 from the right.
   const double scale = Scale(root);
-  const bool right = SidebarRight().count(root) || ButtonsRight().count(root);
+  const bool right = SidebarRight().count(root);
   const double across = right ? client.right / scale - at.x / scale : at.x / scale;
   auto shown = WindowButtonsShown().find(root);
   if (shown != WindowButtonsShown().end() && shown->second && std::abs(across - 43) <= 11 &&
@@ -3344,7 +3337,6 @@ LRESULT CALLBACK FrameProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam
       }
       WindowButtonsShown().erase(hwnd);
       SidebarRight().erase(hwnd);
-      ButtonsRight().erase(hwnd);
       FrameUi().erase(hwnd);
       std::erase_if(LittleViews(), [hwnd](HWND view) {
         return !IsWindow(view) || GetAncestor(view, GA_ROOT) == hwnd;
@@ -5343,18 +5335,6 @@ void host_set_sidebar_right(void* ui_view, bool right) {
   }
 }
 
-void host_set_window_buttons_right(void* ui_view, bool right) {
-  HWND root = Root(ui_view);
-  if (!root) {
-    return;
-  }
-  if (right) {
-    ButtonsRight().insert(root);
-  } else {
-    ButtonsRight().erase(root);
-  }
-}
-
 void host_set_window_on_top(void* ui_view, bool on) {
   // The overlays are windows it owns, which Windows makes topmost and back with it.
   SetWindowPos(Root(ui_view), on ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
@@ -5446,6 +5426,46 @@ void host_show_settings(void) {
 
 void host_hide_settings(void) {
   ShowWindow(g_settings.hwnd, SW_HIDE);
+}
+
+namespace {
+// First run's window, while it's open.
+HWND g_first_run = nullptr;
+}  // namespace
+
+void host_add_first_run(void* first_run_view) {
+  g_first_run = Hwnd(first_run_view);
+  ShowWindow(g_first_run, SW_HIDE);
+  // The system's buttons, but its size is fixed.
+  LONG_PTR style = GetWindowLongPtrW(g_first_run, GWL_STYLE);
+  SetWindowLongPtrW(g_first_run, GWL_STYLE, style & ~(WS_THICKFRAME | WS_MAXIMIZEBOX));
+}
+
+void host_show_first_run(void) {
+  if (!g_first_run) {
+    return;
+  }
+  // Centred on the primary display's work area, where the browser window opens.
+  MONITORINFO monitor{sizeof(monitor)};
+  GetMonitorInfoW(MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY), &monitor);
+  RECT own{};
+  GetWindowRect(g_first_run, &own);
+  const RECT work = monitor.rcWork;
+  const int width = own.right - own.left, height = own.bottom - own.top;
+  SetWindowPos(g_first_run, nullptr, (work.left + work.right - width) / 2,
+               (work.top + work.bottom - height) / 2, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+  ShowWindow(g_first_run, SW_SHOW);
+  SetForegroundWindow(g_first_run);
+  host_close_launch_window();
+  // check.sh waits for this line.
+  fprintf(stderr, "browser: first run shown\n");
+}
+
+void host_close_first_run(void) {
+  if (g_first_run) {
+    ShowWindow(g_first_run, SW_HIDE);
+  }
+  g_first_run = nullptr;
 }
 
 bool host_close_other_window(void) {

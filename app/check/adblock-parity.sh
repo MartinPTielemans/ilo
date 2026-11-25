@@ -178,13 +178,17 @@ if [ "$active" != 1 ]; then
   exit 0
 fi
 if [ "$engine" = off ]; then
-  # Off everywhere, as Settings' Ad Blocking switch turns it off, and the probe's ad script loads.
+  # Off everywhere, as Settings › Privacy's Ad Blocking switch turns it off, and the probe's ad
+  # script loads.
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
-  send clickkey $(drawn "toolbar Ad Blocking")
-  expect '^browser: settings tab Ad Blocking$' "a click on Ad Blocking didn't show its section"
-  settings_drew "Ad Blocking"
-  click_in_sight "switch ad blocking"
+  send clickkey $(drawn "toolbar Privacy")
+  expect '^browser: settings tab Privacy$' "a click on Privacy didn't show its section"
+  settings_drew Privacy
+  # Ad Blocking is under Privacy's own rows: in_sight scrolls it up, from this show's frame.
+  in_sight "switch ad blocking" '^browser: settings drew Privacy$' ||
+    fail "Settings didn't draw Block ads and trackers' switch"
+  send clickkey $at
   expect '^browser: ad blocking off$' "a click on Block ads and trackers' switch didn't turn it off"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"

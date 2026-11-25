@@ -11,7 +11,7 @@ use gpui::{
     point, px,
 };
 
-use super::{Drawn, END_FADE, OptIn, STEP_MOTION, STILL_FADE, Step};
+use super::{END_FADE, FirstRun, OptIn, STEP_MOTION, Step};
 use crate::account::{self, State, Status};
 use crate::import::ImportEvent;
 use crate::shell::{Folders, Shell, commands::Command, recorder::Recorder};
@@ -24,8 +24,8 @@ use crate::tokens::shell::onboarding::loops::{
 };
 use crate::transparency::{self, Transparency};
 
-/// A drawn shell showing one Space with no tab shown, as at a new profile's first launch, with the
-/// keyboard in the UI.
+/// A drawn shell showing one Space with no tab shown, as at a new profile's first launch, and first
+/// run's window over it, which the context returned drives: its keys and clicks go to that window.
 fn first_window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
     // The transparency step keeps its level where Settings does: here, a folder of the test's own.
     let dir = std::env::temp_dir().join(format!(
@@ -60,6 +60,13 @@ fn first_window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestConte
     });
     cx.update(|window, cx| window.focus(&shell.focus_handle(cx), cx));
     cx.run_until_parked();
+    // Opened here so the test holds its context; starting the flow takes it up.
+    let first_run = cx
+        .update(|_, cx| FirstRun::open(shell.clone(), cx))
+        .expect("first run's window");
+    shell.update(cx, |shell, _| shell.first_run = Some(first_run));
+    let cx = VisualTestContext::from_window(first_run.into(), cx).into_mut();
+    cx.run_until_parked();
     (shell, cx, host)
 }
 
@@ -93,16 +100,18 @@ fn started(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
-/// Goes on with Esc to `to`, as the user skipping each step before it does, from the welcome with
-/// Return, as its Esc skips the whole setup.
+/// Goes on with Skip to `to`, as the user skipping each step before it does, from the welcome with
+/// Return, as its Skip Setup skips the whole setup.
 fn skip_to(shell: &Entity<Shell>, cx: &mut VisualTestContext, to: Step) {
-    // A flow that never comes to `to` fails rather than spins. Esc may take a few presses at a
-    // step, as the import's goes back inside it first, but never this many.
+    // A flow that never comes to `to` fails rather than spins.
     for _ in 0..32 {
         let Some(at) = step(shell, cx).filter(|&step| step != to) else {
             break;
         };
-        cx.simulate_keystrokes(if at == Step::Intro { "enter" } else { "escape" });
+        match at {
+            Step::Intro => cx.simulate_keystrokes("enter"),
+            _ => click_skip(cx),
+        }
     }
     assert_eq!(step(shell, cx), Some(to));
 }
@@ -124,9 +133,10 @@ fn click_skip(cx: &mut VisualTestContext) {
 /// Where the step shown draws `name` (Shell::place).
 fn placed(name: &str, cx: &mut VisualTestContext) -> Option<gpui::Bounds<gpui::Pixels>> {
     cx.run_until_parked();
-    let shell = cx
-        .update(|window, _| window.root::<Shell>().flatten())
-        .expect("a shell");
+    let first_run = cx
+        .update(|window, _| window.root::<FirstRun>().flatten())
+        .expect("first run's window");
+    let shell = first_run.read_with(cx, |first_run, _| first_run.shell());
     shell.read_with(cx, |shell, _| {
         let onboarding = shell.onboarding.as_ref()?;
         onboarding.places.borrow().get(name).copied()
@@ -155,61 +165,6 @@ fn later(shell: &Entity<Shell>, cx: &mut VisualTestContext, seconds: f32) {
     cx.run_until_parked();
 }
 
-/// The wordmark draws as a hand writes "ilo": the i's stem, the l's, then the ring, each from
-/// nothing; the dot lands only once the ring is closed, takes the green after, and the line comes
-/// last. A still intro has all of the wordmark from its first frame, only fading in.
-#[test]
-fn the_intro_draws_the_wordmark_then_its_line() {
-    let at = |t| Drawn::at(t, false);
-    assert_eq!(
-        at(0.),
-        Drawn {
-            stem_i: 0.,
-            stem_l: 0.,
-            ring: 0.,
-            dot: 0.,
-            signal: 0.,
-            tagline: 0.
-        }
-    );
-    let early = at(0.4);
-    assert!(
-        early.stem_i > early.stem_l && early.stem_l > 0.,
-        "the stems in order: {early:?}"
-    );
-    assert_eq!(
-        early.ring, 0.,
-        "the ring waits for the stems to be under way"
-    );
-    // A frame after each part ends, which is when the next may start.
-    let ring_closed = at(1.11);
-    assert_eq!(ring_closed.ring, 1.);
-    assert!(
-        ring_closed.dot < 0.1,
-        "the dot lands once the ring closes: {ring_closed:?}"
-    );
-    let landed = at(1.35);
-    assert_eq!(landed.dot, 1.);
-    assert!(landed.signal < 0.1, "the dot lands in the ink: {landed:?}");
-    let green = at(1.65);
-    assert_eq!(green.signal, 1.);
-    assert!(
-        green.tagline < 0.1,
-        "it takes the green before the line comes: {green:?}"
-    );
-    assert_eq!(at(2.05).tagline, 1.);
-
-    let still = Drawn::at(0., true);
-    assert_eq!(
-        (still.stem_i, still.ring, still.dot, still.signal),
-        (1., 1., 1., 1.)
-    );
-    assert_eq!(
-        still.tagline, 0.,
-        "with Reduce Motion it fades in rather than drawing"
-    );
-}
-
 /// A launch that brings Spaces back never starts it: the shell has no flow until it's asked for.
 #[gpui::test]
 fn a_normal_window_has_no_flow(cx: &mut TestAppContext) {
@@ -217,42 +172,26 @@ fn a_normal_window_has_no_flow(cx: &mut TestAppContext) {
     assert_eq!(step(&shell, cx), None);
 }
 
-/// A window that opens with no page has given its keyboard to Chromium's view, so the flow takes
-/// it for the UI as it comes on screen, and only then, or each frame would take it from the import
-/// view's own controls.
-#[gpui::test]
-fn the_flow_takes_the_keyboard_as_it_shows(cx: &mut TestAppContext) {
-    let (shell, cx, host) = first_window(cx);
-    host.take();
-    started(&shell, cx);
-    let taken = |calls: Vec<String>| calls.iter().filter(|call| *call == "focus ui").count();
-    assert_eq!(taken(host.take()), 1, "the flow's first frame takes it");
-    later(&shell, cx, 0.5);
-    cx.simulate_keystrokes("enter");
-    later(&shell, cx, STEP_MOTION);
-    assert_eq!(taken(host.take()), 0, "the frames and steps after leave it");
-}
-
-/// The welcome waits for the user, however long: another key or a click on the window leaves it
-/// be, Return or Get Started goes on, and Esc or Skip Setup ends the flow there, as its last step
-/// does.
+/// The welcome waits for the user, however long: another key, Esc, which has no step to go back
+/// to, or a click on the window leaves it be, Return or Get Started goes on, and Skip Setup ends
+/// the flow there, as its last step does, as do closing the window and its shortcut.
 #[gpui::test]
 fn the_welcome_waits_then_goes_on_or_skips_the_setup(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     started(&shell, cx);
     later(&shell, cx, 3. * PERIOD);
-    cx.simulate_keystrokes("a");
-    let corner = shell.read_with(cx, |shell, _| shell.page_frame(shell.viewport).0.origin);
-    cx.simulate_click(corner + point(px(4.), px(4.)), Modifiers::none());
+    cx.simulate_keystrokes("a escape");
+    cx.simulate_click(point(px(600.), px(300.)), Modifiers::none());
     assert_eq!(step(&shell, cx), Some(Step::Intro), "it waits");
     cx.simulate_keystrokes("enter");
     assert_eq!(step(&shell, cx), Some(Step::Import));
 
-    for leave in ["escape", "skip"] {
+    for leave in ["skip", "close", "secondary-w"] {
         started(&shell, cx);
         match leave {
-            "escape" => cx.simulate_keystrokes("escape"),
-            _ => click_skip(cx),
+            "skip" => click_skip(cx),
+            "close" => assert!(!cx.simulate_close(), "the window goes as the flow ends"),
+            key => cx.simulate_keystrokes(key),
         }
         let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
         assert!(ending.is_some(), "{leave} ends the flow at the welcome");
@@ -261,14 +200,14 @@ fn the_welcome_waits_then_goes_on_or_skips_the_setup(cx: &mut TestAppContext) {
     }
 }
 
-/// With the system's Reduce Motion, the welcome's wordmark is the still one, all there once its
-/// words have faded in, and its loop is its last frame, asking for none.
+/// With the system's Reduce Motion, the welcome is all there once it has faded in, and its loop is
+/// its last frame, asking for none.
 #[gpui::test]
 fn reduce_motion_gives_the_still_welcome(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     cx.update(|_, cx| cx.set_reduce_motion(true));
     started(&shell, cx);
-    later(&shell, cx, STILL_FADE);
+    later(&shell, cx, STEP_MOTION);
     let settled = shell.read_with(cx, |shell, _| {
         shell.onboarding.as_ref().is_some_and(|o| o.settled)
     });
@@ -323,7 +262,7 @@ fn a_loop_draws_only_while_its_step_shows(cx: &mut TestAppContext) {
 
     started(&shell, cx);
     later(&shell, cx, 1.);
-    cx.simulate_keystrokes("escape");
+    click_skip(cx);
     later(&shell, cx, END_FADE);
     assert_eq!(step(&shell, cx), None);
     assert!(!asks_for_frames(&shell, cx), "an ended flow draws nothing");
@@ -346,9 +285,8 @@ fn back_goes_to_the_step_before(cx: &mut TestAppContext) {
     later(&shell, cx, STEP_MOTION);
     click_back(cx);
     assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser));
-    let backward = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().backward);
-    assert!(backward, "it comes from the left");
-    cx.simulate_keystrokes("escape");
+    later(&shell, cx, STEP_MOTION);
+    click_skip(cx);
     assert_eq!(
         step(&shell, cx),
         Some(Step::Color),
@@ -395,28 +333,51 @@ fn a_colour_picked_shows_at_once_and_goes_unless_kept(cx: &mut TestAppContext) {
     }
 }
 
-/// Esc skips each step in turn, and after the last the flow fades out from over the first
-/// Space's welcome, which then shows alone.
+/// Skip skips each step in turn, and after the last the flow fades out, with the first Space's
+/// welcome under it.
 #[gpui::test]
-fn escape_goes_on_and_the_last_step_leaves_the_flow(cx: &mut TestAppContext) {
+fn skip_goes_on_and_the_last_step_leaves_the_flow(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     started(&shell, cx);
     cx.simulate_keystrokes("enter");
     for next in [Step::DefaultBrowser, Step::Color] {
         later(&shell, cx, STEP_MOTION);
-        cx.simulate_keystrokes("escape");
+        click_skip(cx);
         assert_eq!(step(&shell, cx), Some(next));
     }
     later(&shell, cx, STEP_MOTION);
-    cx.simulate_keystrokes("escape");
+    click_skip(cx);
     let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
-    assert!(ending.is_some(), "Esc on the last step leaves the flow");
+    assert!(ending.is_some(), "Skip on the last step leaves the flow");
     later(&shell, cx, END_FADE);
     assert_eq!(step(&shell, cx), None);
     assert!(
         shell.read_with(cx, |shell, _| shell.welcome),
         "the welcome is under it"
     );
+}
+
+/// Esc is Back, as in the drawing's window: it goes to the step before, keeping nothing the step
+/// shows, and at the welcome, which has none, it does nothing.
+#[gpui::test]
+fn escape_goes_back_a_step(cx: &mut TestAppContext) {
+    let (shell, cx, _) = first_window(cx);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Color);
+    later(&shell, cx, STEP_MOTION);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser));
+    later(&shell, cx, STEP_MOTION);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(step(&shell, cx), Some(Step::Import));
+    later(&shell, cx, STEP_MOTION);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(step(&shell, cx), Some(Step::Intro));
+    later(&shell, cx, STEP_MOTION);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(step(&shell, cx), Some(Step::Intro), "the welcome stays");
+    let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
+    assert!(ending.is_none(), "and the flow with it");
 }
 
 /// Return is the step's button, and Skip, at the window's bottom right, goes on too, from a step
@@ -456,11 +417,15 @@ fn return_and_skip_go_on_from_a_step(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_default_browser_step_asks_the_system(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
-    for (key, asked) in [("escape", false), ("enter", true)] {
+    for (key, asked) in [("skip", false), ("enter", true)] {
         started(&shell, cx);
         skip_to(&shell, cx, Step::DefaultBrowser);
+        later(&shell, cx, STEP_MOTION);
         host.take();
-        cx.simulate_keystrokes(key);
+        match key {
+            "skip" => click_skip(cx),
+            key => cx.simulate_keystrokes(key),
+        }
         assert_eq!(step(&shell, cx), Some(Step::Color));
         assert_eq!(
             host.take().contains(&"make default browser".to_string()),
@@ -498,7 +463,7 @@ fn a_default_browser_leaves_its_step_out(cx: &mut TestAppContext) {
     host.default_browser.set(true);
     started(&shell, cx);
     skip_to(&shell, cx, Step::Import);
-    cx.simulate_keystrokes("escape");
+    click_skip(cx);
     assert_eq!(step(&shell, cx), Some(Step::Color));
 }
 
@@ -529,7 +494,7 @@ fn the_colour_picked_is_the_first_spaces(cx: &mut TestAppContext) {
         Some(SWATCHES.len() - 1),
         "it stops at the end"
     );
-    cx.simulate_keystrokes("escape");
+    click_skip(cx);
     assert!(!colored(host.take()), "Skip keeps the Space's colour");
 
     started(&shell, cx);
@@ -631,17 +596,6 @@ fn a_screen_reader_reads_each_steps_title_and_controls(cx: &mut TestAppContext) 
     );
 }
 
-/// A page shown covers the window, so it ends the flow at once, with no command bar over it.
-#[gpui::test]
-fn a_page_shown_ends_it(cx: &mut TestAppContext) {
-    let (shell, cx, host) = first_window(cx);
-    started(&shell, cx);
-    shell.update(cx, |shell, cx| shell.set_selected(1, cx));
-    cx.run_until_parked();
-    assert_eq!(step(&shell, cx), None);
-    assert!(host.command_bars.borrow().is_empty());
-}
-
 /// The flow ends in the first Space with the command bar up, as ⌘T has it, and a line on the card
 /// under it until a page shows.
 #[gpui::test]
@@ -649,7 +603,7 @@ fn it_ends_with_the_command_bar_up(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     started(&shell, cx);
     skip_to(&shell, cx, Step::Color);
-    cx.simulate_keystrokes("escape");
+    click_skip(cx);
     assert!(
         host.command_bars.borrow().is_empty(),
         "not while the flow fades"
@@ -672,7 +626,7 @@ fn a_quit_under_way_brings_no_command_bar_as_the_flow_ends(cx: &mut TestAppConte
     let (shell, cx, host) = first_window(cx);
     started(&shell, cx);
     skip_to(&shell, cx, Step::Color);
-    cx.simulate_keystrokes("escape");
+    click_skip(cx);
     crate::shell::quit_goes_ahead();
     later(&shell, cx, END_FADE);
     assert_eq!(step(&shell, cx), None);
@@ -689,7 +643,7 @@ fn the_opt_ins_show_only_those_offered(cx: &mut TestAppContext) {
     };
     started(&shell, cx);
     skip_to(&shell, cx, Step::Color);
-    cx.simulate_keystrokes("escape");
+    click_skip(cx);
     later(&shell, cx, END_FADE);
     assert_eq!(
         step(&shell, cx),
@@ -709,7 +663,7 @@ fn the_opt_ins_show_only_those_offered(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.onboarding_switch(OptIn::Agents, cx));
     assert_eq!(host.take(), vec!["agents true".to_string()]);
     assert_eq!(offered(&shell, cx), vec![(OptIn::Agents, true)]);
-    cx.simulate_keystrokes("escape");
+    click_skip(cx);
     let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
     assert!(ending.is_some(), "it's the last step");
     assert_eq!(
@@ -727,13 +681,12 @@ fn the_opt_ins_show_only_those_offered(cx: &mut TestAppContext) {
     assert_eq!(offered(&shell, cx), both, "both off to begin with");
 }
 
-/// With both opt-ins offered, in a window the size of the owner's at 1280 × 800, each switch lies
-/// inside its row, and a click at its drawn centre turns it on; its sentence once pushed it out of
-/// the row, where the click missed (#1286).
+/// With both opt-ins offered, in first run's fixed window, each switch lies inside its row, and a
+/// click at its drawn centre turns it on; its sentence once pushed it out of the row, where the
+/// click missed (#1286).
 #[gpui::test]
 fn a_click_on_each_opt_in_switch_turns_it_on(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
-    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     host.crash_reports.set(Some(false));
     host.agents.set(Some(false));
     started(&shell, cx);
@@ -780,7 +733,6 @@ fn a_click_on_each_opt_in_switch_turns_it_on(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_count_is_a_switch_set_as_the_step_is_left(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
-    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     host.agents.set(Some(false));
     host.daily_count.set(Some(false));
     started(&shell, cx);
@@ -833,15 +785,13 @@ fn the_count_turned_on_and_off_again_sets_nothing(cx: &mut TestAppContext) {
     assert_eq!(host.daily_count.get(), Some(false));
 }
 
-/// Skip and Esc leave the step, so they leave the count as it stands when pressed: off untouched,
-/// and on once turned on, which sends the first count as Continue does.
+/// Skip leaves the step, so it leaves the count as it stands when pressed: off untouched, and on
+/// once turned on, which sends the first count as Continue does.
 #[gpui::test]
-fn skip_and_esc_leave_the_count_as_it_stands(cx: &mut TestAppContext) {
+fn skip_leaves_the_count_as_it_stands(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     for (leave, turned, set) in [
-        ("escape", false, None),
         ("skip", false, None),
-        ("escape", true, Some("daily count true")),
         ("skip", true, Some("daily count true")),
     ] {
         host.daily_count.set(Some(false));
@@ -854,12 +804,7 @@ fn skip_and_esc_leave_the_count_as_it_stands(cx: &mut TestAppContext) {
             });
         }
         host.take();
-        match leave {
-            "escape" => cx.simulate_keystrokes("escape"),
-            _ => {
-                click_skip(cx);
-            }
-        }
+        click_skip(cx);
         let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
         assert!(ending.is_some(), "{leave} left the last step");
         let said: Vec<String> = set.into_iter().map(str::to_string).collect();
@@ -878,7 +823,6 @@ fn at_three_switches(
     cx: &mut TestAppContext,
 ) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
     let (shell, cx, host) = first_window(cx);
-    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     host.daily_count.set(Some(false));
     host.crash_reports.set(Some(false));
     host.agents.set(Some(false));
@@ -965,8 +909,8 @@ fn the_switches_are_a_tab_from_continue(cx: &mut TestAppContext) {
     }
 }
 
-/// With a switch the keyboard is on, ↩ is still Continue and Esc still Skip: neither turns it,
-/// and the count is set as the step is left, as it stands (#2978).
+/// With a switch the keyboard is on, ↩ is still Continue and Esc still Back: neither turns it. ↩
+/// sets the count as the step is left, as it stands (#2978); Esc goes back and sets nothing.
 #[gpui::test]
 fn return_and_escape_leave_from_a_focused_switch(cx: &mut TestAppContext) {
     use crate::settings_rows::spoken::press;
@@ -984,6 +928,12 @@ fn return_and_escape_leave_from_a_focused_switch(cx: &mut TestAppContext) {
         }
         host.take();
         press(leave, cx);
+        if leave == "escape" {
+            assert_ne!(step(&shell, cx), Some(Step::OptIns), "Esc went back");
+            assert_eq!(host.take(), Vec::<String>::new(), "turned on {turned}");
+            assert_eq!(host.daily_count.get(), Some(false), "Esc set nothing");
+            continue;
+        }
         let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
         assert!(ending.is_some(), "{leave} left the step");
         let said: Vec<String> = turned
@@ -1001,31 +951,6 @@ fn return_and_escape_leave_from_a_focused_switch(cx: &mut TestAppContext) {
             "{leave} turned the switch"
         );
     }
-}
-
-/// The keyboard left on a switch goes back to the window as the flow ends, so the shell's own keys,
-/// ⌘T among them, still reach their commands once the switches are gone.
-#[gpui::test]
-fn the_window_keeps_its_keys_after_a_switch_had_the_keyboard(cx: &mut TestAppContext) {
-    use crate::shell::commands::Run;
-    let ran: Rc<std::cell::RefCell<Vec<Command>>> = Rc::default();
-    let runs = ran.clone();
-    cx.update(|cx| {
-        cx.bind_keys(crate::shell::keys::key_bindings(cx));
-        cx.on_action(move |run: &Run, _| runs.borrow_mut().push(run.0));
-    });
-    let (shell, cx, _) = at_three_switches(cx);
-    cx.simulate_keystrokes("shift-tab");
-    cx.simulate_keystrokes("escape");
-    later(&shell, cx, END_FADE);
-    assert_eq!(step(&shell, cx), None);
-    ran.borrow_mut().clear();
-    cx.simulate_keystrokes("cmd-t");
-    assert_eq!(
-        *ran.borrow(),
-        [Command::NewTab],
-        "⌘T after the flow, with a switch the last to have the keyboard"
-    );
 }
 
 /// A build that names no server for the count doesn't offer it.
@@ -1056,25 +981,29 @@ fn opt_in_frame(
     })
 }
 
-/// Help › Welcome to ilo plays it again: here when the window shows no page, else in a new window,
-/// since GPUI can't draw over a page.
+/// Help › Welcome to ilo plays it again in first run's window, whether the window shows a page or
+/// not, as the flow no longer draws over the browser's.
 #[gpui::test]
 fn welcome_to_ilo_plays_it_again(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
-    shell.update(cx, |shell, cx| shell.run(Command::Welcome, "menu", cx));
-    cx.run_until_parked();
-    assert_eq!(step(&shell, cx), Some(Step::Intro));
-    assert!(
-        !host.take().contains(&"welcome window".to_string()),
-        "no new window for it"
-    );
-
-    shell.update(cx, |shell, cx| shell.set_selected(1, cx));
-    cx.run_until_parked();
-    shell.update(cx, |shell, cx| shell.run(Command::Welcome, "menu", cx));
-    cx.run_until_parked();
-    assert_eq!(step(&shell, cx), None);
-    assert!(host.take().contains(&"welcome window".to_string()));
+    for selected in [None, Some(1)] {
+        if let Some(tab) = selected {
+            shell.update(cx, |shell, cx| shell.set_selected(tab, cx));
+            cx.run_until_parked();
+        }
+        host.take();
+        shell.update(cx, |shell, cx| shell.run(Command::Welcome, "menu", cx));
+        cx.run_until_parked();
+        assert_eq!(step(&shell, cx), Some(Step::Intro), "{selected:?}");
+        assert!(
+            host.take().contains(&"first run shown".to_string()),
+            "{selected:?}: in its window"
+        );
+        click_skip(cx);
+        later(&shell, cx, END_FADE);
+        assert_eq!(step(&shell, cx), None);
+        assert!(host.take().contains(&"first run ended".to_string()));
+    }
 }
 
 /// The import step is the import view Settings shows: an import whose Spaces are in holds a moment
@@ -1148,7 +1077,7 @@ fn the_import_step_is_the_import_view(cx: &mut TestAppContext) {
     );
 
     skip_to(&shell, cx, Step::Color);
-    cx.simulate_keystrokes("escape");
+    click_skip(cx);
     later(&shell, cx, END_FADE);
     assert_eq!(step(&shell, cx), None);
     assert_eq!(
@@ -1307,11 +1236,11 @@ fn signed_in_by_then_the_account_step_is_left_out(cx: &mut TestAppContext) {
     started(&shell, cx);
     skip_to(&shell, cx, Step::Color);
     synced(cx, Status::On, "https://sync.example.org");
-    cx.simulate_keystrokes("escape");
+    click_skip(cx);
     assert_eq!(step(&shell, cx), Some(Step::OptIns));
 }
 
-/// Esc goes on from the account step without signing in, as Skip does.
+/// Skip goes on from the account step without signing in.
 #[gpui::test]
 fn skip_leaves_the_account_step_signed_out(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
@@ -1321,7 +1250,7 @@ fn skip_leaves_the_account_step_signed_out(cx: &mut TestAppContext) {
     started(&shell, cx);
     skip_to(&shell, cx, Step::Account);
     later(&shell, cx, STEP_MOTION);
-    cx.simulate_keystrokes("escape");
+    click_skip(cx);
     assert_eq!(step(&shell, cx), Some(Step::OptIns));
     assert!(
         !account_calls(&host).contains(&"sign in".to_string()),
@@ -1378,7 +1307,6 @@ fn a_finished_sign_in_goes_on(cx: &mut TestAppContext) {
 fn the_first_devices_words_go_on_with_done(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     host.sync_server.set(true);
-    cx.simulate_resize(gpui::size(px(1280.), px(800.)));
     host.crash_reports.set(Some(false));
     let server = "https://sync.example.org";
     synced(cx, Status::SignedOut, server);
@@ -1481,7 +1409,7 @@ fn an_import_that_needs_full_disk_access_keeps_its_step(cx: &mut TestAppContext)
 /// The import step says what the state its view shows is for, with its button and its corner:
 /// the list "Bring your stuff." with Import from the browser used last and Skip; ↩ shows that
 /// browser's choices, "What comes from Arc.", with Import and Back, and its view has no buttons of
-/// its own; Esc goes back to the list, keeping the step, and Esc there skips it.
+/// its own; Esc goes back to the list, keeping the step, and Esc there goes back a step.
 #[gpui::test]
 fn the_import_steps_words_follow_the_state_its_view_shows(cx: &mut TestAppContext) {
     use crate::import::Corner;
@@ -1520,7 +1448,11 @@ fn the_import_steps_words_follow_the_state_its_view_shows(cx: &mut TestAppContex
     );
     assert_eq!(guide(cx).title, "Bring your stuff.");
     cx.simulate_keystrokes("escape");
-    assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser));
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Intro),
+        "from the list, to the step before"
+    );
 }
 
 /// ↩ at the list brings the browser picked, and ↩ at its choices imports it: once read, the flow
@@ -1556,7 +1488,7 @@ fn return_brings_the_browser_picked_and_imports_it(cx: &mut TestAppContext) {
 }
 
 /// A profile that hasn't opened keeps the step, named in its title, with Try Again as its button,
-/// which ↩ presses; Esc skips the step, as its corner says, and the import goes on waiting.
+/// which ↩ presses; Skip, in its corner, skips the step, and the import stops waiting.
 #[gpui::test]
 fn a_stalled_import_names_its_profile_on_the_step(cx: &mut TestAppContext) {
     use crate::import::Corner;
@@ -1580,7 +1512,7 @@ fn a_stalled_import_names_its_profile_on_the_step(cx: &mut TestAppContext) {
         "↩ didn't try again"
     );
     waited(cx, crate::import::STALL.as_secs_f32());
-    cx.simulate_keystrokes("escape");
+    click_skip(cx);
     assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser));
     assert_eq!(
         view.read_with(cx, |view, _| view.primary()),
@@ -1618,7 +1550,7 @@ fn the_arrows_move_the_lists_pick(cx: &mut TestAppContext) {
 }
 
 /// The wait for Full Disk Access says Back in its corner, which Esc does, back to the list; Esc
-/// there goes on, as from any step.
+/// there goes back a step, as from any step.
 #[cfg(unix)]
 #[gpui::test]
 fn skip_goes_on_from_full_disk_access(cx: &mut TestAppContext) {
@@ -1650,7 +1582,11 @@ fn skip_goes_on_from_full_disk_access(cx: &mut TestAppContext) {
         "Esc went back to the list"
     );
     cx.simulate_keystrokes("escape");
-    assert_eq!(step(&shell, cx), Some(Step::DefaultBrowser));
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Intro),
+        "from the list, to the step before"
+    );
     std::fs::remove_dir_all(&home).unwrap();
 }
 
@@ -1847,8 +1783,8 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
 /// Each step's keyboard rests on a control as it comes, never on the step's dialog, whose title
 /// and line a screen reader says on the way in. Orca drops the arrival of a step left by a key
 /// while its place is a dialog (#3498). The colours and engines have it, else the step's button,
-/// the opt-ins' too, never a switch. ↩ and Esc there do what they do anywhere in the step: ↩ is
-/// the step's button, pressed once on its way down and not again on its way up, and Esc skips.
+/// the opt-ins' too, never a switch. ↩ there does what it does anywhere in the step: it's the
+/// step's button, pressed once on its way down and not again on its way up.
 #[gpui::test]
 fn each_step_rests_on_a_control(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
@@ -1878,7 +1814,7 @@ fn each_step_rests_on_a_control(cx: &mut TestAppContext) {
         Some((Role::RadioButton, "DuckDuckGo".into())),
         "the engines, read by the one picked"
     );
-    press("escape", cx);
+    click_skip(cx);
     assert_eq!(step(&shell, cx), Some(Step::Color));
     assert_eq!(keyed(cx), Some((Role::RadioGroup, "Color".into())));
     press("enter", cx);
@@ -1890,9 +1826,9 @@ fn each_step_rests_on_a_control(cx: &mut TestAppContext) {
 
     assert_eq!(keyed(cx), button("Sign In"));
     signing(&host);
-    press("escape", cx);
+    click_skip(cx);
     assert_eq!(step(&shell, cx), Some(Step::OptIns));
-    assert_eq!(signing(&host), 0, "Esc on Sign In skipped it");
+    assert_eq!(signing(&host), 0, "Skip didn't sign in");
     // Not on a switch, each a yes to sending something, which a stray Space would give.
     assert_eq!(keyed(cx), button("Continue"));
     host.take();
@@ -1974,7 +1910,7 @@ fn the_search_engine_step_sets_nothing_until_continue(cx: &mut TestAppContext) {
     };
     started(&shell, cx);
     skip_to(&shell, cx, Step::DefaultBrowser);
-    cx.simulate_keystrokes("escape");
+    click_skip(cx);
     assert_eq!(step(&shell, cx), Some(Step::SearchEngine));
     assert_eq!(engine(&shell, cx), Some(0), "the default is picked");
     cx.simulate_keystrokes("down down down");
@@ -1982,7 +1918,7 @@ fn the_search_engine_step_sets_nothing_until_continue(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("up");
     assert_eq!(engine(&shell, cx), Some(1));
     host.take();
-    cx.simulate_keystrokes("escape");
+    click_skip(cx);
     assert_eq!(step(&shell, cx), Some(Step::Color));
     assert_eq!(set(host.take()), Vec::<String>::new(), "Skip sets nothing");
 
@@ -2011,7 +1947,7 @@ fn no_engines_leaves_the_search_engine_step_out(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
     started(&shell, cx);
     skip_to(&shell, cx, Step::DefaultBrowser);
-    cx.simulate_keystrokes("escape");
+    click_skip(cx);
     assert_eq!(step(&shell, cx), Some(Step::Color));
 }
 
@@ -2146,14 +2082,13 @@ fn the_arrows_move_the_transparency_pick(cx: &mut TestAppContext) {
     assert_eq!(level(&shell, cx), Some(Transparency::Standard));
 }
 
-/// ↩ goes on with the level shown, kept; Esc and Skip go on with Standard, keeping nothing new.
+/// ↩ goes on with the level shown, kept; Skip goes on with Standard, keeping nothing new.
 /// Here it's the last step, so going on ends the flow.
 #[gpui::test]
 fn return_keeps_the_level_and_skip_puts_standard_back(cx: &mut TestAppContext) {
     let (shell, cx, _) = glass_window(cx);
     for (go_on, kept) in [
         ("enter", Transparency::More),
-        ("escape", Transparency::Standard),
         ("skip", Transparency::Standard),
     ] {
         // A first run, at Standard.
@@ -2174,29 +2109,6 @@ fn return_keeps_the_level_and_skip_puts_standard_back(cx: &mut TestAppContext) {
         assert_eq!(cx.update(|_, cx| transparency::level(cx)), kept, "{go_on}");
         later(&shell, cx, END_FADE);
     }
-}
-
-/// While the step shows, and while it slides in or away, the shell draws nothing of its own under
-/// the flow, so the window's glass is the preview; the step before keeps it, and it comes back
-/// as the flow ends.
-#[gpui::test]
-fn the_window_is_bare_glass_at_the_transparency_step(cx: &mut TestAppContext) {
-    let (shell, cx, _) = glass_window(cx);
-    let bare = |shell: &Entity<Shell>, cx: &VisualTestContext| {
-        shell.read_with(cx, |shell, _| shell.onboarding_bare())
-    };
-    started(&shell, cx);
-    skip_to(&shell, cx, Step::Color);
-    assert!(!bare(&shell, cx), "the colour step keeps the shell");
-    cx.simulate_keystrokes("escape");
-    assert!(bare(&shell, cx), "the transparency step is bare");
-    later(&shell, cx, STEP_MOTION);
-    assert!(bare(&shell, cx), "and stays bare once it's in");
-    cx.simulate_keystrokes("escape");
-    assert!(
-        !bare(&shell, cx),
-        "the shell comes back under the flow's fade"
-    );
 }
 
 /// Whether `part` is wholly inside `whole`.
@@ -2287,7 +2199,7 @@ fn the_cards_welcome_waits_under_the_flow_and_comes_as_it_fades(cx: &mut TestApp
         0.,
         "the card's welcome draws nothing under the flow, which the window shows through"
     );
-    cx.simulate_keystrokes("escape");
+    click_skip(cx);
     cx.run_until_parked();
     assert!(
         shown(&shell, cx) > 0.,
@@ -2397,10 +2309,6 @@ fn at_favorites<'a>(
 #[gpui::test]
 fn the_favorites_step_is_on_the_sheet(cx: &mut TestAppContext) {
     let (shell, cx, view) = at_favorites(&["https://example.com/", "https://example.org/"], cx);
-    assert!(
-        super::sheet::on_sheet(Step::Favorites),
-        "the favorites step shows on the sheet"
-    );
     let drawn = |name: &str, cx: &mut VisualTestContext| {
         cx.run_until_parked();
         view.read_with(cx, |view, _| view.drawn_place(name))
@@ -2471,10 +2379,6 @@ fn the_default_browsers_loop_opens_the_link_as_a_tab(cx: &mut TestAppContext) {
     skip_to(&shell, cx, Step::DefaultBrowser);
     later(&shell, cx, STEP_MOTION);
     assert!(
-        super::sheet::on_sheet(Step::DefaultBrowser),
-        "the default browser's step shows on the sheet"
-    );
-    assert!(
         placed("skip", cx).is_some() && placed("back", cx).is_some(),
         "the sheet's foot has Back and Skip"
     );
@@ -2520,10 +2424,6 @@ fn the_search_engines_loop_opens_the_words_typed_as_a_tab(cx: &mut TestAppContex
     skip_to(&shell, cx, Step::SearchEngine);
     later(&shell, cx, STEP_MOTION);
     assert!(
-        super::sheet::on_sheet(Step::SearchEngine),
-        "the search engine's step shows on the sheet"
-    );
-    assert!(
         placed("skip", cx).is_some() && placed("back", cx).is_some(),
         "the sheet's foot has Back and Skip"
     );
@@ -2561,10 +2461,6 @@ fn the_sync_loop_carries_a_tab_across_and_a_favorite_back(cx: &mut TestAppContex
     started(&shell, cx);
     skip_to(&shell, cx, Step::Account);
     later(&shell, cx, STEP_MOTION);
-    assert!(
-        super::sheet::on_sheet(Step::Account),
-        "the sync's step shows on the sheet"
-    );
     assert!(
         placed("skip", cx).is_some() && placed("back", cx).is_some(),
         "the sheet's foot has Back and Skip"
@@ -2637,10 +2533,6 @@ fn the_assistant_step_is_on_the_sheet_with_room_for_its_switch(cx: &mut TestAppC
     skip_to(&shell, cx, Step::Assistant);
     later(&shell, cx, STEP_MOTION);
     assert!(
-        super::sheet::on_sheet(Step::Assistant) && super::sheet::on_sheet(Step::OptIns),
-        "the assistant's step and Up to you show on the sheet"
-    );
-    assert!(
         placed("skip", cx).is_some() && placed("back", cx).is_some(),
         "the sheet's foot has Back and Skip"
     );
@@ -2650,8 +2542,8 @@ fn the_assistant_step_is_on_the_sheet_with_room_for_its_switch(cx: &mut TestAppC
         px(crate::tokens::settings::ROW_HEIGHT),
         "a row high"
     );
-    cx.simulate_keystrokes("escape");
-    assert_eq!(step(&shell, cx), Some(Step::OptIns), "Esc goes on, as Skip");
+    click_skip(cx);
+    assert_eq!(step(&shell, cx), Some(Step::OptIns), "Skip goes on");
 }
 
 /// The sheet's foot is in the same place on every step, the assistants' too with all its rows: a
@@ -2668,13 +2560,22 @@ fn the_sheets_foot_is_in_the_same_place_on_every_step(cx: &mut TestAppContext) {
         let Some(at) = step(&shell, cx) else {
             break;
         };
-        if at != Step::Intro && super::sheet::on_sheet(at) {
+        // Left from the last step, the flow is ending and its Skip goes with it.
+        if shell.read_with(cx, |shell, _| {
+            shell.onboarding.as_ref().unwrap().ending.is_some()
+        }) {
+            break;
+        }
+        if at != Step::Intro {
             later(&shell, cx, STEP_MOTION);
             if let Some(skip) = placed("skip", cx) {
                 feet.push((at, skip.origin.y));
             }
         }
-        cx.simulate_keystrokes(if at == Step::Intro { "enter" } else { "escape" });
+        match at {
+            Step::Intro => cx.simulate_keystrokes("enter"),
+            _ => click_skip(cx),
+        }
     }
     assert!(
         feet.iter().any(|(at, _)| *at == Step::Assistant),
@@ -2718,7 +2619,7 @@ fn the_assistant_step_looks_for_the_assistants_as_it_shows(cx: &mut TestAppConte
     assert_eq!(looks(), 0, "nothing looked before the step");
     assert_eq!(lines(cx), ["Checking…", "Checking…"]);
 
-    cx.simulate_keystrokes("escape");
+    click_skip(cx);
     assert_eq!(step(&shell, cx), Some(Step::Assistant));
     later(&shell, cx, STEP_MOTION);
     assert_eq!(looks(), 1, "the step's showing looked once");
@@ -2730,7 +2631,7 @@ fn the_assistant_step_looks_for_the_assistants_as_it_shows(cx: &mut TestAppConte
     later(&shell, cx, 5.);
     assert_eq!(looks(), 1, "nothing looked again while it stood");
 
-    cx.simulate_keystrokes("escape");
+    click_skip(cx);
     later(&shell, cx, STEP_MOTION);
     click_back(cx);
     assert_eq!(step(&shell, cx), Some(Step::Assistant));

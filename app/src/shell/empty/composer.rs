@@ -7,8 +7,8 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui::{
-    Bounds, BoxShadow, Context, Entity, FontWeight, Hsla, Pixels, SharedString, Subscription,
-    Window, canvas, div, point, prelude::*, px, rgb, rgba, svg,
+    Bounds, BoxShadow, Context, Corners, Entity, FontWeight, Hsla, Pixels, SharedString,
+    Subscription, Window, canvas, div, point, prelude::*, px, rgb, rgba, svg,
 };
 
 use crate::agents::task::{Card, Dot, Word};
@@ -25,6 +25,7 @@ use super::super::{
     commands::{key_name, space_tabs},
     keys::OFF_THE_MAC,
     menus::{MenuAction, MenuEntry},
+    task_area::covering,
 };
 
 /// What the field says in Search.
@@ -708,7 +709,7 @@ impl Shell {
         };
         let row = command_bar::centered_row_middle(f32::from(self.viewport.height))
             - f32::from(frame.top());
-        let plates = cards.iter().any(|card| card.last_site.is_some());
+        let plates = cards.iter().any(|card| self.plate_of(card).is_some());
         let top = group_top(row, f32::from(frame.size.height), !cards.is_empty(), plates);
         let page = div()
             .size_full()
@@ -871,9 +872,10 @@ impl Shell {
     }
 
     /// A recent task's card: its state, its title and its last steps, the one under way in full
-    /// ink (or its status, with no steps this turn; a stopped task's last finished step alone,
-    /// or nothing), over a plate naming the site of its last
-    /// page; a task that has reached none ends after its words. A click opens it.
+    /// ink (or its status, with no steps this turn), over the picture its last page's tile ended
+    /// on. Once over, its one line is a done task's answer's first or, quiet, a stopped one's
+    /// last finished step, if it has one; a task a run before left says when it ended and has
+    /// none. A card with no picture ends after its words. A click opens it.
     fn recent_card(
         &self,
         index: usize,
@@ -881,7 +883,10 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let palette = self.palette;
-        let state = card.word.alone(&card.name);
+        let state = match &card.ended_at {
+            Some(at) => format!("{} · {at}", card.word.alone(&card.name)).into(),
+            None => card.word.alone(&card.name),
+        };
         let dot = (card.dot == Dot::Working).then(|| {
             div()
                 .flex_none()
@@ -890,17 +895,15 @@ impl Shell {
                 .bg(rgb(STATUS_AGENT))
         });
         let working = card.dot == Dot::Working;
-        let lines: Vec<(SharedString, bool)> = match card.steps.is_empty() {
-            // A stopped task says only its last finished step, or nothing after its title.
-            _ if card.word == Word::Stopped => (card
-                .steps
-                .last()
-                .cloned()
-                .map(|step| (step, false))
-                .into_iter())
-            .collect(),
-            true => vec![(card.status.clone(), true)],
-            false => {
+        let lines: Vec<(SharedString, bool)> = match card.word {
+            _ if card.ended_at.is_some() => Vec::new(),
+            // A done task says its answer's first line; a stopped one only its last finished
+            // step, quiet, or nothing after its title.
+            Word::Done | Word::Stopped => (card.line.clone().into_iter())
+                .map(|line| (line, card.word == Word::Done))
+                .collect(),
+            _ if card.steps.is_empty() => vec![(card.status.clone(), true)],
+            _ => {
                 let last = card.steps.len() - 1;
                 (card.steps.iter().cloned().enumerate())
                     .map(|(at, step)| (step, working && at == last))
@@ -917,19 +920,25 @@ impl Shell {
                 })
                 .child(line)
         });
-        let plate = card.last_site.clone().map(|site| {
+        let plate = self.plate_of(&card).map(|picture| {
+            let corners = Corners::all(px(PAGE_RADIUS));
             div()
                 .h(px(PAGE_HEIGHT))
                 .mx(px(PAGE_INSET))
                 .mb(px(PAGE_INSET))
                 .rounded(px(PAGE_RADIUS))
                 .bg(palette.plate(PAGE_FILL))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(STEP_SIZE))
-                .text_color(palette.text(STEP_INK))
-                .child(site)
+                .child(
+                    canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, _| {
+                            let drawn = covering(bounds, picture.size());
+                            (window.paint_image(bounds, drawn, corners, picture.image(), 0, false))
+                                .ok();
+                        },
+                    )
+                    .size_full(),
+                )
         });
         let agent = card.agent.clone();
         div()

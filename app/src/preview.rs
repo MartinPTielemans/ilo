@@ -2038,6 +2038,11 @@ impl Browser for Fake {
     // The preview has one window.
     fn new_window(&self, _: &mut App) {}
 
+    // It has no host to show first run's window, which opens on screen.
+    fn shows_first_run_at_open(&self) -> bool {
+        true
+    }
+
     // So the onboarding shows its step for it.
     fn is_default_browser(&self) -> bool {
         false
@@ -3091,6 +3096,19 @@ fn main() {
                     // A Live Folder's tab is the one selected, as the mock's #2961 is.
                     if states::var("PREVIEW_LIVE_FOLDER").as_deref() == Ok("states") {
                         shell.set_selected(LIVE_TABS[0].0, cx);
+                    }
+                    // PREVIEW_PAGE=<rrggbb>[,<tab>] says the page of the tab shown, or of that
+                    // tab, which it shows, is that colour, as the core reports a page's own.
+                    if let Ok(page) = states::var("PREVIEW_PAGE") {
+                        let mut parts = page.split(',');
+                        let color = parts
+                            .next()
+                            .and_then(|hex| u32::from_str_radix(hex, 16).ok());
+                        if let Some(tab) = parts.next().and_then(|tab| tab.parse().ok()) {
+                            shell.set_selected(tab, cx);
+                        }
+                        let shown = shell.selected();
+                        shell.set_tab_background(shown, color, cx);
                     }
                     // PREVIEW_TRANSLATE=<language> says the made-up pages are in that language,
                     // so the URL field offers to translate them.

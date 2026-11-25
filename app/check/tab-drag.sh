@@ -75,10 +75,10 @@ expect "^browser: tab $c drag picture [1-9][0-9]*x[1-9][0-9]*\$" "the tab's drag
 # drag to that window's surface, whose list takes the tab.
 over=$((right - left + 100))
 set -- $(row 0)
-send dragto $over $(($2 - 20))
+send dragto $over $(($2 - 17))
 expect '^browser: drop line in today 0$' "no line marked the tab's place in the second window's list"
 ../tools/window-screenshot.sh "$pid" "$out/tab-drag-line.png" all || fail "no window to capture"
-send release $over $(($2 - 20))
+send release $over $(($2 - 17))
 expect "^browser: tab $c dropped from window $first in today 0\$" \
   "the second window's list didn't put the tab where its line was"
 expect "^browser: window $second shows $c\$" "the tab dropped on the second window's list didn't show there"

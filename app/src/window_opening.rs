@@ -152,6 +152,17 @@ pub(crate) fn open_window_after(id: bc::bc_id, cx: &mut App) -> Option<bc::bc_id
 thread_local! {
     /// Whether the window opened last came on screen with its first frame drawn.
     static DRAWN_BEFORE_SHOWN: Cell<Option<Instant>> = const { Cell::new(None) };
+    /// The first window's view, kept off screen while first run shows in its own window.
+    static HELD_FOR_FIRST_RUN: Cell<Option<*mut c_void>> = const { Cell::new(None) };
+}
+
+/// Puts the first window, which first run kept off screen, on screen as first run ends.
+pub(crate) fn show_window_held_for_first_run() {
+    if let Some(ui_view) = HELD_FOR_FIRST_RUN.take() {
+        unsafe { platform::host_show_window(ui_view) };
+        // check.sh reads this line.
+        log!("browser: window on screen after first run");
+    }
 }
 
 /// When the window opened last came on screen with its first frame drawn, so that frame was on
@@ -421,7 +432,14 @@ pub(crate) fn open_window_as(
             .is_ok();
     #[cfg(not(target_os = "macos"))]
     let drawn = false;
+    // First run is the only window on screen until it ends (spec-first-run.md), so a launch that
+    // starts it keeps the browser window off screen till then; the timer below finishes opening.
+    let held = first && window.read(cx).is_ok_and(|shell| shell.first_run_open());
     match (&from, saved) {
+        _ if held => {
+            HELD_FOR_FIRST_RUN.set(Some(ui_view));
+            log!("browser: window held for first run");
+        }
         (Some(from), Some(_)) => unsafe {
             platform::host_show_window_behind(ui_view, from.ui_view)
         },

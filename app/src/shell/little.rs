@@ -132,6 +132,7 @@ impl Shell {
             name: SharedString::default(),
             color: None,
             theme: None,
+            transparency: None,
             icon: SharedString::default(),
             agent: SharedString::default(),
             profile,
