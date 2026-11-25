@@ -3610,8 +3610,8 @@ fn a_links_sign_in_part_is_never_opened_or_drawn() {
     assert!(!format!("{host}{rest}").contains("hunter2"));
 }
 
-/// A web link's tooltip says its host, then the rest of its address as plain text, cut in the
-/// middle.
+/// A web link's tooltip says its host, then the rest of its address, each as plain text cut in the
+/// middle, a host in capitals as any.
 #[test]
 fn a_web_links_tooltip_is_its_address_plain_and_cut() {
     let (host, rest) = super::link_tip("https://maat.pt/agenda?day=sat").unwrap();
@@ -3625,6 +3625,17 @@ fn a_web_links_tooltip_is_its_address_plain_and_cut() {
     assert!(
         rest.starts_with("/aaa") && rest.ends_with("zzz") && rest.contains('\u{2026}'),
         "{rest}"
+    );
+    // A host in capitals has its tooltip too, the host as it is found.
+    let (host, rest) = super::link_tip("https://MAAT.PT/Agenda").unwrap();
+    assert_eq!((host.as_ref(), rest.as_ref()), ("maat.pt", "/Agenda"));
+    // A host past the cap is cut as the rest is.
+    let long = format!("https://{}.example/", "h".repeat(80));
+    let (host, _) = super::link_tip(&long).unwrap();
+    assert_eq!(host.chars().count(), 48);
+    assert!(
+        host.ends_with("h.example") && host.contains('\u{2026}'),
+        "{host}"
     );
 }
 

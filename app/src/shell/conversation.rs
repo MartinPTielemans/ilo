@@ -4139,25 +4139,27 @@ fn linked_to(pages: &[(u64, SharedString)], url: &SharedString) -> Option<Linked
     web.then(|| Linked::Web(url.clone()))
 }
 
-/// What a web link's tooltip says: its host, then the rest of its address, plain and cut in the
-/// middle.
+/// What a web link's tooltip says: its host, then the rest of its address, each plain and cut in
+/// the middle. Both come from the address as parsed, so a host in capitals is found as any is.
 fn link_tip(url: &str) -> Option<(SharedString, SharedString)> {
     let parsed = url::Url::parse(url).ok()?;
-    let host = parsed.host_str()?.to_string();
-    let after = url.find(&host)? + host.len();
-    let rest: String = (url[after..].chars()).filter(|c| !c.is_control()).collect();
-    let count = rest.chars().count();
-    let rest = match count > LINK_TIP_MOST {
-        true => {
-            let head = (LINK_TIP_MOST - 1) / 2;
-            let tail = LINK_TIP_MOST - 1 - head;
-            let start: String = rest.chars().take(head).collect();
-            let end: String = rest.chars().skip(count - tail).collect();
-            format!("{start}\u{2026}{end}")
-        }
-        false => rest,
-    };
+    let host = cut_middle(parsed.host_str()?, LINK_TIP_MOST);
+    let rest = cut_middle(&parsed[url::Position::AfterHost..], LINK_TIP_MOST);
     Some((host.into(), rest.into()))
+}
+
+/// `text` without control characters, and if longer than `most` characters, its start and end
+/// with an ellipsis between, `most` in all.
+fn cut_middle(text: &str, most: usize) -> String {
+    let text: String = text.chars().filter(|c| !c.is_control()).collect();
+    let count = text.chars().count();
+    if count <= most {
+        return text;
+    }
+    let head = (most - 1) / 2;
+    let start: String = text.chars().take(head).collect();
+    let end: String = text.chars().skip(count - (most - 1 - head)).collect();
+    format!("{start}\u{2026}{end}")
 }
 
 /// `url` without its `user:pass@` part, if it is an address that has one.
