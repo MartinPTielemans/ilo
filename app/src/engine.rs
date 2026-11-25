@@ -2376,6 +2376,10 @@ impl Browser for Engine {
         }
     }
 
+    fn shape_first_run(&self, width: f32, height: f32, radius: f32) {
+        unsafe { platform::host_set_first_run_frame(width.into(), height.into(), radius.into()) }
+    }
+
     fn end_first_run(&self, window: gpui::AnyWindowHandle, cx: &mut App) {
         unsafe { platform::host_close_first_run() };
         window

@@ -276,6 +276,9 @@ pub(super) struct Onboarding {
     pub(super) since: Instant,
     /// When the entry began, while it plays (v9 §2).
     entry: Option<Instant>,
+    /// The card's size and corners the host last shaped the window to, so it's told only of a
+    /// change: on the entry's frames, and once as it ends.
+    shaped: Option<(f32, f32, f32)>,
     /// The progress knot's fraction as it last left, the one it's going to, and when it set off.
     progress: (f32, f32, Instant),
     /// When the last step was left, for the card's fade.
@@ -515,6 +518,7 @@ impl Shell {
             clock: cx.background_executor().clone(),
             since: now,
             entry: Some(now),
+            shaped: None,
             progress: (0., 0., now),
             ending: None,
             light: appearance.and_then(|name| match name {
@@ -1301,6 +1305,10 @@ impl Shell {
                 )
             }
         };
+        let (_, _, w, h, radius) = plate;
+        if onboarding.shaped.replace((w, h, radius)) != Some((w, h, radius)) {
+            self.browser.shape_first_run(w, h, radius);
+        }
         let content = self.step_content(step, inks, entry.is_some(), window, cx);
         let onboarding = self.onboarding.as_ref()?;
         let entry_knot = entry_knot.map(|((size, x, y, drawn), opacity)| {

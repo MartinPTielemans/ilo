@@ -1139,3 +1139,39 @@ fn no_line_names_a_pick(cx: &mut TestAppContext) {
         }
     }
 }
+
+/// The host shapes the window to the card as the entry grows it and once as it ends, at the card's
+/// size; nothing after, so nothing keeps the window busy once the motion has ended.
+#[gpui::test]
+fn the_window_is_shaped_by_the_entrys_frames_alone(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    let shaped = |host: &Recorder| -> Vec<String> {
+        (host.take().into_iter())
+            .filter(|call| call.starts_with("first run shaped"))
+            .collect()
+    };
+    begun(&shell, cx);
+    let length = Onboarding::entry_length(false);
+    for _ in 0..5 {
+        later(&shell, cx, length / 5.);
+    }
+    settle(&shell, cx);
+    let calls = shaped(&host);
+    assert!(calls.len() > 2, "it grows: {calls:?}");
+    let whole = format!("first run shaped {} {} {}", t::WIDTH, t::HEIGHT, t::RADIUS);
+    assert_eq!(calls.last(), Some(&whole), "{calls:?}");
+    assert_eq!(
+        calls.iter().filter(|call| **call == whole).count(),
+        1,
+        "{calls:?}"
+    );
+    cx.simulate_keystrokes("enter");
+    settle(&shell, cx);
+    cx.simulate_keystrokes("secondary-[");
+    settle(&shell, cx);
+    assert_eq!(
+        shaped(&host),
+        Vec::<String>::new(),
+        "a step's change shapes nothing"
+    );
+}
