@@ -29,7 +29,18 @@ impl Identity {
     /// The folder at `path` itself, never through a link at its end: None when nothing is there,
     /// or a link or a file is.
     pub fn of(path: &Path) -> Option<Identity> {
-        let found = std::fs::symlink_metadata(path).ok()?;
+        Identity::of_found(std::fs::symlink_metadata(path).ok()?)
+    }
+
+    /// The folder a handle holds open, by the handle and not its path again: a folder put at the
+    /// path after the open isn't taken for the one opened.
+    #[cfg(unix)]
+    pub fn of_open(dir: std::os::fd::BorrowedFd) -> Option<Identity> {
+        let held = std::fs::File::from(dir.try_clone_to_owned().ok()?);
+        Identity::of_found(held.metadata().ok()?)
+    }
+
+    fn of_found(found: std::fs::Metadata) -> Option<Identity> {
         if !found.file_type().is_dir() {
             return None;
         }
