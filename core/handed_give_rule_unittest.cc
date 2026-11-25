@@ -59,15 +59,32 @@ TEST(HandedGiveRuleTest, APageThatIsntHttpOrHttpsIsRefused) {
   EXPECT_FALSE(MayGive(tab));
 }
 
-TEST(HandedGiveRuleTest, ATabUsingTheCameraIsRefused) {
+// A call goes with its tab.
+TEST(HandedGiveRuleTest, ATabUsingTheCameraIsGiven) {
   Tab tab = Fit();
   tab.camera = true;
-  EXPECT_FALSE(MayGive(tab));
+  EXPECT_TRUE(MayGive(tab));
 }
 
-TEST(HandedGiveRuleTest, ATabUsingTheMicrophoneIsRefused) {
+TEST(HandedGiveRuleTest, ATabUsingTheMicrophoneIsGiven) {
   Tab tab = Fit();
   tab.microphone = true;
+  EXPECT_TRUE(MayGive(tab));
+}
+
+TEST(HandedGiveRuleTest, ATabUsingBothIsGiven) {
+  Tab tab = Fit();
+  tab.camera = true;
+  tab.microphone = true;
+  EXPECT_TRUE(MayGive(tab));
+}
+
+// A share with the call refuses it still.
+TEST(HandedGiveRuleTest, ATabInACallThatSharesTheScreenIsRefused) {
+  Tab tab = Fit();
+  tab.camera = true;
+  tab.microphone = true;
+  tab.screen = true;
   EXPECT_FALSE(MayGive(tab));
 }
 
