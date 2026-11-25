@@ -2086,6 +2086,14 @@ impl Browser for Engine {
         recent_host::fetch(self.window, tab);
     }
 
+    fn broom(&self) -> Option<shell::Broom> {
+        broom_host::shown(self.window)
+    }
+
+    fn start_broom(&self, cx: &mut App) {
+        broom_host::start(self.window, cx);
+    }
+
     fn card_picture(&self, tab: u64, scale: f32, cx: &mut App) {
         let request = hover_card::asking(tab, cx);
         // check.sh reads this line: a hidden page draws for its picture from here.

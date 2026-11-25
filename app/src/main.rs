@@ -186,6 +186,7 @@ use other_tabs_host::*;
 mod translate_host;
 use translate_host::{tab_language, tab_translate_texts};
 mod boosts_host;
+mod broom_host;
 use boosts_host::{tab_boost_zap_ended, tab_boost_zapped};
 
 use browser::bc;

@@ -975,6 +975,7 @@ pub(crate) unsafe extern "C" fn window_closed(_: *mut c_void, id: bc::bc_id) {
         update_app(|cx| {
             find_bar::window_closed(id, cx);
             offer::window_closed(id, cx);
+            broom_host::window_closed(id, cx);
             for child in window.children {
                 child.update(cx, |_, window, _| window.remove_window()).ok();
             }
