@@ -8,7 +8,7 @@ use gpui::{
     canvas, div, prelude::*, px, rgb,
 };
 
-use super::glyph::{self, Glyph, Mark, MarkInks, State};
+use super::glyph::{self, Mark, MarkInks, State};
 use super::{
     Chip, Form, PageWord, SLOT, Shell, chip, clock, drawn_listener, number, state_lead, state_line,
 };
@@ -140,11 +140,10 @@ impl Shell {
             },
             Some(mark) => mark,
             None => {
-                let now = clock();
-                let drawn = Glyph::new(State::from(dot), now, true).drawn(now);
+                let look = glyph::Look::of(State::from(dot));
                 let inks = self.glyph_inks();
                 let paint = move |bounds, _, window: &mut Window, _: &mut gpui::App| {
-                    glyph::paint(&drawn, bounds, inks, false, window)
+                    glyph::paint(look, bounds, inks, false, window)
                 };
                 return canvas(|_, _, _| {}, paint)
                     .flex_none()

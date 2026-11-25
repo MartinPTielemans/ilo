@@ -2843,14 +2843,8 @@ chips = 0.18
 chips-delay = 0.12
 chips-stagger = 0.05
 chips-rise = 4.0
-# The glyph's dot circles once in `orbit`, and the status's highlight sweeps in `shimmer`, both
-# linear.
-orbit = 1.4
+# The status's highlight sweeps in `shimmer`, linear.
 shimmer = 1.8
-ring = 0.24
-dot-fade = 0.2
-tick = 0.3
-tick-delay = 0.09
 # Open's pages fly to their rows one after another, their contents fading in, and their rows show
 # as they land.
 ghost = 0.42

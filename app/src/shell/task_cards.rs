@@ -47,7 +47,7 @@ use crate::tokens::shell::task_card::{
     BUTTON_HEIGHT, COUNT_LINE, DONE_LINE, FINDING_LINES, GAP, GLYPH as CARD_GLYPH, GLYPH_GAP, ICON,
     LINE, LINE_AROUND, LIVE_LINE, PADDING, TITLE_LINE, UNDER,
 };
-use glyph::{Glyph, State};
+use glyph::{Look, State};
 use motion::{Curve, Ease};
 
 /// Now, for the cards' motion. Tests hold this clock still and move it on themselves, so how far a
@@ -704,12 +704,11 @@ impl Shell {
     /// A finished task's mark at rest, as the Library shows it: Done's tick, or the grey ring of
     /// one stopped or failed, in the glyph's box.
     pub(super) fn status_mark(&self, dot: Dot) -> impl IntoElement + use<> {
-        let now = clock();
-        let drawn = Glyph::new(State::from(dot), now, true).drawn(now);
+        let look = Look::of(State::from(dot));
         let inks = self.glyph_inks();
         canvas(
             |_, _, _| {},
-            move |bounds, _, window, _| glyph::paint(&drawn, bounds, inks, false, window),
+            move |bounds, _, window, _| glyph::paint(look, bounds, inks, false, window),
         )
         .size(px(GLYPH))
     }
