@@ -434,11 +434,35 @@ fn no_system_root_is_a_users_or_a_volumes() {
                 );
             }
         }
-        // Nothing of /var or /private/var whole, which hold every user's temporary folders.
+        // Nothing of /var or /private/var whole, which hold every user's temporary folders, nor
+        // the system's library whole, which holds its keychains and every service's bundle.
         if filter == "subpath" {
-            assert!(!["/", "/var", "/private/var", "/private", "/System"].contains(&root));
+            let whole = [
+                "/",
+                "/var",
+                "/private/var",
+                "/private",
+                "/System",
+                "/System/Library",
+            ];
+            assert!(!whole.contains(&root));
         }
     }
+}
+
+/// The system's Perl starts: its own tree is read and mapped, and nothing wider. The site's and
+/// the network's module folders, which someone other than the system writes, stay unread.
+#[test]
+fn the_systems_perl_is_its_own_tree_read_and_mapped() {
+    let text = system::text();
+    let perl: Vec<&str> = (text.lines())
+        .filter(|line| line.contains("Perl"))
+        .collect();
+    assert_eq!(
+        perl,
+        ["(allow file-read* file-test-existence file-map-executable \
+             (subpath \"/System/Library/Perl\"))"]
+    );
 }
 
 #[test]

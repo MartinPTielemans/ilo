@@ -13,7 +13,8 @@
 //! `/private/var`, which hold every user's temporary folders; `/opt/homebrew/lib` and
 //! `/usr/local/lib`, which aren't the system's; the app sandbox's extensions, which another
 //! program hands out; the syslog socket and the notification memory; and its lookups, of which
-//! rules.rs takes the trust ones. Added: the one name of `/private/var` a shell's start reads.
+//! rules.rs takes the trust ones. Added: the one name of `/private/var` a shell's start reads,
+//! and the system's Perl.
 
 /// One allow: its operations, then each root in the filter named.
 pub struct Allow {
@@ -67,6 +68,13 @@ pub const SYSTEM: &[Allow] = &[
         &["/System/Library/Extensions"],
     ),
     allow(READ, "subpath", FRAMEWORKS),
+    // The system's Perl: /usr/bin/perl loads its library, its modules and their compiled parts
+    // from here, on the sealed system volume.
+    allow(
+        "file-read* file-test-existence file-map-executable",
+        "subpath",
+        &["/System/Library/Perl"],
+    ),
     // The system's links to its own folders, and the firmlinks' parents.
     allow(
         METADATA,
