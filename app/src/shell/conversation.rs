@@ -1082,10 +1082,10 @@ impl TalkView {
         menu(items, at, false, window, chosen, cx);
     }
 
-    /// The level chip's menu, for the task shown: the Shell holds the window's menus.
     /// The level trigger's menu, the bar's own (choices.rs), hanging under it: the thread's level
-    /// checked. Only the user's pick here changes it, through the press its refusal's button
-    /// makes; there's no agent path to it.
+    /// checked, and last the words table's `Settings…`, to where the levels are explained. Only
+    /// the user's pick here changes it, through the press its refusal's button makes; there's no
+    /// agent path to it.
     fn level_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(shown) = &self.shown else { return };
         let (Some(trigger), Some(menu)) = (
@@ -1104,9 +1104,20 @@ impl TalkView {
             items.push(MenuEntry::named(ONLY_ADDED, false).checked(true));
             items.len() - 2
         });
+        items.push(MenuEntry::line());
+        items.push(MenuEntry::named(super::empty::composer::SETTINGS, true));
+        let settings = items.len() - 1;
         let view = cx.entity().downgrade();
         let chosen: crate::text_input::Chosen = Box::new(move |closed, _, cx| {
             let picked = closed.chosen();
+            if picked == Some(settings) {
+                let shell = view.upgrade().map(|view| view.read(cx).shell.clone());
+                if let Some(shell) = shell {
+                    shell
+                        .update(cx, |shell, cx| shell.browser.agent_access(cx))
+                        .ok();
+                }
+            }
             let action = match picked {
                 Some(item) if Some(item) == any_site => Some(TaskAction::PickAnySite),
                 Some(item) => Tier::ALL.get(item).map(|tier| TaskAction::PickTier(*tier)),

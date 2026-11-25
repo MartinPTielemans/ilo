@@ -3502,8 +3502,9 @@ live-line = 16.0
 # the level `composer-level-x` in at `composer-level`/`composer-level-line`, the model in text-2
 # without its mark, the round button `composer-round` with Stop's square at `composer-square`. The
 # drawing gives no arrow or space under the row here: `composer-arrow` is the stage's less one, by
-# the round button's, and the row keeps the stage's `composer-row-under`.
-composer-radius = 14.0
+# the round button's, and the row keeps the stage's `composer-row-under`. Its corner is the stage
+# composer's, `radius.panel`, where the drawing has 14: a corner is one of the four.
+composer-radius = 16.0
 composer-field = 38.0
 composer-field-x = 12.0
 composer-text = 13.0

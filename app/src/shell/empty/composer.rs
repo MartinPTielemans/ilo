@@ -128,7 +128,7 @@ impl Resting {
 }
 
 /// The level's menu's last row, which opens Settings › Agents at Access.
-const SETTINGS: &str = "Settings…";
+pub(in crate::shell) const SETTINGS: &str = "Settings…";
 
 /// Records where the element it's put in is drawn, for a menu to hang from it.
 fn drawn_at(at: &Rc<Cell<Option<Bounds<Pixels>>>>) -> impl IntoElement {

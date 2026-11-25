@@ -2829,7 +2829,8 @@ fn a_model_that_cant_change_opens_nothing(cx: &mut TestAppContext) {
 /// The composer's level trigger says the thread's own level, at Look only and at Full access,
 /// and a click on it opens the bar's own level menu (choices.rs) under it, that level checked,
 /// wearing its plate while it's open. A pick there is the user's press on the thread, the one way
-/// its level changes. A thread kept to the sites added has its way out to any site there too.
+/// its level changes. A thread kept to the sites added has its way out to any site there too. Last
+/// is the words table's `Settings…`, which opens Settings › Agents at Access.
 #[gpui::test]
 fn the_level_trigger_says_the_threads_level_and_opens_the_bars_menu(cx: &mut TestAppContext) {
     type Shown = Rc<RefCell<Option<(Vec<MenuEntry>, crate::text_input::Chosen)>>>;
@@ -2874,6 +2875,10 @@ fn the_level_trigger_says_the_threads_level_and_opens_the_bars_menu(cx: &mut Tes
                 ("Only the sites you add".into(), false, true),
             ]);
         }
+        expected.extend([
+            (String::new(), false, false),
+            ("Settings…".into(), true, false),
+        ]);
         assert_eq!(rows, expected, "the level menu's rows at {tier:?}");
         assert_eq!(
             view.read_with(cx, |view, _| view.menu_open),
@@ -2881,16 +2886,13 @@ fn the_level_trigger_says_the_threads_level_and_opens_the_bars_menu(cx: &mut Tes
             "the trigger wears its plate while its menu is open"
         );
         host.take();
-        let pick = match only_added {
-            false => 1,
-            true => expected.len() - 2,
+        let (pick, pressed) = match (tier, only_added) {
+            (_, true) => (expected.len() - 4, "task task-1 PickAnySite"),
+            (Tier::Full, _) => (expected.len() - 1, "agent access"),
+            _ => (1, "task task-1 PickTier(Work)"),
         };
         cx.update(|window, cx| chosen(crate::menu::Closed::Chose(pick), window, cx));
         cx.run_until_parked();
-        let pressed = match only_added {
-            false => "task task-1 PickTier(Work)",
-            true => "task task-1 PickAnySite",
-        };
         assert_eq!(
             host.take(),
             vec![pressed.to_string()],
