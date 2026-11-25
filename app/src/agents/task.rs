@@ -3531,7 +3531,8 @@ fn first_words(result: &str) -> SharedString {
 }
 
 /// A result's first line of text, without the marks that make it a heading, a list's item or
-/// bold, or None with no text.
+/// bold, a link's address left for its label, then cleaned as a title is: clipped at TITLE_KEPT
+/// and what wouldn't show or would move the text around it written out. None with no text.
 fn first_line(result: &str) -> Option<SharedString> {
     let line = (result.lines())
         .map(|line| {
@@ -3540,7 +3541,34 @@ fn first_line(result: &str) -> Option<SharedString> {
                 .trim_end_matches(['*', ' '])
         })
         .find(|line| !line.is_empty())?;
-    Some(page::clip(&line.replace("**", ""), 120).into())
+    let kept = page::clip(&labels(&line.replace("**", "")), TITLE_KEPT);
+    Some(super::request::escaped(&kept, false).0.into())
+}
+
+/// `text` with each "[label](address)" its label alone.
+fn labels(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('[') {
+        plain.push_str(&rest[..open]);
+        let link = &rest[open + 1..];
+        let label = link.find("](").and_then(|close| {
+            let end = link[close + 2..].find(')')?;
+            Some((&link[..close], close + 2 + end + 1))
+        });
+        match label {
+            Some((label, length)) => {
+                plain.push_str(label);
+                rest = &link[length..];
+            }
+            None => {
+                plain.push('[');
+                rest = link;
+            }
+        }
+    }
+    plain.push_str(rest);
+    plain
 }
 
 /// A stopped task's last finished step, as its trace line says it, its thoughts left out. A step
