@@ -16,7 +16,7 @@ use crate::agents::task::{Card, Dot, Word};
 /// Settings › Agents' group and row that choose when these post.
 pub const NOTIFICATIONS: &str = "Notifications";
 pub const WHEN_TO_NOTIFY: &str = "Notify";
-const NOTIFY_AWAY: &str = concat!("When ", env!("APP_NAME"), " isn't in front");
+const NOTIFY_AWAY: &str = concat!("When ", env!("PRODUCT_NAME"), " isn't in front");
 const NOTIFY_ALWAYS: &str = "Always";
 const NOTIFY_NEVER: &str = "Never";
 /// The most of a task's title a notification carries, as its card's title holds at most.

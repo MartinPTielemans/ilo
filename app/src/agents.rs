@@ -54,6 +54,7 @@ use futures::StreamExt;
 use gpui::{App, AppContext, Context, Entity, Global, SharedString, Task};
 use serde_json::{Value, json};
 
+use crate::product::PRODUCT;
 use crate::shell::DialogKind;
 use crate::sort_by_site;
 
@@ -1260,7 +1261,9 @@ impl Agents {
     /// commands would defeat the sandbox.
     pub fn other_client_detail(&self, missing: &[&str]) -> String {
         if self.bridge.first().map(String::as_str) == Some("flatpak") {
-            return "Any MCP client. ilo's sandbox can't see Claude Code or Codex on this computer, so Copy Setup gives their setup to paste in.".into();
+            return format!(
+                "Any MCP client. {PRODUCT}'s sandbox can't see Claude Code or Codex on this computer, so Copy Setup gives their setup to paste in."
+            );
         }
         match missing {
             [] => "Any MCP client".into(),

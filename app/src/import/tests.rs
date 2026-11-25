@@ -1893,7 +1893,7 @@ fn a_profile_that_doesnt_open_offers_try_again(cx: &mut TestAppContext) {
             format!(
                 "{} made the profile Work for one of Arc's Spaces, and it hasn't opened in 20 \
                  seconds.",
-                env!("APP_NAME")
+                env!("PRODUCT_NAME")
             )
         );
         assert_eq!(guide.button.as_deref(), Some("Try Again"));
@@ -3229,7 +3229,7 @@ fn returning_with_access_still_off_says_still_no_access(cx: &mut TestAppContext)
     cx.run_until_parked();
     let still = format!(
         "Still no access. If you turned it on, quit {} and open it again.",
-        env!("APP_NAME")
+        env!("PRODUCT_NAME")
     );
     view.read_with(cx, |view, _| {
         assert_eq!(view.access(), Some(still.clone()));

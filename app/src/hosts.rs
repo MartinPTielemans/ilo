@@ -868,7 +868,7 @@ pub(crate) unsafe extern "C" fn crash_report_offered(_: *mut c_void) {
         button("Send Report", "send", true),
         button("Don't Send", "don't send", false),
     ];
-    let text = concat!(env!("APP_NAME"), " quit unexpectedly.");
+    let text = concat!(env!("PRODUCT_NAME"), " quit unexpectedly.");
     update_app(move |cx| {
         with_overlays(move |cx| toast::show_until_answered(text, buttons, cx), cx)
     });

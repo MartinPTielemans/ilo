@@ -140,13 +140,13 @@ impl OptIn {
         match self {
             OptIn::DailyCount => (
                 "Send a daily usage count",
-                crate::daily_count::words(env!("APP_NAME")).into(),
+                crate::daily_count::words(env!("PRODUCT_NAME")).into(),
             ),
             OptIn::CrashReports => (
                 "Send crash reports",
                 concat!(
                     "When ",
-                    env!("APP_NAME"),
+                    env!("PRODUCT_NAME"),
                     " crashes, it sends a report of what went wrong, so it can be fixed."
                 )
                 .into(),
@@ -184,7 +184,7 @@ impl Step {
         let (title, line, button) = match self {
             // The sheet's first page (#4093): what the flow is, and that each step can be skipped.
             Step::Intro => (
-                concat!("Welcome to ", env!("APP_NAME"), "."),
+                concat!("Welcome to ", env!("PRODUCT_NAME"), "."),
                 "A good tool. A few steps to make it yours, and you can skip any of them.",
                 "Get Started",
             ),
@@ -216,7 +216,7 @@ impl Step {
                     true => "Make Default",
                     false => "Continue",
                 };
-                let title = concat!("Make ", env!("APP_NAME"), " your default browser.");
+                let title = concat!("Make ", env!("PRODUCT_NAME"), " your default browser.");
                 return (title, line.into(), button);
             }
             // The engine that searches until one is picked is already the filled dot; the title
@@ -230,7 +230,7 @@ impl Step {
             Step::Transparency => (
                 "How much should show through?",
                 concat!(
-                    env!("APP_NAME"),
+                    env!("PRODUCT_NAME"),
                     "'s window is glass. Pick one to see the window change right away."
                 ),
                 "Continue",
@@ -244,7 +244,7 @@ impl Step {
             // The lead's words, as the sheet adds none of its own.
             Step::Assistant => (
                 "Bring your own assistant",
-                "Tasks run on the assistant you already use.",
+                "Threads run on the assistant you already use.",
                 "Continue",
             ),
             Step::OptIns => (

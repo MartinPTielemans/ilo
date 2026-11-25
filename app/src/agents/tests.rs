@@ -6221,6 +6221,50 @@ fn agents_never_get_a_login_address_or_card(cx: &mut TestAppContext) {
 /// was asked from, and a card that says what it does.
 mod tasks {
     use super::*;
+
+    /// What a user reads calls the user's work a thread (Z0), while what an assistant is told keeps
+    /// "task", which the sweep leaves until its own change.
+    #[test]
+    fn a_user_reads_thread_and_an_assistant_is_still_told_task() {
+        let says_task = |text: &str| {
+            text.to_lowercase()
+                .split(|c: char| !c.is_alphabetic())
+                .any(|word| word == "task" || word == "tasks")
+        };
+        let mut read: Vec<String> = [
+            crate::agents::tier::NEVER_GETS,
+            crate::agents::notes::SWITCH_LINE,
+            crate::agents::notes::SWITCH_OFF_LINE,
+            crate::agents::notes::FOOT,
+            crate::agents::fence::FOOT,
+        ]
+        .map(String::from)
+        .into();
+        for agent in ["task-1", "claude-code"] {
+            read.extend(
+                tools::names(agent)
+                    .iter()
+                    .map(|name| tools::describe(name).to_string()),
+            );
+        }
+        let said: Vec<&String> = read.iter().filter(|text| says_task(text)).collect();
+        assert!(
+            said.is_empty(),
+            "these strings a user reads still say task, not thread: {said:#?}"
+        );
+
+        let told = tools::list("task-1").to_string();
+        for (what, text) in [
+            ("the instructions", tools::INSTRUCTIONS),
+            ("a task's instructions", tools::TASK_INSTRUCTIONS),
+            ("a task's tools", told.as_str()),
+        ] {
+            assert!(
+                says_task(text),
+                "{what} an assistant is told no longer say task, which they keep for now: {text}"
+            );
+        }
+    }
     use crate::agents::ready::{Found, Ready};
     use crate::agents::runner::{self, Cli, Failure, Out};
     use crate::agents::sign_in::Offer;

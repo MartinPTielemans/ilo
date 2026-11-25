@@ -38,6 +38,7 @@ const MARK_STEM_WIDTH: f32 = 133.1 * MARK_SCALE;
 const MARK_STEM_HEIGHT: f32 = 358.4 * MARK_SCALE;
 /// How tall the mark is at its own size.
 const MARK_HEIGHT: f32 = MARK_DOT + MARK_DOT_GAP + MARK_STEM_HEIGHT;
+use crate::product::PRODUCT;
 use crate::tokens::shell::empty::BUTTON_FILL;
 use crate::tokens::shell::empty::BUTTON_GAP;
 use crate::tokens::shell::empty::BUTTON_HEIGHT;
@@ -345,9 +346,14 @@ fn welcome(palette: &Palette, cx: &mut Context<Shell>) -> gpui::Div {
         .items_center()
         .child(mark(WELCOME_MARK, palette))
         .child(
-            display_text("Welcome to ilo", WELCOME_SIZE, WELCOME_LINE, cx)
-                .mt(px(MARK_GAP - cap_top(WELCOME_SIZE, WELCOME_LINE)))
-                .text_color(palette.text(rgba(NAME).a)),
+            display_text(
+                format!("Welcome to {PRODUCT}"),
+                WELCOME_SIZE,
+                WELCOME_LINE,
+                cx,
+            )
+            .mt(px(MARK_GAP - cap_top(WELCOME_SIZE, WELCOME_LINE)))
+            .text_color(palette.text(rgba(NAME).a)),
         )
         .child(
             display_text("a good tool.", TAGLINE_SIZE, TAGLINE_LINE, cx)

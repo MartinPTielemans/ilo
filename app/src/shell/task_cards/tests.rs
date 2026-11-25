@@ -1505,7 +1505,7 @@ fn the_count_is_of_headers(cx: &mut TestAppContext) {
     draw(&shell, cx);
     assert_eq!(plates(&shell, cx), "more 2 task-5 task-3 task-2");
     shell.read_with(cx, |shell, _| {
-        assert_eq!(shell.more_words().as_ref(), "2 more tasks");
+        assert_eq!(shell.more_words().as_ref(), "2 more threads");
         let stops = shell.foot_stops();
         let headers = |stop: &&StripStop| matches!(stop, StripStop::Header(_));
         let rows = |stop: &&StripStop| matches!(stop, StripStop::Row(_));

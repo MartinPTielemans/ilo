@@ -10,6 +10,7 @@ use url::Url;
 
 use super::definition::{Column, Definition, Kind, Type};
 use super::table::{Cell, tables};
+use crate::product::PRODUCT;
 
 /// The most of a body the core reads (#3820), and so the most a read takes.
 pub const BODY_MOST: usize = 4 << 20;
@@ -108,7 +109,9 @@ type Read = (String, Option<String>);
 fn data_rows(read: &Definition, body: &[u8]) -> Result<Vec<Vec<Read>>, Broken> {
     let body = body.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(body);
     let Ok(answer) = serde_json::from_slice::<Value>(body) else {
-        return Err(Broken("The site didn't send data ilo can read.".into()));
+        return Err(Broken(format!(
+            "The site didn't send data {PRODUCT} can read."
+        )));
     };
     let found = at_path(&answer, &read.rows)
         .ok_or_else(|| Broken(format!("The site's data is missing {}.", named(&read.rows))))?;
@@ -188,7 +191,7 @@ fn table_rows(read: &Definition, body: &[u8], mime: &str) -> Result<Vec<Vec<Read
         1 => found.pop().unwrap(),
         many => {
             return Err(Broken(format!(
-                "{many} tables have {these}; ilo can't pick one."
+                "{many} tables have {these}; {PRODUCT} can't pick one."
             )));
         }
     };

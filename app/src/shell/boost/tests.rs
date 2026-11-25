@@ -675,7 +675,10 @@ fn an_arrangement_changed_outside_ilo_is_off_until_turned_on(cx: &mut TestAppCon
     assert_eq!(host.take(), ["arrangement 1 example.com: 3 changes"]);
     assert_eq!(
         shell.read_with(cx, |shell, _| shell.arrangement_note(10)),
-        (None, Some("Changed outside ilo, off"))
+        (
+            None,
+            Some(concat!("Changed outside ", env!("PRODUCT_NAME"), ", off"))
+        )
     );
     // Where the first ↺ would be is the list's words, with nothing to press.
     put_back(&shell, 0, 3, cx);

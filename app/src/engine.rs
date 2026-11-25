@@ -2523,7 +2523,7 @@ impl Browser for Engine {
         let also_going = going.clone();
         let question = dialog::Question {
             icon: None,
-            message: concat!("Quit ", env!("APP_NAME"), "?").into(),
+            message: concat!("Quit ", env!("PRODUCT_NAME"), "?").into(),
             detail: "".into(),
             list: Vec::new(),
             action: "Quit".into(),

@@ -79,14 +79,14 @@ pub fn also(name: &str) -> &'static [&'static str] {
     match name {
         "Peek" => &["link preview"],
         "Mini Player" => &["picture in picture", "pip"],
-        concat!("Little ", env!("APP_NAME")) => &["little arc", "small window"],
+        "Little Window" => &["little arc", "small window"],
         "Block ads and trackers" => &["ad blocker", "content blocker"],
         "Relay calls" => &["webrtc", "ip leak"],
         "Reopen your windows and tabs" => &["restore session"],
         "Page zoom" => &["text size", "font size"],
         "Let sites ask to send notifications" => &["notifications"],
         "Ask where to save each file" => &["downloads"],
-        "Tasks from the command bar" => &["agent tasks", "ask claude", "ask codex"],
+        "Threads from the command bar" => &["agent tasks", "ask claude", "ask codex"],
         "Appearance" => &["dark mode", "light mode"],
         "Show the hidden sidebar at the window's edge" => &["edge reveal", "auto hide"],
         "Sidebar position" => &[

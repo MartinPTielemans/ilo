@@ -34,7 +34,7 @@ pub(in crate::shell) const SEARCH_WORDS: &str = crate::command_bar::PLACEHOLDER_
 const SEARCH: &str = "Search";
 const ASK: &str = "Ask";
 /// Over the cards.
-const LATEST: &str = "Latest tasks";
+const LATEST: &str = "Pick up a thread";
 
 /// What the field says in Ask, naming the assistant it runs on.
 fn ask_words(assistant: Option<&str>) -> SharedString {

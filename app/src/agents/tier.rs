@@ -12,7 +12,7 @@ pub const ANY_SITE: &str = "Any site";
 pub const ONLY_ADDED: &str = "Only the sites you add";
 
 /// Settings › Agents' line under its name, the one place it says what a task never gets.
-pub const NEVER_GETS: &str = "A task never gets passwords, cookies or your other tabs.";
+pub const NEVER_GETS: &str = "A thread never gets passwords, cookies or your other tabs.";
 
 /// A task's access, lowest first, which their order follows.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -76,10 +76,11 @@ impl Tier {
     pub fn promise(self) -> &'static str {
         match self {
             Tier::Look => "Opens pages and reads them, and does nothing on them.",
-            Tier::Work => {
-                "Clicks, types and submits forms. ilo stops at paying, ordering, sending messages as \
-                 you and bank sites."
-            }
+            Tier::Work => concat!(
+                "Clicks, types and submits forms. ",
+                env!("PRODUCT_NAME"),
+                " stops at paying, ordering, sending messages as you and bank sites."
+            ),
             Tier::Full => {
                 "Everything you can do on a page, including paying, ordering, messages and bank \
                  sites."

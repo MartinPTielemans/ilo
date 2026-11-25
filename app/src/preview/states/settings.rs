@@ -278,10 +278,11 @@ impl gpui::Render for PicturesPage {
                         vec![
                             row(
                                 "Reopen your windows and tabs",
-                                Some(
-                                    "Off: ilo opens one empty window, and Today tabs go to the \
-                                     archive.",
-                                ),
+                                Some(concat!(
+                                    "Off: ",
+                                    env!("PRODUCT_NAME"),
+                                    " opens one empty window, and Today tabs go to the archive."
+                                )),
                                 gpui::IntoElement::into_any_element(stop_switch(
                                     &look, "restore", "restore", true, 1., look.on, a11y,
                                 )),
@@ -656,7 +657,10 @@ impl gpui::Render for PicturesPage {
         .text_color(base.opacity(browser::tokens::settings::TITLE));
         let general = matches!(self.shown, Pictures::General);
         let lede = match self.shown {
-            Pictures::General => Some("ilo isn't your default browser."),
+            Pictures::General => Some(concat!(
+                env!("PRODUCT_NAME"),
+                " isn't your default browser."
+            )),
             Pictures::Models => Some(browser::agents::tier::NEVER_GETS),
             _ => None,
         };

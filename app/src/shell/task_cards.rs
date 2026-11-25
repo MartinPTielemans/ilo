@@ -1607,8 +1607,8 @@ impl Shell {
         let more = listed.saturating_sub(MOST - usize::from(self.foot.slot));
         match (self.foot.all, more) {
             (true, _) => "Show less".into(),
-            (false, 1) => "1 more task".into(),
-            (false, more) => format!("{more} more tasks").into(),
+            (false, 1) => "1 more thread".into(),
+            (false, more) => format!("{more} more threads").into(),
         }
     }
 

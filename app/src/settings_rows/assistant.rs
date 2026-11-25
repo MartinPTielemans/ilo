@@ -69,7 +69,7 @@ pub fn assistant_row(
                 div()
                     .id(("assistant-mark", index))
                     .when(a11y, |mark| {
-                        named_check(mark, format!("Run tasks with {name}"), marked)
+                        named_check(mark, format!("Run threads with {name}"), marked)
                     })
                     .size(px(CONTROL_HEIGHT))
                     .flex()

@@ -17,7 +17,7 @@ pub const ADD_SITE: &str = "Add Site…";
 pub const PLACEHOLDER: &str = "Site or address";
 pub const SPOKEN: &str = "Site agents can't open or use";
 /// The sentence under the list.
-pub const FOOT: &str = "Agents can't open or use these sites, whatever a task's access.";
+pub const FOOT: &str = "Agents can't open or use these sites, whatever a thread's access.";
 
 /// Why the card asks, under what the agent wants: the user's own list.
 pub fn why(site: &str) -> String {

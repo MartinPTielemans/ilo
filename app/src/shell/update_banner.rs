@@ -223,7 +223,7 @@ impl Shell {
         };
         let height = self.update_banner_height();
         let open = height > UPDATE_BANNER;
-        let app = env!("APP_NAME");
+        let app = env!("PRODUCT_NAME");
         let (rest_words, title, detail, button) = match (&waiting, self.update_restarting) {
             (Waiting::Ready(version), restarting) => (
                 "Update ready",
@@ -232,7 +232,7 @@ impl Shell {
                     None => "The update is ready".into(),
                 },
                 if restarting {
-                    concat!(env!("APP_NAME"), " reopens with your tabs.")
+                    concat!(env!("PRODUCT_NAME"), " reopens with your tabs.")
                 } else {
                     "Your tabs come back."
                 },

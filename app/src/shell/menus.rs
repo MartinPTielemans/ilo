@@ -221,7 +221,7 @@ pub fn profile_kept(first: bool, profiles: usize, spaces: usize, task: bool) -> 
         _ if first && profiles < 2 => return None,
         _ if first => "The first profile can't be deleted.".into(),
         Some(its) => format!("Delete {its} to delete it."),
-        None if task => "An agent's task is working in it.".into(),
+        None if task => "An agent's thread is working in it.".into(),
         None => return None,
     };
     Some(why)
@@ -2052,7 +2052,10 @@ mod tests {
         );
         assert_eq!(says(false, 2, 1, false), "Delete its Space to delete it.");
         assert_eq!(says(false, 3, 2, true), "Delete its Spaces to delete it.");
-        assert_eq!(says(false, 2, 0, true), "An agent's task is working in it.");
+        assert_eq!(
+            says(false, 2, 0, true),
+            "An agent's thread is working in it."
+        );
         assert_eq!(
             says(false, 2, 0, false),
             "",

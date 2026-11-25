@@ -93,7 +93,7 @@ impl Section {
     ];
 
     /// The small label over each of `GROUPS`, in its order (#4092).
-    pub const LABELS: [&'static str; 3] = ["Browser", "Private", env!("APP_NAME")];
+    pub const LABELS: [&'static str; 3] = ["Browser", "Private", env!("PRODUCT_NAME")];
 
     /// Every section, in the column's order.
     pub fn all() -> impl Iterator<Item = Section> {
