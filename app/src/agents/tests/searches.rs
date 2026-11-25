@@ -145,3 +145,27 @@ fn a_tasks_call_by_the_searchs_name_is_no_tool(cx: &mut TestAppContext) {
     assert!(titles(&run, &agent, cx).is_empty());
     assert!(entries(&run, &agent, cx).is_empty());
 }
+
+/// The thread's past row, as Library › Agents keeps it on disk, holds its searches' count and
+/// none of their words.
+#[gpui::test]
+fn the_past_row_holds_the_searches_count_alone(cx: &mut TestAppContext) {
+    let run = Run::new("search-past", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.said(&agent, Out::Searched("sleeper carriages Madrid".into()), cx);
+    run.said(&agent, Out::Searched("ferry to Tangier".into()), cx);
+    run.finish(&agent, cx);
+    let ended = (run.agents).update(cx, |agents, cx| agents.take_ended(cx));
+    let past: Vec<_> = ended.into_iter().map(|(_, past)| past).collect();
+    assert_eq!(past.len(), 1, "{past:?}");
+    let file = crate::agent_history::write(&past);
+    let searched: Vec<_> = (crate::agent_history::read(&file).into_iter())
+        .flat_map(|past| past.steps)
+        .filter(|step| step.action == SEARCHED)
+        .collect();
+    assert_eq!(searched.len(), 1, "{file}");
+    assert_eq!(searched[0].target, "2", "{file}");
+    for word in ["sleeper", "carriages", "Madrid", "ferry", "Tangier"] {
+        assert!(!file.contains(word), "{word} in the past file: {file}");
+    }
+}
