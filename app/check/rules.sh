@@ -15,6 +15,11 @@
 #   access a task starts with, in ilo's own words and with nothing sent. A change without a `what`,
 #   the sentence that says what it does, is refused for that, with nothing sent (#3555).
 # - A held tab: while a hand_off waits on the user, every tool on that tab is refused.
+# - Outside its page, on the Mac: after an agent's click or key, a page of the agent's asks for a
+#   select's list, the pickers of a date and a colour field, a field's own list, a cast, a share, a
+#   digital credential and a print, in the background, in its task's live tile and watched. Each
+#   call is answered and no window of the app's comes on screen. Once the user holds the page,
+#   their own click opens its select's list and the share sheet.
 # - Hostile pages: text, hidden text, a title, labels, a comment and a frame of another site tell
 #   the agent to do each of the above, and one forges a tool's answer. What read_page and snapshot
 #   hand over has none of the page's secrets (a password, a hidden field, a typed value, its
@@ -510,6 +515,215 @@ changes "$hostile_tab" "the hostile page"
 # Nothing the agent or a page did gave a task more access: only the user's press in ilo does.
 if grep -q '^browser: task [^ ]* access ' "$log"; then
   missed "a task's access changed with no press of the user's: $(grep '^browser: task [^ ]* access ' "$log" | tail -1)"
+fi
+
+# Nothing outside its page. A page in the agent's Space asks the browser, after an agent's click or
+# key, for each thing a tab of the user's gets drawn outside its page: a select's list, the pickers
+# of a date and of a colour field, a field's own list, the devices to cast to, the share sheet, a
+# digital credential's wallet and a print. While the user doesn't hold the page the call is
+# answered, the page hears of its ask where the browser answers one, and no window of the app's
+# comes on screen for it: with the page in the background, in its task's live tile, and watched.
+# The page says in its title what it asked and how it went, with a count, so each ask has a line of
+# its own to wait for. Print is last in each state, as a page whose print isn't refused stops
+# answering. The windows are the Mac's (check/windows.m); elsewhere the run doesn't look.
+if [ "$(uname)" = Darwin ]; then
+  clang -fobjc-arc -framework Cocoa -o "$out/windows" check/windows.m 2> "$out/windows-build.log" ||
+    fail "check/windows.m didn't build: $(cat "$out/windows-build.log")"
+  cat > "$out/site/rules-asks.html" << 'EOF'
+<title>asks</title>
+<style>
+select, #share { position: fixed; top: 5vh; width: 18vw; height: 10vh; margin: 0 }
+select { left: 4vw }
+#share { left: 28vw }
+p { margin-top: 30vh }
+</style>
+<select aria-label="List" onmousedown="say('list pressed')"><option>One<option>Two</select>
+<button id=share onclick="ask('share', () => navigator.share({ title: 'rules', text: 'made up' }))">Share</button>
+<p><input id=day type=date aria-label="Day"> <input id=tint type=color aria-label="Tint">
+<input list=kinds aria-label="Kind"><datalist id=kinds><option>oak<option>olive</datalist></p>
+<p><button onclick="show('picker', document.querySelector('select'))">Show list</button>
+<button onclick="show('day', day)">Show day</button>
+<button onclick="show('tint', tint)">Show tint</button>
+<button onclick="ask('cast', () => new PresentationRequest(['https://localhost/receiver.html']).start())">Cast</button>
+<button onclick="ask('digital', () => navigator.credentials.get({ digital: { requests: [
+  { protocol: 'openid4vp-v1-unsigned', data: { response_type: 'vp_token', response_mode: 'dc_api',
+    nonce: 'made-up', dcql_query: { credentials: [{ id: 'c', format: 'mso_mdoc',
+      meta: { doctype_value: 'org.iso.18013.5.1.mDL' },
+      claims: [{ path: ['org.iso.18013.5.1', 'age_over_18'] }] }] } } }] } }))">Ask D</button>
+<button onclick="window.print(); say('print asked')">Print</button></p>
+<script>
+let asks = 0;
+const say = what => document.title = what + " " + ++asks;
+const ask = (what, make) => {
+  try { make().then(() => say(what + " done"), e => say(what + " " + e.name)); }
+  catch (e) { say(what + " unasked"); }
+};
+const show = (what, field) => {
+  try { field.showPicker(); say(what + " shown"); }
+  catch (e) { say(what + " " + e.name); }
+};
+</script>
+EOF
+  # The app's windows on screen but the browser window and what ilo itself lays over the whole of
+  # it, as the pointer that shows where an agent clicks on a watched page: each as "<level> <width>
+  # <height>". A window exactly as large as the browser window is left out with them, so a dialog
+  # of that exact size would not be seen.
+  whole=$("$out/windows" "$pid" | awk '$1 == 0 { print $2, $3; exit }')
+  [ -n "$whole" ] || fail "the browser window isn't on screen"
+  others() { "$out/windows" "$pid" | awk -v whole="$whole" '$2 " " $3 != whole' | sort | tr '\n' ','; }
+  up=$(others)
+  [ -z "$up" ] || fail "before the page's asks the app has more than its window on screen: $up"
+  opened=$(call open_tab "{\"url\":\"$local_site/rules-asks.html\"}")
+  asks_tab=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  [ -n "$asks_tab" ] || fail "open_tab of the page that asks answered: $opened"
+  outline=$(call snapshot "{\"tab\":$asks_tab}")
+  # A click's arguments for the page's $1 named $2.
+  its() { echo "{\"tab\":$asks_tab,\"ref\":\"$(ref_of "$1" "$2")\"}"; }
+  # asked <what> <tool> <arguments> [<the page's word for it> [<what the page must hear>]]: the
+  # agent's call is answered, the page hears how its ask went, and nothing more is on screen.
+  asked() {
+    tries=$((tries + 1))
+    [ -z "${4:-}" ] || heard=$(grep -c "^browser: title $asks_tab $4 " "$log" || true)
+    got=$(call "$2" "$3")
+    case "$got" in "error: "*) missed "$state: $1 answered: $got" && return ;; esac
+    if [ -n "${4:-}" ]; then
+      if await_more "^browser: title $asks_tab $4 " "$heard"; then
+        answer=$(grep "^browser: title $asks_tab $4 " "$log" | tail -1 | cut -d' ' -f4-)
+        # shellcheck disable=SC2254 # $5 is a pattern
+        case "$answer" in ${5:-*}) ;; *) missed "$state: $1: the page heard $answer" ;; esac
+      else
+        missed "$state: $1: the page was never answered"
+      fi
+    fi
+    now=$(others)
+    [ -z "$now" ] || [ "$now" = "$up" ] || missed "$state: after $1 the app has a window more on screen: $now"
+    up=$now
+  }
+  # Once more where a state ends, before the run goes on to the next: a window that came up after
+  # the state's last ask is that state's.
+  ended() {
+    now=$(others)
+    [ -z "$now" ] || [ "$now" = "$up" ] || missed "$state: after its last ask the app has a window more on screen: $now"
+    up=$now
+  }
+  asks() {
+    state=$1
+    asked "an agent's click on a select" click "$(its combobox List)"
+    asked "Space on the select the click focused" press_key "{\"tab\":$asks_tab,\"key\":\"Space\"}"
+    asked "the page's showPicker of a select" click "$(its button "Show list")" picker
+    asked "the page's showPicker of a date field" click "$(its button "Show day")" day
+    asked "the page's showPicker of a colour field" click "$(its button "Show tint")" tint
+    asked "typing into a field with a list of its own" type "$(its combobox Kind | sed 's/}$/,"text":"o"}/')"
+    asked "casting" click "$(its button Cast)" cast "cast *Error *"
+    asked "sharing" click "$(its button Share)" share "share NotAllowedError *"
+    asked "a digital credential" click "$(its button "Ask D")" digital "digital *Error *"
+    asked "the page's print" click "$(its button Print)" "print asked"
+  }
+  if [ "$driven" = 1 ]; then
+    asks "in the background"
+    # In its task's tile, which is live while the conversation shows.
+    read -r px py pw ph << PLATE
+$(grep "^browser: task plate task-${first#session-} at " "$log" | tail -1 | cut -d' ' -f6-)
+PLATE
+    ended
+    send click $((px + pw / 2)) $((py + ph / 2))
+    expect "^browser: task $first shown\$" "a click on the task's card didn't show its conversation"
+    await "^browser: task tile $asks_tab live\$" || fail "the tile of the page that asks didn't go live"
+    asks "in a live tile"
+    # Watched: a click on its picture opens the page in the conversation's place.
+    read -r px py pw ph << PICTURE
+$(grep "^browser: task picture $asks_tab at " "$log" | tail -1 | cut -d' ' -f6-)
+PICTURE
+    ended
+    send click $((px + pw / 2)) $((py + ph / 2))
+    await "^browser: task $first page $asks_tab\$" || fail "a click on the picture of the page that asks didn't open it"
+    await "^browser: task page $asks_tab in place\$" || fail "the page that asks didn't come to rest in place"
+    asks "watched"
+    # The page is the user's once they press in it, and from then on it is drawn for as a tab of
+    # their own is: their click on the select opens its list, and their click on Share the share
+    # sheet, which the engine makes only for a page in front and visible.
+    ended
+    if [ -z "$up" ]; then
+      # The window's page view on screen, the largest of them: its corner and its size. The layout
+      # counts a view's place from the window's bottom, a click counts from its top.
+      page_view() {
+        send layout
+        read -r vx vy vw vh << VIEW
+$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content ' |
+          awk -F', ' '{ split($1, content, "[ x]"); wide = content[4]; high = content[5]
+            for (i = 2; i <= NF; i++) if ($i ~ /^(BrowserCoreTileView|WebContentsViewCocoa) /) {
+              split($i, part, " "); split(part[2], corner, ","); split(part[3], size, "x")
+              if (corner[1] + 0 < wide && size[1] * size[2] > most) {
+                most = size[1] * size[2]
+                view = corner[1] " " (high - corner[2] - size[2]) " " size[1] " " size[2] } } }
+            END { print view }')
+VIEW
+        [ -n "$vh" ] || fail "the window's layout has no page view on screen"
+      }
+      in_page() { echo "$((vx + vw * $1 / 100)) $((vy + vh * $2 / 100))"; }
+      # Up to 10 s for something of the page's to be on screen ($1 = 1) or for nothing to be.
+      on_screen() {
+        for _ in $(seq 100); do
+          now=$(others)
+          if [ "$1" = 1 ]; then [ -z "$now" ] || return 0; else [ -n "$now" ] || return 0; fi
+          sleep 0.1
+        done
+        return 1
+      }
+      # Up to 10 s for what is on screen to stop changing, as a sheet grows into its place.
+      at_rest() {
+        was=
+        for _ in $(seq 100); do
+          now=$(others)
+          [ "$now" != "$was" ] || return 0
+          was=$now
+          sleep 0.1
+        done
+        return 1
+      }
+      placed=$(grep -c "^browser: task page $asks_tab in place\$" "$log" || true)
+      page_view
+      send click $(in_page 50 70)
+      await "^browser: agent mcp-client taken over in $asks_tab\$" || fail "the user's press in the watched page didn't make it theirs"
+      await_more "^browser: task page $asks_tab in place\$" "$placed" || fail "the page the user took over didn't come to rest in the window"
+      page_view
+      tries=$((tries + 1))
+      post click $(in_page 13 10)
+      if on_screen 1; then
+        send dismiss
+        on_screen 0 || fail "the list of the select the user pressed stayed on screen: $(others)"
+      else
+        missed "the user's own click on the select of a page they hold opened no list"
+      fi
+      tries=$((tries + 1))
+      heard=$(grep -c "^browser: title $asks_tab share AbortError " "$log" || true)
+      post click $(in_page 37 10)
+      if on_screen 1 && at_rest; then
+        # The sheet goes away for a press beside it, and the page hears its share was put off.
+        post click $(in_page 50 70)
+        on_screen 0 || fail "the share sheet the user's click opened stayed on screen: $(others)"
+        await_more "^browser: title $asks_tab share AbortError " "$heard" ||
+          missed "the page the user holds never heard that its share was put away"
+      else
+        missed "the user's own click on Share of a page they hold opened no share sheet"
+      fi
+    else
+      missed "the page the user holds wasn't tried: a window of the app's was still on screen"
+    fi
+    # Back to the user's own page, by its row in Today, as the window was.
+    send click $(row 0)
+    expect '^browser: task area [0-9]* closed$' "a click on the user's tab's row didn't put the conversation away"
+  else
+    asks "in the background, with Browser not the active app"
+    ended
+  fi
+  # One entry a document and kind, however often the page asked. Print's is certain, as the core is
+  # asked of every print; a cast's and a share's are made only where the engine would have drawn.
+  entries() { grep -c "^browser: agent logged mcp-client request_permission $1 .*refused: " "$log" || true; }
+  [ "$(entries print)" = 1 ] || missed "the page's print has $(entries print) entries in the activity log, not one"
+  for kind in cast share; do
+    [ "$(entries "$kind")" -le 1 ] || missed "the page's $kind has $(entries "$kind") entries in the activity log"
+  done
 fi
 
 # Nothing off the site was reached, and no answer held a secret.
