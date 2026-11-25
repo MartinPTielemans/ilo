@@ -102,6 +102,8 @@ sign_copy() {
   rm -rf "$bundle/Contents/Frameworks/Sparkle.framework"
   plutil -replace CFBundleIdentifier -string "$check_id" "$bundle/Contents/Info.plist"
   plutil -replace CFBundleName -string "$check_name" "$bundle/Contents/Info.plist"
+  # The cookie key's item is named for this one (core/keychain_item.h), so it's the run's.
+  plutil -replace CrProductDirName -string "$check_name" "$bundle/Contents/Info.plist"
   if ! { codesign --force --deep --keychain "$identities" --sign "$2" "$bundle" &&
     codesign --force --keychain "$identities" --sign "$2" -r="$3" "$bundle"; } > "$dir/$1.sign.log" 2>&1; then
     fail "codesign couldn't sign the $1 copy: $dir/$1.sign.log"
