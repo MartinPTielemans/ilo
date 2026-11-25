@@ -3610,6 +3610,12 @@ impl TraceLine {
         }
     }
 
+    /// Whether what came of it sits at the column's right edge, its words filling the line: a
+    /// step's line, never a fold's head, a page's line, one of ilo's or a line read as one string.
+    fn note_at_right(&self) -> bool {
+        self.mark.is_none() && self.head.is_none() && self.page.is_none() && !self.joined
+    }
+
     /// Its note's words as they draw after its title, the count apart from the rest as it rolls
     /// by itself: after a middle dot on a line that's `joined`. Each part starts with its own
     /// space, so the parts in a row read as one string.
@@ -3712,6 +3718,7 @@ impl From<Fold> for LineKey {
 fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
     let palette = look.palette;
     let parts = line.note_parts();
+    let at_right = line.note_at_right();
     let TraceLine {
         key,
         glyph,
@@ -3857,6 +3864,7 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
     let mut laid = None;
     let title = div()
         .min_w_0()
+        .when(at_right, |title| title.flex_1())
         .map(|title| match ilos {
             true => title
                 .relative()
@@ -3900,6 +3908,7 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
         .group(group)
         .flex_none()
         .max_w_full()
+        .when(at_right, |line| line.w_full())
         .flex()
         .gap(px(TRACE_GAP))
         .rounded(px(NAV_RADIUS))

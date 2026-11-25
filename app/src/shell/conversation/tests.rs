@@ -3748,3 +3748,21 @@ fn a_threads_primary_is_never_the_spaces_colour() {
         }
     }
 }
+
+/// What came of a step sits at the column's right edge, its words filling the line between; a
+/// fold's head, a page's line and a line read as one string keep theirs after their words.
+#[test]
+fn what_came_of_a_step_sits_at_the_columns_right() {
+    use super::TraceLine;
+    let line = |fold| TraceLine::new(fold, "Opened tickets.example".into(), "2 s".into());
+    assert!(line(Fold::Step(1)).note_at_right());
+    let mut head = line(Fold::Trace(0));
+    head.head = Some(true);
+    let mut page = line(Fold::Page(2));
+    page.page = Some(false);
+    let mut joined = line(Fold::Trace(0));
+    joined.joined = true;
+    for kept in [head, page, joined] {
+        assert!(!kept.note_at_right());
+    }
+}
