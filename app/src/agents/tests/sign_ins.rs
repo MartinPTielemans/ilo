@@ -81,7 +81,7 @@ fn codex_signs_in_in_a_private_window_that_closes_as_it_ends(cx: &mut TestAppCon
 #[gpui::test]
 fn no_line_names_the_sign_ins_page_or_any_part_of_it(cx: &mut TestAppContext) {
     use crate::shell::recorder::Recorder;
-    use crate::shell::{Folders, Page, Shell};
+    use crate::shell::{Command, Folders, Page, Shell};
     crate::heard::listen();
     let (agents, browser, configs) = signed_out(None, cx);
     sign_in(&agents, cx);
@@ -105,6 +105,9 @@ fn no_line_names_the_sign_ins_page_or_any_part_of_it(cx: &mut TestAppContext) {
             shell.set_page(tab, page, cx);
         }
         shell.set_selected(tab, cx);
+        // ⇧⌘C and ⌥⇧⌘C copy it, here on a host with no share sheet, as Linux and Windows are.
+        shell.run_for_page(Command::CopyUrl, cx);
+        shell.run_for_page(Command::CopyMarkdownLink, cx);
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
     // The core's title for it, which is its address while it loads, in the tab's and the window's
@@ -118,6 +121,10 @@ fn no_line_names_the_sign_ins_page_or_any_part_of_it(cx: &mut TestAppContext) {
     assert!(said("browser: url field "), "{lines:#?}");
     assert!(said(&format!("browser: title {tab} ")), "{lines:#?}");
     assert!(said("browser: window title "), "{lines:#?}");
+    let copied = lines
+        .iter()
+        .filter(|line| line.starts_with("browser: copied "));
+    assert_eq!(copied.count(), 2, "{lines:#?}");
     // A link on it, under the pointer or peeked, is on its host: the link target's and the link
     // preview's lines say it as these do.
     let link = "https://auth.example.test/help";

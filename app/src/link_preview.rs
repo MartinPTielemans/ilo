@@ -911,12 +911,10 @@ pub fn key(window: u64, tab: u64, keystroke: &str, reserved: bool, cx: &mut App)
         }
         Some(KeyAction::Keep) => preview.keep(keystroke, cx),
         Some(KeyAction::CopyUrl) => {
-            let url = preview
-                .preview
-                .as_ref()
-                .map(|shown| shown.url.clone())
+            let (url, tabs) = (preview.preview.as_ref())
+                .map(|shown| (shown.url.clone(), vec![shown.tab, shown.over]))
                 .unwrap_or_default();
-            crate::shell::copy_url_of_preview(&url, cx);
+            crate::shell::copy_url_of_preview(&url, &tabs, cx);
             true
         }
         None => false,
