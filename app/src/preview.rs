@@ -3602,8 +3602,13 @@ fn main() {
             // PREVIEW_MODEL_MENU=<claude|codex>[,<model>] shows Settings › Agents' Model menu for that
             // CLI as it opens, from the CLI's recorded list, on Default or the model chosen, light
             // with PREVIEW_APPEARANCE=light (#2455).
+            // PREVIEW_MODEL_MENU=composer[,<key>…] shows the composer's model menu instead, with its
+            // search, Claude's recorded models and Codex not signed in, then types the keys in it.
             if let Ok(cli) = states::var("PREVIEW_MODEL_MENU") {
-                preview_model_menu(bounds, &cli, cx);
+                match cli.strip_prefix("composer") {
+                    Some(keys) => preview_composer_model_menu(bounds, keys, cx),
+                    None => preview_model_menu(bounds, &cli, cx),
+                }
             }
             // PREVIEW_PAGE_MENU=<link|image|text|field>,<x>,<y>[,<key>…] shows a page's menu there, made
             // up as Chrome builds it for a link, an image, selected text or a misspelt word in a text
@@ -3854,6 +3859,64 @@ fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
             };
             menu::show(request, cx);
         });
+    })
+    .detach();
+}
+
+/// The composer's model menu as the command bar builds it, from Claude's recorded list and with
+/// Codex not signed in, then `keys`, comma-separated, typed in its search.
+fn preview_composer_model_menu(bounds: Bounds<Pixels>, keys: &str, cx: &mut App) {
+    use browser::agents::{ready::claude_listed, runner::Cli, task};
+    let answer = serde_json::from_str(include_str!(
+        "agents/runner/answers/claude-2.1.322-initialize.json"
+    ))
+    .unwrap_or_default();
+    let models = claude_listed(&answer).unwrap_or_default();
+    let heading = |name: &str| MenuEntry {
+        header: true,
+        ..MenuEntry::named(name.to_string(), false)
+    };
+    let first = task::model_default(Cli::Claude);
+    let (_, models) = task::model_menu("", &first, models.default.as_deref(), models.listed);
+    let mut items = vec![
+        MenuEntry::search("Search models"),
+        heading(Cli::Claude.name()),
+    ];
+    items.extend(models.into_iter().map(|entry| MenuEntry {
+        over: false,
+        ..entry
+    }));
+    items.extend([
+        heading(Cli::Codex.name()),
+        MenuEntry::named("Sign In", true).kept(),
+        MenuEntry::line(),
+        MenuEntry::named("Settings", true).kept(),
+    ]);
+    let keys: Vec<String> = (keys.split(','))
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(String::from)
+        .collect();
+    let light = preview_tone() == Some(Tone::Light);
+    let Some(window) = menu::open_at(Rc::new(PreviewMenu), bounds, cx) else {
+        return;
+    };
+    let window: gpui::AnyWindowHandle = window.into();
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(Duration::from_millis(500))
+            .await;
+        cx.update(|cx| {
+            let request = menu::Request {
+                items,
+                at: point(px(40.), px(40.)),
+                area: Bounds::new(point(px(0.), px(0.)), bounds.size),
+                look: menu::Look::plain(light),
+                chosen: menu::picked(|_, _| {}),
+            };
+            menu::show(request, cx);
+        });
+        press_keys(window, keys, cx).await;
     })
     .detach();
 }

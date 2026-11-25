@@ -75,6 +75,11 @@ pub struct MenuEntry {
     pub header: bool,
     /// Words after its title in the secondary ink, which say more of it, as Default's model.
     pub detail: Option<SharedString>,
+    /// Whether it's the menu's search field, its first row, titled with its placeholder: what's
+    /// typed there narrows the rows after it (`menu::narrowed`).
+    pub field: bool,
+    /// Whether a search leaves it whatever is typed, as the model menu's Sign In and Settings.
+    pub kept: bool,
 }
 
 impl MenuEntry {
@@ -108,7 +113,22 @@ impl MenuEntry {
             favicon: None,
             header: false,
             detail: None,
+            field: false,
+            kept: false,
         }
+    }
+
+    /// A search field over the rows after it, with the words table's `placeholder`.
+    pub fn search(placeholder: impl Into<SharedString>) -> Self {
+        MenuEntry {
+            field: true,
+            ..MenuEntry::named(placeholder, false)
+        }
+    }
+
+    /// Left by any search (`kept`).
+    pub fn kept(self) -> Self {
+        MenuEntry { kept: true, ..self }
     }
 
     /// A heading over the items after it, in the platform's case.
