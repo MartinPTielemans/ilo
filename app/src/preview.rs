@@ -2235,6 +2235,7 @@ impl command_bar::Host for PreviewBar {
         _: &str,
         _: browser::agents::tier::Tier,
         _: Option<String>,
+        _: Option<&'static str>,
         _: &mut App,
     ) {
     }

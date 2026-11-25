@@ -691,6 +691,7 @@ pub trait Host {
         asked: &str,
         tier: Tier,
         model: Option<String>,
+        effort: Option<&'static str>,
         cx: &mut App,
     );
     /// The level and model the composer last started a thread with in the profile of the Space
@@ -2442,7 +2443,8 @@ impl CommandBar {
         self.input
             .update(cx, |input, cx| input.set_text("".into(), 0, window, cx));
         self.set_rows(String::new(), Vec::new(), window, cx);
-        self.host.run_task_at_rest(&id, &asked, tier, model, cx);
+        self.host
+            .run_task_at_rest(&id, &asked, tier, model, effort, cx);
     }
 
     /// The effort trigger's menu, under it: Default, then the levels the composer's assistant's

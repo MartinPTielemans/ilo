@@ -270,9 +270,10 @@ impl Host for Recorder {
         asked: &str,
         tier: Tier,
         model: Option<String>,
+        effort: Option<&'static str>,
         cx: &mut App,
     ) {
-        self.run_task(agent, asked, None, tier, model, None, cx);
+        self.run_task(agent, asked, None, tier, model, effort, cx);
         self.record("at rest".into());
     }
 
@@ -4898,6 +4899,48 @@ impl Resting {
             .map(|(text, _)| text)
             .collect()
     }
+
+    /// Picks row `at` of the composer's effort menu, as `pick_level` does its level.
+    fn pick_effort(&mut self, at: usize) {
+        let shown: Rc<RefCell<Option<Chosen>>> = Rc::default();
+        let into = shown.clone();
+        self.cx.update(|_, cx| {
+            cx.set_global(crate::menu::EntriesMenu(Rc::new(
+                move |_, _, _, _, chosen, _| *into.borrow_mut() = Some(chosen),
+            )))
+        });
+        (self.window)
+            .update(&mut self.cx, |rest, window, cx| {
+                rest.bar.update(cx, |bar, cx| bar.effort_menu(window, cx))
+            })
+            .unwrap();
+        let chosen = shown.borrow_mut().take().expect("no effort menu showed");
+        self.cx
+            .update(|window, cx| chosen(crate::menu::Closed::Chose(at), window, cx));
+        self.cx.run_until_parked();
+    }
+}
+
+/// A thread started from the composer at rest goes with the effort picked on its menu, as ⌘T's
+/// does, and with none where Default is picked.
+#[gpui::test]
+fn the_composer_at_rest_starts_the_thread_with_its_effort(cx: &mut TestAppContext) {
+    let mut rest = Resting::with_claude(cx);
+    rest.type_text("book a table");
+    rest.keys("tab");
+    rest.pick_effort(3);
+    rest.host.calls.take();
+    rest.keys("enter");
+    assert_eq!(
+        rest.host.calls.take(),
+        ["task claude book a table effort high", "at rest"]
+    );
+    rest.type_text("next");
+    rest.keys("tab");
+    rest.pick_effort(0);
+    rest.host.calls.take();
+    rest.keys("enter");
+    assert_eq!(rest.host.calls.take(), ["task claude next", "at rest"]);
 }
 
 /// A Space's first frame reads nothing for its field: the bar resting there asks the core and the

@@ -337,6 +337,7 @@ impl command_bar::Host for Bar {
         asked: &str,
         tier: browser::agents::tier::Tier,
         model: Option<String>,
+        effort: Option<&'static str>,
         cx: &mut App,
     ) {
         let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
@@ -344,7 +345,7 @@ impl command_bar::Host for Bar {
         };
         let window = front().0;
         update_window_in(window, cx, |shell, _| shell.bar_starting());
-        start_thread(cli, asked, None, tier, model, None, window, cx);
+        start_thread(cli, asked, None, tier, model, effort, window, cx);
     }
 
     fn set_up_agents(&self, cx: &mut App) {
