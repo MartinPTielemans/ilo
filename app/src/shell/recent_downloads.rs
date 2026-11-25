@@ -602,7 +602,7 @@ impl Shell {
             .line_height(px(t::DETAIL_LINE))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(heading_ink)
-            .child("Recent downloads");
+            .child("Downloads");
         // The body's box, which the shadow lies under and what it lists is cut to.
         let boxed = || {
             div()
