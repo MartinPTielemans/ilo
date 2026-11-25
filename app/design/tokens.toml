@@ -1489,11 +1489,7 @@ page-line-width = 1.0
 page-line = 0xffffff0f
 light-page-line = 0x0000000d
 # The column's text, glyphs, field and buttons are the palette's neutrals and the sidebar's icon
-# ink; these two are Settings' own. A group's heading and the updater's word, quieter than
-# `text-secondary`, but a label, so over the palette's `text-tertiary` in light.
-text-3 = 0xf3f0e86b
-light-text-3 = 0x16161880
-# The page shown: the ink, where the sidebar's selected row is white in light.
+# ink. The page shown is Settings' own: the ink, where the sidebar's selected row is white in light.
 shown = 0xf3f0e833
 light-shown = 0x16161829
 
