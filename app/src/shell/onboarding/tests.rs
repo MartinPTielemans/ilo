@@ -833,6 +833,27 @@ fn welcome_plays_it_again(cx: &mut TestAppContext) {
     assert!(host.take().contains(&"first run shown".to_string()));
 }
 
+/// Help › Welcome's replay keeps no step, going on or back: quit halfway, the next launch doesn't
+/// open first run by itself.
+#[gpui::test]
+fn a_replay_keeps_no_step_to_resume(cx: &mut TestAppContext) {
+    let dir = kept_dir(cx);
+    let (shell, cx, host) = first_window(cx);
+    host.archive_after.set(Some(DAY / 2.));
+    shell.update(cx, |shell, cx| shell.run(Command::Welcome, "menu", cx));
+    shell.update(cx, |shell, cx| {
+        shell.onboarding.as_mut().unwrap().end_entry();
+        cx.notify();
+    });
+    settle(&shell, cx);
+    assert_eq!(step(&shell, cx), Some(Step::Import));
+    on_to(&shell, cx, Step::Tidy);
+    cx.simulate_keystrokes("secondary-[");
+    assert_eq!(step(&shell, cx), Some(Step::Space));
+    assert_eq!(kept(&dir), None, "the replay kept no step");
+    assert!(!super::first_run_waiting(&dir.to_string_lossy()));
+}
+
 /// The preview opens the card at a step by its number.
 #[gpui::test]
 fn the_preview_opens_the_card_at_a_step_by_number(cx: &mut TestAppContext) {

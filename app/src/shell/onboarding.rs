@@ -279,6 +279,8 @@ pub(super) struct Onboarding {
     /// The card's size and corners the host last shaped the window to, so it's told only of a
     /// change: on the entry's frames, and once as it ends.
     shaped: Option<(f32, f32, f32)>,
+    /// Help › Welcome plays the card again, which keeps no step to resume at.
+    replay: bool,
     /// The assistants whose Sign In was pressed, whose rows then say what the press learned.
     pressed: Vec<crate::agents::runner::Cli>,
     /// The assistants whose Sign In waits for the look its press started, to sign in once it ends.
@@ -438,6 +440,13 @@ impl Shell {
     /// Starts the card at its first step in first run's window, opening it unless it's open.
     /// `appearance` is check.sh's "light" or "dark", else the window's own.
     pub fn start_onboarding(&mut self, appearance: Option<&str>, cx: &mut Context<Self>) {
+        self.begin_onboarding(appearance, false, cx);
+    }
+
+    /// Starts the card, as first run or, `replay`, as Help › Welcome plays it again: a replay
+    /// neither resumes at a kept step nor keeps one, so one quit halfway never opens first run by
+    /// itself at the next launch.
+    fn begin_onboarding(&mut self, appearance: Option<&str>, replay: bool, cx: &mut Context<Self>) {
         // Once a window, as an import under way in it goes on; played again, it lists the browsers
         // anew.
         match &mut self.importing {
@@ -484,13 +493,16 @@ impl Shell {
             .collect();
         // A run left under way resumes at its step, or the next that this launch shows; one out
         // of range is past every step but the last, which always shows.
-        let first = match resume::read(cx) {
+        let kept = if replay { None } else { resume::read(cx) };
+        let first = match kept {
             Some(kept) => (steps.iter().copied())
                 .find(|step| step.place() >= kept)
                 .unwrap_or(Step::Done),
             None => steps[0],
         };
-        resume::keep(first.place(), cx);
+        if !replay {
+            resume::keep(first.place(), cx);
+        }
         let numbers: Vec<&str> = steps.iter().map(|step| step.number()).collect();
         // check.sh waits for these lines.
         log!("browser: onboarding started");
@@ -523,6 +535,7 @@ impl Shell {
             since: now,
             entry: Some(now),
             shaped: None,
+            replay,
             pressed: Vec::new(),
             signing: Vec::new(),
             progress: (0., 0., now),
@@ -652,7 +665,7 @@ impl Shell {
 
     /// Help › Welcome: the card again from its first step, in its own window over this one.
     pub(super) fn welcome_again(&mut self, cx: &mut Context<Self>) {
-        self.start_onboarding(None, cx);
+        self.begin_onboarding(None, true, cx);
     }
 
     /// Goes on from the step shown, to the next or out of the card after the last. Its line for
@@ -697,13 +710,17 @@ impl Shell {
         match at.and_then(|at| onboarding.steps.get(at + 1)).copied() {
             Some(next) => {
                 onboarding.show(next, still);
-                resume::keep(next.place(), cx);
+                if !onboarding.replay {
+                    resume::keep(next.place(), cx);
+                }
                 log!("browser: onboarding step {}", next.number());
             }
             // Ended, there's nothing to resume, whether or not a quit then closes the card.
             None => {
                 onboarding.ending = Some(onboarding.clock.now());
-                resume::clear(cx);
+                if !onboarding.replay {
+                    resume::clear(cx);
+                }
             }
         }
         if let Some(on) = help {
@@ -752,7 +769,9 @@ impl Shell {
         onboarding.end_entry();
         log!("browser: onboarding left {}", step.number());
         onboarding.show(before, still);
-        resume::keep(before.place(), cx);
+        if !onboarding.replay {
+            resume::keep(before.place(), cx);
+        }
         log!("browser: onboarding step {}", before.number());
         cx.notify();
     }
