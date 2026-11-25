@@ -44,6 +44,9 @@ constexpr char kLittleArchiveAfterSwitch[] = "archive-little-after";
 // The profile's own time, in seconds, which it takes from Settings' default the first time the
 // core uses it once the Spaces are read.
 constexpr char kArchiveAfter[] = "browser_core.archive_after";
+// Whether the profile's windows offer Sort Tabs into Folders (#4252), a Tabs & Sidebar switch of
+// the same kind, kept with it.
+constexpr char kSortTabs[] = "browser_core.sort_tabs";
 
 // Builds no service: Chrome registers a profile's prefs through its factories.
 class PrefsFactory : public ProfileKeyedServiceFactory {
@@ -63,6 +66,7 @@ class PrefsFactory : public ProfileKeyedServiceFactory {
 
   void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) override {
     registry->RegisterDoublePref(kArchiveAfter, 0);
+    registry->RegisterBooleanPref(kSortTabs, true);
   }
 };
 
@@ -266,6 +270,18 @@ bool SetProfileArchiveAfter(Profile* profile, std::optional<base::TimeDelta> aft
   profile->GetOriginalProfile()->GetPrefs()->SetDouble(
       kArchiveAfter, after ? after->InSecondsF() : archive_rule::kNever);
   ScheduleAutoArchive();
+  return true;
+}
+
+bool ProfileSortTabs(Profile* profile) {
+  return profile && profile->GetOriginalProfile()->GetPrefs()->GetBoolean(kSortTabs);
+}
+
+bool SetProfileSortTabs(Profile* profile, bool on) {
+  if (!profile) {
+    return false;
+  }
+  profile->GetOriginalProfile()->GetPrefs()->SetBoolean(kSortTabs, on);
   return true;
 }
 

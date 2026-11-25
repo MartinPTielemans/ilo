@@ -21,20 +21,26 @@ message SpaceEntity {
     // A Today tab, which other devices show without its page until it's clicked. Arc kept these on
     // the device; ilo syncs them (#2098).
     TODAY = 3;
+    // A folder in a Space's Today tabs (#4252), holding the Today tabs whose parent it is, which
+    // come together under it. It goes once none is left, and a device makes it only once two of
+    // its tabs are there.
+    TODAY_FOLDER = 4;
   }
 
-  // Its node's id, a lowercase UUID, which is also its client tag. A Today tab's has "today:"
-  // before it, so ilo 0.1.13 and older, which take TODAY for SPACE, drop it rather than making a
-  // Space of it.
+  // Its node's id, a lowercase UUID, which is also its client tag. A Today tab's and a today's
+  // folder's have "today:" before it, so ilo 0.1.13 and older, which take TODAY for SPACE, drop
+  // them rather than making a Space of each.
   optional string id = 1;
   optional Kind kind = 2;
   // A pinned tab's, folder's or Today tab's Space's id.
   optional string space = 3;
-  // The id of the folder holding a pinned tab or folder, else empty.
+  // The id of the folder holding a pinned tab or folder, or the today's folder holding a Today
+  // tab, without its "today:", else empty.
   optional string parent = 4;
   // Its place among its siblings: a serialized sync_pb.UniquePosition.
   optional bytes position = 5;
-  // A Space's or folder's name, or the name the user gave a pinned or Today tab.
+  // A Space's or folder's name, a today's folder's too, or the name the user gave a pinned or
+  // Today tab.
   optional string name = 6;
   // A pinned tab's pinned URL, or a Today tab's page, and its title, which it shows until its page
   // loads.

@@ -38,6 +38,11 @@ std::optional<base::TimeDelta> ProfileArchiveAfter(Profile* profile);
 // Sets |profile|'s time, none for Never, and returns whether it did: not for no profile or a time
 // that isn't positive.
 bool SetProfileArchiveAfter(Profile* profile, std::optional<base::TimeDelta> after);
+// Whether |profile|'s windows offer Sort Tabs into Folders, on until the user turns it off; false
+// for no profile. Kept in the profile's prefs beside its archive time.
+bool ProfileSortTabs(Profile* profile);
+// Sets it, and returns whether it did: not for no profile.
+bool SetProfileSortTabs(Profile* profile, bool on);
 // The note on the first tabs auto-archive takes: shown from then until the user dismisses it, and
 // never again after that (bc_archive_note).
 bool ArchiveNoteShown();

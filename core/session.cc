@@ -317,6 +317,15 @@ SavedSpace SaveSpace(const Space& space,
     const Space::Node* node = space.NodeOf(id);
     return node ? *node : Space::Node();
   };
+  // Each today's folder saved, to where it is among them.
+  std::map<bc_id, int> today_folders;
+  for (bc_id folder : space.TodayFolders()) {
+    today_folders[folder] = static_cast<int>(to.today_folders.size());
+    to.today_folders.push_back({.name = space.FolderName(folder),
+                                .icon = space.FolderIcon(folder),
+                                .open = space.IsOpen(folder),
+                                .node = node_of(folder)});
+  }
   // Its Today tabs with those the user handed an agent out of it, each where it would come back.
   std::vector<bc_id> today_rows = space.today();
   if (handed_as_users && !space.agent()) {
@@ -380,6 +389,8 @@ SavedSpace SaveSpace(const Space& space,
       tab.pinned_url = space.PinnedUrl(id);
       if (tabs == &to.pinned) {
         tab.folder = folder_of(id);
+      } else if (auto it = today_folders.find(space.FolderOf(id)); it != today_folders.end()) {
+        tab.folder = it->second;
       }
       tab.node = node_of(id);
       if (tabs == &to.today) {
@@ -476,9 +487,11 @@ std::optional<std::string> ToJson(const Saved& saved) {
       dict.Set("parent", folders[folder].node.id.AsLowercaseString());
     }
   };
-  // |tabs|, pinned in |folders| if they're a Space's pinned tabs.
+  // |tabs|, pinned in |folders| if they're a Space's pinned tabs, or in |today_folders| by index
+  // if they're its Today tabs.
   const auto to_list = [&](const std::vector<SavedTab>& tabs,
-                           const std::vector<SavedFolder>* folders = nullptr) {
+                           const std::vector<SavedFolder>* folders = nullptr,
+                           bool today = false) {
     base::ListValue list;
     for (const SavedTab& tab : tabs) {
       base::ListValue history;
@@ -526,6 +539,9 @@ std::optional<std::string> ToJson(const Saved& saved) {
       if (folders) {
         write_folder(*folders, tab.folder, dict);
       }
+      if (today && tab.folder >= 0) {
+        dict.Set("today_folder", tab.folder);
+      }
       // A pinned or Today tab's, which a favorite has none of.
       WriteNode(tab.node, dict);
       if (!tab.profile.empty()) {
@@ -560,9 +576,22 @@ std::optional<std::string> ToJson(const Saved& saved) {
     base::DictValue dict = base::DictValue()
                                .Set("name", space.name)
                                .Set("pinned", std::move(pinned))
-                               .Set("today", to_list(space.today))
+                               .Set("today", to_list(space.today, nullptr, /*today=*/true))
                                .Set("shown", space.shown);
     WriteNode(space.node, dict);
+    if (!space.today_folders.empty()) {
+      base::ListValue today_folders;
+      for (const SavedFolder& folder : space.today_folders) {
+        base::DictValue row =
+            base::DictValue().Set("folder", folder.name).Set("open", folder.open);
+        if (!folder.icon.empty()) {
+          row.Set("icon", folder.icon);
+        }
+        WriteNode(folder.node, row);
+        today_folders.Append(std::move(row));
+      }
+      dict.Set("today_folders", std::move(today_folders));
+    }
     if (space.shown_favorite >= 0) {
       dict.Set("shown_favorite", space.shown_favorite);
     }
@@ -786,6 +815,21 @@ std::optional<Saved> Read(const base::FilePath& path) {
     if (agent_id && !agent_id->empty() && agent_name) {
       to.agent = Space::Agent{.id = *agent_id, .name = *agent_name};
     }
+    if (const base::ListValue* list = space->FindList("today_folders")) {
+      for (const base::Value& row : *list) {
+        const base::DictValue* dict = row.GetIfDict();
+        const std::string* folder = dict ? dict->FindString("folder") : nullptr;
+        // One that can't be read keeps its place, so the indexes after it still name theirs, and
+        // its tabs come back loose.
+        SavedFolder& read = to.today_folders.emplace_back();
+        if (folder) {
+          read.name = *folder;
+          read.icon = dict->FindString("icon") ? *dict->FindString("icon") : std::string();
+          read.open = dict->FindBool("open").value_or(true);
+          read.node = ReadNode(*dict);
+        }
+      }
+    }
     const int shown = space->FindInt("shown").value_or(-1);
     const int shown_favorite = space->FindInt("shown_favorite").value_or(-1);
     if (shown_favorite >= 0 && shown_favorite < static_cast<int>(favorites.size())) {
@@ -856,6 +900,13 @@ std::optional<Saved> Read(const base::FilePath& path) {
         }
         if (tab && tabs == &to.pinned) {
           tab->folder = folder_of(*dict);
+        }
+        if (tab && tabs == &to.today) {
+          const int folder = dict->FindInt("today_folder").value_or(-1);
+          tab->folder = folder >= 0 && folder < static_cast<int>(to.today_folders.size()) &&
+                                !to.today_folders[folder].name.empty()
+                            ? folder
+                            : -1;
         }
         if (tab) {
           tab->node = ReadNode(*dict);
@@ -1589,6 +1640,33 @@ Space* RestoreSpace(Window& window,
   for (size_t j = 0; j < today_ids.size(); ++j) {
     if (today_ids[j]) {
       today_nodes[today_ids[j]] = saved_space.today[j].node;
+    }
+  }
+  // Each today's folder around the run of tabs that name it. One whose tabs came back apart, or
+  // fewer than two of them, comes back loose, as AddTodayFolder refuses it.
+  std::vector<std::vector<bc_id>> in_today_folder(saved_space.today_folders.size());
+  std::vector<bool> apart(saved_space.today_folders.size());
+  int last = -1;
+  for (size_t j = 0; j < today_ids.size(); ++j) {
+    if (!today_ids[j]) {
+      continue;
+    }
+    const int folder = saved_space.today[j].folder;
+    if (folder >= 0 && folder < static_cast<int>(in_today_folder.size())) {
+      apart[folder] = apart[folder] || (folder != last && !in_today_folder[folder].empty());
+      in_today_folder[folder].push_back(today_ids[j]);
+    }
+    last = folder;
+  }
+  for (size_t j = 0; j < in_today_folder.size(); ++j) {
+    const SavedFolder& saved_folder = saved_space.today_folders[j];
+    if (apart[j]) {
+      continue;
+    }
+    if (bc_id folder = space->AddTodayFolder(saved_folder.name, in_today_folder[j])) {
+      space->SetOpen(folder, saved_folder.open);
+      space->SetFolderIcon(folder, saved_folder.icon);
+      today_nodes[folder] = saved_folder.node;
     }
   }
   if (!today_nodes.empty()) {

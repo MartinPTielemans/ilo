@@ -1689,7 +1689,7 @@ void Window::MoveFolderToSpace(bc_id folder, bc_id space) {
   if (!from || !to || from == to || to->agent() || to->own() || DeletingSpaces().contains(space)) {
     return;
   }
-  std::vector<bc_id> tabs;
+  std::vector<bc_id> tabs = from->TodayFolderTabs(folder);
   for (bc_id row : from->pinned_rows()) {
     if (!from->IsFolder(row) && from->Within(row, folder)) {
       tabs.push_back(row);
@@ -2606,6 +2606,9 @@ bc_id Window::Clear() {
     return 0;
   }
   std::vector<Cleared> frame;
+  std::vector<SavedFolder> folders;
+  // Each today's folder the Clear closes tabs of, to where it is among them.
+  std::map<bc_id, int> folder_at;
   const std::vector<bc_id>& today = space->today();
   // While the window shows every Today tab, there's nothing else to clear, so they go too (Arc).
   const bool last = std::ranges::all_of(
@@ -2614,7 +2617,19 @@ bc_id Window::Clear() {
     if (last || !Showing(today[index])) {
       const bool split = index > 0 && std::ranges::contains(space->Panes(today[index]),
                                                             today[index - 1]);
-      frame.push_back({today[index], index, split, today[index] == selected_});
+      int folder = -1;
+      if (const bc_id in = space->FolderOf(today[index]); space->IsTodayFolder(in)) {
+        auto [at, added] = folder_at.try_emplace(in, static_cast<int>(folders.size()));
+        if (added) {
+          const Space::Node* node = space->NodeOf(in);
+          folders.push_back({.name = space->FolderName(in),
+                             .icon = space->FolderIcon(in),
+                             .open = space->IsOpen(in),
+                             .node = node ? *node : Space::Node()});
+        }
+        folder = at->second;
+      }
+      frame.push_back({today[index], index, split, today[index] == selected_, folder});
     }
   }
   // Bottom up, so ReopenClosedTab brings back the top one first, at its place.
@@ -2625,7 +2640,7 @@ bc_id Window::Clear() {
     return 0;
   }
   const bc_id id = NewId();
-  cleared_.push_back({id, std::move(frame)});
+  cleared_.push_back({id, std::move(frame), std::move(folders)});
   if (cleared_.size() > kMaxClears) {
     cleared_.erase(cleared_.begin());
   }
@@ -2638,7 +2653,11 @@ size_t Window::UndoClear(bc_id clear) {
     return 0;
   }
   std::vector<Cleared> frame = std::move(it->tabs);
+  const std::vector<SavedFolder> folders = std::move(it->folders);
   cleared_.erase(it);
+  // The tabs back in each today's folder, and the Space they're back in.
+  std::vector<std::vector<bc_id>> in_folder(folders.size());
+  Space* folders_space = nullptr;
   size_t reopened = 0;
   bc_id above = 0;
   bc_id shown = 0;
@@ -2657,8 +2676,20 @@ size_t Window::UndoClear(bc_id clear) {
       if (cleared.selected) {
         shown = id;
       }
+      if (cleared.folder >= 0 && cleared.folder < static_cast<int>(folders.size())) {
+        in_folder[cleared.folder].push_back(id);
+        folders_space = Space::Holding(id);
+      }
     }
     above = id;
+  }
+  // Each folder around those of its tabs that came back, if two did, as it was.
+  for (size_t j = 0; folders_space && j < folders.size(); ++j) {
+    if (bc_id folder = folders_space->AddTodayFolder(folders[j].name, in_folder[j])) {
+      folders_space->SetOpen(folder, folders[j].open);
+      folders_space->SetFolderIcon(folder, folders[j].icon);
+      folders_space->RestoreNodes(Space::Node(), {{folder, folders[j].node}});
+    }
   }
   // A Clear that closed the tab shown shows it again, with its split.
   if (shown) {

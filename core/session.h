@@ -52,7 +52,8 @@ struct SavedTab {
   // Whether it's the tab of its favorite split view focused last. A favorite's split view is with
   // the favorite of its profile, or its Space under Each Space, saved before it.
   bool focused = false;
-  // A pinned tab's folder, among its Space's saved folders, else -1.
+  // A pinned tab's folder, among its Space's saved folders, or a Today tab's, among its saved
+  // today's folders, else -1.
   int folder = -1;
   // A pinned or Today tab's node, or none if it was saved before they had them.
   Space::Node node;
@@ -109,6 +110,9 @@ struct SavedSpace {
   // Whether its pinned tabs and folders showed, or were collapsed.
   bool pinned_open = true;
   std::vector<SavedTab> today;
+  // Its today's folders, top to bottom, each holding the run of Today tabs that name it. Only
+  // name, icon, open and node count; a build before them reads none, its tabs coming back loose.
+  std::vector<SavedFolder> today_folders;
   // The tab the window showed there, counting the pinned tabs then the Today tabs, or -1.
   int shown = -1;
   // The favorite the window showed there instead, among the session's favorites, or -1.

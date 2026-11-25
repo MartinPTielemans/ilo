@@ -217,6 +217,16 @@ source_set("sync_spaces_newer") {
   public_deps = [ ":sync_spaces_proto" ]
 }
 
+# Which today's folder a synced Today tab goes in, apart so browser_core_unittests tests the rule
+# alone.
+source_set("sync_today_folders") {
+  sources = [
+    "sync_today_folders.cc",
+    "sync_today_folders.h",
+  ]
+  public_deps = [ ":sync_spaces_proto" ]
+}
+
 # Whether a site's arrangement is placed: its file checked against the schema and the record of
 # the one the user made or turned on, apart so browser_core_unittests tests the rule alone.
 source_set("arrangement") {
@@ -1034,6 +1044,7 @@ source_set("browser_core") {
     ":sync_guard",
     ":sync_keys",
     ":sync_spaces_newer",
+    ":sync_today_folders",
     ":sync_trouble",
     ":link_card_rule",
     ":launch_space_rule",
@@ -1405,6 +1416,7 @@ test("browser_core_unittests") {
     "sync_guard_unittest.cc",
     "sync_pairing_unittest.cc",
     "sync_spaces_newer_unittest.cc",
+    "sync_today_folders_unittest.cc",
     "sync_trouble_unittest.cc",
     "sync_updates_unittest.cc",
     "system_stores_unittest.cc",
@@ -1469,6 +1481,7 @@ test("browser_core_unittests") {
     ":sync_guard",
     ":sync_keys",
     ":sync_spaces_newer",
+    ":sync_today_folders",
     ":sync_trouble",
     ":link_card_rule",
     ":share_snapshot",
