@@ -20,13 +20,18 @@ macro_rules! log {
 }
 
 /// `log!`'s line for a unit test that listens (`heard`), in test builds only: elsewhere it is
-/// nothing, so an unchecked launch still never formats a line.
+/// nothing, so an unchecked launch still never formats a line. The line is made in the caller's own
+/// body, not in a closure, so an argument may still return early with `?`, as it may in `log!`.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! log_heard {
     ($($arg:tt)*) => {{
         #[cfg(test)]
-        $crate::heard::line(|| format!($($arg)*));
+        {
+            if $crate::heard::on() {
+                $crate::heard::line(format!($($arg)*));
+            }
+        }
     }};
 }
 
@@ -46,12 +51,8 @@ pub mod heard {
         LINES.with(|lines| lines.borrow().is_some())
     }
 
-    /// Keeps the line `made` makes, made only while a test listens.
-    pub fn line(made: impl FnOnce() -> String) {
-        if !on() {
-            return;
-        }
-        let line = made();
+    /// Keeps `line`, which `log_heard!` makes only while a test listens.
+    pub fn line(line: String) {
         LINES.with(|lines| {
             if let Some(lines) = lines.borrow_mut().as_mut() {
                 lines.push(line);

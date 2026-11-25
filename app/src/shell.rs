@@ -223,14 +223,14 @@ pub use permission::{Answer, Question};
 pub(crate) use picture::next_request;
 pub use picture::{PagePicture, picture_answered};
 pub use portrait::PortraitBackground;
+pub use recent_downloads::FilePreview;
 use recent_downloads::RecentDownloads;
-pub use recent_downloads::{FilePreview, HOVER_ALL};
 pub use rows::LoneSpaceHeader;
 use rows::{Breath, UNLOAD};
 use scaled::scaled;
 pub use side_panel::SidePanel;
 pub use sidebar::{SidebarEdge, SidebarRight, edge_reveals, sidebar_right};
-use swap::{ARROW_DOWN, Swapped, Swaps};
+use swap::{Swapped, Swaps};
 pub use themes::{AppAppearance, app_appearance};
 use tile_theme::TileTheme;
 pub use trace::{RECORDING, STOP, recorded as trace_recorded};
@@ -474,15 +474,9 @@ use crate::tokens::shell::SPEAKER_SIZE;
 // kept.
 use crate::tokens::shell::DIVIDER_HEIGHT;
 const DIVIDER_LINE_Y: f32 = DIVIDER_HEIGHT / 2.;
+use crate::tokens::shell::CLEAR_HEIGHT;
 use crate::tokens::shell::DIVIDER_GAP;
 use crate::tokens::shell::TODAY_GAP;
-// The arrow before Clear while it would close the last Today tabs, 8 pt tall and 3 pt before the
-// word (Arc). Lucide's arrow-down spans 14 of its 24 each way.
-const CLEAR_ARROW: f32 = 8. * 24. / 14.;
-const CLEAR_ARROW_INSET: f32 = CLEAR_ARROW * 5. / 24.;
-use crate::tokens::shell::CLEAR_GAP;
-const CLEAR_ARROW_ROOM: f32 = CLEAR_ARROW - 2. * CLEAR_ARROW_INSET + CLEAR_GAP;
-use crate::tokens::shell::CLEAR_HEIGHT;
 // Clear takes clicks 5 pt past the word each way, as the header's buttons past their glyphs.
 const CLEAR_HIT_OUT: f32 = 5.;
 // How long the toast after a copy shows (ours: Arc's isn't measured), and after a Space is deleted
@@ -724,6 +718,8 @@ struct Space {
     /// How each of its Live Folders' rows are drawn under its other tabs, which the rows after
     /// them make room for, and the tabs drawn in their items' places (#2979).
     live_rooms: HashMap<u64, live_folders::LiveLayout>,
+    /// The task cards its Today lists, each where it stands (`task_cards::place_cards`).
+    placed: Vec<task_cards::Placed>,
 }
 
 impl Space {
@@ -893,7 +889,7 @@ impl Space {
     }
 
     /// Whether `shown` and its split are all of its Today tabs, so Clear has nothing else to close
-    /// and closes them too, which an arrow before it says (Arc).
+    /// and closes them too (Arc).
     fn clears_last(&self, shown: u64) -> bool {
         let shown = self.panes(shown);
         !self.today.is_empty() && self.today.iter().all(|tab| shown.contains(tab))
@@ -944,7 +940,8 @@ impl Space {
     /// Where its rows are in the list, from its top, under a head `head` tall.
     fn slots(&self, head: f32) -> HashMap<Slot, f32> {
         let (pinned, today) = self.rows();
-        slots(head, &pinned, &self.live_blocks(&pinned), &today)
+        let cards = task_cards::blocks(&self.placed, &today);
+        slots(head, &pinned, &self.live_blocks(&pinned), &today, &cards)
     }
 
     /// Where each open Live Folder's runs of rows go among `pinned`, its pinned rows listed: the
@@ -1053,6 +1050,8 @@ enum Slot {
     NewTab,
     /// A run of an open Live Folder's rows, by its folder and its place among the runs (#2979).
     Live(u64, usize),
+    /// A task's card in Today, by its number, or ⌘T's slot (`task_cards::Placed`).
+    Task(u64),
 }
 
 /// The list on its way to a row, from `from` down its top at `start` to `to`, last set at `set`.
@@ -1517,6 +1516,8 @@ pub struct Shell {
     /// ilo's menu (#3148), and whether the menu up is the one it opened, which keeps it pressed.
     menu_control: bool,
     app_menu: bool,
+    /// Whether the menu up is the one the footer's + opened, which keeps its plate while it's up.
+    plus_menu: bool,
     /// The Space and whether its pinned rows were collapsed when last drawn, and when they last
     /// changed there, for the chevron's turn.
     pinned_seen: Option<(u64, bool)>,
@@ -1742,12 +1743,9 @@ pub struct Shell {
     card_wait: Option<Task<()>>,
     /// What the button showed when last drawn, for the lines check.sh waits for.
     drawn_copied: &'static str,
-    /// The Space shown at the last draw, and whether its Clear had the arrow, while it had a
-    /// Clear divider.
-    drawn_arrow: Option<(u64, bool)>,
     /// Whether the pointer is over the divider's Clear, which then draws brighter.
     clear_hovered: bool,
-    /// The same for the broom after it.
+    /// The same for the broom before it.
     broom_hovered: bool,
     /// The glyphs changing into others.
     swaps: Swaps,
@@ -1898,7 +1896,7 @@ pub struct Shell {
     /// Every Space's agent tasks' cards, newest first, as the Agents last said (Agent task).
     task_cards: Vec<crate::agents::task::Card>,
     /// The window's tasks' plates at the sidebar's foot, and ⌘T's slot among them.
-    foot: task_cards::Foot,
+    task_list: task_cards::TaskList,
     /// The task ✕ dismissed last, which ⇧⌘T brings back unless a tab has closed since, and when,
     /// in milliseconds since the Unix epoch, as the archive dates what closed.
     closed_task: Option<(SharedString, f64)>,
@@ -2198,6 +2196,7 @@ impl Shell {
             name_menu: false,
             menu_control: OFF_THE_MAC,
             app_menu: false,
+            plus_menu: false,
             pinned_seen: None,
             pinned_turn: None,
             split_folds: HashMap::new(),
@@ -2298,7 +2297,6 @@ impl Shell {
             card_hidden: Vec::new(),
             card_wait: None,
             drawn_copied: "shows link",
-            drawn_arrow: None,
             clear_hovered: false,
             broom_hovered: false,
             swaps: Swaps::default(),
@@ -2375,7 +2373,7 @@ impl Shell {
             cast_drawn: Rc::default(),
             question_settling: RefCell::default(),
             task_cards: Vec::new(),
-            foot: task_cards::Foot::default(),
+            task_list: task_cards::TaskList::default(),
             closed_task: None,
             archived_tasks: Vec::new(),
             agent_history: Vec::new(),
@@ -2509,6 +2507,7 @@ impl Shell {
             shown: 0,
             peeked: Vec::new(),
             live_rooms: Default::default(),
+            placed: Vec::new(),
         }];
         shell
     }
@@ -2562,6 +2561,7 @@ impl Shell {
             shown: 0,
             peeked: Vec::new(),
             live_rooms: Default::default(),
+            placed: Vec::new(),
         }];
         shell
     }
@@ -2661,8 +2661,10 @@ impl Shell {
     /// Where the rows of the Space shown are in the list.
     fn layout(&self) -> HashMap<Slot, f32> {
         let head = self.list_head();
-        self.shown_space()
-            .map_or_else(|| slots(head, &[], &[], &[]), |space| space.slots(head))
+        self.shown_space().map_or_else(
+            || slots(head, &[], &[], &[], &[]),
+            |space| space.slots(head),
+        )
     }
 
     /// The favorite split holding `tab`, if it's in one.
@@ -3065,6 +3067,7 @@ impl Shell {
                         shown: 0,
                         peeked: Vec::new(),
                         live_rooms: Default::default(),
+                        placed: Vec::new(),
                     };
                 };
                 if space.name != name {
@@ -3112,6 +3115,7 @@ impl Shell {
                     shown: space.shown,
                     peeked: std::mem::take(&mut space.peeked),
                     live_rooms: std::mem::take(&mut space.live_rooms),
+                    placed: std::mem::take(&mut space.placed),
                 }
             })
             .collect();
@@ -3146,6 +3150,7 @@ impl Shell {
             self.toast_spaces(made, cx);
         }
         self.task_spaces_changed(cx);
+        self.place_cards(cx);
         self.update_menus(cx);
         self.update_title(cx);
         cx.notify();
@@ -3267,6 +3272,7 @@ impl Shell {
         self.update_menus(cx);
         self.update_title(cx);
         self.history_space_shown(cx);
+        self.card_space_shown(cx);
         cx.notify();
     }
 
@@ -3294,7 +3300,8 @@ impl Shell {
             .filter(|&tab| listed.insert(tab))
             .collect();
         entry.pinned = pinned;
-        entry.today = today;
+        let was = std::mem::replace(&mut entry.today, today);
+        task_cards::stand_again(&mut entry.placed, &was, &entry.today);
         for split in &splits {
             let was = entry
                 .splits
@@ -4708,7 +4715,6 @@ impl Render for Shell {
             let favicon = hover.1.map_or("none".into(), |tab| tab.to_string());
             log!("browser: hover {row} close {close} favicon {favicon}");
         }
-        self.step_clear_arrow();
         let now = self.clock.now();
         self.swaps.step(window, now);
         // As the outline's, so a capture of the URL field's button shows the glyph it logged.
@@ -4804,7 +4810,7 @@ impl Render for Shell {
         self.step_new_space(window);
         self.step_flight(window, cx);
         self.step_task_area(window, cx);
-        self.step_foot(window, cx);
+        self.step_task_list(window, cx);
         self.step_picture(window, cx);
         self.step_recent_downloads(window, cx);
         self.step_media_stack(window, cx);
@@ -4972,7 +4978,7 @@ impl Render for Shell {
             .then(|| self.window_buttons(self.viewport.width, cx));
         let normal = self.task_area.is_none();
         let task_area = self.task_area_element(cx);
-        let empty_card = self.empty_card(window, cx);
+        let empty_card = self.empty_card(cx);
         self.breath.arm(cx);
         div()
             .id("shell")
@@ -5212,10 +5218,8 @@ impl Shell {
                     .children(self.chooser_card(cx))
                     .children(self.pair_card(cx))
                     .children(self.cast_card(cx))
-                    .children(self.task_foot(cx))
-                    // Over the tasks' plates, which its open grows over.
                     .children(self.media_player_cards(cx))
-                    // Over the players and the task's foot, which it opens over.
+                    // Over the players, which it opens over.
                     .children(self.update_banner(cx))
                     .children(self.safe_start_card(cx))
                     .children(self.task_ghosts())
@@ -5231,7 +5235,6 @@ impl Shell {
             .children(self.recent_download_rows(cx))
             .children((!self.blank).then(|| self.library_button(cx)))
             .children(self.download_bin(cx))
-            .children(self.archive_flights())
             .children((!self.one_space()).then(|| self.plus_button(cx)))
             .children(self.menu_control.then(|| self.menu_button(cx)))
             .children(self.switcher(cx))
@@ -5417,12 +5420,15 @@ impl Shell {
             })
             .child(
                 row_box().child(plate(plus, new_tab).when(!today.is_empty(), |plate| {
-                    let clear = still_clear(&self.palette, space.clears_last(space.shown));
-                    let broom = self
-                        .browser
-                        .broom()
-                        .map(|_| broom::still_broom(&self.palette));
-                    plate.child(today_line(&self.palette, self.hairline(), clear, broom))
+                    // No broom: what it shows is the browser's answer for the Space shown, and
+                    // Clear stands where it will with one or without.
+                    let clear = clear_label(&self.palette, self.palette.tertiary());
+                    plate.child(today_line(
+                        &self.palette,
+                        self.hairline(),
+                        None::<gpui::Div>,
+                        clear,
+                    ))
                 })),
             )
             .children(today.into_iter().map(row))
@@ -5465,8 +5471,17 @@ impl Shell {
             rows.push((None, self.today_gap(cx).into_any_element()));
         }
         rows.push((None, self.new_tab_row(cx).into_any_element()));
-        for tab in today {
-            rows.push((Some(tab), self.list_row(tab, cx)));
+        // The task cards among the Today tabs, each where `slots` puts it.
+        let cards = (self.shown_space())
+            .map(|space| task_cards::blocks(&space.placed, &today))
+            .unwrap_or_default();
+        for at in 0..=today.len() {
+            for &(_, n, _) in cards.iter().filter(|card| card.0 == at) {
+                rows.push((None, self.task_card(n, cx)));
+            }
+            if let Some(&tab) = today.get(at) {
+                rows.push((Some(tab), self.list_row(tab, cx)));
+            }
         }
         // A dragged row's ghost, over the rest where the pointer has it, unless it's over the
         // favorites or the page. The system draws links and files dragged in.
@@ -5618,7 +5633,7 @@ impl Shell {
         self.step_tools(window);
         self.step_pinned_turn(window);
         self.step_split_folds(window, cx);
-        self.step_foot(window, cx);
+        self.step_task_list(window, cx);
         let left = REVEAL_INSET - (REVEAL_INSET + self.width()) * (1. - self.reveal_out());
         // On the right, its window ends at the browser window's right edge, and the panel comes
         // out of that edge.
@@ -5963,6 +5978,7 @@ fn slots(
     pinned: &[u64],
     blocks: &[(usize, u64, usize, f32)],
     today: &[u64],
+    cards: &[(usize, u64, f32)],
 ) -> HashMap<Slot, f32> {
     let rows = (pinned.iter().enumerate())
         .flat_map(|(at, &tab)| {
@@ -5973,7 +5989,12 @@ fn slots(
         })
         .chain((!today.is_empty()).then_some((Slot::Divider, TODAY_GAP)))
         .chain([(Slot::NewTab, ROW_PITCH)])
-        .chain(today.iter().map(|&tab| (Slot::Tab(tab), ROW_PITCH)));
+        .chain((0..=today.len()).flat_map(|at| {
+            let cards = (cards.iter())
+                .filter(move |card| card.0 == at)
+                .map(|&(_, n, room)| (Slot::Task(n), room));
+            cards.chain(today.get(at).map(|&tab| (Slot::Tab(tab), ROW_PITCH)))
+        }));
     let mut top = head;
     rows.map(|(slot, height)| {
         top += height;
@@ -6115,12 +6136,12 @@ fn today_hairline(color: Hsla, line: Pixels) -> impl IntoElement {
 
 /// The New Tab line's own line, after its label while there are tabs today: a hairline that takes
 /// the room the label leaves, where that is a line's worth, then `clear`, which ends where the
-/// titles do, or before `broom`, which then ends there.
+/// titles do, with or without `broom` before it: the hairline alone gives way to that.
 fn today_line(
     palette: &Palette,
     line: Pixels,
-    clear: impl IntoElement,
     broom: Option<impl IntoElement>,
+    clear: impl IntoElement,
 ) -> gpui::Div {
     div()
         .flex_1()
@@ -6131,8 +6152,8 @@ fn today_line(
         .flex()
         .items_center()
         .child(today_hairline(palette.faint(DIVIDER), line))
-        .child(clear)
         .children(broom)
+        .child(clear)
 }
 
 /// The divider of a Space's card in the Library: a line, and `clear` at its end while it shows.
@@ -6157,11 +6178,9 @@ fn divider_box(palette: &Palette, line: Pixels, clear: Option<impl IntoElement>)
     )
 }
 
-/// The divider's Clear: the word, after `arrow` while it would close the last Today tabs (Arc).
-/// The word stays at the titles' end, and the arrow's room opens `room` of the way before it, which
-/// moves the line's end, so nothing jumps as the arrow comes and goes. It hangs out by a margin
-/// that takes its clicks, and the word keeps its place.
-fn clear_label(palette: &Palette, arrow: AnyElement, room: f32, color: f32) -> gpui::Div {
+/// The divider's Clear: the word alone, at the titles' end, whatever Clear would close. It hangs
+/// out by a margin that takes its clicks, and the word keeps its place.
+fn clear_label(palette: &Palette, color: f32) -> gpui::Div {
     div()
         .flex_none()
         .ml(px(DIVIDER_GAP - CLEAR_HIT_OUT))
@@ -6172,34 +6191,7 @@ fn clear_label(palette: &Palette, arrow: AnyElement, room: f32, color: f32) -> g
         .items_center()
         .text_size(px(text::SMALL))
         .text_color(palette.text(color))
-        .child(
-            div()
-                .relative()
-                .flex_none()
-                .h_full()
-                .w(px(room * CLEAR_ARROW_ROOM))
-                .child(
-                    div()
-                        .absolute()
-                        .top(px((CLEAR_HEIGHT - CLEAR_ARROW) / 2.))
-                        .right(px(CLEAR_GAP - CLEAR_ARROW_INSET))
-                        .child(arrow),
-                ),
-        )
         .child("Clear")
-}
-
-/// Clear, with the arrow while `arrow`, where it doesn't change on the button: a Space's page
-/// beside the one shown, and a Library card.
-fn still_clear(palette: &Palette, arrow: bool) -> gpui::Div {
-    let glyph = match arrow {
-        true => svg()
-            .path(ARROW_DOWN)
-            .size(px(CLEAR_ARROW))
-            .text_color(palette.text(palette.tertiary())),
-        false => return clear_label(palette, div().into_any_element(), 0., palette.tertiary()),
-    };
-    clear_label(palette, glyph.into_any_element(), 1., palette.tertiary())
 }
 
 /// "+ New Tab": its plus and its label. The plus is drawn as a favicon is, so it centres on the
@@ -6565,6 +6557,7 @@ mod tests {
             shown: 0,
             peeked: Vec::new(),
             live_rooms: Default::default(),
+            placed: Vec::new(),
         }
     }
 

@@ -716,7 +716,7 @@ impl Agents {
                     if row == Row::Idle { "ended" } else { "failed" },
                 );
                 agents.tasks.sign_ins.rows.insert(cli, row);
-                agents.look_for_task_agents(cx);
+                agents.look_after_click(cli, cx);
                 cx.notify();
             });
         })
@@ -754,7 +754,7 @@ impl Agents {
                 };
                 log!("browser: task agent {} sign-in {ended}", cli.id());
                 self.tasks.sign_ins.rows.insert(cli, row);
-                self.look_for_task_agents(cx);
+                self.look_after_click(cli, cx);
                 cx.notify();
             }
         }

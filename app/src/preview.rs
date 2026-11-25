@@ -996,12 +996,6 @@ impl Browser for Fake {
     // Nor captures.
     fn list_captures(&self, _: &mut App) {}
 
-    fn hover_kinds(&self, _: &mut App) -> u32 {
-        browser::shell::HOVER_ALL
-    }
-
-    fn set_hover_kinds(&self, _: u32, _: &mut App) {}
-
     // The made-up downloads have no files, so each is gone already and none drags.
     fn trash(&self, _: &str, _: &mut App) -> bool {
         true
@@ -1227,8 +1221,9 @@ impl Browser for Fake {
         states::var("PREVIEW_SAFE_START").map_or(true, |state| state != "unblocked")
     }
 
-    // PREVIEW_BROOM=<idle|sorting|failed|nothing> draws the broom after Clear in that state, which
-    // a click doesn't change: nothing here sorts.
+    // PREVIEW_BROOM=<idle|sorting|failed|nothing> gives the broom before Clear that state, which
+    // a click doesn't change: nothing here sorts. An idle one is drawn with the pointer over the
+    // sidebar, as PREVIEW_HOVER puts it, and one with nothing to sort never.
     fn broom(&self) -> Option<Broom> {
         match states::var("PREVIEW_BROOM").ok()?.as_str() {
             "idle" => Some(Broom::Idle),
@@ -1736,9 +1731,6 @@ impl Browser for Fake {
         command_bar::in_place(Rc::new(PreviewBar), window, cx)
     }
 
-    // The preview runs no tasks.
-    fn start_task(&self, _: &str, _: &str, _: u64, _: browser::agents::task::Start, _: &mut App) {}
-
     fn field_window_typing(&self, _: &mut App) -> bool {
         false
     }
@@ -2088,11 +2080,11 @@ impl Browser for Fake {
         self.opt_ins.set((on, self.opt_ins.get().1));
     }
 
-    fn agents(&self, _: &App) -> Option<bool> {
+    fn threads(&self, _: &App) -> Option<bool> {
         Some(self.opt_ins.get().1)
     }
 
-    fn set_agents(&self, on: bool, _: &mut App) {
+    fn set_threads(&self, on: bool, _: &mut App) {
         self.opt_ins.set((self.opt_ins.get().0, on));
     }
 
@@ -2230,6 +2222,16 @@ impl command_bar::Host for PreviewBar {
         _: &str,
         _: &str,
         _: Option<(SharedString, SharedString)>,
+        _: browser::agents::tier::Tier,
+        _: Option<String>,
+        _: &mut App,
+    ) {
+    }
+
+    fn run_task_at_rest(
+        &self,
+        _: &str,
+        _: &str,
         _: browser::agents::tier::Tier,
         _: Option<String>,
         _: &mut App,
@@ -2724,6 +2726,11 @@ fn main() {
                 );
                 return;
             }
+            // PREVIEW_THREADS=on or off shows Settings › Threads' first row, its switch so.
+            if let Ok(state) = states::var("PREVIEW_THREADS") {
+                preview_pictures(Pictures::Threads { on: state == "on" }, cx);
+                return;
+            }
             // PREVIEW_SETTINGS_GENERAL=1 shows Settings › General, on made-up values (#4092).
             if states::var("PREVIEW_SETTINGS_GENERAL").is_ok() {
                 preview_pictures(Pictures::General, cx);
@@ -2846,7 +2853,7 @@ fn main() {
                         spaces[0].2 = Some(theme.main_color());
                         spaces[0].6 = theme.to_text().into();
                     }
-                    // PREVIEW_TASKS=1 shows three tasks' cards at the foot, one at work, one
+                    // PREVIEW_TASKS=1 shows three tasks' cards in Today, one at work, one
                     // stopped and one done; =open shows the first's conversation, as its card's
                     // click does.
                     let tasks = states::var("PREVIEW_TASKS").ok().or_else(|| {
@@ -2862,6 +2869,7 @@ fn main() {
                         .map(|(id, (title, url, days))| (id, title, url, now() - days * DAY))
                         .collect();
                     let first_download = first_archived + ARCHIVE.len() as u64;
+                    let files = states::var("PREVIEW_DOWNLOADS").as_deref() == Ok("files");
                     let downloads = (first_download..)
                         .zip(DOWNLOADS)
                         .map(
@@ -2869,7 +2877,14 @@ fn main() {
                                 id,
                                 name: name.into(),
                                 url: url.into(),
-                                path: SharedString::default(),
+                                // PREVIEW_DOWNLOADS=files gives the finished ones made-up files:
+                                // the Library button's plate lists a finished one only with one.
+                                path: match state {
+                                    DownloadState::Done if files => {
+                                        format!("/preview/{name}").into()
+                                    }
+                                    _ => SharedString::default(),
+                                },
                                 received,
                                 total,
                                 state,
@@ -3597,8 +3612,13 @@ fn main() {
             // PREVIEW_MODEL_MENU=<claude|codex>[,<model>] shows Settings › Agents' Model menu for that
             // CLI as it opens, from the CLI's recorded list, on Default or the model chosen, light
             // with PREVIEW_APPEARANCE=light (#2455).
+            // PREVIEW_MODEL_MENU=composer[,<key>…] shows the composer's model menu instead, with its
+            // search, Claude's recorded models and Codex not signed in, then types the keys in it.
             if let Ok(cli) = states::var("PREVIEW_MODEL_MENU") {
-                preview_model_menu(bounds, &cli, cx);
+                match cli.strip_prefix("composer") {
+                    Some(keys) => preview_composer_model_menu(bounds, keys, cx),
+                    None => preview_model_menu(bounds, &cli, cx),
+                }
             }
             // PREVIEW_PAGE_MENU=<link|image|text|field>,<x>,<y>[,<key>…] shows a page's menu there, made
             // up as Chrome builds it for a link, an image, selected text or a misspelt word in a text
@@ -3849,6 +3869,63 @@ fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
             };
             menu::show(request, cx);
         });
+    })
+    .detach();
+}
+
+/// The composer's model menu as the command bar builds it, from Claude's recorded list and with
+/// Codex not signed in, then `keys`, comma-separated, typed in its search.
+fn preview_composer_model_menu(bounds: Bounds<Pixels>, keys: &str, cx: &mut App) {
+    use browser::agents::{ready::claude_listed, runner::Cli, task};
+    let answer = serde_json::from_str(include_str!(
+        "agents/runner/answers/claude-2.1.322-initialize.json"
+    ))
+    .unwrap_or_default();
+    let models = claude_listed(&answer).unwrap_or_default();
+    let heading = |name: &str| MenuEntry {
+        header: true,
+        ..MenuEntry::named(name.to_string(), false)
+    };
+    let (_, models) = task::model_menu("", "Default", models.default.as_deref(), models.listed);
+    let mut items = vec![
+        MenuEntry::search("Search models"),
+        heading(browser::settings_rows::assistant_name(Cli::Claude)),
+    ];
+    items.extend(models.into_iter().map(|entry| MenuEntry {
+        over: false,
+        ..entry
+    }));
+    items.extend([
+        heading(browser::settings_rows::assistant_name(Cli::Codex)),
+        MenuEntry::named("Sign In", true).offer().out(),
+        MenuEntry::line(),
+        MenuEntry::named("Settings", true).kept().out(),
+    ]);
+    let keys: Vec<String> = (keys.split(','))
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(String::from)
+        .collect();
+    let light = preview_tone() == Some(Tone::Light);
+    let Some(window) = menu::open_at(Rc::new(PreviewMenu), bounds, cx) else {
+        return;
+    };
+    let window: gpui::AnyWindowHandle = window.into();
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(Duration::from_millis(500))
+            .await;
+        cx.update(|cx| {
+            let request = menu::Request {
+                items,
+                at: point(px(40.), px(40.)),
+                area: Bounds::new(point(px(0.), px(0.)), bounds.size),
+                look: menu::Look::plain(light),
+                chosen: menu::picked(|_, _| {}),
+            };
+            menu::show(request, cx);
+        });
+        press_keys(window, keys, cx).await;
     })
     .detach();
 }

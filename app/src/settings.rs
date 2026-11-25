@@ -217,7 +217,9 @@ impl Popup {
             Popup::SearchEngine(_) => SEARCH_WITH.into(),
             Popup::ArchiveAfter(_) => "Archive Today tabs after".into(),
             Popup::Notes(_) => "New Note".into(),
-            Popup::Assistant(cli) => format!("{} options", cli.assistant()).into(),
+            Popup::Assistant(cli) => {
+                format!("{} options", browser::settings_rows::assistant_name(cli)).into()
+            }
             Popup::Model(_) => browser::agents::task::MODEL.into(),
             Popup::Notify => browser::needs_you::WHEN_TO_NOTIFY.into(),
             Popup::PageZoom => "Page zoom".into(),
@@ -3847,80 +3849,45 @@ impl Settings {
     /// agents, each part on the page the owner drew it on (spec-settings.md › S8 to S11).
     fn agents(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> [Page; 4] {
         let look = &self.look;
-        let on = agents.read(cx).is_on();
+        let on = agents.read(cx).threads();
+        // The inside switch: the user's own assistant, for threads. Other apps have theirs.
+        let name = format!("Let your assistant use {PRODUCT}");
         let switch = {
             let agents = agents.clone();
-            let set = move |on, cx: &mut App| agents.update(cx, |agents, cx| agents.set_on(on, cx));
-            self.toggle("agents", "Let agents use the browser", on, set, accent, cx)
+            let set =
+                move |on, cx: &mut App| agents.update(cx, |agents, cx| agents.set_threads(on, cx));
+            self.toggle("agents", name.clone(), on, set, accent, cx)
         };
-        let model = agents.read(cx);
-        let about: SharedString = match model.trouble() {
-            Some(trouble) => trouble,
-            None if on => {
-                "On: a connected client reaches the browser through the bridge beside it.".into()
-            }
-            None => "Each asks before it sends or pays for anything.".into(),
+        // Off, the drawn line says what off does; on, the row is bare. The agents' trouble comes
+        // first, as it did.
+        let about: Option<SharedString> = match agents.read(cx).trouble() {
+            Some(trouble) => Some(trouble),
+            None => (!on).then(|| "Off: no thread starts.".into()),
         };
-        let master = feature(
-            look,
-            Section::Threads.glyph(),
-            "Let agents use the browser",
-            Some(about),
-            vec![switch],
-        );
+        let master = setting(look, name, about, vec![switch]);
         let listed = agents.read(cx).listed();
         let clients: Vec<gpui::Div> = listed
             .iter()
             .map(|client| self.client(agents, *client, &listed, cx))
             .collect();
-        // Asking your own Claude from ⌘T and letting an app connect are two trust decisions, so
-        // tasks have their switch under agents', shown while agents are on.
-        let tasks_on = agents.read(cx).tasks_on();
-        let tasks = on.then(|| {
-            let switch = {
-                let agents = agents.clone();
-                let set = move |on, cx: &mut App| {
-                    agents.update(cx, |agents, cx| agents.set_tasks_on(on, cx))
-                };
-                self.toggle(
-                    "agent tasks",
-                    "Threads from the command bar",
-                    tasks_on,
-                    set,
-                    accent,
-                    cx,
-                )
-            };
-            let tab = if shell::OFF_THE_MAC { "Tab" } else { "⇥" };
-            let bar = shell::keystroke_label("cmd-t");
-            let line = match tasks_on {
-                true => format!("{tab} in {bar} gives what you typed to Claude or Codex here."),
-                false => {
-                    format!("Off: {tab} in {bar} makes no thread. Apps that connect still can.")
-                }
-            };
-            nested(setting(
-                look,
-                "Threads from the command bar",
-                Some(line.into()),
-                vec![switch],
-            ))
-        });
-        // Under tasks' own switch, while they're on: whether a finished one is kept (#4105).
-        let keeps = (on && tasks_on).then(|| self.kept_tasks(agents, accent, cx));
+        // Under the inside switch, while it's on: whether a finished one is kept (#4105).
+        let keeps = on.then(|| self.kept_tasks(agents, accent, cx));
         // And under that, each one kept, which is the list of what is.
-        let kept = match on && tasks_on {
+        let kept = match on {
             true => self.kept_rows(agents, cx),
             false => Vec::new(),
         };
-        let rows = [master].into_iter().chain(tasks).chain(keeps).chain(kept);
+        let rows = [master].into_iter().chain(keeps).chain(kept);
         let mut threads = vec![Block::Rows(rows.collect())];
         let (mut models, mut access) = (Vec::new(), Vec::new());
         // Every assistant, in its state, whether agents and tasks are on or not (S9).
         models.push(Block::Heading("Your assistant".into()));
         models.push(Block::Group(self.assistants(agents, cx)));
-        models.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
-        if tasks_on {
+        models.push(Block::Under(foot(
+            look,
+            browser::settings_rows::SIGN_INS_STAY,
+        )));
+        if on {
             access.extend(self.access());
             // What a thread may reach: files and folders too, with the folders it holds to revoke.
             access.extend(self.files_not_here(agents, cx));
@@ -4040,9 +4007,17 @@ impl Settings {
         }
         [
             Page::new(Section::Threads, "", threads),
-            Page::new(Section::Models, "", models),
+            Page::new(
+                Section::Models,
+                Section::Models.lede().unwrap_or_default(),
+                models,
+            ),
             Page::new(Section::Access, agents::tier::NEVER_GETS, access),
-            Page::new(Section::OtherApps, "", blocks),
+            Page::new(
+                Section::OtherApps,
+                Section::OtherApps.lede().unwrap_or_default(),
+                blocks,
+            ),
         ]
     }
 
@@ -4058,8 +4033,9 @@ impl Settings {
             };
             self.toggle("other apps", name.clone(), on, set, accent, cx)
         };
-        let line = "Each works in a Space of its own, never in your tabs.";
-        setting(&self.look, name, Some(line.into()), vec![switch])
+        // A draft until the next wording batch (S30): off says what off does; on, the row is bare.
+        let line = (!on).then(|| "Off: no app connects.".into());
+        setting(&self.look, name, line, vec![switch])
     }
 
     /// Access: what each tier lets a task do, in words only, since only a task's own menu sets
@@ -5815,10 +5791,6 @@ fn method(target: &str) -> &str {
 
 /// Apps that connect's heading.
 const APPS_THAT_CONNECT: &str = "Apps that connect";
-
-/// What Your assistant's rows never do, under them. That ilo has no assistant of its own is first
-/// run's to say.
-const NEVER_SEES_LOGIN: &str = concat!(env!("PRODUCT_NAME"), " never sees your assistant's login.");
 
 /// A line under a group that says more of it, in a row's line's grey, as Fenced sites' has.
 fn foot(look: &RowLook, line: impl Into<SharedString>) -> gpui::Div {

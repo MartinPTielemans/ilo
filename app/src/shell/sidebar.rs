@@ -312,6 +312,8 @@ impl Shell {
         if to != self.sidebar_width {
             self.sidebar_width = to;
             self.browser.set_sidebar_width(to, cx);
+            // A done card's finding wraps to the width.
+            self.place_cards(cx);
         }
         self.width_motion = (from != to).then(|| (from, crate::motion::start(cx)));
         if self.width_motion.is_none() {

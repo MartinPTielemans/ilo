@@ -8,14 +8,16 @@
 //! and no outside client reaches any of this, to take one up, list them or remove one.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use gpui::{App, AppContext, Context, SharedString};
+use gpui::{App, AppContext, Context, RenderImage, SharedString};
 
 use super::ilo::{IloKind, IloLine};
-use super::{Card, KEPT, Line, State, Task, Who, seconds};
+use super::{Card, KEPT, Line, State, Task, Who, finding, last_tab, seconds};
 use crate::agents::Agents;
 use crate::agents::helpers::Helpers;
+use crate::agents::kept::cards::{self, Picture};
 use crate::agents::kept::{self, Keep, Keeps, Nowhere};
 use crate::agents::runner::Cli;
 use crate::agents::tier::{Sites, Tier};
@@ -31,11 +33,94 @@ const IN_FIELD: usize = usize::MAX;
 const KEPT_HERE: usize = usize::MAX - 1;
 const RESUMED: usize = usize::MAX - 2;
 
+/// The last picture of a kept task's last page its conversation took, as its card keeps it.
+pub enum CardTile {
+    /// Of `tab`: the picture, or none if it couldn't have been given to an agent.
+    Taken(u64, Option<Arc<RenderImage>>),
+    /// The card's folder holds what there is of `tab`'s, written at the Done.
+    Written(u64),
+}
+
 impl Agents {
     /// Where the kept tasks' folders are, under the profile's. None with no profile folder, when
     /// nothing is kept.
     pub(super) fn kept_root(&self) -> Option<PathBuf> {
         (self.tasks.dir.as_ref()).map(|dir| dir.join(kept::FOLDER))
+    }
+
+    /// Where the kept tasks' cards are, beside their folders (kept/cards.rs).
+    pub(super) fn cards_root(&self) -> Option<PathBuf> {
+        (self.tasks.dir.as_ref()).map(|dir| dir.join(cards::FOLDER))
+    }
+
+    /// The conversation of `agent`'s task took a picture of `tab`: `picture`, or none if it
+    /// couldn't have been given to an agent, as the window that took it says. Of the task's last
+    /// page, a kept task's card keeps it for its Done, in place of any before; of another, nothing.
+    pub fn card_pictured(
+        &mut self,
+        agent: &str,
+        tab: u64,
+        picture: Option<Arc<RenderImage>>,
+        cx: &App,
+    ) {
+        let Some(task) = self.task(agent) else {
+            return;
+        };
+        let kept = self.tasks.kept.of(agent).is_some() && !self.tasks.kept.off;
+        if !kept || last_tab(task, &self.pages(task, cx)) != Some(tab) {
+            return;
+        }
+        let tile = CardTile::Taken(tab, picture);
+        self.tasks.card_tiles.insert(agent.to_string(), tile);
+    }
+
+    /// `agent`'s kept task is Done: its card's line and its last page's picture go to its card's
+    /// folder, written off the UI's thread, the picture only if the last one its conversation took
+    /// of that page could have been given to an agent, and the page still could be now. Nothing
+    /// with the switch off, nor for a task with no row, as one deleted from the Archive: its card
+    /// stays as it was while ⌘Z can bring it back, and goes when it goes for good. A failed write
+    /// leaves the card as it was and says nothing.
+    fn keep_card(&mut self, agent: &str, cx: &mut Context<Self>) {
+        let (Some(root), Some(task)) = (self.cards_root(), self.task(agent)) else {
+            return;
+        };
+        if self.tasks.kept.off || !self.tasks.kept.listed().any(|listed| listed == agent) {
+            return;
+        }
+        let Some(card) = (self.tasks.kept.of(agent)).map(|record| record.card.clone()) else {
+            return;
+        };
+        if !matches!(task.state, State::Done { .. }) {
+            return;
+        }
+        let line = Some(finding(&task.messages).to_string()).filter(|line| !line.is_empty());
+        let last = last_tab(task, &self.pages(task, cx));
+        // A page that couldn't be kept now, as one the user held since its picture was taken,
+        // keeps none, whatever its tile says.
+        let last = last.filter(|tab| self.keeps_picture(*tab, cx));
+        let (picture, written) = match self.tasks.card_tiles.remove(agent) {
+            Some(CardTile::Taken(tab, Some(image))) if Some(tab) == last => {
+                (Some(image), Some(tab))
+            }
+            Some(CardTile::Written(tab)) if Some(tab) == last => (None, Some(tab)),
+            _ => (None, None),
+        };
+        let leave = picture.is_none() && written.is_some();
+        if let Some(tab) = written {
+            (self.tasks.card_tiles).insert(agent.to_string(), CardTile::Written(tab));
+        }
+        let picture = match (picture, leave) {
+            (Some(image), _) => Picture::Taken(image),
+            (None, true) => Picture::Leave,
+            (None, false) => Picture::Remove,
+        };
+        let job = cards::Job::Write {
+            root,
+            id: card,
+            line,
+            picture,
+        };
+        self.tasks.card_jobs.ask(job, cx.background_executor());
     }
 
     /// Settings › Agents' Keep finished tasks so you can reply.
@@ -312,7 +397,7 @@ impl Agents {
     /// follows at once, so it's there to reply to after a quit, or isn't. Its title is the name
     /// its agent gave it and never what was asked; one deleted from the Archive has no row, and
     /// ⌘Z gives it its row back.
-    pub(super) fn keep_ended(&mut self, agent: &str) {
+    pub(super) fn keep_ended(&mut self, agent: &str, cx: &mut Context<Self>) {
         let (Some(root), Some(task)) = (self.kept_root(), self.task(agent)) else {
             return;
         };
@@ -325,6 +410,7 @@ impl Agents {
         }
         record.past = past;
         self.tasks.kept.write(&root);
+        self.keep_card(agent, cx);
     }
 
     /// At quit: a task still at work ends there, as the quit is the user's, so the file says it
@@ -536,6 +622,7 @@ impl Agents {
     /// `agent`'s task goes for good: what its assistant kept of it goes with it.
     pub(in crate::agents) fn forget_kept(&mut self, agent: &str, cx: &mut Context<Self>) {
         self.tasks.picked_up.remove(agent);
+        self.tasks.card_tiles.remove(agent);
         let task = agent.to_string();
         self.remove_kept(
             move |record| record.task.as_deref() == Some(task.as_str()),
@@ -577,6 +664,11 @@ impl Agents {
             move |record| !(record.task.as_ref()).is_some_and(|task| working.contains(task)),
             cx,
         );
+        // Every card goes, a task's at work too: it has none to show until it's done, and is
+        // written again then.
+        if let Some(root) = self.cards_root() {
+            (self.tasks.card_jobs).ask(cards::Job::RemoveAll(root), cx.background_executor());
+        }
     }
 
     /// At launch: the tasks an earlier run of the browser left that had ended are tasks again, in
@@ -591,10 +683,15 @@ impl Agents {
     /// kept nothing, the one look for the file is all a launch pays: nothing is read, started or
     /// spawned.
     pub(crate) fn take_old_kept(&mut self, cx: &mut Context<Self>) {
-        let Some(root) = self.kept_root() else {
+        let (Some(root), Some(cards_root)) = (self.kept_root(), self.cards_root()) else {
             return;
         };
         if !self.tasks.kept.read(&root) {
+            // Cards with no file of ids are what a run that went before it could remove them left.
+            if cards_root.exists() {
+                let sweep = cards::Job::Sweep(cards_root, Vec::new());
+                self.tasks.card_jobs.ask(sweep, cx.background_executor());
+            }
             return;
         }
         let mut left = self.tasks.kept.left();
@@ -614,13 +711,15 @@ impl Agents {
             cx.notify();
         }
         self.remove_kept(|record| record.task.is_none(), cx);
+        let sweep = cards::Job::Sweep(cards_root, self.tasks.kept.cards());
+        self.tasks.card_jobs.ask(sweep, cx.background_executor());
     }
 
     /// Removes the conversations `which` picks, off the UI's thread, as each waits on its
     /// assistant. One that couldn't be removed stays held and counted, so nothing reads as removed
     /// that wasn't, and the user can try again.
     fn remove_kept(&mut self, which: impl Fn(&kept::Record) -> bool, cx: &mut Context<Self>) {
-        let Some(root) = self.kept_root() else {
+        let (Some(root), Some(cards_root)) = (self.kept_root(), self.cards_root()) else {
             return;
         };
         let removing: Vec<_> = (self.tasks.kept.removing(which).into_iter())
@@ -632,6 +731,14 @@ impl Agents {
         if removing.is_empty() {
             return;
         }
+        // A card goes with its task at once, whether or not its conversation can be removed.
+        let gone: Vec<_> = (removing.iter())
+            .filter_map(|(id, ..)| self.tasks.kept.card_of(id))
+            .collect();
+        (self.tasks.card_jobs).ask(
+            cards::Job::Remove(cards_root, gone),
+            cx.background_executor(),
+        );
         // Its row leaves the file at once; its id stays there until its assistant has removed
         // the conversation, so one that couldn't be is still held to try again.
         self.tasks.kept.write(&root);

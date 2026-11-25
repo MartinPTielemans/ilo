@@ -318,10 +318,12 @@ impl Browser for Core {
 
     fn user_space(&self, like: u64) -> u64 {
         let profile = unsafe { bc::bc_space_profile(like) };
+        // A private window's is never one: agents get no path into it.
         let users = |space: u64| {
             space != 0
                 && name(bc::bc_space_agent, space).is_empty()
                 && unsafe { bc::bc_space_profile(space) } == profile
+                && !self.private_space(space)
         };
         let shown = unsafe { bc::bc_window_space(crate::front().0) };
         match users(shown) {

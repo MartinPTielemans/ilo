@@ -31,6 +31,8 @@ pub(super) struct Scene {
     pub bar: bool,
     /// The Spaces on a phone.
     pub phone: bool,
+    /// Today's tabs sorted into folders, with the broom on New Tab's line.
+    pub sorted: bool,
     /// The command bar at rest, waiting for what's typed (Rest).
     pub rest: bool,
 }
@@ -52,6 +54,8 @@ pub(super) enum Chip {
     Favorites,
     /// The private step's: what the blocker kept off the page, with no count.
     Private,
+    /// The broom's, at the tidy step with an assistant: the folders it made, with no count.
+    Sorted,
 }
 
 impl Chip {
@@ -61,6 +65,7 @@ impl Chip {
             Chip::Found => Some(Glyph::Check),
             Chip::Favorites => None,
             Chip::Private => Some(Glyph::Shield),
+            Chip::Sorted => Some(Glyph::Broom),
         }
     }
 
@@ -70,11 +75,21 @@ impl Chip {
             Chip::Found => None,
             Chip::Favorites => Some("Favorites sit here, in every Space"),
             Chip::Private => Some("Ads and trackers kept off this page"),
+            Chip::Sorted => Some("Sorted into Trip and Laptop"),
         }
     }
 }
 
 impl Scene {
+    /// The tidy step's with an assistant, where the broom can be (values-first-run.md, 27b).
+    pub(super) fn sorted() -> Scene {
+        Scene {
+            sorted: true,
+            chip: Some(Chip::Sorted),
+            ..Scene::default()
+        }
+    }
+
     /// The step's scene, as values-first-run.md draws its screen.
     pub(super) fn of(step: Step) -> Scene {
         let plain = Scene::default();
@@ -294,7 +309,7 @@ fn sidebar(scene: Scene, inks: Inks) -> gpui::Div {
     let [address_height, address_padding] = t::ADDRESS;
     let [favorites_height, favorites_gap] = t::FAVORITES;
     let [_, _, _, row_mark] = t::ROW;
-    let [roadmap, budget, open, parks, kestrel] = t::MARKS;
+    let [roadmap, budget, _, parks, kestrel] = t::MARKS;
     let lights = div()
         .flex_none()
         .h(px(buttons_height))
@@ -369,12 +384,91 @@ fn sidebar(scene: Scene, inks: Inks) -> gpui::Div {
                 .child(space)
                 .child(tab("Roadmap", roadmap, false))
                 .child(tab("Budget 2027", budget, false))
-                .child(new_tab(inks))
-                .children(scene.thread.then(|| thread(inks)))
-                .child(open_tab(open))
-                .child(tab("The largest city parks", parks, true))
-                .child(tab("The Kestrel 14, six mon…", kestrel, true)),
+                .map(|tabs| match scene.sorted {
+                    true => tabs.children(sorted(inks)),
+                    false => tabs
+                        .child(new_tab(inks))
+                        .children(scene.thread.then(|| thread(inks)))
+                        .child(open_tab("The Lakeside loop · Fie…", 0.))
+                        .child(tab("The largest city parks", parks, true))
+                        .child(tab("The Kestrel 14, six mon…", kestrel, true)),
+                }),
         )
+}
+
+/// Today's tabs as the broom leaves them: New Tab's line with Clear and the broom, then a folder
+/// for each kind of tab, its tabs in it.
+fn sorted(inks: Inks) -> [gpui::Div; 8] {
+    let [height, end] = t::SORTED_NEW_TAB;
+    let [_, size, line, plus] = t::NEW_TAB;
+    let [_, padding, gap, slot] = t::ROW;
+    let [button_width, button_height, button_radius, broom] = t::BROOM_BUTTON;
+    let [_, _, _, parks, kestrel] = t::MARKS;
+    let [ferry, brightcart] = t::SORTED_MARKS;
+    let indent = t::FOLDER_INDENT;
+    let new_tab = div()
+        .flex_none()
+        .h(px(height))
+        .pl(px(padding))
+        .pr(px(end))
+        .flex()
+        .items_center()
+        .gap(px(gap))
+        .child(
+            div()
+                .flex_none()
+                .size(px(slot))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(glyph(Glyph::Plus, plus, inks.ink(inks.faint))),
+        )
+        .child(text("New Tab", [size, line], inks.ink(inks.faint)).flex_none())
+        .child(div().flex_1().h(px(t::LINE)).bg(inks.ink(t::HAIRLINE)))
+        .child(text("Clear", t::CLEAR_TEXT, inks.ink(inks.faint)).flex_none())
+        .child(
+            div()
+                .flex_none()
+                .w(px(button_width))
+                .h(px(button_height))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(button_radius))
+                .bg(inks.ink(inks.shown))
+                .border_1()
+                .border_color(inks.line())
+                .child(glyph(Glyph::Broom, broom, inks.ink(1.))),
+        );
+    let folder = |name: &'static str| {
+        row(inks)
+            .child(
+                gpui::svg()
+                    .flex_none()
+                    .size(px(slot))
+                    .path("icons/folder.svg")
+                    .text_color(inks.ink(inks.quiet)),
+            )
+            .child(
+                text(name, t::FOLDER_TEXT, inks.ink(inks.quiet)).font_weight(FontWeight::SEMIBOLD),
+            )
+    };
+    let tab = |name: &'static str, color: u32| {
+        row(inks)
+            .pl(px(indent))
+            .child(mark(slot, t::MARK_ROUND_RADIUS, color))
+            .child(text(name, t::ROW_TEXT, inks.ink(1.)))
+    };
+    [
+        new_tab,
+        folder("Trip"),
+        open_tab("The Lakeside loop", indent),
+        tab("The largest city parks", parks),
+        tab("Ferry times", ferry),
+        folder("Laptop"),
+        tab("Kestrel 14 review", kestrel),
+        tab("Kestrel 14 · Brightcart", brightcart),
+    ]
 }
 
 /// A row of the small sidebar, without its contents.
@@ -413,25 +507,24 @@ fn new_tab(inks: Inks) -> gpui::Div {
         .child(div().flex_1().h(px(t::LINE)).bg(inks.ink(t::HAIRLINE)))
 }
 
-/// The tab open in the small window, on its page's own ground and joined to it.
-fn open_tab(color: u32) -> gpui::Div {
+/// The tab open in the small window, named `name`, on its page's own ground and joined to it, in
+/// by `indent` where it's in a folder.
+fn open_tab(name: &'static str, indent: f32) -> gpui::Div {
     let [height, padding, gap, size] = t::ROW;
+    let [_, _, color, _, _] = t::MARKS;
     div()
         .flex_none()
         .w(px(t::OPEN_TAB))
         .h(px(height))
-        .px(px(padding))
+        .pl(px(padding.max(indent)))
+        .pr(px(padding))
         .flex()
         .items_center()
         .gap(px(gap))
         .rounded_l(px(t::OPEN_TAB_RADIUS))
         .bg(rgb(t::PAGE))
         .child(mark(size, t::MARK_RADIUS, color))
-        .child(text(
-            "The Lakeside loop · Fie…",
-            t::ROW_TEXT,
-            rgb(t::PAGE_INK),
-        ))
+        .child(text(name, t::ROW_TEXT, rgb(t::PAGE_INK)))
 }
 
 /// A thread at work in the sidebar: its ring, its name, what it's doing and the sites it reads.
@@ -899,6 +992,7 @@ enum Glyph {
     Bubble,
     Arrow,
     Shield,
+    Broom,
 }
 
 impl Glyph {
@@ -911,6 +1005,7 @@ impl Glyph {
             Glyph::Bubble => (16., None),
             Glyph::Arrow => (40., Some(2.)),
             Glyph::Shield => (16., Some(1.4)),
+            Glyph::Broom => (12., Some(1.05)),
         }
     }
 }
@@ -983,6 +1078,20 @@ fn glyph(kind: Glyph, size: f32, color: impl Into<Hsla>) -> gpui::Div {
                         path.move_to(at(5.8, 8.1));
                         path.line_to(at(7.4, 9.7));
                         path.line_to(at(10.3, 6.5));
+                        paths.push((path, None));
+                    }
+                    // The broom on the New Tab line: its handle, its head and a bristle.
+                    Glyph::Broom => {
+                        let mut path = new();
+                        path.move_to(at(10.3, 1.7));
+                        path.line_to(at(6.3, 5.7));
+                        path.move_to(at(4.95, 4.95));
+                        path.line_to(at(7.05, 7.05));
+                        path.line_to(at(5.15, 10.45));
+                        path.line_to(at(1.55, 6.85));
+                        path.close();
+                        path.move_to(at(5.65, 6.35));
+                        path.line_to(at(3.5, 8.5));
                         paths.push((path, None));
                     }
                     Glyph::Arrow => {

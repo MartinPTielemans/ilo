@@ -25,13 +25,13 @@ use super::{
     SPACE_DRAGGED, SPACE_SWATCH_SHOWN, Shell, Space, UNSELECTED_TITLE, URL_BUTTON_GLYPH,
     URL_BUTTON_SIZE, What,
     access::Accessible,
-    dashed_square,
+    clear_label, dashed_square,
     display_face::{cap_top, display_text},
     divider_box, favicon, file_url, folder_icon,
     header::TipSide,
     host, keystroke_label, plate, row_box, selected_plate, space_icon_drawn,
     space_order::{Along, DraggedSpace},
-    split_plate, spring_to, still_clear,
+    split_plate, spring_to,
     task_cards::number as task_number,
     title,
 };
@@ -76,7 +76,7 @@ const LIBRARY_BAND_STIFFNESS: f32 = 0.25;
 /// buttons: half a pixel at 2×, so their swap from the panel's copy can't be seen.
 const LIBRARY_REST_SLACK: f32 = 0.25;
 
-use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
+use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED, Tone};
 use crate::tokens::shell::library::COLUMN;
 use crate::tokens::shell::library::COLUMN_EDGE;
 use crate::tokens::shell::library::COLUMN_WIDTH;
@@ -129,6 +129,9 @@ use crate::tokens::shell::library::SPACES_LEFT;
 use crate::tokens::shell::library::SPACES_PAGE;
 use crate::tokens::shell::library::{CARD_MORE_X, CARD_MORE_Y};
 use crate::tokens::shell::{FOOT_GLYPH, FOOT_ROW, LIBRARY_BUTTON};
+use crate::tokens::shell::{
+    FOOT_PLATE, FOOT_PLATE_RADIUS, LIBRARY_OPEN_GLYPH, LIBRARY_OPEN_PLATE, LIGHT_LIBRARY_OPEN_PLATE,
+};
 
 #[cfg(test)]
 use crate::tokens::shell::library::FILTER_X;
@@ -171,8 +174,12 @@ const CAPTURE_BIT: u64 = 1 << 63;
 /// Rows laid out past the list's ends, so a scroll doesn't show them late.
 const ARCHIVE_OVERDRAW: f32 = 300.;
 use crate::tokens::shell::library::BUTTON_PROGRESS_BOTTOM;
+use crate::tokens::shell::library::BUTTON_PROGRESS_FILL;
 use crate::tokens::shell::library::BUTTON_PROGRESS_HEIGHT;
+use crate::tokens::shell::library::BUTTON_PROGRESS_TRACK;
+use crate::tokens::shell::library::BUTTON_PROGRESS_TRACK_PLATED;
 use crate::tokens::shell::library::BUTTON_PROGRESS_WIDTH;
+use crate::tokens::shell::library::LIGHT_BUTTON_PROGRESS_TRACK;
 use crate::tokens::shell::library::PROGRESS_BOTTOM;
 use crate::tokens::shell::library::PROGRESS_FILL;
 use crate::tokens::shell::library::PROGRESS_HEIGHT;
@@ -2247,7 +2254,7 @@ impl Shell {
         let glow = self.foot_glow(id, CARD_WIDTH, height, CARD_RADIUS);
         let rows = space.card_lines().into_iter().map(|line| match line {
             Line::Divider => {
-                let clear = still_clear(&palette, space.clears_last(space.shown));
+                let clear = clear_label(&palette, palette.tertiary());
                 divider_box(&palette, self.hairline(), Some(clear)).into_any_element()
             }
             Line::Folder(folder, depth) => {
@@ -4314,12 +4321,23 @@ impl Shell {
         }
     }
 
+    /// Whether the footer's Library button wears its plate: while the Library is open, which with
+    /// the sidebar receding under it is as long as the button is still seen.
+    pub(super) fn library_lit(&self) -> bool {
+        self.library_open
+    }
+
     /// The footer's button that opens the Library, at its left (Arc). While downloads run, it keeps
     /// its glyph and name over a bar of how far they've got. The pointer resting on it shows the
-    /// recent downloads over it.
+    /// recent downloads over it. While the Library is open it wears a plate, its glyph in the
+    /// text's ink.
     pub(super) fn library_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let progress = downloads_progress(&self.downloads);
         let command = Command::ViewLibrary;
+        // While its plate of recent downloads is up the button is the plate's foot, in its fill:
+        // no plate of its own, its glyph in the ink.
+        let plated = self.recent_downloads.plated();
+        let lit = self.library_lit() && !plated;
         div()
             .id("library")
             .when(self.a11y, |button| {
@@ -4336,8 +4354,11 @@ impl Shell {
             .rounded(px(NAV_RADIUS))
             .block_mouse_except_scroll()
             .map(|button| self.with_tooltip(button, command, TipSide::Beside, cx))
-            .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
-            .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+            .when(!plated, |button| {
+                button
+                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+            })
             // A button has one hover handler, so this one also carries the tooltip's.
             .on_hover(cx.listener(move |shell, hovered: &bool, window, cx| {
                 shell.hover_button(
@@ -4350,25 +4371,30 @@ impl Shell {
                 shell.hover_recent_downloads(false, *hovered, window, cx)
             }))
             .on_click(cx.listener(move |shell, _, _, cx| shell.run(command, "sidebar", cx)))
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(|shell, event: &MouseDownEvent, _, cx| {
-                    shell.hover_kinds_menu(event.position, cx)
-                }),
-            )
-            // A task's card folding into it bumps its glyph as it lands.
-            .child({
-                let (scale, alpha) = self.archive_glyph(std::time::Instant::now());
+            .when(lit, |button| {
+                button.child(
+                    div()
+                        .absolute()
+                        .left(px((LIBRARY_BUTTON - FOOT_PLATE) / 2.))
+                        .top(px((FOOT_ROW - FOOT_PLATE) / 2.))
+                        .size(px(FOOT_PLATE))
+                        .rounded(px(FOOT_PLATE_RADIUS))
+                        .bg(self.palette.plate(match self.palette.tone {
+                            Tone::Dark => LIBRARY_OPEN_PLATE,
+                            Tone::Light => LIGHT_LIBRARY_OPEN_PLATE,
+                        })),
+                )
+            })
+            .child(
                 svg()
                     .path("icons/library.svg")
                     .size(px(FOOT_GLYPH))
-                    .text_color(self.palette.glyph(alpha))
-                    .when(scale != 1., |glyph| {
-                        glyph.with_transformation(gpui::Transformation::scale(gpui::size(
-                            scale, scale,
-                        )))
-                    })
-            })
+                    .text_color(self.palette.glyph(if lit || plated {
+                        LIBRARY_OPEN_GLYPH
+                    } else {
+                        NAV
+                    })),
+            )
             .when_some(progress, |button, done| {
                 button.child(
                     div()
@@ -4378,13 +4404,17 @@ impl Shell {
                         .w(px(BUTTON_PROGRESS_WIDTH))
                         .h(px(BUTTON_PROGRESS_HEIGHT))
                         .rounded(px(BUTTON_PROGRESS_HEIGHT / 2.))
-                        .bg(self.palette.faint(PROGRESS_TRACK))
+                        .bg(self.palette.faint(match self.palette.tone {
+                            _ if plated => BUTTON_PROGRESS_TRACK_PLATED,
+                            Tone::Dark => BUTTON_PROGRESS_TRACK,
+                            Tone::Light => LIGHT_BUTTON_PROGRESS_TRACK,
+                        }))
                         .child(
                             div()
                                 .h_full()
                                 .w(relative(done))
                                 .rounded(px(BUTTON_PROGRESS_HEIGHT / 2.))
-                                .bg(self.palette.glyph(PROGRESS_FILL)),
+                                .bg(self.palette.glyph(BUTTON_PROGRESS_FILL)),
                         ),
                 )
             })
@@ -4595,6 +4625,7 @@ mod tests {
             shown: 0,
             peeked: Vec::new(),
             live_rooms: Default::default(),
+            placed: Vec::new(),
         }
     }
 

@@ -11,10 +11,10 @@ use gpui::{
     point, px,
 };
 
-use super::{END_FADE, FirstRun, STEP_MOTION, Step, Switch};
+use super::{END_FADE, FirstRun, STEP_MOTION, STEPS, Step, Switch};
 use crate::account::{self, State, Status};
 use crate::import::ImportEvent;
-use crate::shell::{Folders, Setting, Shell, commands::Command, recorder::Recorder};
+use crate::shell::{Broom, Folders, Setting, Shell, commands::Command, recorder::Recorder};
 use crate::theme::Theme;
 use crate::theme_picker::{SWATCHES, swatch_name};
 use crate::tokens::shell::onboarding::IMPORT_HOLD;
@@ -659,10 +659,10 @@ fn the_opt_ins_show_only_those_offered(cx: &mut TestAppContext) {
     in_through_the_keys(&shell, cx);
     later(&shell, cx, END_FADE);
 
-    // With no count's server named, only the crash reports' switch shows, and other apps' agents'
-    // none with agents off.
+    // With no count's server named, only the crash reports' switch shows. Outside apps' agents
+    // have none until their own setting (#4260), with agents on or off.
     host.crash_reports.set(Some(false));
-    host.agents.set(Some(false));
+    host.threads.set(Some(false));
     started(&shell, cx);
     skip_to(&shell, cx, Step::OptIns);
     assert_eq!(offered(&shell, cx), vec![(Switch::CrashReports, false)]);
@@ -681,7 +681,7 @@ fn the_opt_ins_show_only_those_offered(cx: &mut TestAppContext) {
         "Skip leaves a switch as it was turned"
     );
     assert_eq!(
-        host.agents.get(),
+        host.threads.get(),
         Some(false),
         "and the agents' as they were"
     );
@@ -696,37 +696,21 @@ fn the_opt_ins_show_only_those_offered(cx: &mut TestAppContext) {
 }
 
 /// The assistant step's two choices are Settings › Agents' switch as it stands: just the browser
-/// turns agents off at once and takes other apps' agents' row out of the opt-ins, with their step
-/// when it has no other row; with an assistant turns them on and brings both back.
+/// turns agents off at once, with an assistant turns them on, and a pick doesn't go on.
 #[gpui::test]
-fn just_the_browser_turns_agents_off_and_takes_their_row_away(cx: &mut TestAppContext) {
+fn just_the_browser_turns_agents_off(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     // The host reads the shell as it turns agents off, as the core's does.
     host.reads_shell(shell.downgrade());
-    host.agents.set(Some(true));
-    host.other_apps.set(Some(false));
-    let offered = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
-        shell.update(cx, |shell, cx| shell.opt_ins(cx))
-    };
+    host.threads.set(Some(true));
     started(&shell, cx);
     skip_to(&shell, cx, Step::Assistant);
-    assert_eq!(offered(&shell, cx), vec![(Switch::OtherApps, false)]);
-    assert!(steps(&shell, cx).contains(&Step::OptIns));
     host.take();
     press("down", cx);
     assert_eq!(
         host.take(),
-        vec!["agents false".to_string()],
+        vec!["threads false".to_string()],
         "just the browser"
-    );
-    assert_eq!(
-        offered(&shell, cx),
-        Vec::new(),
-        "takes other apps' agents' row away"
-    );
-    assert!(
-        !steps(&shell, cx).contains(&Step::OptIns),
-        "and its step, with no other row"
     );
     press("down", cx);
     assert_eq!(
@@ -737,16 +721,8 @@ fn just_the_browser_turns_agents_off_and_takes_their_row_away(cx: &mut TestAppCo
     press("up", cx);
     assert_eq!(
         host.take(),
-        vec!["agents true".to_string()],
+        vec!["threads true".to_string()],
         "with an assistant"
-    );
-    assert_eq!(offered(&shell, cx), vec![(Switch::OtherApps, false)]);
-    let steps = steps(&shell, cx);
-    let at = steps.iter().position(|&each| each == Step::OptIns);
-    assert_eq!(
-        at.and_then(|at| steps.get(at + 1)),
-        Some(&Step::Keys),
-        "brings the step back in its place, before the keys"
     );
     assert_eq!(
         step(&shell, cx),
@@ -755,51 +731,113 @@ fn just_the_browser_turns_agents_off_and_takes_their_row_away(cx: &mut TestAppCo
     );
 }
 
-/// Other apps' agents' row is off until turned on, set as it's turned, and Skip Setup leaves it
-/// off.
+/// The assistant step's picks set the inside switch alone and the other apps' row the outside
+/// switch alone: whatever is picked or clicked, the other is as it was.
 #[gpui::test]
-fn other_apps_agents_are_off_until_turned_on(cx: &mut TestAppContext) {
+fn each_pick_and_row_sets_its_own_switch_alone(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
-    host.agents.set(Some(true));
-    host.other_apps.set(Some(false));
-    host.crash_reports.set(Some(false));
-    let offered = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
-        shell.update(cx, |shell, cx| shell.opt_ins(cx))
-    };
+    host.reads_shell(shell.downgrade());
+    host.threads.set(Some(true));
+    host.other_apps.set(Some(true));
     started(&shell, cx);
-    skip_to(&shell, cx, Step::OptIns);
+    skip_to(&shell, cx, Step::Assistant);
+    host.take();
+    press("down", cx);
     assert_eq!(
-        offered(&shell, cx),
-        vec![(Switch::CrashReports, false), (Switch::OtherApps, false)]
+        host.take(),
+        vec!["threads false".to_string()],
+        "just the browser"
     );
+    assert_eq!(host.other_apps.get(), Some(true), "just the browser");
+    press("up", cx);
+    assert_eq!(
+        host.take(),
+        vec!["threads true".to_string()],
+        "with an assistant"
+    );
+    assert_eq!(host.other_apps.get(), Some(true), "with an assistant");
+    skip_to(&shell, cx, Step::OptIns);
     host.take();
     shell.update(cx, |shell, cx| {
         shell.onboarding_switch(Switch::OtherApps, cx)
     });
     cx.run_until_parked();
-    assert_eq!(host.take(), vec!["other apps true".to_string()]);
-    click_skip(cx);
-    in_through_the_keys(&shell, cx);
-    assert_eq!(
-        host.other_apps.get(),
-        Some(true),
-        "Skip leaves it as turned"
-    );
-    later(&shell, cx, END_FADE);
+    assert_eq!(host.take(), vec!["other apps false".to_string()]);
+    assert_eq!(host.threads.get(), Some(true), "the row");
+}
 
-    host.other_apps.set(Some(false));
-    started(&shell, cx);
-    host.take();
-    shell.update(cx, |shell, cx| shell.onboarding_skip_setup("skip", cx));
-    cx.run_until_parked();
-    assert!(
-        !host
-            .take()
-            .iter()
-            .any(|call| call.starts_with("other apps")),
-        "Skip Setup turns nothing on"
+/// The opt-ins' step offers other apps' agents on both paths, off, and turning the row on sets
+/// that switch alone; just the browser leaves it as it was, no other step has a row about other
+/// apps, and Skip Setup leaves it as it was.
+#[gpui::test]
+fn other_apps_agents_have_their_row_on_both_paths(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    host.reads_shell(shell.downgrade());
+    host.crash_reports.set(Some(false));
+    let offered = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.opt_ins(cx))
+    };
+    // The table's words (P30o), the name from the constant.
+    let (name, line) = Switch::OtherApps.words();
+    assert_eq!(
+        name,
+        concat!("Let other apps' agents use ", env!("APP_NAME"))
     );
-    assert_eq!(host.other_apps.get(), Some(false));
+    assert_eq!(line, "Editors, terminal tools and scripts on this computer");
+    // Just the browser, then with an assistant.
+    for (key, agents) in [("down", false), ("up", true)] {
+        host.threads.set(Some(!agents));
+        host.other_apps.set(Some(false));
+        started(&shell, cx);
+        skip_to(&shell, cx, Step::Assistant);
+        host.take();
+        press(key, cx);
+        assert_eq!(
+            host.take(),
+            vec![format!("threads {agents}")],
+            "the pick sets the agents' switch alone"
+        );
+        assert_eq!(host.other_apps.get(), Some(false), "and leaves other apps'");
+        let others = shell.update(cx, |shell, cx| {
+            (STEPS.iter())
+                .filter(|&&step| step != Step::OptIns)
+                .any(|&step| {
+                    (shell.switches(step, cx).iter()).any(|(each, _)| *each == Switch::OtherApps)
+                })
+        });
+        assert!(!others, "no other step has a row about other apps");
+        skip_to(&shell, cx, Step::OptIns);
+        assert_eq!(
+            offered(&shell, cx),
+            vec![(Switch::CrashReports, false), (Switch::OtherApps, false)],
+            "agents {agents}: after crash reports, off"
+        );
+        host.take();
+        shell.update(cx, |shell, cx| {
+            shell.onboarding_switch(Switch::OtherApps, cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(host.take(), vec!["other apps true".to_string()]);
+        assert_eq!(host.threads.get(), Some(agents), "the agents' as picked");
+        click_skip(cx);
+        in_through_the_keys(&shell, cx);
+        later(&shell, cx, END_FADE);
+    }
+
+    // Skip Setup leaves it as it was, on or off.
+    for was in [true, false] {
+        host.other_apps.set(Some(was));
+        started(&shell, cx);
+        host.take();
+        shell.update(cx, |shell, cx| shell.onboarding_skip_setup("skip", cx));
+        cx.run_until_parked();
+        assert!(
+            !(host.take().iter()).any(|call| call.starts_with("other apps")),
+            "Skip Setup sets nothing of other apps'"
+        );
+        assert_eq!(host.other_apps.get(), Some(was));
+        later(&shell, cx, END_FADE);
+    }
 }
 
 /// With both opt-ins offered, in first run's fixed window, each switch lies inside its row, and a
@@ -1142,6 +1180,36 @@ fn the_tidy_bar_sets_its_time_as_continue_goes_on(cx: &mut TestAppContext) {
         assert_ne!(step(&shell, cx), Some(Step::Tidy), "{leave} left the step");
         let said: Vec<String> = set.into_iter().map(str::to_string).collect();
         assert_eq!(host.take(), said, "{keys} then {leave}");
+    }
+}
+
+/// The tidy step tells of the broom only with an assistant, and only where the broom can be,
+/// whatever today's tabs number: none to sort still has its card, no broom has none.
+#[gpui::test]
+fn the_tidy_step_tells_of_the_broom_only_where_it_can_be(cx: &mut TestAppContext) {
+    for (agents, broom, shown) in [
+        (true, Some(Broom::NothingToSort), true),
+        (true, Some(Broom::Idle), true),
+        (true, None, false),
+        (false, Some(Broom::Idle), false),
+    ] {
+        let (shell, cx, host) = with_settings(cx, Some(DAY / 2.), &[]);
+        host.threads.set(Some(agents));
+        host.broom.set(broom);
+        started(&shell, cx);
+        skip_to(&shell, cx, Step::Tidy);
+        later(&shell, cx, STEP_MOTION);
+        assert_eq!(
+            placed("broom", cx).is_some(),
+            shown,
+            "agents {agents}, broom {broom:?}"
+        );
+        host.take();
+        click_skip(cx);
+        assert!(
+            !host.take().iter().any(|call| call == "start broom"),
+            "the card starts nothing"
+        );
     }
 }
 
@@ -2494,7 +2562,7 @@ fn the_favorites_step_is_on_the_sheet(cx: &mut TestAppContext) {
 fn the_assistant_step_is_on_the_sheet_with_room_for_its_switch(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     // With an assistant, as its rows show only on that path.
-    host.agents.set(Some(true));
+    host.threads.set(Some(true));
     started(&shell, cx);
     assert_eq!(
         steps(&shell, cx).get(1),
@@ -2523,7 +2591,7 @@ fn the_assistant_step_is_on_the_sheet_with_room_for_its_switch(cx: &mut TestAppC
 #[gpui::test]
 fn the_sheets_foot_is_in_the_same_place_on_every_step(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
-    host.agents.set(Some(false));
+    host.threads.set(Some(false));
     let _agents = cx.update(|_, cx| crate::agents::tests::stand_in(Vec::new(), cx));
     started(&shell, cx);
     let mut feet = Vec::new();
@@ -2570,13 +2638,14 @@ fn the_assistant_step_looks_for_the_assistants_as_it_shows(cx: &mut TestAppConte
     use crate::agents::runner::Cli;
     let (shell, cx, host) = first_window(cx);
     // With an assistant, as its rows show only on that path.
-    host.agents.set(Some(true));
+    host.threads.set(Some(true));
     let signed_out = Found {
         ready: Ready::SignedOut,
         ..Default::default()
     };
     let (agents, looks) =
         cx.update(|_, cx| crate::agents::tests::stand_in(vec![(Cli::Claude, signed_out)], cx));
+    agents.update(cx, |agents, cx| agents.set_threads(true, cx));
     cx.simulate_a11y_activation();
     started(&shell, cx);
     let lines = |cx: &mut VisualTestContext| {
@@ -2599,10 +2668,10 @@ fn the_assistant_step_looks_for_the_assistants_as_it_shows(cx: &mut TestAppConte
     later(&shell, cx, STEP_MOTION);
     assert_eq!(looks(), 1, "the step's showing looked once");
     assert_eq!(lines(cx), ["Not signed in", "Not installed"]);
+    // A login now: each row offers Sign In, its program on this computer or not.
     let said: Vec<String> = read(cx).into_iter().map(|(_, name, _)| name).collect();
-    for offer in ["Sign In to Claude Code", "Get Codex"] {
-        assert!(said.iter().any(|name| name == offer), "{offer} in {said:?}");
-    }
+    let sign_ins = said.iter().filter(|name| *name == "Sign In").count();
+    assert_eq!(sign_ins, 2, "Sign In on each row in {said:?}");
     later(&shell, cx, 5.);
     assert_eq!(looks(), 1, "nothing looked again while it stood");
 
@@ -2620,14 +2689,14 @@ fn the_assistant_step_looks_for_the_assistants_as_it_shows(cx: &mut TestAppConte
 fn the_assistant_step_looks_only_after_a_yes(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     host.reads_shell(shell.downgrade());
-    host.agents.set(Some(false));
+    host.threads.set(Some(false));
     let (_agents, looks) = cx.update(|_, cx| crate::agents::tests::stand_in(Vec::new(), cx));
     started(&shell, cx);
     skip_to(&shell, cx, Step::Assistant);
     later(&shell, cx, STEP_MOTION);
     assert_eq!(looks(), 0, "shown with agents off, nothing looked");
     press("up", cx);
-    assert_eq!(host.agents.get(), Some(true));
+    assert_eq!(host.threads.get(), Some(true));
     assert_eq!(looks(), 1, "With an assistant looked once");
     press("up", cx);
     assert_eq!(looks(), 1, "picked again, none more");
@@ -2653,13 +2722,14 @@ fn the_assistants_names_are_whole_beside_or_over_their_buttons(cx: &mut TestAppC
     };
     let (shell, cx, host) = first_window(cx);
     // With an assistant, as its rows show only on that path.
-    host.agents.set(Some(true));
+    host.threads.set(Some(true));
     let signed_out = Found {
         ready: Ready::SignedOut,
         ..Default::default()
     };
     let (agents, _) =
         cx.update(|_, cx| crate::agents::tests::stand_in(vec![(Cli::Claude, signed_out)], cx));
+    agents.update(cx, |agents, cx| agents.set_threads(true, cx));
     cx.simulate_a11y_activation();
     started(&shell, cx);
     skip_to(&shell, cx, Step::Assistant);
@@ -2671,19 +2741,21 @@ fn the_assistants_names_are_whole_beside_or_over_their_buttons(cx: &mut TestAppC
 
     let scale = cx.update(|window, _| window.scale_factor());
     let tree = cx.a11y_tree().expect("GPUI built a tree");
-    let button = |label: &str| {
-        let node = (tree.nodes.iter())
+    // The row's own button: each assistant's says Sign In.
+    let button = |label: &str, row: &gpui::Bounds<gpui::Pixels>| {
+        let (top, bottom) = (f32::from(row.top()), f32::from(row.bottom()));
+        let bounds = (tree.nodes.iter())
             .map(|(_, node)| node)
-            .find(|node| node.role() == Role::Button && node.label().as_deref() == Some(label))
-            .unwrap_or_else(|| panic!("no {label} button"));
-        let bounds = node.bounds().expect("a button has bounds");
+            .filter(|node| node.role() == Role::Button && node.label().as_deref() == Some(label))
+            .filter_map(|node| node.bounds())
+            .find(|bounds| (top..bottom).contains(&(bounds.y0 as f32 / scale)))
+            .unwrap_or_else(|| panic!("no {label} button in {row:?}"));
         (bounds.x0 as f32 / scale, bounds.y0 as f32 / scale)
     };
     let system = cx.update(|_, cx| gpui::WindowTextSystem::new(cx.text_system().clone()));
     for (row, name, offer) in [
-        ("claude", "Claude Code", "Sign In to Claude Code"),
-        ("codex", "Codex", "Get Codex"),
-        ("another", "Another app", "How to Connect"),
+        ("claude", "Claude", "Sign In"),
+        ("codex", "ChatGPT", "Sign In"),
     ] {
         let row = placed(row, cx).unwrap_or_else(|| panic!("{name}'s row wasn't drawn"));
         let whole = crate::tooltip::text_width(
@@ -2693,7 +2765,7 @@ fn the_assistants_names_are_whole_beside_or_over_their_buttons(cx: &mut TestAppC
             &system,
         );
         let name_left = f32::from(row.left()) + ROW_X + GLYPH_PLATE + GLYPH_PLATE_GAP;
-        let (left, top) = button(offer);
+        let (left, top) = button(offer, &row);
         let beside = left + 0.5 >= name_left + whole + END_GAP;
         // Under is on a line of its own, below the name's, which is at least the glyph's height,
         // not centred on a row its line made tall.

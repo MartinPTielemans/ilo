@@ -862,6 +862,15 @@ min-width = 200.0
 max-width = 320.0
 # How far a submenu lies over its parent, so their rows line up.
 overlap = 4.0
+# A menu's search field, its first row, as the model menu's (Z9): a row's text at a row's inset,
+# with a line under it in the line's ink, so the field stands apart from the rows it narrows.
+field-row = 32.0
+# The search glyph at the field's left, in the checks' column (spec-bar-composer Model), centred
+# on it where it's wider.
+search-glyph = 14.0
+# The out arrow after a row that leaves the menu for a page of its own, as the model menu's Sign In
+# and Settings do (spec-bar-composer Model).
+out-arrow = 12.0
 # The safe triangle keeps a submenu open while the pointer is on its way to it, and ends once the
 # pointer rests this long in it, in seconds, what's under it lit then: in every menu, the capture
 # menu's Add to Board too (#4108).
@@ -1315,6 +1324,8 @@ scope-chevron = 8.0
 mark = 26.0
 mark-gap = 12.0
 mark-row = 56.0
+# The ring an assistant's row turns while its sign-in is under way, as drawn.
+working = 14.0
 # Buttons under the groups are 11 below them.
 buttons-top = 11.0
 # Ours: a checkbox, as the dialog's, 8 before its name, ticked in the look's on colour with its
@@ -1778,13 +1789,10 @@ divider-gap = 9.0
 # In the sidebar the line is the New Tab line's own: after its label, to Clear or the line's end,
 # and what's kept ends this far over that line while there are tabs today.
 today-gap = 6.0
-clear-gap = 3.0
 clear-height = 20.0
-# The broom after Clear on the New Tab line: its glyph in a box of its own, the line's gap after
-# Clear, so Clear sits the two left of where it ends alone. With nothing to sort the glyph keeps its
-# place at this much of its strength.
+# The broom before Clear on the New Tab line, where it's drawn: its glyph in a box of its own, the
+# line's gap before Clear, which keeps its place, and the hairline ends as far before the glyph.
 broom-size = 14.0
-broom-unavailable = 0.4
 # The footer: the Space switcher between the Library button and the +. Its row is 34 tall, 6 over
 # the sidebar's foot and as far under the list, and the + is a 16 pt glyph that ends 10 inside the
 # sidebar's 8, so its plate is 10 in. The switcher starts where the Library button ends and keeps
@@ -1796,6 +1804,18 @@ plus-inset = 10.0
 foot-glyph = 16.0
 # The Library button, at the foot's left.
 library-button = 36.0
+# The foot's two buttons while what they open is up, as the redesign draws them: a plate 28 across
+# with corners of 8. The Library button's is the shown plate's ink while the Library is open, 0.20
+# on a dark window and 0.16 on a light one, under its glyph in the text's. The +'s is the button
+# plate's, 0.10, while its menu is up, and that box is where the + takes the pointer. Under the
+# pointer the + has the same plate (ours: the drawing has no pointer): the first row's 0.077 tells
+# from the window at 1.15:1 there, under the palette's 1.2, and this one at 1.21.
+foot-plate = 28.0
+foot-plate-radius = 8.0
+library-open-plate = 0.2
+light-library-open-plate = 0.16
+library-open-glyph = 1.0
+plus-plate = 0.1
 # A Space's dot is 7 across and the dots are 10 apart. A Space with an icon keeps the pitch it
 # had: the redesign draws dots alone.
 space-pitch = 17.0
@@ -1803,11 +1823,11 @@ space-icon-pitch = 34.0
 space-height = 34.0
 # A Space without an icon shows as a dot, the same size shown or not, a step bigger under the
 # pointer (ours). The Space shown's is its first colour this far toward the ink, a light tone of it
-# on a dark window.
+# on a dark window, as the redesign's foot has it.
 space-swatch-shown = 7.0
 space-swatch = 7.0
 space-swatch-hovered = 9.0
-space-dot-tone = 0.5
+space-dot-tone = 0.55
 # More Spaces than fit at the pitch share the switcher's span in half points; once a share would be
 # under a dot's pitch, the Space shown keeps that and the others share the rest: 13 and 9.5 with
 # 16 and 22 Spaces in a sidebar 300 wide (the rule is Arc 1.171's). A squeezed item's ink keeps 4
@@ -2028,6 +2048,10 @@ beside-least = 200.0
 # The nav glyphs keep Arc's 1.75 pt in 24 and the window buttons their 1.3 in 14, so those files
 # are the only ones that differ (ours, drawn on Lucide's grid with round ends).
 icon-stroke = 2.25
+# A folder's glyph on its line in the sidebar, which the redesign draws 16 with a stroke of 1.3:
+# 1.95 on the grid. Its three drawings (closed, open, with dots) are the only Lucide outlines not
+# at icon-stroke.
+row-folder-stroke = 1.95
 # The grid Lucide draws on and every outline here shares.
 icon-grid = 24.0
 bar-length = 11.4
@@ -2348,7 +2372,7 @@ archived-radius = 12.0
 # favorites' tiles' radius.
 media-gap = 6.0
 media-radius = 12.0
-# Ours: a running download's bar, under its text, and the footer button's, under its glyph.
+# Ours: a running download's bar, under its text.
 progress-height = 3.0
 progress-bottom = 6.0
 progress-track = 0.12
@@ -2356,6 +2380,13 @@ progress-fill = 0.6
 button-progress-width = 16.0
 button-progress-height = 2.0
 button-progress-bottom = 4.0
+# The footer button's bar, as the redesign draws it: its track the shown plate's ink, 0.20 on a
+# dark window and 0.16 on a light one, and what has arrived in the text's.
+button-progress-track = 0.2
+light-button-progress-track = 0.16
+# On the plate of recent downloads, whose foot the button is, the track is the button level's.
+button-progress-track-plated = 0.1
+button-progress-fill = 1.0
 # Arc's: a new download's icon lands in a bin on the footer button, its file's icon this big, its
 # centre right of and above the glyph's, until it leaves.
 bin = 32.0
@@ -2629,6 +2660,16 @@ tidy-track-line = 0.08
 tidy-thumb-fill = 0xffffff
 tidy-thumb-shadow = [2.0, 6.0, 0.5]
 tidy-card-top = 16.0
+# With an assistant, the broom's card under the tidy step's switch (values-first-run.md, 27b): its
+# top, height, corners, padding before and after, and gap; its tile's size, corners and glyph, the
+# tile's fill and the glyph's ink, the same in both appearances; its title's and its line's size
+# and line.
+broom-card = [16.0, 58.0, 12.0, 9.0, 12.0, 10.0]
+broom-tile = [28.0, 8.0, 16.0]
+broom-tile-fill = 0x3a3a40
+broom-glyph = 0xf3f0e8
+broom-title = [13.0, 16.0]
+broom-line = [11.0, 14.0]
 
 # First run's picture (spec-first-run.md, values-first-run.md "Right side: the picture"): a small
 # browser drawn from these, with made-up fixed content the same for everyone, and per step what
@@ -2738,6 +2779,15 @@ hills-at = [-80.0, 110.0, 300.0, 160.0, 120.0, 340.0, 20.0, 140.0, 260.0]
 chip = [44.0, 22.0, 28.0, 8.0, 10.0, 12.0, 13.0]
 chip-radius = 14.0
 chip-text = [12.0, 16.0]
+# Today's tabs sorted into folders, at the tidy step with an assistant (values-first-run.md, 27b):
+# New Tab's row then (height, padding after), Clear's text, the broom's button (width, height,
+# corners, glyph); a folder's text and its tabs' indent; Ferry times' and the Brightcart's marks.
+sorted-new-tab = [24.0, 4.0]
+clear-text = [9.0, 11.0]
+broom-button = [22.0, 18.0, 5.0, 13.0]
+folder-text = [11.0, 13.0]
+folder-indent = 20.0
+sorted-marks = [0x3f7fd9, 0xe0a23a]
 # The thread card in the small sidebar (with an assistant): its corners, padding, gap and its
 # ring; the line inside it; its marks and how far its lines are indented.
 thread-radius = 9.0
@@ -2943,28 +2993,71 @@ veil = 0.12
 rim = 0.5
 
 [shell.recent-downloads]
-recent-pitch = 56.0
-column-x = 8.0
-column = 40.0
-icon = 26.0
-text-x = 61.0
-text-end = 12.0
+# The Library button's plate of recent downloads (the owner's): with the pointer resting on the
+# button, the button turns into a plate that grows upward out of the foot, inside the sidebar, and
+# lists this many downloads, newest first.
+count = 4
+# The floating level's fill, as a menu's, over the window's own look, and the window's inner line
+# along the whole of its outline, which is the plate and the button's box under it as one
+# shape; a menu's shadow lies round it. On the sidebar the fill alone is nearly the sidebar's own
+# tone, so the line and the shadow are what lift it. Its top corners and its far bottom one are a
+# panel's, the near bottom one square where it runs into the button. The fill and the line are the
+# drawing's floating fill and rim, held here until a menu takes the same: then one source for both.
+fill = 0x3030_36eb
+light-fill = 0xf6f5_f1eb
+rim = 0xffff_ff1a
+light-rim = 0x0000_001f
+# The line's width. It's drawn half of this inside the outline, so all of it lies on the plate.
+line = 1.0
+radius = 16.0
+padding = 6.0
+# The button's own box takes the fill, round at its foot as the window's corner is, and a curve
+# this big takes its far side into the plate's foot.
+strip-radius = 12.0
+curve = 8.0
+# Its heading, at the detail's size, semibold. It's drawn in text-3, which reads at 3.4:1 on the
+# plate and under that on the light one: small text, so its ink is as much firmer as holds 4.5:1
+# on the plate in each look, a step under the detail's.
+heading = 26.0
+heading-ink = 0.56
+light-heading-ink = 0.6
+# A row: its plate under the pointer the button level's; a tile, the file's picture or the page
+# glyph on the card level's fill; its name, medium, over one line of detail in text-2. The name is
+# drawn at 12.5, which is off the chrome's four sizes: it's body, as a row of the Library's is.
+row = 44.0
+row-inset = 8.0
+row-gap = 9.0
+row-radius = 9.0
+row-hovered = 0.1
+tile = 28.0
+tile-radius = 7.0
+tile-fill = 0.067
+tile-glyph = 14.0
+tile-glyph-ink = 0.8
 name = 1.0
-name-size = 15.0
-name-line = 19.0
-age-size = 11.0
-age-line = 15.0
-# Ours: a tall image's preview keeps 4 pt inside its row's plate, with corners concentric with it:
-# the plate's 12 less 4.
-preview-height = 48.0
-preview-radius = 8.0
-# Ours: a row's plate under the pointer, as the Library's rows have one.
-plate-inset = 4.0
-plate-radius = 12.0
-# Arc's: the tab list behind is hidden from this far above the top row, and comes back over the
-# shade's height above that.
-shade-gap = 3.0
-shade = 170.0
+name-size = 13.0
+name-line = 16.0
+detail-size = 11.0
+detail-line = 14.0
+detail-above = 1.0
+# A download still coming: a bar before how much of it has come, its track the button level's and
+# what has come in the text's.
+bar-width = 44.0
+bar-height = 3.0
+bar-gap = 7.0
+bar-above = 2.0
+bar-track = 0.1
+bar-fill = 1.0
+
+# Ours: it opens once the pointer has rested this long on the button, grows from the button's own
+# box on `ease`, the cubic ease-out as CSS writes its curve, so it leaves the button fast and
+# settles, with its rows fading in from this far through, and folds back faster.
+[shell.recent-downloads.motion]
+rest = 0.15
+grow = 0.2
+fold = 0.15
+ease = [0.33, 1.0, 0.68, 1.0]
+rows-from = 0.5
 
 [shell.scroller]
 # The list's scroller is Arc 1.170's, AppKit's own: a knob and no track, this far in from the
@@ -3203,14 +3296,8 @@ chips-stagger = 0.05
 # The running ring's quarter goes round once in this, the Cast card's turn.
 ring-turn = 1.0
 chips-rise = 4.0
-# The glyph's dot circles once in `orbit`, and the status's highlight sweeps in `shimmer`, both
-# linear.
-orbit = 1.4
+# The status's highlight sweeps in `shimmer`, linear.
 shimmer = 1.8
-ring = 0.24
-dot-fade = 0.2
-tick = 0.3
-tick-delay = 0.09
 # Open's pages fly to their rows one after another, their contents fading in, and their rows show
 # as they land.
 ghost = 0.42
@@ -3240,6 +3327,83 @@ bump-scale = 1.18
 bump-glyph = 0.95
 # With motion reduced, every change is a crossfade this long.
 crossfade = 0.2
+
+[shell.task-card]
+# The owner's drawing (sidebar-and-library, Notes · 36; spec-thread-card): a thread is one outlined
+# card in today's list, among the tabs, and never looks like one. Every ink is the window's ink at
+# an alpha, as a plate's is, so one card reads on a dark window and a light one (light-values: the
+# Light values are the lead's, Proposed). The frame: `padding` in, the row radius, `gap` between
+# its rows, the ink at `fill`, an outline `outline-width` inside at `outline`, and `under` under it
+# in the list. Row 1: the state's glyph, `glyph` square, `glyph-gap` before the title, which is
+# body type on `title-line`, semibold. Rows 2 and 3 start under the title.
+padding = 10.0
+radius = 12.0
+gap = 8.0
+under = 4.0
+fill = 0.067
+outline = 0.18
+outline-width = 1.0
+glyph = 16.0
+glyph-gap = 9.0
+title-line = 16.0
+# Row 2: the live line, small type on `live-line` in text-2 (the drawing's 12 is off the scale); a
+# done card's on `done-line`. Text-2 is a step stronger on a light window, where dark ink at 60%
+# over a light glass falls under the reading floor sooner.
+live-line = 15.0
+done-line = 16.0
+# A done card not yet seen: its finding wraps to at most `finding-lines` on `done-line`, its first
+# sentence in text, the rest in text-2.
+finding-lines = 3
+text-2 = 0.6
+text-2-light = 0.65
+# Row 3: its pages as icons `icon` square, `icon-gap` apart, those not yet visited at
+# `unvisited`, and at its right the count in small type on `count-line`, in text-3.
+icon = 14.0
+icon-gap = 5.0
+unvisited = 0.4
+count-line = 14.0
+text-3 = 0.42
+text-3-light = 0.5
+# Waits for you: the outline turns bright, `rim-width` at `rim`, and its one button is
+# `button-height` tall, `button-x` at each side, `button-radius` corners, filled with the ink, its
+# label small on `button-line`, semibold, in `on-primary` (`on-primary-light` on a light window).
+rim = 0.851
+rim-width = 1.5
+button-height = 24.0
+button-x = 10.0
+button-radius = 8.0
+button-line = 16.0
+on-primary = 0x161618
+on-primary-light = 0xF3F0E8
+# A line: a card folded, done and seen, or one of several at work, `line` tall, `line-x` at each
+# side, `line-around` above and below it in the list.
+line = 34.0
+line-x = 10.0
+line-around = 3.0
+# Not seen yet: a dot `dot` across after the title, in the ink.
+dot = 6.0
+# The glyphs in their box. At work, a quarter arc in the ink on a ring at `track`, radius `ring`,
+# stroke `ring-stroke`, turning once a `turn`. Done, a check in the ink in a circle of the same
+# radius at `circle` (`circle-unseen` until its conversation shows), stroke `check-stroke`.
+# Waiting, a disc of radius `pause` in the ink, with two bars in on-primary, stroke `pause-stroke`,
+# from `pause-top` to `pause-bottom` at `pause-left` and `pause-right` of the box.
+track = 0.2
+ring = 6.25
+ring-stroke = 1.5
+circle = 0.4
+circle-unseen = 0.6
+check-stroke = 1.4
+pause = 6.8
+pause-stroke = 1.6
+pause-top = 5.6
+pause-bottom = 10.4
+pause-left = 6.3
+pause-right = 9.7
+
+[shell.task-card.motion]
+# Seconds: the design file has no motion, so tools/design-sync.md leaves this table out. The ring
+# at work turns once in `turn`, on the loading dots' clock, so a list at rest draws nothing.
+turn = 1.4
 
 [shell.conversation]
 # Ours, as Arc had no tasks: a task's conversation in the page's place, a column of text no wider
@@ -3982,6 +4146,14 @@ hairline = 0.5
 less = 0.3
 # Where today's Standard sits on it: the value a Space comes with and Reset gives.
 start = 0.4
+# The drawing's ground at the solid end, laid over the material at full strength, which a dark
+# window's black goes to from where Less sits (the drawing's screen 15, its Solid band).
+solid = 0x18181a
+# Past here, a dark window with no colour lets the title on a plate under the pointer read this
+# much over a white window behind, as at today's More, where it holds 4.5 everywhere else on the
+# bar (the lead, 2026-11-25).
+hovered-title-past = 0.95
+hovered-title = 4.2
 
 [zoom-hud]
 # Arc's, measured at 2× (Arc 1.170 rec): 41.5 tall, 8 inside the card's top right corner, the
