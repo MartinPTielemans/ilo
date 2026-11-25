@@ -1340,7 +1340,8 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   entry="^browser: agent activity mcp-client [0-9]* open_page site=$plain refused: not_secure\$"
   noted="^browser: agent logged mcp-client open_page $plain\$"
   # The entry of a page the user went to and left at a Hand Back has an action of its own, as
-  # no step of the agent's asked for it: the app ends none on it, and the log reads the same.
+  # no step of the agent's asked for it. The app ends no step on either entry, a step that asked
+  # for a page hearing from the core itself, and the log reads the same.
   by_step=$entry
   at_hand_back="^browser: agent activity mcp-client [0-9]* handed_back_page site=$plain refused: not_secure\$"
   count_stopped() {
@@ -1383,6 +1384,33 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
   one_stopped "the agent's navigate"
   await_log "$put_back" \
     "the agent's tab $warned wasn't put back on its page after its navigate to http://$plain/split-a.html never opened: $(grep "^browser: page $warned " "$log" | tail -1)"
+  # A click whose page then goes there is no open and no navigate of the agent's. The page is
+  # stopped as any, with its one entry, and the tab put back on the page with the link. The click
+  # went, so it's never answered as one that didn't: its step goes on and reads the page the tab is
+  # put back on, the link's, not the empty one the stopped load leaves for a moment.
+  printf '%s' "<!doctype html><title>Link page</title>
+<a href=\"http://$plain/split-a.html\">Plain page</a>" > "$out/site/to-plain.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/to-plain.html\"}")
+  linked=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  ref=$(ref_in "$opened" link "Plain page")
+  [ -n "$linked" ] && [ -n "$ref" ] ||
+    fail "open_tab of the page with a link to http://$plain answered: $opened"
+  count_stopped
+  clicked=$(call click "{\"tab\":$linked,\"ref\":\"$ref\"}")
+  await_log "browser: tab $linked error -20\$" \
+    "the click on a link to http://$plain/split-a.html wasn't stopped before http: $(grep "^browser: loaded $linked " "$log" | tail -1)"
+  one_stopped "a click on a link to it"
+  await_log "^browser: page $linked back 0 forward 1 loading 0 http://localhost:$port/to-plain\\.html\$" \
+    "the agent's tab $linked wasn't put back on its page after a click's page never opened: $(grep "^browser: page $linked " "$log" | tail -1)"
+  case "$clicked" in
+    "error: "*) fail "a click that went, to a page at http://$plain that never opened, answered as one that didn't: $clicked" ;;
+    *"$plain"*) fail "a click's answer read the page at http://$plain that never opened, not the page its tab is put back on: $clicked" ;;
+    "Clicked link “Plain page”."*"Nothing in the outline changed."* | \
+    "Clicked link “Plain page”."*'- link "Plain page" ['*) ;;
+    *) fail "a click whose page never opened didn't answer with the page its tab is put back on: $clicked" ;;
+  esac
+  closed=$(call close_tab "{\"tab\":$linked}")
+  case "$closed" in "Closed tab $linked."*) ;; *) fail "closing the link's tab answered: $closed" ;; esac
   beside=$(split_tab b)
   split=$(call split_tabs "{\"tabs\":[$warned,$beside]}")
   [ "$split" = "Tab $warned's split view, left to right: $warned, $beside." ] ||
