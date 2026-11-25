@@ -291,10 +291,10 @@ fn each_palette_is_known_by_its_colours_until_one_is_changed_by_hand() {
 #[test]
 fn each_chosen_palette_shows_its_name_and_a_look_by_hand_none() {
     let names = [
-        "No color", "Dusk", "Lagoon", "Ember", "Meadow", "Sorbet", "Slate", "Midnight",
+        "None", "Dusk", "Lagoon", "Ember", "Meadow", "Sorbet", "Slate", "Midnight",
     ];
     assert_eq!(layout::palette_count(), names.len());
-    assert_eq!(layout::chosen_name(None), Some("No color"));
+    assert_eq!(layout::chosen_name(None), Some("None"));
     for (index, name) in names.into_iter().enumerate().skip(1) {
         let made = layout::palette_theme(index, None).unwrap();
         assert_eq!(
@@ -878,7 +878,7 @@ fn voiceover_reads_the_panel_and_moves_its_bars(cx: &mut TestAppContext) {
     assert_eq!(panel.theme().unwrap().appearance, Appearance::Dark);
     let (_, dusk) = named(&mut panel, Role::RadioButton, "Dusk");
     assert_eq!(dusk.toggled(), Some(Toggled::True));
-    let (none, _) = named(&mut panel, Role::RadioButton, "No color");
+    let (none, _) = named(&mut panel, Role::RadioButton, "None");
     let (_, intensity) = named(&mut panel, Role::Slider, "Intensity");
     assert_eq!(intensity.numeric_value(), Some(40.));
     let (_, glass) = named(&mut panel, Role::Slider, "Transparency");

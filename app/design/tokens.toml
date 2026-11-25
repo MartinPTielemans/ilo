@@ -3393,7 +3393,7 @@ disc-rim = 0.15
 no-color = 0xede8df
 palette-colors = [2, 2, 2, 2, 2, 1, 2]
 palettes = [0x7a70f4, 0xe86ba8, 0x5fa9e8, 0x5fcb8d, 0xe5605f, 0xf08a4b, 0x6fa06a, 0xd3c97e, 0xedc95a, 0xe88bb3, 0x6b7088, 0x4a4f8c, 0x17181f]
-palette-names = ["No color", "Dusk", "Lagoon", "Ember", "Meadow", "Sorbet", "Slate", "Midnight"]
+palette-names = ["None", "Dusk", "Lagoon", "Ember", "Meadow", "Sorbet", "Slate", "Midnight"]
 # The pad: the colours' handles on the hue they take, going once round from the left edge, and
 # their lightness, from the top down. Its ground and rim as drawn; its dots 10 apart from 13 and 14
 # in, 26 across and 15 down, as strong as drawn; its foot shaded from 40% of the way down.
