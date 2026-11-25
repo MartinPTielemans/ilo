@@ -156,18 +156,20 @@ settings_keyboard() {
     return 0
   fi
   if windows; then
-    python3 -I check/app-windows.py foreground "$(cat "/proc/$pid/winpid")" Sync > /dev/null ||
+    python3 -I check/app-windows.py foreground "$(cat "/proc/$pid/winpid")" 'Sync & Import' \
+      > /dev/null ||
       fail "Settings couldn't have the keyboard again"
     return 0
   fi
   if [ "$(uname)" = Linux ] && [ -n "${WAYLAND_DISPLAY:-}" ]; then
-    swaymsg "[pid=$pid title=\"^Sync\$\"] focus" > /dev/null ||
+    swaymsg "[pid=$pid title=\"^Sync & Import\$\"] focus" > /dev/null ||
       fail "sway couldn't give $on's Settings the keyboard"
     return 0
   fi
   [ "$(uname)" = Linux ] && [ -z "${WAYLAND_DISPLAY:-}" ] || return 0
   installed xdotool "giving Settings the keyboard back"
-  settings=$(timeout 10 xdotool search --all --onlyvisible --pid "$(window_pid)" --name '^Sync$' | head -1)
+  settings=$(timeout 10 xdotool search --all --onlyvisible --pid "$(window_pid)" \
+    --name '^Sync & Import$' | head -1)
   [ -n "$settings" ] || fail "the X server has no Settings window"
   xdotool windowactivate --sync "$settings" 2>/dev/null || xdotool windowfocus --sync "$settings" ||
     fail "Settings couldn't have the keyboard again"

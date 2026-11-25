@@ -399,7 +399,16 @@ pub(crate) unsafe extern "C" fn tab_state_changed(
     if unsafe { bc::bc_tab_window(tab) } == 0 {
         update_app(|cx| link_preview::set_url(tab, page.url.clone(), cx));
     }
-    update_shells(|shell, cx| shell.set_page(tab, page.clone(), cx));
+    // What a sort of today's tabs counts changes only when a page turns web or not (#4252).
+    let flipped = Cell::new(false);
+    update_shells(|shell, cx| {
+        let counted = shell.broom_counts(tab);
+        shell.set_page(tab, page.clone(), cx);
+        flipped.set(flipped.get() || counted != shell.broom_counts(tab));
+    });
+    if flipped.get() {
+        update_app(broom_host::page_counts_changed);
+    }
 }
 
 pub(crate) unsafe extern "C" fn tab_title_changed(

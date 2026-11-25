@@ -342,13 +342,6 @@ void host_watch_finished_launching(void (*finished)(void)) {
   finished();
 }
 
-// No dock dot. The docks that badge a launcher, KDE's, Dash to Dock and Plank among them, read the
-// Unity LauncherEntry API, which gives it a count, progress or urgency but no colour, so the
-// Space's has nothing to show in.
-void host_dock_dot_launch(const char* profile_dir) {}
-
-void host_dock_dot(bool colored, uint32_t color) {}
-
 // host_cascaded is frames.rs's too.
 
 // Through the core, as the window is Chromium's: under Wayland its toplevel, which GPUI's window is

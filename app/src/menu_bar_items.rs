@@ -233,6 +233,7 @@ pub fn menus(
                 MenuItem::separator(),
                 named(Command::Clear),
                 named(Command::SortBySite).disabled(!bar.sort_offered),
+                named(Command::SortIntoFolders).disabled(!bar.broom_offered),
                 named(Command::ResetSpaceTabs),
             ],
         ),

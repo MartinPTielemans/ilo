@@ -5,12 +5,13 @@ use std::time::Instant;
 use std::{cell::Cell, f32::consts::FRAC_PI_2, time::Duration};
 
 use gpui::{
-    AnyElement, App, Bounds, ClickEvent, Context, Div, FontWeight, Global, MouseButton,
-    MouseDownEvent, MouseMoveEvent, Pixels, Point, Radians, Role, SharedString, Transformation,
-    Window, canvas, div, prelude::*, px, svg,
+    AnyElement, App, Bounds, ClickEvent, Context, Div, FontWeight, Global, Hsla, MouseButton,
+    MouseDownEvent, MouseMoveEvent, Pixels, Point, Radians, Rgba, Role, SharedString,
+    Transformation, Window, canvas, div, prelude::*, px, svg,
 };
 
 use super::Space;
+use super::join::join;
 use super::{
     BREATH, BREATH_LOW, CHOSEN, CLEAR_ARROW, CLEAR_HOVERED, CLOSE_GLYPH, CLOSE_HOVERED,
     CLOSE_RIGHT, CLOSE_SIZE, CancelName, Closing, Command, Curve, EMOJI_SIZE, FAVICON_DRAWN,
@@ -30,12 +31,13 @@ use super::{
 };
 use super::{
     access::{Accessible, NEW_TAB},
+    broom::Broom,
     drag::in_sidebar,
     return_mark::Bitmap,
     sidebar_keys,
 };
 use crate::palette::Tone;
-use crate::tokens::shell::{LIGHT_SEGMENT_RULE, SEGMENT_RULE};
+use crate::tokens::shell::{DIVIDER, LIGHT_SEGMENT_RULE, SEGMENT_RULE};
 use crate::{
     icon_picker::{self, Subject},
     palette::Palette,
@@ -303,10 +305,16 @@ impl Shell {
             && matches!(row, Row::Tab(_))
             && !folder
             && self.page(self.selected).developer_mode;
+        // The open tab's line is its page's own colour, one shape with the page (join.rs); the
+        // plain plate is for a page that has reported none.
+        let page = match row {
+            Row::Tab(tab) if selected => self.page_fill(tab),
+            _ => None,
+        };
         let plate = content
             .relative()
             .children(ring)
-            .when(selected, |plate| {
+            .when(selected && page.is_none(), |plate| {
                 selected_plate(&self.palette, plate, plate_in, hover.unwrap_or(0.))
             })
             .when(developer && !ghost, |plate| {
@@ -341,12 +349,13 @@ impl Shell {
                     .on_mouse_down(MouseButton::Left, |_, _, _| {})
                     .group_active("row", |style| style.bg(self.palette.shown(0.)))
             })
-            // A ghost covers the rows it passes, in the colours its row has in place.
+            // A ghost covers the rows it passes, in the colours its row has in place: the open
+            // tab's in its page's colour, as a plate, since only the row in place meets the page.
             .when(ghost, |plate| {
-                let fill = if selected {
-                    self.palette.shown(0.)
-                } else {
-                    self.palette.hovered_row()
+                let fill = match (page, selected) {
+                    (Some(page), _) => return plate.bg(page),
+                    (None, true) => self.palette.shown(0.),
+                    (None, false) => self.palette.hovered_row(),
                 };
                 plate.bg(self.window_fill().blend(fill))
             });
@@ -376,6 +385,11 @@ impl Shell {
             .when(self.a11y && !ghost, |element| {
                 self.row_access(element, row, selected)
             })
+            // Under the plate, and not pressed smaller with it: it stays with the page.
+            .children(
+                page.filter(|_| !ghost)
+                    .map(|page| self.line_join(page, depth, plate_in)),
+            )
             .child(scaled_from_middle(plate, scale))
     }
 
@@ -421,6 +435,47 @@ impl Shell {
                 .when(self.keyed == Some(tab), |row| row.aria_active_descendant())
                 .pressed_by_mouse_down(true, true),
         }
+    }
+
+    /// The page's own colour for the line or the tile of `tab`, once its page has reported one:
+    /// the tab shown, alone in the page area beside the docked sidebar. A split view's line is no
+    /// one page's and keeps the plain plate whatever its panes' colours, and Developer Mode's
+    /// line keeps its own look.
+    pub(super) fn page_fill(&self, tab: u64) -> Option<Rgba> {
+        let shown = tab == self.selected && self.shown_has_plate();
+        let color = self.tab_background(tab).filter(|_| shown)?;
+        let beside = self.card_left() > 0. && self.card_left() == self.width();
+        let own = self.panes(tab).len() == 1 && !self.page(tab).developer_mode;
+        (beside && own).then(|| gpui::rgb(color))
+    }
+
+    /// The inks of `tab`'s line or tile: the window's, or on its page's own colour the ink that
+    /// reads there, so no page makes its own tab unreadable.
+    pub(super) fn line_palette(&self, tab: u64) -> Palette {
+        match self.page_fill(tab) {
+            Some(fill) => self.palette.on_fill(fill),
+            None => self.palette,
+        }
+    }
+
+    /// The open tab's line in `page`, its page's own colour, at `opacity`: from its plate's place,
+    /// `depth` folders in, to the sidebar's edge and into the page.
+    fn line_join(&self, page: Rgba, depth: usize, opacity: f32) -> Div {
+        let on = self.palette.on_fill(page);
+        // A dark page's shape is told from a dark window by a line of light round it.
+        let outline = (on.tone == Tone::Dark).then(|| on.faint(DIVIDER).opacity(opacity));
+        let (left, right) = match self.right {
+            true => (0., PLATE_INSET),
+            false => (PLATE_INSET + depth as f32 * FOLDER_INDENT, 0.),
+        };
+        let inset = (ROW_HEIGHT - PLATE_HEIGHT) / 2.;
+        div()
+            .absolute()
+            .top(px(inset))
+            .bottom(px(inset))
+            .left(px(left))
+            .right(px(right))
+            .child(join(Hsla::from(page).opacity(opacity), outline, self.right))
     }
 
     /// Whether `row` is a tab's that's pressed and not yet let go.
@@ -630,6 +685,7 @@ impl Shell {
             true => SEPARATE.into(),
             false => super::assets::bars_path(angle),
         };
+        let palette = self.line_palette(row);
         let name = match (separate, unload) {
             (true, _) => "Separate All Tabs",
             (false, true) => "Unload Tab",
@@ -643,7 +699,7 @@ impl Shell {
             .mr(px(CLOSE_RIGHT))
             .size(px(CLOSE_SIZE))
             .rounded(px(NAV_RADIUS))
-            .hover(|style| style.bg(self.palette.plate(CLOSE_HOVERED)))
+            .hover(|style| style.bg(palette.plate(CLOSE_HOVERED)))
             .flex()
             .items_center()
             .justify_center()
@@ -653,7 +709,7 @@ impl Shell {
                     .path(glyph)
                     .flex_none()
                     .size(px(CLOSE_GLYPH))
-                    .text_color(self.palette.text(SECONDARY)),
+                    .text_color(palette.text(SECONDARY)),
             )
             .when(split, |button| {
                 button
@@ -709,6 +765,7 @@ impl Shell {
     /// (owner, 2026-11-02, #1349). It names itself after a moment, as a header button does.
     fn remove_button(&self, tabs: Vec<u64>, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         let row = tabs[0];
+        let palette = self.line_palette(row);
         div()
             .id(("remove", row))
             .when(self.a11y, |button| button.button_named(REMOVE_TIP))
@@ -717,7 +774,7 @@ impl Shell {
             .mr(px(CLOSE_RIGHT))
             .size(px(CLOSE_SIZE))
             .rounded(px(NAV_RADIUS))
-            .hover(|style| style.bg(self.palette.plate(CLOSE_HOVERED)))
+            .hover(|style| style.bg(palette.plate(CLOSE_HOVERED)))
             .flex()
             .items_center()
             .justify_center()
@@ -725,7 +782,7 @@ impl Shell {
                 svg()
                     .path(REMOVE)
                     .size(px(REMOVE_GLYPH))
-                    .text_color(self.palette.text(SECONDARY)),
+                    .text_color(palette.text(SECONDARY)),
             )
             .child(self.button_frame(REMOVE_TIP))
             .on_hover(cx.listener(move |shell, hovered: &bool, _, cx| {
@@ -785,6 +842,7 @@ impl Shell {
     fn speaker(&self, tab: u64, cx: &mut Context<Self>) -> Option<gpui::Stateful<gpui::Div>> {
         let page = self.page(tab);
         let icon = speaker_glyph(page.muted);
+        let palette = self.line_palette(tab);
         (page.audible || page.muted).then(|| {
             div()
                 .id(("speaker", tab))
@@ -796,7 +854,7 @@ impl Shell {
                 .mr(px(-(SPEAKER_SIZE - SPEAKER_DRAWN) / 2.))
                 .size(px(SPEAKER_SIZE))
                 .rounded(px(NAV_RADIUS))
-                .hover(|style| style.bg(self.palette.plate(CLOSE_HOVERED)))
+                .hover(|style| style.bg(palette.plate(CLOSE_HOVERED)))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -804,7 +862,7 @@ impl Shell {
                     Swapped::Speaker(tab),
                     icon,
                     SPEAKER_DRAWN,
-                    self.palette.text(self.palette.secondary()).into(),
+                    palette.text(palette.secondary()).into(),
                     cx,
                 ))
                 // Not the row's press, which would show the tab, nor a double-click's rename.
@@ -833,7 +891,7 @@ impl Shell {
                     svg()
                         .path(glyph)
                         .size(px(SPEAKER_DRAWN))
-                        .text_color(self.palette.text(SECONDARY)),
+                        .text_color(self.line_palette(tab).text(SECONDARY)),
                 ),
         )
     }
@@ -1467,18 +1525,22 @@ impl Shell {
         } else {
             self.title(tab)
         };
-        let bright = Some(Row::Tab(tab)) == self.selected_row() || page.developer_mode;
+        let open = Some(Row::Tab(tab)) == self.selected_row();
+        let bright = open || page.developer_mode;
+        let palette = self.line_palette(tab);
         // A tab opened from a Live Folder is its item's row: its title and place, and its state's
         // glyph, merged or closed too, while the tab stays.
         let item = self.live_item_of(tab).filter(|_| !back).cloned();
         let label = item.as_ref().map_or(label, |item| item.title.clone());
-        let title = title(&self.palette, label, bright);
+        // The open tab's title is a step heavier, as text on a plate is.
+        let title = title(&palette, label, bright)
+            .when(open, |title| title.font_weight(FontWeight::MEDIUM));
         let host = item
             .as_ref()
             .map(|item| item.place())
             .or_else(|| self.host_line(tab));
         let title = match host {
-            Some(host) => with_host(&self.palette, title, host),
+            Some(host) => with_host(&palette, title, host),
             None => title,
         };
         // The row's button shows under the pointer, and the title truncates before it.
@@ -1519,21 +1581,21 @@ impl Shell {
             (true, _) => svg()
                 .path("icons/arrow-left.svg")
                 .size(px(FAVICON_DRAWN))
-                .text_color(self.palette.glyph(NAV))
+                .text_color(palette.glyph(NAV))
                 .into_any_element(),
             (false, Some(item)) => svg()
                 .path(item.state.glyph())
                 .size(px(FAVICON_DRAWN))
-                .text_color(self.palette.text(SECONDARY))
+                .text_color(palette.text(SECONDARY))
                 .into_any_element(),
             (false, None) => {
-                let bitmap = self.tab_bitmap_in(&self.palette, tab);
+                let bitmap = self.tab_bitmap_in(&palette, tab);
                 self.with_return_mark(
-                    &self.palette,
+                    &palette,
                     tab,
                     FAVICON_SIZE,
                     bitmap,
-                    || self.tab_icon(tab),
+                    || self.tab_icon_in(&palette, tab),
                     cx,
                 )
             }
@@ -2042,7 +2104,14 @@ impl Shell {
     pub(super) fn new_tab_row(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let (plus, label) = new_tab_label(&self.palette);
         let line = (!self.today().is_empty()).then(|| {
-            today_line(&self.palette, self.hairline(), self.clear_button(cx)).on_mouse_down(
+            // The broom is drawn exactly when Clear is, and what it shows is the browser's answer.
+            let broom = self.browser.broom();
+            let clear = match broom {
+                Some(Broom::Failed) => self.sort_failed(cx).into_any_element(),
+                _ => self.clear_button(cx).into_any_element(),
+            };
+            let broom = broom.map(|state| self.broom_button(state, cx));
+            today_line(&self.palette, self.hairline(), clear, broom).on_mouse_down(
                 MouseButton::Right,
                 cx.listener(|shell, event: &MouseDownEvent, _, cx| {
                     cx.stop_propagation();
@@ -2175,7 +2244,7 @@ impl Shell {
         let dot = div()
             .size(px(STATUS_DOT))
             .rounded_full()
-            .bg(self.palette.text(STATUS_LOADING));
+            .bg(self.line_palette(tab).text(STATUS_LOADING));
         let strength = self.breath.strength(self.clock.now());
         Some(
             div()

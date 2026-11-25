@@ -600,7 +600,6 @@ the zoom HUD, offers, the pickers, tooltips, hover cards and the link target."""
         "const COMMAND_BAR", "const ICON_PICKER", "const THEME_PICKER", "const FOLDER_PREVIEW",
         "const SITE_CONTROLS", "fn show_menu",
         "struct DialogHost", "impl dialog::Host for DialogHost",
-        "struct DockDot", "impl dock_dot::Host for DockDot",
         "struct SiteControlsHost", "fn set_site_controls_shape",
         "impl site_controls::Host for SiteControlsHost", "thread_local! MENU_OVER",
         "struct MenuHost", "impl menu::Host for MenuHost", "fn menu_pointer", "fn menu_dismissed",

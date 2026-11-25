@@ -1,0 +1,16 @@
+<!-- The broom on the New Tab line (docs/ux-spec.md › Sidebar): a handle, a head and one bristle, ours, on the family's grid. -->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2.25"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path d="M20.6 3.4 12.6 11.4" />
+  <path d="M9.9 9.9l4.2 4.2-3.8 6.8L3.1 13.7z" />
+  <path d="M11.3 12.7 7 17" />
+</svg>

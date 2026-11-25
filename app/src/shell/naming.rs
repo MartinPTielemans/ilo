@@ -762,6 +762,11 @@ impl Shell {
 
     /// The field that renames a tab, in place of its title.
     pub(super) fn naming_field(&self, renaming: &Renaming, cx: &mut Context<Self>) -> gpui::Div {
+        // The open tab's name is typed on its page's colour, in the ink that reads there.
+        let palette = match renaming.naming.tab() {
+            Some(tab) => self.line_palette(tab),
+            None => self.palette,
+        };
         div()
             .flex_1()
             .min_w_0()
@@ -775,7 +780,7 @@ impl Shell {
                 cx.listener(|shell, _: &CancelName, window, cx| shell.escape_name(window, cx)),
             )
             .text_size(px(text::BODY))
-            .text_color(self.palette.text(FORM_TEXT))
+            .text_color(palette.text(FORM_TEXT))
             .child(renaming.name.clone())
     }
 }
