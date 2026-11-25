@@ -151,3 +151,50 @@ fn the_sweep_takes_a_card_with_no_record_and_leaves_one_with_a_record() {
     sweep(&root, &[]);
     assert!(!root.exists());
 }
+
+/// Asked one after another, the jobs run in that order, each finding what the one before left: a
+/// card Remove All took is written again by a later Done; one taken out and written again holds
+/// only what came after; a sweep takes only what no record holds, a card written just before it
+/// too. Asked again once the queue is empty, it runs again.
+#[gpui::test]
+fn the_queue_runs_its_jobs_in_the_order_asked(cx: &mut gpui::TestAppContext) {
+    let root = root("queue");
+    let queue = Queue::default();
+    let executor = cx.executor();
+    let write = |id: &CardId, line: &str, picture: Picture| Job::Write {
+        root: root.clone(),
+        id: id.clone(),
+        line: Some(line.to_string()),
+        picture,
+    };
+    let (first, second, third) = (CardId::new(), CardId::new(), CardId::new());
+    queue.ask(
+        write(&second, "Gone.", Picture::Write(picture())),
+        &executor,
+    );
+    queue.ask(Job::RemoveAll(root.clone()), &executor);
+    queue.ask(
+        write(&first, "Before.", Picture::Write(picture())),
+        &executor,
+    );
+    queue.ask(Job::Remove(root.clone(), vec![first.clone()]), &executor);
+    queue.ask(write(&first, "After.", Picture::Leave), &executor);
+    queue.ask(write(&second, "Back.", Picture::Leave), &executor);
+    queue.ask(write(&third, "Swept.", Picture::Leave), &executor);
+    let kept = vec![first.clone(), second.clone()];
+    queue.ask(Job::Sweep(root.clone(), kept), &executor);
+    cx.run_until_parked();
+
+    let card = |id: &CardId| read(&root, id);
+    assert_eq!(card(&first).line.as_deref(), Some("After."));
+    assert_eq!(card(&first).picture, None);
+    assert_eq!(card(&second).line.as_deref(), Some("Back."));
+    assert_eq!(card(&second).picture, None);
+    assert_eq!(card(&third), Card::default());
+    assert!(!root.join(third.as_str()).exists());
+
+    queue.ask(Job::Remove(root.clone(), vec![first.clone()]), &executor);
+    cx.run_until_parked();
+    assert_eq!(card(&first), Card::default());
+    assert_eq!(card(&second).line.as_deref(), Some("Back."));
+}

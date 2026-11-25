@@ -886,6 +886,8 @@ pub struct Tasks {
     pub(super) profiles: Vec<String>,
     /// The last picture each kept task's card could keep of its last page (pick_up.rs).
     card_tiles: HashMap<String, pick_up::CardTile>,
+    /// The cards' file work, in the order it's asked (kept/cards.rs).
+    card_jobs: super::kept::cards::Queue,
     /// The state each task was in when the user's reply took it up, which it goes back to if its
     /// assistant no longer has the conversation.
     pub(super) picked_up: HashMap<String, State>,

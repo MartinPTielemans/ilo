@@ -1,15 +1,20 @@
 //! What a kept thread brings back across a quit (#4090), in a folder of its own,
 //! `<profile>/Kept threads/<card id>/`, which only its owner can open: its card's line and its
 //! page's last picture, and later its log and its trace's pictures, each under a name this file
-//! gives it. This is the one place that writes, reads and removes them. The names in it are this
-//! file's own and the card's id, never anything of a thread's, and nothing here logs.
+//! gives it. This is the one place that writes, reads and removes them, and its `Queue` the one
+//! way they're written and removed, in the order asked. The names in it are this file's own and
+//! the card's id, never anything of a thread's, and nothing here logs.
 //!
 //! Written at the thread's Done, off the UI's thread; read after a launch's first frame; removed
 //! with the thread, with Remove All, with its profile, and at launch where no kept record holds
 //! the card's id. Its own folder, not the conversation's under `Kept tasks`, as nothing is ever
 //! put in that one (kept.rs).
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+use gpui::{BackgroundExecutor, RenderImage};
 
 /// The folder under the profile's that holds each kept thread's own.
 pub const FOLDER: &str = "Kept threads";
@@ -90,7 +95,6 @@ impl std::fmt::Debug for Pixels {
 }
 
 /// What a write does with a card's picture.
-#[derive(Debug)]
 pub enum Picture {
     /// Leaves the one there, or none.
     Leave,
@@ -98,6 +102,30 @@ pub enum Picture {
     Remove,
     /// Puts this one in its place.
     Write(Pixels),
+    /// Puts this one, as GPUI drew it, in its place: its pixels are read off the UI's thread.
+    Taken(Arc<RenderImage>),
+}
+
+/// Which it is, and a picture's size alone.
+impl std::fmt::Debug for Picture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Picture::Leave => f.write_str("Leave"),
+            Picture::Remove => f.write_str("Remove"),
+            Picture::Write(pixels) => write!(f, "Write({pixels:?})"),
+            Picture::Taken(_) => f.write_str("Taken(…)"),
+        }
+    }
+}
+
+/// `image`'s pixels, as GPUI drew it.
+fn pixels(image: &RenderImage) -> Option<Pixels> {
+    let size = image.size(0);
+    Some(Pixels {
+        bgra: image.as_bytes(0)?.to_vec(),
+        width: u32::try_from(size.width.0).ok()?,
+        height: u32::try_from(size.height.0).ok()?,
+    })
 }
 
 /// What a card's folder held.
@@ -181,8 +209,9 @@ pub fn write(root: &Path, id: &CardId, line: Option<&str>, picture: &Picture) ->
     let picture = match picture {
         Picture::Leave => None,
         Picture::Remove => Some(None),
-        // One that can't be encoded leaves none.
+        // One that can't be read or encoded leaves none.
         Picture::Write(pixels) => Some(png(pixels)),
+        Picture::Taken(image) => Some(pixels(image).as_ref().and_then(png)),
     };
     let line = Some(line.map(|line| line.as_bytes().to_vec()));
     let mut written = true;
@@ -285,6 +314,96 @@ pub fn sweep(root: &Path, kept: &[CardId]) {
     }
     // Only if it's empty.
     _ = std::fs::remove_dir(root);
+}
+
+/// One piece of the cards' file work, in the folder of cards it names.
+#[derive(Debug)]
+pub enum Job {
+    /// A thread's Done: `write`.
+    Write {
+        root: PathBuf,
+        id: CardId,
+        line: Option<String>,
+        picture: Picture,
+    },
+    /// Threads gone for good: `remove`, each.
+    Remove(PathBuf, Vec<CardId>),
+    /// Remove All: `remove_all`.
+    RemoveAll(PathBuf),
+    /// A launch: `sweep`.
+    Sweep(PathBuf, Vec<CardId>),
+}
+
+impl Job {
+    fn run(self) {
+        match self {
+            Job::Write {
+                root,
+                id,
+                line,
+                picture,
+            } => _ = write(&root, &id, line.as_deref(), &picture),
+            Job::Remove(root, ids) => {
+                for id in &ids {
+                    remove(&root, id);
+                }
+            }
+            Job::RemoveAll(root) => remove_all(&root),
+            Job::Sweep(root, kept) => sweep(&root, &kept),
+        }
+    }
+}
+
+/// The one way the cards' file work is done: each job off the UI's thread, one at a time, in the
+/// order asked, so a later job always finds what an earlier one left, as a Remove All asked after
+/// a Done's write finds the card to take out. A job waits only for the ones before it; with none
+/// waiting nothing runs, and nothing is on a timer.
+#[derive(Clone, Default)]
+pub struct Queue(Arc<Mutex<Waiting>>);
+
+#[derive(Default)]
+struct Waiting {
+    jobs: VecDeque<Job>,
+    /// Whether a run is taking the jobs, which takes one asked while it runs too.
+    running: bool,
+}
+
+impl Queue {
+    /// Puts `job` after those asked before it, starting a run on `executor` if none is under way.
+    pub fn ask(&self, job: Job, executor: &BackgroundExecutor) {
+        {
+            let mut waiting = self
+                .0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            waiting.jobs.push_back(job);
+            if std::mem::replace(&mut waiting.running, true) {
+                return;
+            }
+        }
+        let queue = self.clone();
+        executor.spawn(async move { queue.run() }).detach();
+    }
+
+    /// Takes the jobs in order until there are none.
+    fn run(&self) {
+        loop {
+            let job = {
+                let mut waiting = self
+                    .0
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                match waiting.jobs.pop_front() {
+                    Some(job) => job,
+                    None => {
+                        waiting.running = false;
+                        return;
+                    }
+                }
+            };
+            job.run();
+        }
+    }
 }
 
 #[cfg(test)]

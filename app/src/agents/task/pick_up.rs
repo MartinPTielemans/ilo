@@ -17,7 +17,7 @@ use super::ilo::{IloKind, IloLine};
 use super::{Card, KEPT, Line, State, Task, Who, finding, last_tab, seconds};
 use crate::agents::Agents;
 use crate::agents::helpers::Helpers;
-use crate::agents::kept::cards::{self, Picture, Pixels};
+use crate::agents::kept::cards::{self, Picture};
 use crate::agents::kept::{self, Keep, Keeps, Nowhere};
 use crate::agents::runner::Cli;
 use crate::agents::tier::{Sites, Tier};
@@ -109,15 +109,18 @@ impl Agents {
         if let Some(tab) = written {
             (self.tasks.card_tiles).insert(agent.to_string(), CardTile::Written(tab));
         }
-        cx.background_spawn(async move {
-            let picture = match (picture, leave) {
-                (Some(image), _) => pixels(&image).map_or(Picture::Remove, Picture::Write),
-                (None, true) => Picture::Leave,
-                (None, false) => Picture::Remove,
-            };
-            cards::write(&root, &card, line.as_deref(), &picture);
-        })
-        .detach();
+        let picture = match (picture, leave) {
+            (Some(image), _) => Picture::Taken(image),
+            (None, true) => Picture::Leave,
+            (None, false) => Picture::Remove,
+        };
+        let job = cards::Job::Write {
+            root,
+            id: card,
+            line,
+            picture,
+        };
+        self.tasks.card_jobs.ask(job, cx.background_executor());
     }
 
     /// Settings › Agents' Keep finished tasks so you can reply.
@@ -664,8 +667,7 @@ impl Agents {
         // Every card goes, a task's at work too: it has none to show until it's done, and is
         // written again then.
         if let Some(root) = self.cards_root() {
-            cx.background_spawn(async move { cards::remove_all(&root) })
-                .detach();
+            (self.tasks.card_jobs).ask(cards::Job::RemoveAll(root), cx.background_executor());
         }
     }
 
@@ -687,8 +689,8 @@ impl Agents {
         if !self.tasks.kept.read(&root) {
             // Cards with no file of ids are what a run that went before it could remove them left.
             if cards_root.exists() {
-                cx.background_spawn(async move { cards::sweep(&cards_root, &[]) })
-                    .detach();
+                let sweep = cards::Job::Sweep(cards_root, Vec::new());
+                self.tasks.card_jobs.ask(sweep, cx.background_executor());
             }
             return;
         }
@@ -709,9 +711,8 @@ impl Agents {
             cx.notify();
         }
         self.remove_kept(|record| record.task.is_none(), cx);
-        let kept = self.tasks.kept.cards();
-        cx.background_spawn(async move { cards::sweep(&cards_root, &kept) })
-            .detach();
+        let sweep = cards::Job::Sweep(cards_root, self.tasks.kept.cards());
+        self.tasks.card_jobs.ask(sweep, cx.background_executor());
     }
 
     /// Removes the conversations `which` picks, off the UI's thread, as each waits on its
@@ -734,12 +735,10 @@ impl Agents {
         let gone: Vec<_> = (removing.iter())
             .filter_map(|(id, ..)| self.tasks.kept.card_of(id))
             .collect();
-        cx.background_spawn(async move {
-            for card in &gone {
-                cards::remove(&cards_root, card);
-            }
-        })
-        .detach();
+        (self.tasks.card_jobs).ask(
+            cards::Job::Remove(cards_root, gone),
+            cx.background_executor(),
+        );
         // Its row leaves the file at once; its id stays there until its assistant has removed
         // the conversation, so one that couldn't be is still held to try again.
         self.tasks.kept.write(&root);
@@ -784,16 +783,6 @@ fn replies(task: &Task) -> usize {
 /// Whether the task has ended: done, stopped, failed or at its assistant's limit.
 fn ended(task: &Task) -> bool {
     !matches!(task.state, State::Working | State::Asking { .. })
-}
-
-/// `image`'s pixels, as a card's folder keeps them.
-fn pixels(image: &RenderImage) -> Option<Pixels> {
-    let size = image.size(0);
-    Some(Pixels {
-        bgra: image.as_bytes(0)?.to_vec(),
-        width: u32::try_from(size.width.0).ok()?,
-        height: u32::try_from(size.height.0).ok()?,
-    })
 }
 
 /// The title the file keeps for `task`: the name its agent gave it, in this run or, for one a run
