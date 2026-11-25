@@ -1049,6 +1049,15 @@ pub fn reason(kind: Option<Kind>) -> String {
     reason.to_string()
 }
 
+/// How many pages, as a count at a line's end says it: "1 page", "3 pages", and nothing for none.
+pub fn pages_counted(pages: usize) -> Option<String> {
+    match pages {
+        0 => None,
+        1 => Some("1 page".into()),
+        pages => Some(format!("{pages} pages")),
+    }
+}
+
 /// What an action an agent took is, for the activity log, by the name the core's entry gives it.
 pub fn describe(action: &str) -> &'static str {
     match action {

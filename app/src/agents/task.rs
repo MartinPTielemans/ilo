@@ -2065,6 +2065,7 @@ impl Agents {
         if let Some(process) = task.process.as_mut() {
             process.interrupt();
         }
+        self.you_stopped(agent, cx);
         self.keep_ended(agent);
         self.stop_agent(agent, cx);
         cx.notify();
@@ -3049,7 +3050,8 @@ impl Agents {
 
     /// The user stopped the outside agent `agent`: its sessions under way, on each connection,
     /// are stopped.
-    pub(super) fn session_stopped(&mut self, agent: &str) {
+    pub(super) fn session_stopped(&mut self, agent: &str, cx: &App) {
+        let mut stopped = Vec::new();
         let live = (self.tasks.tasks.iter_mut()).filter(|task| {
             matches!(task.state, State::Working | State::Asking { .. })
                 && (task.session.as_ref()).is_some_and(|session| session.agent == agent)
@@ -3061,7 +3063,21 @@ impl Agents {
                 session.idle = None;
                 session.quiet = None;
             }
+            stopped.push(task.agent.clone());
         }
+        for key in stopped {
+            self.you_stopped(&key, cx);
+        }
+    }
+
+    /// The user stopped the task `key`: the last line of its log says so, with how many pages it
+    /// held then.
+    fn you_stopped(&mut self, key: &str, cx: &App) {
+        let Some(task) = self.task(key) else {
+            return;
+        };
+        let pages = self.pages(task, cx).len();
+        self.place_in(key, super::lines::Happened::YouStopped { pages });
     }
 
     /// `agent`'s call `call` said its task is done (#3652): its session under way is, unless

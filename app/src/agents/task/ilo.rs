@@ -1,5 +1,6 @@
 //! ilo's own lines in a task's conversation: what the browser stopped, a step that's the user's, a
-//! tab the agent needs back, a sign-in ilo did and a change of the task's access. And of a task
+//! tab the agent needs back, a sign-in ilo did, a change of the task's access and that the user
+//! stopped it. And of a task
 //! that has ended (#4105): that the user's reply took it up, and in the reply field's place, that
 //! its assistant no longer has the conversation or keeps none, or that its profile was deleted.
 //! And of a task with files (#4101) whose assistant ilo couldn't limit to them: that it started
@@ -75,6 +76,9 @@ pub enum IloKind {
     },
     /// The user changed the task's access.
     TierChanged { from: Tier, to: Tier },
+    /// The user stopped the task, which held `pages` pages then: a count, never a page's title or
+    /// its site.
+    YouStopped { pages: usize },
     /// ilo stopped the task over its helpers (#4102), by `limit`: its turn where it started more
     /// than a task may, the task itself where a helper started one of its own or isn't one ilo
     /// allows. `tab` is the page the task stood on, or 0 with none. The count its line says is
@@ -232,6 +236,7 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
         // Not Now keeps the tab, as the user's own.
         IloKind::TabBack { .. } => vec![IloButton::HandBack, IloButton::NotNow],
         IloKind::SignedIn { .. } | IloKind::TierChanged { .. } => Vec::new(),
+        IloKind::YouStopped { .. } => Vec::new(),
         // What happened, which no press undoes: the files are given again at a task's start.
         IloKind::StartedWithout { .. }
         | IloKind::KeptAt { .. }
@@ -273,7 +278,7 @@ pub fn tab(kind: &IloKind) -> Option<u64> {
         | IloKind::Yours { tab, .. }
         | IloKind::TabBack { tab }
         | IloKind::SignedIn { tab, .. } => Some(*tab),
-        IloKind::TierChanged { .. } => None,
+        IloKind::TierChanged { .. } | IloKind::YouStopped { .. } => None,
         IloKind::StartedWithout { .. }
         | IloKind::KeptAt { .. }
         | IloKind::SetBack { .. }

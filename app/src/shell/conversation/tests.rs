@@ -1332,6 +1332,37 @@ fn a_site_is_never_in_quotes_and_a_pages_words_are(_: &mut TestAppContext) {
     assert_eq!(&line[at], "boxoffice.example");
 }
 
+/// The line of a task the user stopped says the pages it held then by their count alone, and with
+/// none, no count (Z17). It names nothing, so no page's or site's words stand in it, and it has
+/// nothing to press.
+#[gpui::test]
+fn the_users_stop_says_its_pages_by_their_count_alone(cx: &mut TestAppContext) {
+    let said = |pages| super::words::head(&IloKind::YouStopped { pages }, "Claude");
+    assert_eq!(said(0), ("· You stopped it".into(), None));
+    assert_eq!(said(1), ("· You stopped it · 1 page".into(), None));
+    assert_eq!(said(3), ("· You stopped it · 3 pages".into(), None));
+
+    let (shell, _host, cx) = shown(cx);
+    let talk = Conversation {
+        lines: vec![Line::Ilo(IloLine {
+            key: 7,
+            kind: IloKind::YouStopped { pages: 3 },
+            settled: true,
+        })],
+        ..conversation(0)
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let (_, laid, _) = ilo_words(&view, cx);
+    assert_eq!(laid.text(), "ilo · You stopped it · 3 pages");
+    assert!(
+        view.read_with(cx, |view, _| view.ilo_drawn.borrow().is_empty()),
+        "the line of the user's stop drew a button"
+    );
+}
+
 /// The lines of a wall ilo couldn't put up around a task's files, and of a run it couldn't end
 /// whole (#4101), each whole: what ilo did, then why, with the folder's or the file's name quoted
 /// as the user's own and nothing else of the line drawn as a name.
@@ -1497,6 +1528,8 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             from: Tier::Work,
             to: Tier::Full,
         },
+        IloKind::YouStopped { pages: 0 },
+        IloKind::YouStopped { pages: 2 },
         IloKind::StartedWithout {
             left: LeftOut::Folder("Trip".into()),
         },
@@ -1557,6 +1590,7 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             | IloKind::TabBack { .. }
             | IloKind::SignedIn { .. }
             | IloKind::TierChanged { .. }
+            | IloKind::YouStopped { .. }
             | IloKind::StartedWithout { .. }
             | IloKind::KeptAt { .. }
             | IloKind::SetBack { .. }

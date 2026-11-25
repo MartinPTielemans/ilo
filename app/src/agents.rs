@@ -3004,7 +3004,7 @@ impl Agents {
                     server.stop(agent);
                 }
                 self.note(agent, 0, "stopped by the user", "", "");
-                self.session_stopped(agent);
+                self.session_stopped(agent, cx);
                 // No connection of the `ilo` command's is left open to close (Event::Bye).
                 if agent == Client::Command.id() {
                     self.live.remove(agent);
