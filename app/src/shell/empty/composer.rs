@@ -9,7 +9,6 @@ use gpui::{
 };
 
 use crate::agents::task::{Card, Dot, Word};
-use crate::agents::tier::{ANY_SITE, ONLY_ADDED, Tier};
 use crate::command_bar::{self, CommandBar};
 use crate::palette::{Palette, Tone};
 use crate::shell::ShowStarted;
@@ -17,11 +16,7 @@ use crate::tokens::command_bar::{HEIGHT as BAR_HEIGHT, WIDTH as BAR_WIDTH};
 use crate::tokens::shell::composer::*;
 use crate::tokens::text;
 
-use super::super::{
-    STATUS_AGENT, Shell,
-    menus::{MenuAction, MenuEntry},
-    task_area::covering,
-};
+use super::super::{STATUS_AGENT, Shell, task_area::covering};
 
 /// Over the cards.
 const LATEST: &str = "Pick up a thread";

@@ -1640,7 +1640,7 @@ impl TalkView {
                     )
                 }
                 RowCase::Ended(open) => {
-                    let told = open_told(on, shell.read(cx).foot.strip_open.clone());
+                    let told = open_told(on, shell.read(cx).task_list.strip_open.clone());
                     ("conversation-open", open.clone(), Box::new(told))
                 }
             };
@@ -1655,7 +1655,7 @@ impl TalkView {
                     view.shell
                         .update(cx, |shell, cx| {
                             let (Some(agent), from) =
-                                (shell.task_strip_agent(), shell.foot.strip_open.get())
+                                (shell.task_strip_agent(), shell.task_list.strip_open.get())
                             else {
                                 return;
                             };
