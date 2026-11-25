@@ -282,14 +282,6 @@ pub(super) enum Fold {
 }
 
 impl Shell {
-    /// A link in a task's conversation: its page opens as a tab of the user's Space, and shows.
-    fn open_link(&mut self, url: &str, cx: &mut Context<Self>) {
-        // check.sh reads this line.
-        log!("browser: task link {url}");
-        self.leave_task_area(cx);
-        self.browser.open_page(url, cx);
-    }
-
     /// The task whose conversation the page area shows, for the Agents to send.
     pub fn talk_agent(&self) -> Option<SharedString> {
         let talk = self.talk.as_ref()?;
@@ -1033,6 +1025,13 @@ impl TalkView {
     }
 
     /// A picture's click: its page zooms out of it to fill the area.
+    /// A link in its answer: the thread's page shows, as its tile's click shows it.
+    pub(super) fn show_page(&mut self, tab: u64, cx: &mut Context<Self>) {
+        // check.sh reads this line.
+        log!("browser: task link {tab}");
+        self.watch(tab, cx);
+    }
+
     fn watch(&mut self, tab: u64, cx: &mut Context<Self>) {
         let from = self
             .drawn
@@ -1626,6 +1625,14 @@ impl TalkView {
                 (bytes(range.start)..bytes(range.end), style)
             })
             .collect();
+        // A link is one only to a page of this thread, which a click shows; the assistant's words
+        // can't make one to anywhere else, which stays plain words.
+        let links: Vec<(std::ops::Range<usize>, u64)> = (inline.links.iter())
+            .filter_map(|(range, url)| Some((range.clone(), thread_tab(&look.thread_pages, url)?)))
+            .collect();
+        let linked = |range: &std::ops::Range<usize>| {
+            (links.iter()).any(|(each, _)| each.start <= range.start && range.end <= each.end)
+        };
         let highlights = (inline.styled.iter()).map(|(range, style)| {
             let underline = UnderlineStyle {
                 thickness: px(LINK_LINE),
@@ -1636,7 +1643,7 @@ impl TalkView {
                 font_weight: style.bold.then_some(FontWeight::SEMIBOLD),
                 font_style: style.italic.then_some(FontStyle::Italic),
                 background_color: style.code.then(|| palette.plate(CODE_FILL)),
-                underline: style.link.then_some(underline),
+                underline: (style.link && linked(range)).then_some(underline),
                 ..HighlightStyle::default()
             };
             (range.clone(), highlight)
@@ -1644,17 +1651,19 @@ impl TalkView {
         let highlights: Vec<_> =
             gpui::combine_highlights(highlights.collect::<Vec<_>>(), fades).collect();
         let text = StyledText::new(inline.text).with_highlights(highlights);
-        if inline.links.is_empty() {
+        if links.is_empty() {
             return text.into_any_element();
         }
-        let (ranges, urls): (Vec<_>, Vec<SharedString>) = inline.links.into_iter().unzip();
+        let (ranges, tabs): (Vec<_>, Vec<u64>) = links.into_iter().unzip();
         let shell = self.shell.clone();
         InteractiveText::new(id, text)
             .on_click(ranges, move |index, _, cx| {
-                let Some(url) = urls.get(index).cloned() else {
-                    return;
-                };
-                shell.update(cx, |shell, cx| shell.open_link(&url, cx)).ok();
+                let Some(&tab) = tabs.get(index) else { return };
+                let Some(shell) = shell.upgrade() else { return };
+                let view = (shell.read(cx).talk.as_ref()).map(|talk| talk.view.clone());
+                if let Some(view) = view {
+                    view.update(cx, |view, cx| view.show_page(tab, cx));
+                }
             })
             .into_any_element()
     }
@@ -3459,6 +3468,8 @@ struct Look {
     helper_pages: Vec<HelperPage>,
     /// The tabs its stretches acted on, by which a page's line has its title and icon.
     pages: Vec<PageHead>,
+    /// The thread's pages, each by its tab and address: the only places its words link to.
+    thread_pages: Vec<(u64, SharedString)>,
     /// A page watched is going back into its picture over it, which hides what's under it.
     behind: bool,
     /// The conversation stands beside the page it watches (`Shell::talk_beside`).
@@ -3539,6 +3550,19 @@ impl Shell {
     }
 }
 
+/// The tab among a thread's `pages` that `url` is, the same address but for a closing slash or
+/// fragment.
+fn thread_tab(pages: &[(u64, SharedString)], url: &str) -> Option<u64> {
+    let bare = |url: &str| {
+        let url = url.split('#').next().unwrap_or(url);
+        url.strip_suffix('/').unwrap_or(url).to_string()
+    };
+    let url = bare(url);
+    (pages.iter())
+        .find(|(_, page)| bare(page) == url)
+        .map(|(tab, _)| *tab)
+}
+
 /// The tabs the steps of `lines` acted on.
 fn page_tabs(lines: &[Line]) -> Vec<u64> {
     let mut tabs: Vec<u64> = (lines.iter())
@@ -3587,6 +3611,9 @@ impl Render for TalkView {
         let helpers =
             (self.shown.as_ref()).map_or_else(Vec::new, |shown| helper_tabs(&shown.lines));
         let paged = (self.shown.as_ref()).map_or_else(Vec::new, |shown| page_tabs(&shown.lines));
+        let thread_tabs: Vec<u64> = (self.shown.as_ref()).map_or_else(Vec::new, |shown| {
+            shown.tabs.iter().map(|(tab, _)| *tab).collect()
+        });
         let Some(look) = self.shell.upgrade().map(|shell| {
             let shell = shell.read(cx);
             let asked_favicon = asked.and_then(|url| shell.favicon_at(&url));
@@ -3597,6 +3624,9 @@ impl Render for TalkView {
                 asked_favicon,
                 helper_pages: shell.helper_pages(&self.agent, helpers),
                 pages: shell.page_heads(paged),
+                thread_pages: (thread_tabs.into_iter())
+                    .filter_map(|tab| Some((tab, shell.tabs.get(&tab)?.page.url.clone())))
+                    .collect(),
                 behind: shell.task_page_going_back(),
                 beside: shell.talk_beside,
                 standing: shell.task_standing(),

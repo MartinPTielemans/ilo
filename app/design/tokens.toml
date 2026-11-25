@@ -3140,7 +3140,7 @@ item-gap = 4.0
 list-marker = 18.0
 code-fill = 0.08
 link-line = 1.0
-link-underline = 0.4
+link-underline = 0.35
 # Under an answer, `answer-foot-top` down: a row `answer-foot` high, its parts `answer-foot-gap`
 # apart: the copy glyph, then the time it finished, both in text-3 (spec-thread-stage.md).
 answer-foot-top = 10.0

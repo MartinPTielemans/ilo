@@ -3258,3 +3258,23 @@ fn the_copy_button_copies_the_answers_plain_text(cx: &mut TestAppContext) {
     let copied = cx.read(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
     assert_eq!(copied.as_deref(), Some("Two shows at MAAT"));
 }
+
+/// An answer's link is one only to a page of its thread, the same address but for a closing slash
+/// or fragment; an address anywhere else isn't a link.
+#[test]
+fn the_answers_links_go_only_to_the_threads_pages() {
+    let pages = [
+        (30, "https://maat.pt/".into()),
+        (31, "https://ccb.pt/agenda".into()),
+    ];
+    assert_eq!(super::thread_tab(&pages, "https://maat.pt"), Some(30));
+    assert_eq!(
+        super::thread_tab(&pages, "https://ccb.pt/agenda#today"),
+        Some(31)
+    );
+    assert_eq!(super::thread_tab(&pages, "https://ccb.pt/"), None);
+    assert_eq!(
+        super::thread_tab(&pages, "https://elsewhere.example/"),
+        None
+    );
+}
