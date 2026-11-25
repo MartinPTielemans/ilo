@@ -11,12 +11,12 @@
 use std::ffi::{CStr, CString, OsStr, OsString};
 use std::io;
 use std::mem::MaybeUninit;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use super::{LeavingLink, Removed, Stop, Walked, Wall};
+use super::{Granted, LeavingLink, Removed, Stop, Walked, Wall};
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Limits {
@@ -93,11 +93,12 @@ pub(super) fn outside(wall: &Wall, limits: Limits) -> Walked {
 
 fn outside_with(wall: &Wall, limits: Limits, trust: Trust) -> Walked {
     let mut walked = Walked::default();
-    let Some(root_path) = wall.folder() else {
+    let Some(granted) = wall.folder.as_ref() else {
         return walked;
     };
+    let root_path = granted.root();
     let opened = (|| -> io::Result<_> {
-        let (root, walk_root) = (open_root(root_path)?, open_root(root_path)?);
+        let (root, walk_root) = (open_granted(granted)?, open_granted(granted)?);
         Ok((
             stat_of(&root)?,
             entries(&walk_root, limits.entries)?,
@@ -243,8 +244,8 @@ pub(super) fn remove(wall: &Wall, links: &[LeavingLink]) -> Removed {
 }
 
 fn remove_with(wall: &Wall, links: &[LeavingLink], trust: Trust) -> Removed {
-    let root = wall.folder().and_then(|path| {
-        let root = open_root(path).ok()?;
+    let root = wall.folder.as_ref().and_then(|granted| {
+        let (path, root) = (granted.root(), open_granted(granted).ok()?);
         // A list of every leaving link is the user's own links too, so it deletes none.
         let slack = trust(&root)?;
         Some((path, root, since(wall, Some(slack))))
@@ -465,12 +466,18 @@ fn c_string(name: &OsStr) -> io::Result<CString> {
 const DIR_FLAGS: libc::c_int =
     libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
 
-/// The granted folder, resolved at the user's pick, opened as a directory and never through a link.
-fn open_root(path: &Path) -> io::Result<OwnedFd> {
-    let path = c_string(path.as_os_str())?;
+/// The granted folder, opened at the path resolved at the user's pick, as a directory and never
+/// through a link, and only if what it opened is the folder they picked: one put in its place since
+/// is another folder, unread and untouched.
+fn open_granted(granted: &Granted) -> io::Result<OwnedFd> {
+    let path = c_string(granted.root().as_os_str())?;
     // SAFETY: a NUL-terminated path; the handle is owned from here.
     let fd = unsafe { libc::open(path.as_ptr(), DIR_FLAGS) };
-    owned(fd)
+    let root = owned(fd)?;
+    match granted.is_open(root.as_fd()) {
+        true => Ok(root),
+        false => Err(io::Error::other("not the folder granted")),
+    }
 }
 
 /// The directory `name` in `dir`, opened as one: a link or anything else there is refused.

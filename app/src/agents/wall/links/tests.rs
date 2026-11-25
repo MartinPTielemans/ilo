@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::sleep;
 
-use super::super::Granted;
 use super::*;
 
 /// A granted folder and a folder beside it, outside it, removed after the test.
@@ -56,6 +55,12 @@ impl Folders {
         let granted = Granted::picked_for_test(self.at("removed"));
         fs::remove_dir(self.at("removed")).unwrap();
         granted
+    }
+
+    /// Another folder put at the granted one's path, the granted one moved beside it as `moved`.
+    fn swap(&self) {
+        fs::rename(&self.root, self.base.join("moved")).unwrap();
+        fs::create_dir(&self.root).unwrap();
     }
 
     /// The wall of a task that started now: what's made before this is the user's, after it the
@@ -227,7 +232,7 @@ fn a_directory_past_the_budget_is_read_only_that_far() {
     }
     let wall = folders.start();
 
-    let big = open_root(&folders.at("big")).unwrap();
+    let big = open_granted(&Granted::picked_for_test(folders.at("big"))).unwrap();
     let (names, more) = entries(&big, 10).unwrap();
     assert_eq!((names.len(), more), (10, true));
     let (names, more) = entries(&big, 50).unwrap();
@@ -412,6 +417,42 @@ fn a_folder_that_cannot_be_opened_is_its_own_answer() {
     let walked = walk(&wall);
     assert!(walked.root_unread);
     assert_eq!((walked.unread, walked.first_unread), (0, None));
+}
+
+/// A folder put at the granted one's path between the grant and the task's end is another folder,
+/// and the walk reads none of it.
+#[test]
+fn a_folder_put_in_the_granted_ones_place_is_not_walked() {
+    let folders = Folders::new();
+    let wall = folders.start();
+    folders.swap();
+    folders.link("away", &folders.outside);
+
+    let walked = walk(&wall);
+    assert!(walked.root_unread);
+    assert!(walked.links.is_empty());
+}
+
+/// The same between the line and the click: Delete takes nothing from the folder in its place.
+#[test]
+fn delete_takes_nothing_from_a_folder_put_in_the_granted_ones_place() {
+    let folders = Folders::new();
+    let wall = folders.start();
+    folders.link("away", &folders.outside);
+    let walked = walk(&wall);
+    assert_eq!(listed(&walked), ["away"]);
+
+    folders.swap();
+    folders.link("away", &folders.outside);
+    assert_eq!(
+        remove_with(&wall, &walked.links, exact),
+        Removed {
+            removed: 0,
+            left: 1
+        }
+    );
+    assert!(fs::symlink_metadata(folders.at("away")).is_ok());
+    assert!(fs::symlink_metadata(folders.base.join("moved/away")).is_ok());
 }
 
 /// Each way of not seeing the whole folder is an answer of its own, never "nothing found".

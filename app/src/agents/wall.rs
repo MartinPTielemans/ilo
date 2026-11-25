@@ -87,6 +87,12 @@ impl Granted {
     fn still_picked(&self) -> bool {
         Identity::of(&self.root) == Some(self.identity)
     }
+
+    /// Whether a handle opened at its path holds the folder picked, and not one put in its place.
+    #[cfg(unix)]
+    fn is_open(&self, dir: std::os::fd::BorrowedFd) -> bool {
+        Identity::of_open(dir) == Some(self.identity)
+    }
 }
 
 /// What a task's assistant is to start inside.
