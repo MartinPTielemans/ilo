@@ -17,7 +17,8 @@ class Space;
 // its own. The scope (BC_FAVORITES_) says who shares a list: every Space, whatever its profile (the
 // same sites, each profile opening them in its own tabs), the Spaces of one profile (Arc), or no
 // two Spaces. A tab is a favorite until it's taken out of the favorites or closes. Each keeps the
-// URL it was made a favorite at, which Back to Favorite URL goes to.
+// URL it was made a favorite at, which Back to Favorite URL goes to. While an agent has a
+// favorite's tab from the user, a tab without a page is the favorite in its place (handed.h).
 class Favorites {
  public:
   Favorites() = delete;
@@ -73,6 +74,14 @@ class Favorites {
   // Takes |tab| out of the favorites, as Remove does, and under Every Space closes the site's tabs
   // in the other profiles.
   static void Unfavorite(bc_id tab);
+  // A tab without a page at the favorite |tab|'s URL, in its profile, with its title, name and
+  // icon: one to keep its tile (Replace) while |tab| is away. In no Space and no favorite yet.
+  // 0 if |tab| isn't a favorite or its profile isn't loaded.
+  static bc_id StandIn(bc_id tab);
+  // |with|, a tab of the favorite |tab|'s profile that isn't one, is the favorite in its place: in
+  // its list where it was, at its URL, its site's in that profile and in its split. |tab| is a
+  // favorite no longer, and isn't closed. False, changing nothing, if it can't be.
+  static bool Replace(bc_id tab, bc_id with);
   // The Space |space| was given another profile, which has loaded: its favorites, under Each Space,
   // go to tabs there, and under Every Space the profile gets the sites it lacks.
   static void SpaceMoved(bc_id space);

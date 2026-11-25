@@ -101,6 +101,7 @@
 #include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
+#include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -142,13 +143,39 @@
 
 namespace {
 
-// Whether a tab's page has a device open, scans for Bluetooth ones, or is being told the location.
-bool UsesDeviceOrLocation(content::WebContents* contents) {
+// Whether a tab's page has a device open, or scans for Bluetooth ones.
+bool UsesDevice(content::WebContents* contents) {
   using Kind = content::WebContentsCapabilityType;
-  return contents && std::ranges::any_of(
-                         std::array{Kind::kUSB, Kind::kBluetoothConnected, Kind::kBluetoothScanning,
-                                    Kind::kHID, Kind::kSerial, Kind::kGeolocation},
-                         [&](Kind kind) { return contents->IsCapabilityActive(kind); });
+  return contents &&
+         std::ranges::any_of(std::array{Kind::kUSB, Kind::kBluetoothConnected,
+                                        Kind::kBluetoothScanning, Kind::kHID, Kind::kSerial},
+                             [&](Kind kind) { return contents->IsCapabilityActive(kind); });
+}
+
+// Closes the Picture in Picture window of |contents|' page, Chrome's floating one for a video or
+// one its page opened for a document, if it has one. The video plays on in its page.
+// The Space the favorite |tab| is given from, as it's in none: the one its window shows, if that
+// shows it among its favorites, else the first of the user's that does. Null if none does.
+browser_core::Space* ShowingFavorite(bc_id tab) {
+  const auto shows = [tab](const browser_core::Space* space) {
+    return space && !space->agent() && !space->own() &&
+           browser_core::Favorites::ShownIn(tab, *space);
+  };
+  const browser_core::Window* window = browser_core::Window::Holding(tab);
+  if (browser_core::Space* shown = window ? browser_core::Space::FromId(window->space()) : nullptr;
+      shows(shown)) {
+    return shown;
+  }
+  const std::vector<browser_core::Space*> spaces = browser_core::Space::All();
+  auto it = std::ranges::find_if(spaces, shows);
+  return it == spaces.end() ? nullptr : *it;
+}
+
+void ClosePictureInPicture(content::WebContents* contents) {
+  PictureInPictureWindowManager* manager = PictureInPictureWindowManager::GetInstance();
+  if (contents && manager->IsInPictureInPicture() && manager->GetWebContents() == contents) {
+    manager->ExitPictureInPicture();
+  }
 }
 
 gfx::Rect ToRect(bc_rect rect) {
@@ -726,6 +753,11 @@ bool bc_tab_take_back(bc_id tab) {
 
 bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   browser_core::Space* from = browser_core::Space::Holding(tab);
+  // A favorite is in no Space, and is given from the one that shows it.
+  const bool favorite = !from && browser_core::Favorites::Has(tab);
+  if (favorite) {
+    from = ShowingFavorite(tab);
+  }
   browser_core::Space* to = browser_core::Space::FromId(space);
   const browser_core::Tab* page = browser_core::Tab::Get(tab);
   if (!from || !to || !page) {
@@ -733,19 +765,25 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   }
   content::WebContents* contents = browser_core::Tab::FromId(tab);
   const browser_core::Tab::Captures captures = page->captures();
-  // Where it leaves, for its way back (handed.h).
-  const bc_id home = from->id();
-  const browser_core::Space::Node* node = from->NodeOf(tab);
-  const browser_core::Space::Node left = node ? *node : browser_core::Space::Node();
+  // Where it leaves, for its way back (handed.h): its place, the split view it leaves with the
+  // give, as a tab taken out of one by hand does, and a pinned tab's pin, which it goes without.
+  // A favorite leaves its tile, which the give has a tab without a page keep.
+  browser_core::handed::Mark left = favorite ? browser_core::handed::Mark{.home = from->id()}
+                                             : browser_core::handed::Leaving(*from, tab);
   // The page goes as it is, with its profile's logins, so never into another profile's Space,
   // where it would load again. And only a tab that may be handed: the app asks the same before it
   // gives one, and the rule holds here whatever asked.
   if (!browser_core::handed_give_rule::MayGive({
           .users = !from->agent() && !from->own(),
           .to_agent = to->agent().has_value(),
-          .same_profile = from->profile() == to->profile(),
-          .pinned = from->IsPinned(tab),
-          .split = from->Panes(tab).size() > 1,
+          .same_profile = (favorite ? browser_core::Favorites::ProfileOf(tab) : from->profile()) ==
+                          to->profile(),
+          .live_folder = left.pin && std::ranges::any_of(left.pin->folders,
+                                                         [&](const auto& folder) {
+                                                           return from->FolderLive(folder.id) != 0;
+                                                         }),
+          .favorite_split = favorite && browser_core::Favorites::Panes(tab).size() > 1,
+          .stands_in = browser_core::handed::KeepsATile(tab),
           .web_page = !page->system_page() && page->Url().SchemeIsHTTPOrHTTPS() &&
                       (!contents || contents->GetLastCommittedURL().SchemeIsHTTPOrHTTPS()),
           .camera = captures.camera,
@@ -754,12 +792,8 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
           .permission_asked = browser_core::PermissionQuestion::Pending(contents),
           .dialog = browser_core::PageDialog::Up(tab),
           .saved_login = browser_core::SavedLoginFits(contents),
-          .device_or_location = UsesDeviceOrLocation(contents),
+          .device = UsesDevice(contents),
           .files = contents && contents->HasFileSystemAccessHandles(),
-          // Chrome says a video is in Picture in Picture at a media card too, which is no window.
-          .picture_in_picture = contents && (contents->HasPictureInPictureDocument() ||
-                                             (contents->HasPictureInPictureVideo() &&
-                                              !browser_core::CardShowsVideo(contents))),
       })) {
     return false;
   }
@@ -777,16 +811,21 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
             point && point->on() && point->agent() != to->agent()->id) {
           point->End(/*tell=*/true);
         }
-        browser_core::Window::MoveToSpace(tab, space, /*to_agent=*/true);
+        if (favorite) {
+          left.tile = browser_core::Window::GiveFavorite(tab, space);
+        } else {
+          browser_core::Window::MoveToSpace(tab, space, /*to_agent=*/true);
+        }
         return browser_core::Space::Holding(tab) == to;
       });
   if (!moved) {
     return false;
   }
-  // A card's video ends with the give, and only with one that happened: a page in an agent's
-  // Space has no Picture in Picture, at a card either (agent_space_rule.h).
+  // A card's video ends with the give, and only with one that happened, and a Picture in Picture
+  // window closes with it: a page in an agent's Space has neither (agent_space_rule.h).
   browser_core::EndCardVideo(tab);
-  browser_core::handed::Given(tab, home, left);
+  ClosePictureInPicture(contents);
+  browser_core::handed::Given(tab, std::move(left));
   // A print preview the user had open over it doesn't ride into the agent's Space, nor a
   // certificate chooser or anything else Chrome was asking them there.
   browser_core::ClosePrintPreview(browser_core::Tab::FromId(tab));

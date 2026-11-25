@@ -5,16 +5,17 @@
 namespace browser_core::handed_give_rule {
 namespace {
 
-// A Today tab of the user's at a web page, given to an agent's Space of its profile.
+// A tab of the user's at a web page, in Today, pinned or a favorite, given to an agent's Space of
+// its profile.
 Tab Fit() {
   return {.users = true, .to_agent = true, .same_profile = true, .web_page = true};
 }
 
-TEST(HandedGiveRuleTest, ATodayTabAtAWebPageIsGiven) {
+TEST(HandedGiveRuleTest, ATabAtAWebPageIsGiven) {
   EXPECT_TRUE(MayGive(Fit()));
 }
 
-// An agent's own tab, a private window's or another window's own, and a favorite, in no Space.
+// An agent's own tab, and a private window's or another window's own.
 TEST(HandedGiveRuleTest, OnlyATabOfTheUsersListedSpaces) {
   Tab tab = Fit();
   tab.users = false;
@@ -30,15 +31,24 @@ TEST(HandedGiveRuleTest, OnlyIntoAnAgentsSpaceOfTheSameProfile) {
   EXPECT_FALSE(MayGive(tab));
 }
 
-TEST(HandedGiveRuleTest, APinnedTabIsRefused) {
+// A pinned tab in a folder that fills itself, or in a folder inside one.
+TEST(HandedGiveRuleTest, ATabInALiveFolderIsRefused) {
   Tab tab = Fit();
-  tab.pinned = true;
+  tab.live_folder = true;
   EXPECT_FALSE(MayGive(tab));
 }
 
-TEST(HandedGiveRuleTest, ATabInASplitViewIsRefused) {
+// Two or three favorites shown side by side are one tile.
+TEST(HandedGiveRuleTest, AFavoriteInASplitViewOfFavoritesIsRefused) {
   Tab tab = Fit();
-  tab.split = true;
+  tab.favorite_split = true;
+  EXPECT_FALSE(MayGive(tab));
+}
+
+// The tab that keeps a favorite's tile while an agent has the favorite's own.
+TEST(HandedGiveRuleTest, ATabKeepingAHandedFavoritesTileIsRefused) {
+  Tab tab = Fit();
+  tab.stands_in = true;
   EXPECT_FALSE(MayGive(tab));
 }
 
@@ -61,7 +71,8 @@ TEST(HandedGiveRuleTest, ATabUsingTheMicrophoneIsRefused) {
   EXPECT_FALSE(MayGive(tab));
 }
 
-TEST(HandedGiveRuleTest, ATabUsingTheScreenIsRefused) {
+// The screen, a window or another tab.
+TEST(HandedGiveRuleTest, ATabSharingTheScreenIsRefused) {
   Tab tab = Fit();
   tab.screen = true;
   EXPECT_FALSE(MayGive(tab));
@@ -88,23 +99,16 @@ TEST(HandedGiveRuleTest, ATabWhoseSignInFormHasASavedLoginIsRefused) {
   EXPECT_FALSE(MayGive(tab));
 }
 
-// A device it has open, a scan for one, or the user's location as it changes.
-TEST(HandedGiveRuleTest, ATabUsingADeviceOrTheLocationIsRefused) {
+// A device it has open, or a scan for one.
+TEST(HandedGiveRuleTest, ATabUsingADeviceIsRefused) {
   Tab tab = Fit();
-  tab.device_or_location = true;
+  tab.device = true;
   EXPECT_FALSE(MayGive(tab));
 }
 
 TEST(HandedGiveRuleTest, ATabHoldingTheUsersFilesIsRefused) {
   Tab tab = Fit();
   tab.files = true;
-  EXPECT_FALSE(MayGive(tab));
-}
-
-// Chrome's floating window for its video, or a window its page opened for a document.
-TEST(HandedGiveRuleTest, ATabWithAPictureInPictureWindowIsRefused) {
-  Tab tab = Fit();
-  tab.picture_in_picture = true;
   EXPECT_FALSE(MayGive(tab));
 }
 

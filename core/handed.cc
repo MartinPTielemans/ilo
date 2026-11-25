@@ -7,6 +7,7 @@
 #include "base/no_destructor.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_session.h"
+#include "browser_core/favorites.h"
 #include "browser_core/handed_place.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
@@ -15,7 +16,6 @@
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/web_contents.h"
-#include "url/gurl.h"
 
 namespace browser_core::handed {
 
@@ -26,8 +26,8 @@ std::map<bc_id, Mark>& Marks() {
   return *marks;
 }
 
-// The place |row| has among |home|'s Today tabs: its own there, or the one it kept if it's a
-// handed tab that left |home|. Null if it has none.
+// The place |row| has among |home|'s rows: its own there, or the one it kept if it's a handed tab
+// that left |home|. Null if it has none.
 const syncer::UniquePosition* PlaceOf(const Space& home, bc_id row) {
   if (const Space::Node* node = home.NodeOf(row)) {
     return &node->position;
@@ -47,9 +47,27 @@ bool MayTraverse(bc_id tab, int index, bool from_page) {
 
 }  // namespace
 
-void Given(bc_id tab, bc_id home, Space::Node node) {
-  Marks().insert_or_assign(tab, Mark{.home = home, .node = std::move(node)});
+Mark Leaving(const Space& from, bc_id tab) {
+  const Space::Node* node = from.NodeOf(tab);
+  std::vector<bc_id> split = from.Panes(tab);
+  if (split.size() < 2) {
+    split.clear();
+  }
+  return {.home = from.id(),
+          .node = node ? *node : Space::Node(),
+          .split = std::move(split),
+          .pin = handed_back::PinOf(from, tab)};
+}
+
+void Given(bc_id tab, Mark left) {
+  Marks().insert_or_assign(tab, std::move(left));
   BoundHistory(tab);
+}
+
+bool KeepsATile(bc_id tab) {
+  const bool named =
+      std::ranges::any_of(Marks(), [tab](const auto& each) { return each.second.tile == tab; });
+  return handed_place::KeepsATile(named, named && Favorites::Has(tab));
 }
 
 const Mark* Of(bc_id tab) {
@@ -79,12 +97,22 @@ bool Return(bc_id tab) {
   }
   // The move takes the mark off.
   const Mark mark = *kept;
+  // A favorite goes back onto its tile, in no Space, while the tab that kept it is a favorite
+  // still.
+  if (mark.tile &&
+      handed_place::OnItsTile({.favorite = Favorites::Has(mark.tile),
+                               .same_profile = Favorites::ProfileOf(mark.tile) == in->profile()}) &&
+      Window::ReturnFavorite(tab, mark.tile)) {
+    FillForUser(tab);
+    return true;
+  }
   Space* home = Space::FromId(mark.home);
   // The Space it left may be gone, or in another profile now, where the page couldn't go as it is.
   if (!home || home->agent() || home->own() || home->profile() != in->profile()) {
     return false;
   }
-  // An agent may pin a tab in its own Space; the user's was a Today tab.
+  // An agent may pin a tab in its own Space; the user's goes back as it left, with the pin it had
+  // or none.
   if (in->IsPinned(tab)) {
     in->Unpin(tab);
   }
@@ -92,13 +120,12 @@ bool Return(bc_id tab) {
   if (Space::Holding(tab) != home) {
     return false;
   }
-  std::vector<bc_id> others = home->today();
-  std::erase(others, tab);
-  home->Move(tab, /*pinned=*/false, 0, PlaceAmong(*home, others, mark.node),
-             [](bc_id) { return GURL(); });
-  // Its node as it was, so the account's other devices see no move.
-  if (mark.node.id.is_valid()) {
-    home->RestoreNodes(home->node(), {{tab, mark.node}});
+  // A favorite whose tile is gone stays where the move put it, at the top of Today.
+  if (!mark.tile) {
+    handed_back::Put(*home, tab, mark.node, mark.split, mark.pin);
+  }
+  if (!mark.split.empty()) {
+    Window::PanesChanged();
   }
   // The user's again, as a tab moved out of an agent's Space is (bc_tab_move_to_space).
   FillForUser(tab);
@@ -147,17 +174,17 @@ bool MayStep(bc_id tab, int offset) {
 }
 
 size_t PlaceAmong(const Space& home, const std::vector<bc_id>& rows, const Space::Node& node) {
-  std::vector<handed_place::Row> today;
-  today.reserve(rows.size());
-  for (size_t i = 0; i < rows.size(); ++i) {
-    const syncer::UniquePosition* place = PlaceOf(home, rows[i]);
-    today.push_back({
-        .before =
-            place && place->IsValid() && node.position.IsValid() && place->LessThan(node.position),
-        .joined_above = i > 0 && std::ranges::contains(home.Panes(rows[i]), rows[i - 1]),
-    });
+  return handed_back::Among(home, rows, node, [&](bc_id row) { return PlaceOf(home, row); });
+}
+
+handed_back::Pinned PinnedWith(const Space& home) {
+  std::vector<handed_back::Held> held;
+  for (const auto& [tab, mark] : Marks()) {
+    if (mark.home == home.id() && mark.pin) {
+      held.push_back({.tab = tab, .node = mark.node, .pin = *mark.pin});
+    }
   }
-  return handed_place::Among(today);
+  return handed_back::PinnedWith(home, held);
 }
 
 }  // namespace browser_core::handed

@@ -15,4 +15,30 @@ size_t Among(const std::vector<Row>& today) {
   return at;
 }
 
+size_t InSplit(const std::vector<bool>& was_before) {
+  size_t at = 0;
+  for (size_t pane = 0; pane < was_before.size(); ++pane) {
+    if (was_before[pane]) {
+      at = pane + 1;
+    }
+  }
+  return at;
+}
+
+size_t InFolder(const std::vector<bool>& still_there) {
+  size_t in = 0;
+  while (in < still_there.size() && !still_there[in]) {
+    ++in;
+  }
+  return in;
+}
+
+bool OnItsTile(const Tile& tile) {
+  return tile.favorite && tile.same_profile;
+}
+
+bool KeepsATile(bool named, bool favorite) {
+  return named && favorite;
+}
+
 }  // namespace browser_core::handed_place

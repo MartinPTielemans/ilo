@@ -217,6 +217,16 @@ source_set("sync_spaces_newer") {
   public_deps = [ ":sync_spaces_proto" ]
 }
 
+# What sync sends of a tab the user handed an agent, apart so browser_core_unittests tests the rule
+# alone.
+source_set("sync_spaces_handed") {
+  sources = [
+    "sync_spaces_handed.cc",
+    "sync_spaces_handed.h",
+  ]
+  public_deps = [ ":sync_spaces_proto" ]
+}
+
 # Which today's folder a synced Today tab goes in, apart so browser_core_unittests tests the rule
 # alone.
 source_set("sync_today_folders") {
@@ -919,6 +929,8 @@ source_set("browser_core") {
     "focus_leaving.h",
     "handed.cc",
     "handed.h",
+    "handed_back.cc",
+    "handed_back.h",
     "held_keys.cc",
     "held_keys.h",
     "hooks.h",
@@ -1089,6 +1101,7 @@ source_set("browser_core") {
     ":split_view",
     ":sync_guard",
     ":sync_keys",
+    ":sync_spaces_handed",
     ":sync_spaces_newer",
     ":sync_today_folders",
     ":sync_trouble",
@@ -1409,6 +1422,9 @@ test("browser_core_unittests") {
     "archive_rule_unittest.cc",
     "arrange_rule_unittest.cc",
     "focus_leaving_rule_unittest.cc",
+    # A handed tab's way back, with Space alone as space_unittest.cc has it.
+    "handed_back.cc",
+    "handed_back_unittest.cc",
     "handed_give_rule_unittest.cc",
     "handed_history_unittest.cc",
     "handed_place_unittest.cc",
@@ -1469,6 +1485,7 @@ test("browser_core_unittests") {
     "split_view_unittest.cc",
     "sync_guard_unittest.cc",
     "sync_pairing_unittest.cc",
+    "sync_spaces_handed_unittest.cc",
     "sync_spaces_newer_unittest.cc",
     "sync_today_folders_unittest.cc",
     "sync_trouble_unittest.cc",
@@ -1538,6 +1555,7 @@ test("browser_core_unittests") {
     ":split_view",
     ":sync_guard",
     ":sync_keys",
+    ":sync_spaces_handed",
     ":sync_spaces_newer",
     ":sync_today_folders",
     ":sync_trouble",

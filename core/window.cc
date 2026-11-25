@@ -1437,6 +1437,73 @@ void Window::MoveSplitToFavorites(bc_id tab, size_t index) {
 }
 
 // static
+bc_id Window::GiveFavorite(bc_id tab, bc_id space) {
+  Tab* giving = Tab::Get(tab);
+  Space* to = Space::FromId(space);
+  if (!giving || !to || !to->agent() || DeletingSpaces().contains(space) ||
+      Favorites::Panes(tab).size() != 1 || Favorites::ProfileOf(tab) != to->profile()) {
+    return 0;
+  }
+  const bc_id keeper = Favorites::StandIn(tab);
+  if (!keeper) {
+    return 0;
+  }
+  // Another tab first in each window that shows it, as when a favorite unloads: no window goes
+  // with a tab the user gives an agent.
+  for (Window* window : All()) {
+    if (window->selected_ == tab) {
+      const Space* shown = Space::FromId(window->space_);
+      if (const bc_id next = shown ? shown->NextAfterLeaving(tab, &Tab::Loaded) : 0) {
+        window->Pick(next);
+      } else {
+        window->ShowNothing();
+      }
+    }
+    std::erase_if(window->selected_in_space_,
+                  [tab](const auto& entry) { return entry.second == tab; });
+  }
+  // In a Space it's the agent's to work in, and its page closes it no longer.
+  giving->SetPageMayClose(false);
+  // In the agent's Space before it leaves the favorites, so the UI never hears of it in neither
+  // and forgets its title.
+  to->AddAt(tab, 0);
+  if (!Favorites::Replace(tab, keeper)) {
+    to->Remove(tab);
+    CloseTab(keeper, /*discard=*/true);
+    return 0;
+  }
+  PanesChanged();
+  giving->StateChanged();
+  return keeper;
+}
+
+// static
+bool Window::ReturnFavorite(bc_id tab, bc_id keeper) {
+  Tab* returning = Tab::Get(tab);
+  Space* in = Space::Holding(tab);
+  if (!returning || !in || !in->agent()) {
+    return false;
+  }
+  const bc_id next = in->NextAfterLeaving(tab, &Tab::Loaded);
+  // A favorite again before it leaves the agent's Space, as above.
+  if (!Favorites::Replace(keeper, tab)) {
+    return false;
+  }
+  in->Remove(tab);
+  // Out of an agent's Space, it's the user's, as in MoveToSpace.
+  EndTabSession(tab, BC_AGENT_SESSION_RELEASED);
+  handed::Left(tab);
+  FollowMove(tab, tab, in->id(), 0, next, /*follows=*/false);
+  tiles::End(tab);
+  // The tab that kept the tile is in no Space and no favorite now, and never had a page.
+  CloseTab(keeper, /*discard=*/true);
+  PanesChanged();
+  // Whether it's away from its URL.
+  returning->StateChanged();
+  return true;
+}
+
+// static
 void Window::Unfavorite(bc_id tab, bool pinned, bc_id folder, size_t index) {
   Window* window = Holding(tab);
   Space* shown = window ? Space::FromId(window->space_) : nullptr;
@@ -1649,7 +1716,9 @@ void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent, bool follows) {
   if (!moved) {
     return;
   }
-  const bool pinned = from->IsPinned(tab);
+  // A pinned tab the user gives an agent goes as a tab alone: its pin stays the user's, kept with
+  // where it left (handed.h), and the agent's Space has it as any tab the agent works in.
+  const bool pinned = from->IsPinned(tab) && !to_agent;
   const GURL url = from->PinnedUrl(tab);
   const bc_id next = from->NextAfterLeaving(tab, &Tab::Loaded);
   // In a Space it's the user's or the agent's, and its page closes it no longer.
@@ -1659,7 +1728,8 @@ void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent, bool follows) {
     }
   }
   // A Today tab keeps its node's id, so sync moves it on the account's other devices rather than
-  // closing it into their archives and opening it again there.
+  // closing it into their archives and opening it again there. So does a pinned tab given to an
+  // agent, whose node is the user's still (handed.h).
   const Space::Node* node = pinned ? nullptr : from->NodeOf(tab);
   const base::Uuid kept = node ? node->id : base::Uuid();
   // In its new Space before it leaves the old, so the UI never hears of it in neither and forgets

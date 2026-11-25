@@ -28,6 +28,7 @@
 #include "browser_core/space.h"
 #include "browser_core/sync_other_tabs.h"
 #include "browser_core/sync_spaces.pb.h"
+#include "browser_core/sync_spaces_handed.h"
 #include "browser_core/sync_spaces_newer.h"
 #include "browser_core/sync_today_folders.h"
 #include "browser_core/tab.h"
@@ -261,15 +262,11 @@ std::map<std::string, Entity> Current(const std::map<std::string, Entity>& known
       const bool sent = was != known.end() && was->second.has_seen();
       each.set_seen(sent && here < was->second.seen() + kSeenStep ? was->second.seen() : here);
     }
-    // A Today tab the user handed an agent out of this Space is as |known| has it, if at all, so
-    // the account's other devices see it neither close nor go where the agent takes it, and
-    // nothing synced says it's handed. Back in the Space, it's sent as it is then.
+    // A tab the user handed an agent out of this Space, a Today tab or a pinned one, is as |known|
+    // has it, if at all (sync_spaces_handed.h). Back in the Space, it's sent as it is then.
     for (const auto& [tab, mark] : handed::All()) {
-      if (mark.home != space->id() || !mark.node.id.is_valid()) {
-        continue;
-      }
-      if (auto was = known.find(TodayKey(mark.node.id)); was != known.end()) {
-        all[was->first] = was->second;
+      if (mark.home == space->id() && mark.node.id.is_valid()) {
+        SendAsKnown(mark.pin ? Key(mark.node.id) : TodayKey(mark.node.id), known, all);
       }
     }
   }

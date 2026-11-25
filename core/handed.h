@@ -1,33 +1,61 @@
 // A tab of the user's that an agent has (bc_tab_give_to_agent), from the give until it leaves the
 // agent's Space: what the core keeps of it, so that it's the user's still wherever the user's tabs
 // are kept, and comes back where it left. Which tabs may be given is handed_give_rule's, where one
-// comes back handed_place's, and how far through its history one may be taken handed_history's.
+// comes back handed_place's, its way back into its Space handed_back's, and how far through its
+// history one may be taken handed_history's.
 
 #ifndef BROWSER_CORE_HANDED_H_
 #define BROWSER_CORE_HANDED_H_
 
 #include <cstddef>
 #include <map>
+#include <optional>
 #include <vector>
 
+#include "browser_core/handed_back.h"
 #include "browser_core/handed_history.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/space.h"
 
 namespace browser_core::handed {
 
-// What's kept of a handed tab. In memory only: the session keeps the tab itself, as the user's.
+// What's kept of a handed tab. In memory only: the session keeps the tab itself, as the user's, or
+// for a favorite its tile.
 struct Mark {
-  // The Space it left.
+  // The Space it left, or for a favorite, which is in none, the one the user gave it from.
   bc_id home = 0;
-  // Its node there, with its place among that Space's Today tabs.
+  // Its node there, with its place among that Space's Today tabs, or for a pinned tab among what
+  // its folder held.
   Space::Node node;
+  // The tabs of the split view it left, left to right with itself among them, or none: it goes
+  // back into that split while one of them is still in its list there.
+  std::vector<bc_id> split;
+  // Its pin, for a tab that was pinned: an agent has it as a tab alone, and it comes back pinned
+  // as it was.
+  std::optional<handed_back::Pin> pin;
+  // For a favorite, the tab that keeps its tile while it's away, else 0: one without a page, at
+  // the URL it's a favorite at, which is the favorite to the favorites, the session and each
+  // window, so the tile stays where it is, as it is. It gets no page while this mark names it
+  // (KeepsATile). The favorite's own tab is a tab alone in the agent's Space, and takes the tile
+  // back when it returns, on the page it's at, and the keeper closes. If the user removed the
+  // favorite meanwhile, or moved it into a Space, it comes back a Today tab at the top of |home|.
+  // After a quit the favorite is the keeper, at that URL.
+  bc_id tile = 0;
   // The history it had then, which stays the user's.
   handed_history::Bound history;
 };
 
-// |tab| was given to an agent, out of the Space |home|, where it had |node|.
-void Given(bc_id tab, bc_id home, Space::Node node);
+// What's kept of |tab| as it leaves |from|, a Space of the user's, for an agent's: all but its
+// history, which Given takes once it's the agent's.
+Mark Leaving(const Space& from, bc_id tab);
+
+// |tab| was given to an agent, and |left| is what Leaving made of it before it went.
+void Given(bc_id tab, Mark left);
+
+// Whether |tab| keeps the tile of a favorite an agent has (Mark::tile), so has no page and gets
+// none: what Tab::Wake asks, the one place a tab without a page gets it, so whatever shows or loads
+// one finds none to act on.
+bool KeepsATile(bc_id tab);
 
 // The mark on |tab|, or null if no agent has it from the user.
 const Mark* Of(bc_id tab);
@@ -61,9 +89,13 @@ bool AgentMayGoTo(bc_id tab, int entry);
 // holds it: its history is bound again as its page is made.
 bool MayStep(bc_id tab, int offset);
 
-// Where a tab that kept |node| goes among |rows|, the Today tabs of |home|, the Space it left,
-// each of them |home|'s own or another handed tab that left it.
+// Where a tab that kept |node| goes among |rows|, the Today tabs of |home|, the Space it left, or
+// what one of its folders holds, each of them |home|'s own or another handed tab that left it.
 size_t PlaceAmong(const Space& home, const std::vector<bc_id>& rows, const Space::Node& node);
+
+// |home|'s pinned rows with the pinned tabs handed out of it among them, each where it would come
+// back now.
+handed_back::Pinned PinnedWith(const Space& home);
 
 }  // namespace browser_core::handed
 
