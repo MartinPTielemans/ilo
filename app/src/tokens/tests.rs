@@ -168,6 +168,8 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     // The composer's switch round its parts, and a card's page inside the card (#4140).
     "shell.composer.switch-radius",
     "shell.composer.page-radius",
+    // Settings' segmented track, concentric round its segments at the control radius.
+    "settings.segment-radius",
 ];
 
 #[test]
