@@ -5,7 +5,8 @@
 namespace browser_core::handed_give_rule {
 namespace {
 
-// A tab of the user's at a web page, in Today or pinned, given to an agent's Space of its profile.
+// A tab of the user's at a web page, in Today, pinned or a favorite, given to an agent's Space of
+// its profile.
 Tab Fit() {
   return {.users = true, .to_agent = true, .same_profile = true, .web_page = true};
 }
@@ -14,7 +15,7 @@ TEST(HandedGiveRuleTest, ATabAtAWebPageIsGiven) {
   EXPECT_TRUE(MayGive(Fit()));
 }
 
-// An agent's own tab, a private window's or another window's own, and a favorite, in no Space.
+// An agent's own tab, and a private window's or another window's own.
 TEST(HandedGiveRuleTest, OnlyATabOfTheUsersListedSpaces) {
   Tab tab = Fit();
   tab.users = false;
@@ -34,6 +35,20 @@ TEST(HandedGiveRuleTest, OnlyIntoAnAgentsSpaceOfTheSameProfile) {
 TEST(HandedGiveRuleTest, ATabInALiveFolderIsRefused) {
   Tab tab = Fit();
   tab.live_folder = true;
+  EXPECT_FALSE(MayGive(tab));
+}
+
+// Two or three favorites shown side by side are one tile.
+TEST(HandedGiveRuleTest, AFavoriteInASplitViewOfFavoritesIsRefused) {
+  Tab tab = Fit();
+  tab.favorite_split = true;
+  EXPECT_FALSE(MayGive(tab));
+}
+
+// The tab that keeps a favorite's tile while an agent has the favorite's own.
+TEST(HandedGiveRuleTest, ATabKeepingAHandedFavoritesTileIsRefused) {
+  Tab tab = Fit();
+  tab.stands_in = true;
   EXPECT_FALSE(MayGive(tab));
 }
 

@@ -165,6 +165,16 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Takes the favorite |tab| to |index| in the pinned tabs or |folder| or the Today tabs of the
   // Space its window shows. See bc_tab_move.
   static void Unfavorite(bc_id tab, bool pinned, bc_id folder, size_t index);
+  // Gives the favorite |tab| to the agent whose Space |space| is, in its profile
+  // (bc_tab_give_to_agent): it's a tab of that Space, a favorite no longer, and a tab without a
+  // page keeps its tile, which this returns (handed.h). Each window that showed it shows what its
+  // Space picks next, as when a favorite unloads. 0, changing nothing, for a favorite in a split
+  // view, one of another profile, or while its profile isn't loaded.
+  static bc_id GiveFavorite(bc_id tab, bc_id space);
+  // |tab|, in an agent's Space, takes back the tile |keeper| kept for it, the favorite it was, out
+  // of the Space, and |keeper| closes. False, changing nothing, if |keeper| isn't a favorite of
+  // |tab|'s profile.
+  static bool ReturnFavorite(bc_id tab, bc_id keeper);
   // Has each window that shows |space| show the Space before it, else the one after it, and closes
   // its tabs. The Space goes with the last of them. False, doing nothing, if it's the last Space
   // not going.

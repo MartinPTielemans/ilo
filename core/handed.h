@@ -19,9 +19,10 @@
 
 namespace browser_core::handed {
 
-// What's kept of a handed tab. In memory only: the session keeps the tab itself, as the user's.
+// What's kept of a handed tab. In memory only: the session keeps the tab itself, as the user's, or
+// for a favorite its tile.
 struct Mark {
-  // The Space it left.
+  // The Space it left, or for a favorite, which is in none, the one the user gave it from.
   bc_id home = 0;
   // Its node there, with its place among that Space's Today tabs, or for a pinned tab among what
   // its folder held.
@@ -32,6 +33,14 @@ struct Mark {
   // Its pin, for a tab that was pinned: an agent has it as a tab alone, and it comes back pinned
   // as it was.
   std::optional<handed_back::Pin> pin;
+  // For a favorite, the tab that keeps its tile while it's away, else 0: one without a page, at
+  // the URL it's a favorite at, which is the favorite to the favorites, the session and each
+  // window, so the tile stays where it is, as it is. It gets no page while this mark names it
+  // (KeepsATile). The favorite's own tab is a tab alone in the agent's Space, and takes the tile
+  // back when it returns, on the page it's at, and the keeper closes. If the user removed the
+  // favorite meanwhile, or moved it into a Space, it comes back a Today tab at the top of |home|.
+  // After a quit the favorite is the keeper, at that URL.
+  bc_id tile = 0;
   // The history it had then, which stays the user's.
   handed_history::Bound history;
 };
@@ -42,6 +51,11 @@ Mark Leaving(const Space& from, bc_id tab);
 
 // |tab| was given to an agent, and |left| is what Leaving made of it before it went.
 void Given(bc_id tab, Mark left);
+
+// Whether |tab| keeps the tile of a favorite an agent has (Mark::tile), so has no page and gets
+// none: what Tab::Wake asks, the one place a tab without a page gets it, so whatever shows or loads
+// one finds none to act on.
+bool KeepsATile(bc_id tab);
 
 // The mark on |tab|, or null if no agent has it from the user.
 const Mark* Of(bc_id tab);

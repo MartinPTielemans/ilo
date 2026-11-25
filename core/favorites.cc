@@ -341,6 +341,18 @@ Template TemplateOf(const State& state, bc_id tab) {
   return made;
 }
 
+// A tab without its page, as |made| has it.
+SavedTab SavedFrom(const Template& made) {
+  SavedTab saved;
+  sessions::SerializedNavigationEntry& page = saved.history.emplace_back();
+  page.set_virtual_url(made.url);
+  page.set_original_request_url(made.url);
+  page.set_title(base::UTF8ToUTF16(made.title));
+  saved.name = made.name;
+  saved.icon = made.icon;
+  return saved;
+}
+
 // Opens a tab from |made| in the profile in the directory |profile|, unloaded until it's shown, and
 // makes it a favorite there, of |space| under Each Space and in the split |group| names, right
 // after |after| if it isn't 0, else at |index| of its list. Returns it, or 0 if there's no window
@@ -358,14 +370,7 @@ bc_id Make(State& state,
   if (!in || DirOf(in) != profile) {
     return 0;
   }
-  SavedTab saved;
-  sessions::SerializedNavigationEntry& page = saved.history.emplace_back();
-  page.set_virtual_url(made.url);
-  page.set_original_request_url(made.url);
-  page.set_title(base::UTF8ToUTF16(made.title));
-  saved.name = made.name;
-  saved.icon = made.icon;
-  const bc_id tab = Tab::Restore(in, saved);
+  const bc_id tab = Tab::Restore(in, SavedFrom(made));
   if (!tab) {
     return 0;
   }
@@ -845,6 +850,42 @@ void Favorites::Unfavorite(bc_id tab) {
   for (bc_id other : others) {
     Retire(other);
   }
+}
+
+// static
+bc_id Favorites::StandIn(bc_id tab) {
+  State& state = Get();
+  auto it = state.favs.find(tab);
+  Profile* in =
+      it == state.favs.end() || it->second.doomed ? nullptr : ProfileFor(it->second.profile);
+  if (!in || DirOf(in) != it->second.profile) {
+    return 0;
+  }
+  return Tab::Restore(in, SavedFrom(TemplateOf(state, tab)));
+}
+
+// static
+bool Favorites::Replace(bc_id tab, bc_id with) {
+  State& state = Get();
+  auto it = state.favs.find(tab);
+  if (it == state.favs.end() || it->second.doomed || state.favs.contains(with) ||
+      ProfileDirOf(with) != it->second.profile) {
+    return false;
+  }
+  state.favs[with] = it->second;
+  state.favs.erase(tab);
+  std::ranges::replace(state.tabs, tab, with);
+  if (SplitView* split = SplitHolding(state.splits, tab)) {
+    std::ranges::replace(split->tabs, tab, with);
+    if (split->expanded == tab) {
+      split->expanded = with;
+    }
+    if (split->focused == tab) {
+      split->focused = with;
+    }
+  }
+  ReportChanged();
+  return true;
 }
 
 // static

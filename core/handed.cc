@@ -1,11 +1,14 @@
 #include "browser_core/handed.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_session.h"
+#include "browser_core/favorites.h"
+#include "browser_core/handed_place.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "components/sync/base/unique_position.h"
@@ -61,6 +64,12 @@ void Given(bc_id tab, Mark left) {
   BoundHistory(tab);
 }
 
+bool KeepsATile(bc_id tab) {
+  const bool named =
+      std::ranges::any_of(Marks(), [tab](const auto& each) { return each.second.tile == tab; });
+  return handed_place::KeepsATile(named, named && Favorites::Has(tab));
+}
+
 const Mark* Of(bc_id tab) {
   auto it = Marks().find(tab);
   return it == Marks().end() ? nullptr : &it->second;
@@ -88,6 +97,15 @@ bool Return(bc_id tab) {
   }
   // The move takes the mark off.
   const Mark mark = *kept;
+  // A favorite goes back onto its tile, in no Space, while the tab that kept it is a favorite
+  // still.
+  if (mark.tile &&
+      handed_place::OnItsTile({.favorite = Favorites::Has(mark.tile),
+                               .same_profile = Favorites::ProfileOf(mark.tile) == in->profile()}) &&
+      Window::ReturnFavorite(tab, mark.tile)) {
+    FillForUser(tab);
+    return true;
+  }
   Space* home = Space::FromId(mark.home);
   // The Space it left may be gone, or in another profile now, where the page couldn't go as it is.
   if (!home || home->agent() || home->own() || home->profile() != in->profile()) {
@@ -102,7 +120,10 @@ bool Return(bc_id tab) {
   if (Space::Holding(tab) != home) {
     return false;
   }
-  handed_back::Put(*home, tab, mark.node, mark.split, mark.pin);
+  // A favorite whose tile is gone stays where the move put it, at the top of Today.
+  if (!mark.tile) {
+    handed_back::Put(*home, tab, mark.node, mark.split, mark.pin);
+  }
   if (!mark.split.empty()) {
     Window::PanesChanged();
   }

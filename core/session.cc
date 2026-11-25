@@ -324,7 +324,7 @@ SavedSpace SaveSpace(const Space& space,
   if (handed_as_users && !space.agent()) {
     pinned_rows = handed::PinnedWith(space);
     for (const auto& [tab, mark] : handed::All()) {
-      if (mark.home == space.id() && !mark.pin) {
+      if (mark.home == space.id() && !mark.pin && !mark.tile) {
         today_rows.insert(today_rows.begin() + handed::PlaceAmong(space, today_rows, mark.node),
                           tab);
       }

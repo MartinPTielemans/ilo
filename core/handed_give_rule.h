@@ -8,12 +8,13 @@
 namespace browser_core::handed_give_rule {
 
 // A tab as the give finds it. A tab in a split view is given and leaves the split, a pinned tab is
-// given and its pin is kept for its way back (handed.h), one with a Picture in Picture window is
-// given and the window closes (bc_tab_give_to_agent), and one whose page is being told the location
-// is given as it is. None of those is asked here.
+// given and its pin is kept for its way back (handed.h), a favorite is given and a tab without a
+// page keeps its tile, one with a Picture in Picture window is given and the window closes
+// (bc_tab_give_to_agent), and one whose page is being told the location is given as it is. None of
+// those is asked here.
 struct Tab {
-  // In a Space of the user's that the Spaces list has: not an agent's, and not a window's own, as a
-  // private window's is.
+  // In a Space of the user's that the Spaces list has, or a favorite: not an agent's, and not a
+  // window's own, as a private window's is.
   bool users = false;
   // The Space it's given to is an agent's, in the tab's own profile, as the page goes as it is.
   bool to_agent = false;
@@ -21,6 +22,12 @@ struct Tab {
   // In a Live Folder, or in a folder inside one: such a folder fills itself and replaces its tabs,
   // so the tab's place wouldn't be the user's to come back to.
   bool live_folder = false;
+  // A favorite in a split view of favorites, which is one tile: a tab alone can't keep its part of
+  // it.
+  bool favorite_split = false;
+  // It keeps a favorite's tile while that favorite's tab is with an agent (handed.h): it has no
+  // page, and never gets one.
+  bool stands_in = false;
   // At an http or https page in Chromium's engine, the only pages an agent may act in.
   bool web_page = false;
   // Its page is using the camera or the microphone: a call isn't handed over by a slip.

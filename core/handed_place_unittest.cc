@@ -94,5 +94,36 @@ TEST(HandedPlaceTest, OutsideEveryFolderIfItWasInNone) {
   EXPECT_EQ(InFolder({}), 0u);
 }
 
+TEST(HandedPlaceTest, AFavoriteGoesBackOntoItsTile) {
+  EXPECT_TRUE(OnItsTile({.favorite = true, .same_profile = true}));
+}
+
+// Removed by the user, moved out of the favorites into a Space, or closed by a change of whose
+// favorites they are: the tab is a Today tab then.
+TEST(HandedPlaceTest, NotOntoATileThatIsAFavoriteNoLonger) {
+  EXPECT_FALSE(OnItsTile({.favorite = false, .same_profile = true}));
+}
+
+TEST(HandedPlaceTest, NotOntoATileOfAnotherProfile) {
+  EXPECT_FALSE(OnItsTile({.favorite = true, .same_profile = false}));
+}
+
+// The user's click on the tile, a key that shows it, a load or an agent's call: none gives it a
+// page.
+TEST(HandedPlaceTest, TheTabKeepingAHandedFavoritesTileGetsNoPage) {
+  EXPECT_TRUE(KeepsATile(/*named=*/true, /*favorite=*/true));
+}
+
+// The favorite's own tab is back on the tile, or closed in the agent's Space: a tab left in the
+// favorites then is a favorite as any, at the address it was a favorite at.
+TEST(HandedPlaceTest, AFavoriteNoMarkNamesGetsItsPage) {
+  EXPECT_FALSE(KeepsATile(/*named=*/false, /*favorite=*/true));
+}
+
+// Moved into a Space by the user while it kept the tile: a tab of that Space as any.
+TEST(HandedPlaceTest, OutOfTheFavoritesItGetsItsPage) {
+  EXPECT_FALSE(KeepsATile(/*named=*/true, /*favorite=*/false));
+}
+
 }  // namespace
 }  // namespace browser_core::handed_place

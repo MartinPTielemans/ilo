@@ -784,7 +784,8 @@ void Tab::Unload() {
 }
 
 content::WebContents* Tab::Wake(Window& window) {
-  if (web_contents() || !unloaded_ || !profile()) {
+  // The tab that keeps a handed favorite's tile gets no page, whatever asked for it.
+  if (web_contents() || !unloaded_ || !profile() || handed::KeepsATile(id_)) {
     return web_contents();
   }
   content::WebContents* contents = nullptr;

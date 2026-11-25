@@ -33,4 +33,12 @@ size_t InFolder(const std::vector<bool>& still_there) {
   return in;
 }
 
+bool OnItsTile(const Tile& tile) {
+  return tile.favorite && tile.same_profile;
+}
+
+bool KeepsATile(bool named, bool favorite) {
+  return named && favorite;
+}
+
 }  // namespace browser_core::handed_place

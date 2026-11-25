@@ -1,5 +1,6 @@
 // Where a tab the user handed an agent goes in the Space it left: among its Today tabs, or for a
-// pinned tab in which folder and among what that holds, and in the split view it left. Apart so
+// pinned tab in which folder and among what that holds, and in the split view it left. And for a
+// favorite, which left no Space, whether onto its tile. Apart so
 // browser_core_unittests tests the rule alone. The session's save and the tab's return both ask it,
 // so the place is one fact.
 
@@ -37,6 +38,27 @@ size_t InSplit(const std::vector<bool>& was_before);
 // pinned tabs outside every folder, where one goes that was in no folder or whose folders are all
 // gone.
 size_t InFolder(const std::vector<bool>& still_there);
+
+// The tab that keeps a favorite's tile while the favorite's own tab is with an agent, as that
+// tab's return finds it.
+struct Tile {
+  // A favorite still: the user neither removed the favorite nor moved it out of the favorites
+  // since, and no change of whose favorites they are closed it.
+  bool favorite = false;
+  // In the profile the returning tab is in, as a page goes back as it is.
+  bool same_profile = false;
+};
+
+// Whether a favorite the user handed an agent goes back onto its tile, the favorite it was.
+// Otherwise it's a Today tab at the top of the Space it was given from, as a tab moved to a Space
+// is.
+bool OnItsTile(const Tile& tile);
+
+// Whether a tab keeps a tile for a handed favorite: |named| by that favorite's mark as the one that
+// does, and a |favorite| still. Such a tab has no page and gets none, whatever asks to show or load
+// it. Once the favorite's own tab is back or gone, or the tab is out of the favorites, it's a tab
+// as any.
+bool KeepsATile(bool named, bool favorite);
 
 }  // namespace browser_core::handed_place
 
