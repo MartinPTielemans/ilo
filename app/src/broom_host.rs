@@ -22,7 +22,7 @@ thread_local! {
     /// What each window's broom shows, by the window's core id; a window whose broom isn't drawn
     /// has none.
     static SHOWN: RefCell<HashMap<bc::bc_id, Broom>> = RefCell::default();
-    /// Whether each Space has the two tabs a sort needs, as the pass last found, by its core id.
+    /// Whether each Space has the tabs a sort needs, as the pass last found, by its core id.
     /// A Space no pass has looked at since it changed has none.
     static SORTS: RefCell<HashMap<bc::bc_id, bool>> = RefCell::default();
     /// The one sort running.
@@ -124,8 +124,8 @@ pub(crate) fn agents_changed(cx: &mut App) {
     settle_all(cx);
 }
 
-/// The pass: whether `space` has two tabs a sort would hand over, from what `shell` holds, looking
-/// no further than the second.
+/// The pass: whether `space` has the tabs a sort needs to hand over, from what `shell` holds,
+/// looking no further than the last of them.
 fn pass(space: bc::bc_id, shell: &Entity<Shell>, cx: &App) {
     let sorts = shell.read(cx).broom_sorts(space);
     SORTS.with_borrow_mut(|kept| kept.insert(space, sorts));

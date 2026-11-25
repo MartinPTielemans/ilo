@@ -2286,7 +2286,7 @@ impl Shell {
             // With every site's tabs together already, it would change nothing.
             Command::SortBySite => self.sorted_by_site(self.space).is_some(),
             // Where the broom is drawn and takes a click: never in a private window or an agent's
-            // Space, and never with fewer than two tabs to sort or a sort running.
+            // Space, and never with fewer than four tabs to sort or a sort running.
             Command::SortIntoFolders => self.browser.broom().is_some_and(super::Broom::sorts),
             Command::FavoriteTab => {
                 let tab = self.selected;

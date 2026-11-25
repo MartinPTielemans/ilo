@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 /// Fewer of today's tabs than this outside a folder leave nothing to sort.
-pub const FEWEST: usize = 2;
+pub const FEWEST: usize = 4;
 /// The most tabs one sort hands over: the first ones, in the list's order.
 pub const MOST: usize = 100;
 /// The most characters of a title or a host handed over.
