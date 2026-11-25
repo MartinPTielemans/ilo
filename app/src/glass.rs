@@ -18,15 +18,15 @@ pub struct Plate {
     pub light: bool,
 }
 
-/// What tells the host of a window's plate.
-pub type Tell = fn(&Window, Plate);
+/// What tells the host of a window's plate, answering whether its material now lies under it.
+pub type Tell = fn(&Window, Plate) -> bool;
 
 thread_local! {
     static HOST: Cell<Option<Tell>> = const { Cell::new(None) };
     /// The scale what's painting now is drawn at, about its origin (`shell::scaled`).
     static SCALE: Cell<Option<(f32, Point<Pixels>)>> = const { Cell::new(None) };
-    /// The last plate each window's host was told of, so a frame that moves nothing tells it
-    /// nothing.
+    /// The last plate each window's host put its material under, so a frame that moves nothing
+    /// tells it nothing. The toast and the zoom HUD each have one window for the app's life.
     static TOLD: RefCell<HashMap<WindowId, Plate>> = RefCell::default();
 }
 
@@ -66,9 +66,13 @@ pub fn under(radius: f32, opacity: f32, light: bool) -> impl IntoElement {
                     light,
                 },
             };
+            // A plate the host couldn't put its material under yet, as its view isn't in its window
+            // or has no size, isn't told: the frame GPUI draws once the window has them tells it
+            // again.
             let window_id = window.window_handle().window_id();
-            if TOLD.with_borrow_mut(|told| told.insert(window_id, plate)) != Some(plate) {
-                tell(window, plate);
+            let moved = TOLD.with_borrow(|told| told.get(&window_id) != Some(&plate));
+            if moved && tell(window, plate) {
+                TOLD.with_borrow_mut(|told| told.insert(window_id, plate));
             }
         },
     )

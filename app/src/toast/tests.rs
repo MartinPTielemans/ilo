@@ -695,7 +695,10 @@ thread_local! {
 /// and elsewhere it's told of none.
 #[gpui::test]
 fn at_rest_the_glass_is_the_toasts_plate_where_the_window_has_some(cx: &mut TestAppContext) {
-    crate::glass::set_host(|_, plate| GLASS.with_borrow_mut(|glass| glass.push(plate)));
+    crate::glass::set_host(|_, plate| {
+        GLASS.with_borrow_mut(|glass| glass.push(plate));
+        true
+    });
     let host = open_toast(cx);
     cx.update(|cx| cx.set_reduce_motion(true));
     show_deleted(cx);

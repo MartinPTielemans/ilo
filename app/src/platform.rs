@@ -386,7 +386,7 @@ unsafe extern "C" {
         radius: f64,
         opacity: f64,
         light: bool,
-    );
+    ) -> bool;
     pub fn host_hide_menu_window();
     pub fn host_menu_area(ui_view: *mut c_void, in_reveal: bool, area: *mut f64);
     pub fn host_show_site_controls(

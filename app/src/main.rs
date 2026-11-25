@@ -956,7 +956,7 @@ fn switches_and_host(given: Vec<String>) -> (Vec<CString>, bc::bc_host) {
                 f64::from(plate.opacity),
                 plate.light,
             )
-        };
+        }
     });
     let profile = profile_dir();
     // The Flatpak's sandbox has no cameras: Chromium reaches one through PipeWire and the Camera

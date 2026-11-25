@@ -11,8 +11,9 @@ thread_local! {
     static PLATES: RefCell<Vec<Plate>> = RefCell::default();
 }
 
-fn record(_: &Window, plate: Plate) {
+fn record(_: &Window, plate: Plate) -> bool {
     PLATES.with_borrow_mut(|plates| plates.push(plate));
+    true
 }
 
 /// A plate 100 by 40 at 10, 20, drawn at `factor` its size about its top edge's middle.
@@ -89,4 +90,36 @@ fn without_a_host_nothing_is_told(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     assert_eq!(PLATES.take(), []);
+}
+
+thread_local! {
+    /// Whether the host can put its material under a plate yet, as a view that's in its window
+    /// and has a size.
+    static READY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn record_when_ready(window: &Window, plate: Plate) -> bool {
+    record(window, plate);
+    READY.get()
+}
+
+/// A plate the host couldn't put its material under is told again with the next frame, though it
+/// stands still, and once it could, a frame at rest tells it nothing.
+#[gpui::test]
+fn a_plate_the_host_couldnt_take_is_told_again(cx: &mut TestAppContext) {
+    set_host(record_when_ready);
+    let (view, cx) = cx.add_window_view(|_, _| Plated {
+        factor: 1.,
+        opacity: 1.,
+    });
+    cx.run_until_parked();
+    let standing = plate(10., 20., 100., 40., 12., 1.);
+    assert_eq!(PLATES.take(), [standing]);
+    READY.set(true);
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert_eq!(PLATES.take(), [standing], "the plate wasn't told again");
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert_eq!(PLATES.take(), [], "a frame at rest told the host again");
 }
