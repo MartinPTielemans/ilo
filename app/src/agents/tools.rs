@@ -1030,6 +1030,8 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
                 Tense::Failed => format!("Couldn't ask for {tab} back"),
             };
         }
+        // The browser's own act, which reads the same whenever it's read.
+        NOT_SECURE_ACTION => return format!("{NOT_SECURE} · {}", site("a page")),
         "ask" => ("Asking you", "Asked you", "Couldn't ask you", String::new()),
         "thought" => ("Thinking", "Thought", "Thought", String::new()),
         // The user's Hand Back on a stopped task, with how many pages: never a title or a site.
@@ -1164,9 +1166,38 @@ pub const NO_TAB_OF_ITS_OWN: [&str; 6] = [
     "split_tabs",
 ];
 
+/// The entry of a page that answered only over http in an agent's tab, which the core stopped
+/// where Chrome's warning would have shown and put the tab back (secure_connections_rule.h): its
+/// action and the core's reason code, neither ever shown, and what the log says of it, before
+/// the site the core's entry names.
+pub const NOT_SECURE_ACTION: &str = "open_page";
+const NOT_SECURE_REASON: &str = "not_secure";
+pub const NOT_SECURE: &str = "Not opened: no secure connection";
+/// What a click is told that went, and whose page then went on by itself to a site with no secure
+/// connection, with no page behind it, so that the core closed the tab: the core answers it with an
+/// object whose "closed" is this (browser_core.h, agent_page_done). A result, as the click isn't
+/// to be done again.
+pub const CLOSED_NOT_SECURE: &str = "not_secure";
+pub const WENT_ON_CLICKED: &str = "The click went through. Its page then went on to a site with no secure connection, which ilo doesn't open for a task, so the tab closed. Don't repeat the click.";
+/// The same for a step that isn't a click: Enter after a type, a key or a choice in a select.
+pub const WENT_ON_STEPPED: &str = "The step went through. The page then went on to a site with no secure connection, which ilo doesn't open for a task, so the tab closed. Don't repeat the step.";
+/// What an open is told whose page did so while the open still waited for it: its tab is closed,
+/// so the answer names none.
+pub const WENT_ON_NOT_OPENED: &str = "Not opened: the page went on to a site with no secure connection, which ilo doesn't open for a task.";
+/// The core's action for the same entry where the page is one the user went to and left at
+/// Chrome's warning when they handed the tab back.
+const NOT_SECURE_HANDED_BACK: &str = "handed_back_page";
+
+/// Whether `action` and `refused` are that entry's. It is the log's alone: the step that asked
+/// for the page ends by the core's own answer to it (`Failure::NotSecure`), and no other step.
+pub fn not_secure(action: &str, refused: &str) -> bool {
+    matches!(action, NOT_SECURE_ACTION | NOT_SECURE_HANDED_BACK) && refused == NOT_SECURE_REASON
+}
+
 /// What an action an agent took is, for the activity log, by the name the core's entry gives it.
 pub fn describe(action: &str) -> &'static str {
     match action {
+        NOT_SECURE_ACTION => NOT_SECURE,
         "list_tabs" => "Listed its tabs",
         "read_page" => "Read the page",
         "open_tab" => "Opened a page",

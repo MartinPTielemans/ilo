@@ -91,6 +91,7 @@
 #include "components/sessions/core/serialized_user_agent_override.h"
 #include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
@@ -450,12 +451,12 @@ std::string Handing(bc_id window, bc_id tab) {
 class HeldLoad : public content::WebContentsUserData<HeldLoad> {
  public:
   // Starts the page of |contents|, held by its Space first, if MakeHeldBy made it and it hasn't
-  // started. Chrome's tab helpers are on it by now: its tab strip took it, or Navigate, which
-  // inserts it, has returned.
-  static void Start(content::WebContents* contents) {
+  // started, and gives the navigation it started. Chrome's tab helpers are on it by now: its tab
+  // strip took it, or Navigate, which inserts it, has returned.
+  static base::WeakPtr<content::NavigationHandle> Start(content::WebContents* contents) {
     HeldLoad* held = contents ? FromWebContents(contents) : nullptr;
     if (!held) {
-      return;
+      return nullptr;
     }
     const bc_id space_id = held->space_;
     content::NavigationController::LoadURLParams load = std::move(held->load_);
@@ -466,7 +467,7 @@ class HeldLoad : public content::WebContentsUserData<HeldLoad> {
     // A Space gone before its tab had a page leaves the tab without one.
     Space* space = Space::FromId(space_id);
     if (!space) {
-      return;
+      return nullptr;
     }
     const bc_id tab = Tab::IdOf(contents);
     if (!Space::Holding(tab)) {
@@ -480,7 +481,7 @@ class HeldLoad : public content::WebContentsUserData<HeldLoad> {
       ui_data->set_navigation_initiated_from_sync(from_sync);
       load.navigation_ui_data = std::move(ui_data);
     }
-    contents->GetController().LoadURLWithParams(load);
+    return contents->GetController().LoadURLWithParams(load);
   }
 
  private:
@@ -2005,7 +2006,11 @@ content::WebContents* Window::OpenTab(Profile* profile,
   return params.navigated_or_inserted_contents;
 }
 
-content::WebContents* Window::OpenHeld(Space& space, Profile* profile, const GURL& url) {
+content::WebContents* Window::OpenHeld(Space& space,
+                                       Profile* profile,
+                                       const GURL& url,
+                                       int64_t* load) {
+  *load = 0;
   BrowserWindowInterface* browser = BrowserFor(profile);
   if (!browser) {
     return nullptr;
@@ -2017,7 +2022,10 @@ content::WebContents* Window::OpenHeld(Space& space, Profile* profile, const GUR
   base::AutoReset<bool> opening(&opening_tab_, true);
   Navigate(&params);
   SizeForAgent(params.navigated_or_inserted_contents);
-  HeldLoad::Start(params.navigated_or_inserted_contents);
+  if (base::WeakPtr<content::NavigationHandle> started =
+          HeldLoad::Start(params.navigated_or_inserted_contents)) {
+    *load = started->GetNavigationId();
+  }
   return params.navigated_or_inserted_contents;
 }
 

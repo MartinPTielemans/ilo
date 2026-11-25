@@ -51,7 +51,8 @@ constexpr net::NetworkTrafficAnnotationTag kAgentRequest =
       policy {
         cookies_allowed: YES
         cookies_store: "user"
-        setting: "Settings › Agents: turn agents off, or revoke the agent."
+        setting:
+          "Settings › Threads and Settings › Other apps: turn either off, or remove the app."
         policy_exception_justification: "Only for agents the user connected."
       })");
 

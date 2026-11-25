@@ -16,10 +16,17 @@ pub(crate) unsafe extern "C" fn agent_activity(
             .into_owned()
     };
     let (agent, action, refused) = (text(entry.agent), text(entry.action), text(entry.refused));
+    // The site the entry is about where that isn't the tab's page: a host alone, which is all of
+    // it the log has.
+    let named = (!entry.site.is_null()).then(|| text(entry.site));
+    let about = match named.as_deref().map(browser::agents::named_site) {
+        Some(host) if !host.is_empty() => format!(" site={host}"),
+        _ => String::new(),
+    };
     let tab = entry.tab;
     match refused.is_empty() {
-        true => log!("browser: agent activity {agent} {tab} {action}"),
-        false => log!("browser: agent activity {agent} {tab} {action} refused: {refused}"),
+        true => log!("browser: agent activity {agent} {tab} {action}{about}"),
+        false => log!("browser: agent activity {agent} {tab} {action}{about} refused: {refused}"),
     }
     if refused.is_empty() {
         let agent = SharedString::from(agent.clone());
@@ -29,7 +36,9 @@ pub(crate) unsafe extern "C" fn agent_activity(
     }
     // The Agents' own calls log themselves.
     if !agents_core::calling() {
-        agents_core::update(move |agents, cx| agents.checked(&agent, tab, &action, &refused, cx));
+        agents_core::update(move |agents, cx| {
+            agents.checked(&agent, tab, &action, &refused, named.as_deref(), cx)
+        });
     }
 }
 

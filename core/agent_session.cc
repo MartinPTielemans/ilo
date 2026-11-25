@@ -15,6 +15,7 @@
 #include "browser_core/agent_permissions.h"
 #include "browser_core/handed.h"
 #include "browser_core/host.h"
+#include "browser_core/secure_connections.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
 #include "content/public/browser/web_contents.h"
@@ -146,6 +147,8 @@ bool HandBack(bc_id tab) {
   ClosePrintPreview(Tab::FromId(tab));
   // Nor a certificate chooser, or anything else Chrome asked them over the page while they held it.
   CloseTabDialogs(Tab::FromId(tab));
+  // Chrome's warning before http, up and unanswered, isn't the agent's to answer.
+  LeaveNoHttpWarning(tab);
   return true;
 }
 

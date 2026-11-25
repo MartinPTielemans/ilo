@@ -81,6 +81,7 @@
 #include "browser_core/profiles.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/search.h"
+#include "browser_core/secure_connections.h"
 #include "browser_core/session.h"
 #include "browser_core/share.h"
 #include "browser_core/site_controls.h"
@@ -113,6 +114,7 @@
 #include "components/zoom/page_zoom.h"
 #include "components/zoom/zoom_controller.h"
 #include "content/public/browser/navigation_controller.h"
+#include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_capability_type.h"
@@ -204,15 +206,16 @@ Profile* ProfileOf(const browser_core::Window& window) {
 // |typed_http| it's an http address the user wrote out, which loads as written (TypedHttp). With
 // |new_group| the page starts a browsing group of its own, cut from every window the tab's last
 // page opened or was opened by, as a typed load to another site is, and to the same site too.
-void LoadInTab(bc_id id,
-               const GURL& url,
-               ui::PageTransition transition,
-               bool typed_http,
-               bool new_group = false) {
+// Gives the id of the navigation it started, or 0 if it started none in Chromium's page.
+int64_t LoadInTab(bc_id id,
+                  const GURL& url,
+                  ui::PageTransition transition,
+                  bool typed_http,
+                  bool new_group = false) {
   content::WebContents* contents = browser_core::Window::PageOf(id);
   tabs::TabInterface* tab = contents ? tabs::TabInterface::MaybeGetFromContents(contents) : nullptr;
   if (!tab) {
-    return;
+    return 0;
   }
   // Not a link: the user starts something else in the tab, so closing a tab no longer leads back
   // to where it came from, as Chrome's tab strip forgets on a typed or bookmark navigation.
@@ -220,13 +223,14 @@ void LoadInTab(bc_id id,
   if (space && !ui::PageTransitionCoreTypeIs(transition, ui::PAGE_TRANSITION_LINK)) {
     space->ForgetOpeners();
   }
+  base::WeakPtr<content::NavigationHandle> started;
   browser_core::Tab::FromWebContents(contents)->Load(url, [&] {
     NavigateParams params(tab->GetBrowserWindowInterface(), url, transition);
     params.disposition = WindowOpenDisposition::CURRENT_TAB;
     params.source_contents = contents;
     params.url_typed_with_http_scheme = typed_http;
     if (!new_group) {
-      Navigate(&params);
+      started = Navigate(&params);
       return;
     }
     // Chrome's Navigate has no way to ask for a new group, so the load is the one it would start in
@@ -234,19 +238,25 @@ void LoadInTab(bc_id id,
     content::NavigationController::LoadURLParams load =
         LoadURLParamsFromNavigateParams(contents, &params);
     load.force_new_browsing_instance = true;
-    contents->GetController().LoadURLWithParams(load);
+    started = contents->GetController().LoadURLWithParams(load);
   });
+  return started ? started->GetNavigationId() : 0;
 }
 
 // Loads |url| in the tab itself as a link, a pinned tab going away from its pinned URL, if it may
 // load that way (tab_follow::MayLoad), and returns whether it does. The UI's bc_tab_follow and
 // an agent's bc_agent_navigate both load through it; an agent's starts a new browsing group
-// (|new_group|), so a site it left keeps no hold on its tab through a window it opened.
-bool FollowInTab(bc_id id, const GURL& url, bool new_group) {
+// (|new_group|), so a site it left keeps no hold on its tab through a window it opened. |load|
+// hears the id of the navigation it started, as LoadInTab gives it.
+bool FollowInTab(bc_id id, const GURL& url, bool new_group, int64_t* load = nullptr) {
   if (!browser_core::tab_follow::MayLoad(url) || !browser_core::Window::PageOf(id)) {
     return false;
   }
-  LoadInTab(id, url, browser_core::tab_follow::kTransition, /*typed_http=*/false, new_group);
+  const int64_t started =
+      LoadInTab(id, url, browser_core::tab_follow::kTransition, /*typed_http=*/false, new_group);
+  if (load) {
+    *load = started;
+  }
   return true;
 }
 
@@ -841,11 +851,13 @@ bc_id bc_agent_open_tab(const char* agent, const char* url) {
   }
   Profile* profile = space ? browser_core::ProfileFor(space->profile()) : nullptr;
   // The agent's from before its page starts, so its first request is an agent's (#2660).
-  content::WebContents* contents = window && profile ? window->OpenHeld(*space, profile, target)
-                                                     : nullptr;
+  int64_t load = 0;
+  content::WebContents* contents =
+      window && profile ? window->OpenHeld(*space, profile, target, &load) : nullptr;
   if (!contents) {
     return 0;
   }
+  browser_core::AgentPage::Asked(contents, load, /*opened=*/true);
   const bc_id tab = browser_core::Tab::IdOf(contents);
   space->Add(tab, /*opener=*/0, /*foreground=*/false);
   browser_core::AgentActed(agent, tab);
@@ -861,7 +873,12 @@ bool bc_agent_navigate(const char* agent, bc_id tab, const char* url) {
       !target.SchemeIsHTTPOrHTTPS() || !browser_core::Window::PageOf(tab)) {
     return false;
   }
-  return FollowInTab(tab, target, /*new_group=*/true);
+  int64_t load = 0;
+  if (!FollowInTab(tab, target, /*new_group=*/true, &load)) {
+    return false;
+  }
+  browser_core::AgentPage::Asked(browser_core::Window::PageOf(tab), load, /*opened=*/false);
+  return true;
 }
 
 size_t bc_agent_list_tabs(const char* agent, bc_id* tabs, size_t capacity) {
@@ -1046,6 +1063,14 @@ bool bc_profile_set_offers_to_save(bc_id profile_id, int what, bool offer) {
   }
   prefs->SetBoolean(pref, offer);
   return true;
+}
+
+bool bc_profile_secure_connections(bc_id profile, bool* on) {
+  return browser_core::SecureConnections(browser_core::ProfileOrLoad(profile), on);
+}
+
+bool bc_profile_set_secure_connections(bc_id profile, bool on) {
+  return browser_core::SetSecureConnections(browser_core::ProfileOrLoad(profile), on);
 }
 
 void bc_profile_read(bc_id profile,

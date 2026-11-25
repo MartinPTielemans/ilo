@@ -206,8 +206,8 @@ yours='data:text/html,<title>-</title><textarea id=f style="position:fixed;inset
  onfocus="document.title=`yours focused`" onblur="document.title=`yours left`"
  oninput="document.title=`yours typed `+f.value"></textarea>
 <script>requestAnimationFrame(()=>requestAnimationFrame(()=>document.title="yours"))</script>'
-# A host of the check's server with no https, where an agent's tab comes to Chrome's warning before
-# http. The profile remembers a host that fell back to http, so each run names a new one, as
+# A host of the check's server with no https, whose page never opens in an agent's tab and has
+# Chrome's warning before http in one the user holds. The profile remembers a host that fell back to http, so each run names a new one, as
 # history.sh's $plain.
 serve
 plain="mcp-plain-$(date +%s).example.com"
@@ -1319,27 +1319,158 @@ for split_tab in $split_a $split_b $split_c; do
   closed=$(call close_tab "{\"tab\":$split_tab}")
   case "$closed" in "Closed tab $split_tab."*) ;; *) fail "closing the split view's page answered: $closed" ;; esac
 done
-# An agent's tab at Chrome's warning before http, in the agent's split view, watched from the
-# conversation, where its split's pages share the watched page's place. The warning shown doesn't
-# take the user's keyboard, on the Mac too, where it's a window of its own (#3240). Once the user's
-# click gives it the keyboard, and takes the tab over as a press in its page does (#3243), ⌘W
-# steps back to Pages from there, a press in the page beside it takes that tab over and the
-# keyboard to that page, and never to an agent's dialog: on the Mac that press gives the keyboard
-# back to the browser window (#3212). Escape there is the warning's, as Chrome's is.
+# A page that answers only over http never opens in an agent's tab, from Chromium 157: where
+# Chrome's warning before http would come, whose Continue to site is the user's to press, the core
+# shows none and puts the tab back, closed if open_tab just made it and else back on the page it
+# had. The agent's step ends in the words a refused one has and no more, and the log has one entry
+# for each, by the site's host alone. A tab the user holds has the warning as a tab of their own
+# does, here in the agent's split view, watched from the conversation, where its split's pages
+# share the watched page's place: a click gives it the keyboard, ⌘W steps back to Pages from
+# there, a press in the page beside it takes that tab over and the keyboard to that page, and never
+# to a dialog: on the Mac that press gives the keyboard back to the browser window (#3212). Escape
+# there is the warning's, as Chrome's is. Handed back with the warning up, the tab is the agent's
+# again: the warning goes and the tab is put back, as from a step of the agent's own.
 if [ "$driven" = 1 ]; then
   await '^browser: settings about Version .*, on Chromium [0-9]' || fail "the engine's version wasn't said"
   major=$(sed -n 's/^browser: settings about .*on Chromium \([0-9]*\)\..*/\1/p' "$log" | head -1)
 fi
 if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
-  warned=$(call open_tab "{\"url\":\"http://$plain/split-a.html\"}" |
-    sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
-  [ -n "$warned" ] || fail "open_tab didn't open http://$plain/split-a.html"
+  # What a page that never opened leaves in the log: the core's line, and the entry's two.
+  stopped="browser: tab [0-9]* not secure, not opened: an agent's tab\$"
+  entry="^browser: agent activity mcp-client [0-9]* open_page site=$plain refused: not_secure\$"
+  noted="^browser: agent logged mcp-client open_page $plain\$"
+  # The entry of a page the user went to and left at a Hand Back has an action of its own, as
+  # no step of the agent's asked for it. The app ends no step on either entry, a step that asked
+  # for a page hearing from the core itself, and the log reads the same.
+  by_step=$entry
+  at_hand_back="^browser: agent activity mcp-client [0-9]* handed_back_page site=$plain refused: not_secure\$"
+  count_stopped() {
+    stops=$(grep -c "$stopped" "$log" || true)
+    entries=$(grep -c "$entry" "$log" || true)
+    notes=$(grep -c "$noted" "$log" || true)
+  }
+  # One more page never opened since count_stopped, for $1: one more of each line, and one entry.
+  one_stopped() {
+    await_more "$stopped" "$stops" ||
+      fail "the core didn't take the page at http://$plain from Chrome's warning before http, for $1: $(grep 'browser: tab [0-9]* error ' "$log" | tail -1)"
+    await_more "$entry" "$entries" ||
+      fail "the page at http://$plain that never opened, for $1, had no activity entry: $(grep '^browser: agent activity mcp-client ' "$log" | tail -1)"
+    await_more "$noted" "$notes" ||
+      fail "the log didn't take the entry of the page at http://$plain that never opened, for $1: $(grep '^browser: agent logged ' "$log" | tail -1)"
+    send state
+    [ "$(grep -c "$entry" "$log" || true)" = $((entries + 1)) ] ||
+      fail "the page at http://$plain that never opened, for $1, has $(($(grep -c "$entry" "$log" || true) - entries)) activity entries, not one"
+  }
+  # open_tab to it: the tab it made, which had no page before, closes.
+  count_stopped
+  answer=$(call open_tab "{\"url\":\"http://$plain/split-a.html\"}")
+  [ "$answer" = "error: The tab couldn't open." ] ||
+    fail "open_tab to http://$plain/split-a.html, which has no secure connection, answered: $answer"
+  one_stopped "the agent's open_tab"
+  gone=$(sed -n "s/.*browser: tab \([0-9]*\) not secure, not opened: an agent's tab\$/\1/p" "$log" | tail -1)
+  await_log "^browser: tab $gone closed\$" \
+    "the tab open_tab made for http://$plain/split-a.html, which never opened, stayed open"
+  # navigate to it, from a tab with a page: the tab goes back to its page, with the page that
+  # never opened ahead of it.
+  warned=$(split_tab a)
+  [ -n "$warned" ] || fail "open_tab didn't open the page the agent's navigate was to leave"
+  put_back="^browser: page $warned back 0 forward 1 loading 0 http://localhost:$port/split-a\\.html\$"
+  count_stopped
+  answer=$(call navigate "{\"tab\":$warned,\"url\":\"http://$plain/split-a.html\"}")
+  [ "$answer" = "error: The tab couldn't go there." ] ||
+    fail "navigate to http://$plain/split-a.html, which has no secure connection, answered: $answer"
   await_log "browser: tab $warned error -20\$" \
-    "the agent's tab at http://$plain/split-a.html had no warning before http: $(grep "^browser: loaded $warned " "$log" | tail -1)"
+    "the agent's navigate to http://$plain/split-a.html wasn't stopped before http: $(grep "^browser: loaded $warned " "$log" | tail -1)"
+  one_stopped "the agent's navigate"
+  await_log "$put_back" \
+    "the agent's tab $warned wasn't put back on its page after its navigate to http://$plain/split-a.html never opened: $(grep "^browser: page $warned " "$log" | tail -1)"
+  # A click whose page then goes there is no open and no navigate of the agent's. The page is
+  # stopped as any, with its one entry, and the tab put back on the page with the link. The click
+  # went, so it's never answered as one that didn't: its step goes on and reads the page the tab is
+  # put back on, the link's, not the empty one the stopped load leaves for a moment.
+  printf '%s' "<!doctype html><title>Link page</title>
+<a href=\"http://$plain/split-a.html\">Plain page</a>" > "$out/site/to-plain.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/to-plain.html\"}")
+  linked=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  ref=$(ref_in "$opened" link "Plain page")
+  [ -n "$linked" ] && [ -n "$ref" ] ||
+    fail "open_tab of the page with a link to http://$plain answered: $opened"
+  count_stopped
+  clicked=$(call click "{\"tab\":$linked,\"ref\":\"$ref\"}")
+  await_log "browser: tab $linked error -20\$" \
+    "the click on a link to http://$plain/split-a.html wasn't stopped before http: $(grep "^browser: loaded $linked " "$log" | tail -1)"
+  one_stopped "a click on a link to it"
+  await_log "^browser: page $linked back 0 forward 1 loading 0 http://localhost:$port/to-plain\\.html\$" \
+    "the agent's tab $linked wasn't put back on its page after a click's page never opened: $(grep "^browser: page $linked " "$log" | tail -1)"
+  case "$clicked" in
+    "error: "*) fail "a click that went, to a page at http://$plain that never opened, answered as one that didn't: $clicked" ;;
+    *"$plain"*) fail "a click's answer read the page at http://$plain that never opened, not the page its tab is put back on: $clicked" ;;
+    "Clicked link “Plain page”."*"Nothing in the outline changed."* | \
+    "Clicked link “Plain page”."*'- link "Plain page" ['*) ;;
+    *) fail "a click whose page never opened didn't answer with the page its tab is put back on: $clicked" ;;
+  esac
+  closed=$(call close_tab "{\"tab\":$linked}")
+  case "$closed" in "Closed tab $linked."*) ;; *) fail "closing the link's tab answered: $closed" ;; esac
+  # A click whose page puts the stopped one in its own place has nothing behind it, so the tab
+  # closes. The click went, and hears so as a result, in the words that has: an error would have
+  # the agent click again. Its tab is the page's only one, so no other page is behind it either.
+  went="The click went through. Its page then went on to a site with no secure connection, which ilo doesn't open for a task, so the tab closed. Don't repeat the click."
+  printf '%s' "<!doctype html><title>Leaving page</title>
+<a href=\"#\" onclick=\"location.replace('http://$plain/split-a.html'); return false\">Leave page</a>" > "$out/site/replace-plain.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/replace-plain.html\"}")
+  replaced=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  ref=$(ref_in "$opened" link "Leave page")
+  [ -n "$replaced" ] && [ -n "$ref" ] ||
+    fail "open_tab of the page that puts http://$plain in its own place answered: $opened"
+  count_stopped
+  clicked=$(call click "{\"tab\":$replaced,\"ref\":\"$ref\"}")
+  [ "$clicked" = "$went" ] ||
+    fail "a click that went, whose page put http://$plain in its own place and whose tab closed, answered: $clicked"
+  await_log "browser: tab $replaced error -20\$" \
+    "the page a click put in its own place, http://$plain/split-a.html, wasn't stopped before http: $(grep "^browser: loaded $replaced " "$log" | tail -1)"
+  one_stopped "a click whose page put it in its own place"
+  await_log "^browser: tab $replaced closed\$" \
+    "the agent's tab $replaced, with no page behind the one that never opened, stayed open: $(grep "^browser: page $replaced " "$log" | tail -1)"
+  # Enter after a type's text, on a form whose page then does the same: the commonest road for a
+  # step that is no click. It went, and hears so as a result, in the words a step that is no click
+  # has; the tab closes, and the page was asked for that type once, never again.
+  stepped="The step went through. The page then went on to a site with no secure connection, which ilo doesn't open for a task, so the tab closed. Don't repeat the step."
+  printf '%s' "<!doctype html><title>Leaving form</title>
+<form onsubmit=\"location.replace('http://$plain/split-a.html'); return false\">
+<input aria-label=\"Leaving field\"><button>Send</button></form>" > "$out/site/submit-plain.html"
+  opened=$(call open_tab "{\"url\":\"localhost:$port/submit-plain.html\"}")
+  entered=$(printf '%s\n' "$opened" | sed -n '1s/^Opened tab \([0-9]*\)\..*/\1/p')
+  ref=$(ref_in "$opened" textbox "Leaving field")
+  [ -n "$entered" ] && [ -n "$ref" ] ||
+    fail "open_tab of the form that puts http://$plain in its page's place answered: $opened"
+  count_stopped
+  typed=$(call type "{\"tab\":$entered,\"ref\":\"$ref\",\"text\":\"by-the-agent\",\"submit\":true}")
+  [ "$typed" = "$stepped" ] ||
+    fail "a typed Enter that went, whose form put http://$plain in its page's place and whose tab closed, answered: $typed"
+  await_log "browser: tab $entered error -20\$" \
+    "the page a typed Enter put in its own place, http://$plain/split-a.html, wasn't stopped before http: $(grep "^browser: loaded $entered " "$log" | tail -1)"
+  one_stopped "a typed Enter whose form put it in its page's place"
+  await_log "^browser: tab $entered closed\$" \
+    "the agent's tab $entered, with no page behind the one that never opened, stayed open: $(grep "^browser: page $entered " "$log" | tail -1)"
+  send state
+  [ "$(grep -c "^browser: agent activity mcp-client $entered type" "$log" || true)" = 1 ] ||
+    fail "the type whose Enter went was asked of tab $entered $(grep -c "^browser: agent activity mcp-client $entered type" "$log" || true) times, not once"
+  # An open whose page does the same as it loads, while the open still waits for it: not opened,
+  # in the words that has, and its tab closes.
+  printf '%s' "<!doctype html><title>Gone page</title>
+<script>location.replace('http://$plain/split-a.html')</script>" > "$out/site/goes-plain.html"
+  count_stopped
+  answer=$(call open_tab "{\"url\":\"localhost:$port/goes-plain.html\"}")
+  [ "$answer" = "error: Not opened: the page went on to a site with no secure connection, which ilo doesn't open for a task." ] ||
+    fail "open_tab of a page that went on to http://$plain by itself as it loaded answered: $answer"
+  one_stopped "an open whose page went on to it by itself"
+  gone=$(sed -n "s/.*browser: tab \([0-9]*\) not secure, not opened: an agent's tab\$/\1/p" "$log" | tail -1)
+  await_log "^browser: tab $gone closed\$" \
+    "the tab open_tab made for the page that went on to http://$plain by itself stayed open"
   beside=$(split_tab b)
   split=$(call split_tabs "{\"tabs\":[$warned,$beside]}")
   [ "$split" = "Tab $warned's split view, left to right: $warned, $beside." ] ||
-    fail "split_tabs with the tab at the warning answered: $split"
+    fail "split_tabs with the tab that was put back answered: $split"
   # Tab round the strip's ring never gives the watched agent's page the keyboard: its stop is the
   # strip's words, so the handback into a page, which on Windows gives the shown page's pane the
   # keyboard straight (#3396), never runs for it. Tab from the window's keyboard rings the strip,
@@ -1363,11 +1494,35 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
         fail "Tab round the ring with the agent's split watched left the keyboard in $key, on $focus" ;;
     esac
   }
-  # Watches $warned, whose warning shows over its pane, at $warning, without the user's keyboard,
-  # and has a click on it give it the keyboard. $1 says how the user came to watch it, $2 is a
-  # step to take while it's watched, before the click, and $3, "watched", says it's watched already.
-  watch_warning() {
-    [ "${3:-}" = watched ] || watch "$warned"
+  # The agent's tab $warned, watched in its split view, has no warning; $1 says when.
+  no_warning() {
+    send layout
+    none_since '^browser: layout child ' ||
+      fail "the agent's tab $warned, watched in its split view $1, showed a warning before http, which is the user's alone to answer: $(since | grep '^browser: layout child ')"
+  }
+  # The user takes $warned over from its page watched, with ⌘↩, the UI given the keyboard by a
+  # click on the sidebar, and the strip under it says so; $1 says when. The agent is at work in
+  # its Space, in $beside, which the bar's Take Over wants.
+  take_warned() {
+    took=$(grep -c "^browser: agent mcp-client taken over in $warned\$" "$log" || true)
+    driving=$(grep -c "^browser: task strip $warned says You're driving" "$log" || true)
+    send click $sidebar_point
+    send key return cmd
+    await_more "^browser: agent mcp-client taken over in $warned\$" "$took" ||
+      fail "⌘↩ on the agent's tab $warned, watched $1, didn't take it over: $(since | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
+    await_more "^browser: task strip $warned says You're driving" "$driving" ||
+      fail "the strip under tab $warned didn't say the user has it once they took it over $1: $(grep "^browser: task strip $warned says" "$log" | tail -1)"
+  }
+  # In $warned, which the user holds and watches, the user goes to $plain from the bar, as typed:
+  # https first, then Chrome's warning before http over the tab's pane, at $warning, as in a tab of
+  # their own, which the core leaves there. A click on it gives it the keyboard, and is no press
+  # that takes a tab over, as the tab is the user's. $1 says when.
+  bring_warning() {
+    errors=$(grep -c "browser: tab $warned error -20\$" "$log" || true)
+    count_stopped
+    go_from_bar "$plain/split-a.html"
+    await_more "browser: tab $warned error -20\$" "$errors" ||
+      fail "tab $warned, which the user holds, $1, wasn't stopped before http on its way to $plain/split-a.html: $(grep "^browser: page $warned " "$log" | tail -1)"
     for _ in $(seq 50); do
       send layout
       since | grep -q '^browser: layout child ' && break
@@ -1375,33 +1530,62 @@ if [ "$driven" = 1 ] && [ "$major" -ge 157 ]; then
     done
     laid=$(since | grep -m1 '^browser: layout')
     warning=$(since | sed -n 's/^browser: layout child //p' | head -1)
-    [ -n "$warning" ] || fail "the agent's tab $warned, watched in its split view $1, showed no warning before http: $laid"
-    send state
-    [ "$key" != NativeWidgetMacNSWindow ] ||
-      fail "the agent's warning before http, watched in its split view $1, took the user's keyboard as it showed: $key, $focus"
-    [ -z "${2:-}" ] || "$2"
+    [ -n "$warning" ] || fail "tab $warned, which the user holds, watched in its split view $1, showed no warning before http: $laid"
+    [ "$(grep -c "$stopped" "$log" || true)" = "$stops" ] ||
+      fail "the core took Chrome's warning before http from tab $warned, which the user holds, $1"
     warning_x=${warning%%,*} warning_y=${warning#*,}
     warning_y=${warning_y%% *} warning_size=${warning#* }
     warning_width=${warning_size%%x*} warning_height=${warning_size#*x}
+    pressed_before=$(grep -c '^browser: agent page pressed in ' "$log" || true)
     send click $((warning_x + warning_width / 2)) $((warning_y + 8))
     warning_clicked=$step
     send state
     [ "$key" = NativeWidgetMacNSWindow ] ||
-      fail "a click on the agent's warning before http at $warning, watched in its split view $1, didn't give it the keyboard: $key, $focus"
+      fail "a click on the warning before http at $warning, in tab $warned, which the user holds, watched in its split view $1, didn't give it the keyboard: $key, $focus"
+    [ "$(grep -c '^browser: agent page pressed in ' "$log" || true)" = "$pressed_before" ] ||
+      fail "a click on the warning of tab $warned, which the user holds, reached the app as a press that takes a tab over: $(since "$warning_clicked" | grep '^browser: agent' | tail -4 | tr '\n' ' ')"
+  }
+  # Watches $warned, which has no warning while it's the agent's, then the user takes it over and
+  # brings the warning. $1 says how the user came to watch it, $2 is a step to take while it's
+  # watched and the agent's, and $3, "watched", says it's watched already.
+  warn_held() {
+    [ "${3:-}" = watched ] || watch "$warned"
+    no_warning "$1"
+    [ -z "${2:-}" ] || "$2"
+    take_warned "$1"
+    bring_warning "$1"
   }
   # Hands $warned back from its page watched, the UI given the keyboard by a click on the sidebar.
+  # With Chrome's warning up in it, which $1 says as "warned", the tab is the agent's again and
+  # has none: the warning goes, the tab is put back on its page and the log has one more entry.
+  # With none up, nothing is put back.
   hand_back_warned() {
     watch "$warned"
     send click $sidebar_point
     handed=$(grep -c "^browser: agent mcp-client handed back $warned\$" "$log" || true)
+    puts=$(grep -c "$put_back" "$log" || true)
+    entry=$at_hand_back
+    count_stopped
     send key return cmd
     await_more "^browser: agent mcp-client handed back $warned\$" "$handed" ||
-      fail "⌘↩ didn't hand back tab $warned, which the click on its warning took over"
-  }
-  # Waits for the click on the warning to take $warned over, again; $1 says when.
-  took_warned() {
-    await_more "^browser: agent mcp-client taken over in $warned\$" "$took" ||
-      fail "the click on the agent's warning before http, watched $1, didn't take tab $warned over: $(since "$warning_clicked" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
+      fail "⌘↩ didn't hand back tab $warned, which the user took over"
+    if [ "${1:-}" = warned ]; then
+      one_stopped "tab $warned handed back at Chrome's warning before http"
+      await_more "$put_back" "$puts" ||
+        fail "tab $warned, handed back at Chrome's warning before http, wasn't put back on its page: $(grep "^browser: page $warned " "$log" | tail -1)"
+      for _ in $(seq 50); do
+        send layout
+        none_since '^browser: layout child ' && break
+        sleep 0.1
+      done
+      none_since '^browser: layout child ' ||
+        fail "Chrome's warning before http stayed over tab $warned once it was handed back: $(since | grep '^browser: layout child ')"
+    else
+      send state
+      [ "$(grep -c "$stopped" "$log" || true)" = "$stops" ] ||
+        fail "tab $warned, handed back with no warning up, was put back as if a page hadn't opened"
+    fi
+    entry=$by_step
   }
   # A click on the split's picture straight after Escape, while the page watched still goes back
   # into its own, watches the split: the page going back lets the click through (#3496). The
@@ -1441,10 +1625,7 @@ PICTURE
   since "$escaped" | grep -m1 -e '^browser: drive [0-9]*: click ' -e '^browser: task page in its thumbnail$' |
     grep -q '^browser: task page' &&
     echo "skip: mcp: a click on a picture while the page watched goes back: tab $agent_tab was back in its picture before the click (#3496)."
-  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
-  took=$(grep -c "^browser: agent mcp-client taken over in $warned\$" "$log" || true)
-  watch_warning "from Pages" ring_strip watched
-  first_click=$warning_clicked
+  warn_held "from Pages" ring_strip watched
   # Linux's driver lists the pages the shell lays out, and the task area lays out a watched split
   # as one, which the core divides: the capture shows its panes there.
   if [ "$(uname)" = Linux ]; then
@@ -1459,11 +1640,6 @@ PICTURE
       fail "watching tab $warned didn't show its split view's two pages within the content, ${width:-?} wide: $laid"
   fi
   ../tools/window-screenshot.sh "$pid" "$out/agent-split-warning.png" || fail "no window to capture"
-  # The click on the agent's warning, a press on its tab's dialog, took the tab over, as a press
-  # in its page does: answering it acts on the tab, which is the user's from then (#3243).
-  await_log "^browser: agent page pressed in $warned\$" \
-    "the click on the agent's warning before http, watched from Pages, didn't reach the app as a press on tab $warned: $(since "$first_click" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
-  took_warned "from Pages"
   # From the warning with the keyboard, ⌘W steps back to Pages, as it does from its page.
   back='^browser: task page [0-9]* back$'
   thumbnail='^browser: task page in its thumbnail$'
@@ -1472,60 +1648,20 @@ PICTURE
   send key w cmd
   left=$step
   await_more "$back" "$before" ||
-    fail "⌘W on the agent's warning before http, which had the keyboard, didn't step back to Pages: $(since "$left" | grep -e '^browser: drive' -e '^browser: command' -e '^browser: task' | tail -6 | tr '\n' ' ')"
+    fail "⌘W on the warning before http of tab $warned, which had the keyboard, didn't step back to Pages: $(since "$left" | grep -e '^browser: drive' -e '^browser: command' -e '^browser: task' | tail -6 | tr '\n' ' ')"
   await_more "$thumbnail" "$shrunk" ||
     fail "the agent's split view didn't go back into its picture after ⌘W"
   # The tab is the user's, and its warning takes the keyboard as Chrome's does, so it's handed back
   # from its page watched, the UI given the keyboard by a click on the sidebar, as the user's would:
-  # the warning keeps Return, so ⌘↩ reaches ilo only from there.
-  hand_back_warned
+  # the warning keeps Return, so ⌘↩ reaches ilo only from there. The warning was unanswered.
+  hand_back_warned warned
   to_pages "tab $warned"
-  # Watched again, the agent's warning shows without the keyboard (#3240).
-  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
-  took=$(grep -c "^browser: agent mcp-client taken over in $warned\$" "$log" || true)
-  watch_warning "again after ⌘W"
-  took_warned "again after ⌘W"
-  # The page beside, to the right of the warning's, as split_tabs put them.
-  other="$((warning_x + warning_width + 100)) $((warning_y + warning_height + 100))"
-  send click $other
-  pressed=$step
-  send state
-  [ "$key" = BrowserCoreNSWindow ] ||
-    fail "a press in the page beside the agent's warning before http left the keyboard in $key, on $focus: $(since "$pressed" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
-  ../tools/window-screenshot.sh "$pid" "$out/agent-split-pressed.png" || fail "no window to capture"
-  # The press beside takes over the tab pressed, not the one watched (#3243), and ⌘↩ from that page,
-  # which has the keyboard, hands it back.
-  await_log "^browser: agent page pressed in $beside\$" \
-    "a press in the page beside the agent's warning didn't reach the app as a press on tab $beside: $(since "$pressed" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
-  await_log "^browser: agent mcp-client taken over in $beside\$" \
-    "a press in the other pane of a watched agent split didn't take over the tab pressed, $beside"
-  taken=$(since "$warning_clicked" | sed -n 's/^browser: agent page pressed in \([0-9]*\)$/\1/p' |
-    sort -u | tr '\n' ' ')
-  [ "$taken" = "$(printf '%s\n' "$warned" "$beside" | sort -u | tr '\n' ' ')" ] ||
-    fail "the click on the agent's warning and the press beside it took over tabs $taken, not $warned and $beside"
-  hand_back_pressed "$presses"
-  # The warning's tab, which its click took, is handed back from its page watched.
-  to_pages "the split view"
-  hand_back_warned
   # Escape on the warning with the keyboard is the warning's, its Go back, on every OS: a dialog
-  # keeps the keys that answer it (dialog_keys.cc). The click that gave it the keyboard took the
-  # tab over, so the Escape is the user's act on their own tab, and the strip says they have it
-  # before the page leaves. The warning goes, and the tab leaves the http page, here for the new
-  # tab page, as it had no page before it. ⌘↩ hands it back after.
-  to_pages "tab $warned"
-  # The press beside took $beside over, where the agent acted last, which ended its session there.
-  # The click on the warning in $warned, its other tab, takes that one over too: whose tab it is
-  # decides, not where the agent acted last (#3503).
-  last=$(grep '^browser: agent mcp-client \(at work\|done\) in ' "$log" | tail -1)
-  [ "$last" = "browser: agent mcp-client done in $beside" ] ||
-    fail "the press beside the agent's warning didn't end its session in $beside, where it acted last, before the click on the warning in tab $warned: $last"
-  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
-  took=$(grep -c "^browser: agent mcp-client taken over in $warned\$" "$log" || true)
-  driving=$(grep -c "^browser: task strip $warned says You're driving" "$log" || true)
-  watch_warning "before Escape"
-  took_warned "before Escape"
-  await_more "^browser: task strip $warned says You're driving" "$driving" ||
-    fail "the strip under tab $warned didn't say the user has it once the click on its warning took it: $(grep "^browser: task strip $warned says" "$log" | tail -1)"
+  # keeps the keys that answer it (dialog_keys.cc). The tab is the user's, and the strip said so
+  # before they went anywhere, so the Escape is the user's act on their own tab. The warning goes,
+  # and the tab leaves the page that never opened for the one it had. ⌘↩ hands it back after, with
+  # no warning up.
+  warn_held "before Escape"
   send key escape
   escaped=$step
   for _ in $(seq 50); do
@@ -1533,14 +1669,64 @@ PICTURE
     sleep 0.1
   done
   since "$escaped" | grep "^browser: page $warned " | grep -qv "$plain" ||
-    fail "Escape on the agent's warning before http, which had the keyboard, didn't answer it: tab $warned stayed at http://$plain: $(since "$escaped" | grep -e '^browser: drive' -e "^browser: page $warned " -e '^browser: task' | tail -6 | tr '\n' ' ')"
+    fail "Escape on the warning before http of tab $warned, which had the keyboard, didn't answer it: the tab stayed at http://$plain: $(since "$escaped" | grep -e '^browser: drive' -e "^browser: page $warned " -e '^browser: task' | tail -6 | tr '\n' ' ')"
   for _ in $(seq 50); do
     send layout
     none_since '^browser: layout child ' && break
     sleep 0.1
   done
   none_since '^browser: layout child ' ||
-    fail "the agent's warning before http stayed after its Escape: $(since | grep '^browser: layout child ')"
+    fail "the warning before http of tab $warned stayed after its Escape: $(since | grep '^browser: layout child ')"
+  to_pages "tab $warned"
+  hand_back_warned
+  to_pages "tab $warned"
+  # Watched again, the agent's tab has no warning, and the user's has it again.
+  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+  warn_held "again after Escape"
+  # The page beside, to the right of the warning's, as split_tabs put them.
+  other="$((warning_x + warning_width + 100)) $((warning_y + warning_height + 100))"
+  send click $other
+  pressed=$step
+  send state
+  [ "$key" = BrowserCoreNSWindow ] ||
+    fail "a press in the page beside the warning before http left the keyboard in $key, on $focus: $(since "$pressed" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
+  ../tools/window-screenshot.sh "$pid" "$out/agent-split-pressed.png" || fail "no window to capture"
+  # The press beside takes over the tab pressed, not the one watched (#3243), and ⌘↩ from that page,
+  # which has the keyboard, hands it back.
+  await_log "^browser: agent page pressed in $beside\$" \
+    "a press in the page beside the warning didn't reach the app as a press on tab $beside: $(since "$pressed" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
+  await_log "^browser: agent mcp-client taken over in $beside\$" \
+    "a press in the other pane of a watched agent split didn't take over the tab pressed, $beside"
+  taken=$(since "$warning_clicked" | sed -n 's/^browser: agent page pressed in \([0-9]*\)$/\1/p' |
+    sort -u | tr '\n' ' ')
+  [ "$taken" = "$beside " ] ||
+    fail "the click on the warning of the tab the user holds and the press beside it took over tabs $taken, not $beside alone"
+  hand_back_pressed "$presses"
+  # The warning's tab, which the user took, is handed back from its page watched, its warning up.
+  to_pages "the split view"
+  hand_back_warned warned
+  to_pages "tab $warned"
+  # The press beside took $beside over, where the agent acted last, which ended its session there.
+  # A press in $warned's page, its other tab, takes that one over too: whose tab it is decides, not
+  # where the agent acted last (#3503). It goes where the warning stood, over $warned's pane, as
+  # the split is laid out as it was.
+  last=$(grep '^browser: agent mcp-client \(at work\|done\) in ' "$log" | tail -1)
+  [ "$last" = "browser: agent mcp-client done in $beside" ] ||
+    fail "the press beside the warning didn't end the agent's session in $beside, where it acted last, before the press in tab $warned: $last"
+  presses=$(grep -c '^browser: agent page pressed in ' "$log" || true)
+  warned_presses=$(grep -c "^browser: agent page pressed in $warned\$" "$log" || true)
+  took=$(grep -c "^browser: agent mcp-client taken over in $warned\$" "$log" || true)
+  driving=$(grep -c "^browser: task strip $warned says You're driving" "$log" || true)
+  watch "$warned"
+  no_warning "after the press beside"
+  send click $((warning_x + warning_width / 2)) $((warning_y + warning_height / 2))
+  pressed=$step
+  await_more "^browser: agent page pressed in $warned\$" "$warned_presses" ||
+    fail "a press in tab $warned's page, watched after the press beside, didn't reach the app as a press on it: $(since "$pressed" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
+  await_more "^browser: agent mcp-client taken over in $warned\$" "$took" ||
+    fail "a press in tab $warned's page, after the agent's session ended in $beside, didn't take tab $warned over: $(since "$pressed" | grep -e '^browser: drive' -e '^browser: agent' | tail -6 | tr '\n' ' ')"
+  await_more "^browser: task strip $warned says You're driving" "$driving" ||
+    fail "the strip under tab $warned didn't say the user has it once the press in its page took it: $(grep "^browser: task strip $warned says" "$log" | tail -1)"
   send click $sidebar_point
   hand_back_pressed "$presses"
   to_pages "tab $warned"
@@ -1550,7 +1736,7 @@ PICTURE
   done
   watch "$agent_tab"
 else
-  echo "skip: mcp: an agent's warning before http in its split view, watched. Browser wasn't the active app, or the engine is before 157."
+  echo "skip: mcp: a page with no secure connection in an agent's tab, and Chrome's warning before http in one the user holds. Browser wasn't the active app, or the engine is before 157."
 fi
 
 # The agent's page watched dies, as macOS ends a renderer under memory pressure: its place shows the

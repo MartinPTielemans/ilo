@@ -608,7 +608,9 @@ AgentPage::~AgentPage() {
 
 void AgentPage::Act(uint64_t request, int action, int64_t element, std::string text) {
   acted_ = true;
-  jobs_.push_back({request, action, element, std::move(text)});
+  Job job{request, action, element, std::move(text)};
+  job.asked = secure_connections_rule::TakenBy(asked_, action == BC_AGENT_PAGE_QUIET);
+  jobs_.push_back(std::move(job));
   Next();
 }
 
@@ -622,6 +624,48 @@ void AgentPage::Fill(int64_t element,
   job.put = std::move(put);
   jobs_.push_back(std::move(job));
   Next();
+}
+
+// static
+void AgentPage::Asked(content::WebContents* contents, int64_t load, bool opened) {
+  if (!contents) {
+    return;
+  }
+  CreateForWebContents(contents);
+  FromWebContents(contents)->asked_ = {.load = load, .opened = opened};
+}
+
+// static
+void AgentPage::PageTaken(bc_id tab, int64_t load) {
+  content::WebContents* contents = Tab::FromId(tab);
+  AgentPage* page = contents ? FromWebContents(contents) : nullptr;
+  if (!page) {
+    return;
+  }
+  const auto asked = [load](const Job& job) {
+    return secure_connections_rule::AskedFor(job.asked, load);
+  };
+  if (page->job_ && asked(*page->job_)) {
+    page->Fail(secure_connections_rule::NotOpened(page->job_->asked.opened),
+               BC_AGENT_FAILURE_NOT_SECURE);
+    return;
+  }
+  // Behind another job still, as a navigate asked while a click was under way.
+  const auto queued = std::ranges::find_if(page->jobs_, asked);
+  if (queued != page->jobs_.end()) {
+    Job job = std::move(*queued);
+    page->jobs_.erase(queued);
+    page->Owe(job, secure_connections_rule::NotOpened(job.asked.opened),
+              BC_AGENT_FAILURE_NOT_SECURE);
+  }
+}
+
+// static
+void AgentPage::ClosingNotSecure(bc_id tab, bool closing) {
+  content::WebContents* contents = Tab::FromId(tab);
+  if (AgentPage* page = contents ? FromWebContents(contents) : nullptr) {
+    page->closing_not_secure_ = closing;
+  }
 }
 
 // static
@@ -1377,6 +1421,10 @@ void AgentPage::ChooseNative(const std::vector<std::string>& frames,
   action.action = ax::mojom::Action::kDoDefault;
   action.target_tree_id = host->GetAXTreeID();
   action.target_node_id = node;
+  // The choice has gone from here, as a click from its press.
+  if (job_) {
+    job_->sent = true;
+  }
   host->AccessibilityPerformAction(action);
   Settle();
 }
@@ -1421,6 +1469,11 @@ void AgentPage::ClickAt(int slot, gfx::PointF at, size_t step) {
   if (step == std::size(kSteps)) {
     Settle();
     return;
+  }
+  // From its press on the page may leave for it, and the click has gone. A select's click that
+  // only opens its list is no choice yet.
+  if (job_ && step == 1 && choosing_ != Choosing::kOpened) {
+    job_->sent = true;
   }
   Mouse(kSteps[step], at, slot,
         base::BindOnce(&AgentPage::ClickAt, weak_factory_.GetWeakPtr(), slot, at, step + 1));
@@ -1758,6 +1811,10 @@ void AgentPage::PressKey(const std::string& name, base::OnceClosure then) {
                               .Set("key", key->name == "Space" ? " " : std::string(key->name))
                               .Set("code", std::string(key->name))
                               .Set("windowsVirtualKeyCode", key->code);
+  // The key, or the Enter after a type's text, has gone from its press, as a click from its own.
+  if (job_) {
+    job_->sent = true;
+  }
   base::DictValue down = event.Clone().Set("type", key->text.empty() ? "rawKeyDown" : "keyDown");
   if (!key->text.empty()) {
     down.Set("text", std::string(key->text));
@@ -3304,14 +3361,14 @@ void AgentPage::EndWaiting(std::string why, std::optional<std::string> unstarted
   }
 }
 
-void AgentPage::Owe(Job& job, const std::string& why) {
+void AgentPage::Owe(Job& job, const std::string& why, bc_agent_failure failure) {
   if (job.put) {
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(job.put), false));
     return;
   }
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(&Report, tab_, job.request, why, true, BC_AGENT_FAILURE_NONE));
+      FROM_HERE, base::BindOnce(&Report, tab_, job.request, why, true, failure));
 }
 
 // static
@@ -3357,8 +3414,18 @@ void AgentPage::AnswerHeld() {
 }
 
 void AgentPage::LetGo() {
+  using secure_connections_rule::AtClose;
+  static constexpr char kEnded[] = "The agent's session with the tab ended.";
   std::deque<Job> owed = std::exchange(jobs_, {});
+  // What the job running is told, the first of those owed; the ones behind it never began.
+  AtClose told = AtClose::kTabEnded;
+  const bool closing = std::exchange(closing_not_secure_, false);
   if (job_ && !std::exchange(taken_, false)) {
+    told = secure_connections_rule::ToldAtClose(
+        closing, /*running=*/true,
+        {.went = job_->sent,
+         .waits = job_->action == BC_AGENT_PAGE_QUIET,
+         .asked = job_->asked});
     owed.push_front(*std::move(job_));
   }
   job_.reset();
@@ -3367,13 +3434,30 @@ void AgentPage::LetGo() {
   download_starting_.Stop();
   AnswerHeld();
   for (Job& job : owed) {
-    Owe(job, "The agent's session with the tab ended.");
+    switch (std::exchange(told, AtClose::kTabEnded)) {
+      case AtClose::kTabEnded:
+        Owe(job, kEnded);
+        break;
+      case AtClose::kWent:
+        // A result, not an error: the step went, and the app says what became of its tab.
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE,
+            base::BindOnce(&Report, tab_, job.request,
+                           std::string(secure_connections_rule::kClosedAnswer), /*error=*/false,
+                           BC_AGENT_FAILURE_NONE));
+        break;
+      case AtClose::kWentOn:
+        // The app words it by the value; the words here are the tab's end, which is true of it.
+        Owe(job, kEnded, BC_AGENT_FAILURE_WENT_ON_NOT_SECURE);
+        break;
+    }
   }
   // A file the user is choosing for one of its fields goes nowhere, and its dialog closes.
   AgentFileField::TabEnded(tab_);
   weak_factory_.InvalidateWeakPtrs();
   // What the agent typed is kept only to compare with while its session lasts.
   typed_.clear();
+  asked_ = {};
   acted_ = false;
   pictures_ = 0;
   wheel_.reset();
