@@ -136,6 +136,15 @@ pub fn names(agent: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether `agent` has a tool of this name: one of those tools/list gives it, which are a task's
+/// or an outside agent's, so each list is made once.
+pub fn has(agent: &str, tool: &str) -> bool {
+    static NAMES: [std::sync::OnceLock<Vec<String>>; 2] =
+        [std::sync::OnceLock::new(), std::sync::OnceLock::new()];
+    let names = NAMES[usize::from(super::is_task(agent))].get_or_init(|| names(agent));
+    names.iter().any(|name| name == tool)
+}
+
 /// Pinning and sorting, as the user does in the sidebar: an agent pins its own tabs, unpins or
 /// removes only those it pinned, and sorts its own Today tabs by site.
 fn pin_tools() -> Vec<Value> {
