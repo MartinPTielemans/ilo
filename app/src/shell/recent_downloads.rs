@@ -228,20 +228,34 @@ fn progress(download: &Download) -> Option<f32> {
         .then(|| (download.received as f32 / download.total as f32).clamp(0., 1.))
 }
 
+/// A number of a unit as the plate writes it: whole from 10 up and with one decimal under it, so
+/// a small one still moves as its file comes. One that rounds up to 10 is written whole.
+fn amount(of: f64) -> String {
+    match (of * 10.).round() / 10. {
+        under if under < 10. => format!("{under:.1}"),
+        _ => format!("{of:.0}"),
+    }
+}
+
 /// How much of a download has come, beside its bar, where the Library's words for it don't fit:
-/// both sizes in the whole one's unit, said once ("48 of 121 MB"), in whole numbers below a
-/// gigabyte, as the bar says the rest.
+/// both sizes in the whole one's unit, said once ("48 of 122 MB", "1.2 of 4.8 GB"). A byte has
+/// no part, so bytes are whole.
 fn come(received: i64, total: i64) -> String {
     if total <= 0 {
         return bytes(received);
     }
     let (received, total) = (received.clamp(0, total) as f64, total as f64);
-    match total {
-        t if t < 1e3 => format!("{received:.0} of {t:.0} bytes"),
-        t if t < 1e6 => format!("{:.0} of {:.0} KB", received / 1e3, t / 1e3),
-        t if t < 1e9 => format!("{:.0} of {:.0} MB", received / 1e6, t / 1e6),
-        t => format!("{:.1} of {:.1} GB", received / 1e9, t / 1e9),
-    }
+    let (unit, name) = match total {
+        t if t < 1e3 => return format!("{received:.0} of {t:.0} bytes"),
+        t if t < 1e6 => (1e3, "KB"),
+        t if t < 1e9 => (1e6, "MB"),
+        _ => (1e9, "GB"),
+    };
+    format!(
+        "{} of {} {name}",
+        amount(received / unit),
+        amount(total / unit)
+    )
 }
 
 /// The glyph on the tile of a file with no picture: a page, or the warning triangle for one the
@@ -1267,14 +1281,29 @@ mod tests {
     }
 
     /// A row says what its row in the Library's Downloads does, but one still coming, whose words
-    /// there don't fit beside its bar: both sizes in the whole one's unit, said once.
+    /// there don't fit beside its bar: both sizes in the whole one's unit, said once, each whole
+    /// from 10 up and with one decimal under it.
     #[test]
     fn a_row_says_how_much_has_come_in_one_unit() {
         assert_eq!(come(48_200_000, 121_500_000), "48 of 122 MB");
-        assert_eq!(come(2_000, 4_000), "2 of 4 KB");
-        assert_eq!(come(300, 900), "300 of 900 bytes");
-        assert_eq!(come(1_200_000_000, 4_700_000_000), "1.2 of 4.7 GB");
-        assert_eq!(come(5_000, 4_000), "4 of 4 KB", "never more than there is");
+        assert_eq!(come(1_200_000_000, 4_800_000_000), "1.2 of 4.8 GB");
+        for (received, total, says) in [
+            (12_300_000_000, 48_700_000_000, "12 of 49 GB"),
+            (2_000, 4_000, "2.0 of 4.0 KB"),
+            (2_400_000, 122_000_000, "2.4 of 122 MB"),
+            (9_940_000, 10_000_000, "9.9 of 10 MB"),
+            (9_960_000, 122_000_000, "10 of 122 MB"),
+            (0, 4_800_000_000, "0.0 of 4.8 GB"),
+            (300, 900, "300 of 900 bytes"),
+            (5, 9, "5 of 9 bytes"),
+        ] {
+            assert_eq!(come(received, total), says);
+        }
+        assert_eq!(
+            come(5_000, 4_000),
+            "4.0 of 4.0 KB",
+            "never more than there is"
+        );
         assert_eq!(
             come(1_200_000, 0),
             "1.2 MB",
@@ -1285,7 +1314,7 @@ mod tests {
         (download.received, download.total) = (18_400, 18_400);
         assert_eq!(detail(&download), "18 KB · example.org");
         (download.state, download.received) = (DownloadState::Running, 9_000);
-        assert_eq!(detail(&download), "9 of 18 KB");
+        assert_eq!(detail(&download), "9.0 of 18 KB");
         download.state = DownloadState::Paused;
         assert_eq!(detail(&download), "Paused", "its bar says how far");
         download.total = 0;
