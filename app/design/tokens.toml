@@ -2077,9 +2077,9 @@ keys-radius = 6.0
 keys-fill = 0xffff_ff14
 # From the words to their keys, as the toast sets its chip.
 keys-gap = 8.0
-# The product's mark (app/src/product.rs) over the line, this far across: the smallest size that
-# takes the large drawing, a point more than the mark it replaces stood tall.
-mark-size = 40.0
+# The product's mark (app/src/product.rs), its box this far across, as the asset has it; its ink
+# falls where the drawing puts it. Over the bar at rest (`shell.composer`), and over the welcome.
+mark-size = 48.0
 # From the mark's foot to the line, so they read as a sign and its caption, not one block.
 mark-gap = 24.0
 # The Space's name between the mark and the line, in the display face: its caps start the mark's
@@ -2088,26 +2088,13 @@ name-size = 28.0
 name-line = 34.0
 name-gap = 12.0
 name = 0xffff_ffd9
-# The first run's welcome, in place of the name and the line: "Welcome to ilo" in the display
-# face, "a good tool." under it, dimmer, and one button that opens a new tab, under a mark this
-# much bigger.
+# The first run's welcome, in place of the name and the line: "Welcome to" the product in the
+# display face under a mark this much bigger, and this far under it one button that opens a new
+# tab, first run's main button (`shell.onboarding.window`).
 welcome-mark = 1.5
 welcome-size = 44.0
 welcome-line = 52.0
-tagline-size = 20.0
-tagline-line = 26.0
-tagline = 0xffff_ff99
 button-gap = 28.0
-button-height = 30.0
-button-inset = 12.0
-button-radius = 6.0
-# Signal, the mark's green, with white words and a key chip of white 0.2.
-button-fill = 0x0e9f_55ff
-button-text = 0xffff_ffff
-button-keys = 0xffff_ff33
-button-keys-height = 20.0
-button-keys-inset = 5.0
-button-keys-radius = 6.0
 # The onboarding's last line, at the card's foot under the command bar it leaves up, as the line
 # under the mark is set.
 hint-bottom = 40.0
@@ -2115,11 +2102,12 @@ hint-bottom = 40.0
 
 [shell.composer]
 # The page an empty Space rests on (#4140), as its drawing measures it on the window's ink. Its
-# field's row is level with ⌘T's bar's (`command_bar::centered_row_middle`) and the mark this far
-# over the field. The group moves up only as far as it needs to fit the card, never nearer its top
-# than `top`, which it keeps under the cards too.
+# field's row is level with ⌘T's bar's (`command_bar::centered_row_middle`) and the mark
+# (`shell.empty`'s) this far over the field, in its column, where the card has that much room over
+# it. The group moves up only as far as it needs to fit the card, never nearer its top than `top`,
+# which it keeps under the cards too.
 top = 40.0
-mark-gap = 26.0
+mark-gap = 28.0
 # The field: 540 wide, or what the card leaves inside its side gutters, 52 tall at radius 16. Its
 # words at 15 start 18 in, and the ⇥ chip and the switch end 9 in.
 field-width = 540.0
