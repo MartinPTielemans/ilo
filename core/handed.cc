@@ -5,6 +5,7 @@
 
 #include "base/functional/bind.h"
 #include "base/no_destructor.h"
+#include "base/time/time.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_session.h"
 #include "browser_core/favorites.h"
@@ -93,7 +94,7 @@ bool Return(bc_id tab) {
       handed_place::OnItsTile({.favorite = Favorites::Has(mark.tile),
                                .same_profile = Favorites::ProfileOf(mark.tile) == in->profile()}) &&
       Window::ReturnFavorite(tab, mark.tile)) {
-    FillForUser(tab);
+    UsersAgain(tab);
     return true;
   }
   Space* home = Space::FromId(mark.home);
@@ -117,9 +118,15 @@ bool Return(bc_id tab) {
   if (!mark.split.empty()) {
     Window::PanesChanged();
   }
-  // The user's again, as a tab moved out of an agent's Space is (bc_tab_move_to_space).
-  FillForUser(tab);
+  UsersAgain(tab);
   return true;
+}
+
+void UsersAgain(bc_id tab) {
+  if (Tab* back = Tab::Get(tab)) {
+    back->set_last_seen(base::Time::Now());
+  }
+  FillForUser(tab);
 }
 
 void BoundHistory(bc_id tab) {

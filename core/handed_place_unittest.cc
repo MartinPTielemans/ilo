@@ -125,5 +125,24 @@ TEST(HandedPlaceTest, OutOfTheFavoritesItGetsItsPage) {
   EXPECT_FALSE(KeepsATile(/*named=*/true, /*favorite=*/false));
 }
 
+// The app's close, a thread's, a key or a row's button: the tab goes back where it left.
+TEST(HandedPlaceTest, ACloseOfATabAnAgentHasFromTheUserGivesItBack) {
+  EXPECT_TRUE(CloseGivesBack(/*handed=*/true, /*with_agent=*/true));
+}
+
+// A page the agent opened itself is its own to close.
+TEST(HandedPlaceTest, ACloseOfAnAgentsOwnTabClosesIt) {
+  EXPECT_FALSE(CloseGivesBack(/*handed=*/false, /*with_agent=*/true));
+}
+
+TEST(HandedPlaceTest, ACloseOfATabOfTheUsersClosesIt) {
+  EXPECT_FALSE(CloseGivesBack(/*handed=*/false, /*with_agent=*/false));
+}
+
+// Back in a Space of the user's, as a return leaves it for a moment before its mark goes.
+TEST(HandedPlaceTest, ACloseOfATabThatIsBackClosesIt) {
+  EXPECT_FALSE(CloseGivesBack(/*handed=*/true, /*with_agent=*/false));
+}
+
 }  // namespace
 }  // namespace browser_core::handed_place

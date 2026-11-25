@@ -175,6 +175,11 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // of the Space, and |keeper| closes. False, changing nothing, if |keeper| isn't a favorite of
   // |tab|'s profile.
   static bool ReturnFavorite(bc_id tab, bc_id keeper);
+  // Gives |tab|, which an agent has from the user (bc_tab_give_to_agent), back to the user: where
+  // it left, as bc_tab_return_from_agent does, or if the Space it left is gone or in another
+  // profile now, to the top of the first Space of the user's, one of its own profile first.
+  // Nothing for a tab no agent has from the user.
+  static void GiveBack(bc_id tab);
   // Has each window that shows |space| show the Space before it, else the one after it, and closes
   // its tabs. The Space goes with the last of them. False, doing nothing, if it's the last Space
   // not going.

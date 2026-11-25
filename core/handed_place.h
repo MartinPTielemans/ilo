@@ -60,6 +60,12 @@ bool OnItsTile(const Tile& tile);
 // as any.
 bool KeepsATile(bool named, bool favorite);
 
+// Whether a close of a tab gives it back to the user and closes nothing: one the user handed an
+// agent (|handed|) while it's in that agent's Space still (|with_agent|), whoever asks and by
+// whichever road. It's the user's, and nothing closes it while an agent has it. Once it's back it
+// closes as any tab of theirs.
+bool CloseGivesBack(bool handed, bool with_agent);
+
 }  // namespace browser_core::handed_place
 
 #endif  // BROWSER_CORE_HANDED_PLACE_H_
