@@ -372,6 +372,54 @@ fn another_space_takes_the_bar_at_rest_back_to_search(cx: &mut TestAppContext) {
     );
 }
 
+/// On a new profile ilo hasn't looked for an assistant yet: ⇥ grows the bar at rest into the
+/// composer and looks, once, as ⌘T's does. The assistant the browser finds after is the
+/// composer's, and ↩ starts the thread on it; before, ↩ starts nothing.
+#[gpui::test]
+fn an_assistant_found_later_shows_at_rest(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    host.unlearned.set(true);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_input("book a table");
+    host.resting.take();
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    assert!(composer(&shell, cx).0, "⇥ didn't grow the bar");
+    let asked = host.resting.take();
+    assert_eq!(
+        (asked.iter())
+            .filter(|call| *call == "look for agents")
+            .count(),
+        1,
+        "⇥ looks for the assistants, once: {asked:?}"
+    );
+    let agent = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            let resting = shell.read(cx).resting.as_ref().unwrap();
+            resting.bar.read(cx).composer_agent().map(String::from)
+        })
+    };
+    assert_eq!(agent(&shell, cx), None, "none found yet");
+    cx.simulate_keystrokes("enter");
+    assert!(
+        !rested(&host)
+            .iter()
+            .any(|call| call.starts_with("run task")),
+        "a thread started with no assistant"
+    );
+
+    // The browser found Claude, and the window is sent what it knows (send_agents).
+    host.unlearned.set(false);
+    shell.update(cx, |shell, cx| shell.assistants_learned(cx));
+    cx.run_until_parked();
+    assert_eq!(agent(&shell, cx).as_deref(), Some("claude"));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        rested(&host),
+        ["run task at rest claude book a table at work"]
+    );
+}
+
 /// ↩ in the composer at rest starts what was typed as a thread on the assistant, where the bar
 /// rests, at the level the composer shows, and empties the field.
 #[gpui::test]

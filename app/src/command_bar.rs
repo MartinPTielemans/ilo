@@ -4164,6 +4164,12 @@ impl CommandBar {
         self.ask.is_some()
     }
 
+    /// The assistant the composer would start its thread on, by id.
+    #[cfg(test)]
+    pub fn composer_agent(&self) -> Option<SharedString> {
+        self.composer_assistant().map(|agent| agent.id.clone())
+    }
+
     /// What its field says with nothing typed.
     #[cfg(test)]
     pub fn placeholder(&self, cx: &App) -> SharedString {
