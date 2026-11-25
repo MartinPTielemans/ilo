@@ -13,11 +13,12 @@ use gpui::{
     px, rgb, rgba, svg,
 };
 
-use crate::palette::{INK, PAPER};
+use crate::palette::{BUTTON_PLATE, FIELD_PLATE, INK, PAPER, TEXT_PRIMARY, TEXT_SECONDARY, Tone};
 use crate::settings_card::Follow;
 use crate::settings_rows::{drawn, named_button, ring};
 use crate::tokens::settings::form;
 use crate::tokens::settings::{MIN_HEIGHT, MIN_WIDTH, SEARCH_DIMMED};
+use crate::tokens::shell::ICON_INK;
 
 /// Settings' window at `bounds`, titled `title`, as the app opens it and the preview shows it: the
 /// column runs under the window's buttons, which sit where the browser window's do, and off the Mac
@@ -144,7 +145,8 @@ pub struct Sections {
 pub type Pick = Rc<dyn Fn(Section, &mut Window, &mut App)>;
 pub type Foot = Rc<dyn Fn(&mut Window, &mut App)>;
 
-/// The sidebar's colours, the drawing's in dark and light-values.md's in light.
+/// The sidebar's colours: the palette's neutrals and the sidebar's icon ink, with Settings' own
+/// quietest text and shown plate.
 #[derive(Clone, Copy)]
 pub struct Ink {
     pub text: Rgba,
@@ -159,13 +161,15 @@ pub struct Ink {
 impl Ink {
     pub fn new(dark: bool) -> Ink {
         let pick = |dark_one: u32, light_one: u32| rgba(if dark { dark_one } else { light_one });
+        let ink = if dark { Tone::Dark } else { Tone::Light }.ink();
+        let at = |a: f32| Rgba { a, ..ink };
         Ink {
-            text: pick(form::TEXT, form::LIGHT_TEXT),
-            text_2: pick(form::TEXT_2, form::LIGHT_TEXT_2),
+            text: at(TEXT_PRIMARY),
+            text_2: at(TEXT_SECONDARY),
             text_3: pick(form::TEXT_3, form::LIGHT_TEXT_3),
-            icon: pick(form::ICON, form::LIGHT_ICON),
-            field: pick(form::FIELD, form::LIGHT_FIELD),
-            button: pick(form::BUTTON, form::LIGHT_BUTTON),
+            icon: at(ICON_INK),
+            field: at(FIELD_PLATE),
+            button: at(BUTTON_PLATE),
             shown: pick(form::SHOWN, form::LIGHT_SHOWN),
         }
     }
@@ -189,7 +193,12 @@ impl Version {
             _ => None,
         };
         Version {
-            name: format!("{} {}", env!("APP_NAME"), crate::build_info::version()).into(),
+            name: format!(
+                "{} {}",
+                crate::product::PRODUCT,
+                crate::build_info::version()
+            )
+            .into(),
             word,
         }
     }

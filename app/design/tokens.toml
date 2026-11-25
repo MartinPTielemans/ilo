@@ -1474,19 +1474,12 @@ light-own-page = 0xfbfaf7a8
 page-line-width = 1.0
 page-line = 0xffffff0f
 light-page-line = 0x0000000d
-text = 0xf3f0e8ff
-light-text = 0x161618ff
-text-2 = 0xf3f0e899
-light-text-2 = 0x161618a6
+# The column's text, glyphs, field and buttons are the palette's neutrals and the sidebar's icon
+# ink; these two are Settings' own. A group's heading and the updater's word, quieter than
+# `text-secondary`, but a label, so over the palette's `text-tertiary` in light.
 text-3 = 0xf3f0e86b
 light-text-3 = 0x16161880
-# A row's glyph and the search's magnifier and the foot's arrow, in the controls' icon ink.
-icon = 0xf3f0e8b3
-light-icon = 0x161618b3
-field = 0xf3f0e816
-light-field = 0x16161816
-button = 0xf3f0e81a
-light-button = 0x1616181a
+# The page shown: the ink, where the sidebar's selected row is white in light.
 shown = 0xf3f0e833
 light-shown = 0x16161829
 
