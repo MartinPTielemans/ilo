@@ -536,6 +536,11 @@ impl Browser for Recorder {
         self.moves.set(self.moves.get() + 1);
     }
 
+    fn move_folder_to_today(&self, folder: u64, index: usize, _: &mut App) {
+        self.edit(format!("today folder {folder} {index}"));
+        self.moves.set(self.moves.get() + 1);
+    }
+
     fn delete_folder(&self, folder: u64, _: &mut App) {
         self.edit(format!("delete folder {folder}"));
     }

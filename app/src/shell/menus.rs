@@ -990,14 +990,30 @@ impl Shell {
     }
 
     /// A folder's menu, as Arc's.
-    fn folder_menu(&self, folder: u64) -> Vec<(MenuEntry, &'static str, MenuAction)> {
+    pub(super) fn folder_menu(&self, folder: u64) -> Vec<(MenuEntry, &'static str, MenuAction)> {
+        let rename: (MenuEntry, &'static str, MenuAction) = (
+            MenuEntry::new("Rename Folder", true),
+            "rename-folder",
+            Box::new(move |shell, cx| shell.rename_folder(folder, cx)),
+        );
+        // A today's folder is named and let go, its tabs staying in Today (#4252).
+        if self
+            .shown_space()
+            .is_some_and(|space| space.today_folder(folder))
+        {
+            return vec![
+                rename,
+                (MenuEntry::line(), "", Box::new(|_, _| {})),
+                (
+                    MenuEntry::new("Delete Folder", true).destructive(),
+                    "delete-folder",
+                    Box::new(move |shell, cx| shell.delete_folder_now(folder, cx)),
+                ),
+            ];
+        }
         let links = !self.folder_links(folder).is_empty();
         let mut items: Vec<(MenuEntry, &'static str, MenuAction)> = vec![
-            (
-                MenuEntry::new("Rename Folder", true),
-                "rename-folder",
-                Box::new(move |shell, cx| shell.rename_folder(folder, cx)),
-            ),
+            rename,
             (
                 MenuEntry::new("Change Icon…", true),
                 "change-folder-icon",

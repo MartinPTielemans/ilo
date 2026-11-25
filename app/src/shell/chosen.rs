@@ -11,14 +11,17 @@ use super::{Edit, NEW_FOLDER, Shell, What};
 
 impl Shell {
     /// The rows that can be chosen, in the sidebar's order: the shown Space's pinned tabs and
-    /// folders, outside closed folders, then its Today tabs. A split view is one row, by its first
-    /// tab.
+    /// folders, outside closed folders, then its Today tabs, a today's folder's line not one of
+    /// them. A split view is one row, by its first tab.
     fn choosable_rows(&self) -> Vec<u64> {
         let (pinned, today) = self.rows();
         let space = self.shown_space();
         let shut = |row: u64| space.is_some_and(|space| space.shut(row));
         let pinned = pinned.into_iter().filter(|&row| !shut(row));
-        pinned.chain(today).collect()
+        let line = |row: u64| space.is_some_and(|space| space.today_folder(row));
+        pinned
+            .chain(today.into_iter().filter(|&row| !line(row)))
+            .collect()
     }
 
     /// A left press on `tab`'s row or segment: ⌘ chooses it and ⇧ the rows through it, and

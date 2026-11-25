@@ -21,6 +21,13 @@ fn main() {
     let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
 
     println!("cargo::rustc-check-cfg=cfg(engine_header_mismatch)");
+    // Whether the core's header can make today's folders (#4252), read from the header itself so
+    // nobody has to remember to turn Sort Tabs into Folders on where it can work.
+    println!("cargo::rustc-check-cfg=cfg(today_folders)");
+    let declared = std::fs::read_to_string(&header).expect("couldn't read the core's header");
+    if declared.contains("bc_folder_create_today(") {
+        println!("cargo::rustc-cfg=today_folders");
+    }
     native(&root, &header, &os);
     if os == "macos" {
         wall_launcher(&root);

@@ -180,7 +180,11 @@ impl Browser for Engine {
     }
 
     fn move_folder(&self, folder: u64, to: u64, index: usize, _: &mut App) {
-        unsafe { bc::bc_folder_move(folder, to, index) };
+        unsafe { bc::bc_folder_move(folder, true, to, index) };
+    }
+
+    fn move_folder_to_today(&self, folder: u64, index: usize, _: &mut App) {
+        unsafe { bc::bc_folder_move(folder, false, 0, index) };
     }
 
     fn delete_folder(&self, folder: u64, _: &mut App) {
