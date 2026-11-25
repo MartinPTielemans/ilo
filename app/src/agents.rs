@@ -876,6 +876,8 @@ pub struct Agents {
     doing: HashMap<String, SharedString>,
     /// The tabs the user holds from agents, by tab.
     held: HashMap<u64, Held>,
+    /// The pages whose picture a kept card can't keep for what was put in them (kept/unkept.rs).
+    unkept: kept::unkept::Unkept,
     /// The tabs whose page shows its own dialog, such as its alert(), by tab, as the core reports
     /// it (`page_dialog`), with who asks for a sign-in: nothing more is done on one until it's
     /// gone (#3536).
@@ -1089,12 +1091,15 @@ impl Agents {
             doing: HashMap::new(),
             pins: HashMap::new(),
             held: HashMap::new(),
+            unkept: Default::default(),
             dialogs: HashMap::new(),
             runs: Vec::new(),
             stepping: None,
-            tasks: task::Tasks {
-                dir,
-                ..Default::default()
+            // Made whole, as its fields aren't all this file's to name.
+            tasks: {
+                let mut tasks = task::Tasks::default();
+                tasks.dir = dir;
+                tasks
             },
             scripts: false,
             script_event: 0,
@@ -1642,7 +1647,7 @@ impl Agents {
                 timer: None,
                 sign_in: false,
             };
-            self.held.insert(tab, held);
+            self.hold(tab, held);
             self.carry(tab, held::Event::Passkey, life, actions, cx);
         }
         if why != "disconnected" {
@@ -2170,7 +2175,7 @@ impl Agents {
                     timer: None,
                     sign_in: false,
                 };
-                self.held.insert(tab, held);
+                self.hold(tab, held);
                 self.carry(tab, held::Event::HandOff, life, actions, cx);
             }
             "sort_tabs_by_site" if !is_task(&agent) => {
@@ -2908,9 +2913,48 @@ impl Agents {
             timer: None,
             sign_in: true,
         };
-        self.held.insert(tab, held);
+        self.hold(tab, held);
         self.carry(tab, held::Event::HandOff, life, actions, cx);
         Ok(())
+    }
+
+    /// The user holds `tab` from now: whatever they put in its page keeps its picture off a kept
+    /// card until a new document (kept/unkept.rs).
+    fn hold(&mut self, tab: u64, held: Held) {
+        self.unkept.mark(tab);
+        self.held.insert(tab, held);
+    }
+
+    /// `tab`'s address and whether it loads, as the core said them (tabs::tab_state_changed).
+    pub fn tab_state(&mut self, tab: u64, url: &str, loading: bool) {
+        let holding = self.held.contains_key(&tab);
+        self.unkept.state(tab, url, loading, holding);
+    }
+
+    /// `tab`'s main frame finished loading (tabs::tab_loaded).
+    pub fn tab_loaded(&mut self, tab: u64) {
+        let holding = self.held.contains_key(&tab);
+        self.unkept.loaded(tab, holding);
+    }
+
+    /// Whether a picture of `tab` taken now could have been given to an agent, for a kept card
+    /// to keep, by what the agents know of it: not while the user holds it, nor since then or
+    /// since an agent typed there text that may not be shown, until a new document; nor a page
+    /// withheld from an outside agent the user stopped, a page at a fenced site, or a sign-in's:
+    /// a page's own, one the agent handed the user to sign in, or its assistant's own. The page's own camera,
+    /// microphone and sharing, and a private window, are the window's to add.
+    pub fn keeps_picture(&self, tab: u64, cx: &App) -> bool {
+        let withheld = (self.tasks.tasks.iter())
+            .filter_map(|task| task.session.as_ref())
+            .any(|session| session.withheld && session.tabs.contains(&tab));
+        let sign_in = matches!(self.dialogs.get(&tab), Some((DialogKind::SignIn, _)))
+            || self.held.get(&tab).is_some_and(|held| held.sign_in)
+            || sign_in::quiet(tab);
+        !(self.held.contains_key(&tab)
+            || self.unkept.marked(tab)
+            || withheld
+            || sign_in
+            || self.came_to(tab, cx).is_some())
     }
 
     /// The user takes the tab the agent is at work in over: the agent may not act in it until
@@ -2936,7 +2980,7 @@ impl Agents {
             timer: None,
             sign_in: false,
         };
-        self.held.insert(tab, held);
+        self.hold(tab, held);
         // The core ends the agent's session there, which logs it.
         self.carry(tab, held::Event::TakeOver, life, actions, cx);
         cx.notify();
@@ -2980,6 +3024,7 @@ impl Agents {
     /// The core closed `tab` (tabs::tab_closed). A hold on it ends. A session's page that the
     /// agent or the browser didn't close, the user or its own page did.
     pub fn tab_closed(&mut self, tab: u64, cx: &mut Context<Self>) {
+        self.unkept.closed(tab);
         self.sign_in_tab_closed(tab, cx);
         self.dialogs.remove(&tab);
         self.cleared.remove(&tab);
@@ -3361,6 +3406,11 @@ impl Agents {
                     let refused = Refused::of(tools::Kind::Password, PASSWORDS);
                     return self.refuse(act, &host, refused, cx);
                 }
+                // Text that may not be shown is kept off a kept card's picture too, as only the
+                // agent's screenshot hatches it.
+                if !element.shows_typed() {
+                    self.unkept.mark(tab);
+                }
                 let submit = arguments
                     .get("submit")
                     .and_then(Value::as_bool)
@@ -3670,7 +3720,7 @@ impl Agents {
             timer: None,
             sign_in: false,
         };
-        self.held.insert(tab, held);
+        self.hold(tab, held);
         self.carry(tab, held::Event::HandOff, life, actions, cx);
         cx.notify();
     }
@@ -5534,6 +5584,20 @@ pub fn tab_closed(tab: u64, cx: &mut App) {
 pub fn tab_at(tab: u64, url: &str, cx: &mut App) {
     if let Some(agents) = global(cx) {
         agents.update(cx, |agents, _| agents.tab_at(tab, url));
+    }
+}
+
+/// The core's address for `tab` and whether it loads (tabs::tab_state_changed).
+pub fn tab_state(tab: u64, url: &str, loading: bool, cx: &mut App) {
+    if let Some(agents) = global(cx) {
+        agents.update(cx, |agents, _| agents.tab_state(tab, url, loading));
+    }
+}
+
+/// `tab`'s main frame finished loading (tabs::tab_loaded).
+pub fn tab_loaded(tab: u64, cx: &mut App) {
+    if let Some(agents) = global(cx) {
+        agents.update(cx, |agents, _| agents.tab_loaded(tab));
     }
 }
 

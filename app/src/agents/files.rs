@@ -669,6 +669,28 @@ mod tests {
         }
     }
 
+    /// A kept thread's card folder, under the profile's, is never given, nor a folder holding it:
+    /// as this build names it, and on the made-up profile.
+    #[test]
+    fn the_kept_threads_folder_is_never_given() {
+        use crate::agents::kept::cards::FOLDER;
+        let profile = PathBuf::from(crate::profile_dir());
+        let here = Never::here(None);
+        for folder in [profile.join(FOLDER), profile.clone()] {
+            assert!(never_grantable(&folder, &here), "{}", folder.display());
+        }
+        let never = never();
+        let profile = never.ilo[0].clone();
+        let holding = profile.parent().unwrap().to_path_buf();
+        for folder in [
+            profile.join(FOLDER).join("0123"),
+            profile.join(FOLDER),
+            holding,
+        ] {
+            assert!(never_grantable(&folder, &never), "{}", folder.display());
+        }
+    }
+
     #[test]
     fn a_disks_root_resolves_to_a_root_and_is_refused() {
         let root = resolved(Path::new("/")).unwrap();

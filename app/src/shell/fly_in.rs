@@ -300,6 +300,7 @@ mod tests {
         new_download,
     };
     use crate::shell::{Download, DownloadState, Shell, recorder::Recorder};
+    use crate::tokens::shell::recent_downloads::motion::REST;
 
     /// The icon's place at each hundredth of a second of its flight.
     fn path(from: (f32, f32), to: (f32, f32)) -> Vec<Place> {
@@ -479,7 +480,7 @@ mod tests {
         after(FLIGHT + 1., &shell, cx);
         let height = shell.read_with(cx, |shell, _| f32::from(shell.viewport.height));
         cx.simulate_mouse_move(point(px(24.), px(height - 25.)), None, Modifiers::none());
-        after(0.3, &shell, cx);
+        after(REST + BIN_FADE / 2., &shell, cx);
         assert_eq!(shown(&shell, cx), (false, true), "fading as the list opens");
         after(BIN_FADE, &shell, cx);
         assert!(shell.read_with(cx, |shell, _| shell.flight.is_none()));

@@ -3,7 +3,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     rc::Rc,
     sync::Arc,
     time::Duration,
@@ -56,6 +56,11 @@ impl Core {
 pub(crate) struct Recorder {
     /// The core this window shares with the others a test makes with `Recorder::beside`.
     pub(super) core: Rc<Core>,
+    /// The tabs whose picture the agents' rules let a kept card keep, as `keeps_picture` answers.
+    pub(super) keeps: RefCell<HashSet<u64>>,
+    /// What the window told each kept card of a picture its conversation took: the task, the
+    /// page and whether the card may keep it.
+    pub(super) card_pictures: RefCell<Vec<(SharedString, u64, bool)>>,
     /// This window's Clears, by id, the last ten.
     cleared: RefCell<Vec<u64>>,
     calls: RefCell<Vec<String>>,
@@ -307,9 +312,6 @@ pub(crate) struct Recorder {
     pub(super) pictures: RefCell<Option<(WeakEntity<super::Shell>, super::PagePicture)>>,
     /// The answers to page dialogs it was given, with what was typed.
     pub(super) replies: RefCell<Vec<PageReply>>,
-    /// What it says every agent's Space's menu lists.
-    /// What the Library button's hover leaves out, none at first, as the core's default.
-    hover_kinds_off: Cell<u32>,
     /// The account's core, as the first launch's account step asks it, in a build that names a
     /// sync server, which a test says; one that names none at first.
     pub(super) account: Rc<Account>,
@@ -949,15 +951,6 @@ impl Browser for Recorder {
 
     fn list_captures(&self, _: &mut App) {
         self.record("list captures".into())
-    }
-
-    fn hover_kinds(&self, _: &mut App) -> u32 {
-        super::recent_downloads::HOVER_ALL & !self.hover_kinds_off.get()
-    }
-
-    fn set_hover_kinds(&self, kinds: u32, _: &mut App) {
-        self.hover_kinds_off
-            .set(super::recent_downloads::HOVER_ALL & !kinds);
     }
 
     fn trash(&self, path: &str, _: &mut App) -> bool {
@@ -2141,6 +2134,20 @@ impl Browser for Recorder {
 
     fn ask_again(&self, asked: SharedString, _: &mut App) {
         self.record(format!("ask again {asked}"));
+    }
+
+    fn keeps_picture(&self, tab: u64, _: &App) -> bool {
+        self.keeps.borrow().contains(&tab)
+    }
+
+    fn card_pictured(
+        &self,
+        agent: SharedString,
+        tab: u64,
+        picture: Option<Arc<RenderImage>>,
+        _: &mut App,
+    ) {
+        (self.card_pictures.borrow_mut()).push((agent, tab, picture.is_some()));
     }
 
     fn task_picture(&self, tab: u64, _: u64, _: &mut App) {
