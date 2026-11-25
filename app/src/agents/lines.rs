@@ -1,5 +1,6 @@
 //! ilo's lines of what happened to a task (#4086 step 3): each refusal, each step that's the
-//! user's, each time an agent asks for a tab back, each change of the task's access, and each wall
+//! user's, each time an agent asks for a tab back, each change of the task's access, each time the
+//! user stops it, and each wall
 //! around its files that ilo couldn't put up, with what a run inside one left running (#4101,
 //! rewall.rs). The app
 //! makes each from the task's own state, at the end of the turn it came in: nothing an agent sends
@@ -120,13 +121,15 @@ pub enum Happened {
     TabBack { tab: u64 },
     /// The user changed the task's access.
     TierChanged { from: Tier, to: Tier },
+    /// The user stopped the task, which held `pages` pages then.
+    YouStopped { pages: usize },
 }
 
 impl Happened {
     fn tab(self) -> Option<u64> {
         match self {
             Happened::Yours { tab } | Happened::TabBack { tab } => Some(tab),
-            Happened::TierChanged { .. } => None,
+            Happened::TierChanged { .. } | Happened::YouStopped { .. } => None,
         }
     }
 }
@@ -159,8 +162,12 @@ impl Agents {
         if made.tab().is_some() && task.placed.iter().any(standing) {
             return;
         }
-        // The task's access changed: the line said so, and it needs nothing of the user.
-        let settled = matches!(made, Happened::TierChanged { .. });
+        // The task's access changed, or the user stopped it: the line said so, and it needs
+        // nothing of the user.
+        let settled = matches!(
+            made,
+            Happened::TierChanged { .. } | Happened::YouStopped { .. }
+        );
         task.placed.push(Placed {
             kind: made,
             after,
@@ -273,11 +280,18 @@ impl Agents {
                 },
                 Happened::TabBack { tab } => IloKind::TabBack { tab },
                 Happened::TierChanged { from, to } => IloKind::TierChanged { from, to },
+                Happened::YouStopped { pages } => IloKind::YouStopped { pages },
+            };
+            let settled = match placed.kind {
+                // An outside agent's task the user stopped offers its pages back, ended as it
+                // is, until they're handed back.
+                Happened::YouStopped { .. } => !Self::offers_pages_back(task),
+                _ => placed.settled || ended,
             };
             let line = IloLine {
                 key: PLACED + index,
                 kind,
-                settled: placed.settled || ended,
+                settled,
             };
             let mark = Mark {
                 after: placed.after,
