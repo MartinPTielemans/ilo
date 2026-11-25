@@ -369,20 +369,20 @@ for line in sys.stdin:
   done < "$out/preview-corners-$1.txt"
 }
 
-# Its look in a light and a dark Space theme: the theme picker's first swatch, then the sun, and
-# later the moon, each 13 right of its appearance-x token, as cards.sh and little.sh pick them.
-peek_look() { # <light|dark> <the appearance button's x> [swatch]
+# Its look in a light and a dark Space theme: the theme panel's first palette, then Light, and
+# later Dark, as cards.sh and little.sh pick them.
+peek_look() { # <light|dark> [palette]
   post rightclick 100 112
   expect "^browser: menu shown $(cased "Change Space Icon…, Rename Space…, $colors")" \
     "the Space's menu didn't offer its theme"
   send choose "$(cased 'Edit Theme Color…')"
   expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
   expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
-  if [ -n "${3:-}" ]; then
-    send clickkey "$(swatch_x 0)" $swatch_y
-    expect '^browser: colored space [0-9]* [0-9a-f]*$' "the first swatch didn't colour the Space"
+  if [ -n "${2:-}" ]; then
+    send clickkey $(panel_at palette 1)
+    expect '^browser: colored space [0-9]* [0-9a-f]*$' "the first palette didn't colour the Space"
   fi
-  send clickkey "$2" 49
+  send clickkey $(panel_at look "$1")
   expect "^browser: themed space [0-9]* .*appearance=$1" "the Space's theme didn't turn $1"
   send key escape
   expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
@@ -392,8 +392,8 @@ peek_look() { # <light|dark> <the appearance button's x> [swatch]
   send key escape
   expect "^browser: tab $p closed\$" "Esc didn't close the preview in a $1 Space"
 }
-peek_look light 191.3 swatch
-peek_look dark 231.7
+peek_look light palette
+peek_look dark
 
 # Resting on the keep button names it and its key under it, in the tooltip's window, which shows
 # over the preview's, so it lies over the card's page; the pointer leaving ends it.
