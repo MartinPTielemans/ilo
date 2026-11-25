@@ -2420,6 +2420,7 @@ impl TalkView {
             IloButton::Raise(tier) => Some(TaskAction::SetTier(tier)),
             IloButton::AnySite => Some(TaskAction::AnySite),
             IloButton::HandBack => tab.map(TaskAction::HandBack),
+            IloButton::PagesBack => Some(TaskAction::PagesBack),
             // It only shows the page, as its picture's click does.
             IloButton::ShowPage => {
                 if let Some(tab) = tab {

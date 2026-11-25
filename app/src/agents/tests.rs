@@ -8794,6 +8794,17 @@ mod tasks {
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert_eq!(lines[0].kind, IloKind::YouStopped { pages: 2 });
         assert!(ilo::buttons(&lines[0]).is_empty());
+        // Nor is there anything to hand back: an outside agent's line alone has that.
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&agent, TaskAction::PagesBack, cx);
+            assert!(
+                !agents
+                    .log
+                    .iter()
+                    .any(|entry| entry.action == tools::PAGES_BACK)
+            );
+        });
+        assert_eq!(stopped(cx), lines);
 
         // Their reply comes under the line, which stays where it came.
         agents.update(cx, |agents, cx| agents.reply(&agent, "Go on", cx));
@@ -10542,8 +10553,9 @@ mod sessions {
     }
 
     /// The user's Stop ends the task and closes the client's connections, and nothing bars a new
-    /// one: its task starts at the level the stopped one was left at, so its click on the old
-    /// page and on one it opens are both refused.
+    /// one. Its click on the stopped task's page is refused as stopped, and starts no task; the
+    /// task of a page it opens starts at the level the stopped one was left at, so its click
+    /// there is refused as Look only refuses it.
     #[gpui::test]
     fn a_lowered_level_holds_after_stop_on_a_new_connection(cx: &mut TestAppContext) {
         let (agents, browser, first) = lowered(Tier::Look, cx);
@@ -10554,10 +10566,15 @@ mod sessions {
 
         hello_on(&agents, "claude-code", 2, "claude-code", cx);
         let pages = browser.pages.borrow().len();
-        refused_as_look_only(coupon(&agents, (2, 4, 20), cx));
-        answered(&agents, 4, cx);
-        let second = cards(&agents, cx)[0].agent.to_string();
-        assert_ne!(first, second);
+        let refused = coupon(&agents, (2, 4, 20), cx).try_recv();
+        let refused = refused.expect("the click wasn't refused at once");
+        assert!(refused.error, "it clicked: {}", refused.text);
+        assert_eq!(refused.text, STOPPED);
+        assert_eq!(
+            cards(&agents, cx).len(),
+            1,
+            "the refused click started a task"
+        );
         assert_eq!(browser.pages.borrow().len(), pages, "the click went");
 
         let now = std::time::Instant::now();
@@ -10573,6 +10590,8 @@ mod sessions {
         let opened = page_done(&agents, &browser, answer, shop_tree(), cx);
         assert!(opened.text.starts_with("Opened tab 30."), "{}", opened.text);
         answered(&agents, 5, cx);
+        let second = cards(&agents, cx)[0].agent.to_string();
+        assert_ne!(first, second);
         let pages = browser.pages.borrow().len();
         refused_as_look_only(coupon(&agents, (2, 6, 30), cx));
         assert_eq!(browser.pages.borrow().len(), pages, "the click went");
@@ -11419,8 +11438,8 @@ mod sessions {
     /// says it stopped: its calls under way are answered that the user stopped it, and its
     /// connections close, so it shows the browser's server as gone, with one "stopped by the user"
     /// in its activity log, which each card's record has once. Reconnected, its
-    /// next call is a card of its own, and ⌘. from its page, which stops the client, stops that
-    /// card too.
+    /// next call on a page of its own is a card of its own, and ⌘. from its page, which stops the
+    /// client, stops that card too.
     #[gpui::test]
     fn stop_closes_the_clients_connections_and_their_cards(cx: &mut TestAppContext) {
         let (agents, browser) = at_work(cx);
@@ -11498,7 +11517,10 @@ mod sessions {
             assert_eq!(stops(actions), 1, "{:?}", past.steps);
         }
 
-        call_as(&agents, 4, "read_page", json!({ "tab": 20 }), cx);
+        // On a page that isn't a stopped task's: those are refused it until the user hands them
+        // back (sessions::stopped).
+        (browser.tabs.borrow_mut()).push((31, 2, "Other", "https://example.org/"));
+        call_as(&agents, 4, "read_page", json!({ "tab": 31 }), cx);
         assert_eq!(cards(&agents, cx)[0].dot, Dot::Working, "a new session");
         agents.update(cx, |agents, cx| agents.stop_agent("claude-code", cx));
         assert!(cards(&agents, cx).iter().all(|card| card.dot == Dot::Ended));

@@ -955,6 +955,10 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
         }
         "ask" => ("Asking you", "Asked you", "Couldn't ask you", String::new()),
         "thought" => ("Thinking", "Thought", "Thought", String::new()),
+        // The user's Hand Back on a stopped task, with how many pages: never a title or a site.
+        PAGES_BACK if !did.target.is_empty() => {
+            return format!("{} · {}", describe(PAGES_BACK), did.target);
+        }
         action => return describe(action).to_string(),
     };
     let verb = match tense {
@@ -1058,6 +1062,31 @@ pub fn pages_counted(pages: usize) -> Option<String> {
     }
 }
 
+/// The log's entry of the user's Hand Back on a stopped task of an outside agent's: its pages are
+/// that client's again. Not a tab's own hand back after a takeover ("handed back").
+pub const PAGES_BACK: &str = "pages handed back";
+
+/// The tabs a call's arguments name, whatever its tool: its `tab`, a split's, and each of `tabs`.
+pub fn tabs_named(arguments: &Value) -> Vec<u64> {
+    let one = ["tab", "split"]
+        .into_iter()
+        .filter_map(|name| arguments.get(name));
+    let several = arguments.get("tabs").and_then(Value::as_array);
+    one.chain(several.into_iter().flatten())
+        .filter_map(tab_id)
+        .collect()
+}
+
+/// The tools that never act on the tab their connection used last.
+pub const NO_TAB_OF_ITS_OWN: [&str; 6] = [
+    "open_tab",
+    "list_tabs",
+    "title",
+    "done",
+    "sort_tabs_by_site",
+    "split_tabs",
+];
+
 /// What an action an agent took is, for the activity log, by the name the core's entry gives it.
 pub fn describe(action: &str) -> &'static str {
     match action {
@@ -1080,6 +1109,7 @@ pub fn describe(action: &str) -> &'static str {
         "released" => "Let go of the tab",
         "taken back" => "You took the tab over",
         "handed back" => "You handed the tab back",
+        PAGES_BACK => "You handed it back",
         "given" => "You gave it a tab",
         "stopped" => "You stopped it",
         "stopped by the user" => "You stopped it, which closed its connection",

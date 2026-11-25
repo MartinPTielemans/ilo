@@ -282,10 +282,16 @@ impl Agents {
                 Happened::TierChanged { from, to } => IloKind::TierChanged { from, to },
                 Happened::YouStopped { pages } => IloKind::YouStopped { pages },
             };
+            let settled = match placed.kind {
+                // An outside agent's task the user stopped offers its pages back, ended as it
+                // is, until they're handed back.
+                Happened::YouStopped { .. } => !Self::offers_pages_back(task),
+                _ => placed.settled || ended,
+            };
             let line = IloLine {
                 key: PLACED + index,
                 kind,
-                settled: placed.settled || ended,
+                settled,
             };
             let mark = Mark {
                 after: placed.after,

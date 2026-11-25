@@ -1363,6 +1363,60 @@ fn the_users_stop_says_its_pages_by_their_count_alone(cx: &mut TestAppContext) {
     );
 }
 
+/// The stopped line of an outside agent's task offers its pages back until they're handed back:
+/// `Hand Back`, its one button, which gives the agent pages again and so takes no press until the
+/// line has stood a moment. Once it has, one press hands them back, and no key does.
+#[gpui::test]
+fn the_stopped_lines_hand_back_takes_no_press_until_it_has_stood(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    let talk = Conversation {
+        lines: vec![Line::Ilo(IloLine {
+            key: 7,
+            kind: IloKind::YouStopped { pages: 2 },
+            settled: false,
+        })],
+        ..conversation(0)
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let back = (7, IloButton::PagesBack);
+    let (at, _) = ilo_button(&view, back, cx).expect("Hand Back wasn't drawn");
+    assert_eq!(super::words::button(IloButton::PagesBack), "Hand Back");
+    assert_eq!(
+        view.read_with(cx, |view, _| view.ilo_drawn.borrow().len()),
+        1,
+        "the stopped line has one button"
+    );
+    host.take();
+    cx.simulate_click(at.center(), Modifiers::none());
+    assert!(
+        !host.take().iter().any(|line| line.contains("PagesBack")),
+        "a press as the line came handed the pages back"
+    );
+    let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(5);
+    view.update(cx, |view, _| {
+        view.ilo_drawn.borrow_mut().insert(back, (at, long_ago));
+    });
+    cx.simulate_click(at.center(), Modifiers::none());
+    assert_eq!(
+        host.take()
+            .into_iter()
+            .filter(|line| line.contains("PagesBack"))
+            .collect::<Vec<_>>(),
+        vec!["task task-1 PagesBack".to_string()],
+    );
+    // Stood as long as it has, no key presses it.
+    for keys in ["enter", "space", "tab enter", "cmd-enter"] {
+        cx.simulate_keystrokes(keys);
+    }
+    assert!(
+        !host.take().iter().any(|line| line.contains("PagesBack")),
+        "a key handed the pages back"
+    );
+}
+
 /// The lines of a wall ilo couldn't put up around a task's files, and of a run it couldn't end
 /// whole (#4101), each whole: what ilo did, then why, with the folder's or the file's name quoted
 /// as the user's own and nothing else of the line drawn as a name.
