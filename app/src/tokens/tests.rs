@@ -37,16 +37,6 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "the preview's made-up Space colours",
     ),
     (
-        "shell/dock_dot.rs",
-        "0x8655BF",
-        "a test's made-up Space colour",
-    ),
-    (
-        "shell/dock_dot.rs",
-        "0xE0475B",
-        "a test's made-up Space colour",
-    ),
-    (
         "shell/undo_tests.rs",
         "Some(0xff0000)",
         "a test's made-up Space colour",

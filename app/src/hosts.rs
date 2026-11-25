@@ -93,15 +93,6 @@ impl dialog::Host for DialogHost {
     }
 }
 
-/// The Dock icon's dot, swapped by the host (platform/mac/dock.mm).
-pub(crate) struct DockDot;
-
-impl dock_dot::Host for DockDot {
-    fn show(&self, color: Option<u32>) {
-        unsafe { platform::host_dock_dot(color.is_some(), color.unwrap_or(0)) };
-    }
-}
-
 /// The Site Controls' requests, as calls to the core and to the host's window for them, over the
 /// window in front (`front`).
 pub(crate) struct SiteControlsHost {

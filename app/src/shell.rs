@@ -71,8 +71,6 @@ mod conversation;
 #[cfg(test)]
 mod copy_tests;
 mod display_face;
-#[cfg(test)]
-mod dock_dot;
 mod drag;
 mod drm_note;
 mod empty;
@@ -3154,7 +3152,6 @@ impl Shell {
             self.toast_spaces(made, cx);
         }
         self.task_spaces_changed(cx);
-        self.follow_dock(cx);
         self.update_menus(cx);
         self.update_title(cx);
         cx.notify();
@@ -3273,7 +3270,6 @@ impl Shell {
         if self.form().is_some() {
             self.focus_form(cx);
         }
-        self.follow_dock(cx);
         self.update_menus(cx);
         self.update_title(cx);
         self.history_space_shown(cx);
@@ -3687,7 +3683,6 @@ impl Shell {
         cx.notify();
         self.refresh_menus(cx);
         self.refresh_picture(cx);
-        self.follow_dock(cx);
     }
 
     /// The command bar closed with no tab chosen in it: the user left it, or its ask ran a task.
@@ -4175,14 +4170,6 @@ impl Shell {
 
     fn shown_space(&self) -> Option<&Space> {
         self.spaces.iter().find(|space| space.id == self.space)
-    }
-
-    /// The Dock icon's dot takes the key window's Space's color. A private window has no Space of
-    /// the user's, so its dot is the icon's own.
-    fn follow_dock(&self, cx: &mut Context<Self>) {
-        if commands::key_shell(cx).is_some_and(|key| key == cx.weak_entity()) {
-            crate::dock_dot::follow(self.shown_space().and_then(|space| space.color), cx);
-        }
     }
 
     /// The core let the agent with the id `agent` act in `tab`, for the activity log: it's at work
