@@ -38,6 +38,7 @@ fn opened(cx: &mut TestAppContext) -> Rc<Recorder> {
 
 fn card(agent: &str, name: &str, dot: Dot) -> Card {
     Card {
+        kept_picture: None,
         agent: agent.to_string().into(),
         home: 1,
         space: 3,

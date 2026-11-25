@@ -41,6 +41,7 @@ fn task(n: u64, ended: f64) -> ArchivedTask {
 /// Task 1's card, back at the foot, in its own Space 101.
 fn card() -> Card {
     Card {
+        kept_picture: None,
         agent: "task-1".into(),
         home: 1,
         space: 101,

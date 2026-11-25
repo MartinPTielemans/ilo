@@ -26,6 +26,7 @@ use crate::tooltip::text_width;
 
 pub(super) fn card() -> Card {
     Card {
+        kept_picture: None,
         agent: "task-1".into(),
         home: 1,
         space: 3,
@@ -3248,6 +3249,28 @@ fn a_closed_conversation_leaves_its_card_the_picture_its_tile_ended_on(cx: &mut 
     assert_eq!(plate(&shell, &on, cx), None, "another page's picture");
     let held = shell.read_with(cx, |shell, _| shell.card_plates.len());
     assert_eq!(held, 0, "a picture no card shows is still held");
+}
+
+/// After a quit, a kept card's plate in Latest tasks shows the picture its card read back; a card
+/// with none has no plate.
+#[gpui::test]
+fn a_kept_cards_plate_shows_the_picture_it_read_back(cx: &mut TestAppContext) {
+    let pixels = image::RgbaImage::from_pixel(3, 2, image::Rgba([40, 80, 120, 255]));
+    let image = std::sync::Arc::new(gpui::RenderImage::new(vec![image::Frame::new(pixels)]));
+    let plate = crate::agents::kept::cards::Plate {
+        image,
+        size: (3, 2),
+    };
+    let kept = Card {
+        kept_picture: Some(plate),
+        ..card()
+    };
+    let (shell, _, cx) = shown_with(kept.clone(), cx);
+    let size = |card: &Card, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.plate_of(card).map(|p| p.size()))
+    };
+    assert_eq!(size(&kept, cx), Some((3., 2.)));
+    assert_eq!(size(&card(), cx), None, "a plate with no picture");
 }
 
 /// A picture the conversation takes goes to its task's kept card only if it could have been
