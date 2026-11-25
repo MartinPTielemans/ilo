@@ -245,6 +245,14 @@ hint-key-gap = 6.0
 field-fade = 24.0
 # The panel's corners, which the host's blur and shadow take too: the plates' 12 and their 8 in.
 radius = 20.0
+# The composer's foot, under a line after its rows: ⇥ and its words at the left, ↩ and what it
+# does at the right, the words 12 on a 16 line in the rows' dim ink (P3, screen 48).
+foot-height = 40.0
+foot-left = 20.0
+foot-right = 16.0
+foot-gap = 8.0
+foot-text = 12.0
+foot-line = 16.0
 # How far above the browser window's middle the panel's top is: Arc's is at y 396 of 1130 and at
 # 305.5 of 949, which no fraction of the height fits.
 above-middle = 169.0

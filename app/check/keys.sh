@@ -803,8 +803,7 @@ send type summarise this
 send key tab
 expect '^browser: command bar asks an agent$' "⇥ didn't make a task with tasks on"
 send key escape
-send key escape
-expect '^browser: command bar hidden$' "escape didn't close the command bar from the ask"
+expect '^browser: command bar hidden$' "escape didn't close the command bar from the composer"
 send menu Settings…
 expect '^browser: settings shown Agents$' "Settings… didn't show Agents again"
 settings_drew Agents

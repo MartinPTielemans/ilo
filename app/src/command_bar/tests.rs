@@ -3486,6 +3486,37 @@ impl Bar {
             .unwrap()
     }
 
+    /// Which rows are New Thread.
+    fn threads(&mut self) -> Vec<bool> {
+        self.window
+            .read_with(&self.cx.cx, |bar, _| {
+                bar.rows.iter().map(Suggestion::starts_thread).collect()
+            })
+            .unwrap()
+    }
+
+    /// Whether the bar is the composer, and what's typed.
+    fn composer(&mut self) -> (bool, String) {
+        self.window
+            .read_with(&self.cx.cx, |bar, cx| {
+                (bar.ask.is_some(), bar.input.read(cx).text().to_string())
+            })
+            .unwrap()
+    }
+
+    /// A click on the composer's Back to Search, at its foot's left, under `rows` rows.
+    fn click_back_to_search(&mut self) {
+        use crate::tokens::command_bar::{FOOT_HEIGHT, FOOT_LEFT};
+        let rows = (self.window)
+            .read_with(&self.cx.cx, |bar, _| bar.rows.len())
+            .unwrap();
+        // The window as tall as the host makes it, foot and all, as it is round the composer.
+        (self.cx).simulate_resize(window(WIDTH, height(rows) + LINE + FOOT_HEIGHT));
+        let y = height(rows) + LINE + FOOT_HEIGHT / 2.;
+        (self.cx).simulate_click(at(FOOT_LEFT + 4., y), Modifiers::none());
+        self.cx.run_until_parked();
+    }
+
     /// The chip before the input, and the hint at its end.
     fn chip_and_hint(&mut self) -> (Option<String>, bool, bool) {
         self.window
@@ -3538,8 +3569,8 @@ fn tab_makes_what_is_typed_a_task(cx: &mut TestAppContext) {
     assert!(!bar.is_open());
 }
 
-/// Esc and ⇧⇥ leave the ask with what was typed, closing Today's slot, and ⌫ at the start takes
-/// the page's chip off before it leaves.
+/// ⇧⇥ leaves the ask with what was typed, closing Today's slot, and ⌫ at the start takes the
+/// page's chip off before it leaves. Esc closes the composer as it closes the bar.
 #[gpui::test]
 fn the_ask_is_left_as_site_search_is(cx: &mut TestAppContext) {
     let page = Some(("https://lisbon.example/guide", ""));
@@ -3549,19 +3580,10 @@ fn the_ask_is_left_as_site_search_is(cx: &mut TestAppContext) {
     // A page without a title is named by its site.
     assert_eq!(bar.chip_and_hint().0.as_deref(), Some("lisbon.example"));
     bar.calls();
-    bar.keys("escape");
+    bar.keys("shift-tab");
     assert_eq!(bar.chip_and_hint(), (None, false, true));
     assert_eq!(bar.calls(), ["asking false"]);
     assert_eq!(bar.input().0, "book it");
-    assert!(
-        bar.is_open(),
-        "Esc closed the bar rather than leaving the ask"
-    );
-
-    bar.keys("tab");
-    bar.keys("shift-tab");
-    assert_eq!(bar.chip_and_hint().1, false);
-    assert!(bar.calls().contains(&"asking false".to_string()));
 
     bar.keys("tab");
     bar.keys("home backspace");
@@ -3577,6 +3599,103 @@ fn the_ask_is_left_as_site_search_is(cx: &mut TestAppContext) {
     bar.keys("tab");
     bar.keys("home backspace enter");
     assert!(bar.calls().contains(&"task claude book it".to_string()));
+
+    let mut bar = Bar::with_agents(cx, &[("claude", None)], page);
+    bar.type_text("book it");
+    bar.keys("tab");
+    bar.calls();
+    bar.keys("escape");
+    assert!(
+        !bar.is_open(),
+        "Esc left the composer rather than closing it"
+    );
+    assert_eq!(bar.calls(), ["asking false", "dismiss"]);
+}
+
+/// Words typed put New Thread second, under the page or search ↩ takes, which ↩ on the first row
+/// goes to, never starting a thread. ⇥, ↩ on New Thread and a click on it each grow the bar into
+/// the composer with the words kept, and ⇥ or a click on Back to Search goes back with them.
+#[gpui::test]
+fn new_thread_grows_the_bar_into_the_composer_and_back(cx: &mut TestAppContext) {
+    let typed = "flights to lisbon";
+    let rows = || vec![searching(typed), page("https://flights.test/")];
+    let opened = |cx: &mut TestAppContext| {
+        let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+        bar.type_text(typed);
+        bar.suggest(typed, rows());
+        bar
+    };
+    let mut bar = opened(cx);
+    assert_eq!(
+        bar.threads(),
+        [false, true, false],
+        "New Thread isn't second"
+    );
+    bar.calls();
+    bar.keys("enter");
+    assert!(!bar.is_open(), "↩ on the first row didn't go");
+    assert!(
+        !bar.calls().iter().any(|call| call.starts_with("asking")),
+        "↩ on the first row started a thread"
+    );
+
+    let mut bar = opened(cx);
+    bar.keys("tab");
+    assert_eq!(
+        bar.composer(),
+        (true, typed.into()),
+        "⇥ didn't grow the bar"
+    );
+    assert!(
+        !bar.threads().contains(&true),
+        "the composer lists New Thread"
+    );
+    bar.keys("tab");
+    assert_eq!(bar.composer(), (false, typed.into()), "⇥ didn't go back");
+    bar.suggest(typed, rows());
+    bar.keys("down enter");
+    assert_eq!(
+        bar.composer(),
+        (true, typed.into()),
+        "↩ on New Thread didn't grow the bar"
+    );
+    bar.click_back_to_search();
+    assert_eq!(
+        bar.composer(),
+        (false, typed.into()),
+        "Back to Search didn't go back"
+    );
+    bar.suggest(typed, rows());
+    bar.click_row(1);
+    assert_eq!(
+        bar.composer(),
+        (true, typed.into()),
+        "a click on New Thread didn't grow the bar"
+    );
+    assert!(bar.is_open());
+}
+
+/// ↩ that commits Japanese the input method composes in the composer is the input method's: no
+/// thread starts until the next ↩, which starts it with the committed words.
+#[gpui::test]
+fn return_committing_japanese_in_the_composer_starts_nothing(cx: &mut TestAppContext) {
+    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    bar.type_text("東京の");
+    bar.keys("tab");
+    bar.calls();
+    bar.compose("ほてる");
+    bar.keys("enter");
+    assert!(bar.is_open(), "↩ while composing closed the composer");
+    assert_eq!(
+        bar.calls(),
+        Vec::<String>::new(),
+        "↩ while composing started"
+    );
+    bar.input_method(|input, window, cx| input.replace_text_in_range(None, "ホテル", window, cx));
+    assert!(bar.is_open());
+    assert_eq!(bar.calls(), Vec::<String>::new());
+    bar.keys("enter");
+    assert_eq!(bar.calls(), ["task claude 東京のホテル"]);
 }
 
 /// An agent at its plan's limit is dimmed with its reset time, and not selected; with none ready

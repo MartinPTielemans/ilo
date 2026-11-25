@@ -344,47 +344,61 @@ impl Shell {
         resting.forget_picks();
         log!("browser: composer runs a task on {agent}");
         let home = self.space();
-        self.show_started = Some(ShowStarted::Asked(home));
+        self.show_started = Some(ShowStarted::Asked {
+            home,
+            over: self.selected,
+        });
         self.browser.start_task(&agent, &asked, home, start, cx);
         cx.notify();
     }
 
-    /// The Agents' answer to the composer's last ↩: the task it started, whose view alone opens as
-    /// its card comes in, or None, when it started none and no other task's card opens a view.
-    pub fn composed_started(&mut self, agent: Option<SharedString>) {
-        if !matches!(self.show_started, Some(ShowStarted::Asked(_))) {
-            return;
-        }
-        self.show_started = agent.map(ShowStarted::Task);
+    /// ⌘T's ↩ is starting a task from this window's Space, over the tab it shows: as the
+    /// composer's does, its conversation takes that tab's place as its card comes in.
+    pub fn bar_starting(&mut self) {
+        self.show_started = Some(ShowStarted::Asked {
+            home: self.space(),
+            over: self.selected,
+        });
     }
 
-    /// The composer's ↩ shows the task it started in the page's place, as its Space has no page to
-    /// stay on; ⌘T's ask over a page leaves the page, and its card comes in at the foot. The card
-    /// comes before the window hears of the task's Space, which the core tells after the call
-    /// that made it, so until then the start waits for that Space, by its task. `was`, the cards
-    /// before these, tells the new ones while the Agents haven't said which task it started.
+    /// The Agents' answer to the composer's or ⌘T's last ↩: the task it started, whose view alone
+    /// opens as its card comes in, or None, when it started none and no other task's card opens a
+    /// view.
+    pub fn composed_started(&mut self, agent: Option<SharedString>) {
+        let Some(ShowStarted::Asked { over, .. }) = self.show_started else {
+            return;
+        };
+        self.show_started = agent.map(|agent| ShowStarted::Task { agent, over });
+    }
+
+    /// The composer's and ⌘T's ↩ show the task they started in the place of the page they were
+    /// asked over, the empty page or a tab, while it still shows. The card comes before the window
+    /// hears of the task's Space, which the core tells after the call that made it, so until then
+    /// the start waits for that Space, by its task. `was`, the cards before these, tells the new
+    /// ones while the Agents haven't said which task it started.
     pub(in crate::shell) fn show_started_task(
         &mut self,
         was: Option<&[SharedString]>,
         cx: &mut Context<Self>,
     ) {
         let started = |card: &&Card| match &self.show_started {
-            Some(ShowStarted::Asked(home)) => {
+            Some(ShowStarted::Asked { home, .. }) => {
                 card.home == *home && was.is_some_and(|was| !was.contains(&card.agent))
             }
-            Some(ShowStarted::Task(agent)) => card.agent == *agent,
+            Some(ShowStarted::Task { agent, .. }) => card.agent == *agent,
             None => false,
         };
         let Some(card) = self.task_cards.iter().find(started) else {
             return;
         };
+        let over = self.show_started.as_ref().map_or(0, ShowStarted::over);
         let (agent, home, space) = (card.agent.clone(), card.home, card.space);
         if space != 0 && self.task_space(space).is_none() {
-            self.show_started = Some(ShowStarted::Task(agent));
+            self.show_started = Some(ShowStarted::Task { agent, over });
             return;
         }
         self.show_started = None;
-        if self.selected == 0 && self.space() == home && self.talk_agent().is_none() {
+        if self.selected == over && self.space() == home && self.talk_agent().is_none() {
             self.show_task(agent, cx);
         }
     }
