@@ -2,6 +2,49 @@
 
 use super::*;
 
+/// An assistant's one button to sign in, as its row says it.
+pub const SIGN_IN: &str = "Sign In";
+/// The line under the assistants' rows (draft, the lead's): what a sign-in leaves where.
+pub const SIGN_INS_STAY: &str = "Sign-ins stay on this computer.";
+/// ChatGPT's row's line, signed in.
+const CHATGPT_SIGNED_IN: &str = "Your ChatGPT plan";
+/// The row's line while its sign-in is under way.
+const UNDER_WAY: &str = "Sign in on the page that opened";
+
+/// The row's line before it's signed in, its program here or not: whose plan it works on.
+fn on_plan(cli: crate::agents::runner::Cli) -> String {
+    format!("On your {} plan", assistant_name(cli))
+}
+
+/// What an assistant's row calls it: the one the user signs in to.
+pub fn assistant_name(cli: crate::agents::runner::Cli) -> &'static str {
+    use crate::agents::runner::Cli;
+    match cli {
+        Cli::Claude => "Claude",
+        Cli::Codex => "ChatGPT",
+    }
+}
+
+/// The ring that turns while a sign-in is under way: the product's one sign of work, a turn a
+/// second, drawn only while it is.
+fn working(look: &Look, index: usize) -> impl IntoElement {
+    use gpui::{Animation, AnimationExt as _, Radians, Transformation};
+    svg()
+        .path("icons/working.svg")
+        .flex_none()
+        .size(px(WORKING))
+        .text_color(look.ink)
+        .with_animation(
+            ("assistant-working", index),
+            Animation::new(std::time::Duration::from_secs(1)).repeat(),
+            |ring, turned| {
+                ring.with_transformation(Transformation::rotate(Radians(
+                    std::f32::consts::TAU * turned,
+                )))
+            },
+        )
+}
+
 /// What a press on an assistant's row asks for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Act {
@@ -17,8 +60,8 @@ pub enum Act {
 }
 
 /// An assistant's row (#4100), one component for Settings › Agents' Your assistant and first run's
-/// assistant step: Claude Code's or Codex's glyph, its name and what `shown` says of it, then Get,
-/// Sign in, Cancel or Try Again, or, signed in, its ⋯ menu, opening at `menu_at`, and the mark,
+/// assistant step, a login now: Claude's or ChatGPT's glyph, its name and what `shown` says of it,
+/// then Sign In (its maker's page, where its program is missing), Cancel or Try Again, or, signed in, its ⋯ menu, opening at `menu_at`, and the mark,
 /// `marked` when tasks run on it. A press calls `act`.
 pub fn assistant_row(
     look: &Look,
@@ -27,32 +70,35 @@ pub fn assistant_row(
     marked: bool,
     a11y: bool,
     menu_at: impl IntoElement,
+    mark_at: impl IntoElement,
     act: Rc<dyn Fn(Act, &mut gpui::Window, &mut gpui::App)>,
 ) -> gpui::Div {
     use crate::agents::sign_in::Offer;
     let index = cli as usize;
-    let name = cli.assistant();
+    let name = assistant_name(cli);
     let press = |id: &'static str, title: SharedString, what: Act| {
         let act = act.clone();
         stop_button(look, (id, index), title, a11y)
             .on_click(move |_, window, cx| act(what, window, cx))
             .into_any_element()
     };
-    let title = |offer: Offer| offer.label(cli).unwrap_or_default().into();
+    // A login now: Sign In whether its program is here (its own sign-in), missing (its maker's
+    // page, as Get opened) or its last sign-in failed; a task's card keeps Offer's own words.
+    let sign_in = || SharedString::from(SIGN_IN);
     let controls = match shown.offer {
         Offer::Nothing => Vec::new(),
-        Offer::Get => vec![press("assistant-get", title(Offer::Get), Act::Get)],
-        Offer::SignIn => vec![press(
-            "assistant-sign-in",
-            title(Offer::SignIn),
-            Act::SignIn,
-        )],
-        Offer::TryAgain => vec![press(
-            "assistant-try-again",
-            title(Offer::TryAgain),
-            Act::SignIn,
-        )],
-        Offer::Cancel => vec![press("assistant-cancel", title(Offer::Cancel), Act::Cancel)],
+        Offer::Get => vec![press("assistant-get", sign_in(), Act::Get)],
+        Offer::SignIn => vec![press("assistant-sign-in", sign_in(), Act::SignIn)],
+        Offer::TryAgain => vec![press("assistant-try-again", sign_in(), Act::SignIn)],
+        // Under way, the ring the product turns while it works, and the way out.
+        Offer::Cancel => vec![
+            working(look, index).into_any_element(),
+            press(
+                "assistant-cancel",
+                Offer::Cancel.label(cli).unwrap_or_default().into(),
+                Act::Cancel,
+            ),
+        ],
         Offer::SignedIn => {
             let more = {
                 let act = act.clone();
@@ -72,16 +118,27 @@ pub fn assistant_row(
                         named_check(mark, format!("Run threads with {name}"), marked)
                     })
                     .size(px(CONTROL_HEIGHT))
+                    .relative()
                     .flex()
                     .items_center()
                     .justify_center()
+                    .child(mark_at)
                     .child(self::mark(look, marked, look.on, look.knob_on))
                     .on_click(move |_, window, cx| act(Act::Mark, window, cx))
             };
             vec![more.into_any_element(), mark.into_any_element()]
         }
     };
-    let line: SharedString = shown.line.clone().into();
+    // The table's words where it has them; its others as the assistant's state says them.
+    let line: SharedString = match shown.offer {
+        Offer::Get | Offer::SignIn => on_plan(cli).into(),
+        Offer::Cancel => UNDER_WAY.into(),
+        // ChatGPT's signed in says whose plan, not the program it runs through (M2).
+        Offer::SignedIn if matches!(cli, crate::agents::runner::Cli::Codex) => {
+            CHATGPT_SIGNED_IN.into()
+        }
+        _ => shown.line.clone().into(),
+    };
     let text = match shown.command() {
         Some(command) => commanded(look, name, line, command).into_any_element(),
         None => named(name, Some(lined(look).child(line))).into_any_element(),

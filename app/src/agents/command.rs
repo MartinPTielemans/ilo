@@ -648,7 +648,7 @@ pub fn run(
         return fail(
             exit::UNKNOWN,
             format!(
-                "The ilo command isn't added. Add it in {} › Settings › Agents › Command line.",
+                "The ilo command isn't added. Add it in {} › Settings › Other apps.",
                 env!("APP_NAME")
             ),
         );
@@ -699,23 +699,19 @@ struct Session {
 
 impl Session {
     fn open(agent: &Agent, name: &str) -> Result<Session, (i32, String)> {
-        let not_running = || {
-            (
-                exit::NOT_RUNNING,
-                format!(
-                    "{0} isn't running, or agents are off. Open {0} and turn agents on in Settings › Agents.",
-                    env!("APP_NAME")
-                ),
-            )
-        };
+        let not_running = || (exit::NOT_RUNNING, super::bridge::off());
         let stream = super::server::connect(&agent.address).map_err(|_| not_running())?;
         let mut writer = stream.try_clone().map_err(|_| not_running())?;
         writeln!(writer, "{}", json!({ "token": agent.token })).map_err(|_| not_running())?;
         let mut reader = BufReader::new(stream);
         let answer = super::server::read_line(&mut reader).ok_or_else(not_running)?;
         let answer: Value = serde_json::from_str(&answer).unwrap_or_default();
-        if let Some(refused) = answer.get("error").and_then(Value::as_str) {
-            return Err((exit::UNKNOWN, refused.into()));
+        // The server refuses with agents' off answer while other apps' agents are off, which a
+        // script reads as it does agents off.
+        match answer.get("error").and_then(Value::as_str) {
+            Some(refused) if refused == super::bridge::off() => return Err(not_running()),
+            Some(refused) => return Err((exit::UNKNOWN, refused.into())),
+            None => {}
         }
         let mut session = Session {
             writer,
@@ -1039,7 +1035,11 @@ mod tests {
     fn a_run_without_the_agent_file_says_where_to_add_it() {
         let printed = run(vec!["tabs".into()], None, None, String::new);
         assert_eq!(printed.code, exit::UNKNOWN);
-        assert!(printed.err.contains("Command line"));
+        let said = format!(
+            "The ilo command isn't added. Add it in {} › Settings › Other apps.",
+            env!("APP_NAME")
+        );
+        assert!(printed.err.contains(&said), "{}", printed.err);
     }
 
     /// The command before Add, as the Store's alias is from install: the profile's server hears

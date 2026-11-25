@@ -239,14 +239,13 @@ impl Swaps {
     }
 }
 
-/// A folder's icon, open or closed.
-/// A folder's glyph, open or closed, and closed with three dots while it lists the tab shown with
-/// folders hidden between them (#1405).
+/// A folder's glyph on its line, open or closed, and closed with three dots while it lists the tab
+/// shown with folders hidden between them (#1405): the line's own drawings, at its lighter stroke.
 pub(super) fn folder_glyph(open: bool, elided: bool) -> &'static str {
     match (open, elided) {
-        (true, _) => "icons/folder-open.svg",
-        (false, true) => "icons/folder-ellipsis.svg",
-        (false, false) => "icons/folder.svg",
+        (true, _) => "icons/row-folder-open.svg",
+        (false, true) => "icons/row-folder-ellipsis.svg",
+        (false, false) => "icons/row-folder.svg",
     }
 }
 

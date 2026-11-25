@@ -27,16 +27,18 @@ use super::{
     NAV_RADIUS, SECONDARY, Shell, TITLE,
     agent_bar::stop_keys,
     browser::{Browser, Page},
+    menus::{MenuAction, MenuEntry},
     picture::{PagePicture, next_request},
     row_spring,
     task_cards::PageWord,
 };
 use crate::agents::Status;
+use crate::agents::files::words as files_words;
 use crate::agents::page::clip;
 use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
 use crate::agents::task::{
     ArchivedTask, Card, Conversation, Dot, Line, Live, Opens, TaskAction, Trace, TraceItem,
-    TraceStep, first_line,
+    TraceStep, told_line,
 };
 use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
 use crate::text_input::TextInput;
@@ -78,7 +80,7 @@ actions!(conversation, [SendReply, StopTask]);
 mod ilo_keys;
 mod markdown;
 mod motion;
-mod words;
+pub(super) mod words;
 
 /// A chip at the page's scale, the toast's: its words, and its key after them, fainter. The
 /// conversation's and the page strip's buttons are these.
@@ -99,6 +101,13 @@ pub(super) fn page_chip_keyed(
     key: Option<String>,
     key_color: Hsla,
 ) -> gpui::Stateful<gpui::Div> {
+    chip_ground(palette, id)
+        .child(words.into())
+        .children(key.map(|key| div().text_color(key_color).child(key)))
+}
+
+/// A page chip's ground, with nothing on it yet.
+fn chip_ground(palette: super::Palette, id: impl Into<ElementId>) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
         .flex_none()
@@ -115,8 +124,6 @@ pub(super) fn page_chip_keyed(
         .text_size(px(text::BODY))
         .font_weight(FontWeight::MEDIUM)
         .text_color(palette.text(TITLE))
-        .child(words.into())
-        .children(key.map(|key| div().text_color(key_color).child(key)))
 }
 
 /// Sends the windows' `shells` what the Agents show as they change: their status, the task cards,
@@ -191,6 +198,9 @@ pub struct TalkView {
     replies: bool,
     /// Its pages' pictures, by tab: the request out for each, and the picture once it came.
     pictures: Vec<(u64, u64, Option<PagePicture>)>,
+    /// The requests out for pages whose picture could have been given to an agent when asked,
+    /// which a kept card may keep if it still could when the picture comes.
+    keeps_asked: Vec<u64>,
     /// The pages the core last answered with no picture of, which the next action asks again.
     unpictured: Vec<u64>,
     /// Where each picture was drawn last, in the window, for its page to zoom out of.
@@ -245,6 +255,8 @@ pub struct TalkView {
     ilo_links: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
     /// Where the level's chip under the reply field was drawn, if the last frame drew it.
     level_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Where the folder's chip under the reply field was drawn.
+    folder_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// Whether the user was typing in the reply field as the last frame drew, the field having
     /// the keyboard and words in it: a page ilo opens by itself mustn't cover those.
     typing: bool,
@@ -332,8 +344,6 @@ impl Shell {
     /// An ended task's Start Again: the command bar opens as it does for a new tab, with what the
     /// task was first asked in its field, as an ask. Nothing is sent until the user sends it.
     pub fn ask_again(&mut self, asked: SharedString, cx: &mut Context<Self>) {
-        // It asks again at Work on pages, whatever the composer had picked.
-        self.forget_composer_tier();
         self.run(super::Command::NewTab, "start again", cx);
         self.browser.ask_again(asked, cx);
     }
@@ -427,6 +437,7 @@ impl Shell {
                     reply,
                     replies,
                     pictures: Vec::new(),
+                    keeps_asked: Vec::new(),
                     unpictured: Vec::new(),
                     drawn: Rc::default(),
                     drawn_logged: Rc::default(),
@@ -453,6 +464,7 @@ impl Shell {
                     ilo_words_drawn: Rc::default(),
                     ilo_links: Rc::default(),
                     level_drawn: Rc::default(),
+                    folder_drawn: Rc::default(),
                     typing: false,
                     take_over_drawn: Rc::default(),
                     hand_back_drawn: Rc::default(),
@@ -500,8 +512,10 @@ impl Shell {
         }
         let watched = self.watched_task_page().is_some();
         let (view, browser) = (talk.view.clone(), self.browser.clone());
+        let tabs = conversation.as_ref().map(|shown| &shown.tabs[..]);
+        let keeps = self.keeps_pictures(tabs.unwrap_or_default(), cx);
         match view.update(cx, |view, cx| {
-            view.set(conversation, watched, &*browser, cx)
+            view.set(conversation, watched, &*browser, &keeps, cx)
         }) {
             Some(stale) => self.stale_pictures.extend(stale),
             None => self.close_task(cx),
@@ -521,8 +535,10 @@ impl Shell {
     pub(super) fn retake_talk_pictures(&mut self, cx: &mut Context<Self>) {
         let Some(talk) = &self.talk else { return };
         let (view, browser) = (talk.view.clone(), self.browser.clone());
+        let tabs = (view.read(cx).shown.as_ref()).map(|shown| shown.tabs.clone());
+        let keeps = self.keeps_pictures(&tabs.unwrap_or_default(), cx);
         let stale = view.update(cx, |view, cx| match view.shown.clone() {
-            Some(shown) if view.stale => view.set(Some(shown), false, &*browser, cx),
+            Some(shown) if view.stale => view.set(Some(shown), false, &*browser, &keeps, cx),
             _ => None,
         });
         self.stale_pictures.extend(stale.unwrap_or_default());
@@ -587,7 +603,11 @@ impl Shell {
             .map(|(.., picture)| picture.clone())
     }
 
-    /// A picture the conversation asked for came: whether it was one of its own.
+    /// A picture the conversation asked for came, or the core had none: whether it was one of its
+    /// own. Its task's card is told of it, to keep for its Done, if it could have been given to an
+    /// agent both when it was asked and now, and told it has none if it couldn't, picture or not;
+    /// with no picture of a page that could be kept, it keeps what it had. A private window tells
+    /// it nothing.
     pub(super) fn talk_pictured(
         &mut self,
         request: u64,
@@ -595,12 +615,39 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> bool {
         let Some(talk) = &self.talk else { return false };
-        let view = talk.view.clone();
+        let (agent, view) = (talk.agent.clone(), talk.view.clone());
+        let asked = view.read(cx).asked(request);
         let Some(old) = view.update(cx, |view, cx| view.pictured(request, picture, cx)) else {
             return false;
         };
         self.stale_pictures.extend(old);
+        if let (Some((tab, keeps)), false) = (asked, self.private) {
+            match (keeps && self.keeps_picture(tab, cx), picture) {
+                (false, _) => self.browser.card_pictured(agent, tab, None, cx),
+                (true, Some(picture)) => {
+                    let image = Some(picture.image());
+                    self.browser.card_pictured(agent, tab, image, cx)
+                }
+                (true, None) => {}
+            }
+        }
         true
+    }
+
+    /// Whether a picture of `tab` taken now could have been given to an agent: by the agents'
+    /// rules, and not while its page uses the camera or the microphone, shares a screen, a window
+    /// or a tab, or is captured. Never in a private window.
+    fn keeps_picture(&self, tab: u64, cx: &gpui::App) -> bool {
+        let page = self.page(tab);
+        let in_use = page.camera || page.microphone || page.sharing || page.shared;
+        !self.private && !in_use && self.browser.keeps_picture(tab, cx)
+    }
+
+    /// Those of `tabs` whose picture taken now could be kept.
+    fn keeps_pictures(&self, tabs: &[(u64, SharedString)], cx: &gpui::App) -> Vec<u64> {
+        (tabs.iter().map(|(tab, _)| *tab))
+            .filter(|tab| self.keeps_picture(*tab, cx))
+            .collect()
     }
 
     /// ⌘. with a conversation shown: its task stops, if it works or waits on the user.
@@ -619,20 +666,13 @@ impl Shell {
     }
 
     /// ⌘W with a conversation shown: its card closes, dismissing the task, which ⌘Z and ⇧⌘T bring
-    /// back; a finished task's folds into the Archive as the conversation goes. Says whether there
-    /// was one.
+    /// back, a finished one's included, which stays in Today until then. Says whether there was one.
     pub(super) fn dismiss_talk(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(agent) = self.talk_agent() else {
             return false;
         };
         log!("browser: command dismiss-task via conversation");
-        let finished = self
-            .task_cards
-            .iter()
-            .any(|card| card.agent == agent && card.finished());
-        if !finished {
-            self.dismiss_task(agent, cx);
-        }
+        self.dismiss_task(agent, cx);
         self.close_task(cx);
         true
     }
@@ -670,6 +710,7 @@ impl TalkView {
         conversation: Option<Conversation>,
         watched: bool,
         browser: &dyn Browser,
+        keeps: &[u64],
         cx: &mut Context<Self>,
     ) -> Option<Vec<Arc<RenderImage>>> {
         let conversation = conversation.filter(|shown| shown.agent == self.agent)?;
@@ -693,9 +734,13 @@ impl TalkView {
         } else if moved {
             self.stale = false;
             let mut pictures = Vec::new();
+            self.keeps_asked.clear();
             for (tab, _) in &conversation.tabs {
                 let old = self.pictures.iter_mut().find(|(each, ..)| each == tab);
                 let request = next_request();
+                if keeps.contains(tab) {
+                    self.keeps_asked.push(request);
+                }
                 pictures.push((
                     *tab,
                     request,
@@ -782,7 +827,7 @@ impl TalkView {
                     Line::Said(text) => Some(text),
                     _ => None,
                 })?;
-                Some(words::says(&shown.name, &first_line(said)?))
+                Some(words::says(&shown.name, &told_line(said)?))
             });
             if let Some(first) = answer {
                 self.tell(first.into());
@@ -851,6 +896,13 @@ impl TalkView {
         let old = entry.2.replace(picture.clone());
         cx.notify();
         Some(old.map(|old| old.image()).into_iter().collect())
+    }
+
+    /// The page `request` asked for a picture of, and whether that picture could have been given
+    /// to an agent when it was asked.
+    fn asked(&self, request: u64) -> Option<(u64, bool)> {
+        let (tab, ..) = self.pictures.iter().find(|(_, each, _)| *each == request)?;
+        Some((*tab, self.keeps_asked.contains(&request)))
     }
 
     /// `tab`'s picture, which it no longer holds.
@@ -2149,10 +2201,10 @@ impl TalkView {
     /// The reply field, the TextInput, so IME and the field's keys are a text field's. A session's
     /// conversation is in its agent's terminal, which a quiet line in its place says, on the text's
     /// column as it has no plate.
-    /// With Settings › Agents' Tasks from the command bar off, the line says so in the field's
-    /// place, as the task takes no more.
+    /// With the inside switch off, the line says so in the field's place, as the task takes no
+    /// more.
     fn reply(&self, look: &Look, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
-        let tasks_off = crate::agents::global(cx).is_some_and(|agents| !agents.read(cx).tasks_on());
+        let tasks_off = crate::agents::global(cx).is_some_and(|agents| !agents.read(cx).threads());
         let quiet = match (self.replies, tasks_off) {
             (false, _) => {
                 let name = self
@@ -2319,7 +2371,8 @@ impl TalkView {
     }
 
     /// The composer's row under the reply field: the task's access on a chip,
-    /// which opens its menu (#4094), and Stop at the row's end.
+    /// which opens its menu (#4094), the folder the task holds on the next (#4101), and Stop at
+    /// the row's end. A reply never carries files or a folder, so there's no way to add one here.
     fn composer(&self, look: &Look, cx: &mut Context<Self>) -> gpui::Div {
         let palette = look.palette;
         let tier = self
@@ -2353,8 +2406,52 @@ impl TalkView {
             .flex()
             .items_center()
             .child(chip)
+            .children(self.folder_chip(look, cx))
             .child(div().flex_1())
             .children(self.stop(look, cx))
+    }
+
+    /// The folder the task holds, by its name, whose menu has its one act, Revoke: the task goes
+    /// on without it at once.
+    fn folder_chip(
+        &self,
+        look: &Look,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Stateful<gpui::Div>> {
+        let palette = look.palette;
+        let name = self.shown.as_ref()?.folder.clone()?;
+        let drawn = self.folder_drawn.clone();
+        let chip = chip_ground(palette, "conversation-folder")
+            .ml(px(CHIP_GAP))
+            .gap(px(PAGE_CHIP_GAP))
+            .child(
+                svg()
+                    .flex_none()
+                    .path("icons/folder.svg")
+                    .size(px(PAGE_CHIP_FAVICON))
+                    .text_color(palette.text(TITLE)),
+            )
+            .child(clip(&name, QUOTED_CHARS as usize))
+            .relative()
+            .child(
+                canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+            )
+            .on_click(cx.listener(|view, _, window, cx| {
+                let at = window.mouse_position();
+                let agent = view.agent.clone();
+                let revoke: MenuAction = Box::new(move |shell, cx| {
+                    shell.browser.task(agent, TaskAction::RevokeFolder, cx)
+                });
+                let items = vec![(MenuEntry::new(files_words::REVOKE, true), revoke)];
+                (view.shell)
+                    .update(cx, |shell, cx| shell.show_menu(items, at, None, cx))
+                    .ok();
+            }));
+        Some(chip)
     }
 
     /// One of ilo's own lines: its glyph and mark, its words with the name it took from a page
@@ -2411,6 +2508,8 @@ impl TalkView {
             IloKind::StartedWithout { .. } => "icons/file.svg",
             IloKind::LeftRunning { .. } => "icons/circle-alert.svg",
             IloKind::EndedLeft => "icons/check.svg",
+            IloKind::Revoked { .. } | IloKind::FolderGone { .. } => "icons/folder.svg",
+            IloKind::NotCopied { .. } => "icons/file.svg",
             IloKind::Resumed { .. } => "icons/play.svg",
             IloKind::KeptHere => "icons/save.svg",
             IloKind::Gone
@@ -3244,6 +3343,7 @@ impl Render for TalkView {
             self.scroll.scroll_to_bottom();
         }
         self.level_drawn.set(None);
+        self.folder_drawn.set(None);
         self.take_over_drawn.borrow_mut().clear();
         self.hand_back_drawn.set(None);
         let busy = self.motion.settle(now);

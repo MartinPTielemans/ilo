@@ -46,6 +46,7 @@ pub use server::address;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::Ordering::SeqCst;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 use std::time::{Instant, SystemTime};
@@ -291,8 +292,9 @@ pub trait Browser {
     fn task_spaces(&self) -> Vec<u64>;
     /// Moves `tab` out of a task's Space to the top of the user's Space `space`'s Today tabs.
     fn move_tab(&self, tab: u64, space: u64, cx: &mut App);
-    /// The user's Space a session's pages open into: the one the front window shows, if it's in
-    /// the profile of `like`, an agent's Space, else the first of the user's in that profile.
+    /// The user's Space a session's card shows in and its pages open into: the one the front
+    /// window shows, if it's in the profile of `like`, an agent's Space, else the first of the
+    /// user's in that profile; never a private window's.
     fn user_space(&self, like: u64) -> u64;
     /// The name of the folder of `space`'s profile, "Default" or "Profile 2", which names the
     /// profile from one run to the next where the core's number for it doesn't (bc_profile_dir).
@@ -809,7 +811,10 @@ pub struct Agents {
     /// in a Flatpak the command that runs it there (bridge::launch).
     socket: PathBuf,
     bridge: Vec<String>,
-    on: bool,
+    /// The user's two switches (#4260), which the server's threads read: the inside one, whether
+    /// the product's own threads run, and the outside one, whether other apps' agents may
+    /// connect. Neither touches the other, and both are off for a new profile.
+    switches: server::Switches,
     agents: Vec<Agent>,
     /// The agents' tokens, which the server's threads read.
     tokens: server::Tokens,
@@ -874,6 +879,8 @@ pub struct Agents {
     doing: HashMap<String, SharedString>,
     /// The tabs the user holds from agents, by tab.
     held: HashMap<u64, Held>,
+    /// The pages whose picture a kept card can't keep for what was put in them (kept/unkept.rs).
+    unkept: kept::unkept::Unkept,
     /// The tabs whose page shows its own dialog, such as its alert(), by tab, as the core reports
     /// it (`page_dialog`), with who asks for a sign-in: nothing more is done on one until it's
     /// gone (#3536).
@@ -890,9 +897,6 @@ pub struct Agents {
     /// Whether scripts may control the browser (scripts.rs), and the Apple Event logged last.
     scripts: bool,
     script_event: u64,
-    /// Settings › Agents' Tasks from the command bar is off: asking an agent from ⌘T and letting
-    /// an app connect are two trust decisions, so tasks have a switch of their own under agents'.
-    tasks_off: bool,
 }
 
 /// A run of steps (run_steps): one at a time, each as its tool would run alone.
@@ -970,6 +974,23 @@ const BUSY: &str = "The page was still busy after 5 s, so it may change yet.";
 /// keeps one, while what it shows held still: no reason to wait for it (#2355).
 const REQUESTS: &str = "The page held still, with requests it made still open after 5 s.";
 
+/// What a click is told after its usual answer when it landed on a field whose list or picker a
+/// click doesn't open on an agent's page, by the core's word for the field (`"shut"` in the page's
+/// answer), so that the agent doesn't spend steps on a list that stays shut.
+fn shut_line(field: &str) -> Option<&'static str> {
+    match field {
+        "select" => Some("A click doesn't open this list. Use select with the option's text."),
+        "date_time" => {
+            Some("A click doesn't open a calendar here. Type the date or time into the field.")
+        }
+        "color" => Some(
+            "This color field can't be set by a click or by typing. If it has to be set, hand the \
+             tab to the user with hand_off.",
+        ),
+        _ => None,
+    }
+}
+
 /// A tab the user holds from its agent: handed to them, or taken over.
 struct Held {
     agent: String,
@@ -1034,7 +1055,7 @@ impl Agents {
             path,
             socket,
             bridge,
-            on: false,
+            switches: server::Switches::default(),
             agents: Vec::new(),
             tokens: Arc::default(),
             server: None,
@@ -1069,16 +1090,18 @@ impl Agents {
             doing: HashMap::new(),
             pins: HashMap::new(),
             held: HashMap::new(),
+            unkept: Default::default(),
             dialogs: HashMap::new(),
             runs: Vec::new(),
             stepping: None,
-            tasks: task::Tasks {
-                dir,
-                ..Default::default()
+            // Made whole, as its fields aren't all this file's to name.
+            tasks: {
+                let mut tasks = task::Tasks::default();
+                tasks.dir = dir;
+                tasks
             },
             scripts: false,
             script_event: 0,
-            tasks_off: false,
         }
     }
 
@@ -1145,7 +1168,27 @@ impl Agents {
             Some((runner::Cli::from_id(cli)?, ready::Found::from_saved(found)))
         }))
         .collect();
-        self.tasks_off = tasks.get("on").and_then(Value::as_bool) == Some(false);
+        let last = (tasks.get("last").and_then(Value::as_object))
+            .into_iter()
+            .flatten();
+        self.tasks.last = (last.filter_map(|(profile, last)| {
+            let tier = last.get("level").and_then(Value::as_str);
+            // Full access is never kept; a level this build doesn't know starts at the default.
+            let tier = tier
+                .and_then(tier::Tier::from_id)
+                .filter(|tier| *tier != tier::Tier::Full);
+            let model = (last.get("model").and_then(Value::as_array)).and_then(|model| {
+                let cli = runner::Cli::from_id(model.first()?.as_str()?)?;
+                Some((cli, model.get(1)?.as_str()?.to_string()))
+            });
+            let last = task::Last {
+                tier: tier.unwrap_or_default(),
+                model,
+            };
+            Some((profile.clone(), last))
+        }))
+        .collect();
+        let tasks_off = tasks.get("on").and_then(Value::as_bool) == Some(false);
         self.tasks.kept.off = tasks.get("keep").and_then(Value::as_bool) == Some(false);
         // The conversations kept for the tasks of a run before go, as its tasks went (#4105): now
         // that the assistants found are known, as each removes its own.
@@ -1154,38 +1197,92 @@ impl Agents {
         self.notify = (tasks.get("notify").and_then(Value::as_str))
             .and_then(crate::needs_you::Notify::from_id)
             .unwrap_or_default();
-        self.on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
+        // Settings saved before the two switches had one for every agent, and under it one for
+        // the command bar's tasks. Once, the inside switch is on only where both were, and other
+        // apps' agents only where agents were and they weren't turned off, so nothing comes on
+        // and nothing listens that didn't before. Saved, each is the user's alone.
+        let agents_on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
+        let threads = saved.get("threads").and_then(Value::as_bool);
+        let others = saved.get("other_apps").and_then(Value::as_bool);
+        let (threads_on, others_on) = match threads {
+            Some(threads) => (threads, others.unwrap_or(false)),
+            None => (agents_on && !tasks_off, agents_on && others.unwrap_or(true)),
+        };
+        self.switches.threads.store(threads_on, SeqCst);
+        self.switches.others.store(others_on, SeqCst);
         self.scripts = saved
             .get("scripts")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        if self.on {
+        // The kept tasks taken above had no token while the inside switch was still unread.
+        self.tokens_changed();
+        if threads.is_none() && agents_on {
+            self.save();
+        }
+        if self.listening() {
             self.start(cx);
         }
         cx.notify();
     }
 
-    pub fn is_on(&self) -> bool {
-        self.on
+    /// Whether the product's own threads run: the inside switch, Threads' first row, which the user
+    /// alone sets. Off, no thread starts from the bar, a card, a reply or the broom.
+    pub fn threads(&self) -> bool {
+        self.switches.threads.load(SeqCst)
     }
 
-    /// Whether the user may ask an agent from ⌘T: agents are on, and so is Settings › Agents' Tasks
-    /// from the command bar, which is on unless they turned it off. Outside agents, through the
-    /// server, don't hang on it.
-    pub fn tasks_on(&self) -> bool {
-        self.on && !self.tasks_off
+    /// Whether the server listens: while either switch is on. With both off nothing listens.
+    pub fn listening(&self) -> bool {
+        self.threads() || self.other_apps()
     }
 
-    /// Settings › Agents' Tasks from the command bar. Off, ⇥ makes no task and shows no hint, no
-    /// task starts, and a task's card offers no Retry or reply; the tasks running finish, and
-    /// their cards stay until seen.
-    pub fn set_tasks_on(&mut self, on: bool, cx: &mut Context<Self>) {
-        if on != self.tasks_off {
+    /// Sets the inside switch, the user's click alone. Off, every thread of the product's own ends
+    /// as Stop ends it, its assistant's program with it, its token goes so no call of it is
+    /// handled after, a sort under way ends, and with other apps' agents off too the server
+    /// stops. Other apps' agents connected work on.
+    pub fn set_threads(&mut self, on: bool, cx: &mut Context<Self>) {
+        if on == self.threads() {
             return;
         }
-        self.tasks_off = !on;
+        self.switches.threads.store(on, SeqCst);
+        match on {
+            true => self.start(cx),
+            false => {
+                self.end_threads(cx);
+                if !self.other_apps() {
+                    self.stop(cx);
+                }
+            }
+        }
+        self.tokens_changed();
         self.save();
+        // The brooms follow as Agents' observer tells them (broom_host::agents_changed), which
+        // ends a sort under way.
         cx.notify();
+    }
+
+    /// Ends every thread of the product's own as Stop ends it, then its assistant's program, so
+    /// nothing of it runs while the inside switch is off. A session's task is its app's, which
+    /// the outside switch has.
+    fn end_threads(&mut self, cx: &mut Context<Self>) {
+        let own: Vec<String> = (self.tasks.tasks.iter())
+            .filter(|task| task.session.is_none())
+            .map(|task| task.agent.clone())
+            .collect();
+        for agent in own {
+            self.stop_task(&agent, cx);
+            self.reading.retain(|_, reading| reading.agent != agent);
+            self.forget_waiting(&agent, None, cx);
+            if let Some(task) = self.task_mut(&agent) {
+                task.end_run();
+            }
+            if let Some((server, _)) = &self.server {
+                server.disconnect(&agent);
+            }
+            if self.live.remove(&agent) {
+                self.browser.disconnected(&agent, cx);
+            }
+        }
     }
 
     /// Whether Settings › Agents' Site notes is on, as it is unless the user turned it off.
@@ -1215,18 +1312,50 @@ impl Agents {
         cx.notify();
     }
 
-    /// The switch in Settings › Agents. Off stops the server and ends every agent's session.
-    pub fn set_on(&mut self, on: bool, cx: &mut Context<Self>) {
-        if on == self.on {
+    /// Whether other apps' agents may connect while agents are on: Settings › Other apps' switch,
+    /// and first run's, which the user alone sets. A task from the command bar doesn't hang on it.
+    pub fn other_apps(&self) -> bool {
+        self.switches.others.load(SeqCst)
+    }
+
+    /// Sets Settings › Other apps' switch, the user's click alone. Off, an app's agent that
+    /// connects is answered as it is with nothing listening, and each one's sessions end as they
+    /// do when the server stops, their pages by the same rule; the apps stay connected, listed as
+    /// they are. With the inside switch off too the server stops; the user's threads run on.
+    pub fn set_other_apps(&mut self, on: bool, cx: &mut Context<Self>) {
+        if on == self.other_apps() {
             return;
         }
-        self.on = on;
+        self.switches.others.store(on, SeqCst);
         match on {
             true => self.start(cx),
-            false => self.stop(cx),
+            false => {
+                self.end_other_apps(cx);
+                if !self.threads() {
+                    self.stop(cx);
+                }
+            }
         }
         self.save();
         cx.notify();
+    }
+
+    /// Ends every session of the user's connected apps' agents as `stop` ends every agent's, with
+    /// their connections closed, the server running on for the command bar's tasks.
+    fn end_other_apps(&mut self, cx: &mut Context<Self>) {
+        let apps: Vec<Client> = self.agents.iter().map(|agent| agent.client).collect();
+        for client in apps {
+            let agent = client.id();
+            self.reading.retain(|_, reading| reading.agent != agent);
+            self.forget_waiting(agent, None, cx);
+            if let Some((server, _)) = &self.server {
+                server.disconnect(agent);
+            }
+            if self.live.remove(agent) {
+                self.browser.disconnected(agent, cx);
+                self.note(agent, 0, "disconnected", "", "");
+            }
+        }
     }
 
     /// The server as a client's config names it, with the agent's token.
@@ -1555,7 +1684,7 @@ impl Agents {
                 timer: None,
                 sign_in: false,
             };
-            self.held.insert(tab, held);
+            self.hold(tab, held);
             self.carry(tab, held::Event::Passkey, life, actions, cx);
         }
         if why != "disconnected" {
@@ -1615,6 +1744,9 @@ impl Agents {
     /// What the server's threads hand over.
     pub fn handle(&mut self, event: Event, cx: &mut Context<Self>) {
         match event {
+            // A hello the server read before the user turned other apps' agents off, from a
+            // connection that's closing: nothing of it shows.
+            Event::Hello { agent, .. } if !self.may_connect(&agent) => {}
             Event::Hello {
                 agent,
                 client,
@@ -1669,6 +1801,15 @@ impl Agents {
             _ = call
                 .reply
                 .send(ToolResult::error("This agent isn't connected."));
+            return;
+        }
+        // A call's word for its tool is its client's to choose, and the log and the trace word
+        // an entry from its action. So one that names no tool of the agent's ends here, before
+        // anything is run, shown or kept by that word: no call can leave an entry that reads as
+        // the browser's own or the user's.
+        if !tools::has(&call.agent, &call.tool) {
+            let none = format!("There's no tool {}.", call.tool);
+            _ = call.reply.send(ToolResult::error(none));
             return;
         }
         // A task the user stopped keeps its connection for their next message, so its calls still
@@ -2071,7 +2212,7 @@ impl Agents {
                     timer: None,
                     sign_in: false,
                 };
-                self.held.insert(tab, held);
+                self.hold(tab, held);
                 self.carry(tab, held::Event::HandOff, life, actions, cx);
             }
             "sort_tabs_by_site" if !is_task(&agent) => {
@@ -2336,11 +2477,25 @@ impl Agents {
         }
     }
 
-    /// Whether the agent may call tools: a client the user connected, or a task not dropped.
+    /// Whether the agent's connections are taken: a thread's while the inside switch is on, an
+    /// app's while the outside one is, each whatever the other says.
+    fn may_connect(&self, agent: &str) -> bool {
+        match server::side(agent) {
+            Some(server::Side::Inside) => self.threads(),
+            Some(server::Side::Outside) => self.other_apps(),
+            None => false,
+        }
+    }
+
+    /// Whether the agent may call tools: a client the user connected, while other apps' agents are
+    /// on, or a thread not dropped, while threads are.
     fn may_call(&self, agent: &str) -> bool {
-        match Client::from_id(agent) {
-            Some(client) => self.is_connected(client),
-            None => is_task(agent) && self.task(agent).is_some(),
+        match (server::side(agent), Client::from_id(agent)) {
+            (Some(server::Side::Outside), Some(client)) => {
+                self.is_connected(client) && self.other_apps()
+            }
+            (Some(server::Side::Inside), _) => self.threads() && self.task(agent).is_some(),
+            _ => false,
         }
     }
 
@@ -2802,9 +2957,48 @@ impl Agents {
             timer: None,
             sign_in: true,
         };
-        self.held.insert(tab, held);
+        self.hold(tab, held);
         self.carry(tab, held::Event::HandOff, life, actions, cx);
         Ok(())
+    }
+
+    /// The user holds `tab` from now: whatever they put in its page keeps its picture off a kept
+    /// card until a new document (kept/unkept.rs).
+    fn hold(&mut self, tab: u64, held: Held) {
+        self.unkept.mark(tab);
+        self.held.insert(tab, held);
+    }
+
+    /// `tab`'s address and whether it loads, as the core said them (tabs::tab_state_changed).
+    pub fn tab_state(&mut self, tab: u64, url: &str, loading: bool) {
+        let holding = self.held.contains_key(&tab);
+        self.unkept.state(tab, url, loading, holding);
+    }
+
+    /// `tab`'s main frame finished loading (tabs::tab_loaded).
+    pub fn tab_loaded(&mut self, tab: u64) {
+        let holding = self.held.contains_key(&tab);
+        self.unkept.loaded(tab, holding);
+    }
+
+    /// Whether a picture of `tab` taken now could have been given to an agent, for a kept card
+    /// to keep, by what the agents know of it: not while the user holds it, nor since then or
+    /// since an agent typed there text that may not be shown, until a new document; nor a page
+    /// withheld from an outside agent the user stopped, a page at a fenced site, or a sign-in's:
+    /// a page's own, one the agent handed the user to sign in, or its assistant's own. The page's own camera,
+    /// microphone and sharing, and a private window, are the window's to add.
+    pub fn keeps_picture(&self, tab: u64, cx: &App) -> bool {
+        let withheld = (self.tasks.tasks.iter())
+            .filter_map(|task| task.session.as_ref())
+            .any(|session| session.withheld && session.tabs.contains(&tab));
+        let sign_in = matches!(self.dialogs.get(&tab), Some((DialogKind::SignIn, _)))
+            || self.held.get(&tab).is_some_and(|held| held.sign_in)
+            || sign_in::quiet(tab);
+        !(self.held.contains_key(&tab)
+            || self.unkept.marked(tab)
+            || withheld
+            || sign_in
+            || self.came_to(tab, cx).is_some())
     }
 
     /// The user takes the tab the agent is at work in over: the agent may not act in it until
@@ -2830,7 +3024,7 @@ impl Agents {
             timer: None,
             sign_in: false,
         };
-        self.held.insert(tab, held);
+        self.hold(tab, held);
         // The core ends the agent's session there, which logs it.
         self.carry(tab, held::Event::TakeOver, life, actions, cx);
         cx.notify();
@@ -2874,6 +3068,7 @@ impl Agents {
     /// The core closed `tab` (tabs::tab_closed). A hold on it ends. A session's page that the
     /// agent or the browser didn't close, the user or its own page did.
     pub fn tab_closed(&mut self, tab: u64, cx: &mut Context<Self>) {
+        self.unkept.closed(tab);
         self.sign_in_tab_closed(tab, cx);
         self.dialogs.remove(&tab);
         self.cleared.remove(&tab);
@@ -3255,6 +3450,11 @@ impl Agents {
                     let refused = Refused::of(tools::Kind::Password, PASSWORDS);
                     return self.refuse(act, &host, refused, cx);
                 }
+                // Text that may not be shown is kept off a kept card's picture too, as only the
+                // agent's screenshot hatches it.
+                if !element.shows_typed() {
+                    self.unkept.mark(tab);
+                }
                 let submit = arguments
                     .get("submit")
                     .and_then(Value::as_bool)
@@ -3564,7 +3764,7 @@ impl Agents {
             timer: None,
             sign_in: false,
         };
-        self.held.insert(tab, held);
+        self.hold(tab, held);
         self.carry(tab, held::Event::HandOff, life, actions, cx);
         cx.notify();
     }
@@ -4284,6 +4484,13 @@ impl Agents {
             note = match note.is_empty() {
                 true => unsettled.into(),
                 false => format!("{note} {unsettled}"),
+            };
+        }
+        // The core names the field only where its list would have stayed shut.
+        if let Some(shut) = tree["shut"].as_str().and_then(shut_line) {
+            note = match note.is_empty() {
+                true => shut.into(),
+                false => format!("{note} {shut}"),
             };
         }
         // A choice answers with what the field holds once it shows the option, as the core
@@ -5163,7 +5370,8 @@ impl Agents {
             return;
         }
         let (events, mut handed) = futures::channel::mpsc::unbounded();
-        match server::Server::start(&self.socket, self.tokens.clone(), events) {
+        let (tokens, switches) = (self.tokens.clone(), self.switches.clone());
+        match server::Server::start(&self.socket, tokens, switches, events) {
             Ok(server) => {
                 // check.sh reads this line.
                 log!("browser: agents server on {}", server.path().display());
@@ -5211,9 +5419,11 @@ impl Agents {
             .agents
             .iter()
             .map(|agent| (agent.token.clone(), agent.client.id().into()));
-        // A session's calls come with its client's token: it has none of its own.
+        // A session's calls come with its client's token: it has none of its own. A thread of the
+        // product's own has one only while the inside switch is on.
+        let threads = self.threads();
         let tasks = (self.tasks.tasks.iter())
-            .filter(|task| task.session.is_none())
+            .filter(|task| threads && task.session.is_none())
             .map(|task| (task.token().to_string(), task.agent.clone()));
         *self.tokens.lock().unwrap() = tokens.chain(tasks).collect();
     }
@@ -5237,16 +5447,26 @@ impl Agents {
         let found: serde_json::Map<String, Value> = (self.tasks.found.iter())
             .map(|(cli, found)| (cli.id().into(), found.saved()))
             .collect();
+        let last: serde_json::Map<String, Value> = (self.tasks.last.iter())
+            .map(|(profile, last)| {
+                let model = (last.model.as_ref()).map(|(cli, id)| json!([cli.id(), id]));
+                (
+                    profile.clone(),
+                    json!({ "level": last.tier.id(), "model": model }),
+                )
+            })
+            .collect();
         let tasks = json!({
-            "on": !self.tasks_off,
             "default": self.tasks.default.map(runner::Cli::id),
             "models": models,
             "found": found,
+            "last": last,
             "keep": !self.tasks.kept.off,
             "notify": self.notify.id(),
         });
         let saved = json!({
-            "on": self.on,
+            "threads": self.threads(),
+            "other_apps": self.other_apps(),
             "agents": agents,
             "grants": grants,
             "fenced": self.fenced,
@@ -5409,6 +5629,20 @@ pub fn tab_closed(tab: u64, cx: &mut App) {
 pub fn tab_at(tab: u64, url: &str, cx: &mut App) {
     if let Some(agents) = global(cx) {
         agents.update(cx, |agents, _| agents.tab_at(tab, url));
+    }
+}
+
+/// The core's address for `tab` and whether it loads (tabs::tab_state_changed).
+pub fn tab_state(tab: u64, url: &str, loading: bool, cx: &mut App) {
+    if let Some(agents) = global(cx) {
+        agents.update(cx, |agents, _| agents.tab_state(tab, url, loading));
+    }
+}
+
+/// `tab`'s main frame finished loading (tabs::tab_loaded).
+pub fn tab_loaded(tab: u64, cx: &mut App) {
+    if let Some(agents) = global(cx) {
+        agents.update(cx, |agents, _| agents.tab_loaded(tab));
     }
 }
 

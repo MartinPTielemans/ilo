@@ -318,10 +318,12 @@ impl Browser for Core {
 
     fn user_space(&self, like: u64) -> u64 {
         let profile = unsafe { bc::bc_space_profile(like) };
+        // A private window's is never one: agents get no path into it.
         let users = |space: u64| {
             space != 0
                 && name(bc::bc_space_agent, space).is_empty()
                 && unsafe { bc::bc_space_profile(space) } == profile
+                && !self.private_space(space)
         };
         let shown = unsafe { bc::bc_window_space(crate::front().0) };
         match users(shown) {
@@ -501,6 +503,7 @@ pub fn start(cx: &mut App) {
     cx.set_global(GlobalAgents(made.clone()));
     // The bar in an agent's Space follows what it does, and what the user holds from it.
     cx.observe(&made, |agents, cx| {
+        crate::broom_host::agents_changed(cx);
         let status = agents.read(cx).status();
         // Each card is compared with the last, so a window redraws only for a task that changed.
         let cards = agents.read(cx).shown_cards(cx);

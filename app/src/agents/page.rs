@@ -129,6 +129,15 @@ pub struct Element {
     pub form: Option<i64>,
 }
 
+impl Element {
+    /// Whether what an agent types into it may be shown: never a password field's value, nor one
+    /// whose name says it's a secret. A trace's step and a kept card both go by this.
+    pub fn shows_typed(&self) -> bool {
+        let name = self.name.to_lowercase();
+        !self.password && !name.contains("password") && !name.contains("passcode")
+    }
+}
+
 /// What has the keyboard in a page, as its outline says.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum Focus {

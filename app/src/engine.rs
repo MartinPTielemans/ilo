@@ -529,14 +529,6 @@ impl Browser for Engine {
         list_captures(cx);
     }
 
-    fn hover_kinds(&self, _: &mut App) -> u32 {
-        unsafe { bc::bc_hover_kinds() as u32 }
-    }
-
-    fn set_hover_kinds(&self, kinds: u32, _: &mut App) {
-        unsafe { bc::bc_set_hover_kinds(kinds as c_int) };
-    }
-
     fn trash(&self, path: &str, _: &mut App) -> bool {
         CString::new(path).is_ok_and(|path| unsafe { platform::host_trash(path.as_ptr()) })
     }
@@ -675,6 +667,20 @@ impl Browser for Engine {
     fn show_task(&self, _: SharedString, _: &mut App) {
         // The Agents send a window its conversation as it changes; this sends it now.
         agents_core::update(|_, cx| cx.notify());
+    }
+
+    fn keeps_picture(&self, tab: u64, cx: &App) -> bool {
+        browser::agents::global(cx).is_some_and(|agents| agents.read(cx).keeps_picture(tab, cx))
+    }
+
+    fn card_pictured(
+        &self,
+        agent: SharedString,
+        tab: u64,
+        picture: Option<Arc<gpui::RenderImage>>,
+        _: &mut App,
+    ) {
+        agents_core::update(move |agents, cx| agents.card_pictured(&agent, tab, picture, cx));
     }
 
     fn task_picture(&self, tab: u64, request: u64, _: &mut App) {
@@ -1918,28 +1924,8 @@ impl Browser for Engine {
         command_bar::in_place(Rc::new(command_bar_host::Bar), window, cx)
     }
 
-    fn start_task(
-        &self,
-        agent: &str,
-        asked: &str,
-        home: u64,
-        start: browser::agents::task::Start,
-        _: &mut App,
-    ) {
-        let (agent, asked, window) = (agent.to_string(), asked.to_string(), self.window);
-        agents_core::update(move |agents, cx| {
-            let cli = browser::agents::runner::Cli::from_id(&agent);
-            let started = cli.and_then(|cli| agents.start_task(cli, &asked, None, home, start, cx));
-            // The composer's ↩ opens the view of the task it started alone, or of none.
-            let shell = WINDOWS.with_borrow(|windows| {
-                (windows.iter().find(|w| w.id == window)).and_then(|w| w.shell.upgrade())
-            });
-            if let Some(shell) = shell {
-                shell.update(cx, |shell, _| {
-                    shell.composed_started(started.map(Into::into))
-                });
-            }
-        });
+    fn files_available(&self, _: &App) -> bool {
+        browser::agents::wall::available().is_ok()
     }
 
     fn field_window_typing(&self, cx: &mut App) -> bool {
@@ -2086,6 +2072,14 @@ impl Browser for Engine {
         recent_host::fetch(self.window, tab);
     }
 
+    fn broom(&self) -> Option<shell::Broom> {
+        broom_host::shown(self.window)
+    }
+
+    fn start_broom(&self, cx: &mut App) {
+        broom_host::start(self.window, cx);
+    }
+
     fn card_picture(&self, tab: u64, scale: f32, cx: &mut App) {
         let request = hover_card::asking(tab, cx);
         // check.sh reads this line: a hidden page draws for its picture from here.
@@ -2096,6 +2090,10 @@ impl Browser for Engine {
 
     fn window(&self) -> u64 {
         self.window
+    }
+
+    fn shown_now(&self) -> u64 {
+        unsafe { bc::bc_window_selected(self.window) }
     }
 
     fn find_next(&self, tab: u64, forward: bool, cx: &mut App) {
@@ -2177,14 +2175,24 @@ impl Browser for Engine {
 
     // Every build has the agents' server. The first launch picks its steps before the first
     // frame, when agents_core makes the Agents, and a new profile's are off until then.
-    fn agents(&self, cx: &App) -> Option<bool> {
-        Some(browser::agents::global(cx).is_some_and(|agents| agents.read(cx).is_on()))
+    fn threads(&self, cx: &App) -> Option<bool> {
+        Some(browser::agents::global(cx).is_some_and(|agents| agents.read(cx).threads()))
     }
 
-    fn set_agents(&self, on: bool, cx: &mut App) {
+    fn set_threads(&self, on: bool, cx: &mut App) {
         agents_core::start(cx);
         if let Some(agents) = browser::agents::global(cx) {
-            agents.update(cx, |agents, cx| agents.set_on(on, cx));
+            agents.update(cx, |agents, cx| agents.set_threads(on, cx));
+        }
+    }
+
+    fn other_apps(&self, cx: &App) -> Option<bool> {
+        Some(browser::agents::global(cx).is_some_and(|agents| agents.read(cx).other_apps()))
+    }
+
+    fn set_other_apps(&self, on: bool, cx: &mut App) {
+        if let Some(agents) = browser::agents::global(cx) {
+            agents.update(cx, |agents, cx| agents.set_other_apps(on, cx));
         }
     }
 
@@ -2306,6 +2314,50 @@ impl Browser for Engine {
         unsafe { platform::host_make_default_browser(settings::default_browser_answered) };
     }
 
+    // Settings' own switches, read and set as its rows do.
+    fn setting(&self, space: u64, setting: shell::Setting, _: &App) -> Option<bool> {
+        match setting {
+            shell::Setting::RestoreWindows => Some(unsafe { bc::bc_restore_windows() }),
+            shell::Setting::AdBlocking => Some(unsafe { bc::bc_ad_blocking() }),
+            shell::Setting::SavePasswords => {
+                let (profile, mut offers) = (unsafe { bc::bc_space_profile(space) }, false);
+                let what = bc::BC_SAVE_PASSWORDS as i32;
+                unsafe { bc::bc_profile_offers_to_save(profile, what, &mut offers) }
+                    .then_some(offers)
+            }
+        }
+    }
+
+    fn set_setting(&self, space: u64, setting: shell::Setting, on: bool, _: &mut App) {
+        match setting {
+            shell::Setting::RestoreWindows => unsafe { bc::bc_set_restore_windows(on) },
+            shell::Setting::AdBlocking => unsafe { bc::bc_set_ad_blocking(on) },
+            shell::Setting::SavePasswords => unsafe {
+                let profile = bc::bc_space_profile(space);
+                bc::bc_profile_set_offers_to_save(profile, bc::BC_SAVE_PASSWORDS as i32, on);
+            },
+        }
+    }
+
+    // A new profile's loads after the flow starts, and until then it's the time a profile takes
+    // the first time it's used, which Never (-1) isn't.
+    fn archive_after(&self, space: u64) -> Option<(f64, Vec<f64>)> {
+        let after = unsafe { bc::bc_profile_archive_after(bc::bc_space_profile(space)) };
+        let after = if after == 0. {
+            unsafe { bc::bc_archive_after() }
+        } else {
+            after
+        };
+        Some((after, settings::archive_times()))
+    }
+
+    fn set_archive_after(&self, space: u64, seconds: f64, _: &mut App) {
+        let profile = unsafe { bc::bc_space_profile(space) };
+        if !unsafe { bc::bc_profile_set_archive_after(profile, seconds) } {
+            unsafe { bc::bc_set_archive_after(seconds) };
+        }
+    }
+
     fn search_engines(&self, space: u64) -> (Vec<(SharedString, SharedString)>, SharedString) {
         settings::search_engines(unsafe { bc::bc_space_profile(space) }).unwrap_or_default()
     }
@@ -2314,27 +2366,22 @@ impl Browser for Engine {
         settings::set_search_engine(unsafe { bc::bc_space_profile(space) }, keyword, name);
     }
 
-    fn welcome_window(&self, cx: &mut App) {
-        let id = self.window;
-        cx.defer(move |cx| {
-            let from = WINDOWS.with_borrow(|windows| {
-                let this = windows.iter().find(|w| w.id == id && w.regular());
-                this.or_else(|| windows.iter().find(|w| w.regular()))
-                    .cloned()
-            });
-            let Some(window) = from.and_then(|from| open_window(Some(from), None, cx)) else {
-                return;
-            };
-            let shell = WINDOWS.with_borrow(|windows| {
-                windows
-                    .iter()
-                    .find(|w| w.id == window)
-                    .and_then(|w| w.shell.upgrade())
-            });
-            if let Some(shell) = shell {
-                shell.update(cx, |shell, cx| shell.start_onboarding(None, cx));
+    fn show_first_run(&self, window: gpui::AnyWindowHandle, cx: &mut App) {
+        let view = window.update(cx, |_, window, _| crate::ns_view(window));
+        if let Ok(view) = view {
+            unsafe {
+                platform::host_add_first_run(view);
+                platform::host_show_first_run();
             }
-        });
+        }
+    }
+
+    fn end_first_run(&self, window: gpui::AnyWindowHandle, cx: &mut App) {
+        unsafe { platform::host_close_first_run() };
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .ok();
+        show_window_held_for_first_run();
     }
 
     fn new_private_window(&self, cx: &mut App) {

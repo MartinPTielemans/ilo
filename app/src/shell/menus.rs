@@ -75,6 +75,11 @@ pub struct MenuEntry {
     pub header: bool,
     /// Words after its title in the secondary ink, which say more of it, as Default's model.
     pub detail: Option<SharedString>,
+    /// Whether it's the menu's search field, its first row, titled with its placeholder: what's
+    /// typed there narrows the rows after it (`menu::narrowed`).
+    pub field: bool,
+    /// Whether a search leaves it whatever is typed, as the model menu's Sign In and Settings.
+    pub kept: bool,
 }
 
 impl MenuEntry {
@@ -108,7 +113,22 @@ impl MenuEntry {
             favicon: None,
             header: false,
             detail: None,
+            field: false,
+            kept: false,
         }
+    }
+
+    /// A search field over the rows after it, with the words table's `placeholder`.
+    pub fn search(placeholder: impl Into<SharedString>) -> Self {
+        MenuEntry {
+            field: true,
+            ..MenuEntry::named(placeholder, false)
+        }
+    }
+
+    /// Left by any search (`kept`).
+    pub fn kept(self) -> Self {
+        MenuEntry { kept: true, ..self }
     }
 
     /// A heading over the items after it, in the platform's case.
@@ -124,7 +144,7 @@ impl MenuEntry {
     }
 
     /// In the submenu of the item at `parent`.
-    fn under(self, parent: usize) -> Self {
+    pub(in crate::shell) fn under(self, parent: usize) -> Self {
         MenuEntry {
             parent: Some(parent),
             ..self
@@ -305,11 +325,13 @@ impl Shell {
             let action: MenuAction = Box::new(move |shell, cx| shell.run(command, "sidebar", cx));
             (entry, action)
         };
-        let mut items = vec![
-            command(Command::SortBySite),
-            command(Command::Clear),
-            (MenuEntry::line(), Box::new(|_, _| {})),
-        ];
+        let mut items = vec![command(Command::SortBySite)];
+        // Only where the broom would sort: with nothing to sort, or a sort running, it's not offered.
+        if self.browser.broom().is_some_and(super::Broom::sorts) {
+            items.push(command(Command::SortIntoFolders));
+        }
+        items.push(command(Command::Clear));
+        items.push((MenuEntry::line(), Box::new(|_, _| {})));
         let after = items.len();
         items.extend((self.empty_space_items(self.space, cx).into_iter()).map(
             |(entry, action)| {
@@ -500,9 +522,10 @@ impl Shell {
     ) {
         let look = self.menu_look();
         self.menu_open = true;
-        // The name row and the menu control say so after this if the menu is their own.
+        // The name row, the menu control and the + say so after this if the menu is their own.
         self.name_menu = false;
         self.app_menu = false;
+        self.plus_menu = false;
         let shell = cx.weak_entity();
         self.browser.context_menu(
             entries,
@@ -514,6 +537,7 @@ impl Shell {
                     .update(cx, |shell, cx| {
                         shell.menu_open = false;
                         shell.app_menu = false;
+                        shell.plus_menu = false;
                         chosen(index, shell, cx);
                         shell.settle_recent_downloads(cx);
                     })
@@ -1104,7 +1128,9 @@ impl Shell {
         markdown: bool,
         cx: &mut Context<Self>,
     ) {
-        let lines: Vec<String> = (self.folder_links(folder).into_iter())
+        let links = self.folder_links(folder);
+        let tabs: Vec<u64> = links.iter().map(|&(tab, _)| tab).collect();
+        let lines: Vec<String> = (links.into_iter())
             .map(|(tab, link)| match markdown {
                 false => link,
                 true => format!("[{}]({link})", markdown_text(&self.title(tab))),
@@ -1115,7 +1141,7 @@ impl Shell {
         } else {
             "Copied All Links"
         };
-        self.copy(&lines.join("\n"), toast, cx);
+        self.copy_from(&tabs, &lines.join("\n"), toast, cx);
     }
 
     /// A folder's Paste URL as New Tab: the clipboard's web link as a tab at the folder's top,
@@ -1737,12 +1763,13 @@ impl Shell {
     /// shown's, or as a Markdown link, as ⌥⇧⌘C does.
     fn copy_link(&mut self, tab: u64, markdown: bool, cx: &mut Context<Self>) {
         if let Some((text, toast)) = self.link_to_copy(tab, markdown) {
-            self.copy(&text, toast, cx);
+            self.copy_from(&[tab], &text, toast, cx);
         }
     }
 
     /// The + button's menu, by Arc's menus' names for what it makes (ours: Arc's + menu isn't
     /// recorded), and the shown page's Boost, New Boost… or Edit Boost…, where it can have one.
+    /// The + keeps its plate while it's up.
     pub(super) fn plus_menu(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let mut items = vec![
             ("New Space…", Command::NewSpace),
@@ -1782,6 +1809,8 @@ impl Shell {
             entries,
             position,
             Box::new(move |chosen, shell, cx| {
+                // The + lets its plate go.
+                cx.notify();
                 let Some(at) = chosen else {
                     return;
                 };
@@ -1797,6 +1826,8 @@ impl Shell {
             }),
             cx,
         );
+        self.plus_menu = self.menu_open;
+        cx.notify();
     }
 
     /// The menu control's menu, off the Mac (#3148): what the Mac's menu bar holds under ilo's

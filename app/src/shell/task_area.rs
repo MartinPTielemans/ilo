@@ -15,7 +15,8 @@ use std::f32::consts::FRAC_PI_2;
 
 use gpui::{
     AnyElement, AnyView, Bounds, Context, Corners, FontWeight, Hsla, MouseButton, Pixels, Radians,
-    SharedString, Size, Transformation, Window, canvas, div, point, prelude::*, px, rgb, size, svg,
+    SharedString, Size, Task, Transformation, Window, canvas, div, point, prelude::*, px, rgb,
+    size, svg,
 };
 
 use super::{
@@ -66,6 +67,10 @@ pub(super) struct Closing {
     /// page's dialog is drawn over a task's conversation.
     aside: Option<TaskArea>,
 }
+/// How long, in seconds, a page going back waits for a picture of itself as it is to shrink from,
+/// as the one it came out of its thumbnail with is the conversation's, smaller and older: past it,
+/// it goes back with that one. The core answers in a frame or two where the page draws.
+pub(super) const PICTURE_WAIT: f32 = 0.1;
 
 /// A task's page watched in the page area.
 struct Watched {
@@ -82,6 +87,9 @@ struct Watched {
     by_ilo: bool,
     /// Held behind its picture since ilo opened it, till a timer of ARM lets it in place.
     guarded: bool,
+    /// While it waits to go back for a picture of itself as it is: the one wait that bounds it,
+    /// which the answer ends by dropping it.
+    waiting: Option<Task<()>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -196,6 +204,7 @@ impl Shell {
                             shown: 0,
                             peeked: Vec::new(),
                             live_rooms: Default::default(),
+                            placed: Vec::new(),
                         }
                     }
                 }
@@ -208,7 +217,7 @@ impl Shell {
     /// A task's Space the window shows, as one a launch brings back, gives way to the user's.
     pub(super) fn task_spaces_changed(&mut self, cx: &mut Context<Self>) {
         if self.area_takes_space() {
-            self.reshape_foot(cx);
+            self.reshape_cards(cx);
         }
         let area = self.task_area.as_ref();
         let gone = area.is_some_and(|area| self.space_went(area.space));
@@ -410,7 +419,7 @@ impl Shell {
         log!("browser: task area {space} open");
         self.take_keyboard(cx);
         // Its group at the sidebar's foot opens to its pages, and the one shown before closes.
-        self.reshape_foot(cx);
+        self.reshape_cards(cx);
         cx.notify();
     }
 
@@ -464,6 +473,7 @@ impl Shell {
                 zoom,
                 by_ilo,
                 guarded: by_ilo,
+                waiting: None,
             },
             cx,
         );
@@ -549,6 +559,12 @@ impl Shell {
             _ => {
                 let request = next_request();
                 page.zoom = Zoom::Asked(request);
+                // A core that never answers leaves it going back with the picture it has (#4247).
+                page.waiting = Some(cx.spawn(async move |shell, cx| {
+                    let wait = Duration::from_secs_f32(PICTURE_WAIT);
+                    cx.background_executor().timer(wait).await;
+                    (shell.update(cx, |shell, cx| shell.task_page_unpictured(request, cx))).ok();
+                }));
                 self.browser.page_picture(tab, request, cx);
             }
         }
@@ -734,7 +750,7 @@ impl Shell {
         self.talk_closed(cx);
         self.lay_out_page(cx);
         // Its group at the sidebar's foot closes to its header.
-        self.reshape_foot(cx);
+        self.reshape_cards(cx);
         if let Some(agent) = left {
             self.talk_left(agent, cx);
         }
@@ -852,7 +868,7 @@ impl Shell {
             closing.aside = area;
         }
         self.lay_out_page(cx);
-        self.reshape_foot(cx);
+        self.reshape_cards(cx);
         cx.notify();
     }
 
@@ -877,6 +893,7 @@ impl Shell {
                     zoom: Zoom::Rest,
                     by_ilo: false,
                     guarded: false,
+                    waiting: None,
                     ..page
                 };
                 self.show_watched(page, cx);
@@ -922,7 +939,7 @@ impl Shell {
             log!("browser: task area {space} back");
         }
         self.lay_out_page(cx);
-        self.restore_foot(cx);
+        self.restore_cards(cx);
         // The Agents send its conversation as it is now, as they sent none while it was aside.
         if let Some(agent) = self.talk_agent() {
             self.browser.show_task(agent, cx);
@@ -958,6 +975,7 @@ impl Shell {
         if page.zoom != Zoom::Asked(request) {
             return false;
         }
+        page.waiting = None;
         if let Some(picture) = picture {
             if let Some(old) = page.picture.replace(picture).filter(|_| page.asked) {
                 self.stale_pictures.push(old.image());
@@ -968,6 +986,23 @@ impl Shell {
         self.show_task_page_away(cx);
         cx.notify();
         true
+    }
+
+    /// The page waited `PICTURE_WAIT` for the picture `request` asked, which never came: it goes
+    /// back with the picture it has, and one that comes after is nothing to the area.
+    fn task_page_unpictured(&mut self, request: u64, cx: &mut Context<Self>) {
+        let Some(page) = self.task_area.as_mut().and_then(|area| area.page.as_mut()) else {
+            return;
+        };
+        if page.zoom != Zoom::Asked(request) {
+            return;
+        }
+        page.waiting = None;
+        page.zoom = Zoom::In(Instant::now());
+        // The core's fault (#4253), in the run's log, where the zoom alone wouldn't show it.
+        log!("browser: task page {} back unpictured", page.tab);
+        self.show_task_page_away(cx);
+        cx.notify();
     }
 
     /// A press on the page zooming ends its zoom out at once, for the page itself to take what
@@ -1321,7 +1356,7 @@ impl Shell {
     }
 
     /// The card of the task the page area shows.
-    fn task_card_shown(&self) -> Option<&Card> {
+    pub(super) fn task_card_shown(&self) -> Option<&Card> {
         let agent = self.talk_in(self.task_open()?)?;
         self.task_cards.iter().find(|card| card.agent == agent)
     }
@@ -1482,7 +1517,7 @@ impl Shell {
                         .child(self.strip_open_listener())
                         .on_click(cx.listener(move |shell, _, _, cx| {
                             cx.stop_propagation();
-                            let from = shell.foot.strip_open.get();
+                            let from = shell.task_list.strip_open.get();
                             log!("browser: command open-task-pages via strip");
                             shell.open_task_pages(agent.clone(), Some(tab), from, cx);
                         }));

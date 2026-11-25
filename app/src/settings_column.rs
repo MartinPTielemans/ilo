@@ -16,6 +16,7 @@ use gpui::{
 use crate::palette::{BUTTON_PLATE, FIELD_PLATE, INK, PAPER, TEXT_PRIMARY, TEXT_SECONDARY, Tone};
 use crate::settings_card::Follow;
 use crate::settings_rows::{drawn, named_button, ring};
+use crate::tokens::palette::{LIGHT_TEXT_SECONDARY, LIGHT_TEXT_TERTIARY, TEXT_TERTIARY};
 use crate::tokens::settings::form;
 use crate::tokens::settings::{MIN_HEIGHT, MIN_WIDTH, SEARCH_DIMMED};
 use crate::tokens::shell::ICON_INK;
@@ -64,6 +65,19 @@ pub enum Section {
 }
 
 impl Section {
+    /// What the page is, once, under its heading, where the two kinds of agent need telling apart:
+    /// Models is the user's assistant's, Other apps the outside apps'.
+    pub fn lede(self) -> Option<String> {
+        use crate::product::PRODUCT;
+        match self {
+            Section::Models => Some(format!("What {PRODUCT} runs your threads on.")),
+            Section::OtherApps => Some(format!(
+                "Apps that drive {PRODUCT} from outside, through its command line or MCP."
+            )),
+            _ => None,
+        }
+    }
+
     /// The sidebar's groups, in its order, as the owner drew them.
     pub const GROUPS: [&'static [Section]; 3] = [
         &[
@@ -146,7 +160,7 @@ pub type Pick = Rc<dyn Fn(Section, &mut Window, &mut App)>;
 pub type Foot = Rc<dyn Fn(&mut Window, &mut App)>;
 
 /// The sidebar's colours: the palette's neutrals and the sidebar's icon ink, with Settings' own
-/// quietest text and shown plate.
+/// shown plate.
 #[derive(Clone, Copy)]
 pub struct Ink {
     pub text: Rgba,
@@ -160,17 +174,27 @@ pub struct Ink {
 
 impl Ink {
     pub fn new(dark: bool) -> Ink {
-        let pick = |dark_one: u32, light_one: u32| rgba(if dark { dark_one } else { light_one });
         let ink = if dark { Tone::Dark } else { Tone::Light }.ink();
         let at = |a: f32| Rgba { a, ..ink };
         Ink {
             text: at(TEXT_PRIMARY),
-            text_2: at(TEXT_SECONDARY),
-            text_3: pick(form::TEXT_3, form::LIGHT_TEXT_3),
+            text_2: at(if dark {
+                TEXT_SECONDARY
+            } else {
+                LIGHT_TEXT_SECONDARY
+            }),
+            text_3: at(if dark {
+                TEXT_TERTIARY
+            } else {
+                LIGHT_TEXT_TERTIARY
+            }),
             icon: at(ICON_INK),
             field: at(FIELD_PLATE),
             button: at(BUTTON_PLATE),
-            shown: pick(form::SHOWN, form::LIGHT_SHOWN),
+            shown: match dark {
+                true => rgba(form::SHOWN),
+                false => at(form::LIGHT_SHOWN),
+            },
         }
     }
 }

@@ -10,7 +10,8 @@ pub(crate) enum Pictures {
         appearance: browser::theme::Appearance,
         right: bool,
     },
-    /// General's groups as a profile has them, with ilo not the default browser.
+    /// General's groups as a profile has them, with the browser not the default, among several
+    /// profiles.
     General,
     /// Tabs & Sidebar's Share favorites, the scope chosen, in its group of one.
     Favorites(browser::shell::FavoritesScope),
@@ -22,6 +23,8 @@ pub(crate) enum Pictures {
     Models,
     /// Agents' Site notes (#4122): the switch, on, and the sites' rows, the first `open`.
     SiteNotes { open: bool },
+    /// Threads' first row, your assistant's switch, `on` or off.
+    Threads { on: bool },
 }
 
 /// Where the ilo command is (#3667).
@@ -87,20 +90,20 @@ impl gpui::Render for PicturesPage {
         use browser::settings_column::{self, Section};
         use browser::settings_pictures::{appearance_picker, favorites_picker, picker};
         use browser::settings_rows::{
-            Look, command_export, command_text, drawn, end, frame, glyph_plate, group_lined,
-            pictured, popup, stop_button, stop_switch, text as row_text,
+            Look, command_export, command_text, drawn, end, folder_popup, frame, glyph_plate,
+            group_lined, mark_row, pictured, popup, scope, segmented, stop_button, stop_switch,
+            text as row_text,
         };
         use browser::theme::Appearance;
         use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
         use browser::tokens::settings::{
-            BUTTONS_TOP, CONTROL_GAP, DETAIL_LINE, FIRST_GROUP, GLYPH_PLATE, GLYPH_PLATE_GAP,
-            GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, NAME, POPUP_WIDTH, ROW_X, SHARE_TOP, SIDE_ROOM,
-            TEXT_X,
+            BUTTONS_TOP, DETAIL_LINE, FIRST_GROUP, GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP,
+            HEADING_BOTTOM, HEADING_TOP, NAME, POPUP_WIDTH, ROW_X, SHARE_TOP, SIDE_ROOM, TEXT_X,
         };
         // Where a feature's own setting's text and the hairline over it start, as in Settings.
         const NESTED_X: f32 = ROW_X + GLYPH_PLATE + GLYPH_PLATE_GAP;
         use browser::tokens::text;
-        use gpui::{ParentElement, Styled, div, rgb};
+        use gpui::{ParentElement, Styled, div, prelude::FluentBuilder as _, rgb};
         // Settings takes Light's or Dark's look when it's chosen, and the system's for Automatic.
         let dark = match self.shown {
             Pictures::Appearance {
@@ -135,6 +138,7 @@ impl gpui::Render for PicturesPage {
             Pictures::CommandLine(_) => Section::OtherApps,
             Pictures::Assistants { .. } | Pictures::Models => Section::Models,
             Pictures::SiteNotes { .. } => Section::Access,
+            Pictures::Threads { .. } => Section::Threads,
         };
         let column = settings_column::column(
             &Default::default(),
@@ -158,6 +162,8 @@ impl gpui::Render for PicturesPage {
         // last, as Site notes' is.
         let mut under: Option<&str> = None;
         let mut foot: Option<&str> = None;
+        // A group whose heading has the chip saying whose settings it shows, and the profile's name.
+        let mut scoped: Option<(usize, &str)> = None;
         // The rows, by group and place, that are a feature's own settings under it.
         let mut nested: Vec<(usize, usize)> = Vec::new();
         let blocks: Vec<(Option<&str>, Vec<gpui::Div>)> = match self.shown {
@@ -253,11 +259,20 @@ impl gpui::Render for PicturesPage {
                 )]);
                 groups
             }
+            Pictures::Threads { on } => {
+                // As Settings draws it: off says what off does, on is bare.
+                let name = format!("Let your assistant use {}", browser::product::PRODUCT);
+                let line = (!on).then(|| "Off: no thread starts.".into());
+                let row = frame()
+                    .child(row_text(&look, name.clone(), line))
+                    .child(end([gpui::IntoElement::into_any_element(stop_switch(
+                        &look, "agents", name, on, 1., look.on, a11y,
+                    ))]));
+                vec![(None, vec![row])]
+            }
             Pictures::General => {
-                let button = |id: &'static str, title: &'static str| {
-                    gpui::IntoElement::into_any_element(stop_button(&look, id, title, a11y))
-                };
-                let row = |name: &'static str, line: Option<&str>, control| {
+                use browser::product::PRODUCT;
+                let row = |name: gpui::SharedString, line: Option<&str>, control| {
                     frame()
                         .child(row_text(
                             &look,
@@ -266,30 +281,37 @@ impl gpui::Render for PicturesPage {
                         ))
                         .child(end([control]))
                 };
-                let folder = div()
-                    .flex()
-                    .items_center()
-                    .gap(px(CONTROL_GAP))
-                    .child(div().text_color(look.detail).child("~/Downloads"))
-                    .child(button("download-folder", "Change…"));
+                let make = browser::settings_rows::primary(&look, "make-default", "Make Default");
+                let default = mark_row(
+                    &look,
+                    "Default browser",
+                    Some(
+                        format!(
+                            "{PRODUCT} isn't your default, so links from other apps open \
+                             somewhere else."
+                        )
+                        .into(),
+                    ),
+                    vec![gpui::IntoElement::into_any_element(make)],
+                );
+                let opens: [gpui::SharedString; 2] =
+                    ["Bring back my windows".into(), "Start fresh".into()];
+                let opens = segmented(&look, "opens", &opens, Some(0), a11y, |_, segment| segment);
+                let folder = folder_popup(&look, "folder", "Save downloads to", "Downloads", a11y);
+                scoped = Some((2, "Personal"));
                 vec![
+                    (None, vec![default]),
                     (
                         Some("Opening and quitting"),
                         vec![
                             row(
-                                "Reopen your windows and tabs",
-                                Some(concat!(
-                                    "Off: ",
-                                    env!("PRODUCT_NAME"),
-                                    " opens one empty window, and Today tabs go to the archive."
-                                )),
-                                gpui::IntoElement::into_any_element(stop_switch(
-                                    &look, "restore", "restore", true, 1., look.on, a11y,
-                                )),
+                                format!("When {PRODUCT} opens").into(),
+                                None,
+                                gpui::IntoElement::into_any_element(opens),
                             ),
                             row(
-                                "Ask before quitting",
-                                Some("⌘Q asks first, so a stray press can't close every window."),
+                                "Ask before quitting".into(),
+                                None,
                                 gpui::IntoElement::into_any_element(stop_switch(
                                     &look, "warn", "warn", true, 1., look.on, a11y,
                                 )),
@@ -300,7 +322,7 @@ impl gpui::Render for PicturesPage {
                         Some("Search and downloads"),
                         vec![
                             row(
-                                "Search engine",
+                                "Search with".into(),
                                 None,
                                 gpui::IntoElement::into_any_element(popup(
                                     &look,
@@ -310,21 +332,31 @@ impl gpui::Render for PicturesPage {
                                 )),
                             ),
                             row(
-                                "Save downloads to",
+                                "Save downloads to".into(),
                                 None,
                                 gpui::IntoElement::into_any_element(folder),
                             ),
                             row(
-                                "Ask where to save each file",
-                                Some(
-                                    "Each download asks where it goes, rather than saving to its \
-                                     folder.",
-                                ),
+                                "Ask where to save each file".into(),
+                                None,
                                 gpui::IntoElement::into_any_element(stop_switch(
                                     &look, "ask", "ask", false, 1., look.on, a11y,
                                 )),
                             ),
                         ],
+                    ),
+                    (
+                        Some("In the menu bar"),
+                        vec![row(
+                            "Little Window".into(),
+                            Some(
+                                "A small window from the menu bar, for a quick look without the \
+                                 browser.",
+                            ),
+                            gpui::IntoElement::into_any_element(stop_switch(
+                                &look, "little", "little", true, 1., look.on, a11y,
+                            )),
+                        )],
                     ),
                 ]
             }
@@ -372,20 +404,19 @@ impl gpui::Render for PicturesPage {
                         .child(row_text(&look, name, Some(line.to_string().into())))
                         .child(end(controls))
                 };
-                let master = feature(
-                    Section::Threads.glyph(),
-                    "Let agents use the browser",
-                    "On: a connected client reaches the browser through the bridge beside it.",
-                    vec![gpui::IntoElement::into_any_element(stop_switch(
+                // Other apps' own switch, on, as its page has it: S30's draft, bare when on.
+                let agents_on = format!("Let other apps' agents use {}", browser::product::PRODUCT);
+                let master = frame()
+                    .child(row_text(&look, agents_on.clone(), None))
+                    .child(end(vec![gpui::IntoElement::into_any_element(stop_switch(
                         &look,
-                        "agents",
-                        "Let agents use the browser",
+                        "other apps",
+                        agents_on,
                         true,
                         1.,
                         look.on,
                         a11y,
-                    ))],
-                );
+                    ))]));
                 let clients = vec![
                     feature(
                         "icons/terminal.svg",
@@ -468,6 +499,7 @@ impl gpui::Render for PicturesPage {
                         marked,
                         a11y,
                         gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
+                        gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
                         Rc::new(|_, _, _| {}),
                     )
                 };
@@ -490,6 +522,8 @@ impl gpui::Render for PicturesPage {
                 // A made-up assistant's words, as a failed sign-in shows them.
                 let said = "Your workspace doesn't allow Codex".to_string();
                 nested = vec![(0, 1), (0, 3)];
+                // Under the assistants, as Settings draws it.
+                under = Some(browser::settings_rows::SIGN_INS_STAY);
                 match self.shown {
                     Pictures::Models => {
                         use browser::agents::tier::{ACCESS, Tier};
@@ -612,15 +646,26 @@ impl gpui::Render for PicturesPage {
             .map(|(index, (heading, rows))| {
                 let heading = heading.map(|heading| {
                     div()
-                        .px(px(TEXT_X))
+                        .px(px(browser::tokens::settings::HEADING_X))
                         .mb(px(HEADING_BOTTOM))
-                        .text_size(px(text::SMALL))
+                        .line_height(px(browser::tokens::settings::HEADING_LINE))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(look.heading)
                         .child(heading)
+                        .when_some(
+                            scoped.filter(|&(at, _)| at == index),
+                            |heading, (_, name)| {
+                                heading
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(scope(&look, name, false))
+                            },
+                        )
                 });
                 let top = match (index, heading.is_some()) {
-                    (0, _) => FIRST_GROUP,
                     (_, true) => HEADING_TOP,
+                    (0, false) => FIRST_GROUP,
                     (_, false) => GROUP_GAP,
                 };
                 let under = under.filter(|_| index == 0);
@@ -641,13 +686,13 @@ impl gpui::Render for PicturesPage {
                         (rows.into_iter().enumerate()).map(|(at, row)| {
                             match nested.contains(&(index, at)) {
                                 true => (row, NESTED_X),
-                                false => (row, ROW_X),
+                                false => (row, 0.),
                             }
                         }),
                     ))
                     .children(under)
             });
-        // The page's name, and General's sentence and Make Default, as Settings draws them.
+        // The page's name, and its sentence where it has one, as Settings draws them.
         let title = browser::shell::display_text(
             section.name(),
             browser::tokens::shell::library::TITLE_SIZE,
@@ -655,34 +700,23 @@ impl gpui::Render for PicturesPage {
             cx,
         )
         .text_color(base.opacity(browser::tokens::settings::TITLE));
-        let general = matches!(self.shown, Pictures::General);
         let lede = match self.shown {
-            Pictures::General => Some(concat!(
-                env!("PRODUCT_NAME"),
-                " isn't your default browser."
-            )),
-            Pictures::Models => Some(browser::agents::tier::NEVER_GETS),
+            Pictures::Models | Pictures::Assistants { .. } => Section::Models.lede(),
+            Pictures::CommandLine(_) => Section::OtherApps.lede(),
             _ => None,
         };
         let lede = lede.map(|lede| {
             div()
                 .mt(px(browser::tokens::settings::LEDE_TOP))
                 .line_height(px(browser::tokens::settings::LEDE_LINE))
-                .text_color(base.opacity(browser::tokens::settings::DETAIL))
+                .text_color(base.opacity(browser::palette::TEXT_SECONDARY))
                 .child(lede)
-        });
-        let make = general.then(|| {
-            div()
-                .flex_none()
-                .ml(px(browser::tokens::settings::END_GAP))
-                .child(stop_button(&look, "make-default", "Make Default", a11y))
         });
         let head = div()
             .px(px(TEXT_X))
             .flex()
             .items_start()
-            .child(div().flex_1().min_w_0().child(title).children(lede))
-            .children(make);
+            .child(div().flex_1().min_w_0().child(title).children(lede));
         let colors = Colors {
             line: look.line,
             name: base.opacity(NAME),
