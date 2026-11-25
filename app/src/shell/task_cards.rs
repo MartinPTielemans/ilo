@@ -283,16 +283,46 @@ pub(super) fn blocks(placed: &[Placed], today: &[u64]) -> Vec<(usize, u64, f32)>
     blocks.into_iter().map(|(_, block)| block).collect()
 }
 
-/// After a Space's Today went from `was` to `today`: a card above a tab that left stands above the
-/// next one down that's still there, or at the end.
+/// After a Space's Today went from `was` to `today`: a card keeps its place among the rows. Above
+/// a tab that left, or one dragged elsewhere, it stands above the next one down that stayed, or at
+/// the end. The tabs that stayed are the most that kept their order, so a drag moves only the tab.
 pub(super) fn stand_again(placed: &mut [Placed], was: &[u64], today: &[u64]) {
+    let stayed = kept_order(was, today);
     for card in placed.iter_mut() {
-        let Some(tab) = card.above.filter(|tab| !today.contains(tab)) else {
+        let Some(tab) = card.above.filter(|tab| !stayed.contains(tab)) else {
             continue;
         };
         let after = was.iter().skip_while(|&&each| each != tab).skip(1);
-        card.above = after.copied().find(|each| today.contains(each));
+        card.above = after.copied().find(|each| stayed.contains(each));
     }
+}
+
+/// The tabs of `was` still in `today` that kept their order: the longest run of them whose places
+/// in `today` rise, so one tab dragged is the one left out.
+fn kept_order(was: &[u64], today: &[u64]) -> Vec<u64> {
+    let at: Vec<(u64, usize)> = (was.iter())
+        .filter_map(|tab| Some((*tab, today.iter().position(|each| each == tab)?)))
+        .collect();
+    // Patience sorting: `ends[k]` is the index in `at` of the least last place of a rising run
+    // k + 1 long, and `back` each one's place before it in its run.
+    let mut ends: Vec<usize> = Vec::new();
+    let mut back: Vec<Option<usize>> = vec![None; at.len()];
+    for (index, &(_, place)) in at.iter().enumerate() {
+        let k = ends.partition_point(|&end| at[end].1 < place);
+        back[index] = k.checked_sub(1).map(|before| ends[before]);
+        match ends.get_mut(k) {
+            Some(end) => *end = index,
+            None => ends.push(index),
+        }
+    }
+    let mut run = Vec::with_capacity(ends.len());
+    let mut next = ends.last().copied();
+    while let Some(index) = next {
+        run.push(at[index].0);
+        next = back[index];
+    }
+    run.reverse();
+    run
 }
 
 /// Whether a regular window lists `card` in `space`'s Today: in its home Space, and a task that

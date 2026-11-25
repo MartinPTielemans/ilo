@@ -432,6 +432,29 @@ fn a_card_stands_where_it_came_among_the_today_tabs(cx: &mut TestAppContext) {
     assert_eq!(today(&shell, cx), ["task-2", "12", "task-1"]);
 }
 
+/// A drag moves the tab and leaves the card where it stands among the rows: dragging the tab it
+/// stood above away, it stands above the next row down; dragging another tab, it stays put.
+#[gpui::test]
+fn a_dragged_tab_leaves_the_card_where_it_stands(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shell(cx);
+    let tabs = |today: Vec<u64>, shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| {
+            shell.set_tabs(1, Vec::new(), today, Vec::new(), Folders::default(), cx)
+        });
+    };
+    tabs(vec![10, 11, 12], &shell, cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_task_cards(vec![card(1, Dot::Working)], cx)
+    });
+    assert_eq!(today(&shell, cx), ["task-1", "10", "11", "12"]);
+    // The tab under it, dragged to the end.
+    tabs(vec![11, 12, 10], &shell, cx);
+    assert_eq!(today(&shell, cx), ["task-1", "11", "12", "10"]);
+    // Another tab, dragged to the end.
+    tabs(vec![11, 10, 12], &shell, cx);
+    assert_eq!(today(&shell, cx), ["task-1", "11", "10", "12"]);
+}
+
 /// The walkers go over the tabs and pass the cards by: ⌘1–9, the next and previous tab, recent
 /// tabs and Reveal Tab land on tabs alone.
 #[gpui::test]
