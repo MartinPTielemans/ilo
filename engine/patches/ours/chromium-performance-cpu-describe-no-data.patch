@@ -1,0 +1,55 @@
+Chrome's page of tabs to discard describes every node of the performance graph as its Graph tab
+opens, and the CPU monitor's part reads the node's CPU result without looking whether it has one,
+which is a CHECK in the browser's process. A node has one only if something measured CPU when it
+was made: Chrome keeps two such queries running from launch, and ilo's patches took both away
+(chromium-no-page-resource-monitor, chromium-freezing-measure-on-battery-saver), so opening that
+page quit the app (#4189). A node with no result now has nothing to describe.
+
+--- a/components/performance_manager/resource_attribution/cpu_measurement_monitor.cc
++++ b/components/performance_manager/resource_attribution/cpu_measurement_monitor.cc
+@@ -482,24 +482,39 @@
+ 
+ base::DictValue CPUMeasurementMonitor::DescribeFrameNodeData(
+     const FrameNode* node) const {
+-  return SharedCPUTimeResultData::Get(FrameNodeImpl::FromNode(node)).Describe();
++  // browser_core: a node made while nothing measured CPU has no result to describe (#4189).
++  auto* node_impl = FrameNodeImpl::FromNode(node);
++  if (!SharedCPUTimeResultData::Exists(node_impl)) {
++    return base::DictValue();
++  }
++  return SharedCPUTimeResultData::Get(node_impl).Describe();
+ }
+ 
+ base::DictValue CPUMeasurementMonitor::DescribePageNodeData(
+     const PageNode* node) const {
+-  return SharedCPUTimeResultData::Get(PageNodeImpl::FromNode(node)).Describe();
++  auto* node_impl = PageNodeImpl::FromNode(node);
++  if (!SharedCPUTimeResultData::Exists(node_impl)) {
++    return base::DictValue();
++  }
++  return SharedCPUTimeResultData::Get(node_impl).Describe();
+ }
+ 
+ base::DictValue CPUMeasurementMonitor::DescribeProcessNodeData(
+     const ProcessNode* node) const {
+-  return SharedCPUTimeResultData::Get(ProcessNodeImpl::FromNode(node))
+-      .Describe();
++  auto* node_impl = ProcessNodeImpl::FromNode(node);
++  if (!SharedCPUTimeResultData::Exists(node_impl)) {
++    return base::DictValue();
++  }
++  return SharedCPUTimeResultData::Get(node_impl).Describe();
+ }
+ 
+ base::DictValue CPUMeasurementMonitor::DescribeWorkerNodeData(
+     const WorkerNode* node) const {
+-  return SharedCPUTimeResultData::Get(WorkerNodeImpl::FromNode(node))
+-      .Describe();
++  auto* node_impl = WorkerNodeImpl::FromNode(node);
++  if (!SharedCPUTimeResultData::Exists(node_impl)) {
++    return base::DictValue();
++  }
++  return SharedCPUTimeResultData::Get(node_impl).Describe();
+ }
+ 
+ void CPUMeasurementMonitor::MonitorCPUUsage(const ProcessNode* process_node) {
