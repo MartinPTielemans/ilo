@@ -2369,10 +2369,11 @@ impl Agents {
         }
         // A thread at work is handed nothing mid-turn: a reply with a tab of the user's waits for
         // the turn under way to end, out of the conversation until then, and one sent while it
-        // waits goes after it.
+        // waits goes after it. One that waits on the user is handed it at their send.
+        let waits_on_user = self.waits_on_a_hold(agent);
         if let Some(task) = self.task_mut(agent)
             && task.state == State::Working
-            && task.sends.holds(&tabs)
+            && task.sends.holds(&tabs, waits_on_user)
         {
             let text = text.to_string().into();
             task.sends.hold(handed::Reply { text, tabs }, titles);

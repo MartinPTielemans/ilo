@@ -188,6 +188,82 @@ fn a_tab_and_no_words_starts_a_thread(cx: &mut TestAppContext) {
     assert_eq!(entries(&run, &agent, handed::HANDED, cx), ["example.com"]);
 }
 
+/// A thread started with a tab and no words has no title until its assistant names it, and its
+/// card no line: nothing of the tab's title or address, or of what its assistant was told of it,
+/// stands in for the user's words anywhere the thread is listed.
+#[gpui::test]
+fn a_thread_started_with_a_tab_alone_has_no_title_until_named(cx: &mut TestAppContext) {
+    let run = run("handed-alone-named", cx);
+    let agent = send(&run, "", USERS, &[TRAINS.0], cx).expect("started");
+    let shown = |cx: &mut TestAppContext| {
+        run.agents.read_with(cx, |agents, cx| {
+            let card = agents.cards(1, cx).remove(0);
+            let title = agents.task(&agent).expect("its thread").title.to_string();
+            (title, card.title.to_string(), card.line)
+        })
+    };
+    assert_eq!(shown(cx), (String::new(), String::new(), None));
+    let named = call(
+        &run.agents,
+        &agent,
+        "title",
+        json!({ "text": "Lisbon trains" }),
+        cx,
+    );
+    cx.run_until_parked();
+    assert!(!named.try_recv().expect("answered").error);
+    let (title, card, line) = shown(cx);
+    assert_eq!(
+        (title.as_str(), card.as_str(), line),
+        ("Lisbon trains", "Lisbon trains", None)
+    );
+}
+
+/// No send hands a helper a tab. A helper is the assistant's own and has no name a send could go
+/// to: the start's tab, a reply's and one held for the turn's end each go to the thread, whose
+/// assistant alone is told, and a send that names a helper as its thread reaches nothing.
+#[gpui::test]
+fn no_send_hands_a_helper_a_tab(cx: &mut TestAppContext) {
+    use crate::agents::runner::Helper;
+    use crate::tokens::agents::helpers::DEEP;
+    let run = run("handed-helper", cx);
+    (run.browser.tabs.borrow_mut()).push((FARES.0, USERS, FARES.1, FARES.2));
+    (run.agents).update(cx, |agents, _| agents.tasks.helpers = true);
+    let agent = send(&run, ASKED, USERS, &[TRAINS.0], cx).expect("started");
+    run.ran(1);
+    let own = opens_its_own(&run, &agent, cx);
+    let helper = "toolu_helper_1".to_string();
+    let told = |cx: &mut TestAppContext, told: Helper| {
+        let id = helper.clone();
+        run.said(&agent, Out::Helper { id, told }, cx);
+    };
+    told(cx, Helper::Asked("Compare fares".into()));
+    let (id, deep) = (Some(helper.clone()), DEEP.into());
+    run.said(&agent, Out::Started { id, deep }, cx);
+    told(cx, Helper::On(own));
+
+    // A reply while the helper works is the thread's, held for its turn's end as any is.
+    reply(&run, &agent, "And this", &[SEATS.0], cx);
+    assert_eq!(given(&run), [TRAINS.0]);
+    // One sent to the helper's own name, as nothing in the product can, reaches nothing.
+    reply(&run, &helper, "Yours", &[FARES.0], cx);
+    assert_eq!(space_of(&run, FARES.0), USERS);
+    run.said(&agent, Out::Ended(None), cx);
+    cx.run_until_parked();
+    assert_eq!(given(&run), [TRAINS.0, SEATS.0]);
+    let holds = |cx: &mut TestAppContext, who: &str| {
+        (run.agents).read_with(cx, |agents, _| agents.handed_order(who))
+    };
+    assert_eq!(holds(cx, &agent), [TRAINS.0, SEATS.0]);
+    assert_eq!(holds(cx, &helper), [0u64; 0]);
+    assert!(held(&run, &helper, cx).is_empty());
+    assert!(entries(&run, &helper, handed::HANDED, cx).is_empty());
+    assert_eq!(
+        entries(&run, &agent, handed::HANDED, cx),
+        ["example.com", "tickets.example"]
+    );
+}
+
 /// Only a tab of the user's own, on the web, in the Space the window showed at the send, is
 /// handed: not one of another Space, of an agent's, of a private window or of another profile,
 /// not a page off the web, and not one the core refuses. Each that isn't handed leaves no entry
@@ -1285,6 +1361,57 @@ fn a_reply_with_a_tab_waits_for_the_turn_under_way_to_end(cx: &mut TestAppContex
     // The turn they started ends as any does, with nothing held.
     run.finish(&agent, cx);
     assert_eq!(space_of(&run, TRAINS.0), USERS);
+}
+
+/// A thread that waits on the user by a step it handed them is handed a tab at their send, as one
+/// that waits on its question is: the wait is theirs to end, and the tab may be what ends it. One
+/// sent while a reply already waits for the turn's end goes after it, as ever, and once the step
+/// is handed back a tab waits for the turn's end again.
+#[gpui::test]
+fn a_reply_to_a_thread_that_waits_in_a_hand_off_hands_its_tabs(cx: &mut TestAppContext) {
+    let run = run("handed-in-hand-off", cx);
+    (run.browser.tabs.borrow_mut()).push((FARES.0, USERS, FARES.1, FARES.2));
+    let agent = send(&run, ASKED, USERS, &[], cx).expect("started");
+    run.ran(1);
+    let own = opens_its_own(&run, &agent, cx);
+    let step = json!({ "tab": own, "reason": "Sign in." });
+    let handed_off = call(&run.agents, &agent, "hand_off", step, cx);
+    cx.run_until_parked();
+    assert!(handed_off.try_recv().is_err(), "the hand-off waits");
+
+    reply(&run, &agent, "It's this one", &[TRAINS.0], cx);
+    assert!(held(&run, &agent, cx).is_empty());
+    assert_eq!(given(&run), [TRAINS.0]);
+    assert!(is_handed(&run, &agent, TRAINS.0, cx));
+    assert_eq!(
+        heard(&run, 1, 2),
+        format!(
+            "It's this one\n\nThe user added one of their tabs to your pages.\n{}",
+            line_of(TRAINS)
+        )
+    );
+    assert_eq!(run.state(&agent, cx), State::Working);
+    assert!(handed_off.try_recv().is_err(), "the hand-off still waits");
+
+    // Handed back, the thread is at work with no wait on the user: a tab waits for its turn's end.
+    (run.agents).update(cx, |agents, cx| agents.hand_back(own, cx));
+    cx.run_until_parked();
+    assert!(!handed_off.try_recv().expect("answered").error);
+    reply(&run, &agent, "And this", &[SEATS.0], cx);
+    assert_eq!(
+        held(&run, &agent, cx),
+        [("And this".to_string(), vec![SEATS.0])]
+    );
+    // A second step handed to the user: what they send then goes after the one that waits.
+    let step = json!({ "tab": own, "reason": "The code." });
+    let handed_off = call(&run.agents, &agent, "hand_off", step, cx);
+    cx.run_until_parked();
+    assert!(handed_off.try_recv().is_err(), "the hand-off waits");
+    reply(&run, &agent, "Fares too", &[FARES.0], cx);
+    assert_eq!(held(&run, &agent, cx).len(), 2);
+    assert_eq!(given(&run), [TRAINS.0]);
+    assert_eq!(space_of(&run, SEATS.0), USERS);
+    assert_eq!(space_of(&run, FARES.0), USERS);
 }
 
 /// Stop means stop: a reply held when the thread is stopped, fails or finishes is never given.

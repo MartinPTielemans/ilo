@@ -157,10 +157,10 @@ pub(in crate::agents) struct Sends {
 
 impl Sends {
     /// Whether a reply with `tabs` to the thread at work waits for the turn under way to end: one
-    /// with a tab of the user's does, as nothing is handed mid-turn, and so does any sent while
-    /// one waits, which goes after it.
-    pub(super) fn holds(&self, tabs: &Picked) -> bool {
-        !tabs.is_empty() || !self.held.is_empty()
+    /// with a tab of the user's does, as nothing is handed mid-turn, unless the thread
+    /// `waits_on_user` then; and so does any sent while one waits, which goes after it.
+    pub(super) fn holds(&self, tabs: &Picked, waits_on_user: bool) -> bool {
+        !self.held.is_empty() || (!tabs.is_empty() && !waits_on_user)
     }
 
     /// `reply` waits for the turn under way to end, after those that wait already.
@@ -620,6 +620,14 @@ impl Agents {
     /// handed to a thread since.
     fn returned_from(&self, agent: &str, tab: u64) -> bool {
         matches!(self.gone.get(&tab), Some((whose, Gone::Returned)) if whose == agent)
+    }
+
+    /// Whether `agent`'s thread waits on the user by a tab: a step it handed them, or a tab they
+    /// took over that it asked back. A call of its own waits on the hold, so a tab of theirs the
+    /// user sends it then goes at their send, as one sent with the answer to its question does.
+    pub(super) fn waits_on_a_hold(&self, agent: &str) -> bool {
+        let mut held = self.held.values().filter(|held| held.agent == agent);
+        held.any(|held| held.reply.is_some())
     }
 
     /// Whether a call of `agent`'s with `arguments` names a tab the user returned from its thread.
