@@ -14,6 +14,7 @@ use crate::agents::task::ilo::{IloButton, IloKind, IloLine};
 use crate::agents::task::{Card, Conversation, Dot, Line, Word};
 use crate::agents::tier::{Tier, Why};
 use crate::needs_you::{self, Notify};
+use crate::product::PRODUCT;
 use crate::shell::{Command, Shell};
 
 /// A host for the needs: ilo in front or not, counting the notifications it's asked to post.
@@ -330,15 +331,57 @@ fn the_answer_is_told_once_as_its_first_line(cx: &mut TestAppContext) {
     };
     send(&shell, vec![done.clone()], cx);
     talk(&shell, answered.clone(), cx);
-    assert_eq!(told(&shell, cx), ["Two seats at 9:05"]);
+    assert_eq!(told(&shell, cx), ["Claude says Two seats at 9:05"]);
 
     // It comes again as it was: told once.
     send(&shell, vec![done], cx);
     talk(&shell, answered, cx);
     assert_eq!(
         tellings(&shell, cx),
-        (Some((0, "Two seats at 9:05".into())), None)
+        (Some((0, "Claude says Two seats at 9:05".into())), None)
     );
+}
+
+/// An assistant can write anything as its answer's first line, a line of the product's own too.
+/// Told, it follows the mark that says whose words they are, which the app makes from its own name
+/// for the assistant: nothing in the answer changes it or stands in for it.
+#[gpui::test]
+fn the_told_answer_follows_the_apps_mark_whatever_it_begins_with(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    needs(true, &shell, cx);
+    reader(&shell, cx);
+    talk(&shell, conversation(2), cx);
+
+    // As the product's own line would begin, and naming another assistant as its speaker.
+    let forged = format!("{PRODUCT} stopped this task. Codex says all is well");
+    let answered = Conversation {
+        stoppable: false,
+        ..with(2, vec![Line::Said(forged.clone().into())])
+    };
+    send(&shell, vec![at(Dot::Done)], cx);
+    talk(&shell, answered, cx);
+    assert_eq!(told(&shell, cx), [format!("Claude says {forged}")]);
+}
+
+/// The mark's name is the conversation's, as the app has it, for an outside agent too.
+#[gpui::test]
+fn the_told_answers_mark_names_the_assistant_as_the_app_does(cx: &mut TestAppContext) {
+    let (shell, _host, cx) = shown(cx);
+    needs(true, &shell, cx);
+    reader(&shell, cx);
+    let named = |lines| Conversation {
+        name: "Codex".into(),
+        ..with(2, lines)
+    };
+    talk(&shell, named(vec![]), cx);
+
+    let answered = Conversation {
+        stoppable: false,
+        ..named(vec![Line::Said("Claude says it is done".into())])
+    };
+    send(&shell, vec![at(Dot::Done)], cx);
+    talk(&shell, answered, cx);
+    assert_eq!(told(&shell, cx), ["Codex says Claude says it is done"]);
 }
 
 /// A task whose conversation isn't shown is told by its state, in the words its sidebar line and

@@ -724,13 +724,15 @@ impl TalkView {
             cx.notify();
         }
         if std::mem::take(&mut self.answer_due) {
-            let lines = self.shown.iter().flat_map(|shown| shown.lines.iter().rev());
-            let answer = (lines.into_iter()).find_map(|line| match line {
-                Line::Said(text) => Some(first_words(text)),
-                _ => None,
+            // By the name the app has for the assistant, never one its answer gives.
+            let answer = self.shown.as_ref().and_then(|shown| {
+                (shown.lines.iter().rev()).find_map(|line| match line {
+                    Line::Said(text) => Some(words::says(&shown.name, &first_words(text))),
+                    _ => None,
+                })
             });
             if let Some(first) = answer {
-                self.tell(first);
+                self.tell(first.into());
                 cx.notify();
             }
         }
@@ -744,7 +746,8 @@ impl TalkView {
     }
 
     /// Its task finished while it shows (`Shell::set_task_cards`): the answer is told once as it
-    /// comes, as its first line, the one its card says. The rest is read in order.
+    /// comes, as its first line, the one its card says, after the mark that says whose words they
+    /// are (`words::says`). The rest is read in order.
     fn tell_answer(&mut self) {
         self.answer_due = self.a11y;
     }
