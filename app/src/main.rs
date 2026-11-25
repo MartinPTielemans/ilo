@@ -31,10 +31,10 @@ use browser::theme::Appearance;
 use browser::widevine::Widevine;
 use browser::window_frames::{self, Frame};
 use browser::{
-    account, boost_editor, capture, command_bar, dialog, elevation::Level,
-    folder_preview, hover_card, icon_picker, launch, launch_picture, link_preview, link_target,
-    log, log_always, log_in, menu, offer, passwords, site_controls, tab_switcher, theme_picker,
-    toast, tooltip, updates, zoom_hud,
+    account, boost_editor, capture, command_bar, dialog, elevation::Level, folder_preview,
+    hover_card, icon_picker, launch, launch_picture, link_preview, link_target, log, log_always,
+    log_in, menu, offer, passwords, site_controls, tab_switcher, theme_picker, toast, tooltip,
+    updates, zoom_hud,
 };
 use gpui::{
     AnyWindowHandle, App, ApplicationHandle, AsyncApp, Bounds, Context, Focusable, Image,
