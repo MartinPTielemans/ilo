@@ -861,9 +861,10 @@ in_sight() {
 # one at $(drawn …) under a short window's edge takes the click on nothing (#2503). $2 is the
 # driver's command, clickkey unless named. in_sight's variables are its own here, so a caller's at,
 # a mark it awaits from, keeps.
+# With $3, the place is one drawn after the last line matching it, as in_sight's $2.
 click_in_sight() {
   local at sight top bottom y by rest
-  in_sight "$1" || fail "Settings didn't draw $1"
+  in_sight "$1" "${3:-}" || fail "Settings didn't draw $1"
   send "${2:-clickkey}" $at
 }
 # ⌘N's and ⇧⌘N's window opens with ⌘T's command bar once it's on screen, as Arc's (window.sh

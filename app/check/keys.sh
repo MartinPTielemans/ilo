@@ -773,7 +773,9 @@ settings_drew Shortcuts
 # what's typed a task; off, it doesn't. It goes off again after.
 send clickkey $(drawn "toolbar Threads")
 settings_drew Threads
-click_in_sight "switch agents"
+# The search above drew this switch among its rows, far down the card, and a section's "drew"
+# line comes before its frame's places: only a place drawn since Threads drew is its own.
+click_in_sight "switch agents" clickkey '^browser: settings drew Threads$'
 expect '^browser: agents on$' "a click on Let agents use the browser didn't turn threads on"
 ../tools/window-screenshot.sh "$pid" "$out/settings-agent-tasks-on.png" || fail "no window to capture"
 send key w cmd
