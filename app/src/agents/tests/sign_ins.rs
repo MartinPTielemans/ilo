@@ -76,6 +76,55 @@ fn codex_signs_in_in_a_private_window_that_closes_as_it_ends(cx: &mut TestAppCon
     assert_eq!(ready, Ready::SignedIn);
 }
 
+/// No line logged while the sign-in's page shows names its address or any part of it: not the
+/// page's reports as it loads, not the URL field's words, its host neither.
+#[gpui::test]
+fn no_line_names_the_sign_ins_page_or_any_part_of_it(cx: &mut TestAppContext) {
+    use crate::shell::recorder::Recorder;
+    use crate::shell::{Folders, Page, Shell};
+    crate::heard::listen();
+    let (agents, browser, configs) = signed_out(None, cx);
+    sign_in(&agents, cx);
+    hear(&configs, 0, Heard::Page(PAGE.into()), cx);
+    let tab = page(&browser);
+    // The window it shows in, its tab chosen, the core reporting the page as it loads.
+    let host = Rc::new(Recorder::default());
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host, cx));
+    shell.update(cx, |shell, cx| {
+        let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
+        shell.set_spaces(vec![space], cx);
+        shell.set_space(1, cx);
+        shell.set_tabs(1, Vec::new(), vec![tab], Vec::new(), Folders::default(), cx);
+        for loading in [true, false] {
+            let page = Page {
+                url: PAGE.into(),
+                loading,
+                can_go_back: !loading,
+                ..Page::default()
+            };
+            shell.set_page(tab, page, cx);
+        }
+        shell.set_selected(tab, cx);
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    let lines = crate::heard::take();
+    let said = |start: &str| lines.iter().any(|line| line.starts_with(start));
+    assert!(said(&format!("browser: page {tab} back ")), "{lines:#?}");
+    assert!(said("browser: url field "), "{lines:#?}");
+    let parts = [
+        PAGE,
+        "auth.example.test",
+        "example.test",
+        "/oauth/authorize",
+        "state=",
+        "made-up-state-0002",
+    ];
+    for line in &lines {
+        let named = parts.iter().find(|part| line.contains(**part));
+        assert_eq!(named, None, "{line}");
+    }
+}
+
 #[gpui::test]
 fn a_sign_in_under_way_is_the_only_one(cx: &mut TestAppContext) {
     let (agents, _, configs) = signed_out(None, cx);
