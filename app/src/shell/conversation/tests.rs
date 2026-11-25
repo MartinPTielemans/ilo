@@ -24,7 +24,7 @@ use crate::tokens::shell::task_area::BESIDE;
 use crate::tokens::text;
 use crate::tooltip::text_width;
 
-fn card() -> Card {
+pub(super) fn card() -> Card {
     Card {
         agent: "task-1".into(),
         home: 1,
@@ -63,7 +63,7 @@ fn step(key: usize, title: &str, running: bool) -> TraceStep {
 }
 
 /// Task-1's conversation as it works, `steps` steps in.
-fn conversation(steps: usize) -> Conversation {
+pub(super) fn conversation(steps: usize) -> Conversation {
     let items = (0..steps)
         .map(|key| TraceItem::Step(step(key, "Opened skyscanner.net", key + 1 == steps)))
         .collect();
@@ -95,7 +95,9 @@ fn conversation(steps: usize) -> Conversation {
 /// The user's Space 1 with tabs 10 and 11, 10 shown, and task-1's Space 3 with tab 30, whose card
 /// is at the top of Space 1's Today; a click on the card shows its conversation. Without motion,
 /// so the area is in place at once.
-fn shown(cx: &mut TestAppContext) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTestContext) {
+pub(super) fn shown(
+    cx: &mut TestAppContext,
+) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTestContext) {
     shown_with(card(), cx)
 }
 
@@ -1194,7 +1196,7 @@ fn the_reply_placeholder_follows_the_appearance(cx: &mut TestAppContext) {
 
 /// Task-1's conversation with ilo's line that it stopped Claude at Place order, under Work on
 /// pages, drawn, and its view.
-fn stopped_at_order(
+pub(super) fn stopped_at_order(
     cx: &mut TestAppContext,
 ) -> (
     Entity<Shell>,
@@ -1754,7 +1756,7 @@ fn focus_command(shell: &Entity<Shell>, from: &str, cx: &mut VisualTestContext) 
 }
 
 /// Task-1's page 30 watched over its conversation from a picture's place, by the user.
-fn watch_page(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+pub(super) fn watch_page(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
     use gpui::{Bounds, size};
     let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
     shell.update(cx, |shell, cx| {
@@ -2258,7 +2260,7 @@ fn ended(kind: IloKind) -> Conversation {
 
 /// Where the words of ilo's line 7 were drawn and how they were laid out, and where the
 /// conversation was, once it has drawn again.
-fn ilo_words(
+pub(super) fn ilo_words(
     view: &Entity<super::TalkView>,
     cx: &mut VisualTestContext,
 ) -> (

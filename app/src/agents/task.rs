@@ -3501,7 +3501,7 @@ fn limit_words(name: &str, resets: &Option<SharedString>) -> String {
 
 /// A result's first words for its card's line: its first line of text, without the marks that
 /// make it a heading, a list's item or bold.
-fn first_words(result: &str) -> SharedString {
+pub fn first_words(result: &str) -> SharedString {
     let line = (result.lines())
         .map(|line| {
             line.trim()
