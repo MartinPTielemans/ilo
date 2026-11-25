@@ -334,11 +334,18 @@ fn build(task: &WallFor) -> Result<Wall, WallRefused> {
     }
     let program = std::fs::canonicalize(task.program).map_err(|_| failed(NO_PROGRAM))?;
     let program_dir = program.parent().ok_or_else(|| failed(NO_PROGRAM))?;
-    let resolve = |path: &Path| rules::resolved(path).unwrap_or_else(|_| path.to_path_buf());
-    let (cli_home, data) = (resolve(task.cli_home), resolve(task.data));
+    // A path the checks below compare that can't be resolved could hide an overlap behind a
+    // link, so it refuses the wall: never the path as given. One not made yet is its folder
+    // resolved and its own name, as `resolved` answers.
+    let resolve = |path: &Path| rules::resolved(path).map_err(|_| failed(NOT_RESOLVED));
+    let (cli_home, data, home) = (
+        resolve(task.cli_home)?,
+        resolve(task.data)?,
+        resolve(task.home)?,
+    );
     let mut kept_out = vec![cli_home.as_path(), data.as_path()];
     kept_out.extend(folder.as_ref().map(Granted::root));
-    let program_named = match program_folder_whole(program_dir, &resolve(task.home), &kept_out) {
+    let program_named = match program_folder_whole(program_dir, &home, &kept_out) {
         true => rules::Program::Folder(program_dir),
         false => rules::Program::File(&program),
     };
@@ -353,7 +360,9 @@ fn build(task: &WallFor) -> Result<Wall, WallRefused> {
     // such a folder first; this is where the wall is made.
     if let Some(granted) = &folder {
         let root = granted.root();
-        let (ilo, claude_config) = (resolve(task.ilo), task.claude_config.map(resolve));
+        // An ilo that can't be named, as an empty path, resolves to nothing and refuses too.
+        let ilo = resolve(task.ilo)?;
+        let claude_config = task.claude_config.map(resolve).transpose()?;
         let files = [
             Some(&program),
             Some(&bridge),
@@ -558,11 +567,22 @@ mod tests {
 
     /// What build is handed for a task of `made`'s with `granted`, with each path its own.
     fn built(made: &Made, granted: &Granted) -> Result<Wall, WallRefused> {
-        built_as(made, granted, Cli::Codex)
+        built_as(made, granted, Cli::Codex, None)
     }
 
     /// As `built`, for `cli`'s task: Claude Code's has its own home and its `.claude.json`.
-    fn built_as(made: &Made, granted: &Granted, cli: Cli) -> Result<Wall, WallRefused> {
+    /// As `built`, for `cli`'s task: Claude Code's has its own home and its `.claude.json`. `odd`
+    /// replaces one of ilo's own paths, `"ilo"` or `"data"`, by the one given.
+    fn built_as(
+        made: &Made,
+        granted: &Granted,
+        cli: Cli,
+        odd: Option<(&str, &Path)>,
+    ) -> Result<Wall, WallRefused> {
+        let given = |name: &str, default: PathBuf| match odd {
+            Some((odd, path)) if odd == name => path.to_path_buf(),
+            _ => default,
+        };
         let paths = [
             "Tasks/task",
             "Tasks/task.json",
@@ -592,7 +612,7 @@ mod tests {
             config,
             program,
             home,
-            data,
+            data: &given("data", data.clone()),
             socket,
             bridge,
             places,
@@ -603,7 +623,7 @@ mod tests {
             claude_config: (cli == Cli::Claude)
                 .then(|| made.at("conf/.claude.json"))
                 .as_deref(),
-            ilo: &made.at("app/browser"),
+            ilo: &given("ilo", made.at("app/browser")),
             cli,
             ..task(None, None)
         })
@@ -614,10 +634,33 @@ mod tests {
     fn overlaps(made: &Made, at: &str, cli: Cli) {
         std::fs::create_dir_all(made.at(at)).unwrap();
         let granted = Granted::picked(made.at(at)).unwrap();
-        let refused = built_as(made, &granted, cli).unwrap_err();
+        let refused = built_as(made, &granted, cli, None).unwrap_err();
         assert_eq!(refused, WallRefused::Failed(OVERLAPS.into()), "{at}");
         assert!(!OVERLAPS.contains('/'));
         assert_eq!(made.places(), 0, "{at}");
+    }
+
+    /// A path the overlap checks compare that can't be resolved refuses the wall, never compared
+    /// as given: here ilo's data two folders below one that is there.
+    #[test]
+    fn a_path_the_checks_compare_that_cant_be_resolved_isnt_walled() {
+        let made = Made::new("unresolved");
+        let granted = Granted::picked(made.at("granted")).unwrap();
+        let deep = made.at("missing/profile");
+        let refused = built_as(&made, &granted, Cli::Codex, Some(("data", &deep))).unwrap_err();
+        assert_eq!(refused, WallRefused::Failed(NOT_RESOLVED.into()));
+        assert_eq!(made.places(), 0);
+    }
+
+    /// An ilo whose executable can't be named, which put_up hands as an empty path, isn't walled.
+    #[test]
+    fn an_ilo_that_cant_be_named_isnt_walled() {
+        let made = Made::new("no-ilo");
+        let granted = Granted::picked(made.at("granted")).unwrap();
+        let empty = Path::new("");
+        let refused = built_as(&made, &granted, Cli::Codex, Some(("ilo", empty))).unwrap_err();
+        assert_eq!(refused, WallRefused::Failed(NOT_RESOLVED.into()));
+        assert_eq!(made.places(), 0);
     }
 
     #[test]

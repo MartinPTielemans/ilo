@@ -171,6 +171,7 @@ impl Agents {
         // None resolves to nothing too, so the start says it's without its files.
         let bridge = wall::bridge().unwrap_or_default();
         let home = crate::agents::clients::home();
+        // None is an empty path, which resolves to nothing, so the wall is refused.
         let ilo = std::env::current_exe().unwrap_or_default();
         let data = dir.parent().unwrap_or(&dir);
         let wall = WallFor {
