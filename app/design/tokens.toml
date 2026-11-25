@@ -2636,6 +2636,16 @@ tidy-track-line = 0.08
 tidy-thumb-fill = 0xffffff
 tidy-thumb-shadow = [2.0, 6.0, 0.5]
 tidy-card-top = 16.0
+# With an assistant, the broom's card under the tidy step's switch (values-first-run.md, 27b): its
+# top, height, corners, padding before and after, and gap; its tile's size, corners and glyph, the
+# tile's fill and the glyph's ink, the same in both appearances; its title's and its line's size
+# and line.
+broom-card = [16.0, 58.0, 12.0, 9.0, 12.0, 10.0]
+broom-tile = [28.0, 8.0, 16.0]
+broom-tile-fill = 0x3a3a40
+broom-glyph = 0xf3f0e8
+broom-title = [13.0, 16.0]
+broom-line = [11.0, 14.0]
 
 # First run's picture (spec-first-run.md, values-first-run.md "Right side: the picture"): a small
 # browser drawn from these, with made-up fixed content the same for everyone, and per step what
@@ -2745,6 +2755,15 @@ hills-at = [-80.0, 110.0, 300.0, 160.0, 120.0, 340.0, 20.0, 140.0, 260.0]
 chip = [44.0, 22.0, 28.0, 8.0, 10.0, 12.0, 13.0]
 chip-radius = 14.0
 chip-text = [12.0, 16.0]
+# Today's tabs sorted into folders, at the tidy step with an assistant (values-first-run.md, 27b):
+# New Tab's row then (height, padding after), Clear's text, the broom's button (width, height,
+# corners, glyph); a folder's text and its tabs' indent; Ferry times' and the Brightcart's marks.
+sorted-new-tab = [24.0, 4.0]
+clear-text = [9.0, 11.0]
+broom-button = [22.0, 18.0, 5.0, 13.0]
+folder-text = [11.0, 13.0]
+folder-indent = 20.0
+sorted-marks = [0x3f7fd9, 0xe0a23a]
 # The thread card in the small sidebar (with an assistant): its corners, padding, gap and its
 # ring; the line inside it; its marks and how far its lines are indented.
 thread-radius = 9.0
