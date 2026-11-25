@@ -824,16 +824,16 @@ pub fn permission_stopped(action: &str, site: &str) -> Option<String> {
         "screen_capture" => "recording the screen",
         "notifications" => "sending notifications",
         "file_picker" => "opening a file picker",
-        "file_handle" => "opening your files",
+        "file_handle" => "using your files",
         "color_picker" => "picking a color from the screen",
         "print" => "printing",
         "share" => "opening the share sheet",
         "federated_sign_in" => "signing you in with another site's account",
         "payment" => "asking for a payment",
         "client_certificate" => "asking for a certificate",
-        "cast" => "casting to your devices",
+        "cast" => "casting to a device",
         "extension_install" => "installing an extension",
-        "app_install" => "installing an app",
+        "app_install" => "installing itself as an app",
         _ => {
             return Some(format!(
                 "{PRODUCT} stopped a permission request from {site}"

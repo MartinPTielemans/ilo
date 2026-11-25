@@ -3879,7 +3879,10 @@ impl Settings {
         // Every assistant, in its state, whether agents and tasks are on or not (S9).
         models.push(Block::Heading("Your assistant".into()));
         models.push(Block::Group(self.assistants(agents, cx)));
-        models.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
+        models.push(Block::Under(foot(
+            look,
+            browser::settings_rows::SIGN_INS_STAY,
+        )));
         if on {
             access.extend(self.access());
             // What a thread may reach: files and folders too, with the folders it holds to revoke.
@@ -5784,10 +5787,6 @@ fn method(target: &str) -> &str {
 
 /// Apps that connect's heading.
 const APPS_THAT_CONNECT: &str = "Apps that connect";
-
-/// What Your assistant's rows never do, under them. That ilo has no assistant of its own is first
-/// run's to say.
-const NEVER_SEES_LOGIN: &str = concat!(env!("APP_NAME"), " never sees your assistant's login.");
 
 /// A line under a group that says more of it, in a row's line's grey, as Fenced sites' has.
 fn foot(look: &RowLook, line: impl Into<SharedString>) -> gpui::Div {
