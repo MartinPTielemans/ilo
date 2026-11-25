@@ -1796,7 +1796,7 @@ reveal-radius = 20.0
 reveal-border = 0.6
 reveal-rim = 0.1
 reveal-rim-width = 1.0
-window-button-y = 24.0
+window-button-y = 22.0
 window-button-size = 14.0
 window-button-glyph = 0x00000080
 # The window buttons: close, minimize and zoom.
