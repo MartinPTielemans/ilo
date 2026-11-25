@@ -31,9 +31,9 @@ use browser::mini_bar;
 use browser::palette::{self, Palette, Tone};
 use browser::settings_card::Card;
 use browser::shell::{
-    self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState, Folders,
-    LiveAnswer, LiveItem, LiveList, LiveSource, Match, MediaAction, MenuBar, MenuEntry, Page,
-    PullState, Shell, SpaceEntry, Split, Trouble, Visited, Volume, WindowButton,
+    self, Archived, BarTab, Broom, Browser, Command, Download, DownloadAction, DownloadState,
+    Folders, LiveAnswer, LiveItem, LiveList, LiveSource, Match, MediaAction, MenuBar, MenuEntry,
+    Page, PullState, Shell, SpaceEntry, Split, Trouble, Visited, Volume, WindowButton,
 };
 use browser::site_controls::{self, Connection, Permission, Site, Value};
 use browser::theme::{Appearance, Theme};
@@ -1218,6 +1218,18 @@ impl Browser for Fake {
 
     fn ad_blocking(&self) -> bool {
         states::var("PREVIEW_SAFE_START").map_or(true, |state| state != "unblocked")
+    }
+
+    // PREVIEW_BROOM=<idle|sorting|failed|nothing> draws the broom after Clear in that state, which
+    // a click doesn't change: nothing here sorts.
+    fn broom(&self) -> Option<Broom> {
+        match states::var("PREVIEW_BROOM").ok()?.as_str() {
+            "idle" => Some(Broom::Idle),
+            "sorting" => Some(Broom::Sorting),
+            "failed" => Some(Broom::Failed),
+            "nothing" => Some(Broom::NothingToSort),
+            _ => None,
+        }
     }
 
     fn use_system_engine(&self, tab: u64, cx: &mut App) {
