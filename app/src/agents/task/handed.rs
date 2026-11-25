@@ -146,6 +146,9 @@ pub(in crate::agents) struct Sends {
     /// Those never given, as the thread was no longer under way before the turn ended: the
     /// user's to have back, words and picks.
     unsent: Vec<Reply>,
+    /// The tabs that went back to the user as the thread was last no longer under way, each with
+    /// the site it came back on: what their next reply to it shows picked again.
+    came_back: Vec<(u64, Option<String>)>,
 }
 
 impl Sends {
@@ -164,6 +167,12 @@ impl Sends {
     /// The turn under way ended: the replies held for it, to give in their order.
     pub(super) fn take_held(&mut self) -> Vec<(Reply, Vec<SharedString>)> {
         std::mem::take(&mut self.held)
+    }
+
+    /// The user's reply was given: it carried what they left picked, and nothing is picked for
+    /// the next.
+    pub(super) fn replied(&mut self) {
+        self.came_back.clear();
     }
 
     /// The thread is no longer under way: what was held is never given.
@@ -451,8 +460,31 @@ impl Agents {
             task.sends.not_given();
         }
         for tab in self.handed_order(agent) {
-            self.return_tab(agent, tab, By::Thread, cx);
+            let came_back_on = self.browser.url_site(&self.browser.tab(tab, cx).url);
+            if self.return_tab(agent, tab, By::Thread, cx)
+                && let Some(task) = self.task_mut(agent)
+            {
+                task.sends.came_back.retain(|(each, _)| *each != tab);
+                task.sends.came_back.push((tab, came_back_on));
+            }
         }
+    }
+
+    /// The tabs that went back to the user as `agent`'s thread was last no longer under way, for
+    /// the composer of their next reply to it to show picked again, in the order handed. Each
+    /// follows its tab as it is now: one that no longer fits, seen from the Space `space_in_view`,
+    /// or has left the site it came back on, isn't picked. In memory alone, for that thread's
+    /// composer and nothing else: never kept, and in no tool's answer or log line.
+    pub fn came_back(&self, agent: &str, space_in_view: u64, cx: &App) -> Vec<u64> {
+        let Some(task) = self.task(agent) else {
+            return Vec::new();
+        };
+        let fits = |(tab, site): &&(u64, Option<String>)| {
+            self.may_hand(agent, space_in_view, *tab, cx)
+                && self.browser.url_site(&self.browser.tab(*tab, cx).url) == *site
+        };
+        let came_back = task.sends.came_back.iter();
+        came_back.filter(fits).map(|(tab, _)| *tab).collect()
     }
 
     /// The tabs `agent`'s thread holds of the user's, in the order handed.

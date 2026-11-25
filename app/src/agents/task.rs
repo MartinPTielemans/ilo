@@ -2417,6 +2417,7 @@ impl Agents {
             .push(Message::new(Who::User, text.to_string()));
         let which = pick_up::replies(task);
         task.sends.showed(which, chips);
+        task.sends.replied();
         task.state = State::Working;
         task.writing = None;
         task.helpers.turned(task.trace.len());

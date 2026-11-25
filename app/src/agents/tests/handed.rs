@@ -1178,3 +1178,106 @@ fn a_reply_held_at_a_stop_is_never_given(cx: &mut TestAppContext) {
         assert!(replies(&run, &agent, cx).is_empty(), "{name}");
     }
 }
+
+fn came_back(run: &Run, agent: &str, cx: &mut TestAppContext) -> Vec<u64> {
+    run.agents
+        .read_with(cx, |agents, cx| agents.came_back(agent, USERS, cx))
+}
+
+/// The tabs that went back as a thread stopped are what the user's next reply to it shows picked
+/// again. Each follows its tab as it is now: one that left the site it came back on, closed, or
+/// is no longer in the Space in view isn't picked. One the user took back themselves, or the
+/// thread closed, never is. The reply sent, nothing is picked for the next.
+#[gpui::test]
+fn the_tabs_that_came_back_are_picked_for_the_next_reply(cx: &mut TestAppContext) {
+    let run = run("handed-came-back", cx);
+    (run.browser.tabs.borrow_mut()).push((FARES.0, USERS, FARES.1, FARES.2));
+    (run.browser.tabs.borrow_mut()).push((15, USERS, "Maps", "https://maps.example/lisbon"));
+    let picked = [TRAINS.0, SEATS.0, FARES.0, 15];
+    let agent = send(&run, ASKED, USERS, &picked, cx).expect("started");
+    run.ran(1);
+    assert!(came_back(&run, &agent, cx).is_empty());
+    // The user's own return and the thread's own close are no picks of the next reply.
+    press_return(&run, &agent, 15, cx);
+    run.finish(&agent, cx);
+    assert_eq!(came_back(&run, &agent, cx), [TRAINS.0, SEATS.0, FARES.0]);
+    // Seen from a Space they aren't in, none fits.
+    let elsewhere = run
+        .agents
+        .read_with(cx, |agents, cx| agents.came_back(&agent, 2, cx));
+    assert!(elsewhere.is_empty());
+    // One left the site it came back on, and one closed.
+    for tab in run.browser.tabs.borrow_mut().iter_mut() {
+        if tab.0 == SEATS.0 {
+            tab.3 = "https://other.example/seats";
+        }
+    }
+    (run.browser.tabs.borrow_mut()).retain(|tab| tab.0 != FARES.0);
+    assert_eq!(came_back(&run, &agent, cx), [TRAINS.0]);
+    // Back on its site, it's picked again.
+    for tab in run.browser.tabs.borrow_mut().iter_mut() {
+        if tab.0 == SEATS.0 {
+            tab.3 = "https://tickets.example/later";
+        }
+    }
+    assert_eq!(came_back(&run, &agent, cx), [TRAINS.0, SEATS.0]);
+    // The next reply carried what the user left picked: nothing is for the one after.
+    reply(&run, &agent, "And then?", &[TRAINS.0], cx);
+    assert!(came_back(&run, &agent, cx).is_empty());
+    run.finish(&agent, cx);
+    assert_eq!(came_back(&run, &agent, cx), [TRAINS.0]);
+    // A thread put away comes back with them, and they go with the thread.
+    (run.agents).update(cx, |agents, cx| agents.dismiss_task(&agent, cx));
+    assert_eq!(came_back(&run, &agent, cx), [TRAINS.0]);
+    (run.agents).update(cx, |agents, cx| agents.end_tasks(true, cx));
+    assert!(came_back(&run, &agent, cx).is_empty());
+}
+
+/// Nothing ilo keeps of a thread has the title or the address of a tab the user handed it: not
+/// the record History keeps of it, whose log has the tab's host alone, and no file of the
+/// profile, the kept list among them.
+#[gpui::test]
+fn nothing_kept_has_a_handed_tabs_title_or_address(cx: &mut TestAppContext) {
+    let run = run("handed-kept", cx);
+    let agent = send(&run, ASKED, USERS, &[TRAINS.0], cx).expect("started");
+    run.ran(1);
+    // The thread ends with it, is handed two, closes one, the user returns the other, and it
+    // ends again.
+    run.finish(&agent, cx);
+    reply(&run, &agent, "And then?", &[TRAINS.0, SEATS.0], cx);
+    press_return(&run, &agent, SEATS.0, cx);
+    _ = answered(&run, &agent, "close_tab", TRAINS.0, cx);
+    run.finish(&agent, cx);
+    let ended = (run.agents).update(cx, |agents, cx| agents.take_ended(cx));
+    let [(_, record)] = ended.as_slice() else {
+        panic!("{} records of one thread", ended.len());
+    };
+    // Its record has each give and return, by the host.
+    let noted = |action: &str| {
+        let steps = record.steps.iter();
+        let sites = steps.filter(|step| step.action == action);
+        sites.map(|step| step.site.clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(
+        noted(handed::HANDED),
+        ["example.com", "example.com", "tickets.example"]
+    );
+    assert_eq!(noted(handed::TAKEN_BACK), ["tickets.example"]);
+    assert_eq!(noted(handed::GIVEN_BACK), ["example.com", "example.com"]);
+    (run.agents).update(cx, |agents, cx| agents.end_tasks(true, cx));
+    cx.run_until_parked();
+    let files = run.files();
+    assert!(
+        (files.iter()).any(|(path, _)| path.ends_with("index.json")),
+        "no kept list"
+    );
+    let kept = files.into_iter().map(|(path, text)| {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        (name, text)
+    });
+    for (name, text) in kept.chain([("its record".to_string(), format!("{record:?}"))]) {
+        for of_the_tab in [TRAINS.1, SEATS.1, "/trains", "/seats"] {
+            assert!(!text.contains(of_the_tab), "{name} keeps {of_the_tab}");
+        }
+    }
+}
