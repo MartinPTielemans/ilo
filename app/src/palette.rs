@@ -1122,6 +1122,14 @@ impl Palette {
         Hsla::from(self.ink).opacity(alpha)
     }
 
+    /// `dark` on a dark window and `light` on a light one: a token the drawing gives each tone.
+    pub fn toned<T>(&self, dark: T, light: T) -> T {
+        match self.tone {
+            Tone::Dark => dark,
+            Tone::Light => light,
+        }
+    }
+
     /// A sidebar row's plate under the pointer, the only one a row has but the tab shown's: on a
     /// dark window the plate anything has under the pointer, so a row's and a card's are one and
     /// both are seen; on a light one the ink at a row's fainter step.
