@@ -87,6 +87,20 @@ struct Today {
 // the folder back whole.
 Today TodayWith(const Space& home, const std::vector<HeldToday>& held);
 
+// Where a tab handed out of a Space is among that Space's rows.
+struct Place {
+  // Its index among the rows, top to bottom, with every tab handed out of the Space among them.
+  size_t index = 0;
+  // The folder it's in there, a pinned one or a today's, or 0 for none.
+  bc_id folder = 0;
+};
+
+// Where |tab| is among |rows|, which PinnedWith or TodayWith made with |folders|: where Put would
+// put it now, so where the app draws its row meanwhile. None for a tab that isn't among them.
+std::optional<Place> PlaceOf(const std::vector<bc_id>& rows,
+                             const std::map<bc_id, bc_id>& folders,
+                             bc_id tab);
+
 // Puts |tab|, a Today tab of |home| again as a tab moved to a Space is, back where it left with
 // |node|: among the Today tabs, or with |pin| pinned at its address, in the folder that held it
 // among what that holds now. Once that folder is gone it's in the one that held the folder, where

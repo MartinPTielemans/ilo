@@ -191,4 +191,53 @@ handed_back::Pinned PinnedWith(const Space& home) {
   return handed_back::PinnedWith(home, held);
 }
 
+bool PlaceOf(bc_id tab, bc_handed_place* place) {
+  const Mark* mark = Of(tab);
+  const Space* in = Space::Holding(tab);
+  if (!mark || !in || !in->agent() || !place) {
+    return false;
+  }
+  // As Return, in its order: a favorite onto its tile, whatever became of the Space it was given
+  // from.
+  const bool same_profile = mark->tile && Favorites::ProfileOf(mark->tile) == in->profile();
+  if (mark->tile && handed_place::OnItsTile({.favorite = Favorites::Has(mark->tile),
+                                             .same_profile = same_profile})) {
+    *place = {.tile = mark->tile};
+    return true;
+  }
+  const Space* home = Space::FromId(mark->home);
+  if (!home || home->agent() || home->own() || home->profile() != in->profile()) {
+    return false;
+  }
+  // A favorite whose tile is gone: the top of Today, where a tab moved to a Space goes.
+  if (mark->tile) {
+    *place = {.home = home->id()};
+    return true;
+  }
+  const std::optional<handed_back::Place> at = [&] {
+    if (mark->pin) {
+      const handed_back::Pinned pinned = PinnedWith(*home);
+      return handed_back::PlaceOf(pinned.rows, pinned.folders, tab);
+    }
+    const handed_back::Today today = TodayWith(*home);
+    return handed_back::PlaceOf(today.rows, today.folders, tab);
+  }();
+  if (!at) {
+    return false;
+  }
+  *place = {.home = home->id(),
+            .pinned = mark->pin.has_value(),
+            .folder = at->folder,
+            .index = at->index};
+  return true;
+}
+
+bc_id OnTile(bc_id tile) {
+  if (!KeepsATile(tile)) {
+    return 0;
+  }
+  auto kept = std::ranges::find(Marks(), tile, [](const auto& each) { return each.second.tile; });
+  return kept == Marks().end() ? 0 : kept->first;
+}
+
 }  // namespace browser_core::handed

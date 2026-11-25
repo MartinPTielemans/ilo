@@ -120,6 +120,18 @@ bc_id TodayFolderOf(const Space& space, bc_id tab) {
   return space.IsTodayFolder(folder) ? folder : 0;
 }
 
+std::optional<Place> PlaceOf(const std::vector<bc_id>& rows,
+                             const std::map<bc_id, bc_id>& folders,
+                             bc_id tab) {
+  auto row = std::ranges::find(rows, tab);
+  if (row == rows.end()) {
+    return std::nullopt;
+  }
+  auto folder = folders.find(tab);
+  return Place{.index = static_cast<size_t>(row - rows.begin()),
+               .folder = folder == folders.end() ? 0 : folder->second};
+}
+
 Today TodayWith(const Space& home, const std::vector<HeldToday>& held) {
   Today with{.rows = home.today()};
   std::map<bc_id, const Space::Node*> nodes;
