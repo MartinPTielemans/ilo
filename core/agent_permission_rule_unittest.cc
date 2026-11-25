@@ -109,6 +109,19 @@ TEST(AgentPermissionRule, AFrameInNoTabKeepsItsHandles) {
   EXPECT_FALSE(RefusesFileHandle(/*site_storage=*/false, Tab{}));
 }
 
+TEST(AgentPermissionRule, AUsersTabHasTheColorPicker) {
+  EXPECT_FALSE(Refuses(Kind::kColorPicker, kUsers));
+}
+
+TEST(AgentPermissionRule, APageInAnAgentsSpaceHasNoColorPicker) {
+  EXPECT_TRUE(Refuses(Kind::kColorPicker, kAgents));
+}
+
+// It reads the user's screen, not the page: the user holding the tab opens none for its page.
+TEST(AgentPermissionRule, AHeldTabHasNoColorPickerEither) {
+  EXPECT_TRUE(Refuses(Kind::kColorPicker, kHeld));
+}
+
 TEST(AgentPermissionRule, AUsersTabIsAskedAsEver) {
   EXPECT_EQ(TakesRequest(/*link_handler_offer=*/false, kUsers), Taken::kNo);
   EXPECT_EQ(TakesRequest(/*link_handler_offer=*/true, kUsers), Taken::kNo);

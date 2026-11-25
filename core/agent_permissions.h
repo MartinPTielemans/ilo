@@ -46,6 +46,10 @@ bool NoClipboardWrite(content::RenderFrameHost* frame);
 // own storage. A worker that is no frame's is in no tab, and keeps what it has.
 bool NoFileHandle(content::GlobalRenderFrameHostId frame, bool site_storage);
 
+// Whether the page in |frame| gets no colour picker, which is the system's and reads the screen
+// where the user clicks: a page in an agent's Space, held or not, with its entry.
+bool NoColorPicker(content::RenderFrameHost* frame);
+
 // Notes in the activity log that the browser refused |kind| to the page of |frame|, or of
 // |contents|, if it's in an agent's Space: once per document and kind, however often the page
 // asks, and after the task that refused it, since the app takes no entry inside a call of its own

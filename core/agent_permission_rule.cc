@@ -71,6 +71,8 @@ const char* CodeWord(Kind kind) {
       return "web_printing";
     case Kind::kFileHandle:
       return "file_handle";
+    case Kind::kColorPicker:
+      return "color_picker";
     case Kind::kOther:
     case Kind::kLeftAsToday:
       return "other";

@@ -207,6 +207,16 @@ bool NoFileHandle(content::GlobalRenderFrameHostId id, bool site_storage) {
   return true;
 }
 
+bool NoColorPicker(content::RenderFrameHost* frame) {
+  if (!frame ||
+      !agent_permission_rule::Refuses(
+          Kind::kColorPicker, RuleTabOf(content::WebContents::FromRenderFrameHost(frame)))) {
+    return false;
+  }
+  NoteRefused(Kind::kColorPicker, frame);
+  return true;
+}
+
 void NoteRefused(agent_permission_rule::Kind kind, content::RenderFrameHost* frame) {
   content::WebContents* contents = content::WebContents::FromRenderFrameHost(frame);
   const Tab* tab = contents ? Tab::FromWebContents(contents->GetOutermostWebContents()) : nullptr;

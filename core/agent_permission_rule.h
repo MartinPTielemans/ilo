@@ -47,6 +47,8 @@ enum class Kind {
   // A handle on a file or a folder of the user's that the site was given before, which needs no
   // picker.
   kFileHandle,
+  // The system's colour picker, which hands a page the colour of the screen where the user clicks.
+  kColorPicker,
   // A question of no kind above that the browser would have put to the user.
   kOther,
   // A kind that gives a page nothing of the user's device or person, such as a screen wake lock
