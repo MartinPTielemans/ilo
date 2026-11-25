@@ -813,6 +813,22 @@ since() {
 none_since() {
   ! since "${2:-}" | grep -q "$1"
 }
+# Clicks first run's Skip, or Skip Setup at its welcome, where step $1 last said it's drawn: each
+# step logs where once it has settled, in the frame after the line saying so. Esc is Back there, so
+# a check going on through the steps clicks this.
+skip_step() {
+  local at=
+  for _ in $(seq 100); do
+    at=$(awk -v settled="browser: onboarding step $1 settled" '
+      $0 == settled { at = ""; on = 1; next }
+      on && /^browser: onboarding skip at / { at = $5 " " $6 }
+      END { print at }' "$log")
+    [ -n "$at" ] && break
+    sleep 0.1
+  done
+  [ -n "$at" ] || fail "the $1 step didn't say where its Skip is"
+  send click $at
+}
 # Nothing logged while the driver handled the last command matches $1: what it did at once, not
 # what a timer of the app's did after, which on Windows send's own greps can outlast.
 none_while() {
