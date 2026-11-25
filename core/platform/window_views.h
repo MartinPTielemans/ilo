@@ -130,9 +130,16 @@ void ShowTile(content::WebContents* contents,
               const gfx::Rect& frame,
               double corner_radius);
 
-// Takes |contents|' page out of the tile ShowTile put it in, out of sight, and lets it take input
-// again.
-void EndTile(content::WebContents* contents);
+// Takes |contents|' page out of the tile ShowTile put it in, or out of the park, and lets it take
+// input again. Where |leaves_window|, as the page goes or a card in another window takes it, out of
+// the window too; otherwise the window's own pages take it next, in the same window, and the tile
+// with it (ShowPages).
+void EndTile(content::WebContents* contents, bool leaves_window);
+
+// bc_tab_end_tile: parks |contents|' page out of sight in its tile's window, still a tile's to the
+// page, so Chromium never hears it leave its window and it stays visible to itself (#3788), until
+// ShowTile or EndTile has it.
+void ParkTile(content::WebContents* contents);
 
 // |contents|' page came in a view of its own, a page from another site committing, while it's a
 // tile: the view takes the page's own size again, which Chromium sized from the tile's.

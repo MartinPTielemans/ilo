@@ -12,22 +12,27 @@ namespace browser_core::tiles {
 // bc_tab_show_tile.
 bool Show(bc_id tab, void* view, const gfx::Rect& frame, double corner_radius);
 
-// A window showing |tab|, and its page going: takes the page out of its tile, and a card has it no
-// more. Nothing if neither had it.
+// Its page going: takes the page out of its tile or the park, and its window, and a card has it no
+// more. Nothing if none had it.
 void End(bc_id tab);
 
-// bc_tab_end_tile: takes the page out of its tile. Nothing if it isn't one.
+// A window showing |tab| takes its page, with its input, from its tile or the park, within the
+// window, and a card has it no more. Nothing if none had it.
+void TakenByWindow(bc_id tab);
+
+// bc_tab_end_tile: takes the page out of its tile, parking it in the tile's window, so it stays
+// visible (#3788). Nothing if it isn't a tile.
 void EndTile(bc_id tab);
 
 // bc_tab_show_in: a card has the page, with its input, from now on, until End. Takes it out of its
 // tile first.
 void ShowInCard(bc_id tab);
 
-// A page from another site committed in |tab|, in a view of its own: if it's a tile, the view
-// keeps the page's size.
+// A page from another site committed in |tab|, in a view of its own: if it's in a tile, live or
+// parked, the view keeps the page's size.
 void PageViewChanged(bc_id tab);
 
-// Whether |tab| is a tile, whose page's own asks to be activated are refused.
+// Whether |tab|'s page is in a tile, live or parked, whose own asks to be activated are refused.
 bool Holds(bc_id tab);
 
 }  // namespace browser_core::tiles

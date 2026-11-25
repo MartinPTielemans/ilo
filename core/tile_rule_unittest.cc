@@ -107,5 +107,43 @@ TEST(TileRule, AClosedOrUnknownTabIsAsChromiumHasIt) {
   EXPECT_FALSE(tiles.Holds(7));
 }
 
+TEST(TileRule, AnEndedTileIsParkedUntilATileHasItsPageAgain) {
+  // An agent's page stays visible from its opening to its close, whatever the user looks at
+  // (#3788).
+  TileRule tiles;
+  tiles.Show(1, &kView, true, false, true);
+  EXPECT_FALSE(tiles.Parked(1));
+  EXPECT_EQ(tiles.End(1), &kView);
+  EXPECT_TRUE(tiles.Parked(1));
+  EXPECT_FALSE(tiles.Holds(1));
+  EXPECT_TRUE(tiles.InTile(1));
+  EXPECT_EQ(tiles.Show(1, &kOtherView, true, false, true), Shown::kNew);
+  EXPECT_FALSE(tiles.Parked(1));
+}
+
+TEST(TileRule, ACardAWindowOrThePageGoingTakesAParkedPage) {
+  TileRule tiles;
+  tiles.Show(1, &kView, true, false, true);
+  tiles.End(1);
+  EXPECT_EQ(tiles.Show(1, &kView, true, /*window_shows=*/true, true), Shown::kWindowShows);
+  EXPECT_TRUE(tiles.Parked(1));
+  EXPECT_EQ(tiles.Left(1), nullptr);
+  EXPECT_FALSE(tiles.Parked(1));
+  EXPECT_FALSE(tiles.InTile(1));
+  tiles.Show(1, &kView, true, false, true);
+  tiles.End(1);
+  EXPECT_EQ(tiles.ShowInCard(1), nullptr);
+  EXPECT_FALSE(tiles.Parked(1));
+}
+
+TEST(TileRule, OnlyATilesPageIsParked) {
+  TileRule tiles;
+  EXPECT_EQ(tiles.End(7), nullptr);
+  EXPECT_FALSE(tiles.Parked(7));
+  tiles.ShowInCard(8);
+  EXPECT_EQ(tiles.End(8), nullptr);
+  EXPECT_FALSE(tiles.Parked(8));
+}
+
 }  // namespace
 }  // namespace browser_core

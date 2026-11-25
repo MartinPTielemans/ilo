@@ -24,6 +24,7 @@ TileRule::Shown TileRule::Show(uint64_t tab,
   }
   auto [it, added] = views_.try_emplace(tab, view);
   if (added) {
+    parked_.erase(tab);
     return Shown::kNew;
   }
   if (it->second == view) {
@@ -33,7 +34,7 @@ TileRule::Shown TileRule::Show(uint64_t tab,
   return Shown::kMoved;
 }
 
-const void* TileRule::End(uint64_t tab) {
+const void* TileRule::Take(uint64_t tab) {
   auto it = views_.find(tab);
   if (it == views_.end()) {
     return nullptr;
@@ -43,18 +44,36 @@ const void* TileRule::End(uint64_t tab) {
   return view;
 }
 
+const void* TileRule::End(uint64_t tab) {
+  const void* view = Take(tab);
+  if (view) {
+    parked_.insert(tab);
+  }
+  return view;
+}
+
 const void* TileRule::ShowInCard(uint64_t tab) {
   cards_.insert(tab);
-  return End(tab);
+  parked_.erase(tab);
+  return Take(tab);
 }
 
 const void* TileRule::Left(uint64_t tab) {
   cards_.erase(tab);
-  return End(tab);
+  parked_.erase(tab);
+  return Take(tab);
+}
+
+bool TileRule::Parked(uint64_t tab) const {
+  return parked_.contains(tab);
 }
 
 bool TileRule::Holds(uint64_t tab) const {
   return views_.contains(tab);
+}
+
+bool TileRule::InTile(uint64_t tab) const {
+  return Holds(tab) || Parked(tab);
 }
 
 // static
