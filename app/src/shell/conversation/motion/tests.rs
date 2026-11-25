@@ -58,6 +58,7 @@ fn conversation(lines: Vec<Line>) -> Conversation {
         writing: false,
         tier: Default::default(),
         only_added: false,
+        finished: Vec::new(),
     }
 }
 

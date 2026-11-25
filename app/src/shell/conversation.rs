@@ -50,18 +50,20 @@ use crate::tokens::shell::conversation::ilo::{
 };
 use crate::tokens::shell::conversation::motion::{CHEVRON, LAND, PICK_FADE, RISE, STEPS_FADE};
 use crate::tokens::shell::conversation::{
-    BLOCK_GAP, BUBBLE_BOTTOM, BUBBLE_FILL, BUBBLE_MOST, BUBBLE_TOP, BUBBLE_X, CHIP_KEY,
-    CHIPS_BELOW, CHIPS_TOP, CODE_FILL, COLUMN, CONNECTOR_ABOVE, CONNECTOR_HEIGHT, CONNECTOR_INK,
-    CONNECTOR_WIDTH, CONNECTOR_X, FOLD_DONE_GAP, FOLD_GAP, FOLD_HEAD, FOLD_ICON, FOLD_ICONS_GAP,
-    HEADER_BOTTOM, INSET, ITEM_GAP, LIGHT_BUBBLE_FILL, LINES_BELOW, LINK_LINE, LINK_UNDERLINE,
-    LIST_MARKER, META_GAP, META_LINE, OPEN_BELOW, OPEN_TOP, PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON,
-    PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG, PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PAGE_LINE,
-    PARAGRAPH_GAP, PICTURE_EMPTY_GLYPH, PICTURE_HEIGHT, PICTURE_WIDTH, RADIUS, REPLY_BOTTOM,
-    REPLY_FILL, REPLY_GAP, REPLY_HEIGHT, REPLY_INSET, REPLY_KEY_END, REPLY_RIM, SHIMMER,
-    SHIMMER_BAND, SHIMMER_PERIOD, SITE_GAP, STEP_RING, STEP_RING_STROKE, STRETCH_GAP, TEXT,
-    TEXT_LINE, TITLE_LINE, TOP, TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH,
-    TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER, TRACE_LINE, TRACE_NOTE, TRACE_PICTURE_HEIGHT,
-    TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH, TRACE_TEXT, TRACE_TEXT_LINE, TRACE_TITLE,
+    ANSWER_FOOT, ANSWER_FOOT_GAP, ANSWER_FOOT_TOP, ANSWER_TIME, ANSWER_TIME_LINE, BLOCK_GAP,
+    BUBBLE_BOTTOM, BUBBLE_FILL, BUBBLE_MOST, BUBBLE_TOP, BUBBLE_X, CHIP_KEY, CHIPS_BELOW,
+    CHIPS_TOP, CODE_FILL, COLUMN, CONNECTOR_ABOVE, CONNECTOR_HEIGHT, CONNECTOR_INK,
+    CONNECTOR_WIDTH, CONNECTOR_X, COPY_GLYPH, FOLD_DONE_GAP, FOLD_GAP, FOLD_HEAD, FOLD_ICON,
+    FOLD_ICONS_GAP, HEADER_BOTTOM, INSET, ITEM_GAP, LIGHT_BUBBLE_FILL, LIGHT_TEXT_3, LINES_BELOW,
+    LINK_LINE, LINK_UNDERLINE, LIST_MARKER, META_GAP, META_LINE, OPEN_BELOW, OPEN_TOP,
+    PAGE_CHIP_BELOW, PAGE_CHIP_FAVICON, PAGE_CHIP_FILL, PAGE_CHIP_GAP, PAGE_CHIP_HANG,
+    PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PAGE_LINE, PARAGRAPH_GAP, PICTURE_EMPTY_GLYPH, PICTURE_HEIGHT,
+    PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP, REPLY_HEIGHT, REPLY_INSET,
+    REPLY_KEY_END, REPLY_RIM, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD, SITE_GAP, STEP_RING,
+    STEP_RING_STROKE, STRETCH_GAP, TEXT, TEXT_3, TEXT_LINE, TITLE_LINE, TOP, TRACE_BELOW,
+    TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH, TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER, TRACE_LINE,
+    TRACE_NOTE, TRACE_PICTURE_HEIGHT, TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH, TRACE_TEXT,
+    TRACE_TEXT_LINE, TRACE_TITLE,
 };
 use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT, RING_TURN};
 use crate::tokens::shell::task::{
@@ -2151,6 +2153,7 @@ impl TalkView {
                     .mb(px(BLOCK_GAP))
                     .text_color(palette.text(TITLE))
                     .child(self.said("said", index, text, self.motion.runs(index), look))
+                    .children(self.answer_foot(index, &shown.finished, look, cx))
                     .into_any_element(),
                 Line::Trace(trace) => self.trace(trace, look, cx),
                 Line::Thinking { key, failed } => self.thinking(*key, failed.clone(), look),
@@ -2206,6 +2209,60 @@ impl TalkView {
             );
         }
         lines
+    }
+
+    /// Under an answer: the button that copies it, and the time it finished. None under the
+    /// assistant's other words.
+    fn answer_foot(
+        &self,
+        index: usize,
+        finished: &[(usize, SharedString)],
+        look: &Look,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Div> {
+        let (_, time) = finished.iter().find(|(at, _)| *at == index)?;
+        let quiet = answer_text_3(&look.palette);
+        let copy = div()
+            .id(("conversation-copy", index))
+            .when(look.a11y, |copy| {
+                copy.role(Role::Button).aria_label(words::COPY_ANSWER)
+            })
+            .flex_none()
+            .cursor_pointer()
+            .child(
+                svg()
+                    .path("icons/copy.svg")
+                    .size(px(COPY_GLYPH))
+                    .text_color(quiet),
+            )
+            .on_click(cx.listener(move |view, _, _, cx| view.copy_answer(index, cx)));
+        Some(
+            div()
+                .mt(px(ANSWER_FOOT_TOP))
+                .h(px(ANSWER_FOOT))
+                .flex()
+                .items_center()
+                .gap(px(ANSWER_FOOT_GAP))
+                .child(copy)
+                .child(
+                    div()
+                        .text_size(px(ANSWER_TIME))
+                        .line_height(px(ANSWER_TIME_LINE))
+                        .text_color(quiet)
+                        .child(time.clone()),
+                ),
+        )
+    }
+
+    /// Copies the answer at `index` as plain text, its marks taken out.
+    pub(super) fn copy_answer(&self, index: usize, cx: &mut Context<Self>) {
+        let answer = (self.shown.as_ref()).and_then(|shown| match shown.lines.get(index) {
+            Some(Line::Said(text)) => Some(plain(text)),
+            _ => None,
+        });
+        if let Some(answer) = answer {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(answer));
+        }
     }
 
     /// A question's answers as it's answered: the one picked has gone on as the reply, and the
@@ -2810,6 +2867,13 @@ fn rolled(
 /// rule under the glyph above them.
 /// The user's message's plate: the drawing's dark plate in Dark, the ink at a card's strength in
 /// Light (light-values.md, Proposed).
+fn answer_text_3(palette: &super::Palette) -> Hsla {
+    match palette.tone {
+        Tone::Dark => rgba(TEXT_3).into(),
+        Tone::Light => rgba(LIGHT_TEXT_3).into(),
+    }
+}
+
 fn bubble_fill(palette: &super::Palette) -> Hsla {
     rgba(match palette.tone {
         Tone::Dark => BUBBLE_FILL,

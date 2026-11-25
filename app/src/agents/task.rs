@@ -160,6 +160,9 @@ pub struct Conversation {
     pub tier: Tier,
     /// Whether it may go only to the sites of the pages the user added.
     pub only_added: bool,
+    /// Its answers, by their lines, each with the time it finished in the system's short form,
+    /// which stands under it with the button that copies it.
+    pub finished: Vec<(usize, SharedString)>,
 }
 
 /// Where a task under way is, as the live line over its reply field says it: working only while
@@ -1138,6 +1141,7 @@ impl Agents {
             (None, true) => format!("{} · {about}", task.name),
             (None, false) => format!("{} · {} · {about}", task.name, task.model),
         };
+        let finished = finished(&task.messages, &lines);
         Some(Conversation {
             agent: task.agent.clone().into(),
             name: task.name.clone(),
@@ -1159,6 +1163,7 @@ impl Agents {
             // The chip under the reply field says the task's own level, the one its refusals read.
             tier: task.tier,
             only_added: matches!(task.sites, Sites::Only(_)),
+            finished,
         })
     }
 
@@ -3700,6 +3705,32 @@ pub(super) fn conversation(task: &Task) -> String {
     text
 }
 
+/// Each of `messages`' answers by its line among `lines`, with the time it finished, as the clock
+/// here says a time: 18:00 or 6:00 PM. Matched from the end, the last line that says an answer's
+/// words before the next answer's line: an answer ends its turn, so what the assistant said along
+/// the way in the same words comes before it.
+fn finished(messages: &[Message], lines: &[Line]) -> Vec<(usize, SharedString)> {
+    let mut before = lines.len();
+    let mut finished = Vec::new();
+    for answer in messages
+        .iter()
+        .rev()
+        .filter(|message| message.who == Who::Result)
+    {
+        let said = |at: &usize| matches!(&lines[*at], Line::Said(text) if *text == answer.text);
+        let Some(at) = (0..before).rev().find(said) else {
+            continue;
+        };
+        let when = SystemTime::now() - Instant::now().saturating_duration_since(answer.at);
+        let when: chrono::DateTime<chrono::Local> = when.into();
+        let hour = crate::clock::hour_minute(crate::clock::twelve_hour());
+        finished.push((at, when.format(hour).to_string().into()));
+        before = at;
+    }
+    finished.reverse();
+    finished
+}
+
 /// A time in seconds since 1970 as the clock reads it here, such as 18:00.
 fn clock(at: u64) -> SharedString {
     crate::agents::local_time(at).into()
@@ -4812,4 +4843,42 @@ fn end_old_task_files(tasks: &std::path::Path) {
                 cleaned.kept
             );
         });
+}
+
+#[cfg(test)]
+mod finished_tests {
+    use super::*;
+
+    /// Each answer stands over its own foot; what the assistant said along the way has none,
+    /// though its words are the same.
+    #[test]
+    fn each_answer_takes_the_line_that_says_it() {
+        let message = |who, text: &str| Message {
+            who,
+            text: text.to_string().into(),
+            at: Instant::now(),
+        };
+        let messages = [
+            message(Who::Agent, "Two shows"),
+            message(Who::Result, "Two shows"),
+            message(Who::User, "And Sunday?"),
+            message(Who::Result, "Two shows"),
+        ];
+        let lines = [
+            Line::Said("Two shows".into()),
+            Line::Said("Two shows".into()),
+            Line::You("And Sunday?".into()),
+            Line::Said("Two shows".into()),
+        ];
+        let at: Vec<usize> = finished(&messages, &lines)
+            .into_iter()
+            .map(|(at, _)| at)
+            .collect();
+        assert_eq!(at, [1, 3]);
+        assert!(
+            finished(&messages, &lines)
+                .iter()
+                .all(|(_, time)| !time.is_empty())
+        );
+    }
 }

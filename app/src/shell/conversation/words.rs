@@ -32,6 +32,9 @@ pub fn says(assistant: &str, said: &str) -> String {
 /// A task the user stopped, as the last line of its log says it.
 const YOU_STOPPED: &str = "You stopped it";
 
+/// The button under an answer that copies it, as a screen reader names it (Z18).
+pub const COPY_ANSWER: &str = "Copy Answer";
+
 /// The line over a stretch's helpers (Z16), for two or more: the table has no line for one.
 pub fn split(strands: usize) -> Option<String> {
     (strands > 1).then(|| format!("Split into {strands} strands"))

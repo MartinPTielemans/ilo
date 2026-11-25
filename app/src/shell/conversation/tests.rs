@@ -99,6 +99,7 @@ pub(super) fn conversation(steps: usize) -> Conversation {
         writing: false,
         tier: Default::default(),
         only_added: false,
+        finished: Vec::new(),
     }
 }
 
@@ -3239,4 +3240,21 @@ fn a_left_page_folds_and_opens_alone(cx: &mut TestAppContext) {
         height(Fold::Page(3), true, cx).is_some(),
         "opening the left page folded the one it's on"
     );
+}
+
+/// The button under an answer copies the answer's plain text, its marks taken out, and the time it
+/// finished stands beside it.
+#[gpui::test]
+fn the_copy_button_copies_the_answers_plain_text(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shown(cx);
+    let mut talk = conversation(1);
+    talk.lines.push(Line::Said(
+        "**Two** shows at [MAAT](https://maat.pt)".into(),
+    ));
+    talk.finished = vec![(1, "18:00".into())];
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    view.update(cx, |view, cx| view.copy_answer(1, cx));
+    let copied = cx.read(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert_eq!(copied.as_deref(), Some("Two shows at MAAT"));
 }

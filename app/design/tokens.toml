@@ -3141,6 +3141,16 @@ list-marker = 18.0
 code-fill = 0.08
 link-line = 1.0
 link-underline = 0.4
+# Under an answer, `answer-foot-top` down: a row `answer-foot` high, its parts `answer-foot-gap`
+# apart: the copy glyph, then the time it finished, both in text-3 (spec-thread-stage.md).
+answer-foot-top = 10.0
+answer-foot = 20.0
+answer-foot-gap = 8.0
+copy-glyph = 14.0
+answer-time = 12.0
+answer-time-line = 16.0
+text-3 = 0xf3f0e86b
+light-text-3 = 0x16161880
 # The user's message: its plate's padding, its share of the column at most.
 bubble-top = 10.0
 bubble-bottom = 10.0
