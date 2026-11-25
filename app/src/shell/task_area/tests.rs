@@ -13,10 +13,9 @@ use gpui::{
     div, point, px, size,
 };
 
-use super::{Zoom, pushed, watched};
+use super::{PICTURE_WAIT, Zoom, pushed, watched};
 use crate::agents::Status;
 use crate::shell::{Command, Folders, Page, PagePicture, Shell, recorder::Recorder};
-use crate::tokens::shell::task_area::motion::PICTURE_WAIT;
 
 /// The user's Space 1 with tabs 10 and 11, shown with 10, Claude Code's own Space 2 with tab 20,
 /// Space 3 of the task task-1, run by Claude Code, with tabs 30 and 31, and the user's empty
