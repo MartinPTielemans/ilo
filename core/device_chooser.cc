@@ -13,6 +13,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "browser_core/agent_space_page.h"
 #include "browser_core/host.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
@@ -98,7 +99,7 @@ base::OnceClosure DeviceChooser::Show(content::RenderFrameHost* owner,
     controller->Cancel();
     return base::DoNothing();
   }
-  if (const Space* space = Space::Holding(tab); space && space->agent()) {
+  if (const Space* space = AgentSpaceOf(tab)) {
     // A device is the user's alone to give, and an agent's Space has no user watching it, so the
     // page hears a cancel, as from Chrome's Cancel, and the activity log says why.
     LOG(ERROR) << "browser: device chooser " << tab << " " << KindName(kind)

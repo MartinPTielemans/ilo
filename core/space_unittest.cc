@@ -118,6 +118,20 @@ TEST_F(SpaceTest, AnExpectedTabIsTheSpacesFromWhenItsMadeUntilItsPlacedOrGone) {
   EXPECT_EQ(Space::Holding(9), work_);
 }
 
+// A tab a page opens is its opener's Space's until it's listed, whatever becomes of the opener in
+// between: the Space holds it, not the opener.
+TEST_F(SpaceTest, ATabAPageOpenedIsItsOpenersSpacesAfterTheOpenerClosedOrLeft) {
+  work_->Add(5, /*opener=*/0, /*foreground=*/false);
+  work_->Expect(7);
+  work_->Remove(5);
+  EXPECT_EQ(Space::Holding(7), work_);
+  work_->Add(6, /*opener=*/0, /*foreground=*/false);
+  work_->Expect(8);
+  work_->Remove(6);
+  home_->Add(6, /*opener=*/0, /*foreground=*/false);
+  EXPECT_EQ(Space::Holding(8), work_);
+}
+
 TEST_F(SpaceTest, ASpaceIsFoundByItsNodeWhileItIsTheUsers) {
   const base::Uuid work = work_->node().id;
   ASSERT_TRUE(work.is_valid());

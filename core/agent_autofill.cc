@@ -9,6 +9,7 @@
 #include "base/functional/callback_helpers.h"
 #include "base/memory/raw_ptr.h"
 #include "browser_core/agent_session.h"
+#include "browser_core/agent_space_page.h"
 #include "browser_core/host.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
@@ -32,8 +33,7 @@ namespace browser_core {
 namespace {
 
 bool IsAgentTab(bc_id tab) {
-  const Space* space = Space::Holding(tab);
-  return space && space->agent() && !IsHeld(tab);
+  return AgentSpaceOf(tab) && !IsHeld(tab);
 }
 
 // Gives the password manager the main frame's forms again, which it dropped while the tab was the
@@ -162,7 +162,7 @@ bool RefuseAgentPasskey(content::WebContents* contents, bool asks) {
     return true;
   }
   const bc_id id = tab->id();
-  const std::string agent = Space::Holding(id)->agent()->id;
+  const std::string agent = AgentSpaceOf(id)->agent()->id;
   Hold(id);
   // With no session there, the app hears from here that the tab is the user's.
   if (!EndTabSession(id, BC_AGENT_SESSION_PASSKEY) && Host().agent_session_ended) {

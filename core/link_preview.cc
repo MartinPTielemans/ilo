@@ -2,6 +2,7 @@
 
 #include <memory>
 
+#include "browser_core/agent_space_page.h"
 #include "browser_core/host.h"
 #include "browser_core/tab.h"
 #include "content/public/browser/navigation_handle.h"
@@ -33,7 +34,8 @@ class LinkPreviewThrottle : public content::NavigationThrottle {
       return PROCEED;
     }
     Tab* tab = Tab::FromWebContents(contents);
-    if (!tab) {
+    // A page in an agent's Space the user doesn't hold opens none: its link goes on in its tab.
+    if (!tab || RefusesInAgentSpace(agent_space_rule::Ask::kLinkPreview, contents)) {
       return PROCEED;
     }
     const gfx::PointF click = tab->last_click();

@@ -25,6 +25,7 @@
 #include "base/time/time.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_session.h"
+#include "browser_core/agent_space_page.h"
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/boost_colors.h"
@@ -563,6 +564,20 @@ void MakeHeldBy(Space& space, NavigateParams& params) {
   params.contents_to_insert = std::move(made);
 }
 
+// The Space |tab|, a tab just made, was made for, or 0: the one expecting it (Space::Expect), which
+// the agent's Space of |source|, the tab whose page opened it, becomes here if none does yet. So a
+// tab a page in an agent's Space opens is that Space's before any page of its own starts, whatever
+// its address (#2660), and its listing never asks where its opener is by then.
+bc_id MadeFor(bc_id tab, bc_id source) {
+  Space* space = Space::Holding(tab);
+  Space* sources = !space && source ? Space::Holding(source) : nullptr;
+  if (sources && sources->agent()) {
+    sources->Expect(tab);
+    space = sources;
+  }
+  return space ? space->id() : 0;
+}
+
 // The tabs the user closed whose pages haven't let them go yet (#3890).
 ClosingWayBack& UserClosing() {
   static base::NoDestructor<ClosingWayBack> closing;
@@ -1084,6 +1099,7 @@ void Window::AdjustNavigate(NavigateParams& params) {
               source_space && source_space->agent());
   }
   window->agent_opener_ = 0;
+  window->agents_source_ = 0;
   if (for_agent && (params.disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
                     params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB ||
                     params.disposition == WindowOpenDisposition::NEW_POPUP ||
@@ -1134,10 +1150,12 @@ void Window::AdjustNavigate(NavigateParams& params) {
   }
   // ⇧-click on a web link, which Chrome opens in a new window: the app may open it in a link
   // preview instead (the owner, 2026-11-02, #1370). Not a page's window.open(), which holds the
-  // page it made, or a form sent.
+  // page it made, or a form sent. Nor from a page in an agent's Space the user doesn't hold, whose
+  // link opens as any it opens does, in that Space.
   if (source && params.disposition == WindowOpenDisposition::NEW_WINDOW &&
       !params.started_from_context_menu && params.user_gesture && !params.contents_to_insert &&
-      !params.post_data && params.url.SchemeIsHTTPOrHTTPS() && Host().tab_link_to_preview) {
+      !params.post_data && params.url.SchemeIsHTTPOrHTTPS() && Host().tab_link_to_preview &&
+      !RefusesInAgentSpace(agent_space_rule::Ask::kLinkPreview, params.source_contents)) {
     const gfx::PointF click = source->last_click();
     // The app only answers here: it opens the preview after this call, outside the navigation.
     if (Host().tab_link_to_preview(Host().context, Tab::IdOf(params.source_contents),
@@ -1174,9 +1192,9 @@ void Window::AdjustNavigate(NavigateParams& params) {
     // Posted, as for the tabs Chrome opens.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&Window::ReportTabOpened, window->weak_factory_.GetWeakPtr(),
-                                  Tab::IdOf(contents), Tab::IdOf(params.source_contents),
-                                  /*foreground=*/false, /*split_with=*/0,
-                                  /*popup=*/std::nullopt, /*popup_placed=*/false));
+                                  Tab::IdOf(contents), source_id, /*foreground=*/false,
+                                  /*split_with=*/0, /*popup=*/std::nullopt,
+                                  /*popup_placed=*/false, MadeFor(Tab::IdOf(contents), source_id)));
     params.disposition = WindowOpenDisposition::IGNORE_ACTION;
   }
   // Chrome's downloads page, which it opens after the user stopped a quit to let downloads finish,
@@ -1198,10 +1216,15 @@ void Window::AdjustNavigate(NavigateParams& params) {
   // content made, the opener's Tab held as content made it (Tab::DidOpenRequestedURL).
   if (source_space && source_space->agent() && !params.contents_to_insert &&
       (params.disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB ||
-       params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB) &&
-      !params.url.is_empty() && !params.url.SchemeIs(url::kAboutScheme) &&
-      !params.url.SchemeIs(content::kChromeUIScheme)) {
-    MakeHeldBy(*Space::Holding(source_id), params);
+       params.disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB)) {
+    if (!params.url.is_empty() && !params.url.SchemeIs(url::kAboutScheme) &&
+        !params.url.SchemeIs(content::kChromeUIScheme)) {
+      MakeHeldBy(*Space::Holding(source_id), params);
+    } else {
+      // One with no page to start, which Navigate makes itself, is the agent's Space's as its tab
+      // strip takes it (MadeFor).
+      window->agents_source_ = source_id;
+    }
   }
 }
 
@@ -1991,8 +2014,11 @@ content::WebContents* Window::OpenFromPinned(bc_id pinned, const GURL& url, bool
       from && from->profile() ? OpenTab(from->profile(), url, /*when_shown=*/false, typed_http)
                               : nullptr;
   if (contents) {
-    ReportTabOpened(Tab::IdOf(contents), pinned, /*foreground=*/true, /*split_with=*/0,
-                    /*popup=*/std::nullopt, /*popup_placed=*/false);
+    const bc_id tab = Tab::IdOf(contents);
+    ReportTabOpened(tab, pinned, /*foreground=*/true, /*split_with=*/0, /*popup=*/std::nullopt,
+                    /*popup_placed=*/false, MadeFor(tab, pinned));
+    // Closed, if it had nowhere to be listed.
+    contents = Tab::FromId(tab);
   }
   return contents;
 }
@@ -3345,6 +3371,8 @@ void Window::OnTabStripModelChanged(TabStripModel* tab_strip_model,
     Tab::HelpersArrived(inserted.contents);
     HeldLoad::Start(inserted.contents);
   }
+  // Whichever tab comes next, so it never marks a later one.
+  const bc_id agents_source = std::exchange(agents_source_, 0);
   if (opening_tab_) {
     return;
   }
@@ -3366,13 +3394,17 @@ void Window::OnTabStripModelChanged(TabStripModel* tab_strip_model,
     if (!opened_by && opener) {
       opened_by = Tab::IdOf(opener->GetContents());
     }
+    // The tab strip names the tab it had active as the opener of a tab opened from a link, which
+    // says where one of the user's is listed and never makes one an agent's: only the page that
+    // opened it does, here, before any page of its own starts.
+    const bc_id tab = Tab::IdOf(inserted.contents);
+    const bc_id made_for = MadeFor(tab, agents_source);
     // Posted: the app shows the tab, and a tab strip can't change while it reports a change.
     base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
-        base::BindOnce(&Window::ReportTabOpened, weak_factory_.GetWeakPtr(),
-                       Tab::IdOf(inserted.contents), opened_by,
+        base::BindOnce(&Window::ReportTabOpened, weak_factory_.GetWeakPtr(), tab, opened_by,
                        !agent_opener && tab_strip_model->active_index() == inserted.index,
-                       split_with, popup, popup_placed));
+                       split_with, popup, popup_placed, made_for));
   }
 }
 
@@ -3724,12 +3756,44 @@ Space* Window::SpaceOf(content::WebContents* contents) {
   const int index = tab_strip_model->GetIndexOfWebContents(contents);
   tabs::TabInterface* opener =
       index == TabStripModel::kNoTab ? nullptr : tab_strip_model->GetOpenerOfTabAt(index);
-  return window->SpaceForOpened(opener ? Tab::IdOf(opener->GetContents()) : 0);
+  return window->SpaceForOpened(contents, opener ? Tab::IdOf(opener->GetContents()) : 0,
+                                /*made_for=*/0);
 }
 
-Space* Window::SpaceForOpened(bc_id opener) const {
-  Space* space = opener ? Space::Holding(opener) : nullptr;
-  return space ? space : Space::FromId(space_);
+Space* Window::SpaceForOpened(content::WebContents* contents, bc_id opener, bc_id made_for) const {
+  using agent_space_rule::Listed;
+  Space* openers = opener ? Space::Holding(opener) : nullptr;
+  Space* shown = Space::FromId(space_);
+  // A private page's Space is its window's own, which the window shows.
+  Space* first = nullptr;
+  if (!contents->GetBrowserContext()->IsOffTheRecord()) {
+    const std::string dir = DirOf(contents);
+    for (Space* space : Space::All()) {
+      if (!space->agent() && space->profile() == dir) {
+        first = space;
+        break;
+      }
+    }
+  }
+  switch (agent_space_rule::ListedIn({
+      .made_for_a_space = made_for != 0,
+      .its_space_is_there = Space::FromId(made_for) != nullptr,
+      .opener_in_users_space = openers && !openers->agent(),
+      .window_shows_users_space = shown && !shown->agent(),
+      .profile_has_users_space = first != nullptr,
+  })) {
+    case Listed::kInTheSpaceItWasMadeFor:
+      return Space::FromId(made_for);
+    case Listed::kInItsOpenersSpace:
+      return openers;
+    case Listed::kInTheSpaceShown:
+      return shown;
+    case Listed::kInTheUsersFirstSpace:
+      return first;
+    case Listed::kClosed:
+      return nullptr;
+  }
+  return nullptr;
 }
 
 void Window::ReportTabOpened(bc_id tab,
@@ -3737,7 +3801,8 @@ void Window::ReportTabOpened(bc_id tab,
                              bool foreground,
                              bc_id split_with,
                              std::optional<bc_rect> popup,
-                             bool popup_placed) {
+                             bool popup_placed,
+                             bc_id made_for) {
   // A popup can close itself at once.
   content::WebContents* contents = Tab::FromId(tab);
   if (!contents) {
@@ -3746,7 +3811,7 @@ void Window::ReportTabOpened(bc_id tab,
   // A page's pop-up waits for the ad blocker's pop-up filters, which may close it (#2806).
   if (HoldPopupReport(contents, base::BindOnce(&Window::ReportTabOpened, weak_factory_.GetWeakPtr(),
                                                tab, opener, foreground, split_with, popup,
-                                               popup_placed))) {
+                                               popup_placed, made_for))) {
     return;
   }
   // How long after the press in its page a tab a page opened is listed, which the pop-up hold adds
@@ -3761,18 +3826,23 @@ void Window::ReportTabOpened(bc_id tab,
               static_cast<unsigned long long>(opener));
     }
   }
-  if (Space* space = SpaceForOpened(opener)) {
-    space->Add(tab, opener, foreground);
-    // Beside the page it came from, unless that page's split view is full.
-    const bool split = split_with && space->Split(tab, split_with, Tab::PageUrl(Tab::FromId(tab)),
-                                                  /*left=*/false);
-    // A page in a Space the window doesn't show doesn't bring its tabs to the front.
-    if (foreground && space->id() == space_) {
-      Select(tab);
-    }
-    if (split) {
-      PanesChanged();
-    }
+  Space* space = SpaceForOpened(contents, opener, made_for);
+  if (!space) {
+    // The Space it was made for is gone, or it's no agent's and its profile has no Space of the
+    // user's: closed, and the app never hears of it.
+    CloseTab(tab, /*discard=*/true);
+    return;
+  }
+  space->Add(tab, opener, foreground);
+  // Beside the page it came from, unless that page's split view is full.
+  const bool split = split_with && space->Split(tab, split_with, Tab::PageUrl(Tab::FromId(tab)),
+                                                /*left=*/false);
+  // A page in a Space the window doesn't show doesn't bring its tabs to the front.
+  if (foreground && space->id() == space_) {
+    Select(tab);
+  }
+  if (split) {
+    PanesChanged();
   }
   if (popup && Host().tab_popup) {
     Host().tab_popup(Host().context, id_, tab, opener, *popup, popup_placed);
