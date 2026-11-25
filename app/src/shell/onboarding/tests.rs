@@ -919,7 +919,9 @@ fn passing_each_step_sets_no_switch(cx: &mut TestAppContext) {
             Step::Done
         ]
     );
-    later(&shell, cx, END_FADE);
+    // The last settle has played the end's fade, and the card has gone.
+    cx.run_until_parked();
+    assert_eq!(step(&shell, cx), None, "Start Browsing ended the card");
     assert_eq!(settings_set(host.take()), Vec::<String>::new());
 }
 
