@@ -559,17 +559,17 @@ send click $(home_row)
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "a click on the pinned row didn't show its tab"
 link_to site
 
-# With the switch in Settings › Features off, the link goes in the pinned tab.
+# With the switch in Settings › General off, the link goes in the pinned tab.
 send click $page_point
 expect "^browser: title $a pressed [0-9]*\$" "a click on the test page's lower part didn't reach it"
 send key , cmd
 expect '^browser: settings shown General$' "⌘, didn't show Settings on its General tab"
 # Settings takes no click until it has drawn, nor a tab's rows until the tab has (#1101, #1133).
 expect '^browser: settings drew General$' "Settings didn't draw General"
-send clickkey $(settings_at "toolbar Features")
-expect '^browser: settings tab Features$' "a click on Features didn't show its section"
-settings_drew Features
-send clickkey $(settings_at "switch link previews")
+# Peek is under General's own rows: in_sight scrolls it up, from this show's frame.
+in_sight "switch link previews" '^browser: settings drew General$' ||
+  fail "Settings didn't draw the link previews' switch"
+send clickkey $at
 expect '^browser: link previews off$' "a click on the link previews switch didn't turn them off"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -616,9 +616,11 @@ send key 1 ctrl
 expect "^browser: space $first\( in .*\)\{0,1\}\$" "⌃1 didn't show the first Space again"
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "the first Space didn't show the pinned tab again"
 send key , cmd
-expect '^browser: settings shown Features$' "⌘, didn't show Settings on its Features section"
-expect '^browser: settings drew Features$' "Settings didn't draw Features"
-send clickkey $(settings_at "switch link previews")
+expect '^browser: settings shown General$' "⌘, didn't show Settings on its General section"
+expect '^browser: settings drew General$' "Settings didn't draw General"
+in_sight "switch link previews" '^browser: settings drew General$' ||
+  fail "Settings didn't draw the link previews' switch"
+send clickkey $at
 expect '^browser: link previews on$' "a click on the link previews switch didn't turn them on"
 send clickkey $(settings_at "toolbar Links")
 expect '^browser: settings tab Links$' "a click on Links didn't show its tab"

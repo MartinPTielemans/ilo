@@ -2,7 +2,7 @@
 # What an agent a page has talked round still can't do (#2325): a scripted MCP client tries
 # everything the rules forbid, and pages of the run's own try to steer it. No model is in the loop:
 # the client does the worst a fully steered agent could, and the browser must refuse each try, with
-# nothing asked of the user (#4086) and each in the activity log, as Settings › Agents lists it.
+# nothing asked of the user (#4086) and each in the activity log, as Settings › Other apps lists it.
 # - Outside its Space: every tool that takes a tab, on the user's tab and on another agent's.
 # - Pages that aren't http or https: open_tab and navigate to file:, chrome:, about:, data:,
 #   javascript:, view-source:, chrome-extension: and devtools: addresses. (Chromium can't load

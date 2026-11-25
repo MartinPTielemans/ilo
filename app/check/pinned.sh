@@ -814,25 +814,26 @@ send key return
 expect "^browser: iconed folder $f 🌟\$" "the picker's pick didn't become the folder's icon"
 expect '^browser: icon picker hidden$' "picking an emoji didn't close the icon picker"
 ../tools/window-screenshot.sh "$pid" "$out/folder-icon.png" || fail "no window to capture"
-# Export… in Settings › Import & Export, under its Export heading, writes the Space's pinned
+# Export… in Settings › Sync & Import, under its Export heading, writes the Space's pinned
 # tabs as Markdown links, the folder a list of what it holds.
 send key , cmd
 expect '^browser: settings shown General$' "⌘, didn't show Settings on its General tab"
 # The run's first ⌘, opens the window, which takes no click until it has drawn (#1101).
 expect '^browser: settings drew General$' "Settings didn't draw General"
-send clickkey $(drawn "toolbar Import & Export")
-expect '^browser: settings tab Import & Export$' "a click on Import & Export didn't show its section"
-settings_drew 'Import & Export'
+send clickkey $(drawn "toolbar Sync & Import")
+expect '^browser: settings tab Sync & Import$' "a click on Sync & Import didn't show its section"
+settings_drew 'Sync & Import'
 # Copy All Links' toast is mostly still up, and the click lands all the same (#1134): a toast lets
 # clicks through, but on its plate while it has buttons, which this one hasn't. A slow run says
 # when the toast had gone first, so the click didn't have one to go past.
 shown=$(grep -n '^browser: toast shown Copied Links as Markdown$' "$log" | tail -1 | cut -d: -f1)
-section=$(grep -n '^browser: settings tab Import & Export$' "$log" | tail -1 | cut -d: -f1)
+section=$(grep -n '^browser: settings tab Sync & Import$' "$log" | tail -1 | cut -d: -f1)
 hidden=$(sed -n "${shown:-1},\$p" "$log" | grep -n '^browser: toast hidden$' | head -1 | cut -d: -f1)
 if [ -n "$hidden" ] && [ $((${shown:-1} + hidden - 1)) -lt "$section" ]; then
-  echo "skip: the click on Import & Export with a toast up, as Copy All Links' toast had gone first (#1134)."
+  echo "skip: the click on Sync & Import with a toast up, as Copy All Links' toast had gone first (#1134)."
 fi
-click_in_sight "export spaces"
+in_sight "export spaces" '^browser: settings drew Sync & Import$' || fail "Settings didn't draw Export…"
+send clickkey $at
 expect '^browser: exported [0-9]* links to .*/spaces\.md$' "Export… didn't write the Spaces' links"
 grep -qx -- '- later' "$out/spaces.md" ||
   fail "the export didn't list the folder: $(cat "$out/spaces.md")"
