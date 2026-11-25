@@ -35,8 +35,8 @@ pub enum Broom {
 }
 
 impl Broom {
-    /// Whether a click starts a sort.
-    fn sorts(self) -> bool {
+    /// Whether a click starts a sort, as the menu item and the bar entry read it too.
+    pub fn sorts(self) -> bool {
         matches!(self, Broom::Idle | Broom::Failed)
     }
 }

@@ -73,6 +73,7 @@ impl What {
     pub const REMOVE_THEME: What = What::quiet("Remove Theme Color");
     pub const CLEAR: What = What::quiet("Clear");
     pub const SORT_BY_SITE: What = What::quiet("Sort by Site");
+    pub const SORT_TABS: What = What::quiet("Sort Tabs");
     /// Arc says it in its own words (docs/ux-spec.md › Toast), so the shell shows that toast.
     pub const DELETE_SPACE: What = What::quiet("Delete Space");
     /// The Space leaving the switcher isn't where the eye is, at the folder it became.
@@ -268,6 +269,16 @@ pub(super) enum Edit {
         space: u64,
         rows: Vec<u64>,
     },
+    /// Takes back what Sort Tabs into Folders did in `space`, as one step: the folders it `made` go,
+    /// the tabs it `joined` to today's folders already there leave them, and today's rows are in
+    /// the order `rows` they were in. The older folders stay as they were. It's done once: the
+    /// sort's answer isn't kept to do again.
+    Unsort {
+        space: u64,
+        made: Vec<u64>,
+        joined: Vec<u64>,
+        rows: Vec<u64>,
+    },
     /// Brings back the Space, which `DeleteSpace` deleted.
     UndoDeleteSpace(u64),
     DeleteSpace(u64),
@@ -375,6 +386,10 @@ impl Edit {
                 show.iter_mut().for_each(|each| id_of(each, from, to));
             }
             Edit::Close(tabs) | Edit::Order { rows: tabs, .. } => ids(tabs),
+            Edit::Unsort { joined, rows, .. } => {
+                ids(joined);
+                ids(rows);
+            }
             Edit::Repin { tabs, spot } => {
                 tabs.iter_mut().for_each(|(each, _)| id_of(each, from, to));
                 if let At::Pinned { folder, .. } = &mut spot.at {
@@ -721,6 +736,15 @@ impl Edit {
                 let rows = shell.order_today(space, &rows, cx)?;
                 Some(Edit::Order { space, rows })
             }
+            Edit::Unsort {
+                space,
+                made,
+                joined,
+                rows,
+            } => {
+                shell.browser.unsort_today(space, &made, &joined, &rows, cx);
+                None
+            }
             Edit::UndoDeleteSpace(space) => shell
                 .browser
                 .undo_delete_space(space, cx)
@@ -879,6 +903,11 @@ impl Shell {
             let Some(Entry { what, edit }) = stack.pop() else {
                 break false;
             };
+            // Undone once, with nothing to redo: the sort's answer isn't kept.
+            if matches!(edit, Edit::Unsort { .. }) {
+                edit.apply(self, cx);
+                break true;
+            }
             if let Some(inverse) = edit.apply(self, cx) {
                 let stack = match undoing {
                     true => &mut self.history.redo,

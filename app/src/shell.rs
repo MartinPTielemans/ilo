@@ -123,6 +123,7 @@ mod permission;
 mod portrait;
 #[cfg(test)]
 mod side_tests;
+mod sort_folders;
 #[cfg(test)]
 mod space_order_tests;
 mod task_cards;
