@@ -8,6 +8,7 @@ bool Refuses(Ask ask, const Tab& tab) {
   }
   switch (ask) {
     case Ask::kPaste:
+    case Ask::kLinkPreview:
       return !tab.held;
     case Ask::kFilePicker:
     case Ask::kDevice:
@@ -16,8 +17,8 @@ bool Refuses(Ask ask, const Tab& tab) {
   return true;
 }
 
-bool InAgentSpace(Where where, bool preview_of_agents) {
-  return where == Where::kAgentsSpace || (where == Where::kNoSpace && preview_of_agents);
+bool MenuHasLinkPreviewRow(bool web_link, const Tab& tab) {
+  return web_link && !Refuses(Ask::kLinkPreview, tab);
 }
 
 }  // namespace browser_core::agent_space_rule

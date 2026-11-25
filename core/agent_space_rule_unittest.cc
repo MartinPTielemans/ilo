@@ -5,7 +5,7 @@
 namespace browser_core::agent_space_rule {
 namespace {
 
-constexpr Ask kAsks[] = {Ask::kPaste, Ask::kFilePicker, Ask::kDevice};
+constexpr Ask kAsks[] = {Ask::kPaste, Ask::kFilePicker, Ask::kDevice, Ask::kLinkPreview};
 
 TEST(AgentSpaceRuleTest, ATabOfTheUsersIsRefusedNothing) {
   for (Ask ask : kAsks) {
@@ -35,18 +35,19 @@ TEST(AgentSpaceRuleTest, AHeldTabStillGetsNoDevice) {
   EXPECT_TRUE(Refuses(Ask::kDevice, {.agents = true, .held = true}));
 }
 
-TEST(AgentSpaceRuleTest, TheSpaceAPagesTabIsInAnswersWhoseItIs) {
-  EXPECT_TRUE(InAgentSpace(Where::kAgentsSpace, /*preview_of_agents=*/false));
-  EXPECT_FALSE(InAgentSpace(Where::kUsersSpace, /*preview_of_agents=*/false));
-  EXPECT_FALSE(InAgentSpace(Where::kNoSpace, /*preview_of_agents=*/false));
+// A link the user clicks at a step they do themselves opens in a preview as in a tab of theirs.
+TEST(AgentSpaceRuleTest, AHeldTabOpensTheUsersLinkPreview) {
+  EXPECT_FALSE(Refuses(Ask::kLinkPreview, {.agents = true, .held = true}));
 }
 
-TEST(AgentSpaceRuleTest, APreviewNoSpaceHasTakenIsItsOpeners) {
-  EXPECT_TRUE(InAgentSpace(Where::kNoSpace, /*preview_of_agents=*/true));
+TEST(AgentSpaceRuleTest, ThePageMenuHasNoLinkPreviewRowInAnAgentsSpace) {
+  EXPECT_FALSE(MenuHasLinkPreviewRow(/*web_link=*/true, {.agents = true, .held = false}));
 }
 
-TEST(AgentSpaceRuleTest, APreviewAUsersSpaceTookIsTheUsers) {
-  EXPECT_FALSE(InAgentSpace(Where::kUsersSpace, /*preview_of_agents=*/true));
+TEST(AgentSpaceRuleTest, ThePageMenuHasTheLinkPreviewRowForAWebLinkWhereTheClickOpensOne) {
+  EXPECT_TRUE(MenuHasLinkPreviewRow(/*web_link=*/true, {.agents = false, .held = false}));
+  EXPECT_TRUE(MenuHasLinkPreviewRow(/*web_link=*/true, {.agents = true, .held = true}));
+  EXPECT_FALSE(MenuHasLinkPreviewRow(/*web_link=*/false, {.agents = false, .held = false}));
 }
 
 }  // namespace

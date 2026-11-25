@@ -1134,10 +1134,12 @@ void Window::AdjustNavigate(NavigateParams& params) {
   }
   // ⇧-click on a web link, which Chrome opens in a new window: the app may open it in a link
   // preview instead (the owner, 2026-11-02, #1370). Not a page's window.open(), which holds the
-  // page it made, or a form sent.
+  // page it made, or a form sent. Nor from a page in an agent's Space the user doesn't hold, whose
+  // link opens as any it opens does, in that Space.
   if (source && params.disposition == WindowOpenDisposition::NEW_WINDOW &&
       !params.started_from_context_menu && params.user_gesture && !params.contents_to_insert &&
-      !params.post_data && params.url.SchemeIsHTTPOrHTTPS() && Host().tab_link_to_preview) {
+      !params.post_data && params.url.SchemeIsHTTPOrHTTPS() && Host().tab_link_to_preview &&
+      !RefusesInAgentSpace(agent_space_rule::Ask::kLinkPreview, params.source_contents)) {
     const gfx::PointF click = source->last_click();
     // The app only answers here: it opens the preview after this call, outside the navigation.
     if (Host().tab_link_to_preview(Host().context, Tab::IdOf(params.source_contents),
@@ -1990,10 +1992,6 @@ content::WebContents* Window::OpenPreview(content::WebContents& opener,
   // Its card draws Chromium's page, so its load stays there (system_engine.h).
   if (tab) {
     tab->set_opened_as_preview();
-    // Marked before its page starts, from the Space its opener is in now, a preview's included.
-    const Tab* from = Tab::FromWebContents(&opener);
-    const Space* agents = from ? AgentSpaceOf(from->id()) : nullptr;
-    tab->set_preview_of_agents(agents ? agents->id() : 0);
   }
   // Inserting a background tab sized it to the active tab's page.
   preview->Resize(gfx::Rect(size));

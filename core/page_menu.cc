@@ -10,6 +10,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "browser_core/agent_space_page.h"
 #include "browser_core/host.h"
 #include "browser_core/tab.h"
 #include "browser_core/tile.h"
@@ -161,16 +162,18 @@ std::unique_ptr<RenderViewContextMenuBase> PageMenu::Show(
 void PageMenu::Report(bc_id window, double x, double y) {
   // Chrome's menu runners take the model of the menu they own as this, which the core owns.
   auto& model = const_cast<ui::SimpleMenuModel&>(menu_->menu_model());
-  // Open Link in Peek, for a web link: the app decides whether it shows (tab_link_to_preview).
+  // Open Link in Peek, for a web link: the app decides whether it shows (tab_link_to_preview). A
+  // page in an agent's Space the user doesn't hold has no such row, as its click opens no preview.
   const Row peek = {
       .command = BC_PAGE_MENU_PREVIEW_LINK,
       .title = kPreviewLinkTitle,
       .enabled = true,
   };
   const bool web_link = menu_->params().link_url.SchemeIsHTTPOrHTTPS();
+  const bool peeks = Host().tab_link_to_preview &&
+                     agent_space_rule::MenuHasLinkPreviewRow(web_link, RuleTabOf(web_contents()));
   std::vector<Row> rows;
-  AddRows(&model, -1, web_link && Host().tab_link_to_preview ? &peek : nullptr, rows, rows_,
-          models_);
+  AddRows(&model, -1, peeks ? &peek : nullptr, rows, rows_, models_);
   open_ = true;
   std::vector<bc_page_menu_item> items;
   items.reserve(rows.size());
@@ -196,7 +199,9 @@ void PageMenu::Close(bc_id tab, int command) {
 void PageMenu::Run(int command) {
   base::WeakPtr<PageMenu> alive = weak_factory_.GetWeakPtr();
   // Open Link in Peek, from where the menu was asked for, as a ⇧-click is from where it pressed.
-  if (command == BC_PAGE_MENU_PREVIEW_LINK && Host().tab_link_to_preview) {
+  // Not once the user no longer holds an agent's tab whose menu they opened while they did.
+  if (command == BC_PAGE_MENU_PREVIEW_LINK && Host().tab_link_to_preview &&
+      !RefusesInAgentSpace(agent_space_rule::Ask::kLinkPreview, web_contents())) {
     const content::ContextMenuParams& params = menu_->params();
     Host().tab_link_to_preview(Host().context, tab_, params.link_url.spec().c_str(), params.x,
                                params.y);

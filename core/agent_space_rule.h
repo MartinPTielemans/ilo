@@ -22,25 +22,19 @@ enum class Ask {
   kFilePicker,
   // A USB, HID, serial or Bluetooth device the user gave the page's site.
   kDevice,
+  // A link of the page's opened in a preview over the user's window: by a click that leaves a
+  // pinned tab's site, a click with ⇧, or the row of the page's menu.
+  kLinkPreview,
 };
 
 // Whether the browser refuses |ask| from a page in |tab|. Nothing in a tab of the user's. In an
-// agent's Space the picker and a device always, and a paste unless the user holds the tab, so
-// their own paste works at a step they do themselves.
+// agent's Space the picker and a device always, and a paste and a link preview unless the user
+// holds the tab, so their own paste and their own click work at a step they do themselves.
 bool Refuses(Ask ask, const Tab& tab);
 
-// Where the browser finds a page's tab: in the Space that lists it or, from the page's making
-// until one does, the Space it was made for, which a page another opens is its opener's.
-enum class Where {
-  kNoSpace,
-  kUsersSpace,
-  kAgentsSpace,
-};
-
-// Whether a page is in an agent's Space. The Space its tab is in answers. A link preview is in none
-// until one takes it, and is its opener's until then: |preview_of_agents| is whether the page it
-// previews a link of was in an agent's Space as the preview opened, whatever became of that page.
-bool InAgentSpace(Where where, bool preview_of_agents);
+// Whether the page's menu has its row that opens a link in a preview, for a link that could open
+// in one (|web_link|): never where the click itself would open none.
+bool MenuHasLinkPreviewRow(bool web_link, const Tab& tab);
 
 }  // namespace browser_core::agent_space_rule
 

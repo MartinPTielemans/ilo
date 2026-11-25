@@ -295,10 +295,6 @@ class Tab : public content::WebContentsObserver,
   // Space or the favorites take it.
   bool opened_as_preview() const { return opened_as_preview_; }
   void set_opened_as_preview() { opened_as_preview_ = true; }
-  // The agent's Space the page a preview shows a link of was in as the preview opened, else 0: the
-  // preview is refused what that page is (AgentSpaceOf).
-  bc_id preview_of_agents() const { return preview_of_agents_; }
-  void set_preview_of_agents(bc_id space) { preview_of_agents_ = space; }
 
   // When a window last stopped showing the tab, else when it opened, for the auto-archive and for
   // unloading tabs unseen a while.
@@ -498,7 +494,6 @@ class Tab : public content::WebContentsObserver,
   base::TimeTicks last_press_at_;
   DocumentPresses presses_;
   bool opened_as_preview_ = false;
-  bc_id preview_of_agents_ = 0;
   bool last_press_held_alt_ = false;
   // Whether the app was last told the page is full screen.
   bool fullscreen_ = false;
