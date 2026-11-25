@@ -3223,13 +3223,14 @@ lines-below = 16.0
 [shell.conversation.ilo]
 # Ours (#4086, no asks; the owner's dev build tunes these): what ilo itself says in a task's
 # conversation, drawn as the trace's lines are, flat and unboxed. An ilo line is the trace's line
-# with ilo's mark before its words, both at `ink` of the full ink; what it says more is under its
+# with ilo's mark at `glyph` before its words, the mark in its own ink and the words at `ink` of
+# the full ink, the text's (spec-thread-stage.md, ilo's own line); what it says more is under its
 # words, and its buttons, the conversation's page chips, under that, with a note under a button
 # that needs one. A name it takes from a page, the button it stopped at or a site, is cut to
 # `quoted-chars` and drawn in the title's ink, apart from ilo's words. A refusal repeated is one
 # line, its count at its end in the trace's note ink.
-glyph = 13.0
-ink = 0.8
+glyph = 16.0
+ink = 1.0
 quoted-chars = 40.0
 text-top = 1.0
 text-line = 17.0

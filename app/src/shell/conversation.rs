@@ -41,6 +41,7 @@ use crate::agents::task::{
 use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED, Tone};
 use crate::text_input::TextInput;
 use crate::tokens::command_bar::{CHIP as BAR_CHIP, HINT_KEY_RIM, HINT_KEY_X};
+use crate::tokens::mark::INK as MARK_INK;
 use crate::tokens::shell::HAIRLINE;
 use crate::tokens::shell::conversation::ilo::{
     ARM, BELOW as ILO_BELOW, BUTTONS_GAP, BUTTONS_TOP, COMPOSER_CHEVRON, COMPOSER_CHEVRON_GAP,
@@ -2511,34 +2512,8 @@ impl TalkView {
             (quoted, style)
         });
         let highlights: Vec<_> = [(mark.clone(), marked)].into_iter().chain(named).collect();
-        let glyph = match &line.kind {
-            // A task ilo stopped has the one glyph, whatever it stopped it over.
-            IloKind::Stopped { .. }
-            | IloKind::Helpers { .. }
-            | IloKind::NotRestarted { .. }
-            | IloKind::NotRaised { .. } => "icons/ban.svg",
-            IloKind::Yours { .. } => "icons/user.svg",
-            IloKind::TabBack { .. } => "icons/undo-2.svg",
-            // The user's own stop has Stop's glyph.
-            IloKind::YouStopped { .. } => "icons/square.svg",
-            IloKind::SignedIn { .. } => "icons/key-round.svg",
-            IloKind::TierChanged { .. } | IloKind::KeptAt { .. } | IloKind::SetBack { .. } => {
-                "icons/shield.svg"
-            }
-            IloKind::StartedWithout {
-                left: ilo::LeftOut::Folder(_),
-            } => "icons/folder.svg",
-            IloKind::StartedWithout { .. } => "icons/file.svg",
-            IloKind::LeftRunning { .. } => "icons/circle-alert.svg",
-            IloKind::EndedLeft => "icons/check.svg",
-            IloKind::Resumed { .. } => "icons/play.svg",
-            IloKind::KeptHere => "icons/save.svg",
-            IloKind::Gone
-            | IloKind::NotKept
-            | IloKind::KeepsNothing
-            | IloKind::NoProfile
-            | IloKind::NoSpace => "icons/message-circle.svg",
-        };
+        // Every one of ilo's lines wears ilo's mark, whatever it says (the mark rule).
+        let glyph = crate::product::mark_path(ILO_GLYPH);
         let head = trace_line(
             look,
             TraceLine {
@@ -3130,7 +3105,7 @@ fn trace_line(look: &Look, line: TraceLine) -> gpui::Stateful<gpui::Div> {
     };
     let glyph = glyph.map(|glyph| {
         let (color, size) = match ilos {
-            true => (palette.glyph(ILO_INK), ILO_GLYPH),
+            true => (palette.text(MARK_INK), ILO_GLYPH),
             false => (palette.glyph(TRACE_GLYPH_ALPHA), TRACE_GLYPH),
         };
         let path = if failed { "icons/x.svg" } else { glyph };
