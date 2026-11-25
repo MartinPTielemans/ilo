@@ -178,9 +178,7 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "settings.segment-radius",
     // The foot's plates in the owner's drawing (spec-library-foot-theme.md): 28 square at 8.
     "shell.foot-plate-radius",
-    // The downloads plate in the same drawing: the button's box under it at 10, a row at 9 and
-    // its tile at 7.
-    "shell.recent-downloads.strip-radius",
+    // The downloads plate in the same drawing: a row at 9 and its tile at 7.
     "shell.recent-downloads.row-radius",
     "shell.recent-downloads.tile-radius",
 ];

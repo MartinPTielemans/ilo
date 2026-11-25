@@ -7,8 +7,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::{sync::Arc, time::Duration};
 
 use gpui::{
-    AnyElement, BoxShadow, Context, FontWeight, Hsla, Image, ObjectFit, PathBuilder, SharedString,
-    Task, Window, canvas, div, img, point, prelude::*, px, relative, rgb, svg,
+    AnyElement, BoxShadow, Context, FontWeight, Hsla, Image, ObjectFit, PathBuilder, Pixels, Point,
+    SharedString, Task, Window, canvas, div, img, point, prelude::*, px, relative, rgba, svg,
 };
 
 use super::{
@@ -85,11 +85,95 @@ fn grown(open: f32) -> f32 {
     1. - (1. - open).powi(3)
 }
 
-/// How strong the heading's ink is on the plate's fill in `tone`.
+/// How strong the heading's ink is on the plate in a `tone` window.
 fn heading_ink(tone: Tone) -> f32 {
     match tone {
         Tone::Dark => t::HEADING_INK,
         Tone::Light => t::LIGHT_HEADING_INK,
+    }
+}
+
+/// The plate's colour in a `tone` window whose own look, opaque, is `ground`: the floating level's
+/// fill over it. GPUI draws a box's shadow under the box too, so through the fill alone the plate
+/// would be as much darker than the button's box under it, which has no shadow, and the tab list
+/// would show through both.
+fn plate(tone: Tone, ground: Hsla) -> Hsla {
+    ground.blend(Hsla::from(rgba(match tone {
+        Tone::Dark => t::FILL,
+        Tone::Light => t::LIGHT_FILL,
+    })))
+}
+
+/// The plate and the button's box under it as one shape: a body `width` by `height` over a box
+/// `LIBRARY_BUTTON` by `FOOT_ROW` at its near side, with a curve taking the box's far side into
+/// the body's foot. While the body is growing its corners are as round as it has room for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Outline {
+    width: f32,
+    height: f32,
+    /// The body's top corners and its far bottom one.
+    top: f32,
+    far: f32,
+    /// The curve from the body's foot into the box's far side.
+    curve: f32,
+}
+
+impl Outline {
+    fn of(width: f32, height: f32) -> Self {
+        let past = (width - LIBRARY_BUTTON).max(0.);
+        let curve = t::CURVE.min(past / 2.);
+        let top = t::RADIUS.min(width / 2.).min(height / 2.);
+        Outline {
+            width,
+            height,
+            top,
+            far: top.min(past - curve),
+            curve,
+        }
+    }
+
+    /// Its line, `inset` inside its edge, from `origin`, the body's top near corner.
+    fn trace(&self, path: &mut PathBuilder, origin: Point<Pixels>, inset: f32) {
+        let at = |x: f32, y: f32| origin + point(px(x), px(y));
+        // A corner `radius` round at the edge, turning with the line or against it.
+        let turn = |path: &mut PathBuilder, radius: f32, with: bool, to: Point<Pixels>| match radius
+            > 0.
+        {
+            true => path.arc_to(point(px(radius), px(radius)), px(0.), false, with, to),
+            false => path.line_to(to),
+        };
+        let (right, foot) = (self.width - inset, self.height - inset);
+        let (box_right, box_foot) = (LIBRARY_BUTTON - inset, self.height + FOOT_ROW - inset);
+        let (top, far, curve, round) = (self.top, self.far, self.curve, t::STRIP_RADIUS);
+        path.move_to(at(top, inset));
+        path.line_to(at(self.width - top, inset));
+        turn(path, top - inset, true, at(right, top));
+        path.line_to(at(right, self.height - far));
+        turn(path, far - inset, true, at(self.width - far, foot));
+        path.line_to(at(LIBRARY_BUTTON + curve, foot));
+        turn(
+            path,
+            curve + inset,
+            false,
+            at(box_right, self.height + curve),
+        );
+        path.line_to(at(box_right, self.height + FOOT_ROW - round));
+        turn(
+            path,
+            round - inset,
+            true,
+            at(LIBRARY_BUTTON - round, box_foot),
+        );
+        path.line_to(at(round, box_foot));
+        turn(
+            path,
+            round - inset,
+            true,
+            at(inset, self.height + FOOT_ROW - round),
+        );
+        path.line_to(at(inset, top));
+        turn(path, top - inset, true, at(top, inset));
+        path.close();
     }
 }
 
@@ -427,15 +511,6 @@ impl Shell {
         }
     }
 
-    /// The plate's fill: opaque, as it lies over the tab list.
-    fn recent_downloads_fill(&self) -> Hsla {
-        Hsla::from(rgb(match self.palette.tone {
-            Tone::Dark => t::FILL,
-            Tone::Light => t::LIGHT_FILL,
-        }))
-        .opacity(t::FILL_ALPHA)
-    }
-
     /// The plate where it's all open: as wide as the sidebar's rows, and as tall as its heading
     /// and rows inside its padding.
     fn recent_downloads_size(&self) -> (f32, f32) {
@@ -446,9 +521,10 @@ impl Shell {
         )
     }
 
-    /// The plate, drawn by the sidebar inside its own bounds, under the Library button: its body
-    /// growing upward from the button's box, the button's own box in its fill under it, and the
-    /// curve that takes the one into the other. While it shows it takes the tab list's pointer.
+    /// The plate, drawn by the sidebar inside its own bounds, under the Library button: a menu's
+    /// shadow, then the plate and the button's own box as one shape in its fill with its line
+    /// along the whole of it, and the body with what it lists, growing upward from the box. While
+    /// it shows it takes the tab list's pointer.
     pub(super) fn recent_download_rows(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let recent = &self.recent_downloads;
         if recent.rows.is_empty() || self.page_fullscreen {
@@ -457,10 +533,17 @@ impl Shell {
         let live = !recent.going;
         let open = self.recent_downloads_open(cx.background_executor().now(), cx);
         let (size, shown) = (grown(open), rows_shown(open));
-        let fill = self.recent_downloads_fill();
+        let tone = self.palette.tone;
+        // The window's look at its foot, where the plate lies.
+        let fill = plate(tone, self.window_fill_at(1.));
+        let rim = Hsla::from(rgba(match tone {
+            Tone::Dark => t::RIM,
+            Tone::Light => t::LIGHT_RIM,
+        }));
         let (full_width, full_height) = self.recent_downloads_size();
         let width = LIBRARY_BUTTON + (full_width - LIBRARY_BUTTON) * size;
         let height = full_height * size;
+        let outline = Outline::of(width, height);
         let button_top = (FOOTER_HEIGHT + FOOT_ROW) / 2.;
         let rows: Vec<_> = (recent.rows.iter())
             .map(|&id| self.recent_row(id, live, cx))
@@ -474,28 +557,53 @@ impl Shell {
             .text_size(px(t::DETAIL_SIZE))
             .line_height(px(t::DETAIL_LINE))
             .font_weight(FontWeight::SEMIBOLD)
-            .text_color(self.palette.text(heading_ink(self.palette.tone)))
+            .text_color(self.palette.text(heading_ink(tone)))
             .child("Recent downloads");
-        let shadow = BoxShadow {
-            // It comes with the plate's size.
-            color: gpui::hsla(0., 0., 0., t::SHADOW * size),
-            offset: point(px(0.), px(t::SHADOW_Y)),
-            blur_radius: px(t::SHADOW_BLUR),
-            spread_radius: px(0.),
-            inset: false,
+        // The body's box, which the shadow lies under and what it lists is cut to.
+        let boxed = || {
+            div()
+                .absolute()
+                .left(px(LIBRARY_BACK_INSET))
+                .bottom(px(button_top))
+                .w(px(width))
+                .h(px(height))
+                .rounded_tl(px(outline.top))
+                .rounded_tr(px(outline.top))
+                .rounded_br(px(outline.far))
         };
-        let body = div()
+        // A menu's shadow, which comes with the plate as the shape does.
+        let light = tone == Tone::Light;
+        let shadows: Vec<_> = (crate::elevation::menu_shadow(light).into_iter())
+            .map(|shadow| BoxShadow {
+                color: shadow.color.opacity(size),
+                ..shadow
+            })
+            .collect();
+        let shadow = boxed().shadow(shadows);
+        // One shape, so the fill has no seam where the body meets the box and the line runs
+        // round both: GPUI's borders follow one box each.
+        let shape = canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let mut filled = PathBuilder::fill();
+                outline.trace(&mut filled, bounds.origin, 0.);
+                if let Ok(filled) = filled.build() {
+                    window.paint_path(filled, fill.opacity(size));
+                }
+                let mut line = PathBuilder::stroke(px(1.));
+                outline.trace(&mut line, bounds.origin, 0.5);
+                if let Ok(line) = line.build() {
+                    window.paint_path(line, rim.opacity(size));
+                }
+            },
+        )
+        .absolute()
+        .left(px(LIBRARY_BACK_INSET))
+        .bottom(px((FOOTER_HEIGHT - FOOT_ROW) / 2.))
+        .w(px(width))
+        .h(px(height + FOOT_ROW));
+        let body = boxed()
             .id("recent-downloads")
-            .absolute()
-            .left(px(LIBRARY_BACK_INSET))
-            .bottom(px(button_top))
-            .w(px(width))
-            .h(px(height))
-            .rounded_tl(px(t::RADIUS))
-            .rounded_tr(px(t::RADIUS))
-            .rounded_br(px(t::RADIUS))
-            .bg(fill)
-            .shadow(vec![shadow])
             .overflow_hidden()
             .when(live, |body| {
                 body.block_mouse_except_scroll().on_hover(cx.listener(
@@ -519,45 +627,10 @@ impl Shell {
                     .child(div().flex().flex_col().opacity(shown).children(rows)),
             )
             .children(live.then(|| self.download_press_listeners(cx)));
-        // The button's own box, which the button draws its glyph over.
-        let strip = div()
-            .absolute()
-            .left(px(LIBRARY_BACK_INSET))
-            .bottom(px((FOOTER_HEIGHT - FOOT_ROW) / 2.))
-            .w(px(LIBRARY_BUTTON))
-            .h(px(FOOT_ROW))
-            .rounded_b(px(t::STRIP_RADIUS))
-            .bg(fill.opacity(size));
-        // Where the body's foot runs on past the button, a curve takes the button's side into it,
-        // as wide as the body has grown past the button.
-        let curve = t::CURVE.min(width - LIBRARY_BUTTON);
-        let fillet = canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| {
-                let mut shape = PathBuilder::fill();
-                shape.move_to(bounds.origin);
-                shape.line_to(bounds.top_right());
-                shape.arc_to(
-                    point(bounds.size.width, bounds.size.height),
-                    px(0.),
-                    false,
-                    false,
-                    bounds.bottom_left(),
-                );
-                shape.close();
-                if let Ok(shape) = shape.build() {
-                    window.paint_path(shape, fill);
-                }
-            },
-        )
-        .absolute()
-        .left(px(LIBRARY_BACK_INSET + LIBRARY_BUTTON))
-        .bottom(px(button_top - curve))
-        .size(px(curve));
         vec![
+            shadow.into_any_element(),
+            shape.into_any_element(),
             body.into_any_element(),
-            strip.into_any_element(),
-            fillet.into_any_element(),
         ]
     }
 
@@ -673,7 +746,6 @@ mod tests {
 
     use gpui::{
         Entity, Hsla, Modifiers, MouseButton, Rgba, TestAppContext, VisualTestContext, point, px,
-        rgb,
     };
 
     use super::{
@@ -682,8 +754,8 @@ mod tests {
             library::{LIBRARY_BACK_INSET, Section},
             recorder::Recorder,
         },
-        DAY, HOUR, MINUTE, RECENT_REST, WEEK, age, come, detail, grown, heading_ink, now, opened,
-        rows_shown, t,
+        DAY, HOUR, MINUTE, Outline, RECENT_REST, WEEK, age, come, detail, grown, heading_ink, now,
+        opened, plate, rows_shown, t,
     };
     use crate::palette::{Palette, TEXT, Tone, contrast, over};
     use crate::tokens::shell::recent_downloads::motion::{FOLD, GROW, ROWS_FROM};
@@ -1186,44 +1258,68 @@ mod tests {
         assert_eq!(detail(&download), "May harm your computer");
     }
 
-    /// What the plate says reads on its fill in both looks: a name at 7:1, and its detail and the
-    /// heading, small text both, at the text's floor.
+    /// What the plate says reads on it, the floating fill over the sidebar, in both looks: a name
+    /// at 7:1, and its detail and the heading, small text both, at the text's floor, as all of a
+    /// row is on the plate it wears under the pointer.
     #[test]
     fn the_plates_text_reads_on_its_fill() {
         for tone in [Tone::Dark, Tone::Light] {
             let palette = Palette::of(None, tone);
-            let fill = Rgba::from(rgb(match tone {
-                Tone::Dark => t::FILL,
-                Tone::Light => t::LIGHT_FILL,
-            }));
-            let reads = |ink: Hsla| {
-                let ink = Rgba::from(ink);
-                contrast(over(fill, ink, ink.a), fill)
+            let on = |ground: Hsla, ink: Hsla| {
+                let (ground, ink) = (Rgba::from(ground), Rgba::from(ink));
+                contrast(over(ground, ink, ink.a), ground)
             };
-            let name = reads(palette.text(t::NAME));
-            let detail = reads(palette.text(palette.secondary()));
-            let heading = reads(palette.text(heading_ink(tone)));
-            assert!(name >= 7., "{tone:?}: a name reads at {name:.2}");
-            assert!(detail >= TEXT, "{tone:?}: a detail reads at {detail:.2}");
-            assert!(
-                heading >= TEXT,
-                "{tone:?}: the heading reads at {heading:.2}"
-            );
-            // The page glyph on its tile, and a row's plate under the pointer, which the name
-            // lies on too.
-            let tile = Rgba::from(palette.plate(t::TILE_FILL));
-            let tile = over(fill, tile, tile.a);
-            let glyph = Rgba::from(palette.glyph(t::TILE_GLYPH_INK));
-            let glyph = contrast(over(tile, glyph, glyph.a), tile);
-            assert!(glyph >= 3., "{tone:?}: the page glyph reads at {glyph:.2}");
-            let lit = Rgba::from(palette.plate(t::ROW_HOVERED));
-            let lit = over(fill, lit, lit.a);
-            let ink = Rgba::from(palette.text(palette.secondary()));
-            let on_lit = contrast(over(lit, ink, ink.a), lit);
-            assert!(
-                on_lit >= TEXT,
-                "{tone:?}: a detail on a row under the pointer reads at {on_lit:.2}"
-            );
+            let plate = plate(tone, Hsla::from(palette.underlay));
+            let name = palette.text(t::NAME);
+            let quiet = palette.text(palette.secondary());
+            let tile = plate.blend(palette.plate(t::TILE_FILL));
+            let lit = plate.blend(palette.plate(t::ROW_HOVERED));
+            for (what, read, floor) in [
+                ("a name", on(plate, name), 7.),
+                ("a detail", on(plate, quiet), TEXT),
+                (
+                    "the heading",
+                    on(plate, palette.text(heading_ink(tone))),
+                    TEXT,
+                ),
+                (
+                    "the page glyph",
+                    on(tile, palette.glyph(t::TILE_GLYPH_INK)),
+                    3.,
+                ),
+                ("a name on a row under the pointer", on(lit, name), 7.),
+                ("a detail on a row under the pointer", on(lit, quiet), TEXT),
+            ] {
+                assert!(read >= floor, "{tone:?}: {what} reads at {read:.2}");
+            }
         }
+    }
+
+    /// The plate's corners are a panel's once it's open, and never rounder than it has room for
+    /// on the way: none while it's no bigger than the button, and the curve into the button's
+    /// side never past the middle of what runs on beyond it.
+    #[test]
+    fn the_outlines_corners_fit_the_plate_as_it_grows() {
+        let open = Outline::of(224., 200.);
+        assert_eq!(
+            (open.top, open.far, open.curve),
+            (t::RADIUS, t::RADIUS, t::CURVE)
+        );
+        let shut = Outline::of(LIBRARY_BUTTON, 0.);
+        assert_eq!((shut.top, shut.far, shut.curve), (0., 0., 0.));
+        for step in 0..=20 {
+            let size = step as f32 / 20.;
+            let (width, height) = (LIBRARY_BUTTON + (224. - LIBRARY_BUTTON) * size, 200. * size);
+            let outline = Outline::of(width, height);
+            assert!(2. * outline.top <= width.min(height) + 1e-3);
+            assert!(outline.top + outline.far <= height + 1e-3);
+            assert!(outline.far + outline.curve <= width - LIBRARY_BUTTON + 1e-3);
+            assert!(outline.far >= 0. && outline.curve >= 0.);
+        }
+        assert!(
+            t::CURVE <= FOOT_ROW - t::STRIP_RADIUS,
+            "the curve ends above the box's foot"
+        );
+        assert!(2. * t::STRIP_RADIUS <= LIBRARY_BUTTON.min(FOOT_ROW));
     }
 }

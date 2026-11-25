@@ -2977,24 +2977,24 @@ rim = 0.5
 # button, the button turns into a plate that grows upward out of the foot, inside the sidebar, and
 # lists this many downloads, newest first.
 count = 4
-# The floating level's fill, opaque as it's drawn, since it lies over the tab list with nothing
-# blurring what's under it; its top corners and its far bottom one round, the near bottom one
-# square where it runs into the button; and the floating level's shadow.
-fill = 0x303036
-light-fill = 0xf6f5f1
-fill-alpha = 1.0
-radius = 12.0
+# The floating level's fill, as a menu's, over the window's own look, and the window's inner line,
+# 1 px, along the whole of its outline, which is the plate and the button's box under it as one
+# shape; a menu's shadow lies round it. On the sidebar the fill alone is nearly the sidebar's own
+# tone, so the line and the shadow are what lift it. Its top corners and its far bottom one are a
+# panel's, the near bottom one square where it runs into the button.
+fill = 0x3030_36eb
+light-fill = 0xf6f5_f1eb
+rim = 0xffff_ff1a
+light-rim = 0x0000_001f
+radius = 16.0
 padding = 6.0
-shadow = 0.35
-shadow-y = 12.0
-shadow-blur = 32.0
-# The button's own box takes the fill, round at its foot, and a curve this big takes its far side
-# into the plate's foot.
-strip-radius = 10.0
+# The button's own box takes the fill, round at its foot as the window's corner is, and a curve
+# this big takes its far side into the plate's foot.
+strip-radius = 12.0
 curve = 8.0
 # Its heading, at the detail's size, semibold. It's drawn in text-3, which reads at 3.4:1 on this
 # fill and under that on the light one: small text, so its ink is as much firmer as holds 4.5:1 on
-# the fill in each look (4.65 and 4.67), a step under the detail's.
+# the fill in each look, a step under the detail's.
 heading = 26.0
 heading-ink = 0.55
 light-heading-ink = 0.6
