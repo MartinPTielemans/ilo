@@ -340,6 +340,15 @@ impl Browser for Core {
         unsafe { bc::bc_tab_return_from_agent(tab) }
     }
 
+    fn in_use(&self, tab: u64, cx: &App) -> bool {
+        // Every window's shell has every Space's tabs, each with the state the core last gave.
+        let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
+        (shell.and_then(|shell| shell.upgrade())).is_some_and(|shell| {
+            let page = shell.read(cx).page(tab);
+            page.camera || page.microphone
+        })
+    }
+
     fn user_space(&self, like: u64) -> u64 {
         let profile = unsafe { bc::bc_space_profile(like) };
         // A private window's is never one: agents get no path into it.

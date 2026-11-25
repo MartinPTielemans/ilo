@@ -83,6 +83,8 @@ struct Made {
     /// as one whose Space is gone, as a test says.
     returned: RefCell<Vec<u64>>,
     not_returned: RefCell<HashSet<u64>>,
+    /// The tabs whose page is using the camera or the microphone.
+    in_use: RefCell<HashSet<u64>>,
     /// The user's Space in view, where a test moves it from 1.
     user: std::cell::Cell<Option<u64>>,
 }
@@ -422,6 +424,10 @@ impl Browser for Made {
         self.given.borrow_mut().push((tab, from, place));
         tabs[at].1 = space;
         true
+    }
+
+    fn in_use(&self, tab: u64, _: &App) -> bool {
+        self.in_use.borrow().contains(&tab)
     }
 
     /// As the core's: a tab given, in an agent's Space still, goes back to its place in the
@@ -13598,6 +13604,7 @@ mod handed;
 #[cfg(unix)]
 mod helpers;
 mod holds;
+mod in_use;
 pub(crate) mod kept;
 #[cfg(unix)]
 mod lines;

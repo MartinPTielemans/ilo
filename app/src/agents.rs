@@ -303,6 +303,10 @@ pub trait Browser {
     /// Returns `tab`, which the user gave an agent and which is in its Space still, to the place
     /// it left, on the page it's at now (bc_tab_return_from_agent). Whether it moved.
     fn return_tab(&self, tab: u64, cx: &mut App) -> bool;
+    /// Whether `tab`'s page is using the camera or the microphone, as the core last said of it
+    /// (bc_tab_state). Asked of an agent's own page only, for what a task below Full access may
+    /// do there (access.rs): no tool's answer and no log line has it.
+    fn in_use(&self, tab: u64, cx: &App) -> bool;
     /// The user's Space a session's card shows in and its pages open into: the one the front
     /// window shows, if it's in the profile of `like`, an agent's Space, else the first of the
     /// user's in that profile; never a private window's.
@@ -1945,6 +1949,11 @@ impl Agents {
             _ = reply.send(Refused::new(task::handed::RETURNED).into());
             return;
         }
+        // A page that is using the camera or the microphone answers only what reads it, below
+        // Full access.
+        if self.in_use_call((&agent, connection, id), &tool, &arguments, &reply, cx) {
+            return;
+        }
         match tool.as_str() {
             "list_tabs" => {
                 // Its first call makes its Space, which the core then lists.
@@ -2512,6 +2521,12 @@ impl Agents {
         let (reply, answer) = mpsc::channel();
         run.step = answer;
         self.trace_step(&run.agent, run.connection, run.call, run.tab, &step, cx);
+        // Each step is judged as its tool is, on a page in use too: the run stops at the first
+        // that isn't a read.
+        let by = (run.agent.clone(), run.connection, run.call);
+        if self.stopped_in_use((&by.0, by.1, by.2), &tool, run.tab, &reply, cx) {
+            return self.runs.push(run);
+        }
         if tool == "wait" || tool == "check" {
             return self.wait(run, &step, reply, cx);
         }
@@ -5347,6 +5362,8 @@ impl Agents {
         refused: &str,
         (url, sent, said): (&str, Vec<request::Sent>, &str),
     ) {
+        // By whichever road an entry comes, its reason is the one the app keeps.
+        let refused = tools::kept_reason(refused);
         // The rules run reads each entry as Settings › Agents lists it, the app's own refusals too,
         // which never reach the core's line.
         match refused.is_empty() {

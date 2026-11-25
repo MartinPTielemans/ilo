@@ -797,6 +797,36 @@ pub const KEPT: &str = "asked to stay: unsaved changes";
 /// kind's code word, as "request_permission camera".
 const PERMISSION: &str = "request_permission ";
 
+/// The reason the core gives with its entry for a question it cancelled in a tab of the user's
+/// that a thread holds while the user themself has taken it over, apart from every other such
+/// entry's. The app matches it whole, as this constant, and logs and keeps the entry by
+/// `AGENT_SPACE` (`kept_reason`), so the code is in no log line and in no past thread's file.
+pub const USERS_HOLD: &str = "agent_space_users_hold";
+
+/// The reason the core gives with every other entry of a permission it refused, and the one each
+/// is logged and kept by.
+pub const AGENT_SPACE: &str = "agent_space";
+
+/// An entry's reason as the app logs and keeps it.
+pub fn kept_reason(refused: &str) -> &str {
+    match refused == USERS_HOLD {
+        true => AGENT_SPACE,
+        false => refused,
+    }
+}
+
+/// The line for an entry the core made, which check.sh reads, by the reason the app keeps. `about`
+/// is the site the entry names where that isn't the tab's page, as the line says it, or nothing.
+pub fn log_activity(agent: &str, tab: u64, action: &str, about: &str, refused: &str) {
+    let refused = kept_reason(refused);
+    match refused.is_empty() {
+        true => crate::log!("browser: agent activity {agent} {tab} {action}{about}"),
+        false => {
+            crate::log!("browser: agent activity {agent} {tab} {action}{about} refused: {refused}")
+        }
+    }
+}
+
 /// The kind of permission the browser refused a page a thread holds, by the core's code word, if
 /// `action` is the core's entry of one. A page's file dialog the core cancelled is the file
 /// picker's, under the actions that entry has had, so that one event has one wording.
