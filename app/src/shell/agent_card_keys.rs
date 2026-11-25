@@ -546,7 +546,7 @@ impl Shell {
             return;
         };
         log!("browser: agent card key pressed {}", button.label);
-        self.press_card(button.does, cx);
+        self.press_card_by_key(button.does, cx);
     }
 
     fn card_leave(&mut self, _: &mut Window, cx: &mut Context<Self>) {

@@ -23,6 +23,8 @@ fn shell_with_task(
     cx: &mut TestAppContext,
 ) -> (Entity<Shell>, Rc<Recorder>, &mut VisualTestContext) {
     let host = Rc::new(Recorder::default());
+    // The user works in ilo, which Show Tab's keyboard needs.
+    host.app_active.set(true);
     host.space_agents
         .borrow_mut()
         .insert(2, "claude-code".into());
@@ -1695,4 +1697,440 @@ fn an_agents_split_never_shows_its_pages_dialogs(cx: &mut TestAppContext) {
         .filter(|call| call.starts_with("page dialog ") && call != "page dialog none")
         .collect();
     assert!(shown.is_empty(), "{shown:?}");
+}
+
+/// Task-1 asks the user to sign in in its tab 30 (a handoff), its card and its question drawn.
+fn handed(shell: &Entity<Shell>, host: &Recorder, cx: &mut VisualTestContext) {
+    use crate::agents::Question;
+    use crate::agents::task::{Card, Dot};
+
+    let card = |agent: &str, space: u64| Card {
+        agent: agent.to_string().into(),
+        home: 1,
+        space,
+        name: "Claude".into(),
+        replies: true,
+        title: "Find a flight".into(),
+        status: "Needs you".into(),
+        asks: false,
+        dot: Dot::Waiting,
+        answers: Vec::new(),
+        question: None,
+        open: Vec::new(),
+        retry: false,
+        command: None,
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_task_cards(vec![card("task-1", 3), card("claude-code", 2)], cx);
+        shell.set_agent_status(
+            vec![Status {
+                agent: "task-1".into(),
+                name: "Claude".into(),
+                space: 3,
+                doing: "Typed · flights.example".into(),
+                held: vec![(30, "Sign in to flights.example".into())],
+            }],
+            cx,
+        );
+        let question = Question {
+            id: 7,
+            agent: "Claude".into(),
+            from: "task-1".into(),
+            what: "sign in".into(),
+            why: "flights.example asks you to sign in.".into(),
+            handoff: Some(30),
+            ..Default::default()
+        };
+        shell.set_agent_question(Some(question), cx);
+    });
+    draw(shell, cx);
+    assert!(
+        !host.take().iter().any(|said| said == "focus page"),
+        "the handoff alone gave a page the keyboard"
+    );
+}
+
+/// A click on one of the handoff card's buttons: Show Tab at its right, Hand Back at its left. The
+/// core answers a select by showing the tab, in the task's Space for one of the task's.
+fn press_card(
+    shell: &Entity<Shell>,
+    host: &Recorder,
+    cx: &mut VisualTestContext,
+    show: bool,
+) -> Vec<String> {
+    use gpui::Modifiers;
+
+    let card = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
+    let card = card.expect("the handoff's card wasn't drawn");
+    let x = if show { 0.75 } else { 0.25 };
+    let at = point(
+        card.origin.x + card.size.width * x,
+        card.origin.y + card.size.height - px(26.),
+    );
+    cx.simulate_click(at, Modifiers::none());
+    cx.run_until_parked();
+    let mut asked = host.take();
+    if asked.iter().any(|said| said == "select 30") {
+        assert!(
+            !asked.iter().any(|said| said == "focus page"),
+            "the keyboard was asked for before the core showed the handed tab, so it would land \
+             on the page shown before: {asked:?}"
+        );
+        core_shows_task(shell, cx, 30);
+        draw(shell, cx);
+        asked.extend(host.take());
+    }
+    asked
+}
+
+/// The handed page is the one watched, in the task's conversation, with the keyboard asked for it
+/// after the tab shows.
+fn watched_with_keys(
+    shell: &Entity<Shell>,
+    asked: &[String],
+    cx: &mut VisualTestContext,
+    case: &str,
+) {
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(30))),
+        "{case}: Show Tab didn't put the handed page in front of the user"
+    );
+    let select = asked.iter().position(|said| said == "select 30");
+    let focus = asked.iter().position(|said| said == "focus page");
+    assert!(
+        focus.is_some(),
+        "{case}: the handed page didn't get the keyboard: {asked:?}"
+    );
+    assert!(
+        select.is_none() || select < focus,
+        "{case}: the keyboard went before the tab showed: {asked:?}"
+    );
+}
+
+/// Show Tab on a handoff's card (#4065) puts the handed page in front of the user, watched as the
+/// task's Pages watch it, with the keyboard on the page, the user's click having asked for it: out
+/// of the conversation, in another of the user's Spaces, on the task's Pages, watching another of
+/// its pages, or with another task's conversation open.
+#[gpui::test]
+fn show_tab_on_a_handoff_shows_the_page_with_the_keyboard(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    handed(&shell, &host, cx);
+    let asked = press_card(&shell, &host, cx, true);
+    watched_with_keys(&shell, &asked, cx, "out of the conversation");
+    assert_eq!(
+        shell.read_with(cx, |shell, _| (shell.space(), shell.selected())),
+        (1, 10),
+        "the window's Space and tab stayed the user's, to go back to"
+    );
+}
+
+#[gpui::test]
+fn show_tab_from_another_space_comes_back_to_it(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    shell.update(cx, |shell, cx| shell.set_space(4, cx));
+    handed(&shell, &host, cx);
+    let asked = press_card(&shell, &host, cx, true);
+    watched_with_keys(&shell, &asked, cx, "in another Space");
+    host.shown.borrow_mut().clear();
+    shell.update(cx, |shell, cx| shell.close_task(cx));
+    assert_eq!(shell.read_with(cx, |shell, _| shell.task_shown()), None);
+    assert_eq!(
+        *host.shown.borrow(),
+        [4],
+        "closing the conversation didn't go back to the Space Show Tab was pressed in"
+    );
+}
+
+#[gpui::test]
+fn show_tab_from_the_tasks_pages_or_another_of_its_pages(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    handed(&shell, &host, cx);
+    shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
+    draw(&shell, cx);
+    host.take();
+    let asked = press_card(&shell, &host, cx, true);
+    watched_with_keys(&shell, &asked, cx, "on the task's Pages");
+
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    shell.update(cx, |shell, cx| shell.watch_task_page(31, thumb, None, cx));
+    core_shows_task(&shell, cx, 31);
+    draw(&shell, cx);
+    host.take();
+    let asked = press_card(&shell, &host, cx, true);
+    watched_with_keys(&shell, &asked, cx, "watching another of its pages");
+
+    // Pressed again with the page watched, it gives the page the keyboard again.
+    shell.update(cx, |shell, cx| shell.take_keyboard(cx));
+    host.take();
+    let asked = press_card(&shell, &host, cx, true);
+    watched_with_keys(&shell, &asked, cx, "the handed page watched already");
+}
+
+#[gpui::test]
+fn show_tab_with_another_tasks_conversation_open(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    handed(&shell, &host, cx);
+    shell.update(cx, |shell, cx| shell.show_task("claude-code".into(), cx));
+    draw(&shell, cx);
+    host.take();
+    let asked = press_card(&shell, &host, cx, true);
+    watched_with_keys(&shell, &asked, cx, "another task's conversation open");
+}
+
+/// While one of the app's overlays has the keyboard, the page doesn't get it: the click that
+/// closes the command bar reaches the card, and the page gets the keyboard once the bar's gone.
+#[gpui::test]
+fn show_tab_waits_for_the_command_bar_to_go(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    handed(&shell, &host, cx);
+    host.bar_open.set(true);
+    let asked = press_card(&shell, &host, cx, true);
+    assert!(
+        !asked.iter().any(|said| said == "focus page"),
+        "the page got the keyboard while the command bar had it: {asked:?}"
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(30)))
+    );
+    host.bar_open.set(false);
+    draw(&shell, cx);
+    assert_eq!(host.take(), ["focus page"]);
+    draw(&shell, cx);
+    assert!(host.take().is_empty(), "the keyboard was asked for again");
+}
+
+/// The UI taking the keyboard between Show Tab and the core showing the tab, as a click in the
+/// conversation's field does, keeps it there: the show coming late doesn't take it for the page.
+#[gpui::test]
+fn show_tab_leaves_the_keyboard_the_ui_took_before_the_tab_showed(cx: &mut TestAppContext) {
+    use gpui::Modifiers;
+
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    handed(&shell, &host, cx);
+    let card = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
+    let card = card.expect("the handoff's card wasn't drawn");
+    let at = point(
+        card.origin.x + card.size.width * 0.75,
+        card.origin.y + card.size.height - px(26.),
+    );
+    cx.simulate_click(at, Modifiers::none());
+    cx.run_until_parked();
+    let asked = host.take();
+    assert!(asked.iter().any(|said| said == "select 30"), "{asked:?}");
+    shell.update(cx, |shell, cx| shell.take_keyboard(cx));
+    core_shows_task(&shell, cx, 30);
+    draw(&shell, cx);
+    let asked = host.take();
+    assert!(
+        !asked.iter().any(|said| said == "focus page"),
+        "the late show took the keyboard the UI had taken since: {asked:?}"
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(30)))
+    );
+}
+
+/// The user gone to another app before the core shows the tab: the page isn't given the keyboard,
+/// which on Windows could bring ilo forward, nor later once the user comes back.
+#[gpui::test]
+fn show_tab_gives_no_keyboard_with_another_app_in_front(cx: &mut TestAppContext) {
+    use gpui::Modifiers;
+
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    handed(&shell, &host, cx);
+    let card = shell.read_with(cx, |shell, _| shell.agent_question_drawn.get());
+    let card = card.expect("the handoff's card wasn't drawn");
+    let at = point(
+        card.origin.x + card.size.width * 0.75,
+        card.origin.y + card.size.height - px(26.),
+    );
+    cx.simulate_click(at, Modifiers::none());
+    cx.run_until_parked();
+    assert!(host.take().iter().any(|said| said == "select 30"));
+    host.app_active.set(false);
+    core_shows_task(&shell, cx, 30);
+    draw(&shell, cx);
+    host.app_active.set(true);
+    draw(&shell, cx);
+    let asked = host.take();
+    assert!(
+        !asked.iter().any(|said| said == "focus page"),
+        "the page was given the keyboard with another app in front, or after: {asked:?}"
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(30)))
+    );
+}
+
+/// A menu up when Show Tab is pressed keeps the keyboard until it closes, as a click outside
+/// closes it, and only then does the page take the keyboard, once.
+#[gpui::test]
+fn show_tab_waits_for_a_menu_to_close(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    handed(&shell, &host, cx);
+    shell.update(cx, |shell, cx| {
+        let entries = vec![crate::shell::MenuEntry::new("Copy", true)];
+        shell.context_menu(entries, point(px(40.), px(40.)), Box::new(|_, _, _| {}), cx);
+    });
+    host.take();
+    let asked = press_card(&shell, &host, cx, true);
+    assert!(
+        !asked.iter().any(|said| said == "focus page"),
+        "the page got the keyboard while a menu had it: {asked:?}"
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(30)))
+    );
+    cx.update(|_, cx| host.dismiss(cx));
+    draw(&shell, cx);
+    assert_eq!(host.take(), ["focus page"]);
+    draw(&shell, cx);
+    assert!(host.take().is_empty(), "the keyboard was asked for again");
+}
+
+/// With two sessions of the agent in its Space, Show Tab opens the conversation of the one waiting
+/// on the user, which handed the tab, though the other's card comes first.
+#[gpui::test]
+fn show_tab_opens_the_waiting_sessions_conversation(cx: &mut TestAppContext) {
+    use crate::agents::task::Dot;
+
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    handed(&shell, &host, cx);
+    shell.update(cx, |shell, cx| {
+        let mut cards = shell.task_cards.clone();
+        let mut working = cards[0].clone();
+        working.agent = "task-0".into();
+        working.dot = Dot::Working;
+        cards.insert(0, working);
+        shell.set_task_cards(cards, cx);
+    });
+    draw(&shell, cx);
+    host.take();
+    let asked = press_card(&shell, &host, cx, true);
+    watched_with_keys(&shell, &asked, cx, "with two sessions in the Space");
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.talk_agent()),
+        Some("task-1".into()),
+        "Show Tab opened the conversation of a session that didn't hand the tab"
+    );
+}
+
+/// ↩ on Show Tab, with the card's keys on, runs once (#4065): the press shows the handed page as
+/// the click does, the key's repeats press nothing, and the page gets the keyboard only once the
+/// key is up, so neither reaches it. The card's keys are off after, so a ↩ typed next presses no
+/// button and is the page's.
+#[gpui::test]
+fn return_on_show_tab_runs_once_and_leaves_the_cards_keys(cx: &mut TestAppContext) {
+    use crate::shell::agent_card_keys::PROTECT;
+    use crate::shell::commands::Command;
+
+    cx.update(crate::shell::commands::bind_keys);
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    handed(&shell, &host, cx);
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::FocusAgentQuestion, "ui", cx)
+    });
+    // The frame gives the ringed button the keyboard.
+    draw(&shell, cx);
+    cx.executor().advance_clock(PROTECT);
+    cx.run_until_parked();
+    let ring = shell.read_with(cx, |shell, _| shell.agent_card_ring());
+    assert_eq!(
+        ring,
+        Some(1),
+        "the key didn't ring Show Tab, the handoff's primary"
+    );
+    host.take();
+
+    let enter = gpui::Keystroke::parse("enter").unwrap();
+    let down = |held| gpui::KeyDownEvent {
+        keystroke: enter.clone(),
+        is_held: held,
+        prefer_character_input: false,
+    };
+    cx.simulate_event(down(false));
+    cx.run_until_parked();
+    let asked = host.take();
+    assert!(
+        asked.contains(&"select 30".to_string()),
+        "↩ on Show Tab: {asked:?}"
+    );
+    let in_the_show = shell.update(cx, |shell, cx| {
+        shell.set_space(3, cx);
+        shell.set_selected(30, cx);
+        host.take()
+    });
+    draw(&shell, cx);
+    let held = [in_the_show, host.take()].concat();
+    assert!(
+        !held.iter().any(|said| said == "focus page"),
+        "the page got the keyboard with ↩ still down, so its repeats and release would reach it: \
+         {held:?}"
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.agent_card_ring()),
+        None,
+        "the card's keys stayed on after Show Tab"
+    );
+    for _ in 0..3 {
+        cx.executor().advance_clock(PROTECT);
+        cx.simulate_event(down(true));
+        cx.run_until_parked();
+    }
+    draw(&shell, cx);
+    let repeats = host.take();
+    assert!(repeats.is_empty(), "↩'s repeats did something: {repeats:?}");
+    cx.simulate_event(gpui::KeyUpEvent {
+        keystroke: enter.clone(),
+    });
+    cx.run_until_parked();
+    draw(&shell, cx);
+    assert_eq!(
+        host.take(),
+        ["focus page"],
+        "the key up didn't give the page the keyboard"
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, Some(30)))
+    );
+
+    // A ↩ typed next is the page's, which GPUI never sees: here, nothing the window does.
+    cx.executor().advance_clock(PROTECT);
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    draw(&shell, cx);
+    let after = host.take();
+    assert!(
+        !after.iter().any(|said| said.starts_with("select")
+            || said.starts_with("hand back")
+            || said.starts_with("answer agent")),
+        "a ↩ after Show Tab pressed a card button: {after:?}"
+    );
+}
+
+/// Hand Back still works from the page Show Tab shows.
+#[gpui::test]
+fn hand_back_after_show_tab(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shell_with_task(cx);
+    still(cx);
+    handed(&shell, &host, cx);
+    press_card(&shell, &host, cx, true);
+    let asked = press_card(&shell, &host, cx, false);
+    assert!(asked.iter().any(|said| said == "hand back 30"), "{asked:?}");
 }
