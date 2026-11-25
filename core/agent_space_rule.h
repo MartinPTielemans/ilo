@@ -19,6 +19,8 @@ struct Tab {
 enum class Ask {
   // The clipboard's content, by a paste.
   kPaste,
+  // A write to the clipboard, by a copy.
+  kCopy,
   // The picker for a file or a folder of the user's.
   kFilePicker,
   // A USB, HID, serial or Bluetooth device the user gave the page's site.
@@ -32,8 +34,8 @@ enum class Ask {
 };
 
 // Whether the browser refuses |ask| from a page in |tab|. Nothing in a tab of the user's. In an
-// agent's Space the picker, a device and Picture in Picture always, and a paste and a link preview
-// unless the user holds the tab, so their own paste and their own click work at a step they do
+// agent's Space the picker, a device and Picture in Picture always, and a paste, a copy and a link
+// preview unless the user holds the tab, so their own paste, copy and click work at a step they do
 // themselves.
 bool Refuses(Ask ask, const Tab& tab);
 

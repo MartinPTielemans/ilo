@@ -10,10 +10,12 @@
 
 #include "base/files/file_path.h"
 #include "base/functional/callback_forward.h"
+#include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/permission_prompt.h"
 #include "components/sync/base/data_type.h"
 #include "components/sync/base/passphrase_enums.h"
 #include "components/sync/engine/commit_and_get_updates_types.h"
+#include "content/common/content_export.h"
 #include "content/public/browser/bluetooth_delegate.h"
 #include "content/public/browser/login_delegate.h"
 #include "content/public/browser/weak_document_ptr.h"
@@ -45,6 +47,7 @@ namespace content {
 class RenderFrameHost;
 class RenderWidgetHost;
 class WebContents;
+struct MediaStreamRequest;
 }
 
 namespace extensions {
@@ -66,6 +69,7 @@ class AuthChallengeInfo;
 
 namespace permissions {
 class ChooserController;
+class PermissionRequest;
 }
 
 namespace policy {
@@ -361,5 +365,31 @@ extern void (*g_browser_core_activate_contents)(content::WebContents* contents);
 // (kind 2), as it asks. False keeps it from opening, with no infobar, and the page hears a cancel.
 // The browser's own dialogs, as a download's Save As, aren't asked about.
 extern bool (*g_browser_core_page_file_dialog)(content::WebContents* contents, int kind);
+
+// components/permissions/permission_context_base.cc: whether the page in |frame| is refused the
+// permission |type| whatever is saved for its site, asked in GetPermissionStatus before any setting
+// is read, by a read of the status as much as by a request; and RequestPermission's word that a
+// request, not a read, was refused so (chromium-core-agent-no-permissions.patch).
+extern bool (*g_browser_core_no_permission)(content::RenderFrameHost* frame,
+                                            ContentSettingsType type);
+extern void (*g_browser_core_permission_refused)(content::RenderFrameHost* frame,
+                                                 ContentSettingsType type);
+
+// components/permissions/permission_request_manager.cc: whether the core takes |request|, asked by
+// the page in |frame|, first in AddRequest: before it is queued, shown, counted or recorded. One
+// taken the core has ended or left unanswered itself; the manager frees it as the call returns.
+extern bool (*g_browser_core_takes_permission_request)(content::RenderFrameHost* frame,
+                                                       permissions::PermissionRequest* request);
+
+// chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc: whether the page in |contents|
+// is refused |request|, first in ProcessMediaAccessRequest, before any handler and so any picker.
+// True answers the page as a denial does.
+extern bool (*g_browser_core_no_media_access)(content::WebContents* contents,
+                                              const content::MediaStreamRequest& request);
+
+// content/browser/renderer_host/clipboard_host_impl.cc: whether a write to the clipboard by the
+// page in |frame| is dropped, asked in FrameClipboardContext::CanWrite at each write. Exported by
+// content, which is a library of its own in a component build.
+CONTENT_EXPORT extern bool (*g_browser_core_no_clipboard_write)(content::RenderFrameHost* frame);
 
 #endif  // BROWSER_CORE_HOOKS_H_

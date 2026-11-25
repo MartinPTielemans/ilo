@@ -28,6 +28,7 @@
 #include "browser_core/agent_file_field.h"
 #include "browser_core/agent_job_voter.h"
 #include "browser_core/agent_page.h"
+#include "browser_core/agent_permissions.h"
 #include "browser_core/agent_space_page.h"
 #include "browser_core/arrange.h"
 #include "browser_core/auto_archive.h"
@@ -448,14 +449,21 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
 
   // Chrome's, and neither for a page in an agent's Space: the clipboard is read by a paste there
   // only while the user holds the tab, and the picker for their files is never shown
-  // (agent_space_rule.h).
+  // (agent_space_rule.h). Each is asked as the page reads or opens one, so a refusal has its
+  // entry in the activity log.
   bool IsClipboardPasteAllowed(content::RenderFrameHost* frame) override {
-    return !RefusesInAgentSpace(agent_space_rule::Ask::kPaste, frame) &&
-           ChromeContentBrowserClient::IsClipboardPasteAllowed(frame);
+    if (RefusesInAgentSpace(agent_space_rule::Ask::kPaste, frame)) {
+      NoteRefused(agent_permission_rule::Kind::kClipboardRead, frame);
+      return false;
+    }
+    return ChromeContentBrowserClient::IsClipboardPasteAllowed(frame);
   }
   bool IsFileSystemAccessApiFilePickerAllowed(content::WebContents* contents) override {
-    return !RefusesInAgentSpace(agent_space_rule::Ask::kFilePicker, contents) &&
-           ChromeContentBrowserClient::IsFileSystemAccessApiFilePickerAllowed(contents);
+    if (RefusesInAgentSpace(agent_space_rule::Ask::kFilePicker, contents)) {
+      NoteRefused(agent_permission_rule::Kind::kFilePicker, contents);
+      return false;
+    }
+    return ChromeContentBrowserClient::IsFileSystemAccessApiFilePickerAllowed(contents);
   }
 
   // Chrome's, but a page in an agent's Space opens no Picture in Picture window for a document,
@@ -693,6 +701,11 @@ void Install(const bc_host& host) {
   g_browser_core_component_allowed = &widevine::MayUpdate;
   g_browser_core_no_passwords = &IsAgentTab;
   g_browser_core_no_autofill = &IsAgentTab;
+  g_browser_core_no_permission = &NoPermission;
+  g_browser_core_permission_refused = &PermissionRefused;
+  g_browser_core_takes_permission_request = &TakesPermissionRequest;
+  g_browser_core_no_media_access = &NoMediaAccess;
+  g_browser_core_no_clipboard_write = &NoClipboardWrite;
   g_browser_core_refuse_passkey = &RefuseAgentPasskey;
 #if BUILDFLAG(IS_MAC)
   g_browser_core_touch_id_keychain_group = &platform::PasskeyKeychainGroup;
