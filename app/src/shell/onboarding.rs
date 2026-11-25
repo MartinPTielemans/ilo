@@ -156,7 +156,16 @@ impl Switch {
                 ("Block ads and trackers", "Built in, on every site".into())
             }
             // Settings' name: the drawing's "Save and fill" and its Touch ID aren't what it sets.
-            Switch::Setting(Setting::SavePasswords) => ("Offer to save passwords", "".into()),
+            // The spec gives only the Mac's line, so the others go without.
+            Switch::Setting(Setting::SavePasswords) => (
+                "Offer to save passwords",
+                if cfg!(target_os = "macos") {
+                    "Kept on this Mac"
+                } else {
+                    ""
+                }
+                .into(),
+            ),
             Switch::DailyCount => (
                 "Send a daily usage count",
                 crate::daily_count::words(env!("APP_NAME")).into(),
@@ -262,8 +271,7 @@ impl Step {
             ),
             Step::Private => (
                 "Private from the start.",
-                "These are on. Turn off what you don't want, here or for one site from its \
-                 address.",
+                "Turn off what you don't want, here or for one site from its address.",
                 "Continue",
             ),
             // Its button only while signed out; the view's own buttons are the step's after.
