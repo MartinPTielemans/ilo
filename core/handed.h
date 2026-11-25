@@ -49,12 +49,15 @@ struct Mark {
   // The history it had then, which stays the user's.
   handed_history::Bound history;
   // What its page's asks for the camera and the microphone are answered by
-  // (agent_permission_rule.h): the origin its page was on at the give, and whether the user holds
-  // it by a press of their own (TakenOver) and not by a hold made for them. The core alone sets
-  // them, from what it reads itself, and they go with the mark: none is saved, synced, logged or
-  // told to an agent.
+  // (agent_permission_rule.h): the origin its page was on at the give, whether the user holds it
+  // by a press of their own (TakenOver) and not by a hold made for them, and which of the two its
+  // page was using as it last passed into the agent's hands (PassedOn). The core alone sets them,
+  // from what it reads itself, and they go with the mark: none is saved, synced, logged or told
+  // to an agent.
   url::Origin given_on;
   bool users_press = false;
+  bool camera = false;
+  bool microphone = false;
 };
 
 // What's kept of |tab| as it leaves |from|, a Space of the user's, for an agent's: all but its
@@ -69,7 +72,9 @@ void Given(bc_id tab, Mark left);
 void TakenOver(bc_id tab);
 
 // |tab| passed into the agent's hands: at the give, and each time the user hands it back. It's no
-// longer the user's by their own press.
+// longer the user's by their own press, and what its page uses of the camera and the microphone
+// then is the call that goes with it, on the origin it was given on: one the user started while
+// they held it too, and one they ended no longer.
 void PassedOn(bc_id tab);
 
 // Whether |tab| keeps the tile of a favorite an agent has (Mark::tile), so has no page and gets

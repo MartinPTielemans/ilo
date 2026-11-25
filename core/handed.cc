@@ -67,9 +67,19 @@ void TakenOver(bc_id tab) {
 }
 
 void PassedOn(bc_id tab) {
-  if (auto mark = Marks().find(tab); mark != Marks().end()) {
-    mark->second.users_press = false;
+  auto mark = Marks().find(tab);
+  if (mark == Marks().end()) {
+    return;
   }
+  Mark& kept = mark->second;
+  kept.users_press = false;
+  const Tab* page = Tab::Get(tab);
+  content::WebContents* contents = Tab::FromId(tab);
+  const bool on_given_origin =
+      contents && contents->GetPrimaryMainFrame()->GetLastCommittedOrigin() == kept.given_on;
+  const Tab::Captures uses = page && on_given_origin ? page->captures() : Tab::Captures();
+  kept.camera = uses.camera;
+  kept.microphone = uses.microphone;
 }
 
 bool KeepsATile(bc_id tab) {

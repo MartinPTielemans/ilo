@@ -145,7 +145,9 @@ agent_permission_rule::Handed HandedOf(content::RenderFrameHost* frame) {
   return {.handed = true,
           .on_given_origin = !given.opaque() && frame->GetLastCommittedOrigin() == given &&
                              outermost->GetPrimaryMainFrame()->GetLastCommittedOrigin() == given,
-          .users_press = mark->users_press};
+          .users_press = mark->users_press,
+          .camera = mark->camera,
+          .microphone = mark->microphone};
 }
 
 void Enter(std::string agent, bc_id tab, std::string action) {
@@ -164,7 +166,7 @@ void Enter(std::string agent, bc_id tab, std::string action) {
 }  // namespace
 
 bool NoPermission(content::RenderFrameHost* frame, ContentSettingsType type) {
-  return agent_permission_rule::RefusesAsk(
+  return agent_permission_rule::RefusesStatus(
       KindOf(type), RuleTabOf(content::WebContents::FromRenderFrameHost(frame)), HandedOf(frame));
 }
 

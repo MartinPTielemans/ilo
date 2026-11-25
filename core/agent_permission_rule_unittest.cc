@@ -48,14 +48,17 @@ TEST(AgentPermissionRule, AHeldTabIsRefusedAsOneNotHeldButForWhatTheUserDoesThem
 
 // Every state a tab can be in when a frame of it asks: a user's, an agent's as the agent drives
 // it and as the user holds it, handed by the user or opened by the agent, on the origin it was
-// given on and off it, and held by the user's own press or for them.
+// given on and off it, held by the user's own press or for them, and with a call that came with
+// it or none.
 template <typename Each>
 void ForEveryState(Each each) {
   for (const Tab& tab : {kUsers, kAgents, kHeld}) {
-    for (int bits = 0; bits < 8; ++bits) {
+    for (int bits = 0; bits < 32; ++bits) {
       each(tab, Handed{.handed = (bits & 1) != 0,
                        .on_given_origin = (bits & 2) != 0,
-                       .users_press = (bits & 4) != 0});
+                       .users_press = (bits & 4) != 0,
+                       .camera = (bits & 8) != 0,
+                       .microphone = (bits & 16) != 0});
     }
   }
 }
@@ -128,6 +131,76 @@ TEST(AgentPermissionRule, NoOtherKindIsAnsweredAsSavedInATabTheUserTookOver) {
   }
   EXPECT_TRUE(RefusesAsk(Kind::kCameraPanTiltZoom, kHeld, kTakenOver));
   EXPECT_TRUE(RefusesAsk(Kind::kScreenCapture, kHeld, kTakenOver));
+}
+
+constexpr Handed kInACall{.handed = true, .on_given_origin = true, .camera = true,
+                          .microphone = true};
+
+bool IsTheCallHandedOver(Kind kind, const Tab& tab, const Handed& handed) {
+  return tab.agents && handed.handed && handed.on_given_origin &&
+         ((kind == Kind::kCamera && handed.camera) ||
+          (kind == Kind::kMicrophone && handed.microphone));
+}
+
+// While the agent drives the tab and while the user holds it.
+TEST(AgentPermissionRule, ACallHandedOverHasItsCameraAndMicrophoneReadAsSaved) {
+  for (const Tab& tab : {kAgents, kHeld}) {
+    EXPECT_FALSE(RefusesStatus(Kind::kCamera, tab, kInACall));
+    EXPECT_FALSE(RefusesStatus(Kind::kMicrophone, tab, kInACall));
+  }
+}
+
+TEST(AgentPermissionRule, ADeviceTheCallDidntUseReadsAsRefused) {
+  const Handed camera_only{.handed = true, .on_given_origin = true, .camera = true};
+  EXPECT_FALSE(RefusesStatus(Kind::kCamera, kAgents, camera_only));
+  EXPECT_TRUE(RefusesStatus(Kind::kMicrophone, kAgents, camera_only));
+  const Handed microphone_only{.handed = true, .on_given_origin = true, .microphone = true};
+  EXPECT_TRUE(RefusesStatus(Kind::kCamera, kAgents, microphone_only));
+  EXPECT_FALSE(RefusesStatus(Kind::kMicrophone, kAgents, microphone_only));
+}
+
+TEST(AgentPermissionRule, ACallReadsAsRefusedOffTheOriginItWasGivenOn) {
+  const Handed elsewhere{.handed = true, .camera = true, .microphone = true};
+  EXPECT_TRUE(RefusesStatus(Kind::kCamera, kAgents, elsewhere));
+  EXPECT_TRUE(RefusesStatus(Kind::kMicrophone, kHeld, elsewhere));
+}
+
+TEST(AgentPermissionRule, APageTheAgentOpenedReadsAsRefused) {
+  const Handed opened{.on_given_origin = true, .camera = true, .microphone = true};
+  EXPECT_TRUE(RefusesStatus(Kind::kCamera, kAgents, opened));
+  EXPECT_TRUE(RefusesStatus(Kind::kMicrophone, kHeld, opened));
+}
+
+// The status is read as saved in two states and no other, for the camera and the microphone and
+// no other kind.
+TEST(AgentPermissionRule, TheStatusReadsAsRefusedAsEverInEveryOtherState) {
+  ForEveryState([](const Tab& tab, const Handed& handed) {
+    for (size_t at = 0; at < kKinds; ++at) {
+      const Kind kind = KindAt(at);
+      if (IsTheUsersOwnCall(kind, tab, handed) || IsTheCallHandedOver(kind, tab, handed)) {
+        EXPECT_FALSE(RefusesStatus(kind, tab, handed)) << at;
+        continue;
+      }
+      EXPECT_EQ(RefusesStatus(kind, tab, handed), Refuses(kind, tab))
+          << at << " " << tab.agents << tab.held << handed.handed << handed.on_given_origin
+          << handed.users_press << handed.camera << handed.microphone;
+    }
+  });
+}
+
+// What a call came with changes the status alone: a page's ask is refused wherever it was, with
+// the call or without, so nothing starts in the agent's hands.
+TEST(AgentPermissionRule, ACallHandedOverOpensNoAsk) {
+  ForEveryState([](const Tab& tab, const Handed& handed) {
+    Handed without = handed;
+    without.camera = false;
+    without.microphone = false;
+    for (size_t at = 0; at < kKinds; ++at) {
+      EXPECT_EQ(RefusesAsk(KindAt(at), tab, handed), RefusesAsk(KindAt(at), tab, without)) << at;
+    }
+  });
+  EXPECT_TRUE(RefusesAsk(Kind::kCamera, kAgents, kInACall));
+  EXPECT_TRUE(RefusesAsk(Kind::kMicrophone, kAgents, kInACall));
 }
 
 // The app words the entry from these, so they are spelled here once more.

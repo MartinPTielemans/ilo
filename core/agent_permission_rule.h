@@ -92,6 +92,10 @@ struct Handed {
   // The user took the tab over by a press of their own. A hold made for them, at a handoff or for
   // a passkey, isn't one: an agent's own call makes a handoff.
   bool users_press = false;
+  // The tab's page was using the camera, or the microphone, as the tab last passed into the
+  // agent's hands: at the give, and each time the user handed it back.
+  bool camera = false;
+  bool microphone = false;
 };
 
 // Whether a page in |tab| is refused its ask for |kind|. As Refuses, but for the camera and the
@@ -101,6 +105,14 @@ struct Handed {
 // the question of a site they never allowed is taken as any other (TakesRequest). Pan-tilt-zoom,
 // the screen and every other kind are Refuses' in every state.
 bool RefusesAsk(Kind kind, const agent_space_rule::Tab& tab, const Handed& handed);
+
+// Whether a page in |tab| has its permission for |kind| read as refused, which is what a call
+// under way is ended by when a setting of its site changes. As RefusesAsk, and read as saved too
+// for a device the page was using as the tab last passed into the agent's hands, on the origin it
+// was given on: a call the user handed over ends when they block its site, as in a tab of theirs,
+// and at no other change. Nothing starts by this read: a page's ask is RefusesAsk's, whatever the
+// status says.
+bool RefusesStatus(Kind kind, const agent_space_rule::Tab& tab, const Handed& handed);
 
 // The action of a refusal's activity entry is this and the kind's word, and its reason the one
 // code for every kind. The app words the entry from the kind; neither is ever shown.
