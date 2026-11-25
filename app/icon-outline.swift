@@ -5,10 +5,11 @@
 // drawing's mask does, and joins the over-passes on: one filled shape, no point of the drawing
 // moved.
 //
-// With `lines` the round joins' curves are written as lines, for what can fill only polygons (the
-// Windows icons' script). The two smaller drawings are outlined that way too; the smallest has no
-// mask, as its cord passes over nothing, so nothing is cut from it and its loops are holes in one
-// piece, which the even-odd fill leaves open.
+// The centre-lines are curves, and so is the outline: the cord's edge has no corner but where a
+// gap or an over-pass ends. With `lines` its curves are written as lines, for what can fill only
+// polygons (the Windows icons' script). The two smaller drawings are outlined that way too; the
+// smallest has no mask, as its cord passes over nothing, so nothing is cut from it and its loops
+// are holes in one piece, which the even-odd fill leaves open.
 //
 // usage: icon-outline <knot.svg> <layer.svg> [lines]
 import CoreGraphics
@@ -29,25 +30,39 @@ struct Line {
 
 func lines(_ text: String) -> [Line] {
   let tag = try! NSRegularExpression(pattern: "<path d=\"([^\"]+)\"([^>]*)/>")
-  let point = try! NSRegularExpression(pattern: "([ML])\\s*(-?[\\d.]+)[ ,](-?[\\d.]+)")
+  let command = try! NSRegularExpression(pattern: "([A-Za-z])([^A-Za-z]*)")
   let widthOf = try! NSRegularExpression(pattern: "stroke-width=\"([\\d.]+)\"")
   let whole = text as NSString
   return tag.matches(in: text, range: NSRange(location: 0, length: whole.length)).map { found in
     let d = whole.substring(with: found.range(at: 1)) as NSString
     let rest = whole.substring(with: found.range(at: 2)) as NSString
     let path = CGMutablePath()
-    let points = point.matches(in: d as String, range: NSRange(location: 0, length: d.length))
-    // The drawing has only M, L and Z. Anything else would be dropped without a word, so a
-    // drawing that gains a curve stops here.
-    let letters = (d as String).filter { $0.isLetter }.count
-    let closed = (d as String).trimmingCharacters(in: .whitespaces).hasSuffix("Z")
-    precondition(letters == points.count + (closed ? 1 : 0), "a path command other than M, L, Z")
-    for p in points {
-      let at = CGPoint(
-        x: Double(d.substring(with: p.range(at: 2)))!, y: Double(d.substring(with: p.range(at: 3)))!)
-      if d.substring(with: p.range(at: 1)) == "M" { path.move(to: at) } else { path.addLine(to: at) }
+    // The second control point of the curve before, which S continues from.
+    var before: CGPoint?
+    for found in command.matches(in: d as String, range: NSRange(location: 0, length: d.length)) {
+      let letter = d.substring(with: found.range(at: 1))
+      let v = d.substring(with: found.range(at: 2))
+        .split(whereSeparator: { $0 == " " || $0 == "," }).map { CGFloat(Double($0)!) }
+      func at(_ i: Int) -> CGPoint { CGPoint(x: v[2 * i], y: v[2 * i + 1]) }
+      // The drawing has these five, each with one set of numbers. Anything else would be drawn
+      // wrong without a word, so a drawing that gains another command stops here.
+      let takes = ["M": 2, "L": 2, "C": 6, "S": 4, "Z": 0][letter]
+      precondition(takes == v.count, "a path command other than M, L, C, S, Z, or its numbers")
+      switch letter {
+      case "M": path.move(to: at(0))
+      case "L": path.addLine(to: at(0))
+      case "C": path.addCurve(to: at(2), control1: at(0), control2: at(1))
+      case "S":
+        // Its first control point is the one before, mirrored in the point the curve starts at:
+        // the line has one direction there.
+        let from = path.currentPoint
+        precondition(before != nil, "an S that follows no curve")
+        let mirrored = CGPoint(x: 2 * from.x - before!.x, y: 2 * from.y - before!.y)
+        path.addCurve(to: at(1), control1: mirrored, control2: at(0))
+      default: path.closeSubpath()
+      }
+      before = letter == "C" ? at(1) : letter == "S" ? at(0) : nil
     }
-    if closed { path.closeSubpath() }
     let w = widthOf.firstMatch(in: rest as String, range: NSRange(location: 0, length: rest.length))!
     return Line(
       path: path, width: CGFloat(Double(rest.substring(with: w.range(at: 1)))!),
@@ -88,14 +103,15 @@ var place = CGAffineTransform.identity
   .translatedBy(x: -canvas / 2, y: -canvas / 2)
   .scaledBy(x: canvas / 232, y: canvas / 232).translatedBy(x: 34.8, y: 32.8)
   .scaledBy(x: 1.3533, y: 1.3533)
-// A tenth of a point of the 1024 is under what any size the icon is drawn at can show.
+// As lines, the outline stays within a hundredth of a point of the 1024 from its curves: under
+// what any size the icon is drawn at can show.
 let whole = shape.copy(using: &place)!
-let placed = args.count == 4 ? whole.flattened(threshold: 0.1) : whole
+let placed = args.count == 4 ? whole.flattened(threshold: 0.01) : whole
 
 var d = ""
 var pieces = 0
 var last = ""
-func n(_ v: CGFloat) -> String { String(format: "%.2f", v) }
+func n(_ v: CGFloat) -> String { String(format: "%.3f", v) }
 placed.applyWithBlock { element in
   let p = element.pointee.points
   func at(_ i: Int) -> String { "\(n(p[i].x)) \(n(p[i].y))" }
