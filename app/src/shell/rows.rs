@@ -13,21 +13,19 @@ use gpui::{
 use super::Space;
 use super::join::join;
 use super::{
-    BREATH, BREATH_LOW, CHOSEN, CLEAR_ARROW, CLEAR_HOVERED, CLOSE_GLYPH, CLOSE_HOVERED,
-    CLOSE_RIGHT, CLOSE_SIZE, CancelName, Closing, Command, Curve, EMOJI_SIZE, FAVICON_DRAWN,
-    FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FORM_TEXT, KeepName, LOADING_SIZE, NAME_HEIGHT, NAV,
-    NAV_HOVERED, NAV_RADIUS, Naming, PINNED_CARET, PINNED_CARET_GAP, PINNED_CARET_PLATE,
-    PINNED_TURN, PLATE_HEIGHT, PLATE_INSET, PLATE_RADIUS, Page, Pending, REMOVE_GLYPH, ROW_HEIGHT,
-    ROW_PITCH, Row, SECONDARY, SEGMENT_END, SEGMENT_FAVICON_X, SEGMENT_LINE, SEGMENT_TITLE_GAP,
-    SELECTED_UNHOVER, SLEEPING_FAVICON, SPACE_DONE_HEIGHT, SPACE_DONE_WIDTH, SPACE_ICON_PLATE,
-    SPACE_MORE, SPACE_MORE_INSET, SPACE_NAME, SPEAKER_DRAWN, SPEAKER_GAP, SPEAKER_SIZE, STATUS_DOT,
+    BREATH, BREATH_LOW, CHOSEN, CLEAR_HOVERED, CLOSE_GLYPH, CLOSE_HOVERED, CLOSE_RIGHT, CLOSE_SIZE,
+    CancelName, Closing, Command, Curve, EMOJI_SIZE, FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X,
+    FOLDER_INDENT, FORM_TEXT, KeepName, LOADING_SIZE, NAME_HEIGHT, NAV, NAV_HOVERED, NAV_RADIUS,
+    Naming, PINNED_CARET, PINNED_CARET_GAP, PINNED_CARET_PLATE, PINNED_TURN, PLATE_HEIGHT,
+    PLATE_INSET, PLATE_RADIUS, Page, Pending, REMOVE_GLYPH, ROW_HEIGHT, ROW_PITCH, Row, SECONDARY,
+    SEGMENT_END, SEGMENT_FAVICON_X, SEGMENT_LINE, SEGMENT_TITLE_GAP, SELECTED_UNHOVER,
+    SLEEPING_FAVICON, SPACE_DONE_HEIGHT, SPACE_DONE_WIDTH, SPACE_ICON_PLATE, SPACE_MORE,
+    SPACE_MORE_INSET, SPACE_NAME, SPEAKER_DRAWN, SPEAKER_GAP, SPEAKER_SIZE, STATUS_DOT,
     STATUS_LOADING, Shell, Slot, Swapped, TITLE_END_INSET, TODAY_GAP, URL_BUTTON_GLYPH,
     clear_label, cubic_bezier, developer_outline, favicon, favicon_source, folder_icon, host,
     icon_placeholder, icon_slot, name_box, new_tab_label, plate, row_box, row_spring,
-    scaled::scaled_from_middle,
-    selected_plate, space_icon, split_plate,
-    swap::{ARROW_DOWN, NONE, folder_glyph},
-    title, today_line,
+    scaled::scaled_from_middle, selected_plate, space_icon, split_plate, swap::folder_glyph, title,
+    today_line,
 };
 use super::{
     access::{Accessible, NEW_TAB},
@@ -41,6 +39,7 @@ use crate::tokens::shell::{DIVIDER, LIGHT_SEGMENT_RULE, SEGMENT_RULE};
 use crate::{
     icon_picker::{self, Subject},
     palette::Palette,
+    settings_rows::drawn_of,
     space_icon::has_icon,
     tokens::shell::{
         BLOCK_GAP, DROP_SLOT_INSET, HOST_LINE, HOST_TITLE_LINE, SEGMENT_MARK_GAP,
@@ -858,6 +857,12 @@ impl Shell {
                 .flex()
                 .items_center()
                 .justify_center()
+                // check.sh reads the line to click the speaker, which the row's button moves.
+                // Only where a line is read: the owner's launch draws no more.
+                .when(crate::checked() || cfg!(test), |speaker| {
+                    let logged = self.speakers_drawn.clone();
+                    (speaker.relative()).child(drawn_of("speaker", tab.to_string(), logged))
+                })
                 .child(self.swaps.glyph(
                     Swapped::Speaker(tab),
                     icon,
@@ -2012,19 +2017,12 @@ impl Shell {
 
     /// The New Tab line's Clear, at its end, where the titles end.
     fn clear_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let arrow = if self.clears_last() { ARROW_DOWN } else { NONE };
-        let what = Swapped::Clear(self.space);
-        let room = self.swaps.toward(what, ARROW_DOWN, self.clock.now());
-        let room = room.unwrap_or(if arrow == NONE { 0. } else { 1. });
         let color = if self.clear_hovered {
             CLEAR_HOVERED
         } else {
             self.palette.tertiary()
         };
-        let glyph = self
-            .swaps
-            .glyph(what, arrow, CLEAR_ARROW, self.palette.text(color), cx);
-        clear_label(&self.palette, glyph, room, color)
+        clear_label(&self.palette, color)
             .id("clear")
             .when(self.a11y, |clear| {
                 clear.accessibility_id("clear").button_named("Clear Today")
@@ -2072,31 +2070,6 @@ impl Shell {
     pub(super) fn clears_last(&self) -> bool {
         self.shown_space()
             .is_some_and(|space| space.clears_last(self.selected))
-    }
-
-    /// Starts the arrow coming or going as Clear starts or stops closing the last Today tabs, on
-    /// the divider drawn before. Another Space's, or a divider just drawn, has its own at once.
-    pub(super) fn step_clear_arrow(&mut self) {
-        let arrow = (!self.today().is_empty()).then(|| (self.space, self.clears_last()));
-        if arrow == self.drawn_arrow {
-            return;
-        }
-        if let Some((space, is)) = arrow {
-            match self.drawn_arrow {
-                Some((was_in, was)) if was_in == space => {
-                    let glyph = |arrow: bool| if arrow { ARROW_DOWN } else { NONE };
-                    let now = self.clock.now();
-                    (self.swaps).start(Swapped::Clear(space), glyph(was), glyph(is), now);
-                }
-                _ => self.swaps.end(Swapped::Clear(space)),
-            }
-        }
-        let shows = |arrow: Option<(u64, bool)>| arrow.is_some_and(|(_, shows)| shows);
-        if shows(arrow) != shows(self.drawn_arrow) {
-            // check.sh waits for this line.
-            log!("browser: clear arrow {}", shows(arrow) as u8);
-        }
-        self.drawn_arrow = arrow;
     }
 
     /// "+ New Tab", and while there are tabs today the line that parts them from what's kept,
@@ -2325,7 +2298,7 @@ mod tests {
         super::{
             CLOSE_RIGHT, CLOSE_SIZE, FAVICON_SIZE, FAVICON_X, Folders, NAME_HEIGHT, PINNED_TURN,
             PLATE_INSET, PRESS_SCALE, PRESS_TIME, Page, ROW_HEIGHT, ROW_PITCH, Row,
-            SELECTED_UNHOVER, SPACE_ICON_PLATE, SPACE_MORE, SPACE_MORE_INSET, Shell, Slot, Swapped,
+            SELECTED_UNHOVER, SPACE_ICON_PLATE, SPACE_MORE, SPACE_MORE_INSET, Shell, Slot,
             commands::{Command, bind_keys},
             drag::detents::shell_with,
             recorder::Recorder,
@@ -2901,20 +2874,12 @@ mod tests {
         cx.run_until_parked();
     }
 
-    /// Whether the window drew Clear with its arrow, without it, or no Clear, and whether the
-    /// arrow was coming or going.
-    fn arrow(shell: &Entity<Shell>, cx: &mut VisualTestContext) -> (Option<bool>, bool) {
-        shell.read_with(cx, |shell, _| {
-            let drawn = shell.drawn_arrow.map(|(_, arrow)| arrow);
-            (drawn, shell.swaps.changing(Swapped::Clear(1)))
-        })
-    }
-
-    /// With two Today tabs, Clear keeps the one shown and has no arrow. Once one is left, the arrow
-    /// comes before Clear, and Clear closes that one too. ⌘Z brings it back with its arrow, shown
-    /// at once on the divider drawn again, and a second tab takes it away until it closes.
+    /// With two Today tabs, Clear keeps the one shown. Once that one is Today's last, Clear closes
+    /// it too, and ⌘Z brings it back.
     #[gpui::test]
-    fn clear_shows_its_arrow_when_one_today_tab_is_left(cx: &mut TestAppContext) {
+    fn clear_closes_the_shown_tab_when_it_is_todays_last_and_undo_brings_it_back(
+        cx: &mut TestAppContext,
+    ) {
         let host = Rc::new(Recorder::default());
         let browser = host.clone();
         cx.update(bind_keys);
@@ -2927,7 +2892,6 @@ mod tests {
         // The keys reach the shell as they do with the UI focused.
         cx.update(|window, cx| window.focus(&shell.read(cx).focus_handle.clone(), cx));
         report(&shell, cx, vec![2, 3], 2);
-        assert_eq!(arrow(&shell, cx), (Some(false), false));
 
         cx.simulate_keystrokes("shift-cmd-k");
         assert!(host.take().contains(&"clear".to_string()));
@@ -2936,11 +2900,6 @@ mod tests {
             vec![3]
         );
         report(&shell, cx, vec![2], 2);
-        assert_eq!(
-            arrow(&shell, cx),
-            (Some(true), true),
-            "the arrow comes on the same Clear"
-        );
 
         cx.simulate_keystrokes("shift-cmd-k");
         assert!(host.take().contains(&"clear".to_string()));
@@ -2949,22 +2908,9 @@ mod tests {
             vec![2]
         );
         report(&shell, cx, Vec::new(), 0);
-        assert_eq!(arrow(&shell, cx).0, None);
 
         cx.simulate_keystrokes("cmd-z");
         assert!(host.take().contains(&"undo clear".to_string()));
-        report(&shell, cx, vec![2], 2);
-        assert_eq!(
-            arrow(&shell, cx),
-            (Some(true), false),
-            "a divider drawn again has it at once"
-        );
-
-        // A tab that opens takes it away again, on the same Clear, and closing it brings it back.
-        report(&shell, cx, vec![4, 2], 4);
-        assert_eq!(arrow(&shell, cx), (Some(false), true));
-        report(&shell, cx, vec![2], 2);
-        assert_eq!(arrow(&shell, cx), (Some(true), true));
     }
 
     /// Under Reduce Motion the rows are in their places at once, and the frame after a move still
@@ -4452,6 +4398,68 @@ mod tests {
         cx.simulate_click(point(px(today.0), px(today.1)), Modifiers::none());
         cx.run_until_parked();
         assert_eq!(host.take(), ["close 5"]);
+    }
+
+    /// A row's speaker logs where it's drawn, its tab and its square's middle alone, for check.sh
+    /// to click it: once where it is, once more where the row's button, under the pointer, moves
+    /// it, and not again on a draw that leaves it there. A row without one logs nothing.
+    #[gpui::test]
+    fn a_speaker_logs_its_place_once_and_again_where_the_rows_button_moves_it(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, cx, _host) = window(cx, vec![2], vec![4, 5], 4);
+        // The lines since the last ask, the speakers' alone.
+        let heard = || {
+            let lines = crate::heard::take();
+            crate::heard::listen();
+            (lines.into_iter())
+                .filter(|line| line.starts_with("browser: speaker "))
+                .collect::<Vec<_>>()
+        };
+        let place = |line: &str| {
+            let at = line.strip_prefix("browser: speaker 5 at ");
+            let at = at.unwrap_or_else(|| panic!("not the playing tab's line alone: {line}"));
+            let (x, y) = at.split_once(' ').expect("x and y");
+            let number = |text: &str| text.parse::<f32>().expect("a number and nothing else");
+            (number(x), number(y))
+        };
+        let draw_again = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+            shell.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        };
+        crate::heard::listen();
+        shell.update(cx, |shell, cx| {
+            let page = Page {
+                audible: true,
+                ..Page::default()
+            };
+            shell.set_page(5, page, cx);
+        });
+        cx.run_until_parked();
+        let lines = heard();
+        assert_eq!(lines.len(), 1, "one line where it's first drawn: {lines:?}");
+        let rest = place(&lines[0]);
+        draw_again(&shell, cx);
+        assert_eq!(heard(), [""; 0], "drawn again where it was");
+
+        // The row's button comes under the pointer, and the speaker makes room for it.
+        let button = close_button(&shell, cx, 5);
+        move_to(cx, button);
+        let lines = heard();
+        assert_eq!(lines.len(), 1, "one line where it moved: {lines:?}");
+        let moved = place(&lines[0]);
+        assert!(moved.0 < rest.0, "before the button: {moved:?}, {rest:?}");
+        assert_eq!(moved.1, rest.1, "on its row's line still");
+        draw_again(&shell, cx);
+        assert_eq!(heard(), [""; 0], "drawn again where it moved to");
+
+        // The pointer on a row with no speaker: its own back where it was, and nothing of that row.
+        let silent = close_button(&shell, cx, 4);
+        move_to(cx, silent);
+        let lines = heard();
+        assert_eq!(lines.len(), 1, "one line back at its place: {lines:?}");
+        assert_eq!(place(&lines[0]), rest);
+        crate::heard::take();
     }
 
     /// VoiceOver reads the button the row under the pointer shows by what it does, and the speaker

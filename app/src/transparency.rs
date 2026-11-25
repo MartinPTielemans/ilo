@@ -67,17 +67,17 @@ impl Transparency {
         match self {
             Transparency::Less => concat!(
                 "Shows only a hint of what’s behind ",
-                env!("APP_NAME"),
+                env!("PRODUCT_NAME"),
                 ". All text stays easy to read, even over a bright window."
             ),
             Transparency::Standard => concat!(
                 "Shows more of what’s behind ",
-                env!("APP_NAME"),
+                env!("PRODUCT_NAME"),
                 ". Gray text is a little fainter over a bright window."
             ),
             Transparency::More => concat!(
                 "Shows the most of what’s behind ",
-                env!("APP_NAME"),
+                env!("PRODUCT_NAME"),
                 ". Gray text can be hard to read over a bright window."
             ),
         }
@@ -129,18 +129,18 @@ impl Transparency {
 pub const NAME: &str = "Transparency";
 pub const ABOUT: &str = concat!(
     "How much of what’s behind ",
-    env!("APP_NAME"),
+    env!("PRODUCT_NAME"),
     " shows through the window, menus and command bar."
 );
 /// Under Settings' group on the Mac, where the system's setting overrides every level.
 pub const REDUCE_TRANSPARENCY_WINS: &str = concat!(
     "If Reduce Transparency is on in your Mac’s settings, ",
-    env!("APP_NAME"),
+    env!("PRODUCT_NAME"),
     " stays solid at every level."
 );
 /// The onboarding step's line over the picker, where the window itself is the preview.
 pub const ONBOARDING_LINE: &str = concat!(
-    env!("APP_NAME"),
+    env!("PRODUCT_NAME"),
     "’s window is glass. Pick one to see the window change right away."
 );
 

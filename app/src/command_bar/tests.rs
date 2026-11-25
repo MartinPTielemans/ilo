@@ -9,6 +9,7 @@ use gpui::{
 };
 
 use super::*;
+use crate::agents::runner::Cli;
 use crate::text_input::{self, Chosen, FieldMenu, korean};
 
 /// A host that records what the bar asks of it, but its suggestions and its window's height, and
@@ -294,6 +295,12 @@ impl Host for Recorder {
             .push(format!("tooltip {} {}", tip.text, tip.keys.join(" ")));
         self.anchors.borrow_mut().push(anchor);
     }
+}
+
+/// An assistant's heading in the model menu as `choice_menu` writes it: its name as Settings'
+/// page has it, from Settings' own source, so the two can't say it differently.
+fn settings_heading(cli: Cli) -> String {
+    format!("# {}", crate::settings_rows::assistant_name(cli))
 }
 
 /// The agents the host offers: each ready, at its limit if it has a reset time. Claude offers
@@ -3560,8 +3567,9 @@ impl Bar {
 
     /// Opens the composer's level menu, or its model menu, as a click on its trigger does, and
     /// gives its rows, each title with ✓ before it where it's checked, `-` where it's disabled,
-    /// `#` where it's a heading and `?` where it's the search's field, and its answer, which `pick`
-    /// then gives the menu's pick.
+    /// `#` where it's a heading, `?` where it's the search's field and `~` where it's an offer in
+    /// the secondary ink, ↗ after one with the out arrow, and its answer, which `pick` then gives
+    /// the menu's pick.
     fn choice_menu(&mut self, model: bool) -> (Vec<String>, Chosen) {
         let shown: Rc<RefCell<Option<(Vec<MenuEntry>, Chosen)>>> = Rc::default();
         let into = shown.clone();
@@ -3582,14 +3590,16 @@ impl Bar {
             .map(|item| {
                 let mark = match (item.header, item.checked, item.enabled) {
                     _ if item.field => "? ",
+                    _ if item.offer => "~ ",
                     (true, _, _) => "# ",
                     (_, true, _) => "✓ ",
                     (_, _, false) => "- ",
                     _ => "",
                 };
+                let out = if item.out { " ↗" } else { "" };
                 match &item.detail {
-                    Some(detail) => format!("{mark}{} ({detail})", item.title),
-                    None => format!("{mark}{}", item.title),
+                    Some(detail) => format!("{mark}{} ({detail}){out}", item.title),
+                    None => format!("{mark}{}{out}", item.title),
                 }
             })
             .collect();
@@ -3672,14 +3682,14 @@ fn the_composers_menus_pick_its_level_and_model(cx: &mut TestAppContext) {
         rows,
         [
             "? Search models",
-            "# claude",
-            "claude's default",
+            &settings_heading(Cli::Claude),
+            "Default",
             "✓ Haiku",
             "Sonnet",
-            "# codex",
-            "codex's default",
+            &settings_heading(Cli::Codex),
+            "Default",
             "- ",
-            "Settings",
+            "Settings ↗",
         ]
     );
     bar.pick(chosen, 6);
@@ -4051,8 +4061,8 @@ fn agents_at_their_limit_or_none_ready(cx: &mut TestAppContext) {
     assert_eq!(
         rows[1..5],
         [
-            "# claude",
-            "- claude's default (Limit resets 18:00)",
+            &settings_heading(Cli::Claude),
+            "- Default (Limit resets 18:00)",
             "- Haiku (Limit resets 18:00)",
             "- Sonnet (Limit resets 18:00)",
         ]
@@ -4073,7 +4083,13 @@ fn agents_at_their_limit_or_none_ready(cx: &mut TestAppContext) {
     let (rows, chosen) = bar.choice_menu(true);
     assert_eq!(
         rows,
-        ["? Search models", "# Codex", "Sign In", "- ", "Settings"]
+        [
+            "? Search models",
+            &settings_heading(Cli::Codex),
+            "~ Sign In ↗",
+            "- ",
+            "Settings ↗"
+        ]
     );
     bar.pick(chosen, 2);
     assert_eq!(bar.calls(), ["sign in codex"]);

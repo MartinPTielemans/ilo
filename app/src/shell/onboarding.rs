@@ -170,7 +170,7 @@ impl Switch {
             ),
             Switch::DailyCount => (
                 "Send a daily usage count",
-                crate::daily_count::words(env!("APP_NAME")).into(),
+                crate::daily_count::words(env!("PRODUCT_NAME")).into(),
             ),
             Switch::OtherApps => (
                 concat!("Let other apps' agents use ", env!("APP_NAME")),
@@ -180,7 +180,7 @@ impl Switch {
                 "Send crash reports",
                 concat!(
                     "When ",
-                    env!("APP_NAME"),
+                    env!("PRODUCT_NAME"),
                     " crashes, it sends a report of what went wrong, so it can be fixed."
                 )
                 .into(),
@@ -214,7 +214,7 @@ impl Step {
         let (title, line, button) = match self {
             // The sheet's first page (#4093): what the flow is, and that each step can be skipped.
             Step::Intro => (
-                concat!("Welcome to ", env!("APP_NAME"), "."),
+                concat!("Welcome to ", env!("PRODUCT_NAME"), "."),
                 "A few steps to make it yours, and you can skip any of them.",
                 "Get Started",
             ),
@@ -246,7 +246,7 @@ impl Step {
                     true => "Make Default",
                     false => "Continue",
                 };
-                let title = concat!("Make ", env!("APP_NAME"), " your default browser.");
+                let title = concat!("Make ", env!("PRODUCT_NAME"), " your default browser.");
                 return (title, line.into(), button);
             }
             // The engine that searches until one is picked is already the filled dot (P-search).
@@ -264,7 +264,7 @@ impl Step {
                 "How much should show through?",
                 // D5: over a light desktop the window changes too little to see "right away".
                 concat!(
-                    env!("APP_NAME"),
+                    env!("PRODUCT_NAME"),
                     "'s window is glass, blurring what's behind it."
                 ),
                 "Continue",

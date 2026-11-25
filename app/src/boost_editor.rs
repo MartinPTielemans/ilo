@@ -67,7 +67,7 @@ use crate::tokens::theme_picker::{
 };
 use crate::tokens::{menu, radius::CONTROL, text};
 
-pub const WIDTH: f32 = theme_picker::WIDTH;
+pub const WIDTH: f32 = theme_picker::FORM_WIDTH;
 const HINT: &str = "Drag a dot: big for the ground, small for links";
 /// Where the dots rest until the user places them, drawn as rings alone: the ground's toward the
 /// field's light edge and the links' among the full colours (ours).

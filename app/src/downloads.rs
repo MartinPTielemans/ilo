@@ -74,7 +74,7 @@ pub(crate) unsafe extern "C" fn window_downloads_question(
         .into(),
         detail: match last_private {
             true => "Quit Incognito mode anyway?",
-            false => concat!("Quit ", env!("APP_NAME"), " anyway?"),
+            false => concat!("Quit ", env!("PRODUCT_NAME"), " anyway?"),
         }
         .into(),
         list: Vec::new(),

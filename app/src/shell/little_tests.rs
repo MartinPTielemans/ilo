@@ -1054,10 +1054,10 @@ fn off_nothing_offers_or_opens_a_little_window(cx: &mut TestAppContext) {
         assert!(!shell.offers(Command::NewLittleWindow));
         assert!(
             shell.menu_bar(cx).little_off,
-            "File still has New Little ilo Window"
+            "File still has New Little Window"
         );
         assert_eq!(
-            shell.bar_name("New Little ilo Window", Command::NewLittleWindow, cx),
+            shell.bar_name("New Little Window", Command::NewLittleWindow, cx),
             None
         );
     });

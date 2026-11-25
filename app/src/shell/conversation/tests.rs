@@ -15,6 +15,7 @@ use crate::agents::task::{
     Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep, Word,
 };
 use crate::agents::tier::{Tier, Why};
+use crate::product::PRODUCT;
 use crate::shell::picture::PagePicture;
 use crate::shell::{Command, Folders, Page, Shell, recorder::Recorder};
 use crate::text_input::TextInput;
@@ -1438,7 +1439,7 @@ fn the_users_stop_says_its_pages_by_their_count_alone(cx: &mut TestAppContext) {
     view.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
     let (_, laid, _) = ilo_words(&view, cx);
-    assert_eq!(laid.text(), "ilo · You stopped it · 3 pages");
+    assert_eq!(laid.text(), format!("{PRODUCT} · You stopped it · 3 pages"));
     assert!(
         view.read_with(cx, |view, _| view.ilo_drawn.borrow().is_empty()),
         "the line of the user's stop drew a button"
@@ -1568,7 +1569,7 @@ fn a_wall_that_wasnt_put_up_says_what_ilo_did_and_why(_: &mut TestAppContext) {
     use super::words::{head, tail, with_name};
     let said = |kind: &IloKind| {
         let (own, name) = head(kind, "Claude");
-        let own = format!("ilo {own}");
+        let own = format!("{PRODUCT} {own}");
         let Some(name) = name else {
             assert_eq!(tail(kind, "Claude"), None);
             return (own, String::new());
@@ -1584,19 +1585,19 @@ fn a_wall_that_wasnt_put_up_says_what_ilo_did_and_why(_: &mut TestAppContext) {
     let cases = [
         (
             without(LeftOut::Folder("Trip".into())),
-            "ilo started this task without \u{201c}Trip\u{201d}: ilo couldn't limit Claude to \
+            "{p} started this thread without \u{201c}Trip\u{201d}: {p} couldn't limit Claude to \
              that folder",
             "\u{201c}Trip\u{201d}",
         ),
         (
             without(LeftOut::File("seats.pdf".into())),
-            "ilo started this task without \u{201c}seats.pdf\u{201d}: ilo couldn't limit Claude \
+            "{p} started this thread without \u{201c}seats.pdf\u{201d}: {p} couldn't limit Claude \
              to that file",
             "\u{201c}seats.pdf\u{201d}",
         ),
         (
             without(LeftOut::Files(3)),
-            "ilo started this task without your 3 files: ilo couldn't limit Claude to them",
+            "{p} started this thread without your 3 files: {p} couldn't limit Claude to them",
             "",
         ),
         (
@@ -1605,7 +1606,7 @@ fn a_wall_that_wasnt_put_up_says_what_ilo_did_and_why(_: &mut TestAppContext) {
                 refused: Tier::Full,
                 folder: "Trip".into(),
             },
-            "ilo kept this task at Work on pages: ilo couldn't limit Claude to \
+            "{p} kept this thread at Work on pages: {p} couldn't limit Claude to \
              \u{201c}Trip\u{201d} at Full access",
             "\u{201c}Trip\u{201d}",
         ),
@@ -1615,89 +1616,89 @@ fn a_wall_that_wasnt_put_up_says_what_ilo_did_and_why(_: &mut TestAppContext) {
                 refused: Tier::Full,
                 folder: "Trip".into(),
             },
-            "ilo set this task back to Work on pages: ilo couldn't limit Claude to \
+            "{p} set this thread back to Work on pages: {p} couldn't limit Claude to \
              \u{201c}Trip\u{201d} at Full access",
             "\u{201c}Trip\u{201d}",
         ),
         (
             stopped(LeftOut::Folder("Trip".into())),
-            "ilo stopped this task: ilo couldn't restart Claude without \u{201c}Trip\u{201d}",
+            "{p} stopped this thread: {p} couldn't restart Claude without \u{201c}Trip\u{201d}",
             "\u{201c}Trip\u{201d}",
         ),
         (
             stopped(LeftOut::File("seats.pdf".into())),
-            "ilo stopped this task: ilo couldn't restart Claude without \
+            "{p} stopped this thread: {p} couldn't restart Claude without \
              \u{201c}seats.pdf\u{201d}",
             "\u{201c}seats.pdf\u{201d}",
         ),
         (
             stopped(LeftOut::Files(3)),
-            "ilo stopped this task: ilo couldn't restart Claude without your 3 files",
+            "{p} stopped this thread: {p} couldn't restart Claude without your 3 files",
             "",
         ),
         (
             IloKind::NotRaised {
                 refused: Tier::Full,
             },
-            "ilo stopped this task: ilo couldn't restart Claude at Full access",
+            "{p} stopped this thread: {p} couldn't restart Claude at Full access",
             "",
         ),
         (
             left(Reach::Folder("Trip".into())),
-            "ilo couldn't end everything Claude started: what's left can still reach \
+            "{p} couldn't end everything Claude started: what's left can still reach \
              \u{201c}Trip\u{201d}. Restarting this computer ends it.",
             "\u{201c}Trip\u{201d}",
         ),
         (
             left(Reach::Files),
-            "ilo couldn't end everything Claude started: what's left can still reach this \
-             task's files. Restarting this computer ends it.",
+            "{p} couldn't end everything Claude started: what's left can still reach this \
+             thread's files. Restarting this computer ends it.",
             "",
         ),
         (
             left(Reach::Both("Trip".into())),
-            "ilo couldn't end everything Claude started: what's left can still reach \
-             \u{201c}Trip\u{201d} and this task's files. Restarting this computer ends it.",
+            "{p} couldn't end everything Claude started: what's left can still reach \
+             \u{201c}Trip\u{201d} and this thread's files. Restarting this computer ends it.",
             "\u{201c}Trip\u{201d}",
         ),
         (
             IloKind::EndedLeft,
-            "ilo ended what Claude had left running",
+            "{p} ended what Claude had left running",
             "",
         ),
         (
             IloKind::Revoked {
                 folder: "Trip".into(),
             },
-            "ilo \u{b7} You revoked \u{201c}Trip\u{201d}",
+            "{p} \u{b7} You revoked \u{201c}Trip\u{201d}",
             "\u{201c}Trip\u{201d}",
         ),
         (
             IloKind::FolderGone {
                 folder: "Trip".into(),
             },
-            "ilo revoked \u{201c}Trip\u{201d}: ilo couldn't find it",
+            "{p} revoked \u{201c}Trip\u{201d}: {p} couldn't find it",
             "\u{201c}Trip\u{201d}",
         ),
         (
             IloKind::NotCopied {
                 left: LeftOut::File("seats.pdf".into()),
             },
-            "ilo started this task without \u{201c}seats.pdf\u{201d}: ilo couldn't copy it",
+            "{p} started this thread without \u{201c}seats.pdf\u{201d}: {p} couldn't copy it",
             "\u{201c}seats.pdf\u{201d}",
         ),
         (
             IloKind::NotCopied {
                 left: LeftOut::Files(3),
             },
-            "ilo started this task without 3 files: ilo couldn't copy them",
+            "{p} started this thread without 3 files: {p} couldn't copy them",
             "",
         ),
     ];
     for (kind, whole, name) in cases {
         assert_eq!(
             said(&kind),
-            (whole.to_string(), name.to_string()),
+            (whole.replace("{p}", PRODUCT), name.to_string()),
             "{kind:?}"
         );
         assert_eq!(super::words::body(&kind, "Trip"), None);
@@ -2927,8 +2928,8 @@ fn a_working_line_counts_the_tasks_helpers() {
         let (title, counted) = its_trace(talk).summary();
         format!("{title} · {counted}")
     };
-    assert_eq!(summary(&mut with_helpers(4)), "Working · 4 helpers");
-    assert_eq!(summary(&mut with_helpers(1)), "Working · 1 helper");
+    assert_eq!(summary(&mut with_helpers(4)), "Working · 4 strands");
+    assert_eq!(summary(&mut with_helpers(1)), "Working · 1 strand");
     assert_eq!(summary(&mut with_helpers(0)), "Working · 1 step");
 
     // One of the four waits on the user and one has finished: each still has its line, so each
@@ -2936,11 +2937,11 @@ fn a_working_line_counts_the_tasks_helpers() {
     let mut talk = with_helpers(4);
     its_trace(&mut talk).items[1] = helper(step(11, "Read shop.example", false));
     its_trace(&mut talk).items[2] = helper(step(12, "Handed you shop.example", false));
-    assert_eq!(summary(&mut talk), "Working · 4 helpers");
+    assert_eq!(summary(&mut talk), "Working · 4 strands");
 
     let over = its_trace(&mut talk);
     (over.running, over.took) = (false, Some(41));
-    assert_eq!(summary(&mut talk), "Worked for 41 s · 4 helpers");
+    assert_eq!(summary(&mut talk), "Worked for 41 s · 4 strands");
 }
 
 /// Opened, as it is while it works, the Working line lists a line for each helper with the task's

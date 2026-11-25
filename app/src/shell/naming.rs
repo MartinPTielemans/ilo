@@ -378,7 +378,10 @@ impl Shell {
             }
             Pending::Icon(subject) => subject,
             Pending::Theme(space) => {
-                let edge = theme_picker::At::Edge(self.page_edge_x());
+                let edge = theme_picker::At::Beside {
+                    edge: self.page_edge_x(),
+                    top: f32::from(row.top()),
+                };
                 return self.show_theme_picker(space, edge, self.right, cx);
             }
         };
