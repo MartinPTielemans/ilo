@@ -1010,12 +1010,40 @@ impl Agents {
     pub fn conversation(&self, agent: &str, cx: &App) -> Option<Conversation> {
         let task = self.task(agent)?;
         let ended = !matches!(task.state, State::Working | State::Asking { .. });
+        let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
+            .map(|tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
+            .collect();
+        let card = self.card(task, cx);
+        let on = (task.state == State::Working)
+            .then(|| self.on(task))
+            .flatten();
+        // The card's Needs you reads the same question and refusals, so the line can't say
+        // working while the card says the task waits on the user.
+        // A page the user took over is theirs on the line unless the agent works on another.
+        let taken = (tabs.iter())
+            .find(|(tab, _)| self.held.contains_key(tab))
+            .filter(|(tab, _)| on.is_none_or(|on| on == *tab));
+        let live = match (&task.state, &card.question) {
+            (State::Asking { .. }, None) => Live::Asked,
+            (_, Some(_)) => Live::Handed,
+            _ if task.stops.iter().any(|stop| !stop.settled) => Live::Refused,
+            _ if let Some((tab, _)) = taken => Live::Yours {
+                tab: *tab,
+                site: (tabs.len() > 1)
+                    .then(|| tier::plain(&site(&self.browser.tab(*tab, cx).url)).into()),
+            },
+            _ => Live::Working,
+        };
         let working = task.state == State::Working;
+        // A stretch heads as at work only while the task is: one that ended at a refused or handed
+        // step, a question or a page the user took heads as worked, as the card's word says, unless
+        // work went on past the wait, by the steps' own order and states (set 4, find 5).
+        let at_work = working && (live == Live::Working || went_on(task, &self.held));
         let mut lines = fold(
             &task.messages,
             &task.trace,
             ended,
-            working,
+            at_work,
             task.writing.as_ref(),
             &task.helpers,
             &task.stopped_turns,
@@ -1048,30 +1076,6 @@ impl Agents {
         helpers::lines(task, &mut lines);
         // ilo's own lines of a task that can be replied to after it ended (#4105).
         self.kept_lines(task, &mut lines);
-        let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
-            .map(|tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
-            .collect();
-        let card = self.card(task, cx);
-        let on = (task.state == State::Working)
-            .then(|| self.on(task))
-            .flatten();
-        // The card's Needs you reads the same question and refusals, so the line can't say
-        // working while the card says the task waits on the user.
-        // A page the user took over is theirs on the line unless the agent works on another.
-        let taken = (tabs.iter())
-            .find(|(tab, _)| self.held.contains_key(tab))
-            .filter(|(tab, _)| on.is_none_or(|on| on == *tab));
-        let live = match (&task.state, &card.question) {
-            (State::Asking { .. }, None) => Live::Asked,
-            (_, Some(_)) => Live::Handed,
-            _ if task.stops.iter().any(|stop| !stop.settled) => Live::Refused,
-            _ if let Some((tab, _)) = taken => Live::Yours {
-                tab: *tab,
-                site: (tabs.len() > 1)
-                    .then(|| tier::plain(&site(&self.browser.tab(*tab, cx).url)).into()),
-            },
-            _ => Live::Working,
-        };
         // The card's own word, so a refusal waiting on the user says Needs you in both. Done says
         // when, and a limit when it resets if the assistant said; without that it's the word, as
         // the name before it says whose limit it is.
@@ -3664,6 +3668,26 @@ fn fallback(trace: &[Traced]) -> Option<String> {
         0 => Some(first),
         more => Some(format!("{first} and {more} more")),
     }
+}
+
+/// Whether a task waiting on the user works on past the wait: a step came after a refusal it
+/// hasn't settled, or a step of its, or a helper's, is under way that isn't itself a wait or on a
+/// page the user holds. Read from the steps alone, never from what the agent says.
+fn went_on<T>(task: &Task, held: &HashMap<u64, T>) -> bool {
+    let after_refusal = (task.stops.iter())
+        .filter(|stop| !stop.settled)
+        .any(|stop| {
+            task.trace[stop.traced.min(task.trace.len())..]
+                .iter()
+                .any(|step| step.did.tool != "thought")
+        });
+    let under_way = (task.trace.iter()).any(|step| {
+        step.ended.is_none()
+            && step.did.tool != "thought"
+            && !WAIT_ON_USER.contains(&step.did.tool.as_str())
+            && step.did.tab.is_none_or(|tab| !held.contains_key(&tab))
+    });
+    after_refusal || under_way
 }
 
 /// The steps of the turn under way, newest first, its thoughts left out: what the card and the

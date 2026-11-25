@@ -7400,6 +7400,116 @@ mod tasks {
         result
     }
 
+    /// A task at work with one step taken on tab 30, a shop's basket, and tab 31 open beside it.
+    fn at_work(cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>, String) {
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Use the coupon", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        let mut tabs = browser.tabs.borrow_mut();
+        tabs.push((30, 100, "Shop", "https://shop.example/basket"));
+        tabs.push((31, 100, "Sign in", "https://example.com/login"));
+        drop(tabs);
+        let snapshot = json!({ "tab": 30 });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "snapshot",
+            snapshot,
+            Some(shop_tree()),
+            cx,
+        );
+        (agents, browser, agent)
+    }
+
+    /// The live state, and the head of the last stretch of work with whether it shows as under way.
+    fn stretch_head(
+        agents: &Entity<Agents>,
+        agent: &str,
+        cx: &mut TestAppContext,
+    ) -> (task::Live, String, bool) {
+        agents.read_with(cx, |agents, cx| {
+            let conversation = agents.conversation(agent, cx).unwrap();
+            let trace = (conversation.lines.iter().rev())
+                .find_map(|line| match line {
+                    task::Line::Trace(trace) => Some(trace),
+                    _ => None,
+                })
+                .expect("a stretch of work");
+            (
+                conversation.live,
+                trace.summary().0.to_string(),
+                trace.running,
+            )
+        })
+    }
+
+    /// The head over a stretch reads the task's state, as the card's word does (set 4, find 5):
+    /// while the task waits on the user the stretch before is worked, never "Working".
+    fn heads_as_worked(live: task::Live, head: (task::Live, String, bool)) {
+        let (now, title, running) = head;
+        assert_eq!(now, live);
+        assert!(
+            title.starts_with("Worked for") && !running,
+            "a stretch headed {title:?} (under way: {running}) while the task was {live:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn a_stretch_heads_as_working_while_its_task_works(cx: &mut TestAppContext) {
+        let (agents, _browser, agent) = at_work(cx);
+        let (live, title, running) = stretch_head(&agents, &agent, cx);
+        assert_eq!(
+            (live, title.as_str(), running),
+            (task::Live::Working, "Working", true)
+        );
+    }
+
+    #[gpui::test]
+    fn a_stretch_that_ended_at_a_refused_step_heads_as_worked(cx: &mut TestAppContext) {
+        let (agents, browser, agent) = at_work(cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().tier = Tier::Look
+        });
+        // Its answer comes back as the app's own refusal, which ends the step.
+        let click = json!({ "tab": 30, "ref": "e1" });
+        assert!(traced(&agents, &browser, &agent, "click", click, None, cx).error);
+        heads_as_worked(task::Live::Refused, stretch_head(&agents, &agent, cx));
+    }
+
+    #[gpui::test]
+    fn a_stretch_before_a_handed_step_heads_as_worked(cx: &mut TestAppContext) {
+        let (agents, _browser, agent) = at_work(cx);
+        let reason = json!({ "reason": "Sign in, please.", "tab": 31 });
+        let _handed = call(&agents, &agent, "hand_off", reason, cx);
+        heads_as_worked(task::Live::Handed, stretch_head(&agents, &agent, cx));
+    }
+
+    #[gpui::test]
+    fn a_stretch_before_a_question_heads_as_worked(cx: &mut TestAppContext) {
+        let (agents, _browser, agent) = at_work(cx);
+        let question = json!({ "question": "Which size?" });
+        let _asked = call(&agents, &agent, "ask", question, cx);
+        heads_as_worked(task::Live::Asked, stretch_head(&agents, &agent, cx));
+    }
+
+    #[gpui::test]
+    fn a_stretch_before_the_user_took_its_page_heads_as_worked(cx: &mut TestAppContext) {
+        let (agents, _browser, agent) = at_work(cx);
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&agent, TaskAction::TakeOver(30), cx)
+        });
+        let (live, ..) = stretch_head(&agents, &agent, cx);
+        assert!(
+            matches!(live, task::Live::Yours { tab: 30, .. }),
+            "{live:?}"
+        );
+        let head = stretch_head(&agents, &agent, cx);
+        heads_as_worked(live, head);
+    }
+
     /// A card's status says how far its task has got, from its own steps and never a clock (#1080):
     /// Thinking with no steps yet, then "Step N · <step>", "Needs you" ahead of what a handoff
     /// waits for, and "Stopped after N steps" once the user stops it. Only the count and "Needs
