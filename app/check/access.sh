@@ -349,16 +349,18 @@ if ! grep -q '^accessibility: skipped' "$tree"; then
     fail "the welcome isn't a dialog called by its title, Welcome to $app_name.: $intro"
   grep -q " $button \"Get Started\"" "$intro" || fail "the welcome's Get Started isn't a button: $intro"
   grep -q " $button \"Skip Setup\"" "$intro" || fail "the welcome's Skip Setup isn't a button: $intro"
-  # Return goes on from the welcome, as Esc there would skip the setup, and Esc from each step
-  # after to the colour's, each one settled before the next Esc.
+  # Return goes on from the welcome, and Skip from each step after to the colour's, as Esc is
+  # Back, each one settled before the next Skip.
   send key return
   expect '^browser: onboarding left intro via return$' "Return didn't go on from the welcome"
-  for _ in 1 2 3 4; do
+  expect '^browser: onboarding step [a-z-]* settled$' "no step came after the welcome"
+  for _ in 1 2 3 4 5 6; do
     grep -q '^browser: onboarding step color settled$' "$log" && break
-    send key escape
-    expect '^browser: onboarding step [a-z-]* settled$' "Esc didn't go on to a step"
+    at=$(sed -n 's/^browser: onboarding step \([a-z-]*\) settled$/\1/p' "$log" | tail -1)
+    skip_step "$at"
+    expect '^browser: onboarding step [a-z-]* settled$' "Skip didn't go on from the $at step"
   done
-  grep -q '^browser: onboarding step color settled$' "$log" || fail "Esc didn't come to the colour step"
+  grep -q '^browser: onboarding step color settled$' "$log" || fail "Skip didn't come to the colour step"
   colour="$out/access-colour.txt"
   read_tree "$radio_group \"Color\"" > "$colour"
   grep -q " $dialog \"Pick a color for your first Space.\"" "$colour" ||

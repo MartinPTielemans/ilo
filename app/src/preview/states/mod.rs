@@ -39,6 +39,7 @@ pub(crate) const STATES: &[State] = &[
     State { name: "PREVIEW_BOOST", values: "on, off", shows: "Site Controls' site with a Boost, which shows its row" },
     State { name: "PREVIEW_BOOST_CARD", values: "list, nofit, changed", shows: "the Boost card of the tab shown" },
     State { name: "PREVIEW_BOOST_EDITOR", values: "new, edited, advanced", shows: "the Boost editor for a site's Boost" },
+    State { name: "PREVIEW_BROOM", values: "idle, sorting, failed, nothing", shows: "the broom after Clear on the New Tab line in that state" },
     State { name: "PREVIEW_CHOOSER", values: "serial, hid, usb, bluetooth, stopped, none, off, denied", shows: "a page's device chooser" },
     State { name: "PREVIEW_CLICK", values: "<x>,<y>", shows: "a click there in the window" },
     State { name: "PREVIEW_COMMAND_LINE", values: "off, on, unsearched, flatpak-off, flatpak-on", shows: "Settings › Agents' apps that connect" },

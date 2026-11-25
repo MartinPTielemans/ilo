@@ -53,6 +53,7 @@ mod blank_tests;
 #[cfg(test)]
 mod board_title_tests;
 mod boost;
+mod broom;
 mod browser;
 mod by_site;
 #[cfg(test)]
@@ -70,8 +71,6 @@ mod conversation;
 #[cfg(test)]
 mod copy_tests;
 mod display_face;
-#[cfg(test)]
-mod dock_dot;
 mod drag;
 mod drm_note;
 mod empty;
@@ -123,6 +122,7 @@ mod permission;
 mod portrait;
 #[cfg(test)]
 mod side_tests;
+mod sort_folders;
 #[cfg(test)]
 mod space_order_tests;
 mod task_cards;
@@ -138,7 +138,7 @@ mod recent_tabs;
 #[cfg(test)]
 mod recent_tabs_tests;
 #[cfg(test)]
-mod recorder;
+pub(crate) mod recorder;
 mod return_mark;
 mod ring;
 mod rows;
@@ -174,8 +174,10 @@ mod update_banner;
 pub use assets::Assets;
 pub use bar_usage::{HistoryDeleted, PICKS_FILE, history_deleted, move_old_picks, picked_in_bar};
 pub use battery::PAUSED;
+pub use broom::Broom;
 pub use browser::{
-    Browser, Folders, MediaAction, Page, Split, Trouble, Volume, WindowButton, WindowButtonGeometry,
+    Browser, Folders, MediaAction, Page, Setting, Split, Trouble, Volume, WindowButton,
+    WindowButtonGeometry,
 };
 pub use cast::{Cast, CastDevice, CastState};
 pub use chooser::{Chooser, ChooserDevice, DeviceKind, Scan};
@@ -1745,6 +1747,8 @@ pub struct Shell {
     drawn_arrow: Option<(u64, bool)>,
     /// Whether the pointer is over the divider's Clear, which then draws brighter.
     clear_hovered: bool,
+    /// The same for the broom after it.
+    broom_hovered: bool,
     /// The glyphs changing into others.
     swaps: Swaps,
     /// The window's content size at the last draw, and the frame and corner radius the page was
@@ -2301,6 +2305,7 @@ impl Shell {
             drawn_copied: "shows link",
             drawn_arrow: None,
             clear_hovered: false,
+            broom_hovered: false,
             swaps: Swaps::default(),
             viewport: Size::default(),
             scale: 1.,
@@ -3148,7 +3153,6 @@ impl Shell {
             self.toast_spaces(made, cx);
         }
         self.task_spaces_changed(cx);
-        self.follow_dock(cx);
         self.update_menus(cx);
         self.update_title(cx);
         cx.notify();
@@ -3267,7 +3271,6 @@ impl Shell {
         if self.form().is_some() {
             self.focus_form(cx);
         }
-        self.follow_dock(cx);
         self.update_menus(cx);
         self.update_title(cx);
         self.history_space_shown(cx);
@@ -3681,7 +3684,6 @@ impl Shell {
         cx.notify();
         self.refresh_menus(cx);
         self.refresh_picture(cx);
-        self.follow_dock(cx);
     }
 
     /// The command bar closed with no tab chosen in it: the user left it, or its ask ran a task.
@@ -3830,14 +3832,18 @@ impl Shell {
 
     pub fn set_page(&mut self, tab: u64, page: Page, cx: &mut Context<Self>) {
         let developer_mode = self.developer_mode(tab);
-        // check.sh reads these lines.
+        // check.sh reads these lines. A sign-in's page's address can hold its code or a token
+        // (#4100), so its line names none of it.
         let flag = |on| if on { 1 } else { 0 };
+        let url = match crate::agents::sign_in::quiet(tab) {
+            true => "(a sign-in's page)",
+            false => &*page.url,
+        };
         log!(
-            "browser: page {tab} back {} forward {} loading {} {}",
+            "browser: page {tab} back {} forward {} loading {} {url}",
             flag(page.can_go_back),
             flag(page.can_go_forward),
             flag(page.loading),
-            page.url
         );
         // Asked here, once a report, as the row drawn each frame needs only the answer.
         let left_pinned_host =
@@ -4169,14 +4175,6 @@ impl Shell {
 
     fn shown_space(&self) -> Option<&Space> {
         self.spaces.iter().find(|space| space.id == self.space)
-    }
-
-    /// The Dock icon's dot takes the key window's Space's color. A private window has no Space of
-    /// the user's, so its dot is the icon's own.
-    fn follow_dock(&self, cx: &mut Context<Self>) {
-        if commands::key_shell(cx).is_some_and(|key| key == cx.weak_entity()) {
-            crate::dock_dot::follow(self.shown_space().and_then(|space| space.color), cx);
-        }
     }
 
     /// The core let the agent with the id `agent` act in `tab`, for the activity log: it's at work
@@ -5427,7 +5425,11 @@ impl Shell {
             .child(
                 row_box().child(plate(plus, new_tab).when(!today.is_empty(), |plate| {
                     let clear = still_clear(&self.palette, space.clears_last(space.shown));
-                    plate.child(today_line(&self.palette, self.hairline(), clear))
+                    let broom = self
+                        .browser
+                        .broom()
+                        .map(|_| broom::still_broom(&self.palette));
+                    plate.child(today_line(&self.palette, self.hairline(), clear, broom))
                 })),
             )
             .children(today.into_iter().map(row))
@@ -6091,9 +6093,42 @@ pub(super) fn icon_slot(drawn: impl IntoElement) -> gpui::Div {
         .child(drawn)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The room the New Tab line's hairline had when it was last painted, and whether it was
+    /// drawn in it, for a test of a narrow sidebar's.
+    static TODAY_HAIRLINE: std::cell::Cell<Option<(Pixels, bool)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The New Tab line's hairline in `color`, `line` thick, over the room it's laid out in. In room
+/// shorter than the line's own gap it isn't drawn: what would be left of it is a dot between the
+/// label and Clear, which reads as a fault and not as a line.
+fn today_hairline(color: Hsla, line: Pixels) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |room, _, window, _| {
+            let drawn = room.size.width >= px(DIVIDER_GAP);
+            #[cfg(test)]
+            TODAY_HAIRLINE.set(Some((room.size.width, drawn)));
+            if drawn {
+                window.paint_quad(gpui::fill(room, color));
+            }
+        },
+    )
+    .flex_1()
+    .h(line)
+}
+
 /// The New Tab line's own line, after its label while there are tabs today: a hairline that takes
-/// the room the label leaves, then `clear`, which ends where the titles do.
-fn today_line(palette: &Palette, line: Pixels, clear: impl IntoElement) -> gpui::Div {
+/// the room the label leaves, where that is a line's worth, then `clear`, which ends where the
+/// titles do, or before `broom`, which then ends there.
+fn today_line(
+    palette: &Palette,
+    line: Pixels,
+    clear: impl IntoElement,
+    broom: Option<impl IntoElement>,
+) -> gpui::Div {
     div()
         .flex_1()
         .min_w_0()
@@ -6102,8 +6137,9 @@ fn today_line(palette: &Palette, line: Pixels, clear: impl IntoElement) -> gpui:
         .mr(px(TITLE_END_INSET))
         .flex()
         .items_center()
-        .child(div().flex_1().h(line).bg(palette.faint(DIVIDER)))
+        .child(today_hairline(palette.faint(DIVIDER), line))
         .child(clear)
+        .children(broom)
 }
 
 /// The divider of a Space's card in the Library: a line, and `clear` at its end while it shows.

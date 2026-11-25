@@ -763,7 +763,12 @@ pub fn show(
     update(cx, |preview, gpui_window, cx| {
         preview.finish(cx);
         // check.sh reads this line.
-        log!("browser: link preview {tab} {url}");
+        // Nor a link from a sign-in's page (#4100).
+        let logged = crate::agents::sign_in::logged;
+        log!(
+            "browser: link preview {tab} {}",
+            logged(over, logged(tab, &url))
+        );
         let mut shown = Preview {
             window,
             page,
@@ -906,12 +911,10 @@ pub fn key(window: u64, tab: u64, keystroke: &str, reserved: bool, cx: &mut App)
         }
         Some(KeyAction::Keep) => preview.keep(keystroke, cx),
         Some(KeyAction::CopyUrl) => {
-            let url = preview
-                .preview
-                .as_ref()
-                .map(|shown| shown.url.clone())
+            let (url, tabs) = (preview.preview.as_ref())
+                .map(|shown| (shown.url.clone(), vec![shown.tab, shown.over]))
                 .unwrap_or_default();
-            crate::shell::copy_url_of_preview(&url, cx);
+            crate::shell::copy_url_of_preview(&url, &tabs, cx);
             true
         }
         None => false,

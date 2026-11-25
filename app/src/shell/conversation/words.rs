@@ -185,6 +185,19 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
             None,
         ),
         IloKind::EndedLeft => (format!("ended what {agent} had left running"), None),
+        // The user is the subject, as of a change of level.
+        IloKind::Revoked { folder } => ("\u{b7} You revoked".into(), Some(folder.to_string())),
+        IloKind::FolderGone { folder } => ("revoked".into(), Some(folder.to_string())),
+        // X6c: what the copy that failed would have given, by its count.
+        IloKind::NotCopied {
+            left: LeftOut::File(name) | LeftOut::Folder(name),
+        } => ("started this thread without".into(), Some(name.to_string())),
+        IloKind::NotCopied {
+            left: LeftOut::Files(files),
+        } => (
+            format!("started this thread without {files} files: {PRODUCT} couldn't copy them"),
+            None,
+        ),
         IloKind::Resumed { tier } => (format!("resumed this thread at {}", tier.label()), None),
         // Where the assistant is the subject, a middle dot sets ilo's mark off from the sentence.
         // A kept task takes a reply after a quit too, so the words name no end; the reply field
@@ -245,6 +258,10 @@ pub fn tail(kind: &IloKind, agent: &str) -> Option<String> {
         IloKind::LeftRunning {
             reach: Reach::Both(_),
         } => Some(format!(" and this thread's files{RESTART_ENDS}")),
+        IloKind::FolderGone { .. } => Some(format!(": {PRODUCT} couldn't find it")),
+        IloKind::NotCopied {
+            left: LeftOut::File(_) | LeftOut::Folder(_),
+        } => Some(format!(": {PRODUCT} couldn't copy it")),
         _ => None,
     }
 }
@@ -281,7 +298,10 @@ pub fn body(kind: &IloKind, at: &str) -> Option<String> {
         | IloKind::NotRestarted { .. }
         | IloKind::NotRaised { .. }
         | IloKind::LeftRunning { .. }
-        | IloKind::EndedLeft => None,
+        | IloKind::EndedLeft
+        | IloKind::Revoked { .. }
+        | IloKind::FolderGone { .. }
+        | IloKind::NotCopied { .. } => None,
         IloKind::Resumed { .. } => None,
         IloKind::KeptHere
         | IloKind::Gone

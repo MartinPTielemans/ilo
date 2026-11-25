@@ -60,6 +60,7 @@ fn conversation(lines: Vec<Line>) -> Conversation {
         tier: Default::default(),
         only_added: false,
         finished: Vec::new(),
+        folder: None,
     }
 }
 

@@ -112,6 +112,13 @@ pub enum IloKind {
     LeftRunning { reach: Reach },
     /// ilo later ended what the assistant had left running.
     EndedLeft,
+    /// The user revoked the task's folder; it goes on without it (J2).
+    Revoked { folder: SharedString },
+    /// The task's folder was moved, renamed, deleted or its disk ejected, so ilo ended its grant;
+    /// it goes on without it (J6).
+    FolderGone { folder: SharedString },
+    /// ilo couldn't copy the files the user attached, so the task started without them.
+    NotCopied { left: LeftOut },
     /// The user's reply took up the task after it had ended, at `tier`, which the app decided.
     Resumed { tier: Tier },
     /// The assistant keeps the task's conversation on the user's computer, said once per profile.
@@ -251,7 +258,10 @@ pub fn buttons(line: &IloLine) -> Vec<IloButton> {
         | IloKind::NotRestarted { .. }
         | IloKind::NotRaised { .. }
         | IloKind::LeftRunning { .. }
-        | IloKind::EndedLeft => Vec::new(),
+        | IloKind::EndedLeft
+        | IloKind::Revoked { .. }
+        | IloKind::FolderGone { .. }
+        | IloKind::NotCopied { .. } => Vec::new(),
         IloKind::Resumed { .. } | IloKind::KeptHere => Vec::new(),
         IloKind::Gone
         | IloKind::NotKept
@@ -292,7 +302,10 @@ pub fn tab(kind: &IloKind) -> Option<u64> {
         | IloKind::NotRestarted { .. }
         | IloKind::NotRaised { .. }
         | IloKind::LeftRunning { .. }
-        | IloKind::EndedLeft => None,
+        | IloKind::EndedLeft
+        | IloKind::Revoked { .. }
+        | IloKind::FolderGone { .. }
+        | IloKind::NotCopied { .. } => None,
         IloKind::Resumed { .. } | IloKind::KeptHere => None,
         IloKind::Gone
         | IloKind::NotKept
