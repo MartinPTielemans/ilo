@@ -958,17 +958,6 @@ pub trait Browser {
     fn files_available(&self, _: &App) -> bool {
         false
     }
-    /// Runs what the user asked in the composer's Ask as a task on the assistant `agent`, from Space
-    /// `home`, with the level and model the user picked there (#4140). Only the user's ↩ there
-    /// calls it: no agent has a path to it.
-    fn start_task(
-        &self,
-        agent: &str,
-        asked: &str,
-        home: u64,
-        start: crate::agents::task::Start,
-        cx: &mut App,
-    );
     /// Whether the user types in a field of a window over this one: find, the password offer, the
     /// icon picker, the Boost editor or the folder preview. Find doesn't count once the user has
     /// gone back to the page with it still showing.

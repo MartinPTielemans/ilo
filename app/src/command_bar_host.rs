@@ -290,11 +290,6 @@ impl command_bar::Host for Bar {
         let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
             return;
         };
-        let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
-        let home = shell
-            .and_then(|shell| shell.upgrade())
-            .map_or(0, |shell| shell.read(cx).space());
-        let asked = asked.to_string();
         let page = page.map(|(url, title)| browser::agents::task::AskedOn { url, title });
         // The bar folds into the slot at the foot that its task's card takes, where the window
         // shows one; elsewhere it hides, and the card fades in.
@@ -332,28 +327,23 @@ impl command_bar::Host for Bar {
             shell.fold_started(folded, cx);
             shell.bar_starting();
         });
-        agents_core::update(move |agents, cx| {
-            let start = browser::agents::task::Start {
-                tier,
-                model: model.clone(),
-                pages: Vec::new(),
-                only_added: false,
-                // The bar's composer has no `+` yet: a path reaches a task only from the panel.
-                files: Default::default(),
-            };
-            let started = agents.start_task(cli, &asked, page, home, start, cx);
-            if started.is_some() {
-                agents.remember_composer(home, tier, model.map(|model| (cli, model)));
-            }
-            // Its conversation takes the page's place as its card comes, which takes the slot; one
-            // that didn't start leaves the slot empty and the page as it was.
-            update_window_in(window, cx, |shell, _| {
-                shell.composed_started(started.clone().map(Into::into))
-            });
-            if started.is_none() {
-                update_shells_in(cx, |shell, cx| shell.set_ask_slot(false, cx));
-            }
-        });
+        start_thread(cli, asked, page, tier, model, window, cx);
+    }
+
+    fn run_task_at_rest(
+        &self,
+        agent: &str,
+        asked: &str,
+        tier: browser::agents::tier::Tier,
+        model: Option<String>,
+        cx: &mut App,
+    ) {
+        let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
+            return;
+        };
+        let window = front().0;
+        update_window_in(window, cx, |shell, _| shell.bar_starting());
+        start_thread(cli, asked, None, tier, model, window, cx);
     }
 
     fn set_up_agents(&self, cx: &mut App) {
@@ -391,6 +381,48 @@ impl command_bar::Host for Bar {
             None => tooltip::dismiss(cx),
         }
     }
+}
+
+/// Starts the composer's thread, `asked` on `cli` with `page`, from the Space shown in the front
+/// window, at `tier` on `model`, which the profile remembers as the composer's last once it starts.
+/// Its conversation then takes the place of what `window` shows: ⌘T's slot, or a resting bar's
+/// empty page.
+fn start_thread(
+    cli: browser::agents::runner::Cli,
+    asked: &str,
+    page: Option<browser::agents::task::AskedOn>,
+    tier: browser::agents::tier::Tier,
+    model: Option<String>,
+    window: bc::bc_id,
+    cx: &mut App,
+) {
+    let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
+    let home = shell
+        .and_then(|shell| shell.upgrade())
+        .map_or(0, |shell| shell.read(cx).space());
+    let asked = asked.to_string();
+    agents_core::update(move |agents, cx| {
+        let start = browser::agents::task::Start {
+            tier,
+            model: model.clone(),
+            pages: Vec::new(),
+            only_added: false,
+            // The bar's composer has no `+` yet: a path reaches a task only from the panel.
+            files: Default::default(),
+        };
+        let started = agents.start_task(cli, &asked, page, home, start, cx);
+        if started.is_some() {
+            agents.remember_composer(home, tier, model.map(|model| (cli, model)));
+        }
+        // Its conversation takes the page's place as its card comes, which takes the slot; one
+        // that didn't start leaves the slot empty and the page as it was.
+        update_window_in(window, cx, |shell, _| {
+            shell.composed_started(started.clone().map(Into::into))
+        });
+        if started.is_none() {
+            update_shells_in(cx, |shell, cx| shell.set_ask_slot(false, cx));
+        }
+    });
 }
 
 /// `color` as the host takes a colour, 0xRRGGBBAA.
