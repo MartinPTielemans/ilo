@@ -6,7 +6,8 @@ use std::{
 };
 
 use gpui::{
-    Entity, Modifiers, Pixels, Point, SharedString, TestAppContext, VisualTestContext, point, px,
+    Entity, EntityInputHandler, Modifiers, Pixels, Point, SharedString, TestAppContext,
+    VisualTestContext, point, px,
 };
 
 use crate::agents::task::{Card, Dot};
@@ -401,6 +402,121 @@ fn the_bar_at_rest_lists_its_own_spaces_threads_alone(cx: &mut TestAppContext) {
     assert_eq!(listed(1, cx), ["task-1", "task-3", "task-5"]);
     assert_eq!(listed(2, cx), ["task-2", "task-4"]);
     assert_eq!(listed(3, cx), Vec::<String>::new());
+}
+
+/// A window whose one Space has the unloaded pinned tab 20 and shows no page, so its field at
+/// rest has the keyboard, by itself.
+fn resting_by_a_pinned_tab(
+    cx: &mut TestAppContext,
+) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
+    // ⌘Z and ⇧⌘Z are the window's keys and a field's, as the app binds them.
+    cx.update(crate::shell::bind_keys);
+    cx.update(crate::text_input::bind_keys);
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+    cx.update(|window, _| window.activate_window());
+    shell.update(cx, |shell, cx| {
+        let space = (1, "Space".into(), None, 0, "".into(), "".into(), "".into());
+        shell.set_spaces(vec![space], cx);
+        shell.set_space(1, cx);
+        let folders = Folders::default();
+        shell.set_tabs(1, vec![20], Vec::new(), Vec::new(), folders, cx);
+    });
+    cx.run_until_parked();
+    assert!(
+        field_focused(&shell, cx),
+        "the field didn't take the keyboard"
+    );
+    (shell, cx, host)
+}
+
+/// Removes the pinned tab 20, as its row's button does, and the core reports it gone.
+fn remove_the_pinned_tab(shell: &Entity<Shell>, cx: &mut VisualTestContext, host: &Recorder) {
+    shell.update(cx, |shell, cx| {
+        shell.remove_pinned(20, cx);
+        let folders = Folders::default();
+        shell.set_tabs(1, Vec::new(), Vec::new(), Vec::new(), folders, cx);
+    });
+    cx.run_until_parked();
+    host.take_edits();
+}
+
+/// The field at rest takes the keyboard by itself as the last page leaves, so while it holds no
+/// text the user changed, ⌘Z is for what they did last: a pinned tab removed is pinned again.
+#[gpui::test]
+fn command_z_in_the_empty_field_at_rest_undoes_the_windows_last_step(cx: &mut TestAppContext) {
+    let (shell, cx, host) = resting_by_a_pinned_tab(cx);
+    remove_the_pinned_tab(&shell, cx, &host);
+    assert!(field_focused(&shell, cx));
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(
+        host.take_edits(),
+        ["reopen 20 as 1001", "move 1001 true 0 0"],
+        "⌘Z stopped in the field"
+    );
+    // The core reports the tab pinned again, under its new id.
+    shell.update(cx, |shell, cx| {
+        let folders = Folders::default();
+        shell.set_tabs(1, vec![1001], Vec::new(), Vec::new(), folders, cx);
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("shift-cmd-z");
+    assert!(!host.take_edits().is_empty(), "⇧⌘Z stopped in the field");
+}
+
+/// Once the user has typed in the field at rest, ⌘Z is the field's, as in any field, and undoes
+/// nothing of the window's, even once what was typed is gone.
+#[gpui::test]
+fn command_z_after_typing_in_the_field_at_rest_is_the_fields(cx: &mut TestAppContext) {
+    let (shell, cx, host) = resting_by_a_pinned_tab(cx);
+    remove_the_pinned_tab(&shell, cx, &host);
+    cx.simulate_input("book");
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(
+        host.take_edits(),
+        Vec::<String>::new(),
+        "⌘Z undid the window's"
+    );
+    let typed = cx.update(|_, cx| {
+        let resting = shell.read(cx).resting.as_ref().unwrap();
+        resting.bar.read(cx).typed_text(cx)
+    });
+    assert_eq!(typed, "book", "⌘Z changed what was typed");
+    cx.simulate_keystrokes("backspace backspace backspace backspace cmd-z");
+    assert_eq!(
+        host.take_edits(),
+        Vec::<String>::new(),
+        "⌘Z undid the window's"
+    );
+}
+
+/// While an input method composes in the field at rest, as Japanese does before it commits,
+/// ⌘Z is the field's, and the composition stays.
+#[gpui::test]
+fn command_z_while_composing_in_the_field_at_rest_is_the_fields(cx: &mut TestAppContext) {
+    let (shell, cx, host) = resting_by_a_pinned_tab(cx);
+    remove_the_pinned_tab(&shell, cx, &host);
+    let field = cx.update(|_, cx| {
+        let resting = shell.read(cx).resting.as_ref().unwrap();
+        resting.bar.read(cx).field()
+    });
+    cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_and_mark_text_in_range(None, "に", None, window, cx)
+        })
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-z");
+    assert_eq!(
+        host.take_edits(),
+        Vec::<String>::new(),
+        "⌘Z undid the window's"
+    );
+    assert!(
+        field.read_with(cx, |field, _| field.composing()),
+        "the composition went"
+    );
 }
 
 /// On a new profile ilo hasn't looked for an assistant yet: ⇥ grows the bar at rest into the

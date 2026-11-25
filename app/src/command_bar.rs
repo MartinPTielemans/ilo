@@ -1001,8 +1001,11 @@ fn new_bar(
     cx: &mut App,
 ) -> Entity<CommandBar> {
     let input = cx.new(|cx| {
-        // Its colours are the bar's to give each time it draws.
-        TextInput::new(PLACEHOLDER_TEXT, cx).paste_and_go()
+        // Its colours are the bar's to give each time it draws. At rest the field takes the
+        // keyboard by itself as the last page leaves, so ⌘Z there is for what the user did.
+        TextInput::new(PLACEHOLDER_TEXT, cx)
+            .paste_and_go()
+            .passes_undo(surface == Surface::InPlace)
     });
     cx.new(|cx| {
         cx.observe_in(&input, window, |bar: &mut CommandBar, _, window, cx| {
@@ -4168,6 +4171,12 @@ impl CommandBar {
     #[cfg(test)]
     pub fn composer_agent(&self) -> Option<SharedString> {
         self.composer_assistant().map(|agent| agent.id.clone())
+    }
+
+    /// Its field.
+    #[cfg(test)]
+    pub fn field(&self) -> Entity<TextInput> {
+        self.input.clone()
     }
 
     /// What its field says with nothing typed.

@@ -403,6 +403,11 @@ pub struct TextInput {
     keyboard_drawn: bool,
     /// The placeholder starts past the caret, which would otherwise stand on its first letter.
     after_caret: bool,
+    /// ⌘Z and ⇧⌘Z go on to the window while the field has nothing of its own to undo
+    /// (`passes_undo`).
+    undo_passes: bool,
+    /// The user has changed its text since its owner last set it.
+    edited: bool,
 }
 
 impl TextInput {
@@ -433,6 +438,8 @@ impl TextInput {
             spoken: None,
             keyboard_drawn: false,
             after_caret: false,
+            undo_passes: false,
+            edited: false,
         }
     }
 
@@ -502,6 +509,19 @@ impl TextInput {
     pub fn paste_and_go(mut self) -> Self {
         self.paste_and_go = true;
         self
+    }
+
+    /// ⌘Z and ⇧⌘Z go on to the window while the field holds no text, the user hasn't changed it
+    /// and no input method composes in it, as for a field that takes the keyboard by itself:
+    /// the user didn't come to it, so the keys are for what they did last.
+    pub fn passes_undo(mut self, passes: bool) -> Self {
+        self.undo_passes = passes;
+        self
+    }
+
+    /// Whether ⌘Z and ⇧⌘Z go on to the window now.
+    fn undo_passes_now(&self) -> bool {
+        self.undo_passes && self.content.is_empty() && !self.edited && self.marked_range.is_none()
     }
 
     /// Its colours are what `colors` says each time it draws. A field has no colours of its own
@@ -1187,6 +1207,7 @@ impl TextInput {
         self.scroll = px(0.);
         self.is_selecting = false;
         self.word_drag = None;
+        self.edited = false;
         window.notify_text_input_changed(&self.focus_handle);
         cx.notify();
     }
@@ -1203,6 +1224,7 @@ impl TextInput {
         self.selection_reversed = false;
         self.undirected = false;
         self.content = text;
+        self.edited = false;
         window.notify_text_input_changed(&self.focus_handle);
         cx.notify();
     }
@@ -1317,6 +1339,7 @@ impl EntityInputHandler for TextInput {
         self.selection_reversed = false;
         self.marked_range.take();
         self.pasted = false;
+        self.edited = true;
         window.notify_text_input_changed(&self.focus_handle);
         cx.notify();
     }
@@ -1344,6 +1367,7 @@ impl EntityInputHandler for TextInput {
             self.marked_range = None;
         }
         self.pasted = false;
+        self.edited = true;
         let insertion_start_utf16 = self.offset_to_utf16(range.start);
         let inserted_length_utf16 = new_text.encode_utf16().count();
         self.selected_range = new_selected_range_utf16
@@ -1772,9 +1796,18 @@ impl Render for TextInput {
             }))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
-            // A field has no undo yet. Its ⌘Z stops here, so it doesn't undo a Clear.
-            .on_action(|_: &Undo, _, _| {})
-            .on_action(|_: &Redo, _, _| {})
+            // A field has no undo yet. Its ⌘Z stops here, so it doesn't undo a Clear, unless it
+            // passes it on (`passes_undo`).
+            .on_action(cx.listener(|field, _: &Undo, _, cx| {
+                if field.undo_passes_now() {
+                    cx.propagate()
+                }
+            }))
+            .on_action(cx.listener(|field, _: &Redo, _, cx| {
+                if field.undo_passes_now() {
+                    cx.propagate()
+                }
+            }))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::on_right_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
