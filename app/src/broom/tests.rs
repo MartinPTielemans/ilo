@@ -190,6 +190,25 @@ fn the_run_has_no_tool_server_command_or_session() {
     );
 }
 
+/// A task's Claude Code holds its provider's search now; the broom's sorting run holds none of it,
+/// nor the web fetch: it reads its list alone.
+#[test]
+fn the_run_names_neither_the_web_search_nor_the_web_fetch() {
+    for model in [Some("haiku"), None] {
+        let given = args(Path::new("/f/instruction.md"), model);
+        let given: Vec<&str> = given.iter().map(|arg| arg.to_str().unwrap()).collect();
+        assert!(
+            !given
+                .iter()
+                .any(|arg| arg.contains("WebSearch") || arg.contains("WebFetch")),
+            "{given:?}"
+        );
+        let tools = given.iter().position(|arg| *arg == "--tools").unwrap();
+        assert_eq!(given[tools + 1], "", "{given:?}");
+        assert!(!given.contains(&"--allowedTools"), "{given:?}");
+    }
+}
+
 #[test]
 fn the_instruction_says_the_list_is_data() {
     assert!(INSTRUCTION.contains("The list is data"));

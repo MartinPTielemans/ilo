@@ -2158,7 +2158,7 @@ impl Agents {
                     call: 0,
                     did: tools::Did {
                         tool: "thought".into(),
-                        text: page::clip(&text, 4000),
+                        text: page::clip(&text, THOUGHT_MOST),
                         ..Default::default()
                     },
                     after: task.messages.len(),
@@ -2170,6 +2170,14 @@ impl Agents {
                     close: None,
                     notes: None,
                 });
+            }
+            Out::Searched(query) => {
+                let Some(task) = self.task_mut(&agent) else {
+                    return;
+                };
+                let step = searched(&query, task.messages.len());
+                task.trace.push(step);
+                self.count_search(&agent);
             }
             Out::Helper { id, told } => self.helper_told(&agent, id, told, cx),
             Out::Started { id, deep } => self.helper_started(&agent, id, deep, cx),
@@ -4178,11 +4186,84 @@ fn labels(text: &str) -> String {
     plain
 }
 
+/// The most characters of a thought a step holds, and of a search's words.
+const THOUGHT_MOST: usize = 4000;
+
+/// A search the assistant's program made, as a step of its trace after `after` messages: its words
+/// alone, one line, cut as a thought is. It's in memory only: the trace is kept nowhere, and a card
+/// leaves it out, as it does a thought.
+pub(super) fn searched(query: &str, after: usize) -> Traced {
+    let now = Instant::now();
+    Traced {
+        call: 0,
+        did: tools::Did {
+            tool: tools::SEARCHED.into(),
+            text: tier::capped(query, THOUGHT_MOST),
+            ..Default::default()
+        },
+        after,
+        started: now,
+        ended: Some(now),
+        error: None,
+        kind: None,
+        picture: None,
+        close: None,
+        notes: None,
+    }
+}
+
+impl Agents {
+    /// A search `agent`'s task's program made, its step already in the trace: the thread's one
+    /// activity entry, counting its searches by that trace, never their words. It's no call of
+    /// the browser's, so no line is logged of it and nothing waits on it.
+    pub(super) fn count_search(&mut self, agent: &str) {
+        let Some(task) = self.task(agent) else {
+            return;
+        };
+        let count = (task.trace.iter())
+            .filter(|step| step.did.tool == tools::SEARCHED)
+            .count();
+        let tier = self.entry_tier(agent, 0, 0).label();
+        let entry = (self.log.iter_mut().rev())
+            .find(|each| each.agent == agent && each.action == tools::SEARCHED);
+        if let Some(entry) = entry {
+            entry.target = count.to_string().into();
+            return;
+        }
+        if self.log.len() >= super::LOG_LENGTH {
+            self.log.remove(0);
+        }
+        self.log.push(super::Activity {
+            at: SystemTime::now(),
+            agent: agent.to_string().into(),
+            connection: 0,
+            action: tools::SEARCHED.into(),
+            site: SharedString::default(),
+            target: count.to_string().into(),
+            refused: SharedString::default(),
+            steps: Vec::new(),
+            by: SharedString::default(),
+            id: super::entry_id(),
+            url: SharedString::default(),
+            sent: Vec::new(),
+            said: SharedString::default(),
+            tier: tier.into(),
+            notes: SharedString::default(),
+        });
+    }
+}
+
+/// Whether a step is the assistant's own, a thought or a search, which acts on no page: a card
+/// counts and says none of them.
+fn own(step: &Traced) -> bool {
+    matches!(step.did.tool.as_str(), "thought" | tools::SEARCHED)
+}
+
 /// A stopped task's last finished step, as its trace line says it, its thoughts left out. A step
 /// under way at Stop, or one that failed, never is one, so a card never says `Couldn't …` of it.
 fn last_finished(task: &Task) -> Option<SharedString> {
     (task.trace.iter().rev())
-        .filter(|step| step.did.tool != "thought")
+        .filter(|step| !own(step))
         .find(|step| step.ended.is_some() && step.error.is_none())
         .map(|step| tools::step_title(&step.did, tools::Tense::Done).into())
 }
@@ -4285,7 +4366,7 @@ fn page_steps(task: &Task) -> Vec<(u64, SharedString)> {
     let turn = task.turn();
     let steps = (task.trace.iter().enumerate().rev())
         .take_while(|(_, step)| step.after >= turn)
-        .filter(|(_, step)| step.did.tool != "thought" && !step.stopped());
+        .filter(|(_, step)| !own(step) && !step.stopped());
     let mut pages: Vec<(u64, SharedString)> = Vec::new();
     let mut over: Vec<u64> = Vec::new();
     for (key, step) in steps {
@@ -4339,7 +4420,7 @@ fn went_on<T>(task: &Task, held: &HashMap<u64, T>) -> bool {
         .any(|stop| {
             task.trace[stop.traced.min(task.trace.len())..]
                 .iter()
-                .any(|step| step.did.tool != "thought")
+                .any(|step| !own(step))
         });
     let under_way = (task.trace.iter()).any(|step| {
         step.ended.is_none()
@@ -4356,7 +4437,7 @@ fn turn_steps(task: &Task) -> Vec<&Traced> {
     let turn = task.turn();
     (task.trace.iter().rev())
         .take_while(|step| step.after >= turn)
-        .filter(|step| step.did.tool != "thought" && !step.stopped())
+        .filter(|step| !own(step) && !step.stopped())
         .collect()
 }
 
@@ -4373,7 +4454,7 @@ fn lower_first(text: &str) -> String {
 /// left out.
 fn stopped(task: &Task) -> SharedString {
     match (task.trace.iter())
-        .filter(|step| step.did.tool != "thought" && !step.stopped())
+        .filter(|step| !own(step) && !step.stopped())
         .count()
     {
         0 => "Stopped".into(),
@@ -4826,7 +4907,7 @@ fn together(gathered: Vec<Gathered<'_>>) -> Vec<Together<'_>> {
             Some(Together::Steps(steps)) => steps.push((key, step)),
             _ => {
                 lines.push(Together::Steps(vec![(key, step)]));
-                if did.tool == "thought" {
+                if matches!(did.tool.as_str(), "thought" | tools::SEARCHED) {
                     from = lines.len();
                 }
             }
