@@ -279,7 +279,6 @@ fn starts_from_its_words(args: &[String], first: &str, reply: &str) {
 
 /// A task with files never goes on with a conversation its assistant kept, which it can't reach
 /// inside a wall: a reply after its run went starts it from its own words.
-#[cfg(unix)]
 #[gpui::test]
 fn a_task_with_files_never_goes_on_with_a_kept_conversation(cx: &mut TestAppContext) {
     let (run, walls, agent) = kept_with_a_folder("unkept", cx);
@@ -329,7 +328,6 @@ fn a_reply_to_a_stopped_task_with_files_starts_it_inside_a_new_wall(cx: &mut Tes
 /// folder that changes its wall: the run inside Full access's wall is over and is sent nothing
 /// of the reply, which starts one inside the lower level's wall from the task's own words. Its
 /// assistant is told nothing of the access, as at any reply that takes a task up.
-#[cfg(unix)]
 #[gpui::test]
 fn a_level_lowered_at_a_reply_starts_it_inside_the_lower_levels_wall(cx: &mut TestAppContext) {
     let (run, walls, agent) = kept_with_a_folder("reply", cx);

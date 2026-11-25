@@ -33,7 +33,8 @@ use crate::agents::Status;
 use crate::agents::page::clip;
 use crate::agents::task::ilo::{self, IloButton, IloKind, IloLine};
 use crate::agents::task::{
-    ArchivedTask, Card, Conversation, Dot, Line, Opens, TaskAction, Trace, TraceItem, TraceStep,
+    ArchivedTask, Card, Conversation, Dot, Line, Live, Opens, TaskAction, Trace, TraceItem,
+    TraceStep,
 };
 use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
 use crate::text_input::TextInput;
@@ -247,6 +248,8 @@ pub struct TalkView {
     typing: bool,
     /// Where the last frame drew Take Over on the lines: once, on the live line.
     take_over_drawn: Rc<RefCell<Vec<Bounds<Pixels>>>>,
+    /// Where the last frame drew the live line's Hand Back, while the user has the task's page.
+    hand_back_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     landed: Rc<Cell<Option<Bounds<Pixels>>>>,
     drawn_at: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
@@ -442,6 +445,7 @@ impl Shell {
                     level_drawn: Rc::default(),
                     typing: false,
                     take_over_drawn: Rc::default(),
+                    hand_back_drawn: Rc::default(),
                     landed: Rc::default(),
                     drawn_at: Rc::default(),
                 })
@@ -2066,17 +2070,40 @@ impl TalkView {
     /// The live line over the reply field while the task works: the step under way, else
     /// `{assistant} is working`, never a finished or refused step, with Take Over at its end
     /// while the agent is on a page. Beside the page, the trace's own step line is it, and on the
-    /// page the strip has Take Over.
+    /// page the strip has Take Over. While the task waits on the user or the user has its page,
+    /// it says what `words::live` gives for that, never working: on a page the user took over,
+    /// with Hand Back, which goes as the ilo line's Hand Back does.
     fn live(&self, look: &Look, cx: &mut Context<Self>) -> Option<gpui::Stateful<gpui::Div>> {
         let shown = (self.shown.as_ref()).filter(|shown| shown.stoppable)?;
         if look.beside || look.standing {
             return None;
         }
         let palette = look.palette;
-        let step = under_way(&shown.lines);
+        let working = shown.live == Live::Working;
+        let step = under_way(&shown.lines).filter(|_| working);
         let words: SharedString = match step {
             Some(step) => step.title.clone(),
-            None => words::working(&shown.name).into(),
+            None if working => words::working(&shown.name).into(),
+            None => words::live(&shown.live)?.into(),
+        };
+        let hand_back = match shown.live {
+            Live::Yours { tab, .. } => {
+                let drawn = self.hand_back_drawn.clone();
+                let chip = page_chip(palette, "conversation-hand-back", words::HAND_BACK, None)
+                    .relative()
+                    .child(
+                        canvas(move |bounds, _, _| drawn.set(Some(bounds)), |_, _, _, _| {})
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full(),
+                    )
+                    .on_click(
+                        cx.listener(move |view, _, _, cx| view.act(TaskAction::HandBack(tab), cx)),
+                    );
+                Some(chip)
+            }
+            _ => None,
         };
         let text = match (step.is_some(), look.shimmer(self.made)) {
             (true, Some(phase)) => shimmering(&palette, words, phase).into_any_element(),
@@ -2086,7 +2113,7 @@ impl TalkView {
                 .into_any_element(),
         };
         let drawn = self.take_over_drawn.clone();
-        let take_over = shown.on.map(|tab| {
+        let take_over = shown.on.filter(|_| working).map(|tab| {
             page_chip(palette, "conversation-take-over", words::TAKE_OVER, None)
                 .relative()
                 .child(
@@ -2119,7 +2146,8 @@ impl TalkView {
                         .whitespace_nowrap()
                         .child(text),
                 )
-                .children(take_over),
+                .children(take_over)
+                .children(hand_back),
         )
     }
 
@@ -3031,6 +3059,7 @@ impl Render for TalkView {
         }
         self.level_drawn.set(None);
         self.take_over_drawn.borrow_mut().clear();
+        self.hand_back_drawn.set(None);
         let busy = self.motion.settle(now);
         self.follow_on(now);
         // What changes once it has shown moves.
