@@ -90,7 +90,10 @@ impl Agents {
             return self.refuse(act, &at, refused, cx);
         }
         let host = site(&self.browser.shown(tab, cx).url);
-        let tier = self.tier_of(agent, connection, call);
+        // The access of the task that holds the page, whichever of its client's connections
+        // calls, as every act on a page is judged: a second connection's own task is at the
+        // access every task starts with, which would pass one the user lowered.
+        let tier = (self.judged_task(&act)).map_or(tier::Tier::default(), |task| task.tier);
         let why = match tier::sign_in_why(page::opening_risk(&host).is_some()) {
             _ if self.fence_of(&host).is_some() => Some(Why::Fenced),
             _ if self.off_sites(&act, cx) => Some(Why::OtherSite),
@@ -209,14 +212,24 @@ impl Agents {
             signing.map_or_else(|| self.holder(agent, tab), |(connection, _)| connection);
         self.note(agent, connection, "filled_login", site, "");
         cx.notify();
-        // A ⌘T task's by its agent, a connected client's by the session its call is in.
         let Some((_, call)) = signing else {
             return;
         };
-        let Some(task) = (self.tracer(agent, call)).and_then(|key| self.task_mut(&key)) else {
+        // The conversation of the task that holds the page, whose access judged the fill, else
+        // the one its call is in: a ⌘T task's by its agent, a connected client's by its session.
+        let own = self.tracer(agent, call);
+        let holder = (self.page_task(agent, tab)).map(|task| task.agent.clone());
+        let theirs = holder.is_some() && holder != own;
+        let Some(task) = (holder.or(own)).and_then(|key| self.task_mut(&key)) else {
             return;
         };
-        let Some(at) = (task.trace.iter()).rposition(|traced| traced.call == call) else {
+        // Under the call's step in its own task's trace; in the holder's, whose trace a second
+        // connection's call isn't in, under its latest step.
+        let at = match theirs {
+            false => (task.trace.iter()).rposition(|traced| traced.call == call),
+            true => task.trace.len().checked_sub(1),
+        };
+        let Some(at) = at else {
             return;
         };
         let line = IloKind::SignedIn {

@@ -671,3 +671,135 @@ fn only_settings_turns_signing_tasks_in_on_or_off() {
         }
     }
 }
+
+/// Calls `tool` as Claude Code's connection `connection`, as call `id`.
+fn call_on(
+    agents: &Entity<Agents>,
+    connection: u64,
+    id: u64,
+    tool: &str,
+    arguments: Value,
+    cx: &mut TestAppContext,
+) -> mpsc::Receiver<ToolResult> {
+    let (reply, answer) = mpsc::channel();
+    let call = Call {
+        id,
+        agent: "claude-code".into(),
+        connection,
+        tool: tool.into(),
+        arguments,
+        reply,
+        at: std::time::Instant::now(),
+    };
+    agents.update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
+    answer
+}
+
+/// The server says call `id` was answered.
+fn answered(agents: &Entity<Agents>, id: u64, cx: &mut TestAppContext) {
+    let event = Event::Answered {
+        agent: "claude-code".into(),
+        id,
+        at: std::time::Instant::now(),
+        error: None,
+        kind: None,
+        image: None,
+        notes: None,
+    };
+    agents.update(cx, |agents, cx| agents.handle(event, cx));
+}
+
+/// Claude Code's first connection at work in tab 20, which its task holds, then a second
+/// connection of its, which has a task of its own at the access every task starts with. The first
+/// task's key.
+fn two_connections(agents: &Entity<Agents>, cx: &mut TestAppContext) -> String {
+    hello(agents, cx);
+    call_on(agents, 1, 2, "read_page", json!({ "tab": 20 }), cx);
+    answered(agents, 2, cx);
+    let first = agents.read_with(cx, |agents, cx| agents.shown_cards(cx)[0].agent.to_string());
+    let event = Event::Hello {
+        agent: "claude-code".into(),
+        connection: 2,
+        client: "claude-code".into(),
+    };
+    agents.update(cx, |agents, cx| agents.handle(event, cx));
+    first
+}
+
+/// A fill is judged at the access of the task that holds the page, whichever connection asks:
+/// the first task lowered to Look only, a second connection's sign_in on its page is refused
+/// before the core, though its own task is at Work on pages, and the refusal is the first task's.
+#[gpui::test]
+fn a_fill_on_a_page_is_judged_at_the_access_of_the_task_that_holds_it(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let first = two_connections(&agents, cx);
+    agents.update(cx, |agents, cx| agents.set_tier(&first, Tier::Look, cx));
+
+    let refused = call_on(&agents, 2, 3, "sign_in", json!({ "tab": 20 }), cx)
+        .try_recv()
+        .expect("the sign-in wasn't refused at once");
+    assert!(refused.error, "it signed in: {}", refused.text);
+    assert_eq!(refused.kind, Some(tools::Kind::Outside));
+    assert!(
+        browser.saved_sign_ins.borrow().is_empty(),
+        "a second connection's fill reached the core on a page of a task at Look only"
+    );
+    answered(&agents, 3, cx);
+    let stops =
+        |key: &str, cx: &mut TestAppContext| agents.read_with(cx, |agents, _| agents.stops(key));
+    let held = stops(&first, cx);
+    assert_eq!(held.len(), 1, "{held:?}");
+    assert_eq!(held[0].tier, Tier::Look);
+    let second = agents.read_with(cx, |agents, cx| {
+        (agents.shown_cards(cx).into_iter())
+            .map(|card| card.agent.to_string())
+            .find(|key| *key != first)
+    });
+    let second = second.expect("the second connection's task");
+    assert!(stops(&second, cx).is_empty(), "the refusal is the caller's");
+    let tier = agents.read_with(cx, |agents, _| agents.task(&second).map(|task| task.tier));
+    assert_eq!(tier, Some(Tier::Work));
+}
+
+/// A fill a second connection asked for on a page the first task holds is the first task's line:
+/// its conversation says ilo filled the login, the caller's doesn't.
+#[gpui::test]
+fn a_fills_line_is_in_the_conversation_of_the_task_that_holds_the_page(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let first = two_connections(&agents, cx);
+
+    let answer = call_on(&agents, 2, 3, "sign_in", json!({ "tab": 20 }), cx);
+    let request = asked(&browser);
+    agents.update(cx, |agents, cx| {
+        agents.signed_in("claude-code", 20, "example.com", ACCOUNT.into(), cx)
+    });
+    done(&agents, request, true, SIGNED, None, cx);
+    assert!(!answer.recv().unwrap().error);
+    answered(&agents, 3, cx);
+
+    let filled = |key: &str, cx: &mut TestAppContext| {
+        agents.read_with(cx, |agents, cx| {
+            (agents.conversation(key, cx).into_iter()).any(|talk| {
+                (talk.lines.iter()).any(|line| {
+                    matches!(
+                        line,
+                        Line::Ilo(IloLine {
+                            kind: IloKind::SignedIn { .. },
+                            ..
+                        })
+                    )
+                })
+            })
+        })
+    };
+    assert!(filled(&first, cx), "the line isn't the holder's");
+    let others: Vec<String> = agents.read_with(cx, |agents, cx| {
+        (agents.shown_cards(cx).into_iter())
+            .map(|card| card.agent.to_string())
+            .filter(|key| *key != first)
+            .collect()
+    });
+    for other in others {
+        assert!(!filled(&other, cx), "the line is the caller's");
+    }
+}
