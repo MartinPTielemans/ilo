@@ -14,7 +14,9 @@ use gpui::{
 
 use crate::agents::request::Sent;
 pub use crate::keyboard_ring::{ring, ring_round};
-use crate::palette::{CARD_PLATE, INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER, TEXT_SECONDARY};
+use crate::palette::{
+    CARD_PLATE, FIELD_PLATE, INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER, TEXT_SECONDARY,
+};
 use crate::text_input::Colors;
 use crate::tokens::palette::{ACCENT_HOVERED, ACCENT_PRESSED, DIALOG_LIGHT, LIGHT_TEXT_SECONDARY};
 use crate::tokens::radius;
@@ -30,7 +32,13 @@ use crate::tokens::settings::{
     ON_SWITCH_OFF, PADDING, POPUP_PADDING, RESTORE_RADIUS, ROW_HEIGHT, ROW_X, SIDE_ROOM,
     STACKED_GAP, SWITCH_HEIGHT, SWITCH_OFF, SWITCH_OFF_LIGHT, SWITCH_WIDTH,
 };
+use crate::tokens::settings::{
+    FOLDER_GLYPH, FOLDER_LEFT, FOLDER_RIGHT, MARK, MARK_GAP, MARK_ROW, POPUP_WIDTH, SCOPE_CHEVRON,
+    SCOPE_GAP, SCOPE_HEIGHT, SCOPE_LEFT, SCOPE_LINE, SCOPE_RIGHT, SCOPE_TEXT, SEGMENT_HEIGHT,
+    SEGMENT_INSET, SEGMENT_LINE, SEGMENT_RADIUS, SEGMENT_TEXT, SEGMENT_X,
+};
 use crate::tokens::settings::{SENT_CHEVRON, SENT_GAP, SENT_INDENT, SENT_LABEL, SENT_LINES};
+use crate::tokens::shell::ICON_INK;
 use crate::tokens::text::SMALL;
 
 mod assistant;
@@ -315,6 +323,8 @@ pub struct Look {
     /// A row's grey text, under its name or at its end.
     pub detail: Rgba,
     pub control: Rgba,
+    /// A segmented choice's track: the field's plate.
+    pub field: Rgba,
     /// A control under the pointer.
     pub hovered: Rgba,
     pub pressed: Rgba,
@@ -359,6 +369,7 @@ impl Look {
             line: mix(LINE),
             detail: mix(pick(TEXT_SECONDARY, LIGHT_TEXT_SECONDARY)),
             control: mix(pick(CONTROL, CONTROL_LIGHT)),
+            field: mix(FIELD_PLATE),
             hovered: mix(pick(CONTROL_HOVERED, CONTROL_HOVERED_LIGHT)),
             pressed: mix(pick(CONTROL_PRESSED, CONTROL_PRESSED_LIGHT)),
             switch_off: mix(pick(SWITCH_OFF, SWITCH_OFF_LIGHT)),
@@ -384,6 +395,7 @@ impl Look {
             line,
             detail: mix(ON_DETAIL),
             control: mix(ON_CONTROL),
+            field: mix(FIELD_PLATE),
             hovered: mix(ON_HOVERED),
             pressed: mix(ON_PRESSED),
             switch_off: mix(ON_SWITCH_OFF),
@@ -753,6 +765,157 @@ pub fn popup(look: &Look, label: impl Into<SharedString>, width: f32, open: bool
         })
         .child(div().min_w_0().truncate().child(label.into()))
         .child(chevrons)
+}
+
+/// A pop-up naming a folder, as Save downloads to's: the folder before its `name`, with no
+/// chevrons, lit as a button is. Its caller opens the system's folder picker on a click, and an
+/// assistive app, while one asks (`a11y`), reads it by its row's `spoken` name with the folder's.
+pub fn folder_popup(
+    look: &Look,
+    id: impl Into<gpui::ElementId>,
+    spoken: impl Into<SharedString>,
+    name: impl Into<SharedString>,
+    a11y: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let name: SharedString = name.into();
+    let folder = svg()
+        .flex_none()
+        .path("icons/folder.svg")
+        .size(px(FOLDER_GLYPH))
+        .text_color(look.ink.opacity(ICON_INK));
+    let control = div()
+        .id(id)
+        .max_w(px(POPUP_WIDTH))
+        .pl(px(FOLDER_LEFT))
+        .pr(px(FOLDER_RIGHT))
+        .gap(px(CHEVRONS_GAP));
+    lit(look, control)
+        .when(a11y, |control| {
+            control
+                .role(Role::Button)
+                .aria_label(spoken)
+                .aria_value(name.clone())
+        })
+        .child(folder)
+        .child(div().min_w_0().truncate().child(name))
+}
+
+/// A short choice of words: each of `choices` a segment in a track, the `chosen` one plated. An
+/// assistive app, while one asks (`a11y`), reads each as a radio button by its words, chosen or
+/// not. `each` gives a segment what it does when clicked, by its index.
+pub fn segmented(
+    look: &Look,
+    id: impl Into<SharedString>,
+    choices: &[SharedString],
+    chosen: Option<usize>,
+    a11y: bool,
+    mut each: impl FnMut(usize, gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::Div>,
+) -> gpui::Div {
+    let id: SharedString = id.into();
+    let (hovered, plate) = (look.control, look.pressed);
+    let segments = choices.iter().enumerate().map(|(index, words)| {
+        let on = chosen == Some(index);
+        let segment = div()
+            .id((id.clone(), index))
+            .when(a11y, |segment| {
+                let toggled = if on { Toggled::True } else { Toggled::False };
+                segment
+                    .role(Role::RadioButton)
+                    .aria_label(words.clone())
+                    .aria_toggled(toggled)
+            })
+            .tab_index(0)
+            .focus_from_keys_only()
+            .focus_visible(ring(look.ink))
+            .relative()
+            .flex_none()
+            .h(px(SEGMENT_HEIGHT))
+            .px(px(SEGMENT_X))
+            .flex()
+            .items_center()
+            .rounded(px(CONTROL_RADIUS))
+            .when(on, |segment| {
+                segment
+                    .bg(plate)
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(look.ink)
+            })
+            .when(!on, |segment| {
+                segment
+                    .text_color(look.detail)
+                    .hover(move |segment| segment.bg(hovered))
+            })
+            .child(words.clone());
+        each(index, segment)
+    });
+    let segments: Vec<_> = segments.collect();
+    div()
+        .flex_none()
+        .flex()
+        .items_center()
+        .p(px(SEGMENT_INSET))
+        .gap(px(SEGMENT_INSET))
+        .rounded(px(SEGMENT_RADIUS))
+        .bg(look.field)
+        .text_size(px(SEGMENT_TEXT))
+        .line_height(px(SEGMENT_LINE))
+        .children(segments)
+}
+
+/// Whose settings a group shows, beside its heading: "For" and the profile's `name`, with a
+/// chevron, on a button's plate, the shown plate while its menu is `open`. Its caller opens the
+/// profiles' menu on a press.
+pub fn scope(look: &Look, name: impl Into<SharedString>, open: bool) -> gpui::Div {
+    let chevron = svg()
+        .flex_none()
+        .path("icons/chevron-down.svg")
+        .size(px(SCOPE_CHEVRON))
+        .text_color(look.ink.opacity(CHEVRONS_ALPHA));
+    let hovered = look.hovered;
+    div()
+        .flex_none()
+        .h(px(SCOPE_HEIGHT))
+        .pl(px(SCOPE_LEFT))
+        .pr(px(SCOPE_RIGHT))
+        .flex()
+        .items_center()
+        .gap(px(SCOPE_GAP))
+        .rounded_full()
+        .text_size(px(SCOPE_TEXT))
+        .line_height(px(SCOPE_LINE))
+        .font_weight(gpui::FontWeight::NORMAL)
+        .bg(if open { look.pressed } else { look.control })
+        .when(!open, |chip| chip.hover(move |chip| chip.bg(hovered)))
+        .child(div().text_color(look.detail).child("For"))
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(look.ink)
+                .child(name.into()),
+        )
+        .child(chevron)
+}
+
+/// A row with the app's mark before its text, as Default browser's, and its controls at its end.
+pub fn mark_row(
+    look: &Look,
+    name: impl Into<SharedString>,
+    line: Option<SharedString>,
+    controls: Vec<gpui::AnyElement>,
+) -> gpui::Div {
+    let mark = svg()
+        .flex_none()
+        .path(crate::product::mark_path(MARK))
+        .size(px(MARK))
+        .mr(px(MARK_GAP))
+        .text_color(look.ink);
+    frame()
+        .min_h(px(MARK_ROW))
+        .child(mark)
+        .child(text(look, name, line))
+        .when(!controls.is_empty(), |row| row.child(end(controls)))
 }
 
 /// A switch, on or off, with its knob `slid` of the way to that side.

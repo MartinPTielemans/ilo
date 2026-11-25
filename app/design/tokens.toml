@@ -1264,6 +1264,35 @@ control-pressed = 0.2
 control-pressed-light = 0.16
 popup-width = 155.0
 popup-end = 0.0
+# The folder a pop-up names, as Save downloads to's: the folder 14 at its start, 8 in, its name 6
+# after it and 10 from its end, in the icon ink, with no chevrons.
+folder-left = 8.0
+folder-right = 10.0
+folder-glyph = 14.0
+# A short choice of words, as drawn: a track 28 tall on the field's plate, its segments 2 in and 2
+# apart at radius 8; each 24 tall, 10 in, at the control radius, its words at 12 on 16. The one
+# chosen is on the shown plate at medium in the ink (the drawing's 510), the rest in the quiet ink.
+segment-height = 24.0
+segment-inset = 2.0
+segment-x = 10.0
+segment-radius = 8.0
+segment-text = 12.0
+segment-line = 16.0
+# Whose settings a group shows, beside its heading, as drawn: 20 tall at radius 10 on a button's
+# plate, 9 in before "For" and 7 after its chevron, 5 apart, at 11 on 14, the profile's name at
+# medium, its chevron 8 in the chevrons' ink.
+scope-height = 20.0
+scope-left = 9.0
+scope-right = 7.0
+scope-gap = 5.0
+scope-text = 11.0
+scope-line = 14.0
+scope-chevron = 8.0
+# A row with the app's mark before its text, as Default browser: the mark 26, 12 before the text,
+# the row at least 56 tall.
+mark = 26.0
+mark-gap = 12.0
+mark-row = 56.0
 # Buttons under the groups are 11 below them.
 buttons-top = 11.0
 # Ours: a checkbox, as the dialog's, 8 before its name, ticked in the look's on colour with its
