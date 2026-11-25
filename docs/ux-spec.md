@@ -291,7 +291,7 @@ Arc's layout: the URL field and back, forward and reload live in the sidebar, an
 
 | Item | Value | Source |
 |---|---|---|
-| Row centre (window buttons, sidebar button, back, forward, reload) | 24 below the window top, the line the Mac's window buttons are on. The row is 44 tall as drawn, with its centre 22 down (*interim*: the core's frame for the Mac's buttons still centres them 24 down) | ours (the 0.4.0 redesign), Arc 1.170.0 ax |
+| Row centre (window buttons, sidebar button, back, forward, reload) | 22 below the window top: the row is 44 tall as drawn and its parts are centred in it, the Mac's window buttons by the core's frame. Arc's row is 48, its line 24 down | ours (the 0.4.0 redesign); Arc 1.170.0 ax for its own |
 | Button hover plate | 24 × 24, the glyphs' pitch, centred on the row, radius 6. Only the plate takes clicks; the rest of the row moves the window | ours |
 | Sidebar button, back, forward, reload | the row's parts are 6 in from the sidebar's own 8 at each side and 8 apart: the window's buttons, then the sidebar button's glyph, 18 wide, then at the far side back, forward and reload, glyphs of 16 with reload's ending 14 from the sidebar's edge: their middles at 158, 182 and 206 in a 228 sidebar. In full screen, with no window buttons, the sidebar button's glyph starts the row, 14 in. Arc labels the sidebar button Hide sidebar while docked and Lock sidebar while out | ours (the 0.4.0 redesign), Arc 1.170 |
 | Narrow sidebar | reload goes first, under 185, then forward, under 161, when back's glyph would come nearer the sidebar button's than the row's 8; back and forward stay together | ours, Ardia, from Arc users |

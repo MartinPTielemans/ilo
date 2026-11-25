@@ -14,10 +14,10 @@
 
 namespace {
 
-// The window's buttons sit in the app's header row where Arc's do: centred in the top 48 points,
-// the first 13 from the left edge, so their centres are 20, 43 and 66 across and 24 down
-// (docs/ux-spec.md, Window).
-constexpr CGFloat kButtonRowHeight = 48;
+// The window's buttons sit in the app's first row, centred in the 44 points it's drawn in, the
+// first 13 from the left edge as Arc's is, so their centres are 20, 43 and 66 across and 22 down
+// (docs/ux-spec.md, Header and URL field).
+constexpr CGFloat kButtonRowHeight = 44;
 constexpr CGFloat kButtonInset = 13;
 
 }  // namespace

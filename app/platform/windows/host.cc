@@ -3102,7 +3102,7 @@ int FrameHit(HWND root, POINT at) {
                                              : HTTOP;
   }
   // Maximize, the second of shell.rs's WINDOW_BUTTONS in Windows' order (windows_buttons), 43
-  // from the left and window-button-y (24) down, its plate windows-button-plate (22) across
+  // from the left and window-button-y (22) down, its plate windows-button-plate (22) across
   // (design/tokens.toml): kept in step with them. With the sidebar on the right, or the top bar
   // on, the group is at the right, close at the corner, and maximize 43 from the right.
   const double scale = Scale(root);
@@ -3110,7 +3110,7 @@ int FrameHit(HWND root, POINT at) {
   const double across = right ? client.right / scale - at.x / scale : at.x / scale;
   auto shown = WindowButtonsShown().find(root);
   if (shown != WindowButtonsShown().end() && shown->second && std::abs(across - 43) <= 11 &&
-      std::abs(at.y / scale - 24) <= 11) {
+      std::abs(at.y / scale - 22) <= 11) {
     return HTMAXBUTTON;
   }
   return 0;
