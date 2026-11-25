@@ -115,14 +115,6 @@ pub(super) fn shown(
     shown_with(card(), cx)
 }
 
-/// The id of the last picture of `tab`'s page the conversation asked the host for.
-fn picture_asked(host: &Recorder, tab: u64) -> u64 {
-    let asked = host.task_pictures.borrow();
-    let last = asked.iter().rev().find(|(each, _)| *each == tab);
-    last.map(|&(_, request)| request)
-        .unwrap_or_else(|| panic!("no picture of tab {tab} was asked for, only {asked:?}"))
-}
-
 /// As `shown`, with `card` for task-1's.
 fn shown_with(
     card: Card,

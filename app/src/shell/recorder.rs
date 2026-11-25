@@ -307,9 +307,6 @@ pub(crate) struct Recorder {
     /// The shell it answers each picture asked of it for with this picture, at once, inside the
     /// call that asked, as a core that answers inline would.
     pub(super) pictures: RefCell<Option<(WeakEntity<super::Shell>, super::PagePicture)>>,
-    /// Each picture of a task's page asked of it, with the request's id: other tests take ids
-    /// from the same process-wide count at the same time, so a test learns its own here.
-    pub(super) task_pictures: RefCell<Vec<(u64, u64)>>,
     /// The answers to page dialogs it was given, with what was typed.
     pub(super) replies: RefCell<Vec<PageReply>>,
     /// What it says every agent's Space's menu lists.
@@ -2148,8 +2145,7 @@ impl Browser for Recorder {
         self.record(format!("ask again {asked}"));
     }
 
-    fn task_picture(&self, tab: u64, request: u64, _: &mut App) {
-        self.task_pictures.borrow_mut().push((tab, request));
+    fn task_picture(&self, tab: u64, _: u64, _: &mut App) {
         self.record(format!("task picture {tab}"));
     }
 
