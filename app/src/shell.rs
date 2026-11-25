@@ -1748,6 +1748,8 @@ pub struct Shell {
     broom_hovered: bool,
     /// The glyphs changing into others.
     swaps: Swaps,
+    /// Where each row's speaker was last logged, for check.sh to click it there.
+    speakers_drawn: crate::settings_rows::Drawn,
     /// The window's content size at the last draw, and the frame and corner radius the page was
     /// last laid out at.
     viewport: Size<Pixels>,
@@ -2304,6 +2306,7 @@ impl Shell {
             clear_hovered: false,
             broom_hovered: false,
             swaps: Swaps::default(),
+            speakers_drawn: Rc::default(),
             viewport: Size::default(),
             scale: 1.,
             page_laid: None,
