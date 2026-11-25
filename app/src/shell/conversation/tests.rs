@@ -3903,6 +3903,15 @@ fn row_cases() -> Vec<RowCaseShown> {
         stoppable: false,
         ..conversation(3)
     };
+    // The task has gone: ilo's line says so in the field's place.
+    let gone = Conversation {
+        lines: vec![Line::Ilo(IloLine {
+            key: 4,
+            kind: IloKind::Gone,
+            settled: false,
+        })],
+        ..ended.clone()
+    };
     let between = Conversation {
         lines: vec![Line::Trace(Trace {
             key: 0,
@@ -4008,6 +4017,12 @@ fn row_cases() -> Vec<RowCaseShown> {
             button: Some(StripStop::Open),
             stops: false,
             ..case("ended", &done, ended, None)
+        },
+        RowCaseShown {
+            ring: vec!["Open"],
+            button: Some(StripStop::Open),
+            stops: false,
+            ..case("gone", &done, gone, None)
         },
         RowCaseShown {
             ring: vec!["Page", "TakeOver", "Stop"],

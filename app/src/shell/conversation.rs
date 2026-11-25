@@ -1546,14 +1546,17 @@ impl TalkView {
     }
 
     /// What the page row holds for `on`, the page stood on, `open` the words of Open while the
-    /// thread has ended with that page to move. ilo's line in the field's place goes with the
-    /// field's row (#4105).
+    /// thread has ended with that page to move. ilo's line in the field's place, which an ended
+    /// thread has (#4105), leaves the row its Open, which nothing else there offers.
     pub(super) fn page_row_for(&self, on: u64, open: Option<String>) -> PageRow {
         let Some(shown) = self.shown.as_ref() else {
             return PageRow::default();
         };
         if self.replies && self.in_field().is_some() {
-            return PageRow::default();
+            return PageRow {
+                case: open.map(|open| RowCase::Ended(open.into())),
+                stop: false,
+            };
         }
         let case = match &shown.live {
             Live::Working if shown.stoppable && shown.on == Some(on) => {
