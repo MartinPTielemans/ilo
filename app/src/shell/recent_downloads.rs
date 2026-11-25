@@ -103,8 +103,8 @@ fn heading_ink(tone: Tone) -> f32 {
 /// would show through both.
 fn plate(tone: Tone, ground: Hsla) -> Hsla {
     ground.blend(Hsla::from(rgba(match tone {
-        Tone::Dark => t::FILL,
-        Tone::Light => t::LIGHT_FILL,
+        Tone::Dark => crate::tokens::floating::FILL,
+        Tone::Light => crate::tokens::floating::LIGHT_FILL,
     })))
 }
 
@@ -580,8 +580,8 @@ impl Shell {
         // The window's look at its foot, where the plate lies.
         let fill = plate(tone, self.window_fill_at(1.));
         let rim = Hsla::from(rgba(match tone {
-            Tone::Dark => t::RIM,
-            Tone::Light => t::LIGHT_RIM,
+            Tone::Dark => crate::tokens::floating::RIM,
+            Tone::Light => crate::tokens::floating::LIGHT_RIM,
         }));
         let [_, _, heading_ink] = inks(&self.palette, fill);
         let (full_width, full_height) = self.recent_downloads_size();
@@ -615,9 +615,8 @@ impl Shell {
                 .rounded_tr(px(outline.top))
                 .rounded_br(px(outline.far))
         };
-        // A menu's shadow, which comes with the plate as the shape does.
-        let light = tone == Tone::Light;
-        let shadows: Vec<_> = (crate::elevation::menu_shadow(light).into_iter())
+        // What floats' shadows, which come with the plate as the shape does.
+        let shadows: Vec<_> = (crate::elevation::menu_shadow().into_iter())
             .map(|shadow| BoxShadow {
                 color: shadow.color.opacity(size),
                 ..shadow
