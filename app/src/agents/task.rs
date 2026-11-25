@@ -1400,6 +1400,12 @@ impl Agents {
         }
     }
 
+    /// Settings › Models opens: it looks for each assistant, as Other Apps does, so its rows say
+    /// what's on this computer. Nothing else in Settings looks, so a launch never runs one.
+    pub fn models_shown(&mut self, cx: &mut Context<Self>) {
+        self.look_for_task_agents(cx);
+    }
+
     /// What the browser last learned of `cli`.
     pub fn found(&self, cli: Cli) -> Ready {
         self.tasks

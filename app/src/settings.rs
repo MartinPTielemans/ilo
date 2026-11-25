@@ -822,6 +822,9 @@ fn show_now(cx: &mut App) {
             if settings.section == Section::OtherApps {
                 look_for_clients(cx);
             }
+            if settings.section == Section::Models {
+                models_shown(cx);
+            }
             if settings.section == Section::SyncImport {
                 settings
                     .account
@@ -845,6 +848,13 @@ fn look_for_clients(cx: &mut App) {
             agents.look_for_clients(cx);
             agents.look_for_task_agents(cx);
         });
+    }
+}
+
+/// Looks for the assistants as Models opens, so its rows say what's on this computer.
+fn models_shown(cx: &mut App) {
+    if let Some(agents) = agents::global(cx) {
+        agents.update(cx, |agents, cx| agents.models_shown(cx));
     }
 }
 
@@ -1404,6 +1414,9 @@ impl Settings {
         }
         if section == Section::OtherApps {
             look_for_clients(cx);
+        }
+        if section == Section::Models {
+            models_shown(cx);
         }
         if section == Section::SyncImport {
             self.account
@@ -3777,10 +3790,11 @@ impl Settings {
         let rows = [master].into_iter().chain(tasks).chain(keeps).chain(kept);
         let mut threads = vec![Block::Rows(rows.collect())];
         let (mut models, mut access) = (Vec::new(), Vec::new());
+        // Every assistant, in its state, whether agents and tasks are on or not (S9).
+        models.push(Block::Heading("Your assistant".into()));
+        models.push(Block::Group(self.assistants(agents, cx)));
+        models.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
         if tasks_on {
-            models.push(Block::Heading("Your assistant".into()));
-            models.push(Block::Group(self.assistants(agents, cx)));
-            models.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
             access.extend(self.access());
             // What a thread may reach: files and folders too, with the folders it holds to revoke.
             access.extend(self.files_not_here(agents, cx));
