@@ -1281,3 +1281,163 @@ fn nothing_kept_has_a_handed_tabs_title_or_address(cx: &mut TestAppContext) {
         }
     }
 }
+
+/// The composer offers a tab, and keeps its chip, only while the app would hand it: the user's
+/// own tab on the web, in the Space in view, of the thread's profile and no private window's. It
+/// is a read that leaves nothing; the core's own refusals are met at the give.
+#[gpui::test]
+fn the_composer_offers_only_a_tab_that_fits(cx: &mut TestAppContext) {
+    let run = run("handed-fits", cx);
+    const ELSEWHERE: u64 = 3;
+    const PRIVATE: u64 = 5;
+    const OTHER_PROFILE: u64 = 7;
+    run.browser.tabs.borrow_mut().extend([
+        (13, ELSEWHERE, "Notes", "https://notes.example/"),
+        (15, PRIVATE, "Bank", "https://bank.example/"),
+        (16, USERS, "Settings", "chrome://settings/"),
+        (17, OTHER_PROFILE, "Work mail", "https://mail.example/"),
+        (18, USERS, "Upload", "https://files.example/"),
+    ]);
+    run.browser.private.borrow_mut().push(PRIVATE);
+    (run.browser.profiles.borrow_mut()).push((OTHER_PROFILE, "Profile 2"));
+    run.browser.not_given.borrow_mut().insert(18);
+    let agent = send(&run, ASKED, USERS, &[], cx).expect("started");
+    run.ran(1);
+    let fits = |agent: Option<&str>, space: u64, tab: u64, cx: &mut TestAppContext| {
+        run.agents
+            .read_with(cx, |agents, cx| agents.still_fits(agent, tab, space, cx))
+    };
+    // A tab elsewhere, the outside agent's own, one not open, a private window's and one off the
+    // web: none, for a thread to start or for this one.
+    for (space, tab) in [
+        (USERS, 13),
+        (USERS, 20),
+        (2, 20),
+        (USERS, 99),
+        (PRIVATE, 15),
+        (USERS, 16),
+    ] {
+        assert!(!fits(None, space, tab, cx), "tab {tab} from {space}");
+        assert!(
+            !fits(Some(&agent), space, tab, cx),
+            "tab {tab} from {space}"
+        );
+    }
+    // Another profile's tab is one for a thread started there, and none for this one.
+    assert!(fits(None, OTHER_PROFILE, 17, cx));
+    assert!(!fits(Some(&agent), OTHER_PROFILE, 17, cx));
+    // What only the core refuses is offered, and its chip says so at the send.
+    for tab in [TRAINS.0, 18] {
+        assert!(fits(None, USERS, tab, cx));
+        assert!(fits(Some(&agent), USERS, tab, cx));
+    }
+    assert!(given(&run).is_empty());
+    assert!(run.browser.reads.borrow().is_empty());
+    // A tab a thread holds is in no Space of the user's, until it's back.
+    run.finish(&agent, cx);
+    reply(&run, &agent, "", &[TRAINS.0], cx);
+    assert!(!fits(None, USERS, TRAINS.0, cx));
+    assert!(!fits(Some(&agent), USERS, TRAINS.0, cx));
+    press_return(&run, &agent, TRAINS.0, cx);
+    assert!(fits(Some(&agent), USERS, TRAINS.0, cx));
+    // Tasks off, none is offered.
+    (run.agents).update(cx, |agents, cx| agents.set_tasks_on(false, cx));
+    assert!(!fits(None, USERS, TRAINS.0, cx));
+    assert!(!fits(Some(&agent), USERS, TRAINS.0, cx));
+}
+
+/// No tool gives a thread a tab of the user's, takes one back to them, or says anything of one
+/// that isn't the thread's: every tool a thread and an outside agent has is called naming the
+/// user's tab, and the core is asked for no give, the tab stays where it is, the log has no
+/// return by the user, and no answer has its title or its site.
+#[gpui::test]
+fn no_tool_gives_returns_or_tells_of_a_tab_of_the_users(cx: &mut TestAppContext) {
+    let run = run("handed-walk", cx);
+    let agent = send(&run, ASKED, USERS, &[TRAINS.0], cx).expect("started");
+    run.ran(1);
+    let arguments = json!({
+        "tab": SEATS.0,
+        "tabs": [SEATS.0, TRAINS.0],
+        "split": SEATS.0,
+        "url": "https://own.example/page",
+        "ref": "e1",
+        "text": "x",
+        "key": "Enter",
+        "option": "x",
+        "title": "Named",
+        "reason": "To carry on.",
+        "question": "Which?",
+        "result": "Booked.",
+        "method": "GET",
+        "steps": [{ "tool": "click", "tab": SEATS.0, "ref": "e1" }],
+    });
+    for who in [agent.as_str(), "claude-code"] {
+        let mut names = tools::names(who);
+        assert!(names.len() > 10, "{who} has its tools");
+        // What ends the thread goes last, so each other tool is called on one under way.
+        names.sort_by_key(|name| matches!(name.as_str(), "finish" | "done"));
+        for tool in names {
+            let answer = call(&run.agents, who, &tool, arguments.clone(), cx);
+            cx.run_until_parked();
+            if let Ok(answer) = answer.try_recv() {
+                for of_the_tab in [SEATS.1, "tickets.example", "/seats"] {
+                    assert!(
+                        !answer.text.contains(of_the_tab),
+                        "{who}'s {tool} says {of_the_tab}"
+                    );
+                }
+            }
+            assert_eq!(given(&run), [TRAINS.0], "{who}'s {tool} gave a tab");
+            assert_eq!(space_of(&run, SEATS.0), USERS, "{who}'s {tool}");
+            assert!(!is_handed(&run, &agent, SEATS.0, cx), "{who}'s {tool}");
+            for whose in [agent.as_str(), "claude-code"] {
+                assert!(
+                    entries(&run, whose, handed::TAKEN_BACK, cx).is_empty(),
+                    "{who}'s {tool} returned a tab as the user"
+                );
+                assert_eq!(
+                    entries(&run, whose, handed::HANDED, cx).len(),
+                    usize::from(whose == agent),
+                    "{who}'s {tool} entered a give"
+                );
+            }
+        }
+    }
+}
+
+/// A handed tab is one of its thread's pages under the thread's level, as any other: at Look
+/// only, a click on it is refused and a read of it goes to the page, and the give's entry has
+/// the thread's level.
+#[gpui::test]
+fn a_handed_tab_is_under_its_threads_level(cx: &mut TestAppContext) {
+    use crate::agents::tier::Tier;
+    let run = run("handed-look", cx);
+    let start = Start {
+        tier: Tier::Look,
+        tabs: Picked::of_chips(USERS, vec![TRAINS.0]),
+        ..Start::default()
+    };
+    let agent = send_with(&run, ASKED, start, cx).expect("started");
+    run.ran(1);
+    let click = answered(&run, &agent, "click", TRAINS.0, cx);
+    assert!(click.error, "{}", click.text);
+    let read = call(
+        &run.agents,
+        &agent,
+        "read_page",
+        json!({ "tab": TRAINS.0 }),
+        cx,
+    );
+    cx.run_until_parked();
+    assert!(read.try_recv().is_err(), "the read didn't reach the page");
+    assert!(
+        (run.browser.reads.borrow().iter()).any(|read| read.0 == TRAINS.0),
+        "the read didn't reach the page"
+    );
+    let level = run.agents.read_with(cx, |agents, _| {
+        let mut entries = agents.activity(&agent);
+        let handed = entries.find(|entry| entry.action.as_ref() == handed::HANDED);
+        handed.expect("its entry").tier.to_string()
+    });
+    assert_eq!(level, Tier::Look.label());
+}

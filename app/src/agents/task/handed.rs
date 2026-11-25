@@ -314,31 +314,41 @@ impl Agents {
         let Some(task) = thread.filter(|_| self.tasks_on()) else {
             return false;
         };
-        // The user's own tab, in the Space the window showed at the send: never a private
-        // window's, and never one of another profile than the thread's.
-        if self.browser.private_space(from) || !self.browser.shows(tab, from, cx) {
-            return false;
-        }
         let own = match task.space {
             0 => task.home,
             space => space,
         };
-        if self.browser.space_profile(from) != self.browser.space_profile(own) {
-            return false;
+        self.fits(own, from, tab, cx)
+    }
+
+    /// Whether `tab` is one the app would hand from the user's Space `from` to a thread of the
+    /// Space `own`: the user's own tab, in the Space the window shows, never a private window's
+    /// and never one of another profile than the thread's, on a page on the web, as every page a
+    /// thread has.
+    fn fits(&self, own: u64, from: u64, tab: u64, cx: &App) -> bool {
+        !self.browser.private_space(from)
+            && self.browser.shows(tab, from, cx)
+            && self.browser.space_profile(from) == self.browser.space_profile(own)
+            && self.browser.off_limits(tab, cx).is_none()
+    }
+
+    /// Whether the composer may offer `tab`, and keep its chip, seen from the user's Space
+    /// `space_in_view`: for a reply to `agent`'s thread, or with none for a thread not yet
+    /// started. As far as the app knows: the core refuses the rest at the give. A read of what
+    /// the app has, which asks nothing of the tab and makes nothing happen in it; for the
+    /// composer alone, when its menu of the user's tabs opens and for a chip before the send,
+    /// and in no tool's answer or log line.
+    pub fn still_fits(&self, agent: Option<&str>, tab: u64, space_in_view: u64, cx: &App) -> bool {
+        match agent {
+            Some(agent) => self.may_hand(agent, space_in_view, tab, cx),
+            None => self.tasks_on() && self.fits(space_in_view, space_in_view, tab, cx),
         }
-        // A page on the web, as every page a thread has.
-        self.browser.off_limits(tab, cx).is_none()
     }
 
     /// Whether any of `picked` would be handed to a thread started from the user's Space `home`,
     /// as far as the app knows before there is a thread: with no words, a start needs one.
     pub(super) fn any_to_hand(&self, home: u64, picked: &Picked, cx: &App) -> bool {
-        let fits = |tab: &u64| {
-            !self.browser.private_space(picked.space)
-                && self.browser.shows(*tab, picked.space, cx)
-                && self.browser.space_profile(picked.space) == self.browser.space_profile(home)
-                && self.browser.off_limits(*tab, cx).is_none()
-        };
+        let fits = |tab: &u64| self.fits(home, picked.space, *tab, cx);
         self.tasks_on() && picked.tabs.iter().any(fits)
     }
 
