@@ -4527,12 +4527,12 @@ impl Settings {
     ) {
         let (message, detail, action) = match kept {
             1 => (
-                "Remove 1 finished thread?".to_string(),
+                "Remove 1 thread?".to_string(),
                 "The conversation is removed from this computer.".to_string(),
                 REMOVE,
             ),
             kept => (
-                format!("Remove {kept} finished threads?"),
+                format!("Remove {kept} threads?"),
                 "Their conversations are removed from this computer.".to_string(),
                 "Remove All",
             ),

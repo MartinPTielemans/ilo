@@ -1806,11 +1806,7 @@ impl Shell {
         let tasks = self.archive_only() == Only::Tasks;
         match (section, unsearched) {
             (Section::Spaces, _) => "",
-            (Section::Archive, true) if tasks => concat!(
-                "Finished threads stay here until ",
-                env!("PRODUCT_NAME"),
-                " quits."
-            ),
+            (Section::Archive, true) if tasks => "Archived threads show here.",
             (Section::Archive, false) if tasks => "No threads match.",
             (Section::Archive, unsearched) => match (self.archive_only(), unsearched) {
                 (Only::Visited, true) => "Pages you visit show here.",
@@ -1820,7 +1816,7 @@ impl Shell {
                 (_, true) => "Pages you visit and tabs you close show here.",
                 (_, false) => "No pages match.",
             },
-            (Section::Agents, true) => "Your agents' finished threads stay here for 30 days.",
+            (Section::Agents, true) => "Archived threads stay here for 30 days.",
             (Section::Agents, false) => "No threads match.",
             (Section::Boosts, true) => {
                 "A Boost restyles a site. Open the site, then pick Boost in its Site Controls."

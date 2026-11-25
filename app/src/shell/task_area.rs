@@ -1392,7 +1392,7 @@ impl Shell {
                 (format!("{name} needs you"), why.to_string())
             }
             Dot::Done => (
-                format!("{name} finished"),
+                format!("{name}, done"),
                 crate::agents::site(&self.page(tab).url).to_string(),
             ),
             Dot::Ended => (card.word.alone(&name).to_string(), String::new()),

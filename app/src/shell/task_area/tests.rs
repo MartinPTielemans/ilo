@@ -1655,7 +1655,7 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
     shell.update(cx, |shell, cx| shell.set_task_cards(vec![done.clone()], cx));
     assert_eq!(
         says(&shell, cx),
-        ("Claude finished".into(), "gulbenkian.pt".into(), false)
+        ("Claude, done".into(), "gulbenkian.pt".into(), false)
     );
     // Of the pages it left, the strip opens the page shown alone, and has nothing once it moved.
     let open = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
