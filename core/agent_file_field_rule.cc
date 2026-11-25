@@ -75,8 +75,8 @@ std::string DocumentFrame(const std::vector<DocumentChild>& children) {
 std::optional<std::string> FileFieldPlaceRefusal(const FileFieldPlace& place) {
   // An opaque origin serializes as "null", which would equal another opaque one's.
   if (place.frame.empty() || place.origin.empty() || place.origin == "null") {
-    return "That field is in a frame with no site of its own, so ilo can't say which site is "
-           "asking. Hand the tab to the user with hand_off.";
+    return "That field is in a frame with no site of its own, so the browser can't say which "
+           "site is asking. Hand the tab to the user with hand_off.";
   }
   return std::nullopt;
 }
