@@ -546,7 +546,7 @@ fn a_task_its_agent_never_named_keeps_no_title(cx: &mut TestAppContext) {
     let next = next(&run, cx);
     let archived = archive(&next, cx);
     assert_eq!(archived.len(), 1);
-    assert_eq!(archived[0].1, "Untitled task");
+    assert_eq!(archived[0].1, "Untitled thread");
     assert!(archived[0].2.starts_with("Claude · Done "));
     // Out of the Archive and back, it has no more of a title than it had.
     act(&next, &archived[0].0, TaskAction::Delete, cx);
@@ -1084,7 +1084,7 @@ fn a_past_task_whose_profile_is_gone_offers_start_again_alone(cx: &mut TestAppCo
     let next = next(&run, cx);
     let archived = archive(&next, cx);
     assert_eq!(archived.len(), 2);
-    let past = (archived.iter().find(|task| task.1 == "Untitled task"))
+    let past = (archived.iter().find(|task| task.1 == "Untitled thread"))
         .unwrap()
         .0
         .clone();

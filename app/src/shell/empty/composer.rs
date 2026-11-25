@@ -24,7 +24,7 @@ use super::super::{
 };
 
 /// Over the cards.
-const LATEST: &str = "Latest tasks";
+const LATEST: &str = "Pick up a thread";
 
 /// The bar the page rests on, while the Space shows no page.
 pub(in crate::shell) struct Resting {

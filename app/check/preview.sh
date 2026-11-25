@@ -632,7 +632,7 @@ expect '^browser: link rule 1 field has the keyboard$' "+ didn't give the new ru
 send type preview-target
 post clickkey $(settings_at "link space 1")
 front=$(cased "The Space in Front")
-expect "^browser: menu shown $front (checked), [^,]*, work, Little ilo\$" \
+expect "^browser: menu shown $front (checked), [^,]*, work, Little Window\$" \
   "the rule's Space pop-up didn't list the Space in front, the user's Spaces and Little ilo"
 send choose work
 expect '^browser: link rules drawn URL contains "meet.google.com" → [^,]*, URL contains "preview-target" → work; ' \

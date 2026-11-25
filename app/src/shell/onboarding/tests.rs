@@ -542,7 +542,7 @@ fn a_screen_reader_reads_each_steps_title_and_controls(cx: &mut TestAppContext) 
         let dialogs = said.iter().filter(|(role, ..)| *role == Role::Dialog);
         dialogs.map(|(_, name, _)| name.clone()).collect::<Vec<_>>()
     };
-    let welcome = concat!("Welcome to ", env!("APP_NAME"), ".");
+    let welcome = concat!("Welcome to ", env!("PRODUCT_NAME"), ".");
     assert_eq!(dialogs(&read(cx)), [welcome], "the welcome, by its title");
 
     skip_to(&shell, cx, Step::Color);
@@ -1902,7 +1902,7 @@ fn skip_goes_on_from_full_disk_access(cx: &mut TestAppContext) {
     let guide = view.read_with(cx, |view, _| view.guide());
     assert_eq!(
         guide.title,
-        format!("Let {} read Safari.", env!("APP_NAME"))
+        format!("Let {} read Safari.", env!("PRODUCT_NAME"))
     );
     assert_eq!(guide.button.as_deref(), Some("Open System Settings"));
     assert_eq!(guide.corner, crate::import::Corner::Back);

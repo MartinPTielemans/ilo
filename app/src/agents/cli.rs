@@ -15,6 +15,7 @@
 //! Store's copy it's the package's alias, on PATH from install, which does nothing but say it isn't
 //! added until Add writes the agent file.
 
+use crate::product::PRODUCT;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -78,14 +79,14 @@ pub fn detail(state: State, flatpak: Option<&str>, windows: Option<&str>) -> Det
     match (state, flatpak) {
         (State::Off, Some(_)) => Detail {
             line: format!(
-                "{what} ilo's sandbox can't write to {FOLDER_SHOWN}, so Add gives a line to run once in a terminal."
+                "{what} {PRODUCT}'s sandbox can't write to {FOLDER_SHOWN}, so Add gives a line to run once in a terminal."
             ),
             mono: None,
             export: None,
         },
         (_, Some(line)) => Detail {
             line: format!(
-                "Added in ilo. Run this once in a terminal to put ilo in {FOLDER_SHOWN}:"
+                "Added in {PRODUCT}. Run this once in a terminal to put ilo in {FOLDER_SHOWN}:"
             ),
             mono: None,
             export: Some(line.into()),
@@ -221,7 +222,7 @@ pub struct Install {
 pub fn taken(folder: &str) -> String {
     format!(
         "{folder}/{LINK} isn't {0}'s, so it wasn't replaced. Move or remove it, then Add again.",
-        env!("APP_NAME")
+        env!("PRODUCT_NAME")
     )
 }
 

@@ -896,7 +896,7 @@ impl Shown<'_> {
 #[gpui::test]
 fn the_status_line_says_when_it_synced_and_what_stops_it(cx: &mut TestAppContext) {
     let mut tab = shown(state(Status::On), cx);
-    let app = env!("APP_NAME");
+    let app = env!("PRODUCT_NAME");
     assert_eq!(tab.status(), (None, format!("Syncing through {app}")));
     assert!(tab.host.take().contains(&"activity".to_string()));
 
@@ -1104,7 +1104,7 @@ fn every_control_in_sync_has_a_name(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_lasting_trouble_says_what_and_since_when(cx: &mut TestAppContext) {
     let mut tab = shown(state(Status::On), cx);
-    let app = env!("APP_NAME");
+    let app = env!("PRODUCT_NAME");
     let since = "since 14:52";
     tab.shows_since("at 14:50", Some(Trouble::Offline), since);
     assert_eq!(

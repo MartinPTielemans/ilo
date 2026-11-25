@@ -46,6 +46,8 @@ empty_profile=$(cased "Set Profile › Default (checked), Set Profile › New Pr
 # its defaults by its own id, not the dev build's (#3614). The dev build's is dev.browser.app
 # (build.sh), which the runs off the Mac keep too.
 app_name=$(cat branding/name)
+# The name the app's own windows, dialogs and Settings say, which can differ from the bundle's.
+product=$(cat branding/product)
 checked_app_id=dev.browser.app
 if [ "$(uname)" = Darwin ]; then
   checked_app_id=$(plutil -extract CFBundleIdentifier raw -o - "$app/Contents/Info.plist") || {
@@ -870,7 +872,7 @@ detents() {
 # driver's last command: the app doesn't report it done.
 quit_by_key() {
   post key q cmd
-  expect "^browser: dialog shown Quit $app_name?\$" "⌘Q didn't ask before quitting"
+  expect "^browser: dialog shown Quit $product?\$" "⌘Q didn't ask before quitting"
   expect '^browser: dialog settled$' "the dialog asking to quit didn't settle"
   post key return
   exec 3>&-
