@@ -78,10 +78,15 @@ pub(super) enum Step {
     Assistant,
     /// Settings' opt-in switches, both off; left out when neither is offered.
     OptIns,
+    /// The three keys that carry most of it, as the app's keys are then, and the way in.
+    Keys,
 }
 
-const STEPS: [Step; 10] = [
+/// In the drawing's order: the assistant asked early (the owner's), then what comes along, the
+/// browser's own settings, the Space's look, sync, the opt-ins and the keys.
+const STEPS: [Step; 11] = [
     Step::Intro,
+    Step::Assistant,
     Step::Import,
     Step::Favorites,
     Step::DefaultBrowser,
@@ -90,8 +95,8 @@ const STEPS: [Step; 10] = [
     // After the colour, as a Space's glow reads through the same glass.
     Step::Transparency,
     Step::Account,
-    Step::Assistant,
     Step::OptIns,
+    Step::Keys,
 ];
 
 /// The opt-ins the first launch offers, each Settings' own switch.
@@ -101,18 +106,18 @@ pub(super) enum OptIn {
     /// while it shows (#2978).
     DailyCount,
     CrashReports,
-    Agents,
 }
 
 impl OptIn {
-    const ALL: [OptIn; 3] = [OptIn::DailyCount, OptIn::CrashReports, OptIn::Agents];
+    // Outside apps' agents' switch, off until asked (step 30's third row), waits for its own
+    // setting (#4260): today's agents switch is the one the assistant step's choice will set.
+    const ALL: [OptIn; 2] = [OptIn::DailyCount, OptIn::CrashReports];
 
     /// What check.sh calls it.
     fn name(self) -> &'static str {
         match self {
             OptIn::DailyCount => "daily-count",
             OptIn::CrashReports => "crash-reports",
-            OptIn::Agents => "agents",
         }
     }
 
@@ -132,13 +137,6 @@ impl OptIn {
                 )
                 .into(),
             ),
-            // Settings' own line while it's off.
-            OptIn::Agents => (
-                "Let agents use the browser",
-                "They work in tabs of their own, which you can watch, and never see your \
-                 passwords, cookies or autofill."
-                    .into(),
-            ),
         }
     }
 }
@@ -157,6 +155,7 @@ impl Step {
             Step::Account => "account",
             Step::Assistant => "assistant",
             Step::OptIns => "opt-ins",
+            Step::Keys => "keys",
         }
     }
 
@@ -200,9 +199,12 @@ impl Step {
                 let title = concat!("Make ", env!("APP_NAME"), " your default browser.");
                 return (title, line.into(), button);
             }
-            // The engine that searches until one is picked is already the filled dot; the title
-            // alone, with no line under it (the ninth wording batch).
-            Step::SearchEngine => ("Pick a search engine.", "", "Continue"),
+            // The engine that searches until one is picked is already the filled dot (P-search).
+            Step::SearchEngine => (
+                "Pick a search engine.",
+                "You can change it later in Settings.",
+                "Continue",
+            ),
             Step::Color => (
                 "Pick a color for your first Space.",
                 "The window takes it. Each Space can have its own, from its name in the sidebar.",
@@ -210,9 +212,10 @@ impl Step {
             ),
             Step::Transparency => (
                 "How much should show through?",
+                // D5: over a light desktop the window changes too little to see "right away".
                 concat!(
                     env!("APP_NAME"),
-                    "'s window is glass. Pick one to see the window change right away."
+                    "'s window is glass, blurring what's behind it."
                 ),
                 "Continue",
             ),
@@ -233,6 +236,12 @@ impl Step {
                 "Each stays off until you turn it on, and Settings has it too.",
                 "Continue",
             ),
+            // Z20's weaving word, not the name: it stays as the name changes.
+            Step::Keys => (
+                "You're woven in.",
+                "Three keys carry most of it.",
+                concat!("Open ", env!("APP_NAME")),
+            ),
         };
         (title, line.into(), button)
     }
@@ -248,11 +257,6 @@ const END_FADE: f32 = 0.2;
 /// or before it has said.
 fn signed_out(state: &account::State) -> bool {
     matches!(state.status, Status::SignedOut | Status::SigningIn)
-}
-
-/// The check draw's curve, CSS's ease-in-out.
-fn ease_in_out(x: f32) -> f32 {
-    cubic_bezier(0.42, 0., 0.58, 1., x)
 }
 
 /// The row motion's ease-out, as a dot settling into place.
@@ -895,7 +899,6 @@ impl Shell {
                 )
             }
             OptIn::CrashReports => self.browser.crash_reports(cx),
-            OptIn::Agents => self.browser.agents(cx),
         };
         OptIn::ALL
             .into_iter()
@@ -914,12 +917,10 @@ impl Shell {
             opt_in.name(),
             if on { "off" } else { "on" }
         );
-        // After this update, as turning agents off ends their ask, which reads every Shell (#2459).
         let browser = self.browser.clone();
         cx.defer(move |cx| match opt_in {
             OptIn::DailyCount => {}
             OptIn::CrashReports => browser.set_crash_reports(!on, cx),
-            OptIn::Agents => browser.set_agents(!on, cx),
         });
         if let Some(onboarding) = self.onboarding.as_mut() {
             onboarding.switched = Some((opt_in, onboarding.clock.now()));
@@ -1384,8 +1385,9 @@ impl Shell {
             .children(account)
             .children(assistants)
             .children(switches)
+            .children((step == Step::Keys).then(|| self.keys_step(colors, cx)))
             .child(self.frame_foot(step, button, colors, cx));
-        let art = self.frame_art(step, colors);
+        let art = self.frame_art(step, colors, cx);
         let dialog = |pane: gpui::Stateful<gpui::Div>| {
             pane.when_some(focus, |content, focus| content.track_focus(&focus))
                 .when(named, |content| {

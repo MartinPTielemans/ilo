@@ -2554,6 +2554,17 @@ panel-line = 0xffffff
 panel-line-alpha = 0.07
 light-panel-line = 0x000000
 light-panel-line-alpha = 0.07
+# The keys step's rows: height, padding before and after, gap and the gap between rows; a row's
+# card and its line, at the text's ink; a key's cap: its least width, as wide as longer keys need
+# with its padding, its height, and its plate. Its foot line: height, size and line.
+keys-row = [46.0, 9.0, 12.0, 12.0, 6.0]
+keys-row-radius = 12.0
+card = 0.066
+card-line = 0.06
+key-cap = [56.0, 28.0, 8.0]
+key-cap-radius = 8.0
+key-cap-fill = 0.1
+foot = [30.0, 12.0, 16.0]
 
 # First run's picture (spec-first-run.md, values-first-run.md "Right side: the picture"): a small
 # browser drawn from these, with made-up fixed content the same for everyone, and per step what
@@ -2704,6 +2715,10 @@ light-bar-fill = 0xf6f5f1
 bar-text = [14.0, 18.0]
 bar-marks = [0xedc95a, 0xf29a38]
 bar-key-radius = 6.0
+# The bar at rest, on the keys step: its gap, its key's chip (height, padding) and the chip's text.
+bar-at-rest-gap = 10.0
+bar-key = [20.0, 6.0]
+bar-key-text = [11.0, 14.0]
 # A phone over the window: left, top, width, height, padding, gap; its island and its Spaces.
 phone = [262.0, 226.0, 184.0, 380.0, 16.0, 14.0, 10.0]
 phone-radius = 34.0

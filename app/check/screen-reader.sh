@@ -344,10 +344,17 @@ press down
 judging=1
 # On through the steps as Skip goes, a click on it where each step says it's drawn, as Esc is Back,
 # each one's speech recorded as it comes.
-for _ in $(seq 10); do
+for _ in $(seq 12); do
   grep -q '^browser: onboarding done$' "$log" && break
   at=$(sed -n 's/^browser: onboarding step \([a-z-]*\) settled$/\1/p' "$log" | tail -1)
   heard=$(wc -l < "$nvda_log")
+  # The keys' step, the last, has no Skip: its Return is the way in.
+  if [ "$at" = keys ]; then
+    send key return
+    expect '^browser: onboarding done$' "Return didn't leave the keys' step"
+    spoken "Return at keys"
+    continue
+  fi
   skip_step "$at"
   expect '^browser: onboarding \(step [a-z-]* settled\|done\)$' "Skip didn't leave the $at step"
   spoken "Skip at $at"

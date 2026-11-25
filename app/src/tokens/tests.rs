@@ -105,10 +105,11 @@ fn look_values_come_from_the_token_file() {
 /// point, not a corner, and what the rule derives, which the concentric test below checks.
 const NOT_ONE_OF_FOUR: &[&str] = &[
     // First run's window, as its drawing has it (values-first-run.md): the indicator's track, the
-    // foot's buttons and their key, and the picture's panel.
+    // foot's buttons and their key, the keys step's caps, and the picture's panel.
     "shell.onboarding.window.track-radius",
     "shell.onboarding.window.button-radius",
     "shell.onboarding.window.key-radius",
+    "shell.onboarding.window.key-cap-radius",
     "shell.onboarding.window.panel-radius",
     "icon-picker.arrow-tip-radius",
     "icon-picker.arrow-foot-radius",

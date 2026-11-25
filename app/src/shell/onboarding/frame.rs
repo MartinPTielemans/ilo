@@ -6,7 +6,7 @@ use gpui::{
     prelude::*, px, rgb,
 };
 
-use super::{Colors, Shell, Step, display_text, picture, skip_frame, with_alpha};
+use super::{Colors, Command, Shell, Step, display_text, picture, skip_frame, with_alpha};
 use crate::import::Corner;
 use crate::settings_rows::{named_button, ring};
 use crate::theme_picker::SWATCHES;
@@ -316,6 +316,8 @@ impl Shell {
         let welcome = step == Step::Intro;
         let corner = match step {
             Step::Import => (self.import_guide(cx)).map_or(Corner::Skip, |guide| guide.corner),
+            // The last step has nothing to skip: its button is the way in.
+            Step::Keys => Corner::None,
             _ => Corner::Skip,
         };
         let back = (!welcome).then(|| {
@@ -376,9 +378,110 @@ impl Shell {
 
     /// The picture for `step`: the small browser in the Space's colour, the colour picked at the
     /// color step once one is.
-    pub(super) fn frame_art(&self, step: Step, colors: Colors) -> AnyElement {
+    pub(super) fn frame_art(&self, step: Step, colors: Colors, cx: &gpui::App) -> AnyElement {
         let picked = (self.onboarding.as_ref()).and_then(|onboarding| onboarding.picked);
         let space = picked.map_or(picture::SPACE, |index| SWATCHES[index]);
-        picture::picture(picture::Scene::of(step), space, colors)
+        let scene = picture::Scene::of(step);
+        let rest = match scene.rest {
+            true => picture::Rest {
+                threads: self.threads_on(cx),
+                key: keys_shown(Command::NewTab, cx).unwrap_or_default().into(),
+            },
+            false => picture::Rest::default(),
+        };
+        picture::picture(scene, rest, space, colors)
     }
+
+    /// Whether ⌘T starts threads here: the agents' and their tasks' switches are on.
+    fn threads_on(&self, cx: &gpui::App) -> bool {
+        crate::agents::global(cx).is_some_and(|agents| agents.read(cx).tasks_on())
+    }
+
+    /// The keys step's rows, a key each with what it does, as the app's keys are now, and its
+    /// foot line at the column's foot.
+    pub(super) fn keys_step(&self, colors: Colors, cx: &gpui::App) -> gpui::Div {
+        let inks = Inks::of(colors);
+        let [height, start, end, gap, between] = t::KEYS_ROW;
+        let [cap_width, cap_height, cap_padding] = t::KEY_CAP;
+        let [foot, foot_size, foot_line] = t::FOOT;
+        let new_tab = match self.threads_on(cx) {
+            true => "A site, a search, or a thread",
+            false => "A site or a search",
+        };
+        let rows = [
+            (Command::NewTab, new_tab),
+            (
+                Command::ToggleSidebar,
+                "Hide the sidebar, and bring it back",
+            ),
+            (Command::RecentTab, "Back to the tab you had before"),
+        ];
+        // A command the user left with no key has no row.
+        let rows = rows.into_iter().filter_map(|(command, does)| {
+            let keys = keys_shown(command, cx)?;
+            Some(
+                div()
+                    .h(px(height))
+                    .pl(px(start))
+                    .pr(px(end))
+                    .flex()
+                    .items_center()
+                    .gap(px(gap))
+                    .rounded(px(t::KEYS_ROW_RADIUS))
+                    .bg(inks.text(t::CARD))
+                    .border_1()
+                    .border_color(inks.text(t::CARD_LINE))
+                    .child(
+                        div()
+                            .flex_none()
+                            .min_w(px(cap_width))
+                            .px(px(cap_padding))
+                            .h(px(cap_height))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(t::KEY_CAP_RADIUS))
+                            .bg(inks.text(t::KEY_CAP_FILL))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(keys),
+                    )
+                    .child(div().flex_1().min_w_0().child(does)),
+            )
+        });
+        let again = concat!("Help › Welcome to ", env!("APP_NAME"), " runs this again.");
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .text_size(px(t::BUTTON_SIZE))
+            .line_height(px(t::BUTTON_LINE))
+            .text_color(inks.text(1.))
+            .child(
+                div()
+                    .pt(px(t::BODY_TOP))
+                    .pr(px(t::QUIET_INSET))
+                    .flex()
+                    .flex_col()
+                    .gap(px(between))
+                    .children(rows),
+            )
+            .child(
+                div()
+                    .mt_auto()
+                    .h(px(foot))
+                    .flex()
+                    .items_center()
+                    .text_size(px(foot_size))
+                    .line_height(px(foot_line))
+                    .text_color(inks.text(inks.faint))
+                    .child(again),
+            )
+    }
+}
+
+/// The keys that run `command`, as a tooltip's chips spell them, spaced: "⌘ T". None with no key.
+pub(super) fn keys_shown(command: Command, cx: &gpui::App) -> Option<String> {
+    let chips = crate::shell::user_keys(cx).chips(command);
+    (!chips.is_empty()).then(|| chips.join(" "))
 }

@@ -31,6 +31,16 @@ pub(super) struct Scene {
     pub bar: bool,
     /// The Spaces on a phone.
     pub phone: bool,
+    /// The command bar at rest, waiting for what's typed (Rest).
+    pub rest: bool,
+}
+
+/// What the bar at rest says: whether it starts threads, and the key that brings it up, as the
+/// app's keys have it then.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct Rest {
+    pub threads: bool,
+    pub key: SharedString,
 }
 
 /// A caption over the picture: its icon and its words, where it has words. A chip that would
@@ -91,6 +101,10 @@ impl Scene {
             },
             Step::Account => Scene {
                 phone: true,
+                ..plain
+            },
+            Step::Keys => Scene {
+                rest: true,
                 ..plain
             },
         }
@@ -158,7 +172,7 @@ impl Inks {
 }
 
 /// The picture for `scene`, the Space's colour `space` in it.
-pub(super) fn picture(scene: Scene, space: u32, colors: Colors) -> AnyElement {
+pub(super) fn picture(scene: Scene, rest: Rest, space: u32, colors: Colors) -> AnyElement {
     let inks = Inks::of(colors);
     let [left, top, width, height] = t::WINDOW;
     let [shadow_y, shadow_blur] = t::SHADOW;
@@ -226,6 +240,7 @@ pub(super) fn picture(scene: Scene, space: u32, colors: Colors) -> AnyElement {
         .when(scene.notice, |picture| picture.child(notice(inks)))
         .when(scene.bar, |picture| picture.child(bar(inks)))
         .when(scene.phone, |picture| picture.child(phone()))
+        .when(scene.rest, |picture| picture.child(at_rest(rest, inks)))
         .children(scene.chip.map(|chip| caption(chip, inks)))
         .into_any_element()
 }
@@ -744,6 +759,58 @@ fn bar(inks: Inks) -> gpui::Div {
         ))
 }
 
+/// The command bar at rest: the caret before what it asks for, and the key that brings it up.
+fn at_rest(rest: Rest, inks: Inks) -> gpui::Div {
+    let [left, top, height, padding] = t::BAR_AT_REST;
+    let [key_height, key_padding] = t::BAR_KEY;
+    let [shadow_y, shadow_blur] = t::SHADOW;
+    let asks = match rest.threads {
+        true => "Search, or start a thread…",
+        false => "Search or enter an address…",
+    };
+    div()
+        .absolute()
+        .left(px(left))
+        .top(px(top))
+        .w(px(t::BAR[2]))
+        .h(px(height))
+        .px(px(padding))
+        .flex()
+        .items_center()
+        .gap(px(t::BAR_AT_REST_GAP))
+        .rounded(px(t::BAR_RADIUS))
+        .bg(rgb(inks.bar))
+        .border_1()
+        .border_color(inks.line())
+        .shadow(vec![shadow(
+            with_alpha(0, inks.shadow),
+            shadow_y,
+            shadow_blur,
+        )])
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .child(div().w(px(t::LINE)).h(px(t::BAR_TEXT[0])).bg(inks.ink(1.)))
+                .child(text(asks, t::BAR_TEXT, inks.ink(inks.faint))),
+        )
+        .when(!rest.key.is_empty(), |bar| {
+            bar.child(
+                div()
+                    .flex_none()
+                    .h(px(key_height))
+                    .px(px(key_padding))
+                    .flex()
+                    .items_center()
+                    .rounded(px(t::BAR_KEY_RADIUS))
+                    .bg(inks.ink(t::BUTTON))
+                    .child(text(rest.key, t::BAR_KEY_TEXT, inks.ink(inks.quiet))),
+            )
+        })
+}
+
 /// The Spaces on a phone, which sync brings there.
 fn phone() -> gpui::Div {
     let [left, top, width, height, padding_y, padding_x, gap] = t::PHONE;
@@ -947,5 +1014,18 @@ mod tests {
         let chip = Scene::of(Step::Import).chip;
         assert_eq!(chip, Some(Chip::Found));
         assert_eq!(Chip::Found.words(), None);
+    }
+
+    #[test]
+    fn the_keys_show_the_bar_at_rest_alone() {
+        let scene = Scene::of(Step::Keys);
+        assert!(scene.rest);
+        assert_eq!(
+            Scene {
+                rest: false,
+                ..scene
+            },
+            Scene::default()
+        );
     }
 }

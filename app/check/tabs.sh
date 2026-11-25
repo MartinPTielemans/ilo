@@ -2241,6 +2241,10 @@ requestAnimationFrame(() => setTimeout(() => document.title = "google " +
       # opened on another, such as Google.
       none_since '^browser: profile [0-9]* searches with ' ||
         fail "Google: Return as the search engine step opened set an engine, so it hadn't DuckDuckGo picked: $(grep '^browser: profile [0-9]* searches with ' "$log" | tail -1)"
+    elif [ "$each" = keys ]; then
+      # The keys' step, the last, has no Skip: its Return is the way in.
+      send key return
+      expect '^browser: onboarding left keys via return$' "Google: Return didn't leave the keys' step"
     else
       # Skip, as Esc is Back.
       skip_step "$each"

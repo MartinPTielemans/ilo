@@ -112,6 +112,21 @@ fn skip_to(shell: &Entity<Shell>, cx: &mut VisualTestContext, to: Step) {
     assert_eq!(step(shell, cx), Some(to));
 }
 
+/// From the step before the keys, left with Skip or Return, the keys' step comes, which has no
+/// Skip, and its button ends the flow.
+fn in_through_the_keys(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+    later(shell, cx, STEP_MOTION);
+    assert_eq!(
+        step(shell, cx),
+        Some(Step::Keys),
+        "the keys are the last step"
+    );
+    assert!(placed("skip", cx).is_none(), "the keys' step has no Skip");
+    cx.simulate_keystrokes("enter");
+    let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
+    assert!(ending.is_some(), "the keys' button ends the flow");
+}
+
 /// Moves the step shown, or the flow's end, `seconds` into the past, and draws.
 /// Lets `seconds` of the executor's clock pass, as a timer the flow set waits for.
 fn waited(cx: &mut VisualTestContext, seconds: f32) {
@@ -282,8 +297,8 @@ fn a_colour_picked_shows_at_once_and_goes_unless_kept(cx: &mut TestAppContext) {
     }
 }
 
-/// Skip skips each step in turn, and after the last the flow fades out, with the first Space's
-/// welcome under it.
+/// Skip skips each step in turn to the keys, whose button is the way in, and the flow fades out,
+/// with the first Space's welcome under it.
 #[gpui::test]
 fn skip_goes_on_and_the_last_step_leaves_the_flow(cx: &mut TestAppContext) {
     let (shell, cx, _) = first_window(cx);
@@ -296,8 +311,8 @@ fn skip_goes_on_and_the_last_step_leaves_the_flow(cx: &mut TestAppContext) {
     }
     later(&shell, cx, STEP_MOTION);
     click_skip(cx);
-    let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
-    assert!(ending.is_some(), "Skip on the last step leaves the flow");
+    later(&shell, cx, STEP_MOTION);
+    in_through_the_keys(&shell, cx);
     later(&shell, cx, END_FADE);
     assert_eq!(step(&shell, cx), None);
     assert!(
@@ -329,8 +344,8 @@ fn escape_goes_back_a_step(cx: &mut TestAppContext) {
     assert!(ending.is_none(), "and the flow with it");
 }
 
-/// Return is the step's button, and Skip, at the window's bottom right, goes on too, from a step
-/// and from the last, which leaves the flow. At the import Return is its view's button, which
+/// Return is the step's button, and Skip, at the window's bottom right, goes on too, to the keys,
+/// whose Return leaves the flow. At the import Return is its view's button, which
 /// shows the browser's choices, and keeps the step.
 #[gpui::test]
 fn return_and_skip_go_on_from_a_step(cx: &mut TestAppContext) {
@@ -340,8 +355,9 @@ fn return_and_skip_go_on_from_a_step(cx: &mut TestAppContext) {
         ("skip", Step::Import, Some(Step::DefaultBrowser)),
         ("return", Step::Import, Some(Step::Import)),
         ("return", Step::DefaultBrowser, Some(Step::Color)),
-        ("return", Step::Color, None),
-        ("skip", Step::Color, None),
+        ("return", Step::Color, Some(Step::Keys)),
+        ("skip", Step::Color, Some(Step::Keys)),
+        ("return", Step::Keys, None),
     ] {
         started(&shell, cx);
         skip_to(&shell, cx, from);
@@ -553,6 +569,7 @@ fn it_ends_with_the_command_bar_up(cx: &mut TestAppContext) {
     started(&shell, cx);
     skip_to(&shell, cx, Step::Color);
     click_skip(cx);
+    in_through_the_keys(&shell, cx);
     assert!(
         host.command_bars.borrow().is_empty(),
         "not while the flow fades"
@@ -576,6 +593,7 @@ fn a_quit_under_way_brings_no_command_bar_as_the_flow_ends(cx: &mut TestAppConte
     started(&shell, cx);
     skip_to(&shell, cx, Step::Color);
     click_skip(cx);
+    in_through_the_keys(&shell, cx);
     crate::shell::quit_goes_ahead();
     later(&shell, cx, END_FADE);
     assert_eq!(step(&shell, cx), None);
@@ -593,40 +611,47 @@ fn the_opt_ins_show_only_those_offered(cx: &mut TestAppContext) {
     started(&shell, cx);
     skip_to(&shell, cx, Step::Color);
     click_skip(cx);
-    later(&shell, cx, END_FADE);
     assert_eq!(
         step(&shell, cx),
-        None,
-        "with neither offered, the colour is the last step"
+        Some(Step::Keys),
+        "with neither offered, the keys come after the colour"
     );
-
-    // With no collector set up, only the agents' switch shows.
-    host.agents.set(Some(false));
-    started(&shell, cx);
-    skip_to(&shell, cx, Step::OptIns);
-    assert_eq!(offered(&shell, cx), vec![(OptIn::Agents, false)]);
-    host.take();
-    // It's set once the Shell's update is over, as turning agents off ends their ask, which reads
-    // every Shell (#2459).
-    host.reads_shell(shell.downgrade());
-    shell.update(cx, |shell, cx| shell.onboarding_switch(OptIn::Agents, cx));
-    assert_eq!(host.take(), vec!["agents true".to_string()]);
-    assert_eq!(offered(&shell, cx), vec![(OptIn::Agents, true)]);
-    click_skip(cx);
-    let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
-    assert!(ending.is_some(), "it's the last step");
-    assert_eq!(
-        host.agents.get(),
-        Some(true),
-        "Skip leaves a switch as it was turned"
-    );
+    in_through_the_keys(&shell, cx);
     later(&shell, cx, END_FADE);
 
+    // With no count's server named, only the crash reports' switch shows. Outside apps' agents
+    // have none until their own setting (#4260), with agents on or off.
     host.crash_reports.set(Some(false));
     host.agents.set(Some(false));
     started(&shell, cx);
     skip_to(&shell, cx, Step::OptIns);
-    let both = vec![(OptIn::CrashReports, false), (OptIn::Agents, false)];
+    assert_eq!(offered(&shell, cx), vec![(OptIn::CrashReports, false)]);
+    host.take();
+    shell.update(cx, |shell, cx| {
+        shell.onboarding_switch(OptIn::CrashReports, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(host.take(), vec!["crash reports true".to_string()]);
+    assert_eq!(offered(&shell, cx), vec![(OptIn::CrashReports, true)]);
+    click_skip(cx);
+    in_through_the_keys(&shell, cx);
+    assert_eq!(
+        host.crash_reports.get(),
+        Some(true),
+        "Skip leaves a switch as it was turned"
+    );
+    assert_eq!(
+        host.agents.get(),
+        Some(false),
+        "and the agents' as they were"
+    );
+    later(&shell, cx, END_FADE);
+
+    host.crash_reports.set(Some(false));
+    host.daily_count.set(Some(false));
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::OptIns);
+    let both = vec![(OptIn::DailyCount, false), (OptIn::CrashReports, false)];
     assert_eq!(offered(&shell, cx), both, "both off to begin with");
 }
 
@@ -637,7 +662,7 @@ fn the_opt_ins_show_only_those_offered(cx: &mut TestAppContext) {
 fn a_click_on_each_opt_in_switch_turns_it_on(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     host.crash_reports.set(Some(false));
-    host.agents.set(Some(false));
+    host.daily_count.set(Some(false));
     started(&shell, cx);
     skip_to(&shell, cx, Step::OptIns);
     later(&shell, cx, STEP_MOTION);
@@ -647,9 +672,10 @@ fn a_click_on_each_opt_in_switch_turns_it_on(cx: &mut TestAppContext) {
             onboarding.frames.borrow().get(&(opt_in, part)).copied()
         })
     };
+    // The count's is set only as the step is left (the_count_is_a_switch_set_as_the_step_is_left).
     for (opt_in, set) in [
-        (OptIn::CrashReports, "crash reports true"),
-        (OptIn::Agents, "agents true"),
+        (OptIn::DailyCount, None),
+        (OptIn::CrashReports, Some("crash reports true")),
     ] {
         let row = frame(&shell, cx, opt_in, "row").expect("its row is drawn");
         let switch = frame(&shell, cx, opt_in, "switch").expect("its switch is drawn");
@@ -663,17 +689,15 @@ fn a_click_on_each_opt_in_switch_turns_it_on(cx: &mut TestAppContext) {
         );
         host.take();
         cx.simulate_click(switch.center(), Modifiers::none());
-        assert_eq!(
-            host.take(),
-            vec![set.to_string()],
-            "a click on {opt_in:?}'s switch"
-        );
+        cx.run_until_parked();
+        let said: Vec<String> = set.into_iter().map(str::to_string).collect();
+        assert_eq!(host.take(), said, "a click on {opt_in:?}'s switch");
     }
-    let both = vec![(OptIn::CrashReports, true), (OptIn::Agents, true)];
+    let both = vec![(OptIn::DailyCount, true), (OptIn::CrashReports, true)];
     assert_eq!(shell.update(cx, |shell, cx| shell.opt_ins(cx)), both);
     // The switches line up, in one column at the box's right edge.
     let right = |opt_in| frame(&shell, cx, opt_in, "switch").map(|switch| switch.right());
-    assert_eq!(right(OptIn::CrashReports), right(OptIn::Agents));
+    assert_eq!(right(OptIn::DailyCount), right(OptIn::CrashReports));
 }
 
 /// The daily usage count is the opt-ins' first switch while the build names a server, off, lined
@@ -682,14 +706,14 @@ fn a_click_on_each_opt_in_switch_turns_it_on(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_count_is_a_switch_set_as_the_step_is_left(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
-    host.agents.set(Some(false));
+    host.crash_reports.set(Some(false));
     host.daily_count.set(Some(false));
     started(&shell, cx);
     skip_to(&shell, cx, Step::OptIns);
     later(&shell, cx, STEP_MOTION);
     assert_eq!(
         offered(&shell, cx),
-        vec![(OptIn::DailyCount, false), (OptIn::Agents, false)]
+        vec![(OptIn::DailyCount, false), (OptIn::CrashReports, false)]
     );
     let row = opt_in_frame(&shell, cx, OptIn::DailyCount, "row").expect("its row is drawn");
     let switch = opt_in_frame(&shell, cx, OptIn::DailyCount, "switch").expect("its switch");
@@ -697,8 +721,8 @@ fn the_count_is_a_switch_set_as_the_step_is_left(cx: &mut TestAppContext) {
         switch.left() >= row.left() && switch.right() <= row.right(),
         "the count's switch at {switch:?} is outside its row at {row:?}"
     );
-    let agents = opt_in_frame(&shell, cx, OptIn::Agents, "switch").expect("the agents' switch");
-    assert_eq!(switch.right(), agents.right(), "the switches line up");
+    let crash = opt_in_frame(&shell, cx, OptIn::CrashReports, "switch").expect("crash reports'");
+    assert_eq!(switch.right(), crash.right(), "the switches line up");
     host.take();
     cx.simulate_click(switch.center(), Modifiers::none());
     assert_eq!(offered(&shell, cx)[0], (OptIn::DailyCount, true));
@@ -725,8 +749,7 @@ fn the_count_turned_on_and_off_again_sets_nothing(cx: &mut TestAppContext) {
     }
     host.take();
     cx.simulate_keystrokes("enter");
-    let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
-    assert!(ending.is_some(), "Continue left the last step");
+    assert_eq!(step(&shell, cx), Some(Step::Keys), "Continue left the step");
     assert!(
         host.take().is_empty(),
         "turned on and off again, the count was set"
@@ -754,8 +777,7 @@ fn skip_leaves_the_count_as_it_stands(cx: &mut TestAppContext) {
         }
         host.take();
         click_skip(cx);
-        let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
-        assert!(ending.is_some(), "{leave} left the last step");
+        assert_eq!(step(&shell, cx), Some(Step::Keys), "{leave} left the step");
         let said: Vec<String> = set.into_iter().map(str::to_string).collect();
         assert_eq!(
             host.take(),
@@ -767,27 +789,26 @@ fn skip_leaves_the_count_as_it_stands(cx: &mut TestAppContext) {
     }
 }
 
-/// The step at its three switches, all off, the motion done.
-fn at_three_switches(
+/// The step at its switches, the count's and crash reports', both off, the motion done.
+fn at_the_switches(
     cx: &mut TestAppContext,
 ) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
     let (shell, cx, host) = first_window(cx);
     host.daily_count.set(Some(false));
     host.crash_reports.set(Some(false));
-    host.agents.set(Some(false));
     started(&shell, cx);
     skip_to(&shell, cx, Step::OptIns);
     later(&shell, cx, STEP_MOTION);
     (shell, cx, host)
 }
 
-/// ⇥ goes along the three switches in order and round again, ⇧⇥ back, and Space turns the one
+/// ⇥ goes along the switches in order and round again, ⇧⇥ back, and Space turns the one
 /// the keyboard is on, as a click on its row does; an assistive app reads each as its switch
 /// (#2985).
 #[gpui::test]
 fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
     use crate::settings_rows::spoken::{press, stops};
-    let (shell, cx, host) = at_three_switches(cx);
+    let (shell, cx, host) = at_the_switches(cx);
     // Round from the window, as the step's Continue has the keyboard as it comes.
     cx.update(|window, cx| window.blur(cx));
     let names: Vec<String> = stops(cx).into_iter().map(|(_, name, _)| name).collect();
@@ -796,7 +817,6 @@ fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
         [
             "Send a daily usage count",
             "Send crash reports",
-            "Let agents use the browser",
             "Back",
             "Skip",
             "Continue"
@@ -805,11 +825,7 @@ fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
     );
     cx.update(|window, cx| window.blur(cx));
     host.take();
-    for (at, said) in [
-        (0, None),
-        (1, Some("crash reports true")),
-        (2, Some("agents true")),
-    ] {
+    for (at, said) in [(0, None), (1, Some("crash reports true"))] {
         cx.simulate_keystrokes("tab");
         press("space", cx);
         assert!(offered(&shell, cx)[at].1, "Space turned switch {at} on");
@@ -823,29 +839,22 @@ fn tab_and_space_turn_each_opt_in_switch(cx: &mut TestAppContext) {
     press("space", cx);
     assert_eq!(
         offered(&shell, cx),
-        vec![
-            (OptIn::DailyCount, true),
-            (OptIn::CrashReports, true),
-            (OptIn::Agents, false),
-        ],
+        vec![(OptIn::DailyCount, true), (OptIn::CrashReports, false)],
         "⇧⇥ from the first went back past the buttons to the last switch"
     );
 }
 
 /// The opt-ins rest on Continue, the last of the sheet's foot, and the switches are a ⇥ from it:
-/// ⇥ goes round to the count's, the first, and ⇧⇥ back past Skip and Back to the agents', the
+/// ⇥ goes round to the count's, the first, and ⇧⇥ back past Skip and Back to crash reports', the
 /// last (#3498).
 #[gpui::test]
 fn the_switches_are_a_tab_from_continue(cx: &mut TestAppContext) {
     for (keys, at) in [
         ("tab", "Send a daily usage count"),
         ("shift-tab", "Skip"),
-        (
-            "shift-tab shift-tab shift-tab",
-            "Let agents use the browser",
-        ),
+        ("shift-tab shift-tab shift-tab", "Send crash reports"),
     ] {
-        let (_, cx, _) = at_three_switches(cx);
+        let (_, cx, _) = at_the_switches(cx);
         cx.simulate_a11y_activation();
         assert_eq!(keyed(cx), Some((Role::Button, "Continue".into())));
         cx.simulate_keystrokes(keys);
@@ -869,7 +878,7 @@ fn return_and_escape_leave_from_a_focused_switch(cx: &mut TestAppContext) {
         ("enter", false),
         ("escape", false),
     ] {
-        let (shell, cx, host) = at_three_switches(cx);
+        let (shell, cx, host) = at_the_switches(cx);
         // From Continue, where the step rests, round to the count's switch.
         cx.simulate_keystrokes("tab");
         if turned {
@@ -883,8 +892,7 @@ fn return_and_escape_leave_from_a_focused_switch(cx: &mut TestAppContext) {
             assert_eq!(host.daily_count.get(), Some(false), "Esc set nothing");
             continue;
         }
-        let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
-        assert!(ending.is_some(), "{leave} left the step");
+        assert_eq!(step(&shell, cx), Some(Step::Keys), "{leave} left the step");
         let said: Vec<String> = turned
             .then(|| "daily count true".to_string())
             .into_iter()
@@ -906,10 +914,10 @@ fn return_and_escape_leave_from_a_focused_switch(cx: &mut TestAppContext) {
 #[gpui::test]
 fn a_build_without_a_count_server_doesnt_offer_it(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
-    host.agents.set(Some(false));
+    host.crash_reports.set(Some(false));
     started(&shell, cx);
     skip_to(&shell, cx, Step::OptIns);
-    assert_eq!(offered(&shell, cx), vec![(OptIn::Agents, false)]);
+    assert_eq!(offered(&shell, cx), vec![(OptIn::CrashReports, false)]);
 }
 
 /// The opt-ins the step offers, each with whether it's on.
@@ -1027,6 +1035,7 @@ fn the_import_step_is_the_import_view(cx: &mut TestAppContext) {
 
     skip_to(&shell, cx, Step::Color);
     click_skip(cx);
+    in_through_the_keys(&shell, cx);
     later(&shell, cx, END_FADE);
     assert_eq!(step(&shell, cx), None);
     assert_eq!(
@@ -1242,12 +1251,7 @@ fn a_finished_sign_in_goes_on(cx: &mut TestAppContext) {
     synced(cx, Status::Pairing, server);
     assert_eq!(step(&shell, cx), Some(Step::Account));
     synced(cx, Status::On, server);
-    later(&shell, cx, END_FADE);
-    assert_eq!(
-        step(&shell, cx),
-        None,
-        "signed in, it went on, here out of the flow"
-    );
+    assert_eq!(step(&shell, cx), Some(Step::Keys), "signed in, it went on");
 }
 
 /// The account's first device shows its recovery words, which show once, so neither Esc nor Skip
@@ -1720,8 +1724,11 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
     assert_eq!(keyed(cx), Some((Role::Button, "Skip".into())));
     host.take();
     press("enter", cx);
-    let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
-    assert!(ending.is_some(), "↩ on Skip left the last step");
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Keys),
+        "↩ on Skip left the step"
+    );
     let colored = host
         .take()
         .iter()
@@ -1782,8 +1789,11 @@ fn each_step_rests_on_a_control(cx: &mut TestAppContext) {
     assert_eq!(keyed(cx), button("Continue"));
     host.take();
     press("space", cx);
-    let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
-    assert!(ending.is_some(), "Space on Continue pressed it");
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Keys),
+        "Space on Continue pressed it"
+    );
     assert_eq!(host.daily_count.get(), Some(false), "and turned no switch");
     assert_eq!(
         host.crash_reports.get(),
@@ -1987,9 +1997,10 @@ fn the_preview_opens_the_flow_at_a_step_by_name_or_number(cx: &mut TestAppContex
             shell.onboarding.as_ref().map(|onboarding| onboarding.step)
         })
     };
-    assert_eq!(at("6", cx), Some(Step::Color));
+    assert_eq!(at("7", cx), Some(Step::Color));
     assert_eq!(at("transparency", cx), Some(Step::Transparency));
-    assert_eq!(at("7", cx), Some(Step::Transparency));
+    assert_eq!(at("8", cx), Some(Step::Transparency));
+    assert_eq!(at("keys", cx), Some(Step::Keys));
 }
 
 /// The keyboard rests on the picker, which shows Standard, and the arrows move the pick, stopping
@@ -2032,7 +2043,6 @@ fn the_arrows_move_the_transparency_pick(cx: &mut TestAppContext) {
 }
 
 /// ↩ goes on with the level shown, kept; Skip goes on with Standard, keeping nothing new.
-/// Here it's the last step, so going on ends the flow.
 #[gpui::test]
 fn return_keeps_the_level_and_skip_puts_standard_back(cx: &mut TestAppContext) {
     let (shell, cx, _) = glass_window(cx);
@@ -2052,8 +2062,7 @@ fn return_keeps_the_level_and_skip_puts_standard_back(cx: &mut TestAppContext) {
             }
             key => cx.simulate_keystrokes(key),
         }
-        let ending = shell.read_with(cx, |shell, _| shell.onboarding.as_ref().unwrap().ending);
-        assert!(ending.is_some(), "{go_on} went on from the last step");
+        assert_eq!(step(&shell, cx), Some(Step::Keys), "{go_on} went on");
         assert_eq!(level(&shell, cx), Some(kept), "{go_on}");
         assert_eq!(cx.update(|_, cx| transparency::level(cx)), kept, "{go_on}");
         later(&shell, cx, END_FADE);
@@ -2179,9 +2188,10 @@ fn the_assistant_step_is_on_the_sheet_with_room_for_its_switch(cx: &mut TestAppC
     let (shell, cx, host) = first_window(cx);
     host.agents.set(Some(false));
     started(&shell, cx);
-    assert!(
-        steps(&shell, cx).ends_with(&[Step::Assistant, Step::OptIns]),
-        "the assistant's step comes before Up to you: {:?}",
+    assert_eq!(
+        steps(&shell, cx).get(1),
+        Some(&Step::Assistant),
+        "the assistant's step comes after the welcome: {:?}",
         steps(&shell, cx)
     );
     skip_to(&shell, cx, Step::Assistant);
@@ -2197,7 +2207,7 @@ fn the_assistant_step_is_on_the_sheet_with_room_for_its_switch(cx: &mut TestAppC
         "a row high"
     );
     click_skip(cx);
-    assert_eq!(step(&shell, cx), Some(Step::OptIns), "Skip goes on");
+    assert_eq!(step(&shell, cx), Some(Step::Import), "Skip goes on");
 }
 
 /// The sheet's foot is in the same place on every step, the assistants' too with all its rows: a
@@ -2227,7 +2237,8 @@ fn the_sheets_foot_is_in_the_same_place_on_every_step(cx: &mut TestAppContext) {
             }
         }
         match at {
-            Step::Intro => cx.simulate_keystrokes("enter"),
+            // The keys' step has no Skip; its button is the way in.
+            Step::Intro | Step::Keys => cx.simulate_keystrokes("enter"),
             _ => click_skip(cx),
         }
     }
@@ -2273,7 +2284,8 @@ fn the_assistant_step_looks_for_the_assistants_as_it_shows(cx: &mut TestAppConte
     assert_eq!(looks(), 0, "nothing looked before the step");
     assert_eq!(lines(cx), ["Checking…", "Checking…"]);
 
-    click_skip(cx);
+    // From the welcome, whose Skip is Skip Setup, Return goes on.
+    cx.simulate_keystrokes("enter");
     assert_eq!(step(&shell, cx), Some(Step::Assistant));
     later(&shell, cx, STEP_MOTION);
     assert_eq!(looks(), 1, "the step's showing looked once");
@@ -2354,4 +2366,28 @@ fn the_assistants_names_are_whole_beside_or_over_their_buttons(cx: &mut TestAppC
              {row:?}"
         );
     }
+}
+
+/// The keys' step shows the app's keys as they are then: the key the user gave New Tab is the one
+/// its row and the picture's bar show, spelled as a tooltip's chips are.
+#[gpui::test]
+fn the_keys_step_shows_the_keys_the_app_has(cx: &mut TestAppContext) {
+    use crate::shell::{change_keys, user_keys};
+    let (_, cx, _) = first_window(cx);
+    let shown = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| super::frame::keys_shown(Command::NewTab, cx))
+    };
+    let chips =
+        |cx: &mut VisualTestContext| cx.update(|_, cx| user_keys(cx).chips(Command::NewTab));
+    let before = shown(cx).expect("New Tab has a key");
+    assert_eq!(before, chips(cx).join(" "));
+    cx.update(|_, cx| {
+        change_keys(cx, |user| {
+            user.set(Command::NewTab, vec!["ctrl-alt-cmd-t".to_string()])
+        })
+    })
+    .unwrap();
+    let after = shown(cx).expect("New Tab has a key");
+    assert_ne!(after, before, "the key the user gave it");
+    assert_eq!(after, chips(cx).join(" "));
 }
