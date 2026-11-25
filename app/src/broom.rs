@@ -57,7 +57,8 @@ pub struct Folder {
 /// Why a sort moved nothing, with nothing of what it was handed or answered.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Failed {
-    /// The program didn't start, or its folder couldn't be made.
+    /// The program didn't start, its folder couldn't be made, or its version wasn't read: nothing
+    /// was handed to it.
     NotStarted,
     /// Its version is older than `OLDEST`, or it didn't say one.
     TooOld,
@@ -308,7 +309,13 @@ impl Run {
         handed: usize,
     ) -> Result<Vec<Folder>, Failed> {
         let deadline = Instant::now() + self.cap;
-        let version = self.run(program, &[OsString::from("--version")], None, deadline)?;
+        // Nothing is handed over yet, so however the version's read fails, the run didn't start.
+        let version = (self.run(program, &[OsString::from("--version")], None, deadline)).map_err(
+            |failed| match failed {
+                Failed::Ended => Failed::Ended,
+                _ => Failed::NotStarted,
+            },
+        )?;
         if !fits(&String::from_utf8_lossy(&version)) {
             return Err(Failed::TooOld);
         }

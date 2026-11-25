@@ -234,10 +234,16 @@ struct StandIn {
 #[cfg(unix)]
 impl StandIn {
     fn new(version: &str, body: &str) -> StandIn {
+        StandIn::answering(&format!("echo '{version} (Claude Code)'"), body)
+    }
+
+    /// One that runs `version` when asked its version.
+    fn answering(version: &str, body: &str) -> StandIn {
         use std::os::unix::fs::PermissionsExt;
         let folder = super::folder().unwrap();
         let script = format!(
-            "#!/bin/sh\nif [ \"$1\" = --version ]; then echo '{version} (Claude Code)'; exit 0; fi\n\
+            "#!/bin/sh\nif [ \"$1\" = --ready ]; then exit 0; fi\n\
+             if [ \"$1\" = --version ]; then {version}; exit 0; fi\n\
              pwd > '{at}/where'\ncat > '{at}/handed'\n{body}\n",
             at = folder.display(),
         );
@@ -245,10 +251,10 @@ impl StandIn {
         std::fs::write(&program, script).unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
         // Another test's thread that forked while the script was open for writing holds it until
-        // its child runs, and it won't run meanwhile ("Text file busy"): ask its version, which
-        // leaves nothing behind, until it runs.
+        // its child runs, and it won't run meanwhile ("Text file busy"): run it, doing nothing,
+        // until it does.
         for _ in 0..200 {
-            match crate::child::command(&program).arg("--version").output() {
+            match crate::child::command(&program).arg("--ready").output() {
                 Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
                     std::thread::sleep(Duration::from_millis(10))
                 }
@@ -332,6 +338,22 @@ fn a_run_that_fails_or_says_something_else_moves_nothing() {
         let run = Run::new(CAP).unwrap();
         let answer = run.answer(&stand_in.program(), &handed(&tabs(3)).unwrap(), 3);
         assert_eq!(answer.err(), Some(Failed::Unread), "{body}");
+    }
+}
+
+/// A version's read that fails or reaches the cap hands nothing over, so the run never started:
+/// no line of the 30-day file says it was handed.
+#[cfg(unix)]
+#[test]
+fn a_version_that_isnt_read_hands_nothing_and_never_started() {
+    for version in ["sleep 20", "exit 1"] {
+        let stand_in = StandIn::answering(version, &sorts(r#"{"folders":[]}"#));
+        let run = Run::new(Duration::from_millis(300)).unwrap();
+        let started = Instant::now();
+        let answer = run.answer(&stand_in.program(), &handed(&tabs(3)).unwrap(), 3);
+        assert_eq!(answer.err(), Some(Failed::NotStarted), "{version}");
+        assert!(started.elapsed() < Duration::from_secs(5), "{version}");
+        assert!(!stand_in.at("handed").exists(), "{version}");
     }
 }
 

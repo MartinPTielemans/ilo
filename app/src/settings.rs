@@ -2010,9 +2010,8 @@ impl Settings {
             Some("Its page loads again there, without this profile's logins and cookies.".into()),
             vec![moving],
         );
-        // Drawn only where the broom can be: while the user's own Claude Code, signed in, runs
-        // their tasks.
-        let broom = agents::global(cx).is_some_and(|agents| agents.read(cx).sorts());
+        // Drawn only where the broom can be, which is also where the core keeps the switch.
+        let broom = crate::broom_host::can_be(cx);
         let sort = self.per_profile(
             profiles,
             "Sort tabs into folders",

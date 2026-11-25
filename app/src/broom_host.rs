@@ -30,8 +30,8 @@ thread_local! {
     /// The windows a sort that moved nothing ended in, each until its timer, which goes with it.
     static FAILED: RefCell<HashMap<bc::bc_id, Task<()>>> = RefCell::default();
     /// The profiles whose Sort tabs into folders the user turned off in Settings (Z27), by their
-    /// core id. The core keeps no switch of it yet, so it reads as on at launch and a change holds
-    /// while the browser runs.
+    /// core id. Its row is drawn only where the broom can be, which needs the core's today's
+    /// folders, and that core line keeps it in the profile's prefs in this one's place.
     static OFF: RefCell<HashSet<bc::bc_id>> = RefCell::default();
 }
 
@@ -101,6 +101,22 @@ pub(crate) fn page_counts_changed(cx: &mut App) {
     settle_all(cx);
 }
 
+/// Whether the core can put a sort's answer in place, as today's folders: known without a run,
+/// and part of the one answer that makes the broom be. This core can't, as its header has no
+/// `bc_folder_create_today`. Nor can Windows, till its run is killed as a job object, whole.
+fn makes_today_folders() -> bool {
+    let core = false;
+    core && cfg!(not(target_os = "windows"))
+}
+
+/// Whether the broom can be at all: the core makes today's folders, and the user's own Claude
+/// Code, signed in, runs their tasks. Where it can't, no window has a broom, so no menu item, bar
+/// entry or click starts a sort, and Settings draws no row for it.
+pub(crate) fn can_be(cx: &App) -> bool {
+    makes_today_folders()
+        && browser::agents::global(cx).is_some_and(|agents| agents.read(cx).sorts())
+}
+
 /// What the Agents know changed, such as Claude Code signing out or tasks turning off: the brooms
 /// follow, with no pass.
 pub(crate) fn agents_changed(cx: &mut App) {
@@ -117,7 +133,7 @@ fn pass(space: bc::bc_id, shell: &Entity<Shell>, cx: &App) {
 /// Each window's broom as it now is, from what's kept, each window drawn again only if its own
 /// changed.
 fn settle_all(cx: &mut App) {
-    let sorts = browser::agents::global(cx).is_some_and(|agents| agents.read(cx).sorts());
+    let sorts = can_be(cx);
     // Telling a shell to draw again only marks it, so nothing here reaches the windows' list.
     WINDOWS.with_borrow(|windows| {
         for window in windows {
@@ -186,7 +202,7 @@ fn answer(window: bc::bc_id, space: bc::bc_id) -> Broom {
 /// The user's click on `window`'s broom, its menu item or its bar entry (Browser::start_broom):
 /// sorts the Today tabs of the Space it shows, if its broom takes a click.
 pub(crate) fn start(window: bc::bc_id, cx: &mut App) {
-    if !shown(window).is_some_and(Broom::sorts) {
+    if !can_be(cx) || !shown(window).is_some_and(Broom::sorts) {
         return;
     }
     let Some(shell) = WINDOWS.with_borrow(|windows| {
@@ -256,7 +272,8 @@ fn ended(
             .find(|each| each.id == window && each.regular())
             .and_then(|each| each.shell.upgrade())
     });
-    // Not handed over: no folder was made for it, or the program was too old to take it.
+    // Not handed over, so no line says it was: the run didn't start or read the program's
+    // version, or the program was too old to take it.
     let given = !matches!(
         answer,
         Err(broom::Failed::NotStarted | broom::Failed::TooOld)
