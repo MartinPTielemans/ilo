@@ -336,11 +336,7 @@ impl Shell {
             // state, which outlives the release of a press that selected its row.
             .when(
                 self.pressed(row) && !selected && dragging != Some(slot) && !folder,
-                |plate| {
-                    plate
-                        .bg(self.palette.shown(0.))
-                        .shadow(self.palette.shown_shadow(1.))
-                },
+                |plate| plate.bg(self.palette.shown(0.)),
             )
             .when(row == Row::NewTab && !selected, |plate| {
                 // GPUI keeps an element's pressed state only once a listener gives it a hitbox.

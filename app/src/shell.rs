@@ -6293,7 +6293,7 @@ fn selected_plate(palette: &Palette, plate: gpui::Div, opacity: f32, hover: f32)
     let fill = palette.shown(hover).opacity(opacity);
     #[cfg(test)]
     SHOWN_FILL.set(Some(fill));
-    plate.bg(fill).shadow(palette.shown_shadow(opacity))
+    plate.bg(fill)
 }
 
 #[cfg(test)]

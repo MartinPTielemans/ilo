@@ -1426,10 +1426,11 @@ fn reduce_transparency_holds_the_windows_text_at_every_level() {
     }
 }
 
-/// The selected row's plate reads apart from a hovered row's at every level, in either look,
+/// The selected row's plate reads apart from a hovered row's at every level on a dark window,
 /// shaded grounds and all: the lighter of the two by 1.15:1 at every point of the window. With no
 /// shade they're 1.18:1 apart at worst, at More over white, where a hovered plate shaded less than
-/// the selected one ended the lighter (#4090).
+/// the selected one ended the lighter (#4090). A light window's two are the ink at two strengths,
+/// the shown one the firmer (`a_light_windows_plates_are_the_ink_and_hold_their_floors`).
 ///
 /// A dark window at More is the one place it doesn't hold: there a plate under the pointer has
 /// to tell from a bright window at 1.2:1 and lets its title give, the selected one tells as much
@@ -1438,7 +1439,7 @@ fn reduce_transparency_holds_the_windows_text_at_every_level() {
 #[test]
 fn the_selected_plate_reads_apart_from_the_hovered_one_at_every_level() {
     const APART: f32 = 1.15;
-    for tone in [Tone::Dark, Tone::Light] {
+    for tone in [Tone::Dark] {
         for level in Transparency::ALL {
             set_transparency(level);
             let palette = Palette::of(None, tone);
@@ -1564,7 +1565,7 @@ const PAGE_PLATE_DARK_MORE: u32 = 0x706e69;
 /// Gray text on a plate in a dark window is one ink at every level, whatever alpha its place gives
 /// it off a plate, and holds text's 4.5:1 with the palette's margin on the shown card's plate as
 /// measured, where the state line's own gray read 3.39 to 4.28. A light window's is the gray it
-/// has off a plate.
+/// has off a plate, or its own lift where that is more (#4276).
 ///
 /// A test has no window material, so this knows the token's ink over the grounds measured on one
 /// desktop and one window behind it, and no others: what another backdrop makes of the plate is
@@ -1614,7 +1615,11 @@ fn gray_on_a_dark_plate_is_one_ink_that_reads_on_the_measured_card() {
         );
         let light = Palette::of(None, Tone::Light);
         for alpha in places {
-            assert_eq!(light.gray_on_plate(alpha), light.gray(alpha), "{level:?}");
+            assert_eq!(
+                light.gray_on_plate(alpha),
+                light.gray(alpha.max(LIGHT_PLATE_GRAY)),
+                "{level:?}"
+            );
         }
     }
 }
@@ -1761,10 +1766,10 @@ fn a_plate_under_the_pointer_tells_and_its_title_reads_at_every_level() {
 /// A sidebar row's plate under the pointer on a dark window is the plate anything has under the
 /// pointer there, with a Space's colour and with none, at every level, so a row's and a card's at
 /// the sidebar's foot are one form and what the test above holds of one it holds of the other. A
-/// light window's row keeps the ink at its own fainter step.
+/// light window's row is the ink at the same step, with the shade a row's words ask.
 #[test]
 fn a_rows_plate_under_the_pointer_is_the_one_a_card_has_on_a_dark_window() {
-    use crate::tokens::shell::LIGHT_HOVERED;
+    use crate::tokens::shell::HOVERED;
     let themes = grid(
         &[0., 60., 120., 180., 240., 300.],
         &[0.4, 1.],
@@ -1783,7 +1788,7 @@ fn a_rows_plate_under_the_pointer_is_the_one_a_card_has_on_a_dark_window() {
             let light = Palette::of(theme, Tone::Light);
             assert_eq!(
                 light.hovered_row(),
-                light.ground_plate(Ground::Hovered, LIGHT_HOVERED),
+                light.ground_plate(Ground::Hovered, HOVERED),
                 "{level:?} {theme:?}"
             );
         }
@@ -2459,4 +2464,99 @@ fn lights_pass_leaves_a_dark_windows_palette_as_it_was() {
         pin, 329_911_903_870_600_431,
         "a dark window's palette moved:\n{all}"
     );
+}
+
+/// What a light window's plates read (#4276), with no theme and on the picker's swatches, at every
+/// step of the Space's Transparency bar, on every point of the window over a black backdrop and a
+/// white one: `(what, the least it reads anywhere, the least over a white backdrop alone)`.
+fn light_plates_read() -> Vec<(&'static str, f32, f32)> {
+    let themes: Vec<Option<Theme>> = [
+        0xf0eae5, 0xe59eba, 0x9e749b, 0xe1676f, 0xef8c63, 0xf2d46c, 0x73e49b, 0x7eb6d5, 0x656786,
+    ]
+    .into_iter()
+    .map(|color| Some(Theme::of_color(color)))
+    .chain([None])
+    .collect();
+    let mut read = [
+        "the shown plate's title",
+        "the shown plate's gray",
+        "a pointed row's title",
+        "a pointed card's title",
+        "a pointed row from its ground",
+        "a pointed card from its ground",
+        "the ink's shown plate, darker than its ground",
+        "the ink's shown plate, darker than a pointed row",
+    ]
+    .map(|what| (what, f32::MAX, f32::MAX));
+    for glass in bar() {
+        for theme in &themes {
+            let palette = Palette::at(theme.as_ref(), Tone::Light, glass);
+            let shown = Rgba::from(palette.shown(0.));
+            let gray = Rgba::from(palette.gray_on_plate(palette.secondary()));
+            let title = Rgba::from(palette.text(1.));
+            let (row, card) = (
+                Rgba::from(palette.hovered_row()),
+                Rgba::from(palette.hovered_plate()),
+            );
+            // `window_at` gives each point over the black backdrop, then over the white one.
+            for (index, at) in fine_window(&palette).into_iter().enumerate() {
+                let on = |plate: Rgba| over(at, plate, plate.a);
+                let word = |ink: Rgba, ground: Rgba| contrast(over(ground, ink, ink.a), ground);
+                let reads = [
+                    word(title, on(shown)),
+                    word(gray, on(shown)),
+                    word(title, on(row)),
+                    word(title, on(card)),
+                    contrast(on(row), at),
+                    contrast(on(card), at),
+                    // Only a Space with no colour has the ink's plate; a colour's may be lighter.
+                    match theme {
+                        None => (luminance(at) + 0.05) / (luminance(on(shown)) + 0.05),
+                        Some(_) => f32::MAX,
+                    },
+                    match theme {
+                        None => (luminance(on(row)) + 0.05) / (luminance(on(shown)) + 0.05),
+                        Some(_) => f32::MAX,
+                    },
+                ];
+                for (kept, now) in read.iter_mut().zip(reads) {
+                    kept.1 = kept.1.min(now);
+                    if index % 2 == 1 {
+                        kept.2 = kept.2.min(now);
+                    }
+                }
+            }
+        }
+    }
+    read.to_vec()
+}
+
+/// A light window has no white plate: the shown plate is the ink, darker than the window under it
+/// everywhere, and what's written on a plate holds its floor all along the Space's Transparency
+/// bar (#4276). A title holds 4.5:1 on the shown plate and on a plate under the pointer, over a
+/// black backdrop as over a white one, so no light title needs the 4.2 a dark window's is let down
+/// to past the bar's `hovered-title-past`. Gray on the shown plate holds 4.5:1 with a white window
+/// behind, which takes the lift `light-plate-gray` on a Space's colour. A plate under the pointer
+/// tells from its ground at 1.2:1, and the shown plate is the firmer of the two beside it.
+#[test]
+fn a_light_windows_plates_are_the_ink_and_hold_their_floors() {
+    let read = light_plates_read();
+    println!("{read:#?}");
+    let floors = [TEXT, TEXT, TEXT, TEXT, TELLS, TELLS, 1., 1.];
+    let failed: Vec<String> = read
+        .iter()
+        .zip(floors)
+        .filter(|&(&(what, least, white), floor)| {
+            // Gray's floor is the one with a white window behind; the rest hold everywhere.
+            let held = match what {
+                "the shown plate's gray" => white,
+                _ => least,
+            };
+            held < floor
+        })
+        .map(|(&(what, least, white), floor)| {
+            format!("{what}: {least:.2}, {white:.2} over white, under {floor}")
+        })
+        .collect();
+    assert!(failed.is_empty(), "{failed:#?}\nall: {read:#?}");
 }

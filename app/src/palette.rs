@@ -13,8 +13,8 @@
 //! component to WCAG's minimums.
 
 use gpui::{
-    BoxShadow, ColorSpace, Div, Global, HighlightStyle, Hsla, Rgba, div, linear_color_stop,
-    linear_gradient, point, prelude::*, px, rgb, rgba,
+    ColorSpace, Div, Global, HighlightStyle, Hsla, Rgba, div, linear_color_stop, linear_gradient,
+    prelude::*, px, rgb, rgba,
 };
 
 use crate::space_transparency::solid_share;
@@ -44,10 +44,7 @@ use crate::tokens::palette::{
 };
 use crate::tokens::palette::{GRAY_TEXT, GRAY_TEXT_LESS, GRAY_TEXT_MORE, PLATE_GRAY};
 pub use crate::tokens::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
-use crate::tokens::palette::{
-    LIGHT_SELECTED, LIGHT_SELECTED_HOVERED, LIGHT_SELECTED_SHADOW, LIGHT_SELECTED_SHADOW_BLUR,
-    LIGHT_SELECTED_SHADOW_Y,
-};
+use crate::tokens::palette::{LIGHT_PLATE_GRAY, LIGHT_STATE_SELECTED};
 use crate::tokens::palette::{LIGHT_TEXT_SECONDARY, LIGHT_TEXT_TERTIARY};
 pub use crate::tokens::palette::{
     STATE_HOVERED, STATE_PRESSED, STATE_SELECTED, STATE_SELECTED_HOVERED,
@@ -231,12 +228,12 @@ impl Tone {
         }
     }
 
-    /// The selected row's plate, at rest and under the pointer: the ink on a dark window, as
-    /// Arc's dark rows are, and white on a light one, as its light rows are.
+    /// The selected row's plate, at rest and under the pointer: the ink in both looks, a step
+    /// weaker on a light window, which has no firmer step under the pointer (#4276).
     fn selected(self) -> (Rgba, f32, f32) {
         match self {
             Tone::Dark => (rgb(PAPER), STATE_SELECTED, STATE_SELECTED_HOVERED),
-            Tone::Light => (WHITE, LIGHT_SELECTED, LIGHT_SELECTED_HOVERED),
+            Tone::Light => (rgb(INK), LIGHT_STATE_SELECTED, LIGHT_STATE_SELECTED),
         }
     }
 
@@ -812,8 +809,8 @@ impl Palette {
             .iter()
             .map(|&at| over(at, self.ink, GRAIN_SHIFT * grain))
             .collect();
-        // A light window's selected row is white, and a control's states still reach the ink's
-        // selected plate.
+        // A light window's selected row is a step weaker than the ladder's selected plate, which a
+        // control's states still reach.
         let (selected, alpha, _) = self.tone.selected();
         grounds.extend(plain.iter().map(|&at| over(at, selected, alpha)));
         if let Some(shown) = self.shown {
@@ -830,7 +827,7 @@ impl Palette {
 
     /// The colour of `ground`'s plate and its alphas in each state it's drawn in.
     fn ground_plates(&self, ground: Ground) -> (Rgba, Vec<f32>) {
-        use crate::tokens::shell::{HOVERED, LIGHT_HOVERED, TILE};
+        use crate::tokens::shell::{HOVERED, TILE};
         let pressable = |rest: f32| {
             vec![
                 rest,
@@ -841,12 +838,9 @@ impl Palette {
         let ink = self.ink;
         match ground {
             Ground::Selected => {
-                let (colour, rest, under) = self.tone.selected();
-                // A dark window's selected plate keeps its strength under the pointer (`shown`).
-                match self.tone {
-                    Tone::Dark => (colour, vec![rest]),
-                    Tone::Light => (colour, vec![rest, under]),
-                }
+                // The selected plate keeps its strength under the pointer (`shown`).
+                let (colour, rest, _) = self.tone.selected();
+                (colour, vec![rest])
             }
             Ground::Shown => match self.shown {
                 Some(colour) => {
@@ -855,13 +849,7 @@ impl Palette {
                 }
                 None => (ink, Vec::new()),
             },
-            Ground::Hovered => (
-                ink,
-                vec![match self.tone {
-                    Tone::Dark => HOVERED,
-                    Tone::Light => LIGHT_HOVERED,
-                }],
-            ),
+            Ground::Hovered => (ink, vec![HOVERED]),
             Ground::Library => (ink, vec![STATE_HOVERED, STATE_PRESSED]),
             Ground::Field => {
                 let mut alphas = pressable(FIELD_PLATE);
@@ -934,7 +922,7 @@ impl Palette {
     /// falls on, on the colour a screen shows, 8 bits a channel. It has nothing more to spare
     /// there, and needs none: that window is its material alone, one colour over each backdrop,
     /// with no points between to dip. A plate that tells already keeps its shade, and so does any
-    /// with a Space's colour or on a light window, where what tells is the plate's shadow.
+    /// with a Space's colour or on a light window, whose plate is the darker of the two.
     fn solve_selected(&self, window: &Window) -> f32 {
         let coarse = self.ground_shades[Ground::Selected as usize];
         if self.tone == Tone::Light || self.shown.is_some() {
@@ -1123,12 +1111,10 @@ impl Palette {
     /// Gray text at `alpha` on a row's or a card's plate. A dark window's plate is lighter than
     /// the window beside it, so gray reads less on it than off it, and there it is one ink
     /// wherever it lies, PLATE_GRAY, or more where `alpha` or the floor asks more. A light
-    /// window's plate is lighter than its gray's ground too, which the ink gains by.
+    /// window's plate is darker than the window beside it, the ink's or a Space's colour, and
+    /// gray on it is the ink at LIGHT_PLATE_GRAY at least.
     pub fn gray_on_plate(&self, alpha: f32) -> Hsla {
-        match self.tone {
-            Tone::Dark => self.gray(alpha.max(PLATE_GRAY)),
-            Tone::Light => self.gray(alpha),
-        }
+        self.gray(alpha.max(self.toned(PLATE_GRAY, LIGHT_PLATE_GRAY)))
     }
 
     /// This palette for what lies on `fill`, an opaque colour that isn't the window's, such as a
@@ -1250,26 +1236,15 @@ impl Palette {
     pub fn shown(&self, hover: f32) -> Hsla {
         let Some(color) = self.shown else {
             // On a dark window the ladder's hovered plate is Paper too strong for Paper's text to
-            // read on, so without a colour the plate keeps its strength under the pointer.
-            return match self.tone {
-                Tone::Dark => self.selected(0.),
-                Tone::Light => self.selected(hover),
-            };
+            // read on, so without a colour the plate keeps its strength under the pointer, and a
+            // light window's has no firmer step.
+            return self.selected(0.);
         };
         let (rest, under) = self.tone.shown();
         self.on_ground(
             Ground::Shown,
             Hsla::from(color).opacity(rest + (under - rest) * hover),
         )
-    }
-
-    /// What lifts the tab shown's plate off a light window, at `opacity`: the selected plate's,
-    /// for a Space without a colour; a plate of the Space's colour lies flat.
-    pub fn shown_shadow(&self, opacity: f32) -> Vec<BoxShadow> {
-        match self.shown {
-            Some(_) => Vec::new(),
-            None => self.selected_shadow(opacity),
-        }
     }
 
     /// The window's colour over its ground, `foot` of the way to the foot glow's full strength and
@@ -1288,21 +1263,6 @@ impl Palette {
         composite(foot, far)
     }
 
-    /// What lifts the selected row's plate off a light window, at `opacity`; nothing on a dark
-    /// one.
-    pub fn selected_shadow(&self, opacity: f32) -> Vec<BoxShadow> {
-        if self.tone == Tone::Dark {
-            return Vec::new();
-        }
-        vec![BoxShadow {
-            color: Hsla::from(BLACK).opacity(LIGHT_SELECTED_SHADOW * opacity),
-            offset: point(px(0.), px(LIGHT_SELECTED_SHADOW_Y)),
-            blur_radius: px(LIGHT_SELECTED_SHADOW_BLUR),
-            spread_radius: px(0.),
-            inset: false,
-        }]
-    }
-
     /// A plate under a row or a field, the ink at `alpha`.
     pub fn plate(&self, alpha: f32) -> Hsla {
         Hsla::from(self.ink).opacity(alpha)
@@ -1318,11 +1278,11 @@ impl Palette {
 
     /// A sidebar row's plate under the pointer, the only one a row has but the tab shown's: on a
     /// dark window the plate anything has under the pointer, so a row's and a card's are one and
-    /// both are seen; on a light one the ink at a row's fainter step.
+    /// both are seen; on a light one the ink at the same step, with a row's own shade.
     pub fn hovered_row(&self) -> Hsla {
         match self.tone {
             Tone::Dark => self.hovered_plate(),
-            Tone::Light => self.ground_plate(Ground::Hovered, crate::tokens::shell::LIGHT_HOVERED),
+            Tone::Light => self.ground_plate(Ground::Hovered, crate::tokens::shell::HOVERED),
         }
     }
 

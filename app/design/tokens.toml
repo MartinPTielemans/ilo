@@ -994,8 +994,15 @@ gray-text-more = 3.0
 # window behind (#6d6d6b at Standard, from the real app's own pixels at 469483355): 4.55, where
 # 0.97 reads 4.40 and the state line's 0.75 read 3.39. Over the check VM's desktop alone (#6b6a65
 # at Standard, #696762 at More, at f98ded880) it reads 4.76 and 4.96, where the state line read
-# 3.51 and 4.28. A light window's gray reads 7.7 or more on its white plate and stays as it is.
+# 3.51 and 4.28.
 plate-gray = 1.0
+# The same on a light window (#4276), whose plates are the ink's or a Space's colour and darker
+# than the window beside them: the ink at this, the least hundredth at which gray on the shown
+# plate holds 4.5:1 with a white window behind, all along the Transparency bar, with no theme and
+# on each of the picker's swatches. It reads 4.54 there on a Space's colour and 5.76 on the ink's
+# plate, where the look's quiet ink, 0.65, read 4.23 and 5.26. Over a black window it reads 3.71
+# and 4.31: the level's gray floor, 3:1, is what holds there.
+light-plate-gray = 0.71
 # The HUD window's material alone, untinted, over a window of white, grey 128 and black behind
 # it, on a black desktop, as the app draws it on a Mac with the tint off, measured from its
 # window's pixels: the darkest the window can be. The desktop picture comes through what's behind
@@ -1116,14 +1123,10 @@ state-pressed = 0.065
 state-hovered = 0.12
 state-selected = 0.2
 state-selected-hovered = 0.36
-# On a light window the tab shown lies on white 0.85 over a black 0.20 shadow rather than on a plate
-# of Ink (Arc's light `TabCellBackgroundCurrent`). Ours, as Arc's light rows aren't recorded: the
-# shadow 1 down and blurred 2, and the plate white 1 under the pointer.
-light-selected = 0.85
-light-selected-hovered = 1.0
-light-selected-shadow = 0.2
-light-selected-shadow-y = 1.0
-light-selected-shadow-blur = 2.0
+# On a light window the selected plate is the ink too, a step weaker (#4276): dark ink over a light
+# glass weighs more than light ink over a dark one. No white plate lies on a light window, and
+# nothing lifts this one but its own strength, which it keeps under the pointer.
+light-state-selected = 0.16
 # The tab shown keeps the Space's colour on its row, the only colour in the chrome (#4089): its
 # main colour at `shown` on a dark window and `light-shown` on a light one, and a step firmer under
 # the pointer (ours: the mock has no hovered shown row). Where the ink wouldn't read on it at 4.5:1
@@ -1894,10 +1897,10 @@ selected-hovered = 0.36
 # A row chosen with ⌘- or ⇧-click besides the tab shown: Arc's secondary selection, P3 #FAFBFF
 # 0.10 over dark and black 0.10 over light (docs/ux-spec.md › Tokens).
 chosen = 0.1
-# A row under the pointer is the only plate a row has but the tab shown's (#4091): 0.12 on a dark
-# window, 0.07 on a light one.
+# A row under the pointer is the only plate a row has but the tab shown's (#4091): the ink at 0.12
+# in both looks (#4276), where 0.07 on a light window told from it at 1.16 at most, under the 1.2
+# a plate under the pointer has to.
 hovered = 0.12
-light-hovered = 0.07
 pressed = 0.065
 secondary = 0.62
 # The close button's square under the pointer: Dia's subtle fill, 0.12, at the header buttons'
@@ -1926,14 +1929,13 @@ scroll-edge = 0.09
 clear-hovered = 0.81
 # A tab whose page isn't loaded fades its favicon (ours: Arc's alpha isn't measured).
 sleeping-favicon = 0.5
-# A favorite's tile: a quiet plate with no shadow (#4091), the ink at 0.07 on a dark window and
-# white at 0.55 on a light one, with the resting level's rim, and under the pointer the ladder's
+# A favorite's tile: a quiet plate with no shadow (#4091), the ink at 0.07 in both looks (#4276),
+# with the resting level's rim, and under the pointer the ladder's
 # hover over that (palette's `state-hovered`). The one shown is
 # themed by its icon (tile_theme.rs), and black with Dia's default selection ring, white 0.45,
-# where the icon gives no theme. A light window's is white (Dia), unthemed whatever its icon until
+# where the icon gives no theme. A light window's is unthemed whatever its icon until
 # the light theme is built (ours).
 tile = 0.07
-light-tile = 0.55
 tile-ring = 0.45
 keyed = 0.45
 tile-unthemed = 0x0000_00ff
