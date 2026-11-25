@@ -88,5 +88,18 @@ TEST(HandedGiveRuleTest, ATabWhoseSignInFormHasASavedLoginIsRefused) {
   EXPECT_FALSE(MayGive(tab));
 }
 
+// A device it has open, a scan for one, or the user's location as it changes.
+TEST(HandedGiveRuleTest, ATabUsingADeviceOrTheLocationIsRefused) {
+  Tab tab = Fit();
+  tab.device_or_location = true;
+  EXPECT_FALSE(MayGive(tab));
+}
+
+TEST(HandedGiveRuleTest, ATabHoldingTheUsersFilesIsRefused) {
+  Tab tab = Fit();
+  tab.files = true;
+  EXPECT_FALSE(MayGive(tab));
+}
+
 }  // namespace
 }  // namespace browser_core::handed_give_rule

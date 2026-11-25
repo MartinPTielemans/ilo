@@ -1,6 +1,7 @@
 // The C API in public/browser_core.h, over the core's C++.
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <iterator>
 #include <map>
@@ -113,6 +114,7 @@
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_capability_type.h"
 #include "content/public/common/page_zoom.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
@@ -136,6 +138,15 @@
 #endif
 
 namespace {
+
+// Whether a tab's page has a device open, scans for Bluetooth ones, or is being told the location.
+bool UsesDeviceOrLocation(content::WebContents* contents) {
+  using Kind = content::WebContentsCapabilityType;
+  return contents && std::ranges::any_of(
+                         std::array{Kind::kUSB, Kind::kBluetoothConnected, Kind::kBluetoothScanning,
+                                    Kind::kHID, Kind::kSerial, Kind::kGeolocation},
+                         [&](Kind kind) { return contents->IsCapabilityActive(kind); });
+}
 
 gfx::Rect ToRect(bc_rect rect) {
   return gfx::ToEnclosingRect(gfx::RectF(rect.x, rect.y, rect.width, rect.height));
@@ -732,6 +743,8 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
           .permission_asked = browser_core::PermissionQuestion::Pending(contents),
           .dialog = browser_core::PageDialog::Up(tab),
           .saved_login = browser_core::SavedLoginFits(contents),
+          .device_or_location = UsesDeviceOrLocation(contents),
+          .files = contents && contents->HasFileSystemAccessHandles(),
       })) {
     return false;
   }

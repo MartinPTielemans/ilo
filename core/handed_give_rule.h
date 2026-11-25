@@ -35,6 +35,11 @@ struct Tab {
   // The profile has a saved login for a sign-in form on its page, which Chrome may have filled in
   // as it loaded: an agent would sign in with it by pressing the form's button.
   bool saved_login = false;
+  // Its page has a USB, HID, serial or Bluetooth device open, scans for Bluetooth ones, or is being
+  // told where the user is: what a page has running stays the user's.
+  bool device_or_location = false;
+  // Its page holds a file or a folder of the user's.
+  bool files = false;
 };
 
 // Whether |tab| is given. Each of them alone refuses it.
