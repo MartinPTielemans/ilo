@@ -6481,6 +6481,37 @@ mod tasks {
         agents.update(cx, |agents, cx| agents.task_said(event, cx));
     }
 
+    #[gpui::test]
+    fn a_sort_runs_a_signed_in_claude_alone_while_tasks_are_on(cx: &mut TestAppContext) {
+        let program = PathBuf::from("/opt/claude");
+        let (agents, _) = ready(Some(program.clone()), cx);
+        let sort =
+            |cx: &mut TestAppContext| agents.read_with(cx, |agents, _| agents.sort_program());
+        let found = sort(cx).expect("Claude signed in sorts");
+        assert!(agents.read_with(cx, |agents, _| agents.sorts()));
+        assert_eq!((found.program, found.model), (program, None));
+        set_found(&agents, Ready::SignedOut, cx);
+        assert!(sort(cx).is_none(), "signed out");
+        assert!(!agents.read_with(cx, |agents, _| agents.sorts()));
+        set_found(&agents, Ready::SignedIn, cx);
+        agents.update(cx, |agents, cx| agents.set_tasks_on(false, cx));
+        assert!(sort(cx).is_none(), "tasks off");
+        agents.update(cx, |agents, cx| agents.set_tasks_on(true, cx));
+        agents.update(cx, |agents, cx| {
+            let found = Found {
+                ready: Ready::SignedIn,
+                program: Some("/opt/codex".into()),
+                ..Default::default()
+            };
+            agents.tasks.found.insert(Cli::Codex, found);
+            agents.set_default_task_agent(Cli::Codex, cx);
+        });
+        assert!(
+            sort(cx).is_none(),
+            "Codex has no switch keeping a run to the list"
+        );
+    }
+
     #[cfg(unix)]
     #[gpui::test]
     fn a_task_runs_its_cli_with_the_ask_and_the_pages_address_alone(cx: &mut TestAppContext) {

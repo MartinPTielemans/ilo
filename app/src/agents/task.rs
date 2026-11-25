@@ -1464,6 +1464,33 @@ impl Agents {
         self.tasks.default
     }
 
+    /// What a sort of today's tabs into folders runs (#4252), from what the browser already knows:
+    /// the user's own Claude Code, while tasks are on, it runs them and it's signed in, as last
+    /// learned, with its task model. Codex has no switch that keeps a run to the list, so it sorts
+    /// nothing.
+    pub fn sort_program(&self) -> Option<crate::broom::Program> {
+        let found = self.sorter()?;
+        Some(crate::broom::Program {
+            program: found.program.clone()?,
+            path: found.path.clone(),
+            model: Some(self.task_model(Cli::Claude).to_string()).filter(|model| !model.is_empty()),
+        })
+    }
+
+    /// Whether a sort has a program to run, as `sort_program` finds it, without copying it: the
+    /// broom is drawn only then.
+    pub fn sorts(&self) -> bool {
+        self.sorter().is_some()
+    }
+
+    fn sorter(&self) -> Option<&Found> {
+        if !self.tasks_on() || self.tasks.default != Some(Cli::Claude) {
+            return None;
+        }
+        let found = self.tasks.found.get(&Cli::Claude)?;
+        (found.ready == Ready::SignedIn && found.program.is_some()).then_some(found)
+    }
+
     /// The models `cli`'s Model pop-up offers after its own default, which is the empty id, as id
     /// and name in the CLI's order: those it listed when last looked for. ilo runs the CLI without
     /// the user's settings files, so the default is the CLI's, not theirs.
@@ -3260,6 +3287,7 @@ impl Agents {
                     .map_or(task.sent, |session| session.messages),
                 steps,
                 answers,
+                sorted: None,
             };
             // A session has no home of the user's, so its agent's Space says its profile.
             let home = if task.home != 0 {
