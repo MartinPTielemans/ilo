@@ -2,7 +2,7 @@ use super::*;
 use crate::space_transparency::{START, of_level};
 use crate::theme::Appearance;
 use crate::tokens::palette::{LIGHT_TINT, TINT};
-use crate::tokens::space_transparency::{HOVERED_TITLE, HOVERED_TITLE_PAST, LESS};
+use crate::tokens::space_transparency::{HOVERED_TITLE, HOVERED_TITLE_PAST};
 
 /// A theme as the design sweep (#320) names one: `count` colours, the main one at `hue` degrees,
 /// HSL `saturation` and `lightness` (its distance from the field's centre).
@@ -162,20 +162,19 @@ fn failures_over(
         against(&plated(SECTION_PLATE)),
         GLYPH,
     );
-    // The selected section's glyph, on the Library's column under Arc's selected plate (#371).
-    use crate::tokens::shell::library::{COLUMN, LIBRARY_PLATE};
-    let selected: Vec<Rgba> = window
-        .iter()
-        .map(|&at| over(over(at, ink, COLUMN), ink, LIBRARY_PLATE))
-        .collect();
-    let glyph = palette.section_glyph;
+    // The shown section's glyph, name and count, on the window under the selected plate, as the
+    // Library's column has no fill of its own.
+    let plate = Rgba::from(palette.selected(0.));
+    let shown_section: Vec<Rgba> = window.iter().map(|&at| over(at, plate, plate.a)).collect();
     check(
-        "selected Library section glyph",
-        selected
-            .iter()
-            .map(|&at| contrast(glyph, at))
-            .fold(f32::MAX, f32::min),
-        GLYPH,
+        "shown Library section",
+        on(palette.text(TEXT_PRIMARY), &shown_section),
+        TEXT,
+    );
+    check(
+        "shown Library section count",
+        on(palette.text(palette.secondary()), &shown_section),
+        gray,
     );
     let targets: Vec<Rgba> = plated(TARGET_PLATE)
         .iter()
@@ -346,29 +345,27 @@ fn states(palette: &Palette, window: &[Rgba], gray: f32) -> Vec<(String, Hsla, f
             .collect()
     };
     let white = |alpha: f32| Hsla::from(WHITE).opacity(alpha);
-    let column: Vec<Rgba> = window
-        .iter()
-        .map(|&at| over(at, ink, shell::library::COLUMN))
-        .collect();
     let (overlay, dialog) = (vec![palette.overlay], vec![palette.dialog]);
-    let sections = [
-        shell::library::SECTION_HOVERED,
-        shell::library::LIBRARY_PLATE,
-    ];
     let mut states = vec![
         // On the window.
-        // A section's plates are Arc's selected one and ours under it.
+        // A section's row, at rest, under the pointer and pressed; the shown one's apart.
         (
             "Library section label",
-            palette.gray(shell::library::SECTION_LABEL),
+            palette.text(TEXT_PRIMARY),
+            TEXT,
+            lay_on(Ground::Library, window, 0., &PRESSABLE),
+        ),
+        (
+            "Library section count",
+            palette.text(palette.secondary()),
             gray,
-            lay(&column, 0., &sections),
+            lay_on(Ground::Library, window, 0., &PRESSABLE),
         ),
         (
             "Library section glyph",
             palette.glyph(shell::library::SECTION_GLYPH_UNSELECTED),
             GLYPH,
-            lay(&column, 0., &sections),
+            lay_on(Ground::Library, window, 0., &PRESSABLE),
         ),
         (
             "Library row title",
@@ -1949,30 +1946,10 @@ fn gray_margin(palette: &Palette) -> f32 {
     worst - gray_text_at(palette.glass)
 }
 
-/// The sweep's one excused miss, by the lead's word (2026-11-25): the Library's section label on a
-/// dark window in a colour, where Less sits, reads just under gray's 4.5 there, in today's build
-/// too, which no coarser test saw. No colour moves at Less for it; P6 redraws the Library and
-/// takes this out. It fails the day the label reads 4.5 or more, or less than this.
-const LABEL_AT_LESS: f32 = 4.49;
-const LIBRARY_LABEL: &str = "Library section label, every state";
-
-/// The least the Library's section label reads on `palette`'s `window` in each state it takes.
-fn library_label_reads(palette: &Palette, window: &[Rgba], gray: f32) -> f32 {
-    let (_, label, _, grounds) = states(palette, window, gray)
-        .into_iter()
-        .find(|(name, ..)| format!("{name}, every state") == LIBRARY_LABEL)
-        .expect("the Library's section label is one of the states");
-    let label = Rgba::from(label);
-    (grounds.iter())
-        .map(|&at| contrast(over(at, label, label.a), at))
-        .fold(f32::MAX, f32::min)
-}
-
 /// A Space's glass anywhere on its bar keeps every floor of the window and what lies on it, gray
 /// text at the one where its glass sits, over a black and a white backdrop: a sweep from solid to
 /// clear in hundredths, in Dark and Light, with no colour and with one. The title on a plate under
-/// the pointer may read less past the bar's last stretch, as at today's More, and the Library's
-/// section label is excused at one point (`LABEL_AT_LESS`).
+/// the pointer may read less past the bar's last stretch, as at today's More.
 #[test]
 fn a_spaces_glass_holds_every_floor_across_its_bar() {
     let colored = Theme::at(0.3, -0.5);
@@ -1983,19 +1960,7 @@ fn a_spaces_glass_holds_every_floor_across_its_bar() {
                 let palette = Palette::at(theme, tone, glass);
                 let window = fine_window(&palette);
                 let gray = gray_text_at(glass);
-                let mut failures = failures_over(theme, &palette, &window, gray);
-                if tone == Tone::Dark && theme.is_some() && glass == LESS {
-                    let reads = library_label_reads(&palette, &window, gray);
-                    assert!(
-                        (LABEL_AT_LESS..gray).contains(&reads),
-                        "the Library's section label, Dark, coloured, where Less sits, reads \
-                         {reads:.4}: the miss it was excused for ({LABEL_AT_LESS} to under \
-                         {gray}) has gone or grown; take the exception out or stop"
-                    );
-                    let before = failures.len();
-                    failures.retain(|each| !each.starts_with(LIBRARY_LABEL));
-                    assert_eq!(before - failures.len(), 1, "{failures:#?}");
-                }
+                let failures = failures_over(theme, &palette, &window, gray);
                 let colour = if theme.is_some() { "coloured" } else { "none" };
                 failed.extend(
                     failures

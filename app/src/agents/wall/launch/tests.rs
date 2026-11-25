@@ -144,6 +144,7 @@ mod walled {
             launcher: Some(Launcher { program, handoff }),
             tmp: None,
             place: None,
+            listener: None,
         }
     }
 
@@ -695,6 +696,7 @@ mod walled {
                 token: "token".into(),
             },
             model: None,
+            effort: None,
             instructions: String::new(),
             tools: Vec::new(),
             helpers: false,

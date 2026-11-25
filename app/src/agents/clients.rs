@@ -75,6 +75,13 @@ impl Client {
             Client::Other | Client::Command => "",
         }
     }
+
+    /// Settings › Other apps' line for an app the user set up (S31, draft): what the product
+    /// wrote and where, the same with the switch on or off, since it says nothing of whether the
+    /// app is connected now.
+    pub fn set_up_line(self) -> String {
+        format!("Set up in {}", self.config())
+    }
 }
 
 /// The server as a client's config names it.
@@ -665,6 +672,16 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A set-up app's line says where it was set up and never that it's connected (S31).
+    #[test]
+    fn a_set_up_apps_line_says_where_not_connected() {
+        for client in [Client::ClaudeCode, Client::Codex] {
+            let line = client.set_up_line();
+            assert!(line.contains(client.config()), "{line}");
+            assert!(!line.to_lowercase().contains("connected"), "{line}");
+        }
+    }
 
     fn entry() -> Entry {
         Entry {

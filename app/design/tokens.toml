@@ -2291,44 +2291,42 @@ key-reach = 4.0
 [shell.library]
 # Where the card's left edge goes while the Library is open: the Library's right edge, which is
 # this for Downloads and Archived Tabs and `spaces_width` for Spaces.
-library-width = 417.0
+library-width = 533.0
 # The Library's colours are alphas of the palette's ink (palette.rs), plates in Paper's terms.
-# The column of sections, and the line at its edge.
-column-width = 112.0
+# The column of sections, as wide as the sidebar it takes (the drawing's 228), with no fill or edge
+# of its own, as drawn: its rows sit on the window as the sidebar's do.
+column-width = 228.0
+# The plate under Arc's column, which the drawn one doesn't have; palette.rs still solves the
+# accent glyph on it until that goes.
 column = 0.06
-column-edge = 0.04
-# A section's button, its glyph centred 31 below its top and its label 56 below.
+# A section is a row of the column, as drawn: 34 tall against the next, 8 inside the column, its
+# glyph 10 in and its name 9 after it, and at its end, while files download, how many.
 section-x = 8.0
-section-width = 97.0
-section-height = 80.0
+section-height = 34.0
 section-radius = 12.0
-section-glyph = 20.0
-section-glyph-y = 31.0
-section-label-y = 56.0
-section-label-height = 15.0
-section-label = 0.85
-# Ours: the glyph of a section not shown, and the plate under one hovered, under Arc's selected
-# plate rather than the ladder's hovered, which would outshine it.
-section-glyph-unselected = 0.6
-section-hovered = 0.05
-# Between two sections' buttons, 100 apart.
-section-gap = 20.0
-# Ours: where the buttons may reach in a window too short for Arc's place, as seven need at 800
-# tall: the first starts no higher than 74, 8 under the heading's caps, and the last ends 8 above
-# the back button.
-sections-top = 74.0
-sections-bottom = 48.0
-# The plate under the selected section and the search field.
+section-pad = 10.0
+section-gap = 9.0
+section-glyph = 16.0
+section-text = 13.0
+section-line = 16.0
+section-count-text = 11.0
+section-count-line = 14.0
+# A section's glyph at rest, and the shown one's at full ink, as drawn. Under the pointer a row
+# takes the Library rows' plate.
+section-glyph-unselected = 0.7
+# The rows start under the window's buttons' row, 44, the heading's, 36, and 8 more.
+sections-top = 88.0
+# The plate under the search field.
 library-plate = 0.09
 # The back button, at the column's bottom.
 library-back-inset = 8.0
-# The "Library" heading at the column's top, in the display face, in the section labels' white:
-# its caps start 52 down, and its L's stem is under the close button's left edge, 13 in, with
-# Outfit's 1.5 bearing at 20 before it.
-title-size = 20.0
-title-line = 26.0
-title-x = 11.5
-title-cap = 52.0
+# The "Library" heading, in the display face at 19 on 24, 10 into its row of 36, which is under
+# the window's buttons' row of 44.
+title-size = 19.0
+title-line = 24.0
+title-x = 10.0
+title-top = 44.0
+title-height = 36.0
 # The Spaces section (Arc 1.170 cap, one Space, and rec, three): a card per Space starts 28 after
 # the column, 240 wide, 24 apart and as tall as the window less 48 above and below, with Arc's
 # blue + 33 after the last, 30 across and halfway down, and the Library ends 37 after it, so it's
@@ -2380,10 +2378,11 @@ plus-after = 37.0
 # Ours: a tab dragged over another Space's card rings it in that card's accent, this wide, inside
 # its edge (Arc's isn't recorded).
 card-drop-ring = 2.0
-# The search field, on the window buttons' row. It runs to 409 but while the archive holds a
-# Little ilo tab, when Arc's Filter button, 73 wide at x 336, takes its end and the field stops 8
-# before it (ours).
-search-x = 120.0
+# The search field, on the window buttons' row over the list, 4 in from the column's edge as Arc's
+# is. It runs 289, to 11 short of the Library's edge, but while the archive holds a Little ilo tab,
+# when Arc's Filter button, 73 wide and 220 in from the column's edge, takes its end and the field
+# stops 8 before it (ours).
+search-x = 4.0
 search-top = 10.0
 search-width = 289.0
 search-height = 36.0
@@ -2392,7 +2391,7 @@ search-glyph = 15.0
 search-glyph-x = 14.5
 search-text-x = 44.0
 search-placeholder = 0.56
-filter-x = 336.0
+filter-x = 220.0
 filter-width = 73.0
 filter-gap = 8.0
 # History's Filter button is at least Arc's width, and grows from its end to fit what it filters

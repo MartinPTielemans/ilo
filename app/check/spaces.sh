@@ -205,9 +205,8 @@ expect "^browser: create space $second reading 日本語\$" "return didn't name 
 expect "^browser: renamed space $second reading 日本語\$" "the core didn't rename the Space"
 expect '^browser: space form gone$' "the form didn't leave after Create"
 ../tools/window-screenshot.sh "$pid" "$out/new-space.png" || fail "no window to capture"
-send key t cmd
+resting_key t "new Space"
 expect '^browser: command new-tab via ui$' "⌘T in the new Space didn't reach the UI"
-expect '^browser: command bar shown$' "⌘T in the new Space didn't open the command bar"
 send type "http://localhost:$port/one.html"
 send key return
 expect '^browser: today [0-9][0-9]*$' "the tab for one.html didn't open in the new Space"

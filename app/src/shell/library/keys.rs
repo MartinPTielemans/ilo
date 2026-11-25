@@ -905,7 +905,7 @@ mod tests {
     }
 
     /// Tab goes over the Library's controls in reading order and round again: from the field to
-    /// the section buttons, each a tab of the Sections list, and on to Back and the field, and
+    /// the section rows, each a tab of the Sections list, and on to Back and the field, and
     /// Shift+Tab goes the other way. ↓ moves along the sections, and Return shows the one the keys
     /// are on, which keeps them (#3238).
     #[gpui::test]
@@ -918,15 +918,13 @@ mod tests {
         cx.simulate_keystrokes("tab");
         assert_eq!(keyed(cx), (Role::TextInput, "Search History".into()));
         cx.simulate_keystrokes("tab");
-        assert_eq!(keyed(cx), (Role::Tab, "Media".into()));
+        assert_eq!(keyed(cx), (Role::Tab, "Downloads".into()));
         cx.simulate_keystrokes("up");
         assert_eq!(
             keyed(cx),
-            (Role::Tab, "Media".into()),
+            (Role::Tab, "Downloads".into()),
             "↑ left the first section"
         );
-        cx.simulate_keystrokes("down");
-        assert_eq!(keyed(cx), (Role::Tab, "Downloads".into()));
         // Pressed and let go, as a keyboard sends it: Return clicks on the release.
         cx.simulate_keystrokes("enter");
         let keystroke = gpui::Keystroke::parse("enter").unwrap();
@@ -942,12 +940,12 @@ mod tests {
         );
         assert_eq!(keyed(cx), (Role::Tab, "Downloads".into()));
         cx.simulate_keystrokes("shift-tab");
-        assert_eq!(keyed(cx), (Role::Tab, "Media".into()));
-        cx.simulate_keystrokes("shift-tab");
         assert_eq!(keyed(cx), (Role::TextInput, "Search Downloads".into()));
-        // Escape closes the Library from any of its stops, not only the field.
         cx.simulate_keystrokes("tab");
-        assert_eq!(keyed(cx), (Role::Tab, "Media".into()));
+        assert_eq!(keyed(cx), (Role::Tab, "Downloads".into()));
+        cx.simulate_keystrokes("down");
+        assert_eq!(keyed(cx), (Role::Tab, "History".into()));
+        // Escape closes the Library from any of its stops, not only the field.
         cx.simulate_keystrokes("escape");
         shell.update(cx, |shell, _| settle(shell));
         cx.run_until_parked();

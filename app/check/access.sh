@@ -215,8 +215,8 @@ else
       expect "^browser: find $a closed\$" "escape didn't close the find bar"
     fi
 
-    # Settings' column is a tab list of its sections, the one shown selected, and Chromium
-    # settings at its foot a button.
+    # Settings' column is a tab list of its sections, the one shown selected, then About, its foot
+    # row, a tab of its own after them, and Chromium settings a button.
     settings="$out/access-settings.txt"
     send menu Settings…
     expect '^browser: settings shown General$' "Settings… didn't show Settings on General"
@@ -224,8 +224,11 @@ else
     read_tree '"Sections"' > "$settings"
     under "$tab_group \"Sections\"" "$settings" | grep -q " $tab \"General\" $shown" ||
       fail "Settings' General isn't the selected tab in its Sections: $settings"
-    under "$tab_group \"Sections\"" "$settings" | grep -q " $tab \"About\"" ||
-      fail "Settings' About isn't a tab in its Sections: $settings"
+    awk -v list="$tab_group \"Sections\"" -v about=" $tab \"About\"" '
+      !found && index($0, list) { found = 1; depth = $1; next }
+      found && $1 <= depth { ok = $1 == depth && index($0, about); exit }
+      END { exit !ok }' "$settings" ||
+      fail "Settings' About isn't a tab after its Sections, at their depth: $settings"
     grep -q " $button \"Chromium settings\"" "$settings" ||
       fail "Settings' Chromium settings isn't a button: $settings"
     # Its sub-views name their controls too (#1911), as far as this copy draws them: Links' + and
