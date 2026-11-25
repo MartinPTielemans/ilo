@@ -2992,11 +2992,11 @@ padding = 6.0
 # this big takes its far side into the plate's foot.
 strip-radius = 12.0
 curve = 8.0
-# Its heading, at the detail's size, semibold. It's drawn in text-3, which reads at 3.4:1 on this
-# fill and under that on the light one: small text, so its ink is as much firmer as holds 4.5:1 on
-# the fill in each look, a step under the detail's.
+# Its heading, at the detail's size, semibold. It's drawn in text-3, which reads at 3.4:1 on the
+# plate and under that on the light one: small text, so its ink is as much firmer as holds 4.5:1
+# on the plate in each look, a step under the detail's.
 heading = 26.0
-heading-ink = 0.55
+heading-ink = 0.56
 light-heading-ink = 0.6
 # A row: its plate under the pointer the button level's; a tile, the file's picture or the page
 # glyph on the card level's fill; its name, medium, over one line of detail in text-2. The name is

@@ -15,7 +15,7 @@ use super::{
     Download, DownloadState, FOOTER_HEIGHT, Section, Shell, host,
     library::{LIBRARY_BACK_INSET, bytes, is_video},
 };
-use crate::palette::Tone;
+use crate::palette::{Palette, Tone};
 use crate::tokens::shell::recent_downloads as t;
 use crate::tokens::shell::recent_downloads::motion::{FOLD, GROW, REST, ROWS_FROM};
 use crate::tokens::shell::{FOOT_ROW, LIBRARY_BUTTON};
@@ -102,6 +102,19 @@ fn plate(tone: Tone, ground: Hsla) -> Hsla {
         Tone::Dark => t::FILL,
         Tone::Light => t::LIGHT_FILL,
     })))
+}
+
+/// The inks of what the plate says, where it's `plate`: a name's, a detail's and the heading's.
+/// They lie on the plate, so their floor is its own, and a row's the plate's under the one the
+/// row wears under the pointer. The window's floor answers for its material over any backdrop,
+/// and on a dark window lifts the quiet inks all the way to a name's.
+fn inks(palette: &Palette, plate: Hsla) -> [Hsla; 3] {
+    let lit = plate.blend(palette.plate(t::ROW_HOVERED));
+    [
+        palette.text_on(t::NAME, lit),
+        palette.text_on(palette.secondary(), lit),
+        palette.text_on(heading_ink(palette.tone), plate),
+    ]
 }
 
 /// The plate and the button's box under it as one shape: a body `width` by `height` over a box
@@ -540,6 +553,7 @@ impl Shell {
             Tone::Dark => t::RIM,
             Tone::Light => t::LIGHT_RIM,
         }));
+        let [_, _, heading_ink] = inks(&self.palette, fill);
         let (full_width, full_height) = self.recent_downloads_size();
         let width = LIBRARY_BUTTON + (full_width - LIBRARY_BUTTON) * size;
         let height = full_height * size;
@@ -557,7 +571,7 @@ impl Shell {
             .text_size(px(t::DETAIL_SIZE))
             .line_height(px(t::DETAIL_LINE))
             .font_weight(FontWeight::SEMIBOLD)
-            .text_color(self.palette.text(heading_ink(tone)))
+            .text_color(heading_ink)
             .child("Recent downloads");
         // The body's box, which the shadow lies under and what it lists is cut to.
         let boxed = || {
@@ -664,7 +678,8 @@ impl Shell {
                         .text_color(self.palette.glyph(t::TILE_GLYPH_INK)),
                 ),
         };
-        let quiet = self.palette.text(self.palette.secondary());
+        let on = plate(self.palette.tone, self.window_fill_at(1.));
+        let [name_ink, quiet, _] = inks(&self.palette, on);
         let line = |text: SharedString| {
             div()
                 .min_w_0()
@@ -708,7 +723,7 @@ impl Shell {
             .items_center()
             .text_size(px(t::NAME_SIZE))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(self.palette.text(t::NAME))
+            .text_color(name_ink)
             .child(div().truncate().child(download.name.clone()));
         let row = div()
             .id(("recent-download", id))
@@ -745,7 +760,8 @@ mod tests {
     use std::{rc::Rc, time::Duration};
 
     use gpui::{
-        Entity, Hsla, Modifiers, MouseButton, Rgba, TestAppContext, VisualTestContext, point, px,
+        Entity, Hsla, Modifiers, MouseButton, Rgba, TestAppContext, VisualTestContext, black,
+        point, px, white,
     };
 
     use super::{
@@ -754,8 +770,8 @@ mod tests {
             library::{LIBRARY_BACK_INSET, Section},
             recorder::Recorder,
         },
-        DAY, HOUR, MINUTE, Outline, RECENT_REST, WEEK, age, come, detail, grown, heading_ink, now,
-        opened, plate, rows_shown, t,
+        DAY, HOUR, MINUTE, Outline, RECENT_REST, WEEK, age, come, detail, grown, heading_ink, inks,
+        now, opened, plate, rows_shown, t,
     };
     use crate::palette::{Palette, TEXT, Tone, contrast, over};
     use crate::tokens::shell::recent_downloads::motion::{FOLD, GROW, ROWS_FROM};
@@ -1260,39 +1276,45 @@ mod tests {
 
     /// What the plate says reads on it, the floating fill over the sidebar, in both looks: a name
     /// at 7:1, and its detail and the heading, small text both, at the text's floor, as all of a
-    /// row is on the plate it wears under the pointer.
+    /// row is on the plate it wears under the pointer. The heading's ink is its token's there,
+    /// which no floor lifts. Over a theme the sidebar's own look is another colour, and the floors
+    /// hold where it's as dark and as light as a colour can be.
     #[test]
     fn the_plates_text_reads_on_its_fill() {
+        let mut short = Vec::new();
         for tone in [Tone::Dark, Tone::Light] {
             let palette = Palette::of(None, tone);
             let on = |ground: Hsla, ink: Hsla| {
                 let (ground, ink) = (Rgba::from(ground), Rgba::from(ink));
                 contrast(over(ground, ink, ink.a), ground)
             };
-            let plate = plate(tone, Hsla::from(palette.underlay));
-            let name = palette.text(t::NAME);
-            let quiet = palette.text(palette.secondary());
-            let tile = plate.blend(palette.plate(t::TILE_FILL));
-            let lit = plate.blend(palette.plate(t::ROW_HOVERED));
-            for (what, read, floor) in [
-                ("a name", on(plate, name), 7.),
-                ("a detail", on(plate, quiet), TEXT),
-                (
-                    "the heading",
-                    on(plate, palette.text(heading_ink(tone))),
-                    TEXT,
-                ),
-                (
-                    "the page glyph",
-                    on(tile, palette.glyph(t::TILE_GLYPH_INK)),
-                    3.,
-                ),
-                ("a name on a row under the pointer", on(lit, name), 7.),
-                ("a detail on a row under the pointer", on(lit, quiet), TEXT),
-            ] {
-                assert!(read >= floor, "{tone:?}: {what} reads at {read:.2}");
+            let sidebar = Hsla::from(palette.underlay);
+            for (ground, most) in [(sidebar, 7.), (black(), TEXT), (white(), TEXT)] {
+                let plate = plate(tone, ground);
+                let [name, quiet, heading] = inks(&palette, plate);
+                let tile = plate.blend(palette.plate(t::TILE_FILL));
+                let lit = plate.blend(palette.plate(t::ROW_HOVERED));
+                for (what, read, floor) in [
+                    ("a name", on(plate, name), most),
+                    ("a detail", on(plate, quiet), TEXT),
+                    ("the heading", on(plate, heading), TEXT),
+                    (
+                        "the page glyph",
+                        on(tile, palette.glyph(t::TILE_GLYPH_INK)),
+                        3.,
+                    ),
+                    ("a name on a row under the pointer", on(lit, name), most),
+                    ("a detail on a row under the pointer", on(lit, quiet), TEXT),
+                ] {
+                    if read < floor {
+                        short.push(format!("{tone:?}: {what} reads at {read:.2}"));
+                    }
+                }
             }
+            let [_, _, heading] = inks(&palette, plate(tone, sidebar));
+            assert_eq!(heading.a, heading_ink(tone), "{tone:?}");
         }
+        assert!(short.is_empty(), "{}", short.join("\n"));
     }
 
     /// The plate's corners are a panel's once it's open, and never rounder than it has room for
