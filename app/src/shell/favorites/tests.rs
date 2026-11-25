@@ -1,13 +1,22 @@
 //! Where the hover cards of the favorites' tiles go, and what a click on one asks for, on a host
 //! that records them.
 
-use std::rc::Rc;
+use std::{io::Cursor, rc::Rc, sync::Arc};
 
-use gpui::{Modifiers, TestAppContext, VisualTestContext, point, px};
+use gpui::{
+    Bounds, Hsla, Image, ImageFormat, Modifiers, Pixels, TestAppContext, VisualTestContext, point,
+    px,
+};
+use image::{Rgba, RgbaImage};
 
+use super::TileTheme;
 use crate::{
     hover_card::Anchor,
-    shell::{Folders, LIST_TOP, PLATE_INSET, Row, Shell, TILE_HEIGHT, recorder::Recorder},
+    shell::{
+        Command, Folders, LIST_TOP, PLATE_INSET, Page, Row, SHOWN_FILL, Shell, TILE_HEIGHT,
+        recorder::Recorder,
+    },
+    theme::{self, Appearance},
 };
 
 /// A drawn shell with the favorites 10, 11 and 12.
@@ -555,4 +564,128 @@ fn a_split_dragged_onto_the_tiles_is_one_favorite(cx: &mut TestAppContext) {
             .any(|edit| edit.starts_with("favorite split 1 ")),
         "{edits:?}"
     );
+}
+
+/// A made-up page's own colour, and the one colour of its icon.
+const PAGE: u32 = 0x0e1014;
+const ICON: u32 = 0x8fa3ff;
+
+/// A drawn dark shell with the favorite 20, whose icon is one colour, and today's tab 10, each at
+/// a page that has reported its own colour.
+fn with_coloured_pages(cx: &mut TestAppContext) -> (gpui::Entity<Shell>, &mut VisualTestContext) {
+    let host = Rc::new(Recorder::default());
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host, cx));
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    let [_, red, green, blue] = ICON.to_be_bytes();
+    let mut png = Vec::new();
+    RgbaImage::from_pixel(16, 16, Rgba([red, green, blue, 0xff]))
+        .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    shell.update(cx, |shell, cx| {
+        shell.set_spaces(
+            vec![(1, "Space".into(), None, 1, "".into(), "".into(), "".into())],
+            cx,
+        );
+        shell.set_space(1, cx);
+        shell.set_favorites(vec![(20, 1)], cx);
+        shell.set_tabs(1, Vec::new(), vec![10], Vec::new(), Folders::default(), cx);
+        let icon = Arc::new(Image::from_bytes(ImageFormat::Png, png));
+        shell.set_favicon(20, Some(icon), cx);
+        for tab in [10, 20] {
+            shell.set_tab_background(tab, Some(PAGE), cx);
+        }
+        // An icon gives its tile a look on a dark window only.
+        shell.run(Command::Appearance(Appearance::Dark), "ui", cx);
+    });
+    cx.run_until_parked();
+    (shell, cx)
+}
+
+/// Shows `tab` at a local page, in Developer Mode or with it turned off there, and draws: where
+/// the mode's outline was drawn, if it was, and the fill the shown row's plain plate was laid in,
+/// if one was.
+fn shown_at_a_local_page(
+    shell: &gpui::Entity<Shell>,
+    cx: &mut VisualTestContext,
+    tab: u64,
+    developer_mode: bool,
+) -> (Option<(u64, Bounds<Pixels>)>, Option<Hsla>) {
+    SHOWN_FILL.set(None);
+    shell.update(cx, |shell, cx| {
+        let page = Page {
+            url: "http://localhost:3000/".into(),
+            developer_mode,
+            ..Page::default()
+        };
+        shell.set_page(tab, page, cx);
+        shell.set_selected(tab, cx);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let outline = shell.read_with(cx, |shell, _| shell.developer_outline_drawn.get());
+    (outline, SHOWN_FILL.take())
+}
+
+/// Whether `inner` lies in `outer`.
+fn within(inner: Bounds<Pixels>, outer: Bounds<Pixels>) -> bool {
+    inner.left() >= outer.left()
+        && inner.top() >= outer.top()
+        && inner.right() <= outer.right()
+        && inner.bottom() <= outer.bottom()
+}
+
+fn hex(color: Hsla) -> u32 {
+    theme::packed(color.to_rgb())
+}
+
+/// Developer Mode's tile keeps its own look whatever colour its page reported: the look its icon
+/// gives it, under the mode's outline. With the mode off for the page, the same tile takes the
+/// page's colour and the outline goes.
+#[gpui::test]
+fn a_shown_tile_in_developer_mode_takes_its_icons_look_and_not_its_pages_colour(
+    cx: &mut TestAppContext,
+) {
+    let (shell, cx) = with_coloured_pages(cx);
+    let (outline, _) = shown_at_a_local_page(&shell, cx, 20, true);
+    let tile = shell.read_with(cx, |shell, _| shell.tip_frames.borrow()[&20]);
+    let (on, bounds) = outline.expect("the tile has no Developer Mode outline");
+    assert_eq!(on, 20);
+    assert!(within(bounds, tile), "{bounds:?} isn't in {tile:?}");
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.page_fill(20), None);
+        let theme = shell.tile_theme(20).expect("the icon gives no look");
+        assert!(matches!(&*theme, &TileTheme::Flat { fill, .. } if fill >> 8 == ICON));
+        let (fill, ..) = shell.open_look(shell.page_fill(20), Some(&*theme));
+        assert_eq!(hex(fill), ICON);
+    });
+    let (outline, _) = shown_at_a_local_page(&shell, cx, 20, false);
+    assert_eq!(outline, None);
+    shell.read_with(cx, |shell, _| {
+        let own = shell.page_fill(20);
+        assert_eq!(own.map(|own| hex(own.into())), Some(PAGE));
+        let (fill, ..) = shell.open_look(own, None);
+        assert_eq!(hex(fill), PAGE);
+    });
+}
+
+/// A tab's row in Developer Mode keeps the plain plate under the mode's outline, and takes its
+/// page's colour in the plate's place with the mode off, as its tile does.
+#[gpui::test]
+fn a_shown_row_in_developer_mode_keeps_the_plain_plate_and_not_its_pages_colour(
+    cx: &mut TestAppContext,
+) {
+    let (shell, cx) = with_coloured_pages(cx);
+    let (outline, plate) = shown_at_a_local_page(&shell, cx, 10, true);
+    let row = shell.read_with(cx, |shell, _| shell.tip_frames.borrow()[&10]);
+    let (on, bounds) = outline.expect("the row has no Developer Mode outline");
+    assert_eq!(on, 10);
+    assert!(within(bounds, row), "{bounds:?} isn't in {row:?}");
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(shell.page_fill(10), None);
+        assert_eq!(plate, Some(shell.palette.shown(0.)));
+    });
+    let (outline, plate) = shown_at_a_local_page(&shell, cx, 10, false);
+    assert_eq!((outline, plate), (None, None));
+    let own = shell.read_with(cx, |shell, _| shell.page_fill(10));
+    assert_eq!(own.map(|own| hex(own.into())), Some(PAGE));
 }

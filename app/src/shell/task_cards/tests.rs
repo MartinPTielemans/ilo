@@ -713,6 +713,20 @@ fn a_waiting_card_lists_in_every_space(cx: &mut TestAppContext) {
     assert_eq!(today(&shell, cx), ["task-2", "task-1", "10", "11"]);
 }
 
+/// A card whose home Space is gone lists in no Space, waiting or not, a session's as a task's: the
+/// list knows a card by its home alone, and the Library still lists its task.
+#[gpui::test]
+fn a_card_whose_home_is_gone_lists_nowhere(cx: &mut TestAppContext) {
+    let gone = |n: u64, dot: Dot| Card {
+        home: 3,
+        ..card(n, dot)
+    };
+    let (shell, _, cx) = shell_with(cx, vec![gone(2, Dot::Waiting), gone(1, Dot::Working)]);
+    assert_eq!(today(&shell, cx), ["10", "11"]);
+    shell.update(cx, |shell, cx| shell.set_space(2, cx));
+    assert_eq!(today(&shell, cx), ["20"]);
+}
+
 /// A private window offers no tasks and lists none, while a regular window lists them.
 #[gpui::test]
 fn a_private_window_lists_no_card(cx: &mut TestAppContext) {

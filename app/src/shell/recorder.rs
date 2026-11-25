@@ -191,6 +191,11 @@ pub(crate) struct Recorder {
     pub(super) dialog_busy: Cell<bool>,
     /// It warns before a move to another profile's Space, as `warn_moving_profiles` answers.
     pub(super) warn_profiles: Cell<bool>,
+    /// The core's secure connections, for every profile, as `secure_connections` answers; None
+    /// as for a profile it hasn't loaded.
+    pub(super) secure_connections: Cell<Option<bool>>,
+    /// The core refuses `set_secure_connections`, as for a policy.
+    pub(super) refuses_secure_connections: Cell<bool>,
     /// Who shares the favorites, as `favorites_scope` answers.
     pub(super) favorites_scope: Cell<super::FavoritesScope>,
     /// A profile keeps passkeys on this computer, as `keeps_passkeys` answers.
@@ -1518,6 +1523,20 @@ impl Browser for Recorder {
     }
 
     fn delete_profile(&self, _: u64, _: &mut App) {}
+
+    fn secure_connections(&self, _: u64) -> Option<bool> {
+        self.secure_connections.get()
+    }
+
+    fn set_secure_connections(&self, _: u64, on: bool, _: &mut App) -> bool {
+        self.record(format!("secure connections {on}"));
+        let refused =
+            self.refuses_secure_connections.get() || self.secure_connections.get().is_none();
+        if !refused {
+            self.secure_connections.set(Some(on));
+        }
+        !refused
+    }
 
     fn favorites_scope(&self, _: &mut App) -> super::FavoritesScope {
         self.favorites_scope.get()

@@ -589,6 +589,13 @@ pub trait Browser {
     }
     /// Deletes a profile no Space is in, with its favorites and everything the browser keeps in it.
     fn delete_profile(&self, profile: u64, cx: &mut App);
+    /// Whether `profile` always uses secure connections, as the core has it, the one place it's
+    /// kept; None for a profile the core hasn't loaded. Only Settings › Privacy reads it, as it
+    /// draws.
+    fn secure_connections(&self, profile: u64) -> Option<bool>;
+    /// Turns `profile`'s secure connections on or off, and returns whether the core did: not for a
+    /// profile it hasn't loaded, or one a policy sets. The user's click alone calls it.
+    fn set_secure_connections(&self, profile: u64, on: bool, cx: &mut App) -> bool;
     /// Who shares the favorites, as Settings has it.
     fn favorites_scope(&self, cx: &mut App) -> super::FavoritesScope;
     /// Whether a profile can keep passkeys on this computer, which go with it when it's deleted.

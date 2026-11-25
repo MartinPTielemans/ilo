@@ -1,5 +1,6 @@
 // The way back of a tab the user handed an agent, into the Space it left: what's kept of a pinned
-// tab's pin meanwhile, and the putting back once the tab is one of that Space's Today tabs again.
+// tab's pin and of a Today tab's folder meanwhile, and the putting back once the tab is one of that
+// Space's Today tabs again.
 // Only the Space is asked, apart from handed.cc so browser_core_unittests tests it with Space
 // alone. Where it goes is handed_place's.
 
@@ -62,19 +63,46 @@ struct Pinned {
 // saves it.
 Pinned PinnedWith(const Space& home, const std::vector<Held>& held);
 
+// The today's folder of |space| holding the Today tab |tab|, which is kept for as long as an agent
+// has the tab, or 0 for a tab in none.
+bc_id TodayFolderOf(const Space& space, bc_id tab);
+
+// A Today tab handed out of a Space, with what's kept of it.
+struct HeldToday {
+  bc_id tab = 0;
+  Space::Node node;
+  // The today's folder it was in, or 0.
+  bc_id folder = 0;
+};
+
+// A Space's Today tabs with the Today tabs handed out of it among them.
+struct Today {
+  std::vector<bc_id> rows;
+  // Each handed one that is in a today's folder there, to that folder.
+  std::map<bc_id, bc_id> folders;
+};
+
+// |home|'s Today tabs with each of |held| where Put would put it now, which is where the session
+// saves it: a today's folder's tabs are one run with those handed out of it, so a launch brings
+// the folder back whole.
+Today TodayWith(const Space& home, const std::vector<HeldToday>& held);
+
 // Puts |tab|, a Today tab of |home| again as a tab moved to a Space is, back where it left with
 // |node|: among the Today tabs, or with |pin| pinned at its address, in the folder that held it
 // among what that holds now. Once that folder is gone it's in the one that held the folder, where
-// the folder was, and outside every folder once all of them are. Then into the split view it
-// left, which had |split|, itself among them, beside the first of those still in its list and
-// between the ones it was between: it stays loose, where the split was, if none is left there or
-// their split is full by now. Its node is |node| again and the rows around it keep theirs, so the
-// account's other devices see no move.
+// the folder was, and outside every folder once all of them are. A Today tab that was in
+// |today_folder| is in it again, among its tabs, as its first or last tab too, while |home| has
+// that folder, and loose at its place once it's gone: no folder is made for it. Then into the split
+// view it left, which had |split|, itself among them, beside the first of those still in its list
+// and between the ones it was between: it stays loose, where the split was, if none is left there
+// or their split is full by now. Its node is |node| again and the rows around it, and the today's
+// folders, keep theirs, so the account's other devices see no move.
 void Put(Space& home,
          bc_id tab,
          const Space::Node& node,
          const std::vector<bc_id>& split,
-         const std::optional<Pin>& pin);
+         const std::optional<Pin>& pin,
+         bc_id today_folder);
 
 }  // namespace browser_core::handed_back
 
