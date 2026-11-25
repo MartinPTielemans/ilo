@@ -44,10 +44,11 @@ TabBackground::Step TabBackground::Settled(bool shown, base::TimeTicks now) {
     wait_ = 0;
     return {};
   }
-  // Still changing: the next wait, longer than this one until the longest.
+  // Still changing: the next wait. A settle time's is only what's left of it since the last
+  // change, so the colour a fade ends on is told a settle time after it.
   if (now - changed_at_ < kSettle) {
     wait_ = std::min(wait_ + 1, kWaits.size() - 1);
-    return {.wait = kWaits[wait_]};
+    return {.wait = kWaits[wait_] == kSettle ? kSettle - (now - changed_at_) : kWaits[wait_]};
   }
   waiting_ = false;
   wait_ = 0;

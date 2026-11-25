@@ -123,12 +123,9 @@ TEST(TabBackgroundTest, ABurstTellsTheFirstAndTheSettledColour) {
   ASSERT_EQ(tab.told.size(), 1u);
   EXPECT_EQ(tab.told[0], 0u);
   EXPECT_TRUE(tab.background.waiting());
-  // The first wait ended mid-fade, so the settled colour comes when the second does.
-  tab.Pass(TabBackground::kWaits[1]);
+  tab.Pass(TabBackground::kSettle);
   ASSERT_EQ(tab.told.size(), 2u);
   EXPECT_EQ(tab.told[1], 29u);
-  EXPECT_EQ(tab.waited, (std::vector<base::TimeDelta>{TabBackground::kWaits[0],
-                                                       TabBackground::kWaits[1]}));
   // Nothing is left armed once the changes stop.
   EXPECT_FALSE(tab.background.waiting());
   EXPECT_FALSE(tab.due);
@@ -136,18 +133,43 @@ TEST(TabBackgroundTest, ABurstTellsTheFirstAndTheSettledColour) {
   EXPECT_EQ(tab.told.size(), 2u);
 }
 
-// A page that never stops changing: the first colour and nothing more, on one wait at a time, each
-// longer than the one before until the longest, which goes on.
+// A change of theme that fades: the colour it ends on is told a settle time after its last frame,
+// however many waits the fade outlasted.
+TEST(TabBackgroundTest, AFadeIsToldASettleTimeAfterItsEnd) {
+  for (base::TimeDelta fade : {base::Milliseconds(200), base::Milliseconds(400)}) {
+    FakeTab tab;
+    tab.Fade(fade);
+    ASSERT_EQ(tab.told.size(), 1u);
+    // The last frame was one frame ago.
+    tab.Pass(TabBackground::kSettle - kFrame - base::Milliseconds(1));
+    EXPECT_EQ(tab.told.size(), 1u) << fade;
+    tab.Pass(base::Milliseconds(1));
+    ASSERT_EQ(tab.told.size(), 2u) << fade;
+    EXPECT_EQ(tab.told[1], tab.faded);
+    EXPECT_FALSE(tab.due);
+  }
+}
+
+// A page that never stops changing: the first colour and nothing more, on one wait at a time. For
+// about a second the waits are the settle time's, then each is longer than the one before until
+// the longest, which goes on.
 TEST(TabBackgroundTest, AnEndlessChangeWaitsLongerEachTimeAndTellsOnce) {
   FakeTab tab;
   tab.Fade(base::Seconds(10));
   EXPECT_EQ(tab.told.size(), 1u);
-  // Ten seconds of frames: 8 waits asked for, one in two seconds from the fourth on, not 40 and
+  // Ten seconds of frames: 11 waits asked for, one in two seconds from the eighth on, not 40 and
   // not 625.
-  EXPECT_EQ(tab.waited,
-            (std::vector<base::TimeDelta>{base::Milliseconds(250), base::Milliseconds(500),
-                                          base::Seconds(1), base::Seconds(2), base::Seconds(2),
-                                          base::Seconds(2), base::Seconds(2), base::Seconds(2)}));
+  ASSERT_EQ(tab.waited.size(), 11u);
+  EXPECT_EQ(tab.waited[0], TabBackground::kSettle);
+  for (size_t i = 1; i < 5; ++i) {
+    // What's left of the settle time since the last frame.
+    EXPECT_LT(tab.waited[i], TabBackground::kSettle) << i;
+    EXPECT_GE(tab.waited[i], TabBackground::kSettle - kFrame) << i;
+  }
+  EXPECT_EQ(std::vector<base::TimeDelta>(tab.waited.begin() + 5, tab.waited.end()),
+            (std::vector<base::TimeDelta>{base::Milliseconds(500), base::Seconds(1),
+                                          base::Seconds(2), base::Seconds(2), base::Seconds(2),
+                                          base::Seconds(2)}));
   EXPECT_TRUE(tab.background.waiting());
 }
 

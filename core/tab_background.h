@@ -22,11 +22,14 @@ class TabBackground {
   // animation's frames, and short enough that the line follows a page's change of theme with it.
   static constexpr base::TimeDelta kSettle = base::Milliseconds(250);
   // The waits of one run of changes, each asked for when the one before ended with the colour
-  // still changing; the last goes on for as long as the run does. They grow so a page that never
-  // stops fading wakes the UI thread once in two seconds and not four times a second, while a
-  // change of theme is still looked at a settle time after it began.
-  static constexpr std::array<base::TimeDelta, 4> kWaits = {
-      kSettle, base::Milliseconds(500), base::Seconds(1), base::Seconds(2)};
+  // still changing; the last goes on for as long as the run does. The first is the settle time,
+  // and each of the next four only what's left of it since the last change, so for about a second
+  // a run is watched as closely as a fade needs: its settled colour is told a settle time after
+  // its end. A run that outlasts that isn't a change of theme, and its waits grow, so a page that
+  // never stops fading wakes the UI thread once in two seconds and not four times a second.
+  static constexpr std::array<base::TimeDelta, 8> kWaits = {
+      kSettle, kSettle, kSettle, kSettle, kSettle,
+      base::Milliseconds(500), base::Seconds(1), base::Seconds(2)};
 
   // What the tab does next.
   struct Step {
