@@ -1846,6 +1846,13 @@ impl Agents {
             _ = call.reply.send(stopped);
             return;
         }
+        // A tab of the user's they returned to their own tabs is theirs again, on whatever page
+        // it's at now: a call that names it hears so, whatever its tool, an ask for it back too,
+        // and nothing of the call is run, shown, logged or kept.
+        if self.names_returned(&call.agent, &call.arguments) {
+            _ = (call.reply).send(Refused::new(task::handed::RETURNED).into());
+            return;
+        }
         self.trace_call(&call, cx);
         // check.sh reads this line.
         log!("browser: agent {} calls {}", call.agent, call.tool);
@@ -1932,10 +1939,8 @@ impl Agents {
             at,
             ..
         } = call;
-        // A tab of the user's they returned to their own tabs: a call that names it hears so,
-        // whatever its tool, an ask for it back too, before anything of the call is looked at.
-        let named = tools::tabs_named(&arguments);
-        if named.iter().any(|tab| self.returned_from(&agent, *tab)) {
+        // One that waited at the fence while the user returned the tab it names hears so too.
+        if self.names_returned(&agent, &arguments) {
             _ = reply.send(Refused::new(task::handed::RETURNED).into());
             return;
         }

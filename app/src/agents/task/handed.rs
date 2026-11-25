@@ -8,6 +8,7 @@
 use std::sync::mpsc;
 
 use gpui::{App, Context, SharedString};
+use serde_json::Value;
 
 use crate::agents::tier::Sites;
 use crate::agents::{Agents, Gone, TabInfo, ToolResult, held, site, tools};
@@ -607,8 +608,14 @@ impl Agents {
 
     /// Whether `tab` is one the user returned to their own tabs from `agent`'s thread, and hasn't
     /// handed to a thread since.
-    pub(in crate::agents) fn returned_from(&self, agent: &str, tab: u64) -> bool {
+    fn returned_from(&self, agent: &str, tab: u64) -> bool {
         matches!(self.gone.get(&tab), Some((whose, Gone::Returned)) if whose == agent)
+    }
+
+    /// Whether a call of `agent`'s with `arguments` names a tab the user returned from its thread.
+    pub(in crate::agents) fn names_returned(&self, agent: &str, arguments: &Value) -> bool {
+        let named = tools::tabs_named(arguments);
+        named.iter().any(|tab| self.returned_from(agent, *tab))
     }
 
     /// What the app keeps of `tab` as a page of an agent's goes with it: the agent's own pin of it,

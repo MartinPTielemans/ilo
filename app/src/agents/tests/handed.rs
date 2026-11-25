@@ -344,6 +344,50 @@ fn return_to_your_tabs_takes_the_tab_back_mid_step(cx: &mut TestAppContext) {
     );
 }
 
+/// A call that names a tab the user returned leaves nothing: the tab is theirs again, on whatever
+/// page it's at now, so the call is no step of the thread's trace, no entry of the activity log
+/// and no line of the app's log, whatever its tool.
+#[gpui::test]
+fn a_call_on_a_returned_tab_leaves_nothing(cx: &mut TestAppContext) {
+    let run = run("handed-returned-call", cx);
+    let agent = send(&run, ASKED, USERS, &[TRAINS.0], cx).expect("started");
+    press_return(&run, &agent, TRAINS.0, cx);
+    // The user has gone on in it since.
+    let elsewhere = (9, USERS, "Results", "https://clinic.example/results");
+    run.browser
+        .tabs
+        .borrow_mut()
+        .retain(|each| each.0 != TRAINS.0);
+    (run.browser.tabs.borrow_mut()).push((TRAINS.0, elsewhere.1, elsewhere.2, elsewhere.3));
+    let kept = |cx: &mut TestAppContext| {
+        run.agents.read_with(cx, |agents, _| {
+            let steps = agents.task(&agent).expect("its thread").trace.len();
+            (steps, agents.activity(&agent).count())
+        })
+    };
+    let before = kept(cx);
+    crate::heard::listen();
+    for tool in [
+        "read_page",
+        "click",
+        "snapshot",
+        "navigate",
+        "ask_for_tab",
+        "close_tab",
+    ] {
+        let answer = answered(&run, &agent, tool, TRAINS.0, cx);
+        assert_eq!(answer.text, handed::RETURNED, "{tool}");
+    }
+    let lines = crate::heard::take();
+    assert_eq!(kept(cx), before);
+    let of_it = |line: &&String| {
+        let names = ["Results", "clinic.example", TRAINS.1, "example.com"];
+        line.contains(" calls ") || names.iter().any(|name| line.contains(name))
+    };
+    assert_eq!(lines.iter().find(of_it), None, "{lines:#?}");
+    assert!(run.browser.pages.borrow().is_empty(), "the core acted");
+}
+
 /// Only a tab the thread holds of the user's is returned: a page it opened itself, a tab of the
 /// user's it never had and a tab handed to another thread are left as they are, with no entry.
 #[gpui::test]
