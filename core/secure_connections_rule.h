@@ -51,8 +51,8 @@ inline constexpr char kEntryAction[] = "open_page";
 inline constexpr char kEntryReason[] = "not_secure";
 
 // The entry's action for a page the user went to and left at Chrome's warning when they handed
-// the tab back. No step of the agent's asked for that page, so the app ends none on this entry:
-// a step the agent began since the hand-back still goes, and is never told it didn't.
+// the tab back: no step of the agent's asked for that page. The app ends no step on either
+// entry, so the two differ only for who reads the log.
 inline constexpr char kHandedBackAction[] = "handed_back_page";
 
 // The navigation an agent's open or navigate started in a tab, for the job that waits on its

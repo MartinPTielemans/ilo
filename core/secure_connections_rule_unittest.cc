@@ -61,7 +61,7 @@ TEST(SecureConnectionsRuleTest, TheEntryIsKnownByItsTwoCodes) {
   EXPECT_STREQ(kEntryReason, "not_secure");
 }
 
-// The app tells the hand-back's entry from a step's by its action alone, so the two differ.
+// A reader of the log tells the hand-back's entry from a step's by its action alone.
 TEST(SecureConnectionsRuleTest, TheHandBacksEntryHasAnActionOfItsOwn) {
   EXPECT_STREQ(kHandedBackAction, "handed_back_page");
   EXPECT_STRNE(kHandedBackAction, kEntryAction);
