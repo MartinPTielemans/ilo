@@ -4697,7 +4697,7 @@ impl Settings {
             )
             .into()
         } else if connected {
-            format!("Connected in {}", client.config()).into()
+            client.set_up_line().into()
         } else if client == Client::Other {
             // Says which it looked for, so one missing from the list isn't a mystery.
             let missing: Vec<&str> = (Client::APPS.into_iter())
