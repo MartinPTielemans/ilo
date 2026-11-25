@@ -49,9 +49,9 @@ final class Desk {
     closed.seen = now
     try await computer.put(closed)
     try await computer.delete(closed.id!)
-    // A pinned tab a newer ilo wrote, with a field 13 this one has never heard of.
+    // A pinned tab a newer ilo wrote, with a field 1000 this one has never heard of.
     let later = page(newer, .pin, "https://example.org/newer", title: "Newer")
-    try await computer.put(later, bytes: later.serialized + [13 << 3, 1])
+    try await computer.put(later, bytes: later.serialized + [0xc0, 0x3e, 1])
     // Two the computer's own Parse refuses: an id that isn't a lowercase UUID, and a Today tab
     // without its prefix.
     try await computer.put(page(newID().uppercased(), .pin, "https://example.org/shouting", title: "Shouting"))
@@ -593,7 +593,7 @@ final class IntegrationTests: XCTestCase {
     // And a Today tab one wrote since.
     let written = try await desk.computer.entities()
     let later = try XCTUnwrap(written[desk.second]?.entity)
-    try await desk.computer.put(later, bytes: later.serialized + [13 << 3, 1])
+    try await desk.computer.put(later, bytes: later.serialized + [0xc0, 0x3e, 1])
     await phone.refresh()
     XCTAssertNil(phone.move(desk.second, to: desk.work))
     XCTAssertEqual(phone.problem, Said.newer)
@@ -1194,6 +1194,51 @@ final class IntegrationTests: XCTestCase {
     XCTAssertEqual(phone.node(desk.one)?.name, "")
     XCTAssertEqual(phone.node(desk.first)?.name, "")
     XCTAssertNil(phone.problem)
+  }
+
+  /// A Today tab in a today's folder on the computers carries its folder in field 13, which the
+  /// phone keeps on what it writes of the tab and never draws, so the tab stays the phone's to
+  /// change. Pinned, it's in no today's folder, so the pin carries none.
+  @MainActor
+  func testATodayTabInATodaysFolderStaysWritable() async throws {
+    let desk = try await Desk(server: try server, email: address())
+    let folder = newID()
+    let sent = try await account(desk, desk.second)
+    var foldered = try XCTUnwrap(sent?.entity)
+    foldered.todayFolder = folder
+    try await desk.computer.put(foldered)
+    let phone = try await phone(on: desk).account
+    XCTAssertEqual(phone.today(in: desk.work).map(\.id), [desk.first, desk.second])
+    XCTAssertEqual(phone.state.records[desk.second]?.writable, true)
+
+    // A new page: the account has the tab as it came, with its page and title changed.
+    phone.updateToday(desk.second, url: URL(string: "https://example.org/next")!, title: "Next")
+    XCTAssertNil(phone.problem)
+    await settled(phone)
+    var expected = foldered
+    expected.url = "https://example.org/next"
+    expected.title = "Next"
+    let updated = try await account(desk, desk.second)
+    XCTAssertEqual(updated?.bytes, expected.serialized)
+
+    // Moved to another Space, it keeps the field, which names a folder of the Space it left. The
+    // computers take no tab into another Space's folder (TodayFolderOf in
+    // core/sync_today_folders.cc), so they put it in Today there loose and write it back without.
+    XCTAssertEqual(phone.move(desk.second, to: desk.home)?.id, desk.second)
+    await settled(phone)
+    let movedEntry = try await account(desk, desk.second)
+    let moved = try XCTUnwrap(movedEntry?.entity)
+    XCTAssertEqual(moved.space, desk.home)
+    XCTAssertEqual(moved.todayFolder, folder)
+
+    let key = SpaceEntity.key(desk.second)
+    XCTAssertEqual(phone.pin(today: desk.second)?.id, key)
+    XCTAssertNil(phone.problem)
+    await settled(phone)
+    let all = try await desk.computer.entities()
+    XCTAssertNil(all[desk.second])
+    XCTAssertEqual(all[key]?.entity.kind, .pin)
+    XCTAssertNil(all[key]?.entity.todayFolder)
   }
 
   @MainActor

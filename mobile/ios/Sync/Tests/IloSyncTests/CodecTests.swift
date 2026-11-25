@@ -135,10 +135,31 @@ final class SpaceEntityTests: XCTestCase {
     XCTAssertNil(SpaceEntity.parse(space.serialized)!.entity.name)
   }
 
+  /// A Today tab in a today's folder on the computers, as they write one: its folder in field 13,
+  /// last. The phone understands it, so the tab stays writable, and writes it back as it came.
+  func testATodayTabsFolderIsKeptAndWrittenBack() {
+    var tab = SpaceEntity()
+    tab.id = "today:0b0e3d2c-6a52-4d0e-9d55-0d6d7f1f0a11"
+    tab.kind = .today
+    tab.space = "5c0e3d2c-6a52-4d0e-9d55-0d6d7f1f0a22"
+    tab.url = "https://example.org/"
+    tab.title = "Example"
+    tab.seen = 1_800_000_000
+    var folder = ProtoWriter()
+    folder.string(13, "7d8e9f0a-1b2c-4d3e-8f4a-5b6c7d8e9f0a")
+    let bytes = tab.serialized + folder.bytes
+    let parsed = SpaceEntity.parse(bytes)!
+    XCTAssertTrue(parsed.understood)
+    XCTAssertTrue(parsed.entity.isValid)
+    XCTAssertEqual(parsed.entity.todayFolder, "7d8e9f0a-1b2c-4d3e-8f4a-5b6c7d8e9f0a")
+    XCTAssertEqual(parsed.entity.serialized, bytes)
+  }
+
   func testAnEntityWithMoreIsNotUnderstood() {
+    // Field 1000, which neither the computer's nor the phone's SpaceEntity has.
     var writer = ProtoWriter()
     writer.string(1, "5c0e3d2c-6a52-4d0e-9d55-0d6d7f1f0a22")
-    writer.string(13, "from a newer ilo")
+    writer.string(1000, "from a newer ilo")
     XCTAssertFalse(SpaceEntity.parse(writer.bytes)!.understood)
 
     var kind = ProtoWriter()
