@@ -352,7 +352,6 @@ impl Process {
         Ok(process)
     }
 
-    /// Sends the user's message, which the agent reads once its turn under way ends.
     /// The model its next turns run on, by id, where its program takes one per turn.
     pub fn set_model(&mut self, model: &str) {
         if let (Cli::Codex, Some(state)) = (self.cli, &self.codex) {
@@ -360,6 +359,7 @@ impl Process {
         }
     }
 
+    /// Sends the user's message, which the agent reads once its turn under way ends.
     pub fn say(&mut self, text: &str) -> std::io::Result<()> {
         match (self.cli, &self.codex) {
             (Cli::Codex, Some(state)) => super::codex::say(&self.stdin, state, text),
