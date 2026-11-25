@@ -12,6 +12,7 @@ bool Refuses(Ask ask, const Tab& tab) {
       return !tab.held;
     case Ask::kFilePicker:
     case Ask::kDevice:
+    case Ask::kPictureInPicture:
       return true;
   }
   return true;

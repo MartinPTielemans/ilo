@@ -18,6 +18,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "browser_core/agent_autofill.h"
+#include "browser_core/agent_space_page.h"
 #include "browser_core/arrange.h"
 #include "browser_core/autofill_menu.h"
 #include "browser_core/boosts.h"
@@ -2147,8 +2148,10 @@ void Tab::Media(int action) {
       break;
     case BC_MEDIA_PICTURE_IN_PICTURE:
       // From its card to Chrome's window, if its card shows it, else the page's own handler if it
-      // has one, or its one video, as Chrome's media controls do.
-      if (!FloatCardVideo(web_contents())) {
+      // has one, or its one video, as Chrome's media controls do. Neither for a page in an agent's
+      // Space, which has no Picture in Picture (agent_space_rule.h).
+      if (!RefusesInAgentSpace(agent_space_rule::Ask::kPictureInPicture, web_contents()) &&
+          !FloatCardVideo(web_contents())) {
         session->EnterPictureInPicture();
       }
       break;

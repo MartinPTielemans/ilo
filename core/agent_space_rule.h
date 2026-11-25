@@ -26,11 +26,15 @@ enum class Ask {
   // A link of the page's opened in a preview over the user's window: by a click that leaves a
   // pinned tab's site, a click with ⇧, or the row of the page's menu.
   kLinkPreview,
+  // Picture in Picture: a video's or a document's window floating on the user's screen, and the
+  // video at the app's media card.
+  kPictureInPicture,
 };
 
 // Whether the browser refuses |ask| from a page in |tab|. Nothing in a tab of the user's. In an
-// agent's Space the picker and a device always, and a paste and a link preview unless the user
-// holds the tab, so their own paste and their own click work at a step they do themselves.
+// agent's Space the picker, a device and Picture in Picture always, and a paste and a link preview
+// unless the user holds the tab, so their own paste and their own click work at a step they do
+// themselves.
 bool Refuses(Ask ask, const Tab& tab);
 
 // Whether the page's menu has its row that opens a link in a preview, for a link that could open

@@ -5,7 +5,8 @@
 namespace browser_core::agent_space_rule {
 namespace {
 
-constexpr Ask kAsks[] = {Ask::kPaste, Ask::kFilePicker, Ask::kDevice, Ask::kLinkPreview};
+constexpr Ask kAsks[] = {Ask::kPaste, Ask::kFilePicker, Ask::kDevice, Ask::kLinkPreview,
+                         Ask::kPictureInPicture};
 
 TEST(AgentSpaceRuleTest, ATabOfTheUsersIsRefusedNothing) {
   for (Ask ask : kAsks) {
@@ -33,6 +34,11 @@ TEST(AgentSpaceRuleTest, AHeldTabStillGetsNoFilePicker) {
 // A device opened while they hold the tab would stay open once the agent has it again.
 TEST(AgentSpaceRuleTest, AHeldTabStillGetsNoDevice) {
   EXPECT_TRUE(Refuses(Ask::kDevice, {.agents = true, .held = true}));
+}
+
+// A window opened while they hold the tab would stay on their screen once the agent has it again.
+TEST(AgentSpaceRuleTest, AHeldTabStillGetsNoPictureInPicture) {
+  EXPECT_TRUE(Refuses(Ask::kPictureInPicture, {.agents = true, .held = true}));
 }
 
 // A link the user clicks at a step they do themselves opens in a preview as in a tab of theirs.
