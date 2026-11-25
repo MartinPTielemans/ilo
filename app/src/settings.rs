@@ -24,6 +24,7 @@ use browser::little_launch;
 use browser::log;
 use browser::notes;
 use browser::passwords::{self, Login};
+use browser::product::PRODUCT;
 use browser::shell::{self, CancelName, Command, Holder, KeepName, MenuEntry, Refused, UserKeys};
 use browser::text_input::{self, Colors, TextInput};
 use browser::theme::Appearance;
@@ -56,11 +57,11 @@ use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
 use browser::tokens::radius;
 use browser::tokens::settings::form;
 use browser::tokens::settings::{
-    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS, DETAIL,
+    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS,
     DETAIL_LINE, DETAIL_TOP, END_GAP, FIELD_PADDING, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME,
-    GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE,
-    LEDE_TOP, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SENT_TUCK, SHARE_TOP,
-    SHORT_PADDING, SHORT_ROW, SIDE_ROOM, TEXT_X, TITLE, WIDTH,
+    GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_LINE, HEADING_TOP, HEADING_X,
+    HEIGHT, LEDE_LINE, LEDE_TOP, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SEARCH_PLACEHOLDER,
+    SECTION_TEXT, SENT_TUCK, SHARE_TOP, SHORT_PADDING, SHORT_ROW, SIDE_ROOM, TEXT_X, TITLE, WIDTH,
 };
 use browser::tokens::shell::{
     WINDOW_BUTTON_GLYPH, WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y, WINDOWS_BUTTON_GLYPH,
@@ -84,6 +85,12 @@ const ARCHIVE_AFTER: [(&str, f64); 5] = [
 
 /// The core's BC_ARCHIVE_NEVER.
 const ARCHIVE_NEVER: f64 = -1.;
+
+/// The times Settings offers a profile's tabs to wait before the archive, in its order, as first
+/// run's bar has them.
+pub(crate) fn archive_times() -> Vec<f64> {
+    ARCHIVE_AFTER.iter().map(|&(_, seconds)| seconds).collect()
+}
 
 /// Chrome's page zoom choices, as its settings page's.
 const PAGE_ZOOM: [(&str, f64); 11] = [
@@ -816,6 +823,9 @@ fn show_now(cx: &mut App) {
             if settings.section == Section::OtherApps {
                 look_for_clients(cx);
             }
+            if settings.section == Section::Models {
+                models_shown(cx);
+            }
             if settings.section == Section::SyncImport {
                 settings
                     .account
@@ -839,6 +849,13 @@ fn look_for_clients(cx: &mut App) {
             agents.look_for_clients(cx);
             agents.look_for_task_agents(cx);
         });
+    }
+}
+
+/// Looks for the assistants as Models opens, so its rows say what's on this computer.
+fn models_shown(cx: &mut App) {
+    if let Some(agents) = agents::global(cx) {
+        agents.update(cx, |agents, cx| agents.models_shown(cx));
     }
 }
 
@@ -1087,10 +1104,9 @@ fn view(cx: &mut App) -> Entity<Settings> {
                     return Colors::default();
                 };
                 let settings = settings.read(cx);
-                // The field's "Search" is the rows' grey over the field's own plate, not over a
-                // group's.
+                // The field's "Search" over the field's own plate, not over a group's.
                 Colors {
-                    placeholder: settings.base().opacity(DETAIL).into(),
+                    placeholder: settings.base().opacity(SEARCH_PLACEHOLDER).into(),
                     ..settings.look.field()
                 }
             })
@@ -1400,6 +1416,9 @@ impl Settings {
         if section == Section::OtherApps {
             look_for_clients(cx);
         }
+        if section == Section::Models {
+            models_shown(cx);
+        }
         if section == Section::SyncImport {
             self.account
                 .update(cx, |account, cx| account.read_activity(cx));
@@ -1511,7 +1530,7 @@ impl Settings {
             div()
                 .mt(px(LEDE_TOP))
                 .line_height(px(LEDE_LINE))
-                .text_color(base.opacity(DETAIL))
+                .text_color(self.look.detail)
                 .child(lede)
         });
         let head = div()
@@ -1523,8 +1542,8 @@ impl Settings {
         let mut after_heading = None;
         let blocks = blocks.into_iter().map(|block| {
             let top = match (after_heading, &block) {
-                (None, _) => FIRST_GROUP,
                 (_, Block::Heading(_) | Block::Crumb(..)) => HEADING_TOP,
+                (None, _) => FIRST_GROUP,
                 (Some(true), _) => HEADING_BOTTOM,
                 (_, Block::Under(_)) => BUTTONS_TOP,
                 _ => GROUP_GAP,
@@ -1559,13 +1578,14 @@ impl Settings {
             .children(blocks)
     }
 
-    /// A heading over the group after it, on the text's column.
+    /// A heading over the group after it, 4 in from the groups' edge, as drawn.
     fn heading(&self, heading: SharedString) -> gpui::Div {
         div()
             .relative()
             .child(self.card.mark(heading.clone()))
-            .px(px(TEXT_X))
-            .text_size(px(text::SMALL))
+            .px(px(HEADING_X))
+            .line_height(px(HEADING_LINE))
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(self.look.heading)
             .child(heading)
     }
@@ -1578,7 +1598,7 @@ impl Settings {
             let div = self.flashed(&row.name, row.div);
             match row.nested {
                 true => (div.pl(px(x)), x),
-                false => (div, ROW_X),
+                false => (div, 0.),
             }
         });
         group_lined(&self.look, rows)
@@ -1740,34 +1760,10 @@ impl Settings {
             vec![ask],
         );
         let found: Vec<Row> = search.into_iter().chain(folders).chain([ask]).collect();
-        let mut looks = Vec::new();
-        // Where the host draws the dot: the Dock icon's, or Windows' taskbar button's.
-        if let Some(switch) = browser::dock_dot::SWITCH {
-            let colored = !off(DOCK_ICON_PLAIN);
-            let colored = self.toggle(
-                "dock icon color",
-                switch.name,
-                colored,
-                set_dock_icon_color,
-                accent,
-                cx,
-            );
-            looks.push(setting(
-                look,
-                switch.name,
-                Some(switch.line.into()),
-                vec![colored],
-            ));
-        }
         let mut blocks = vec![
             Block::Heading("Opening and quitting".into()),
             Block::Rows(opening),
         ];
-        // The Dock's row stays until its colour goes (#4078).
-        if !looks.is_empty() {
-            blocks.push(Block::Heading("Look".into()));
-            blocks.push(Block::Rows(looks));
-        }
         if !found.is_empty() {
             blocks.push(Block::Heading("Search and downloads".into()));
             blocks.push(Block::Rows(found));
@@ -2009,12 +2005,38 @@ impl Settings {
             Some("Its page loads again there, without this profile's logins and cookies.".into()),
             vec![moving],
         );
+        // Drawn only where the broom can be, which is also where the core keeps the switch.
+        let broom = crate::broom_host::can_be(cx);
+        let sort = self.per_profile(
+            profiles,
+            "Sort tabs into folders",
+            Some(
+                format!(
+                    "When you sort, {PRODUCT} sends the titles and site names of today's tabs to \
+                     your assistant."
+                )
+                .into(),
+            ),
+            |profile| {
+                let id = profile.id;
+                broom.then(|| {
+                    self.toggle(
+                        format!("sort tabs {id}"),
+                        "Sort tabs into folders",
+                        crate::broom_host::on(id),
+                        move |on, cx| crate::broom_host::set_on(id, on, cx),
+                        accent,
+                        cx,
+                    )
+                })
+            },
+        );
         let mut blocks = vec![
             Block::Heading("Today tabs".into()),
             Block::Rows(
-                archive
-                    .into_iter()
+                (archive.into_iter())
                     .chain([unload, battery, moving])
+                    .chain(sort)
                     .collect(),
             ),
             Block::Rows(vec![favorites]),
@@ -3771,11 +3793,15 @@ impl Settings {
         let rows = [master].into_iter().chain(tasks).chain(keeps).chain(kept);
         let mut threads = vec![Block::Rows(rows.collect())];
         let (mut models, mut access) = (Vec::new(), Vec::new());
+        // Every assistant, in its state, whether agents and tasks are on or not (S9).
+        models.push(Block::Heading("Your assistant".into()));
+        models.push(Block::Group(self.assistants(agents, cx)));
+        models.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
         if tasks_on {
-            models.push(Block::Heading("Your assistant".into()));
-            models.push(Block::Group(self.assistants(agents, cx)));
-            models.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
             access.extend(self.access());
+            // What a thread may reach: files and folders too, with the folders it holds to revoke.
+            access.extend(self.files_not_here(agents, cx));
+            access.extend(self.folders_in_use(agents, cx));
         }
         // ⌘T's tasks and outside agents' sessions notify alike, so it's here while agents are on.
         // The Mac, Windows and Linux each post them (needs_you_host.rs).
@@ -3910,6 +3936,59 @@ impl Settings {
         vec![
             Block::Heading(heading.clone()),
             Block::Group(self.flashed(&heading, group(look, rows))),
+        ]
+    }
+
+    /// Files and folders (#4101) on a system that can't wall a task in with them: why they aren't
+    /// offered (X9), under its own heading, where a user who looks for them finds it. A block of
+    /// its own, which leans on no other row, so it can move as Settings is regrouped.
+    fn files_not_here(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
+        use agents::files::words;
+        if agents.read(cx).files_available() {
+            return Vec::new();
+        }
+        let why = line_row(&self.look, words::NOT_AVAILABLE, None, Vec::new());
+        vec![
+            Block::Heading(words::ON_THIS_COMPUTER.into()),
+            Block::Group(group(&self.look, [why])),
+        ]
+    }
+
+    /// Each folder a live task holds (#4101), with Revoke, which acts at once, under its own
+    /// heading; not drawn while no task holds one, nor where files aren't available. A block of
+    /// its own, which leans on no other row, so it can move as Settings is regrouped.
+    fn folders_in_use(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
+        use agents::files::words;
+        let look = &self.look;
+        let model = agents.read(cx);
+        if !model.files_available() {
+            return Vec::new();
+        }
+        let rows: Vec<gpui::Div> = (model.folders_in_use().into_iter().enumerate())
+            .map(|(index, held)| {
+                let (agents, agent) = (agents.clone(), held.agent.clone());
+                let revoke = self
+                    .button(("agent-folder-revoke", index as u64), words::REVOKE)
+                    .relative()
+                    // By its place, never the folder's name, as this line is logged.
+                    .child(self.drawn(format!("revoke folder {index}")))
+                    .on_click(move |_, _, cx| {
+                        agents.update(cx, |agents, cx| agents.revoke_folder(&agent, cx))
+                    });
+                line_row(
+                    look,
+                    held.folder,
+                    Some(held.task),
+                    vec![revoke.into_any_element()],
+                )
+            })
+            .collect();
+        if rows.is_empty() {
+            return Vec::new();
+        }
+        vec![
+            Block::Heading(words::FOLDERS_IN_USE.into()),
+            Block::Group(group(look, rows)),
         ]
     }
 
@@ -5351,7 +5430,6 @@ fn set_mini_player(on: bool, _: &mut App) {
 /// The app's own switches that are on unless the user turned them off, each a file in the
 /// profile directory while it's off, as the core keeps no settings of the app's own.
 const NO_EDGE_REVEAL: &str = "no-edge-reveal";
-const DOCK_ICON_PLAIN: &str = "plain-dock-icon";
 /// What's recent in hover cards, off (#3074); and the sites Site Controls turned it off for, a line
 /// each.
 const NO_RECENT: &str = "no-recent-in-cards";
@@ -5376,7 +5454,6 @@ fn set_off(name: &str, is_off: bool) {
 pub fn read_switches(cx: &mut App) {
     cx.set_global(shell::SidebarEdge(!off(NO_EDGE_REVEAL)));
     cx.set_global(shell::SidebarRight(off(SIDEBAR_RIGHT)));
-    browser::dock_dot::set_plain(off(DOCK_ICON_PLAIN), cx);
     browser::recent::set_switches(!off(NO_RECENT), recent_sites_off(), cx);
 }
 
@@ -5428,11 +5505,6 @@ pub fn set_sidebar_right(right: bool, cx: &mut App) {
 fn set_edge_reveals(reveals: bool, cx: &mut App) {
     set_off(NO_EDGE_REVEAL, !reveals);
     cx.set_global(shell::SidebarEdge(reveals));
-}
-
-fn set_dock_icon_color(colored: bool, cx: &mut App) {
-    set_off(DOCK_ICON_PLAIN, !colored);
-    browser::dock_dot::set_plain(!colored, cx);
 }
 
 /// About's "Check for updates automatically", which only the Mac and Windows show. It reads the
@@ -6218,11 +6290,17 @@ impl Settings {
         pages.sort_by_key(|page| Section::all().position(|each| each == page.section));
         let (mut entries, mut divs, mut under) = (Vec::new(), Vec::new(), Vec::new());
         for page in pages {
+            // The heading over the groups that follow it, which the search reads too.
+            let mut group = None;
             for block in page.blocks {
                 let rows = match block {
                     Block::Rows(rows) => rows,
                     Block::Under(buttons) => {
                         under.push((page.section, buttons));
+                        continue;
+                    }
+                    Block::Heading(heading) | Block::Crumb(heading, _) => {
+                        group = Some(heading);
                         continue;
                     }
                     _ => continue,
@@ -6234,6 +6312,7 @@ impl Settings {
                 for row in rows {
                     entries.push(Entry {
                         section: page.section,
+                        group: group.clone(),
                         under: row.nested.then(|| head.clone()).flatten(),
                         name: row.name,
                         line: row.line,

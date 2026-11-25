@@ -21,9 +21,9 @@ use crate::tokens::shell::cast::{
     GLYPH, GLYPH_GAP, LIST_TOP, NAME, ROW, ROW_GAP, ROW_INSET, STATUS,
 };
 
-/// One turn of the ring while a card looks for devices (ours: a turn a second reads as busy
-/// without hurrying).
-const TURN: Duration = Duration::from_secs(1);
+/// One turn of a ring that shows something at work, a card looking for devices or the broom
+/// sorting (ours: a turn a second reads as busy without hurrying).
+pub(super) const TURN: Duration = Duration::from_secs(1);
 
 /// A tab's Cast dialog, as the core reports it.
 #[derive(Clone, PartialEq, Debug)]

@@ -89,6 +89,7 @@ pub const SHORTCUTS: &[(&str, &[(&str, Keys)])] = &[
             of(Command::FocusMenu),
             of(Command::Clear),
             of(Command::SortBySite),
+            of(Command::SortIntoFolders),
             of(Command::ResetSpaceTabs),
             of(Command::CopyUrl),
             of(Command::CopyMarkdownLink),

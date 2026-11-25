@@ -1929,3 +1929,61 @@ fn the_shown_rows_title_reads_on_the_plate_as_drawn_at_every_level() {
     }
     set_transparency(Transparency::Standard);
 }
+
+/// Every fifth level of each channel, every grey, and the greys' neighbours where Ink and Paper
+/// both fall short of text: the colours a page may report as its own.
+fn page_colours() -> impl Iterator<Item = Rgba> {
+    let levels = || (0..=255u32).step_by(5);
+    let stepped = levels()
+        .flat_map(move |r| levels().flat_map(move |g| levels().map(move |b| r << 16 | g << 8 | b)));
+    let greys = (0..=255u32).map(|grey| grey << 16 | grey << 8 | grey);
+    let near_middle = (100..=140u32).flat_map(|grey| {
+        [(1, 0, 0), (0, 1, 0), (0, 0, 1), (3, 0, 2)]
+            .map(|(r, g, b)| (grey + r) << 16 | (grey + g) << 8 | (grey + b))
+    });
+    stepped.chain(greys).chain(near_middle).map(rgb)
+}
+
+#[test]
+fn text_on_a_pages_own_colour_reads_whatever_the_colour() {
+    for window in [Tone::Dark, Tone::Light] {
+        let palette = Palette::of(None, window);
+        for fill in page_colours() {
+            let on = palette.on_fill(fill);
+            // The dimmest a title, a host's line or a glyph is asked for: the floor carries it.
+            for (ink, bar) in [
+                (on.text(0.), TEXT),
+                (on.gray(0.), gray_text(transparency())),
+                (on.glyph(0.), GLYPH),
+            ] {
+                let (color, alpha) = (Hsla { a: 1., ..ink }.to_rgb(), ink.a);
+                let reads = contrast(drawn(over(fill, color, alpha)), drawn(fill));
+                assert!(
+                    reads >= bar,
+                    "{:06x} on {:06x} at {alpha} reads {reads}, under {bar}",
+                    hex(color),
+                    hex(fill),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_ink_on_a_pages_colour_is_the_colours_alone_not_the_windows() {
+    let (dark, light) = (
+        Palette::of(None, Tone::Dark),
+        Palette::of(None, Tone::Light),
+    );
+    for fill in page_colours() {
+        let (on_dark, on_light) = (dark.on_fill(fill), light.on_fill(fill));
+        assert_eq!(on_dark.ink, on_light.ink, "on {:06x}", hex(fill));
+        assert_eq!(on_dark.tone, on_light.tone, "on {:06x}", hex(fill));
+        // A light ink is a dark page's: the tone its plates and quiet steps follow.
+        let lit = luminance(on_dark.ink) > luminance(fill);
+        assert_eq!(on_dark.tone == Tone::Dark, lit, "on {:06x}", hex(fill));
+    }
+    // Paper on a dark page and Ink on a light one, as the window's own text is.
+    assert_eq!(dark.on_fill(rgb(0x101014)).ink, rgb(PAPER));
+    assert_eq!(dark.on_fill(rgb(0xffffff)).ink, rgb(INK));
+}

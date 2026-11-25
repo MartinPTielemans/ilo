@@ -37,16 +37,6 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "the preview's made-up Space colours",
     ),
     (
-        "shell/dock_dot.rs",
-        "0x8655BF",
-        "a test's made-up Space colour",
-    ),
-    (
-        "shell/dock_dot.rs",
-        "0xE0475B",
-        "a test's made-up Space colour",
-    ),
-    (
         "shell/undo_tests.rs",
         "Some(0xff0000)",
         "a test's made-up Space colour",
@@ -115,10 +105,11 @@ fn look_values_come_from_the_token_file() {
 /// point, not a corner, and what the rule derives, which the concentric test below checks.
 const NOT_ONE_OF_FOUR: &[&str] = &[
     // First run's window, as its drawing has it (values-first-run.md): the indicator's track, the
-    // foot's buttons and their key, and the picture's panel.
+    // foot's buttons and their key, the keys step's caps, and the picture's panel.
     "shell.onboarding.window.track-radius",
     "shell.onboarding.window.button-radius",
     "shell.onboarding.window.key-radius",
+    "shell.onboarding.window.key-cap-radius",
     "shell.onboarding.window.panel-radius",
     "icon-picker.arrow-tip-radius",
     "icon-picker.arrow-foot-radius",
@@ -131,6 +122,8 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "shell.recent-downloads.preview-radius",
     // The page's own corner, as the redesign draws it: between a control's and a row's.
     "shell.card-radius",
+    // The two curves that take the open tab's line into its page, which round no corner.
+    "shell.join-radius",
     // The menu's glass, concentric round its rows as the rework's mocks draw it (#4090).
     "menu.radius",
     "menu.row-radius",
@@ -157,12 +150,27 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "transparency.menu-row-radius",
     // A card's recent rows, inside its picture's box (#3074).
     "hover-card.recent-row-radius",
-    // First run's sheet (#4093): its slot inset in its corner, the sheet's less the inset, and the
-    // loop's small window at the drawing's scale.
+    // First run's sheet (#4093): its slot inset in its corner, the sheet's less the inset.
     "shell.onboarding.sheet.slot-radius",
-    "shell.onboarding.loops.window-radius",
-    "shell.onboarding.loops.icon-radius",
-    "shell.onboarding.loops.bar-radius",
+    // First run's picture, a small browser at the drawing's scale (values-first-run.md).
+    "shell.onboarding.picture.window-radius",
+    "shell.onboarding.picture.button-radius",
+    "shell.onboarding.picture.address-radius",
+    "shell.onboarding.picture.favorite-radius",
+    "shell.onboarding.picture.favorite-mark-radius",
+    "shell.onboarding.picture.mark-radius",
+    "shell.onboarding.picture.open-tab-radius",
+    "shell.onboarding.picture.page-radius",
+    "shell.onboarding.picture.chip-radius",
+    "shell.onboarding.picture.thread-radius",
+    "shell.onboarding.picture.notice-radius",
+    "shell.onboarding.picture.notice-tile-radius",
+    "shell.onboarding.picture.bar-radius",
+    "shell.onboarding.picture.bar-row-radius",
+    "shell.onboarding.picture.bar-mark-radius",
+    "shell.onboarding.picture.phone-radius",
+    "shell.onboarding.picture.island-radius",
+    "shell.onboarding.picture.phone-space-radius",
     // The composer's switch round its parts, and a card's page inside the card (#4140).
     "shell.composer.switch-radius",
     "shell.composer.page-radius",

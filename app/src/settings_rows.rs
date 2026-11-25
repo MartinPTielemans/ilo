@@ -5,31 +5,30 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
-    App, BoxShadow, Context, Rgba, SharedString,
+    App, Context, Rgba, SharedString,
     accesskit::{HasPopup, Role, Toggled},
-    canvas, div, point,
+    canvas, div,
     prelude::*,
     px, rgb, rgba, svg,
 };
 
 use crate::agents::request::Sent;
 pub use crate::keyboard_ring::{ring, ring_round};
-use crate::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
+use crate::palette::{CARD_PLATE, INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER, TEXT_SECONDARY};
 use crate::text_input::Colors;
-use crate::tokens::palette::{ACCENT_HOVERED, ACCENT_PRESSED, DIALOG_LIGHT};
+use crate::tokens::palette::{ACCENT_HOVERED, ACCENT_PRESSED, DIALOG_LIGHT, LIGHT_TEXT_SECONDARY};
 use crate::tokens::radius;
+use crate::tokens::settings::form::{LIGHT_PAGE_LINE, PAGE_LINE};
 use crate::tokens::settings::{
     BUTTON_GLYPH, CHECK_BOX, CHECK_GAP, CHECK_GLYPH, CHECK_RADIUS, CHEVRONS, CHEVRONS_ALPHA,
-    CHEVRONS_END, CHIP, CHIP_FIXED, CHIP_FIXED_TEXT, CHIP_HEIGHT, CHIP_NONE_TEXT, CHIP_PADDING,
-    CHIP_RADIUS, CHIP_TEXT, CHIP_WIDTH, CONTROL, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_HOVERED,
-    CONTROL_HOVERED_LIGHT, CONTROL_LIGHT, CONTROL_PADDING, CONTROL_PRESSED, CONTROL_PRESSED_LIGHT,
-    CONTROL_RADIUS, DETAIL, DETAIL_LINE, DETAIL_TOP, END_GAP, GLYPH, GLYPH_OFF, GLYPH_ON,
-    GLYPH_PLATE, GLYPH_PLATE_FILL, GLYPH_PLATE_GAP, GROUP, GROUP_LIGHT, GROUP_RIM,
-    GROUP_RING_LIGHT, GROUP_SHADOW_BLUR, GROUP_SHADOW_LIGHT, GROUP_SHADOW_Y, HEADING, KNOB,
-    KNOB_ALPHA, KNOB_INSET, KNOB_SHADOW, KNOB_SHADOW_BLUR, KNOB_SHADOW_Y, LINE, NAME, NAME_OFF,
-    ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE, ON_PRESSED, ON_SWITCH_OFF, PADDING, RESTORE_RADIUS,
-    ROW_HEIGHT, ROW_X, SIDE_ROOM, STACKED_GAP, SWITCH_HEIGHT, SWITCH_OFF, SWITCH_OFF_LIGHT,
-    SWITCH_WIDTH,
+    CHEVRONS_END, CHEVRONS_GAP, CHIP, CHIP_FIXED, CHIP_FIXED_TEXT, CHIP_HEIGHT, CHIP_NONE_TEXT,
+    CHIP_PADDING, CHIP_RADIUS, CHIP_TEXT, CHIP_WIDTH, CONTROL, CONTROL_GAP, CONTROL_HEIGHT,
+    CONTROL_HOVERED, CONTROL_HOVERED_LIGHT, CONTROL_LIGHT, CONTROL_PADDING, CONTROL_PRESSED,
+    CONTROL_PRESSED_LIGHT, CONTROL_RADIUS, DETAIL_LINE, DETAIL_SIZE, DETAIL_TOP, END_GAP, GLYPH,
+    GLYPH_OFF, GLYPH_ON, GLYPH_PLATE, GLYPH_PLATE_FILL, GLYPH_PLATE_GAP, KNOB, KNOB_INSET, LINE,
+    LINE_ROW_HEIGHT, NAME, NAME_OFF, ON_CONTROL, ON_DETAIL, ON_HOVERED, ON_LINE, ON_PRESSED,
+    ON_SWITCH_OFF, PADDING, POPUP_PADDING, RESTORE_RADIUS, ROW_HEIGHT, ROW_X, SIDE_ROOM,
+    STACKED_GAP, SWITCH_HEIGHT, SWITCH_OFF, SWITCH_OFF_LIGHT, SWITCH_WIDTH,
 };
 use crate::tokens::settings::{SENT_CHEVRON, SENT_GAP, SENT_INDENT, SENT_LABEL, SENT_LINES};
 use crate::tokens::text::SMALL;
@@ -334,53 +333,42 @@ pub struct Look {
     pub heading: Rgba,
     /// A group's edge, where its fill alone wouldn't stand off the ground.
     pub edge: Option<Rgba>,
-    /// A group's shadow under it, where it's a plate lifted off the ground (Settings' light).
-    pub lifted: Option<Rgba>,
     /// The one button that does what the view is for: the host's own green.
     pub accent: Rgba,
 }
 
 impl Look {
-    /// Settings' own, on its card: the paper over the overlay's fill in dark, the ink over the
-    /// dialog's in light, as the window's other text is. Its controls are neutral, the text colour
-    /// where they're on (#4092), and its one main action ilo's green, as the app's window isn't a
-    /// Space's (#319). Its groups are the text colour over the card in dark, rimmed, and white
-    /// plates in light, ringed and lifted.
+    /// Settings' own, on its card, as drawn (spec-settings.md › Shared controls): the paper over
+    /// the overlay's fill in dark, the ink over the dialog's in light, as the window's other text
+    /// is. Its groups are the palette's card plate of the ink in both looks, with the page's inner
+    /// line. Its controls are neutral: a switch that's on is the text colour with the other look's
+    /// ink for its knob, and one that's off the shown plate with a knob of the text colour. Its
+    /// one main action is ilo's green, as the app's window isn't a Space's (#319).
     pub fn settings(dark: bool) -> Look {
-        let (card, base) = match dark {
-            true => (rgb(OVERLAY_DARK), rgb(PAPER)),
-            false => (rgb(DIALOG_LIGHT), rgb(INK)),
+        let (card, base, other) = match dark {
+            true => (rgb(OVERLAY_DARK), rgb(PAPER), rgb(INK)),
+            false => (rgb(DIALOG_LIGHT), rgb(INK), rgb(PAPER)),
         };
         let pick = |dark_alpha: f32, light_alpha: f32| if dark { dark_alpha } else { light_alpha };
-        let surface = match dark {
-            true => card.blend(base.opacity(GROUP)),
-            false => card.blend(rgba(GROUP_LIGHT)),
-        };
+        let surface = card.blend(base.opacity(CARD_PLATE));
         let mix = |amount: f32| surface.blend(base.opacity(amount));
-        let switch_off = mix(pick(SWITCH_OFF, SWITCH_OFF_LIGHT));
+        let ink = mix(NAME);
         Look {
             surface,
-            ink: mix(NAME),
+            ink,
             line: mix(LINE),
-            detail: mix(DETAIL),
+            detail: mix(pick(TEXT_SECONDARY, LIGHT_TEXT_SECONDARY)),
             control: mix(pick(CONTROL, CONTROL_LIGHT)),
             hovered: mix(pick(CONTROL_HOVERED, CONTROL_HOVERED_LIGHT)),
             pressed: mix(pick(CONTROL_PRESSED, CONTROL_PRESSED_LIGHT)),
-            switch_off,
-            knob: match dark {
-                true => switch_off.blend(base.opacity(KNOB_ALPHA)),
-                false => gpui::white().into(),
-            },
+            switch_off: mix(pick(SWITCH_OFF, SWITCH_OFF_LIGHT)),
+            knob: ink,
             on: base,
-            knob_on: match dark {
-                true => rgb(INK),
-                false => gpui::white().into(),
-            },
+            knob_on: other,
             glyph_plate: mix(GLYPH_PLATE_FILL),
             glyph: mix(GLYPH_ON),
-            heading: card.blend(base.opacity(HEADING)),
-            edge: Some(rgba(if dark { GROUP_RIM } else { GROUP_RING_LIGHT })),
-            lifted: (!dark).then(|| rgba(GROUP_SHADOW_LIGHT)),
+            heading: ink,
+            edge: Some(rgba(if dark { PAGE_LINE } else { LIGHT_PAGE_LINE })),
             accent: rgb(NO_THEME_ACCENT),
         }
     }
@@ -406,7 +394,6 @@ impl Look {
             glyph: mix(GLYPH_ON),
             heading: ink,
             edge: Some(line),
-            lifted: None,
             accent,
         }
     }
@@ -446,20 +433,21 @@ pub fn field_colors<V: 'static>(
     }
 }
 
-/// A group of `rows`, with a hairline between them from where their text starts.
+/// A group of `rows`, with a hairline across it between them.
 pub fn group(look: &Look, rows: impl IntoIterator<Item = gpui::Div>) -> gpui::Div {
-    group_lined(look, rows.into_iter().map(|row| (row, ROW_X)))
+    group_lined(look, rows.into_iter().map(|row| (row, 0.)))
 }
 
 /// A group of rows, each with the hairline over it starting `x` in, as a feature's own settings
-/// have theirs from where their text starts under its name.
+/// have theirs from where their text starts under its name, and ending where it starts: across
+/// the group from 0, else 14 short of its end.
 pub fn group_lined(look: &Look, rows: impl IntoIterator<Item = (gpui::Div, f32)>) -> gpui::Div {
     let rows = rows.into_iter().enumerate().map(|(index, (row, x))| {
         let line = div()
             .absolute()
             .top_0()
             .left(px(x))
-            .right(px(ROW_X))
+            .right(px(if x > 0. { ROW_X } else { 0. }))
             .h(px(1.))
             .bg(look.line);
         div()
@@ -473,15 +461,6 @@ pub fn group_lined(look: &Look, rows: impl IntoIterator<Item = (gpui::Div, f32)>
         .rounded(px(radius::ROW))
         .bg(look.surface)
         .when_some(look.edge, |group, edge| group.border_1().border_color(edge))
-        .when_some(look.lifted, |group, shadow| {
-            group.shadow(vec![BoxShadow {
-                color: shadow.into(),
-                offset: point(px(0.), px(GROUP_SHADOW_Y)),
-                blur_radius: px(GROUP_SHADOW_BLUR),
-                spread_radius: px(0.),
-                inset: false,
-            }])
-        })
         .children(rows)
 }
 
@@ -498,18 +477,32 @@ pub fn frame() -> gpui::Div {
 /// A row's line's type, which says more under its name, and any line that describes as a row's
 /// does.
 pub fn detail_type() -> gpui::Div {
-    div().text_size(px(SMALL)).line_height(px(DETAIL_LINE))
+    div()
+        .text_size(px(DETAIL_SIZE))
+        .line_height(px(DETAIL_LINE))
 }
 
-/// A row's text: its name, at medium, and the line under it that says more, if any, which wraps.
+/// A row's text: its name, at medium, and the line under it that says more, if any, which wraps,
+/// a row with one at least 52 tall.
 pub fn text(look: &Look, name: impl Into<SharedString>, line: Option<SharedString>) -> gpui::Div {
+    let lined = line.is_some();
     let line = line.map(|line| {
         detail_type()
             .mt(px(DETAIL_TOP))
             .text_color(look.detail)
             .child(line)
     });
-    div().flex_1().min_w_0().child(name_of(name)).children(line)
+    div()
+        .flex_1()
+        .min_w_0()
+        .when(lined, |text| {
+            text.min_h(px(LINE_ROW_HEIGHT - 2. * PADDING))
+                .flex()
+                .flex_col()
+                .justify_center()
+        })
+        .child(name_of(name))
+        .children(line)
 }
 
 /// A row's name, at medium, on one line.
@@ -665,7 +658,9 @@ pub fn button(
     id: impl Into<gpui::ElementId>,
     title: impl Into<SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
-    lit(look, div().id(id).px(px(CONTROL_PADDING))).child(title.into())
+    lit(look, div().id(id).px(px(CONTROL_PADDING)))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .child(title.into())
 }
 
 /// A square push button with `glyph` on it, such as a list's + and −, lit as a button is.
@@ -744,12 +739,12 @@ pub fn popup(look: &Look, label: impl Into<SharedString>, width: f32, open: bool
         .flex_none()
         .w(px(width))
         .h(px(CONTROL_HEIGHT))
-        .pl(px(CONTROL_PADDING))
+        .pl(px(POPUP_PADDING))
         .pr(px(CHEVRONS_END))
         .flex()
         .items_center()
         .justify_between()
-        .gap(px(CHEVRONS_END))
+        .gap(px(CHEVRONS_GAP))
         .rounded(px(CONTROL_RADIUS))
         .bg(if open { look.pressed } else { look.control })
         .when(!open, |popup| {
@@ -764,13 +759,6 @@ pub fn popup(look: &Look, label: impl Into<SharedString>, width: f32, open: bool
 pub fn switch(look: &Look, on: bool, slid: f32, accent: Rgba) -> impl IntoElement {
     let travel = SWITCH_WIDTH - KNOB - 2. * KNOB_INSET;
     let way = if on { slid } else { 1. - slid };
-    let shadow = BoxShadow {
-        color: rgba(KNOB_SHADOW).into(),
-        offset: point(px(0.), px(KNOB_SHADOW_Y)),
-        blur_radius: px(KNOB_SHADOW_BLUR),
-        spread_radius: px(0.),
-        inset: false,
-    };
     div()
         .flex_none()
         .relative()
@@ -785,7 +773,6 @@ pub fn switch(look: &Look, on: bool, slid: f32, accent: Rgba) -> impl IntoElemen
                 .left(px(KNOB_INSET + travel * way))
                 .size(px(KNOB))
                 .rounded_full()
-                .shadow(vec![shadow])
                 .bg(if on { look.knob_on } else { look.knob }),
         )
 }
@@ -1102,7 +1089,8 @@ mod tests {
     }
 
     /// In dark and light alike, each step of a control stands further off its group than the
-    /// last, its line least and a name most, so a press shows more than the pointer does.
+    /// last, a name most, so a press shows more than the pointer does. The line is no further
+    /// off than a control's plate: the drawing gives the hairline and a button one strength.
     #[test]
     fn each_step_stands_further_off_the_group() {
         for dark in [true, false] {
@@ -1115,7 +1103,8 @@ mod tests {
                 look.detail,
                 look.ink,
             ];
-            for pair in steps.windows(2) {
+            assert!(contrast(&look, look.line) <= contrast(&look, look.control));
+            for pair in steps[1..].windows(2) {
                 assert!(
                     contrast(&look, pair[0]) < contrast(&look, pair[1]),
                     "{dark} {pair:?}"
@@ -1127,13 +1116,13 @@ mod tests {
 
     /// Settings' quieter text still reads at WCAG AA's 4.5:1 for small text, in dark and light,
     /// on what it's drawn over: a row's line on its group, the page's sentence and a heading on
-    /// the card, the keys that can't change and None on their chips, and in the column Chromium
-    /// settings, the sections and the field's "Search" and ⌘F (#1636, where 0.4 read at 2.4:1).
+    /// the card, the keys that can't change and None on their chips, and the sections and the
+    /// field's "Search" and ⌘F (#1636, where 0.4 read at 2.4:1).
     #[test]
     fn the_quiet_text_reads_in_dark_and_light() {
         use crate::palette::contrast;
         use crate::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
-        use crate::tokens::settings::{SEARCH_HINT, SECTION_TEXT};
+        use crate::tokens::settings::{SEARCH_HINT, SEARCH_PLACEHOLDER, SECTION_TEXT};
         use crate::tokens::shell::library::LIBRARY_PLATE;
         for dark in [true, false] {
             let look = Look::settings(dark);
@@ -1147,16 +1136,12 @@ mod tests {
             let quiet = [
                 ("a row's line", (look.detail, look.surface)),
                 ("an off feature's name", (look.off(), look.surface)),
-                ("the page's sentence", on(card, DETAIL)),
+                ("the page's sentence", (look.detail, card)),
                 ("a heading", (look.heading, card)),
                 ("keys that can't change", chip(CHIP_FIXED, CHIP_FIXED_TEXT)),
                 ("None", chip(CHIP, CHIP_NONE_TEXT)),
                 ("a section", on(ground, SECTION_TEXT)),
-                (
-                    "Chromium settings and the groups' labels",
-                    on(ground, HEADING),
-                ),
-                ("Search", on(field, DETAIL)),
+                ("Search", on(field, SEARCH_PLACEHOLDER)),
                 ("⌘F", on(field, SEARCH_HINT)),
             ];
             for (what, (text, under)) in quiet {
@@ -1191,10 +1176,6 @@ mod tests {
             );
             let knob = crate::palette::contrast(look.knob_on, look.on);
             assert!(knob >= 3., "{dark}: the knob reads at {knob}");
-            assert!(
-                look.lifted.is_some() != dark,
-                "only light's groups are lifted"
-            );
         }
         let settings = Look::settings(true);
         let elsewhere = Look::on(settings.surface, settings.ink, settings.accent);
