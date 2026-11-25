@@ -5,7 +5,7 @@
 #include "base/functional/bind.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/types/optional_util.h"
-#include "browser_core/space.h"
+#include "browser_core/agent_space_page.h"
 #include "browser_core/tab.h"
 #include "chrome/browser/external_protocol/external_protocol_handler.h"
 #include "chrome/browser/profiles/profile.h"
@@ -69,8 +69,7 @@ bool OpenAppDialog::MayOpen(content::WebContents* contents) {
   if (!Tab::FromWebContents(contents)) {
     return true;
   }
-  const Space* space = Space::Holding(Tab::IdOf(contents));
-  return !space || !space->agent();
+  return !AgentSpaceOf(Tab::IdOf(contents));
 }
 
 OpenAppDialog::OpenAppDialog(content::WebContents* web_contents,

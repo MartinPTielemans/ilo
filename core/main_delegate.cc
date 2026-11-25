@@ -103,6 +103,7 @@
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+#include "ui/base/window_open_disposition.h"
 #include "url/gurl.h"
 
 #if BUILDFLAG(IS_LINUX)
@@ -455,6 +456,31 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
   bool IsFileSystemAccessApiFilePickerAllowed(content::WebContents* contents) override {
     return !RefusesInAgentSpace(agent_space_rule::Ask::kFilePicker, contents) &&
            ChromeContentBrowserClient::IsFileSystemAccessApiFilePickerAllowed(contents);
+  }
+
+  // Chrome's, but a page in an agent's Space opens no Picture in Picture window for a document,
+  // asked by its script or by Chrome for it as its tab is hidden (agent_space_rule.h).
+  bool CanCreateWindow(content::RenderFrameHost* opener,
+                       const GURL& opener_url,
+                       const GURL& opener_top_level_frame_url,
+                       const url::Origin& source_origin,
+                       content::mojom::WindowContainerType container_type,
+                       const GURL& target_url,
+                       const content::Referrer& referrer,
+                       const std::string& frame_name,
+                       WindowOpenDisposition disposition,
+                       const blink::mojom::WindowFeatures& features,
+                       bool user_gesture,
+                       bool opener_suppressed,
+                       bool* no_javascript_access) override {
+    if (disposition == WindowOpenDisposition::NEW_PICTURE_IN_PICTURE &&
+        RefusesInAgentSpace(agent_space_rule::Ask::kPictureInPicture, opener)) {
+      return false;
+    }
+    return ChromeContentBrowserClient::CanCreateWindow(
+        opener, opener_url, opener_top_level_frame_url, source_origin, container_type, target_url,
+        referrer, frame_name, disposition, features, user_gesture, opener_suppressed,
+        no_javascript_access);
   }
 
   // Chrome's, which give a page in an agent's Space none of its site's devices (agent_devices.h).

@@ -16,6 +16,7 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "browser_core/agent_job_voter.h"
+#include "browser_core/link_preview_rule.h"
 #include "browser_core/platform/system_page.h"
 #include "browser_core/protected_move_rule.h"
 #include "browser_core/public/browser_core.h"
@@ -303,6 +304,8 @@ class Tab : public content::WebContentsObserver,
   // Space or the favorites take it.
   bool opened_as_preview() const { return opened_as_preview_; }
   void set_opened_as_preview() { opened_as_preview_ = true; }
+  // The link the tab's page asked to open in a link preview (link_preview_rule.h).
+  LinkPreviewAsk& link_preview_ask() { return link_preview_ask_; }
 
   // When a window last stopped showing the tab, else when it opened, for the auto-archive and for
   // unloading tabs unseen a while.
@@ -502,6 +505,7 @@ class Tab : public content::WebContentsObserver,
   base::TimeTicks last_press_at_;
   DocumentPresses presses_;
   bool opened_as_preview_ = false;
+  LinkPreviewAsk link_preview_ask_;
   bool last_press_held_alt_ = false;
   // Whether the app was last told the page is full screen.
   bool fullscreen_ = false;
