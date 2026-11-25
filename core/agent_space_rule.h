@@ -69,6 +69,18 @@ enum class Listed {
 // has gone: closed if its profile has none.
 Listed ListedIn(const Opened& opened);
 
+// A Space, as a tab with nowhere else to be listed finds it.
+struct Candidate {
+  bool agents = false;
+  // A window's own, as a Little window's or a Blank Window's: only that window's tabs are its.
+  bool a_windows_own = false;
+  bool of_the_tabs_profile = false;
+};
+
+// Whether such a tab may be listed in it: a Space of the user's, of the tab's own profile, that is
+// no window's own. The first that may is the user's first Space (Listed::kInTheUsersFirstSpace).
+bool TakesATabWithNowhereElse(const Candidate& space);
+
 }  // namespace browser_core::agent_space_rule
 
 #endif  // BROWSER_CORE_AGENT_SPACE_RULE_H_

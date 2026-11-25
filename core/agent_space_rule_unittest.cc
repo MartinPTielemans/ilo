@@ -88,5 +88,22 @@ TEST(AgentSpaceRuleTest, ATabWithNoSpaceOfTheUsersToGoToIsClosed) {
   EXPECT_EQ(Listed::kClosed, ListedIn({}));
 }
 
+TEST(AgentSpaceRuleTest, ATabWithNowhereElseGoesToASpaceOfTheUsersInItsProfile) {
+  EXPECT_TRUE(TakesATabWithNowhereElse({.of_the_tabs_profile = true}));
+}
+
+TEST(AgentSpaceRuleTest, ATabWithNowhereElseNeverGoesToAnAgentsSpace) {
+  EXPECT_FALSE(TakesATabWithNowhereElse({.agents = true, .of_the_tabs_profile = true}));
+}
+
+// A Little window's or a Blank Window's.
+TEST(AgentSpaceRuleTest, ATabWithNowhereElseNeverGoesToAWindowsOwnSpace) {
+  EXPECT_FALSE(TakesATabWithNowhereElse({.a_windows_own = true, .of_the_tabs_profile = true}));
+}
+
+TEST(AgentSpaceRuleTest, ATabWithNowhereElseNeverGoesToAnotherProfilesSpace) {
+  EXPECT_FALSE(TakesATabWithNowhereElse({}));
+}
+
 }  // namespace
 }  // namespace browser_core::agent_space_rule

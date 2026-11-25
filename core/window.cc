@@ -3782,7 +3782,11 @@ Space* Window::SpaceForOpened(content::WebContents* contents, bc_id opener, bc_i
   if (!contents->GetBrowserContext()->IsOffTheRecord()) {
     const std::string dir = DirOf(contents);
     for (Space* space : Space::All()) {
-      if (!space->agent() && space->profile() == dir) {
+      if (agent_space_rule::TakesATabWithNowhereElse({
+              .agents = space->agent().has_value(),
+              .a_windows_own = space->own(),
+              .of_the_tabs_profile = space->profile() == dir,
+          })) {
         first = space;
         break;
       }
