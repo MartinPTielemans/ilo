@@ -189,6 +189,8 @@ pub enum Failure {
     /// says.
     Limit(Option<u64>),
     SignedOut,
+    /// The assistant's program isn't on this computer, so no run started.
+    NotInstalled,
     /// The CLI said why, in its words.
     Other(String),
 }

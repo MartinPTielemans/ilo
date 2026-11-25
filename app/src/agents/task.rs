@@ -2031,11 +2031,7 @@ impl Agents {
         };
         let found = self.tasks.found.get(&cli).cloned().unwrap_or_default();
         let Some(program) = found.program.clone() else {
-            self.fail(
-                agent,
-                Failure::Other(format!("{} isn't installed.", cli.name())),
-                cx,
-            );
+            self.fail(agent, Failure::NotInstalled, cx);
             return false;
         };
         let dir = self.tasks_dir();
@@ -2324,8 +2320,8 @@ impl Agents {
                     assistant: true,
                 }
             }
-            Failure::Other(why) if why.contains("isn't installed") => State::Failed {
-                why: why.into(),
+            Failure::NotInstalled => State::Failed {
+                why: format!("{} isn't installed.", cli.name()).into(),
                 assistant: true,
             },
             Failure::Other(why) => State::Failed {
