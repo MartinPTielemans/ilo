@@ -448,6 +448,19 @@ fn the_default_browser_step_says_each_systems_way(cx: &mut TestAppContext) {
     assert!(!host.take().contains(&"make default browser".to_string()));
 }
 
+/// Not Now, the default browser step's Skip, goes on without asking the system, which leaves
+/// Settings' notice that it isn't the default.
+#[gpui::test]
+fn not_now_goes_on_without_asking(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::DefaultBrowser);
+    host.take();
+    click_skip(cx);
+    assert_ne!(step(&shell, cx), Some(Step::DefaultBrowser));
+    assert!(!host.take().contains(&"make default browser".to_string()));
+}
+
 /// A browser that's already the default has no step asking to make it one.
 #[gpui::test]
 fn a_default_browser_leaves_its_step_out(cx: &mut TestAppContext) {
@@ -646,8 +659,8 @@ fn the_opt_ins_show_only_those_offered(cx: &mut TestAppContext) {
     in_through_the_keys(&shell, cx);
     later(&shell, cx, END_FADE);
 
-    // With no count's server named, only the crash reports' switch shows. Outside apps' agents
-    // have none until their own setting (#4260), with agents on or off.
+    // With no count's server named, only the crash reports' switch shows, and other apps' agents'
+    // none with agents off.
     host.crash_reports.set(Some(false));
     host.agents.set(Some(false));
     started(&shell, cx);
@@ -680,6 +693,113 @@ fn the_opt_ins_show_only_those_offered(cx: &mut TestAppContext) {
     skip_to(&shell, cx, Step::OptIns);
     let both = vec![(Switch::DailyCount, false), (Switch::CrashReports, false)];
     assert_eq!(offered(&shell, cx), both, "both off to begin with");
+}
+
+/// The assistant step's two choices are Settings › Agents' switch as it stands: just the browser
+/// turns agents off at once and takes other apps' agents' row out of the opt-ins, with their step
+/// when it has no other row; with an assistant turns them on and brings both back.
+#[gpui::test]
+fn just_the_browser_turns_agents_off_and_takes_their_row_away(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    // The host reads the shell as it turns agents off, as the core's does.
+    host.reads_shell(shell.downgrade());
+    host.agents.set(Some(true));
+    host.other_apps.set(Some(false));
+    let offered = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.opt_ins(cx))
+    };
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Assistant);
+    assert_eq!(offered(&shell, cx), vec![(Switch::OtherApps, false)]);
+    assert!(steps(&shell, cx).contains(&Step::OptIns));
+    host.take();
+    press("down", cx);
+    assert_eq!(
+        host.take(),
+        vec!["agents false".to_string()],
+        "just the browser"
+    );
+    assert_eq!(
+        offered(&shell, cx),
+        Vec::new(),
+        "takes other apps' agents' row away"
+    );
+    assert!(
+        !steps(&shell, cx).contains(&Step::OptIns),
+        "and its step, with no other row"
+    );
+    press("down", cx);
+    assert_eq!(
+        host.take(),
+        Vec::<String>::new(),
+        "picked again, it sets nothing"
+    );
+    press("up", cx);
+    assert_eq!(
+        host.take(),
+        vec!["agents true".to_string()],
+        "with an assistant"
+    );
+    assert_eq!(offered(&shell, cx), vec![(Switch::OtherApps, false)]);
+    let steps = steps(&shell, cx);
+    let at = steps.iter().position(|&each| each == Step::OptIns);
+    assert_eq!(
+        at.and_then(|at| steps.get(at + 1)),
+        Some(&Step::Keys),
+        "brings the step back in its place, before the keys"
+    );
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Assistant),
+        "a pick doesn't go on"
+    );
+}
+
+/// Other apps' agents' row is off until turned on, set as it's turned, and Skip Setup leaves it
+/// off.
+#[gpui::test]
+fn other_apps_agents_are_off_until_turned_on(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    host.agents.set(Some(true));
+    host.other_apps.set(Some(false));
+    host.crash_reports.set(Some(false));
+    let offered = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.opt_ins(cx))
+    };
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::OptIns);
+    assert_eq!(
+        offered(&shell, cx),
+        vec![(Switch::CrashReports, false), (Switch::OtherApps, false)]
+    );
+    host.take();
+    shell.update(cx, |shell, cx| {
+        shell.onboarding_switch(Switch::OtherApps, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(host.take(), vec!["other apps true".to_string()]);
+    click_skip(cx);
+    in_through_the_keys(&shell, cx);
+    assert_eq!(
+        host.other_apps.get(),
+        Some(true),
+        "Skip leaves it as turned"
+    );
+    later(&shell, cx, END_FADE);
+
+    host.other_apps.set(Some(false));
+    started(&shell, cx);
+    host.take();
+    shell.update(cx, |shell, cx| shell.onboarding_skip_setup("skip", cx));
+    cx.run_until_parked();
+    assert!(
+        !host
+            .take()
+            .iter()
+            .any(|call| call.starts_with("other apps")),
+        "Skip Setup turns nothing on"
+    );
+    assert_eq!(host.other_apps.get(), Some(false));
 }
 
 /// With both opt-ins offered, in first run's fixed window, each switch lies inside its row, and a
@@ -1560,9 +1680,10 @@ fn an_import_that_needs_full_disk_access_keeps_its_step(cx: &mut TestAppContext)
 }
 
 /// The import step says what the state its view shows is for, with its button and its corner:
-/// the list "Bring your stuff." with Import from the browser used last and Skip; ↩ shows that
-/// browser's choices, "What comes from Arc.", with Import and Back, and its view has no buttons of
-/// its own; Esc goes back to the list, keeping the step, and Esc there goes back a step.
+/// the list "Bring your stuff." with Import from the browser used last and Skip; a browser's
+/// choices, which a wait for access ends on, "What comes from Arc.", with Import and Back, and its
+/// view has no buttons of its own; Esc goes back to the list, keeping the step, and Esc there goes
+/// back a step.
 #[gpui::test]
 fn the_import_steps_words_follow_the_state_its_view_shows(cx: &mut TestAppContext) {
     use crate::import::Corner;
@@ -1583,7 +1704,7 @@ fn the_import_steps_words_follow_the_state_its_view_shows(cx: &mut TestAppContex
     );
     assert_eq!(list.button.as_deref(), Some("Import from Arc"));
     assert_eq!(list.corner, Corner::Skip);
-    cx.simulate_keystrokes("enter");
+    view.update(cx, |view, cx| view.pick(0, cx));
     cx.run_until_parked();
     assert_eq!(step(&shell, cx), Some(Step::Import));
     let choose = guide(cx);
@@ -1608,15 +1729,13 @@ fn the_import_steps_words_follow_the_state_its_view_shows(cx: &mut TestAppContex
     );
 }
 
-/// ↩ at the list brings the browser picked, and ↩ at its choices imports it: once read, the flow
-/// goes on by itself while the rest comes in.
+/// ↩ at the list imports the browser picked at once, as the drawing's Import from … does: once
+/// read, the flow goes on by itself while the rest comes in.
 #[gpui::test]
 fn return_brings_the_browser_picked_and_imports_it(cx: &mut TestAppContext) {
     use crate::import::tests::Browser;
     let browser = Rc::new(Browser::new(None));
     let (shell, cx, view) = importing_from(browser.clone(), cx);
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     // The step shows the Spaces arriving while Work's profile loads, and holds on them once in.
@@ -1648,8 +1767,6 @@ fn a_stalled_import_names_its_profile_on_the_step(cx: &mut TestAppContext) {
     use crate::import::tests::Browser;
     let browser = Rc::new(Browser::new(None));
     let (shell, cx, view) = importing_from(browser, cx);
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
     waited(cx, crate::import::STALL.as_secs_f32());
@@ -1693,12 +1810,6 @@ fn the_arrows_move_the_lists_pick(cx: &mut TestAppContext) {
     assert_eq!(button(cx).as_deref(), Some("Import from Firefox"));
     cx.simulate_keystrokes("up");
     assert_eq!(button(cx).as_deref(), Some("Import from Chrome"));
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
-    assert_eq!(
-        view.read_with(cx, |view, _| view.guide().title),
-        "What comes from Chrome."
-    );
     std::fs::remove_dir_all(home).unwrap();
 }
 
@@ -1809,20 +1920,13 @@ fn imports_open_tabs_on(press: Press, cx: &mut TestAppContext) {
     };
     let home = chrome(name, &[("Default", "Me")], std::time::SystemTime::now());
     let browser = Rc::new(Browser::new(Some(Roots::under(&home, Os::Linux))));
-    let (shell, cx, view) = importing_from(browser.clone(), cx);
+    let (shell, cx, _) = importing_from(browser.clone(), cx);
     let weak = shell.downgrade();
     browser.reads_shell(move |cx| {
         if let Some(shell) = weak.upgrade() {
             shell.read(cx);
         }
     });
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
-    assert_eq!(
-        view.read_with(cx, |view, _| view.guide().title),
-        "What comes from Chrome.",
-        "Chrome wasn't read"
-    );
     match press {
         Press::Return => cx.simulate_keystrokes("enter"),
         Press::Click => {
@@ -1890,16 +1994,17 @@ fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContex
     );
 
     skip_to(&shell, cx, Step::DefaultBrowser);
-    // On the sheet, ⇥ from the step's button goes round to Back, then Skip.
+    // On the sheet, ⇥ from the step's button goes round to Back, then Skip, which this step,
+    // asking, calls Not Now.
     cx.simulate_keystrokes("tab");
     assert_eq!(keyed(cx), Some((Role::Button, "Back".into())));
     cx.simulate_keystrokes("tab");
-    assert_eq!(keyed(cx), Some((Role::Button, "Skip".into())));
+    assert_eq!(keyed(cx), Some((Role::Button, "Not Now".into())));
     press("enter", cx);
     assert_eq!(
         step(&shell, cx),
         Some(Step::Color),
-        "↩ on Skip skipped one step"
+        "↩ on Not Now skipped one step"
     );
     assert_eq!(
         keyed(cx),
@@ -2009,7 +2114,7 @@ fn each_step_rests_on_a_control(cx: &mut TestAppContext) {
 }
 
 /// At the import the keyboard rests on its view's button, and ↩ presses it once: the list's
-/// press brings the browser's choices, and only the next imports it.
+/// press imports the browser at once, with the chips' kinds, and leaves no button for a second ↩.
 #[gpui::test]
 fn return_at_the_import_presses_its_button_once(cx: &mut TestAppContext) {
     use crate::import::tests::Browser;
@@ -2020,13 +2125,11 @@ fn return_at_the_import_presses_its_button_once(cx: &mut TestAppContext) {
     let words = guide(cx).button.expect("the list's button");
     assert_eq!(keyed(cx), Some((Role::Button, words)));
     press("enter", cx);
-    let choices = guide(cx).title;
-    assert_ne!(choices, "Here it comes.", "↩ pressed it twice");
-    press("enter", cx);
+    assert_eq!(guide(cx).title, "Here it comes.", "↩ imports it");
     assert_eq!(
-        guide(cx).title,
-        "Here it comes.",
-        "and its choices' imports"
+        guide(cx).button,
+        None,
+        "with nothing left for ↩ to press again"
     );
     assert_eq!(step(&shell, cx), Some(Step::Import));
 }
@@ -2303,9 +2406,9 @@ fn the_imports_back_goes_back_in_its_view_first(cx: &mut TestAppContext) {
     use crate::import::tests::Browser;
     let (shell, cx, view) = importing_from(Rc::new(Browser::new(None)), cx);
     let drawn = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.drawn());
-    cx.simulate_keystrokes("enter");
+    view.update(cx, |view, cx| view.pick(0, cx));
     cx.run_until_parked();
-    assert_eq!(drawn(cx), Some("pick"), "↩ shows the browser's choices");
+    assert_eq!(drawn(cx), Some("pick"), "the browser's choices show");
     click_back(cx);
     cx.run_until_parked();
     assert_eq!(
@@ -2390,7 +2493,8 @@ fn the_favorites_step_is_on_the_sheet(cx: &mut TestAppContext) {
 #[gpui::test]
 fn the_assistant_step_is_on_the_sheet_with_room_for_its_switch(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
-    host.agents.set(Some(false));
+    // With an assistant, as its rows show only on that path.
+    host.agents.set(Some(true));
     started(&shell, cx);
     assert_eq!(
         steps(&shell, cx).get(1),
@@ -2465,7 +2569,8 @@ fn the_assistant_step_looks_for_the_assistants_as_it_shows(cx: &mut TestAppConte
     use crate::agents::ready::{Found, Ready};
     use crate::agents::runner::Cli;
     let (shell, cx, host) = first_window(cx);
-    host.agents.set(Some(false));
+    // With an assistant, as its rows show only on that path.
+    host.agents.set(Some(true));
     let signed_out = Found {
         ready: Ready::SignedOut,
         ..Default::default()
@@ -2509,6 +2614,34 @@ fn the_assistant_step_looks_for_the_assistants_as_it_shows(cx: &mut TestAppConte
     assert_eq!(looks(), 2, "shown again, it looked again");
 }
 
+/// With agents off, the assistants' step runs nothing of an assistant as it shows: With an
+/// assistant looks for them once, and picked again, or shown again, not until it shows again.
+#[gpui::test]
+fn the_assistant_step_looks_only_after_a_yes(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    host.reads_shell(shell.downgrade());
+    host.agents.set(Some(false));
+    let (_agents, looks) = cx.update(|_, cx| crate::agents::tests::stand_in(Vec::new(), cx));
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Assistant);
+    later(&shell, cx, STEP_MOTION);
+    assert_eq!(looks(), 0, "shown with agents off, nothing looked");
+    press("up", cx);
+    assert_eq!(host.agents.get(), Some(true));
+    assert_eq!(looks(), 1, "With an assistant looked once");
+    press("up", cx);
+    assert_eq!(looks(), 1, "picked again, none more");
+    press("down", cx);
+    press("up", cx);
+    assert_eq!(looks(), 1, "nor once more in the same showing");
+    click_skip(cx);
+    later(&shell, cx, STEP_MOTION);
+    click_back(cx);
+    assert_eq!(step(&shell, cx), Some(Step::Assistant));
+    cx.run_until_parked();
+    assert_eq!(looks(), 2, "shown again with agents on, it looked again");
+}
+
 /// In the sheet's narrow half no assistant's name is cut by its button: each button is beside the
 /// whole name, or, where the row has no room for both, under it.
 #[gpui::test]
@@ -2519,7 +2652,8 @@ fn the_assistants_names_are_whole_beside_or_over_their_buttons(cx: &mut TestAppC
         CONTROL_GAP, END_GAP, GLYPH_PLATE, GLYPH_PLATE_GAP, PADDING, ROW_X,
     };
     let (shell, cx, host) = first_window(cx);
-    host.agents.set(Some(false));
+    // With an assistant, as its rows show only on that path.
+    host.agents.set(Some(true));
     let signed_out = Found {
         ready: Ready::SignedOut,
         ..Default::default()

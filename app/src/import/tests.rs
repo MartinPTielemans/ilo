@@ -4334,3 +4334,45 @@ fn every_control_in_the_import_has_a_name(cx: &mut TestAppContext) {
     );
     fs::remove_dir_all(made).unwrap();
 }
+
+/// The first launch's list says what comes from the browser picked as chips: a click on one leaves
+/// out all it brings, and another brings it back; Import from … then brings the browser at once,
+/// with what was left out left out. The passwords chip asks for a file, and a click on it once one
+/// is chosen leaves it out again.
+#[gpui::test]
+fn the_guided_lists_chips_leave_out_what_they_bring(cx: &mut TestAppContext) {
+    let browser = Rc::new(Browser::new(None));
+    let host: Rc<dyn Host> = browser.clone();
+    let view = cx.new(|_| ImportView::new(host, false).guided());
+    let spaces = browser.spaces().len();
+    view.update(cx, |view, cx| {
+        view.toggle_chip(0, cx);
+        assert!(view.left_out.contains(&Kind::Spaces));
+        view.toggle_chip(0, cx);
+        assert!(view.left_out.is_empty(), "a second click brought them back");
+        view.toggle_chip(0, cx);
+    });
+    let file = home("guided-passwords").join("Arc Passwords.csv");
+    *browser.passwords_file.borrow_mut() = Some(file.clone());
+    view.update(cx, |view, cx| view.toggle_list_passwords(cx));
+    cx.run_until_parked();
+    view.update(cx, |view, cx| {
+        assert_eq!(view.list_passwords.as_deref(), Some(file.as_path()));
+        view.toggle_list_passwords(cx);
+        assert_eq!(view.list_passwords, None, "a click left the file out");
+        view.press(cx);
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(
+            !matches!(view.step, super::Step::List | super::Step::Pick { .. }),
+            "Import from Arc didn't bring it at once"
+        )
+    });
+    assert_eq!(
+        browser.spaces().len(),
+        spaces,
+        "Spaces came though their chip left them out"
+    );
+    fs::remove_dir_all(file.parent().unwrap()).ok();
+}

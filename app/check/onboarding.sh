@@ -2,9 +2,9 @@
 # A new profile's first launch plays the onboarding in a window of its own, the only one on screen
 # until it ends, captured at each step in a light and a dark appearance: the intro, the welcome,
 # waits, where Return goes on and Skip Setup skips the setup (#4093); the import step lists the
-# made-up Arc in src/import/fixture (a made-up Chrome on Linux), never the Mac's own browsers, and
-# ↩ there shows its choices, with Import and Back, which Esc goes back from to the list; Skip goes
-# on from a step, where Esc is Back, the colour step's Return
+# made-up Arc in src/import/fixture (a made-up Chrome on Linux), never the Mac's own browsers, with
+# what comes from it as chips, which a click leaves out and another brings back, and ↩ there
+# imports it at once; Skip goes on from a step, where Esc is Back, the colour step's Return
 # gives the first Space the swatch picked, and the last step, the keys, has no Skip: its Return
 # leaves the flow for the first Space's welcome with the command bar up and a line under it. On the Mac, Transparency's step comes after
 # the colour's, as it shows only over the window's glass. The default browser's step shows only while
@@ -52,20 +52,19 @@ fi
 capture_step() {
   ../tools/window-screenshot.sh "$pid" "$out/onboarding-$1.png" || fail "no window to capture"
 }
-# ↩ at the import's list shows the choices of the browser used last, as "What comes from …", with
-# Import as the step's button and Back in its corner; Esc goes back to the list, keeping the step.
-# The choices are captured as onboarding-$1-import-choose.png once their counts are in.
+# The import's list says what comes from the browser used last as chips: a click on History leaves
+# it out and another brings it back, keeping the step. Captured as onboarding-$1-import-chips.png
+# with History left out.
 import_choices() {
-  send key return
-  expect "^browser: import pick $found\$" "$1: ↩ at the import didn't show $found's choices"
-  expect "^browser: import read $found: " "$1: picking $found didn't read it"
-  # Once its counts have drawn, which the driver waits for.
+  local at
+  at=$(drawn "import-chip History") || fail "$1: the import's list drew no History chip"
+  send click $at
+  expect '^browser: import chip History false$' "$1: a click on History didn't leave it out"
   send state
-  capture_step "$1-import-choose"
-  send key escape
-  expect '^browser: import escape$' "$1: Esc in $found's choices didn't reach the import"
-  expect '^browser: import drawn list$' "$1: Esc didn't go back from $found's choices to the list"
-  none_since '^browser: onboarding left import' || fail "$1: Esc in the choices left the import step"
+  capture_step "$1-import-chips"
+  send click $at
+  expect '^browser: import chip History true$' "$1: a second click on History didn't bring it back"
+  none_since '^browser: onboarding left import' || fail "$1: a click on a chip left the import step"
 }
 # The account's step, while the build names a server to sign in to.
 account=
@@ -437,8 +436,8 @@ exec 3>&-
 quit
 
 # Suggested favorites: a first launch on a made-up Chrome with tabs open, whose history visits two
-# sites three times and more, brings them in with ↩ at the browser and ↩ at its choices, and the
-# step after the import is Your favorites, offering those two, ticked.
+# sites three times and more, brings them in with ↩ at the browser, and the step after the import
+# is Your favorites, offering those two, ticked.
 fav_home="$PWD/$out/onboarding-favorites-home"
 rm -rf "$fav_home"
 if [ "$(uname)" = Darwin ]; then
@@ -507,7 +506,6 @@ expect '^browser: onboarding step import settled$' "favorites: the import step d
 send key return
 expect '^browser: import pick Chrome$' "favorites: ↩ didn't bring the made-up Chrome"
 expect '^browser: import read Chrome: ' "favorites: picking Chrome didn't read it"
-send key return
 expect '^browser: import suggests https://news\.example\.org/ https://mail\.example\.org/$' \
   "favorites: the import didn't work out the sites its history visited most: $(grep 'import suggests' "$log")"
 expect '^browser: import from Chrome: [0-9]* Spaces, 3 pinned tabs, 55 open tabs, ' \
