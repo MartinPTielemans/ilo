@@ -408,6 +408,13 @@ CONTENT_EXPORT extern bool (*g_browser_core_no_file_handle)(content::GlobalRende
 // started it, not the page. One refused ends as a restricted preview does, and its page goes on.
 extern bool (*g_browser_core_no_print)(content::RenderFrameHost* frame, bool by_users_command);
 
+// chrome/browser/webshare/share_service_impl.cc: whether the page in |frame| is refused the
+// system's sheet to share with, asked in ShareServiceImpl::RunShareOperation once Chrome's own
+// checks have let the share by and before a file of it is read or the sheet is shown. One refused
+// is answered as Chrome answers its own refusals there. Chrome has the file, and so the pointer,
+// on the Mac and Windows only, where the core sets it.
+extern bool (*g_browser_core_no_share)(content::RenderFrameHost* frame);
+
 // content/browser/renderer_host/render_frame_host_impl.cc and
 // content/browser/web_contents/web_contents_impl.cc: whether the page in |frame| is refused a list
 // or picker of its own drawn outside it, asked in RenderFrameHostImpl::ShowPopupMenu before the
