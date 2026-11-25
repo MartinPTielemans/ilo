@@ -21,6 +21,7 @@
 #include "base/uuid.h"
 #include "browser_core/checked.h"
 #include "browser_core/favorites.h"
+#include "browser_core/handed.h"
 #include "browser_core/profiles.h"
 #include "browser_core/session.h"
 #include "browser_core/space_default.h"
@@ -132,6 +133,14 @@ bool Synced(const Space* space) {
   return !space->agent() && space->node().id.is_valid();
 }
 
+// Whether |node|, a row's node id as NodeKey gives it, is that of a tab the user handed an agent
+// (handed.h): theirs still, though in no Space sync keeps for as long as the agent has it.
+bool Handed(const std::string& node) {
+  return std::ranges::any_of(handed::All(), [&](const auto& each) {
+    return each.second.node.id.is_valid() && Key(each.second.node.id) == node;
+  });
+}
+
 // The device's own first Space, made because a browser needs one, while it gives way to the
 // account's (space_default.h): its only one, which the user hasn't made theirs. Else null.
 Space* UntouchedDefault() {
@@ -237,6 +246,17 @@ std::map<std::string, Entity> Current(const std::map<std::string, Entity>& known
       const int64_t here = SeenHere(row, *tab);
       const bool sent = was != known.end() && was->second.has_seen();
       each.set_seen(sent && here < was->second.seen() + kSeenStep ? was->second.seen() : here);
+    }
+    // A Today tab the user handed an agent out of this Space is as |known| has it, if at all, so
+    // the account's other devices see it neither close nor go where the agent takes it, and
+    // nothing synced says it's handed. Back in the Space, it's sent as it is then.
+    for (const auto& [tab, mark] : handed::All()) {
+      if (mark.home != space->id() || !mark.node.id.is_valid()) {
+        continue;
+      }
+      if (auto was = known.find(TodayKey(mark.node.id)); was != known.end()) {
+        all[was->first] = was->second;
+      }
     }
   }
   return all;
@@ -560,6 +580,10 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
 
   // Makes the sidebar match what came from the account: |put| new or changed, |deleted| gone.
   void Apply(std::vector<Entity> put, const std::vector<std::string>& deleted) {
+    // A tab the user handed an agent is in no Space sync keeps, so what another device made of it
+    // would open it here a second time. That stays in known_, and the tab is sent as it is once
+    // it's back.
+    std::erase_if(put, [](const Entity& entity) { return Handed(NodeKey(entity.id())); });
     std::map<std::string, Local> index = Index();
     // A tab pinned or unpinned on another device is deleted under the one id and put under the
     // other, so it moves rather than going: with the put in this batch, or the row here already the
