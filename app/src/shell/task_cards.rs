@@ -38,9 +38,9 @@ use super::agent_bar;
 use super::library::LIBRARY_BACK_INSET;
 use super::page_ends::StripStop;
 use super::{
-    Edit, FAVICON_SIZE, FAVICON_X, FOOTER_HEIGHT, HOVERED, NAV, NAV_RADIUS, NAV_SIZE, PLATE_HEIGHT,
-    PLATE_INSET, PLATE_RADIUS, ROW_HEIGHT, SECONDARY, STATUS_AGENT, Shell, Slot, TILE, TITLE,
-    TITLE_END_INSET, TITLE_GAP, What, cubic_bezier, dashed_plate, selected_plate, title,
+    Edit, FAVICON_SIZE, FAVICON_X, FOOTER_HEIGHT, HOVERED, NAV_RADIUS, PLATE_HEIGHT, PLATE_INSET,
+    PLATE_RADIUS, ROW_HEIGHT, SECONDARY, STATUS_AGENT, Shell, Slot, TILE, TITLE, TITLE_END_INSET,
+    TITLE_GAP, What, cubic_bezier, dashed_plate, selected_plate, title,
 };
 use crate::agents::runner::Cli;
 use crate::agents::sign_in::Offer;
@@ -61,6 +61,7 @@ use crate::tokens::shell::task::{
     STATUS_LINE, STOPPED,
 };
 use crate::tokens::shell::{FAVICON_DRAWN, MEDIA_BUTTON};
+use crate::tokens::shell::{FOOT_ROW, ICON_INK, LIBRARY_BUTTON};
 use crate::tokens::text;
 use glyph::{Glyph, State};
 use motion::{Curve, Ease};
@@ -1433,7 +1434,7 @@ impl Shell {
         let bump = self.archive_bump(now);
         (
             1. + (BUMP_SCALE - 1.) * bump,
-            NAV + (BUMP_GLYPH - NAV) * bump,
+            ICON_INK + (BUMP_GLYPH - ICON_INK) * bump,
         )
     }
 
@@ -1445,9 +1446,9 @@ impl Shell {
         let to = Bounds::new(
             point(
                 px(LIBRARY_BACK_INSET),
-                self.viewport.height - px((FOOTER_HEIGHT - NAV_SIZE) / 2. + NAV_SIZE),
+                self.viewport.height - px((FOOTER_HEIGHT + FOOT_ROW) / 2.),
             ),
-            gpui::size(px(NAV_SIZE), px(NAV_SIZE)),
+            gpui::size(px(LIBRARY_BUTTON), px(FOOT_ROW)),
         );
         let flights = self.foot.groups.iter().filter_map(|group| {
             let (since, from) = group.archived?;

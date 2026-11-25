@@ -382,9 +382,10 @@ use crate::tokens::shell::URL_BUTTON_SIZE;
 use crate::tokens::shell::URL_FIELD_HEIGHT;
 use crate::tokens::shell::URL_FIELD_TEXT_X;
 use crate::tokens::shell::URL_FIELD_TOP;
-// Arc puts favorites between the URL field and the Space's name. This is their gap while there are
-// none, which Arc has no layout for.
-const LIST_TOP: f32 = URL_FIELD_TOP + URL_FIELD_HEIGHT + 8.;
+use crate::tokens::shell::{BLOCK_GAP, BLOCK_TOP};
+// Where what's kept starts under the URL field: the favorites' tiles, or the Space's line while
+// there are none.
+const LIST_TOP: f32 = URL_FIELD_TOP + URL_FIELD_HEIGHT + BLOCK_TOP;
 use crate::tokens::shell::NAME_HEIGHT;
 use crate::tokens::shell::TALL_FAVORITES;
 use crate::tokens::shell::TILE_COLUMNS;
@@ -436,8 +437,8 @@ use crate::tokens::shell::DROP_RING_X;
 use crate::tokens::shell::FAVICON_SIZE;
 use crate::tokens::shell::FAVICON_X;
 pub use crate::tokens::shell::PLATE_RADIUS;
-// Arc's titles end as far from the sidebar's edge as its favicons start.
-const TITLE_END_INSET: f32 = FAVICON_X - PLATE_INSET;
+// A title ends as far inside its plate's end as a favicon's ink starts inside its start.
+const TITLE_END_INSET: f32 = FAVICON_X - PLATE_INSET + (FAVICON_SIZE - FAVICON_DRAWN) / 2.;
 use crate::tokens::shell::BREATH_LOW;
 use crate::tokens::shell::EMOJI_SIZE;
 use crate::tokens::shell::FAVICON_DRAWN;
@@ -463,11 +464,13 @@ use crate::tokens::shell::SEGMENT_TITLE_GAP;
 use crate::tokens::shell::SPEAKER_DRAWN;
 use crate::tokens::shell::SPEAKER_GAP;
 use crate::tokens::shell::SPEAKER_SIZE;
-// The Clear divider, under the pinned tabs. Its line's centre is 25 pt above the centre of the first
-// row under it. While Clear shows, the line ends 9 pt before it.
+// The Clear divider of a Space's card in the Library, its line in its middle. While Clear shows,
+// the line ends 9 pt before it. The sidebar's is the New Tab line's own, TODAY_GAP under what's
+// kept.
 use crate::tokens::shell::DIVIDER_HEIGHT;
-const DIVIDER_LINE_Y: f32 = DIVIDER_HEIGHT - (25. - ROW_HEIGHT / 2.);
+const DIVIDER_LINE_Y: f32 = DIVIDER_HEIGHT / 2.;
 use crate::tokens::shell::DIVIDER_GAP;
+use crate::tokens::shell::TODAY_GAP;
 // The arrow before Clear while it would close the last Today tabs, 8 pt tall and 3 pt before the
 // word (Arc). Lucide's arrow-down spans 14 of its 24 each way.
 const CLEAR_ARROW: f32 = 8. * 24. / 14.;
@@ -488,7 +491,6 @@ use crate::tokens::shell::SPACE_DRAGGED;
 use crate::tokens::shell::SPACE_DROP_LINE;
 use crate::tokens::shell::SPACE_HEIGHT;
 use crate::tokens::shell::SPACE_LEAST;
-use crate::tokens::shell::SPACE_PITCH;
 use crate::tokens::shell::SPACE_SHOWN_LEAST;
 use crate::tokens::shell::SPACE_SWATCH;
 use crate::tokens::shell::SPACE_SWATCH_HOVERED;
@@ -529,13 +531,10 @@ use crate::tokens::shell::CREATE_BOTTOM;
 
 use crate::palette::FIELD_PLATE as URL_FIELD;
 use crate::tokens::shell::CHOSEN;
-use crate::tokens::shell::CLEAR;
 use crate::tokens::shell::CLEAR_HOVERED;
 use crate::tokens::shell::CLOSE_HOVERED;
 use crate::tokens::shell::DIVIDER;
 use crate::tokens::shell::HOVERED;
-use crate::tokens::shell::NEW_TAB;
-use crate::tokens::shell::NEW_TAB_PLUS;
 use crate::tokens::shell::PRESSED;
 use crate::tokens::shell::PRIVATE_SHADE;
 use crate::tokens::shell::SCROLL_EDGE;
@@ -556,14 +555,13 @@ use crate::tokens::shell::FORM_PILL;
 use crate::tokens::shell::FORM_PLACEHOLDER;
 use crate::tokens::shell::FORM_PLATE;
 use crate::tokens::shell::FORM_TEXT;
+use crate::tokens::shell::ICON_INK;
 use crate::tokens::shell::NAV;
 use crate::tokens::shell::NAV_HOVERED;
 use crate::tokens::shell::NAV_INACTIVE;
 use crate::tokens::shell::SPACE_HOVERED;
 use crate::tokens::shell::SPACE_NAME;
-use crate::tokens::shell::SPACE_NAME_SHUT;
 use crate::tokens::shell::SPACE_OTHER;
-use crate::tokens::shell::SPACE_SHOWN;
 use crate::tokens::shell::TILE_RING;
 use crate::tokens::shell::TILE_UNTHEMED;
 use crate::tokens::shell::TILE_UNTHEMED_LIGHT;
@@ -5371,13 +5369,14 @@ impl Shell {
             )
             .children(pinned.into_iter().map(row))
             .when(!today.is_empty(), |page| {
-                let clear = self.tools_shown().then(|| {
-                    still_clear(&self.palette, space.clears_last(space.shown))
-                        .opacity(self.tools_opacity())
-                });
-                page.child(divider_box(&self.palette, self.hairline(), clear))
+                page.child(div().flex_none().h(px(TODAY_GAP)))
             })
-            .child(row_box().child(plate(plus, new_tab)))
+            .child(
+                row_box().child(plate(plus, new_tab).when(!today.is_empty(), |plate| {
+                    let clear = still_clear(&self.palette, space.clears_last(space.shown));
+                    plate.child(today_line(&self.palette, self.hairline(), clear))
+                })),
+            )
             .children(today.into_iter().map(row))
     }
 
@@ -5415,7 +5414,7 @@ impl Shell {
             }
         }
         if !today.is_empty() {
-            rows.push((None, self.divider(cx).into_any_element()));
+            rows.push((None, self.today_gap(cx).into_any_element()));
         }
         rows.push((None, self.new_tab_row(cx).into_any_element()));
         for tab in today {
@@ -5927,7 +5926,7 @@ fn slots(
                 .map(|&(_, folder, run, room)| (Slot::Live(folder, run), room));
             std::iter::once((Slot::Tab(tab), ROW_PITCH)).chain(live)
         })
-        .chain((!today.is_empty()).then_some((Slot::Divider, DIVIDER_HEIGHT)))
+        .chain((!today.is_empty()).then_some((Slot::Divider, TODAY_GAP)))
         .chain([(Slot::NewTab, ROW_PITCH)])
         .chain(today.iter().map(|&tab| (Slot::Tab(tab), ROW_PITCH)));
     let mut top = head;
@@ -6042,7 +6041,22 @@ pub(super) fn icon_slot(drawn: impl IntoElement) -> gpui::Div {
         .child(drawn)
 }
 
-/// The divider under the pinned tabs: a line, and `clear` at its end while it shows.
+/// The New Tab line's own line, after its label while there are tabs today: a hairline that takes
+/// the room the label leaves, then `clear`, which ends where the titles do.
+fn today_line(palette: &Palette, line: Pixels, clear: impl IntoElement) -> gpui::Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .h(px(CLEAR_HEIGHT))
+        .ml(px(DIVIDER_GAP))
+        .mr(px(TITLE_END_INSET))
+        .flex()
+        .items_center()
+        .child(div().flex_1().h(line).bg(palette.faint(DIVIDER)))
+        .child(clear)
+}
+
+/// The divider of a Space's card in the Library: a line, and `clear` at its end while it shows.
 fn divider_box(palette: &Palette, line: Pixels, clear: Option<impl IntoElement>) -> gpui::Div {
     // Clear ends where the titles do, 17 in from the edge.
     let right = if clear.is_some() {
@@ -6078,7 +6092,6 @@ fn clear_label(palette: &Palette, arrow: AnyElement, room: f32, color: f32) -> g
         .flex()
         .items_center()
         .text_size(px(text::SMALL))
-        .font_weight(FontWeight::SEMIBOLD)
         .text_color(palette.text(color))
         .child(
             div()
@@ -6104,10 +6117,10 @@ fn still_clear(palette: &Palette, arrow: bool) -> gpui::Div {
         true => svg()
             .path(ARROW_DOWN)
             .size(px(CLEAR_ARROW))
-            .text_color(palette.text(CLEAR)),
-        false => return clear_label(palette, div().into_any_element(), 0., CLEAR),
+            .text_color(palette.text(palette.tertiary())),
+        false => return clear_label(palette, div().into_any_element(), 0., palette.tertiary()),
     };
-    clear_label(palette, glyph.into_any_element(), 1., CLEAR)
+    clear_label(palette, glyph.into_any_element(), 1., palette.tertiary())
 }
 
 /// "+ New Tab": its plus and its label. The plus is drawn as a favicon is, so it centres on the
@@ -6116,10 +6129,11 @@ fn new_tab_label(palette: &Palette) -> (gpui::Svg, gpui::Div) {
     let plus = svg()
         .path("icons/plus.svg")
         .size(px(FAVICON_DRAWN))
-        .text_color(palette.glyph(NEW_TAB_PLUS));
+        .text_color(palette.glyph(palette.secondary()));
     let label = div()
+        .flex_none()
         .text_size(px(text::BODY))
-        .text_color(palette.text(NEW_TAB))
+        .text_color(palette.text(palette.secondary()))
         .child("New Tab");
     (plus, label)
 }
@@ -6150,7 +6164,7 @@ fn folder_icon(palette: &Palette, open: bool, elided: bool) -> AnyElement {
     svg()
         .path(swap::folder_glyph(open, elided))
         .size(px(FAVICON_DRAWN))
-        .text_color(palette.text(SECONDARY))
+        .text_color(palette.glyph(ICON_INK))
         .into_any_element()
 }
 
