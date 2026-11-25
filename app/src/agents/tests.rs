@@ -75,6 +75,8 @@ struct Made {
     profiles: RefCell<Vec<(u64, &'static str)>>,
     /// The Spaces that are a private window's own, as a test says.
     private: RefCell<Vec<u64>>,
+    /// The user's Space in view, where a test moves it from 1.
+    user: std::cell::Cell<Option<u64>>,
 }
 
 impl Made {
@@ -389,9 +391,9 @@ impl Browser for Made {
         }
     }
 
-    /// The user's Space is 1.
+    /// The user's Space is 1, or the one a test moved the user to.
     fn user_space(&self, _: u64) -> u64 {
-        1
+        self.user.get().unwrap_or(1)
     }
 
     fn space_profile(&self, space: u64) -> String {
@@ -10941,6 +10943,61 @@ mod sessions {
         assert!(cards(&agents, cx).is_empty(), "list_tabs alone isn't work");
         call_as(&agents, 2, "read_page", json!({ "tab": 20 }), cx);
         (agents, browser)
+    }
+
+    /// A session's card has a home as a task's has, the Space it was asked from: the user's Space
+    /// in view when its first call acted on a tab, which the browser says and the client doesn't.
+    /// The user moving on leaves it there, a later session takes the Space in view then, and no
+    /// answer tells the client where its card is.
+    #[gpui::test]
+    fn a_sessions_card_is_at_home_in_the_users_space_in_view(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        browser.user.set(Some(4242));
+        hello(&agents, "claude-code", "claude-code", cx);
+        let mut answers = vec![call_as(&agents, 1, "list_tabs", json!({}), cx)];
+        answered(&agents, 1, cx);
+        answers.push(call_as(&agents, 2, "read_page", json!({ "tab": 20 }), cx));
+        let first = cards(&agents, cx)[0].clone();
+        assert_eq!(first.home, 4242);
+        browser.user.set(Some(4343));
+        answers.push(call_as(&agents, 3, "snapshot", json!({ "tab": 20 }), cx));
+        answered(&agents, 2, cx);
+        answered(&agents, 3, cx);
+        assert_eq!(card(&agents, &first.agent, cx).home, 4242);
+        hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        let now = std::time::Instant::now();
+        answers.push(call_on(
+            &agents,
+            2,
+            4,
+            "read_page",
+            json!({ "tab": 20 }),
+            now,
+            cx,
+        ));
+        let second = cards(&agents, cx)[0].clone();
+        assert_ne!(second.agent, first.agent);
+        assert_eq!(second.home, 4343);
+        cx.run_until_parked();
+        for answer in answers {
+            if let Ok(answer) = answer.try_recv() {
+                for home in ["4242", "4343"] {
+                    assert!(!answer.text.contains(home), "{}", answer.text);
+                }
+            }
+        }
+    }
+
+    /// A private window is never a session's home: with one in view, its card lists in no Space.
+    #[gpui::test]
+    fn a_private_window_is_never_a_sessions_home(cx: &mut TestAppContext) {
+        let (agents, browser, _) = connected(cx);
+        browser.private.borrow_mut().push(1);
+        hello(&agents, "claude-code", "claude-code", cx);
+        call_as(&agents, 1, "read_page", json!({ "tab": 20 }), cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0].home, 0);
     }
 
     /// The first call that acts on a tab starts its connection's card, with its name, and a
