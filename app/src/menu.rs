@@ -14,18 +14,18 @@ use std::time::Instant;
 use std::{rc::Rc, time::Duration};
 
 use gpui::{
-    AnyWindowHandle, App, Bounds, Context, FocusHandle, Hsla, KeyDownEvent, ModifiersChangedEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Radians, Rgba, Role,
-    SharedString, Task, TitlebarOptions, Transformation, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowHandle, WindowKind, WindowOptions, div, img, point, prelude::*, px, rgb,
-    rgba, size, svg,
+    AnyWindowHandle, App, Bounds, Context, FocusHandle, Global, Hsla, KeyDownEvent,
+    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Point, Radians, Rgba, Role, SharedString, Task, TitlebarOptions, Transformation, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, div, img,
+    point, prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{
     elevation::Reach,
     list_keys::TypeAhead,
     shell::{MenuEntry, Shell, keystroke_label},
-    text_input::FieldMenu,
+    text_input::{self, FieldMenu},
 };
 
 pub use crate::tokens::menu::*;
@@ -1373,7 +1373,28 @@ pub type ShowOver = dyn Fn(AnyWindowHandle, Request, &mut App);
 /// browser window and dark elsewhere, once the update that asked is over. The field hears in its
 /// window how the menu closed, which has the keyboard back by then unless the user left.
 pub fn field_menu(show: Rc<ShowOver>) -> FieldMenu {
+    let entries = entries_menu(show).0;
     FieldMenu(Rc::new(move |items, at, from_keys, window, chosen, cx| {
+        let items = (items.into_iter())
+            .map(|(title, enabled)| MenuEntry::named(title, enabled))
+            .collect();
+        entries(items, at, from_keys, window, chosen, cx)
+    }))
+}
+
+/// Shows a menu of `MenuEntry`s, with their checks, headers and details, at `position` in `window`,
+/// as `FieldMenu` shows a field's: for a view that isn't the browser window's own, such as the
+/// command bar's composer, whose choices hang from it.
+pub struct EntriesMenu(pub Rc<ShowEntries>);
+
+pub type ShowEntries =
+    dyn Fn(Vec<MenuEntry>, Point<Pixels>, bool, &Window, text_input::Chosen, &mut App);
+
+impl Global for EntriesMenu {}
+
+/// `EntriesMenu` in ilo's menu, as `field_menu` shows a field's.
+pub fn entries_menu(show: Rc<ShowOver>) -> EntriesMenu {
+    EntriesMenu(Rc::new(move |items, at, from_keys, window, chosen, cx| {
         let handle = window.window_handle();
         let show = show.clone();
         cx.defer(move |cx| {
@@ -1385,9 +1406,6 @@ pub fn field_menu(show: Rc<ShowOver>) -> FieldMenu {
             }) else {
                 return;
             };
-            let items = (items.into_iter())
-                .map(|(title, enabled)| MenuEntry::named(title, enabled))
-                .collect();
             let chosen = Box::new(move |closed: Closed, cx: &mut App| {
                 cx.update_window(handle, |_, window, cx| chosen(closed, window, cx))
                     .ok();

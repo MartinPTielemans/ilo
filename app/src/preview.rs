@@ -261,7 +261,13 @@ struct Fake {
     downloads: RefCell<Vec<Download>>,
     /// The onboarding's two switches, both offered and off to begin with.
     opt_ins: Cell<(bool, bool)>,
+    /// Other apps' agents' switch, off to begin with.
+    other_apps: Cell<bool>,
     daily_count: Cell<bool>,
+    /// Settings' switches first run shows too, each as it starts, on; and a tab's wait before the
+    /// archive, Settings' 12 hours.
+    settings: RefCell<HashMap<browser::shell::Setting, bool>>,
+    archive_after: Cell<f64>,
     /// The tab each Space opens on where the site names one.
     opens_on: RefCell<HashMap<u64, u64>>,
     /// The tab each Space showed as it was left, which it shows again, and its page beside shows
@@ -1057,6 +1063,7 @@ impl Browser for Fake {
                         }])
                         .collect(),
                     answers: "claude-code".into(),
+                    sorted: None,
                 }
             };
         let day = 24 * 60 * 60;
@@ -1220,8 +1227,9 @@ impl Browser for Fake {
         states::var("PREVIEW_SAFE_START").map_or(true, |state| state != "unblocked")
     }
 
-    // PREVIEW_BROOM=<idle|sorting|failed|nothing> draws the broom after Clear in that state, which
-    // a click doesn't change: nothing here sorts.
+    // PREVIEW_BROOM=<idle|sorting|failed|nothing> gives the broom before Clear that state, which
+    // a click doesn't change: nothing here sorts. An idle one is drawn with the pointer over the
+    // sidebar, as PREVIEW_HOVER puts it, and one with nothing to sort never.
     fn broom(&self) -> Option<Broom> {
         match states::var("PREVIEW_BROOM").ok()?.as_str() {
             "idle" => Some(Broom::Idle),
@@ -2089,12 +2097,38 @@ impl Browser for Fake {
         self.opt_ins.set((self.opt_ins.get().0, on));
     }
 
+    fn other_apps(&self, _: &App) -> Option<bool> {
+        Some(self.other_apps.get())
+    }
+
+    fn set_other_apps(&self, on: bool, _: &mut App) {
+        self.other_apps.set(on);
+    }
+
     fn daily_count(&self, _: &App) -> Option<bool> {
         Some(self.daily_count.get())
     }
 
     fn set_daily_count(&self, on: bool, _: &mut App) {
         self.daily_count.set(on);
+    }
+
+    fn setting(&self, _: u64, setting: browser::shell::Setting, _: &App) -> Option<bool> {
+        Some(*self.settings.borrow().get(&setting).unwrap_or(&true))
+    }
+
+    fn set_setting(&self, _: u64, setting: browser::shell::Setting, on: bool, _: &mut App) {
+        self.settings.borrow_mut().insert(setting, on);
+    }
+
+    fn archive_after(&self, _: u64) -> Option<(f64, Vec<f64>)> {
+        let (hour, day) = (3600., 24. * 3600.);
+        let offered = vec![12. * hour, day, 7. * day, 30. * day, -1.];
+        Some((self.archive_after.get(), offered))
+    }
+
+    fn set_archive_after(&self, _: u64, seconds: f64, _: &mut App) {
+        self.archive_after.set(seconds);
     }
 
     fn new_private_window(&self, _: &mut App) {}
@@ -2176,6 +2210,7 @@ impl command_bar::Host for PreviewBar {
         Some(command_bar::TaskAgents {
             agents: vec![claude],
             known: true,
+            ..Default::default()
         })
     }
 
@@ -2191,7 +2226,16 @@ impl command_bar::Host for PreviewBar {
         None
     }
 
-    fn run_task(&self, _: &str, _: &str, _: Option<(SharedString, SharedString)>, _: &mut App) {}
+    fn run_task(
+        &self,
+        _: &str,
+        _: &str,
+        _: Option<(SharedString, SharedString)>,
+        _: browser::agents::tier::Tier,
+        _: Option<String>,
+        _: &mut App,
+    ) {
+    }
 
     fn set_up_agents(&self, _: &mut App) {}
 
@@ -2681,6 +2725,11 @@ fn main() {
                 );
                 return;
             }
+            // PREVIEW_THREADS=on or off shows Settings › Threads' first row, its switch so.
+            if let Ok(state) = states::var("PREVIEW_THREADS") {
+                preview_pictures(Pictures::Threads { on: state == "on" }, cx);
+                return;
+            }
             // PREVIEW_SETTINGS_GENERAL=1 shows Settings › General, on made-up values (#4092).
             if states::var("PREVIEW_SETTINGS_GENERAL").is_ok() {
                 preview_pictures(Pictures::General, cx);
@@ -2803,7 +2852,7 @@ fn main() {
                         spaces[0].2 = Some(theme.main_color());
                         spaces[0].6 = theme.to_text().into();
                     }
-                    // PREVIEW_TASKS=1 shows three tasks' cards at the foot, one at work, one
+                    // PREVIEW_TASKS=1 shows three tasks' cards in Today, one at work, one
                     // stopped and one done; =open shows the first's conversation, as its card's
                     // click does.
                     let tasks = states::var("PREVIEW_TASKS").ok().or_else(|| {
@@ -2856,7 +2905,10 @@ fn main() {
                         archive: RefCell::new(archive),
                         downloads: RefCell::new(downloads),
                         opt_ins: Cell::new((false, false)),
+                        other_apps: Cell::new(false),
                         daily_count: Cell::new(false),
+                        settings: RefCell::default(),
+                        archive_after: Cell::new(12. * 3600.),
                         opens_on: RefCell::default(),
                         shows: Rc::default(),
                     });
@@ -3234,24 +3286,6 @@ fn main() {
                         let pick = std::env::var("PREVIEW_ONBOARDING_PICK").ok();
                         if let Some(index) = pick.and_then(|pick| pick.parse().ok()) {
                             shell.onboarding_pick_swatch(index, cx);
-                        }
-                    }
-                    // PREVIEW_ONBOARDING_LOOP=<s> holds the step's loop <s> seconds in, for a still
-                    // capture, and =<s>,<ms> lets it play from the start <ms> in, for its frames.
-                    if let Ok(held) = std::env::var("PREVIEW_ONBOARDING_LOOP") {
-                        let mut parts = held.split(',').map(|part| part.trim().parse::<f32>().ok());
-                        if let Some(Some(at)) = parts.next() {
-                            shell.onboarding_hold_loop(Some(at), cx);
-                        }
-                        if let Some(Some(ms)) = parts.next() {
-                            cx.spawn(async move |shell, cx| {
-                                let after = Duration::from_millis(ms as u64);
-                                cx.background_executor().timer(after).await;
-                                shell
-                                    .update(cx, |shell, cx| shell.onboarding_hold_loop(None, cx))
-                                    .ok();
-                            })
-                            .detach();
                         }
                     }
                     shell
@@ -4171,7 +4205,10 @@ mod tests {
                 archive: Default::default(),
                 downloads: Default::default(),
                 opt_ins: Default::default(),
+                other_apps: Default::default(),
                 daily_count: Default::default(),
+                settings: Default::default(),
+                archive_after: Default::default(),
                 opens_on: Default::default(),
                 shows: Default::default(),
             });

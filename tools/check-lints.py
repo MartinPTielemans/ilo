@@ -449,8 +449,7 @@ FIXED = {
     # The Settings window's title, a section's name (Section::name in app/src/settings.rs).
     ("app/platform/mac/host.mm", "g_settings.title.UTF8String"),
     ("app/platform/windows/host.cc", "Utf8(title).c_str()"),
-    # The Dock icon's colour as hex, or green or system; the badge's count.
-    ("app/platform/mac/dock.mm", "name.UTF8String"),
+    # The badge's count.
     ("app/platform/mac/needs_you.mm", "NSApp.dockTile.badgeLabel.UTF8String"),
     ("app/platform/windows/host.cc", "std::to_string(count).c_str()"),
     # The system's words for an error, or Sparkle's, which a user's report of a failed update needs:

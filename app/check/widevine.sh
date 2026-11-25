@@ -78,7 +78,7 @@ grep -q "^browser: widevine state restart\$" "$log" || fail "the module didn't d
 send key , cmd
 expect '^browser: settings shown ' "⌘, didn't show Settings"
 settings_drew
-if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' General$'; then
+if ! grep -E '^browser: settings (shown|tab) ' "$log" | tail -1 | grep -q ' General$'; then
   send clickkey $(drawn "toolbar General")
   expect '^browser: settings tab General$' "a click on General didn't show its section"
 fi

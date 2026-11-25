@@ -24,6 +24,7 @@ use browser::little_launch;
 use browser::log;
 use browser::notes;
 use browser::passwords::{self, Login};
+use browser::product::PRODUCT;
 use browser::shell::{self, CancelName, Command, Holder, KeepName, MenuEntry, Refused, UserKeys};
 use browser::text_input::{self, Colors, TextInput};
 use browser::theme::Appearance;
@@ -44,8 +45,9 @@ use browser::settings_column::{self, Section};
 use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
     Act, Chip, Look as RowLook, SLIDE, assistant_row, chevron_slot, chip, command_export,
-    command_text, detailed_row, end, frame, glyph_plate, group, group_lined, named_button, row,
-    sent_part, stop_button, stop_chip, stop_popup, stop_restore, stop_switch, text,
+    command_text, detailed_row, end, folder_popup, frame, glyph_plate, group, group_lined,
+    mark_row, named_button, named_popup, ring, row, segmented, sent_part, stop_button, stop_chip,
+    stop_popup, stop_restore, stop_switch, text,
 };
 use browser::settings_search::{
     self, EndSearch, Entry, NextControl, PageBottom, PageDown, PageTop, PageUp, PreviousControl,
@@ -84,6 +86,12 @@ const ARCHIVE_AFTER: [(&str, f64); 5] = [
 
 /// The core's BC_ARCHIVE_NEVER.
 const ARCHIVE_NEVER: f64 = -1.;
+
+/// The times Settings offers a profile's tabs to wait before the archive, in its order, as first
+/// run's bar has them.
+pub(crate) fn archive_times() -> Vec<f64> {
+    ARCHIVE_AFTER.iter().map(|&(_, seconds)| seconds).collect()
+}
 
 /// Chrome's page zoom choices, as its settings page's.
 const PAGE_ZOOM: [(&str, f64); 11] = [
@@ -125,6 +133,8 @@ enum Block {
     Heading(SharedString),
     /// A heading with what's inside it after a ›, quieter, as Import › Arc.
     Crumb(SharedString, SharedString),
+    /// A heading with the chip saying whose settings its group shows at its end.
+    Scoped(SharedString, AnyElement),
     Group(gpui::Div),
     /// A group of rows the search can find.
     Rows(Vec<Row>),
@@ -168,6 +178,13 @@ impl Page {
 /// The choice that has a command's keys reach ilo before the page.
 const PREFER_ILO: &str = concat!("Prefer ", env!("APP_NAME"));
 
+/// General's rows, as drawn, which their controls are named by too.
+const DEFAULT_BROWSER: &str = "Default browser";
+const SEARCH_WITH: &str = "Search with";
+const SAVE_TO: &str = "Save downloads to";
+/// Little Window's name (the words table's Z41a).
+const LITTLE_WINDOW: &str = "Little Window";
+
 /// The pop-up buttons.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Popup {
@@ -187,6 +204,8 @@ enum Popup {
     Notify,
     /// General's Page zoom.
     PageZoom,
+    /// The chip saying whose settings a group shows.
+    Scope,
 }
 
 impl Popup {
@@ -194,11 +213,13 @@ impl Popup {
     fn spoken(self) -> SharedString {
         match self {
             Popup::LittleArchiveAfter => "Archive windows left unused after".into(),
-            Popup::PasswordsProfile => "Profile".into(),
-            Popup::SearchEngine(_) => "Search engine".into(),
+            Popup::PasswordsProfile | Popup::Scope => "Profile".into(),
+            Popup::SearchEngine(_) => SEARCH_WITH.into(),
             Popup::ArchiveAfter(_) => "Archive Today tabs after".into(),
             Popup::Notes(_) => "New Note".into(),
-            Popup::Assistant(cli) => format!("{} options", cli.assistant()).into(),
+            Popup::Assistant(cli) => {
+                format!("{} options", browser::settings_rows::assistant_name(cli)).into()
+            }
             Popup::Model(_) => browser::agents::task::MODEL.into(),
             Popup::Notify => browser::needs_you::WHEN_TO_NOTIFY.into(),
             Popup::PageZoom => "Page zoom".into(),
@@ -263,6 +284,9 @@ pub struct Settings {
     popup_texts: Rc<RefCell<Vec<(Popup, gpui::Point<gpui::Pixels>)>>>,
     /// The profile whose logins Passwords lists, once the user has picked one.
     passwords_profile: Option<u64>,
+    /// The profile General's search engine and downloads are shown for, once the user has picked
+    /// one from its chip.
+    scope: Option<u64>,
     /// Each profile's logins, as the core last told them.
     logins: HashMap<u64, Vec<Login>>,
     /// Each profile's saved addresses and cards, as the core last told them.
@@ -816,6 +840,9 @@ fn show_now(cx: &mut App) {
             if settings.section == Section::OtherApps {
                 look_for_clients(cx);
             }
+            if settings.section == Section::Models {
+                models_shown(cx);
+            }
             if settings.section == Section::SyncImport {
                 settings
                     .account
@@ -839,6 +866,13 @@ fn look_for_clients(cx: &mut App) {
             agents.look_for_clients(cx);
             agents.look_for_task_agents(cx);
         });
+    }
+}
+
+/// Looks for the assistants as Models opens, so its rows say what's on this computer.
+fn models_shown(cx: &mut App) {
+    if let Some(agents) = agents::global(cx) {
+        agents.update(cx, |agents, cx| agents.models_shown(cx));
     }
 }
 
@@ -1147,6 +1181,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             drawn_logged: Rc::default(),
             popup_texts: Rc::default(),
             passwords_profile: None,
+            scope: None,
             logins: HashMap::new(),
             autofill: HashMap::new(),
             asked: HashSet::new(),
@@ -1399,6 +1434,9 @@ impl Settings {
         if section == Section::OtherApps {
             look_for_clients(cx);
         }
+        if section == Section::Models {
+            models_shown(cx);
+        }
         if section == Section::SyncImport {
             self.account
                 .update(cx, |account, cx| account.read_activity(cx));
@@ -1522,13 +1560,16 @@ impl Settings {
         let mut after_heading = None;
         let blocks = blocks.into_iter().map(|block| {
             let top = match (after_heading, &block) {
-                (_, Block::Heading(_) | Block::Crumb(..)) => HEADING_TOP,
+                (_, Block::Heading(_) | Block::Crumb(..) | Block::Scoped(..)) => HEADING_TOP,
                 (None, _) => FIRST_GROUP,
                 (Some(true), _) => HEADING_BOTTOM,
                 (_, Block::Under(_)) => BUTTONS_TOP,
                 _ => GROUP_GAP,
             };
-            after_heading = Some(matches!(block, Block::Heading(_) | Block::Crumb(..)));
+            after_heading = Some(matches!(
+                block,
+                Block::Heading(_) | Block::Crumb(..) | Block::Scoped(..)
+            ));
             let block = match block {
                 Block::Heading(heading) => self.heading(heading).into_any_element(),
                 Block::Crumb(heading, inside) => {
@@ -1540,6 +1581,13 @@ impl Settings {
                         .child(inside)
                         .into_any_element()
                 }
+                Block::Scoped(heading, chip) => self
+                    .heading(heading)
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(chip)
+                    .into_any_element(),
                 Block::Group(group) | Block::Under(group) => group.into_any_element(),
                 Block::Rows(rows) => self.rows(rows).into_any_element(),
                 Block::View(view) => view,
@@ -1617,114 +1665,141 @@ impl Settings {
         rows
     }
 
-    /// General: how ilo opens and quits, and each profile's search engine and downloads. Make
-    /// Default sits by the heading only while ilo isn't the default.
+    /// General, as drawn (S2): whether the browser is the default, with Make Default while it
+    /// isn't; how it opens and quits; the search engine and downloads of the profile its chip
+    /// shows, which picks another while there are several; and Little Window's button where the
+    /// OS has a place every desktop shows.
     fn general(&self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
-        let default = self.default_browser.read(cx);
-        let lede: SharedString = match (default.is_default(), default.offers()) {
-            (true, _) => concat!("How ", env!("APP_NAME"), " opens and quits.").into(),
-            (false, true) => concat!(env!("APP_NAME"), " isn't your default browser.").into(),
-            (false, false) => format!(
-                "{} isn't your default browser. {}",
-                env!("APP_NAME"),
-                default.detail()
-            )
-            .into(),
-        };
-        let make = default.offers().then(|| {
-            let make = cx.listener(|settings: &mut Self, _, _, cx| {
-                log!("browser: make default browser");
-                settings.default_browser.read(cx).make_default();
-            });
-            self.button("make-default-browser", "Make Default")
-                .relative()
-                .child(self.drawn("make default".into()))
-                .on_click(make)
-                .into_any_element()
-        });
         let look = &self.look;
+        let default = self.default_browser.read(cx);
+        let (line, make) = match (default.is_default(), default.offers()) {
+            (true, _) => (
+                Some(format!("{PRODUCT} is your default browser").into()),
+                None,
+            ),
+            (false, offers) => {
+                let line = format!(
+                    "{PRODUCT} isn't your default, so links from other apps open somewhere else."
+                );
+                let line: SharedString = match offers {
+                    true => line.into(),
+                    false => format!("{line} {}", default.detail()).into(),
+                };
+                let make = offers.then(|| {
+                    let make = cx.listener(|settings: &mut Self, _, _, cx| {
+                        log!("browser: make default browser");
+                        settings.default_browser.read(cx).make_default();
+                    });
+                    // The page's one main button, a stop as every button here is.
+                    browser::settings_rows::primary(look, "make-default-browser", "Make Default")
+                        .when(self.a11y, |make| named_button(make, "Make Default"))
+                        .tab_index(0)
+                        .focus_from_keys_only()
+                        .focus_visible(ring(look.ink))
+                        .relative()
+                        .child(self.drawn("make default".into()))
+                        .on_click(make)
+                        .into_any_element()
+                });
+                (Some(line), make)
+            }
+        };
+        let default = Row {
+            div: mark_row(
+                look,
+                DEFAULT_BROWSER,
+                line.clone(),
+                make.into_iter().collect(),
+            ),
+            name: DEFAULT_BROWSER.into(),
+            line,
+            keys: None,
+            nested: false,
+        };
         let restore = unsafe { bc::bc_restore_windows() };
-        let restore = self.toggle(
-            "restore windows",
-            "Reopen your windows and tabs",
-            restore,
-            set_restore_windows,
-            accent,
-            cx,
+        let opens: [SharedString; 2] = ["Bring back my windows".into(), "Start fresh".into()];
+        let opens = segmented(
+            look,
+            "when-opens",
+            &opens,
+            Some(if restore { 0 } else { 1 }),
+            self.a11y,
+            |index, segment| {
+                let back = index == 0;
+                segment
+                    .child(self.drawn(format!("segment {}", opens[index])))
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        if back == restore {
+                            return;
+                        }
+                        // check.sh waits for this line.
+                        log!(
+                            "browser: restore windows {}",
+                            if back { "on" } else { "off" }
+                        );
+                        set_restore_windows(back, cx);
+                        cx.notify();
+                    }))
+            },
         );
-        let warn = unsafe { bc::bc_warn_before_quitting() };
         let warn = self.toggle(
             "warn before quitting",
             "Ask before quitting",
-            warn,
+            unsafe { bc::bc_warn_before_quitting() },
             set_warn_before_quitting,
             accent,
             cx,
         );
-        let quit = shell::keystroke_label("cmd-q");
         let opening = vec![
             setting(
                 look,
-                "Reopen your windows and tabs",
-                Some(
-                    concat!(
-                        "Off: ",
-                        env!("APP_NAME"),
-                        " opens one empty window, and Today tabs go to the archive."
-                    )
-                    .into(),
-                ),
-                vec![restore],
+                format!("When {PRODUCT} opens"),
+                None,
+                vec![opens.into_any_element()],
             ),
-            setting(
-                look,
-                "Ask before quitting",
-                Some(
-                    format!("{quit} asks first, so a stray press can't close every window.").into(),
-                ),
-                vec![warn],
-            ),
+            setting(look, "Ask before quitting", None, vec![warn]),
         ];
-        // Each only once the core has loaded the profile.
-        let search = self.per_profile(profiles, "Search engine", None, |profile| {
-            let id = profile.id;
-            let (engines, keyword) = search_engines(id)?;
-            let chosen = engines.iter().position(|(each, _)| *each == keyword);
-            let label = chosen.map_or(keyword, |index| engines[index].1.clone());
-            let popup = self.popup(
-                Popup::SearchEngine(id),
-                label,
-                POPUP_WIDTH,
-                cx.listener(move |settings, _, window, cx| {
-                    settings.choose_search_engine(id, engines.clone(), chosen, window, cx)
-                }),
-            );
-            Some(
-                popup
-                    .child(self.drawn(format!("search engine {id}")))
-                    .into_any_element(),
-            )
-        });
-        let folders = self.per_profile(profiles, "Save downloads to", None, |profile| {
-            let id = profile.id;
-            let folder = download_folder(id)?;
-            let change = self
-                .button(("download-folder", id), "Change…")
-                .relative()
-                .child(self.drawn(format!("download folder {id}")))
-                .on_click(cx.listener(move |_, _, _, cx| choose_download_folder(id, cx)));
-            let folder = div().max_w(px(POPUP_WIDTH)).truncate().child(folder);
-            let folder = folder.text_color(self.look.detail).into_any_element();
-            Some(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(CONTROL_GAP))
-                    .child(folder)
-                    .child(change)
-                    .into_any_element(),
-            )
-        });
+        // The profile the chip shows; each keeps its own, once the core has loaded it.
+        let mut found = Vec::new();
+        if let Some(id) = self.scoped(profiles) {
+            if let Some((engines, keyword)) = search_engines(id) {
+                let chosen = engines.iter().position(|(each, _)| *each == keyword);
+                let label = chosen.map_or(keyword, |index| engines[index].1.clone());
+                let popup = self.popup(
+                    Popup::SearchEngine(id),
+                    label,
+                    POPUP_WIDTH,
+                    cx.listener(move |settings, _, window, cx| {
+                        settings.choose_search_engine(id, engines.clone(), chosen, window, cx)
+                    }),
+                );
+                let popup = popup.child(self.drawn(format!("search engine {id}")));
+                found.push(setting(
+                    look,
+                    SEARCH_WITH,
+                    None,
+                    vec![popup.into_any_element()],
+                ));
+            }
+            if let Some(folder) = download_folder(id) {
+                // The folder's own name, as drawn; an assistive app reads where it is.
+                let name = std::path::Path::new(folder.as_ref())
+                    .file_name()
+                    .map_or(folder.clone(), |name| {
+                        name.to_string_lossy().into_owned().into()
+                    });
+                let picker = folder_popup(look, ("download-folder", id), SAVE_TO, name, self.a11y)
+                    .relative()
+                    .child(self.drawn(format!("download folder {id}")))
+                    .on_click(cx.listener(move |_, _, _, cx| choose_download_folder(id, cx)));
+                found.push(setting(
+                    look,
+                    SAVE_TO,
+                    None,
+                    vec![picker.into_any_element()],
+                ));
+            }
+        }
         let ask = self.toggle(
             "ask where to save",
             "Ask where to save each file",
@@ -1733,49 +1808,101 @@ impl Settings {
             accent,
             cx,
         );
-        let ask = setting(
+        found.push(setting(
             look,
             "Ask where to save each file",
-            Some("Each download asks where it goes, rather than saving to its folder.".into()),
+            None,
             vec![ask],
-        );
-        let found: Vec<Row> = search.into_iter().chain(folders).chain([ask]).collect();
-        let mut looks = Vec::new();
-        // Where the host draws the dot: the Dock icon's, or Windows' taskbar button's.
-        if let Some(switch) = browser::dock_dot::SWITCH {
-            let colored = !off(DOCK_ICON_PLAIN);
-            let colored = self.toggle(
-                "dock icon color",
-                switch.name,
-                colored,
-                set_dock_icon_color,
+        ));
+        // The Mac's menu bar and Windows' notification area, each by its own name; Linux has no
+        // place every desktop shows (browser::little_launch). With Little Window off, none (#1636).
+        let little_on = unsafe { bc::bc_little_windows() };
+        let os = little_launch::os();
+        let menu_bar = (little_launch::button(os).filter(|_| little_on)).map(|button| {
+            let switch = self.toggle(
+                "little in the menu bar",
+                button.row,
+                crate::little_in_menu_bar(),
+                set_little_in_menu_bar,
                 accent,
                 cx,
             );
-            looks.push(setting(
-                look,
-                switch.name,
-                Some(switch.line.into()),
-                vec![colored],
-            ));
-        }
+            let line = match os {
+                little_launch::Os::Mac => {
+                    "A small window from the menu bar, for a quick look without the browser."
+                }
+                _ => button.line,
+            };
+            let row = setting(look, LITTLE_WINDOW, Some(line.into()), vec![switch]);
+            (format!("In the {}", button.place), row)
+        });
+        let downloads: SharedString = "Search and downloads".into();
         let mut blocks = vec![
+            Block::Rows(vec![default]),
             Block::Heading("Opening and quitting".into()),
             Block::Rows(opening),
+            match self.scope_chip(profiles, cx) {
+                Some(chip) => Block::Scoped(downloads, chip),
+                None => Block::Heading(downloads),
+            },
+            Block::Rows(found),
         ];
-        // The Dock's row stays until its colour goes (#4078).
-        if !looks.is_empty() {
-            blocks.push(Block::Heading("Look".into()));
-            blocks.push(Block::Rows(looks));
+        if let Some((heading, row)) = menu_bar {
+            blocks.push(Block::Heading(heading.into()));
+            blocks.push(Block::Rows(vec![row]));
         }
-        if !found.is_empty() {
-            blocks.push(Block::Heading("Search and downloads".into()));
-            blocks.push(Block::Rows(found));
+        Page::new(Section::General, "", blocks)
+    }
+
+    /// The profile whose settings General shows: the one picked from its chip while it's there,
+    /// or else the one the browser started with.
+    fn scoped(&self, profiles: &[Profile]) -> Option<u64> {
+        let picked = self
+            .scope
+            .filter(|&id| profiles.iter().any(|each| each.id == id));
+        picked.or(profiles.first().map(|profile| profile.id))
+    }
+
+    /// The chip saying whose settings a group shows, which lists the profiles to pick another
+    /// from, while there are several.
+    fn scope_chip(&self, profiles: &[Profile], cx: &mut Context<Self>) -> Option<AnyElement> {
+        if profiles.len() < 2 {
+            return None;
         }
-        Page {
-            action: make,
-            ..Page::new(Section::General, lede, blocks)
-        }
+        let shown = self.scoped(profiles)?;
+        let chosen = profiles.iter().position(|each| each.id == shown);
+        let names: Vec<SharedString> = profiles.iter().map(|each| each.name.clone()).collect();
+        let ids: Vec<u64> = profiles.iter().map(|each| each.id).collect();
+        let name = chosen.map(|index| names[index].clone()).unwrap_or_default();
+        let open = self.choosing == Some(Popup::Scope);
+        let (keyed_names, keyed_ids) = (names.clone(), ids.clone());
+        let pressed = cx.listener(move |settings: &mut Self, _: &MouseDownEvent, window, cx| {
+            let (names, ids) = (names.clone(), ids.clone());
+            settings.choose_profile(Popup::Scope, names, ids, chosen, window, cx)
+        });
+        // Space or Return opens its menu as a press does.
+        let keyed = cx.listener(
+            move |settings: &mut Self, event: &gpui::ClickEvent, window, cx| {
+                if event.is_keyboard() {
+                    let (names, ids) = (keyed_names.clone(), keyed_ids.clone());
+                    settings.choose_profile(Popup::Scope, names, ids, chosen, window, cx)
+                }
+            },
+        );
+        let chip = browser::settings_rows::scope(&self.look, name.clone(), open)
+            .relative()
+            .id("scope")
+            .when(self.a11y, |chip| {
+                named_popup(chip, Popup::Scope.spoken(), name)
+            })
+            .tab_index(0)
+            .focus_from_keys_only()
+            .focus_visible(ring(self.look.ink))
+            .child(self.menu_at(Popup::Scope))
+            .child(self.drawn("scope".into()))
+            .on_mouse_down(MouseButton::Left, pressed)
+            .on_click(keyed);
+        Some(chip.into_any_element())
     }
 
     /// Appearance (#4092): the settings whose choice is a picture, Appearance and Sidebar
@@ -2009,12 +2136,38 @@ impl Settings {
             Some("Its page loads again there, without this profile's logins and cookies.".into()),
             vec![moving],
         );
+        // Drawn only where the broom can be, which is also where the core keeps the switch.
+        let broom = crate::broom_host::can_be(cx);
+        let sort = self.per_profile(
+            profiles,
+            "Sort tabs into folders",
+            Some(
+                format!(
+                    "When you sort, {PRODUCT} sends the titles and site names of today's tabs to \
+                     your assistant."
+                )
+                .into(),
+            ),
+            |profile| {
+                let id = profile.id;
+                broom.then(|| {
+                    self.toggle(
+                        format!("sort tabs {id}"),
+                        "Sort tabs into folders",
+                        crate::broom_host::on(id),
+                        move |on, cx| crate::broom_host::set_on(id, on, cx),
+                        accent,
+                        cx,
+                    )
+                })
+            },
+        );
         let mut blocks = vec![
             Block::Heading("Today tabs".into()),
             Block::Rows(
-                archive
-                    .into_iter()
+                (archive.into_iter())
                     .chain([unload, battery, moving])
+                    .chain(sort)
                     .collect(),
             ),
             Block::Rows(vec![favorites]),
@@ -2198,27 +2351,6 @@ impl Settings {
             Some(little_line.into()),
             vec![little_switch],
         );
-        // The Mac's menu bar and Windows' notification area, each by its own name; Linux has no
-        // place every desktop shows (browser::little_launch).
-        // With Little ilo off, none (#1636).
-        let menu_bar =
-            (little_launch::button(little_launch::os()).filter(|_| little_on)).map(|button| {
-                let on = crate::little_in_menu_bar();
-                let switch = self.toggle(
-                    "little in the menu bar",
-                    button.row,
-                    on,
-                    set_little_in_menu_bar,
-                    accent,
-                    cx,
-                );
-                nested(setting(
-                    look,
-                    button.row,
-                    Some(button.line.into()),
-                    vec![switch],
-                ))
-            });
         let (label, chosen) = chosen_time(&LITTLE_ARCHIVE_AFTER, unsafe {
             bc::bc_little_archive_after()
         });
@@ -2253,7 +2385,6 @@ impl Settings {
         // Its own settings only while it's on.
         let little: Vec<Row> = [little]
             .into_iter()
-            .chain(menu_bar)
             .chain(little_on.then_some(little_archive))
             .chain(little_on.then_some(sign_in_close))
             .collect();
@@ -3480,7 +3611,8 @@ impl Settings {
                 move |_, window, cx| {
                     let (names, ids) = (names.clone(), ids.clone());
                     let choose = |settings: &mut Settings, cx: &mut Context<Settings>| {
-                        settings.choose_profile(names, ids, chosen, window, cx)
+                        let which = Popup::PasswordsProfile;
+                        settings.choose_profile(which, names, ids, chosen, window, cx)
                     };
                     view.update(cx, choose).ok();
                 },
@@ -3559,10 +3691,11 @@ impl Settings {
         Page::new(Section::Passwords, LEDE, blocks)
     }
 
-    /// Opens the profiles' pop-up menu over its button, as the archive's, and lists the profile
-    /// picked's logins.
+    /// Opens the profiles' pop-up menu over `which`, as the archive's, and shows the profile
+    /// picked's logins, for Passwords', or its settings, for a group's chip.
     fn choose_profile(
         &mut self,
+        which: Popup,
         names: Vec<SharedString>,
         ids: Vec<u64>,
         chosen: Option<usize>,
@@ -3584,15 +3717,23 @@ impl Settings {
             settings
                 .update(cx, |settings, cx| {
                     if let Some(&profile) = picked.and_then(|index| ids.get(index)) {
-                        // check.sh waits for this line.
-                        log!("browser: passwords profile {profile}");
-                        settings.passwords_profile = Some(profile);
+                        // check.sh waits for these lines.
+                        match which {
+                            Popup::PasswordsProfile => {
+                                log!("browser: passwords profile {profile}");
+                                settings.passwords_profile = Some(profile);
+                            }
+                            _ => {
+                                log!("browser: settings scope profile {profile}");
+                                settings.scope = Some(profile);
+                            }
+                        }
                     }
                     settings.chose(cx);
                 })
                 .ok();
         });
-        self.pop_up(Popup::PasswordsProfile, items, picked, window, cx);
+        self.pop_up(which, items, picked, window, cx);
     }
 
     /// Removes a saved login once the user confirms, in an alert, or on Linux in Settings' own
@@ -3705,26 +3846,20 @@ impl Settings {
     fn agents(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> [Page; 4] {
         let look = &self.look;
         let on = agents.read(cx).is_on();
+        // The inside switch: the user's own assistant, for threads. Other apps have theirs.
+        let name = format!("Let your assistant use {PRODUCT}");
         let switch = {
             let agents = agents.clone();
             let set = move |on, cx: &mut App| agents.update(cx, |agents, cx| agents.set_on(on, cx));
-            self.toggle("agents", "Let agents use the browser", on, set, accent, cx)
+            self.toggle("agents", name.clone(), on, set, accent, cx)
         };
-        let model = agents.read(cx);
-        let about: SharedString = match model.trouble() {
-            Some(trouble) => trouble,
-            None if on => {
-                "On: a connected client reaches the browser through the bridge beside it.".into()
-            }
-            None => "Each asks before it sends or pays for anything.".into(),
+        // Off, the drawn line says what off does; on, the row is bare. The agents' trouble comes
+        // first, as it did.
+        let about: Option<SharedString> = match agents.read(cx).trouble() {
+            Some(trouble) => Some(trouble),
+            None => (!on).then(|| "Off: no thread starts.".into()),
         };
-        let master = feature(
-            look,
-            Section::Threads.glyph(),
-            "Let agents use the browser",
-            Some(about),
-            vec![switch],
-        );
+        let master = setting(look, name, about, vec![switch]);
         let listed = agents.read(cx).listed();
         let clients: Vec<gpui::Div> = listed
             .iter()
@@ -3771,10 +3906,14 @@ impl Settings {
         let rows = [master].into_iter().chain(tasks).chain(keeps).chain(kept);
         let mut threads = vec![Block::Rows(rows.collect())];
         let (mut models, mut access) = (Vec::new(), Vec::new());
+        // Every assistant, in its state, whether agents and tasks are on or not (S9).
+        models.push(Block::Heading("Your assistant".into()));
+        models.push(Block::Group(self.assistants(agents, cx)));
+        models.push(Block::Under(foot(
+            look,
+            browser::settings_rows::SIGN_INS_STAY,
+        )));
         if tasks_on {
-            models.push(Block::Heading("Your assistant".into()));
-            models.push(Block::Group(self.assistants(agents, cx)));
-            models.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
             access.extend(self.access());
             // What a thread may reach: files and folders too, with the folders it holds to revoke.
             access.extend(self.files_not_here(agents, cx));
@@ -3786,7 +3925,7 @@ impl Settings {
             threads.push(Block::Heading(browser::needs_you::NOTIFICATIONS.into()));
             threads.push(Block::Rows(vec![self.when_to_notify(agents, cx)]));
         }
-        let mut blocks = Vec::new();
+        let mut blocks = vec![Block::Rows(vec![self.other_apps(agents, accent, cx)])];
         blocks.push(Block::Heading(APPS_THAT_CONNECT.into()));
         let apps = SharedString::from(APPS_THAT_CONNECT);
         blocks.push(Block::Group(self.flashed(&apps, group(look, clients))));
@@ -3831,9 +3970,14 @@ impl Settings {
                         }
                     };
                     let what = title(entry);
-                    let refused = (entry.steps.iter().map(|step| &step.refused))
+                    // Why it was refused, but for a permission the browser refused the page,
+                    // whose title says it whole.
+                    let shown = |entry: &agents::Activity| {
+                        agents::tools::refusal_shown(&entry.action, &entry.refused).to_string()
+                    };
+                    let refused = (entry.steps.iter().map(shown))
                         .find(|refused| !refused.is_empty())
-                        .unwrap_or(&entry.refused);
+                        .unwrap_or_else(|| shown(entry));
                     let steps = entry.steps.iter().map(title);
                     let detail: SharedString = if !refused.is_empty() {
                         format!("Refused: {refused}").into()
@@ -3889,10 +4033,35 @@ impl Settings {
         }
         [
             Page::new(Section::Threads, "", threads),
-            Page::new(Section::Models, "", models),
+            Page::new(
+                Section::Models,
+                Section::Models.lede().unwrap_or_default(),
+                models,
+            ),
             Page::new(Section::Access, agents::tier::NEVER_GETS, access),
-            Page::new(Section::OtherApps, "", blocks),
+            Page::new(
+                Section::OtherApps,
+                Section::OtherApps.lede().unwrap_or_default(),
+                blocks,
+            ),
         ]
+    }
+
+    /// Other apps' own switch (#4260), at the top of their page, where it is kept: only the user's
+    /// click sets it.
+    fn other_apps(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> Row {
+        let name = format!("Let other apps' agents use {PRODUCT}");
+        let on = agents.read(cx).other_apps();
+        let switch = {
+            let agents = agents.clone();
+            let set = move |on, cx: &mut App| {
+                agents.update(cx, |agents, cx| agents.set_other_apps(on, cx))
+            };
+            self.toggle("other apps", name.clone(), on, set, accent, cx)
+        };
+        // A draft until the next wording batch (S30): off says what off does; on, the row is bare.
+        let line = (!on).then(|| "Off: no app connects.".into());
+        setting(&self.look, name, line, vec![switch])
     }
 
     /// Access: what each tier lets a task do, in words only, since only a task's own menu sets
@@ -5407,7 +5576,6 @@ fn set_mini_player(on: bool, _: &mut App) {
 /// The app's own switches that are on unless the user turned them off, each a file in the
 /// profile directory while it's off, as the core keeps no settings of the app's own.
 const NO_EDGE_REVEAL: &str = "no-edge-reveal";
-const DOCK_ICON_PLAIN: &str = "plain-dock-icon";
 /// What's recent in hover cards, off (#3074); and the sites Site Controls turned it off for, a line
 /// each.
 const NO_RECENT: &str = "no-recent-in-cards";
@@ -5432,7 +5600,6 @@ fn set_off(name: &str, is_off: bool) {
 pub fn read_switches(cx: &mut App) {
     cx.set_global(shell::SidebarEdge(!off(NO_EDGE_REVEAL)));
     cx.set_global(shell::SidebarRight(off(SIDEBAR_RIGHT)));
-    browser::dock_dot::set_plain(off(DOCK_ICON_PLAIN), cx);
     browser::recent::set_switches(!off(NO_RECENT), recent_sites_off(), cx);
 }
 
@@ -5484,11 +5651,6 @@ pub fn set_sidebar_right(right: bool, cx: &mut App) {
 fn set_edge_reveals(reveals: bool, cx: &mut App) {
     set_off(NO_EDGE_REVEAL, !reveals);
     cx.set_global(shell::SidebarEdge(reveals));
-}
-
-fn set_dock_icon_color(colored: bool, cx: &mut App) {
-    set_off(DOCK_ICON_PLAIN, !colored);
-    browser::dock_dot::set_plain(!colored, cx);
 }
 
 /// About's "Check for updates automatically", which only the Mac and Windows show. It reads the
@@ -5655,10 +5817,6 @@ fn method(target: &str) -> &str {
 
 /// Apps that connect's heading.
 const APPS_THAT_CONNECT: &str = "Apps that connect";
-
-/// What Your assistant's rows never do, under them. That ilo has no assistant of its own is first
-/// run's to say.
-const NEVER_SEES_LOGIN: &str = concat!(env!("APP_NAME"), " never sees your assistant's login.");
 
 /// A line under a group that says more of it, in a row's line's grey, as Fenced sites' has.
 fn foot(look: &RowLook, line: impl Into<SharedString>) -> gpui::Div {
@@ -6154,7 +6312,7 @@ fn joined<const N: usize>(first: Page, rest: [(&'static str, Page); N]) -> Page 
     for (name, other) in rest {
         let headed = matches!(
             other.blocks.first(),
-            Some(Block::Heading(_) | Block::Crumb(..))
+            Some(Block::Heading(_) | Block::Crumb(..) | Block::Scoped(..))
         );
         if !headed {
             page.blocks.push(Block::Heading(name.into()));
@@ -6283,7 +6441,9 @@ impl Settings {
                         under.push((page.section, buttons));
                         continue;
                     }
-                    Block::Heading(heading) | Block::Crumb(heading, _) => {
+                    Block::Heading(heading)
+                    | Block::Crumb(heading, _)
+                    | Block::Scoped(heading, _) => {
                         group = Some(heading);
                         continue;
                     }

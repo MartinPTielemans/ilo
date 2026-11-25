@@ -16,7 +16,7 @@ use crate::agents::task::{Card, Dot, Word};
 use crate::agents::task::{Start, TaskAction, added_address, model_menu};
 use crate::agents::tier::{ANY_SITE, ONLY_ADDED, Tier};
 use crate::agents::wall::Granted;
-use crate::command_bar::{self, CommandBar, Given, InPlaceKey, TaskAgent};
+use crate::command_bar::{self, CommandBar, Given, InPlaceKey};
 use crate::palette::{Palette, Tone};
 use crate::shell::ShowStarted;
 use crate::tokens::shell::composer::*;
@@ -102,25 +102,7 @@ fn hung_under(chip: Option<Bounds<Pixels>>, clicked: gpui::Point<Pixels>) -> gpu
     chip.origin + point(px(CHIP_INSET - names), chip.size.height + px(MENU_DROP))
 }
 
-/// The model the next task on `agent` starts on, by id, empty for its own default: the pick for
-/// it, or Settings'. A pick it no longer offers is its default, as in Settings.
-pub(super) fn next_model(picked: Option<&(SharedString, String)>, agent: &TaskAgent) -> String {
-    let picked = picked.filter(|(on, _)| *on == agent.id).map(|(_, id)| id);
-    let id = picked.unwrap_or(&agent.model_id);
-    match agent.models.iter().any(|(each, _)| each == id) {
-        true => id.clone(),
-        false => String::new(),
-    }
-}
-
-/// What the assistant's chip says: its name and the model the next task starts on, or its Model
-/// menu's first row for its own default.
-pub(super) fn model_words(agent: &TaskAgent, id: &str) -> String {
-    match agent.models.iter().find(|(each, _)| each == id) {
-        Some((_, name)) => format!("{} · {name}", agent.name),
-        None => agent.default_row.to_string(),
-    }
-}
+pub(super) use crate::command_bar::{model_words, next_model};
 
 impl Resting {
     /// The picks on Ask's line, which hold for the next task alone: its level, model, pages,
@@ -231,6 +213,11 @@ impl Shell {
         let Some(resting) = &mut self.resting else {
             return false;
         };
+        // The core shows a page the shell hasn't heard of yet, as at launch with a page to open:
+        // the keys are that page's, and open the bar over it (#4268).
+        if self.browser.shown_now() != 0 {
+            return false;
+        }
         resting.wants_keys = Owed::Asked;
         cx.notify();
         true
@@ -263,6 +250,12 @@ impl Shell {
             return;
         }
         window.focus(&focus, cx);
+        // GPUI's focus alone draws the caret, while the Mac sends a key to its window's first
+        // responder, which a click gives the UI by itself and this hold gives it without one. Not
+        // while the core already shows a page the shell hasn't heard of: the keys are that page's.
+        if self.browser.shown_now() == 0 {
+            self.hold_keyboard_for_page(cx);
+        }
         log!("browser: resting field has the keyboard");
     }
 

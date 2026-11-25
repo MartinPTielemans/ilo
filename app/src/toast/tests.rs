@@ -686,3 +686,39 @@ fn a_press_in_a_toast_over_a_dialog_closes_neither(cx: &mut TestAppContext) {
         "the press closed the dialog"
     );
 }
+
+thread_local! {
+    static GLASS: RefCell<Vec<crate::glass::Plate>> = RefCell::default();
+}
+
+/// Where the window has its material under it, the toast at rest lies on it in its plate's shape,
+/// and elsewhere it's told of none.
+#[gpui::test]
+fn at_rest_the_glass_is_the_toasts_plate_where_the_window_has_some(cx: &mut TestAppContext) {
+    crate::glass::set_host(|_, plate| {
+        GLASS.with_borrow_mut(|glass| glass.push(plate));
+        true
+    });
+    let host = open_toast(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    show_deleted(cx);
+    let window = toast_window(cx);
+    cx.update(|cx| {
+        window
+            .update(cx, |toast, _, _| {
+                let shown = toast.shown.as_mut().unwrap();
+                shown.shown = Some(Instant::now() - Duration::from_secs_f32(FADE_IN * 2.));
+            })
+            .unwrap()
+    });
+    draw(cx);
+    let plate = host.1.take().pop().expect("the toast didn't come to rest");
+    let glass = GLASS.take().pop();
+    if Float::Toast.over_material() {
+        let glass = glass.expect("the toast had no glass under it");
+        assert_eq!(glass.bounds.dilate(px(0.5)), plate);
+        assert_eq!((glass.radius, glass.opacity), (RADIUS, 1.));
+    } else {
+        assert_eq!(glass, None);
+    }
+}
