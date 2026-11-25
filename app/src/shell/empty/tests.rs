@@ -809,6 +809,30 @@ fn a_private_windows_bar_composes_no_thread(cx: &mut TestAppContext) {
         let (shell, cx, host) = window_with_no_tab(cx);
         host.private_bar.set(private);
         cx.simulate_click(middle(&shell, cx), Modifiers::none());
+
+/// A thread at work in the bar's list at rest wears the turning ring before its state word, on
+/// the shell's one clock, in place of the green dot; a list with none at work asks for no frame,
+/// so an idle window draws nothing.
+#[gpui::test]
+fn a_working_threads_ring_turns_at_rest_and_nothing_else_asks_for_a_frame(cx: &mut TestAppContext) {
+    let (shell, cx, _) = window_with_no_tab(cx);
+    let listed = |dot: Dot, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.set_task_cards(vec![card(1, dot)], cx));
+        cx.run_until_parked();
+        shell.read_with(cx, |shell, _| {
+            assert_eq!(shell.latest_tasks(1).len(), 1, "the thread isn't listed");
+            shell.breath.pending()
+        })
+    };
+    assert!(
+        !listed(Dot::Done, cx),
+        "a done thread's card asked for a frame"
+    );
+    assert!(
+        listed(Dot::Working, cx),
+        "a working thread's ring doesn't turn"
+    );
+}
         cx.simulate_input("book a table");
         cx.simulate_keystrokes("tab enter");
         assert_eq!(

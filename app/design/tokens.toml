@@ -308,6 +308,16 @@ row-glyph = 0.7
 arrow = 0.65
 # The selected row's detail, in the accent's label.
 selected-dim = 0.75
+# The bar's chosen row (P3): a plate of the text's ink, `shown`, where it was the accent, 20% in
+# Dark and 16% in Light, and its kind in text-2, 60% and 65%; its title, glyphs and chips are any
+# row's, so Light's ink stays.
+chosen = 0.2
+light-chosen = 0.16
+chosen-kind = 0.6
+light-chosen-kind = 0.65
+# The bar's caret is the text's ink, and its selection the ink at this (Proposed), where both were
+# the accent: it tells from the bar at 2:1 in Dark and 1.7:1 in Light, with the text 7:1 on it.
+selection = 0.24
 # A tile under an icon or a hint's key, and a command's shortcut (ours).
 chip = 0.08
 # The arrow's tile on a row that switches to a tab.
@@ -2204,8 +2214,9 @@ card-radius = 16.0
 card-fill = 0.065
 card-rim = 0xffff_ff17
 # A card's words: 110 tall, 11 over, 12 in, 10 under. Its state line at 10.5, 12 tall, ink 0.6,
-# its dot 6 and 6 from the words; the title semibold 7 under it and 7 over its steps; each step
-# 10.5 on a 15 line in ink 0.6, the one under way in full ink, after a 10 glyph 6 from its words.
+# a working thread's turning ring 12, as tall as the line, 6 from the words; the title semibold 7
+# under it and 7 over its steps; each step 10.5 on a 15 line in ink 0.6, the one under way in full
+# ink, after a 10 glyph 6 from its words.
 card-words = 110.0
 card-top = 11.0
 card-inset = 12.0
@@ -2214,7 +2225,7 @@ state-size = 10.5
 state-height = 12.0
 state-ink = 0.6
 state-gap = 6.0
-dot = 6.0
+state-glyph = 12.0
 title-gap = 7.0
 step-size = 10.5
 step-line = 15.0

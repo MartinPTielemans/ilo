@@ -5,7 +5,7 @@
 
 use gpui::{
     Bounds, Context, Corners, Entity, FontWeight, Hsla, Pixels, SharedString, Window, canvas, div,
-    point, prelude::*, px, rgb, rgba,
+    point, prelude::*, px, rgba,
 };
 
 use crate::agents::task::{Card, Dot, TaskAction, Word};
@@ -18,7 +18,9 @@ use crate::tokens::shell::composer::*;
 use crate::tokens::text;
 
 use super::super::{
-    STATUS_AGENT, Shell,
+    Shell,
+    broom::working_ring,
+    cast::TURN,
     menus::{MenuAction, MenuEntry},
     task_area::covering,
 };
@@ -343,12 +345,10 @@ impl Shell {
             Some(at) => format!("{} · {at}", card.word.alone(&card.name)).into(),
             None => card.word.alone(&card.name),
         };
-        let dot = (card.dot == Dot::Working).then(|| {
-            div()
-                .flex_none()
-                .size(px(DOT))
-                .rounded_full()
-                .bg(rgb(STATUS_AGENT))
+        // A thread at work wears the state's glyph, the ring, in the text's ink: no green.
+        let ring = (card.dot == Dot::Working).then(|| {
+            let turned = self.breath.turned(TURN, self.clock.now());
+            working_ring(&palette, STATE_GLYPH, turned)
         });
         let working = card.dot == Dot::Working;
         let lines: Vec<(SharedString, bool)> = match card.word {
@@ -429,7 +429,7 @@ impl Shell {
                                 Dot::Waiting => palette.text(1.),
                                 _ => palette.text(STATE_INK),
                             })
-                            .children(dot)
+                            .children(ring)
                             .child(state),
                     )
                     .child(
