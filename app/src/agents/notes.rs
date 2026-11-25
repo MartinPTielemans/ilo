@@ -104,7 +104,7 @@ impl Note {
     pub fn with(&self) -> String {
         format!(
             "Included {}\u{2019}s notes on {}",
-            env!("PRODUCT_NAME"),
+            crate::product::PRODUCT,
             self.name
         )
     }
@@ -147,7 +147,10 @@ mod tests {
         let github = note_for("https://github.com/").expect("GitHub's note");
         assert_eq!(
             github.with(),
-            format!("Included {}\u{2019}s notes on GitHub", env!("PRODUCT_NAME"))
+            format!(
+                "Included {}\u{2019}s notes on GitHub",
+                crate::product::PRODUCT
+            )
         );
     }
 
