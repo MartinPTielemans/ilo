@@ -3844,26 +3844,20 @@ impl Settings {
     fn agents(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> [Page; 4] {
         let look = &self.look;
         let on = agents.read(cx).is_on();
+        // The inside switch: the user's own assistant, for threads. Other apps have theirs.
+        let name = format!("Let your assistant use {PRODUCT}");
         let switch = {
             let agents = agents.clone();
             let set = move |on, cx: &mut App| agents.update(cx, |agents, cx| agents.set_on(on, cx));
-            self.toggle("agents", "Let agents use the browser", on, set, accent, cx)
+            self.toggle("agents", name.clone(), on, set, accent, cx)
         };
-        let model = agents.read(cx);
-        let about: SharedString = match model.trouble() {
-            Some(trouble) => trouble,
-            None if on => {
-                "On: a connected client reaches the browser through the bridge beside it.".into()
-            }
-            None => "Each asks before it sends or pays for anything.".into(),
+        // Off, the drawn line says what off does; on, the row is bare. The agents' trouble comes
+        // first, as it did.
+        let about: Option<SharedString> = match agents.read(cx).trouble() {
+            Some(trouble) => Some(trouble),
+            None => (!on).then(|| "Off: no thread starts.".into()),
         };
-        let master = feature(
-            look,
-            Section::Threads.glyph(),
-            "Let agents use the browser",
-            Some(about),
-            vec![switch],
-        );
+        let master = setting(look, name, about, vec![switch]);
         let listed = agents.read(cx).listed();
         let clients: Vec<gpui::Div> = listed
             .iter()
