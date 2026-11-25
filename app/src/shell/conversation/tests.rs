@@ -611,6 +611,82 @@ fn a_tile_turning_to_needs_you_comes_into_sight_once(cx: &mut TestAppContext) {
     );
 }
 
+/// A page that comes to need the user while the page they left goes back into its picture opens
+/// only once that one is in its thumbnail, never over it on its way.
+#[gpui::test]
+fn a_needs_you_page_opens_once_the_page_left_is_back(cx: &mut TestAppContext) {
+    use crate::agents::Status;
+    let waiting = Card {
+        dot: Dot::Waiting,
+        word: Word::NeedsYou,
+        ..card()
+    };
+    let (shell, host, cx) = shown_with(waiting, cx);
+    let mut talk = conversation(1);
+    talk.tabs = vec![
+        (30, "tickets.example".into()),
+        (31, "tickets.example".into()),
+    ];
+    shell.update(cx, |shell, cx| {
+        let tabs = vec![30, 31];
+        shell.set_tabs(3, Vec::new(), tabs, Vec::new(), Folders::default(), cx);
+        shell.set_conversation(Some(talk), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let draw = |cx: &mut VisualTestContext| {
+        for _ in 0..2 {
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        }
+    };
+    draw(cx);
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    shell.update(cx, |shell, cx| {
+        assert!(
+            shell.watch_row(30, false, cx),
+            "the user's page didn't open"
+        );
+        shell.hold_task_page_going_back();
+        cx.notify();
+    });
+    draw(cx);
+    host.take();
+
+    let held = Status {
+        agent: "task-1".into(),
+        name: "Claude".into(),
+        space: 3,
+        doing: "".into(),
+        held: vec![(31, "Sign in".into())],
+    };
+    shell.update(cx, |shell, cx| shell.set_agent_status(vec![held], cx));
+    draw(cx);
+    assert!(
+        shell.read_with(cx, |shell, _| shell.task_page_going_back()),
+        "the page the user left stopped going back"
+    );
+    let calls = host.take();
+    assert!(
+        !calls.iter().any(|call| call == "select 31"),
+        "the page that needs the user opened over the one going back: {calls:?}"
+    );
+
+    // The page left is in its thumbnail at the zoom's next step: then the other opens.
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    draw(cx);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watched_task_page().map(|(_, tab)| tab)),
+        Some(31),
+        "the page that needs the user didn't open"
+    );
+    let calls = host.take();
+    assert!(calls.iter().any(|call| call == "select 31"), "{calls:?}");
+    assert!(
+        !calls.iter().any(|call| call == "focus page"),
+        "the page ilo opened took the keyboard: {calls:?}"
+    );
+}
+
 /// A page ilo would open by itself over the reply field doesn't open while the user types there:
 /// the field keeps the keyboard and its text, and the tile that needs them is in sight.
 #[gpui::test]

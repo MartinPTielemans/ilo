@@ -28,7 +28,7 @@ use super::{
     keys::user_keys,
     permission::{Look, card_listener},
     picture::next_request,
-    task_cards::act,
+    task_cards::{PageWord, act},
 };
 use crate::agents::task::{Card, Dot, TaskAction, status_lead};
 use crate::link_preview::{CLOSE, OPEN};
@@ -51,6 +51,9 @@ pub(super) struct TaskArea {
     /// The conversation, which the task draws.
     view: AnyView,
     page: Option<Watched>,
+    /// A page of the task's that came to need the user while the one watched went back, which ilo
+    /// opens once that one is in its thumbnail, never over it on its way.
+    opens: Option<u64>,
 }
 
 /// A task's view as it stood when the user asked the window to close or the browser to quit,
@@ -396,6 +399,7 @@ impl Shell {
                     space,
                     view,
                     page: None,
+                    opens: None,
                 })
             }
         }
@@ -575,6 +579,28 @@ impl Shell {
         Some((area.space, page.tab))
     }
 
+    /// ilo opens `tab`, a page of the task's that has come to need the user, unless one the user
+    /// watches is in place. One on its way back is let finish first: `tab` opens once that one is
+    /// in its thumbnail, if it still needs them.
+    pub(super) fn open_needing_page(&mut self, tab: u64, cx: &mut Context<Self>) {
+        let Some(area) = &mut self.task_area else {
+            return;
+        };
+        match area.page.as_ref().map(|page| page.zoom) {
+            Some(Zoom::Asked(_) | Zoom::In(_)) => area.opens = Some(tab),
+            Some(Zoom::Out(_) | Zoom::Rest) => {}
+            None => {
+                self.watch_row(tab, true, cx);
+            }
+        }
+    }
+
+    /// Whether the task shown asks the user for something in `tab`, as its row and tile say.
+    fn task_page_needs_user(&self, tab: u64) -> bool {
+        self.task_card_shown()
+            .is_some_and(|card| self.page_mark(card, tab).word == PageWord::NeedsYou)
+    }
+
     /// Whether the page watched is going back into its picture, over a conversation the user
     /// can't see yet: only its pictures take a press meanwhile (#3496).
     pub(super) fn task_page_going_back(&self) -> bool {
@@ -715,7 +741,12 @@ impl Shell {
 
     /// The page watched goes at once, back to the conversation.
     fn leave_task_page_now(&mut self, cx: &mut Context<Self>) {
-        let Some(page) = self.task_area.as_mut().and_then(|area| area.page.take()) else {
+        let Some(area) = self.task_area.as_mut() else {
+            return;
+        };
+        // What the user does next is theirs: the page that needs them waits in its tile.
+        area.opens = None;
+        let Some(page) = area.page.take() else {
             return;
         };
         if let Watched {
@@ -1102,6 +1133,10 @@ impl Shell {
         }
         if retake {
             self.retake_talk_pictures(cx);
+            let opens = self.task_area.as_mut().and_then(|area| area.opens.take());
+            if let Some(tab) = opens.filter(|&tab| self.task_page_needs_user(tab)) {
+                self.watch_row(tab, true, cx);
+            }
         }
         let live = self.task_page_live();
         if live != self.task_live_logged {
