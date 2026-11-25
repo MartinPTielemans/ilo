@@ -2355,7 +2355,7 @@ archived-radius = 12.0
 # favorites' tiles' radius.
 media-gap = 6.0
 media-radius = 12.0
-# Ours: a running download's bar, under its text, and the footer button's, under its glyph.
+# Ours: a running download's bar, under its text.
 progress-height = 3.0
 progress-bottom = 6.0
 progress-track = 0.12
@@ -2363,6 +2363,11 @@ progress-fill = 0.6
 button-progress-width = 16.0
 button-progress-height = 2.0
 button-progress-bottom = 4.0
+# The footer button's bar, as the redesign draws it: its track the shown plate's ink, 0.20 on a
+# dark window and 0.16 on a light one, and what has arrived in the text's.
+button-progress-track = 0.2
+light-button-progress-track = 0.16
+button-progress-fill = 1.0
 # Arc's: a new download's icon lands in a bin on the footer button, its file's icon this big, its
 # centre right of and above the glyph's, until it leaves.
 bin = 32.0

@@ -76,7 +76,7 @@ const LIBRARY_BAND_STIFFNESS: f32 = 0.25;
 /// buttons: half a pixel at 2×, so their swap from the panel's copy can't be seen.
 const LIBRARY_REST_SLACK: f32 = 0.25;
 
-use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
+use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED, Tone};
 use crate::tokens::shell::library::COLUMN;
 use crate::tokens::shell::library::COLUMN_EDGE;
 use crate::tokens::shell::library::COLUMN_WIDTH;
@@ -171,8 +171,11 @@ const CAPTURE_BIT: u64 = 1 << 63;
 /// Rows laid out past the list's ends, so a scroll doesn't show them late.
 const ARCHIVE_OVERDRAW: f32 = 300.;
 use crate::tokens::shell::library::BUTTON_PROGRESS_BOTTOM;
+use crate::tokens::shell::library::BUTTON_PROGRESS_FILL;
 use crate::tokens::shell::library::BUTTON_PROGRESS_HEIGHT;
+use crate::tokens::shell::library::BUTTON_PROGRESS_TRACK;
 use crate::tokens::shell::library::BUTTON_PROGRESS_WIDTH;
+use crate::tokens::shell::library::LIGHT_BUTTON_PROGRESS_TRACK;
 use crate::tokens::shell::library::PROGRESS_BOTTOM;
 use crate::tokens::shell::library::PROGRESS_FILL;
 use crate::tokens::shell::library::PROGRESS_HEIGHT;
@@ -4374,13 +4377,16 @@ impl Shell {
                         .w(px(BUTTON_PROGRESS_WIDTH))
                         .h(px(BUTTON_PROGRESS_HEIGHT))
                         .rounded(px(BUTTON_PROGRESS_HEIGHT / 2.))
-                        .bg(self.palette.faint(PROGRESS_TRACK))
+                        .bg(self.palette.faint(match self.palette.tone {
+                            Tone::Dark => BUTTON_PROGRESS_TRACK,
+                            Tone::Light => LIGHT_BUTTON_PROGRESS_TRACK,
+                        }))
                         .child(
                             div()
                                 .h_full()
                                 .w(relative(done))
                                 .rounded(px(BUTTON_PROGRESS_HEIGHT / 2.))
-                                .bg(self.palette.glyph(PROGRESS_FILL)),
+                                .bg(self.palette.glyph(BUTTON_PROGRESS_FILL)),
                         ),
                 )
             })
