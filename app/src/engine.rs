@@ -677,6 +677,20 @@ impl Browser for Engine {
         agents_core::update(|_, cx| cx.notify());
     }
 
+    fn keeps_picture(&self, tab: u64, cx: &App) -> bool {
+        browser::agents::global(cx).is_some_and(|agents| agents.read(cx).keeps_picture(tab, cx))
+    }
+
+    fn card_pictured(
+        &self,
+        agent: SharedString,
+        tab: u64,
+        picture: Option<Arc<gpui::RenderImage>>,
+        _: &mut App,
+    ) {
+        agents_core::update(move |agents, cx| agents.card_pictured(&agent, tab, picture, cx));
+    }
+
     fn task_picture(&self, tab: u64, request: u64, _: &mut App) {
         // At twice Pages' tile's size, for a Retina screen.
         let width = (2. * browser::tokens::shell::conversation::PICTURE_WIDTH) as i32;

@@ -884,6 +884,10 @@ pub struct Tasks {
     /// The profiles there are, each by its folder's name, as the core last said them: one that
     /// goes from among them was deleted, and its kept tasks go with it.
     pub(super) profiles: Vec<String>,
+    /// The last picture each kept task's card could keep of its last page (pick_up.rs).
+    card_tiles: HashMap<String, pick_up::CardTile>,
+    /// The cards' file work, in the order it's asked (kept/cards.rs).
+    card_jobs: super::kept::cards::Queue,
     /// The state each task was in when the user's reply took it up, which it goes back to if its
     /// assistant no longer has the conversation.
     pub(super) picked_up: HashMap<String, State>,
@@ -2218,7 +2222,7 @@ impl Agents {
                     task.end(SystemTime::now());
                 }
                 // However it ended, and by the name it has now (#4105).
-                self.keep_ended(&agent);
+                self.keep_ended(&agent, cx);
             }
             // The turn the user stopped ends as an error; their stop is what the card says.
             Out::Ended(Some(_))
@@ -2303,7 +2307,7 @@ impl Agents {
             task.waiting = None;
             task.writing = None;
         }
-        self.keep_ended(agent);
+        self.keep_ended(agent, cx);
         self.forget_waiting(agent, None, cx);
         // What's ready may have changed.
         self.look_for_task_agents(cx);
@@ -2408,7 +2412,7 @@ impl Agents {
             process.interrupt();
         }
         self.you_stopped(agent, cx);
-        self.keep_ended(agent);
+        self.keep_ended(agent, cx);
         self.stop_agent(agent, cx);
         cx.notify();
     }
@@ -2485,7 +2489,7 @@ impl Agents {
             if deleted { "deleted" } else { "undeleted" }
         );
         // Its row leaves the file of the kept with it, and comes back with it (#4105).
-        self.keep_ended(agent);
+        self.keep_ended(agent, cx);
         cx.notify();
     }
 
@@ -3721,11 +3725,7 @@ impl Agents {
             "click" | "type" => {
                 did.target = element.as_ref().map(named).unwrap_or_default();
                 let typed = string("text");
-                // Never a password field's value, nor one whose name says it's a secret.
-                let shows = element.as_ref().is_some_and(|element| {
-                    let name = element.name.to_lowercase();
-                    !element.password && !name.contains("password") && !name.contains("passcode")
-                });
+                let shows = element.as_ref().is_some_and(page::Element::shows_typed);
                 if tool == "type" && shows && typed.chars().count() <= tools::TYPED_SHOWN {
                     did.text = typed;
                 }
@@ -3914,7 +3914,7 @@ impl Agents {
                     tabs,
                 };
                 task.end(SystemTime::now());
-                self.keep_ended(agent);
+                self.keep_ended(agent, cx);
                 self.note(agent, 0, "finish", &site, "");
                 _ = reply.send(ToolResult::text(
                     "Done. The user sees your result. Stop here.",

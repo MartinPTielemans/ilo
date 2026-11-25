@@ -1103,6 +1103,21 @@ pub trait Browser {
     /// Asks for a picture of a task's page for its conversation, which the browser answers with
     /// `Shell::page_pictured` and `request`.
     fn task_picture(&self, tab: u64, request: u64, cx: &mut App);
+    /// Whether a picture of `tab` taken now could have been given to an agent, by the agents'
+    /// rules (Agents::keeps_picture), for a kept task's card. None is, without agents.
+    fn keeps_picture(&self, _tab: u64, _cx: &App) -> bool {
+        false
+    }
+    /// The conversation of `agent`'s task took a picture of `tab`: `picture` if its card may keep
+    /// it, else none (Agents::card_pictured).
+    fn card_pictured(
+        &self,
+        _agent: SharedString,
+        _tab: u64,
+        _picture: Option<Arc<RenderImage>>,
+        _cx: &mut App,
+    ) {
+    }
     /// The user stops the agent with the id `agent`: what it's doing and asking ends.
     fn stop_agent(&self, agent: SharedString, cx: &mut App);
     /// Selects the tab's next match, or the one before, opening its find bar if it's closed.
