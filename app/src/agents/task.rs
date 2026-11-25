@@ -5263,12 +5263,14 @@ fn names_a_client(name: &str) -> bool {
         })
 }
 
-/// Whether a client's name would pass for the browser's own words: one with the app's name as a
-/// word, or that calls itself the browser. "Browser Use" is an agent's.
+/// Whether a client's name would pass for the browser's own words: one with the app's name or the
+/// product's, as the user reads it, as a word, or that calls itself the browser. "Browser Use" is
+/// an agent's.
 fn names_the_browser(name: &str) -> bool {
     let read = reads_as(name);
-    let app = reads_as(env!("APP_NAME"));
-    read.split(' ').any(|word| word == app)
+    let names = [env!("APP_NAME"), crate::product::PRODUCT].map(reads_as);
+    read.split(' ')
+        .any(|word| names.iter().any(|name| word == name))
         || ["the browser", "your browser", "this browser", "web browser"]
             .iter()
             .any(|browser| read.contains(&reads_as(browser)))
