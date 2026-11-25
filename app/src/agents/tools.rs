@@ -1096,6 +1096,15 @@ pub const NO_TAB_OF_ITS_OWN: [&str; 6] = [
 pub const NOT_SECURE_ACTION: &str = "open_page";
 const NOT_SECURE_REASON: &str = "not_secure";
 pub const NOT_SECURE: &str = "Not opened: no secure connection";
+/// What a click is told that went, and whose page then went on by itself to a site with no secure
+/// connection, with no page behind it, so that the core closed the tab: the core answers it with an
+/// object whose "closed" is this (browser_core.h, agent_page_done). A result, as the click isn't
+/// to be done again.
+pub const CLOSED_NOT_SECURE: &str = "not_secure";
+pub const WENT_ON_CLICKED: &str = "The click went through. Its page then went on to a site with no secure connection, which ilo doesn't open for a task, so the tab closed. Don't repeat the click.";
+/// What an open is told whose page did so while the open still waited for it: its tab is closed,
+/// so the answer names none.
+pub const WENT_ON_NOT_OPENED: &str = "Not opened: the page went on to a site with no secure connection, which ilo doesn't open for a task.";
 /// The core's action for the same entry where the page is one the user went to and left at
 /// Chrome's warning when they handed the tab back.
 const NOT_SECURE_HANDED_BACK: &str = "handed_back_page";

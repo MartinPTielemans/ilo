@@ -2745,7 +2745,10 @@ impl Agents {
                         let so_far = run_so_far(&run.done);
                         let why = format!("Step {n} failed: {}{so_far}", answer.text);
                         _ = run.reply.send(ToolResult::error(why));
-                    } else if run.steps.is_empty() {
+                    } else if run.steps.is_empty() || answer.text == tools::WENT_ON_CLICKED {
+                        // A click whose tab closed as its page went on to http is the run's last
+                        // step too: the ones after it have no tab, and failing there would read as
+                        // a run to do again, click and all.
                         let done = run.done.iter().map(|note| format!("{note}\n"));
                         let done: String = done.collect();
                         let last = match (&answer.image, answer.text.is_empty()) {
@@ -4254,6 +4257,14 @@ impl Agents {
             _ = reply.send(ToolResult::error(text));
             return self.advance(cx);
         }
+        // The page it opened went on by itself to one that answers only over http, with none behind
+        // it, so the core closed the tab while the open still waited: not opened, in the words
+        // that has, which are the app's as they name it.
+        if error == Some(Failure::WentOnNotSecure) {
+            self.cleared.remove(&tab);
+            _ = reply.send(ToolResult::error(tools::WENT_ON_NOT_OPENED));
+            return self.advance(cx);
+        }
         self.went_to(entry, tab, cx);
         // What it did, as a look again for the text it waits for says it too.
         let did_note = note.clone();
@@ -4311,6 +4322,14 @@ impl Agents {
             return self.advance(cx);
         }
         let tree: Value = serde_json::from_str(&text).unwrap_or_default();
+        // Its click went, and the page then went on by itself to one that answers only over http,
+        // with none behind it, so the core closed the tab: a result in the words that has, as the
+        // click isn't to be done again, and no outline, as the tab is gone.
+        if tree["closed"] == tools::CLOSED_NOT_SECURE {
+            self.cleared.remove(&tab);
+            _ = reply.send(ToolResult::text(tools::WENT_ON_CLICKED));
+            return self.advance(cx);
+        }
         let nodes = tree["nodes"]
             .as_array()
             .map(Vec::as_slice)
@@ -5331,6 +5350,9 @@ pub enum Failure {
     NoOption,
     /// The open's or the navigate's own page answered only over http and was stopped.
     NotSecure,
+    /// The page an open opened went on by itself to one that did, while the open still waited, and
+    /// the tab closed.
+    WentOnNotSecure,
 }
 
 impl Failure {

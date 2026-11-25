@@ -3849,6 +3849,103 @@ fn a_page_left_at_a_hand_back_ends_no_step(cx: &mut TestAppContext) {
     assert!(!tools::not_secure("open_pages", "not_secure"));
 }
 
+/// A click went, and its page then went on by itself to a site with no secure connection, with no
+/// page behind it, so the core closed the tab and answers the click with an object of its own. The
+/// click hears that as a result, in the words it has and no outline of a tab that is gone: an
+/// error would have the agent click again. The log has the click as done.
+#[gpui::test]
+fn a_click_whose_tab_closed_as_its_page_went_on_to_http_is_told_it_went(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let snapshot = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    page_done(&agents, &browser, snapshot, size_picker(false, 1), cx);
+    let click = json!({ "tab": 20, "ref": "e4" });
+    let answer = call(&agents, "claude-code", "click", click, cx);
+    let request = browser.pages.borrow().last().unwrap().1;
+    let closed = json!({ "closed": "not_secure" }).to_string();
+    agents.update(cx, |agents, cx| {
+        agents.page_done(request, closed.clone(), None, cx)
+    });
+    let told = answer.recv().unwrap();
+    assert_eq!(
+        told.text,
+        "The click went through. Its page then went on to a site with no secure connection, \
+         which ilo doesn't open for a task, so the tab closed. Don't repeat the click."
+    );
+    assert!(
+        !told.error,
+        "a click that went was answered as one that didn't"
+    );
+    let logged = &log(&agents, "claude-code", cx)[0];
+    assert_eq!((logged.0.as_str(), logged.2.as_str()), ("click", ""));
+    // An answer of the core's as the tab closes is nobody's: the click has its one.
+    agents.update(cx, |agents, cx| {
+        let ended = "The agent's session with the tab ended.".to_string();
+        agents.page_done(request, ended, Some(Failure::Other), cx);
+    });
+    assert!(answer.try_recv().is_err(), "the click answered twice");
+}
+
+/// A run of steps ends at such a click, with what the click is told as that step's answer: the
+/// steps after it have no tab, and a run that failed at the next one would read as one to do again.
+#[gpui::test]
+fn a_run_ends_at_a_click_whose_tab_closed_as_its_page_went_on_to_http(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let snapshot = call(&agents, "claude-code", "snapshot", json!({ "tab": 20 }), cx);
+    page_done(&agents, &browser, snapshot, size_picker(false, 1), cx);
+    let steps = json!({ "tab": 20, "steps": [
+        { "action": "scroll" },
+        { "action": "click", "ref": "e4" },
+        { "action": "scroll" },
+    ] });
+    let answer = call(&agents, "claude-code", "run_steps", steps, cx);
+    let request = browser.pages.borrow().last().unwrap().1;
+    agents.update(cx, |agents, cx| {
+        agents.page_done(request, size_picker(false, 1), None, cx)
+    });
+    let asked = browser.pages.borrow().len();
+    let closed = json!({ "closed": "not_secure" }).to_string();
+    let ran = page_done(&agents, &browser, answer, closed, cx);
+    assert_eq!(
+        ran.text,
+        "Ran 2 steps.\n1. Scrolled down.\n2. The click went through. Its page then went on to a \
+         site with no secure connection, which ilo doesn't open for a task, so the tab closed. \
+         Don't repeat the click."
+    );
+    assert!(!ran.error, "the run was answered as one that failed");
+    assert_eq!(
+        browser.pages.borrow().len(),
+        asked,
+        "the run went on in a tab that is gone"
+    );
+}
+
+/// The page an open opened went on by itself to a site with no secure connection, with no page
+/// behind it, while the open still waited, and the core closed the tab: the open hears it wasn't
+/// opened, in the app's words for the core's value, which name no tab.
+#[gpui::test]
+fn an_open_whose_page_went_on_to_http_is_told_it_wasnt_opened(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let open = json!({ "url": "example.com" });
+    let answer = call(&agents, "claude-code", "open_tab", open, cx);
+    let request = browser.pages.borrow().last().unwrap().1;
+    agents.update(cx, |agents, cx| {
+        let ended = "The agent's session with the tab ended.".to_string();
+        agents.page_done(request, ended, Some(Failure::WentOnNotSecure), cx);
+    });
+    assert_eq!(
+        answer.recv().unwrap(),
+        ToolResult::error(
+            "Not opened: the page went on to a site with no secure connection, which ilo \
+             doesn't open for a task."
+        )
+    );
+    agents.update(cx, |agents, cx| {
+        let ended = "The agent's session with the tab ended.".to_string();
+        agents.page_done(request, ended, Some(Failure::Other), cx);
+    });
+    assert!(answer.try_recv().is_err(), "the open answered twice");
+}
+
 /// An entry of the core's is about the site it names, not the page its tab shows, and about the
 /// tab's page when it names none. The name is a host alone: one with more of an address in it, a
 /// path, a query, a port or a name and password, names nothing, and the entry reads a page.
