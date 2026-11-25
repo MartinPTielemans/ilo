@@ -1729,7 +1729,24 @@ impl Shell {
         let shown = self.shown_at_foot() == Some(StripStop::Header(key));
         let (landed, _) = group.landing(now);
         let plate = self.header_plate(group, now);
+        // The card of the thread whose stage shows is one shape with the stage, in its fill, as
+        // the open tab's line is with its page (spec-thread-stage.md, the card in the sidebar).
+        let stage = (shown && self.joins_page_area()).then(|| {
+            let (left, right) = match self.right {
+                true => (-PLATE_INSET, 0.),
+                false => (0., -PLATE_INSET),
+            };
+            let page = super::conversation::stage_fill(&self.palette);
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(left))
+                .right(px(right))
+                .child(self.joined(page, 1.))
+        });
         let plate = match (shown, hovered) {
+            _ if stage.is_some() => plate.children(stage),
             (true, _) => selected_plate(
                 &self.palette,
                 plate,

@@ -1330,6 +1330,48 @@ fn one_thing_in_the_sidebar_is_shown_at_a_time(cx: &mut TestAppContext) {
     assert_eq!(shown(&shell, cx), (true, None, 0));
 }
 
+/// The card of the thread whose stage shows is one shape with the stage: the open tab's join, in
+/// the stage's fill, from the card's own left end to the sidebar's edge. On one of its pages, the
+/// page's row is what's shown, and the card joins nothing.
+#[gpui::test]
+fn the_shown_threads_card_joins_its_stage(cx: &mut TestAppContext) {
+    use crate::shell::join::JOINED;
+    let (shell, _, cx) = with_task_spaces(cx, vec![paged(1, Dot::Working, &[1010, 1011])]);
+    still(cx);
+    let painted = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        JOINED.set(None);
+        draw(shell, cx);
+        JOINED.take()
+    };
+    shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
+    let joined = painted(&shell, cx).expect("the shown card isn't joined to its stage");
+    let (page, width, plate) = shell.read_with(cx, |shell, _| {
+        let plate = shell.task_plate_drawn("task-1").expect("its card");
+        (
+            super::super::conversation::stage_fill(&shell.palette),
+            shell.width(),
+            plate,
+        )
+    });
+    assert_eq!(joined.fill, gpui::Hsla::from(page));
+    assert!(!joined.page_left);
+    assert_eq!(joined.line.left(), plate.left());
+    assert_eq!(
+        (joined.line.top(), joined.line.bottom()),
+        (plate.top(), plate.bottom())
+    );
+    assert_eq!(f32::from(joined.line.right()), width);
+
+    let row = row_drawn(&shell, 1011, cx).expect("its page's row");
+    cx.simulate_click(row.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        painted(&shell, cx),
+        None,
+        "a page of it is shown, not its stage"
+    );
+}
+
 /// A page's row's click stands on that page, as its picture's click in the task's view does, and
 /// does nothing else: the core is asked to show the page, the task is told nothing, and an agent's
 /// page isn't given the keyboard. Nothing of it is kept either: the foot stores nothing, and the

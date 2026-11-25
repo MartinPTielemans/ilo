@@ -94,6 +94,12 @@ mod motion;
 mod pages;
 mod words;
 
+/// The stage's fill, the conversation's ground in the page area: also the fill of the shown
+/// thread's card, which is one shape with it (task_cards.rs).
+pub(super) fn stage_fill(palette: &super::Palette) -> gpui::Rgba {
+    palette.page
+}
+
 /// A chip at the page's scale, the toast's: its words, and its key after them, fainter. The
 /// conversation's and the page strip's buttons are these.
 pub(super) fn page_chip(
@@ -4262,7 +4268,7 @@ impl Render for TalkView {
             .on_action(cx.listener(Self::ilo_back))
             .on_action(cx.listener(Self::ilo_leave))
             .size_full()
-            .bg(palette.page)
+            .bg(stage_fill(&palette))
             .flex()
             .justify_center()
             // A press here is the conversation's, not the window background's, which moves the
