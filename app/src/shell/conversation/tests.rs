@@ -1,6 +1,7 @@
 //! A task's card and its conversation in the page area, on a host that records what the shell asks
 //! of the core.
 
+use gpui::EntityInputHandler as _;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -310,6 +311,42 @@ fn the_card_shows_its_conversation(cx: &mut TestAppContext) {
     );
     assert!(shell.update(cx, |shell, cx| shell.run_agent_key("cmd-.", cx)));
     assert!(host.take().contains(&"task task-1 Stop".to_string()));
+}
+
+/// ↩ that ends a Japanese composition in the reply field is the input method's: it commits the
+/// text and sends nothing, and the next ↩ sends what was committed.
+#[gpui::test]
+fn return_committing_japanese_in_the_reply_field_sends_nothing(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let reply = view.read_with(cx, |view, _| view.reply.clone());
+    host.take();
+    cx.update(|window, cx| {
+        reply.update(cx, |input, cx| {
+            input.replace_and_mark_text_in_range(None, "にほんご", None, window, cx)
+        })
+    });
+    assert!(reply.read_with(cx, |input, _| input.composing()));
+    cx.simulate_keystrokes("enter");
+    let calls = host.take();
+    assert!(
+        !calls.iter().any(|call| call.contains("Reply")),
+        "↩ while composing sent: {calls:?}"
+    );
+    cx.update(|window, cx| {
+        reply.update(cx, |input, cx| {
+            input.replace_text_in_range(None, "日本語", window, cx)
+        })
+    });
+    assert!(!reply.read_with(cx, |input, _| input.composing()));
+    cx.simulate_keystrokes("enter");
+    assert!(
+        host.take()
+            .contains(&r#"task task-1 Reply("日本語")"#.to_string())
+    );
 }
 
 /// An outside agent's session shows its steps one by one, with no ask, and in the reply field's
