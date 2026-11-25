@@ -572,8 +572,16 @@ pub struct Card {
     /// Its last steps this turn, at most `CARD_STEPS`, oldest first, each as the conversation's
     /// trace line says it (`tools::step_title`).
     pub steps: Vec<SharedString>,
-    /// The site of the last page it was on, from its steps, or None before it reaches one.
-    pub last_site: Option<SharedString>,
+    /// The page whose tile Latest tasks' plate pictures: of its pages now, the last its steps
+    /// acted on, else its last; None with no page.
+    pub last_tab: Option<u64>,
+    /// Latest tasks' line under the title once it's over: a done task's answer's first line, a
+    /// stopped one's last finished step. None for the rest, and for a task a run before left,
+    /// whose answer and steps no run keeps.
+    pub line: Option<SharedString>,
+    /// When a task a run before left ended, which its card's head says after its word; None for
+    /// a task of this run.
+    pub ended_at: Option<SharedString>,
     /// Whether the status is the agent's question, which may take two lines.
     pub asks: bool,
     pub dot: Dot,
@@ -1025,12 +1033,40 @@ impl Agents {
     pub fn conversation(&self, agent: &str, cx: &App) -> Option<Conversation> {
         let task = self.task(agent)?;
         let ended = !matches!(task.state, State::Working | State::Asking { .. });
+        let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
+            .map(|tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
+            .collect();
+        let card = self.card(task, cx);
+        let on = (task.state == State::Working)
+            .then(|| self.on(task))
+            .flatten();
+        // The card's Needs you reads the same question and refusals, so the line can't say
+        // working while the card says the task waits on the user.
+        // A page the user took over is theirs on the line unless the agent works on another.
+        let taken = (tabs.iter())
+            .find(|(tab, _)| self.held.contains_key(tab))
+            .filter(|(tab, _)| on.is_none_or(|on| on == *tab));
+        let live = match (&task.state, &card.question) {
+            (State::Asking { .. }, None) => Live::Asked,
+            (_, Some(_)) => Live::Handed,
+            _ if task.stops.iter().any(|stop| !stop.settled) => Live::Refused,
+            _ if let Some((tab, _)) = taken => Live::Yours {
+                tab: *tab,
+                site: (tabs.len() > 1)
+                    .then(|| tier::plain(&site(&self.browser.tab(*tab, cx).url)).into()),
+            },
+            _ => Live::Working,
+        };
         let working = task.state == State::Working;
+        // A stretch heads as at work only while the task is: one that ended at a refused or handed
+        // step, a question or a page the user took heads as worked, as the card's word says, unless
+        // work went on past the wait, by the steps' own order and states (set 4, find 5).
+        let at_work = working && (live == Live::Working || went_on(task, &self.held));
         let mut lines = fold(
             &task.messages,
             &task.trace,
             ended,
-            working,
+            at_work,
             task.writing.as_ref(),
             &task.helpers,
             &task.stopped_turns,
@@ -1063,30 +1099,6 @@ impl Agents {
         helpers::lines(task, &mut lines);
         // ilo's own lines of a task that can be replied to after it ended (#4105).
         self.kept_lines(task, &mut lines);
-        let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
-            .map(|tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
-            .collect();
-        let card = self.card(task, cx);
-        let on = (task.state == State::Working)
-            .then(|| self.on(task))
-            .flatten();
-        // The card's Needs you reads the same question and refusals, so the line can't say
-        // working while the card says the task waits on the user.
-        // A page the user took over is theirs on the line unless the agent works on another.
-        let taken = (tabs.iter())
-            .find(|(tab, _)| self.held.contains_key(tab))
-            .filter(|(tab, _)| on.is_none_or(|on| on == *tab));
-        let live = match (&task.state, &card.question) {
-            (State::Asking { .. }, None) => Live::Asked,
-            (_, Some(_)) => Live::Handed,
-            _ if task.stops.iter().any(|stop| !stop.settled) => Live::Refused,
-            _ if let Some((tab, _)) = taken => Live::Yours {
-                tab: *tab,
-                site: (tabs.len() > 1)
-                    .then(|| tier::plain(&site(&self.browser.tab(*tab, cx).url)).into()),
-            },
-            _ => Live::Working,
-        };
         // The card's own word, so a refusal waiting on the user says Needs you in both. Done says
         // when, and a limit when it resets if the assistant said; without that it's the word, as
         // the name before it says whose limit it is.
@@ -1261,6 +1273,7 @@ impl Agents {
             (State::Failed { why, .. }, _) => (why.clone(), Dot::Ended),
         };
         let open = self.open_tabs(task, cx);
+        let pages = self.pages(task, cx);
         // The core's auto-archive can take a task's page it never showed (window.cc), and a task
         // lives for one run, so its card says where they went rather than offer them.
         // A session's pages are its own to close, so it keeps its receipt (#3652).
@@ -1283,11 +1296,17 @@ impl Agents {
             title: task.title.clone(),
             status,
             steps: last_steps(task),
-            last_site: last_site(task),
+            last_tab: last_tab(task, &pages),
+            line: match &task.state {
+                State::Done { result, .. } => first_line(result),
+                State::Stopped => last_finished(task),
+                _ => None,
+            },
+            ended_at: None,
             asks,
             dot,
             word: Word::of(&task.state, dot == Dot::Waiting),
-            pages: self.pages(task, cx),
+            pages,
             tier: task.tier,
             question,
             open,
@@ -3677,21 +3696,61 @@ fn limit_words(name: &str, resets: &Option<SharedString>) -> String {
     }
 }
 
-/// A result's first words for its card's line: its first line of text, without the marks that
-/// make it a heading, a list's item or bold.
+/// A result's first words for its card's line: its first line of text, or "Finished" with none.
 fn first_words(result: &str) -> SharedString {
+    first_line(result).unwrap_or_else(|| "Finished".into())
+}
+
+/// A result's first line of text, without the marks that make it a heading, a list's item or
+/// bold, a link's address left for its label, then cleaned as a title is: clipped at TITLE_KEPT
+/// and what wouldn't show or would move the text around it written out. None with no text.
+fn first_line(result: &str) -> Option<SharedString> {
     let line = (result.lines())
         .map(|line| {
             line.trim()
                 .trim_start_matches(['#', '>', '-', '*', ' '])
                 .trim_end_matches(['*', ' '])
         })
-        .find(|line| !line.is_empty());
-    match line {
-        Some(line) => page::clip(&line.replace("**", ""), 120).into(),
-        None => "Finished".into(),
-    }
+        .find(|line| !line.is_empty())?;
+    let kept = page::clip(&labels(&line.replace("**", "")), TITLE_KEPT);
+    Some(super::request::escaped(&kept, false).0.into())
 }
+
+/// `text` with each "[label](address)" its label alone.
+fn labels(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('[') {
+        plain.push_str(&rest[..open]);
+        let link = &rest[open + 1..];
+        let label = link.find("](").and_then(|close| {
+            let end = link[close + 2..].find(')')?;
+            Some((&link[..close], close + 2 + end + 1))
+        });
+        match label {
+            Some((label, length)) => {
+                plain.push_str(label);
+                rest = &link[length..];
+            }
+            None => {
+                plain.push('[');
+                rest = link;
+            }
+        }
+    }
+    plain.push_str(rest);
+    plain
+}
+
+/// A stopped task's last finished step, as its trace line says it, its thoughts left out. A step
+/// under way at Stop, or one that failed, never is one, so a card never says `Couldn't …` of it.
+fn last_finished(task: &Task) -> Option<SharedString> {
+    (task.trace.iter().rev())
+        .filter(|step| step.did.tool != "thought")
+        .find(|step| step.ended.is_some() && step.error.is_none())
+        .map(|step| tools::step_title(&step.did, tools::Tense::Done).into())
+}
+
 /// What a card's status leads with when a confirmation or a handoff waits on the user, the one
 /// status the card sets heavier (`status_lead`).
 pub const NEEDS_YOU: &str = "Needs you";
@@ -3710,17 +3769,12 @@ fn last_steps(task: &Task) -> Vec<SharedString> {
     steps
 }
 
-/// The site of the last page a task was on or went to, as its steps name it (`agents::site`), or
-/// None before it reaches one. An address it asked for that names no page isn't one.
-fn last_site(task: &Task) -> Option<SharedString> {
+/// Of a task's `pages` now, the last its steps acted on, else its last.
+fn last_tab(task: &Task, pages: &[u64]) -> Option<u64> {
     (task.trace.iter().rev())
-        .map(|step| &step.did)
-        .find(|did| {
-            let unresolved =
-                matches!(did.tool.as_str(), "open_tab" | "navigate") && did.text.is_empty();
-            !did.site.is_empty() && !unresolved
-        })
-        .map(|did| did.site.clone().into())
+        .filter_map(|step| step.did.tab)
+        .find(|tab| pages.contains(tab))
+        .or(pages.last().copied())
 }
 
 /// A task's status while it works, saying how far it has got by its own steps: "Step 5 · Clicking
@@ -3831,6 +3885,26 @@ fn fallback(trace: &[Traced]) -> Option<String> {
         0 => Some(first),
         more => Some(format!("{first} and {more} more")),
     }
+}
+
+/// Whether a task waiting on the user works on past the wait: a step came after a refusal it
+/// hasn't settled, or a step of its, or a helper's, is under way that isn't itself a wait or on a
+/// page the user holds. Read from the steps alone, never from what the agent says.
+fn went_on<T>(task: &Task, held: &HashMap<u64, T>) -> bool {
+    let after_refusal = (task.stops.iter())
+        .filter(|stop| !stop.settled)
+        .any(|stop| {
+            task.trace[stop.traced.min(task.trace.len())..]
+                .iter()
+                .any(|step| step.did.tool != "thought")
+        });
+    let under_way = (task.trace.iter()).any(|step| {
+        step.ended.is_none()
+            && step.did.tool != "thought"
+            && !WAIT_ON_USER.contains(&step.did.tool.as_str())
+            && step.did.tab.is_none_or(|tab| !held.contains_key(&tab))
+    });
+    after_refusal || under_way
 }
 
 /// The steps of the turn under way, newest first, its thoughts left out: what the card and the

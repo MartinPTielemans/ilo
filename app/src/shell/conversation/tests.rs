@@ -34,7 +34,9 @@ fn card() -> Card {
         title: "Flight to Lisbon".into(),
         status: "Searching flights".into(),
         steps: Vec::new(),
-        last_site: None,
+        last_tab: None,
+        line: None,
+        ended_at: None,
         asks: false,
         dot: Dot::Working,
         word: Word::for_dot(Dot::Working),
@@ -610,6 +612,83 @@ fn a_tile_turning_to_needs_you_comes_into_sight_once(cx: &mut TestAppContext) {
         draw(cx),
         px(0.),
         "the rail scrolled to the tile a second time"
+    );
+}
+
+/// A page that comes to need the user while the page they left goes back into its picture opens
+/// only once that one is in its thumbnail, never over it on its way.
+#[gpui::test]
+fn a_needs_you_page_opens_once_the_page_left_is_back(cx: &mut TestAppContext) {
+    use crate::agents::Status;
+    let waiting = Card {
+        dot: Dot::Waiting,
+        word: Word::NeedsYou,
+        ..card()
+    };
+    let (shell, host, cx) = shown_with(waiting, cx);
+    let mut talk = conversation(1);
+    talk.tabs = vec![
+        (30, "tickets.example".into()),
+        (31, "tickets.example".into()),
+    ];
+    shell.update(cx, |shell, cx| {
+        let tabs = vec![30, 31];
+        shell.set_tabs(3, Vec::new(), tabs, Vec::new(), Folders::default(), cx);
+        shell.set_conversation(Some(talk), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let draw = |cx: &mut VisualTestContext| {
+        for _ in 0..2 {
+            view.update(cx, |_, cx| cx.notify());
+            cx.run_until_parked();
+        }
+    };
+    draw(cx);
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    shell.update(cx, |shell, cx| {
+        assert!(
+            shell.watch_row(30, false, cx),
+            "the user's page didn't open"
+        );
+        shell.hold_task_page_going_back();
+        cx.notify();
+    });
+    draw(cx);
+    host.take();
+
+    let held = Status {
+        agent: "task-1".into(),
+        name: "Claude".into(),
+        space: 3,
+        doing: "".into(),
+        held: vec![(31, "Sign in".into())],
+        taken: Vec::new(),
+    };
+    shell.update(cx, |shell, cx| shell.set_agent_status(vec![held], cx));
+    draw(cx);
+    assert!(
+        shell.read_with(cx, |shell, _| shell.task_page_going_back()),
+        "the page the user left stopped going back"
+    );
+    let calls = host.take();
+    assert!(
+        !calls.iter().any(|call| call == "select 31"),
+        "the page that needs the user opened over the one going back: {calls:?}"
+    );
+
+    // The page left is in its thumbnail at the zoom's next step: then the other opens.
+    cx.update(|_, cx| cx.set_reduce_motion(true));
+    draw(cx);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.watched_task_page().map(|(_, tab)| tab)),
+        Some(31),
+        "the page that needs the user didn't open"
+    );
+    let calls = host.take();
+    assert!(calls.iter().any(|call| call == "select 31"), "{calls:?}");
+    assert!(
+        !calls.iter().any(|call| call == "focus page"),
+        "the page ilo opened took the keyboard: {calls:?}"
     );
 }
 
@@ -3249,4 +3328,51 @@ fn a_watch_from_any_door_is_a_tile_and_a_handoff_leaves_the_reply_field(cx: &mut
         view.read_with(cx, |view, cx| view.reply.read(cx).text().to_string()),
         "Ryanair"
     );
+}
+
+/// A conversation that closes leaves its card in Latest tasks the picture its page's tile ended
+/// on, from memory, and lets the rest go; the card has none while the rail holds it, and none
+/// once it pictures another page, or is gone.
+#[gpui::test]
+fn a_closed_conversation_leaves_its_card_the_picture_its_tile_ended_on(cx: &mut TestAppContext) {
+    let card = Card {
+        last_tab: Some(30),
+        pages: vec![30],
+        ..card()
+    };
+    let (shell, _, cx) = shown_with(card.clone(), cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    let plate = |shell: &Entity<Shell>, card: &Card, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| shell.plate_of(card).map(|p| p.size()))
+    };
+    assert_eq!(plate(&shell, &card, cx), None, "a plate before any picture");
+    let request = crate::shell::picture::next_request() - 1;
+    let picture = PagePicture::from_bgra(vec![255; 4 * 4], 2, 2);
+    shell.update(cx, |shell, cx| shell.page_pictured(request, picture, cx));
+    assert_eq!(
+        plate(&shell, &card, cx),
+        None,
+        "the rail holds it, not the card"
+    );
+
+    shell.update(cx, |shell, cx| shell.close_task(cx));
+    assert_eq!(
+        plate(&shell, &card, cx),
+        Some((2., 2.)),
+        "the card has no picture"
+    );
+
+    // The task goes on to another page: its card no longer pictures this one.
+    let on = Card {
+        last_tab: Some(31),
+        pages: vec![30, 31],
+        ..card.clone()
+    };
+    shell.update(cx, |shell, cx| shell.set_task_cards(vec![on.clone()], cx));
+    assert_eq!(plate(&shell, &card, cx), None);
+    assert_eq!(plate(&shell, &on, cx), None, "another page's picture");
+    let held = shell.read_with(cx, |shell, _| shell.card_plates.len());
+    assert_eq!(held, 0, "a picture no card shows is still held");
 }

@@ -9,9 +9,7 @@ use gpui::{
     VisualTestContext, point, px,
 };
 
-use crate::shell::{
-    DIVIDER_HEIGHT, Folders, NAME_HEIGHT, ROW_PITCH, Shell, Slot, recorder::Recorder,
-};
+use crate::shell::{Folders, NAME_HEIGHT, ROW_PITCH, Shell, Slot, TODAY_GAP, recorder::Recorder};
 
 /// A window on Spaces 1 and 2, showing 1. Space 1 has pinned tab 10 and Today tab 11, and Space 2
 /// has `second`'s Today tabs.
@@ -147,7 +145,7 @@ fn a_right_click_on_empty_space_shows_new_tab_and_the_spaces_menu(cx: &mut TestA
 
     // The line over Today leads with Today's own commands, then the same menu (#2344).
     let (x, top) = at_slot(&shell, cx, Slot::Divider, 30.);
-    let menus = right_click(cx, &host, (x, top + DIVIDER_HEIGHT / 2.));
+    let menus = right_click(cx, &host, (x, top + TODAY_GAP / 2.));
     assert_eq!(menus.len(), 1, "{menus:?}");
     assert_eq!(
         menus[0][..3],
@@ -162,6 +160,16 @@ fn a_right_click_on_empty_space_shows_new_tab_and_the_spaces_menu(cx: &mut TestA
     assert!(
         (entries.iter()).all(|entry| entry.parent.is_none_or(|parent| parent >= profile)),
         "the Set Profile submenu moved"
+    );
+
+    // The line itself is the New Tab line's, after its label, and shows the same menu.
+    let (x, top) = at_slot(&shell, cx, Slot::NewTab, 140.);
+    let menus = right_click(cx, &host, (x, top + ROW_PITCH / 2.));
+    assert_eq!(menus.len(), 1, "{menus:?}");
+    assert_eq!(
+        menus[0][..3],
+        ["Sort Today Tabs by Site", "Clear Today", "—"],
+        "the line after New Tab: {menus:?}"
     );
 }
 

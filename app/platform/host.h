@@ -729,10 +729,6 @@ bool host_window_restored_frame(void* ui_view, double* x, double* y, double* wid
 // Maximizes |ui_view|'s window on the screen of the frame it has, which it then un-maximizes to, as
 // a window comes back when it quit maximized (bc_saved_window_maximized).
 void host_maximize_window(void* ui_view);
-// Puts |ui_view|'s window's minimize, maximize and close at its right corner with the sidebar on
-// the left, as the top bar has them (#3160), or back with the sidebar. The UI draws them; the frame
-// offers Snap layouts over maximize where they are.
-void host_set_window_buttons_right(void* ui_view, bool right);
 #endif
 
 // Makes the window of |reveal_view| the sidebar reveal of |ui_view|'s window, which shows over its

@@ -9,22 +9,36 @@ use gpui::{
 };
 
 use crate::{
+    palette::TEXT_TERTIARY,
     passwords::Key,
     shell::{
         CONTROLS_PLATE, CONTROLS_TOP, Command, FOOTER_HEIGHT, Folders, NAV_PRESS_SCALE, NAV_SIZE,
-        PRESS_TIME, Page, Shell, beside::AtRest, header::nav_places, history::HOLD,
+        PRESS_TIME, Page, Shell, WINDOW_BUTTONS, beside::AtRest, header::nav_places, history::HOLD,
         library::LIBRARY_BACK_INSET, recorder::Recorder,
     },
     site_controls::Place,
-    tokens::shell::{CONTROLS_IDLE, ICON_INK},
+    tokens::shell::{
+        CONTROLS_GAP, CONTROLS_GLYPH, CONTROLS_INSET, CONTROLS_SIDEBAR_GLYPH, ICON_INK,
+        PLATE_INSET, WINDOW_BUTTON_SIZE,
+    },
 };
 
-/// The plates of the sidebar button, back, forward and reload in the 228 pt sidebar a window
-/// starts with: their glyphs' middles are 90, 158, 182 and 206 across.
-const SIDEBAR_X: f32 = 78.;
+/// The plates of back, forward and reload in the 228 pt sidebar a window starts with: their
+/// glyphs' middles are 158, 182 and 206 across.
 const BACK_X: f32 = 146.;
 const FORWARD_X: f32 = 170.;
 const RELOAD_X: f32 = 194.;
+
+/// The sidebar button's plate, whose glyph starts the row's gap past the window's last button:
+/// off that button's middle, so another spacing of the window's buttons is one number.
+fn sidebar_x() -> f32 {
+    let (last, _) = WINDOW_BUTTONS[2];
+    last + WINDOW_BUTTON_SIZE / 2. + CONTROLS_GAP - (CONTROLS_PLATE - CONTROLS_SIDEBAR_GLYPH) / 2.
+}
+
+/// Where a glyph of the row's starts in its plate, and the row's ends, in from the sidebar's.
+const GLYPH_IN: f32 = (CONTROLS_PLATE - CONTROLS_GLYPH) / 2.;
+const EDGE: f32 = PLATE_INSET + CONTROLS_INSET;
 
 /// Back, forward and reload keep to the sidebar's right edge, their glyphs 14 in and 8 apart, at
 /// any width, and the sidebar button stays where it was, 8 past the window's buttons.
@@ -34,7 +48,7 @@ fn back_forward_and_reload_keep_to_the_sidebars_right_edge() {
     assert_eq!(
         at(228.),
         [
-            Some(SIDEBAR_X),
+            Some(sidebar_x()),
             Some(BACK_X),
             Some(FORWARD_X),
             Some(RELOAD_X)
@@ -42,7 +56,7 @@ fn back_forward_and_reload_keep_to_the_sidebars_right_edge() {
     );
     assert_eq!(
         at(347.),
-        [Some(SIDEBAR_X), Some(265.), Some(289.), Some(313.)]
+        [Some(sidebar_x()), Some(265.), Some(289.), Some(313.)]
     );
     let [_, _, forward, reload] = at(500.);
     // Reload's glyph, 16 wide in the middle of its plate of 24.
@@ -52,20 +66,33 @@ fn back_forward_and_reload_keep_to_the_sidebars_right_edge() {
     );
 }
 
-/// Narrower than 185 reload goes, then forward under 161, the rest still at the right edge, and
-/// back's glyph never comes nearer the sidebar button's than the row's 8.
+/// A narrowing sidebar loses reload, then forward, each at the width where back's glyph would come
+/// nearer the sidebar button's than the row's gap; what's left stays at the right edge.
 #[test]
 fn a_narrow_sidebar_loses_reload_then_forward() {
     let at = |width| nav_places(width, false, false);
-    assert_eq!(
-        at(185.),
-        [Some(SIDEBAR_X), Some(103.), Some(127.), Some(151.)]
-    );
-    assert_eq!(at(184.), [Some(SIDEBAR_X), Some(126.), Some(150.), None]);
-    assert_eq!(at(161.), [Some(SIDEBAR_X), Some(103.), Some(127.), None]);
-    assert_eq!(at(160.), [Some(SIDEBAR_X), Some(126.), None, None]);
-    // The sidebar button's glyph ends at 99, and back's starts 4 into its plate.
-    assert_eq!(103. + 4. - 99., 8.);
+    // Where the sidebar button's glyph ends, and the narrowest sidebar with room for `count`
+    // glyphs after it, each the row's gap after the one before.
+    let glyph_end = sidebar_x() + (CONTROLS_PLATE + CONTROLS_SIDEBAR_GLYPH) / 2.;
+    let narrowest = |count: f32| glyph_end + count * (CONTROLS_GAP + CONTROLS_GLYPH) + EDGE;
+    // How far back's glyph starts after the sidebar button's, and where the last glyph ends.
+    let gap = |width: f32| at(width)[1].unwrap() + GLYPH_IN - glyph_end;
+    let end = |width: f32| {
+        let last = at(width).into_iter().flatten().last().unwrap();
+        width - (last + GLYPH_IN + CONTROLS_GLYPH)
+    };
+    for (count, shown) in [(3., 4), (2., 3)] {
+        let width = narrowest(count);
+        let places = at(width);
+        assert_eq!(places[0], Some(sidebar_x()));
+        assert_eq!(places.iter().flatten().count(), shown, "at {width}");
+        assert_eq!((gap(width), end(width)), (CONTROLS_GAP, EDGE), "at {width}");
+        // A point narrower the last one goes, and the rest are at the edge with room to spare.
+        let places = at(width - 1.);
+        assert_eq!(places.iter().flatten().count(), shown - 1, "under {width}");
+        assert_eq!(end(width - 1.), EDGE, "under {width}");
+        assert!(gap(width - 1.) > CONTROLS_GAP, "under {width}");
+    }
 }
 
 /// In full screen, with no window buttons, the sidebar button's glyph starts the row, 14 in as
@@ -189,7 +216,7 @@ fn sidebar_buttons_name_themselves(cx: &mut TestAppContext) {
     let sidebar = move_to(
         cx,
         &host,
-        SIDEBAR_X + CONTROLS_PLATE / 2.,
+        sidebar_x() + CONTROLS_PLATE / 2.,
         CONTROLS_TOP + CONTROLS_PLATE / 2.,
     );
     assert_eq!(sidebar, ["tooltip Hide Sidebar ⌘S"]);
@@ -742,7 +769,7 @@ fn back_forward_and_reload_shrink_a_little_while_held(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     shell.update(cx, |shell, _| shell.held_nav = None);
-    cx.simulate_mouse_down(at(SIDEBAR_X), MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_down(at(sidebar_x()), MouseButton::Left, Modifiers::none());
     cx.run_until_parked();
     assert!(
         shell.read_with(cx, |shell, _| shell.held_nav.is_none()),
@@ -870,7 +897,7 @@ fn the_header_glyphs_dim_while_the_window_is_not_the_users(cx: &mut TestAppConte
         floor > 0.26,
         "the test's Space needs a floor over 0.26, not {floor}"
     );
-    let lit = (Some(false), ICON_INK.max(floor), CONTROLS_IDLE.max(floor));
+    let lit = (Some(false), ICON_INK.max(floor), TEXT_TERTIARY.max(floor));
     cx.update(|window, _| window.activate_window());
     assert_eq!(alphas(cx), lit, "not lit in the user's window");
     // The page or an overlay has the keyboard: GPUI's window isn't active, the host's still main.

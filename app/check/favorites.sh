@@ -47,11 +47,11 @@ fi
 favorites() {
   grep '^browser: favorites' "$log" | tail -1 | sed 's/^browser: favorites *//'
 }
-# One favorite is one tile across the sidebar, 47 tall and 90 below the window's top, under the URL
-# field, and its row of tiles takes the Space's rows 55 down, with the 8 under it.
+# One favorite is one tile across the sidebar, 40 tall and 90 below the window's top, under the URL
+# field, and its row of tiles takes the Space's rows 44 down, with the 4 under it.
 tile="114 114"
 tiled_row() {
-  echo "100 $(($(row "$1" | cut -d' ' -f2) + 55))"
+  echo "100 $(($(row "$1" | cut -d' ' -f2) + 44))"
 }
 open_from_bar "http://localhost:$port/two.html"
 b=$tab
@@ -148,8 +148,8 @@ expect '^browser: tooltip window shown$' "the sidebar button's tooltip didn't fa
 ../tools/window-screenshot.sh "$pid" "$out/header-tooltip.png" || fail "no window to capture"
 send move 100 400
 expect '^browser: tooltip hidden$' "the pointer leaving the sidebar button didn't hide its tooltip"
-# Clear, at the end of the divider over Today, says what it does in Arc's words, under it.
-send move 200 191
+# Clear, at the end of the New Tab line, says what it does in Arc's words, under it.
+send move 200 195
 expect '^browser: clear hovered 1$' "Clear didn't see the pointer come over it"
 expect '^browser: tooltip shown Clear unpinned tabs in this space$' \
   "resting on Clear didn't show its tooltip"
@@ -320,7 +320,7 @@ in_browser RenderWidgetHostViewCocoa "a click on the page didn't give it the key
 send resize $size
 expect "^browser: drawn at ${size% *}x${size#* }\$" "the window didn't draw back at its size"
 # ⌘, from the page opens Settings on General. Its switch turns the warning before quitting off;
-# on Tabs & Sidebar, the menu of the profile's pop-up button sets how long its Today tabs wait for
+# on Tabs & Spaces, the menu of the profile's pop-up button sets how long its Today tabs wait for
 # the archive, a click on a drawing of Share favorites (#2430) sets who shares them, and on the Mac, the haptics' switch turns them
 # off; and ⌘W hides it.
 send key , cmd
@@ -330,9 +330,9 @@ settings_drew General
 ../tools/window-screenshot.sh "$pid" "$out/settings.png" || fail "no window to capture"
 click_in_sight "switch warn before quitting"
 expect '^browser: warn before quitting off$' "a click on Ask before quitting didn't turn it off"
-send clickkey $(drawn "toolbar Tabs & Sidebar")
-expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
-settings_drew 'Tabs & Sidebar'
+send clickkey $(drawn "toolbar Tabs & Spaces")
+expect '^browser: settings tab Tabs & Spaces$' "a click on Tabs & Spaces didn't show its section"
+settings_drew 'Tabs & Spaces'
 post clickkey $(drawn "archive [0-9]*")
 expect '^browser: menu shown 12 hours (default) (checked), 24 hours, 7 days, 30 days, Never$' \
   "a click on Archive Today tabs after didn't show the times, with 12 hours chosen"
@@ -752,9 +752,9 @@ send key , cmd
 expect '^browser: command settings via ui$' "⌘, from the UI didn't run Settings"
 expect '^browser: settings shown General$' "⌘, from the UI didn't show Settings"
 settings_drew General
-send clickkey $(drawn "toolbar Tabs & Sidebar")
-expect '^browser: settings tab Tabs & Sidebar$' "a click on Tabs & Sidebar didn't show its section"
-settings_drew 'Tabs & Sidebar'
+send clickkey $(drawn "toolbar Tabs & Spaces")
+expect '^browser: settings tab Tabs & Spaces$' "a click on Tabs & Spaces didn't show its section"
+settings_drew 'Tabs & Spaces'
 post clickkey $(drawn "archive [0-9]*")
 expect '^browser: menu shown 12 hours (default), 24 hours (checked), 7 days, 30 days, Never$' \
   "Settings didn't keep 24 hours across the quit"
@@ -788,9 +788,9 @@ settings_close
 post clickkey $close
 expect '^browser: settings hidden$' "the close button didn't hide Settings"
 send menu Settings…
-expect '^browser: settings shown Tabs & Sidebar$' \
+expect '^browser: settings shown Tabs & Spaces$' \
   "Settings… didn't show Settings on the section it showed"
-settings_drew 'Tabs & Sidebar'
+settings_drew 'Tabs & Spaces'
 send clickkey $(drawn "chromium settings")
 expect '^browser: more settings$' "a click on Chromium settings didn't run it"
 expect '^browser: settings hidden$' "Chromium settings didn't hide Settings"

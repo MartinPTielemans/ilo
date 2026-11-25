@@ -5,7 +5,8 @@ use std::time::Instant;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use crate::command_bar::PLACEHOLDER_TEXT;
-use crate::palette::{Ground, Tone};
+use crate::elevation::Level;
+use crate::palette::Ground;
 use crate::site_controls::Place;
 
 use gpui::{
@@ -16,9 +17,9 @@ use gpui::{
 
 use super::{
     CONTROLS_GAP, CONTROLS_GLYPH, CONTROLS_INSET, CONTROLS_PLATE, CONTROLS_SIDEBAR_GLYPH,
-    CONTROLS_TOP, Command, HeldNav, NAV, NAV_HOVERED, NAV_INACTIVE, NAV_PRESS_SCALE, NAV_RADIUS,
-    PLATE_INSET, PLATE_RADIUS, SECONDARY, Shell, Swapped, TILE_HOVERED, TOOLS_FADE, Translation,
-    URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD, URL_FIELD_HEIGHT,
+    CONTROLS_TOP, Command, HAIRLINE, HeldNav, NAV, NAV_HOVERED, NAV_INACTIVE, NAV_PRESS_SCALE,
+    NAV_RADIUS, PLATE_INSET, PLATE_RADIUS, SECONDARY, Shell, Swapped, TILE_HOVERED, TOOLS_FADE,
+    Translation, URL_BUTTON_GLYPH, URL_BUTTON_INSET, URL_BUTTON_SIZE, URL_FIELD, URL_FIELD_HEIGHT,
     URL_FIELD_TEXT_X, URL_FIELD_TOP, WINDOW_BUTTONS,
     access::Accessible,
     beside::AtRest,
@@ -46,7 +47,7 @@ use crate::tokens::shell::header::KEY_REACH;
 use crate::tokens::shell::header::SITE_CONTROLS_END;
 use crate::tokens::shell::header::TOOL_PITCH;
 use crate::tokens::shell::header::URL_PLACEHOLDER;
-use crate::tokens::shell::{CONTROLS_IDLE, CONTROLS_IDLE_LIGHT, ICON_INK, WINDOW_BUTTON_SIZE};
+use crate::tokens::shell::{ICON_INK, WINDOW_BUTTON_SIZE};
 use crate::tokens::text;
 
 impl Shell {
@@ -344,10 +345,7 @@ impl Shell {
         match (self.window_main, enabled) {
             (false, _) => self.palette.faint(NAV_INACTIVE),
             (true, true) => self.palette.glyph(ICON_INK),
-            (true, false) => self.palette.glyph(match self.palette.tone {
-                Tone::Dark => CONTROLS_IDLE,
-                Tone::Light => CONTROLS_IDLE_LIGHT,
-            }),
+            (true, false) => self.palette.glyph(self.palette.tertiary()),
         }
     }
 
@@ -806,6 +804,15 @@ impl Shell {
             // It brightens under the pointer as a tile does, from the same white 0.10 (ours).
             .hover(|style| style.bg(self.palette.ground_plate(Ground::Field, TILE_HOVERED)))
             .text_size(px(text::BODY))
+            // The inner line a favorite's tile has, over the fill and under what the field holds.
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .rounded(px(PLATE_RADIUS))
+                    .border(px(HAIRLINE))
+                    .border_color(Level::Resting.rim_in(&self.palette)),
+            )
             .child(
                 div()
                     .min_w(px(0.))
