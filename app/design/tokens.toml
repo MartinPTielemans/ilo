@@ -1426,8 +1426,8 @@ chip-radius = 5.0
 chip-text = 10.0
 chip-line = 12.0
 # A page's row: 30 tall, 10 in, its glyph 16 and 9 before its name at 13 on 16, at radius 8;
-# the page shown on the `shown` plate, its name at weight 510. Under the pointer, the button's
-# fill (ours: the drawing has no hover).
+# the page shown on the `shown` plate, its name at medium, the scale's weight nearest the
+# drawing's 510. Under the pointer, the button's fill (ours: the drawing has no hover).
 row = 30.0
 row-x = 10.0
 row-gap = 9.0
@@ -1435,7 +1435,6 @@ row-radius = 8.0
 row-glyph = 16.0
 row-text = 13.0
 row-line = 16.0
-row-shown-weight = 510.0
 # A group's heading: 34 tall, its name at 11 on 14 at its foot, 6 up, 10 in.
 heading = 34.0
 heading-bottom = 6.0
@@ -1456,13 +1455,13 @@ chromium-glyph = 10.0
 # The page's plane: 8 from the window's top, right and bottom, at radius 10, with an inner line.
 panel-margin = 8.0
 panel-radius = 10.0
-# The page's title, 22 on 28 at weight 600 in the heading face, 16 over what follows it.
+# The page's title, 22 on 28 at the drawing's 600, semibold, in the heading face.
 title-size = 22.0
 title-line = 28.0
-title-weight = 600.0
 own-page = 0x1d1d21a8
 light-own-page = 0xfbfaf7a8
-# The drawing's #FFFFFF0F; in light the ink at the drawn tiles' strength.
+# The drawing's #FFFFFF0F, 1 wide inside its edge; in light the ink at the drawn tiles' strength.
+page-line-width = 1.0
 page-line = 0xffffff0f
 light-page-line = 0x0000000d
 text = 0xf3f0e8ff

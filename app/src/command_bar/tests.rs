@@ -3805,7 +3805,7 @@ fn a_setting_named_opens_settings_at_its_row(cx: &mut TestAppContext) {
         "the index was read more than once a time the bar opened"
     );
     assert!(
-        calls.contains(&"show setting Features › Peek".to_string()),
+        calls.contains(&"show setting General › Peek".to_string()),
         "{calls:?}"
     );
     assert!(

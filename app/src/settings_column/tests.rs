@@ -368,7 +368,8 @@ fn voiceover_names_every_stop_the_keyboard_reaches(cx: &mut TestAppContext) {
     ] {
         assert!(names.contains(&name), "⇥ never reached {name}: {names:?}");
     }
-    assert_eq!(stops.len(), 21, "{names:?}");
+    // The search field, five controls and Chromium settings, then the thirteen pages.
+    assert_eq!(stops.len(), 20, "{names:?}");
 }
 
 /// Settings in small for the keyboard: the column with the search field, and the card with a

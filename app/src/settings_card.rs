@@ -389,7 +389,7 @@ impl Card {
                 color: line.into(),
                 offset: point(px(0.), px(0.)),
                 blur_radius: px(0.),
-                spread_radius: px(1.),
+                spread_radius: px(form::PAGE_LINE_WIDTH),
                 inset: true,
             }])
             .overflow_hidden()

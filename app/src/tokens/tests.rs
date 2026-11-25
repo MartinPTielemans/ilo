@@ -116,6 +116,11 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     // A drawing of the window, its corners and its page card's at the drawing's scale (#2407).
     "settings.side-radius",
     "settings.side-page-radius",
+    // Settings in the owner's drawing (spec-settings.md): its pages' rows at 8, the page's plane
+    // at 10 inside the window's 12, and the search field's ⌘F chip at 5.
+    "settings.form.row-radius",
+    "settings.form.panel-radius",
+    "settings.form.chip-radius",
     // Share favorites' Spaces and their tiles at the drawing's scale (#2430).
     "settings.share-space-radius",
     "settings.share-tile-radius",

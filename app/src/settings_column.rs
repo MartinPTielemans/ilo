@@ -264,9 +264,7 @@ pub fn column(
                     .child(glyph(section.glyph(), form::ROW_GLYPH, ink.icon))
                     .child(
                         div()
-                            .when(selected, |name| {
-                                name.font_weight(FontWeight(form::ROW_SHOWN_WEIGHT))
-                            })
+                            .when(selected, |name| name.font_weight(FontWeight::MEDIUM))
                             .child(section.name()),
                     )
             });
@@ -297,9 +295,7 @@ pub fn column(
                 .text_size(px(form::FOOT_TEXT))
                 .line_height(px(form::FOOT_LINE))
                 .text_color(ink.text_2)
-                .when(selected, |name| {
-                    name.font_weight(FontWeight(form::ROW_SHOWN_WEIGHT))
-                })
+                .when(selected, |name| name.font_weight(FontWeight::MEDIUM))
                 .child(version.name),
         )
         .children(version.word.map(|word| {

@@ -335,7 +335,7 @@ fn a_search_that_finds_nothing_says_so(cx: &mut TestAppContext) {
     assert!(!drew(&view, "page", cx));
 }
 
-/// "archive" shows its rows under Tabs & Sidebar, Features › Little ilo and Shortcuts, and a click
+/// "archive" shows its rows under Tabs & Spaces, General › Little ilo and Shortcuts, and a click
 /// on Features shows that section at its row.
 #[gpui::test]
 fn a_click_on_a_section_name_shows_the_section_at_the_row(cx: &mut TestAppContext) {
@@ -346,8 +346,8 @@ fn a_click_on_a_section_name_shows_the_section_at_the_row(cx: &mut TestAppContex
     assert_eq!(
         labels,
         [
-            "found Tabs & Sidebar Archive Today tabs after",
-            "found Features Archive windows left unused after",
+            "found Tabs & Spaces Archive Today tabs after",
+            "found General Archive windows left unused after",
             "found Shortcuts Archive Tab"
         ]
     );
@@ -393,7 +393,7 @@ fn a_composition_finds_nothing_until_it_commits(cx: &mut TestAppContext) {
     assert!(
         names
             .iter()
-            .any(|(what, _)| what == "found Features Mini Player")
+            .any(|(what, _)| what == "found General Mini Player")
     );
     compose("あ", cx);
     cx.simulate_keystrokes("escape");

@@ -1503,9 +1503,9 @@ impl Settings {
             section => section.name(),
         };
         let base = self.base();
-        // In the heading face, 22 on 28 at 600 (spec-settings.md › The window).
+        // In the heading face, 22 on 28, semibold (spec-settings.md › The window).
         let title = shell::display_text(title, form::TITLE_SIZE, form::TITLE_LINE, cx)
-            .font_weight(FontWeight(form::TITLE_WEIGHT))
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(base.opacity(TITLE));
         let lede = (!lede.is_empty()).then(|| {
             div()
