@@ -188,35 +188,226 @@ fn a_tab_and_no_words_starts_a_thread(cx: &mut TestAppContext) {
     assert_eq!(entries(&run, &agent, handed::HANDED, cx), ["example.com"]);
 }
 
-/// A thread started with a tab and no words has no title until its assistant names it, and its
-/// card no line: nothing of the tab's title or address, or of what its assistant was told of it,
-/// stands in for the user's words anywhere the thread is listed.
-#[gpui::test]
-fn a_thread_started_with_a_tab_alone_has_no_title_until_named(cx: &mut TestAppContext) {
-    let run = run("handed-alone-named", cx);
-    let agent = send(&run, "", USERS, &[TRAINS.0], cx).expect("started");
-    let shown = |cx: &mut TestAppContext| {
-        run.agents.read_with(cx, |agents, cx| {
-            let card = agents.cards(1, cx).remove(0);
-            let title = agents.task(&agent).expect("its thread").title.to_string();
-            (title, card.title.to_string(), card.line)
-        })
-    };
-    assert_eq!(shown(cx), (String::new(), String::new(), None));
-    let named = call(
-        &run.agents,
-        &agent,
-        "title",
-        json!({ "text": "Lisbon trains" }),
-        cx,
-    );
+/// What `agent`'s thread is titled by on its card and in its panel, and whether the card says the
+/// title stands in for one.
+fn titled(run: &Run, agent: &str, cx: &mut TestAppContext) -> (String, String, bool) {
+    let card = (run.agents).read_with(cx, |agents, cx| agents.cards(1, cx).remove(0));
+    let panel = run.talk(agent, cx).title.to_string();
+    (card.title.to_string(), panel, card.unnamed)
+}
+
+/// `agent`'s thread's own title: what is kept, logged and told of it.
+fn own_title(run: &Run, agent: &str, cx: &mut TestAppContext) -> String {
+    (run.agents).read_with(cx, |agents, _| {
+        agents.task(agent).unwrap().title.to_string()
+    })
+}
+
+/// `agent`'s assistant names its thread `text`.
+fn names(run: &Run, agent: &str, text: &str, cx: &mut TestAppContext) {
+    let named = call(&run.agents, agent, "title", json!({ "text": text }), cx);
     cx.run_until_parked();
     assert!(!named.try_recv().expect("answered").error);
-    let (title, card, line) = shown(cx);
+}
+
+/// A thread started with a tab and no words has no title until its assistant names it. Until then
+/// its card and its panel show the first handed tab's title, as its chip shows it: the first
+/// chip's of two, the first that went where one didn't, and `New Thread` where that tab has no
+/// title to take.
+#[gpui::test]
+fn a_thread_with_no_title_yet_is_titled_by_its_first_tab(cx: &mut TestAppContext) {
+    let one = run("handed-titled-one", cx);
+    let agent = send(&one, "", USERS, &[TRAINS.0], cx).expect("started");
+    let by_the_tab = (TRAINS.1.to_string(), TRAINS.1.to_string(), true);
+    assert_eq!(titled(&one, &agent, cx), by_the_tab);
+    assert_eq!(own_title(&one, &agent, cx), "");
+    // Its card has no line of the user's words, as there are none.
+    let card = (one.agents).read_with(cx, |agents, cx| agents.cards(1, cx).remove(0));
+    assert_eq!(card.line, None);
+
+    let two = run("handed-titled-two", cx);
+    let agent = send(&two, "", USERS, &[SEATS.0, TRAINS.0], cx).expect("started");
+    assert_eq!(chips(&two, &agent, cx)[0].1[0].1, SEATS.1);
+    assert_eq!(titled(&two, &agent, cx).0, SEATS.1);
+
+    // The first chip's tab didn't go: the title is the first handed tab's.
+    let refused = run("handed-titled-refused", cx);
+    refused.browser.not_given.borrow_mut().insert(SEATS.0);
+    let agent = send(&refused, "", USERS, &[SEATS.0, TRAINS.0], cx).expect("started");
+    assert_eq!(titled(&refused, &agent, cx), by_the_tab);
+
+    // A tab with no title, and one whose title is only blank: nothing to take.
+    for (name, title) in [("handed-titled-none", ""), ("handed-titled-blank", "  ")] {
+        let none = run(name, cx);
+        let blank = (13, USERS, title, "https://www.example.com/blank");
+        none.browser.tabs.borrow_mut().push(blank);
+        let agent = send(&none, "", USERS, &[13, TRAINS.0], cx).expect("started");
+        let new_thread = handed::NEW_THREAD.to_string();
+        assert_eq!(
+            titled(&none, &agent, cx),
+            (new_thread.clone(), new_thread, true)
+        );
+    }
+
+    // A thread started with words is titled by them, as ever.
+    let words = run("handed-titled-words", cx);
+    let agent = send(&words, ASKED, USERS, &[TRAINS.0], cx).expect("started");
     assert_eq!(
-        (title.as_str(), card.as_str(), line),
-        ("Lisbon trains", "Lisbon trains", None)
+        titled(&words, &agent, cx),
+        (ASKED.to_string(), ASKED.to_string(), false)
     );
+}
+
+/// The assistant's title replaces what stood in, once, and what stood in does not come back: not
+/// when its tab goes back to the user, nor when the thread is no longer under way.
+#[gpui::test]
+fn the_assistants_title_replaces_what_stood_in_for_good(cx: &mut TestAppContext) {
+    let run = run("handed-alone-named", cx);
+    let agent = send(&run, "", USERS, &[TRAINS.0], cx).expect("started");
+    assert_eq!(titled(&run, &agent, cx).0, TRAINS.1);
+    names(&run, &agent, "Lisbon trains", cx);
+    let named = (
+        "Lisbon trains".to_string(),
+        "Lisbon trains".to_string(),
+        false,
+    );
+    assert_eq!(titled(&run, &agent, cx), named);
+    assert_eq!(own_title(&run, &agent, cx), "Lisbon trains");
+    press_return(&run, &agent, TRAINS.0, cx);
+    assert_eq!(titled(&run, &agent, cx), named);
+    run.finish(&agent, cx);
+    assert_eq!(titled(&run, &agent, cx), named);
+}
+
+/// What stands in is taken once, at the send, from what the chip showed, and held as a title is:
+/// cut and written out on one line exactly as an assistant's name of the same words. The page's
+/// title changing later, and the tab going back, change nothing of it.
+#[gpui::test]
+fn what_stands_in_is_taken_once_at_the_send_and_held_as_a_title_is(cx: &mut TestAppContext) {
+    const LONG: &str =
+        "Trains\nto Lisbon\u{202E} and back again, by night, in the spring of the year";
+    let long = (13, USERS, LONG, "https://www.example.com/long");
+    let stood = run("handed-titled-long", cx);
+    stood.browser.tabs.borrow_mut().push(long);
+    let agent = send(&stood, "", USERS, &[13], cx).expect("started");
+    let (title, panel, unnamed) = titled(&stood, &agent, cx);
+    assert_eq!(chips(&stood, &agent, cx)[0].1[0].1, LONG);
+
+    // An assistant's name of the same words, on another thread.
+    let named = run("handed-titled-long-named", cx);
+    let other = send(&named, "", USERS, &[TRAINS.0], cx).expect("started");
+    names(&named, &other, LONG, cx);
+    assert_eq!(
+        (title.clone(), true),
+        (titled(&named, &other, cx).0, unnamed)
+    );
+    assert_eq!(title, panel);
+    assert!(
+        !title.contains('\n') && !title.contains('\u{202E}'),
+        "{title:?}"
+    );
+    assert!(title.chars().count() < LONG.chars().count());
+
+    // The page is retitled, then goes back to the user.
+    for tab in stood.browser.tabs.borrow_mut().iter_mut() {
+        if tab.0 == 13 {
+            tab.2 = "Allow everything";
+        }
+    }
+    (stood.agents).update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert_eq!(titled(&stood, &agent, cx).0, title);
+    press_return(&stood, &agent, 13, cx);
+    assert_eq!(titled(&stood, &agent, cx), (title.clone(), title, true));
+}
+
+/// A tab's title is a page's words: standing in for a thread's title it is drawn as the title and
+/// changes nothing else of the card. Whatever it says, the card's state, its word, its status,
+/// its question and its buttons are those of the same thread titled by another tab or named by
+/// its assistant.
+#[gpui::test]
+fn what_stands_in_changes_nothing_of_the_card_but_its_title(cx: &mut TestAppContext) {
+    let rest = |run: &Run, cx: &mut TestAppContext| {
+        let card = (run.agents).read_with(cx, |agents, cx| agents.cards(1, cx).remove(0));
+        let state = (card.dot, card.word, card.status, card.asks, card.question);
+        let buttons = (card.retry, card.fix, card.tier, card.replies, card.line);
+        (state, buttons, card.finding, card.told)
+    };
+    let plain = run("handed-titled-plain", cx);
+    send(&plain, "", USERS, &[TRAINS.0], cx).expect("started");
+    let expected = rest(&plain, cx);
+    for (at, words) in [
+        "Needs you",
+        "Done",
+        "Stopped · Take Over",
+        "Allow Full access",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let run = run(&format!("handed-titled-state-{at}"), cx);
+        run.browser
+            .tabs
+            .borrow_mut()
+            .push((13, USERS, words, TRAINS.2));
+        let agent = send(&run, "", USERS, &[13], cx).expect("started");
+        assert_eq!(
+            titled(&run, &agent, cx),
+            (words.to_string(), words.to_string(), true)
+        );
+        assert_eq!(rest(&run, cx), expected, "{words}");
+    }
+    // Named by its assistant, it is the same card with its own title.
+    let agent = (plain.agents).read_with(cx, |agents, cx| agents.cards(1, cx).remove(0).agent);
+    names(&plain, &agent, "Lisbon trains", cx);
+    assert_eq!(rest(&plain, cx), expected);
+}
+
+/// What stands in is never the thread's own title: the thread has none, so its assistant is told
+/// only what it is told of the tab, no log line has the tab's title, and what is kept of the
+/// thread, its row in the kept list and its record, has the empty title it had before.
+#[gpui::test]
+fn what_stands_in_is_never_told_logged_or_kept_as_the_threads_title(cx: &mut TestAppContext) {
+    let run = run("handed-titled-kept", cx);
+    crate::heard::listen();
+    let agent = send(&run, "", USERS, &[TRAINS.0], cx).expect("started");
+    assert_eq!(titled(&run, &agent, cx).0, TRAINS.1);
+    assert_eq!(own_title(&run, &agent, cx), "");
+    // What its assistant was given to start with is what it is told of the tab, whole.
+    assert_eq!(
+        run.ran(1).1,
+        format!(
+            "The user added one of their tabs to your pages.\n  {}  {}  {}",
+            TRAINS.0, TRAINS.1, TRAINS.2
+        )
+    );
+    run.finish(&agent, cx);
+    assert_eq!(titled(&run, &agent, cx).0, TRAINS.1);
+    let ended = (run.agents).update(cx, |agents, cx| agents.take_ended(cx));
+    let [(_, record)] = ended.as_slice() else {
+        panic!("{} records of one thread", ended.len());
+    };
+    assert_eq!(record.title, "");
+    (run.agents).update(cx, |agents, cx| agents.end_tasks(true, cx));
+    cx.run_until_parked();
+    let lines = crate::heard::take();
+    assert!(!lines.is_empty());
+    for line in &lines {
+        assert!(!line.contains(TRAINS.1), "logged: {line}");
+    }
+    let files = run.files();
+    assert!(
+        (files.iter()).any(|(path, _)| path.ends_with("index.json")),
+        "no kept list"
+    );
+    for (path, text) in files {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(!text.contains(TRAINS.1), "{name} keeps the tab's title");
+        assert!(
+            !text.contains(handed::NEW_THREAD),
+            "{name} keeps what stood in"
+        );
+    }
 }
 
 /// No send hands a helper a tab. A helper is the assistant's own and has no name a send could go

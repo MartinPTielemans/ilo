@@ -67,6 +67,14 @@ pub const FINDING_KEPT: usize = 160;
 /// line has the width of a title.
 pub const TOLD_KEPT: usize = 120;
 
+/// `text` as a title holds it: kept to TITLE_KEPT characters, then written out as a request's text
+/// is, on one line (#3645, #3690). An assistant's name for its thread and a tab's title standing in
+/// for one are both words ilo didn't write, and both go through here.
+fn as_title(text: &str) -> String {
+    let kept = page::clip(text, TITLE_KEPT);
+    super::request::escaped(&kept, false).0
+}
+
 /// How long a task's title stays before it may change, so it can't flicker (#3690).
 pub const RENAMING: Duration = Duration::from_secs(60);
 
@@ -526,6 +534,17 @@ pub struct Session {
 }
 
 impl Task {
+    /// The title its card and its panel show: its own, or for a thread started with a tab and no
+    /// words, which has none until its assistant names it, what stands in for one. `title` itself
+    /// stays empty until then, so what is kept, logged or told of a thread's title never has a
+    /// page's words.
+    fn shown_title(&self) -> SharedString {
+        match self.title.is_empty() {
+            true => self.sends.stand_in(),
+            false => self.title.clone(),
+        }
+    }
+
     /// It ended `at`. Its record keeps the log's entries from before then, and none noted after,
     /// such as its agent's disconnect, which the Mac's clock, in microseconds, can give the very
     /// time it ended (#3967).
@@ -596,6 +615,9 @@ pub struct Card {
     /// to it where they started it.
     pub replies: bool,
     pub title: SharedString,
+    /// Whether its title stands in for one it doesn't have yet: a tab's title, a page's words, or
+    /// New Thread. Drawn as any title is, and written to no log line.
+    pub unnamed: bool,
     /// The step it's on, such as "Opening gulbenkian.pt", what it waits for, or its result's line.
     pub status: SharedString,
     /// Its last steps this turn, at most `CARD_STEPS`, oldest first, each as the conversation's
@@ -1217,7 +1239,7 @@ impl Agents {
         Some(Conversation {
             agent: task.agent.clone().into(),
             name: task.name.clone(),
-            title: task.title.clone(),
+            title: task.shown_title(),
             about: about.into(),
             asked: task.asked.clone(),
             page: task.page.clone(),
@@ -1394,7 +1416,8 @@ impl Agents {
             space: task.space,
             name: task.name.clone(),
             replies: task.session.is_none(),
-            title: task.title.clone(),
+            title: task.shown_title(),
+            unnamed: task.title.is_empty(),
             status,
             steps: last_steps(task),
             last_tab: last_tab(task, &pages),
@@ -2981,7 +3004,7 @@ impl Agents {
             return;
         };
         let kept = page::clip(text, TITLE_KEPT);
-        let (shown, _) = super::request::escaped(&kept, false);
+        let shown = as_title(text);
         let named = match task.named {
             Some(_) if task.title == shown => Ok(()),
             Some(last) if now.duration_since(last) < RENAMING => Err(NAMED_RECENTLY),

@@ -44,6 +44,7 @@ fn card(agent: &str, name: &str, dot: Dot) -> Card {
         name: name.to_string().into(),
         replies: true,
         title: "Flight to Lisbon".into(),
+        unnamed: false,
         status: "Searching flights".into(),
         steps: Vec::new(),
         last_tab: None,

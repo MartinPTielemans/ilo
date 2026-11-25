@@ -47,6 +47,7 @@ fn card() -> Card {
         name: "Claude".into(),
         replies: true,
         title: "Lisbon museum hours".into(),
+        unnamed: false,
         status: "Most open at 10".into(),
         steps: Vec::new(),
         last_tab: None,
