@@ -47,6 +47,16 @@ already asked whether its context may write; a refused write is dropped as one f
 may not write is. The pointer is exported, since content is a library of its own in a component
 build and the core is outside it.
 
+content/browser/renderer_host/render_frame_host_impl.cc and
+content/browser/web_contents/web_contents_impl.cc. RenderFrameHostImpl::ShowPopupMenu, which shows
+the system's menu for a select where the system draws its list, asks g_browser_core_no_page_popup
+for the frame beside its own refusal for a tab that isn't shown, and answers a refused one the
+same way: the page hears that its list didn't open. WebContentsImpl::ShowCreatedWidget, which
+shows a popup window a page draws by itself (a select's list elsewhere, a date field's calendar, a
+color field's picker), asks the same pointer for the frame that made it beside its own refusal for
+a window that isn't focused, and ends a refused one the same way. One pointer, defined in the
+first file and exported as the clipboard's is; it says which of the two it asks for.
+
 diff --color -ruN a/chrome/browser/download/chrome_download_manager_delegate.cc b/chrome/browser/download/chrome_download_manager_delegate.cc
 --- a/chrome/browser/download/chrome_download_manager_delegate.cc
 +++ b/chrome/browser/download/chrome_download_manager_delegate.cc
@@ -336,3 +346,66 @@ diff --color -ruN a/content/browser/renderer_host/clipboard_host_impl.cc b/conte
  
    BrowserContext* GetBrowserContext() override {
      return render_frame_host_->GetBrowserContext();
+diff --color -ruN a/content/browser/renderer_host/render_frame_host_impl.cc b/content/browser/renderer_host/render_frame_host_impl.cc
+--- a/content/browser/renderer_host/render_frame_host_impl.cc
++++ b/content/browser/renderer_host/render_frame_host_impl.cc
+@@ -402,6 +402,15 @@
+              base::FEATURE_ENABLED_BY_DEFAULT);
+ }  // namespace features
+ 
++// browser_core: whether the page in |frame| is refused a list or picker of its
++// own drawn outside it, which the core says of a page in an agent's Space the
++// user doesn't hold (//browser_core/hooks.h). |system_menu| says it is the
++// system's menu for a select; otherwise it is a popup window the page draws.
++// Exported, as the core is outside this component.
++CONTENT_EXPORT bool (*g_browser_core_no_page_popup)(
++    content::RenderFrameHost* frame,
++    bool system_menu) = nullptr;
++
+ namespace content {
+ 
+ class RenderFrameHostOrProxy {
+@@ -10031,6 +10040,14 @@
+     return;
+   }
+ 
++  // browser_core: nor for a page the core refuses one, whose select stays
++  // shut.
++  if (g_browser_core_no_page_popup &&
++      g_browser_core_no_page_popup(this, /*system_menu=*/true)) {
++    send_did_cancel(std::move(popup_client));
++    return;
++  }
++
+   auto* view = render_view_host()->delegate_->GetDelegateView();
+   if (!view) {
+     send_did_cancel(std::move(popup_client));
+diff --color -ruN a/content/browser/web_contents/web_contents_impl.cc b/content/browser/web_contents/web_contents_impl.cc
+--- a/content/browser/web_contents/web_contents_impl.cc
++++ b/content/browser/web_contents/web_contents_impl.cc
+@@ -287,6 +287,11 @@
+ #if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
+ #include "content/browser/ios/nfc_host.h"
+ #endif
++
++// browser_core: set by the core, defined in render_frame_host_impl.cc.
++CONTENT_EXPORT extern bool (*g_browser_core_no_page_popup)(
++    content::RenderFrameHost* frame,
++    bool system_menu);
+ 
+ namespace content {
+ 
+@@ -6256,6 +6261,13 @@
+       !rwh->is_active()) {
+     // If the OS window isn't focused, then don't open select element popups for
+     // it: https://issues.ch40m1um.qjz9zk/issues/365089001
++    render_widget_host_impl->ShutdownAndDestroyWidget(true);
++    return;
++  }
++
++  // browser_core: nor a popup window for a page the core refuses one.
++  if (g_browser_core_no_page_popup &&
++      g_browser_core_no_page_popup(creator_rfh, /*system_menu=*/false)) {
+     render_widget_host_impl->ShutdownAndDestroyWidget(true);
+     return;
+   }
