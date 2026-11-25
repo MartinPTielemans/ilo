@@ -619,12 +619,15 @@ pub struct Card {
     /// When it ended in this run, in the user's time ("10:42"), or empty while it hasn't: a done
     /// card's `Done · {time}`.
     pub ended_time: SharedString,
-    /// Done, the first paragraph of its last answer as plain text (`finding`), from this run's
-    /// conversation alone: empty when it isn't done, ended with no answer, or came back after a
-    /// quit, which keeps no conversation.
+    /// Done, the first paragraph of its last answer as plain text (`finding`): from this run's
+    /// conversation, or after a quit the line its kept card read back. Empty when it isn't done,
+    /// ended with no answer, or came back with no line.
     pub finding: SharedString,
     /// Done, what a screen reader is told of its finding (`told`): empty with none.
     pub told: SharedString,
+    /// After a quit, the picture its kept card read back of its last page, which Latest tasks'
+    /// plate shows: None for a task of this run, whose plate is its conversation's.
+    pub kept_picture: Option<super::kept::cards::Plate>,
     /// Its access, which its group's line leads with at Full access.
     pub tier: Tier,
     /// A confirmation or a handoff of the task's, which the card asks instead of the windows'.
@@ -882,6 +885,9 @@ pub struct Tasks {
     pub(super) profiles: Vec<String>,
     /// The last picture each kept task's card could keep of its last page (pick_up.rs).
     card_tiles: HashMap<String, pick_up::CardTile>,
+    /// What each kept task a run before left read back of its card, until a reply takes it up or
+    /// it goes (pick_up.rs).
+    came_back: HashMap<String, super::kept::cards::Back>,
     /// The cards' file work, in the order it's asked (kept/cards.rs).
     card_jobs: super::kept::cards::Queue,
     /// The state each task was in when the user's reply took it up, which it goes back to if its
@@ -1362,6 +1368,10 @@ impl Agents {
         };
         let open = self.open_tabs(task, cx);
         let pages = self.pages(task, cx);
+        // A task a run before left, its card as it was: the line and picture read back of it.
+        let back = self.tasks.came_back.get(&task.agent);
+        let back_line: Option<SharedString> =
+            back.and_then(|back| back.line.clone()).map(Into::into);
         // The core's auto-archive can take a task's page it never showed (window.cc), and a task
         // lives for one run, so its card says where they went rather than offer them.
         // A session's pages are its own to close, so it keeps its receipt (#3652).
@@ -1386,7 +1396,7 @@ impl Agents {
             steps: last_steps(task),
             last_tab: last_tab(task, &pages),
             line: match &task.state {
-                State::Done { result, .. } => first_line(result),
+                State::Done { result, .. } => first_line(result).or_else(|| back_line.clone()),
                 State::Stopped => last_finished(task),
                 _ => None,
             },
@@ -1399,13 +1409,17 @@ impl Agents {
                 .map(|at| super::local_time(seconds(at)).into())
                 .unwrap_or_default(),
             finding: match task.state {
-                State::Done { .. } => finding(&task.messages),
+                State::Done { .. } => {
+                    (back_line.clone()).unwrap_or_else(|| finding(&task.messages))
+                }
                 _ => SharedString::default(),
             },
-            told: match task.state {
-                State::Done { .. } => told(&task.messages),
+            told: match (&task.state, &back_line) {
+                (State::Done { .. }, Some(line)) => told_line(line).unwrap_or_default(),
+                (State::Done { .. }, None) => told(&task.messages),
                 _ => SharedString::default(),
             },
+            kept_picture: back.and_then(|back| back.plate.clone()),
             pages,
             tier: task.tier,
             question,
