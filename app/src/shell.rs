@@ -1746,7 +1746,7 @@ pub struct Shell {
     drawn_arrow: Option<(u64, bool)>,
     /// Whether the pointer is over the divider's Clear, which then draws brighter.
     clear_hovered: bool,
-    /// The same for the broom after it.
+    /// The same for the broom before it.
     broom_hovered: bool,
     /// The glyphs changing into others.
     swaps: Swaps,
@@ -5423,12 +5423,15 @@ impl Shell {
             })
             .child(
                 row_box().child(plate(plus, new_tab).when(!today.is_empty(), |plate| {
+                    // No broom: what it shows is the browser's answer for the Space shown, and
+                    // Clear stands where it will with one or without.
                     let clear = still_clear(&self.palette, space.clears_last(space.shown));
-                    let broom = self
-                        .browser
-                        .broom()
-                        .map(|_| broom::still_broom(&self.palette));
-                    plate.child(today_line(&self.palette, self.hairline(), clear, broom))
+                    plate.child(today_line(
+                        &self.palette,
+                        self.hairline(),
+                        None::<gpui::Div>,
+                        clear,
+                    ))
                 })),
             )
             .children(today.into_iter().map(row))
@@ -6121,12 +6124,12 @@ fn today_hairline(color: Hsla, line: Pixels) -> impl IntoElement {
 
 /// The New Tab line's own line, after its label while there are tabs today: a hairline that takes
 /// the room the label leaves, where that is a line's worth, then `clear`, which ends where the
-/// titles do, or before `broom`, which then ends there.
+/// titles do, with or without `broom` before it: the hairline alone gives way to that.
 fn today_line(
     palette: &Palette,
     line: Pixels,
-    clear: impl IntoElement,
     broom: Option<impl IntoElement>,
+    clear: impl IntoElement,
 ) -> gpui::Div {
     div()
         .flex_1()
@@ -6137,8 +6140,8 @@ fn today_line(
         .flex()
         .items_center()
         .child(today_hairline(palette.faint(DIVIDER), line))
-        .child(clear)
         .children(broom)
+        .child(clear)
 }
 
 /// The divider of a Space's card in the Library: a line, and `clear` at its end while it shows.

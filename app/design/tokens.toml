@@ -1747,11 +1747,9 @@ divider-gap = 9.0
 today-gap = 6.0
 clear-gap = 3.0
 clear-height = 20.0
-# The broom after Clear on the New Tab line: its glyph in a box of its own, the line's gap after
-# Clear, so Clear sits the two left of where it ends alone. With nothing to sort the glyph keeps its
-# place at this much of its strength.
+# The broom before Clear on the New Tab line, where it's drawn: its glyph in a box of its own, the
+# line's gap before Clear, which keeps its place, and the hairline ends as far before the glyph.
 broom-size = 14.0
-broom-unavailable = 0.4
 # The footer: the Space switcher between the Library button and the +. Its row is 34 tall, 6 over
 # the sidebar's foot and as far under the list, and the + is a 16 pt glyph that ends 10 inside the
 # sidebar's 8, so its plate is 10 in. The switcher starts where the Library button ends and keeps
