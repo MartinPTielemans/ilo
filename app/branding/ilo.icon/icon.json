@@ -1,22 +1,21 @@
 {
   "fill-specializations" : [
     { "value" : { "solid" : "srgb:0.95294,0.94118,0.90980,1.00000" } },
-    { "appearance" : "dark", "value" : { "solid" : "srgb:0.08627,0.07843,0.05882,1.00000" } }
+    { "appearance" : "dark", "value" : { "solid" : "srgb:0.08627,0.08627,0.09412,1.00000" } }
   ],
   "groups" : [
     {
       "layers" : [
-        { "image-name" : "dot.svg", "name" : "dot" },
         {
-          "image-name" : "stem.svg", "name" : "stem",
+          "image-name" : "knot.svg", "name" : "knot",
           "fill-specializations" : [
-            { "value" : { "solid" : "srgb:0.08627,0.07843,0.05882,1.00000" } },
+            { "value" : { "solid" : "srgb:0.08627,0.08627,0.09412,1.00000" } },
             { "appearance" : "dark", "value" : { "solid" : "srgb:0.95294,0.94118,0.90980,1.00000" } }
           ]
         }
       ],
-      "shadow" : { "kind" : "neutral", "opacity" : 0.5 },
-      "translucency" : { "enabled" : true, "value" : 0.4 }
+      "shadow" : { "kind" : "none", "opacity" : 0 },
+      "translucency" : { "enabled" : false, "value" : 0 }
     }
   ],
   "supported-platforms" : {
