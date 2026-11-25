@@ -1928,30 +1928,6 @@ impl Browser for Engine {
         browser::agents::wall::available().is_ok()
     }
 
-    fn start_task(
-        &self,
-        agent: &str,
-        asked: &str,
-        home: u64,
-        start: browser::agents::task::Start,
-        _: &mut App,
-    ) {
-        let (agent, asked, window) = (agent.to_string(), asked.to_string(), self.window);
-        agents_core::update(move |agents, cx| {
-            let cli = browser::agents::runner::Cli::from_id(&agent);
-            let started = cli.and_then(|cli| agents.start_task(cli, &asked, None, home, start, cx));
-            // The composer's ↩ opens the view of the task it started alone, or of none.
-            let shell = WINDOWS.with_borrow(|windows| {
-                (windows.iter().find(|w| w.id == window)).and_then(|w| w.shell.upgrade())
-            });
-            if let Some(shell) = shell {
-                shell.update(cx, |shell, _| {
-                    shell.composed_started(started.map(Into::into))
-                });
-            }
-        });
-    }
-
     fn field_window_typing(&self, cx: &mut App) -> bool {
         find_bar::typing(self.window, cx)
             || offer::typing(self.window, cx)
