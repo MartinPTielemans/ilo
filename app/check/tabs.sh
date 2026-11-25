@@ -1699,13 +1699,17 @@ FRAME
   # Alt+F4 in the bar closes the browser window under it, as in Chrome's address field, and the
   # bar's window, which every browser window shares, lives on to open over the next one: Ctrl+T
   # there opens the bar again (#1362). The windows over the page that have no Alt+F4 of the UI's,
-  # such as the dialog, close themselves on it (dialogs.sh).
+  # such as the dialog, close themselves on it (dialogs.sh). The sidebar's "+ New Tab" opens the bar
+  # over the second window, which shows no page, where Ctrl+T gives the Space's resting bar the
+  # keyboard instead (#4140).
   send key n cmd
   expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
   second=$(grep '^browser: window opened ' "$log" | tail -1 | cut -d' ' -f4)
   new_window_bar
-  send key t cmd
-  expect '^browser: command bar shown$' "⌘T didn't open the command bar in the second window"
+  send window "$(grep -c '^browser: window opened ' "$log")"
+  send click 100 148
+  expect '^browser: command new-tab via sidebar$' "a click on \"+ New Tab\" in the second window didn't run New Tab"
+  expect '^browser: command bar shown$' "a click on \"+ New Tab\" didn't open the command bar in the second window"
   post key f4 ctrl
   await "^browser: drive $step done" || fail "the driver didn't finish Alt+F4 in the command bar"
   expect '^browser: command close-window via ui$' "Alt+F4 in the command bar didn't reach the UI"
