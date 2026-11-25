@@ -5,8 +5,7 @@ use crate::*;
 /// A Settings group whose row is chosen from drawings, on its card as Settings draws it.
 #[derive(Clone, Copy)]
 pub(crate) enum Pictures {
-    /// Appearance: Appearance, the one `chosen`, Page zoom, and Sidebar position, `right` chosen,
-    /// and the Top bar under it.
+    /// Appearance: Appearance, the one `chosen`, Page zoom, and Sidebar position, `right` chosen.
     Appearance {
         appearance: browser::theme::Appearance,
         right: bool,
@@ -219,17 +218,6 @@ impl gpui::Render for PicturesPage {
                         POPUP_WIDTH,
                         false,
                     ))]));
-                let top_bar = frame()
-                    .child(row_text(
-                        &look,
-                        "Top bar",
-                        Some(
-                            "The URL field and the sidebar's buttons in a row across the window's \
-                             top, the page under it. ⇧⌘D turns it on and off."
-                                .into(),
-                        ),
-                    ))
-                    .child(switch("top bar", false));
                 // Transparency under Appearance, at the level kept, as Settings has it (#4129).
                 let transparency = browser::transparency::row(
                     &look,
@@ -254,17 +242,14 @@ impl gpui::Render for PicturesPage {
                 }
                 groups.extend([(
                     Some("Layout"),
-                    vec![
-                        pictured(
-                            &look,
-                            "Sidebar position",
-                            "The side of the window the sidebar, the Library and the \
-                                 window's buttons are on."
-                                .into(),
-                            pair,
-                        ),
-                        top_bar,
-                    ],
+                    vec![pictured(
+                        &look,
+                        "Sidebar position",
+                        "The side of the window the sidebar, the Library and the \
+                             window's buttons are on."
+                            .into(),
+                        pair,
+                    )],
                 )]);
                 groups
             }

@@ -110,7 +110,7 @@ content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: la
 # which puts New Tab, under the divider, 39 above where it was. Show Space Header brings the row
 # back for the steps after (#1400).
 post rightclick $(row 3)
-expect "^browser: menu shown $(cased 'New Tab, New Folder…, Show Top Bar, Change Space Icon…, Rename Space…, Edit Theme Color…, Hide Space Header'), " \
+expect "^browser: menu shown $(cased 'New Tab, New Folder…, Change Space Icon…, Rename Space…, Edit Theme Color…, Hide Space Header'), " \
   "the lone unnamed Space's menu didn't offer Hide Space Header after Edit Theme Color…"
 send choose "$(cased 'Hide Space Header')"
 expect '^browser: space header hidden$' "Hide Space Header didn't hide the name row"
@@ -1072,10 +1072,10 @@ show_space "key 1 ctrl" select-space ui "$first" "$a"
 expect "^browser: settled space $first\$" "the first Space's page didn't settle"
 
 # A right-click on the sidebar's empty space, three rows under the Space's one Today row, shows
-# New Tab, New Folder…, Show Top Bar and the Space's menu, and New Tab opens the command bar, as ⌘T
+# New Tab, New Folder… and the Space's menu, and New Tab opens the command bar, as ⌘T
 # does.
 post rightclick $(row 3)
-expect "^browser: menu shown $(cased "New Tab, New Folder…, Show Top Bar, Change Space Icon…, Rename Space…, $colors, $profile, \
+expect "^browser: menu shown $(cased "New Tab, New Folder…, Change Space Icon…, Rename Space…, $colors, $profile, \
 Live Folders › GitHub Pull Requests, \
 ${into}Export as Markdown…, Manage Spaces…, Delete Space")\$" \
   "a right-click under the Space's rows didn't show New Tab, New Folder… and the Space's menu"

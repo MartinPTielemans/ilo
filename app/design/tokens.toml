@@ -1483,22 +1483,17 @@ light-shown = 0x16161829
 [shell]
 # The docked sidebar's width at first, where the card starts.
 sidebar-width = 228.0
-# The card's inset from the window's top, right and bottom edges.
-card-inset = 10.0
-# The radius of the card's corners and the page's in it where the window's own corner is square
-# (full screen, maximized, Windows 10, Linux): Arc's, a circle of 12 pixels in its window at 2×.
-card-radius = 6.0
-# The corner the OS gives a browser window, which the card's corners follow where it rounds them:
-# the card's radius is this less card-inset, never under 0, so the frame between them is as thick
-# round the curve as along the sides (outer = inner + inset, as #361 has the chrome's own). The
-# Mac's is macOS 26's continuous corner on a window with no toolbar, measured in window captures
-# on GitHub's macos-26 runner (16.75) and the owner's Mac (16); the core rounds the page on a
-# circle until it takes the window's curve. Windows 11's is 8 points across, unless the window is
-# maximized or full screen.
-# Linux's compositors don't tell a window how they round it, so it's taken as square.
-window-radius-mac = 16.0
-window-radius-windows = 8.0
-window-radius-linux = 0.0
+# The page area, as the redesign draws it: the card is this far from the window's top, right and
+# bottom edges, and starts at the sidebar's edge, with nothing above it.
+card-inset = 8.0
+# The radius of the card's corners and the page's in it, the same in every window on every OS: the
+# drawing's, whatever corner the OS gives the window.
+card-radius = 10.0
+# The line round the card where it faces the window, a point wide, so a page of the window's own
+# shade keeps its edge. The side that meets the sidebar has none.
+page-outline = 0x00000080
+page-outline-light = 0x00000029
+page-outline-width = 1.0
 # Between the pages of a split view, as in Arc. The core's is the same.
 split-gap = 10.0
 # The glow outside a split view's focused page, in its ring's colour (Arc: ≈ 8 pt).
@@ -1507,23 +1502,31 @@ focus-glow-alpha = 0.5
 sidebar-min = 164.0
 sidebar-max = 500.0
 reveal-inset = 5.0
-# The header's buttons: their plates' tops and the sidebar button's left edge, from the window's,
-# as Arc 1.170's accessibility tree has them, 3 pt past the traffic lights. In full screen, with no
-# traffic lights, its glyph's centre is 29.25 in, so its plate starts at 13.25 (Arc 1.171).
+# The sidebar's first row, as the redesign draws it: 44 high, where the URL field starts
+# (url-field-top). Its parts are 6 in from the sidebar's own 8 at each side (plate-inset) and 8
+# apart: the window's buttons, the sidebar button with a glyph of 18, and at the far side back,
+# forward and reload with glyphs of 16, whose strokes are 1.5 there. A narrow sidebar loses reload,
+# then forward, while back would come nearer the sidebar button than the 8. In full screen, with no
+# window buttons, the sidebar button starts the row. They share the window buttons' line
+# (window-button-y), which the core's frame gives AppKit's on the Mac.
+controls-inset = 6.0
+controls-gap = 8.0
+controls-glyph = 16.0
+controls-sidebar-glyph = 18.0
+# A button's plate under the pointer (ours: the drawing has no pointer): the glyphs' pitch across,
+# so none reaches its neighbour's.
+controls-plate = 24.0
+# Little ilo's bar's buttons: their plates' tops and the first one's left edge, from the window's,
+# 3 pt past the traffic lights, and the pitch of the buttons at its end. The foot's are nav-pitch
+# apart.
 nav-top = 7.5
 sidebar-button-x = 77.0
-full-screen-sidebar-button-x = 13.25
-# Back, forward and reload keep to the sidebar's right edge, 6 in from it and 34 apart, so 2 apart
-# (Arc 1.170: 241/275/309 in a 347 sidebar, 122/156/190 in a 228). A narrow sidebar loses reload,
-# then forward, while back would come nearer the sidebar button than its 13 at 228, as Ardia's do.
-nav-trail = 6.0
 nav-pitch = 34.0
-nav-after-sidebar = 13.0
 nav-size = 32.0
 nav-radius = 6.0
-# Header glyphs are drawn in points in a box this big, at Arc's sizes and centres.
+# The foot's and Little ilo's glyphs are drawn in points in a box this big.
 nav-glyph = 24.0
-url-field-top = 46.0
+url-field-top = 44.0
 url-field-height = 36.0
 url-field-text-x = 21.0
 # The URL field's button, which shows while the pointer is over the sidebar: 30 pt, as Arc's, 3 pt
@@ -1822,13 +1825,18 @@ tile-unthemed-light = 0xffff_ffff
 developer-outline = 0.62
 developer-outline-width = 1.0
 developer-tile = 0.16
-# The header's glyphs (docs/ux-spec.md › Header and URL field): 0.60, and 0.26 for back or forward
-# with nowhere to go, over a hover plate of 0.077. In a window that isn't the user's they all take
-# the disabled 0.26 as it is, under the glyph floor (palette.rs), which would leave the dim unseen:
-# nobody reads them till they're back, as macOS greys the traffic lights, and WCAG's 1.4.11
-# exempts inactive controls. The active window's, a disabled back's too, keep the floor.
+# The sidebar's first row's glyphs, as the redesign draws them: the icon ink, the text colour at
+# 0.70 in both looks, and for back or forward with nowhere to go the quietest ink, 0.42 on a dark
+# window and 0.50 on a light one, where dark ink falls under its reading floor sooner.
+icon-ink = 0.7
+controls-idle = 0.42
+controls-idle-light = 0.5
+# The other header-like glyphs (Little ilo's bar, the panels', the foot's): 0.60, over a hover
+# plate of 0.077. In a window that isn't the user's the first row's take 0.26 as it is, under the
+# glyph floor (palette.rs), which would leave the dim unseen: nobody reads them till they're back,
+# as macOS greys the traffic lights, and WCAG's 1.4.11 exempts inactive controls. The active
+# window's, a back with nowhere to go too, keep the floor.
 nav = 0.6
-nav-disabled = 0.26
 nav-inactive = 0.26
 nav-hovered = 0.077
 # The Space's name and the switcher's icons, on #320's ladder: 0.62, then 0.6 for the Space shown
@@ -1876,10 +1884,6 @@ windows-close-hovered = 0xc42b1c
 # URL field does, so the page has the room under the row the header leaves. The buttons are the
 # header's, their glyphs Lucide's at 18, whose 1.69 pt stroke matches the header glyphs' 1.75.
 little-bar = 46.0
-# Top bar (#3160), off by default: the header's row widened across the window, Little ilo's bar's
-# height, its buttons where they are in the sidebar. The URL field moves into it, centred on its
-# line, from the sidebar's edge to the card's right edge, and the card starts under it.
-top-bar = 46.0
 little-glyph = 18.0
 # Open in <Space> ⌘O | ⌄ ends the bar (Arc 1.168, measured by an outside reverse-engineering,
 # *interim*, #1407), in ilo's look: the words in the body size at medium, its key dimmer after them,
