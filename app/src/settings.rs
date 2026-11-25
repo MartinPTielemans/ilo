@@ -44,10 +44,10 @@ use browser::settings_card::{self, Card, Paging};
 use browser::settings_column::{self, Section};
 use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
-    Act, Chip, Look as RowLook, SLIDE, assistant_row, chevron_slot, chip, command_export,
-    command_text, detailed_row, end, folder_popup, frame, glyph_plate, group, group_lined,
-    mark_row, named_button, named_popup, ring, row, segmented, sent_part, stop_button, stop_chip,
-    stop_popup, stop_restore, stop_switch, text,
+    Act, Chip, Look as RowLook, SLIDE, assistant_name_alone, assistant_row, chevron_slot, chip,
+    command_export, command_text, detailed_row, end, folder_popup, frame, glyph_plate, group,
+    group_lined, mark_row, named_button, named_popup, ring, row, segmented, sent_part, stop_button,
+    stop_chip, stop_popup, stop_restore, stop_switch, text,
 };
 use browser::settings_search::{
     self, EndSearch, Entry, NextControl, PageBottom, PageDown, PageTop, PageUp, PreviousControl,
@@ -293,6 +293,9 @@ pub struct Settings {
     autofill: HashMap<u64, Vec<Saved>>,
     /// The profiles whose logins were asked for since Passwords showed.
     asked: HashSet<u64>,
+    /// The assistants the user clicked on Models while the inside switch is off, looked up and
+    /// shown as usual until the page is left.
+    looked_up: HashSet<Cli>,
     /// Made when Import & Export first shows, so the other browsers' files are read only once the
     /// user asks.
     import: Option<Entity<ImportView>>,
@@ -837,6 +840,8 @@ fn show_now(cx: &mut App) {
             // Each show logs where its controls are drawn again, so check.sh can take a place from
             // this show rather than from one before it, which a hidden window's scroll left (#3841).
             settings.drawn_logged.borrow_mut().clear();
+            // A show is the page shown again: Models' rows show the name alone again.
+            settings.looked_up.clear();
             if settings.section == Section::OtherApps {
                 look_for_clients(cx);
             }
@@ -1185,6 +1190,7 @@ fn view(cx: &mut App) -> Entity<Settings> {
             logins: HashMap::new(),
             autofill: HashMap::new(),
             asked: HashSet::new(),
+            looked_up: HashSet::new(),
             requests_opened: HashSet::new(),
             notes_opened: HashSet::new(),
             requests_all: HashSet::new(),
@@ -1421,6 +1427,8 @@ impl Settings {
         self.refused = None;
         // Read again each time it shows: a profile closed since has the core forget it was asked.
         self.asked.clear();
+        // Models' rows show the name alone again once left, while the inside switch is off.
+        self.looked_up.clear();
         // check.sh waits for this line.
         log!("browser: settings tab {}", section.name());
         self.section = section;
@@ -4029,7 +4037,7 @@ impl Settings {
             };
             self.toggle("other apps", name.clone(), on, set, accent, cx)
         };
-        // A draft until the next wording batch (S30): off says what off does; on, the row is bare.
+        // S30, batch 12: off says what off does; on, the row is bare.
         let line = (!on).then(|| "Off: no app connects.".into());
         setting(&self.look, name, line, vec![switch])
     }
