@@ -161,7 +161,6 @@ pub struct Ink {
 
 impl Ink {
     pub fn new(dark: bool) -> Ink {
-        let pick = |dark_one: u32, light_one: u32| rgba(if dark { dark_one } else { light_one });
         let ink = if dark { Tone::Dark } else { Tone::Light }.ink();
         let at = |a: f32| Rgba { a, ..ink };
         Ink {
@@ -179,7 +178,10 @@ impl Ink {
             icon: at(ICON_INK),
             field: at(FIELD_PLATE),
             button: at(BUTTON_PLATE),
-            shown: pick(form::SHOWN, form::LIGHT_SHOWN),
+            shown: match dark {
+                true => rgba(form::SHOWN),
+                false => at(form::LIGHT_SHOWN),
+            },
         }
     }
 }

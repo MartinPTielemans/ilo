@@ -1539,18 +1539,21 @@ fn the_view_imports_what_the_user_picks(cx: &mut TestAppContext) {
     });
 }
 
-/// Each state's one button, the one that does what it's for, is in the host's accent: Settings'
-/// green, or the first launch's Signal. The list has none, as each browser's Import… is one of
-/// many, and an import going on by itself none until a profile hasn't opened, when it's Try Again.
-/// At the end it's Add Favorites while there are favorites to add, else Done.
+/// Each state's one button, the one that does what it's for, is the host's primary: in Settings
+/// the text colour, never green (the owner's), or the first launch's Signal. The list has none, as
+/// each browser's Import… is one of many, and an import going on by itself none until a profile
+/// hasn't opened, when it's Try Again. At the end it's Add Favorites while there are favorites to
+/// add, else Done.
 #[gpui::test]
-fn each_states_one_button_is_in_the_hosts_accent(cx: &mut TestAppContext) {
+fn each_states_one_button_is_the_hosts_primary(cx: &mut TestAppContext) {
     let signal = gpui::rgb(crate::tokens::shell::onboarding::SIGNAL);
     let ground = Look::on(gpui::rgb(crate::palette::INK), gpui::white().into(), signal);
-    assert_eq!(ground.accent, signal);
+    assert_eq!(ground.primary, signal);
+    let settings = Look::settings(false);
+    assert_ne!(settings.primary, gpui::rgb(crate::palette::NO_THEME_ACCENT));
     assert_eq!(
-        Look::settings(false).accent,
-        gpui::rgb(crate::palette::NO_THEME_ACCENT)
+        settings.primary, settings.on,
+        "Settings' main button is its text colour"
     );
     let primary = |view: &Entity<ImportView>, cx: &mut TestAppContext| {
         view.read_with(cx, |view, _| view.primary())
@@ -1560,7 +1563,7 @@ fn each_states_one_button_is_in_the_hosts_accent(cx: &mut TestAppContext) {
     let browser = Rc::new(Browser::new(None));
     let host: Rc<dyn Host> = browser.clone();
     let view = cx.new(|_| ImportView::new(host, false).look(ground));
-    view.read_with(cx, |view, _| assert_eq!(view.look.accent, signal));
+    view.read_with(cx, |view, _| assert_eq!(view.look.primary, signal));
     assert_eq!(primary(&view, cx), None);
     view.update(cx, |view, cx| view.pick(0, cx));
     assert_eq!(primary(&view, cx), Some("Import"));
