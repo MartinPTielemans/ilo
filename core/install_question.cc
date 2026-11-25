@@ -12,6 +12,7 @@
 #include "base/no_destructor.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task/single_thread_task_runner.h"
+#include "browser_core/agent_permissions.h"
 #include "browser_core/host.h"
 #include "browser_core/window.h"
 #include "chrome/browser/extensions/browser_window_util.h"
@@ -49,6 +50,11 @@ void InstallQuestion::Ask(std::unique_ptr<ExtensionInstallPromptShowParams> show
                           extensions::ExtensionInstallPromptClient::DoneCallback done,
                           std::unique_ptr<extensions::InstallPromptData> prompt) {
   content::WebContents* contents = show_params->GetParentWebContents();
+  // Ended as the question of a tab that has gone is.
+  if (NoExtensionInstall(contents)) {
+    std::move(done).Run(DoneCallbackPayload(Result::ABORTED));
+    return;
+  }
   tabs::TabInterface* tab = contents ? tabs::TabInterface::MaybeGetFromContents(contents) : nullptr;
   Window* window = tab ? Window::ForBrowser(tab->GetBrowserWindowInterface()) : nullptr;
   if (!window) {

@@ -31,6 +31,8 @@ use super::tier::Tier;
 
 pub mod launch;
 pub mod leftovers;
+#[cfg(unix)]
+mod links;
 pub mod listener;
 /// The Mac's answers for ending what a walled task left running, which nothing asks yet.
 #[cfg(target_os = "macos")]
@@ -91,6 +93,12 @@ impl Granted {
     /// Whether the folder at its path is still the one picked.
     fn still_picked(&self) -> bool {
         Identity::of(&self.root) == Some(self.identity)
+    }
+
+    /// Whether a handle opened at its path holds the folder picked, and not one put in its place.
+    #[cfg(unix)]
+    fn is_open(&self, dir: std::os::fd::BorrowedFd) -> bool {
+        Identity::of_open(dir) == Some(self.identity)
     }
 }
 
@@ -226,6 +234,20 @@ impl Granted {
         }
     }
 
+    /// A folder of the test's own, which is there, with its identity, as the panel would give it.
+    #[cfg(test)]
+    pub(crate) fn at_for_test(root: PathBuf) -> Granted {
+        let identity = Identity::of(&root).expect("the test's folder is there");
+        Granted { root, identity }
+    }
+
+    /// A folder granted at `root` while `was` was there: what's at `root` now isn't it.
+    #[cfg(test)]
+    pub(crate) fn was_for_test(root: PathBuf, was: &Path) -> Granted {
+        let identity = Identity::of(was).expect("the test's folder is there");
+        Granted { root, identity }
+    }
+
     /// The same by a name of the test's own, for a test of where a folder's name reaches.
     #[cfg(test)]
     pub(crate) fn named_for_test(name: &str) -> Granted {
@@ -233,6 +255,13 @@ impl Granted {
             root: Path::new("/nonexistent").join(name),
             ..Granted::for_test()
         }
+    }
+
+    /// A real folder of a test's own, granted as the folder panel grants one, for a test of what
+    /// is read in it: made here, so the panel's file and this one stay the only makers.
+    #[cfg(test)]
+    pub(crate) fn picked_for_test(folder: PathBuf) -> Granted {
+        Granted::picked(folder).expect("the test's folder is there")
     }
 }
 
@@ -259,7 +288,7 @@ pub fn put_up(task: &WallFor) -> Result<Wall, WallRefused> {
 /// A link in the granted folder that leads out of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LeavingLink {
-    /// Where it is, under the folder.
+    /// Where it is, relative to the folder.
     pub path: PathBuf,
     /// Where it points, as read at the walk.
     pub target: PathBuf,
@@ -279,6 +308,15 @@ pub struct Walked {
     /// some, so the list is every leaving link in the folder, offered to reveal only and never to
     /// delete.
     pub every_leaving: bool,
+    /// Folders the walk couldn't wholly read: one it couldn't open or list, deeper than it goes, on
+    /// another device, or holding an entry it couldn't look at. Each counts once.
+    pub unread: usize,
+    /// The first of them, relative to the folder, for the reveal. It is the user's own folder
+    /// layout, so it stays in memory for the line: never a log line, the 30-day file or an
+    /// agent's answer.
+    pub first_unread: Option<PathBuf>,
+    /// Set when the folder itself couldn't be opened as the task ended, so nothing in it was read.
+    pub root_unread: bool,
     /// Set when the walk stopped short, so the line says it checked part of the folder.
     pub stopped: Option<Stop>,
 }
@@ -291,17 +329,30 @@ pub struct Removed {
 }
 
 /// The links the task made, moved or retargeted that leave its folder: once, as the task ends,
-/// off the UI thread. No wall has a folder until a launcher is built, so there are none yet.
+/// off the UI thread, never on a timer or while the task runs. It reads directories and links only
+/// (links.rs), and stops at a million entries or 30 s, saying so, and at 64 folders deep, counting
+/// what's deeper as unread.
+#[cfg(unix)]
 pub fn links_outside(wall: &Wall) -> Walked {
-    let _ = wall;
+    links::outside(wall, links::LIMITS)
+}
+
+/// Windows walls no task in, so no wall has a folder.
+#[cfg(not(unix))]
+pub fn links_outside(_: &Wall) -> Walked {
     Walked::default()
 }
 
-/// The user's Delete Links: exactly the listed links, each only if it is still a link with the
-/// target the walk read, still leading out. No task can ask for it, and a list of every leaving
-/// link offers none.
+/// The user's Delete Links: exactly the listed links, each only if it is still a link the task
+/// made, with the target the walk read, still leading out. No task can ask for it, and where the
+/// folder keeps no change time to trust, the list was every leaving link, and it deletes none.
+#[cfg(unix)]
 pub fn remove_links(wall: &Wall, links: &[LeavingLink]) -> Removed {
-    let _ = wall;
+    self::links::remove(wall, links)
+}
+
+#[cfg(not(unix))]
+pub fn remove_links(_: &Wall, links: &[LeavingLink]) -> Removed {
     Removed {
         removed: 0,
         left: links.len(),
@@ -488,7 +539,8 @@ mod tests {
                 }
             }
         }
-        // This file's tests alone, until the panel's file joins the list by name.
-        assert_eq!(makers, ["wall.rs"]);
+        // The composer's panel, and this file's tests.
+        makers.sort();
+        assert_eq!(makers, ["folder_panel.rs", "wall.rs"]);
     }
 }

@@ -21,6 +21,7 @@
 #include "base/types/expected.h"
 #include "base/values.h"
 #include "browser_core/agent_file_field_rule.h"
+#include "browser_core/agent_permission_rule.h"
 #include "browser_core/agent_reply_limit.h"
 #include "browser_core/public/browser_core.h"
 #include "browser_core/withheld_fields.h"
@@ -112,6 +113,8 @@ class AgentPage : public content::WebContentsObserver,
     // Whether requests the page made were still open then, or had only just ended, though it was
     // neither loading nor changing, as a page that polls or sends beacons keeps them (#2355).
     bool requests = false;
+    // A click's: the field it landed on whose list or picker a click doesn't open on this page.
+    agent_permission_rule::ShutField shut = agent_permission_rule::ShutField::kNone;
     // A Fill's: the user's files, whether they go in, and who hears whether they did, in place of
     // the agent.
     std::vector<std::string> files;
@@ -220,6 +223,15 @@ class AgentPage : public content::WebContentsObserver,
   // Types the job's text into |element|, which has the keyboard, with what it held selected.
   void TypeInto(int64_t element, bool submit);
   void TypeKeys(std::u16string text, bool submit);
+  // Types the job's text, a date or time value, into |element|'s segments where it's a date or
+  // time input that shows them, and as keys otherwise.
+  void TypeDate(int64_t element, bool submit);
+  // Focuses each of |segments| from |next| on, in its frame's |slot|, and presses its |keys|.
+  void TypeSegments(int slot,
+                    std::vector<int> segments,
+                    std::vector<std::vector<base::DictValue>> keys,
+                    size_t next,
+                    bool submit);
   void PressKey(const std::string& key, base::OnceClosure then);
   // Hears the page's requests, then turns the wheel, so the answer waits for what the scroll
   // starts loading.

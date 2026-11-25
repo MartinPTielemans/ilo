@@ -56,6 +56,7 @@ fn conversation(lines: Vec<Line>) -> Conversation {
         writing: false,
         tier: Default::default(),
         only_added: false,
+        folder: None,
     }
 }
 

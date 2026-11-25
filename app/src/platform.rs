@@ -259,8 +259,6 @@ unsafe extern "C" {
     pub fn host_show_reveal(ui_view: *mut c_void, width: f64);
     pub fn host_hide_reveal(ui_view: *mut c_void);
     pub fn host_detent();
-    pub fn host_dock_dot_launch(profile_dir: *const c_char);
-    pub fn host_dock_dot(colored: bool, color: u32);
     pub fn host_app_active() -> bool;
     pub fn host_needs_you_badge(count: c_int);
     #[cfg(not(target_os = "linux"))]
@@ -336,6 +334,9 @@ unsafe extern "C" {
     pub fn host_add_settings(settings_view: *mut c_void);
     pub fn host_show_settings();
     pub fn host_hide_settings();
+    pub fn host_add_first_run(first_run_view: *mut c_void);
+    pub fn host_show_first_run();
+    pub fn host_close_first_run();
     pub fn host_close_other_window() -> bool;
     #[cfg(not(target_os = "linux"))]
     pub fn host_ask(

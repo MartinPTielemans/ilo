@@ -18,7 +18,8 @@ use std::f32::consts::FRAC_PI_2;
 
 use gpui::{
     AnyElement, AnyView, Bounds, Context, Corners, FontWeight, Hsla, MouseButton, Pixels, Radians,
-    SharedString, Size, Transformation, Window, canvas, div, point, prelude::*, px, rgb, size, svg,
+    SharedString, Size, Task, Transformation, Window, canvas, div, point, prelude::*, px, rgb,
+    size, svg,
 };
 
 use super::{
@@ -70,6 +71,10 @@ pub(super) struct Closing {
     /// page's dialog is drawn over a task's conversation.
     aside: Option<TaskArea>,
 }
+/// How long, in seconds, a page going back waits for a picture of itself as it is to shrink from,
+/// as the one it came out of its thumbnail with is the conversation's, smaller and older: past it,
+/// it goes back with that one. The core answers in a frame or two where the page draws.
+pub(super) const PICTURE_WAIT: f32 = 0.1;
 
 /// A task's page watched in the page area.
 struct Watched {
@@ -89,6 +94,9 @@ struct Watched {
     by_ilo: bool,
     /// Held behind its picture since ilo opened it, till a timer of ARM lets it in place.
     guarded: bool,
+    /// While it waits to go back for a picture of itself as it is: the one wait that bounds it,
+    /// which the answer ends by dropping it.
+    waiting: Option<Task<()>>,
 }
 
 /// A page watched as its tile grown to the area: it keeps its own size, takes no input and hears
@@ -562,6 +570,7 @@ impl Shell {
                 tile,
                 by_ilo,
                 guarded,
+                waiting: None,
             },
             cx,
         );
@@ -890,6 +899,12 @@ impl Shell {
             _ => {
                 let request = next_request();
                 page.zoom = Zoom::Asked(request);
+                // A core that never answers leaves it going back with the picture it has (#4247).
+                page.waiting = Some(cx.spawn(async move |shell, cx| {
+                    let wait = Duration::from_secs_f32(PICTURE_WAIT);
+                    cx.background_executor().timer(wait).await;
+                    (shell.update(cx, |shell, cx| shell.task_page_unpictured(request, cx))).ok();
+                }));
                 self.browser.page_picture(tab, request, cx);
             }
         }
@@ -1231,6 +1246,7 @@ impl Shell {
                     tile,
                     by_ilo: false,
                     guarded: false,
+                    waiting: None,
                     ..page
                 };
                 self.show_watched(page, cx);
@@ -1312,6 +1328,7 @@ impl Shell {
         if page.zoom != Zoom::Asked(request) {
             return false;
         }
+        page.waiting = None;
         if let Some(picture) = picture {
             if let Some(old) = page.picture.replace(picture).filter(|_| page.asked) {
                 self.stale_pictures.push(old.image());
@@ -1322,6 +1339,23 @@ impl Shell {
         self.show_task_page_away(cx);
         cx.notify();
         true
+    }
+
+    /// The page waited `PICTURE_WAIT` for the picture `request` asked, which never came: it goes
+    /// back with the picture it has, and one that comes after is nothing to the area.
+    fn task_page_unpictured(&mut self, request: u64, cx: &mut Context<Self>) {
+        let Some(page) = self.task_area.as_mut().and_then(|area| area.page.as_mut()) else {
+            return;
+        };
+        if page.zoom != Zoom::Asked(request) {
+            return;
+        }
+        page.waiting = None;
+        page.zoom = Zoom::In(Instant::now());
+        // The core's fault (#4253), in the run's log, where the zoom alone wouldn't show it.
+        log!("browser: task page {} back unpictured", page.tab);
+        self.show_task_page_away(cx);
+        cx.notify();
     }
 
     /// A press on the page zooming ends its zoom out at once, for the page itself to take what
@@ -1627,27 +1661,31 @@ impl Shell {
                 .border(px(RING))
                 .border_color(rgb(COLOR))
         });
-        let press = div()
-            .id("task-page-tile")
-            .absolute()
-            .left(at.left())
-            .top(at.top())
-            .w(at.size.width)
-            .h(at.size.height)
-            .occlude()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|shell, _, _, cx| {
-                    cx.stop_propagation();
-                    shell.press_watch_tile(cx);
-                }),
-            );
+        // Going back, the tile takes no press: the conversation's pictures under it do, as they do
+        // under a page going back into its picture (#3496, #4267).
+        let press = (!self.task_page_going_back()).then(|| {
+            div()
+                .id("task-page-tile")
+                .absolute()
+                .left(at.left())
+                .top(at.top())
+                .w(at.size.width)
+                .h(at.size.height)
+                .occlude()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|shell, _, _, cx| {
+                        cx.stop_propagation();
+                        shell.press_watch_tile(cx);
+                    }),
+                )
+        });
         div()
             .absolute()
             .size_full()
             .child(card(place, radius, self.palette.page).opacity(zoom))
             .children(ring)
-            .child(press)
+            .children(press)
             .into_any_element()
     }
 

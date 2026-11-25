@@ -8,7 +8,6 @@ use gpui::{App, Bounds, Context, Pixels, Point, point, px, size};
 
 use std::time::Duration;
 
-use crate::dock_dot::QUIET;
 use crate::folder_preview::{self, Ask, Item};
 use crate::hover_card::{Action, Anchor, Card, Event, Hover, Icon, Opening, Rest};
 use crate::recent::{self, Answer};
@@ -18,11 +17,11 @@ use crate::{icon_picker, theme_picker};
 use super::recent_downloads::{age, now};
 use super::{PLATE_INSET, REVEAL_INSET, Row, Shell, host};
 
-/// How long the switches are quiet before a page they hid is pictured: the Dock dot's `QUIET`. A
-/// page the core still keeps on screen then, as a switch does until the new one draws, it holds
-/// as captured until the copy answers (core/capture.cc), so the picture needn't wait it out
-/// (#1658).
-pub(super) const PICTURE_HIDDEN: Duration = QUIET;
+/// How long the switches are quiet before a page they hid is pictured: past a Space switch's
+/// slide, which has settled by 300 ms, and long enough to take quick switches as one. A page the
+/// core still keeps on screen then, as a switch does until the new one draws, it holds as
+/// captured until the copy answers (core/capture.cc), so the picture needn't wait it out (#1658).
+pub(super) const PICTURE_HIDDEN: Duration = Duration::from_millis(400);
 impl Shell {
     /// The pointer came onto `row` or left it: a tab's row or tile rests for its card, and leaving
     /// it lets the card go. Folders, split views' rows and New Tab have none, and none shows while

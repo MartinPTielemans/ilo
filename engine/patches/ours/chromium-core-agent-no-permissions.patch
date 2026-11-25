@@ -1,0 +1,481 @@
+Lets the core refuse a page what is the user's device's or person's to give, and end a question
+the browser would put to the user for it, which it does for a page in an agent's Space. Hooks only:
+each is one null check where the core has set none, and which page is refused what is the core's
+(//browser_core/agent_permission_rule.h).
+
+components/permissions/permission_context_base.cc. PermissionContextBase::GetPermissionStatus asks
+g_browser_core_no_permission for the frame and the kind after the kill switch and before any saved
+setting is read, and answers DENIED from ACTOR_OVERRIDE, the answer Chrome gives a page its own
+actor works on, so every reader of a status and every request sees one answer. RequestPermission's
+ACTOR_OVERRIDE case tells g_browser_core_permission_refused, so the core hears of a request
+refused so and never of a read.
+
+components/permissions/permission_request_manager.cc. PermissionRequestManager::AddRequest asks
+g_browser_core_takes_permission_request first, with the frame and the request. One the core takes
+ends with the call: the manager owns the request and frees it as it returns, before it is queued,
+shown, counted or recorded.
+
+chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc.
+MediaCaptureDevicesDispatcher::ProcessMediaAccessRequest asks g_browser_core_no_media_access first,
+before any handler has the request and so before any picker, and answers a refused one
+PERMISSION_DENIED with no devices.
+
+chrome/browser/printing/print_view_manager.cc.
+PrintViewManager::RejectPrintPreviewRequestIfRestricted, which every print preview passes before
+its dialog is made (a page's own print call, its PDF viewer's button, the browser's Print command),
+asks g_browser_core_no_print for the frame, saying whether the browser's own command started it.
+One the core refuses takes the road Chrome has for a restricted preview: the print ends and its
+page goes on.
+
+chrome/browser/webshare/share_service_impl.cc. ShareServiceImpl::RunShareOperation, which every
+share a page asks for passes once Chrome's own checks have let it by and before a file of it is
+read or the system's sheet is shown, asks g_browser_core_no_share for the frame after Chrome's own
+refusals there, and answers a refused one as it answers those: PERMISSION_DENIED.
+
+chrome/browser/ui/web_applications/web_app_dialog_utils.cc. ShowWebAppInstallFlowDialog, which
+every dialog that asks whether to install a page as an app passes as it would be made (a page's
+own install prompt, the browser's install commands, Chrome's own offer), asks
+g_browser_core_no_app_install for the page beside Chrome's own refusal there for a page that
+isn't shown, and a refused one ends the same way: the install is declined with no dialog made.
+
+chrome/browser/download/chrome_download_manager_delegate.cc.
+ChromeDownloadManagerDelegate::RequestConfirmation, which Chrome asks before it puts a sheet up
+for where a download's file goes, asks g_browser_core_takes_download_question first, with the
+download, the path Chrome suggested, why it asks and the callback. One the core takes it has
+answered through the callback, and no sheet is made.
+
+content/browser/file_system_access/file_system_access_handle_base.cc. The constructor
+FileSystemAccessHandleBase::FileSystemAccessHandleBase, which every handle on a file or a folder
+runs, asks g_browser_core_no_file_handle for its frame, saying whether the handle is in the site's
+own storage. One the core refuses keeps fixed denied grants in place of those it came with, under
+the same path and name, as a handle in a third-party context does: every answer about a handle
+reads what it keeps, so each is a denial and nothing asks the user. The pointer is exported, as
+the clipboard's is.
+
+content/browser/renderer_host/clipboard_host_impl.cc. FrameClipboardContext::CanWrite asks
+g_browser_core_no_clipboard_write for its frame, where every write of a page's clipboard host is
+already asked whether its context may write; a refused write is dropped as one from a context that
+may not write is. The pointer is exported, since content is a library of its own in a component
+build and the core is outside it.
+
+content/browser/renderer_host/render_frame_host_impl.cc and
+content/browser/web_contents/web_contents_impl.cc. RenderFrameHostImpl::ShowPopupMenu, which shows
+the system's menu for a select where the system draws its list, asks g_browser_core_no_page_popup
+for the frame beside its own refusal for a tab that isn't shown, and answers a refused one the
+same way: the page hears that its list didn't open. WebContentsImpl::ShowCreatedWidget, which
+shows a popup window a page draws by itself (a select's list elsewhere, a date field's calendar, a
+color field's picker), asks the same pointer for the frame that made it beside its own refusal for
+a window that isn't focused, and ends a refused one the same way. One pointer, defined in the
+first file and exported as the clipboard's is; it says which of the two it asks for.
+
+diff --color -ruN a/chrome/browser/download/chrome_download_manager_delegate.cc b/chrome/browser/download/chrome_download_manager_delegate.cc
+--- a/chrome/browser/download/chrome_download_manager_delegate.cc
++++ b/chrome/browser/download/chrome_download_manager_delegate.cc
+@@ -186,6 +186,16 @@
+ #include "components/enterprise/connectors/core/reporting_event_router.h"  // nogncheck crbug.com/40147906
+ #endif  // BUILDFLAG(ENTERPRISE_CLOUD_CONTENT_ANALYSIS)
+ #endif  // BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
++
++// browser_core: whether the core takes Chrome's question of where |download|'s
++// file goes, before any sheet is made for it, which it does for a download of
++// a page in an agent's Space the user doesn't hold (//browser_core/hooks.h).
++// One it takes it has answered through |callback|.
++bool (*g_browser_core_takes_download_question)(
++    download::DownloadItem* download,
++    const base::FilePath& suggested_path,
++    DownloadConfirmationReason reason,
++    DownloadTargetDeterminerDelegate::ConfirmationCallback* callback) = nullptr;
+ 
+ using content::BrowserThread;
+ using content::DownloadManager;
+@@ -1633,6 +1643,14 @@
+     DownloadTargetDeterminerDelegate::ConfirmationCallback callback) {
+   CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
+   CHECK(!download->IsTransient(), base::NotFatalUntil::M161);
++
++  // browser_core: a question the core takes is answered already, and no sheet
++  // is made for it.
++  if (g_browser_core_takes_download_question &&
++      g_browser_core_takes_download_question(download, suggested_path, reason,
++                                             &callback)) {
++    return;
++  }
+ 
+ // TODO(xingliu): We should abstract a DownloadFilePicker interface and make all
+ // platform use it.
+diff --color -ruN a/chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc b/chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc
+--- a/chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc
++++ b/chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc
+@@ -64,6 +64,14 @@
+ #include "extensions/common/extension.h"
+ #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+ 
++// browser_core: whether the page in |contents| is refused |request| before any
++// handler has it, and so before any picker, which the core says of the camera,
++// the microphone and a screen's, window's or tab's picture asked in an agent's
++// Space (//browser_core/hooks.h).
++bool (*g_browser_core_no_media_access)(
++    content::WebContents* contents,
++    const content::MediaStreamRequest& request) = nullptr;
++
+ using blink::MediaStreamDevices;
+ using content::BrowserThread;
+ using content::MediaCaptureDevices;
+@@ -140,6 +148,16 @@
+     content::MediaResponseCallback callback,
+     const extensions::Extension* extension) {
+   CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M161);
++
++  // browser_core: a request the core refuses ends here, as one the user
++  // denied.
++  if (g_browser_core_no_media_access &&
++      g_browser_core_no_media_access(web_contents, request)) {
++    std::move(callback).Run(
++        blink::mojom::StreamDevicesSet(),
++        blink::mojom::MediaStreamRequestResult::PERMISSION_DENIED, nullptr);
++    return;
++  }
+ 
+ #if BUILDFLAG(IS_ANDROID)
+   // Kill switch for getDisplayMedia() on browser side to prevent renderer from
+diff --color -ruN a/chrome/browser/printing/print_view_manager.cc b/chrome/browser/printing/print_view_manager.cc
+--- a/chrome/browser/printing/print_view_manager.cc
++++ b/chrome/browser/printing/print_view_manager.cc
+@@ -57,6 +57,13 @@
+ 
+ using content::BrowserThread;
+ 
++// browser_core: whether the page in |frame| is refused a print preview, which
++// the core says of a page in an agent's Space the user doesn't hold
++// (//browser_core/hooks.h). |by_users_command| says the browser's own Print
++// command started it, not the page.
++bool (*g_browser_core_no_print)(content::RenderFrameHost* frame,
++                                bool by_users_command) = nullptr;
++
+ namespace printing {
+ 
+ namespace {
+@@ -311,6 +318,14 @@
+   policy::DlpContentManager::Get()->CheckPrintingRestriction(
+       web_contents(), rfh_id, std::move(callback));
+ #else
++  // browser_core: a preview the core refuses ends as a restricted one does,
++  // and its page goes on.
++  if (g_browser_core_no_print &&
++      g_browser_core_no_print(content::RenderFrameHost::FromID(rfh_id),
++                              print_preview_state_ == USER_INITIATED_PREVIEW)) {
++    std::move(callback).Run(/*should_proceed=*/false);
++    return;
++  }
+   std::move(callback).Run(/*should_proceed=*/true);
+ #endif
+ }
+diff --color -ruN a/chrome/browser/ui/web_applications/web_app_dialog_utils.cc b/chrome/browser/ui/web_applications/web_app_dialog_utils.cc
+--- a/chrome/browser/ui/web_applications/web_app_dialog_utils.cc
++++ b/chrome/browser/ui/web_applications/web_app_dialog_utils.cc
+@@ -68,6 +68,11 @@
+ #include "components/metrics/structured/structured_metrics_client.h"  // nogncheck
+ #endif
+ 
++// browser_core: whether the page in |contents| is refused the dialog that
++// asks whether to install it as an app, which the core says of a page in an
++// agent's Space the user doesn't hold (//browser_core/hooks.h).
++bool (*g_browser_core_no_app_install)(content::WebContents* contents) = nullptr;
++
+ namespace web_app {
+ 
+ namespace {
+@@ -98,8 +103,12 @@
+   // in the middle of which the installation might be cancelled if the user
+   // changes tabs, or closes the web contents. Explicitly exit the install
+   // flow earlier if that happens.
++  // browser_core: an install the core refuses ends here the same way, with no
++  // dialog made.
+   if (!initiator_web_contents ||
+-      initiator_web_contents->GetVisibility() == content::Visibility::HIDDEN) {
++      initiator_web_contents->GetVisibility() == content::Visibility::HIDDEN ||
++      (g_browser_core_no_app_install &&
++       g_browser_core_no_app_install(initiator_web_contents.get()))) {
+     CHECK(install_tracker);
+     install_tracker->ReportResult(webapps::MlInstallUserResponse::kIgnored);
+     std::move(web_app_acceptance_callback)
+diff --color -ruN a/chrome/browser/webshare/share_service_impl.cc b/chrome/browser/webshare/share_service_impl.cc
+--- a/chrome/browser/webshare/share_service_impl.cc
++++ b/chrome/browser/webshare/share_service_impl.cc
+@@ -42,6 +42,11 @@
+ #include "components/safe_browsing/core/browser/db/database_manager.h"
+ #include "components/safe_browsing/core/browser/db/v5_get_hash_protocol_manager.h"
+ #endif
++
++// browser_core: whether the page in |frame| is refused the system's sheet to
++// share with, which the core says of a page in an agent's Space the user
++// doesn't hold (//browser_core/hooks.h).
++bool (*g_browser_core_no_share)(content::RenderFrameHost* frame) = nullptr;
+ 
+ // IsDangerousFilename() and IsDangerousMimeType() should be kept in sync with
+ // //third_party/blink/renderer/modules/webshare/FILE_TYPES.md
+@@ -336,6 +341,14 @@
+     return;
+   }
+ 
++  // browser_core: a share the core refuses is answered as one from a tab that
++  // isn't in front is, before a file is read or anything is shown.
++  if (g_browser_core_no_share &&
++      g_browser_core_no_share(&render_frame_host())) {
++    std::move(callback).Run(blink::mojom::ShareError::PERMISSION_DENIED);
++    return;
++  }
++
+ #if BUILDFLAG(IS_CHROMEOS)
+   sharesheet_client_.Share(title, text, share_url, std::move(files),
+                            std::move(callback));
+diff --color -ruN a/components/permissions/permission_context_base.cc b/components/permissions/permission_context_base.cc
+--- a/components/permissions/permission_context_base.cc
++++ b/components/permissions/permission_context_base.cc
+@@ -77,6 +77,15 @@
+ #include "ui/android/window_android.h"
+ #endif
+ 
++// browser_core: whether the page in |frame| is refused the permission |type|
++// whatever is saved for its site, which the core says of a page in an agent's
++// Space, and what tells the core that a request for one, not a read of its
++// status, was refused so (//browser_core/hooks.h).
++bool (*g_browser_core_no_permission)(content::RenderFrameHost* frame,
++                                     ContentSettingsType type) = nullptr;
++void (*g_browser_core_permission_refused)(content::RenderFrameHost* frame,
++                                          ContentSettingsType type) = nullptr;
++
+ namespace permissions {
+ namespace {
+ 
+@@ -236,6 +245,12 @@
+                                     content_settings_type_);
+         break;
+       case content::PermissionStatusSource::ACTOR_OVERRIDE:
++        // browser_core: the core hears of a request refused so, which a read
++        // of the status never comes to.
++        if (g_browser_core_permission_refused) {
++          g_browser_core_permission_refused(rfh, content_settings_type_);
++        }
++        break;
+       case content::PermissionStatusSource::FENCED_FRAME:
+       case content::PermissionStatusSource::INSECURE_ORIGIN:
+       case content::PermissionStatusSource::VIRTUAL_URL_DIFFERENT_ORIGIN:
+@@ -365,6 +380,15 @@
+   if (IsPermissionKillSwitchOn()) {
+     return content::PermissionResult(
+         PermissionStatus::DENIED, content::PermissionStatusSource::KILL_SWITCH);
++  }
++
++  // browser_core: a page the core refuses this kind is answered as Chrome
++  // answers a page its own actor works on, before any saved setting is read.
++  if (render_frame_host && g_browser_core_no_permission &&
++      g_browser_core_no_permission(render_frame_host, content_settings_type_)) {
++    return content::PermissionResult(
++        PermissionStatus::DENIED,
++        content::PermissionStatusSource::ACTOR_OVERRIDE);
+   }
+ 
+   if (base::FeatureList::IsEnabled(features::kGlicActorPermissionsAutoReject) &&
+diff --color -ruN a/components/permissions/permission_request_manager.cc b/components/permissions/permission_request_manager.cc
+--- a/components/permissions/permission_request_manager.cc
++++ b/components/permissions/permission_request_manager.cc
+@@ -71,6 +71,13 @@
+ #include "components/permissions/android/android_permission_util.h"
+ #endif
+ 
++// browser_core: whether the core takes |request|, asked by the page in
++// |frame|, before anything is made of it. One it takes it has answered or left
++// unanswered itself, and it keeps no pointer to it (//browser_core/hooks.h).
++bool (*g_browser_core_takes_permission_request)(
++    content::RenderFrameHost* frame,
++    permissions::PermissionRequest* request) = nullptr;
++
+ namespace permissions {
+ 
+ const char kAbusiveNotificationRequestsEnforcementMessage[] =
+@@ -222,6 +229,13 @@
+   DCHECK(source_frame);
+   DCHECK_EQ(content::WebContents::FromRenderFrameHost(source_frame),
+             web_contents());
++
++  // browser_core: a request the core takes is never queued, shown, counted or
++  // recorded, and ends with this call.
++  if (g_browser_core_takes_permission_request &&
++      g_browser_core_takes_permission_request(source_frame, request.get())) {
++    return;
++  }
+ 
+   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+           switches::kDenyPermissionPrompts)) {
+diff --color -ruN a/content/browser/file_system_access/file_system_access_handle_base.cc b/content/browser/file_system_access/file_system_access_handle_base.cc
+--- a/content/browser/file_system_access/file_system_access_handle_base.cc
++++ b/content/browser/file_system_access/file_system_access_handle_base.cc
+@@ -5,6 +5,7 @@
+ #include "content/browser/file_system_access/file_system_access_handle_base.h"
+ 
+ #include <memory>
++#include <utility>
+ #include <vector>
+ 
+ #include "base/barrier_callback.h"
+@@ -23,8 +24,10 @@
+ #include "content/browser/file_system_access/file_system_access_manager_impl.h"
+ #include "content/browser/file_system_access/file_system_access_safe_move_helper.h"
+ #include "content/browser/file_system_access/file_system_access_transfer_token_impl.h"
++#include "content/browser/file_system_access/fixed_file_system_access_permission_grant.h"
+ #include "content/browser/web_contents/web_contents_impl.h"
+ #include "content/public/browser/file_system_access_permission_context.h"
++#include "content/public/browser/global_routing_id.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/common/content_client.h"
+ #include "mojo/public/cpp/bindings/message.h"
+@@ -36,6 +39,14 @@
+ #include "third_party/blink/public/common/storage_key/storage_key.h"
+ #include "third_party/blink/public/mojom/file_system_access/file_system_access_error.mojom-forward.h"
+ 
++// browser_core: whether a handle made for |frame| is refused the user's files,
++// which the core says of a page in an agent's Space (//browser_core/hooks.h).
++// |site_storage| says the handle is in the site's own storage, which is no
++// file of the user's. Exported, as the core is outside this component.
++CONTENT_EXPORT bool (*g_browser_core_no_file_handle)(
++    content::GlobalRenderFrameHostId frame,
++    bool site_storage) = nullptr;
++
+ namespace content {
+ 
+ using LockHandle = FileSystemAccessLockManager::LockHandle;
+@@ -45,6 +56,31 @@
+   return base::UTF16ToUTF8(url.path().BaseName().LossyDisplayName());
+ }
+ 
++// browser_core: the grants a handle keeps. One the core refuses keeps fixed
++// denied ones whatever came with it, as a handle in a third-party context
++// does, so every answer about it is a denial and nothing asks the user.
++FileSystemAccessManagerImpl::SharedHandleState KeptState(
++    const FileSystemAccessManagerImpl::BindingContext& context,
++    const storage::FileSystemURL& url,
++    const FileSystemAccessManagerImpl::SharedHandleState& state) {
++  if (!g_browser_core_no_file_handle ||
++      !g_browser_core_no_file_handle(
++          context.frame_id, url.type() == storage::kFileSystemTypeTemporary)) {
++    return state;
++  }
++  // Each keeps the path and the name it came with, which a handle the page
++  // stores again is stored under.
++  auto denied = [](FileSystemAccessPermissionGrant& grant) {
++    PathInfo path;
++    path.path = grant.GetPath();
++    path.display_name = grant.GetDisplayName();
++    return base::MakeRefCounted<FixedFileSystemAccessPermissionGrant>(
++        blink::mojom::PermissionStatus::DENIED, std::move(path));
++  };
++  return FileSystemAccessManagerImpl::SharedHandleState(
++      denied(*state.read_grant), denied(*state.write_grant));
++}
++
+ }  // namespace
+ 
+ FileSystemAccessHandleBase::FileSystemAccessHandleBase(
+@@ -55,7 +91,7 @@
+     : manager_(manager),
+       context_(context),
+       url_(url),
+-      handle_state_(handle_state) {
++      handle_state_(KeptState(context, url, handle_state)) {
+   CHECK(manager_, base::NotFatalUntil::M159);
+ 
+   // We support sandboxed file system and local file systems on all platforms.
+diff --color -ruN a/content/browser/renderer_host/clipboard_host_impl.cc b/content/browser/renderer_host/clipboard_host_impl.cc
+--- a/content/browser/renderer_host/clipboard_host_impl.cc
++++ b/content/browser/renderer_host/clipboard_host_impl.cc
+@@ -69,6 +69,12 @@
+ #include "content/public/common/url_constants.h"
+ #endif  // BUILDFLAG(IS_CHROMEOS)
+ 
++// browser_core: whether the page in |frame| writes nothing to the clipboard,
++// which the core says of a page in an agent's Space the user doesn't hold
++// (//browser_core/hooks.h). Exported, as the core is outside this component.
++CONTENT_EXPORT bool (*g_browser_core_no_clipboard_write)(
++    content::RenderFrameHost* frame) = nullptr;
++
+ namespace content {
+ 
+ namespace {
+@@ -90,7 +96,12 @@
+     return GetContentClient()->browser()->IsClipboardPasteAllowed(
+         &*render_frame_host_);
+   }
+-  bool CanWrite() override { return true; }
++  // browser_core: a write the core refuses is dropped where one from a page
++  // that may not write is, with the clipboard as it was.
++  bool CanWrite() override {
++    return !g_browser_core_no_clipboard_write ||
++           !g_browser_core_no_clipboard_write(&*render_frame_host_);
++  }
+ 
+   BrowserContext* GetBrowserContext() override {
+     return render_frame_host_->GetBrowserContext();
+diff --color -ruN a/content/browser/renderer_host/render_frame_host_impl.cc b/content/browser/renderer_host/render_frame_host_impl.cc
+--- a/content/browser/renderer_host/render_frame_host_impl.cc
++++ b/content/browser/renderer_host/render_frame_host_impl.cc
+@@ -402,6 +402,15 @@
+              base::FEATURE_ENABLED_BY_DEFAULT);
+ }  // namespace features
+ 
++// browser_core: whether the page in |frame| is refused a list or picker of its
++// own drawn outside it, which the core says of a page in an agent's Space the
++// user doesn't hold (//browser_core/hooks.h). |system_menu| says it is the
++// system's menu for a select; otherwise it is a popup window the page draws.
++// Exported, as the core is outside this component.
++CONTENT_EXPORT bool (*g_browser_core_no_page_popup)(
++    content::RenderFrameHost* frame,
++    bool system_menu) = nullptr;
++
+ namespace content {
+ 
+ class RenderFrameHostOrProxy {
+@@ -10031,6 +10040,14 @@
+     return;
+   }
+ 
++  // browser_core: nor for a page the core refuses one, whose select stays
++  // shut.
++  if (g_browser_core_no_page_popup &&
++      g_browser_core_no_page_popup(this, /*system_menu=*/true)) {
++    send_did_cancel(std::move(popup_client));
++    return;
++  }
++
+   auto* view = render_view_host()->delegate_->GetDelegateView();
+   if (!view) {
+     send_did_cancel(std::move(popup_client));
+diff --color -ruN a/content/browser/web_contents/web_contents_impl.cc b/content/browser/web_contents/web_contents_impl.cc
+--- a/content/browser/web_contents/web_contents_impl.cc
++++ b/content/browser/web_contents/web_contents_impl.cc
+@@ -287,6 +287,11 @@
+ #if BUILDFLAG(IS_IOS) && !BUILDFLAG(IS_IOS_TVOS)
+ #include "content/browser/ios/nfc_host.h"
+ #endif
++
++// browser_core: set by the core, defined in render_frame_host_impl.cc.
++CONTENT_EXPORT extern bool (*g_browser_core_no_page_popup)(
++    content::RenderFrameHost* frame,
++    bool system_menu);
+ 
+ namespace content {
+ 
+@@ -6256,6 +6261,13 @@
+       !rwh->is_active()) {
+     // If the OS window isn't focused, then don't open select element popups for
+     // it: https://issues.ch40m1um.qjz9zk/issues/365089001
++    render_widget_host_impl->ShutdownAndDestroyWidget(true);
++    return;
++  }
++
++  // browser_core: nor a popup window for a page the core refuses one.
++  if (g_browser_core_no_page_popup &&
++      g_browser_core_no_page_popup(creator_rfh, /*system_menu=*/false)) {
+     render_widget_host_impl->ShutdownAndDestroyWidget(true);
+     return;
+   }

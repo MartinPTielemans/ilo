@@ -5,7 +5,7 @@
 use super::*;
 use crate::agents::ready::{Found, Ready};
 use crate::agents::runner::Cli;
-use crate::agents::sign_in::{Ended, Heard, Row, quiet};
+use crate::agents::sign_in::{self, Ended, Heard, Row, quiet};
 
 /// Codex's page, with the state a real one carries.
 const PAGE: &str = "https://auth.example.test/oauth/authorize?state=made-up-state-0002";
@@ -74,6 +74,74 @@ fn codex_signs_in_in_a_private_window_that_closes_as_it_ends(cx: &mut TestAppCon
     assert_eq!(row(&agents, cx), Row::Idle);
     let ready = agents.read_with(cx, |agents, _| agents.found(Cli::Codex));
     assert_eq!(ready, Ready::SignedIn);
+}
+
+/// No line logged while the sign-in's page shows names its address or any part of it: not the
+/// page's reports as it loads, not the URL field's words, its host neither.
+#[gpui::test]
+fn no_line_names_the_sign_ins_page_or_any_part_of_it(cx: &mut TestAppContext) {
+    use crate::shell::recorder::Recorder;
+    use crate::shell::{Command, Folders, Page, Shell};
+    crate::heard::listen();
+    let (agents, browser, configs) = signed_out(None, cx);
+    sign_in(&agents, cx);
+    hear(&configs, 0, Heard::Page(PAGE.into()), cx);
+    let tab = page(&browser);
+    // The window it shows in, its tab chosen, the core reporting the page as it loads.
+    let host = Rc::new(Recorder::default());
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(host, cx));
+    shell.update(cx, |shell, cx| {
+        let space = (1, "Space".into(), None, 1, "".into(), "".into(), "".into());
+        shell.set_spaces(vec![space], cx);
+        shell.set_space(1, cx);
+        shell.set_tabs(1, Vec::new(), vec![tab], Vec::new(), Folders::default(), cx);
+        for loading in [true, false] {
+            let page = Page {
+                url: PAGE.into(),
+                loading,
+                can_go_back: !loading,
+                ..Page::default()
+            };
+            shell.set_page(tab, page, cx);
+        }
+        shell.set_selected(tab, cx);
+        // ⇧⌘C and ⌥⇧⌘C copy it, here on a host with no share sheet, as Linux and Windows are.
+        shell.run_for_page(Command::CopyUrl, cx);
+        shell.run_for_page(Command::CopyMarkdownLink, cx);
+    });
+    cx.update(|window, cx| window.draw(cx).clear(cx));
+    // The core's title for it, which is its address while it loads, in the tab's and the window's
+    // title lines.
+    crate::title_log::page(tab, PAGE);
+    crate::title_log::title(tab, PAGE);
+    crate::title_log::window(tab, PAGE);
+    let lines = crate::heard::take();
+    let said = |start: &str| lines.iter().any(|line| line.starts_with(start));
+    assert!(said(&format!("browser: page {tab} back ")), "{lines:#?}");
+    assert!(said("browser: url field "), "{lines:#?}");
+    assert!(said(&format!("browser: title {tab} ")), "{lines:#?}");
+    assert!(said("browser: window title "), "{lines:#?}");
+    let copied = lines
+        .iter()
+        .filter(|line| line.starts_with("browser: copied "));
+    assert_eq!(copied.count(), 2, "{lines:#?}");
+    // A link on it, under the pointer or peeked, is on its host: the link target's and the link
+    // preview's lines say it as these do.
+    let link = "https://auth.example.test/help";
+    assert_eq!(sign_in::logged(tab, link), "(a sign-in's page)");
+    assert_eq!(sign_in::logged(tab + 1, link), link);
+    let parts = [
+        PAGE,
+        "auth.example.test",
+        "example.test",
+        "/oauth/authorize",
+        "state=",
+        "made-up-state-0002",
+    ];
+    for line in &lines {
+        let named = parts.iter().find(|part| line.contains(**part));
+        assert_eq!(named, None, "{line}");
+    }
 }
 
 #[gpui::test]

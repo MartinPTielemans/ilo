@@ -40,6 +40,11 @@ struct Tab {
   bool device_or_location = false;
   // Its page holds a file or a folder of the user's.
   bool files = false;
+  // Its page has a Picture in Picture window, Chrome's floating one for a video or one for a
+  // document: no page in an agent's Space has one (agent_space_rule.h), and closing the user's is
+  // theirs to do. A video shown in a media card isn't one: the give ends that, and it plays on in
+  // its page.
+  bool picture_in_picture = false;
 };
 
 // Whether |tab| is given. Each of them alone refuses it.

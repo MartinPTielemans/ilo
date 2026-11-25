@@ -203,8 +203,12 @@ void PageMenu::Run(int command) {
   if (command == BC_PAGE_MENU_PREVIEW_LINK && Host().tab_link_to_preview &&
       !RefusesInAgentSpace(agent_space_rule::Ask::kLinkPreview, web_contents())) {
     const content::ContextMenuParams& params = menu_->params();
-    Host().tab_link_to_preview(Host().context, tab_, params.link_url.spec().c_str(), params.x,
-                               params.y);
+    const std::string link = params.link_url.spec();
+    if (Host().tab_link_to_preview(Host().context, tab_, link.c_str(), params.x, params.y)) {
+      if (Tab* tab = Tab::Get(tab_)) {
+        tab->link_preview_ask().Keep(link);
+      }
+    }
   }
   // The row runs before the menu hears it closed, as in Chrome's menus: a page's own row goes to
   // the page through the menu, which closing lets go of.

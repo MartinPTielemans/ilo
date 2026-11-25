@@ -1110,6 +1110,7 @@ void Window::AdjustNavigate(NavigateParams& params) {
     // Windows, showing a window already on screen gives the window itself the user's keyboard.
     params.window_action = NavigateParams::WindowAction::kNoAction;
     window->agent_opener_ = source_id;
+    window->ForgetNextTabsOpenerSoon();
     // A pop-up content made doesn't pass MakeHeldBy, and Navigate's tab strip sizes it as it does
     // any tab added behind, so it takes the agent's size the task after (#3788).
     if (params.contents_to_insert) {
@@ -1160,6 +1161,7 @@ void Window::AdjustNavigate(NavigateParams& params) {
     // The app only answers here: it opens the preview after this call, outside the navigation.
     if (Host().tab_link_to_preview(Host().context, Tab::IdOf(params.source_contents),
                                    params.url.spec().c_str(), click.x(), click.y())) {
+      source->link_preview_ask().Keep(params.url.spec());
       params.disposition = WindowOpenDisposition::IGNORE_ACTION;
       return;
     }
@@ -1224,8 +1226,20 @@ void Window::AdjustNavigate(NavigateParams& params) {
       // One with no page to start, which Navigate makes itself, is the agent's Space's as its tab
       // strip takes it (MadeFor).
       window->agents_source_ = source_id;
+      // Navigate may yet add no tab, and the next one added must not be taken for this page's.
+      window->ForgetNextTabsOpenerSoon();
     }
   }
+}
+
+void Window::ForgetNextTabsOpenerSoon() {
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&Window::ForgetNextTabsOpener, weak_factory_.GetWeakPtr()));
+}
+
+void Window::ForgetNextTabsOpener() {
+  agent_opener_ = 0;
+  agents_source_ = 0;
 }
 
 // static
@@ -2064,9 +2078,13 @@ content::WebContents* Window::OpenPreview(content::WebContents& opener,
   // Inserting a background tab sized it to the active tab's page.
   preview->Resize(gfx::Rect(size));
   NavigateParams load(browser, url, ui::PAGE_TRANSITION_LINK);
-  // What the page would have sent with the link, by the policy Chrome's pages default to.
-  load.referrer = content::Referrer(
-      opener.GetLastCommittedURL(), network::mojom::ReferrerPolicy::kStrictOriginWhenCrossOrigin);
+  // What the page would have sent with its link, by the policy Chrome's pages default to. A
+  // preview the user opens from elsewhere, as the Library's, is no page's link and sends none.
+  Tab* asker = Tab::FromWebContents(&opener);
+  if (asker && asker->link_preview_ask().Take(url.spec())) {
+    load.referrer = content::Referrer(opener.GetLastCommittedURL(),
+                                      network::mojom::ReferrerPolicy::kStrictOriginWhenCrossOrigin);
+  }
   preview->GetController().LoadURLWithParams(LoadURLParamsFromNavigateParams(preview, &load));
   return preview;
 }
@@ -3800,7 +3818,11 @@ Space* Window::SpaceForOpened(content::WebContents* contents, bc_id opener, bc_i
   if (!contents->GetBrowserContext()->IsOffTheRecord()) {
     const std::string dir = DirOf(contents);
     for (Space* space : Space::All()) {
-      if (!space->agent() && space->profile() == dir) {
+      if (agent_space_rule::TakesATabWithNowhereElse({
+              .agents = space->agent().has_value(),
+              .a_windows_own = space->own(),
+              .of_the_tabs_profile = space->profile() == dir,
+          })) {
         first = space;
         break;
       }

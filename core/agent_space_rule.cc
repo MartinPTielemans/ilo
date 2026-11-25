@@ -8,10 +8,12 @@ bool Refuses(Ask ask, const Tab& tab) {
   }
   switch (ask) {
     case Ask::kPaste:
+    case Ask::kCopy:
     case Ask::kLinkPreview:
       return !tab.held;
     case Ask::kFilePicker:
     case Ask::kDevice:
+    case Ask::kPictureInPicture:
       return true;
   }
   return true;
@@ -32,6 +34,10 @@ Listed ListedIn(const Opened& opened) {
     return Listed::kInTheSpaceShown;
   }
   return opened.profile_has_users_space ? Listed::kInTheUsersFirstSpace : Listed::kClosed;
+}
+
+bool TakesATabWithNowhereElse(const Candidate& space) {
+  return !space.agents && !space.a_windows_own && space.of_the_tabs_profile;
 }
 
 }  // namespace browser_core::agent_space_rule

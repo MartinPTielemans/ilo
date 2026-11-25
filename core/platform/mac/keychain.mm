@@ -5,6 +5,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "base/apple/bridging.h"
@@ -20,6 +21,7 @@
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/values.h"
+#include "browser_core/keychain_item.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/webauthn/webauthn_pref_names.h"
 #include "chrome/common/chrome_constants.h"
@@ -63,13 +65,18 @@ void DeletePasskeysBlocking(std::string group, std::string secret, base::FilePat
 }  // namespace
 
 void NameKeychainItem() {
-  NSString* name = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleName"];
-  if (name.length == 0) {
+  // The file's own values: -objectForInfoDictionaryKey: answers with a strings file's where
+  // InfoPlist.strings names the key, as it may the name the user sees.
+  NSDictionary* plist = NSBundle.mainBundle.infoDictionary;
+  std::optional<KeychainItem> item = KeychainItemFor([&](std::string_view key) {
+    return base::SysNSStringToUTF8(
+        base::apple::ObjCCast<NSString>(plist[base::SysUTF8ToNSString(key)]));
+  });
+  if (!item) {
     return;
   }
-  std::string app = base::SysNSStringToUTF8(name);
-  KeychainPassword::GetServiceName() = app + " Safe Storage";
-  KeychainPassword::GetAccountName() = app;
+  KeychainPassword::GetServiceName() = item->service;
+  KeychainPassword::GetAccountName() = item->account;
 }
 
 std::string PasskeyKeychainGroup() {

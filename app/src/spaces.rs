@@ -226,6 +226,7 @@ pub(crate) unsafe extern "C" fn space_changed(_: *mut c_void, space: bc::bc_id) 
         });
         // A tab the user held from an agent that left its Space ends its hold.
         browser::agents::space_changed(space, cx);
+        broom_host::space_changed(space, cx);
     });
 }
 
@@ -311,6 +312,7 @@ pub(crate) unsafe extern "C" fn window_space_shown(
         });
     }
     update_window(window, |shell, cx| shell.set_space(space, cx));
+    update_app(|cx| broom_host::window_space_shown(window, space, cx));
 }
 
 pub(crate) unsafe extern "C" fn archive_changed(

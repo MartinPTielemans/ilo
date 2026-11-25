@@ -40,10 +40,12 @@ class LinkPreviewThrottle : public content::NavigationThrottle {
     }
     const gfx::PointF click = tab->last_click();
     // The app only answers here: it opens the preview after this call, outside the navigation.
-    return Host().tab_link_to_site(Host().context, Tab::IdOf(contents), to.spec().c_str(),
-                                   click.x(), click.y())
-               ? CANCEL_AND_IGNORE
-               : PROCEED;
+    if (!Host().tab_link_to_site(Host().context, Tab::IdOf(contents), to.spec().c_str(), click.x(),
+                                 click.y())) {
+      return PROCEED;
+    }
+    tab->link_preview_ask().Keep(to.spec());
+    return CANCEL_AND_IGNORE;
   }
 
   const char* GetNameForLogging() override { return "browser_core::LinkPreviewThrottle"; }

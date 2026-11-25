@@ -467,6 +467,7 @@ impl gpui::Render for PicturesPage {
                         marked,
                         a11y,
                         gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
+                        gpui::canvas(|_, _, _| {}, |_, _, _, _| {}),
                         Rc::new(|_, _, _| {}),
                     )
                 };
@@ -611,15 +612,16 @@ impl gpui::Render for PicturesPage {
             .map(|(index, (heading, rows))| {
                 let heading = heading.map(|heading| {
                     div()
-                        .px(px(TEXT_X))
+                        .px(px(browser::tokens::settings::HEADING_X))
                         .mb(px(HEADING_BOTTOM))
-                        .text_size(px(text::SMALL))
+                        .line_height(px(browser::tokens::settings::HEADING_LINE))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(look.heading)
                         .child(heading)
                 });
                 let top = match (index, heading.is_some()) {
-                    (0, _) => FIRST_GROUP,
                     (_, true) => HEADING_TOP,
+                    (0, false) => FIRST_GROUP,
                     (_, false) => GROUP_GAP,
                 };
                 let under = under.filter(|_| index == 0);
@@ -640,7 +642,7 @@ impl gpui::Render for PicturesPage {
                         (rows.into_iter().enumerate()).map(|(at, row)| {
                             match nested.contains(&(index, at)) {
                                 true => (row, NESTED_X),
-                                false => (row, ROW_X),
+                                false => (row, 0.),
                             }
                         }),
                     ))
@@ -664,7 +666,7 @@ impl gpui::Render for PicturesPage {
             div()
                 .mt(px(browser::tokens::settings::LEDE_TOP))
                 .line_height(px(browser::tokens::settings::LEDE_LINE))
-                .text_color(base.opacity(browser::tokens::settings::DETAIL))
+                .text_color(base.opacity(browser::palette::TEXT_SECONDARY))
                 .child(lede)
         });
         let make = general.then(|| {

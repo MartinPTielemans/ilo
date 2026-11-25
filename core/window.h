@@ -483,6 +483,10 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // the Space |made_for|, or none for 0, by the rule (agent_space_rule::ListedIn). Null if it has
   // nowhere to go.
   Space* SpaceForOpened(content::WebContents* contents, bc_id opener, bc_id made_for) const;
+  // Forgets, once the task naming it is over, the page that opens the tab the tab strip adds next:
+  // Navigate adds that tab inside the task or adds none, and a tab added later is never its.
+  void ForgetNextTabsOpenerSoon();
+  void ForgetNextTabsOpener();
   // Opens the tab |params| asks for, behind, with nothing loaded until it's first shown.
   content::WebContents* OpenBehind(NavigateParams& params);
   // Moves the pages of |tab| and its split view into this window's Browsers from the windows

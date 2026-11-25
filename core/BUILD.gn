@@ -263,6 +263,16 @@ source_set("ad_block_list_check") {
   public_deps = [ "//base" ]
 }
 
+# What the Mac's Keychain item for the profiles' key is called, apart so browser_core_unittests
+# tests the rule alone.
+source_set("keychain_item") {
+  sources = [
+    "keychain_item.cc",
+    "keychain_item.h",
+  ]
+  public_deps = [ "//base" ]
+}
+
 # Whether a pinned tab is at its pinned URL, apart so browser_core_unittests tests the rule alone.
 source_set("pinned_url") {
   sources = [
@@ -646,6 +656,25 @@ source_set("agent_space_rule") {
   ]
 }
 
+# Which permissions a page in an agent's Space is refused, what its activity entry carries and
+# what becomes of a question for the user there, apart so browser_core_unittests tests the rules
+# alone.
+source_set("agent_permission_rule") {
+  sources = [
+    "agent_permission_rule.cc",
+    "agent_permission_rule.h",
+  ]
+  public_deps = [ ":agent_space_rule" ]
+}
+
+# Which link preview is a page's own link, apart so browser_core_unittests tests the rule alone.
+source_set("link_preview_rule") {
+  sources = [
+    "link_preview_rule.cc",
+    "link_preview_rule.h",
+  ]
+}
+
 # Whether a page's trees show only a splash, apart so browser_core_unittests tests the rule alone
 # (#3658).
 source_set("agent_splash_rule") {
@@ -813,6 +842,8 @@ source_set("browser_core") {
     "agent_file_field.h",
     "agent_page.cc",
     "agent_page.h",
+    "agent_permissions.cc",
+    "agent_permissions.h",
     "agent_request.cc",
     "agent_request.h",
     "agent_session.cc",
@@ -1026,7 +1057,9 @@ source_set("browser_core") {
     ":agent_close_rule",
     ":tab_background",
     ":agent_file_field_rule",
+    ":agent_permission_rule",
     ":agent_space_rule",
+    ":link_preview_rule",
     ":agent_splash_rule",
     ":agent_reply_limit",
     ":popup_hold",
@@ -1086,6 +1119,7 @@ source_set("browser_core") {
     "//chrome/browser/password_manager/factories",
     "//chrome/browser/performance_manager",
     "//chrome/browser/picture_in_picture",
+    "//chrome/browser/printing",
     "//chrome/browser/profiles",
     "//chrome/browser/profiles:profile",
     "//chrome/browser/profiles/keep_alive",
@@ -1121,6 +1155,7 @@ source_set("browser_core") {
     "//chrome/browser/ui/tabs:utils",
     "//chrome/browser/ui/views:bubble_anchor_util_views",
     "//chrome/browser/ui/toolbar",
+    "//chrome/browser/ui/webui/print_preview",
     "//chrome/browser/ui:ui_features",
     "//chrome/browser/ui/views/extensions:extension_popup",
     "//chrome/browser/ui/views/eye_dropper",
@@ -1251,6 +1286,7 @@ source_set("browser_core") {
     # WebKit isn't linked: system_page.mm starts it with the first system page, so a launch that
     # shows none starts no WebKit process.
     deps += [
+      ":keychain_item",
       "//chrome/browser:chrome_browser_application_mac",
       "//ui/events:dom_keyboard_layout",
       "//chrome/browser/webauthn",
@@ -1367,6 +1403,7 @@ test("browser_core_unittests") {
     "live_folder_rule_unittest.cc",
     "mojo_once_for_testing.h",
     "native_ad_block_lists_unittest.cc",
+    "keychain_item_unittest.cc",
     "pinned_url_unittest.cc",
     "saved_read_rule_unittest.cc",
     "saved_read_unittest.cc",
@@ -1376,7 +1413,9 @@ test("browser_core_unittests") {
     "agent_close_rule_unittest.cc",
     "tab_background_unittest.cc",
     "agent_file_field_rule_unittest.cc",
+    "agent_permission_rule_unittest.cc",
     "agent_space_rule_unittest.cc",
+    "link_preview_rule_unittest.cc",
     "agent_splash_rule_unittest.cc",
     "agent_download_hold_unittest.cc",
     "agent_reply_limit_unittest.cc",
@@ -1445,6 +1484,7 @@ test("browser_core_unittests") {
     ":overlay_lend",
     ":live_folder_rule",
     ":native_ad_block_lists",
+    ":keychain_item",
     ":pinned_url",
     ":saved_read",
     ":saved_read_rule",
@@ -1456,7 +1496,9 @@ test("browser_core_unittests") {
     ":agent_close_rule",
     ":tab_background",
     ":agent_file_field_rule",
+    ":agent_permission_rule",
     ":agent_space_rule",
+    ":link_preview_rule",
     ":agent_splash_rule",
     ":agent_download_hold",
     ":agent_job_voter",

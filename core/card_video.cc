@@ -15,6 +15,7 @@
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "base/task/sequenced_task_runner.h"
+#include "browser_core/agent_space_page.h"
 #include "browser_core/platform/window_views.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
@@ -167,6 +168,14 @@ class VideoWindow : public content::VideoOverlayWindow, public views::WidgetObse
     if (entering) {
       Entering() = 0;
     }
+    // A page in an agent's Space has no Picture in Picture, at a card or floating, so it leaves at
+    // once (agent_space_rule.h).
+    if (RefusesInAgentSpace(agent_space_rule::Ask::kPictureInPicture,
+                            controller_->GetWebContents())) {
+      base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+          FROM_HERE, base::BindOnce(&VideoWindow::Refuse, weak_factory_.GetWeakPtr()));
+      return;
+    }
     // Asked for, it shows at its card or nowhere: never floating unasked.
     if (ask && ask->tab == tab()) {
       if (chrome_) {
@@ -304,6 +313,13 @@ class VideoWindow : public content::VideoOverlayWindow, public views::WidgetObse
     if (!InCardNow() && !(chrome_ && chrome_->IsVisible())) {
       End();
     }
+  }
+
+  // Out of Picture in Picture before it showed anywhere. Not End(): the controller closes only a
+  // window that shows, so it's told its window is gone, which deletes this one.
+  void Refuse() {
+    content::VideoPictureInPictureWindowController* controller = controller_;
+    controller->OnWindowDestroyed(/*should_pause_video=*/false);
   }
 
   // Calls |setter| on Chrome's window, now if it's made and as it's made otherwise.
@@ -479,6 +495,10 @@ void ShowCardVideo(bc_id tab, bc_id window, const gfx::Rect& frame, double corne
     }
     return;
   }
+  // A page in an agent's Space has no Picture in Picture, at a card either (agent_space_rule.h).
+  if (RefusesInAgentSpace(agent_space_rule::Ask::kPictureInPicture, Tab::FromId(tab))) {
+    return;
+  }
   const bool started = !asked || asked->tab != tab;
   asked = Ask{tab, window, frame, corner_radius};
   if (in_card && in_card->tab() == tab) {
@@ -500,6 +520,17 @@ void ShowCardVideo(bc_id tab, bc_id window, const gfx::Rect& frame, double corne
   // The page's one video, or its own handler: its window comes from NewVideoWindow.
   Entering() = tab;
   content::MediaSession::Get(contents)->EnterPictureInPicture();
+}
+
+void EndCardVideo(bc_id tab) {
+  std::optional<Ask>& asked = Asked();
+  if (asked && asked->tab == tab) {
+    asked.reset();
+  }
+  // One still on its way to the card stays marked as the card's, so it leaves as it comes.
+  if (VideoWindow* in_card = InCard(); in_card && in_card->tab() == tab) {
+    in_card->End();
+  }
 }
 
 bool FloatCardVideo(content::WebContents* contents) {

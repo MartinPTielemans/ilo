@@ -101,5 +101,12 @@ TEST(HandedGiveRuleTest, ATabHoldingTheUsersFilesIsRefused) {
   EXPECT_FALSE(MayGive(tab));
 }
 
+// Chrome's floating window for its video, or a window its page opened for a document.
+TEST(HandedGiveRuleTest, ATabWithAPictureInPictureWindowIsRefused) {
+  Tab tab = Fit();
+  tab.picture_in_picture = true;
+  EXPECT_FALSE(MayGive(tab));
+}
+
 }  // namespace
 }  // namespace browser_core::handed_give_rule

@@ -43,6 +43,10 @@ bool CardCanShowVideo(content::WebContents* contents);
 // Whether |contents|'s card shows its video.
 bool CardShowsVideo(content::WebContents* contents);
 
+// Ends |tab|'s video at its card, shown or asked for, whichever window's card it is: the video
+// leaves Picture in Picture and plays on in its page.
+void EndCardVideo(bc_id tab);
+
 // Floats |contents|'s video from its card into Chrome's window, as bc_tab_media's Picture in
 // Picture does. Returns whether its card had it.
 bool FloatCardVideo(content::WebContents* contents);

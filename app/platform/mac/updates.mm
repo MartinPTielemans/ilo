@@ -513,11 +513,17 @@ Updates* g_updates;
 }
 
 bool host_keep_keychain_key(void) {
+  // The item is named for the folder the profiles are in, by the file's own value, as the core
+  // names it (core/keychain_item.h): a strings file can change the name the user sees, which the
+  // alert's words take, and the item keeps its own.
+  NSString* item = NSBundle.mainBundle.infoDictionary[@"CrProductDirName"];
+  if (![item isKindOfClass:NSString.class]) item = nil;
   NSString* name = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleName"];
+  if (name.length == 0) name = item;
   NSString* signature = OwnSignature();
   NSUserDefaults* defaults = NSUserDefaults.standardUserDefaults;
   // Under a signature the key was read under, macOS doesn't ask, so launch doesn't wait for it.
-  if (name.length == 0 || !signature || [[defaults stringForKey:kKeySignature] isEqual:signature]) {
+  if (item.length == 0 || !signature || [[defaults stringForKey:kKeySignature] isEqual:signature]) {
     return true;
   }
   auto done = ^{
@@ -528,7 +534,7 @@ bool host_keep_keychain_key(void) {
   for (;;) {
     NSData* key = nil;
     bool stranded = false;
-    OSStatus status = ReadKey(name, &key, &stranded);
+    OSStatus status = ReadKey(item, &key, &stranded);
     // Not there: a first launch, and Chromium makes one.
     if (status == errSecItemNotFound) {
       done();
@@ -538,21 +544,21 @@ bool host_keep_keychain_key(void) {
       Log([NSString stringWithFormat:@"the cookie key is left as it is, after %d tries to regrant it",
                                      (int)tries]);
       // The item holds the key, so a spare a try left is only a copy.
-      SecItemDelete((__bridge CFDictionaryRef)KeyItem(name, kSpare));
+      SecItemDelete((__bridge CFDictionaryRef)KeyItem(item, kSpare));
       done();
       return true;
     }
     if (status == errSecSuccess) {
       // Counted first, so a launch that stops partway counts too.
       [defaults setObject:@{signature : @(++tries)} forKey:kKeyTries];
-      OSStatus regranted = Regrant(name, key);
+      OSStatus regranted = Regrant(item, key);
       Log([NSString stringWithFormat:@"the cookie key regranted to %@: %d", signature, (int)regranted]);
       if (regranted == errSecSuccess) {
         done();
         return true;
       }
       // The item still has the key, or the spare does, which goes back.
-      status = ReadKey(name, &key, &stranded);
+      status = ReadKey(item, &key, &stranded);
       if (status == errSecSuccess) return true;
     }
     Log([NSString stringWithFormat:@"the cookie key couldn't be read: %d", (int)status]);
@@ -566,12 +572,12 @@ bool host_keep_keychain_key(void) {
                                          @"(moving)\" until it can. Without it, websites would "
                                          @"sign you out. Make sure your login keychain is "
                                          @"unlocked in Keychain Access, then try again.",
-                                         name, name, name]
+                                         name, item, item]
             : [NSString stringWithFormat:@"%@ keeps the key to your cookies and saved passwords in "
                                          @"your Keychain, as \"%@ Safe Storage\". Without it, "
                                          @"websites would sign you out. When macOS asks, enter "
                                          @"your password and choose Always Allow.",
-                                         name, name];
+                                         name, item];
     CFOptionFlags response = kCFUserNotificationOtherResponse;
     CFUserNotificationDisplayAlert(0, kCFUserNotificationCautionAlertLevel, nullptr, nullptr,
                                    nullptr, (__bridge CFStringRef)title,

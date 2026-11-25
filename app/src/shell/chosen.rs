@@ -190,12 +190,13 @@ impl Shell {
     /// parameters, as Arc's Copy URLs does.
     pub(super) fn copy_chosen(&mut self, cx: &mut Context<Self>) {
         let rows = self.chosen_in_order();
-        let links: Vec<String> = (self.tabs_of(&rows).into_iter())
-            .map(|tab| self.copied_link(&self.url(tab)))
+        let tabs = self.tabs_of(&rows);
+        let links: Vec<String> = (tabs.iter())
+            .map(|&tab| self.copied_link(&self.url(tab)))
             .filter(|link| !link.is_empty())
             .collect();
         if !links.is_empty() {
-            self.copy(&links.join("\n"), "Copied URLs", cx);
+            self.copy_from(&tabs, &links.join("\n"), "Copied URLs", cx);
         }
     }
 

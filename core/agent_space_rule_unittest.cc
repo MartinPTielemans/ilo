@@ -5,7 +5,8 @@
 namespace browser_core::agent_space_rule {
 namespace {
 
-constexpr Ask kAsks[] = {Ask::kPaste, Ask::kFilePicker, Ask::kDevice, Ask::kLinkPreview};
+constexpr Ask kAsks[] = {Ask::kPaste,  Ask::kCopy,        Ask::kFilePicker,
+                         Ask::kDevice, Ask::kLinkPreview, Ask::kPictureInPicture};
 
 TEST(AgentSpaceRuleTest, ATabOfTheUsersIsRefusedNothing) {
   for (Ask ask : kAsks) {
@@ -25,6 +26,11 @@ TEST(AgentSpaceRuleTest, AHeldTabTakesTheUsersPaste) {
   EXPECT_FALSE(Refuses(Ask::kPaste, {.agents = true, .held = true}));
 }
 
+// And what they copy there is theirs to copy.
+TEST(AgentSpaceRuleTest, AHeldTabTakesTheUsersCopy) {
+  EXPECT_FALSE(Refuses(Ask::kCopy, {.agents = true, .held = true}));
+}
+
 // A file picked while they hold the tab would stay the page's once the agent has it again.
 TEST(AgentSpaceRuleTest, AHeldTabStillGetsNoFilePicker) {
   EXPECT_TRUE(Refuses(Ask::kFilePicker, {.agents = true, .held = true}));
@@ -33,6 +39,11 @@ TEST(AgentSpaceRuleTest, AHeldTabStillGetsNoFilePicker) {
 // A device opened while they hold the tab would stay open once the agent has it again.
 TEST(AgentSpaceRuleTest, AHeldTabStillGetsNoDevice) {
   EXPECT_TRUE(Refuses(Ask::kDevice, {.agents = true, .held = true}));
+}
+
+// A window opened while they hold the tab would stay on their screen once the agent has it again.
+TEST(AgentSpaceRuleTest, AHeldTabStillGetsNoPictureInPicture) {
+  EXPECT_TRUE(Refuses(Ask::kPictureInPicture, {.agents = true, .held = true}));
 }
 
 // A link the user clicks at a step they do themselves opens in a preview as in a tab of theirs.
@@ -86,6 +97,23 @@ TEST(AgentSpaceRuleTest, ATabOpenedWhileTheWindowShowsAnAgentsSpaceIsListedInThe
 
 TEST(AgentSpaceRuleTest, ATabWithNoSpaceOfTheUsersToGoToIsClosed) {
   EXPECT_EQ(Listed::kClosed, ListedIn({}));
+}
+
+TEST(AgentSpaceRuleTest, ATabWithNowhereElseGoesToASpaceOfTheUsersInItsProfile) {
+  EXPECT_TRUE(TakesATabWithNowhereElse({.of_the_tabs_profile = true}));
+}
+
+TEST(AgentSpaceRuleTest, ATabWithNowhereElseNeverGoesToAnAgentsSpace) {
+  EXPECT_FALSE(TakesATabWithNowhereElse({.agents = true, .of_the_tabs_profile = true}));
+}
+
+// A Little window's or a Blank Window's.
+TEST(AgentSpaceRuleTest, ATabWithNowhereElseNeverGoesToAWindowsOwnSpace) {
+  EXPECT_FALSE(TakesATabWithNowhereElse({.a_windows_own = true, .of_the_tabs_profile = true}));
+}
+
+TEST(AgentSpaceRuleTest, ATabWithNowhereElseNeverGoesToAnotherProfilesSpace) {
+  EXPECT_FALSE(TakesATabWithNowhereElse({}));
 }
 
 }  // namespace
