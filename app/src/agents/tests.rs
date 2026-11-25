@@ -907,6 +907,43 @@ fn models_lists_a_signed_in_assistant_with_its_model(cx: &mut TestAppContext) {
     );
 }
 
+/// With the inside switch off, a click on a row while a look runs is looked for once it ends, and
+/// a look no click asked for waits for none: each assistant clicked ends looked up, and nothing
+/// else is.
+#[gpui::test]
+fn a_click_while_a_look_runs_is_looked_for_after_it(cx: &mut TestAppContext) {
+    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+    let agents = agents(&browser, &configs, None, cx);
+    let looks = || configs.looks.load(Ordering::SeqCst);
+    let found = |cx: &mut TestAppContext| {
+        agents.read_with(cx, |agents, _| {
+            Cli::ALL.map(|cli| agents.tasks.found.contains_key(&cli))
+        })
+    };
+    agents.update(cx, |agents, cx| {
+        agents.look_up_assistant(Cli::Claude, cx);
+        // While Claude's look runs: Codex's row, and what no click asks for.
+        agents.look_up_assistant(Cli::Codex, cx);
+        agents.models_shown(cx);
+        agents.look_for_task_agents(cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(looks(), 2, "Claude's, then Codex's after it");
+    assert_eq!(found(cx), [true, true]);
+
+    // A look for every one asked for with the switch on, which goes off while one runs, waits
+    // for nothing; the row clicked meanwhile is still looked for.
+    agents.update(cx, |agents, cx| {
+        agents.set_threads(true, cx);
+        agents.look_up_assistant(Cli::Claude, cx);
+        agents.look_for_task_agents(cx);
+        agents.look_up_assistant(Cli::Codex, cx);
+        agents.set_threads(false, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(looks(), 4, "Claude's, then the click on Codex's alone");
+}
+
 /// With the inside switch off, nothing of an assistant's program runs at launch or as Models
 /// opens: each row reads Checking… with nothing offered, and a click on a row looks that one up
 /// alone. With the switch on, opening Models looks once for every one and says what it found.

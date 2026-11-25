@@ -900,8 +900,9 @@ pub struct Tasks {
     pub dir: Option<PathBuf>,
     /// The sign-ins under way and what each row says of its last.
     pub(super) sign_ins: super::sign_in::SignIns,
-    /// Whether a look asked for while one ran waits for it to end, as after a sign-in.
-    pub(super) look_again: bool,
+    /// The assistants a look asked for while one ran waits to look for once it ends, as after a
+    /// sign-in, each with whether the user's click on its row asked for it.
+    pub(super) look_again: Vec<(Cli, bool)>,
     /// Helpers for the tasks a test starts, whatever the switch says.
     #[cfg(test)]
     pub(super) helpers: bool,
@@ -1471,14 +1472,14 @@ impl Agents {
     /// is looked up only at the user's click (`look_up_assistant`).
     pub fn look_for_task_agents(&mut self, cx: &mut Context<Self>) {
         if self.threads() {
-            self.look_for(Cli::ALL.to_vec(), cx);
+            self.look_for(Cli::ALL.to_vec(), false, cx);
         }
     }
 
     /// Learns whether `cli` alone is installed and signed in, at the user's click on its row, as
     /// Models has it while the inside switch is off.
     pub fn look_up_assistant(&mut self, cli: Cli, cx: &mut Context<Self>) {
-        self.look_for(vec![cli], cx);
+        self.look_for(vec![cli], true, cx);
     }
 
     /// Learns again what the user's click on `cli`'s row changed, as a sign-in or sign-out
@@ -1490,9 +1491,17 @@ impl Agents {
         }
     }
 
-    fn look_for(&mut self, clis: Vec<Cli>, cx: &mut Context<Self>) {
+    /// Looks for `clis`, `clicked` if the user's click on a row asked for it. While a look runs,
+    /// they wait for it to end, a click kept as one.
+    fn look_for(&mut self, clis: Vec<Cli>, clicked: bool, cx: &mut Context<Self>) {
         if self.tasks.looking {
-            self.tasks.look_again = true;
+            for cli in clis {
+                let again = &mut self.tasks.look_again;
+                match again.iter_mut().find(|(each, _)| *each == cli) {
+                    Some((_, was)) => *was |= clicked,
+                    None => again.push((cli, clicked)),
+                }
+            }
             return;
         }
         self.tasks.looking = true;
@@ -1525,9 +1534,15 @@ impl Agents {
                         .find(|cli| agents.found(*cli) == Ready::SignedIn);
                     agents.tasks.default = ready.or(agents.tasks.default);
                 }
-                // A sign-in that ended while it looked may have changed what it found.
-                if std::mem::take(&mut agents.tasks.look_again) {
-                    agents.look_for_task_agents(cx);
+                // A sign-in that ended while it looked may have changed what it found. With the
+                // inside switch off now, only a row the user clicked is looked for.
+                let threads = agents.threads();
+                let again: Vec<Cli> = (std::mem::take(&mut agents.tasks.look_again).into_iter())
+                    .filter(|(_, clicked)| *clicked || threads)
+                    .map(|(cli, _)| cli)
+                    .collect();
+                if !again.is_empty() {
+                    agents.look_for(again, false, cx);
                 }
                 cx.notify();
             });
