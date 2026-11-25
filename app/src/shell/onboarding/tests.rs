@@ -2632,10 +2632,10 @@ fn the_assistant_step_looks_for_the_assistants_as_it_shows(cx: &mut TestAppConte
     later(&shell, cx, STEP_MOTION);
     assert_eq!(looks(), 1, "the step's showing looked once");
     assert_eq!(lines(cx), ["Not signed in", "Not installed"]);
+    // A login now: each row offers Sign In, its program on this computer or not.
     let said: Vec<String> = read(cx).into_iter().map(|(_, name, _)| name).collect();
-    for offer in ["Sign In to Claude Code", "Get Codex"] {
-        assert!(said.iter().any(|name| name == offer), "{offer} in {said:?}");
-    }
+    let sign_ins = said.iter().filter(|name| *name == "Sign In").count();
+    assert_eq!(sign_ins, 2, "Sign In on each row in {said:?}");
     later(&shell, cx, 5.);
     assert_eq!(looks(), 1, "nothing looked again while it stood");
 
@@ -2704,18 +2704,21 @@ fn the_assistants_names_are_whole_beside_or_over_their_buttons(cx: &mut TestAppC
 
     let scale = cx.update(|window, _| window.scale_factor());
     let tree = cx.a11y_tree().expect("GPUI built a tree");
-    let button = |label: &str| {
-        let node = (tree.nodes.iter())
+    // The row's own button: each assistant's says Sign In.
+    let button = |label: &str, row: &gpui::Bounds<gpui::Pixels>| {
+        let (top, bottom) = (f32::from(row.top()), f32::from(row.bottom()));
+        let bounds = (tree.nodes.iter())
             .map(|(_, node)| node)
-            .find(|node| node.role() == Role::Button && node.label().as_deref() == Some(label))
-            .unwrap_or_else(|| panic!("no {label} button"));
-        let bounds = node.bounds().expect("a button has bounds");
+            .filter(|node| node.role() == Role::Button && node.label().as_deref() == Some(label))
+            .filter_map(|node| node.bounds())
+            .find(|bounds| (top..bottom).contains(&(bounds.y0 as f32 / scale)))
+            .unwrap_or_else(|| panic!("no {label} button in {row:?}"));
         (bounds.x0 as f32 / scale, bounds.y0 as f32 / scale)
     };
     let system = cx.update(|_, cx| gpui::WindowTextSystem::new(cx.text_system().clone()));
     for (row, name, offer) in [
-        ("claude", "Claude Code", "Sign In to Claude Code"),
-        ("codex", "Codex", "Get Codex"),
+        ("claude", "Claude", "Sign In"),
+        ("codex", "ChatGPT", "Sign In"),
     ] {
         let row = placed(row, cx).unwrap_or_else(|| panic!("{name}'s row wasn't drawn"));
         let whole = crate::tooltip::text_width(
@@ -2725,7 +2728,7 @@ fn the_assistants_names_are_whole_beside_or_over_their_buttons(cx: &mut TestAppC
             &system,
         );
         let name_left = f32::from(row.left()) + ROW_X + GLYPH_PLATE + GLYPH_PLATE_GAP;
-        let (left, top) = button(offer);
+        let (left, top) = button(offer, &row);
         let beside = left + 0.5 >= name_left + whole + END_GAP;
         // Under is on a line of its own, below the name's, which is at least the glyph's height,
         // not centred on a row its line made tall.

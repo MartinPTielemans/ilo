@@ -125,7 +125,7 @@ send key escape
 # Settings › General lists Spanish, and Remove takes it off, after which the page asks again.
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
-if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' General$'; then
+if ! grep -E '^browser: settings (shown|tab) ' "$log" | tail -1 | grep -q ' General$'; then
   send clickkey $(drawn "toolbar General")
   expect '^browser: settings tab General$' "a click on General didn't show its section"
 fi

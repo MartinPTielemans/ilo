@@ -1,7 +1,9 @@
 //! A line of the sidebar drawn as one shape with what it opens in the page area: its fill runs to
 //! the sidebar's edge, where two curves take it into the page's side.
 
-use gpui::{Bounds, Hsla, IntoElement, PathBuilder, Pixels, Styled, canvas, point, px};
+use gpui::{
+    Bounds, ContentMask, Hsla, IntoElement, PathBuilder, Pixels, Styled, canvas, point, px,
+};
 
 use crate::tokens::shell::{JOIN_RADIUS, PAGE_OUTLINE_WIDTH, PLATE_RADIUS};
 
@@ -11,8 +13,8 @@ thread_local! {
     pub(super) static JOINED: std::cell::Cell<Option<Joined>> = const { std::cell::Cell::new(None) };
 }
 
-/// A painted join: the line's box in the window, its fill and its outline, and whether the page
-/// is on its left.
+/// A painted join: the line's box in the window, its fill and its outline, whether the page is on
+/// its left, and the box its outline is kept to.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Joined {
@@ -20,6 +22,7 @@ pub(super) struct Joined {
     pub fill: Hsla,
     pub outline: Option<Hsla>,
     pub page_left: bool,
+    pub lined: Option<Bounds<Pixels>>,
 }
 
 /// The join, as big as it's laid out: a line in `fill` from its own rounded end to the edge the
@@ -31,12 +34,31 @@ pub(super) fn join(fill: Hsla, outline: Option<Hsla>, page_left: bool) -> impl I
     canvas(
         |_, _, _| {},
         move |line, _, window, _| {
+            let (width, curve) = (px(PAGE_OUTLINE_WIDTH), px(JOIN_RADIUS));
+            // The page's own line runs down its whole side, outside the page. The fill covers it
+            // as far as the shape goes, and where each curve leaves the page that line is the
+            // shape's own already: the line round the shape is drawn up to it, so the two are one
+            // line there, never one over the other or over the fill.
+            let lined = outline.map(|_| {
+                let (top, bottom) = (line.top() - curve, line.bottom() + curve);
+                match page_left {
+                    true => Bounds::from_corners(
+                        point(line.left() + width, top),
+                        point(line.right() + width, bottom),
+                    ),
+                    false => Bounds::from_corners(
+                        point(line.left() - width, top),
+                        point(line.right() - width, bottom),
+                    ),
+                }
+            });
             #[cfg(test)]
             JOINED.set(Some(Joined {
                 line,
                 fill,
                 outline,
                 page_left,
+                lined,
             }));
             let mut shape = PathBuilder::fill();
             trace(&mut shape, line, page_left, 0.);
@@ -44,25 +66,15 @@ pub(super) fn join(fill: Hsla, outline: Option<Hsla>, page_left: bool) -> impl I
             if let Ok(shape) = shape.build() {
                 window.paint_path(shape, fill);
             }
-            let Some(outline) = outline else {
+            let (Some(outline), Some(lined)) = (outline, lined) else {
                 return;
             };
-            // The page's own line runs down its whole side, under the join: the fill takes its
-            // place between the curves, where the two are one shape and no line parts them.
-            let (width, curve) = (px(PAGE_OUTLINE_WIDTH), px(JOIN_RADIUS));
-            let edge = match page_left {
-                true => line.left(),
-                false => line.right() - width,
-            };
-            let side = Bounds::from_corners(
-                point(edge, line.top() - curve),
-                point(edge + width, line.bottom() + curve),
-            );
-            window.paint_quad(gpui::fill(side, fill));
             let mut round = PathBuilder::stroke(width);
             trace(&mut round, line, page_left, PAGE_OUTLINE_WIDTH / 2.);
             if let Ok(round) = round.build() {
-                window.paint_path(round, outline);
+                window.with_content_mask(Some(ContentMask { bounds: lined }), |window| {
+                    window.paint_path(round, outline);
+                });
             }
         },
     )
