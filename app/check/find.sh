@@ -73,7 +73,7 @@ check_find_bar() {
   page_right=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout content' |
     sed -n 's/.*, WebContentsViewCocoa \([0-9]*\),[0-9]* \([0-9]*\)x.*/\1 + \2/p')
   [ -n "$page_right" ] || fail "$1: the layout named no page"
-  page_inset=$((content - (page_right)))
+  page_inset=$((content - ($page_right)))
   case ";$children" in
   *";$((content - 300 - 2 * page_inset)),$((2 * page_inset)) 300x32;"*) ;;
   *) fail "$1: no find bar among the windows over the page (${children:-none}), $content wide" ;;
