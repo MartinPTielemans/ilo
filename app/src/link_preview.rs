@@ -763,7 +763,12 @@ pub fn show(
     update(cx, |preview, gpui_window, cx| {
         preview.finish(cx);
         // check.sh reads this line.
-        log!("browser: link preview {tab} {url}");
+        // Nor a link from a sign-in's page (#4100).
+        let logged = crate::agents::sign_in::logged;
+        log!(
+            "browser: link preview {tab} {}",
+            logged(over, logged(tab, &url))
+        );
         let mut shown = Preview {
             window,
             page,

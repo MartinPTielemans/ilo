@@ -5,7 +5,7 @@
 use super::*;
 use crate::agents::ready::{Found, Ready};
 use crate::agents::runner::Cli;
-use crate::agents::sign_in::{Ended, Heard, Row, quiet};
+use crate::agents::sign_in::{self, Ended, Heard, Row, quiet};
 
 /// Codex's page, with the state a real one carries.
 const PAGE: &str = "https://auth.example.test/oauth/authorize?state=made-up-state-0002";
@@ -107,10 +107,22 @@ fn no_line_names_the_sign_ins_page_or_any_part_of_it(cx: &mut TestAppContext) {
         shell.set_selected(tab, cx);
     });
     cx.update(|window, cx| window.draw(cx).clear(cx));
+    // The core's title for it, which is its address while it loads, in the tab's and the window's
+    // title lines.
+    crate::title_log::page(tab, PAGE);
+    crate::title_log::title(tab, PAGE);
+    crate::title_log::window(tab, PAGE);
     let lines = crate::heard::take();
     let said = |start: &str| lines.iter().any(|line| line.starts_with(start));
     assert!(said(&format!("browser: page {tab} back ")), "{lines:#?}");
     assert!(said("browser: url field "), "{lines:#?}");
+    assert!(said(&format!("browser: title {tab} ")), "{lines:#?}");
+    assert!(said("browser: window title "), "{lines:#?}");
+    // A link on it, under the pointer or peeked, is on its host: the link target's and the link
+    // preview's lines say it as these do.
+    let link = "https://auth.example.test/help";
+    assert_eq!(sign_in::logged(tab, link), "(a sign-in's page)");
+    assert_eq!(sign_in::logged(tab + 1, link), link);
     let parts = [
         PAGE,
         "auth.example.test",
