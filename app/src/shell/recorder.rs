@@ -2102,8 +2102,17 @@ impl Browser for Recorder {
         self.record("new window".into())
     }
 
-    fn welcome_window(&self, _: &mut App) {
-        self.record("welcome window".into())
+    fn show_first_run(&self, _: gpui::AnyWindowHandle, _: &mut App) {
+        self.record("first run shown".into())
+    }
+
+    fn end_first_run(&self, _: gpui::AnyWindowHandle, _: &mut App) {
+        self.record("first run ended".into())
+    }
+
+    // A test's window has no host to show it, so it opens shown and the flow takes its keyboard.
+    fn shows_first_run_at_open(&self) -> bool {
+        true
     }
 
     fn is_default_browser(&self) -> bool {

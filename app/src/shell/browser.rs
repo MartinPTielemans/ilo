@@ -1079,9 +1079,17 @@ pub trait Browser {
     fn quit(&self, going: Rc<dyn Fn(&mut App)>, cx: &mut App);
     /// Opens another window on the same Spaces, after this one's draw.
     fn new_window(&self, cx: &mut App);
-    /// new_window, with a new profile's first launch playing in the new window, which shows no
-    /// page.
-    fn welcome_window(&self, _cx: &mut App) {}
+    /// Puts first run's `window`, which the shell opened unshown and draws the flow in, on screen
+    /// as a window of its own, in front with the keyboard: until first run ends it's the only
+    /// window on screen.
+    fn show_first_run(&self, _window: gpui::AnyWindowHandle, _cx: &mut App) {}
+    /// Takes first run's `window` off screen and closes it, and puts the browser window it kept
+    /// waiting at launch on screen.
+    fn end_first_run(&self, _window: gpui::AnyWindowHandle, _cx: &mut App) {}
+    /// First run's window opens on screen at once, for a host with no call that shows it.
+    fn shows_first_run_at_open(&self) -> bool {
+        false
+    }
     /// Whether the system opens http and https links with the browser, which the onboarding asks
     /// only as it starts, to leave out its step for it.
     fn is_default_browser(&self) -> bool {
