@@ -100,6 +100,7 @@
 #include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/lifetime/browser_shutdown.h"
+#include "chrome/browser/picture_in_picture/picture_in_picture_window_manager.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -140,13 +141,22 @@
 
 namespace {
 
-// Whether a tab's page has a device open, scans for Bluetooth ones, or is being told the location.
-bool UsesDeviceOrLocation(content::WebContents* contents) {
+// Whether a tab's page has a device open, or scans for Bluetooth ones.
+bool UsesDevice(content::WebContents* contents) {
   using Kind = content::WebContentsCapabilityType;
-  return contents && std::ranges::any_of(
-                         std::array{Kind::kUSB, Kind::kBluetoothConnected, Kind::kBluetoothScanning,
-                                    Kind::kHID, Kind::kSerial, Kind::kGeolocation},
-                         [&](Kind kind) { return contents->IsCapabilityActive(kind); });
+  return contents &&
+         std::ranges::any_of(std::array{Kind::kUSB, Kind::kBluetoothConnected,
+                                        Kind::kBluetoothScanning, Kind::kHID, Kind::kSerial},
+                             [&](Kind kind) { return contents->IsCapabilityActive(kind); });
+}
+
+// Closes the Picture in Picture window of |contents|' page, Chrome's floating one for a video or
+// one its page opened for a document, if it has one. The video plays on in its page.
+void ClosePictureInPicture(content::WebContents* contents) {
+  PictureInPictureWindowManager* manager = PictureInPictureWindowManager::GetInstance();
+  if (contents && manager->IsInPictureInPicture() && manager->GetWebContents() == contents) {
+    manager->ExitPictureInPicture();
+  }
 }
 
 gfx::Rect ToRect(bc_rect rect) {
@@ -727,6 +737,12 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   const bc_id home = from->id();
   const browser_core::Space::Node* node = from->NodeOf(tab);
   const browser_core::Space::Node left = node ? *node : browser_core::Space::Node();
+  // The split view it leaves with the give, as a tab taken out of one by hand does, and goes back
+  // into.
+  std::vector<bc_id> split = from->Panes(tab);
+  if (split.size() < 2) {
+    split.clear();
+  }
   // The page goes as it is, with its profile's logins, so never into another profile's Space,
   // where it would load again. And only a tab that may be handed: the app asks the same before it
   // gives one, and the rule holds here whatever asked.
@@ -735,7 +751,6 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
           .to_agent = to->agent().has_value(),
           .same_profile = from->profile() == to->profile(),
           .pinned = from->IsPinned(tab),
-          .split = from->Panes(tab).size() > 1,
           .web_page = !page->system_page() && page->Url().SchemeIsHTTPOrHTTPS() &&
                       (!contents || contents->GetLastCommittedURL().SchemeIsHTTPOrHTTPS()),
           .camera = captures.camera,
@@ -744,12 +759,8 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
           .permission_asked = browser_core::PermissionQuestion::Pending(contents),
           .dialog = browser_core::PageDialog::Up(tab),
           .saved_login = browser_core::SavedLoginFits(contents),
-          .device_or_location = UsesDeviceOrLocation(contents),
+          .device = UsesDevice(contents),
           .files = contents && contents->HasFileSystemAccessHandles(),
-          // Chrome says a video is in Picture in Picture at a media card too, which is no window.
-          .picture_in_picture = contents && (contents->HasPictureInPictureDocument() ||
-                                             (contents->HasPictureInPictureVideo() &&
-                                              !browser_core::CardShowsVideo(contents))),
       })) {
     return false;
   }
@@ -773,10 +784,11 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   if (!moved) {
     return false;
   }
-  // A card's video ends with the give, and only with one that happened: a page in an agent's
-  // Space has no Picture in Picture, at a card either (agent_space_rule.h).
+  // A card's video ends with the give, and only with one that happened, and a Picture in Picture
+  // window closes with it: a page in an agent's Space has neither (agent_space_rule.h).
   browser_core::EndCardVideo(tab);
-  browser_core::handed::Given(tab, home, left);
+  ClosePictureInPicture(contents);
+  browser_core::handed::Given(tab, home, left, std::move(split));
   // A print preview the user had open over it doesn't ride into the agent's Space, nor a
   // certificate chooser or anything else Chrome was asking them there.
   browser_core::ClosePrintPreview(browser_core::Tab::FromId(tab));

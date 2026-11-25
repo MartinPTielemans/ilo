@@ -36,12 +36,6 @@ TEST(HandedGiveRuleTest, APinnedTabIsRefused) {
   EXPECT_FALSE(MayGive(tab));
 }
 
-TEST(HandedGiveRuleTest, ATabInASplitViewIsRefused) {
-  Tab tab = Fit();
-  tab.split = true;
-  EXPECT_FALSE(MayGive(tab));
-}
-
 // A new tab's page, a file, an extension's page, or a page in the system's engine.
 TEST(HandedGiveRuleTest, APageThatIsntHttpOrHttpsIsRefused) {
   Tab tab = Fit();
@@ -61,7 +55,8 @@ TEST(HandedGiveRuleTest, ATabUsingTheMicrophoneIsRefused) {
   EXPECT_FALSE(MayGive(tab));
 }
 
-TEST(HandedGiveRuleTest, ATabUsingTheScreenIsRefused) {
+// The screen, a window or another tab.
+TEST(HandedGiveRuleTest, ATabSharingTheScreenIsRefused) {
   Tab tab = Fit();
   tab.screen = true;
   EXPECT_FALSE(MayGive(tab));
@@ -88,23 +83,16 @@ TEST(HandedGiveRuleTest, ATabWhoseSignInFormHasASavedLoginIsRefused) {
   EXPECT_FALSE(MayGive(tab));
 }
 
-// A device it has open, a scan for one, or the user's location as it changes.
-TEST(HandedGiveRuleTest, ATabUsingADeviceOrTheLocationIsRefused) {
+// A device it has open, or a scan for one.
+TEST(HandedGiveRuleTest, ATabUsingADeviceIsRefused) {
   Tab tab = Fit();
-  tab.device_or_location = true;
+  tab.device = true;
   EXPECT_FALSE(MayGive(tab));
 }
 
 TEST(HandedGiveRuleTest, ATabHoldingTheUsersFilesIsRefused) {
   Tab tab = Fit();
   tab.files = true;
-  EXPECT_FALSE(MayGive(tab));
-}
-
-// Chrome's floating window for its video, or a window its page opened for a document.
-TEST(HandedGiveRuleTest, ATabWithAPictureInPictureWindowIsRefused) {
-  Tab tab = Fit();
-  tab.picture_in_picture = true;
   EXPECT_FALSE(MayGive(tab));
 }
 

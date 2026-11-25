@@ -47,5 +47,31 @@ TEST(HandedPlaceTest, AtTheTopWithNoPlaceKept) {
   EXPECT_EQ(Among({kAfter, kAfter, kAfter}), 0u);
 }
 
+// The split view it left has the tabs it had: it goes back between the ones it was between.
+TEST(HandedPlaceTest, BackBetweenTheTabsOfItsSplit) {
+  EXPECT_EQ(InSplit({true, false}), 1u);
+}
+
+TEST(HandedPlaceTest, BackAtTheEndOfItsSplitThatItWasAt) {
+  EXPECT_EQ(InSplit({false, false}), 0u);
+  EXPECT_EQ(InSplit({true, true}), 2u);
+}
+
+// One of the tabs it was beside closed or left the split since.
+TEST(HandedPlaceTest, BackBesideTheOneTabLeftOfItsSplit) {
+  EXPECT_EQ(InSplit({true}), 1u);
+  EXPECT_EQ(InSplit({false}), 0u);
+}
+
+// The user moved the split's tabs about since: after the last of them that was before it.
+TEST(HandedPlaceTest, AfterTheLastTabThatWasBeforeIt) {
+  EXPECT_EQ(InSplit({false, true}), 2u);
+}
+
+// A tab put in the split since was at neither side of it, and doesn't move it.
+TEST(HandedPlaceTest, ATabAddedToItsSplitSinceDoesntMoveIt) {
+  EXPECT_EQ(InSplit({true, false, false}), 1u);
+}
+
 }  // namespace
 }  // namespace browser_core::handed_place

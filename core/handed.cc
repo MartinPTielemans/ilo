@@ -45,10 +45,31 @@ bool MayTraverse(bc_id tab, int index, bool from_page) {
   return !entry || MayGoTo(tab, entry->GetUniqueID(), from_page);
 }
 
+// Puts |tab|, back among |home|'s Today tabs, into the split view it left, which had |split|:
+// beside the first of them still a Today tab there, between the ones it was between. It stays
+// loose, where the split was, if none of them is left or their split is full by now.
+void RejoinSplit(Space& home, bc_id tab, const std::vector<bc_id>& split) {
+  const auto self = std::ranges::find(split, tab);
+  const auto with = std::ranges::find_if(
+      split, [&](bc_id pane) { return pane != tab && std::ranges::contains(home.today(), pane); });
+  if (self == split.end() || with == split.end() || !home.Split(tab, *with, GURL())) {
+    return;
+  }
+  std::vector<bool> was_before;
+  for (bc_id pane : home.Panes(tab)) {
+    if (pane != tab) {
+      was_before.push_back(std::ranges::find(split, pane) < self);
+    }
+  }
+  home.MoveInSplit(tab, handed_place::InSplit(was_before));
+  Window::PanesChanged();
+}
+
 }  // namespace
 
-void Given(bc_id tab, bc_id home, Space::Node node) {
-  Marks().insert_or_assign(tab, Mark{.home = home, .node = std::move(node)});
+void Given(bc_id tab, bc_id home, Space::Node node, std::vector<bc_id> split) {
+  Marks().insert_or_assign(tab,
+                           Mark{.home = home, .node = std::move(node), .split = std::move(split)});
   BoundHistory(tab);
 }
 
@@ -96,6 +117,7 @@ bool Return(bc_id tab) {
   std::erase(others, tab);
   home->Move(tab, /*pinned=*/false, 0, PlaceAmong(*home, others, mark.node),
              [](bc_id) { return GURL(); });
+  RejoinSplit(*home, tab, mark.split);
   // Its node as it was, so the account's other devices see no move.
   if (mark.node.id.is_valid()) {
     home->RestoreNodes(home->node(), {{tab, mark.node}});

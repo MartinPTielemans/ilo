@@ -22,12 +22,16 @@ struct Mark {
   bc_id home = 0;
   // Its node there, with its place among that Space's Today tabs.
   Space::Node node;
+  // The tabs of the split view it left, left to right with itself among them, or none: it goes
+  // back into that split while one of them is still a Today tab there.
+  std::vector<bc_id> split;
   // The history it had then, which stays the user's.
   handed_history::Bound history;
 };
 
-// |tab| was given to an agent, out of the Space |home|, where it had |node|.
-void Given(bc_id tab, bc_id home, Space::Node node);
+// |tab| was given to an agent, out of the Space |home|, where it had |node| and showed in a split
+// view with |split|, itself among them.
+void Given(bc_id tab, bc_id home, Space::Node node, std::vector<bc_id> split);
 
 // The mark on |tab|, or null if no agent has it from the user.
 const Mark* Of(bc_id tab);
