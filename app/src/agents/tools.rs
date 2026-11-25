@@ -786,13 +786,23 @@ pub const KEPT: &str = "asked to stay: unsaved changes";
 /// kind's code word, as "request_permission camera".
 const PERMISSION: &str = "request_permission ";
 
+/// The kind of permission the browser refused a page a thread holds, by the core's code word, if
+/// `action` is the core's entry of one. A page's file dialog the core cancelled is the file
+/// picker's, under the actions that entry has had, so that one event has one wording.
+fn stopped_kind(action: &str) -> Option<&str> {
+    match action {
+        "file_dialog file_input" | "file_dialog file_system_access" => Some("file_picker"),
+        action => action.strip_prefix(PERMISSION),
+    }
+}
+
 /// What the activity log says of a permission the browser refused a page a thread holds, if
 /// `action` is the core's entry of one. Each kind has its whole sentence, with the site as the one
 /// stopped, and a kind with no sentence of its own takes the one for every other. The kind's code
 /// word and the entry's reason are the core's, for the log file: the sentence is all a user reads
 /// (`refusal_shown`).
 pub fn permission_stopped(action: &str, site: &str) -> Option<String> {
-    let kind = action.strip_prefix(PERMISSION)?;
+    let kind = stopped_kind(action)?;
     let site = stopped_site(site);
     let from = match kind {
         "camera" | "camera_pan_tilt_zoom" => "using the camera",
@@ -812,8 +822,8 @@ pub fn permission_stopped(action: &str, site: &str) -> Option<String> {
     Some(format!("{PRODUCT} stopped {site} from {from}"))
 }
 
-/// The one stopped, as such a sentence names it: the page's host. A page with none, as a blank
-/// one, has no words of its own yet, so `NO_SITE` stands in for them.
+/// The one stopped, as such a sentence names it: the page's host, and `NO_SITE` for a page with
+/// none to give, as a blank one or one of an opaque origin.
 pub fn stopped_site(site: &str) -> &str {
     match site.is_empty() {
         true => NO_SITE,
@@ -821,15 +831,15 @@ pub fn stopped_site(site: &str) -> &str {
     }
 }
 
-/// A stand-in until the words table has the form for a page with no host.
+/// What stands in the site's place in every such sentence where the page has no host.
 pub const NO_SITE: &str = "a page";
 
 /// Why an entry was refused, as its row says it under what was done: nothing for a permission the
-/// browser refused a page, whose sentence says it whole and whose reason is a code word.
+/// browser refused a page, whose sentence says it whole and whose reason is the core's own.
 pub fn refusal_shown<'a>(action: &str, refused: &'a str) -> &'a str {
-    match action.starts_with(PERMISSION) {
-        true => "",
-        false => refused,
+    match stopped_kind(action) {
+        Some(_) => "",
+        None => refused,
     }
 }
 
@@ -1171,9 +1181,6 @@ pub fn describe(action: &str) -> &'static str {
         "stopped by the user" => "You stopped it, which closed its connection",
         "hand_off" => "Handed you a tab",
         "upload" => "Added a file to a page",
-        "file_dialog file_input" | "file_dialog file_system_access" => {
-            "Page tried to open a file dialog"
-        }
         "close_tab" => "Closed a tab",
         "page_dialog" => "Paused: the page shows a dialog",
         "discard_tab" => "Closed a tab without saving",

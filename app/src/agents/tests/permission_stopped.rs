@@ -59,24 +59,45 @@ fn every_other_kind_takes_the_one_sentence() {
     }
 }
 
-/// A page with no host is named by a stand-in, from one place, until the words table has its form.
+/// A page with no host to give, as a blank one, is `a page` in the site's place, from one place, in
+/// each kind's whole sentence.
 #[test]
-fn a_page_with_no_host_takes_the_stand_in() {
-    assert_eq!(tools::stopped_site(""), tools::NO_SITE);
+fn a_page_with_no_host_is_a_page_in_every_sentence() {
+    assert_eq!(tools::stopped_site(""), "a page");
     assert_eq!(tools::stopped_site("example.com"), "example.com");
-    let (title, _) = row("request_permission camera", "");
-    assert_eq!(
-        title,
-        format!("{PRODUCT} stopped {} from using the camera", tools::NO_SITE)
-    );
-    let (title, _) = row("request_permission midi", "");
-    assert_eq!(
-        title,
-        format!(
-            "{PRODUCT} stopped a permission request from {}",
-            tools::NO_SITE
-        )
-    );
+    for (kind, from) in KINDS {
+        let (title, why) = row(&format!("request_permission {kind}"), "");
+        assert_eq!(title, format!("{PRODUCT} stopped a page from {from}"));
+        assert_eq!(why, "", "{kind}");
+    }
+    for kind in OTHERS {
+        let (title, _) = row(&format!("request_permission {kind}"), "");
+        assert_eq!(
+            title,
+            format!("{PRODUCT} stopped a permission request from a page")
+        );
+    }
+}
+
+/// A page's file dialog the core cancelled is the file picker's entry, whichever action it came
+/// under, and its row says the one sentence and nothing of why under it.
+#[test]
+fn a_cancelled_file_dialog_is_the_file_pickers_sentence() {
+    let why = "Agents can't use system file dialogs, so ilo told the page it was cancelled.";
+    let picker = format!("{PRODUCT} stopped example.com from opening a file picker");
+    for action in [
+        "file_dialog file_input",
+        "file_dialog file_system_access",
+        "request_permission file_picker",
+    ] {
+        let did = tools::Did {
+            tool: action.into(),
+            site: "example.com".into(),
+            ..Default::default()
+        };
+        assert_eq!(tools::step_title(&did, tools::Tense::Failed), picker);
+        assert_eq!(tools::refusal_shown(action, why), "", "{action}");
+    }
 }
 
 #[test]
