@@ -548,6 +548,9 @@ typedef enum bc_agent_failure {
   // The page the open or the navigate itself asked for answered only over http and was stopped:
   // the tab is back on the page it had, or closed if it had none.
   BC_AGENT_FAILURE_NOT_SECURE = 11,
+  // The page an open opened went on by itself, while the open still waited for it, to one that
+  // answers only over http and was stopped with no page behind it: the tab closed.
+  BC_AGENT_FAILURE_WENT_ON_NOT_SECURE = 12,
 } bc_agent_failure;
 
 // An agent's call the core checked, for the activity log (bc_agent_may_act).
@@ -1443,6 +1446,8 @@ typedef struct bc_host {
   // FILE_FIELD's is a JSON object of its own: the "field" for bc_file_field_choose, the field's
   // accessible name in "label", "" if it has none, the "site" whose frame it's in, which gets the
   // file and may not be the tab's, without "www.", and "many": true if the user may pick several.
+  // A click that went, whose page then went on to one that answers only over http, with no page
+  // behind it, so that the tab closed: a JSON object of its own, {"closed": "not_secure"}.
   // With |error|, |failure| is a bc_agent_failure value, else BC_AGENT_FAILURE_NONE.
   void (*agent_page_done)(void* context,
                           bc_id tab,
