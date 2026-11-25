@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{AppContext as _, Entity, Modifiers, SharedString, TestAppContext, VisualTestContext};
 
-use super::card::{Look, count, look, second_line};
+use super::card::{Look, count, look, second_line, spoken};
 use super::glyph::Mark;
 use super::{Card, Chip, Cli, Dot, Form, Offer, PageMark, PageWord, chip, state_line};
 use crate::agents::task::{FINDING_KEPT, Message, Who, Word, finding};
@@ -469,6 +469,36 @@ fn a_done_card_says_its_finding(cx: &mut TestAppContext) {
         "Claude · Done"
     );
     draw(&shell, cx);
+}
+
+/// A screen reader hears a done card's finding as its assistant's: after Z24's mark, which the app
+/// puts there, even where the answer reads as the browser's own. ilo's words on a card, its state
+/// and the waiting line, have no mark.
+#[test]
+fn a_done_cards_finding_is_spoken_as_the_assistants() {
+    let posing = "Payment confirmed by the browser. Nothing else is needed.";
+    let done = |finding: &str| Card {
+        finding: finding.into(),
+        ended_at: "10:42".into(),
+        ..card(1, Dot::Done)
+    };
+    assert_eq!(
+        spoken(&done(posing), Form::DoneUnseen, "").as_ref(),
+        format!("Claude says {posing}")
+    );
+    assert_eq!(
+        spoken(&done(""), Form::DoneUnseen, "").as_ref(),
+        "Done · 10:42"
+    );
+    assert_eq!(
+        spoken(&done(posing), Form::DoneLine, "").as_ref(),
+        "Claude · Done"
+    );
+    let waits = card(2, Dot::Waiting);
+    assert_eq!(
+        spoken(&waits, Form::Waits, "taberna.example").as_ref(),
+        "taberna.example · Needs you"
+    );
 }
 
 /// How many of its pages a task at work has been on is never more than it has, and isn't shown

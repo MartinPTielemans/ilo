@@ -13,7 +13,7 @@ use super::{
     Chip, Form, PageWord, SLOT, Shell, chip, clock, drawn_listener, number, state_lead, state_line,
 };
 use crate::agents::task::ilo::IloButton;
-use crate::agents::task::{Card, Dot, NEEDS_YOU};
+use crate::agents::task::{Card, Dot, NEEDS_YOU, says};
 use crate::shell::conversation::words;
 use crate::shell::page_ends::StripStop;
 use crate::shell::{FAVICON_SIZE, PLATE_INSET, Slot, TILE, TITLE, dashed_plate};
@@ -52,6 +52,16 @@ pub(super) fn first_sentence(text: &str) -> usize {
         matches!(c, '.' | '!' | '?') && text[at + c.len_utf8()..].starts_with(' ')
     });
     ends.map_or(text.len(), |(at, c)| at + c.len_utf8())
+}
+
+/// What a card's second line says to the screen reader: as drawn, but a finding, the assistant's
+/// words, comes after Z24's mark, so it's never heard as the browser's.
+pub(super) fn spoken(card: &Card, form: Form, site: &str) -> SharedString {
+    let line = second_line(card, form, site);
+    match form == Form::DoneUnseen && !card.finding.is_empty() {
+        true => says(&card.name, &line).into(),
+        false => line,
+    }
 }
 
 /// How many of its pages a task at work has been on, of them all (Z1), left out while it has one.
@@ -248,7 +258,7 @@ impl Shell {
     /// What a card says of its state to the screen reader, after its title.
     fn said(&self, card: &Card, form: Form) -> SharedString {
         let site = self.waiting_site(card);
-        second_line(card, form, &site)
+        spoken(card, form, &site)
     }
 
     /// The site of the page a waiting task waits on, as the rail names it.
