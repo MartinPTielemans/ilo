@@ -15,7 +15,7 @@ constexpr base::TimeDelta kFrame = base::Milliseconds(16);
 
 // A tab as the core runs it: one wait at most, ended when its time comes, and the colours the UI
 // was told.
-struct Run {
+struct FakeTab {
   void Change(std::optional<uint32_t> argb) { Apply(background.Changed(argb, shown, now)); }
 
   // Time passes, and the wait ends when it's due.
@@ -50,133 +50,133 @@ struct Run {
 };
 
 TEST(TabBackgroundTest, KeepsThePagesColourAndTellsAShownTabAtOnce) {
-  Run run;
-  EXPECT_FALSE(run.background.color());
-  run.Change(kWhite);
-  EXPECT_EQ(run.background.color(), 0xffffffu);
-  ASSERT_EQ(run.told.size(), 1u);
-  EXPECT_EQ(run.told[0], 0xffffffu);
-  EXPECT_FALSE(run.background.waiting());
-  EXPECT_FALSE(run.due);
+  FakeTab tab;
+  EXPECT_FALSE(tab.background.color());
+  tab.Change(kWhite);
+  EXPECT_EQ(tab.background.color(), 0xffffffu);
+  ASSERT_EQ(tab.told.size(), 1u);
+  EXPECT_EQ(tab.told[0], 0xffffffu);
+  EXPECT_FALSE(tab.background.waiting());
+  EXPECT_FALSE(tab.due);
 }
 
 TEST(TabBackgroundTest, AChangeEqualToTheColourKeptIsDropped) {
-  Run run;
-  run.Change(kInk);
-  run.Pass(base::Seconds(1));
-  run.Change(kInk);
-  EXPECT_EQ(run.told.size(), 1u);
-  EXPECT_FALSE(run.due);
+  FakeTab tab;
+  tab.Change(kInk);
+  tab.Pass(base::Seconds(1));
+  tab.Change(kInk);
+  EXPECT_EQ(tab.told.size(), 1u);
+  EXPECT_FALSE(tab.due);
 }
 
 // Transparent, half-transparent and none reported are all "none", and the same to each other.
 TEST(TabBackgroundTest, AColourThatIsntOpaqueIsNone) {
-  Run run;
-  run.Change(kInk);
-  run.Pass(base::Seconds(1));
-  run.Change(0x8016140f);
-  EXPECT_FALSE(run.background.color());
-  ASSERT_EQ(run.told.size(), 2u);
-  EXPECT_FALSE(run.told[1]);
-  run.Pass(base::Seconds(1));
-  run.Change(0x00000000);
-  run.Change(std::nullopt);
-  EXPECT_EQ(run.told.size(), 2u);
+  FakeTab tab;
+  tab.Change(kInk);
+  tab.Pass(base::Seconds(1));
+  tab.Change(0x8016140f);
+  EXPECT_FALSE(tab.background.color());
+  ASSERT_EQ(tab.told.size(), 2u);
+  EXPECT_FALSE(tab.told[1]);
+  tab.Pass(base::Seconds(1));
+  tab.Change(0x00000000);
+  tab.Change(std::nullopt);
+  EXPECT_EQ(tab.told.size(), 2u);
 }
 
 // A tab no window shows keeps the colour for the switch, tells nothing and waits for nothing.
 TEST(TabBackgroundTest, ATabNotShownKeepsTheColourAndTellsNothing) {
-  Run run;
-  run.shown = false;
+  FakeTab tab;
+  tab.shown = false;
   for (int frame = 0; frame < 60; ++frame) {
-    run.Change(0xff000000 | frame);
-    run.Pass(kFrame);
+    tab.Change(0xff000000 | frame);
+    tab.Pass(kFrame);
   }
-  run.Pass(base::Seconds(1));
-  EXPECT_TRUE(run.told.empty());
-  EXPECT_EQ(run.waits, 0);
-  EXPECT_FALSE(run.background.waiting());
+  tab.Pass(base::Seconds(1));
+  EXPECT_TRUE(tab.told.empty());
+  EXPECT_EQ(tab.waits, 0);
+  EXPECT_FALSE(tab.background.waiting());
   // The switch reads the colour it settled on.
-  EXPECT_EQ(run.background.color(), 59u);
+  EXPECT_EQ(tab.background.color(), 59u);
 }
 
 // A fade: the first frame's colour at once, the last once it has stopped, none between.
 TEST(TabBackgroundTest, ABurstTellsTheFirstAndTheSettledColour) {
-  Run run;
+  FakeTab tab;
   for (int frame = 0; frame < 30; ++frame) {
-    run.Change(0xff000000 | frame);
-    run.Pass(kFrame);
+    tab.Change(0xff000000 | frame);
+    tab.Pass(kFrame);
   }
-  ASSERT_EQ(run.told.size(), 1u);
-  EXPECT_EQ(run.told[0], 0u);
-  EXPECT_TRUE(run.background.waiting());
-  run.Pass(TabBackground::kSettle);
-  ASSERT_EQ(run.told.size(), 2u);
-  EXPECT_EQ(run.told[1], 29u);
+  ASSERT_EQ(tab.told.size(), 1u);
+  EXPECT_EQ(tab.told[0], 0u);
+  EXPECT_TRUE(tab.background.waiting());
+  tab.Pass(TabBackground::kSettle);
+  ASSERT_EQ(tab.told.size(), 2u);
+  EXPECT_EQ(tab.told[1], 29u);
   // Nothing is left armed once the changes stop.
-  EXPECT_FALSE(run.background.waiting());
-  EXPECT_FALSE(run.due);
-  run.Pass(base::Seconds(10));
-  EXPECT_EQ(run.told.size(), 2u);
+  EXPECT_FALSE(tab.background.waiting());
+  EXPECT_FALSE(tab.due);
+  tab.Pass(base::Seconds(10));
+  EXPECT_EQ(tab.told.size(), 2u);
 }
 
 // A page that never stops changing: the first colour and nothing more, on one wait at a time.
 TEST(TabBackgroundTest, AnEndlessRunTellsOnce) {
-  Run run;
+  FakeTab tab;
   // Two seconds of frames.
   for (int frame = 0; frame < 125; ++frame) {
-    run.Change(0xff000000 | frame);
-    run.Pass(kFrame);
+    tab.Change(0xff000000 | frame);
+    tab.Pass(kFrame);
   }
-  EXPECT_EQ(run.told.size(), 1u);
+  EXPECT_EQ(tab.told.size(), 1u);
   // The wait went on once per settle time, not once per change: 8 or 9 timer tasks, not 125.
-  EXPECT_GE(run.waits, 8);
-  EXPECT_LE(run.waits, 9);
+  EXPECT_GE(tab.waits, 8);
+  EXPECT_LE(tab.waits, 9);
 }
 
 // A change long after the last is told at once again.
 TEST(TabBackgroundTest, AChangeAfterTheSettleTimeIsToldAtOnce) {
-  Run run;
-  run.Change(kWhite);
-  run.Pass(TabBackground::kSettle);
-  run.Change(kInk);
-  EXPECT_EQ(run.told.size(), 2u);
-  EXPECT_FALSE(run.due);
+  FakeTab tab;
+  tab.Change(kWhite);
+  tab.Pass(TabBackground::kSettle);
+  tab.Change(kInk);
+  EXPECT_EQ(tab.told.size(), 2u);
+  EXPECT_FALSE(tab.due);
 }
 
 // Hidden mid-fade: the wait ends at its time with nothing told and none after it, and the UI reads
 // the colour when it shows the tab again.
 TEST(TabBackgroundTest, AWaitEndsOnceTheTabIsntShown) {
-  Run run;
-  run.Change(kWhite);
-  run.Pass(kFrame);
-  run.Change(kInk);
-  ASSERT_TRUE(run.background.waiting());
-  run.shown = false;
-  run.Change(kWhite);
-  run.Pass(base::Seconds(1));
-  EXPECT_FALSE(run.background.waiting());
-  EXPECT_FALSE(run.due);
-  EXPECT_EQ(run.waits, 1);
-  EXPECT_EQ(run.told.size(), 1u);
-  EXPECT_EQ(run.background.color(), 0xffffffu);
+  FakeTab tab;
+  tab.Change(kWhite);
+  tab.Pass(kFrame);
+  tab.Change(kInk);
+  ASSERT_TRUE(tab.background.waiting());
+  tab.shown = false;
+  tab.Change(kWhite);
+  tab.Pass(base::Seconds(1));
+  EXPECT_FALSE(tab.background.waiting());
+  EXPECT_FALSE(tab.due);
+  EXPECT_EQ(tab.waits, 1);
+  EXPECT_EQ(tab.told.size(), 1u);
+  EXPECT_EQ(tab.background.color(), 0xffffffu);
 }
 
 // The tab goes to another page mid-fade: the colour waiting is told then, since a new page of the
 // same colour reports no change.
 TEST(TabBackgroundTest, LeavingThePageTellsAWaitingChange) {
-  Run run;
-  run.Change(kWhite);
-  run.Pass(kFrame);
-  run.Change(kInk);
-  ASSERT_EQ(run.told.size(), 1u);
-  TabBackground::Step left = run.background.LeftPage(/*shown=*/true);
+  FakeTab tab;
+  tab.Change(kWhite);
+  tab.Pass(kFrame);
+  tab.Change(kInk);
+  ASSERT_EQ(tab.told.size(), 1u);
+  TabBackground::Step left = tab.background.LeftPage(/*shown=*/true);
   EXPECT_TRUE(left.tell);
   EXPECT_FALSE(left.wait);
-  EXPECT_FALSE(run.background.waiting());
-  EXPECT_EQ(run.background.color(), 0x16140fu);
+  EXPECT_FALSE(tab.background.waiting());
+  EXPECT_EQ(tab.background.color(), 0x16140fu);
   // With nothing waiting, leaving tells nothing: the new page keeps the colour until its own.
-  EXPECT_FALSE(run.background.LeftPage(/*shown=*/true).tell);
+  EXPECT_FALSE(tab.background.LeftPage(/*shown=*/true).tell);
 }
 
 }  // namespace
