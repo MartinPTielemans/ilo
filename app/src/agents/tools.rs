@@ -1096,10 +1096,19 @@ pub const NO_TAB_OF_ITS_OWN: [&str; 6] = [
 pub const NOT_SECURE_ACTION: &str = "open_page";
 const NOT_SECURE_REASON: &str = "not_secure";
 pub const NOT_SECURE: &str = "Not opened: no secure connection";
+/// The core's action for the same entry where the page is one the user went to and left at
+/// Chrome's warning when they handed the tab back: no step of the agent's asked for it.
+const NOT_SECURE_HANDED_BACK: &str = "handed_back_page";
 
-/// Whether `action` and `refused` are that entry's.
-pub fn not_secure(action: &str, refused: &str) -> bool {
-    action == NOT_SECURE_ACTION && refused == NOT_SECURE_REASON
+/// Whether `action` and `refused` are that entry's, and if so whether a step of the agent's
+/// asked for its page, which then ends as one that didn't go.
+pub fn not_secure(action: &str, refused: &str) -> Option<bool> {
+    let asked = match action {
+        NOT_SECURE_ACTION => true,
+        NOT_SECURE_HANDED_BACK => false,
+        _ => return None,
+    };
+    (refused == NOT_SECURE_REASON).then_some(asked)
 }
 
 /// What an action an agent took is, for the activity log, by the name the core's entry gives it.

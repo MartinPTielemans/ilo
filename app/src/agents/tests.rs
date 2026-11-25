@@ -3772,7 +3772,7 @@ fn a_page_without_a_secure_connection_ends_the_step_that_went_there(cx: &mut Tes
         answer.recv().unwrap(),
         ToolResult::error("The tab couldn't go there.")
     );
-    // One with no step waiting, as a tab handed back at Chrome's warning, is the log's alone.
+    // One with no step waiting is the log's alone.
     agents.update(cx, |agents, cx| {
         let named = Some("other.example");
         agents.checked("claude-code", 20, "open_page", "not_secure", named, cx);
@@ -3782,6 +3782,47 @@ fn a_page_without_a_secure_connection_ends_the_step_that_went_there(cx: &mut Tes
         log[0],
         ("open_page".into(), "other.example".into(), "".into())
     );
+}
+
+/// A page the user went to and handed the tab back at, Chrome's warning up, is put back as any:
+/// its entry is the log's, in the same words, and ends no step. One waiting on the tab began
+/// after the hand-back and still goes, so it is never told it didn't.
+#[gpui::test]
+fn a_page_left_at_a_hand_back_ends_no_step(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let answer = call(
+        &agents,
+        "claude-code",
+        "navigate",
+        json!({ "tab": 20, "url": "https://shop.example/" }),
+        cx,
+    );
+    agents.update(cx, |agents, cx| {
+        let named = Some("plain.example");
+        agents.checked(
+            "claude-code",
+            20,
+            "handed_back_page",
+            "not_secure",
+            named,
+            cx,
+        );
+    });
+    assert!(answer.try_recv().is_err(), "the entry ended a step");
+    let entries = log(&agents, "claude-code", cx);
+    assert_eq!(
+        entries[0],
+        ("open_page".into(), "plain.example".into(), "".into())
+    );
+    // The step is the core's to answer still, as it goes on in the page the tab is put back on.
+    assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
+    // The entry is known by its reason too, as a step's is.
+    assert_eq!(
+        tools::not_secure("handed_back_page", "not_secure"),
+        Some(false)
+    );
+    assert_eq!(tools::not_secure("open_page", "not_secure"), Some(true));
+    assert_eq!(tools::not_secure("handed_back_page", "another"), None);
 }
 
 /// An entry of the core's is about the site it names, not the page its tab shows, and about the

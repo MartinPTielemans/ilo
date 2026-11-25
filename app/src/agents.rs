@@ -1526,9 +1526,9 @@ impl Agents {
         cx: &mut Context<Self>,
     ) {
         let named = named.map(named_site);
-        if tools::not_secure(action, refused) {
+        if let Some(asked) = tools::not_secure(action, refused) {
             // Never by where the tab is, which is the page it's put back on.
-            return self.not_secure(agent, tab, &named.unwrap_or_default(), cx);
+            return self.not_secure(agent, tab, &named.unwrap_or_default(), asked, cx);
         }
         let site = named.unwrap_or_else(|| site(&self.browser.tab(tab, cx).url));
         self.note_page(
@@ -1543,13 +1543,22 @@ impl Agents {
 
     /// The core stopped a page of `host` in the agent's `tab`, which answered only over http, and
     /// puts the tab back: an entry for the log, by the host the core names, as the tab is leaving
-    /// that page, or by none. The step that waits on the page, the oldest there as the core takes a tab's one
-    /// at a time, ends as one that never went, in the words that has: the agent learns no more.
-    fn not_secure(&mut self, agent: &str, tab: u64, host: &str, cx: &mut Context<Self>) {
+    /// that page, or by none. Where a step of the agent's `asked` for the page, the step that
+    /// waits on it, the oldest there as the core takes a tab's one at a time, ends as one that
+    /// never went, in the words that has: the agent learns no more. A page the user went to and
+    /// handed the tab back at ends none: a step waiting there began after and still goes.
+    fn not_secure(
+        &mut self,
+        agent: &str,
+        tab: u64,
+        host: &str,
+        asked: bool,
+        cx: &mut Context<Self>,
+    ) {
         let by = (self.holder(agent, tab), tab);
         self.note_page(agent, by, tools::NOT_SECURE_ACTION, host, "");
         let waiting = (self.acting.iter())
-            .filter(|(_, acting)| acting.tab == tab)
+            .filter(|(_, acting)| asked && acting.tab == tab)
             .map(|(request, _)| *request)
             .min();
         if let Some(acting) = waiting.and_then(|request| self.acting.remove(&request)) {
