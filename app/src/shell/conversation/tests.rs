@@ -3819,73 +3819,19 @@ fn ring_round(
 /// app's session: its words, Take Over and Stop, the one row with two.
 #[gpui::test]
 fn the_page_row_answers_the_pointer_and_the_ring_alike_in_each_case(cx: &mut TestAppContext) {
-    use crate::shell::page_ends::{STOPS_DRAWN, StripStop};
-    let held = Status {
-        agent: "task-1".into(),
-        name: "Claude".into(),
-        space: 3,
-        doing: "".into(),
-        held: vec![(30, "".into())],
-    };
-    let yours = Conversation {
-        live: Live::Yours {
-            tab: 30,
-            site: None,
-        },
-        ..conversation(3)
-    };
-    let done = Card {
-        dot: Dot::Done,
-        word: Word::for_dot(Dot::Done),
-        open: vec![(30, "skyscanner.net".into())],
-        ..card()
-    };
-    let ended = Conversation {
-        stoppable: false,
-        ..conversation(3)
-    };
-    let session = Card {
-        agent: "session-1".into(),
-        name: "Claude Code".into(),
-        replies: false,
-        ..card()
-    };
-    let session_talk = Conversation {
-        agent: "session-1".into(),
-        name: "Claude Code".into(),
-        lines: vec![
-            Line::Step(step(0, "Read the page", false)),
-            Line::Step(step(1, "Clicking “Tickets”", true)),
-        ],
-        ..conversation(0)
-    };
-    let cases = [
-        (
-            "working",
-            card(),
-            conversation(3),
-            None,
-            vec!["Page", "TakeOver"],
-            StripStop::TakeOver,
-        ),
-        (
-            "yours",
-            card(),
-            yours,
-            Some(held),
-            vec!["into the page", "HandBack"],
-            StripStop::HandBack,
-        ),
-        ("ended", done, ended, None, vec!["Open"], StripStop::Open),
-        (
-            "session",
-            session.clone(),
-            session_talk.clone(),
-            None,
-            vec!["Page", "TakeOver", "Stop"],
-            StripStop::Stop,
-        ),
-    ];
+    use crate::shell::page_ends::STOPS_DRAWN;
+    let (session, session_talk) = session_panel();
+    let cases = row_cases().into_iter().map(|(case, card, talk, status, button)| {
+        let ring = match case {
+            "working" => vec!["Page", "TakeOver"],
+            "yours" => vec!["into the page", "HandBack"],
+            "ended" => vec!["Open"],
+            _ => vec!["Page", "TakeOver", "Stop"],
+        };
+        // Only a held page's status changes the row; the agent at work is left out, as before.
+        let status = status.filter(|status| !status.held.is_empty());
+        (case, card, talk, status, ring, button)
+    });
     for (case, card, talk, status, ring, button) in cases {
         let calls = |pressed: bool, cx: &mut TestAppContext| {
             let (shell, host, view, cx) = standing_with(card.clone(), talk.clone(), cx);
@@ -3927,6 +3873,128 @@ fn the_page_row_answers_the_pointer_and_the_ring_alike_in_each_case(cx: &mut Tes
         view.read_with(cx, |view, _| view.reply_drawn.get())
             .is_some()
     );
+}
+
+/// The page row's cases, each standing on tab 30, and an outside app's panel: the case's name,
+/// task-1's card and conversation, what the agents say of it, and the row's last button.
+fn row_cases() -> Vec<(
+    &'static str,
+    Card,
+    Conversation,
+    Option<Status>,
+    crate::shell::page_ends::StripStop,
+)> {
+    use crate::shell::page_ends::StripStop;
+    let at_work = |agent: &str, name: &str| Status {
+        agent: agent.into(),
+        name: name.into(),
+        space: 3,
+        doing: "Searching flights".into(),
+        held: Vec::new(),
+    };
+    let held = Status {
+        held: vec![(30, "".into())],
+        doing: "".into(),
+        ..at_work("task-1", "Claude")
+    };
+    let yours = Conversation {
+        live: Live::Yours {
+            tab: 30,
+            site: None,
+        },
+        ..conversation(3)
+    };
+    let done = Card {
+        dot: Dot::Done,
+        word: Word::for_dot(Dot::Done),
+        open: vec![(30, "skyscanner.net".into())],
+        ..card()
+    };
+    let ended = Conversation {
+        stoppable: false,
+        ..conversation(3)
+    };
+    let (session, session_talk) = session_panel();
+    vec![
+        ("working", card(), conversation(3), Some(at_work("task-1", "Claude")), StripStop::TakeOver),
+        ("yours", card(), yours, Some(held), StripStop::HandBack),
+        ("ended", done, ended, None, StripStop::Open),
+        ("session", session, session_talk, Some(at_work("session-1", "Claude Code")), StripStop::Stop),
+    ]
+}
+
+/// An outside app's session, standing on tab 30: its card, with no composer, and its step lines.
+fn session_panel() -> (Card, Conversation) {
+    let session = Card {
+        agent: "session-1".into(),
+        name: "Claude Code".into(),
+        replies: false,
+        ..card()
+    };
+    let talk = Conversation {
+        agent: "session-1".into(),
+        name: "Claude Code".into(),
+        lines: vec![
+            Line::Step(step(0, "Read the page", false)),
+            Line::Step(step(1, "Clicking “Tickets”", true)),
+        ],
+        ..conversation(0)
+    };
+    (session, talk)
+}
+
+/// With the keyboard in the page, in each of the page row's cases and an outside app's panel: ⌘↩
+/// and ⌘. are the browser's own commands and answer as they do with the keyboard in the UI, Take
+/// Over or Hand Back and Stop, where the case has one; ↩ and Space reach the page and press nothing
+/// of ours, even with the ring last on the row's button.
+#[gpui::test]
+fn from_the_page_the_commands_answer_and_return_and_space_press_nothing(cx: &mut TestAppContext) {
+    for (case, card, talk, status, button) in row_cases() {
+        let (shell, host, view, cx) = standing_with(card, talk, cx);
+        let agent = status.as_ref().map(|status| status.agent.clone());
+        if let Some(status) = status {
+            shell.update(cx, |shell, cx| {
+                shell.agent_acted(status.agent.clone(), 30, cx);
+                shell.set_agent_status(vec![status], cx)
+            });
+            redraw(&shell, &view, cx);
+        }
+        // The ring was last on the row's button, and the page took the keyboard.
+        shell.update(cx, |shell, cx| shell.key_strip(button, cx));
+        shell.update(cx, |shell, cx| shell.leave_strip("page", cx));
+        host.page_keys.set(Some(true));
+        host.take();
+        let from_page = |key: &str, cx: &mut VisualTestContext| {
+            let kept = shell.update(cx, |shell, cx| {
+                shell.run_agent_page_key(key, cx) || shell.run_ilo_page_key(key, false, cx)
+            });
+            cx.run_until_parked();
+            (kept, host.take())
+        };
+        for key in ["enter", "space"] {
+            let (kept, calls) = from_page(key, cx);
+            assert!(!kept, "{case}: {key} from the page was kept from it");
+            assert_eq!(calls, Vec::<String>::new(), "{case}: {key} from the page pressed");
+        }
+        let (kept, calls) = from_page("cmd-enter", cx);
+        match case {
+            "working" | "session" => {
+                let agent = agent.clone().unwrap();
+                assert!(kept, "{case}: ⌘↩ from the page went to it");
+                assert!(calls.contains(&format!("take over {agent} 30")), "{case}: {calls:?}");
+            }
+            "yours" => assert!(calls.contains(&"hand back 30".to_string()), "{calls:?}"),
+            _ => assert!(!kept && calls.is_empty(), "{case}: ⌘↩ answered: {calls:?}"),
+        }
+        let (kept, calls) = from_page("cmd-.", cx);
+        match case {
+            "ended" => assert!(!kept && calls.is_empty(), "{case}: ⌘. answered: {calls:?}"),
+            _ => assert!(
+                kept && calls.iter().any(|call| call.contains("Stop") || call.starts_with("stop")),
+                "{case}: ⌘. from the page didn't stop: {calls:?}"
+            ),
+        }
+    }
 }
 
 /// The page row has one button at a time, by what the thread is doing on the page shown, and
