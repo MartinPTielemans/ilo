@@ -1024,13 +1024,14 @@ impl Tracking {
     }
 
     /// Shows `entries`, a search's narrowing of the menu, laid out as `layout`, with the first row
-    /// that can be chosen highlighted where something was typed, so ↩ picks it, and none where
-    /// nothing was. The pointer and the press stay as they were.
+    /// that matched what was typed highlighted, so ↩ picks it, and none where nothing was typed or
+    /// nothing matched: ↩ never signs in or opens Settings for a search that found nothing. The
+    /// pointer and the press stay as they were.
     fn narrow(&mut self, entries: Vec<MenuEntry>, layout: Layout, typed: bool) {
         self.entries = entries;
         self.layout = layout;
-        let first =
-            (self.layout.levels[0].items.iter().copied()).find(|&item| self.selectable(item));
+        let first = (self.layout.levels[0].items.iter().copied())
+            .find(|&item| self.selectable(item) && !self.entries[item].kept);
         self.open = vec![Open {
             level: 0,
             highlight: first.filter(|_| typed),
@@ -1743,6 +1744,10 @@ impl ContextMenu {
         // that ends it picks nothing, and esc closes nothing.
         let search = (shown.search.as_ref()).map(|search| search.field.read(cx).composing());
         if search == Some(true) {
+            // Nor do they go on into the field as text, which would end the composition.
+            if matches!(event.keystroke.key.as_str(), "enter" | "escape") {
+                cx.stop_propagation();
+            }
             return;
         }
         let modifiers = event.keystroke.modifiers;
