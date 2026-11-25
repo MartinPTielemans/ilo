@@ -319,6 +319,21 @@ pub struct TraceStep {
     pub opens: Opens,
     /// The line under it, or empty: "With ilo's notes for GitHub" (#4122).
     pub under: SharedString,
+    /// The page it acted on, by which the log groups a page's steps under the page; None for a
+    /// step off any one page (a thought, a question, a step on several tabs).
+    pub page: Option<OnPage>,
+}
+
+/// The page a step acted on.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OnPage {
+    /// Its tab, or None for the page a step opened, whose tab the steps after it name.
+    pub tab: Option<u64>,
+    /// Its site, which the page's line says while its tab has no title.
+    pub site: SharedString,
+    /// Whether the step went to it: opened it or navigated to it, which starts a page's steps
+    /// and has no line of its own unless it failed or is under way.
+    pub went: bool,
 }
 
 /// What a trace's line opens to.
@@ -4465,6 +4480,7 @@ fn helper_began(key: usize, running: bool) -> TraceStep {
         failed: false,
         opens: Opens::Nothing,
         under: SharedString::default(),
+        page: None,
     }
 }
 
@@ -4488,6 +4504,7 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
             failed: false,
             opens: Opens::Nothing,
             under: SharedString::default(),
+            page: on_page(&step.did),
         };
     }
     let description = match (&step.error, took) {
@@ -4525,7 +4542,19 @@ fn trace_step(steps: &[(usize, &Traced)]) -> TraceStep {
             .and_then(|name| notes::NOTES.iter().find(|note| note.name == name)))
         .map(|note| note.with().into())
         .unwrap_or_default(),
+        page: on_page(&step.did),
     }
+}
+
+/// The page a step acted on, as the log groups it: a step on a tab, or one that opened a page.
+fn on_page(did: &tools::Did) -> Option<OnPage> {
+    let went = matches!(did.tool.as_str(), "open_tab" | "navigate");
+    let on_tab = did.tab.is_some() && !matches!(did.tool.as_str(), "thought" | "ask" | "list_tabs");
+    (went || on_tab).then(|| OnPage {
+        tab: did.tab,
+        site: did.site.clone().into(),
+        went,
+    })
 }
 
 /// A turn's same step on several tabs, as one line with how many, which opens to each tab's line
@@ -4562,6 +4591,7 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
             failed: false,
             opens: Opens::Steps(tabs),
             under: SharedString::default(),
+            page: None,
         };
     }
     let failed = tabs.iter().filter(|tab| tab.failed).count();
@@ -4613,6 +4643,7 @@ fn trace_group(steps: &[(usize, &Traced)]) -> TraceStep {
         failed: failed > 0,
         opens: Opens::Steps(tabs),
         under: SharedString::default(),
+        page: None,
     }
 }
 

@@ -67,6 +67,7 @@ fn step(key: usize, title: &str, running: bool) -> TraceStep {
         failed: false,
         opens: Opens::Nothing,
         under: "".into(),
+        page: None,
     }
 }
 
@@ -3170,4 +3171,71 @@ fn a_closed_conversation_leaves_its_card_the_picture_its_tile_ended_on(cx: &mut 
     assert_eq!(plate(&shell, &on, cx), None, "another page's picture");
     let held = shell.read_with(cx, |shell, _| shell.card_plates.len());
     assert_eq!(held, 0, "a picture no card shows is still held");
+}
+
+/// While a stretch works, the page the assistant is on stands open with its steps and a page it
+/// left is one line; a click on the left page brings its steps back and leaves the other as it
+/// was. Going to a page has no line of its own under it.
+#[gpui::test]
+fn a_left_page_folds_and_opens_alone(cx: &mut TestAppContext) {
+    use crate::agents::task::OnPage;
+    let (shell, _, cx) = shown(cx);
+    let on = |key: usize, tab: Option<u64>, site: &str, went: bool, running: bool| {
+        TraceItem::Step(TraceStep {
+            page: Some(OnPage {
+                tab,
+                site: site.to_string().into(),
+                went,
+            }),
+            ..step(key, &format!("step {key}"), running)
+        })
+    };
+    let mut talk = conversation(1);
+    talk.lines = vec![Line::Trace(Trace {
+        key: 0,
+        running: true,
+        took: None,
+        started: None,
+        items: vec![
+            on(0, None, "a.example", true, false),
+            on(1, Some(30), "a.example", false, false),
+            on(2, Some(30), "a.example", false, false),
+            on(3, Some(30), "b.example", true, false),
+            on(4, Some(30), "b.example", false, true),
+        ],
+    })];
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let draw = |cx: &mut VisualTestContext| {
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    };
+    let height = |fold: Fold, current: bool, cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| {
+            (view.is_open(fold, current)).then(|| view.heights.borrow().get(&fold).copied())
+        })
+    };
+    draw(cx);
+    assert_eq!(
+        height(Fold::Page(3), true, cx),
+        Some(Some(lines_high(1.))),
+        "the page it's on isn't open to its one step, without the step that went to it"
+    );
+    assert_eq!(
+        height(Fold::Page(0), false, cx),
+        None,
+        "the left page stood open"
+    );
+
+    view.update(cx, |view, cx| view.toggle(Fold::Page(0), false, cx));
+    draw(cx);
+    assert_eq!(
+        height(Fold::Page(0), false, cx),
+        Some(Some(lines_high(2.))),
+        "the left page didn't bring back its two steps"
+    );
+    assert!(
+        height(Fold::Page(3), true, cx).is_some(),
+        "opening the left page folded the one it's on"
+    );
 }

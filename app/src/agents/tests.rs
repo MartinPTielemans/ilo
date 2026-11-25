@@ -8523,6 +8523,7 @@ mod tasks {
             failed: false,
             opens,
             under: "".into(),
+            page: None,
         };
         let trace = Trace {
             key: 0,

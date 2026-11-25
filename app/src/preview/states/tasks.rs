@@ -157,6 +157,7 @@ fn helper_lines(count: usize, waits: bool, running: bool) -> Vec<TraceItem> {
             failed: false,
             opens: Opens::Nothing,
             under: "".into(),
+            page: None,
         },
         name: HELPER_NAMES[at].into(),
         tab: Some(sites[at].0),
@@ -372,6 +373,7 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
             false => Opens::Nothing,
         },
         under: "".into(),
+        page: None,
     };
     let (click, read) = ("icons/mouse-pointer-2.svg", "icons/text-align-start.svg");
     let items = vec![
@@ -464,6 +466,7 @@ fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
             failed: false,
             opens: Opens::Nothing,
             under: "".into(),
+            page: None,
         })
     };
     let steps = match at {
@@ -533,6 +536,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 failed: false,
                 opens: Opens::Nothing,
                 under: "".into(),
+                page: None,
             })],
         })
     };
@@ -792,6 +796,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 failed: false,
                 opens: Opens::Nothing,
                 under: github.with().into(),
+                page: None,
             };
             let reading = TraceStep {
                 key: 11,
@@ -802,6 +807,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
                 failed: false,
                 opens: Opens::Nothing,
                 under: "".into(),
+                page: None,
             };
             let trace = Trace {
                 key: 10,

@@ -23,6 +23,7 @@ fn step(key: usize, title: &str, running: bool) -> TraceStep {
         failed: false,
         opens: Opens::Nothing,
         under: "".into(),
+        page: None,
     }
 }
 
