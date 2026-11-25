@@ -1518,6 +1518,11 @@ impl Agents {
         self.look_for(vec![cli], true, cx);
     }
 
+    /// Whether a look for the assistants is under way, for the ring on a row the user clicked.
+    pub fn looking(&self) -> bool {
+        self.tasks.looking
+    }
+
     /// Learns again what the user's click on `cli`'s row changed, as a sign-in or sign-out
     /// ending: every assistant while the inside switch is on, else that one alone.
     pub(super) fn look_after_click(&mut self, cli: Cli, cx: &mut Context<Self>) {
