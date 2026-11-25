@@ -3044,7 +3044,7 @@ impl Agents {
         self.dialogs.remove(&tab);
         self.cleared.remove(&tab);
         self.left(tab, Gone::Closed);
-        self.forget_handed(tab);
+        self.forget_handed(tab, cx);
         self.let_go(tab, held::Event::Closed, cx);
     }
 

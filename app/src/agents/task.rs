@@ -1751,7 +1751,9 @@ impl Agents {
             writing: None,
             named: None,
             tier,
-            sites: match only_added && !pages.is_empty() {
+            // A tab of theirs picked for it is a page the user adds, as one typed is: its site
+            // joins as the tab is handed.
+            sites: match only_added && !(pages.is_empty() && tabs.is_empty()) {
                 true => Sites::Only(
                     pages
                         .iter()

@@ -7,6 +7,7 @@ use super::*;
 use crate::agents::runner::{Cli, Out};
 use crate::agents::task::handed::{self, Picked};
 use crate::agents::task::{Start, State, TaskAction};
+use crate::agents::tier::Sites;
 
 /// The user's Space, and a thread's, the first the browser makes.
 const USERS: u64 = 1;
@@ -37,6 +38,10 @@ fn send(
         tabs: Picked::of_chips(space, tabs.to_vec()),
         ..Start::default()
     };
+    send_with(run, asked, start, cx)
+}
+
+fn send_with(run: &Run, asked: &str, start: Start, cx: &mut TestAppContext) -> Option<String> {
     let started = (run.agents).update(cx, |agents, cx| {
         agents.start_task(Cli::Claude, asked, None, USERS, start, cx)
     });
@@ -693,4 +698,97 @@ fn a_thread_that_waits_on_the_user_keeps_its_tabs(cx: &mut TestAppContext) {
         assert_eq!(space_of(&run, tab), THREADS);
     }
     assert!(entries(&run, &agent, handed::GIVEN_BACK, cx).is_empty());
+}
+
+/// A third tab of the user's, on the site of TRAINS.
+const FARES: (u64, &str, &str) = (14, "Fares", "https://www.example.com/fares");
+
+/// The sites `agent`'s thread may use.
+fn sites(run: &Run, agent: &str, cx: &mut TestAppContext) -> Sites {
+    run.agents.read_with(cx, |agents, _| {
+        agents.task(agent).expect("its task").sites.clone()
+    })
+}
+
+fn domain(url: &str) -> String {
+    crate::sort_by_site::made_up_site(url).expect("a site")
+}
+
+/// A thread limited to the pages the user adds, started with the page `added` and `tabs`.
+fn limited(run: &Run, added: &[&str], tabs: &[u64], cx: &mut TestAppContext) -> String {
+    run.browser
+        .tabs
+        .borrow_mut()
+        .push((FARES.0, USERS, FARES.1, FARES.2));
+    let start = Start {
+        pages: added.iter().map(|url| url.to_string()).collect(),
+        only_added: true,
+        tabs: Picked::of_chips(USERS, tabs.to_vec()),
+        ..Start::default()
+    };
+    send_with(run, ASKED, start, cx).expect("started")
+}
+
+/// A handed tab's site joins the sites its thread may use, that one site, for as long as the
+/// thread holds a handed tab of it: it stays while a second is held and goes at the last return,
+/// with no change of access in the log, as the user changed none.
+#[gpui::test]
+fn a_handed_tabs_site_is_its_threads_while_a_tab_of_it_is_held(cx: &mut TestAppContext) {
+    let run = run("handed-site", cx);
+    const ADDED: &str = "https://fieldbook.example/lakeside";
+    let agent = limited(&run, &[ADDED], &[TRAINS.0, FARES.0], cx);
+    let (added, handed) = (domain(ADDED), domain(TRAINS.2));
+    let with = Sites::Only(vec![added.clone(), handed]);
+    assert_eq!(sites(&run, &agent, cx), with);
+    let access = |cx: &mut TestAppContext| {
+        run.agents.read_with(cx, |agents, _| {
+            (agents.activity(&agent))
+                .filter(|entry| entry.action.as_ref() == crate::agents::access::ACCESS_ACTION)
+                .count()
+        })
+    };
+    let logged = access(cx);
+    press_return(&run, &agent, TRAINS.0, cx);
+    assert_eq!(sites(&run, &agent, cx), with, "a second tab of it is held");
+    // Whoever returns the last: here the thread, by its close.
+    assert!(!answered(&run, &agent, "close_tab", FARES.0, cx).error);
+    assert_eq!(sites(&run, &agent, cx), Sites::Only(vec![added]));
+    assert_eq!(access(cx), logged);
+}
+
+/// A site that was the thread's before the give stays its own after the return, a thread that
+/// may use any site is as it was, and sites the user set themselves meanwhile stay as set.
+#[gpui::test]
+fn a_site_that_was_the_threads_before_stays(cx: &mut TestAppContext) {
+    let run = run("handed-site-before", cx);
+    const ADDED: &str = "https://www.example.com/timetable";
+    let own = Sites::Only(vec![domain(ADDED)]);
+    let agent = limited(&run, &[ADDED], &[TRAINS.0], cx);
+    assert_eq!(sites(&run, &agent, cx), own);
+    press_return(&run, &agent, TRAINS.0, cx);
+    assert_eq!(sites(&run, &agent, cx), own);
+
+    let any = send(&run, ASKED, USERS, &[SEATS.0], cx).expect("started");
+    assert_eq!(sites(&run, &any, cx), Sites::Any);
+    press_return(&run, &any, SEATS.0, cx);
+    assert_eq!(sites(&run, &any, cx), Sites::Any);
+
+    let set = limited(&run, &["https://fieldbook.example/"], &[FARES.0], cx);
+    let users = Sites::Only(vec![domain(FARES.2), "notes.example".into()]);
+    (run.agents).update(cx, |agents, cx| agents.set_sites(&set, users.clone(), cx));
+    press_return(&run, &set, FARES.0, cx);
+    assert_eq!(sites(&run, &set, cx), users);
+}
+
+/// A tab picked for a thread limited to the pages the user adds is a page they add: with no
+/// address added beside it, the thread may use that tab's site and no other, and none once the
+/// tab is back, by its thread's end too.
+#[gpui::test]
+fn a_tab_alone_limits_its_thread_to_its_site(cx: &mut TestAppContext) {
+    let run = run("handed-site-alone", cx);
+    let agent = limited(&run, &[], &[TRAINS.0], cx);
+    assert_eq!(sites(&run, &agent, cx), Sites::Only(vec![domain(TRAINS.2)]));
+    run.finish(&agent, cx);
+    assert_eq!(space_of(&run, TRAINS.0), USERS);
+    assert_eq!(sites(&run, &agent, cx), Sites::Only(Vec::new()));
 }
