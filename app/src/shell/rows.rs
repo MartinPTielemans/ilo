@@ -479,7 +479,12 @@ impl Shell {
         let on = self.palette.on_fill(page);
         // A dark page's shape is told from a dark window by a line of light round it.
         let outline = (on.tone == Tone::Dark).then(|| on.faint(DIVIDER).opacity(opacity));
-        join(Hsla::from(page).opacity(opacity), outline, self.right)
+        join(
+            Hsla::from(page).opacity(opacity),
+            outline,
+            self.right,
+            PLATE_RADIUS,
+        )
     }
 
     /// Whether the page area starts at the sidebar's edge, where a line of it can join what the

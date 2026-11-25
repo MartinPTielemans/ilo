@@ -14,10 +14,10 @@ use super::{
 };
 use crate::agents::task::ilo::IloButton;
 use crate::agents::task::{Card, Dot, NEEDS_YOU};
-use crate::shell::conversation::words;
+use crate::shell::conversation::{stage_fill, words};
+use crate::shell::join::join;
 use crate::shell::page_ends::StripStop;
 use crate::shell::{FAVICON_SIZE, PLATE_INSET, Slot, TILE, TITLE, dashed_plate};
-use crate::tokens::shell::FAVICON_DRAWN;
 use crate::tokens::shell::task::{CHIP_HEIGHT, CHIP_X, PAGE_RADIUS, SLOT_DASH};
 use crate::tokens::shell::task_card::motion::TURN;
 use crate::tokens::shell::task_card::{
@@ -26,6 +26,7 @@ use crate::tokens::shell::task_card::{
     OUTLINE, OUTLINE_WIDTH, PADDING, RADIUS, RIM, RIM_WIDTH, TEXT_2, TEXT_2_LIGHT, TEXT_3,
     TEXT_3_LIGHT, TITLE_LINE, UNDER, UNVISITED,
 };
+use crate::tokens::shell::{DIVIDER, FAVICON_DRAWN};
 use crate::tokens::text;
 
 /// A waiting card's second line: the site of the page it waits on and the state's word (words
@@ -104,6 +105,22 @@ pub(super) fn look(card: &Card, form: Form, unseen: bool) -> Look {
         rim: form == Form::Waits,
         button: form == Form::Waits && !card.pages.is_empty(),
         dot: form == Form::DoneUnseen,
+    }
+}
+
+/// A card's frame: one shape with its stage, or closed in its outline at `outline` of the ink,
+/// `width` wide.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Framed {
+    Joined,
+    Outlined { outline: f32, width: f32 },
+}
+
+/// The room a card's outline takes, the rim's for a waiting one, kept whether it is drawn or not.
+fn rim_width(rim: bool) -> f32 {
+    match rim {
+        true => RIM_WIDTH,
+        false => OUTLINE_WIDTH,
     }
 }
 
@@ -196,16 +213,26 @@ impl Shell {
         let Some(placed) = placed else {
             return block.into_any_element();
         };
-        let block = block.h(px(placed.room)).px(px(PLATE_INSET));
+        let block = block.h(px(placed.room));
         if n == SLOT {
-            return block.child(self.slot_plate()).into_any_element();
+            return (block.px(px(PLATE_INSET)))
+                .child(self.slot_plate())
+                .into_any_element();
         }
         let Some(card) = self
             .task_cards
             .iter()
             .find(|card| card.agent == placed.agent)
         else {
-            return block.into_any_element();
+            return block.px(px(PLATE_INSET)).into_any_element();
+        };
+        let unseen = self.task_list.unseen.contains(&card.agent);
+        let framed = self.card_framed(card, placed.form, unseen);
+        // The shown thread's card runs to the sidebar's edge, where it meets its stage.
+        let block = match (framed, self.right) {
+            (Framed::Joined, false) => block.pl(px(PLATE_INSET)),
+            (Framed::Joined, true) => block.pr(px(PLATE_INSET)),
+            (Framed::Outlined { .. }, _) => block.px(px(PLATE_INSET)),
         };
         let now = clock();
         let coming = self.task_list.coming.get(&card.agent);
@@ -215,11 +242,7 @@ impl Shell {
             true => self.card_line(card, placed.form),
             false => self.card_whole(card, placed.form, cx),
         };
-        let unseen = self.task_list.unseen.contains(&card.agent);
-        let (outline, width) = match look(card, placed.form, unseen).rim {
-            true => (RIM, RIM_WIDTH),
-            false => (OUTLINE, OUTLINE_WIDTH),
-        };
+        let width = rim_width(look(card, placed.form, unseen).rim);
         let height = placed.room
             - if placed.form.line() {
                 2. * LINE_AROUND
@@ -234,11 +257,23 @@ impl Shell {
             .h(px(height))
             .when(placed.form.line(), |frame| frame.mt(px(LINE_AROUND)))
             .rounded(px(RADIUS))
-            .border(px(width))
-            .border_color(Hsla::from(self.palette.ink).opacity(outline))
-            .bg(self.palette.plate(FILL))
             .opacity(opacity)
             .cursor_pointer();
+        // Joined, the card's own outline gives way to the stage's line round the shape, in the
+        // same width of room, so nothing inside it moves.
+        let frame = match framed {
+            Framed::Joined => {
+                let stage = stage_fill(&self.palette);
+                let line = self.palette.on_fill(stage).faint(DIVIDER);
+                // Placed from the frame's corner: left to itself it starts inside the room.
+                let shape = join(stage.into(), Some(line), self.right, RADIUS);
+                (frame.p(px(width))).child(div().absolute().inset_0().child(shape))
+            }
+            Framed::Outlined { outline, width } => frame
+                .border(px(width))
+                .border_color(Hsla::from(self.palette.ink).opacity(outline))
+                .bg(self.palette.plate(FILL)),
+        };
         let drawn = drawn_listener(
             &self.task_list.plates_drawn,
             &self.task_list.rested,
@@ -255,6 +290,20 @@ impl Shell {
                 shell.show_group(agent.clone(), cx)
             }));
         block.child(frame).into_any_element()
+    }
+
+    /// How `card` in `form` is framed: joined to its stage while its thread is the one shown and
+    /// the stage starts at the sidebar's edge, in either of the thread's forms, and otherwise in
+    /// its state's outline, the waiting one's rim.
+    pub(super) fn card_framed(&self, card: &Card, form: Form, unseen: bool) -> Framed {
+        if self.joins_page_area() && self.talk_agent().as_ref() == Some(&card.agent) {
+            return Framed::Joined;
+        }
+        let rim = look(card, form, unseen).rim;
+        Framed::Outlined {
+            outline: if rim { RIM } else { OUTLINE },
+            width: rim_width(rim),
+        }
     }
 
     /// What a card says of its state to the screen reader, after its title.
