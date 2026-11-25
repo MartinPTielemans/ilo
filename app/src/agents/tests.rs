@@ -9705,6 +9705,42 @@ mod tasks {
         });
         std::fs::remove_dir_all(folder).unwrap();
     }
+
+    /// The composer opens in a profile with what it last started a thread with there: its level,
+    /// except Full access, which opens at the level every thread starts at, and its model. Each
+    /// profile keeps its own, and they're saved.
+    #[gpui::test]
+    fn the_composer_keeps_its_last_level_and_model_per_profile(cx: &mut TestAppContext) {
+        use crate::agents::task::Last;
+        let folder = std::env::temp_dir().join(format!("ilo-composer-last-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("Agents");
+        let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+        browser.profiles.borrow_mut().push((2, "Profile 2"));
+        let agents = agents(&browser, &configs, Some(path.clone()), cx);
+        let haiku = Some((Cli::Claude, "haiku".to_string()));
+        agents.update(cx, |agents, _| {
+            assert_eq!(agents.composer_last(1), Last::default(), "a first composer");
+            agents.remember_composer(1, Tier::Look, haiku.clone());
+            agents.remember_composer(2, Tier::Full, None);
+        });
+        let opens = |agents: &Entity<Agents>, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| {
+                (agents.composer_last(1), agents.composer_last(2))
+            })
+        };
+        let looked = Last {
+            tier: Tier::Look,
+            model: haiku.clone(),
+        };
+        assert_eq!(opens(&agents, cx), (looked.clone(), Last::default()));
+        let again = super::agents(&browser, &configs, Some(path.clone()), cx);
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(!saved.contains("\"full\""), "Full access was kept: {saved}");
+        again.update(cx, |agents, cx| agents.load(&saved, cx));
+        assert_eq!(opens(&again, cx), (looked, Last::default()));
+        std::fs::remove_dir_all(folder).unwrap();
+    }
 }
 
 /// Scripts are off at first: every Apple Event, reads too, is refused and logged as refused under

@@ -42,6 +42,19 @@ impl Tier {
         }
     }
 
+    /// Its name in the saved settings, which stays when its label changes.
+    pub fn id(self) -> &'static str {
+        match self {
+            Tier::Look => "look",
+            Tier::Work => "work",
+            Tier::Full => "full",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<Tier> {
+        Tier::ALL.into_iter().find(|tier| tier.id() == id)
+    }
+
     /// The lowest tier above this one at which an act refused for `why` happens, which its
     /// refusal offers, or None if none does.
     pub fn lifting(self, why: Why) -> Option<Tier> {
