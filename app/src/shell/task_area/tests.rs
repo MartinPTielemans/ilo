@@ -1819,9 +1819,15 @@ fn on_a_thread_the_url_field_shows_its_title_and_only_shows_it(cx: &mut TestAppC
     });
     let words =
         |shell: &Shell, cx: &gpui::App| shell.url_field_words(&shell.url(shell.field_tab()), cx);
+    // The field logs its words when they change, so it is built again as if it had said none.
     crate::heard::listen();
-    draw(&shell, cx);
-    let heard = crate::heard::take();
+    shell.update(cx, |shell, cx| {
+        shell.url_field_drawn.replace(SharedString::default());
+        drop(shell.url_field(cx).into_any_element());
+    });
+    let heard: Vec<String> = (crate::heard::take().into_iter())
+        .filter(|line| line.starts_with("browser: url field"))
+        .collect();
     shell.read_with(cx, |shell, cx| {
         assert_eq!(shell.field_tab(), 0);
         assert_eq!(words(shell, cx).0.as_ref(), title);
