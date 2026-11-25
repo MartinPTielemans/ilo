@@ -37,6 +37,7 @@
 #include "browser_core/auto_archive.h"
 #include "browser_core/favorites.h"
 #include "browser_core/host.h"
+#include "browser_core/launch_space_rule.h"
 #include "browser_core/profiles.h"
 #include "browser_core/sidebar_backups.h"
 #include "browser_core/space.h"
@@ -104,6 +105,24 @@ std::vector<SavedWindow>& LoadedWindows() {
 std::vector<bc_id>& RestoredSpaces() {
   static base::NoDestructor<std::vector<bc_id>> spaces;
   return *spaces;
+}
+
+// The Spaces put back, as SpaceShownAtLaunch sees them.
+std::vector<LaunchSpace> LaunchSpaces() {
+  std::vector<LaunchSpace> spaces;
+  for (bc_id id : RestoredSpaces()) {
+    const Space* space = Space::FromId(id);
+    spaces.push_back({.agents = !space || space->agent().has_value(),
+                      .profile = space ? space->profile() : std::string()});
+  }
+  return spaces;
+}
+
+// Shows the Space SpaceShownAtLaunch picks, with its page only if it's the user's.
+void ShowAtLaunch(Window& window, size_t at) {
+  const bc_id id = RestoredSpaces()[at];
+  const Space* space = Space::FromId(id);
+  window.ShowSpace(id, /*page=*/UserSettings().restore_windows && space && !space->agent());
 }
 
 // A navigation's page state is left out past this, as in Chrome's sessions.
@@ -1414,11 +1433,13 @@ bool RestoreSavedWindow(Window& window, size_t index) {
   }
   const SavedWindow& saved = LoadedWindows()[index];
   window.SetSidebarWidth(saved.sidebar_width);
-  const size_t at = static_cast<size_t>(saved.space);
-  const bc_id space = at < RestoredSpaces().size() ? RestoredSpaces()[at] : 0;
-  if (!space) {
+  const size_t saved_at = static_cast<size_t>(saved.space);
+  if (saved_at >= RestoredSpaces().size() || !RestoredSpaces()[saved_at]) {
     return false;
   }
+  // An agent's or a task's Space is never shown again: its page would load (#4230).
+  const size_t at = SpaceShownAtLaunch(LaunchSpaces(), saved_at).value_or(saved_at);
+  const bc_id space = RestoredSpaces()[at];
   // The tab the Space showed, which the Spaces were put back with in the first window.
   for (const Window* each : Window::All()) {
     if (bc_id tab = &window == each ? 0 : each->SelectedIn(space)) {
@@ -1427,7 +1448,7 @@ bool RestoreSavedWindow(Window& window, size_t index) {
     }
   }
   // A new window's shows no page.
-  window.ShowSpace(space, /*page=*/UserSettings().restore_windows);
+  ShowAtLaunch(window, at);
   // The window is on screen already, so this is the transition the user would start. Only the
   // front window's: one behind would take the user to its own macOS Space as the browser launches,
   // so it comes back windowed, at the frame it had before full screen.
@@ -1452,11 +1473,13 @@ Space* RestoreSpace(Window& window,
   // Else the Space comes back as a new window shows it: its pinned tabs, none shown, and no Today
   // tabs, which go in the archive.
   const bool whole = UserSettings().restore_windows;
+  // An agent's or a task's tabs stay without their pages, its Space never shown (#4230).
+  const bool selects = whole && !saved_space.agent;
   const auto restore = [&](const SavedTab& saved_tab, int index) -> bc_id {
     // Without its page until it's first shown, which saves launch making a page for each tab, and
     // waiting for its profile if that's still loading.
     const bc_id tab = Tab::Restore(profile, saved_tab);
-    if (tab && whole && index == saved_space.shown) {
+    if (tab && selects && index == saved_space.shown) {
       window.SetSelectedIn(space->id(), tab);
     }
     return tab;
@@ -1510,7 +1533,7 @@ Space* RestoreSpace(Window& window,
                              ? saved_tab.pinned_url
                              : saved_tab.history[saved_tab.current].virtual_url(),
                          space->id(), saved_tab.site);
-      if (whole && static_cast<int>(j) == saved_space.shown_own_favorite) {
+      if (selects && static_cast<int>(j) == saved_space.shown_own_favorite) {
         window.SetSelectedIn(space->id(), tab);
       }
     }
@@ -1666,16 +1689,18 @@ bool RestoreSavedSession(Window& window) {
   for (const SavedSpace& saved_space : saved->spaces) {
     Space* space = RestoreSpace(window, HomeFor(saved_space.profile), saved_space);
     RestoredSpaces().push_back(space->id());
-    if (UserSettings().restore_windows && saved_space.shown_favorite >= 0 &&
+    if (UserSettings().restore_windows && !saved_space.agent && saved_space.shown_favorite >= 0 &&
         favorites[saved_space.shown_favorite]) {
       window.SetSelectedIn(space->id(), favorites[saved_space.shown_favorite]);
     }
   }
   // Under Every Space, a profile that came up short of a site gets its tab for it.
   Favorites::Complete();
-  // A session saved with no regular window open shows the first Space.
+  // A session saved with no regular window open shows the user's first Space.
   if (!RestoreSavedWindow(window, 0)) {
-    window.ShowSpace(RestoredSpaces().front(), /*page=*/UserSettings().restore_windows);
+    if (const std::optional<size_t> at = SpaceShownAtLaunch(LaunchSpaces(), std::nullopt)) {
+      ShowAtLaunch(window, *at);
+    }
   }
   g_saver->ListSidebars();
   return true;
