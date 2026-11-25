@@ -171,6 +171,7 @@ impl Agents {
         // None resolves to nothing too, so the start says it's without its files.
         let bridge = wall::bridge().unwrap_or_default();
         let home = crate::agents::clients::home();
+        let ilo = std::env::current_exe().unwrap_or_default();
         let data = dir.parent().unwrap_or(&dir);
         let wall = WallFor {
             cli,
@@ -182,6 +183,7 @@ impl Agents {
             program: &program,
             home: &home,
             data,
+            ilo: &ilo,
             socket: &self.socket,
             bridge: &bridge,
             places: &places,
