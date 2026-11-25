@@ -14,6 +14,7 @@
 #include "content/public/browser/history_traversal.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 
 namespace browser_core::handed {
@@ -50,8 +51,25 @@ Mark Leaving(const Space& from, bc_id tab) {
 }
 
 void Given(bc_id tab, Mark left) {
+  // A tab without its page is on no origin, and none is ever the one it was given on.
+  if (content::WebContents* contents = Tab::FromId(tab)) {
+    left.given_on = contents->GetPrimaryMainFrame()->GetLastCommittedOrigin();
+  }
   Marks().insert_or_assign(tab, std::move(left));
   BoundHistory(tab);
+  PassedOn(tab);
+}
+
+void TakenOver(bc_id tab) {
+  if (auto mark = Marks().find(tab); mark != Marks().end()) {
+    mark->second.users_press = true;
+  }
+}
+
+void PassedOn(bc_id tab) {
+  if (auto mark = Marks().find(tab); mark != Marks().end()) {
+    mark->second.users_press = false;
+  }
 }
 
 bool KeepsATile(bc_id tab) {

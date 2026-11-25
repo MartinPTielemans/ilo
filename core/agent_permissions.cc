@@ -9,6 +9,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "browser_core/agent_space_page.h"
 #include "browser_core/cast_dialog.h"
+#include "browser_core/handed.h"
 #include "browser_core/host.h"
 #include "browser_core/space.h"
 #include "browser_core/tab.h"
@@ -28,6 +29,7 @@
 #include "third_party/blink/public/common/mediastream/media_stream_request.h"
 #include "third_party/blink/public/mojom/mediastream/media_stream.mojom-shared.h"
 #include "ui/shell_dialogs/selected_file_info.h"
+#include "url/origin.h"
 
 namespace browser_core {
 
@@ -128,6 +130,24 @@ class Entries : public content::DocumentUserData<Entries> {
 
 DOCUMENT_USER_DATA_KEY_IMPL(Entries);
 
+// What the rule reads of the tab |frame| is in, for an ask of |frame|'s for the camera or the
+// microphone (agent_permission_rule::Handed). The tab's own page counts, and no page being made
+// ready beside it.
+agent_permission_rule::Handed HandedOf(content::RenderFrameHost* frame) {
+  content::WebContents* contents = content::WebContents::FromRenderFrameHost(frame);
+  content::WebContents* outermost = contents ? contents->GetOutermostWebContents() : nullptr;
+  const Tab* tab = outermost ? Tab::FromWebContents(outermost) : nullptr;
+  const handed::Mark* mark = tab ? handed::Of(tab->id()) : nullptr;
+  if (!mark) {
+    return {};
+  }
+  const url::Origin& given = mark->given_on;
+  return {.handed = true,
+          .on_given_origin = !given.opaque() && frame->GetLastCommittedOrigin() == given &&
+                             outermost->GetPrimaryMainFrame()->GetLastCommittedOrigin() == given,
+          .users_press = mark->users_press};
+}
+
 void Enter(std::string agent, bc_id tab, std::string action) {
   if (!Host().agent_activity) {
     return;
@@ -144,8 +164,8 @@ void Enter(std::string agent, bc_id tab, std::string action) {
 }  // namespace
 
 bool NoPermission(content::RenderFrameHost* frame, ContentSettingsType type) {
-  return agent_permission_rule::Refuses(
-      KindOf(type), RuleTabOf(content::WebContents::FromRenderFrameHost(frame)));
+  return agent_permission_rule::RefusesAsk(
+      KindOf(type), RuleTabOf(content::WebContents::FromRenderFrameHost(frame)), HandedOf(frame));
 }
 
 void PermissionRefused(content::RenderFrameHost* frame, ContentSettingsType type) {
@@ -179,12 +199,15 @@ bool TakesPermissionRequest(content::RenderFrameHost* frame,
 
 bool NoMediaAccess(content::WebContents* contents, const content::MediaStreamRequest& request) {
   const agent_space_rule::Tab tab = RuleTabOf(contents);
+  // The frame that asks, which is gone by now at most for a page that is too.
+  const agent_permission_rule::Handed handed = HandedOf(
+      content::RenderFrameHost::FromID(request.render_process_id, request.render_frame_id));
   bool refused = false;
   // A page may ask for several at once, and each refused has its entry: the camera and the
   // microphone are answered here because Chrome reads their status before it would request them,
   // so a refusal by the status alone would be told to nobody.
   const auto ask = [&](bool wanted, Kind kind) {
-    if (wanted && agent_permission_rule::Refuses(kind, tab)) {
+    if (wanted && agent_permission_rule::RefusesAsk(kind, tab, handed)) {
       refused = true;
       NoteRefused(kind, contents);
     }

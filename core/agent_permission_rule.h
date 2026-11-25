@@ -79,6 +79,29 @@ inline constexpr size_t kKinds = static_cast<size_t>(Kind::kLeftAsToday) + 1;
 // as a tab of theirs does.
 bool Refuses(Kind kind, const agent_space_rule::Tab& tab);
 
+// A tab of the user's that an agent has (handed.h), as a frame in it asks for the camera or the
+// microphone. The core reads each of these itself: no page and no agent's call sets one.
+struct Handed {
+  // An agent has it from the user. A page an agent opened itself is never one.
+  bool handed = false;
+  // The frame that asks and the tab's page are both on the origin the tab's page was on at the
+  // give, to the scheme, the host and the port. A page the agent took the tab to elsewhere is as
+  // one it opened, until the tab is back there, and another site's frame in the page is no part
+  // of what the user gave.
+  bool on_given_origin = false;
+  // The user took the tab over by a press of their own. A hold made for them, at a handoff or for
+  // a passkey, isn't one: an agent's own call makes a handoff.
+  bool users_press = false;
+};
+
+// Whether a page in |tab| is refused its ask for |kind|. As Refuses, but for the camera and the
+// microphone in a handed tab the user took over by their own press, on the origin it was given
+// on: there the ask is answered by what the profile has saved for the site, as in a tab of theirs,
+// so the camera they turn on in a call they handed over comes on. They are asked nothing for it:
+// the question of a site they never allowed is taken as any other (TakesRequest). Pan-tilt-zoom,
+// the screen and every other kind are Refuses' in every state.
+bool RefusesAsk(Kind kind, const agent_space_rule::Tab& tab, const Handed& handed);
+
 // The action of a refusal's activity entry is this and the kind's word, and its reason the one
 // code for every kind. The app words the entry from the kind; neither is ever shown.
 inline constexpr char kEntryAction[] = "request_permission ";

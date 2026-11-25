@@ -46,6 +46,90 @@ TEST(AgentPermissionRule, AHeldTabIsRefusedAsOneNotHeldButForWhatTheUserDoesThem
   }
 }
 
+// Every state a tab can be in when a frame of it asks: a user's, an agent's as the agent drives
+// it and as the user holds it, handed by the user or opened by the agent, on the origin it was
+// given on and off it, and held by the user's own press or for them.
+template <typename Each>
+void ForEveryState(Each each) {
+  for (const Tab& tab : {kUsers, kAgents, kHeld}) {
+    for (int bits = 0; bits < 8; ++bits) {
+      each(tab, Handed{.handed = (bits & 1) != 0,
+                       .on_given_origin = (bits & 2) != 0,
+                       .users_press = (bits & 4) != 0});
+    }
+  }
+}
+
+constexpr Handed kTakenOver{.handed = true, .on_given_origin = true, .users_press = true};
+
+bool IsTheUsersOwnCall(Kind kind, const Tab& tab, const Handed& handed) {
+  return (kind == Kind::kCamera || kind == Kind::kMicrophone) && tab.agents && tab.held &&
+         handed.handed && handed.on_given_origin && handed.users_press;
+}
+
+TEST(AgentPermissionRule, AHandedTabTheUserTookOverAnswersItsCameraAndMicrophoneAsSaved) {
+  EXPECT_FALSE(RefusesAsk(Kind::kCamera, kHeld, kTakenOver));
+  EXPECT_FALSE(RefusesAsk(Kind::kMicrophone, kHeld, kTakenOver));
+}
+
+// Driven by the agent, held for the user at a handoff, off the origin it was given on, or a page
+// the agent opened: each alone leaves the ask refused, for every kind.
+TEST(AgentPermissionRule, AnAskIsRefusedAsEverInEveryStateButThatOne) {
+  ForEveryState([](const Tab& tab, const Handed& handed) {
+    for (size_t at = 0; at < kKinds; ++at) {
+      const Kind kind = KindAt(at);
+      if (IsTheUsersOwnCall(kind, tab, handed)) {
+        EXPECT_FALSE(RefusesAsk(kind, tab, handed)) << at;
+        continue;
+      }
+      EXPECT_EQ(RefusesAsk(kind, tab, handed), Refuses(kind, tab))
+          << at << " " << tab.agents << tab.held << handed.handed << handed.on_given_origin
+          << handed.users_press;
+    }
+  });
+}
+
+TEST(AgentPermissionRule, AHandedTabTheAgentDrivesIsRefusedTheCameraAndTheMicrophone) {
+  const Handed driven{.handed = true, .on_given_origin = true};
+  EXPECT_TRUE(RefusesAsk(Kind::kCamera, kAgents, driven));
+  EXPECT_TRUE(RefusesAsk(Kind::kMicrophone, kAgents, driven));
+}
+
+// An agent's own call makes a handoff, so the hold it makes opens nothing.
+TEST(AgentPermissionRule, AHandedTabHeldAtAHandoffIsRefusedTheCameraAndTheMicrophone) {
+  const Handed handed_off{.handed = true, .on_given_origin = true};
+  EXPECT_TRUE(RefusesAsk(Kind::kCamera, kHeld, handed_off));
+  EXPECT_TRUE(RefusesAsk(Kind::kMicrophone, kHeld, handed_off));
+}
+
+TEST(AgentPermissionRule, AHandedTabOffTheOriginItWasGivenOnIsRefusedThemTakenOverOrNot) {
+  const Handed elsewhere{.handed = true, .users_press = true};
+  EXPECT_TRUE(RefusesAsk(Kind::kCamera, kHeld, elsewhere));
+  EXPECT_TRUE(RefusesAsk(Kind::kMicrophone, kHeld, elsewhere));
+}
+
+TEST(AgentPermissionRule, APageTheAgentOpenedIsRefusedThemTakenOverOrNot) {
+  const Handed opened{.on_given_origin = true, .users_press = true};
+  EXPECT_TRUE(RefusesAsk(Kind::kCamera, kHeld, opened));
+  EXPECT_TRUE(RefusesAsk(Kind::kMicrophone, kHeld, opened));
+  EXPECT_TRUE(RefusesAsk(Kind::kCamera, kHeld, {}));
+  EXPECT_TRUE(RefusesAsk(Kind::kMicrophone, kHeld, {}));
+}
+
+// The camera's own movement, the screen and every other kind stay refused where the camera and
+// the microphone are answered.
+TEST(AgentPermissionRule, NoOtherKindIsAnsweredAsSavedInATabTheUserTookOver) {
+  for (size_t at = 0; at < kKinds; ++at) {
+    const Kind kind = KindAt(at);
+    if (kind == Kind::kCamera || kind == Kind::kMicrophone) {
+      continue;
+    }
+    EXPECT_EQ(RefusesAsk(kind, kHeld, kTakenOver), Refuses(kind, kHeld)) << at;
+  }
+  EXPECT_TRUE(RefusesAsk(Kind::kCameraPanTiltZoom, kHeld, kTakenOver));
+  EXPECT_TRUE(RefusesAsk(Kind::kScreenCapture, kHeld, kTakenOver));
+}
+
 // The app words the entry from these, so they are spelled here once more.
 TEST(AgentPermissionRule, TheKindsTheAppHasASentenceForKeepTheirWords) {
   EXPECT_STREQ(CodeWord(Kind::kCamera), "camera");
@@ -366,6 +450,17 @@ TEST(AgentPermissionRule, ASitesOfferToHandleALinkIsDroppedUnanswered) {
 TEST(AgentPermissionRule, AHeldTabIsNotAskedEither) {
   EXPECT_EQ(TakesRequest(/*link_handler_offer=*/false, kHeld), Taken::kCancelled);
   EXPECT_EQ(TakesRequest(/*link_handler_offer=*/true, kHeld), Taken::kDropped);
+}
+
+// The question reads nothing of a handed tab, so the state whose ask is answered as saved has its
+// question taken as every other: the user is asked nothing for a page an agent has.
+TEST(AgentPermissionRule, NoStateOfATabAnAgentHasLetsAQuestionBeDrawn) {
+  ForEveryState([](const Tab& tab, const Handed&) {
+    for (bool offer : {false, true}) {
+      EXPECT_EQ(TakesRequest(offer, tab) == Taken::kNo, !tab.agents) << tab.agents << tab.held;
+    }
+  });
+  EXPECT_EQ(TakesRequest(/*link_handler_offer=*/false, kHeld), Taken::kCancelled);
 }
 
 }  // namespace

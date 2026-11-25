@@ -23,6 +23,12 @@ bool Refuses(Kind kind, const agent_space_rule::Tab& tab) {
   }
 }
 
+bool RefusesAsk(Kind kind, const agent_space_rule::Tab& tab, const Handed& handed) {
+  const bool call = kind == Kind::kCamera || kind == Kind::kMicrophone;
+  const bool users = handed.handed && handed.on_given_origin && tab.held && handed.users_press;
+  return Refuses(kind, tab) && !(call && users);
+}
+
 const char* CodeWord(Kind kind) {
   switch (kind) {
     case Kind::kCamera:
