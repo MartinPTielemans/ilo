@@ -24,10 +24,7 @@ pub(crate) unsafe extern "C" fn agent_activity(
         _ => String::new(),
     };
     let tab = entry.tab;
-    match refused.is_empty() {
-        true => log!("browser: agent activity {agent} {tab} {action}{about}"),
-        false => log!("browser: agent activity {agent} {tab} {action}{about} refused: {refused}"),
-    }
+    browser::agents::tools::log_activity(&agent, tab, &action, &about, &refused);
     if refused.is_empty() {
         let agent = SharedString::from(agent.clone());
         update_app_later(move |cx| {

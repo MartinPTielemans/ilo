@@ -5347,6 +5347,8 @@ impl Agents {
         refused: &str,
         (url, sent, said): (&str, Vec<request::Sent>, &str),
     ) {
+        // By whichever road an entry comes, its reason is the one the app keeps.
+        let refused = tools::kept_reason(refused);
         // The rules run reads each entry as Settings › Agents lists it, the app's own refusals too,
         // which never reach the core's line.
         match refused.is_empty() {
