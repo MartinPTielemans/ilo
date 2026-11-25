@@ -68,6 +68,8 @@ pub(crate) struct Recorder {
     pub(super) resting: Rc<RefCell<Vec<String>>>,
     /// The in-place bar's profile is new: it has learned no agent till this goes false.
     pub(super) unlearned: Rc<std::cell::Cell<bool>>,
+    /// Whether the resting bars are over a private window, as the host reads it of the front one.
+    pub(super) private_bar: Rc<std::cell::Cell<bool>>,
     /// Whether it can wall a task in with its files, as `files_available` answers.
     pub(super) files: std::cell::Cell<bool>,
     /// How many detents the trackpad was asked for.
@@ -118,7 +120,7 @@ pub(crate) struct Recorder {
     pub(super) no_stay_on_top: Cell<bool>,
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
     pub(super) crash_reports: Cell<Option<bool>>,
-    pub(super) agents: Cell<Option<bool>>,
+    pub(super) threads: Cell<Option<bool>>,
     pub(super) other_apps: Cell<Option<bool>>,
     pub(super) daily_count: Cell<Option<bool>>,
     /// Settings' switches first run shows too, as `setting` answers: only those a test offers.
@@ -318,7 +320,7 @@ pub(crate) struct Recorder {
     pub(super) sync_server: Cell<bool>,
     /// The videos opened that haven't given their first frame yet.
     videos_starting: RefCell<Vec<u64>>,
-    /// The Shell that set_agents and show_share_sheet read, as the core's do: turning agents off
+    /// The Shell that set_threads and show_share_sheet read, as the core's do: turning agents off
     /// ends their ask, which reads every Shell, and the share sheet finds its tab's window.
     reads: RefCell<Option<WeakEntity<super::Shell>>>,
 }
@@ -1904,47 +1906,13 @@ impl Browser for Recorder {
         let host = resting_bar::RestingBar {
             asked: self.resting.clone(),
             unlearned: self.unlearned.clone(),
+            private: self.private_bar.clone(),
         };
         crate::command_bar::in_place(Rc::new(host), window, cx)
     }
 
     fn files_available(&self, _: &App) -> bool {
         self.files.get()
-    }
-
-    fn start_task(
-        &self,
-        agent: &str,
-        asked: &str,
-        home: u64,
-        start: crate::agents::task::Start,
-        _: &mut App,
-    ) {
-        // The model only when the user picked one: "on " and its id, empty for the default. The
-        // pages only when the user added some: their addresses, and "only them" for Only the
-        // sites you add.
-        let model = (start.model.as_ref()).map_or(String::new(), |id| format!(" on {id:?}"));
-        let pages = match (start.pages.is_empty(), start.only_added) {
-            (true, _) => String::new(),
-            (false, only) => format!(
-                " with {:?}{}",
-                start.pages,
-                if only { " only them" } else { "" }
-            ),
-        };
-        // Files and a folder by count alone, as nothing names them but the conversation.
-        let files = match start.files.files.len() {
-            0 => String::new(),
-            count => format!(" and {count} files"),
-        };
-        let folder = match start.files.folder.is_some() {
-            true => " and a folder",
-            false => "",
-        };
-        self.record(format!(
-            "start task {agent} {asked} from {home} at {}{model}{pages}{files}{folder}",
-            start.tier.label()
-        ));
     }
 
     fn field_window_typing(&self, _: &mut App) -> bool {
@@ -2209,14 +2177,18 @@ impl Browser for Recorder {
         self.record(format!("crash reports {on}"))
     }
 
-    fn agents(&self, _: &App) -> Option<bool> {
-        self.agents.get()
+    fn threads(&self, _: &App) -> Option<bool> {
+        self.threads.get()
     }
 
-    fn set_agents(&self, on: bool, cx: &mut App) {
+    fn set_threads(&self, on: bool, cx: &mut App) {
         self.read_shell(cx);
-        self.agents.set(Some(on));
-        self.record(format!("agents {on}"))
+        self.threads.set(Some(on));
+        self.record(format!("threads {on}"));
+        // As the engine's host passes it on, so a stand-in's Agents runs what the switch lets.
+        if let Some(agents) = crate::agents::global(cx) {
+            agents.update(cx, |agents, cx| agents.set_threads(on, cx));
+        }
     }
 
     fn other_apps(&self, _: &App) -> Option<bool> {

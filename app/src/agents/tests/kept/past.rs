@@ -1185,3 +1185,32 @@ fn a_profiles_deletion_removes_its_kept_tasks(cx: &mut TestAppContext) {
     assert_eq!(listed(&next, cx).len(), 1);
     assert_eq!(next.ilo_lines(&new, cx).last(), Some(&IloKind::Gone));
 }
+
+/// With the inside switch off at launch, the tasks a run before left are listed as ever and have
+/// no token, so nothing is let in as one of them; on again, each has its own.
+#[gpui::test]
+fn a_past_task_has_no_token_while_threads_are_off(cx: &mut TestAppContext) {
+    let run = Run::new("threads-off", cx);
+    let done = run.start(Cli::Claude, cx);
+    run.ran(1);
+    name_it(&run, &done, "Lisbon seats", cx);
+    run.finish(&done, cx);
+    quit(&run, cx);
+    let path = run.profile.join("agents.json");
+    let mut saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    saved["threads"] = json!(false);
+    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+    let agents = agents(&browser, &configs, Some(path), cx);
+    agents.update(cx, |agents, cx| agents.load(&saved.to_string(), cx));
+    let listed = agents.read_with(cx, |agents, cx| agents.archived_tasks(cx).len());
+    assert_eq!(listed, 1, "the past task isn't listed");
+    let tokens = |cx: &mut TestAppContext| {
+        agents.read_with(cx, |agents, _| {
+            let tokens = agents.tokens.lock().unwrap();
+            tokens.values().filter(|agent| is_task_id(agent)).count()
+        })
+    };
+    assert_eq!(tokens(cx), 0, "a past task has a token with threads off");
+    agents.update(cx, |agents, cx| agents.set_threads(true, cx));
+    assert_eq!(tokens(cx), 1, "on again, the past task has none");
+}

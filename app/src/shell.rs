@@ -229,7 +229,7 @@ use rows::{Breath, UNLOAD};
 use scaled::scaled;
 pub use side_panel::SidePanel;
 pub use sidebar::{SidebarEdge, SidebarRight, edge_reveals, sidebar_right};
-use swap::{ARROW_DOWN, Swapped, Swaps};
+use swap::{Swapped, Swaps};
 pub use themes::{AppAppearance, app_appearance};
 use tile_theme::TileTheme;
 pub use trace::{RECORDING, STOP, recorded as trace_recorded};
@@ -473,15 +473,9 @@ use crate::tokens::shell::SPEAKER_SIZE;
 // kept.
 use crate::tokens::shell::DIVIDER_HEIGHT;
 const DIVIDER_LINE_Y: f32 = DIVIDER_HEIGHT / 2.;
+use crate::tokens::shell::CLEAR_HEIGHT;
 use crate::tokens::shell::DIVIDER_GAP;
 use crate::tokens::shell::TODAY_GAP;
-// The arrow before Clear while it would close the last Today tabs, 8 pt tall and 3 pt before the
-// word (Arc). Lucide's arrow-down spans 14 of its 24 each way.
-const CLEAR_ARROW: f32 = 8. * 24. / 14.;
-const CLEAR_ARROW_INSET: f32 = CLEAR_ARROW * 5. / 24.;
-use crate::tokens::shell::CLEAR_GAP;
-const CLEAR_ARROW_ROOM: f32 = CLEAR_ARROW - 2. * CLEAR_ARROW_INSET + CLEAR_GAP;
-use crate::tokens::shell::CLEAR_HEIGHT;
 // Clear takes clicks 5 pt past the word each way, as the header's buttons past their glyphs.
 const CLEAR_HIT_OUT: f32 = 5.;
 // How long the toast after a copy shows (ours: Arc's isn't measured), and after a Space is deleted
@@ -894,7 +888,7 @@ impl Space {
     }
 
     /// Whether `shown` and its split are all of its Today tabs, so Clear has nothing else to close
-    /// and closes them too, which an arrow before it says (Arc).
+    /// and closes them too (Arc).
     fn clears_last(&self, shown: u64) -> bool {
         let shown = self.panes(shown);
         !self.today.is_empty() && self.today.iter().all(|tab| shown.contains(tab))
@@ -1748,9 +1742,6 @@ pub struct Shell {
     card_wait: Option<Task<()>>,
     /// What the button showed when last drawn, for the lines check.sh waits for.
     drawn_copied: &'static str,
-    /// The Space shown at the last draw, and whether its Clear had the arrow, while it had a
-    /// Clear divider.
-    drawn_arrow: Option<(u64, bool)>,
     /// Whether the pointer is over the divider's Clear, which then draws brighter.
     clear_hovered: bool,
     /// The same for the broom before it.
@@ -2310,7 +2301,6 @@ impl Shell {
             card_hidden: Vec::new(),
             card_wait: None,
             drawn_copied: "shows link",
-            drawn_arrow: None,
             clear_hovered: false,
             broom_hovered: false,
             swaps: Swaps::default(),
@@ -4731,7 +4721,6 @@ impl Render for Shell {
             let favicon = hover.1.map_or("none".into(), |tab| tab.to_string());
             log!("browser: hover {row} close {close} favicon {favicon}");
         }
-        self.step_clear_arrow();
         let now = self.clock.now();
         self.swaps.step(window, now);
         // As the outline's, so a capture of the URL field's button shows the glyph it logged.
@@ -4995,7 +4984,7 @@ impl Render for Shell {
             .then(|| self.window_buttons(self.viewport.width, cx));
         let normal = self.task_area.is_none();
         let task_area = self.task_area_element(cx);
-        let empty_card = self.empty_card(window, cx);
+        let empty_card = self.empty_card(cx);
         self.breath.arm(cx);
         div()
             .id("shell")
@@ -5439,7 +5428,7 @@ impl Shell {
                 row_box().child(plate(plus, new_tab).when(!today.is_empty(), |plate| {
                     // No broom: what it shows is the browser's answer for the Space shown, and
                     // Clear stands where it will with one or without.
-                    let clear = still_clear(&self.palette, space.clears_last(space.shown));
+                    let clear = clear_label(&self.palette, self.palette.tertiary());
                     plate.child(today_line(
                         &self.palette,
                         self.hairline(),
@@ -6195,11 +6184,9 @@ fn divider_box(palette: &Palette, line: Pixels, clear: Option<impl IntoElement>)
     )
 }
 
-/// The divider's Clear: the word, after `arrow` while it would close the last Today tabs (Arc).
-/// The word stays at the titles' end, and the arrow's room opens `room` of the way before it, which
-/// moves the line's end, so nothing jumps as the arrow comes and goes. It hangs out by a margin
-/// that takes its clicks, and the word keeps its place.
-fn clear_label(palette: &Palette, arrow: AnyElement, room: f32, color: f32) -> gpui::Div {
+/// The divider's Clear: the word alone, at the titles' end, whatever Clear would close. It hangs
+/// out by a margin that takes its clicks, and the word keeps its place.
+fn clear_label(palette: &Palette, color: f32) -> gpui::Div {
     div()
         .flex_none()
         .ml(px(DIVIDER_GAP - CLEAR_HIT_OUT))
@@ -6210,34 +6197,7 @@ fn clear_label(palette: &Palette, arrow: AnyElement, room: f32, color: f32) -> g
         .items_center()
         .text_size(px(text::SMALL))
         .text_color(palette.text(color))
-        .child(
-            div()
-                .relative()
-                .flex_none()
-                .h_full()
-                .w(px(room * CLEAR_ARROW_ROOM))
-                .child(
-                    div()
-                        .absolute()
-                        .top(px((CLEAR_HEIGHT - CLEAR_ARROW) / 2.))
-                        .right(px(CLEAR_GAP - CLEAR_ARROW_INSET))
-                        .child(arrow),
-                ),
-        )
         .child("Clear")
-}
-
-/// Clear, with the arrow while `arrow`, where it doesn't change on the button: a Space's page
-/// beside the one shown, and a Library card.
-fn still_clear(palette: &Palette, arrow: bool) -> gpui::Div {
-    let glyph = match arrow {
-        true => svg()
-            .path(ARROW_DOWN)
-            .size(px(CLEAR_ARROW))
-            .text_color(palette.text(palette.tertiary())),
-        false => return clear_label(palette, div().into_any_element(), 0., palette.tertiary()),
-    };
-    clear_label(palette, glyph.into_any_element(), 1., palette.tertiary())
 }
 
 /// "+ New Tab": its plus and its label. The plus is drawn as a favicon is, so it centres on the

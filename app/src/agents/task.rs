@@ -918,8 +918,9 @@ pub struct Tasks {
     pub dir: Option<PathBuf>,
     /// The sign-ins under way and what each row says of its last.
     pub(super) sign_ins: super::sign_in::SignIns,
-    /// Whether a look asked for while one ran waits for it to end, as after a sign-in.
-    pub(super) look_again: bool,
+    /// The assistants a look asked for while one ran waits to look for once it ends, as after a
+    /// sign-in, each with whether the user's click on its row asked for it.
+    pub(super) look_again: Vec<(Cli, bool)>,
     /// Helpers for the tasks a test starts, whatever the switch says.
     #[cfg(test)]
     pub(super) helpers: bool,
@@ -1069,8 +1070,8 @@ impl Agents {
         if session && asks {
             return (None, None);
         }
-        // With tasks off nothing more is asked of a task; an answer still lets one finish.
-        if !self.tasks_on() && asks {
+        // With threads off nothing more is asked of a task; an answer still lets one finish.
+        if !self.threads() && asks {
             return (None, None);
         }
         match action {
@@ -1419,7 +1420,7 @@ impl Agents {
                 State::Working => page_steps(task),
                 _ => Vec::new(),
             },
-            retry: matches!(task.state, State::Limit { .. }) && self.tasks_on(),
+            retry: matches!(task.state, State::Limit { .. }) && self.threads(),
             fix: match (&task.state, task.cli) {
                 (
                     State::Failed {
@@ -1434,7 +1435,7 @@ impl Agents {
 
     /// The CLIs ⌘T's ask lists: those signed in, as last learned, the default first.
     pub fn ask_agents(&self) -> Vec<AskAgent> {
-        if !self.tasks_on() {
+        if !self.threads() {
             return Vec::new();
         }
         let mut clis: Vec<Cli> = (Cli::ALL.into_iter())
@@ -1458,7 +1459,7 @@ impl Agents {
 
     /// The CLIs installed but not signed in, as last learned, which the composer offers to sign in.
     pub fn signed_out_agents(&self) -> Vec<Cli> {
-        if !self.tasks_on() {
+        if !self.threads() {
             return Vec::new();
         }
         (Cli::ALL.into_iter())
@@ -1497,15 +1498,48 @@ impl Agents {
 
     /// Learns again whether each CLI is installed and signed in, off the UI thread, unless it's
     /// learning already. Once a show: Settings › Agents and ⌘T's ask call it as they first show.
+    /// Nothing of an assistant's program runs while the inside switch is off: then a row's state
+    /// is looked up only at the user's click (`look_up_assistant`).
     pub fn look_for_task_agents(&mut self, cx: &mut Context<Self>) {
+        if self.threads() {
+            self.look_for(Cli::ALL.to_vec(), false, cx);
+        }
+    }
+
+    /// Learns whether `cli` alone is installed and signed in, at the user's click on its row, as
+    /// Models has it while the inside switch is off.
+    pub fn look_up_assistant(&mut self, cli: Cli, cx: &mut Context<Self>) {
+        self.look_for(vec![cli], true, cx);
+    }
+
+    /// Learns again what the user's click on `cli`'s row changed, as a sign-in or sign-out
+    /// ending: every assistant while the inside switch is on, else that one alone.
+    pub(super) fn look_after_click(&mut self, cli: Cli, cx: &mut Context<Self>) {
+        match self.threads() {
+            true => self.look_for_task_agents(cx),
+            false => self.look_up_assistant(cli, cx),
+        }
+    }
+
+    /// Looks for `clis`, `clicked` if the user's click on a row asked for it. While a look runs,
+    /// they wait for it to end, a click kept as one.
+    fn look_for(&mut self, clis: Vec<Cli>, clicked: bool, cx: &mut Context<Self>) {
         if self.tasks.looking {
-            self.tasks.look_again = true;
+            for cli in clis {
+                let again = &mut self.tasks.look_again;
+                match again.iter_mut().find(|(each, _)| *each == cli) {
+                    Some((_, was)) => *was |= clicked,
+                    None => again.push((cli, clicked)),
+                }
+            }
             return;
         }
         self.tasks.looking = true;
         let clients = self.clients.clone();
         let looked = cx.background_spawn(async move {
-            Cli::ALL.map(|cli| (cli, clients.look_for_task_cli(cli)))
+            (clis.into_iter())
+                .map(|cli| (cli, clients.look_for_task_cli(cli)))
+                .collect::<Vec<_>>()
         });
         cx.spawn(async move |agents, cx| {
             let found = looked.await;
@@ -1530,9 +1564,15 @@ impl Agents {
                         .find(|cli| agents.found(*cli) == Ready::SignedIn);
                     agents.tasks.default = ready.or(agents.tasks.default);
                 }
-                // A sign-in that ended while it looked may have changed what it found.
-                if std::mem::take(&mut agents.tasks.look_again) {
-                    agents.look_for_task_agents(cx);
+                // A sign-in that ended while it looked may have changed what it found. With the
+                // inside switch off now, only a row the user clicked is looked for.
+                let threads = agents.threads();
+                let again: Vec<Cli> = (std::mem::take(&mut agents.tasks.look_again).into_iter())
+                    .filter(|(_, clicked)| *clicked || threads)
+                    .map(|(cli, _)| cli)
+                    .collect();
+                if !again.is_empty() {
+                    agents.look_for(again, false, cx);
                 }
                 cx.notify();
             });
@@ -1565,7 +1605,7 @@ impl Agents {
     }
 
     fn sorter(&self) -> Option<&Found> {
-        if !self.tasks_on() || self.tasks.default != Some(Cli::Claude) {
+        if !self.threads() || self.tasks.default != Some(Cli::Claude) {
             return None;
         }
         let found = self.tasks.found.get(&Cli::Claude)?;
@@ -1677,7 +1717,7 @@ impl Agents {
             .filter_map(|url| added_address(url))
             .collect();
         let asked = asked.trim();
-        if asked.is_empty() || !self.tasks_on() {
+        if asked.is_empty() || !self.threads() {
             return None;
         }
         // A private window starts no task, whichever way it was asked: agents get no path into
@@ -3136,6 +3176,18 @@ impl Agents {
             .map_or(0, |session| session.connection)
     }
 
+    /// The user's Space a session's card shows in, as a task's shows in the Space it was asked
+    /// from: the one the window in front shows, else the first of the user's in the profile of the
+    /// agent's `space` (`user_space`). The browser's own state says it, never anything the client
+    /// sends, and a private window's Space is never one: then no Space lists the card.
+    fn session_home(&self, space: u64) -> u64 {
+        let home = self.browser.user_space(space);
+        match self.browser.private_space(home) {
+            true => 0,
+            false => home,
+        }
+    }
+
     /// The session under way of the call's client on the call's connection, or, for a call that
     /// opens or acts on a tab, a new one: its card shows from then. Its calls are its steps.
     fn session_for(&mut self, call: &super::Call, cx: &mut Context<Self>) -> Option<String> {
@@ -3175,6 +3227,7 @@ impl Agents {
             .cloned()
             .unwrap_or_else(|| super::name(&call.agent).into());
         let space = self.space(&call.agent, cx);
+        let home = self.session_home(space);
         // check.sh reads this line.
         log!("browser: session {key} of agent {} as {name}", call.agent);
         let session = Session {
@@ -3199,7 +3252,7 @@ impl Agents {
             title: name.clone(),
             name,
             session: Some(session),
-            home: 0,
+            home,
             space,
             asked: SharedString::default(),
             page: None,

@@ -391,7 +391,7 @@ impl Shell {
         let space = picked.map_or(picture::SPACE, |index| SWATCHES[index]);
         // Just the browser's sidebar is tabs only, with no thread at work or chip about one.
         let scene = match step {
-            Step::Assistant if self.browser.agents(cx) != Some(true) => picture::Scene::default(),
+            Step::Assistant if self.browser.threads(cx) != Some(true) => picture::Scene::default(),
             Step::Tidy if self.broom_card(cx) => picture::Scene::sorted(),
             _ => picture::Scene::of(step),
         };
@@ -407,7 +407,7 @@ impl Shell {
 
     /// Whether ⌘T starts threads here: the agents' and their tasks' switches are on.
     fn threads_on(&self, cx: &gpui::App) -> bool {
-        crate::agents::global(cx).is_some_and(|agents| agents.read(cx).tasks_on())
+        crate::agents::global(cx).is_some_and(|agents| agents.read(cx).threads())
     }
 
     /// The keys step's rows, a key each with what it does, as the app's keys are now, and its
@@ -699,7 +699,7 @@ impl Shell {
     /// Whether the tidy step tells of the broom: only with an assistant, and only where the
     /// broom can be at all, which `Browser::broom` answers whatever today's tabs number.
     pub(super) fn broom_card(&self, cx: &App) -> bool {
-        self.browser.agents(cx) == Some(true) && self.browser.broom().is_some()
+        self.browser.threads(cx) == Some(true) && self.browser.broom().is_some()
     }
 }
 

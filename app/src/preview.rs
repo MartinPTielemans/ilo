@@ -1731,9 +1731,6 @@ impl Browser for Fake {
         command_bar::in_place(Rc::new(PreviewBar), window, cx)
     }
 
-    // The preview runs no tasks.
-    fn start_task(&self, _: &str, _: &str, _: u64, _: browser::agents::task::Start, _: &mut App) {}
-
     fn field_window_typing(&self, _: &mut App) -> bool {
         false
     }
@@ -2083,11 +2080,11 @@ impl Browser for Fake {
         self.opt_ins.set((on, self.opt_ins.get().1));
     }
 
-    fn agents(&self, _: &App) -> Option<bool> {
+    fn threads(&self, _: &App) -> Option<bool> {
         Some(self.opt_ins.get().1)
     }
 
-    fn set_agents(&self, on: bool, _: &mut App) {
+    fn set_threads(&self, on: bool, _: &mut App) {
         self.opt_ins.set((self.opt_ins.get().0, on));
     }
 
@@ -2225,6 +2222,16 @@ impl command_bar::Host for PreviewBar {
         _: &str,
         _: &str,
         _: Option<(SharedString, SharedString)>,
+        _: browser::agents::tier::Tier,
+        _: Option<String>,
+        _: &mut App,
+    ) {
+    }
+
+    fn run_task_at_rest(
+        &self,
+        _: &str,
+        _: &str,
         _: browser::agents::tier::Tier,
         _: Option<String>,
         _: &mut App,
@@ -3884,21 +3891,20 @@ fn preview_composer_model_menu(bounds: Bounds<Pixels>, keys: &str, cx: &mut App)
         header: true,
         ..MenuEntry::named(name.to_string(), false)
     };
-    let first = task::model_default(Cli::Claude);
-    let (_, models) = task::model_menu("", &first, models.default.as_deref(), models.listed);
+    let (_, models) = task::model_menu("", "Default", models.default.as_deref(), models.listed);
     let mut items = vec![
         MenuEntry::search("Search models"),
-        heading(Cli::Claude.name()),
+        heading(browser::settings_rows::assistant_name(Cli::Claude)),
     ];
     items.extend(models.into_iter().map(|entry| MenuEntry {
         over: false,
         ..entry
     }));
     items.extend([
-        heading(Cli::Codex.name()),
-        MenuEntry::named("Sign In", true).kept(),
+        heading(browser::settings_rows::assistant_name(Cli::Codex)),
+        MenuEntry::named("Sign In", true).offer().out(),
         MenuEntry::line(),
-        MenuEntry::named("Settings", true).kept(),
+        MenuEntry::named("Settings", true).kept().out(),
     ]);
     let keys: Vec<String> = (keys.split(','))
         .map(str::trim)
