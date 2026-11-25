@@ -660,6 +660,14 @@ void AgentPage::PageTaken(bc_id tab, int64_t load) {
 }
 
 // static
+void AgentPage::ClosingNotSecure(bc_id tab, bool closing) {
+  content::WebContents* contents = Tab::FromId(tab);
+  if (AgentPage* page = contents ? FromWebContents(contents) : nullptr) {
+    page->closing_not_secure_ = closing;
+  }
+}
+
+// static
 void AgentPage::SessionEnded(bc_id tab) {
   content::WebContents* contents = Tab::FromId(tab);
   if (AgentPage* page = contents ? AgentPage::FromWebContents(contents) : nullptr) {
@@ -1426,6 +1434,10 @@ void AgentPage::ClickAt(int slot, gfx::PointF at, size_t step) {
   if (step == std::size(kSteps)) {
     Settle();
     return;
+  }
+  // From its press on the page may leave for it, and the click has gone.
+  if (job_ && step == 1) {
+    job_->sent = true;
   }
   Mouse(kSteps[step], at, slot,
         base::BindOnce(&AgentPage::ClickAt, weak_factory_.GetWeakPtr(), slot, at, step + 1));
@@ -3226,8 +3238,18 @@ void AgentPage::AnswerHeld() {
 }
 
 void AgentPage::LetGo() {
+  using secure_connections_rule::AtClose;
+  static constexpr char kEnded[] = "The agent's session with the tab ended.";
   std::deque<Job> owed = std::exchange(jobs_, {});
+  // What the job running is told, the first of those owed; the ones behind it never began.
+  AtClose told = AtClose::kTabEnded;
+  const bool closing = std::exchange(closing_not_secure_, false);
   if (job_ && !std::exchange(taken_, false)) {
+    told = secure_connections_rule::ToldAtClose(
+        closing, /*running=*/true,
+        {.clicked = job_->action == BC_AGENT_PAGE_CLICK && job_->sent,
+         .waits = job_->action == BC_AGENT_PAGE_QUIET,
+         .asked = job_->asked});
     owed.push_front(*std::move(job_));
   }
   job_.reset();
@@ -3236,7 +3258,23 @@ void AgentPage::LetGo() {
   download_starting_.Stop();
   AnswerHeld();
   for (Job& job : owed) {
-    Owe(job, "The agent's session with the tab ended.");
+    switch (std::exchange(told, AtClose::kTabEnded)) {
+      case AtClose::kTabEnded:
+        Owe(job, kEnded);
+        break;
+      case AtClose::kClickWent:
+        // A result, not an error: the click went, and the app says what became of its tab.
+        base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+            FROM_HERE,
+            base::BindOnce(&Report, tab_, job.request,
+                           std::string(secure_connections_rule::kClosedAnswer), /*error=*/false,
+                           BC_AGENT_FAILURE_NONE));
+        break;
+      case AtClose::kWentOn:
+        // The app words it by the value; the words here are the tab's end, which is true of it.
+        Owe(job, kEnded, BC_AGENT_FAILURE_WENT_ON_NOT_SECURE);
+        break;
+    }
   }
   // A file the user is choosing for one of its fields goes nowhere, and its dialog closes.
   AgentFileField::TabEnded(tab_);

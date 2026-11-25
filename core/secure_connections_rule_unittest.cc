@@ -117,6 +117,63 @@ TEST(SecureConnectionsRuleTest, TheJobIsToldInTheAppsOwnTwoSentences) {
   EXPECT_STREQ(NotOpened(/*opened=*/false), "The tab couldn't go there.");
 }
 
+// The click went, so an answer that reads as one that didn't would have the agent click again.
+TEST(SecureConnectionsRuleTest, AClickThatWentIsToldSoAsItsTabIsClosedAsNotSecure) {
+  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/true, /*running=*/true, {.clicked = true}),
+            AtClose::kClickWent);
+}
+
+// Its press never reached the page, as one still waiting for its element: it didn't go.
+TEST(SecureConnectionsRuleTest, AClickNotYetSentIsToldTheTabsEnd) {
+  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/true, /*running=*/true, {.clicked = false}),
+            AtClose::kTabEnded);
+}
+
+// The page it opened was there, and went on by itself while the open still waited for it.
+TEST(SecureConnectionsRuleTest, AnOpensWaitIsToldItsPageWentOn) {
+  const Running wait = {.waits = true, .asked = {.load = 7, .opened = true}};
+  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/true, /*running=*/true, wait), AtClose::kWentOn);
+}
+
+// A navigate's tab has the page it left behind it and is put back; a wait asked later has no load.
+TEST(SecureConnectionsRuleTest, AWaitThatIsntAnOpensIsToldTheTabsEnd) {
+  const Running navigates = {.waits = true, .asked = {.load = 7, .opened = false}};
+  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/true, /*running=*/true, navigates),
+            AtClose::kTabEnded);
+  const Running later = {.waits = true};
+  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/true, /*running=*/true, later),
+            AtClose::kTabEnded);
+}
+
+// A type, a key, a choice, a read: there is no answer of their own for them.
+TEST(SecureConnectionsRuleTest, EveryOtherJobRunningIsToldTheTabsEnd) {
+  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/true, /*running=*/true, {}), AtClose::kTabEnded);
+}
+
+// It never began, whatever it was to be.
+TEST(SecureConnectionsRuleTest, AJobStillQueuedIsToldTheTabsEnd) {
+  const Running wait = {.waits = true, .asked = {.load = 7, .opened = true}};
+  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/true, /*running=*/false, wait),
+            AtClose::kTabEnded);
+  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/true, /*running=*/false, {.clicked = true}),
+            AtClose::kTabEnded);
+}
+
+// The user's close, the agent's own, a close of the core's that didn't go: none says a page went
+// on to http, to a click or to an open's wait.
+TEST(SecureConnectionsRuleTest, ATabThatClosesAnyOtherWayTellsEveryJobTheTabsEnd) {
+  const Running wait = {.waits = true, .asked = {.load = 7, .opened = true}};
+  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/false, /*running=*/true, {.clicked = true}),
+            AtClose::kTabEnded);
+  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/false, /*running=*/true, wait),
+            AtClose::kTabEnded);
+}
+
+// The object the header promises the app, which reads it by its one key.
+TEST(SecureConnectionsRuleTest, TheClicksAnswerIsTheHeadersObject) {
+  EXPECT_STREQ(kClosedAnswer, R"({"closed":"not_secure"})");
+}
+
 // An entry about the page its tab shows names no site. Every other entry the core sends is built
 // as this one, by its fields' names without the site, which leaves the site null.
 TEST(SecureConnectionsRuleTest, AnEntryBuiltWithoutASiteNamesNone) {

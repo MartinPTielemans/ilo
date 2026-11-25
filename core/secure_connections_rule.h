@@ -76,6 +76,36 @@ bool AskedFor(const Asked& asked, int64_t taken);
 // What that job is told, as the app says it of a tab that couldn't open or couldn't go.
 const char* NotOpened(bool opened);
 
+// The job running in a tab as the tab goes: whether it is a click whose press went to the page,
+// and whether it is the wait the app asks right after its open or its navigate, with the load it
+// has.
+struct Running {
+  bool clicked = false;
+  bool waits = false;
+  Asked asked;
+};
+
+// What a job is told as its tab goes.
+enum class AtClose {
+  // That the agent's session with the tab ended, as at any tab's end.
+  kTabEnded,
+  // That its click went and the tab then closed: a result, so the click isn't done again.
+  kClickWent,
+  // That the page its open opened went on by itself, with BC_AGENT_FAILURE_WENT_ON_NOT_SECURE.
+  kWentOn,
+};
+
+// What |job| is told of a tab that is gone. Only where the core closed it itself, as the page it
+// went on to was stopped with none behind it (|closed_as_not_secure|), and only the job |running|
+// then, is told more than the tab's end: a click that went, since the agent would do it again, and
+// an open's wait, since the page it waited for was there and left by itself. A job still queued
+// never began; a click not yet sent didn't go; a navigate has the page it left behind it, so its
+// tab is put back and never closed so. Every close but that one tells every job the tab's end.
+AtClose ToldAtClose(bool closed_as_not_secure, bool running, const Running& job);
+
+// kClickWent's answer: the object the header gives agent_page_done for it.
+inline constexpr char kClosedAnswer[] = R"({"closed":"not_secure"})";
+
 }  // namespace browser_core::secure_connections_rule
 
 #endif  // BROWSER_CORE_SECURE_CONNECTIONS_RULE_H_

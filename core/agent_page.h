@@ -79,6 +79,11 @@ class AgentPage : public content::WebContentsObserver,
   // now that it didn't open, with BC_AGENT_FAILURE_NOT_SECURE. Every other job there goes on, as
   // under any page that leaves: on the page the tab is put back on, or to the tab's end.
   static void PageTaken(bc_id tab, int64_t load);
+  // The core is about to close |tab| itself, as the page it went on to was stopped with none behind
+  // it, or, not |closing|, has asked and the page still stands, as one being dragged. Only a tab
+  // that goes between the two tells its running job more than the tab's end
+  // (secure_connections_rule::ToldAtClose).
+  static void ClosingNotSecure(bc_id tab, bool closing);
 
   // The agent's session with |tab| ended: its page stops drawing while hidden, and DevTools lets
   // it go. What's still asked is answered as an error.
@@ -130,6 +135,8 @@ class AgentPage : public content::WebContentsObserver,
     base::OnceCallback<void(bool)> put;
     // The load an open's or a navigate's wait waits on, which its call started.
     secure_connections_rule::Asked asked;
+    // Whether a click's press has gone to the page.
+    bool sent = false;
   };
   using Reply = base::OnceCallback<void(const base::DictValue* result)>;
   using Then = base::OnceCallback<void(std::optional<gfx::RectF>)>;
@@ -432,6 +439,8 @@ class AgentPage : public content::WebContentsObserver,
   bool taken_ = false;
   // What Asked said, until the next job takes or drops it.
   secure_connections_rule::Asked asked_;
+  // Whether the core is closing the tab itself, as ClosingNotSecure says.
+  bool closing_not_secure_ = false;
   // An answer kept while a navigation's download starts, as it may take the job (#1446).
   struct Held {
     uint64_t request;

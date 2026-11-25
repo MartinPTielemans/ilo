@@ -79,7 +79,12 @@ void PutBack(bc_id id, std::string agent, std::string host, const char* action, 
         history.GoBack();
         break;
       case secure_connections_rule::PutBack::kClosed:
+        // The job running there hears that its page went on to http only of a tab this very call
+        // closes, and only where a page went there by itself: one the user left at a Hand Back
+        // was no job's (0). If the page still stands after, its jobs go on as under any page.
+        AgentPage::ClosingNotSecure(id, /*closing=*/load != 0);
         Window::CloseTab(id);
+        AgentPage::ClosingNotSecure(id, /*closing=*/false);
         break;
     }
   }
