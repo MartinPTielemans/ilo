@@ -29,6 +29,19 @@ enum class Ask {
 // their own paste works at a step they do themselves.
 bool Refuses(Ask ask, const Tab& tab);
 
+// Where the browser finds a page's tab: in the Space that lists it or, from the page's making
+// until one does, the Space it was made for, which a page another opens is its opener's.
+enum class Where {
+  kNoSpace,
+  kUsersSpace,
+  kAgentsSpace,
+};
+
+// Whether a page is in an agent's Space. The Space its tab is in answers. A link preview is in none
+// until one takes it, and is its opener's until then: |preview_of_agents| is whether the page it
+// previews a link of was in an agent's Space as the preview opened, whatever became of that page.
+bool InAgentSpace(Where where, bool preview_of_agents);
+
 }  // namespace browser_core::agent_space_rule
 
 #endif  // BROWSER_CORE_AGENT_SPACE_RULE_H_

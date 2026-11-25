@@ -16,4 +16,8 @@ bool Refuses(Ask ask, const Tab& tab) {
   return true;
 }
 
+bool InAgentSpace(Where where, bool preview_of_agents) {
+  return where == Where::kAgentsSpace || (where == Where::kNoSpace && preview_of_agents);
+}
+
 }  // namespace browser_core::agent_space_rule

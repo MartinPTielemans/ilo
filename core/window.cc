@@ -25,6 +25,7 @@
 #include "base/time/time.h"
 #include "browser_core/agent_autofill.h"
 #include "browser_core/agent_session.h"
+#include "browser_core/agent_space_page.h"
 #include "browser_core/archive.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/boost_colors.h"
@@ -1989,6 +1990,10 @@ content::WebContents* Window::OpenPreview(content::WebContents& opener,
   // Its card draws Chromium's page, so its load stays there (system_engine.h).
   if (tab) {
     tab->set_opened_as_preview();
+    // Marked before its page starts, from the Space its opener is in now, a preview's included.
+    const Tab* from = Tab::FromWebContents(&opener);
+    const Space* agents = from ? AgentSpaceOf(from->id()) : nullptr;
+    tab->set_preview_of_agents(agents ? agents->id() : 0);
   }
   // Inserting a background tab sized it to the active tab's page.
   preview->Resize(gfx::Rect(size));

@@ -35,5 +35,19 @@ TEST(AgentSpaceRuleTest, AHeldTabStillGetsNoDevice) {
   EXPECT_TRUE(Refuses(Ask::kDevice, {.agents = true, .held = true}));
 }
 
+TEST(AgentSpaceRuleTest, TheSpaceAPagesTabIsInAnswersWhoseItIs) {
+  EXPECT_TRUE(InAgentSpace(Where::kAgentsSpace, /*preview_of_agents=*/false));
+  EXPECT_FALSE(InAgentSpace(Where::kUsersSpace, /*preview_of_agents=*/false));
+  EXPECT_FALSE(InAgentSpace(Where::kNoSpace, /*preview_of_agents=*/false));
+}
+
+TEST(AgentSpaceRuleTest, APreviewNoSpaceHasTakenIsItsOpeners) {
+  EXPECT_TRUE(InAgentSpace(Where::kNoSpace, /*preview_of_agents=*/true));
+}
+
+TEST(AgentSpaceRuleTest, APreviewAUsersSpaceTookIsTheUsers) {
+  EXPECT_FALSE(InAgentSpace(Where::kUsersSpace, /*preview_of_agents=*/true));
+}
+
 }  // namespace
 }  // namespace browser_core::agent_space_rule
