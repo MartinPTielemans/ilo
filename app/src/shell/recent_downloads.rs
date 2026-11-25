@@ -631,8 +631,8 @@ impl Shell {
                 if let Ok(filled) = filled.build() {
                     window.paint_path(filled, fill.opacity(size));
                 }
-                let mut line = PathBuilder::stroke(px(1.));
-                outline.trace(&mut line, bounds.origin, 0.5);
+                let mut line = PathBuilder::stroke(px(t::LINE));
+                outline.trace(&mut line, bounds.origin, t::LINE / 2.);
                 if let Ok(line) = line.build() {
                     window.paint_path(line, rim.opacity(size));
                 }
