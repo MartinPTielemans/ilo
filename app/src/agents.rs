@@ -5855,8 +5855,14 @@ pub fn named_site(named: &str) -> String {
         (host.chars()).all(|each| each.is_ascii_alphanumeric() || matches!(each, '.' | '-' | '_'))
     };
     let address = |host: &str| {
-        (host.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')))
-            .is_some_and(|inner| inner.chars().all(|each| each.is_ascii_hexdigit() || each == ':'))
+        (host
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']')))
+        .is_some_and(|inner| {
+            inner
+                .chars()
+                .all(|each| each.is_ascii_hexdigit() || each == ':')
+        })
     };
     match !named.is_empty() && (name(named) || address(named)) {
         true => named.strip_prefix("www.").unwrap_or(named).to_string(),
