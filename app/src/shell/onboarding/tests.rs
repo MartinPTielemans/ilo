@@ -2118,7 +2118,11 @@ fn a_screen_reader_reads_the_engines_as_one_choice(cx: &mut TestAppContext) {
         .find_map(|(_, node)| {
             (node.role() == Role::Dialog).then(|| node.description().map(str::to_string))
         });
-    assert_eq!(line, Some(None), "the step's title has no line after it");
+    assert_eq!(
+        line,
+        Some(Some("You can change it later in Settings.".to_string())),
+        "the step's title is read with its line (P-search)"
+    );
     assert!(
         said.iter()
             .any(|(role, name, _)| *role == Role::RadioGroup && name == "Search engine")
