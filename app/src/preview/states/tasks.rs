@@ -1,6 +1,7 @@
 //! Made-up tasks: their Spaces, cards and conversations.
 
 use crate::*;
+use browser::agents::runner::Cli;
 
 /// The first task's Space, apart from the ids the rest of the preview takes.
 pub(crate) const FIRST_TASK: u64 = 9001;
@@ -435,11 +436,21 @@ pub(crate) fn task_conversation(agent: SharedString) -> Conversation {
         only_added: false,
         finished: Vec::new(),
         folder: None,
-        model: None,
+        model: Some(model(Cli::Claude, Some("Opus"))),
     };
     group_talk(&mut talk, &items);
     bench_task(&mut talk, items);
     talk
+}
+
+/// A thread's model as its composer's row says it, the app's way: its CLI's mark and name with
+/// the model's, or its default's row, opening the model's menu where the CLI takes another.
+fn model(cli: Cli, name: Option<&str>) -> (&'static str, SharedString, bool) {
+    let said = match name {
+        Some(name) => format!("{} \u{b7} {name}", cli.name()),
+        None => browser::agents::task::model_default(cli),
+    };
+    (cli.glyph(), said.into(), cli.switches_model())
 }
 
 /// The view of a task that isn't at work says what its group's header does: its title, where it
@@ -692,6 +703,7 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             let ended = state != "picked-up";
             if state == "codex-ended" {
                 talk.name = "Codex".into();
+                talk.model = Some(model(Cli::Codex, None));
             }
             talk.about = match ended {
                 true => format!("{} · Done at 14:02", talk.name).into(),
