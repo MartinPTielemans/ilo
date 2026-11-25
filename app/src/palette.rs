@@ -348,15 +348,10 @@ impl Float {
         window_material() && matches!(self, Float::Menu | Float::SiteControls | Float::TabSwitcher)
     }
 
-    /// Its fill in a `tone` window, as drawn on this host: Standard's over the material whatever
-    /// the Spaces' glass, as a Space's value changes only the window's.
+    /// Its fill in a `tone` window, as drawn on this host, at the app's level whatever the Spaces'
+    /// glass.
     pub fn fill(self, tone: Tone) -> Rgba {
-        self.fill_on(tone, self.over_material())
-    }
-
-    /// Its fill in a `tone` window, over the host's material or with none under it.
-    fn fill_on(self, tone: Tone, material: bool) -> Rgba {
-        self.fill_at(tone, material.then_some(Transparency::Standard))
+        self.fill_at(tone, self.over_material().then(transparency))
     }
 
     /// Its fill at `level` over the host's material, or opaque with none.
