@@ -569,7 +569,7 @@ unsafe extern "C" fn started(_: *mut c_void) {
         browser::text_input::bind_keys(cx);
         #[cfg(target_os = "linux")]
         held_escape::watch(wayland, cx);
-        cx.set_global(menu::field_menu(Rc::new(|window, request, cx| {
+        let show_over: Rc<menu::ShowOver> = Rc::new(|window, request, cx| {
             // A browser window's field by the view the host knows the window by, as its other
             // menus are, which on Linux isn't GPUI's own: Chromium's surface or the X window GPUI
             // opened in. An overlay's by its own.
@@ -593,7 +593,9 @@ unsafe extern "C" fn started(_: *mut c_void) {
                 } = request;
                 show_menu(view, items, at, false, look, chosen, cx);
             }
-        })));
+        });
+        cx.set_global(menu::field_menu(show_over.clone()));
+        cx.set_global(menu::entries_menu(show_over));
         cx.on_action(|_: &Hide, cx| cx.hide());
         cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
         cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());

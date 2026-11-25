@@ -714,17 +714,30 @@ EOF
       fail "no window to capture"
     send key w cmd
     expect '^browser: settings hidden$' "⌘W didn't hide Settings"
-    # A task from ⌘T on each, Claude first, as the agent listed first, then Codex, below it.
+    # A task from ⌘T on each: Claude first, as the agent listed first, which the composer starts
+    # on; then Codex, once Settings' mark runs tasks with it, which puts it first.
+    agents="Claude, Codex"
     for cli in "$1" "$2"; do
       task_cli=$(basename "$cli"); task_cli=${task_cli%.*}
       asked="Find a flight on $task_cli"
+      if [ "$task_cli" = codex ]; then
+        send menu Settings…
+        expect '^browser: settings shown ' "Settings… didn't show Settings again"
+        settings_drew
+        # Settings kept its Agents tab while hidden, where it last logged Codex's mark.
+        at=$(drawn "assistant mark codex") || fail "Settings › Agents logged no mark for Codex"
+        send clickkey $at
+        expect '^browser: tasks run on codex$' "a click on Codex's mark didn't run tasks with it"
+        send key w cmd
+        expect '^browser: settings hidden$' "⌘W didn't hide Settings"
+        agents="Codex, Claude"
+      fi
       send key t cmd
       expect '^browser: command bar shown$' "⌘T didn't open the command bar"
       send type "$asked"
       send key tab
       expect '^browser: command bar asks an agent$' "⇥ didn't make what was typed a task"
-      expect '^browser: command bar agents: Claude, Codex$' "⇥ didn't list Claude and Codex, signed in"
-      [ "$task_cli" = codex ] && send key down
+      expect "^browser: command bar agents: $agents\$" "⇥ didn't list $agents, signed in, in that order"
       send key return
       expect "^browser: command bar runs a task on $task_cli\$" "↩ didn't run the task on $task_cli"
       expect_late "^browser: task task-[0-9]* on $task_cli asked from space " "the task on $task_cli didn't start"
