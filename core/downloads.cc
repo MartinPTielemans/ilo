@@ -18,6 +18,7 @@
 #include "browser_core/agent_download_hold.h"
 #include "browser_core/agent_page.h"
 #include "browser_core/agent_session.h"
+#include "browser_core/agent_space_page.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/host.h"
 #include "browser_core/profiles.h"
@@ -230,8 +231,8 @@ class Downloads : public download::AllDownloadItemNotifier::Observer {
   void HoldForAgent(download::DownloadItem* item) {
     content::WebContents* contents = content::DownloadItemUtils::GetWebContents(item);
     const bc_id tab = contents ? Tab::IdOf(contents) : 0;
-    const Space* space = tab ? Space::Holding(tab) : nullptr;
-    if (!space || !space->agent() || item->GetState() != download::DownloadItem::IN_PROGRESS) {
+    const Space* space = tab ? AgentSpaceOf(tab) : nullptr;
+    if (!space || item->GetState() != download::DownloadItem::IN_PROGRESS) {
       return;
     }
     const uint64_t request = AgentPage::TakeJob(contents);
