@@ -32,7 +32,7 @@ use super::{
     live_tiles::{LiveTiles, TILE_RADIUS, page_in},
     permission::{Look, card_listener},
     picture::next_request,
-    task_cards::act,
+    task_cards::{PageWord, act},
 };
 use crate::agents::task::{Card, Dot, TaskAction, status_lead};
 use crate::link_preview::{CLOSE, OPEN};
@@ -55,6 +55,9 @@ pub(super) struct TaskArea {
     /// The conversation, which the task draws.
     view: AnyView,
     page: Option<Watched>,
+    /// A page of the task's that came to need the user while the one watched went back, which ilo
+    /// opens once that one is in its thumbnail, never over it on its way.
+    opens: Option<u64>,
 }
 
 /// A task's view as it stood when the user asked the window to close or the browser to quit,
@@ -206,7 +209,7 @@ fn between(from: Bounds<Pixels>, to: Bounds<Pixels>, way: f32) -> Bounds<Pixels>
 
 /// Where a picture of `picture`'s size goes to fill `bounds`, as wide as them at least, its top at
 /// theirs, as a thumbnail shows a page's top.
-fn covering(bounds: Bounds<Pixels>, picture: (f32, f32)) -> Bounds<Pixels> {
+pub(in crate::shell) fn covering(bounds: Bounds<Pixels>, picture: (f32, f32)) -> Bounds<Pixels> {
     let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
     let zoom = (width / picture.0).max(height / picture.1);
     let (drawn_width, drawn_height) = (picture.0 * zoom, picture.1 * zoom);
@@ -240,6 +243,7 @@ impl Shell {
                             name,
                             color,
                             theme: Theme::parse(&theme),
+                            transparency: crate::space_transparency::read(&theme),
                             icon,
                             profile,
                             agent,
@@ -466,6 +470,7 @@ impl Shell {
                     space,
                     view,
                     page: None,
+                    opens: None,
                 })
             }
         }
@@ -917,6 +922,28 @@ impl Shell {
         Some((area.space, page.tab))
     }
 
+    /// ilo opens `tab`, a page of the task's that has come to need the user, unless one the user
+    /// watches is in place. One on its way back is let finish first: `tab` opens once that one is
+    /// in its thumbnail, if it still needs them.
+    pub(super) fn open_needing_page(&mut self, tab: u64, cx: &mut Context<Self>) {
+        let Some(area) = &mut self.task_area else {
+            return;
+        };
+        match area.page.as_ref().map(|page| page.zoom) {
+            Some(Zoom::Asked(_) | Zoom::In(_)) => area.opens = Some(tab),
+            Some(Zoom::Out(_) | Zoom::Rest) => {}
+            None => {
+                self.watch_row(tab, true, cx);
+            }
+        }
+    }
+
+    /// Whether the task shown asks the user for something in `tab`, as its row and tile say.
+    fn task_page_needs_user(&self, tab: u64) -> bool {
+        self.task_card_shown()
+            .is_some_and(|card| self.page_mark(card, tab).word == PageWord::NeedsYou)
+    }
+
     /// Whether the page watched is going back into its picture, over a conversation the user
     /// can't see yet: only its pictures take a press meanwhile (#3496).
     pub(super) fn task_page_going_back(&self) -> bool {
@@ -1068,7 +1095,12 @@ impl Shell {
 
     /// The page watched goes at once, back to the conversation.
     fn leave_task_page_now(&mut self, cx: &mut Context<Self>) {
-        let Some(page) = self.task_area.as_mut().and_then(|area| area.page.take()) else {
+        let Some(area) = self.task_area.as_mut() else {
+            return;
+        };
+        // What the user does next is theirs: the page that needs them waits in its tile.
+        area.opens = None;
+        let Some(page) = area.page.take() else {
             return;
         };
         self.let_go_of_watch(page, true);
@@ -1453,6 +1485,10 @@ impl Shell {
             // check.sh waits for this line.
             log!("browser: task page in its thumbnail");
             self.retake_talk_pictures(cx);
+            let opens = self.task_area.as_mut().and_then(|area| area.opens.take());
+            if let Some(tab) = opens.filter(|&tab| self.task_page_needs_user(tab)) {
+                self.watch_row(tab, true, cx);
+            }
         }
         self.settle_watch_tile(now, cx);
         let live = self.task_page_live();

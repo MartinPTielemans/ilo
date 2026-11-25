@@ -237,7 +237,7 @@ echo "ok: ⇧⌘N opens a private window titled Incognito, whose cookie the regu
 
 # In a private window, the extensions allowed in Incognito run as in Chrome, and the others don't:
 # the Extensions menu lists only the allowed one, never uBlock Origin, the browser's own, which
-# blocks there as Settings' Ad Blocking (#2107), and the allowed one pins at the URL field and has its Site Controls tile. Two
+# blocks there as Settings › Privacy's Ad Blocking (#2107), and the allowed one pins at the URL field and has its Site Controls tile. Two
 # extensions in a profile of the block's own: a first launch has Chrome list them, and Chrome's
 # preferences then allow one in Incognito and not the other, as chrome://extensions' Allow in
 # Incognito sets them, before the launch the block checks.

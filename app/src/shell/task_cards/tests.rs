@@ -27,7 +27,9 @@ pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
         title: "Find a flight to Lisbon".into(),
         status: "Searching flights".into(),
         steps: Vec::new(),
-        last_site: None,
+        last_tab: None,
+        line: None,
+        ended_at: None,
         asks: false,
         dot,
         word: Word::for_dot(dot),
@@ -864,7 +866,7 @@ fn a_finished_task_folds_into_the_archive_once_seen(cx: &mut TestAppContext) {
         assert!(peak.fold(0., f32::max) > 0.95);
         assert_eq!(
             shell.archive_glyph(bump + super::seconds(super::BUMP)),
-            (1., super::NAV)
+            (1., super::ICON_INK)
         );
     });
 

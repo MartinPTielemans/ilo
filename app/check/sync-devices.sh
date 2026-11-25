@@ -114,7 +114,7 @@ sign_in first
 await '^browser: account FirstDevice None$' ||
   fail "signing in didn't make A the account's first device"
 settings_keyboard
-at=$(drawn "sync copy") || fail "Settings › Sync didn't draw Copy with the words"
+at=$(drawn "sync copy") || fail "Settings › Sync & Import didn't draw Copy with the words"
 send clickkey $at
 copied_at=$(date +%s)
 words=
@@ -128,7 +128,7 @@ done
 clipboard formats
 echo "$clipped" | grep -qx "$hint" ||
   fail "the copied words aren't marked for clipboard managers to skip: $(echo "$clipped" | tr '\n' ' ')"
-at=$(drawn "sync done") || fail "Settings › Sync didn't draw Done with the words"
+at=$(drawn "sync done") || fail "Settings › Sync & Import didn't draw Done with the words"
 send clickkey $at
 await 'browser: sync service active$' || fail "A's sync didn't become active"
 # A Space A makes reaches the devices it adds, and theirs reach it.
@@ -223,7 +223,7 @@ await '^browser: account NeedsSecret None$' || fail "C, signed in, didn't need t
 await '^browser: account Pairing None$' || fail "C, needing the secret, didn't offer to pair"
 settings_keyboard
 at=$(drawn_after "sync use-words" '^browser: account Pairing None$') ||
-  fail "C's Settings › Sync didn't offer the words"
+  fail "C's Settings › Sync & Import didn't offer the words"
 send clickkey $at
 send type $words
 send key return
@@ -558,8 +558,8 @@ else
   send choose Remove
 fi
 expect "^browser: remove login [0-9]* $login\$" "return didn't remove the login on B"
-send clickkey $(drawn "toolbar Sync")
-expect '^browser: settings tab Sync$' "a click on Sync didn't show B's tab again"
+send clickkey $(drawn "toolbar Sync & Import")
+expect '^browser: settings tab Sync & Import$' "a click on Sync & Import didn't show B's tab again"
 device a
 for _ in $(seq 300); do
   [ "$(grep '^browser: passwords ' "$log" | tail -1 | sed 's/.*: //')" = none ] && break
@@ -582,7 +582,7 @@ cleared=$(grep '^browser: secret clear ' "$log" | tail -1)
 for d in c b; do
   device $d
   settings_keyboard
-  at=$(drawn "sync sign-out") || fail "$d's Settings › Sync didn't draw Sign Out"
+  at=$(drawn "sync sign-out") || fail "$d's Settings › Sync & Import didn't draw Sign Out"
   send clickkey $at
   await '^browser: account SignedOut None$' || fail "Sign Out didn't sign $d out"
 done

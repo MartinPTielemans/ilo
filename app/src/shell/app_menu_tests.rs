@@ -151,7 +151,7 @@ fn the_mac_has_no_menu_control(cx: &mut TestAppContext) {
 }
 
 /// The switcher keeps its centre over what's left between the Library and the control, so at the
-/// sidebar's 228 three Spaces' dots fit at their pitch where four did.
+/// sidebar's 228 six Spaces' dots fit at their pitch where eight did.
 #[gpui::test]
 fn the_switcher_leaves_the_control_its_pitch(cx: &mut TestAppContext) {
     let (shell, cx, _) = window(cx, true);
@@ -161,11 +161,11 @@ fn the_switcher_leaves_the_control_its_pitch(cx: &mut TestAppContext) {
     });
     assert_eq!(span, 228. - 2. * SWITCHER_INSET - NAV_PITCH);
     let full = |count: usize| {
-        crate::shell::footer::space_cells(span, count, 0)
+        crate::shell::footer::space_cells(span, &vec![SPACE_PITCH; count], 0)
             .iter()
             .all(|&cell| cell == SPACE_PITCH)
     };
-    assert!(full(3) && !full(4));
+    assert!(full(6) && !full(7));
 }
 
 /// Focus ilo Menu as F10 from `from` runs it: the page's, or the UI's.

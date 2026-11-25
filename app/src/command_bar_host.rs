@@ -324,20 +324,17 @@ impl command_bar::Host for Bar {
         update_window_in(window, cx, |shell, cx| {
             shell.command_bar_dismissed(cx);
             shell.fold_started(folded, cx);
+            shell.bar_starting();
         });
         agents_core::update(move |agents, cx| {
-            // The card takes the slot as it comes; one that didn't start leaves it empty.
-            if agents
-                .start_task(
-                    cli,
-                    &asked,
-                    page,
-                    home,
-                    browser::agents::tier::Tier::default(),
-                    cx,
-                )
-                .is_none()
-            {
+            let tier = browser::agents::tier::Tier::default();
+            let started = agents.start_task(cli, &asked, page, home, tier, cx);
+            // Its conversation takes the page's place as its card comes, which takes the slot; one
+            // that didn't start leaves the slot empty and the page as it was.
+            update_window_in(window, cx, |shell, _| {
+                shell.composed_started(started.clone().map(Into::into))
+            });
+            if started.is_none() {
                 update_shells_in(cx, |shell, cx| shell.set_ask_slot(false, cx));
             }
         });

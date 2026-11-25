@@ -196,7 +196,7 @@ def end_session(pid):
 
 def bring_forward(pid, title):
     """Gives the foreground to process PID's browser window in front of its others, or with TITLE
-    to its window of that title, such as Settings' "Sync", as a click on it would. The driver's
+    to its window of that title, such as Settings' "Sync & Import", as a click on it would. The driver's
     window command can't: it activates a window within its own app alone, and the runs with several
     copies of the app need the one they drive in front (#2114). Windows lets a process take the
     foreground only while it shares the input of the thread that has it, so this one attaches to

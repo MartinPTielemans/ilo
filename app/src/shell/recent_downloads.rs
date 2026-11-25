@@ -11,11 +11,11 @@ use gpui::{
 };
 
 use super::{
-    Download, DownloadState, FOOTER_HEIGHT, LIST_TOP, MenuEntry, NAV_SIZE, SECONDARY, Section,
-    Shell,
+    Download, DownloadState, FOOTER_HEIGHT, LIST_TOP, MenuEntry, SECONDARY, Section, Shell,
     library::{capture_id, is_video, of},
 };
 use crate::palette::{STATE_HOVERED, STATE_PRESSED};
+use crate::tokens::shell::FOOT_ROW;
 
 /// What the hover lists, bits the button's menu turns on and off: images, videos and other files
 /// downloaded, and the captures saved to the Library (Arc's screenshots).
@@ -518,7 +518,7 @@ impl Shell {
             return Vec::new();
         }
         let live = !recent.going;
-        let button_top = (FOOTER_HEIGHT + NAV_SIZE) / 2.;
+        let button_top = (FOOTER_HEIGHT + FOOT_ROW) / 2.;
         let height = recent.rows.len() as f32 * RECENT_PITCH;
         let window = f32::from(self.viewport.height).max(1.);
         let opacities = self.recent_row_opacities(cx.background_executor().now());

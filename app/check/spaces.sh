@@ -105,9 +105,9 @@ content=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: la
   sed 's/^browser: layout content \([0-9]*x[0-9]*\),.*/\1/')
 
 # The first launch's Space is the browser's only one, "Space 1" with no icon, which Arc 1.171
-# counts as unnamed and hides the name row of, what's under it rising 39. The runs keep the row
+# counts as unnamed and hides the name row of, what's under it rising 38. The runs keep the row
 # (check.sh), so the sidebar's empty space's menu offers Hide Space Header after Edit Theme Color…,
-# which puts New Tab, under the divider, 39 above where it was. Show Space Header brings the row
+# which puts New Tab, under the gap over Today, 38 above where it was. Show Space Header brings the row
 # back for the steps after (#1400).
 post rightclick $(row 3)
 expect "^browser: menu shown $(cased 'New Tab, New Folder…, Change Space Icon…, Rename Space…, Edit Theme Color…, Hide Space Header'), " \
@@ -116,7 +116,7 @@ send choose "$(cased 'Hide Space Header')"
 expect '^browser: space header hidden$' "Hide Space Header didn't hide the name row"
 expect '^browser: outline ' "the rows weren't drawn again without the name row"
 ../tools/window-screenshot.sh "$pid" "$out/space-header-hidden.png" || fail "no window to capture"
-send click 100 $((90 + 44 + 15 + 20 - 39))
+send click 100 $((86 + 4 + 6 + 17))
 expect '^browser: command new-tab via sidebar$' "New Tab didn't rise into the hidden name row's place"
 expect '^browser: command bar shown$' "a click on the risen New Tab didn't open the command bar"
 send key escape
@@ -1643,16 +1643,16 @@ send window 1
 # In the Library's Spaces, the first Space's top Today row dragged onto the second's card, which is
 # empty, moves its tab there as Move to does, and the Library stays open; dragged back from there,
 # it goes home (Arc's help centre, #688). Each card's tabs are under its name, 48 + 6 + 38 down, and
-# with no pinned tabs under the divider's 15, so its first row's middle is 127 down.
+# with no pinned tabs under the divider's 15, so its first row's middle is 124 down.
 # The Library opens on the section it showed last, its Spaces.
 send key l cmd shift
 expect '^browser: library section spaces$' "⇧⌘L didn't open the Library on its Spaces, as it was left"
 expect '^browser: library shown$' "⇧⌘L didn't open the Library over the cards"
 card_drag() {
-  send press $1 127
-  send dragto $(($1 + 10)) 127
-  send dragto $2 127
-  send release $2 127
+  send press $1 124
+  send dragto $(($1 + 10)) 124
+  send dragto $2 124
+  send release $2 124
 }
 card_drag 260 524
 expect "^browser: library dragged [0-9]* to space $second\$" \
