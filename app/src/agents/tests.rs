@@ -11,6 +11,8 @@ use std::time::{Duration, SystemTime};
 use gpui::{App, AppContext, Entity, TestAppContext};
 use serde_json::json;
 
+use super::runner::Cli;
+use super::sign_in::Offer;
 use super::tier::{Sites, Stop, Tier, Why};
 use super::*;
 
@@ -841,6 +843,132 @@ fn the_clients_line_agrees_with_the_assistants_rows(cx: &mut TestAppContext) {
             "{ready:?}: Claude Code's row says {row:?} and Apps that connect lists {listed:?}"
         );
     }
+}
+
+/// Settings › Models' assistants with Claude Code found as `ready` and agents off, as a new
+/// profile has them: each assistant the app can run, its offer, and whether its model is drawn.
+fn providers_found(
+    ready: crate::agents::ready::Ready,
+    cx: &mut TestAppContext,
+) -> Vec<(Cli, Offer, bool)> {
+    use crate::agents::ready::Found;
+    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+    let agents = agents(&browser, &configs, None, cx);
+    agents.update(cx, |agents, _| {
+        let found = Found {
+            ready,
+            ..Default::default()
+        };
+        agents.tasks.found.insert(Cli::Claude, found);
+    });
+    agents.read_with(cx, |agents, _| {
+        assert!(!agents.tasks_on(), "the page is drawn with tasks off");
+        let listed = agents.providers().into_iter();
+        listed
+            .map(|(cli, row, model)| (cli, row.offer, model))
+            .collect()
+    })
+}
+
+/// Models is never only its title: an assistant not on this computer is listed with what Settings
+/// offers for it, and no model under it.
+#[gpui::test]
+fn models_lists_an_assistant_not_on_this_computer(cx: &mut TestAppContext) {
+    let listed = providers_found(crate::agents::ready::Ready::NotFound, cx);
+    assert_eq!(listed.len(), Cli::ALL.len(), "every assistant: {listed:?}");
+    assert!(
+        listed.contains(&(Cli::Claude, Offer::Get, false)),
+        "{listed:?}"
+    );
+}
+
+/// One on this computer and not signed in is listed with Sign In, and no model under it.
+#[gpui::test]
+fn models_lists_an_assistant_not_signed_in_with_sign_in(cx: &mut TestAppContext) {
+    let listed = providers_found(crate::agents::ready::Ready::SignedOut, cx);
+    assert_eq!(listed.len(), Cli::ALL.len(), "every assistant: {listed:?}");
+    assert!(
+        listed.contains(&(Cli::Claude, Offer::SignIn, false)),
+        "{listed:?}"
+    );
+}
+
+/// One signed in is listed signed in, with its model for a new thread under it.
+#[gpui::test]
+fn models_lists_a_signed_in_assistant_with_its_model(cx: &mut TestAppContext) {
+    let listed = providers_found(crate::agents::ready::Ready::SignedIn, cx);
+    assert_eq!(listed.len(), Cli::ALL.len(), "every assistant: {listed:?}");
+    assert!(
+        listed.contains(&(Cli::Claude, Offer::SignedIn, true)),
+        "{listed:?}"
+    );
+}
+
+/// With agents never turned on, nothing looks for an assistant until Models opens: each row reads
+/// Checking… with nothing offered, and opening Models looks once and says what it found.
+#[gpui::test]
+fn models_looks_for_the_assistants_only_as_it_opens(cx: &mut TestAppContext) {
+    use crate::agents::ready::{Found, Ready};
+    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+    let signed_out = Found {
+        ready: Ready::SignedOut,
+        ..Default::default()
+    };
+    configs
+        .looked
+        .lock()
+        .unwrap()
+        .push((Cli::Claude, signed_out));
+    let agents = agents(&browser, &configs, None, cx);
+    cx.run_until_parked();
+    assert_eq!(configs.looks.load(Ordering::SeqCst), 0, "nothing looked");
+    let before = agents.read_with(cx, |agents, _| {
+        assert!(!agents.tasks_on());
+        let listed = agents.providers().into_iter();
+        listed.map(|(_, row, _)| row.offer).collect::<Vec<_>>()
+    });
+    assert_eq!(before, vec![Offer::Nothing; Cli::ALL.len()]);
+    agents.update(cx, |agents, cx| agents.models_shown(cx));
+    cx.run_until_parked();
+    assert_eq!(
+        configs.looks.load(Ordering::SeqCst),
+        Cli::ALL.len(),
+        "one look"
+    );
+    let after = agents.read_with(cx, |agents, _| {
+        let listed = agents.providers().into_iter();
+        listed
+            .map(|(cli, row, _)| (cli, row.offer))
+            .collect::<Vec<_>>()
+    });
+    assert!(after.contains(&(Cli::Claude, Offer::SignIn)), "{after:?}");
+    assert!(after.contains(&(Cli::Codex, Offer::Get)), "{after:?}");
+}
+
+/// Sign In on Models, with agents off, starts that assistant's own sign-in and nothing else:
+/// agents stay off, and it looks again only once the sign-in ends.
+#[gpui::test]
+fn models_sign_in_with_agents_off_turns_nothing_on(cx: &mut TestAppContext) {
+    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+    let agents = agents(&browser, &configs, None, cx);
+    agents.update(cx, |agents, cx| agents.sign_in(Cli::Claude, cx));
+    cx.run_until_parked();
+    let started: Vec<Cli> = (configs.sign_ins.lock().unwrap().iter())
+        .map(|(cli, _)| *cli)
+        .collect();
+    assert_eq!(started, vec![Cli::Claude]);
+    assert_eq!(configs.looks.load(Ordering::SeqCst), 0);
+    agents.read_with(cx, |agents, _| {
+        assert!(!agents.is_on() && !agents.tasks_on(), "agents stay off");
+    });
+    let heard = configs.sign_ins.lock().unwrap()[0].1.clone();
+    let done = crate::agents::sign_in::Heard::Ended(crate::agents::sign_in::Ended::Done);
+    heard.unbounded_send(done).unwrap();
+    cx.run_until_parked();
+    assert_eq!(configs.looks.load(Ordering::SeqCst), Cli::ALL.len());
+    agents.read_with(cx, |agents, _| {
+        assert!(!agents.is_on() && !agents.tasks_on(), "agents stay off");
+    });
 }
 
 /// A Connect that fails, as when the client isn't installed, connects nothing and says why on
@@ -6351,6 +6479,37 @@ mod tasks {
             out,
         };
         agents.update(cx, |agents, cx| agents.task_said(event, cx));
+    }
+
+    #[gpui::test]
+    fn a_sort_runs_a_signed_in_claude_alone_while_tasks_are_on(cx: &mut TestAppContext) {
+        let program = PathBuf::from("/opt/claude");
+        let (agents, _) = ready(Some(program.clone()), cx);
+        let sort =
+            |cx: &mut TestAppContext| agents.read_with(cx, |agents, _| agents.sort_program());
+        let found = sort(cx).expect("Claude signed in sorts");
+        assert!(agents.read_with(cx, |agents, _| agents.sorts()));
+        assert_eq!((found.program, found.model), (program, None));
+        set_found(&agents, Ready::SignedOut, cx);
+        assert!(sort(cx).is_none(), "signed out");
+        assert!(!agents.read_with(cx, |agents, _| agents.sorts()));
+        set_found(&agents, Ready::SignedIn, cx);
+        agents.update(cx, |agents, cx| agents.set_tasks_on(false, cx));
+        assert!(sort(cx).is_none(), "tasks off");
+        agents.update(cx, |agents, cx| agents.set_tasks_on(true, cx));
+        agents.update(cx, |agents, cx| {
+            let found = Found {
+                ready: Ready::SignedIn,
+                program: Some("/opt/codex".into()),
+                ..Default::default()
+            };
+            agents.tasks.found.insert(Cli::Codex, found);
+            agents.set_default_task_agent(Cli::Codex, cx);
+        });
+        assert!(
+            sort(cx).is_none(),
+            "Codex has no switch keeping a run to the list"
+        );
     }
 
     #[cfg(unix)]

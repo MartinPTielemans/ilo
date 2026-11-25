@@ -3,7 +3,7 @@
 use std::rc::Rc;
 
 use gpui::{
-    Bounds, Entity, Modifiers, Pixels, TestAppContext, VisualTestContext,
+    Bounds, Entity, Modifiers, Pixels, SharedString, TestAppContext, VisualTestContext,
     accesskit::{Action, Live, Node, NodeId, Role},
     px,
 };
@@ -11,7 +11,7 @@ use gpui::{
 use super::{Broom, FRAME, NAME, SORTING, failed_said, glyph_ink};
 use crate::palette::{Palette, Tone};
 use crate::product::PRODUCT;
-use crate::shell::{CLEAR_HIT_OUT, Folders, Shell, recorder::Recorder};
+use crate::shell::{CLEAR_HIT_OUT, Command, Folders, Shell, recorder::Recorder};
 use crate::tokens::shell::{BROOM_SIZE, BROOM_UNAVAILABLE, DIVIDER_GAP};
 
 const STATES: [Broom; 4] = [
@@ -195,6 +195,32 @@ fn a_click_starts_a_sort_only_where_the_broom_says_it_would(cx: &mut TestAppCont
     );
     click(cx, &host, line);
     assert!(shell.read_with(cx, |shell, _| shell.new_tab));
+}
+
+/// A browser with no broom, as one whose core can't make today's folders has: no glyph, no
+/// item in the divider's menu or the Tabs menu, no bar entry, and the command run anyway asks
+/// for no sort.
+#[gpui::test]
+fn a_browser_with_no_broom_offers_a_sort_by_no_door(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window(cx, vec![10, 11], None);
+    assert!(node(cx, Role::Button, NAME).is_none());
+    shell.update(cx, |shell, cx| {
+        shell.divider_menu(gpui::point(px(100.), px(200.)), cx)
+    });
+    let titles: Vec<SharedString> = (host.entries.borrow().iter())
+        .map(|entry| entry.title.clone())
+        .collect();
+    assert!(
+        !titles.iter().any(|title| title.as_ref() == NAME),
+        "{titles:?}"
+    );
+    assert!(!host.menu_bar.borrow().broom_offered);
+    let command = Command::SortIntoFolders;
+    assert!(!shell.read_with(cx, |shell, _| shell.offers(command)));
+    host.take();
+    shell.update(cx, |shell, cx| shell.run(command, "ui", cx));
+    cx.run_until_parked();
+    assert!(!host.take().contains(&"start broom".to_owned()));
 }
 
 /// A screen reader hears the broom by what it does, and as unavailable where a press would do

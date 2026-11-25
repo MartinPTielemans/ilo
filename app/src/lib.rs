@@ -164,6 +164,7 @@ pub mod boards;
 pub mod boost_editor;
 pub mod boost_style;
 pub mod boosts;
+pub mod broom;
 pub mod build_info;
 pub mod capture;
 pub mod child;

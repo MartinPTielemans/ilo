@@ -24,6 +24,7 @@ use browser::little_launch;
 use browser::log;
 use browser::notes;
 use browser::passwords::{self, Login};
+use browser::product::PRODUCT;
 use browser::shell::{self, CancelName, Command, Holder, KeepName, MenuEntry, Refused, UserKeys};
 use browser::text_input::{self, Colors, TextInput};
 use browser::theme::Appearance;
@@ -822,6 +823,9 @@ fn show_now(cx: &mut App) {
             if settings.section == Section::OtherApps {
                 look_for_clients(cx);
             }
+            if settings.section == Section::Models {
+                models_shown(cx);
+            }
             if settings.section == Section::SyncImport {
                 settings
                     .account
@@ -845,6 +849,13 @@ fn look_for_clients(cx: &mut App) {
             agents.look_for_clients(cx);
             agents.look_for_task_agents(cx);
         });
+    }
+}
+
+/// Looks for the assistants as Models opens, so its rows say what's on this computer.
+fn models_shown(cx: &mut App) {
+    if let Some(agents) = agents::global(cx) {
+        agents.update(cx, |agents, cx| agents.models_shown(cx));
     }
 }
 
@@ -1404,6 +1415,9 @@ impl Settings {
         }
         if section == Section::OtherApps {
             look_for_clients(cx);
+        }
+        if section == Section::Models {
+            models_shown(cx);
         }
         if section == Section::SyncImport {
             self.account
@@ -2015,12 +2029,38 @@ impl Settings {
             Some("Its page loads again there, without this profile's logins and cookies.".into()),
             vec![moving],
         );
+        // Drawn only where the broom can be, which is also where the core keeps the switch.
+        let broom = crate::broom_host::can_be(cx);
+        let sort = self.per_profile(
+            profiles,
+            "Sort tabs into folders",
+            Some(
+                format!(
+                    "When you sort, {PRODUCT} sends the titles and site names of today's tabs to \
+                     your assistant."
+                )
+                .into(),
+            ),
+            |profile| {
+                let id = profile.id;
+                broom.then(|| {
+                    self.toggle(
+                        format!("sort tabs {id}"),
+                        "Sort tabs into folders",
+                        crate::broom_host::on(id),
+                        move |on, cx| crate::broom_host::set_on(id, on, cx),
+                        accent,
+                        cx,
+                    )
+                })
+            },
+        );
         let mut blocks = vec![
             Block::Heading("Today tabs".into()),
             Block::Rows(
-                archive
-                    .into_iter()
+                (archive.into_iter())
                     .chain([unload, battery, moving])
+                    .chain(sort)
                     .collect(),
             ),
             Block::Rows(vec![favorites]),
@@ -3777,10 +3817,11 @@ impl Settings {
         let rows = [master].into_iter().chain(tasks).chain(keeps).chain(kept);
         let mut threads = vec![Block::Rows(rows.collect())];
         let (mut models, mut access) = (Vec::new(), Vec::new());
+        // Every assistant, in its state, whether agents and tasks are on or not (S9).
+        models.push(Block::Heading("Your assistant".into()));
+        models.push(Block::Group(self.assistants(agents, cx)));
+        models.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
         if tasks_on {
-            models.push(Block::Heading("Your assistant".into()));
-            models.push(Block::Group(self.assistants(agents, cx)));
-            models.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
             access.extend(self.access());
             // What a thread may reach: files and folders too, with the folders it holds to revoke.
             access.extend(self.files_not_here(agents, cx));
