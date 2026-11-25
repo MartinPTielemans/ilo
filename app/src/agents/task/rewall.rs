@@ -26,7 +26,7 @@ use super::{State, Task, conversation};
 use crate::agents::Agents;
 use crate::agents::access::ACCESS_ACTION;
 use crate::agents::files::Given;
-use crate::agents::runner::{Cli, Failure};
+use crate::agents::runner::{self, Cli, Failure};
 use crate::agents::tier::{self, Tier};
 use crate::agents::wall::leftovers::{SweepFailed, Swept};
 use crate::agents::wall::{self, Wall, WallFor, WallRefused};
@@ -59,6 +59,17 @@ pub enum Change {
     Level { from: Tier, raised: Option<Wall> },
     /// The user took `files` back, which the task no longer has.
     TookBack(Given),
+}
+
+/// A start again after a change, which waits on the sweep after the run before it: it goes once
+/// that sweep answers that everything the run started has ended, so nothing of the old run is
+/// still at work beside the new one. Nothing else waits: a Stop drops it.
+pub(in crate::agents) struct Restart {
+    /// The run whose sweep it waits on, by its process.
+    after: u32,
+    /// What ilo tells its assistant of the change, after the task's words as they are then.
+    told: String,
+    change: Change,
 }
 
 /// The activity log's words, each its entry's target as a change of level's is
@@ -172,11 +183,58 @@ impl Agents {
             return;
         };
         let (_, had) = task.ran_walled.swap_remove(at);
+        let restart = task.restart.take_if(|restart| restart.after == run);
         if answer.is_ok() {
+            if let Some(Restart { told, change, .. }) = restart {
+                self.start_again(key, &told, change, cx);
+            }
             return;
         }
-        task.left_running(had);
+        if let Some(restart) = restart {
+            self.not_restarted(key, restart.change, cx);
+        }
+        if let Some(task) = self.task_mut(key) {
+            task.left_running(had);
+        }
         self.note_on(key, 0, ACCESS_ACTION, "", LEFT_RUNNING_LOGGED, "");
+        cx.notify();
+    }
+
+    /// The start after `change` waited on a sweep that couldn't end everything the run before
+    /// had started, so it starts nothing and ilo stops the task, with the line of what didn't
+    /// start: the level a raise was to, or what a lower or a take-back would have started
+    /// without, as a start that fails without them says it.
+    fn not_restarted(&mut self, key: &str, change: Change, cx: &mut Context<Self>) {
+        let Some(task) = self.task_mut(key) else {
+            return;
+        };
+        let files = match change {
+            Change::Level {
+                raised: Some(_), ..
+            } => {
+                let refused = task.tier;
+                task.not_raised(refused);
+                None
+            }
+            Change::Level { raised: None, .. } => Some(task.files.clone()),
+            Change::TookBack(files) => Some(files),
+        };
+        if let Some(files) = files {
+            let stopped = match files.attached {
+                Some(_) => STOPPED_FILES_LOGGED,
+                None => STOPPED_FOLDER_LOGGED,
+            };
+            task.rewalled(Rewalled::Stopped { files });
+            self.note_on(key, 0, ACCESS_ACTION, "", stopped, "");
+        }
+        if let Some(task) = self.task_mut(key) {
+            task.state = State::Stopped;
+            task.end(std::time::SystemTime::now());
+            task.waiting = None;
+            task.writing = None;
+        }
+        self.keep_ended(key);
+        self.forget_waiting(key, None, cx);
         cx.notify();
     }
 }
@@ -362,8 +420,9 @@ impl Agents {
     /// The task `key`, which ilo runs, after `change`, with ilo's words about it for its
     /// assistant, `told`. With its wall as it was the change is told as any task's is. Otherwise
     /// its run ends here, before anything is asked of the system, so no change waits on the
-    /// assistant: a task at work or asking starts again at once inside the new wall, as does any
-    /// raised, and another starts with the user's next message.
+    /// assistant: a task at work or asking starts again inside the new wall, as does any raised,
+    /// and another starts with the user's next message. A run that was walled is swept first, and
+    /// the start waits on that sweep's answer (`swept`).
     pub(in crate::agents) fn rewall(
         &mut self,
         key: &str,
@@ -381,9 +440,19 @@ impl Agents {
             Change::TookBack(_) => (false, false),
         };
         if same {
+            // A start waiting on a sweep is told it with the change it waits to start after.
+            if let Some(restart) = &mut task.restart {
+                restart.told = format!("{}\n\n{told}", restart.told);
+                return cx.notify();
+            }
             return self.tell_task(key, told, raise, cx);
         }
         let now = raise || matches!(task.state, State::Working | State::Asking { .. });
+        // The run a start now waits on: one already waited on, else the walled run this ends,
+        // whose sweep is to come.
+        let run = (task.process.as_ref()).map(runner::Process::run);
+        let walled = run.filter(|run| (task.ran_walled.iter()).any(|(walled, _)| walled == run));
+        let after = (task.restart.take().map(|restart| restart.after)).or(walled);
         self.wall_outgrown(key, cx);
         let Some(task) = self.task_mut(key) else {
             return;
@@ -395,6 +464,25 @@ impl Agents {
         task.told = None;
         task.state = State::Working;
         task.writing = None;
+        match after {
+            Some(after) => {
+                task.restart = Some(Restart {
+                    after,
+                    told,
+                    change,
+                });
+                cx.notify();
+            }
+            None => self.start_again(key, &told, change, cx),
+        }
+    }
+
+    /// The task `key`'s start after `change`, inside the wall it now has, with ilo's words about
+    /// the change, `told`, after the task's own.
+    fn start_again(&mut self, key: &str, told: &str, change: Change, cx: &mut Context<Self>) {
+        let Some(task) = self.task(key) else {
+            return;
+        };
         let first = format!("{}\n\n{told}", conversation(task));
         let (wall, from) = match change {
             Change::Level {

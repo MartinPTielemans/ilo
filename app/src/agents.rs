@@ -2333,11 +2333,12 @@ impl Agents {
         }
     }
 
-    /// Whether the agent may call tools: a client the user connected, or a task not dropped.
+    /// Whether the agent may call tools: a client the user connected, or a task not dropped. A
+    /// task whose start waits on the sweep of its run before has no run, so nothing calls for it.
     fn may_call(&self, agent: &str) -> bool {
         match Client::from_id(agent) {
             Some(client) => self.is_connected(client),
-            None => is_task(agent) && self.task(agent).is_some(),
+            None => is_task(agent) && self.task(agent).is_some_and(|task| task.restart.is_none()),
         }
     }
 

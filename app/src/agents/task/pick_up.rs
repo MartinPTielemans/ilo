@@ -763,6 +763,7 @@ impl Task {
             rising: None,
             rewalled: Vec::new(),
             ran_walled: Vec::new(),
+            restart: None,
         }
     }
 }

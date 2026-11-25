@@ -916,3 +916,148 @@ fn a_sweep_that_couldnt_end_everything_is_a_line_of_what_that_run_had(cx: &mut T
     assert_eq!(run_of(&run, &agent, cx), now);
     assert_eq!(run.state(&agent, cx), State::Working);
 }
+
+/// The run under way as a walled start keeps it, which the stand-in's start isn't, with what it
+/// was given.
+fn walled_run(run: &Run, agent: &str, had: Given, cx: &mut TestAppContext) -> u32 {
+    let at = run_of(run, agent, cx);
+    (run.agents).update(cx, |agents, _| {
+        agents.task_mut(agent).unwrap().ran_walled = vec![(at, had)];
+    });
+    at
+}
+
+/// The sweep after `at`, a run of `agent`'s, answers.
+fn swept(
+    run: &Run,
+    agent: &str,
+    at: u32,
+    answer: Result<Swept, SweepFailed>,
+    cx: &mut TestAppContext,
+) {
+    let event = runner::Event {
+        agent: agent.to_string(),
+        run: at,
+        out: Out::Swept(answer),
+    };
+    (run.agents).update(cx, |agents, cx| agents.task_said(event, cx));
+}
+
+/// A change that ends a walled run starts the next only once the sweep after it answers clean,
+/// so nothing that run left is at work beside the new one. Meanwhile the task is at work with no
+/// run: no call of its is taken, nothing its last run still says is its, and the user's message
+/// goes with the start.
+#[gpui::test]
+fn a_raise_after_a_walled_run_starts_once_its_sweep_is_clean(cx: &mut TestAppContext) {
+    let (run, walls, agent) = started("waits", folder(), cx);
+    run.ran(1);
+    let first = walled_run(&run, &agent, folder(), cx);
+    set(&run, &agent, Tier::Full, cx);
+    assert_eq!(walls.asked().len(), 2);
+    assert_eq!(run_of(&run, &agent, cx), 0);
+    assert_eq!(run.state(&agent, cx), State::Working);
+    (run.agents).update(cx, |agents, cx| agents.reply(&agent, "And on Sunday?", cx));
+    let gone = runner::Event {
+        agent: agent.clone(),
+        run: first,
+        out: Out::Gone(String::new()),
+    };
+    (run.agents).update(cx, |agents, cx| agents.task_said(gone, cx));
+    let may = (run.agents).read_with(cx, |agents, _| agents.may_call(&agent));
+    assert!(!may);
+    assert_eq!(run_of(&run, &agent, cx), 0);
+    assert_eq!(run.state(&agent, cx), State::Working);
+    swept(&run, &agent, first, Ok(Swept::default()), cx);
+    let (args, given) = run.ran(2);
+    assert!(walled(&args), "{args:?}");
+    assert!(given.contains(ASKED), "{given}");
+    assert!(given.contains("And on Sunday?"), "{given}");
+    assert!(
+        given.ends_with(&tier::changed_turn(Tier::Work, Tier::Full)),
+        "{given}"
+    );
+    assert_ne!(run_of(&run, &agent, cx), 0);
+    let may = (run.agents).read_with(cx, |agents, _| agents.may_call(&agent));
+    assert!(may);
+    assert_eq!(stands(&run, &agent, cx), (Tier::Full, true, Vec::new()));
+}
+
+/// ilo's lines in a task ilo stopped, but for the one any stopped task's conversation that
+/// isn't kept has, which this test's task has too.
+fn stopped_lines(run: &Run, agent: &str, cx: &mut TestAppContext) -> Vec<IloKind> {
+    let all = run.ilo_lines(agent, cx);
+    assert!(all.contains(&IloKind::NotKept), "{all:?}");
+    (all.into_iter())
+        .filter(|kind| *kind != IloKind::NotKept)
+        .collect()
+}
+
+/// A sweep that couldn't end everything starts nothing: ilo stops the task, with the line of what
+/// didn't start, the level of a raise (under the raise's own) or what a take-back would have gone
+/// without, and under it what was left running.
+#[gpui::test]
+fn a_restart_whose_sweep_isnt_clean_starts_nothing(cx: &mut TestAppContext) {
+    let (run, _, agent) = started("raised", folder(), cx);
+    run.ran(1);
+    let first = walled_run(&run, &agent, folder(), cx);
+    set(&run, &agent, Tier::Full, cx);
+    swept(&run, &agent, first, Err(SweepFailed::Cap), cx);
+    assert_eq!(run_of(&run, &agent, cx), 0);
+    assert_eq!(run.state(&agent, cx), State::Stopped);
+    let left = IloKind::LeftRunning {
+        reach: Reach::Folder(FOLDER.into()),
+    };
+    assert_eq!(
+        stopped_lines(&run, &agent, cx),
+        [
+            IloKind::TierChanged {
+                from: Tier::Work,
+                to: Tier::Full
+            },
+            IloKind::NotRaised {
+                refused: Tier::Full
+            },
+            left.clone()
+        ]
+    );
+    assert_eq!(
+        logged(&run, &agent, cx).last().unwrap(),
+        LEFT_RUNNING_LOGGED
+    );
+
+    let (run, _, agent) = started("taken", folder(), cx);
+    run.ran(1);
+    let first = walled_run(&run, &agent, folder(), cx);
+    (run.agents).update(cx, |agents, cx| {
+        let files = std::mem::take(&mut agents.task_mut(&agent).unwrap().files);
+        agents.rewall(&agent, Change::TookBack(files), "Taken back.".into(), cx);
+    });
+    assert_eq!(run_of(&run, &agent, cx), 0);
+    swept(&run, &agent, first, Err(SweepFailed::Missing), cx);
+    assert_eq!(run_of(&run, &agent, cx), 0);
+    assert_eq!(run.state(&agent, cx), State::Stopped);
+    let stopped = IloKind::NotRestarted {
+        left: LeftOut::Folder(FOLDER.into()),
+    };
+    assert_eq!(stopped_lines(&run, &agent, cx), [stopped, left]);
+    let logged = logged(&run, &agent, cx);
+    assert_eq!(
+        logged[logged.len() - 2..],
+        [STOPPED_FOLDER_LOGGED, LEFT_RUNNING_LOGGED]
+    );
+}
+
+/// Stop while a start waits on a sweep ends the task there: the start never happens, whatever
+/// the sweep then says.
+#[gpui::test]
+fn stop_while_a_restart_waits_drops_it(cx: &mut TestAppContext) {
+    let (run, _, agent) = started("stop", folder(), cx);
+    run.ran(1);
+    let first = walled_run(&run, &agent, folder(), cx);
+    set(&run, &agent, Tier::Full, cx);
+    (run.agents).update(cx, |agents, cx| agents.stop_task(&agent, cx));
+    assert_eq!(run.state(&agent, cx), State::Stopped);
+    swept(&run, &agent, first, Ok(Swept::default()), cx);
+    assert_eq!(run_of(&run, &agent, cx), 0);
+    assert_eq!(run.state(&agent, cx), State::Stopped);
+}

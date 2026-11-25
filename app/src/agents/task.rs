@@ -461,6 +461,8 @@ pub struct Task {
     /// What each walled run of its was given, by its process, until the sweep after its end
     /// answers: what anything it left running could still reach.
     pub(super) ran_walled: Vec<(u32, Given)>,
+    /// Its start after a change, while it waits on the sweep after the run before (rewall.rs).
+    pub(super) restart: Option<rewall::Restart>,
 }
 
 /// The message an agent is writing as the turn's last, which shows under its trace as it comes,
@@ -1619,6 +1621,7 @@ impl Agents {
             rising: None,
             rewalled: Vec::new(),
             ran_walled: Vec::new(),
+            restart: None,
         };
         self.tasks.tasks.push(task);
         self.tokens_changed();
@@ -1821,6 +1824,10 @@ impl Agents {
             .and_then(|task| task.process.as_ref())
             .map(runner::Process::run);
         if under_way.is_some_and(|under_way| under_way != run) {
+            return;
+        }
+        // Nor is one of a task whose start waits on the sweep of its run before: it has no run.
+        if self.task(&agent).is_some_and(|task| task.restart.is_some()) {
             return;
         }
         // Its assistant is inside its wall, which is no answer of the assistant's.
@@ -2048,6 +2055,10 @@ impl Agents {
         task.state = State::Working;
         task.writing = None;
         task.helpers.turned(task.trace.len());
+        // A start waiting on a sweep (rewall.rs) is given the conversation with this in it.
+        if task.restart.is_some() {
+            return cx.notify();
+        }
         // What ilo had to tell it since its last turn comes first, as ilo's, not the user's.
         let text = match task.told.take() {
             Some(told) => format!("{told}\n\n{text}"),
@@ -2097,6 +2108,8 @@ impl Agents {
         task.asking = None;
         task.writing = None;
         task.waiting = None;
+        // A start waiting on a sweep never happens.
+        task.restart = None;
         // A session's agent is its client's, whose calls under way the user stops, on each of its
         // connections, as the agent path always has. Its Stop is logged before each of its
         // sessions ends, this one too, so each one's record has it (session_stopped).
@@ -2936,6 +2949,7 @@ impl Agents {
             rising: None,
             rewalled: Vec::new(),
             ran_walled: Vec::new(),
+            restart: None,
         });
         cx.notify();
         Some(key)
