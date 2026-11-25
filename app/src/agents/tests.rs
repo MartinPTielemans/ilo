@@ -11,6 +11,8 @@ use std::time::{Duration, SystemTime};
 use gpui::{App, AppContext, Entity, TestAppContext};
 use serde_json::json;
 
+use super::runner::Cli;
+use super::sign_in::Offer;
 use super::tier::{Sites, Stop, Tier, Why};
 use super::*;
 
@@ -835,6 +837,65 @@ fn the_clients_line_agrees_with_the_assistants_rows(cx: &mut TestAppContext) {
             "{ready:?}: Claude Code's row says {row:?} and Apps that connect lists {listed:?}"
         );
     }
+}
+
+/// Settings › Models' assistants with Claude Code found as `ready` and agents off, as a new
+/// profile has them: each assistant the app can run, its offer, and whether its model is drawn.
+fn providers_found(
+    ready: crate::agents::ready::Ready,
+    cx: &mut TestAppContext,
+) -> Vec<(Cli, Offer, bool)> {
+    use crate::agents::ready::Found;
+    let (browser, configs) = (Made::with_agent_space(), Arc::new(Configs::default()));
+    let agents = agents(&browser, &configs, None, cx);
+    agents.update(cx, |agents, _| {
+        let found = Found {
+            ready,
+            ..Default::default()
+        };
+        agents.tasks.found.insert(Cli::Claude, found);
+    });
+    agents.read_with(cx, |agents, _| {
+        assert!(!agents.tasks_on(), "the page is drawn with tasks off");
+        let listed = agents.providers().into_iter();
+        listed
+            .map(|(cli, row, model)| (cli, row.offer, model))
+            .collect()
+    })
+}
+
+/// Models is never only its title: an assistant not on this computer is listed with what Settings
+/// offers for it, and no model under it.
+#[gpui::test]
+fn models_lists_an_assistant_not_on_this_computer(cx: &mut TestAppContext) {
+    let listed = providers_found(crate::agents::ready::Ready::NotFound, cx);
+    assert_eq!(listed.len(), Cli::ALL.len(), "every assistant: {listed:?}");
+    assert!(
+        listed.contains(&(Cli::Claude, Offer::Get, false)),
+        "{listed:?}"
+    );
+}
+
+/// One on this computer and not signed in is listed with Sign In, and no model under it.
+#[gpui::test]
+fn models_lists_an_assistant_not_signed_in_with_sign_in(cx: &mut TestAppContext) {
+    let listed = providers_found(crate::agents::ready::Ready::SignedOut, cx);
+    assert_eq!(listed.len(), Cli::ALL.len(), "every assistant: {listed:?}");
+    assert!(
+        listed.contains(&(Cli::Claude, Offer::SignIn, false)),
+        "{listed:?}"
+    );
+}
+
+/// One signed in is listed signed in, with its model for a new thread under it.
+#[gpui::test]
+fn models_lists_a_signed_in_assistant_with_its_model(cx: &mut TestAppContext) {
+    let listed = providers_found(crate::agents::ready::Ready::SignedIn, cx);
+    assert_eq!(listed.len(), Cli::ALL.len(), "every assistant: {listed:?}");
+    assert!(
+        listed.contains(&(Cli::Claude, Offer::SignedIn, true)),
+        "{listed:?}"
+    );
 }
 
 /// A Connect that fails, as when the client isn't installed, connects nothing and says why on
