@@ -27,6 +27,11 @@ const INTERACTIVE: &[&str] = &[
     "menuitemradio",
     "tab",
     "treeitem",
+    // A date or time input, which `type` fills segment by segment (#4281): DateTime is
+    // datetime-local's, month's and week's.
+    "Date",
+    "DateTime",
+    "InputTime",
 ];
 /// Roles given a ref too, to scroll in: a frame, and the parts of a page a site often scrolls on
 /// their own.
@@ -1567,6 +1572,37 @@ mod tests {
             "{outline}"
         );
         assert!(outline.contains("x…\")\n"), "{outline}");
+    }
+
+    /// A date or time input gets a ref, as an agent types into it (#4281). A colour field and an
+    /// image, which had none, still have none.
+    #[test]
+    fn date_and_time_fields_get_refs_and_a_colour_field_still_has_none() {
+        let mut nodes = vec![
+            node("1", "RootWebArea", "Form", &["2", "3", "4", "5", "6"]),
+            node("2", "Date", "Day", &[]),
+            node("3", "InputTime", "Start", &[]),
+            node("4", "DateTime", "Meeting", &[]),
+            node("5", "ColorWell", "Tint", &[]),
+            node("6", "image", "Logo", &[]),
+        ];
+        for node in &mut nodes {
+            node["backendDOMNodeId"] =
+                json!(node["nodeId"].as_str().unwrap().parse::<i64>().unwrap());
+        }
+        nodes[1]["contents"] = json!("empty");
+        nodes[4]["contents"] = json!("filled");
+        let outline = outline(&tab(), &nodes, &mut Refs::default(), None).text();
+        for line in [
+            "- Date \"Day\" [e1] (empty)\n",
+            "- InputTime \"Start\" [e2]\n",
+            "- DateTime \"Meeting\" [e3]\n",
+            "- ColorWell \"Tint\" (filled)\n",
+            "- image \"Logo\"",
+        ] {
+            assert!(outline.contains(line), "{line} in {outline}");
+        }
+        assert!(!outline.contains("[e4]"), "{outline}");
     }
 
     /// The page's text inside a line's quotes, a name, a select's choices or what a field holds,
