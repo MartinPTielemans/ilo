@@ -290,8 +290,9 @@ pub trait Browser {
     fn task_spaces(&self) -> Vec<u64>;
     /// Moves `tab` out of a task's Space to the top of the user's Space `space`'s Today tabs.
     fn move_tab(&self, tab: u64, space: u64, cx: &mut App);
-    /// The user's Space a session's pages open into: the one the front window shows, if it's in
-    /// the profile of `like`, an agent's Space, else the first of the user's in that profile.
+    /// The user's Space a session's card shows in and its pages open into: the one the front
+    /// window shows, if it's in the profile of `like`, an agent's Space, else the first of the
+    /// user's in that profile; never a private window's.
     fn user_space(&self, like: u64) -> u64;
     /// The name of the folder of `space`'s profile, "Default" or "Profile 2", which names the
     /// profile from one run to the next where the core's number for it doesn't (bc_profile_dir).

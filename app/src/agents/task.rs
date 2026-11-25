@@ -3124,6 +3124,18 @@ impl Agents {
             .map_or(0, |session| session.connection)
     }
 
+    /// The user's Space a session's card shows in, as a task's shows in the Space it was asked
+    /// from: the one the window in front shows, else the first of the user's in the profile of the
+    /// agent's `space` (`user_space`). The browser's own state says it, never anything the client
+    /// sends, and a private window's Space is never one: then no Space lists the card.
+    fn session_home(&self, space: u64) -> u64 {
+        let home = self.browser.user_space(space);
+        match self.browser.private_space(home) {
+            true => 0,
+            false => home,
+        }
+    }
+
     /// The session under way of the call's client on the call's connection, or, for a call that
     /// opens or acts on a tab, a new one: its card shows from then. Its calls are its steps.
     fn session_for(&mut self, call: &super::Call, cx: &mut Context<Self>) -> Option<String> {
@@ -3163,6 +3175,7 @@ impl Agents {
             .cloned()
             .unwrap_or_else(|| super::name(&call.agent).into());
         let space = self.space(&call.agent, cx);
+        let home = self.session_home(space);
         // check.sh reads this line.
         log!("browser: session {key} of agent {} as {name}", call.agent);
         let session = Session {
@@ -3187,7 +3200,7 @@ impl Agents {
             title: name.clone(),
             name,
             session: Some(session),
-            home: 0,
+            home,
             space,
             asked: SharedString::default(),
             page: None,
