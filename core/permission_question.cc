@@ -18,6 +18,7 @@
 #include "components/content_settings/core/common/content_settings_types.h"
 #include "components/permissions/permission_request.h"
 #include "components/permissions/permission_request_enums.h"
+#include "components/permissions/permission_request_manager.h"
 #include "components/permissions/permission_uma_constants.h"
 #include "components/url_formatter/elide_url.h"
 
@@ -90,6 +91,12 @@ bool PermissionQuestion::Quiet(bc_id tab) {
                       request->GetGestureType() ==
                           permissions::PermissionRequestGestureType::NO_GESTURE;
              });
+}
+
+bool PermissionQuestion::Pending(content::WebContents* contents) {
+  permissions::PermissionRequestManager* manager =
+      contents ? permissions::PermissionRequestManager::FromWebContents(contents) : nullptr;
+  return manager && (manager->IsRequestInProgress() || manager->has_pending_requests());
 }
 
 void PermissionQuestion::Changed(bc_id tab) {

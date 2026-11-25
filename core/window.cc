@@ -34,6 +34,7 @@
 #include "browser_core/extensions.h"
 #include "browser_core/favorites.h"
 #include "browser_core/focus_leaving_rule.h"
+#include "browser_core/handed.h"
 #include "browser_core/host.h"
 #include "browser_core/idle_unload.h"
 #include "browser_core/install_question.h"
@@ -1595,7 +1596,7 @@ bc_id Window::TakeTab(bc_id tab) {
 }
 
 // static
-void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent) {
+void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent, bool follows) {
   Space* from = Space::Holding(tab);
   Space* to = Space::FromId(space);
   // No tab moves into an agent's Space, which would put it in the agent's reach, unless the user
@@ -1635,12 +1636,21 @@ void Window::MoveToSpace(bc_id tab, bc_id space, bool to_agent) {
   // the agent started in it, which would land in the user's page.
   if (from->agent()) {
     EndTabSession(tab, BC_AGENT_SESSION_RELEASED);
+    // And one the user had handed the agent is handed no longer.
+    handed::Left(tab);
   }
   if (kept.is_valid()) {
     // Its place was among the old Space's tabs, so it gets one at the top of the new one's.
     to->RestoreNodes(to->node(), {{moved, Space::Node{kept, syncer::UniquePosition()}}});
   }
-  FollowMove(tab, moved, from->id(), space, next);
+  // No window goes with a tab the user gives an agent: the agent's Space isn't theirs to be taken
+  // to by a give.
+  FollowMove(tab, moved, from->id(), space, next, follows && !to_agent);
+  // A tile is an agent's tab's alone (TileRule), so a page still in one, live or parked, leaves it
+  // with the agent's Space. Nothing if a window took it as it followed the tab.
+  if (from->agent()) {
+    tiles::End(tab);
+  }
   // Out of its Space, it isn't kept for ReopenClosedTab or archived.
   if (moved != tab) {
     CloseTab(tab);
@@ -1690,14 +1700,15 @@ void Window::MoveFolderToSpace(bc_id folder, bc_id space) {
 }
 
 // static
-void Window::FollowMove(bc_id tab, bc_id moved, bc_id from, bc_id space, bc_id next) {
+void Window::FollowMove(bc_id tab, bc_id moved, bc_id from, bc_id space, bc_id next, bool follows) {
   for (auto& [id, window] : Windows()) {
     if (window->selected_ == tab && window->let_go_) {
       // Its page went to another window, which takes it along.
       window->Pick(next);
-    } else if (window->selected_ == tab && window->own_space_) {
+    } else if (window->selected_ == tab && (window->own_space_ || !follows)) {
       // Only its own window shows a window's own Space, so the page waits for the window the app
-      // shows it in next (bc_window_select), as ⌘O does.
+      // shows it in next (bc_window_select), as ⌘O does. And a window that doesn't follow the tab
+      // shows what closing it would show next.
       window->selected_ = next;
       if (next) {
         window->Pick(next);
@@ -1724,6 +1735,40 @@ bool Window::DeleteSpace(bc_id space) {
     return false;
   }
   Space* neighbour = it != staying.begin() ? *(it - 1) : *(it + 1);
+  // A tab the user handed the agent whose Space this is is the user's, and never closes with the
+  // Space: it goes back where it left, or to the first Space of the user's if that one is gone.
+  if ((*it)->agent()) {
+    std::vector<bc_id> users;
+    for (const auto& [tab, mark] : handed::All()) {
+      if (Space::Holding(tab) == *it) {
+        users.push_back(tab);
+      }
+    }
+    for (bc_id tab : users) {
+      if (handed::Return(tab)) {
+        continue;
+      }
+      // In its own profile first, where the page goes as it is.
+      auto other = std::ranges::find_if(staying, [&](Space* each) {
+        return !each->agent() && !each->own() && each->profile() == (*it)->profile();
+      });
+      if (other == staying.end()) {
+        other = std::ranges::find_if(staying,
+                                     [](Space* each) { return !each->agent() && !each->own(); });
+      }
+      if (other != staying.end()) {
+        // The user's was a Today tab, whatever the agent made of it.
+        if ((*it)->IsPinned(tab)) {
+          (*it)->Unpin(tab);
+        }
+        // Into another profile it goes as a new tab without its page (CopyToProfile), and no
+        // window goes with it: the address is one the thread chose, and loads with that
+        // profile's logins only once the user shows the tab themselves.
+        MoveToSpace(tab, (*other)->id(), /*to_agent=*/false,
+                    /*follows=*/(*other)->profile() == (*it)->profile());
+      }
+    }
+  }
   // Before the windows leave it, so it keeps the tab the one active last showed there.
   DeletedSpace& deleted = DeletedSpaces().emplace_back();
   deleted.id = space;
@@ -2911,6 +2956,11 @@ bc_id Window::RestoreArchived(bc_id id) {
 }
 
 bc_id Window::Duplicate(bc_id tab) {
+  // A copy of a tab the user handed an agent would be the agent's own, with the history that
+  // stays the user's in it (handed_history.h).
+  if (handed::Of(tab)) {
+    return 0;
+  }
   const Tab* from = Tab::Get(tab);
   Space* space = Favorites::Has(tab) ? Space::FromId(space_) : Space::Holding(tab);
   if (!from || !from->profile() || !space || DirOf(from->profile()) != space->profile() ||
@@ -2938,6 +2988,10 @@ bc_id Window::Duplicate(bc_id tab) {
 }
 
 bc_id Window::OpenHistory(bc_id tab, int offset) {
+  // As Duplicate: the new tab would have all of a handed tab's history.
+  if (handed::Of(tab)) {
+    return 0;
+  }
   const Tab* from = Tab::Get(tab);
   Space* space = Favorites::Has(tab) ? Space::FromId(space_) : Space::Holding(tab);
   if (!from || !from->profile() || !space || DirOf(from->profile()) != space->profile() ||

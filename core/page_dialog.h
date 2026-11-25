@@ -43,6 +43,8 @@ class PageDialog {
   static void Withdraw(bc_id dialog);
   // See bc_tab_answer_dialog.
   static void Answer(bc_id tab, bc_id dialog, Reply reply);
+  // Whether a dialog is asked over |tab|, the one shown or one waiting behind it.
+  static bool Up(bc_id tab);
 
  private:
   // Tells the app the tab's first dialog, or that it has none, from a task of its own: Chrome asks

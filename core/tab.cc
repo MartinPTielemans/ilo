@@ -25,6 +25,7 @@
 #include "browser_core/dialog_keys.h"
 #include "browser_core/favorites.h"
 #include "browser_core/focus_leaving.h"
+#include "browser_core/handed.h"
 #include "browser_core/held_keys.h"
 #include "browser_core/host.h"
 #include "browser_core/link_target.h"
@@ -214,6 +215,8 @@ void Forget(bc_id id) {
   }
   std::unique_ptr<Tab> tab = std::move(it->second);
   Tabs().erase(it);
+  // Closed, it's no agent's from the user any more.
+  handed::Left(id);
   base::SingleThreadTaskRunner::GetCurrentDefault()->DeleteSoon(FROM_HERE, std::move(tab));
 }
 
@@ -647,6 +650,19 @@ GURL Tab::Url() const {
   return unloaded_ ? unloaded_->history[unloaded_->current].virtual_url() : GURL();
 }
 
+Tab::Captures Tab::captures() const {
+  content::WebContents* contents = web_contents();
+  if (!contents || system_page_) {
+    return {};
+  }
+  const scoped_refptr<MediaStreamCaptureIndicator> capture =
+      MediaCaptureDevicesDispatcher::GetInstance()->GetMediaStreamCaptureIndicator();
+  return {.camera = capture->IsCapturingVideo(contents),
+          .microphone = capture->IsCapturingAudio(contents),
+          .screen = capture->IsCapturingTab(contents) || capture->IsCapturingWindow(contents) ||
+                    capture->IsCapturingDisplay(contents)};
+}
+
 bool Tab::At(const GURL& url) const {
   if (content::WebContents* contents = web_contents()) {
     // A page in the system's engine, or one waiting to load, is only at its own URL.
@@ -785,6 +801,8 @@ content::WebContents* Tab::Wake(Window& window) {
     Attach(contents);
   }
   DCHECK_EQ(web_contents(), contents);
+  // Its history came back as new entries: one the user handed an agent is bound among them.
+  handed::BoundHistory(id_);
   const bool muted = std::exchange(unloaded_, std::nullopt)->muted;
   if (muted) {
     SetMuted(true);
@@ -979,7 +997,9 @@ void Tab::Load(const GURL& url, base::FunctionRef<void()> load) {
 bool Tab::CanGoBack() {
   content::NavigationController& history = web_contents()->GetController();
   if (!system_page_) {
-    return history.CanGoBack();
+    // Lit only over an entry the step may take it to: of a tab the user handed an agent, the
+    // history it had then is theirs (handed_history.h).
+    return history.CanGoBack() && handed::MayStep(id_, -1);
   }
   if (system_page_->can_go_back()) {
     return true;
@@ -996,7 +1016,7 @@ bool Tab::CanGoBack() {
 
 bool Tab::CanGoForward() {
   return system_page_ ? system_page_->can_go_forward()
-                      : web_contents()->GetController().CanGoForward();
+                      : web_contents()->GetController().CanGoForward() && handed::MayStep(id_, 1);
 }
 
 void Tab::GoBack() {
@@ -1042,6 +1062,10 @@ void Tab::ListHistory(bool forward) {
     const int step = forward ? 1 : -1;
     for (int i = saved.current + step; i >= 0 && i < static_cast<int>(saved.history.size());
          i += step) {
+      // Only the pages it may be taken to: a row that did nothing would be a row too many.
+      if (!handed::MayStep(id_, i - saved.current)) {
+        continue;
+      }
       const sessions::SerializedNavigationEntry& entry = saved.history[i];
       pages.push_back({i - saved.current, entry.virtual_url(), entry.virtual_url().spec(),
                        base::UTF16ToUTF8(entry.title()), nullptr});
@@ -1546,8 +1570,8 @@ void Tab::ReportState() {
     const int current = unloaded_ ? unloaded_->current : 0;
     const bc_tab_state state = {
         .url = url.c_str(),
-        .can_go_back = current > 0,
-        .can_go_forward = current + 1 < count,
+        .can_go_back = current > 0 && handed::MayStep(id_, -1),
+        .can_go_forward = current + 1 < count && handed::MayStep(id_, 1),
         .loading = false,
         .unloaded = true,
         .away_from_pinned_url = pinned_url.is_valid() && !At(pinned_url),

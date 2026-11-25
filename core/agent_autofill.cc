@@ -1,5 +1,7 @@
 #include "browser_core/agent_autofill.h"
 
+#include <algorithm>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -16,6 +18,9 @@
 #include "components/autofill/core/browser/foundations/autofill_manager.h"
 #include "components/autofill/core/common/form_data.h"
 #include "components/password_manager/content/browser/content_password_manager_driver.h"
+#include "components/password_manager/core/browser/form_fetcher.h"
+#include "components/password_manager/core/browser/password_form_cache.h"
+#include "components/password_manager/core/browser/password_form_manager.h"
 #include "components/password_manager/core/browser/password_manager_interface.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
@@ -122,6 +127,28 @@ WEB_CONTENTS_USER_DATA_KEY_IMPL(Refill);
 bool IsAgentTab(content::WebContents* contents) {
   const Tab* tab = contents ? Tab::FromWebContents(contents) : nullptr;
   return tab && IsAgentTab(tab->id());
+}
+
+bool SavedLoginFits(content::WebContents* contents) {
+  auto* driver = contents ? password_manager::ContentPasswordManagerDriver::GetForRenderFrameHost(
+                                contents->GetPrimaryMainFrame())
+                          : nullptr;
+  // The tab's one manager, which has the forms of every frame of its page.
+  password_manager::PasswordManagerInterface* manager =
+      driver ? driver->GetPasswordManager() : nullptr;
+  const password_manager::PasswordFormCache* forms =
+      manager ? manager->GetPasswordFormCache() : nullptr;
+  if (!forms) {
+    return false;
+  }
+  return std::ranges::any_of(
+      forms->GetFormManagers(),
+      [](const std::unique_ptr<password_manager::PasswordFormManager>& form) {
+        // One still being looked up fills once it's found, whoever has the tab by then.
+        return form->GetFormFetcher()->GetState() ==
+                   password_manager::FormFetcher::State::WAITING ||
+               !form->GetBestMatches().empty();
+      });
 }
 
 bool RefuseAgentPasskey(content::WebContents* contents, bool asks) {

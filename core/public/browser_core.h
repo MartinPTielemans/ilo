@@ -2006,7 +2006,8 @@ BC_EXPORT bool bc_agent_navigate(const char* agent, bc_id tab, const char* url);
 // What bc_agent_close_tab did, and what agent_close_answered says a pending close came to.
 // The tab closed: it's gone, and tab_closed told of it.
 #define BC_AGENT_CLOSED 0
-// The tab isn't in the agent's Space, or the user holds it. As agent_close_answered's answer: it
+// The tab isn't in the agent's Space, the user holds it, or it's one the user handed the agent
+// (bc_tab_give_to_agent), which is returned and never closed. As agent_close_answered's answer: it
 // stays for another reason, as it went to another page, its page was unloaded, or the user took it
 // over or pinned it meanwhile.
 #define BC_AGENT_CLOSE_REFUSED 1
@@ -2182,11 +2183,46 @@ BC_EXPORT void bc_file_field_drop(bc_id field);
 
 // The user gives the agent whose Space is |space| their |tab|, which moves there as
 // bc_tab_move_to_space moves a tab, and the agent may act in it as in its own from then on. Only
-// one of the user's tabs, into an agent's Space of the same profile, as the page goes as it is. A
-// hold on it from an earlier agent ends. Returns whether it moved. The user's: an agent never
-// takes the user's tabs, so agents get none. Moving the tab to a Space of the user's takes it
-// back.
+// one of the user's tabs, into an agent's Space of the same profile, as the page goes as it is. And
+// only a Today tab of a Space the Spaces list has, at an http or https page in Chromium's engine,
+// that isn't in a split view and whose page isn't using the camera, the microphone or a screen's, a
+// window's or a tab's picture, asks for no permission (tab_permission_asked, or a request kept for
+// when the tab is shown), has none of its dialogs up (tab_dialog), has no sign-in form the profile
+// has a saved login for, filled in or not, has no device open and isn't being told the location,
+// and holds no file or folder of the user's: never a pinned tab, a favorite, or a tab of a private
+// window or another window's own Space. The app asks the same before it gives one; this is the
+// answer that holds whatever asks. A hold on it from an earlier agent ends. Returns whether it
+// moved. The user's: an agent never takes the user's tabs, so agents get none.
+//
+// A window showing the tab doesn't go with it: it shows what closing the tab would show next. From
+// the give until the tab leaves the agent's Space the core keeps where it left, and the tab never
+// closes with that Space: deleting it (bc_space_delete) returns the tab first, as
+// bc_tab_return_from_agent does, or moves it to the first Space of the user's if the one it left
+// is gone. Moving the tab to a Space of the user's (bc_tab_move_to_space) takes it back too, to
+// the top of that Space. No agent's close closes it (bc_agent_close_tab).
+//
+// The history the tab had is the user's: for as long as the agent has it, nothing takes the tab to
+// an entry it had at the give other than the one it was on, not the agent's back or forward
+// (bc_agent_page), the app's (bc_tab_go_back, bc_tab_go_forward), nor the page's own script, which
+// then does nothing. Its state says so: can_go_back and can_go_forward are true only over an entry
+// the step may take it to, and bc_tab_history lists only those. While the user holds the tab
+// (bc_tab_take_back, bc_agent_hand_off) their own back, forward and bc_tab_go_to_history go through
+// all of it, the page's own script still through none of what the tab had, and from
+// bc_tab_hand_back the entry it's on then is the one the agent can't go behind or past. No copy is
+// made of it meanwhile: bc_tab_duplicate and bc_tab_open_history return 0, as the copy would be the
+// agent's, with all of that history. The session keeps the tab as the user's, with the Space it
+// left, and the account's other devices see it there as it was. Its page has an agent's page's size
+// from the give.
 BC_EXPORT bool bc_tab_give_to_agent(bc_id tab, bc_id space);
+
+// Returns |tab|, which the user gave an agent (bc_tab_give_to_agent) and which is in that agent's
+// Space still, to the Space it left: a Today tab at the place it left there, on the page it's at
+// now, and the user's again as a tab moved out of an agent's Space is, the agent's session in it
+// ended. A window showing it goes with it. Returns false, moving nothing, for a tab that wasn't
+// given or has left the agent's Space since, or whose Space is gone or in another profile now:
+// bc_tab_move_to_space then takes it to a Space the app picks. The user's and the app's: agents
+// get none.
+BC_EXPORT bool bc_tab_return_from_agent(bc_id tab);
 
 // The profile the Space's tabs open in, which its favorites are in.
 BC_EXPORT bc_id bc_space_profile(bc_id space);

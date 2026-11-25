@@ -90,7 +90,7 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // null. A window whose page another window took doesn't show it.
   static Window* Showing(bc_id tab);
   // Gives an agent's page its own size again, the user's size gone with the tab, unless a window
-  // shows it.
+  // shows it. Nothing for null.
   static void GiveAgentPageItsSize(content::WebContents* contents);
   // A video's Mini Player took the keyboard, so the window that let it go wasn't left for another
   // app or window. On Linux it can take it after that window asked (OnWidgetActivationChanged).
@@ -195,8 +195,9 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // Chrome's active tab does to another window, and its old Space shows next what it would once the
   // tab closed. Into another profile's Space it goes as a new tab, as bc_tab_move_to_space says.
   // Into an agent's Space only |to_agent|, as the user gives the agent the tab
-  // (bc_tab_give_to_agent), and then nowhere else.
-  static void MoveToSpace(bc_id tab, bc_id space, bool to_agent = false);
+  // (bc_tab_give_to_agent), and then nowhere else; no window goes with it then, nor unless
+  // |follows|.
+  static void MoveToSpace(bc_id tab, bc_id space, bool to_agent = false, bool follows = true);
   // Moves |folder|, with the folders and pinned tabs in it, to the bottom of |space|'s pinned tabs,
   // as bc_folder_move_to_space says: a window showing one of its tabs goes with it, as with
   // MoveToSpace, and into another profile's Space each tab goes as a new one. Never into an agent's
@@ -496,8 +497,14 @@ class Window : public web_modal::WebContentsModalDialogHost,
   // else no page: for the window's own picks, which never take another window's page.
   void Pick(bc_id tab);
   // |tab| went from |from| to |space|, as |moved|: each window showing it goes with it, and each
-  // that would show it in |from| shows |next| there instead.
-  static void FollowMove(bc_id tab, bc_id moved, bc_id from, bc_id space, bc_id next);
+  // that would show it in |from| shows |next| there instead. Unless it |follows|, a window showing
+  // it stays where it is and shows |next|, as for a tab the user gives an agent.
+  static void FollowMove(bc_id tab,
+                         bc_id moved,
+                         bc_id from,
+                         bc_id space,
+                         bc_id next,
+                         bool follows = true);
   // Shows next_after_closing_, as the tab shown has closed.
   void SelectAfterClosing();
   // Chrome stopped a close or a quit (|closing| false): the window stays if its Browsers did.

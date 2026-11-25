@@ -142,6 +142,14 @@ class Tab : public content::WebContentsObserver,
   bool waiting_for_profile() const { return !waiting_for_.empty(); }
   // The URL of the page it's at, loaded or not, else of the one it's loading.
   GURL Url() const;
+  // What its page is using now, as its state tells the app: the camera, the microphone, and a
+  // screen's, a window's or a tab's picture. None for a page in the system's engine, or no page.
+  struct Captures {
+    bool camera = false;
+    bool microphone = false;
+    bool screen = false;
+  };
+  Captures captures() const;
   // Whether it's at |url|, or where loading |url| took it: through the redirects the load
   // followed, such as a sign-in hop, or after the page replaced its own address. So a pinned tab
   // that goes back to a pinned URL that always redirects is home, not away from it (#2338).

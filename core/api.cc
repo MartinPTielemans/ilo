@@ -1,6 +1,7 @@
 // The C API in public/browser_core.h, over the core's C++.
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <iterator>
 #include <map>
@@ -52,6 +53,8 @@
 #include "browser_core/favicon.h"
 #include "browser_core/favorites.h"
 #include "browser_core/find.h"
+#include "browser_core/handed.h"
+#include "browser_core/handed_give_rule.h"
 #include "browser_core/held_keys.h"
 #include "browser_core/history_import.h"
 #include "browser_core/history_list.h"
@@ -111,6 +114,7 @@
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/browser/web_contents_capability_type.h"
 #include "content/public/common/page_zoom.h"
 #include "ui/base/clipboard/clipboard.h"
 #include "ui/base/clipboard/clipboard_buffer.h"
@@ -134,6 +138,15 @@
 #endif
 
 namespace {
+
+// Whether a tab's page has a device open, scans for Bluetooth ones, or is being told the location.
+bool UsesDeviceOrLocation(content::WebContents* contents) {
+  using Kind = content::WebContentsCapabilityType;
+  return contents && std::ranges::any_of(
+                         std::array{Kind::kUSB, Kind::kBluetoothConnected, Kind::kBluetoothScanning,
+                                    Kind::kHID, Kind::kSerial, Kind::kGeolocation},
+                         [&](Kind kind) { return contents->IsCapabilityActive(kind); });
+}
 
 gfx::Rect ToRect(bc_rect rect) {
   return gfx::ToEnclosingRect(gfx::RectF(rect.x, rect.y, rect.width, rect.height));
@@ -683,8 +696,10 @@ size_t bc_agent_disconnected(const char* agent) {
 
 int bc_agent_close_tab(const char* agent, bc_id tab, bool discard) {
   const browser_core::Tab* closing = browser_core::Tab::Get(tab);
+  // A tab the user handed the agent is the user's, and no agent's close closes it: the app
+  // returns it instead (bc_tab_return_from_agent).
   if (!agent || !closing || !browser_core::Space::AgentMayAct(agent, tab) ||
-      browser_core::IsHeld(tab)) {
+      browser_core::IsHeld(tab) || browser_core::handed::Of(tab)) {
     return BC_AGENT_CLOSE_REFUSED;
   }
   if (browser_core::Space::Holding(tab)->IsPinned(tab)) {
@@ -701,12 +716,38 @@ bool bc_tab_take_back(bc_id tab) {
 bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   browser_core::Space* from = browser_core::Space::Holding(tab);
   browser_core::Space* to = browser_core::Space::FromId(space);
-  // The page goes as it is, with its profile's logins, so never into another profile's Space,
-  // where it would load again.
-  if (!from || from->agent() || !to || !to->agent() || from->profile() != to->profile()) {
+  const browser_core::Tab* page = browser_core::Tab::Get(tab);
+  if (!from || !to || !page) {
     return false;
   }
   content::WebContents* contents = browser_core::Tab::FromId(tab);
+  const browser_core::Tab::Captures captures = page->captures();
+  // Where it leaves, for its way back (handed.h).
+  const bc_id home = from->id();
+  const browser_core::Space::Node* node = from->NodeOf(tab);
+  const browser_core::Space::Node left = node ? *node : browser_core::Space::Node();
+  // The page goes as it is, with its profile's logins, so never into another profile's Space,
+  // where it would load again. And only a tab that may be handed: the app asks the same before it
+  // gives one, and the rule holds here whatever asked.
+  if (!browser_core::handed_give_rule::MayGive({
+          .users = !from->agent() && !from->own(),
+          .to_agent = to->agent().has_value(),
+          .same_profile = from->profile() == to->profile(),
+          .pinned = from->IsPinned(tab),
+          .split = from->Panes(tab).size() > 1,
+          .web_page = !page->system_page() && page->Url().SchemeIsHTTPOrHTTPS() &&
+                      (!contents || contents->GetLastCommittedURL().SchemeIsHTTPOrHTTPS()),
+          .camera = captures.camera,
+          .microphone = captures.microphone,
+          .screen = captures.screen,
+          .permission_asked = browser_core::PermissionQuestion::Pending(contents),
+          .dialog = browser_core::PageDialog::Up(tab),
+          .saved_login = browser_core::SavedLoginFits(contents),
+          .device_or_location = UsesDeviceOrLocation(contents),
+          .files = contents && contents->HasFileSystemAccessHandles(),
+      })) {
+    return false;
+  }
   const bool moved = browser_core::arrange_rule::GiveToAgent(
       [&] {
         if (browser_core::Arrange* arrange =
@@ -727,9 +768,18 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   if (!moved) {
     return false;
   }
+  browser_core::handed::Given(tab, home, left);
+  // No window shows it any more, and it had the size of the user's window: an agent's page's own
+  // from here, as each of the agent's has, for what the agent reads and pictures of it. Back with
+  // the user, it takes the size of the window that shows it.
+  browser_core::Window::GiveAgentPageItsSize(browser_core::Tab::FromId(tab));
   // One the user took back from an agent before is the agent's now.
   browser_core::HandBack(tab);
   return true;
+}
+
+bool bc_tab_return_from_agent(bc_id tab) {
+  return browser_core::handed::Return(tab);
 }
 
 bool bc_agent_hand_off(const char* agent, bc_id tab) {

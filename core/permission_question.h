@@ -26,6 +26,9 @@ class PermissionQuestion : public permissions::PermissionPrompt {
   // Whether the tab's question asks only to show notifications, with no click or key of the
   // user's behind it (bc_tab_permission_quiet).
   static bool Quiet(bc_id tab);
+  // Whether |contents|' page has a request the user hasn't answered: the one asked, one Chrome
+  // keeps for when its tab is shown again, or one waiting behind those.
+  static bool Pending(content::WebContents* contents);
 
   PermissionQuestion(const PermissionQuestion&) = delete;
   PermissionQuestion& operator=(const PermissionQuestion&) = delete;

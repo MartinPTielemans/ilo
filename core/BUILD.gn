@@ -346,6 +346,33 @@ source_set("arrange_rule") {
   deps = [ "//base" ]
 }
 
+# Which of the user's tabs may be handed to an agent, apart so browser_core_unittests tests the rule
+# alone.
+source_set("handed_give_rule") {
+  sources = [
+    "handed_give_rule.cc",
+    "handed_give_rule.h",
+  ]
+}
+
+# Which entries of its history a tab the user handed an agent may be taken to, apart so
+# browser_core_unittests tests the rule alone.
+source_set("handed_history") {
+  sources = [
+    "handed_history.cc",
+    "handed_history.h",
+  ]
+}
+
+# Where a tab the user handed an agent goes among the Today tabs of the Space it left, apart so
+# browser_core_unittests tests the rule alone.
+source_set("handed_place") {
+  sources = [
+    "handed_place.cc",
+    "handed_place.h",
+  ]
+}
+
 # Who answers as Tab leaves a page at either end, apart so browser_core_unittests tests the rule
 # alone (#3220).
 source_set("focus_leaving_rule") {
@@ -827,6 +854,8 @@ source_set("browser_core") {
     "find.h",
     "focus_leaving.cc",
     "focus_leaving.h",
+    "handed.cc",
+    "handed.h",
     "held_keys.cc",
     "held_keys.h",
     "hooks.h",
@@ -953,6 +982,9 @@ source_set("browser_core") {
     ":archive_rule",
     ":arrange_rule",
     ":focus_leaving_rule",
+    ":handed_give_rule",
+    ":handed_history",
+    ":handed_place",
     ":overlay_lend",
     ":live_folder_rule",
     ":pinned_url",
@@ -1299,6 +1331,9 @@ test("browser_core_unittests") {
     "archive_rule_unittest.cc",
     "arrange_rule_unittest.cc",
     "focus_leaving_rule_unittest.cc",
+    "handed_give_rule_unittest.cc",
+    "handed_history_unittest.cc",
+    "handed_place_unittest.cc",
     "tile_rule_unittest.cc",
     "launch_space_rule_unittest.cc",
     "live_folder_rule_unittest.cc",
@@ -1372,6 +1407,9 @@ test("browser_core_unittests") {
     ":archive_rule",
     ":arrange_rule",
     ":focus_leaving_rule",
+    ":handed_give_rule",
+    ":handed_history",
+    ":handed_place",
     ":launch_space_rule",
     ":tile_rule",
     ":overlay_lend",
