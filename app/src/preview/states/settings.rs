@@ -95,9 +95,8 @@ impl gpui::Render for PicturesPage {
         use browser::theme::Appearance;
         use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
         use browser::tokens::settings::{
-            BUTTONS_TOP, CONTROL_GAP, DETAIL_LINE, FIRST_GROUP, GLYPH_PLATE, GLYPH_PLATE_GAP,
-            GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, NAME, POPUP_WIDTH, ROW_X, SHARE_TOP, SIDE_ROOM,
-            TEXT_X,
+            BUTTONS_TOP, DETAIL_LINE, FIRST_GROUP, GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP,
+            HEADING_BOTTOM, HEADING_TOP, NAME, POPUP_WIDTH, ROW_X, SHARE_TOP, SIDE_ROOM, TEXT_X,
         };
         // Where a feature's own setting's text and the hairline over it start, as in Settings.
         const NESTED_X: f32 = ROW_X + GLYPH_PLATE + GLYPH_PLATE_GAP;
@@ -268,7 +267,7 @@ impl gpui::Render for PicturesPage {
                         ))
                         .child(end([control]))
                 };
-                let make = stop_button(&look, "make-default", "Make Default", a11y);
+                let make = browser::settings_rows::primary(&look, "make-default", "Make Default");
                 let default = mark_row(
                     &look,
                     "Default browser",

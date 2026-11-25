@@ -33,9 +33,9 @@ use crate::tokens::settings::{
     STACKED_GAP, SWITCH_HEIGHT, SWITCH_OFF, SWITCH_OFF_LIGHT, SWITCH_WIDTH,
 };
 use crate::tokens::settings::{
-    FOLDER_GLYPH, FOLDER_LEFT, FOLDER_RIGHT, MARK, MARK_GAP, MARK_ROW, POPUP_WIDTH, SCOPE_CHEVRON,
-    SCOPE_GAP, SCOPE_HEIGHT, SCOPE_LEFT, SCOPE_LINE, SCOPE_RIGHT, SCOPE_TEXT, SEGMENT_HEIGHT,
-    SEGMENT_INSET, SEGMENT_LINE, SEGMENT_RADIUS, SEGMENT_TEXT, SEGMENT_X,
+    FOLDER_GLYPH, FOLDER_LEFT, FOLDER_RIGHT, MARK, MARK_GAP, MARK_ROW, POPUP_WIDTH, PRIMARY,
+    SCOPE_CHEVRON, SCOPE_GAP, SCOPE_HEIGHT, SCOPE_LEFT, SCOPE_LINE, SCOPE_RIGHT, SCOPE_TEXT,
+    SEGMENT_HEIGHT, SEGMENT_INSET, SEGMENT_LINE, SEGMENT_RADIUS, SEGMENT_TEXT, SEGMENT_X,
 };
 use crate::tokens::settings::{SENT_CHEVRON, SENT_GAP, SENT_INDENT, SENT_LABEL, SENT_LINES};
 use crate::tokens::shell::ICON_INK;
@@ -343,8 +343,13 @@ pub struct Look {
     pub heading: Rgba,
     /// A group's edge, where its fill alone wouldn't stand off the ground.
     pub edge: Option<Rgba>,
-    /// The one button that does what the view is for: the host's own green.
+    /// The host's own green, where a view still takes it.
     pub accent: Rgba,
+    /// The one button that does what the view is for, and its label: Settings' is the text colour
+    /// with the other look's ink on it, as the owner drew it; a look on another view's ground
+    /// keeps that ground's accent with white.
+    pub primary: Rgba,
+    pub on_primary: Rgba,
 }
 
 impl Look {
@@ -381,6 +386,8 @@ impl Look {
             heading: ink,
             edge: Some(rgba(if dark { PAGE_LINE } else { LIGHT_PAGE_LINE })),
             accent: rgb(NO_THEME_ACCENT),
+            primary: mix(PRIMARY),
+            on_primary: other,
         }
     }
 
@@ -407,6 +414,8 @@ impl Look {
             heading: ink,
             edge: Some(line),
             accent,
+            primary: accent,
+            on_primary: gpui::white().into(),
         }
     }
 
@@ -689,18 +698,19 @@ pub fn icon_button(
     )
 }
 
-/// The push button that does what the view is for, one at most in sight: white on the accent,
-/// each channel darker under the pointer and darker again pressed, as every filled button is.
+/// The push button that does what the view is for, one at most in sight: its label on the look's
+/// primary at semibold, each channel darker under the pointer and darker again pressed, as every
+/// filled button is.
 pub fn primary(
     look: &Look,
     id: impl Into<gpui::ElementId>,
     title: impl Into<SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
     let shade = |by: f32| Rgba {
-        r: look.accent.r * by,
-        g: look.accent.g * by,
-        b: look.accent.b * by,
-        a: look.accent.a,
+        r: look.primary.r * by,
+        g: look.primary.g * by,
+        b: look.primary.b * by,
+        a: look.primary.a,
     };
     let (hovered, pressed) = (shade(ACCENT_HOVERED), shade(ACCENT_PRESSED));
     div()
@@ -711,8 +721,9 @@ pub fn primary(
         .flex()
         .items_center()
         .rounded(px(CONTROL_RADIUS))
-        .bg(look.accent)
-        .text_color(gpui::white())
+        .bg(look.primary)
+        .text_color(look.on_primary)
+        .font_weight(gpui::FontWeight::SEMIBOLD)
         .hover(move |button| button.bg(hovered))
         .active(move |button| button.bg(pressed))
         .child(title.into())
@@ -1325,9 +1336,9 @@ mod tests {
         assert!(on.edge.is_some());
     }
 
-    /// In Settings what's on is the text's colour, a switch's knob on it the card's, never the
-    /// green the main action keeps (#4092): it stands off the group as far as a name does, and its
-    /// knob reads on it at WCAG's 3:1 for a control. Off Settings' card, on is still the accent.
+    /// In Settings what's on is the text's colour, a switch's knob on it the card's, never green
+    /// (#4092): it stands off the group as far as a name does, and its knob reads on it at WCAG's
+    /// 3:1 for a control. Off Settings' card, on is still the accent.
     #[test]
     fn whats_on_is_the_text_colour_not_the_green() {
         for dark in [true, false] {
@@ -1343,6 +1354,22 @@ mod tests {
         let settings = Look::settings(true);
         let elsewhere = Look::on(settings.surface, settings.ink, settings.accent);
         assert_eq!(elsewhere.on, settings.accent);
+    }
+
+    /// Settings' main button is the text colour, not the green (the owner's), and its label
+    /// reads on it at WCAG's 4.5:1 for text in dark and light. Off Settings' card it keeps the
+    /// ground's accent.
+    #[test]
+    fn the_main_button_is_the_text_colour_and_its_label_reads() {
+        for dark in [true, false] {
+            let look = Look::settings(dark);
+            assert_ne!(look.primary, look.accent, "{dark}");
+            let label = crate::palette::contrast(look.on_primary, look.primary);
+            assert!(label >= 4.5, "{dark}: the label reads at {label}");
+        }
+        let settings = Look::settings(true);
+        let elsewhere = Look::on(settings.surface, settings.ink, settings.accent);
+        assert_eq!(elsewhere.primary, settings.accent);
     }
 }
 

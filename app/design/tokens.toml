@@ -1264,6 +1264,9 @@ control-pressed = 0.2
 control-pressed-light = 0.16
 popup-width = 155.0
 popup-end = 0.0
+# The main button, as drawn: the text colour at this strength, its label the other look's ink at
+# the drawing's 590, semibold; never green (the owner's).
+primary = 1.0
 # The folder a pop-up names, as Save downloads to's: the folder 14 at its start, 8 in, its name 6
 # after it and 10 from its end, in the icon ink, with no chevrons.
 folder-left = 8.0

@@ -1669,7 +1669,12 @@ impl Settings {
                         log!("browser: make default browser");
                         settings.default_browser.read(cx).make_default();
                     });
-                    self.button("make-default-browser", "Make Default")
+                    // The page's one main button, a stop as every button here is.
+                    browser::settings_rows::primary(look, "make-default-browser", "Make Default")
+                        .when(self.a11y, |make| named_button(make, "Make Default"))
+                        .tab_index(0)
+                        .focus_from_keys_only()
+                        .focus_visible(ring(look.ink))
                         .relative()
                         .child(self.drawn("make default".into()))
                         .on_click(make)
