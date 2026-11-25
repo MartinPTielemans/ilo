@@ -96,6 +96,9 @@ struct Handed {
   // agent's hands: at the give, and each time the user handed it back.
   bool camera = false;
   bool microphone = false;
+  // The tab's page is the document it was then. A new document in the tab's main frame has no
+  // call that came with the tab, on whatever origin it is.
+  bool call_document = false;
 };
 
 // Whether a page in |tab| is refused its ask for |kind|. As Refuses, but for the camera and the
@@ -109,9 +112,9 @@ bool RefusesAsk(Kind kind, const agent_space_rule::Tab& tab, const Handed& hande
 // Whether a page in |tab| has its permission for |kind| read as refused, which is what a call
 // under way is ended by when a setting of its site changes. As RefusesAsk, and read as saved too
 // for a device the page was using as the tab last passed into the agent's hands, on the origin it
-// was given on: a call the user handed over ends when they block its site, as in a tab of theirs,
-// and at no other change. Nothing starts by this read: a page's ask is RefusesAsk's, whatever the
-// status says.
+// was given on and while the page is that document still: a call the user handed over ends when
+// they block its site, as in a tab of theirs, and at no other change. Nothing starts by this
+// read: a page's ask is RefusesAsk's, whatever the status says.
 bool RefusesStatus(Kind kind, const agent_space_rule::Tab& tab, const Handed& handed);
 
 // The action of a refusal's activity entry is this and the kind's word, and its reason the one

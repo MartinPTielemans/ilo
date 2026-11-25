@@ -32,7 +32,8 @@ bool RefusesAsk(Kind kind, const agent_space_rule::Tab& tab, const Handed& hande
 bool RefusesStatus(Kind kind, const agent_space_rule::Tab& tab, const Handed& handed) {
   const bool kept = (kind == Kind::kCamera && handed.camera) ||
                     (kind == Kind::kMicrophone && handed.microphone);
-  return RefusesAsk(kind, tab, handed) && !(kept && handed.handed && handed.on_given_origin);
+  return RefusesAsk(kind, tab, handed) &&
+         !(kept && handed.handed && handed.on_given_origin && handed.call_document);
 }
 
 const char* CodeWord(Kind kind) {

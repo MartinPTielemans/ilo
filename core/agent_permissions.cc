@@ -142,12 +142,14 @@ agent_permission_rule::Handed HandedOf(content::RenderFrameHost* frame) {
     return {};
   }
   const url::Origin& given = mark->given_on;
+  content::RenderFrameHost* page = outermost->GetPrimaryMainFrame();
   return {.handed = true,
           .on_given_origin = !given.opaque() && frame->GetLastCommittedOrigin() == given &&
-                             outermost->GetPrimaryMainFrame()->GetLastCommittedOrigin() == given,
+                             page->GetLastCommittedOrigin() == given,
           .users_press = mark->users_press,
           .camera = mark->camera,
-          .microphone = mark->microphone};
+          .microphone = mark->microphone,
+          .call_document = mark->call_in.AsRenderFrameHostIfValid() == page};
 }
 
 // |reason| is one of the rule's two constants.

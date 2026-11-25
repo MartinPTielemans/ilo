@@ -80,6 +80,8 @@ void PassedOn(bc_id tab) {
   const Tab::Captures uses = page && on_given_origin ? page->captures() : Tab::Captures();
   kept.camera = uses.camera;
   kept.microphone = uses.microphone;
+  kept.call_in = on_given_origin ? contents->GetPrimaryMainFrame()->GetWeakDocumentPtr()
+                                 : content::WeakDocumentPtr();
 }
 
 bool KeepsATile(bc_id tab) {
