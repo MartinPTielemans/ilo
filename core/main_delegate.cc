@@ -27,6 +27,7 @@
 #include "browser_core/agent_file_field.h"
 #include "browser_core/agent_job_voter.h"
 #include "browser_core/agent_page.h"
+#include "browser_core/agent_space_page.h"
 #include "browser_core/arrange.h"
 #include "browser_core/auto_archive.h"
 #include "browser_core/battery_saver.h"
@@ -441,6 +442,18 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
         network_context_params->persist_session_cookies) {
       network_context_params->restore_old_session_cookies = true;
     }
+  }
+
+  // Chrome's, and neither for a page in an agent's Space: the clipboard is read by a paste there
+  // only while the user holds the tab, and the picker for their files is never shown
+  // (agent_space_rule.h).
+  bool IsClipboardPasteAllowed(content::RenderFrameHost* frame) override {
+    return !RefusesInAgentSpace(agent_space_rule::Ask::kPaste, frame) &&
+           ChromeContentBrowserClient::IsClipboardPasteAllowed(frame);
+  }
+  bool IsFileSystemAccessApiFilePickerAllowed(content::WebContents* contents) override {
+    return !RefusesInAgentSpace(agent_space_rule::Ask::kFilePicker, contents) &&
+           ChromeContentBrowserClient::IsFileSystemAccessApiFilePickerAllowed(contents);
   }
 
   // Chrome's, answering as Tab leaves a tab's page at either end (focus_leaving.h).
