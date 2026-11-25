@@ -746,6 +746,10 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
           .saved_login = browser_core::SavedLoginFits(contents),
           .device_or_location = UsesDeviceOrLocation(contents),
           .files = contents && contents->HasFileSystemAccessHandles(),
+          // Chrome says a video is in Picture in Picture at a media card too, which is no window.
+          .picture_in_picture = contents && (contents->HasPictureInPictureDocument() ||
+                                             (contents->HasPictureInPictureVideo() &&
+                                              !browser_core::CardShowsVideo(contents))),
       })) {
     return false;
   }
@@ -769,6 +773,9 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   if (!moved) {
     return false;
   }
+  // A card's video ends with the give, and only with one that happened: a page in an agent's
+  // Space has no Picture in Picture, at a card either (agent_space_rule.h).
+  browser_core::EndCardVideo(tab);
   browser_core::handed::Given(tab, home, left);
   // A print preview the user had open over it doesn't ride into the agent's Space, nor a
   // certificate chooser or anything else Chrome was asking them there.
