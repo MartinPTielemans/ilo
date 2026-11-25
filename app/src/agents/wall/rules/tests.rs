@@ -465,6 +465,74 @@ fn the_systems_perl_is_its_own_tree_read_and_mapped() {
     );
 }
 
+/// The developer tools start from their own folder, read where the system's link says: the link
+/// for its name alone, the folder read and mapped, and nothing of an app's. The lookup that asks
+/// for them to be installed is refused, so no command of a task brings up the system's window.
+#[test]
+fn the_developer_tools_are_read_where_the_systems_link_says() {
+    let text = system::text();
+    let lines =
+        |word: &str| -> Vec<&str> { (text.lines()).filter(|line| line.contains(word)).collect() };
+    assert_eq!(
+        lines("developer_dir"),
+        ["(allow file-read-metadata file-test-existence \
+             (literal \"/private/var/select/developer_dir\"))"]
+    );
+    assert_eq!(
+        lines("/Library/Developer"),
+        ["(allow file-read* file-test-existence file-map-executable \
+             (subpath \"/Library/Developer/CommandLineTools\"))"]
+    );
+    for shape in shapes() {
+        let text = super::text(&shape);
+        assert!(!text.contains("installondemand"), "{shape:?}");
+        assert!(!text.contains("dt.CommandLineTools"), "{shape:?}");
+    }
+}
+
+/// A walled command reads by pid only itself and what its own start made: every read of another
+/// process is refused after the base's allow, which comes again for its own wall alone, and no
+/// line after them names a process.
+#[test]
+fn a_walled_command_reads_by_pid_only_its_own_wall() {
+    for shape in shapes() {
+        let text = text(&shape);
+        let lines: Vec<&str> = text.lines().collect();
+        let named: Vec<(usize, &str)> = (lines.iter().copied().enumerate())
+            .filter(|(_, line)| line.contains("process-info"))
+            .collect();
+        let base = (BASE.lines())
+            .filter(|line| line.contains("process-info"))
+            .count();
+        let ours: Vec<&str> = named[base..].iter().map(|(_, line)| *line).collect();
+        assert_eq!(
+            ours,
+            [
+                "(deny process-info* (target others))",
+                "(allow process-info* (target same-sandbox))"
+            ],
+            "{shape:?}"
+        );
+        let deny = named[base].0;
+        assert!(
+            lines[deny..]
+                .iter()
+                .all(|line| !line.starts_with("(allow process-info")
+                    || *line == "(allow process-info* (target same-sandbox))"),
+            "{shape:?}"
+        );
+        // And a signal reaches its own wall alone, as the base has it, with nothing after.
+        let signals: Vec<&str> = (lines.iter().copied())
+            .filter(|line| line.contains("(allow signal") || line.contains("(deny signal"))
+            .collect();
+        assert_eq!(
+            signals,
+            ["(allow signal (target same-sandbox))"],
+            "{shape:?}"
+        );
+    }
+}
+
 #[test]
 fn the_network_is_the_listener_and_the_sockets_alone() {
     for shape in shapes() {

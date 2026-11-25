@@ -14,7 +14,7 @@
 //! `/usr/local/lib`, which aren't the system's; the app sandbox's extensions, which another
 //! program hands out; the syslog socket and the notification memory; and its lookups, of which
 //! rules.rs takes the trust ones. Added: the one name of `/private/var` a shell's start reads,
-//! and the system's Perl.
+//! the system's Perl, and the developer tools' pointer and their own folder.
 
 /// One allow: its operations, then each root in the filter named.
 pub struct Allow {
@@ -93,6 +93,15 @@ pub const SYSTEM: &[Allow] = &[
     ),
     // Added: the link `/bin/sh` reads to pick the shell it starts.
     allow(METADATA, "literal", &["/private/var/select/sh"]),
+    // The system's developer tools: /usr/bin/git, python3 and their like read where the tools are
+    // from this link, then start them from there. Their own folder, where they're installed, is
+    // the system's. Without the link they ask to have the tools installed, which stays refused.
+    allow(METADATA, "literal", &["/private/var/select/developer_dir"]),
+    allow(
+        "file-read* file-test-existence file-map-executable",
+        "subpath",
+        &["/Library/Developer/CommandLineTools"],
+    ),
     // A program's own working folder's root.
     allow(READ, "literal", &["/"]),
     allow(

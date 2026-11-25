@@ -357,9 +357,18 @@ pub fn text(shape: &Shape) -> String {
     ));
     text.push_str(TRUST);
     text.push_str(&hardening());
+    text.push_str(PROCESSES);
     text.push_str(&mark());
     text
 }
+
+/// A walled command reads by pid only itself and what its own start made, which is in its wall:
+/// every other process's read is refused outright, and the base's allow for its own wall comes
+/// again after it.
+const PROCESSES: &str = "\
+(deny process-info* (target others))
+(allow process-info* (target same-sandbox))
+";
 
 /// The allow on the assistant's program: its folder whole, or the one file, as the bridge is named.
 fn program(folder: bool) -> String {
