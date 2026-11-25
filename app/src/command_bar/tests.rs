@@ -3566,13 +3566,11 @@ impl Bar {
         self.shown_menu(CommandBar::effort_menu)
     }
 
-    /// Where the effort trigger would be drawn: it isn't yet, so a test puts it there.
-    fn draw_effort_trigger(&mut self) {
+    /// What the effort trigger reads, None where it isn't drawn.
+    fn effort_said(&mut self) -> Option<String> {
         (self.window)
-            .update(&mut self.cx.cx, |bar, _, _| {
-                bar.effort_at.set(Some(Bounds::default()))
-            })
-            .unwrap();
+            .read_with(&self.cx.cx, |bar, _| bar.effort_words().map(String::from))
+            .unwrap()
     }
 
     fn shown_menu(
@@ -3800,46 +3798,77 @@ fn the_model_menus_search_picks_only_from_its_list(cx: &mut TestAppContext) {
     assert!(!bar.calls().iter().any(|call| call.contains("opus")));
 }
 
-/// The effort menu lists Claude's own levels as its help names them, none checked before a
-/// pick, and the thread starts with the one picked; with none picked, ilo passes none.
+/// Claude's effort trigger reads Effort and its menu has Default ticked before a pick; a level
+/// picked is what the trigger reads and goes with the start, and Default takes it back to none.
 #[gpui::test]
-fn the_effort_menu_lists_claudes_levels_and_the_pick_goes_with_the_start(cx: &mut TestAppContext) {
+fn the_effort_trigger_reads_its_pick_and_default_clears_it(cx: &mut TestAppContext) {
     let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
     bar.type_text("plan the week");
     bar.keys("tab");
-    bar.draw_effort_trigger();
+    assert_eq!(bar.effort_said().as_deref(), Some("Effort"));
     let (rows, chosen) = bar.effort_menu().expect("no effort menu for Claude");
-    assert_eq!(rows, ["low", "medium", "high", "xhigh", "max"]);
-    bar.pick(chosen, 2);
+    let all = ["Low", "Medium", "High", "Extra high", "Max"];
+    assert_eq!(rows, [&["✓ Default"][..], &all].concat());
+    bar.pick(chosen, 3);
+    assert_eq!(bar.effort_said().as_deref(), Some("High"));
     let (rows, chosen) = bar.effort_menu().unwrap();
-    assert_eq!(rows, ["low", "medium", "✓ high", "xhigh", "max"]);
-    bar.pick(chosen, 2);
-    bar.calls();
-    bar.keys("enter");
-    assert_eq!(bar.calls(), ["task claude plan the week effort high"]);
-
-    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
-    bar.type_text("plan the week");
-    bar.keys("tab");
+    assert_eq!(
+        rows,
+        ["Default", "Low", "Medium", "✓ High", "Extra high", "Max"]
+    );
+    bar.pick(chosen, 0);
+    assert_eq!(bar.effort_said().as_deref(), Some("Effort"));
     bar.calls();
     bar.keys("enter");
     assert_eq!(bar.calls(), ["task claude plan the week"]);
 }
 
-/// Codex's program takes no effort setting, so its composer has no effort menu, and the menu
-/// doesn't show while its trigger isn't drawn.
+/// The floor: every row on the effort menu gives the program a level from its own list, each a
+/// different one, and Default gives it none.
 #[gpui::test]
-fn no_effort_menu_for_codex_or_without_its_trigger(cx: &mut TestAppContext) {
+fn every_effort_row_passes_a_level_from_the_programs_list(cx: &mut TestAppContext) {
+    let listed = crate::agents::runner::Cli::Claude.efforts();
+    let mut passed = Vec::new();
+    for row in 0..=listed.len() {
+        let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+        bar.type_text("plan the week");
+        bar.keys("tab");
+        let (rows, chosen) = bar.effort_menu().unwrap();
+        assert_eq!(
+            rows.len(),
+            listed.len() + 1,
+            "a row with no level: {rows:?}"
+        );
+        bar.pick(chosen, row);
+        bar.calls();
+        bar.keys("enter");
+        let call = bar.calls().concat();
+        passed.push(
+            call.split_once(" effort ")
+                .map(|(_, level)| level.to_string()),
+        );
+    }
+    assert_eq!(passed[0], None, "Default passed a level");
+    let levels: Vec<_> = passed[1..].iter().flatten().map(String::as_str).collect();
+    assert_eq!(levels, listed);
+}
+
+/// Codex's program takes no effort setting, so its composer draws no effort trigger and has no
+/// effort menu; a level picked for Claude doesn't go with Codex's start.
+#[gpui::test]
+fn codex_has_no_effort_trigger(cx: &mut TestAppContext) {
     let mut bar = Bar::with_agents(cx, &[("codex", None)], None);
     bar.type_text("plan the week");
     bar.keys("tab");
-    bar.draw_effort_trigger();
+    assert_eq!(bar.effort_said(), None);
     assert!(bar.effort_menu().is_none(), "Codex takes no effort");
+}
 
-    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
-    bar.type_text("plan the week");
-    bar.keys("tab");
-    assert!(bar.effort_menu().is_none(), "a menu under no trigger");
+/// A level the table has no word for is drawn as the program gives it, first letter capital.
+#[test]
+fn a_level_with_no_word_is_the_programs_own_capitalised() {
+    assert_eq!(effort_name("xhigh"), "Extra high");
+    assert_eq!(effort_name("ultra"), "Ultra");
 }
 
 /// The composer opens at what it last started a thread with in the profile, as the host keeps it.

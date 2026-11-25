@@ -328,6 +328,10 @@ const NEVER_GETS: &str = "A thread never gets passwords, cookies or your other t
 const LEVEL: &str = "composer-level";
 const MODEL: &str = "composer-model";
 const EFFORT: &str = "composer-effort";
+/// What the effort trigger reads before a pick, and the menu's row that leaves the level to the
+/// program (words table, D6).
+const EFFORT_NAME: &str = "Effort";
+const EFFORT_DEFAULT: &str = "Default";
 
 /// The most settings the bar lists for what's typed, after the commands that start with it.
 const SETTINGS_SHOWN: usize = 3;
@@ -367,6 +371,26 @@ struct Ask {
 /// (`Cli::efforts`); none for an assistant ilo doesn't run, or one that takes none.
 fn efforts_of(id: &str) -> &'static [&'static str] {
     crate::agents::runner::Cli::from_id(id).map_or(&[], |cli| cli.efforts())
+}
+
+/// A level's name on the effort menu and its trigger: the words table's for those it names (D6),
+/// else the program's own with its first letter capital. It is only ever a label: the program is
+/// passed the level itself.
+fn effort_name(level: &str) -> String {
+    match level {
+        "low" => "Low".into(),
+        "medium" => "Medium".into(),
+        "high" => "High".into(),
+        "xhigh" => "Extra high".into(),
+        "max" => "Max".into(),
+        level => {
+            let mut chars = level.chars();
+            (chars.next().into_iter())
+                .flat_map(char::to_uppercase)
+                .chain(chars)
+                .collect()
+        }
+    }
 }
 
 /// What a row's icon stands for.
@@ -848,8 +872,7 @@ pub struct CommandBar {
     /// Where the composer's level and model triggers were last drawn, which their menus hang from.
     level_at: Rc<Cell<Option<Bounds<Pixels>>>>,
     model_at: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// Where the effort trigger was last drawn. It isn't drawn until its word is in the table,
-    /// so its menu doesn't show yet.
+    /// Where the effort trigger was last drawn, for an assistant whose program takes an effort.
     effort_at: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The trigger whose menu is open, by its id, which wears a plate until the menu closes.
     menu_open: Option<&'static str>,
@@ -2437,9 +2460,9 @@ impl CommandBar {
             .run_task(&id, &asked, page, tier, model, effort, cx);
     }
 
-    /// The effort trigger's menu, under it: the levels the composer's assistant's own program
-    /// takes, under the names its help gives them, the one picked checked, none before a pick.
-    /// No menu for an assistant whose program takes none. A pick holds for this thread only.
+    /// The effort trigger's menu, under it: Default, then the levels the composer's assistant's
+    /// own program takes, by `effort_name`, the one picked checked, Default before a pick. No menu
+    /// for an assistant whose program takes none. A pick holds for this thread only.
     fn effort_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(ask) = &self.ask else { return };
         let Some(agent) = self.composer_assistant() else {
@@ -2449,19 +2472,27 @@ impl CommandBar {
         if levels.is_empty() {
             return;
         }
-        let items = (levels.iter())
-            .map(|level| MenuEntry {
+        let default = MenuEntry {
+            checked: ask.effort.is_none(),
+            ..MenuEntry::named(EFFORT_DEFAULT, true)
+        };
+        let items = std::iter::once(default)
+            .chain(levels.iter().map(|level| MenuEntry {
                 checked: ask.effort == Some(*level),
-                ..MenuEntry::named(*level, true)
-            })
+                ..MenuEntry::named(effort_name(level), true)
+            }))
             .collect();
         let bar = cx.entity().downgrade();
         let chosen = Box::new(
             move |closed: crate::menu::Closed, _: &mut Window, cx: &mut App| {
-                let level = closed.chosen().and_then(|item| levels.get(item).copied());
+                // Row 0 is Default; each other row is its level on the program's own list.
+                let picked = closed.chosen().map(|item| match item {
+                    0 => None,
+                    item => levels.get(item - 1).copied(),
+                });
                 let closed = |bar: &mut Self, cx: &mut Context<Self>| {
                     bar.menu_closed(cx);
-                    level.map(|level| bar.pick_effort(level, cx));
+                    picked.map(|level| bar.pick_effort(level, cx));
                 };
                 bar.update(cx, closed).ok();
             },
@@ -2469,12 +2500,26 @@ impl CommandBar {
         self.show_choices(EFFORT, items, chosen, window, cx);
     }
 
-    /// The user's pick on the composer's effort menu.
-    fn pick_effort(&mut self, level: &'static str, cx: &mut Context<Self>) {
+    /// The user's pick on the composer's effort menu: a level, or None for Default.
+    fn pick_effort(&mut self, level: Option<&'static str>, cx: &mut Context<Self>) {
         let Some(ask) = &mut self.ask else { return };
-        ask.effort = Some(level);
-        log!("browser: composer effort {level}");
+        ask.effort = level;
+        log!("browser: composer effort {}", level.unwrap_or("default"));
         cx.notify();
+    }
+
+    /// What the effort trigger reads: its name before a pick, then the level picked; None where
+    /// the composer's assistant's program takes no effort, which leaves the trigger out.
+    fn effort_words(&self) -> Option<SharedString> {
+        let ask = self.ask.as_ref()?;
+        let levels = efforts_of(&self.composer_assistant()?.id);
+        if levels.is_empty() {
+            return None;
+        }
+        Some(match ask.effort.filter(|level| levels.contains(level)) {
+            Some(level) => effort_name(level).into(),
+            None => EFFORT_NAME.into(),
+        })
     }
 
     /// The level trigger's menu, under it: the three levels, the one the thread starts at
@@ -3759,8 +3804,8 @@ impl CommandBar {
         )
     }
 
-    /// The composer's row of choices: the level and the model, each opening its menu under it,
-    /// then Start, which starts the thread as ↩ does and does nothing with no words.
+    /// The composer's row of choices: the level, the model and, for an assistant whose program
+    /// takes one, the effort, each opening its menu under it, then Start, which starts the thread as ↩ does and does nothing with no words.
     fn choices(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let palette = palette::current(cx);
         let (text, dim) = (palette.on_overlay(TITLE), palette.on_overlay(DIM));
@@ -3814,6 +3859,19 @@ impl CommandBar {
             .children(mark.map(|mark| glyph(mark, MODEL_MARK, text)))
             .child(words(said.into(), text))
             .child(glyph("icons/chevron-down.svg", TRIGGER_CHEVRON, dim));
+        // The bar has one dim ink, which its foot's words (text-3) and the model's chevron
+        // (text-2) both wear, so the trigger wears it before a pick and after.
+        let effort = self.effort_words().map(|said| {
+            trigger(EFFORT, &self.effort_at)
+                .when(self.a11y, |effort| {
+                    effort.role(Role::Button).aria_label(said.clone())
+                })
+                .px(px(TRIGGER_X))
+                .gap(px(TRIGGER_GAP))
+                .on_click(cx.listener(|bar, _, window, cx| bar.effort_menu(window, cx)))
+                .child(words(said, dim))
+                .child(glyph("icons/chevron-down.svg", TRIGGER_CHEVRON, dim))
+        });
         let ready = !self.input.read(cx).text().trim().is_empty();
         let (fill, arrow) = match ready {
             true => (palette.accent.into(), palette.accent_label.into()),
@@ -3846,6 +3904,7 @@ impl CommandBar {
             .child(level)
             .child(div().flex_1())
             .child(model)
+            .children(effort)
             .child(start)
     }
 
