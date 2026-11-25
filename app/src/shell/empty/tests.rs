@@ -372,6 +372,37 @@ fn another_space_takes_the_bar_at_rest_back_to_search(cx: &mut TestAppContext) {
     );
 }
 
+/// Under the bar at rest are the threads whose home is the window's Space alone, those a run
+/// before left there too: another Space's never show, and a Space with none lists none.
+#[gpui::test]
+fn the_bar_at_rest_lists_its_own_spaces_threads_alone(cx: &mut TestAppContext) {
+    let host = Rc::new(Recorder::default());
+    let browser = host.clone();
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
+    let at = |n: u64, home: u64| Card {
+        home,
+        ..card(n, Dot::Working)
+    };
+    shell.update(cx, |shell, cx| {
+        let space = |id: u64| (id, "Space".into(), None, 0, "".into(), "".into(), "".into());
+        shell.set_spaces(vec![space(1), space(2), space(3)], cx);
+        shell.set_space(1, cx);
+        shell.set_task_cards(vec![at(1, 1), at(2, 2), at(3, 1)], cx);
+        shell.set_kept_cards(vec![at(4, 2), at(5, 1)], cx);
+    });
+    let listed = |space: u64, cx: &mut VisualTestContext| {
+        shell.update(cx, |shell, cx| shell.set_space(space, cx));
+        shell.read_with(cx, |shell, _| {
+            (shell.latest_tasks(5).into_iter())
+                .map(|card| card.agent.to_string())
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(listed(1, cx), ["task-1", "task-3", "task-5"]);
+    assert_eq!(listed(2, cx), ["task-2", "task-4"]);
+    assert_eq!(listed(3, cx), Vec::<String>::new());
+}
+
 /// On a new profile ilo hasn't looked for an assistant yet: ⇥ grows the bar at rest into the
 /// composer and looks, once, as ⌘T's does. The assistant the browser finds after is the
 /// composer's, and ↩ starts the thread on it; before, ↩ starts nothing.
