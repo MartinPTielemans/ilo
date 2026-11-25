@@ -472,9 +472,14 @@ impl Shell {
         let tidy = (self.browser.archive_after(self.space))
             .and_then(|(was, offered)| Tidy::of(was, &offered));
         let account = self.signing(cx);
-        // An agent program found here is one Settings › Other apps lists by its own look, which
-        // runs nothing: what it has found already, and nothing looked for again.
+        // An agent program found here is one Settings › Other apps lists: by the folder or file
+        // each makes in the user's home, a stat once as the card starts, which runs nothing, and
+        // what the browser already holds of them. Only with the command connected does that look
+        // also ask the login shell, so then the card keeps to what's held.
         let found_apps = crate::agents::global(cx).is_some_and(|agents| {
+            if !agents.read(cx).is_connected(crate::agents::Client::Command) {
+                agents.update(cx, |agents, cx| agents.look_for_clients(cx));
+            }
             (agents.read(cx).listed().iter()).any(|client| client.cli().is_some())
         });
         let steps: Vec<Step> = STEPS
