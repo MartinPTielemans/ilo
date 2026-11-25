@@ -379,6 +379,11 @@ impl Process {
         self.answer.is_some()
     }
 
+    /// The name of its wall's place, for a walled start with one.
+    pub fn place(&self) -> Option<String> {
+        self.walled.as_deref().and_then(Wall::place_name)
+    }
+
     /// Stops the turn under way at once, leaving the process to take the next message.
     pub fn interrupt(&mut self) {
         // Still the wall's launcher, which reads no line: Stop ends it, and the wait for it.

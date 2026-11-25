@@ -14,6 +14,7 @@ use crate::agents::runner::{self, Cli, Out};
 use crate::agents::task::ilo::{IloKind, IloLine, LeftOut, Reach};
 use crate::agents::task::rewall::{
     Change, LEFT_RUNNING_LOGGED, PutUp, Rewalled, STOPPED_FILES_LOGGED, STOPPED_FOLDER_LOGGED,
+    ended_left_logged,
 };
 use crate::agents::task::{Line, State, Who};
 use crate::agents::tier::{self, Tier};
@@ -1284,7 +1285,7 @@ fn a_sweep_that_couldnt_end_everything_is_a_line_of_what_that_run_had(cx: &mut T
     // As a walled start keeps them, which the stand-in's start isn't.
     (run.agents).update(cx, |agents, _| {
         let task = agents.task_mut(&agent).unwrap();
-        task.ran_walled = vec![(first, folder()), (now, Given::default())];
+        task.ran_walled = vec![(first, folder(), None), (now, Given::default(), None)];
     });
     let swept = |at: u32, answer: Result<Swept, SweepFailed>, cx: &mut TestAppContext| {
         let event = runner::Event {
@@ -1324,7 +1325,7 @@ fn a_sweep_that_couldnt_end_everything_is_a_line_of_what_that_run_had(cx: &mut T
 fn walled_run(run: &Run, agent: &str, had: Given, cx: &mut TestAppContext) -> u32 {
     let at = run_of(run, agent, cx);
     (run.agents).update(cx, |agents, _| {
-        agents.task_mut(agent).unwrap().ran_walled = vec![(at, had)];
+        agents.task_mut(agent).unwrap().ran_walled = vec![(at, had, None)];
     });
     at
 }
@@ -1382,6 +1383,71 @@ fn a_raise_after_a_walled_run_starts_once_its_sweep_is_clean(cx: &mut TestAppCon
     let may = (run.agents).read_with(cx, |agents, _| agents.may_call(&agent));
     assert!(may);
     assert_eq!(stands(&run, &agent, cx), (Tier::Full, true, Vec::new()));
+}
+
+/// A kept task whose run left something running carries that run's place's name in its row,
+/// nothing more of it. A later launch whose cleanup sweeps the place clean says on the task, in
+/// the Archive, that ilo ended what its assistant had left, with an entry of how many, and the row
+/// no longer carries the name; the cleanup may answer before the kept tasks are read. A sweep
+/// that ended nothing, or a place no row carries, says nothing.
+#[gpui::test]
+fn a_later_launch_that_ends_what_a_kept_task_left_says_so_on_it(cx: &mut TestAppContext) {
+    const PLACE: &str = "0123456789abcdef";
+    let run = Run::new("ended-left", cx);
+    let agent = run.start(Cli::Claude, cx);
+    run.ran(1);
+    let at = run_of(&run, &agent, cx);
+    (run.agents).update(cx, |agents, _| {
+        let task = agents.task_mut(&agent).unwrap();
+        task.ran_walled = vec![(at, Given::default(), Some(PLACE.into()))];
+    });
+    swept(&run, &agent, at, Err(SweepFailed::Cap), cx);
+    let left = (run.agents).read_with(cx, |agents, _| {
+        agents.tasks.kept.of(&agent).unwrap().left.clone()
+    });
+    assert_eq!(left, [PLACE]);
+    run.finish(&agent, cx);
+    (run.agents).update(cx, |agents, cx| agents.end_tasks(false, cx));
+
+    let next = Run::again(run.profile.clone(), run.program.clone(), cx);
+    let past = (next.agents).read_with(cx, |agents, _| {
+        agents.tasks.kept.listed().next().unwrap().to_string()
+    });
+    assert!(!next.ilo_lines(&past, cx).contains(&IloKind::EndedLeft));
+    // The cleanup answers before the kept tasks are read.
+    (next.agents).update(cx, |agents, cx| {
+        agents.tasks.kept_taken = false;
+        let clean = vec![(PLACE.to_string(), 2), ("fedcba9876543210".to_string(), 3)];
+        agents.came_clean(clean, cx);
+    });
+    assert!(!next.ilo_lines(&past, cx).contains(&IloKind::EndedLeft));
+    (next.agents).update(cx, |agents, cx| agents.take_old_kept(cx));
+    let ended: Vec<_> = (next.ilo_lines(&past, cx).into_iter())
+        .filter(|line| *line == IloKind::EndedLeft)
+        .collect();
+    assert_eq!(ended, [IloKind::EndedLeft]);
+    assert_eq!(logged(&next, &past, cx), [ended_left_logged(2)]);
+    let left = (next.agents).read_with(cx, |agents, _| {
+        agents.tasks.kept.of(&past).unwrap().left.clone()
+    });
+    assert!(left.is_empty(), "{left:?}");
+
+    // Once more, and with a sweep that ended nothing: nothing more is said.
+    (next.agents).update(cx, |agents, cx| {
+        agents
+            .tasks
+            .kept
+            .of_mut(&past)
+            .unwrap()
+            .left
+            .push(PLACE.into());
+        agents.came_clean(vec![(PLACE.to_string(), 0), (PLACE.to_string(), 4)], cx);
+    });
+    assert_eq!(logged(&next, &past, cx), [ended_left_logged(2)]);
+    let left = (next.agents).read_with(cx, |agents, _| {
+        agents.tasks.kept.of(&past).unwrap().left.clone()
+    });
+    assert!(left.is_empty(), "{left:?}");
 }
 
 /// ilo's lines in a task ilo stopped, but for the one any stopped task's conversation that

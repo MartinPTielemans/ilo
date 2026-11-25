@@ -681,8 +681,14 @@ impl Agents {
     /// From `load`, which the app calls once the first window's UI has shown, so none of this is
     /// in the time to the first frame. With no file of ids, as on every launch after a run that
     /// kept nothing, the one look for the file is all a launch pays: nothing is read, started or
-    /// spawned.
+    /// spawned. Then what the launch's cleanup already found of their runs' places is theirs.
     pub(crate) fn take_old_kept(&mut self, cx: &mut Context<Self>) {
+        self.take_kept_file(cx);
+        self.tasks.kept_taken = true;
+        self.came_clean(Vec::new(), cx);
+    }
+
+    fn take_kept_file(&mut self, cx: &mut Context<Self>) {
         let (Some(root), Some(cards_root)) = (self.kept_root(), self.cards_root()) else {
             return;
         };

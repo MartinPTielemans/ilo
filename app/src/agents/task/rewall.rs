@@ -186,10 +186,10 @@ impl Agents {
         let Some(task) = self.task_mut(key) else {
             return;
         };
-        let Some(at) = (task.ran_walled.iter()).position(|(walled, _)| *walled == run) else {
+        let Some(at) = (task.ran_walled.iter()).position(|(walled, ..)| *walled == run) else {
             return;
         };
-        let (_, had) = task.ran_walled.swap_remove(at);
+        let (_, had, place) = task.ran_walled.swap_remove(at);
         let restart = task.restart.take_if(|restart| restart.after == run);
         if answer.is_ok() {
             if let Some(Restart { told, change, .. }) = restart {
@@ -204,6 +204,53 @@ impl Agents {
             task.left_running(had);
         }
         self.note_on(key, 0, ACCESS_ACTION, "", LEFT_RUNNING_LOGGED, "");
+        // A kept task's row carries the place's name, for the launch whose sweep of it comes
+        // clean to say so on the task.
+        let (Some(place), Some(root)) = (place, self.kept_root()) else {
+            return cx.notify();
+        };
+        if let Some(record) = self.tasks.kept.of_mut(key) {
+            record.left.push(place);
+            self.tasks.kept.write(&root);
+        }
+        cx.notify();
+    }
+
+    /// What the launch's cleanup found of the places runs before left: each it swept clean, by
+    /// name with how many it ended. The kept task whose row carries that name gets ilo's line
+    /// that ilo ended what its assistant had left running, and an entry of how many; its row no
+    /// longer carries it. They wait for the kept tasks to be read (`take_old_kept`), as the
+    /// cleanup can end first. A sweep that ended nothing found it already ended, which ilo didn't
+    /// do, so it says nothing.
+    pub(in crate::agents) fn came_clean(
+        &mut self,
+        clean: Vec<(String, usize)>,
+        cx: &mut Context<Self>,
+    ) {
+        self.tasks.came_clean.extend(clean);
+        if !self.tasks.kept_taken {
+            return;
+        }
+        let mut changed = false;
+        for (place, ended) in std::mem::take(&mut self.tasks.came_clean) {
+            let Some(task) = self.tasks.kept.came_clean(&place) else {
+                continue;
+            };
+            changed = true;
+            let Some(task) = task.filter(|_| ended > 0) else {
+                continue;
+            };
+            if let Some(each) = self.task_mut(&task) {
+                each.ended_left();
+            }
+            self.note_on(&task, 0, ACCESS_ACTION, "", &ended_left_logged(ended), "");
+        }
+        if !changed {
+            return;
+        }
+        if let Some(root) = self.kept_root() {
+            self.tasks.kept.write(&root);
+        }
         cx.notify();
     }
 
@@ -468,7 +515,7 @@ impl Agents {
         // The run a start now waits on: one already waited on, else the walled run this ends,
         // whose sweep is to come.
         let run = (task.process.as_ref()).map(runner::Process::run);
-        let walled = run.filter(|run| (task.ran_walled.iter()).any(|(walled, _)| walled == run));
+        let walled = run.filter(|run| (task.ran_walled.iter()).any(|(walled, ..)| walled == run));
         let after = (task.restart.take().map(|restart| restart.after)).or(walled);
         self.wall_outgrown(key, cx);
         let Some(task) = self.task_mut(key) else {

@@ -234,6 +234,16 @@ impl Place {
     pub fn mark(&self) -> &Mark {
         &self.mark
     }
+
+    /// Its name, which its folder and mark file are named by: never its mark or a path.
+    pub fn name(&self) -> Option<&str> {
+        self.tmp.file_name()?.to_str().filter(|name| is_name(name))
+    }
+}
+
+/// Whether `name` is one a place is made with: 16 small hex digits.
+pub fn is_name(name: &str) -> bool {
+    name.len() == 16 && name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// A folder only its user reads, 0700.
@@ -275,6 +285,11 @@ impl Wall {
         }
         Some(answer)
     }
+
+    /// Its place's name, for a wall with a place.
+    pub fn place_name(&self) -> Option<String> {
+        Some(self.place.as_ref()?.name()?.to_string())
+    }
 }
 
 fn control_by(system: &impl System, place: Option<&Place>, pid: u32) -> Result<(), WallRefused> {
@@ -308,7 +323,7 @@ pub fn left_in(root: &Path) -> Vec<Left> {
             Some(stem) => (stem, true),
             None => (name, false),
         };
-        if stem.len() != 16 || !stem.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        if !is_name(stem) {
             continue;
         }
         let at = match left.iter().position(|each| each.name == stem) {
@@ -331,8 +346,8 @@ pub fn left_in(root: &Path) -> Vec<Left> {
     left
 }
 
-/// What the launch's cleanup did, in counts.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// What the launch's cleanup did, in counts, and which places' sweeps came clean.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Cleaned {
     /// Processes ended.
     pub ended: usize,
@@ -340,6 +355,9 @@ pub struct Cleaned {
     pub removed: usize,
     /// Places kept, as a sweep wasn't clean: the next launch tries again.
     pub kept: usize,
+    /// Each place whose mark was swept clean, by its name, with how many that sweep ended: what
+    /// a kept task whose run left that place says it ended (rewall.rs).
+    pub clean: Vec<(String, usize)>,
 }
 
 /// The launch's cleanup of `left`, off the UI thread: a place with a mark is swept and then both
@@ -357,7 +375,10 @@ fn clean_up_by(system: &impl System, root: &Path, left: &[Left]) -> Cleaned {
         let mark = place.mark.then(|| read_mark(&mark_file)).flatten();
         if let Some(mark) = mark {
             match sweep_by(system, &mark) {
-                Ok(swept) => cleaned.ended += swept.ended,
+                Ok(swept) => {
+                    cleaned.ended += swept.ended;
+                    cleaned.clean.push((place.name.clone(), swept.ended));
+                }
                 Err(_) => {
                     cleaned.kept += 1;
                     continue;
