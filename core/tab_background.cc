@@ -1,5 +1,6 @@
 #include "browser_core/tab_background.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace browser_core {
@@ -31,7 +32,7 @@ TabBackground::Step TabBackground::Keep(bool shown, base::TimeTicks now) {
     return {.tell = true};
   }
   waiting_ = true;
-  return {.wait = kSettle};
+  return {.wait = kWaits[wait_]};
 }
 
 TabBackground::Step TabBackground::Settled(bool shown, base::TimeTicks now) {
@@ -40,17 +41,21 @@ TabBackground::Step TabBackground::Settled(bool shown, base::TimeTicks now) {
   }
   if (!shown) {
     waiting_ = false;
+    wait_ = 0;
     return {};
   }
-  // Still changing: the same wait goes on for what's left of the last change's time.
+  // Still changing: the next wait, longer than this one until the longest.
   if (now - changed_at_ < kSettle) {
-    return {.wait = kSettle - (now - changed_at_)};
+    wait_ = std::min(wait_ + 1, kWaits.size() - 1);
+    return {.wait = kWaits[wait_]};
   }
   waiting_ = false;
+  wait_ = 0;
   return {.tell = true};
 }
 
 TabBackground::Step TabBackground::LeftPage(bool shown) {
+  wait_ = 0;
   return {.tell = std::exchange(waiting_, false) && shown};
 }
 

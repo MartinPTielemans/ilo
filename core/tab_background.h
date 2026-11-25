@@ -1,6 +1,8 @@
 #ifndef BROWSER_CORE_TAB_BACKGROUND_H_
 #define BROWSER_CORE_TAB_BACKGROUND_H_
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 
@@ -15,10 +17,16 @@ class TabBackground {
  public:
   // How long a page's background must have stayed as it is before the UI hears of a change that
   // came while it was changing. A page that animates its background reports a colour per frame it
-  // draws; the UI gets the first and, this long after the last, the one it settled on, so the
-  // sidebar is drawn twice for a fade and not once per frame. Longer than any gap between an
+  // draws; the UI gets the first and, once it has been still this long, the one it settled on, so
+  // the sidebar is drawn twice for a fade and not once per frame. Longer than any gap between an
   // animation's frames, and short enough that the line follows a page's change of theme with it.
   static constexpr base::TimeDelta kSettle = base::Milliseconds(250);
+  // The waits of one run of changes, each asked for when the one before ended with the colour
+  // still changing; the last goes on for as long as the run does. They grow so a page that never
+  // stops fading wakes the UI thread once in two seconds and not four times a second, while a
+  // change of theme is still looked at a settle time after it began.
+  static constexpr std::array<base::TimeDelta, 4> kWaits = {
+      kSettle, base::Milliseconds(500), base::Seconds(1), base::Seconds(2)};
 
   // What the tab does next.
   struct Step {
@@ -34,7 +42,8 @@ class TabBackground {
   // that died, or a page of the system's engine. For that long the colour kept is none, a change
   // as any other, and the page's own is held for when the pane shows the page again.
   Step Covered(bool covered, bool shown, base::TimeTicks now);
-  // The wait a step asked for is over. One for a tab no window shows any more ends there, told
+  // The wait a step asked for is over: the colour is told if it has been still a settle time, or
+  // the next of kWaits is asked for. One for a tab no window shows any more ends there, told
   // nothing: the next window to show it reads color().
   Step Settled(bool shown, base::TimeTicks now);
   // The tab went to another page: a change still waiting is told now, as the new page's colour,
@@ -57,6 +66,8 @@ class TabBackground {
   // When the colour last changed.
   base::TimeTicks changed_at_;
   bool waiting_ = false;
+  // Which of kWaits is under way. 0 whenever none is, so each run of changes starts short.
+  size_t wait_ = 0;
 };
 
 }  // namespace browser_core

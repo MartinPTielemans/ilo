@@ -39,6 +39,15 @@ struct FakeTab {
       EXPECT_FALSE(due);
       due = now + *step.wait;
       ++waits;
+      waited.push_back(*step.wait);
+    }
+  }
+
+  // The page's background changes each frame for this long: a fade.
+  void Fade(base::TimeDelta time) {
+    for (base::TimeDelta at; at < time; at += kFrame) {
+      Change(0xff000000 | (++faded & 0xffffff));
+      Pass(kFrame);
     }
   }
 
@@ -47,6 +56,9 @@ struct FakeTab {
   base::TimeTicks now = base::TimeTicks() + base::Seconds(100);
   std::optional<base::TimeTicks> due;
   int waits = 0;
+  // How long each wait asked for was, in order.
+  std::vector<base::TimeDelta> waited;
+  uint32_t faded = 0;
   std::vector<std::optional<uint32_t>> told;
 };
 
@@ -111,9 +123,12 @@ TEST(TabBackgroundTest, ABurstTellsTheFirstAndTheSettledColour) {
   ASSERT_EQ(tab.told.size(), 1u);
   EXPECT_EQ(tab.told[0], 0u);
   EXPECT_TRUE(tab.background.waiting());
-  tab.Pass(TabBackground::kSettle);
+  // The first wait ended mid-fade, so the settled colour comes when the second does.
+  tab.Pass(TabBackground::kWaits[1]);
   ASSERT_EQ(tab.told.size(), 2u);
   EXPECT_EQ(tab.told[1], 29u);
+  EXPECT_EQ(tab.waited, (std::vector<base::TimeDelta>{TabBackground::kWaits[0],
+                                                       TabBackground::kWaits[1]}));
   // Nothing is left armed once the changes stop.
   EXPECT_FALSE(tab.background.waiting());
   EXPECT_FALSE(tab.due);
@@ -121,18 +136,67 @@ TEST(TabBackgroundTest, ABurstTellsTheFirstAndTheSettledColour) {
   EXPECT_EQ(tab.told.size(), 2u);
 }
 
-// A page that never stops changing: the first colour and nothing more, on one wait at a time.
-TEST(TabBackgroundTest, AnEndlessRunTellsOnce) {
+// A page that never stops changing: the first colour and nothing more, on one wait at a time, each
+// longer than the one before until the longest, which goes on.
+TEST(TabBackgroundTest, AnEndlessChangeWaitsLongerEachTimeAndTellsOnce) {
   FakeTab tab;
-  // Two seconds of frames.
-  for (int frame = 0; frame < 125; ++frame) {
-    tab.Change(0xff000000 | frame);
-    tab.Pass(kFrame);
-  }
+  tab.Fade(base::Seconds(10));
   EXPECT_EQ(tab.told.size(), 1u);
-  // The wait went on once per settle time, not once per change: 8 or 9 timer tasks, not 125.
-  EXPECT_GE(tab.waits, 8);
-  EXPECT_LE(tab.waits, 9);
+  // Ten seconds of frames: 8 waits asked for, one in two seconds from the fourth on, not 40 and
+  // not 625.
+  EXPECT_EQ(tab.waited,
+            (std::vector<base::TimeDelta>{base::Milliseconds(250), base::Milliseconds(500),
+                                          base::Seconds(1), base::Seconds(2), base::Seconds(2),
+                                          base::Seconds(2), base::Seconds(2), base::Seconds(2)}));
+  EXPECT_TRUE(tab.background.waiting());
+}
+
+// Once a run of changes has settled and been told, the next run's waits start short again.
+TEST(TabBackgroundTest, TheWaitsStartShortAgainOnceTheColourSettles) {
+  FakeTab tab;
+  // Long enough that the wait under way is the longest.
+  tab.Fade(base::Seconds(4));
+  ASSERT_EQ(tab.waited.back(), TabBackground::kWaits.back());
+  ASSERT_EQ(tab.told.size(), 1u);
+  tab.Pass(TabBackground::kWaits.back());
+  ASSERT_EQ(tab.told.size(), 2u);
+  EXPECT_FALSE(tab.background.waiting());
+  EXPECT_FALSE(tab.due);
+  tab.waited.clear();
+  tab.Fade(base::Milliseconds(100));
+  ASSERT_EQ(tab.waited.size(), 1u);
+  EXPECT_EQ(tab.waited[0], TabBackground::kSettle);
+}
+
+// One change on the heels of another, as a page that sets its theme in two steps: the second is
+// told a settle time after it, on the first wait alone.
+TEST(TabBackgroundTest, ASecondChangeIsToldASettleTimeAfterIt) {
+  FakeTab tab;
+  tab.Change(kWhite);
+  tab.Pass(kFrame);
+  tab.Change(kInk);
+  ASSERT_EQ(tab.told.size(), 1u);
+  tab.Pass(TabBackground::kSettle - base::Milliseconds(1));
+  EXPECT_EQ(tab.told.size(), 1u);
+  tab.Pass(base::Milliseconds(1));
+  ASSERT_EQ(tab.told.size(), 2u);
+  EXPECT_EQ(tab.told[1], 0x16140fu);
+  EXPECT_EQ(tab.waited, (std::vector<base::TimeDelta>{TabBackground::kSettle}));
+  EXPECT_FALSE(tab.due);
+}
+
+// A page whose colour is still, or changes now and then, asks for no wait at all.
+TEST(TabBackgroundTest, AStillPageAsksForNoWait) {
+  FakeTab tab;
+  tab.Change(kWhite);
+  tab.Pass(base::Seconds(10));
+  tab.Change(kInk);
+  tab.Pass(base::Seconds(10));
+  tab.Change(kWhite);
+  EXPECT_EQ(tab.told.size(), 3u);
+  EXPECT_EQ(tab.waits, 0);
+  EXPECT_FALSE(tab.background.waiting());
+  EXPECT_FALSE(tab.due);
 }
 
 // A change long after the last is told at once again.
@@ -163,6 +227,22 @@ TEST(TabBackgroundTest, AWaitEndsOnceTheTabIsntShown) {
   EXPECT_EQ(tab.background.color(), 0xffffffu);
 }
 
+// Hidden while the longest wait is under way: shown again, its next run of changes starts with
+// the short one.
+TEST(TabBackgroundTest, TheWaitsStartShortAgainAfterTheTabWasHidden) {
+  FakeTab tab;
+  tab.Fade(base::Seconds(4));
+  ASSERT_EQ(tab.waited.back(), TabBackground::kWaits.back());
+  tab.shown = false;
+  tab.Pass(TabBackground::kWaits.back());
+  ASSERT_FALSE(tab.background.waiting());
+  tab.shown = true;
+  tab.waited.clear();
+  tab.Fade(base::Milliseconds(100));
+  ASSERT_EQ(tab.waited.size(), 1u);
+  EXPECT_EQ(tab.waited[0], TabBackground::kSettle);
+}
+
 // The tab goes to another page mid-fade: the colour waiting is told then, since a new page of the
 // same colour reports no change.
 TEST(TabBackgroundTest, LeavingThePageTellsAWaitingChange) {
@@ -178,6 +258,23 @@ TEST(TabBackgroundTest, LeavingThePageTellsAWaitingChange) {
   EXPECT_EQ(tab.background.color(), 0x16140fu);
   // With nothing waiting, leaving tells nothing: the new page keeps the colour until its own.
   EXPECT_FALSE(tab.background.LeftPage(/*shown=*/true).tell);
+}
+
+// Left while the longest wait is under way: the new page's first run of changes starts with the
+// short one.
+TEST(TabBackgroundTest, TheWaitsStartShortAgainAfterThePageIsLeft) {
+  FakeTab tab;
+  tab.Fade(base::Seconds(4));
+  ASSERT_EQ(tab.waited.back(), TabBackground::kWaits.back());
+  // The tab stops its timer as it leaves the page.
+  tab.due.reset();
+  tab.Apply(tab.background.LeftPage(/*shown=*/true));
+  ASSERT_FALSE(tab.background.waiting());
+  tab.waited.clear();
+  tab.Pass(base::Seconds(1));
+  tab.Fade(base::Milliseconds(100));
+  ASSERT_EQ(tab.waited.size(), 1u);
+  EXPECT_EQ(tab.waited[0], TabBackground::kSettle);
 }
 
 // A page that died: the pane shows the core's card, so the colour is none until the page is back,
