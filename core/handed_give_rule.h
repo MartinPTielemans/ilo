@@ -32,6 +32,9 @@ struct Tab {
   // One of its page's dialogs is up, such as an alert or the question whether to leave it: none is
   // drawn over an agent's pages.
   bool dialog = false;
+  // The profile has a saved login for a sign-in form on its page, which Chrome may have filled in
+  // as it loaded: an agent would sign in with it by pressing the form's button.
+  bool saved_login = false;
 };
 
 // Whether |tab| is given. Each of them alone refuses it.

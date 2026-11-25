@@ -81,5 +81,12 @@ TEST(HandedGiveRuleTest, ATabWithAPagesDialogUpIsRefused) {
   EXPECT_FALSE(MayGive(tab));
 }
 
+// Filled in already or not: the form's button would sign the agent in.
+TEST(HandedGiveRuleTest, ATabWhoseSignInFormHasASavedLoginIsRefused) {
+  Tab tab = Fit();
+  tab.saved_login = true;
+  EXPECT_FALSE(MayGive(tab));
+}
+
 }  // namespace
 }  // namespace browser_core::handed_give_rule

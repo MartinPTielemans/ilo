@@ -26,6 +26,11 @@ bool RefuseAgentPasskey(content::WebContents* contents, bool asks);
 // its main frame's sign-in form now, as its load would have, without reloading it.
 void FillForUser(bc_id tab);
 
+// Whether the profile has a saved login that fits a sign-in form on |contents|' page, in any of
+// its frames, filled in or only offered, or Chrome is still looking one up: what the password
+// manager has for the page, with nothing asked of the page. For the give (handed_give_rule.h).
+bool SavedLoginFits(content::WebContents* contents);
+
 }  // namespace browser_core
 
 #endif  // BROWSER_CORE_AGENT_AUTOFILL_H_

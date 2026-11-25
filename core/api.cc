@@ -731,6 +731,7 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
           .screen = captures.screen,
           .permission_asked = browser_core::PermissionQuestion::Pending(contents),
           .dialog = browser_core::PageDialog::Up(tab),
+          .saved_login = browser_core::SavedLoginFits(contents),
       })) {
     return false;
   }
