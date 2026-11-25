@@ -6159,6 +6159,10 @@ void host_hide_settings(void) {
 static NSWindow* g_first_run;
 static NSView* g_first_run_view;
 
+void* host_first_run_window(void) {
+  return g_first_run.visible ? (__bridge void*)g_first_run : nullptr;
+}
+
 void host_add_first_run(void* first_run_view) {
   g_first_run_view = (__bridge NSView*)first_run_view;
   g_first_run = g_first_run_view.window;
