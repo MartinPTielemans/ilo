@@ -150,13 +150,14 @@ impl gpui::Render for AccountPage {
         );
         let column = settings_column::column(
             &Default::default(),
-            Section::Sync,
+            Section::SyncImport,
             dark,
             Rc::default(),
             gpui::IntoElement::into_any_element(field),
             None,
             Rc::new(|_, _, _| {}),
             Rc::new(|_, _| {}),
+            settings_column::Version::of(cx),
             window.is_a11y_active(),
         );
         let base = if dark { rgb(PAPER) } else { rgb(INK) };
@@ -166,7 +167,7 @@ impl gpui::Render for AccountPage {
             heading: look.heading,
         };
         let card = self.card.draw(
-            Section::Sync.name(),
+            Section::SyncImport.name(),
             div().child(self.account.clone()),
             dark,
             colors,

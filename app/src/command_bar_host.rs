@@ -187,7 +187,7 @@ impl command_bar::Host for Bar {
     fn task_agents(&self, cx: &App) -> Option<command_bar::TaskAgents> {
         let agents = browser::agents::global(cx)?;
         let agents = agents.read(cx);
-        if !agents.tasks_on() {
+        if !agents.threads() {
             return None;
         }
         let listed = (agents.ask_agents().into_iter()).map(|agent| command_bar::TaskAgent {
@@ -202,9 +202,13 @@ impl command_bar::Host for Bar {
             models: agents.task_models(agent.cli),
             resets: agent.resets,
         });
+        let signed_out = (agents.signed_out_agents().into_iter())
+            .map(|cli| (cli.id().into(), cli.name().into()))
+            .collect();
         Some(command_bar::TaskAgents {
             agents: listed.collect(),
             known: agents.task_agents_known(),
+            signed_out,
         })
     }
 
@@ -279,16 +283,13 @@ impl command_bar::Host for Bar {
         agent: &str,
         asked: &str,
         page: Option<(SharedString, SharedString)>,
+        tier: browser::agents::tier::Tier,
+        model: Option<String>,
         cx: &mut App,
     ) {
         let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
             return;
         };
-        let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
-        let home = shell
-            .and_then(|shell| shell.upgrade())
-            .map_or(0, |shell| shell.read(cx).space());
-        let asked = asked.to_string();
         let page = page.map(|(url, title)| browser::agents::task::AskedOn { url, title });
         // The bar folds into the slot at the foot that its task's card takes, where the window
         // shows one; elsewhere it hides, and the card fades in.
@@ -324,27 +325,51 @@ impl command_bar::Host for Bar {
         update_window_in(window, cx, |shell, cx| {
             shell.command_bar_dismissed(cx);
             shell.fold_started(folded, cx);
+            shell.bar_starting();
         });
-        agents_core::update(move |agents, cx| {
-            // The card takes the slot as it comes; one that didn't start leaves it empty.
-            if agents
-                .start_task(
-                    cli,
-                    &asked,
-                    page,
-                    home,
-                    browser::agents::tier::Tier::default(),
-                    cx,
-                )
-                .is_none()
-            {
-                update_shells_in(cx, |shell, cx| shell.set_ask_slot(false, cx));
-            }
-        });
+        start_thread(cli, asked, page, tier, model, window, cx);
+    }
+
+    fn run_task_at_rest(
+        &self,
+        agent: &str,
+        asked: &str,
+        tier: browser::agents::tier::Tier,
+        model: Option<String>,
+        cx: &mut App,
+    ) {
+        let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
+            return;
+        };
+        let window = front().0;
+        update_window_in(window, cx, |shell, _| shell.bar_starting());
+        start_thread(cli, asked, None, tier, model, window, cx);
     }
 
     fn set_up_agents(&self, cx: &mut App) {
         settings::show_agents(cx);
+    }
+
+    fn composer_last(
+        &self,
+        cx: &App,
+    ) -> (browser::agents::tier::Tier, Option<(SharedString, String)>) {
+        let space = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
+        let space =
+            (space.and_then(|shell| shell.upgrade())).map_or(0, |shell| shell.read(cx).space());
+        let Some(agents) = browser::agents::global(cx) else {
+            return Default::default();
+        };
+        let last = agents.read(cx).composer_last(space);
+        let model = last.model.map(|(cli, model)| (cli.id().into(), model));
+        (last.tier, model)
+    }
+
+    fn sign_in(&self, agent: &str, _: &mut App) {
+        let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
+            return;
+        };
+        agents_core::update(move |agents, cx| agents.sign_in(cli, cx));
     }
 
     fn tooltip(&self, tip: Option<(tooltip::Tip, tooltip::Anchor)>, cx: &mut App) {
@@ -356,6 +381,48 @@ impl command_bar::Host for Bar {
             None => tooltip::dismiss(cx),
         }
     }
+}
+
+/// Starts the composer's thread, `asked` on `cli` with `page`, from the Space shown in the front
+/// window, at `tier` on `model`, which the profile remembers as the composer's last once it starts.
+/// Its conversation then takes the place of what `window` shows: ⌘T's slot, or a resting bar's
+/// empty page.
+fn start_thread(
+    cli: browser::agents::runner::Cli,
+    asked: &str,
+    page: Option<browser::agents::task::AskedOn>,
+    tier: browser::agents::tier::Tier,
+    model: Option<String>,
+    window: bc::bc_id,
+    cx: &mut App,
+) {
+    let shell = WINDOWS.with_borrow(|windows| windows.first().map(|w| w.shell.clone()));
+    let home = shell
+        .and_then(|shell| shell.upgrade())
+        .map_or(0, |shell| shell.read(cx).space());
+    let asked = asked.to_string();
+    agents_core::update(move |agents, cx| {
+        let start = browser::agents::task::Start {
+            tier,
+            model: model.clone(),
+            pages: Vec::new(),
+            only_added: false,
+            // The bar's composer has no `+` yet: a path reaches a task only from the panel.
+            files: Default::default(),
+        };
+        let started = agents.start_task(cli, &asked, page, home, start, cx);
+        if started.is_some() {
+            agents.remember_composer(home, tier, model.map(|model| (cli, model)));
+        }
+        // Its conversation takes the page's place as its card comes, which takes the slot; one
+        // that didn't start leaves the slot empty and the page as it was.
+        update_window_in(window, cx, |shell, _| {
+            shell.composed_started(started.clone().map(Into::into))
+        });
+        if started.is_none() {
+            update_shells_in(cx, |shell, cx| shell.set_ask_slot(false, cx));
+        }
+    });
 }
 
 /// `color` as the host takes a colour, 0xRRGGBBAA.

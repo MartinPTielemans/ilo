@@ -3,7 +3,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     rc::Rc,
     sync::Arc,
     time::Duration,
@@ -53,9 +53,14 @@ impl Core {
 }
 
 #[derive(Default)]
-pub(super) struct Recorder {
+pub(crate) struct Recorder {
     /// The core this window shares with the others a test makes with `Recorder::beside`.
     pub(super) core: Rc<Core>,
+    /// The tabs whose picture the agents' rules let a kept card keep, as `keeps_picture` answers.
+    pub(super) keeps: RefCell<HashSet<u64>>,
+    /// What the window told each kept card of a picture its conversation took: the task, the
+    /// page and whether the card may keep it.
+    pub(super) card_pictures: RefCell<Vec<(SharedString, u64, bool)>>,
     /// This window's Clears, by id, the last ten.
     cleared: RefCell<Vec<u64>>,
     calls: RefCell<Vec<String>>,
@@ -63,6 +68,10 @@ pub(super) struct Recorder {
     pub(super) resting: Rc<RefCell<Vec<String>>>,
     /// The in-place bar's profile is new: it has learned no agent till this goes false.
     pub(super) unlearned: Rc<std::cell::Cell<bool>>,
+    /// Whether the resting bars are over a private window, as the host reads it of the front one.
+    pub(super) private_bar: Rc<std::cell::Cell<bool>>,
+    /// Whether it can wall a task in with its files, as `files_available` answers.
+    pub(super) files: std::cell::Cell<bool>,
     /// How many detents the trackpad was asked for.
     pub(super) detents: Cell<usize>,
     /// How many tabs and folders it was asked to move.
@@ -79,6 +88,10 @@ pub(super) struct Recorder {
     pub(super) search_engines: RefCell<(Vec<(SharedString, SharedString)>, SharedString)>,
     /// Where the pointer is in the window, as `pointer` answers.
     pub(super) pointer: Cell<Option<Point<Pixels>>>,
+    /// What the broom shows, as `broom` answers: not drawn unless a test says.
+    pub(super) broom: Cell<Option<super::Broom>>,
+    /// The folders `make_today_folders` makes, numbered from this, or none if it's 0.
+    pub(super) today_folders_from: Cell<u64>,
     /// The window over the page draws opaque, as `over_page_blends` answers.
     pub(super) over_page_opaque: Cell<bool>,
     /// This launch is a safe start, and Settings blocks ads, as `safe_start` and `ad_blocking`
@@ -107,8 +120,14 @@ pub(super) struct Recorder {
     pub(super) no_stay_on_top: Cell<bool>,
     /// The opt-ins' switches, as `crash_reports` and `agents` answer, None for one not offered.
     pub(super) crash_reports: Cell<Option<bool>>,
-    pub(super) agents: Cell<Option<bool>>,
+    pub(super) threads: Cell<Option<bool>>,
+    pub(super) other_apps: Cell<Option<bool>>,
     pub(super) daily_count: Cell<Option<bool>>,
+    /// Settings' switches first run shows too, as `setting` answers: only those a test offers.
+    pub(super) settings: RefCell<HashMap<super::Setting, bool>>,
+    /// How long a Today tab waits before the archive, as `archive_after` answers, Settings' times
+    /// offered with it; None until a test gives one.
+    pub(super) archive_after: Cell<Option<f64>>,
     /// The user turned off ⌥ bringing the hidden sidebar out.
     pub(super) option_off: Cell<bool>,
     /// The user turned link previews off.
@@ -198,6 +217,8 @@ pub(super) struct Recorder {
     pub(super) searched_tabs: RefCell<Vec<Vec<u64>>>,
     /// The command bar shows, until a test plays the app's report that it was dismissed.
     pub(super) bar_open: Cell<bool>,
+    /// The tab the core shows already, before the shell hears of it, as a test sets it.
+    pub(super) shown_now: Cell<u64>,
     /// The find bar has the keyboard, as a test sets it.
     pub(super) find_typing: Cell<bool>,
     /// Whether the page has the keyboard, as a core that keeps it says, or None to leave it to the
@@ -293,16 +314,13 @@ pub(super) struct Recorder {
     pub(super) pictures: RefCell<Option<(WeakEntity<super::Shell>, super::PagePicture)>>,
     /// The answers to page dialogs it was given, with what was typed.
     pub(super) replies: RefCell<Vec<PageReply>>,
-    /// What it says every agent's Space's menu lists.
-    /// What the Library button's hover leaves out, none at first, as the core's default.
-    hover_kinds_off: Cell<u32>,
     /// The account's core, as the first launch's account step asks it, in a build that names a
     /// sync server, which a test says; one that names none at first.
     pub(super) account: Rc<Account>,
     pub(super) sync_server: Cell<bool>,
     /// The videos opened that haven't given their first frame yet.
     videos_starting: RefCell<Vec<u64>>,
-    /// The Shell that set_agents and show_share_sheet read, as the core's do: turning agents off
+    /// The Shell that set_threads and show_share_sheet read, as the core's do: turning agents off
     /// ends their ask, which reads every Shell, and the share sheet finds its tab's window.
     reads: RefCell<Option<WeakEntity<super::Shell>>>,
 }
@@ -762,6 +780,37 @@ impl Browser for Recorder {
         !self.previews_off.get()
     }
 
+    fn broom(&self) -> Option<super::Broom> {
+        self.broom.get()
+    }
+
+    fn start_broom(&self, _: &mut App) {
+        self.record("start broom".into())
+    }
+
+    fn make_today_folders(
+        &self,
+        space: u64,
+        new: &[(String, Vec<u64>)],
+        joins: &[(u64, Vec<u64>)],
+        _: &mut App,
+    ) -> Option<Vec<u64>> {
+        let from = self.today_folders_from.get();
+        for (name, tabs) in new {
+            self.edit(format!("today folder {name} in {space} of {tabs:?}"));
+        }
+        for (folder, tabs) in joins {
+            self.edit(format!("join {tabs:?} to today folder {folder}"));
+        }
+        (from != 0).then(|| (from..).take(new.len()).collect())
+    }
+
+    fn unsort_today(&self, space: u64, made: &[u64], joined: &[u64], rows: &[u64], _: &mut App) {
+        self.edit(format!(
+            "unsort {space} made {made:?} joined {joined:?} rows {rows:?}"
+        ));
+    }
+
     fn link_cards(&self) -> bool {
         !self.link_cards_off.get()
     }
@@ -904,15 +953,6 @@ impl Browser for Recorder {
 
     fn list_captures(&self, _: &mut App) {
         self.record("list captures".into())
-    }
-
-    fn hover_kinds(&self, _: &mut App) -> u32 {
-        super::recent_downloads::HOVER_ALL & !self.hover_kinds_off.get()
-    }
-
-    fn set_hover_kinds(&self, kinds: u32, _: &mut App) {
-        self.hover_kinds_off
-            .set(super::recent_downloads::HOVER_ALL & !kinds);
     }
 
     fn trash(&self, path: &str, _: &mut App) -> bool {
@@ -1582,10 +1622,6 @@ impl Browser for Recorder {
         self.record(format!("sidebar right {right}"))
     }
 
-    fn set_window_buttons_right(&self, right: bool, _: &mut App) {
-        self.record(format!("window buttons right {right}"))
-    }
-
     fn little_drawn(&self, _: &mut App) {
         self.record("little drawn".into());
     }
@@ -1857,6 +1893,10 @@ impl Browser for Recorder {
         self.bar_open.get()
     }
 
+    fn shown_now(&self) -> u64 {
+        self.shown_now.get()
+    }
+
     fn command_bar_in_place(
         &self,
         window: &mut gpui::Window,
@@ -1866,34 +1906,13 @@ impl Browser for Recorder {
         let host = resting_bar::RestingBar {
             asked: self.resting.clone(),
             unlearned: self.unlearned.clone(),
+            private: self.private_bar.clone(),
         };
         crate::command_bar::in_place(Rc::new(host), window, cx)
     }
 
-    fn start_task(
-        &self,
-        agent: &str,
-        asked: &str,
-        home: u64,
-        start: crate::agents::task::Start,
-        _: &mut App,
-    ) {
-        // The model only when the user picked one: "on " and its id, empty for the default. The
-        // pages only when the user added some: their addresses, and "only them" for Only the
-        // sites you add.
-        let model = (start.model.as_ref()).map_or(String::new(), |id| format!(" on {id:?}"));
-        let pages = match (start.pages.is_empty(), start.only_added) {
-            (true, _) => String::new(),
-            (false, only) => format!(
-                " with {:?}{}",
-                start.pages,
-                if only { " only them" } else { "" }
-            ),
-        };
-        self.record(format!(
-            "start task {agent} {asked} from {home} at {}{model}{pages}",
-            start.tier.label()
-        ));
+    fn files_available(&self, _: &App) -> bool {
+        self.files.get()
     }
 
     fn field_window_typing(&self, _: &mut App) -> bool {
@@ -2085,6 +2104,20 @@ impl Browser for Recorder {
         self.record(format!("ask again {asked}"));
     }
 
+    fn keeps_picture(&self, tab: u64, _: &App) -> bool {
+        self.keeps.borrow().contains(&tab)
+    }
+
+    fn card_pictured(
+        &self,
+        agent: SharedString,
+        tab: u64,
+        picture: Option<Arc<RenderImage>>,
+        _: &mut App,
+    ) {
+        (self.card_pictures.borrow_mut()).push((agent, tab, picture.is_some()));
+    }
+
     fn task_picture(&self, tab: u64, _: u64, _: &mut App) {
         self.record(format!("task picture {tab}"));
     }
@@ -2102,8 +2135,17 @@ impl Browser for Recorder {
         self.record("new window".into())
     }
 
-    fn welcome_window(&self, _: &mut App) {
-        self.record("welcome window".into())
+    fn show_first_run(&self, _: gpui::AnyWindowHandle, _: &mut App) {
+        self.record("first run shown".into())
+    }
+
+    fn end_first_run(&self, _: gpui::AnyWindowHandle, _: &mut App) {
+        self.record("first run ended".into())
+    }
+
+    // A test's window has no host to show it, so it opens shown and the flow takes its keyboard.
+    fn shows_first_run_at_open(&self) -> bool {
+        true
     }
 
     fn is_default_browser(&self) -> bool {
@@ -2135,14 +2177,27 @@ impl Browser for Recorder {
         self.record(format!("crash reports {on}"))
     }
 
-    fn agents(&self, _: &App) -> Option<bool> {
-        self.agents.get()
+    fn threads(&self, _: &App) -> Option<bool> {
+        self.threads.get()
     }
 
-    fn set_agents(&self, on: bool, cx: &mut App) {
+    fn set_threads(&self, on: bool, cx: &mut App) {
         self.read_shell(cx);
-        self.agents.set(Some(on));
-        self.record(format!("agents {on}"))
+        self.threads.set(Some(on));
+        self.record(format!("threads {on}"));
+        // As the engine's host passes it on, so a stand-in's Agents runs what the switch lets.
+        if let Some(agents) = crate::agents::global(cx) {
+            agents.update(cx, |agents, cx| agents.set_threads(on, cx));
+        }
+    }
+
+    fn other_apps(&self, _: &App) -> Option<bool> {
+        self.other_apps.get()
+    }
+
+    fn set_other_apps(&self, on: bool, _: &mut App) {
+        self.other_apps.set(Some(on));
+        self.record(format!("other apps {on}"))
     }
 
     fn daily_count(&self, _: &App) -> Option<bool> {
@@ -2152,6 +2207,26 @@ impl Browser for Recorder {
     fn set_daily_count(&self, on: bool, _: &mut App) {
         self.daily_count.set(Some(on));
         self.record(format!("daily count {on}"))
+    }
+
+    fn setting(&self, _: u64, setting: super::Setting, _: &App) -> Option<bool> {
+        self.settings.borrow().get(&setting).copied()
+    }
+
+    fn set_setting(&self, space: u64, setting: super::Setting, on: bool, _: &mut App) {
+        self.settings.borrow_mut().insert(setting, on);
+        self.record(format!("setting {space} {setting:?} {on}"))
+    }
+
+    fn archive_after(&self, _: u64) -> Option<(f64, Vec<f64>)> {
+        let (hour, day) = (3600., 24. * 3600.);
+        let offered = vec![12. * hour, day, 7. * day, 30. * day, -1.];
+        Some((self.archive_after.get()?, offered))
+    }
+
+    fn set_archive_after(&self, space: u64, seconds: f64, _: &mut App) {
+        self.archive_after.set(Some(seconds));
+        self.record(format!("archive after {space} {seconds}"))
     }
 
     fn close_window(&self, _: &mut App) {

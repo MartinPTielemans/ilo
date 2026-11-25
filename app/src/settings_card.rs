@@ -7,17 +7,11 @@ use std::rc::Rc;
 
 use gpui::{
     Bounds, BoxShadow, FocusHandle, FontWeight, Pixels, Rgba, ScrollHandle, SharedString,
-    WeakFocusHandle, canvas, div, linear_color_stop, linear_gradient, point, prelude::*, px, rgb,
-    rgba,
+    WeakFocusHandle, canvas, div, linear_color_stop, linear_gradient, point, prelude::*, px, rgba,
 };
 
-use crate::palette::OVERLAY_DARK;
-use crate::tokens::palette::DIALOG_LIGHT;
-use crate::tokens::settings::{
-    CARD_RIM, CARD_RING, CARD_SHADOW, CARD_SHADOW_BLUR, CARD_SHADOW_Y, FADE, HELD_TITLE,
-    PAGE_BOTTOM, PAGE_TOP, PAGE_X, TEXT_X,
-};
-use crate::tokens::shell::CARD_INSET;
+use crate::tokens::settings::form;
+use crate::tokens::settings::{FADE, HELD_TITLE, PAGE_BOTTOM, PAGE_TOP, PAGE_X, TEXT_X};
 
 #[cfg(test)]
 mod tests;
@@ -256,7 +250,7 @@ impl Card {
         })
     }
 
-    /// The card around `page`, light or dark.
+    /// The page's plane around `page`, light or dark.
     pub fn draw(
         &self,
         section: &str,
@@ -284,11 +278,16 @@ impl Card {
         }
         // Drawn again below, in the page's order.
         self.headings.borrow_mut().clear();
-        let fill = if dark {
-            rgb(OVERLAY_DARK)
+        let fill = rgba(if dark {
+            form::OWN_PAGE
         } else {
-            rgb(DIALOG_LIGHT)
-        };
+            form::LIGHT_OWN_PAGE
+        });
+        let line = rgba(if dark {
+            form::PAGE_LINE
+        } else {
+            form::LIGHT_PAGE_LINE
+        });
         let (offset, max) = (self.scroll.offset().y, self.scroll.max_offset().y);
         // What this frame shows of the scroll, from the page's last layout: a page whose layout
         // changes under it, as a resize does, is held to its new one only after, and is drawn
@@ -363,10 +362,14 @@ impl Card {
                 // Under the held title and over the fade, in the window's points, where a press
                 // on a control lands: one drawn past them is under the card's edge, or behind
                 // them. check.sh reads this line, to scroll a control into sight first (#1950).
+                // Each only while it's drawn: at the top nothing is held, and the search's first
+                // found name stands where a held title would.
                 let card = f32::from(bounds.origin.y);
+                let (held, more) = shows;
                 let sight = (
-                    (card + HELD_TITLE).round() as i32,
-                    (card + f32::from(bounds.size.height) - FADE).round() as i32,
+                    (card + if held { HELD_TITLE } else { 0. }).round() as i32,
+                    (card + f32::from(bounds.size.height) - if more { FADE } else { 0. }).round()
+                        as i32,
                 );
                 if sight_logged.replace(Some(sight)) != Some(sight) {
                     crate::log!("browser: settings card shows {} to {}", sight.0, sight.1);
@@ -375,28 +378,24 @@ impl Card {
         )
         .absolute()
         .inset_0();
+        // The page's own plane, 8 in from the window's top, right and bottom, its inner line drawn
+        // over its edge (spec-settings.md › The window).
         div()
             .flex_1()
             .min_w_0()
-            .mt(px(CARD_INSET))
-            .mr(px(CARD_INSET))
-            .mb(px(CARD_INSET))
+            .mt(px(form::PANEL_MARGIN))
+            .mr(px(form::PANEL_MARGIN))
+            .mb(px(form::PANEL_MARGIN))
             .relative()
-            // A window of its own, whose corner it follows as the browser window's card does.
-            .rounded(px(crate::shell::card_radius(crate::shell::window_radius())))
+            .rounded(px(form::PANEL_RADIUS))
             .bg(fill)
-            .when(dark, |card| card.border_1().border_color(rgba(CARD_RIM)))
-            .when(!dark, |card| {
-                card.border_1()
-                    .border_color(rgba(CARD_RING))
-                    .shadow(vec![BoxShadow {
-                        color: rgba(CARD_SHADOW).into(),
-                        offset: point(px(0.), px(CARD_SHADOW_Y)),
-                        blur_radius: px(CARD_SHADOW_BLUR),
-                        spread_radius: px(0.),
-                        inset: false,
-                    }])
-            })
+            .shadow(vec![BoxShadow {
+                color: line.into(),
+                offset: point(px(0.), px(0.)),
+                blur_radius: px(0.),
+                spread_radius: px(form::PAGE_LINE_WIDTH),
+                inset: true,
+            }])
             .overflow_hidden()
             .child(at)
             .child(self.follow.before())

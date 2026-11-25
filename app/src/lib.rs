@@ -13,8 +13,62 @@ macro_rules! log {
     ($($arg:tt)*) => {{
         if $crate::checked() {
             $crate::log_always!($($arg)*);
+        } else {
+            $crate::log_heard!($($arg)*);
         }
     }};
+}
+
+/// `log!`'s line for a unit test that listens (`heard`), in test builds only: elsewhere it is
+/// nothing, so an unchecked launch still never formats a line. The line is made in the caller's own
+/// body, not in a closure, so an argument may still return early with `?`, as it may in `log!`.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! log_heard {
+    ($($arg:tt)*) => {{
+        #[cfg(test)]
+        {
+            if $crate::heard::on() {
+                $crate::heard::line(format!($($arg)*));
+            }
+        }
+    }};
+}
+
+/// The lines `log!` would write, kept while a unit test listens on its thread, as the tests run
+/// unchecked and write none: a test reads them for what a line must never name. Outside the tests
+/// `log!` never asks.
+#[doc(hidden)]
+pub mod heard {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static LINES: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+    }
+
+    /// Whether a test listens on this thread.
+    pub fn on() -> bool {
+        LINES.with(|lines| lines.borrow().is_some())
+    }
+
+    /// Keeps `line`, which `log_heard!` makes only while a test listens.
+    pub fn line(line: String) {
+        LINES.with(|lines| {
+            if let Some(lines) = lines.borrow_mut().as_mut() {
+                lines.push(line);
+            }
+        });
+    }
+
+    /// Keeps this thread's lines from now.
+    pub fn listen() {
+        LINES.with(|lines| *lines.borrow_mut() = Some(Vec::new()));
+    }
+
+    /// The lines kept since `listen`, and stops keeping them.
+    pub fn take() -> Vec<String> {
+        LINES.with(|lines| lines.borrow_mut().take().unwrap_or_default())
+    }
 }
 
 /// Writes a line to stderr in every launch, as `eprintln!` does, but in one write where `eprintln!`
@@ -164,6 +218,7 @@ pub mod boards;
 pub mod boost_editor;
 pub mod boost_style;
 pub mod boosts;
+pub mod broom;
 pub mod build_info;
 pub mod capture;
 pub mod child;
@@ -174,7 +229,6 @@ pub mod daily_count;
 pub mod default_browser;
 pub mod dialog;
 pub mod dismissal;
-pub mod dock_dot;
 pub mod elevation;
 pub mod face;
 pub mod find_status;
@@ -182,6 +236,7 @@ pub mod find_status;
 pub mod flatpak;
 pub mod folder_preview;
 pub mod foot_bar;
+pub mod glass;
 pub mod glow;
 pub mod hold;
 pub mod hover_card;
@@ -210,6 +265,7 @@ pub mod offer;
 pub mod overlay_life;
 pub mod palette;
 pub mod passwords;
+pub mod product;
 pub mod recent;
 pub mod safe_start;
 pub mod saved_reads;
@@ -224,6 +280,7 @@ pub mod shell;
 pub mod site_controls;
 pub mod sort_by_site;
 pub mod space_icon;
+pub mod space_transparency;
 pub mod tab_switcher;
 pub mod text_input;
 pub mod theme;

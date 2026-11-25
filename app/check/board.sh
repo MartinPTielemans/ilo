@@ -39,8 +39,8 @@ names_said() {
 }
 step=0
 rm -f "$saved" "$launch_frame"
-# An MCP client's token, saved with Settings › Agents on, which the app reads as it starts. The file
-# goes once the server is up, so a run that stops early leaves the next checks' agents off.
+# An MCP client's token, saved with Settings › Threads on, which the app reads as it starts. The
+# file goes once the server is up, so a run that stops early leaves the next checks' agents off.
 serve
 agents_file="$profile_dir/Agents"
 token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')

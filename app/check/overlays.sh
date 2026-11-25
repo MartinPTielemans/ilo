@@ -100,7 +100,7 @@ fi
 logged '^browser: drive: real press' || fail "CI's desktop gave no real input, which the run's events need"
 
 # The tabs: the page pinned, then a folder under it holding a pinned tab, closed, and a login page
-# in Today. The Today row is under the two pinned rows, the divider and "+ New Tab".
+# in Today. The Today row is under the two pinned rows, the gap over Today and "+ New Tab".
 send key d cmd
 expect "^browser: pinned $a\$" "⌘D didn't pin the overlays page"
 send key t cmd
@@ -126,7 +126,7 @@ send insert "${site}login.html"
 send key return
 expect '^browser: title [0-9]* login$' "the login page didn't draw"
 l=$(today | cut -d' ' -f1)
-today_row="100 $((90 + 44 + 41 * 2 + 15 + 41 + 20))"
+today_row="100 $((86 + 42 + 34 * 2 + 6 + 34 + 17))"
 send click $(pinned_row 0)
 expect "^browser: selected $a in " "a click on the pinned overlays page didn't show it again"
 

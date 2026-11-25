@@ -1,7 +1,7 @@
 //! What the launch's picture of the sidebar needs to show in a window a little shorter or taller
 //! than the one it was taken in (crate::launch_picture).
 
-use super::Shell;
+use super::{LIST_TOP, Shell};
 use crate::launch_picture::Taken;
 use crate::tokens::shell::LIST_TRAIL;
 use crate::tokens::shell::TALL_FAVORITES;
@@ -43,15 +43,11 @@ impl Shell {
         };
         let (mut shorter, mut taller) = (room, room);
         // Past TALL_FAVORITES of the window's height, the favorites scroll with the list.
-        let scrolls_from = (self.list_top() - self.list_start()) / TALL_FAVORITES;
+        let scrolls_from = (self.list_top() - LIST_TOP) / TALL_FAVORITES;
         if self.tiles_scroll() {
             taller = taller.min(scrolls_from - viewport);
         } else {
             shorter = shorter.min(viewport - scrolls_from);
-        }
-        // The opened foot is capped at a share of the window's height.
-        if self.foot_cap().is_some() {
-            (shorter, taller) = (0., 0.);
         }
         Taken {
             width,

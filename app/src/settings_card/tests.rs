@@ -3,7 +3,7 @@
 
 use gpui::{
     InputEvent as _, Render, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, Window,
-    size,
+    rgb, size,
 };
 
 use super::Paging as To;
@@ -473,4 +473,95 @@ fn the_paging_keys_move_the_page(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("tab space");
     settle(&view, cx);
     assert_eq!(offset(&view, cx), 0., "Space with a control paged");
+}
+
+/// Search results in a card, as Settings draws them: a found General row, under its section's
+/// name, which `drawn` places where check.sh clicks it.
+struct Found {
+    card: Card,
+    /// Where each found name was last drawn, by what check.sh calls it.
+    names: Rc<std::cell::RefCell<Vec<(String, f32)>>>,
+}
+
+impl Render for Found {
+    fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+        use crate::settings_column::Section;
+        use crate::settings_rows::{Look, frame, text as row_text};
+        use crate::settings_search::{Entry, Show, results};
+        let look = Look::settings(true);
+        let entry = Entry {
+            section: Section::General,
+            group: None,
+            under: Some("Little ilo".into()),
+            name: "Archive windows left unused after".into(),
+            line: None,
+            keys: None,
+        };
+        let row = frame().child(row_text(&look, entry.name.clone(), None));
+        let show: Show = Rc::new(|_, _, _, _| {});
+        self.names.borrow_mut().clear();
+        let names = self.names.clone();
+        let drawn = move |what: String| {
+            let names = names.clone();
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, _, _| {
+                    names
+                        .borrow_mut()
+                        .push((what.clone(), f32::from(bounds.center().y)))
+                },
+            )
+            .absolute()
+            .inset_0()
+        };
+        let page = results(&look, vec![(entry, row)], Vec::new(), show, drawn);
+        let colors = Colors {
+            line: rgb(0x333333),
+            name: rgb(0xffffff),
+            heading: rgb(0x999999),
+        };
+        div()
+            .size_full()
+            .flex()
+            .child(div().w(px(208.)))
+            .child(self.card.draw("Settings", page, true, colors))
+    }
+}
+
+/// What the card says it shows, from its last "settings card shows" line.
+fn sight(lines: &[String]) -> (f32, f32) {
+    let shows = lines
+        .iter()
+        .rev()
+        .find_map(|line| line.strip_prefix("browser: settings card shows "))
+        .expect("the card says what it shows");
+    let (top, bottom) = shows.split_once(" to ").unwrap();
+    (top.parse().unwrap(), bottom.parse().unwrap())
+}
+
+/// A found row's name, the first thing on a search's card, is drawn inside what the card says it
+/// shows, as check.sh clicks it there without scrolling: at its top nothing is held over it.
+#[gpui::test]
+fn a_found_rows_place_lies_inside_what_the_card_shows(cx: &mut TestAppContext) {
+    crate::heard::listen();
+    let (view, cx) = cx.add_window_view(|_, _| Found {
+        card: Card::default(),
+        names: Rc::default(),
+    });
+    cx.simulate_resize(size(px(920.), px(760.)));
+    for _ in 0..2 {
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+    }
+    let (top, bottom) = sight(&crate::heard::take());
+    let names = view.read_with(cx, |view, _| view.names.borrow().clone());
+    let found = "found General Archive windows left unused after";
+    let (_, y) = names
+        .iter()
+        .find(|(what, _)| what == found)
+        .expect("the found name is drawn");
+    assert!(
+        (top..=bottom).contains(&y.round()),
+        "{found} at {y}, the card shows {top} to {bottom}"
+    );
 }

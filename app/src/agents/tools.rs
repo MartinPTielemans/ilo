@@ -5,6 +5,7 @@
 use serde_json::{Value, json};
 
 use super::{TabInfo, page};
+use crate::product::PRODUCT;
 
 /// What `initialize` tells the agent about the browser.
 pub const INSTRUCTIONS: &str = concat!(
@@ -133,6 +134,17 @@ pub fn names(agent: &str) -> Vec<String> {
     (list.as_array().into_iter().flatten())
         .filter_map(|tool| Some(tool.get("name")?.as_str()?.to_string()))
         .collect()
+}
+
+/// Whether `agent` has a tool of this name: one of those tools/list gives it. Each list is made
+/// once and kept for the process's life, which is right only while a list depends on the kind of
+/// agent alone, a task's or an outside agent's. The day one varies by a setting, the kept list
+/// goes, or a tool switched on is refused here and one switched off is run.
+pub fn has(agent: &str, tool: &str) -> bool {
+    static NAMES: [std::sync::OnceLock<Vec<String>>; 2] =
+        [std::sync::OnceLock::new(), std::sync::OnceLock::new()];
+    let names = NAMES[usize::from(super::is_task(agent))].get_or_init(|| names(agent));
+    names.iter().any(|name| name == tool)
 }
 
 /// Pinning and sorting, as the user does in the sidebar: an agent pins its own tabs, unpins or
@@ -725,14 +737,14 @@ fn not_a_tab() -> String {
 /// A step of an agent's work, as a task's trace, its card and the activity log say it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Did {
-    /// The tool, a run's step's action, "back" or "forward", or "thought".
+    /// The tool, a run's step's action, "back" or "forward", "thought", or `SEARCHED`.
     pub tool: String,
     /// The site it was on, or went to.
     pub site: String,
     /// What on the page: an element by its name in quotes or its role, a key, a direction, or a
     /// wait's text in quotes or its seconds.
     pub target: String,
-    /// A thought's text, the address it opened, whole, what it typed when that may show (never
+    /// A thought's text, a search's words, the address it opened, whole, what it typed when that may show (never
     /// into a password field, and at most `TYPED_SHOWN` characters), or the way it scrolled in an
     /// element.
     pub text: String,
@@ -742,6 +754,10 @@ pub struct Did {
     /// The address it was on or opened, without its scheme, as such a line says each tab.
     pub page: String,
 }
+
+/// The tool of a step that's a search the assistant's program made, by its provider's own search:
+/// no tool of the browser's.
+pub const SEARCHED: &str = "web_search";
 
 /// What a step typed shows up to, in characters.
 pub const TYPED_SHOWN: usize = 40;
@@ -781,9 +797,84 @@ pub fn close_title(did: &Did, close: Close) -> String {
 /// Why a line the page kept open is open.
 pub const KEPT: &str = "asked to stay: unsaved changes";
 
+/// The core's entry for a permission the browser refused a page in an agent's Space: this and the
+/// kind's code word, as "request_permission camera".
+const PERMISSION: &str = "request_permission ";
+
+/// The kind of permission the browser refused a page a thread holds, by the core's code word, if
+/// `action` is the core's entry of one. A page's file dialog the core cancelled is the file
+/// picker's, under the actions that entry has had, so that one event has one wording.
+fn stopped_kind(action: &str) -> Option<&str> {
+    match action {
+        "file_dialog file_input" | "file_dialog file_system_access" => Some("file_picker"),
+        action => action.strip_prefix(PERMISSION),
+    }
+}
+
+/// What the activity log says of a permission the browser refused a page a thread holds, if
+/// `action` is the core's entry of one. Each kind has its whole sentence, with the site as the one
+/// stopped, and a kind with no sentence of its own takes the one for every other. The kind's code
+/// word and the entry's reason are the core's, for the log file: the sentence is all a user reads
+/// (`refusal_shown`).
+pub fn permission_stopped(action: &str, site: &str) -> Option<String> {
+    let kind = stopped_kind(action)?;
+    let site = stopped_site(site);
+    let from = match kind {
+        "camera" | "camera_pan_tilt_zoom" => "using the camera",
+        "microphone" => "using the microphone",
+        "location" => "seeing your location",
+        "clipboard_read" => "reading the clipboard",
+        "clipboard_write" => "copying to the clipboard",
+        "screen_capture" => "recording the screen",
+        "notifications" => "sending notifications",
+        "file_picker" => "opening a file picker",
+        "file_handle" => "using your files",
+        "color_picker" => "picking a color from the screen",
+        "print" => "printing",
+        "share" => "opening the share sheet",
+        "federated_sign_in" => "signing you in with another site's account",
+        "payment" => "asking for a payment",
+        "client_certificate" => "asking for a certificate",
+        "cast" => "casting to a device",
+        "extension_install" => "installing an extension",
+        "app_install" => "installing itself as an app",
+        _ => {
+            return Some(format!(
+                "{PRODUCT} stopped a permission request from {site}"
+            ));
+        }
+    };
+    Some(format!("{PRODUCT} stopped {site} from {from}"))
+}
+
+/// The one stopped, as such a sentence names it: the page's host, and `NO_SITE` for a page with
+/// none to give, as a blank one or one of an opaque origin.
+pub fn stopped_site(site: &str) -> &str {
+    match site.is_empty() {
+        true => NO_SITE,
+        false => site,
+    }
+}
+
+/// What stands in the site's place in every such sentence where the page has no host.
+pub const NO_SITE: &str = "a page";
+
+/// Why an entry was refused, as its row says it under what was done: nothing for a permission the
+/// browser refused a page, whose sentence says it whole and whose reason is the core's own.
+pub fn refusal_shown<'a>(action: &str, refused: &'a str) -> &'a str {
+    match stopped_kind(action) {
+        Some(_) => "",
+        None => refused,
+    }
+}
+
 /// A step's title, in one sentence: "Opening gulbenkian.pt", "Read maat.pt",
 /// "Couldn't open maat.pt/en/visit".
 pub fn step_title(did: &Did, tense: Tense) -> String {
+    // A permission the browser refused the page: its one sentence, whatever the tense.
+    if let Some(stopped) = permission_stopped(&did.tool, &did.site) {
+        return stopped;
+    }
     let site = |none: &str| match did.site.is_empty() {
         true => none.to_string(),
         false => did.site.clone(),
@@ -955,6 +1046,18 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
         }
         "ask" => ("Asking you", "Asked you", "Couldn't ask you", String::new()),
         "thought" => ("Thinking", "Thought", "Thought", String::new()),
+        // A trace's step has its words; the activity log's entry, a thread's, its count alone.
+        SEARCHED => {
+            return match (did.text.is_empty(), did.target.parse::<usize>()) {
+                (false, _) => format!("Searched the web for “{}”", did.text),
+                (true, Ok(count)) if count > 1 => format!("Searched the web {count} times"),
+                _ => "Searched the web".into(),
+            };
+        }
+        // The user's Hand Back on a stopped task, with how many pages: never a title or a site.
+        PAGES_BACK if !did.target.is_empty() => {
+            return format!("{} · {}", describe(PAGES_BACK), did.target);
+        }
         action => return describe(action).to_string(),
     };
     let verb = match tense {
@@ -1008,6 +1111,7 @@ pub fn step_glyph(tool: &str) -> &'static str {
         "ask" => "icons/circle-question-mark.svg",
         "upload" => "icons/file.svg",
         "thought" => "icons/lightbulb.svg",
+        SEARCHED => "icons/search.svg",
         _ => "icons/globe.svg",
     }
 }
@@ -1049,6 +1153,40 @@ pub fn reason(kind: Option<Kind>) -> String {
     reason.to_string()
 }
 
+/// How many pages, as a count at a line's end says it: "1 page", "3 pages", and nothing for none.
+pub fn pages_counted(pages: usize) -> Option<String> {
+    match pages {
+        0 => None,
+        1 => Some("1 page".into()),
+        pages => Some(format!("{pages} pages")),
+    }
+}
+
+/// The log's entry of the user's Hand Back on a stopped task of an outside agent's: its pages are
+/// that client's again. Not a tab's own hand back after a takeover ("handed back").
+pub const PAGES_BACK: &str = "pages handed back";
+
+/// The tabs a call's arguments name, whatever its tool: its `tab`, a split's, and each of `tabs`.
+pub fn tabs_named(arguments: &Value) -> Vec<u64> {
+    let one = ["tab", "split"]
+        .into_iter()
+        .filter_map(|name| arguments.get(name));
+    let several = arguments.get("tabs").and_then(Value::as_array);
+    one.chain(several.into_iter().flatten())
+        .filter_map(tab_id)
+        .collect()
+}
+
+/// The tools that never act on the tab their connection used last.
+pub const NO_TAB_OF_ITS_OWN: [&str; 6] = [
+    "open_tab",
+    "list_tabs",
+    "title",
+    "done",
+    "sort_tabs_by_site",
+    "split_tabs",
+];
+
 /// What an action an agent took is, for the activity log, by the name the core's entry gives it.
 pub fn describe(action: &str) -> &'static str {
     match action {
@@ -1071,14 +1209,12 @@ pub fn describe(action: &str) -> &'static str {
         "released" => "Let go of the tab",
         "taken back" => "You took the tab over",
         "handed back" => "You handed the tab back",
+        PAGES_BACK => "You handed it back",
         "given" => "You gave it a tab",
         "stopped" => "You stopped it",
         "stopped by the user" => "You stopped it, which closed its connection",
         "hand_off" => "Handed you a tab",
         "upload" => "Added a file to a page",
-        "file_dialog file_input" | "file_dialog file_system_access" => {
-            "Page tried to open a file dialog"
-        }
         "close_tab" => "Closed a tab",
         "page_dialog" => "Paused: the page shows a dialog",
         "discard_tab" => "Closed a tab without saving",

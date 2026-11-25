@@ -13,7 +13,8 @@ use gpui::{
     prelude::*, px, size,
 };
 
-use crate::palette::{Float, Palette};
+use crate::glass;
+use crate::palette::{Float, Palette, Tone};
 use crate::shell::{CARD_INSET, Shell, cubic_bezier, scaled::scaled_from_top};
 
 use crate::elevation::Level;
@@ -296,6 +297,13 @@ impl Render for ZoomHud {
             .bg(Float::ZoomHud.fill(palette.tone))
             .shadow(Level::Popover.shadow())
             .opacity(pose.opacity)
+            .when(Float::ZoomHud.over_material(), |pill| {
+                pill.child(glass::under(
+                    RADIUS,
+                    pose.opacity,
+                    palette.tone == Tone::Light,
+                ))
+            })
             .text_size(px(TEXT_SIZE))
             .font_weight(FontWeight::MEDIUM)
             .text_color(palette.ink)

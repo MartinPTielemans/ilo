@@ -31,9 +31,9 @@ use browser::mini_bar;
 use browser::palette::{self, Palette, Tone};
 use browser::settings_card::Card;
 use browser::shell::{
-    self, Archived, BarTab, Browser, Command, Download, DownloadAction, DownloadState, Folders,
-    LiveAnswer, LiveItem, LiveList, LiveSource, Match, MediaAction, MenuBar, MenuEntry, Page,
-    PullState, Shell, SpaceEntry, Split, Trouble, Visited, Volume, WindowButton,
+    self, Archived, BarTab, Broom, Browser, Command, Download, DownloadAction, DownloadState,
+    Folders, LiveAnswer, LiveItem, LiveList, LiveSource, Match, MediaAction, MenuBar, MenuEntry,
+    Page, PullState, Shell, SpaceEntry, Split, Trouble, Visited, Volume, WindowButton,
 };
 use browser::site_controls::{self, Connection, Permission, Site, Value};
 use browser::theme::{Appearance, Theme};
@@ -261,7 +261,13 @@ struct Fake {
     downloads: RefCell<Vec<Download>>,
     /// The onboarding's two switches, both offered and off to begin with.
     opt_ins: Cell<(bool, bool)>,
+    /// Other apps' agents' switch, off to begin with.
+    other_apps: Cell<bool>,
     daily_count: Cell<bool>,
+    /// Settings' switches first run shows too, each as it starts, on; and a tab's wait before the
+    /// archive, Settings' 12 hours.
+    settings: RefCell<HashMap<browser::shell::Setting, bool>>,
+    archive_after: Cell<f64>,
     /// The tab each Space opens on where the site names one.
     opens_on: RefCell<HashMap<u64, u64>>,
     /// The tab each Space showed as it was left, which it shows again, and its page beside shows
@@ -990,12 +996,6 @@ impl Browser for Fake {
     // Nor captures.
     fn list_captures(&self, _: &mut App) {}
 
-    fn hover_kinds(&self, _: &mut App) -> u32 {
-        browser::shell::HOVER_ALL
-    }
-
-    fn set_hover_kinds(&self, _: u32, _: &mut App) {}
-
     // The made-up downloads have no files, so each is gone already and none drags.
     fn trash(&self, _: &str, _: &mut App) -> bool {
         true
@@ -1057,6 +1057,7 @@ impl Browser for Fake {
                         }])
                         .collect(),
                     answers: "claude-code".into(),
+                    sorted: None,
                 }
             };
         let day = 24 * 60 * 60;
@@ -1218,6 +1219,19 @@ impl Browser for Fake {
 
     fn ad_blocking(&self) -> bool {
         states::var("PREVIEW_SAFE_START").map_or(true, |state| state != "unblocked")
+    }
+
+    // PREVIEW_BROOM=<idle|sorting|failed|nothing> gives the broom before Clear that state, which
+    // a click doesn't change: nothing here sorts. An idle one is drawn with the pointer over the
+    // sidebar, as PREVIEW_HOVER puts it, and one with nothing to sort never.
+    fn broom(&self) -> Option<Broom> {
+        match states::var("PREVIEW_BROOM").ok()?.as_str() {
+            "idle" => Some(Broom::Idle),
+            "sorting" => Some(Broom::Sorting),
+            "failed" => Some(Broom::Failed),
+            "nothing" => Some(Broom::NothingToSort),
+            _ => None,
+        }
     }
 
     fn use_system_engine(&self, tab: u64, cx: &mut App) {
@@ -1717,9 +1731,6 @@ impl Browser for Fake {
         command_bar::in_place(Rc::new(PreviewBar), window, cx)
     }
 
-    // The preview runs no tasks.
-    fn start_task(&self, _: &str, _: &str, _: u64, _: browser::agents::task::Start, _: &mut App) {}
-
     fn field_window_typing(&self, _: &mut App) -> bool {
         false
     }
@@ -2038,6 +2049,11 @@ impl Browser for Fake {
     // The preview has one window.
     fn new_window(&self, _: &mut App) {}
 
+    // It has no host to show first run's window, which opens on screen.
+    fn shows_first_run_at_open(&self) -> bool {
+        true
+    }
+
     // So the onboarding shows its step for it.
     fn is_default_browser(&self) -> bool {
         false
@@ -2064,12 +2080,20 @@ impl Browser for Fake {
         self.opt_ins.set((on, self.opt_ins.get().1));
     }
 
-    fn agents(&self, _: &App) -> Option<bool> {
+    fn threads(&self, _: &App) -> Option<bool> {
         Some(self.opt_ins.get().1)
     }
 
-    fn set_agents(&self, on: bool, _: &mut App) {
+    fn set_threads(&self, on: bool, _: &mut App) {
         self.opt_ins.set((self.opt_ins.get().0, on));
+    }
+
+    fn other_apps(&self, _: &App) -> Option<bool> {
+        Some(self.other_apps.get())
+    }
+
+    fn set_other_apps(&self, on: bool, _: &mut App) {
+        self.other_apps.set(on);
     }
 
     fn daily_count(&self, _: &App) -> Option<bool> {
@@ -2078,6 +2102,24 @@ impl Browser for Fake {
 
     fn set_daily_count(&self, on: bool, _: &mut App) {
         self.daily_count.set(on);
+    }
+
+    fn setting(&self, _: u64, setting: browser::shell::Setting, _: &App) -> Option<bool> {
+        Some(*self.settings.borrow().get(&setting).unwrap_or(&true))
+    }
+
+    fn set_setting(&self, _: u64, setting: browser::shell::Setting, on: bool, _: &mut App) {
+        self.settings.borrow_mut().insert(setting, on);
+    }
+
+    fn archive_after(&self, _: u64) -> Option<(f64, Vec<f64>)> {
+        let (hour, day) = (3600., 24. * 3600.);
+        let offered = vec![12. * hour, day, 7. * day, 30. * day, -1.];
+        Some((self.archive_after.get(), offered))
+    }
+
+    fn set_archive_after(&self, _: u64, seconds: f64, _: &mut App) {
+        self.archive_after.set(seconds);
     }
 
     fn new_private_window(&self, _: &mut App) {}
@@ -2159,6 +2201,7 @@ impl command_bar::Host for PreviewBar {
         Some(command_bar::TaskAgents {
             agents: vec![claude],
             known: true,
+            ..Default::default()
         })
     }
 
@@ -2174,7 +2217,26 @@ impl command_bar::Host for PreviewBar {
         None
     }
 
-    fn run_task(&self, _: &str, _: &str, _: Option<(SharedString, SharedString)>, _: &mut App) {}
+    fn run_task(
+        &self,
+        _: &str,
+        _: &str,
+        _: Option<(SharedString, SharedString)>,
+        _: browser::agents::tier::Tier,
+        _: Option<String>,
+        _: &mut App,
+    ) {
+    }
+
+    fn run_task_at_rest(
+        &self,
+        _: &str,
+        _: &str,
+        _: browser::agents::tier::Tier,
+        _: Option<String>,
+        _: &mut App,
+    ) {
+    }
 
     fn set_up_agents(&self, _: &mut App) {}
 
@@ -2635,10 +2697,6 @@ fn main() {
             if preview_recent().is_some() {
                 browser::recent::set_switches(true, Default::default(), cx);
             }
-            // PREVIEW_TOP_BAR=1 starts with Settings' Top bar on.
-            if states::var_os("PREVIEW_TOP_BAR").is_some() {
-                cx.set_global(shell::TopBar(true));
-            }
             // PREVIEW_UPDATE=ready or =available shows the update banner on a made-up 0.1.5, opened
             // as under the pointer with =ready-open or =available-open, and PREVIEW_UPDATE_CHECKS=off
             // as with the updater's automatic checks off.
@@ -2666,6 +2724,11 @@ fn main() {
                     },
                     cx,
                 );
+                return;
+            }
+            // PREVIEW_THREADS=on or off shows Settings › Threads' first row, its switch so.
+            if let Ok(state) = states::var("PREVIEW_THREADS") {
+                preview_pictures(Pictures::Threads { on: state == "on" }, cx);
                 return;
             }
             // PREVIEW_SETTINGS_GENERAL=1 shows Settings › General, on made-up values (#4092).
@@ -2790,7 +2853,7 @@ fn main() {
                         spaces[0].2 = Some(theme.main_color());
                         spaces[0].6 = theme.to_text().into();
                     }
-                    // PREVIEW_TASKS=1 shows three tasks' cards at the foot, one at work, one
+                    // PREVIEW_TASKS=1 shows three tasks' cards in Today, one at work, one
                     // stopped and one done; =open shows the first's conversation, as its card's
                     // click does.
                     let tasks = states::var("PREVIEW_TASKS").ok().or_else(|| {
@@ -2806,6 +2869,7 @@ fn main() {
                         .map(|(id, (title, url, days))| (id, title, url, now() - days * DAY))
                         .collect();
                     let first_download = first_archived + ARCHIVE.len() as u64;
+                    let files = states::var("PREVIEW_DOWNLOADS").as_deref() == Ok("files");
                     let downloads = (first_download..)
                         .zip(DOWNLOADS)
                         .map(
@@ -2813,7 +2877,14 @@ fn main() {
                                 id,
                                 name: name.into(),
                                 url: url.into(),
-                                path: SharedString::default(),
+                                // PREVIEW_DOWNLOADS=files gives the finished ones made-up files:
+                                // the Library button's plate lists a finished one only with one.
+                                path: match state {
+                                    DownloadState::Done if files => {
+                                        format!("/preview/{name}").into()
+                                    }
+                                    _ => SharedString::default(),
+                                },
                                 received,
                                 total,
                                 state,
@@ -2843,7 +2914,10 @@ fn main() {
                         archive: RefCell::new(archive),
                         downloads: RefCell::new(downloads),
                         opt_ins: Cell::new((false, false)),
+                        other_apps: Cell::new(false),
                         daily_count: Cell::new(false),
+                        settings: RefCell::default(),
+                        archive_after: Cell::new(12. * 3600.),
                         opens_on: RefCell::default(),
                         shows: Rc::default(),
                     });
@@ -3086,6 +3160,19 @@ fn main() {
                     if states::var("PREVIEW_LIVE_FOLDER").as_deref() == Ok("states") {
                         shell.set_selected(LIVE_TABS[0].0, cx);
                     }
+                    // PREVIEW_PAGE=<rrggbb>[,<tab>] says the page of the tab shown, or of that
+                    // tab, which it shows, is that colour, as the core reports a page's own.
+                    if let Ok(page) = states::var("PREVIEW_PAGE") {
+                        let mut parts = page.split(',');
+                        let color = parts
+                            .next()
+                            .and_then(|hex| u32::from_str_radix(hex, 16).ok());
+                        if let Some(tab) = parts.next().and_then(|tab| tab.parse().ok()) {
+                            shell.set_selected(tab, cx);
+                        }
+                        let shown = shell.selected();
+                        shell.set_tab_background(shown, color, cx);
+                    }
                     // PREVIEW_TRANSLATE=<language> says the made-up pages are in that language,
                     // so the URL field offers to translate them.
                     if let Ok(language) = states::var("PREVIEW_TRANSLATE") {
@@ -3208,24 +3295,6 @@ fn main() {
                         let pick = std::env::var("PREVIEW_ONBOARDING_PICK").ok();
                         if let Some(index) = pick.and_then(|pick| pick.parse().ok()) {
                             shell.onboarding_pick_swatch(index, cx);
-                        }
-                    }
-                    // PREVIEW_ONBOARDING_LOOP=<s> holds the step's loop <s> seconds in, for a still
-                    // capture, and =<s>,<ms> lets it play from the start <ms> in, for its frames.
-                    if let Ok(held) = std::env::var("PREVIEW_ONBOARDING_LOOP") {
-                        let mut parts = held.split(',').map(|part| part.trim().parse::<f32>().ok());
-                        if let Some(Some(at)) = parts.next() {
-                            shell.onboarding_hold_loop(Some(at), cx);
-                        }
-                        if let Some(Some(ms)) = parts.next() {
-                            cx.spawn(async move |shell, cx| {
-                                let after = Duration::from_millis(ms as u64);
-                                cx.background_executor().timer(after).await;
-                                shell
-                                    .update(cx, |shell, cx| shell.onboarding_hold_loop(None, cx))
-                                    .ok();
-                            })
-                            .detach();
                         }
                     }
                     shell
@@ -3548,8 +3617,13 @@ fn main() {
             // PREVIEW_MODEL_MENU=<claude|codex>[,<model>] shows Settings › Agents' Model menu for that
             // CLI as it opens, from the CLI's recorded list, on Default or the model chosen, light
             // with PREVIEW_APPEARANCE=light (#2455).
+            // PREVIEW_MODEL_MENU=composer[,<key>…] shows the composer's model menu instead, with its
+            // search, Claude's recorded models and Codex not signed in, then types the keys in it.
             if let Ok(cli) = states::var("PREVIEW_MODEL_MENU") {
-                preview_model_menu(bounds, &cli, cx);
+                match cli.strip_prefix("composer") {
+                    Some(keys) => preview_composer_model_menu(bounds, keys, cx),
+                    None => preview_model_menu(bounds, &cli, cx),
+                }
             }
             // PREVIEW_PAGE_MENU=<link|image|text|field>,<x>,<y>[,<key>…] shows a page's menu there, made
             // up as Chrome builds it for a link, an image, selected text or a misspelt word in a text
@@ -3800,6 +3874,63 @@ fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
             };
             menu::show(request, cx);
         });
+    })
+    .detach();
+}
+
+/// The composer's model menu as the command bar builds it, from Claude's recorded list and with
+/// Codex not signed in, then `keys`, comma-separated, typed in its search.
+fn preview_composer_model_menu(bounds: Bounds<Pixels>, keys: &str, cx: &mut App) {
+    use browser::agents::{ready::claude_listed, runner::Cli, task};
+    let answer = serde_json::from_str(include_str!(
+        "agents/runner/answers/claude-2.1.322-initialize.json"
+    ))
+    .unwrap_or_default();
+    let models = claude_listed(&answer).unwrap_or_default();
+    let heading = |name: &str| MenuEntry {
+        header: true,
+        ..MenuEntry::named(name.to_string(), false)
+    };
+    let (_, models) = task::model_menu("", "Default", models.default.as_deref(), models.listed);
+    let mut items = vec![
+        MenuEntry::search("Search models"),
+        heading(browser::settings_rows::assistant_name(Cli::Claude)),
+    ];
+    items.extend(models.into_iter().map(|entry| MenuEntry {
+        over: false,
+        ..entry
+    }));
+    items.extend([
+        heading(browser::settings_rows::assistant_name(Cli::Codex)),
+        MenuEntry::named("Sign In", true).offer().out(),
+        MenuEntry::line(),
+        MenuEntry::named("Settings", true).kept().out(),
+    ]);
+    let keys: Vec<String> = (keys.split(','))
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(String::from)
+        .collect();
+    let light = preview_tone() == Some(Tone::Light);
+    let Some(window) = menu::open_at(Rc::new(PreviewMenu), bounds, cx) else {
+        return;
+    };
+    let window: gpui::AnyWindowHandle = window.into();
+    cx.spawn(async move |cx| {
+        cx.background_executor()
+            .timer(Duration::from_millis(500))
+            .await;
+        cx.update(|cx| {
+            let request = menu::Request {
+                items,
+                at: point(px(40.), px(40.)),
+                area: Bounds::new(point(px(0.), px(0.)), bounds.size),
+                look: menu::Look::plain(light),
+                chosen: menu::picked(|_, _| {}),
+            };
+            menu::show(request, cx);
+        });
+        press_keys(window, keys, cx).await;
     })
     .detach();
 }
@@ -4145,7 +4276,10 @@ mod tests {
                 archive: Default::default(),
                 downloads: Default::default(),
                 opt_ins: Default::default(),
+                other_apps: Default::default(),
                 daily_count: Default::default(),
+                settings: Default::default(),
+                archive_after: Default::default(),
                 opens_on: Default::default(),
                 shows: Default::default(),
             });

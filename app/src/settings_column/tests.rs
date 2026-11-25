@@ -8,8 +8,11 @@ use gpui::{
 };
 
 use super::*;
+use crate::tokens::settings::form::{
+    CHROMIUM_ROW, FOOT_ROW, HEADING, ROW, SEARCH_AFTER, SEARCH_HEIGHT, SIDEBAR, SIDEBAR_BOTTOM,
+    TITLE_ROW,
+};
 use crate::tokens::settings::{HEIGHT, WIDTH};
-use crate::tokens::shell::library::SEARCH_HEIGHT;
 
 /// The column alone, showing what it last picked.
 struct Shown {
@@ -43,6 +46,10 @@ impl Render for Shown {
             None,
             pick,
             foot,
+            Version {
+                name: "0.0.0".into(),
+                word: None,
+            },
             window.is_a11y_active(),
         ))
     }
@@ -61,23 +68,27 @@ fn shown(cx: &mut TestAppContext) -> (gpui::Entity<Shown>, &mut VisualTestContex
     (view, cx)
 }
 
-/// Where the middle of `section`'s plate is: the sections 2 apart under the search field, each
-/// group under its label.
-fn plate_y(section: Section) -> f32 {
-    let mut y = COLUMN_TOP + SEARCH_HEIGHT + SEARCH_GAP;
+/// Where the middle of `section`'s row is in a window `height` tall: the pages under the search
+/// field, each group under its heading, and About's version row at the foot, over Chromium's.
+fn plate_y(section: Section, height: f32) -> f32 {
+    if section == Section::About {
+        return height - SIDEBAR_BOTTOM - CHROMIUM_ROW - FOOT_ROW / 2.;
+    }
+    let mut y = TITLE_ROW + SEARCH_HEIGHT + SEARCH_AFTER;
     for group in Section::GROUPS {
-        y += LABEL_TOP + LABEL_LINE + LABEL_BOTTOM;
+        y += HEADING;
         for &each in group {
             if each == section {
-                return y + PLATE_HEIGHT / 2.;
+                return y + ROW / 2.;
             }
-            y += PLATE_HEIGHT + PLATE_GAP;
+            y += ROW;
         }
     }
     unreachable!()
 }
 
-/// The fourteen sections run down the column in their three groups, and a click on each shows it.
+/// The drawn pages run down the sidebar in the owner's three groups, About's at the foot, and a
+/// click on each shows it.
 #[gpui::test]
 fn a_click_on_a_section_shows_it(cx: &mut TestAppContext) {
     let (view, cx) = shown(cx);
@@ -86,25 +97,24 @@ fn a_click_on_a_section_shows_it(cx: &mut TestAppContext) {
         names,
         [
             "General",
-            "Appearance",
-            "Tabs & Sidebar",
-            "Features",
-            "Agents",
-            "Links",
-            "Shortcuts",
-            "Profiles",
-            "Passwords",
+            "Window",
             "Privacy",
-            "Ad Blocking",
-            "Sync",
-            "Import & Export",
+            "Passwords",
+            "Sync & Import",
+            "Shortcuts",
+            "Threads",
+            "Models",
+            "Access",
+            "Other apps",
+            "Tabs & Spaces",
+            "Links",
             "About"
         ]
     );
     // Last first, so each click is a change.
     for section in Section::all().collect::<Vec<_>>().into_iter().rev() {
         cx.simulate_click(
-            point(px(COLUMN / 2.), px(plate_y(section))),
+            point(px(SIDEBAR / 2.), px(plate_y(section, HEIGHT))),
             Modifiers::none(),
         );
         cx.run_until_parked();
@@ -123,20 +133,20 @@ fn a_click_on_a_section_shows_it(cx: &mut TestAppContext) {
     );
 }
 
-/// Chromium's settings sit at the column's foot, 8 up from the window's bottom, and a click there
+/// Chromium's settings sit at the sidebar's foot, 8 up from the window's bottom, and a click there
 /// opens them.
 #[gpui::test]
 fn the_foot_opens_chromiums_settings(cx: &mut TestAppContext) {
     let (view, cx) = shown(cx);
-    let y = HEIGHT - FOOT_BOTTOM - PLATE_HEIGHT / 2.;
-    cx.simulate_click(point(px(COLUMN / 2.), px(y)), Modifiers::none());
+    let y = HEIGHT - SIDEBAR_BOTTOM - CHROMIUM_ROW / 2.;
+    cx.simulate_click(point(px(SIDEBAR / 2.), px(y)), Modifiers::none());
     cx.run_until_parked();
     assert_eq!(view.read_with(cx, |view, _| view.foot.get()), 1);
     assert!(view.read_with(cx, |view, _| view.picked.borrow().is_empty()));
 }
 
-/// At Settings' 720 × 480 minimum the fourteen sections don't fit over the foot: they scroll above
-/// it, so the last, scrolled to, shows clear of the foot, and a click on the foot is the foot's.
+/// At Settings' 720 × 480 minimum the pages don't fit over the foot: they scroll above it, so the
+/// last, Links, scrolled to, shows clear of the version row, and a click on the foot is the foot's.
 #[gpui::test]
 fn at_the_least_height_the_sections_scroll_above_the_foot(cx: &mut TestAppContext) {
     let (view, cx) = shown(cx);
@@ -144,7 +154,7 @@ fn at_the_least_height_the_sections_scroll_above_the_foot(cx: &mut TestAppContex
     cx.run_until_parked();
     cx.update(|window, cx| {
         let event = gpui::ScrollEvent {
-            position: point(px(COLUMN / 2.), px(200.)),
+            position: point(px(SIDEBAR / 2.), px(200.)),
             delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-400.))),
             ..Default::default()
         };
@@ -152,28 +162,28 @@ fn at_the_least_height_the_sections_scroll_above_the_foot(cx: &mut TestAppContex
     });
     view.update(cx, |_, cx| cx.notify());
     cx.run_until_parked();
-    let about = view.read_with(cx, |view, _| {
+    let links = view.read_with(cx, |view, _| {
         let logged = view.logged.borrow();
         let line = logged
             .lines()
             .iter()
-            .find(|line| line.contains(" toolbar About at "))
+            .find(|line| line.contains(" toolbar Links at "))
             .cloned();
         line.and_then(|line| line.rsplit(' ').next()?.parse::<f32>().ok())
     });
-    let foot_top = 480. - FOOT_BOTTOM - PLATE_HEIGHT;
-    let about = about.expect("About wasn't drawn");
+    let foot_top = 480. - SIDEBAR_BOTTOM - CHROMIUM_ROW - FOOT_ROW;
+    let links = links.expect("Links wasn't drawn");
     assert!(
-        about + PLATE_HEIGHT / 2. <= foot_top,
-        "About at {about} runs under the foot at {foot_top}"
+        links + ROW / 2. <= foot_top,
+        "Links at {links} runs under the foot at {foot_top}"
     );
-    let y = 480. - FOOT_BOTTOM - PLATE_HEIGHT / 2.;
-    cx.simulate_click(point(px(COLUMN / 2.), px(y)), Modifiers::none());
+    let y = 480. - SIDEBAR_BOTTOM - CHROMIUM_ROW / 2.;
+    cx.simulate_click(point(px(SIDEBAR / 2.), px(y)), Modifiers::none());
     cx.run_until_parked();
     assert_eq!(view.read_with(cx, |view, _| view.foot.get()), 1);
     assert!(
         view.read_with(cx, |view, _| view.picked.borrow().is_empty()),
-        "the click picked a section"
+        "the click picked a page"
     );
 }
 
@@ -291,6 +301,10 @@ impl Render for Stops {
                 None,
                 Rc::new(|_, _, _| {}),
                 Rc::new(|_, _| {}),
+                Version {
+                    name: "0.0.0".into(),
+                    word: None,
+                },
                 a11y,
             ))
             .child(card)
@@ -354,7 +368,8 @@ fn voiceover_names_every_stop_the_keyboard_reaches(cx: &mut TestAppContext) {
     ] {
         assert!(names.contains(&name), "⇥ never reached {name}: {names:?}");
     }
-    assert_eq!(stops.len(), 21, "{names:?}");
+    // The search field, five controls and Chromium settings, then the thirteen pages.
+    assert_eq!(stops.len(), 20, "{names:?}");
 }
 
 /// Settings in small for the keyboard: the column with the search field, and the card with a
@@ -412,6 +427,10 @@ impl Render for Keyed {
                 None,
                 pick,
                 Rc::new(|_, _| {}),
+                Version {
+                    name: "0.0.0".into(),
+                    word: None,
+                },
                 window.is_a11y_active(),
             ))
             .child(card)
@@ -479,7 +498,7 @@ fn the_keyboard_goes_through_settings_in_reading_order(cx: &mut TestAppContext) 
     assert_eq!(shown(cx), Section::About, "↓ left the list at its end");
     cx.simulate_keystrokes("up up");
     press("enter", cx);
-    assert_eq!(shown(cx), Section::Sync);
+    assert_eq!(shown(cx), Section::TabsAndSpaces);
     // ⇥ from the list goes on to the field, where typing searches.
     for _ in 0..3 {
         cx.simulate_keystrokes("down");
@@ -654,9 +673,9 @@ fn after_a_control_goes_cmd_w_reaches_settings(cx: &mut TestAppContext) {
     );
 }
 
-/// At Settings' least height the sections scroll above the foot, and the keys keep the one they
-/// move to in sight: ⇧⇥ from the field to About, the last, scrolls the list to it, and ↑ back to
-/// General scrolls it back (#2506).
+/// At Settings' least height the pages scroll above the foot, and the keys keep the one they move
+/// to in sight: ⇧⇥ from the field to About, at the foot, then ↑ to Links, the list's last, scrolls
+/// the list to it, and ↑ back to General scrolls it back (#2506).
 #[gpui::test]
 fn the_keys_keep_the_section_they_move_to_in_sight(cx: &mut TestAppContext) {
     cx.update(|cx| {
@@ -699,20 +718,18 @@ fn the_keys_keep_the_section_they_move_to_in_sight(cx: &mut TestAppContext) {
     };
     let (offset, most) = scroll(cx);
     assert_eq!(offset, 0.);
-    assert!(
-        most > PLATE_HEIGHT,
-        "the sections fit at the least height: {most}"
-    );
+    assert!(most > ROW, "the pages fit at the least height: {most}");
     cx.simulate_keystrokes("shift-tab");
+    press("enter", cx);
+    assert_eq!(view.read_with(cx, |view, _| view.shown), Section::About);
+    cx.simulate_keystrokes("up");
     settle(cx);
     let (offset, _) = scroll(cx);
     assert!(
-        offset <= PLATE_GAP - most,
-        "⇧⇥ to About left it under the foot: {offset} of {most}"
+        offset <= 1. - most,
+        "↑ to Links left it under the foot: {offset} of {most}"
     );
-    press("enter", cx);
-    assert_eq!(view.read_with(cx, |view, _| view.shown), Section::About);
-    for _ in 1..Section::all().count() {
+    for _ in 2..Section::all().count() {
         cx.simulate_keystrokes("up");
     }
     settle(cx);
@@ -721,18 +738,12 @@ fn the_keys_keep_the_section_they_move_to_in_sight(cx: &mut TestAppContext) {
     assert_eq!(view.read_with(cx, |view, _| view.shown), Section::General);
 }
 
-/// Each group of sections has its label, and Appearance is the Browser group's second, after
-/// General, as #4092 moves the look's rows out of General and Tabs & Sidebar into it.
+/// The owner's groups, each under its heading, and no page of appearance settings: what it held
+/// is on Window (spec-settings.md › The sidebar).
 #[test]
-fn appearance_follows_general_under_browser() {
-    assert_eq!(Section::LABELS.len(), Section::GROUPS.len());
-    assert_eq!(Section::LABELS[0], "Browser");
-    assert_eq!(
-        Section::GROUPS[0][..2],
-        [Section::General, Section::Appearance]
-    );
-    assert_eq!(
-        Section::all().filter(|&s| s == Section::Appearance).count(),
-        1
-    );
+fn the_pages_are_in_the_owners_groups() {
+    assert_eq!(Section::LABELS, ["Personal", "Agents", "Features"]);
+    assert_eq!(Section::GROUPS[0][..2], [Section::General, Section::Window]);
+    assert_eq!(Section::all().last(), Some(Section::About));
+    assert!(Section::all().all(|page| page.name() != "Appearance"));
 }

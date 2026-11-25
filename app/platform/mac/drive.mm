@@ -107,6 +107,9 @@
 //                                         <w>x<h>" or "none", and whether it's full screen, as
 //                                         "browser: layout full screen <0|1>"
 //   state                                 nothing, for the done line's report
+//   reopen                                sends the app the reopen Apple Event, as a click on
+//                                         the Dock's icon or a second launch does, through
+//                                         AppKit's handler to the app's delegate
 //   title [<text>]                        logs the key window's title, as "browser: key window
 //                                         titled <title>", such as a window of Chrome's. With
 //                                         <text>, once the title has it, for up to 10 s, as a
@@ -156,9 +159,6 @@
 //   dock [<title>]                        chooses the Dock menu's item titled <title>, the menu
 //                                         the Dock icon's right click opens, or with none logs
 //                                         its items, as "browser: dock menu <titles>"
-//   dockicon <path>                       draws the Dock's icon, as the app last set it, to a 1024
-//                                         px PNG at <path> and logs the color of its dot, as
-//                                         "browser: dock icon <r> <g> <b>" in sRGB
 //   statusitem [click | capture <path>]   logs whether the menu bar has Little ilo's button,
 //                                         "browser: status item shown" or "none", or clicks it,
 //                                         or draws it to a PNG at <path>, logged as "browser:
@@ -575,8 +575,13 @@ void AddDisplay(unsigned width, unsigned height, bool main, void (^done)(void)) 
 // The browser window the window command picked, from 0.
 size_t g_driven = 0;
 
-// The browser window driven, once it's on screen.
+// First run's window while it's on screen, at a new profile's first launch or played again from
+// Help over a browser window, since the user's input goes there then; else the browser window
+// driven, once it's on screen.
 NSWindow* MainWindow() {
+  if (NSWindow* first_run = (__bridge NSWindow*)host_first_run_window()) {
+    return first_run;
+  }
   NSWindow* window = (__bridge NSWindow*)host_browser_window(g_driven);
   return window.visible ? window : nil;
 }
@@ -736,6 +741,34 @@ void MoveIn(NSWindow* target, double x, double y) {
 void Click(NSWindow* window, double x, double y, int count, NSEventModifierFlags flags = 0) {
   PostMouse(window, NSEventTypeLeftMouseDown, x, y, count, flags);
   PostMouse(window, NSEventTypeLeftMouseUp, x, y, count, flags);
+}
+
+// The window's own close, minimize or zoom button at (x, y), in points from its top-left corner.
+NSButton* TitleButtonAt(NSWindow* window, double x, double y) {
+  for (NSWindowButton kind : {NSWindowCloseButton, NSWindowMiniaturizeButton, NSWindowZoomButton}) {
+    NSButton* button = [window standardWindowButton:kind];
+    if (!button || button.hidden || !button.window) {
+      continue;
+    }
+    NSPoint at = [button convertPoint:NSMakePoint(x, NSHeight(window.frame) - y) fromView:nil];
+    if (NSPointInRect(at, button.bounds)) {
+      return button;
+    }
+  }
+  return nil;
+}
+
+// A left click, or with the window's own button there, that button pressed as a click ends in it:
+// the button tracks a posted click in a loop of its own, after which the done line's event never
+// came, so a check waiting on it hung though the window had closed.
+void ClickOrPress(NSWindow* window, double x, double y, NSEventModifierFlags flags) {
+  if (NSButton* button = TitleButtonAt(window, x, y)) {
+    if (button.enabled) {
+      [button performClick:nil];
+    }
+    return;
+  }
+  Click(window, x, y, 1, flags);
 }
 
 // The modifiers named in the rest of |words|: cmd, shift, alt and ctrl.
@@ -1713,6 +1746,21 @@ bool Run(const std::string& line, void (^done)(void)) {
     }
     return false;
   }
+  if (action == "reopen") {
+    // One sent to the app itself goes to its handler at once.
+    NSAppleEventDescriptor* reopen = [NSAppleEventDescriptor
+        appleEventWithEventClass:kCoreEventClass
+                         eventID:kAEReopenApplication
+                targetDescriptor:NSAppleEventDescriptor.currentProcessDescriptor
+                        returnID:kAutoGenerateReturnID
+                   transactionID:kAnyTransactionID];
+    NSError* error = nil;
+    if (![reopen sendEventWithOptions:NSAppleEventSendNoReply timeout:5 error:&error]) {
+      fprintf(stderr, "browser: reopen not sent: %s\n", error.localizedDescription.UTF8String);
+    }
+    done();
+    return true;
+  }
   if (!window) {
     return false;
   }
@@ -1733,7 +1781,7 @@ bool Run(const std::string& line, void (^done)(void)) {
       LogPassed(window, x, y);
     }
     Convert(window, target, &x, &y);
-    Click(target, x, y, 1, Modifiers(words) | walk);
+    ClickOrPress(target, x, y, Modifiers(words) | walk);
     done();
     return true;
   }
@@ -1742,7 +1790,7 @@ bool Run(const std::string& line, void (^done)(void)) {
     if (!NSApp.keyWindow || !(words >> x >> y)) {
       return false;
     }
-    Click(NSApp.keyWindow, x, y, 1, walk);
+    ClickOrPress(NSApp.keyWindow, x, y, walk);
     done();
     return true;
   }
@@ -2349,41 +2397,6 @@ bool Run(const std::string& line, void (^done)(void)) {
       }
       fprintf(stderr, "browser: dock menu %s\n", [titles componentsJoinedByString:@", "].UTF8String);
     }
-    done();
-    return true;
-  }
-  if (action == "dockicon") {
-    // The image the app gave the Dock, which is what the Dock draws: a capture of the Dock itself
-    // would need the screen, with other apps' icons. Drawn as dock.mm draws macOS's, with the dot
-    // at (512, 328) from the top left.
-    std::string path;
-    std::getline(words >> std::ws, path);
-    if (path.empty()) {
-      return false;
-    }
-    NSBitmapImageRep* picture =
-        [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:nullptr
-                                                pixelsWide:1024
-                                                pixelsHigh:1024
-                                             bitsPerSample:8
-                                           samplesPerPixel:4
-                                                  hasAlpha:YES
-                                                  isPlanar:NO
-                                            colorSpaceName:NSDeviceRGBColorSpace
-                                               bytesPerRow:0
-                                              bitsPerPixel:0];
-    [NSGraphicsContext saveGraphicsState];
-    NSGraphicsContext.currentContext = [NSGraphicsContext graphicsContextWithBitmapImageRep:picture];
-    [NSApp.applicationIconImage drawInRect:NSMakeRect(0, 0, 1024, 1024)];
-    [NSGraphicsContext restoreGraphicsState];
-    NSData* png = [picture representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
-    NSColor* dot =
-        [[picture colorAtX:512 y:328] colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
-    if (!dot || ![png writeToFile:@(path.c_str()) atomically:YES]) {
-      return false;
-    }
-    fprintf(stderr, "browser: dock icon %.0f %.0f %.0f\n", dot.redComponent * 255,
-            dot.greenComponent * 255, dot.blueComponent * 255);
     done();
     return true;
   }

@@ -249,6 +249,7 @@ pub(crate) unsafe extern "C" fn tab_loaded(_: *mut c_void, tab: bc::bc_id, url: 
     update_app_later(move |cx| {
         crate::sign_in_close::tab_loaded(tab, &owned, cx);
         browser::agents::tab_at(tab, &owned, cx);
+        browser::agents::tab_loaded(tab, cx);
     });
     sample_foot_bar(tab);
     sample_mini_bar(tab);
@@ -388,11 +389,23 @@ pub(crate) unsafe extern "C" fn tab_state_changed(
         developer_mode: state.developer_mode,
     };
     browser::title_log::page(tab, &page.url);
-    update_app(|cx| browser::agents::tab_at(tab, &page.url, cx));
+    update_app(|cx| {
+        browser::agents::tab_at(tab, &page.url, cx);
+        browser::agents::tab_state(tab, &page.url, page.loading, cx);
+    });
     if unsafe { bc::bc_tab_window(tab) } == 0 {
         update_app(|cx| link_preview::set_url(tab, page.url.clone(), cx));
     }
-    update_shells(|shell, cx| shell.set_page(tab, page.clone(), cx));
+    // What a sort of today's tabs counts changes only when a page turns web or not (#4252).
+    let flipped = Cell::new(false);
+    update_shells(|shell, cx| {
+        let counted = shell.broom_counts(tab);
+        shell.set_page(tab, page.clone(), cx);
+        flipped.set(flipped.get() || counted != shell.broom_counts(tab));
+    });
+    if flipped.get() {
+        update_app(broom_host::page_counts_changed);
+    }
 }
 
 pub(crate) unsafe extern "C" fn tab_title_changed(

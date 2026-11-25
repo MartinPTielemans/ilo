@@ -27,8 +27,8 @@ use crate::agents::Agents;
 use crate::agents::access::ACCESS_ACTION;
 use crate::agents::files::Given;
 use crate::agents::runner::{Cli, Failure};
-use crate::agents::tier::{self, Tier};
-use crate::agents::wall::{self, Wall, WallFor, WallRefused};
+use crate::agents::tier::{self, StartedWith, Tier};
+use crate::agents::wall::{self, Refusal, Wall, WallFor, WallRefused};
 
 /// What answers for `wall::put_up` in a test.
 #[cfg(test)]
@@ -60,10 +60,17 @@ pub enum Change {
     TookBack(Given),
 }
 
+/// A later start's log row where it left the task's files out: the level it started at, then
+/// that, as `tier::started_logged` says it.
+const LEFT_OUT: StartedWith = StartedWith {
+    pages: 0,
+    folder: false,
+    files: 0,
+    left_out: true,
+};
+
 /// The activity log's words, each its entry's target as a change of level's is
-/// `tier::changed_logged`: the event, and never a file's name or a path. What a start's row ends
-/// with where it left the task's files out, after the level it started at.
-pub const LEFT_OUT_LOGGED: &str = " · files left out";
+/// `tier::changed_logged`: the event, and never a file's name or a path.
 /// A task that stopped as it couldn't be started again without the folder the user took back,
 /// or without the files they attached.
 pub const STOPPED_FOLDER_LOGGED: &str = "Stopped · couldn't restart without its folder";
@@ -125,7 +132,7 @@ pub struct Came {
 impl Task {
     /// Keeps what came of a wall that wasn't put up, after the messages and steps the task has
     /// now.
-    fn rewalled(&mut self, what: Rewalled) {
+    pub(in crate::agents) fn rewalled(&mut self, what: Rewalled) {
         self.rewalled.push(Came {
             after: self.messages.len(),
             traced: self.trace.len(),
@@ -207,6 +214,12 @@ impl Agents {
         };
         match self.put_up(agent, task.tier) {
             Ok(wall) => Ok(Some(Arc::new(wall))),
+            // The folder is no longer where it was: its grant ends (J6), and what else the task
+            // has goes inside a wall of its own.
+            Err(WallRefused::Refused(Refusal::Gone)) if task.files.folder.is_some() => {
+                self.folder_gone(agent);
+                self.wall_or_without(agent)
+            }
             Err(_) => {
                 self.without_files(agent);
                 Err(())
@@ -215,11 +228,12 @@ impl Agents {
     }
 
     /// The wall the task's first start goes inside, with the log's row of that start: the level
-    /// it starts at, the `pages` the user added to it, and on the same row that its files were
-    /// left out, where its wall wasn't put up.
-    pub(super) fn wall_to_begin(&mut self, agent: &str, pages: usize) -> Option<Arc<Wall>> {
+    /// it starts at, what it starts `with`, and on the same row that its files were left out,
+    /// where its wall wasn't put up or their copies couldn't be made.
+    pub(super) fn wall_to_begin(&mut self, agent: &str, with: StartedWith) -> Option<Arc<Wall>> {
         let wall = self.wall_or_without(agent);
-        self.log_start(agent, pages, wall.is_err());
+        let left_out = with.left_out || wall.is_err();
+        self.log_start(agent, StartedWith { left_out, ..with });
         wall.unwrap_or_default()
     }
 
@@ -228,20 +242,18 @@ impl Agents {
     pub(super) fn wall_to_start(&mut self, agent: &str) -> Option<Arc<Wall>> {
         let wall = self.wall_or_without(agent);
         if wall.is_err() {
-            self.log_start(agent, 0, true);
+            self.log_start(agent, LEFT_OUT);
         }
         wall.unwrap_or_default()
     }
 
-    /// The log's row for a start of `agent`'s task at the level it has.
-    fn log_start(&mut self, agent: &str, pages: usize, left_out: bool) {
+    /// The log's row for a start of `agent`'s task at the level it has, with what it starts
+    /// with: counts alone, never a name or a path.
+    pub(super) fn log_start(&mut self, agent: &str, with: StartedWith) {
         let Some(task) = self.task(agent) else {
             return;
         };
-        let mut started = tier::started_logged(task.tier, pages);
-        if left_out {
-            started.push_str(LEFT_OUT_LOGGED);
-        }
+        let started = tier::started_logged(task.tier, with);
         self.note_on(agent, 0, ACCESS_ACTION, "", &started, "");
     }
 
@@ -287,7 +299,7 @@ impl Agents {
             }
             Some(rising) => {
                 self.without_files(agent);
-                self.log_start(agent, 0, true);
+                self.log_start(agent, LEFT_OUT);
                 rising.first
             }
             // No start of ilo's was rising: it couldn't start, as any start that can't.
@@ -318,7 +330,8 @@ impl Agents {
         let Some(task) = self.task(key).filter(|_| to > from) else {
             return Ok(None);
         };
-        if task.files.same_rules(from, to) {
+        // Its one start, once its copies end, puts up the wall of the level it then has.
+        if task.files.same_rules(from, to) || task.copying {
             return Ok(None);
         }
         let wall = match task.cli {
@@ -367,6 +380,10 @@ impl Agents {
         let Some(task) = self.task_mut(key) else {
             return;
         };
+        // Its assistant hasn't started: it starts once, as its copies end, with what it then has.
+        if task.copying {
+            return;
+        }
         let (raise, same) = match &change {
             Change::Level { from, .. } => {
                 (task.tier > *from, task.files.same_rules(*from, task.tier))

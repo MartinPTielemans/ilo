@@ -252,9 +252,9 @@ else
       rule_read=read
     fi
     sync="$out/access-settings-sync.txt"
-    send clickkey $(drawn "toolbar Sync")
-    expect '^browser: settings tab Sync$' "a click on Sync didn't show its tab"
-    settings_drew Sync
+    send clickkey $(drawn "toolbar Sync & Import")
+    expect '^browser: settings tab Sync & Import$' "a click on Sync & Import didn't show its tab"
+    settings_drew 'Sync & Import'
     await '^browser: settings sync \(sign-in\|sign-out\|cancel\) at ' ||
       fail "Sync drew none of Sign In, Sign Out and Cancel"
     if grep -q '^browser: settings sync sign-in at ' "$log"; then
@@ -267,10 +267,8 @@ else
       grep -q " $button \"Sign Out\"" "$sync" || fail "Sync's Sign Out isn't a button: $sync"
     fi
     import="$out/access-settings-import.txt"
-    send clickkey $(drawn "toolbar Import & Export")
-    expect '^browser: settings tab Import & Export$' "a click on Import & Export didn't show its section"
-    settings_drew 'Import & Export'
-    expect '^browser: import drawn list$' "Settings › Import & Export didn't draw its list"
+    # Import is on Sync & Import too, under Sync's rows, and draws its list as the page shows.
+    expect '^browser: import drawn list$' "Settings › Sync & Import didn't draw the import's list"
     read_tree '"Import a Bookmarks File…"' > "$import"
     for name in "Import a Bookmarks File…" "Import a Passwords File…"; do
       grep -q " $button \"$name\"" "$import" || fail "the import's $name isn't a button: $import"
@@ -351,16 +349,18 @@ if ! grep -q '^accessibility: skipped' "$tree"; then
     fail "the welcome isn't a dialog called by its title, Welcome to $app_name.: $intro"
   grep -q " $button \"Get Started\"" "$intro" || fail "the welcome's Get Started isn't a button: $intro"
   grep -q " $button \"Skip Setup\"" "$intro" || fail "the welcome's Skip Setup isn't a button: $intro"
-  # Return goes on from the welcome, as Esc there would skip the setup, and Esc from each step
-  # after to the colour's, each one settled before the next Esc.
+  # Return goes on from the welcome, and Skip from each step after to the colour's, as Esc is
+  # Back, each one settled before the next Skip.
   send key return
   expect '^browser: onboarding left intro via return$' "Return didn't go on from the welcome"
-  for _ in 1 2 3 4; do
+  expect '^browser: onboarding step [a-z-]* settled$' "no step came after the welcome"
+  for _ in 1 2 3 4 5 6; do
     grep -q '^browser: onboarding step color settled$' "$log" && break
-    send key escape
-    expect '^browser: onboarding step [a-z-]* settled$' "Esc didn't go on to a step"
+    at=$(sed -n 's/^browser: onboarding step \([a-z-]*\) settled$/\1/p' "$log" | tail -1)
+    skip_step "$at"
+    expect '^browser: onboarding step [a-z-]* settled$' "Skip didn't go on from the $at step"
   done
-  grep -q '^browser: onboarding step color settled$' "$log" || fail "Esc didn't come to the colour step"
+  grep -q '^browser: onboarding step color settled$' "$log" || fail "Skip didn't come to the colour step"
   colour="$out/access-colour.txt"
   read_tree "$radio_group \"Color\"" > "$colour"
   grep -q " $dialog \"Pick a color for your first Space.\"" "$colour" ||

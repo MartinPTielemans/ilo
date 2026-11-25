@@ -18,7 +18,7 @@
 # closing the window. Closed over
 # another app's window, one leaves that window in front and its app active, with a stand-in for the
 # app that the run opens itself. Turned off in Settings ›
-# Features, ⌥⌘N opens nothing and ⌥⌘-click on a link opens it behind, also when ⌥⌘ and the
+# General, ⌥⌘N opens nothing and ⌥⌘-click on a link opens it behind, also when ⌥⌘ and the
 # press come as the pointer reaches the link and stay down past the link target's delay, its
 # window waiting for the release (#2666).
 
@@ -423,7 +423,7 @@ else
 fi
 
 # The menu bar's button, and on Windows the notification area's icon: none until Settings ›
-# Features turns it on, a click on it opens a Little ilo window for the Space shown, and turned off
+# General turns it on, a click on it opens a Little ilo window for the Space shown, and turned off
 # it's gone. Windows' driver can't reach Explorer's area or its flyout, so its click is the message
 # Explorer sends the icon's window for one.
 if [ "$(uname)" = Darwin ] || windows; then
@@ -434,14 +434,15 @@ if [ "$(uname)" = Darwin ] || windows; then
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings"
   settings_drew
-  if ! grep '^browser: settings shown ' "$log" | tail -1 | grep -q ' Features$'; then
-    send clickkey $(drawn "toolbar Features")
-    expect '^browser: settings tab Features$' "a click on Features didn't show its section"
-    settings_drew Features
+  if ! grep -E '^browser: settings (shown|tab) ' "$log" | tail -1 | grep -q ' General$'; then
+    send clickkey $(drawn "toolbar General")
+    expect '^browser: settings tab General$' "a click on General didn't show its section"
+    settings_drew General
   fi
-  menu_bar_switch=$(drawn "switch little in the menu bar") ||
+  # Its button is General's last group: in_sight scrolls it up, from this show's frame.
+  in_sight "switch little in the menu bar" '^browser: settings drew General$' ||
     fail "Settings didn't draw Show in the $place's switch"
-  send clickkey $menu_bar_switch
+  send clickkey $at
   expect '^browser: little in the menu bar on$' "a click on the menu bar switch didn't turn it on"
   send statusitem
   expect '^browser: status item shown$' "turning the switch on didn't put the button in the $place"
@@ -477,9 +478,11 @@ if [ "$(uname)" = Darwin ] || windows; then
   send key w cmd
   expect "^browser: window closed $little\$" "the $place's Little ilo window didn't come to the front: ⌘W didn't close it"
   send menu Settings…
-  expect '^browser: settings shown Features$' "Settings… didn't show Features again"
-  settings_drew Features
-  send clickkey $menu_bar_switch
+  expect '^browser: settings shown General$' "Settings… didn't show General again"
+  settings_drew General
+  in_sight "switch little in the menu bar" '^browser: settings drew General$' ||
+    fail "Settings didn't draw Show in the $place's switch again"
+  send clickkey $at
   expect '^browser: little in the menu bar off$' "a click on the menu bar switch didn't turn it off"
   send statusitem
   expect '^browser: status item none$' "turning the switch off left the button in the $place"
@@ -813,15 +816,19 @@ if [ "$active" = 1 ]; then
 else
   echo "skip: the unused Little ilo window. Browser wasn't the active app."
 fi
-# Little ilo off in Settings › Features (#1636): ⌥⌘N opens nothing, and ⌥⌘-click on a link opens
+# Little ilo off in Settings › General (#1636): ⌥⌘N opens nothing, and ⌥⌘-click on a link opens
 # it behind, as ⌘-click does. On again after.
 send window 1
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
 settings_drew
-send clickkey $(drawn "toolbar Features")
-settings_drew Features
-click_in_sight "switch little windows"
+if ! grep -E '^browser: settings (shown|tab) ' "$log" | tail -1 | grep -q ' General$'; then
+  send clickkey $(drawn "toolbar General")
+  settings_drew General
+fi
+in_sight "switch little windows" '^browser: settings drew General$' ||
+  fail "Settings didn't draw Little ilo's switch"
+send clickkey $at
 expect '^browser: little windows off$' "a click on Little ilo's switch didn't turn it off"
 ../tools/window-screenshot.sh "$pid" "$out/little-off.png" || fail "no window to capture"
 send key w cmd
@@ -903,9 +910,11 @@ done
 ! sed -n "/^browser: drive $off_from: /,\$p" "$log" | grep -q '^browser: little window opened ' ||
   fail "with Little ilo off, ⌥⌘N or ⌥⌘-click opened a Little ilo window"
 send menu Settings…
-expect '^browser: settings shown Features$' "Settings… didn't show Features again"
-settings_drew Features
-click_in_sight "switch little windows"
+expect '^browser: settings shown General$' "Settings… didn't show General again"
+settings_drew General
+in_sight "switch little windows" '^browser: settings drew General$' ||
+  fail "Settings didn't draw Little ilo's switch"
+send clickkey $at
 expect '^browser: little windows on$' "a click on Little ilo's switch didn't turn it on again"
 send key w cmd
 exec 3>&-

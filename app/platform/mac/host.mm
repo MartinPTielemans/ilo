@@ -297,6 +297,9 @@ struct Browser {
   CATransform3D opening_small = CATransform3DIdentity;
   BOOL opening_opaque = YES;
   BOOL opening_shadow = YES;
+
+  // Kept off screen while first run shows (host_hold_window), until host_show_window.
+  bool held = false;
 };
 
 // In the order their views were made. Each is allocated alone, so the pointers stay put.
@@ -2026,6 +2029,84 @@ static void WatchLittleOrderingOut(NSWindow* window) {
   }
 }
 
+// NativeWidgetMacNSWindow's own, which a window not held goes on to, by selector.
+static IMP g_order_front;
+static IMP g_make_key_and_order_front;
+static IMP g_order_front_regardless;
+static IMP g_order_window;
+
+// A held window stays off screen whatever orders it in: Chromium shows a browser window as it makes
+// it, and again as it adds a tab, a link from another app's included, and a reopen from the Dock
+// or a second launch comes here too. Ordering out still goes through.
+static bool StaysHeld(NSWindow* window) {
+  Browser* browser = BrowserOf(window);
+  return browser && browser->held;
+}
+
+static void OrderHeldFront(NSWindow* self, SEL selector, id sender) {
+  if (!StaysHeld(self)) {
+    ((void (*)(id, SEL, id))g_order_front)(self, selector, sender);
+  }
+}
+
+static void MakeHeldKeyAndOrderFront(NSWindow* self, SEL selector, id sender) {
+  if (!StaysHeld(self)) {
+    ((void (*)(id, SEL, id))g_make_key_and_order_front)(self, selector, sender);
+  }
+}
+
+static void OrderHeldFrontRegardless(NSWindow* self, SEL selector) {
+  if (!StaysHeld(self)) {
+    ((void (*)(id, SEL))g_order_front_regardless)(self, selector);
+  }
+}
+
+static void OrderHeldWindow(NSWindow* self,
+                            SEL selector,
+                            NSWindowOrderingMode mode,
+                            NSInteger relative_to) {
+  if (mode == NSWindowOut || !StaysHeld(self)) {
+    ((void (*)(id, SEL, NSWindowOrderingMode, NSInteger))g_order_window)(self, selector, mode,
+                                                                        relative_to);
+  }
+}
+
+// Puts |replacement| in for |selector| on |kind|, keeping what it had in |original|. Chromium's
+// browser windows all share the class, so it's done once, and the others pass through.
+static void Replace(Class kind, SEL selector, IMP replacement, IMP* original) {
+  if (class_getMethodImplementation(kind, selector) == replacement) {
+    return;
+  }
+  Method inherited = class_getInstanceMethod(kind, selector);
+  *original = method_getImplementation(inherited);
+  if (!class_addMethod(kind, selector, replacement, method_getTypeEncoding(inherited))) {
+    *original = method_setImplementation(class_getInstanceMethod(kind, selector), replacement);
+  }
+}
+
+void host_hold_window(void* ui_view) {
+  Browser* browser = BrowserWithView(ui_view);
+  if (!browser) {
+    return;
+  }
+  NSWindow* window = browser->ui_view.window;
+  browser->window = window;
+  browser->held = true;
+  Class kind = window.class;
+  Replace(kind, @selector(orderFront:), (IMP)OrderHeldFront, &g_order_front);
+  Replace(kind, @selector(makeKeyAndOrderFront:), (IMP)MakeHeldKeyAndOrderFront,
+          &g_make_key_and_order_front);
+  Replace(kind, @selector(orderFrontRegardless), (IMP)OrderHeldFrontRegardless,
+          &g_order_front_regardless);
+  Replace(kind, @selector(orderWindow:relativeTo:), (IMP)OrderHeldWindow, &g_order_window);
+  // The core put it on screen as it made it, clear until its first frame.
+  [window orderOut:nil];
+  // check.sh reads this line.
+  if (Checked()) {
+    fprintf(stderr, "browser: window held off screen\n");
+  }
+}
+
 static void PlaceTitlebarSide(Browser* browser);
 
 void host_show_window(void* ui_view) {
@@ -2041,6 +2122,7 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
   NSView* view = browser->ui_view;
   NSWindow* window = view.window;
   browser->window = window;
+  browser->held = false;
   // As the sidebar's side was told before there was a window (host_set_sidebar_right).
   if (browser->sidebar_right) {
     PlaceTitlebarSide(browser);
@@ -6073,6 +6155,104 @@ void host_hide_settings(void) {
   [g_settings orderOut:nil];
 }
 
+// First run's window, while it's open.
+static NSWindow* g_first_run;
+static NSView* g_first_run_view;
+
+void* host_first_run_window(void) {
+  return g_first_run.visible ? (__bridge void*)g_first_run : nullptr;
+}
+
+// Chromium's AppController's, which a reopen goes on to while first run doesn't show.
+static BOOL (*g_engine_reopen)(id, SEL, NSApplication*, BOOL);
+
+// A reopen, as a click on the Dock's icon or a second launch sends, brings first run's window to
+// the front while it shows and makes nothing: Chromium's own would make a browser window of its
+// own, as the browser's is held off screen and it finds none on screen.
+static BOOL ReopenToFirstRun(id self, SEL selector, NSApplication* app, BOOL visible) {
+  if (!g_first_run) {
+    return g_engine_reopen ? g_engine_reopen(self, selector, app, visible) : YES;
+  }
+  if (g_first_run.visible) {
+    [g_first_run makeKeyAndOrderFront:nil];
+  }
+  // check.sh reads this line.
+  if (Checked()) {
+    fprintf(stderr, "browser: reopen brought first run to the front\n");
+  }
+  return NO;
+}
+
+void host_add_first_run(void* first_run_view) {
+  g_first_run_view = (__bridge NSView*)first_run_view;
+  g_first_run = g_first_run_view.window;
+  static bool once = false;
+  if (!once) {
+    once = true;
+    const SEL selector = @selector(applicationShouldHandleReopen:hasVisibleWindows:);
+    Class kind = object_getClass(NSApp.delegate);
+    if (Method method = kind ? class_getInstanceMethod(kind, selector) : nullptr) {
+      g_engine_reopen = (BOOL (*)(id, SEL, NSApplication*, BOOL))method_setImplementation(
+          method, (IMP)ReopenToFirstRun);
+    } else if (kind) {
+      class_addMethod(kind, selector, (IMP)ReopenToFirstRun,
+                      protocol_getMethodDescription(@protocol(NSApplicationDelegate), selector, NO,
+                                                    YES)
+                          .types);
+    }
+    // A window over first run's that closes, such as a Little window a link from another app
+    // opened, gives the keyboard back to first run's, not to none, as the browser's is held.
+    [NSNotificationCenter.defaultCenter
+        addObserverForName:NSWindowWillCloseNotification
+                    object:nil
+                     queue:nil
+                usingBlock:^(NSNotification* notification) {
+                  if (!g_first_run || notification.object == g_first_run) {
+                    return;
+                  }
+                  dispatch_async(dispatch_get_main_queue(), ^{
+                    NSWindow* key = NSApp.keyWindow;
+                    if (g_first_run.visible && (!key || !key.visible)) {
+                      [g_first_run makeKeyAndOrderFront:nil];
+                    }
+                  });
+                }];
+  }
+  // The system's buttons, but its size is fixed: nothing to zoom to, resize or tab with.
+  g_first_run.styleMask &= ~NSWindowStyleMaskResizable;
+  [g_first_run standardWindowButton:NSWindowZoomButton].enabled = NO;
+  g_first_run.tabbingMode = NSWindowTabbingModeDisallowed;
+}
+
+void host_show_first_run(void) {
+  if (!g_first_run) {
+    return;
+  }
+  // On screen once the UI has drawn it, as Settings comes, and centred on the screen the browser
+  // window opens on, as it opens before any.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!g_first_run) {
+      return;
+    }
+    NSRect visible = WindowScreen().visibleFrame;
+    NSSize size = g_first_run.frame.size;
+    [g_first_run setFrameOrigin:NSMakePoint(round(NSMidX(visible) - size.width / 2),
+                                            round(NSMidY(visible) - size.height / 2))];
+    [g_first_run_view.layer setNeedsDisplay];
+    [g_first_run_view.layer displayIfNeeded];
+    [g_first_run makeKeyAndOrderFront:nil];
+    host_close_launch_window();
+    // check.sh waits for this line.
+    fprintf(stderr, "browser: first run shown\n");
+  });
+}
+
+void host_close_first_run(void) {
+  [g_first_run orderOut:nil];
+  g_first_run = nil;
+  g_first_run_view = nil;
+}
+
 bool host_close_other_window(void) {
   NSWindow* key = NSApp.keyWindow;
   // The browser window, the windows over it and Settings take ⌘W themselves.
@@ -6080,7 +6260,11 @@ bool host_close_other_window(void) {
       !(key.styleMask & NSWindowStyleMaskClosable)) {
     return false;
   }
-  [key performClose:nil];
+  // Closed after the menu's action returns: a GPUI window closing inside it finds the app borrowed
+  // and aborts.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [key performClose:nil];
+  });
   return true;
 }
 
