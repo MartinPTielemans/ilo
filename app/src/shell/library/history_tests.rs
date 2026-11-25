@@ -574,7 +574,7 @@ fn a_click_on_a_past_tasks_row_opens_its_conversation(cx: &mut TestAppContext) {
     assert_eq!(shown(cx), None);
 }
 
-/// The search field's "Search History…" follows a switch between light and dark while the Library
+/// The search field's "Search history" follows a switch between light and dark while the Library
 /// stays open, in the placeholder gray of the palette it's drawn in: a field that kept the gray of
 /// the look it opened in drew Paper on a light window's field, almost the field's own colour.
 #[gpui::test]

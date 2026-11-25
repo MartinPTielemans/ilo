@@ -1054,13 +1054,13 @@ impl Shell {
         }
         self.section = section;
         let placeholder = match section {
-            Section::Media => "Search Media…",
-            Section::Downloads => "Search Downloads…",
+            Section::Media => "Search media",
+            Section::Downloads => "Search downloads",
             Section::Spaces => "",
-            Section::Archive => "Search History…",
-            Section::Agents => "Search Agents…",
-            Section::Boosts => "Search Boosts…",
-            Section::Boards => "Search Boards…",
+            Section::Archive => "Search history",
+            Section::Agents => "Search threads",
+            Section::Boosts => "Search boosts",
+            Section::Boards => "Search boards",
         };
         // Its colours are the panel's to give as it draws, since the field outlives a change of
         // the window's look.
