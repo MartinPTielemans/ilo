@@ -120,6 +120,10 @@ screens=(
   "command-line-flatpak-on-light|settings ilo-command|PREVIEW_COMMAND_LINE=flatpak-on PREVIEW_APPEARANCE=light"
   "command-line-flatpak-on-dark|settings ilo-command|PREVIEW_COMMAND_LINE=flatpak-on PREVIEW_APPEARANCE=dark"
   "command-line-flatpak-on-narrow|settings ilo-command|PREVIEW_COMMAND_LINE=flatpak-on PREVIEW_APPEARANCE=light PREVIEW_SETTINGS_WIDTH=720"
+  "assistants-start-light|settings assistant rows|PREVIEW_ASSISTANTS=start PREVIEW_APPEARANCE=light"
+  "assistants-start-dark|settings assistant rows|PREVIEW_ASSISTANTS=start PREVIEW_APPEARANCE=dark"
+  "assistants-signed-in-light|settings assistant rows|PREVIEW_ASSISTANTS=signed-in PREVIEW_APPEARANCE=light"
+  "assistants-signed-in-dark|settings assistant rows|PREVIEW_ASSISTANTS=signed-in PREVIEW_APPEARANCE=dark"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;

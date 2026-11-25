@@ -56,9 +56,9 @@ use crate::settings_rows::{
 use crate::theme::Theme;
 use crate::tokens::radius;
 use crate::tokens::settings::{
-    BOX_GAP, BUTTONS_TOP, CHECK_TICK, CHIP_GAP, CHIP_HEIGHT, CHIP_PADDING, CHIP_RADIUS,
-    CONTROL_GAP, DETAIL_LINE, DETAIL_TOP, DISCLOSURE_GAP, DISCLOSURE_GLYPH, DOT, GLYPH_PLATE,
-    GLYPH_PLATE_GAP, HEADER_GAP, ROW_X, STEP,
+    BOX_GAP, BUTTONS_TOP, CHIP_GAP, CHIP_HEIGHT, CHIP_PADDING, CHIP_RADIUS, CONTROL_GAP,
+    DETAIL_LINE, DETAIL_TOP, DISCLOSURE_GAP, DISCLOSURE_GLYPH, DOT, GLYPH_PLATE, GLYPH_PLATE_GAP,
+    HEADER_GAP, ROW_X, STEP,
 };
 use crate::tokens::shell::import::BADGE;
 use crate::tokens::text;
@@ -2131,7 +2131,7 @@ impl ImportView {
             .items_center()
             .gap(px(CONTROL_GAP))
             .child(format!("Turn on {app}"))
-            .child(switch(look, true, 1., look.accent));
+            .child(switch(look, true, 1., look.on));
         let steps = [
             step(
                 1,
@@ -2465,13 +2465,7 @@ impl ImportView {
                         .on_click(
                             cx.listener(move |view, _, _, cx| view.toggle_folder(&toggled, cx)),
                         )
-                        .child(checked_row(
-                            look,
-                            on,
-                            name.clone(),
-                            look.accent,
-                            rgb(CHECK_TICK),
-                        ))
+                        .child(checked_row(look, on, name.clone(), look.on, look.knob_on))
                 });
                 Some(group(look, rows.map(|row| div().child(row))))
             }
@@ -2852,7 +2846,7 @@ impl ImportView {
                 .id(("import-kind", kind as usize))
                 .when(self.a11y, |toggle| named_switch(toggle, kind.label(), on))
                 .on_click(cx.listener(move |view, _, _, cx| view.toggle(kind, cx)))
-                .child(switch(look, on, slid, look.accent));
+                .child(switch(look, on, slid, look.on));
             let chips = (read.as_ref())
                 .filter(|_| kind == Kind::Spaces)
                 .map(|read| chips(look, &read.found.spaces));
@@ -2960,7 +2954,7 @@ impl ImportView {
                     .id("import-pick-passwords-switch")
                     .when(self.a11y, |toggle| named_switch(toggle, "Passwords", *on))
                     .on_click(cx.listener(|view, _, _, cx| view.toggle_passwords(cx)))
-                    .child(switch(look, *on, 1., look.accent));
+                    .child(switch(look, *on, 1., look.on));
                 let said = format!("**{}**, read by Chromium's importer", file_name(file));
                 (said, *on, toggle.into_any_element())
             }
@@ -3583,7 +3577,7 @@ impl Render for ImportView {
                                 div()
                                     .size(px(BADGE))
                                     .rounded_full()
-                                    .bg(look.accent)
+                                    .bg(look.on)
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -3591,7 +3585,7 @@ impl Render for ImportView {
                                         svg()
                                             .path("icons/check.svg")
                                             .size(px(BADGE * 0.75))
-                                            .text_color(gpui::white()),
+                                            .text_color(look.knob_on),
                                     ),
                             );
                         let counts = (!came.counts.is_empty()).then(|| came.counts.clone());
