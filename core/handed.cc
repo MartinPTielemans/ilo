@@ -11,7 +11,6 @@
 #include "browser_core/handed_place.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
-#include "components/sync/base/unique_position.h"
 #include "content/public/browser/history_traversal.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
@@ -24,16 +23,6 @@ namespace {
 std::map<bc_id, Mark>& Marks() {
   static base::NoDestructor<std::map<bc_id, Mark>> marks;
   return *marks;
-}
-
-// The place |row| has among |home|'s rows: its own there, or the one it kept if it's a handed tab
-// that left |home|. Null if it has none.
-const syncer::UniquePosition* PlaceOf(const Space& home, bc_id row) {
-  if (const Space::Node* node = home.NodeOf(row)) {
-    return &node->position;
-  }
-  const Mark* mark = Of(row);
-  return mark && mark->home == home.id() ? &mark->node.position : nullptr;
 }
 
 // What the page of |tab| asks before it's taken to the entry at |index| of its history, by a page
@@ -56,7 +45,8 @@ Mark Leaving(const Space& from, bc_id tab) {
   return {.home = from.id(),
           .node = node ? *node : Space::Node(),
           .split = std::move(split),
-          .pin = handed_back::PinOf(from, tab)};
+          .pin = handed_back::PinOf(from, tab),
+          .today_folder = handed_back::TodayFolderOf(from, tab)};
 }
 
 void Given(bc_id tab, Mark left) {
@@ -122,7 +112,7 @@ bool Return(bc_id tab) {
   }
   // A favorite whose tile is gone stays where the move put it, at the top of Today.
   if (!mark.tile) {
-    handed_back::Put(*home, tab, mark.node, mark.split, mark.pin);
+    handed_back::Put(*home, tab, mark.node, mark.split, mark.pin, mark.today_folder);
   }
   if (!mark.split.empty()) {
     Window::PanesChanged();
@@ -173,8 +163,15 @@ bool MayStep(bc_id tab, int offset) {
   return entry && MayGoTo(tab, entry->GetUniqueID(), /*from_page=*/false);
 }
 
-size_t PlaceAmong(const Space& home, const std::vector<bc_id>& rows, const Space::Node& node) {
-  return handed_back::Among(home, rows, node, [&](bc_id row) { return PlaceOf(home, row); });
+handed_back::Today TodayWith(const Space& home) {
+  std::vector<handed_back::HeldToday> held;
+  for (const auto& [tab, mark] : Marks()) {
+    // A favorite is saved as its tile, and a pinned tab among the pinned rows.
+    if (mark.home == home.id() && !mark.pin && !mark.tile) {
+      held.push_back({.tab = tab, .node = mark.node, .folder = mark.today_folder});
+    }
+  }
+  return handed_back::TodayWith(home, held);
 }
 
 handed_back::Pinned PinnedWith(const Space& home) {

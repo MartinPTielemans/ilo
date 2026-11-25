@@ -33,6 +33,10 @@ struct Mark {
   // Its pin, for a tab that was pinned: an agent has it as a tab alone, and it comes back pinned
   // as it was.
   std::optional<handed_back::Pin> pin;
+  // The today's folder it was in, for a Today tab in one, else 0: it comes back into that folder
+  // at its place, as its first or last tab too, while its Space has the folder, and loose at its
+  // place once the folder is gone. No folder is made for it.
+  bc_id today_folder = 0;
   // For a favorite, the tab that keeps its tile while it's away, else 0: one without a page, at
   // the URL it's a favorite at, which is the favorite to the favorites, the session and each
   // window, so the tile stays where it is, as it is. It gets no page while this mark names it
@@ -89,9 +93,9 @@ bool AgentMayGoTo(bc_id tab, int entry);
 // holds it: its history is bound again as its page is made.
 bool MayStep(bc_id tab, int offset);
 
-// Where a tab that kept |node| goes among |rows|, the Today tabs of |home|, the Space it left, or
-// what one of its folders holds, each of them |home|'s own or another handed tab that left it.
-size_t PlaceAmong(const Space& home, const std::vector<bc_id>& rows, const Space::Node& node);
+// |home|'s Today tabs with the Today tabs handed out of it among them, each where it would come
+// back now, with the today's folder it would be in.
+handed_back::Today TodayWith(const Space& home);
 
 // |home|'s pinned rows with the pinned tabs handed out of it among them, each where it would come
 // back now.

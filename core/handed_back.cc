@@ -115,19 +115,72 @@ Pinned PinnedWith(const Space& home, const std::vector<Held>& held) {
   return with;
 }
 
+bc_id TodayFolderOf(const Space& space, bc_id tab) {
+  const bc_id folder = space.FolderOf(tab);
+  return space.IsTodayFolder(folder) ? folder : 0;
+}
+
+Today TodayWith(const Space& home, const std::vector<HeldToday>& held) {
+  Today with{.rows = home.today()};
+  std::map<bc_id, const Space::Node*> nodes;
+  const auto folder_of = [&](bc_id row) {
+    auto handed = with.folders.find(row);
+    return handed == with.folders.end() ? TodayFolderOf(home, row) : handed->second;
+  };
+  const auto place_of = [&](bc_id row) -> const syncer::UniquePosition* {
+    auto handed = nodes.find(row);
+    const Space::Node* its = handed == nodes.end() ? home.NodeOf(row) : handed->second;
+    return its ? &its->position : nullptr;
+  };
+  for (const HeldToday& each : held) {
+    // The folder's tabs, and where each of those is among the rows. None once the folder is gone.
+    std::vector<bc_id> beside;
+    std::vector<size_t> at;
+    for (size_t i = 0; each.folder && i < with.rows.size(); ++i) {
+      if (folder_of(with.rows[i]) == each.folder) {
+        beside.push_back(with.rows[i]);
+        at.push_back(i);
+      }
+    }
+    bc_id folder = home.IsTodayFolder(each.folder) && !beside.empty() ? each.folder : 0;
+    size_t row = 0;
+    if (folder) {
+      const size_t index = Among(home, beside, each.node, place_of);
+      row = index < at.size() ? at[index] : at.back() + 1;
+    } else {
+      row = Among(home, with.rows, each.node, place_of);
+      // Between two tabs of one today's folder, it's in that one, as a tab put inside a folder's
+      // run is.
+      const bc_id above = row > 0 && row < with.rows.size() ? folder_of(with.rows[row - 1]) : 0;
+      if (above && folder_of(with.rows[row]) == above) {
+        folder = above;
+      }
+    }
+    with.rows.insert(with.rows.begin() + row, each.tab);
+    if (folder) {
+      with.folders[each.tab] = folder;
+    }
+    nodes[each.tab] = &each.node;
+  }
+  return with;
+}
+
 void Put(Space& home,
          bc_id tab,
          const Space::Node& node,
          const std::vector<bc_id>& split,
-         const std::optional<Pin>& pin) {
+         const std::optional<Pin>& pin,
+         bc_id today_folder) {
   const auto place_of = [&](bc_id row) -> const syncer::UniquePosition* {
     const Space::Node* its = home.NodeOf(row);
     return its ? &its->position : nullptr;
   };
-  // Each row's node as it is. The tab moves with the place it got at the top of Today, which the
-  // Space may make room for by giving the row above it a new one, and none of them moved.
+  // Each row's node as it is, and each today's folder's. The tab moves with the place it got at
+  // the top of Today, which the Space may make room for by giving the row above it a new one, and
+  // none of them moved.
   std::map<bc_id, Space::Node> nodes;
-  for (const std::vector<bc_id>* rows : {&home.pinned_rows(), &home.today()}) {
+  const std::vector<bc_id> today_folders = home.TodayFolders();
+  for (const std::vector<bc_id>* rows : {&home.pinned_rows(), &home.today(), &today_folders}) {
     for (bc_id row : *rows) {
       if (const Space::Node* its = home.NodeOf(row)) {
         nodes[row] = *its;
@@ -145,6 +198,12 @@ void Put(Space& home,
     }
     home.Move(tab, /*pinned=*/true, folder, Among(home, beside, *by, place_of),
               [&](bc_id) { return pin->url; });
+  } else if (home.IsTodayFolder(today_folder)) {
+    // Among the folder's tabs, so its first or last tab is in it again, as one from between two
+    // is.
+    home.Move(tab, /*pinned=*/false, today_folder,
+              Among(home, home.TodayFolderTabs(today_folder), node, place_of),
+              [](bc_id) { return GURL(); });
   } else {
     std::vector<bc_id> others = home.today();
     std::erase(others, tab);

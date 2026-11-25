@@ -329,18 +329,13 @@ SavedSpace SaveSpace(const Space& space,
   // Its pinned rows and its Today tabs with those the user handed an agent out of it, each where
   // it would come back.
   handed_back::Pinned pinned_rows{.rows = space.pinned_rows()};
-  std::vector<bc_id> today_rows = space.today();
+  handed_back::Today today_rows{.rows = space.today()};
   if (handed_as_users && !space.agent()) {
     pinned_rows = handed::PinnedWith(space);
-    for (const auto& [tab, mark] : handed::All()) {
-      if (mark.home == space.id() && !mark.pin && !mark.tile) {
-        today_rows.insert(today_rows.begin() + handed::PlaceAmong(space, today_rows, mark.node),
-                          tab);
-      }
-    }
+    today_rows = handed::TodayWith(space);
   }
   for (auto [ids, tabs] : {std::pair(&std::as_const(pinned_rows.rows), &to.pinned),
-                           std::pair(&std::as_const(today_rows), &to.today)}) {
+                           std::pair(&std::as_const(today_rows.rows), &to.today)}) {
     bc_id above = 0;
     for (bc_id id : *ids) {
       const handed::Mark* mark = handed_as_users ? handed::Of(id) : nullptr;
@@ -375,6 +370,9 @@ SavedSpace SaveSpace(const Space& space,
           tab.folder = folder == folders.end() ? -1 : folder->second;
         } else {
           tab.last_seen = Window::Showing(id) ? base::Time::Now() : saving->last_seen();
+          // In the today's folder it comes back into, so a launch has that folder whole.
+          auto folder = today_folders.find(today_rows.folders[id]);
+          tab.folder = folder == today_folders.end() ? -1 : folder->second;
         }
         above = id;
         tabs->push_back(std::move(tab));

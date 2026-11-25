@@ -21,6 +21,7 @@ struct Left {
   Space::Node node;
   Rows split;
   std::optional<Pin> pin;
+  bc_id today_folder = 0;
 };
 
 // Space alone, with what it asks of the rest of the core as space_unittest.cc stubs it.
@@ -51,7 +52,10 @@ class HandedBackTest : public testing::Test {
 
   // |tab| leaves Work as a given tab does: what's kept of it, and then out of the Space.
   Left Give(bc_id tab) {
-    Left left{.node = *work_->NodeOf(tab), .split = work_->Panes(tab), .pin = PinOf(*work_, tab)};
+    Left left{.node = *work_->NodeOf(tab),
+              .split = work_->Panes(tab),
+              .pin = PinOf(*work_, tab),
+              .today_folder = TodayFolderOf(*work_, tab)};
     if (left.split.size() < 2) {
       left.split.clear();
     }
@@ -62,7 +66,41 @@ class HandedBackTest : public testing::Test {
   // |tab| comes back to Work as a returned tab does: at the top of Today, then put back.
   void Return(bc_id tab, const Left& left) {
     work_->AddAt(tab, 0);
-    Put(*work_, tab, left.node, left.split, left.pin);
+    Put(*work_, tab, left.node, left.split, left.pin, left.today_folder);
+  }
+
+  // Four more Today tabs under the split view, the upper three in the today's folder Trip, which
+  // is returned.
+  bc_id AddTrip() {
+    for (bc_id tab : {21, 22, 23, 24}) {
+      work_->AddAt(tab, SIZE_MAX);
+    }
+    const bc_id trip = work_->AddTodayFolder("Trip", {21, 22, 23});
+    EXPECT_TRUE(trip);
+    EXPECT_EQ(work_->today(), (Rows{11, 12, 13, 21, 22, 23, 24}));
+    return trip;
+  }
+
+  // What the session saves of Work's Today tabs while |tab| is away with |left|.
+  Today SavedToday(bc_id tab, const Left& left) const {
+    return TodayWith(*work_, {{.tab = tab, .node = left.node, .folder = left.today_folder}});
+  }
+
+  // The rows |saved| has in |folder|, which must be one unbroken run: a launch brings back only a
+  // today's folder whose tabs come back together.
+  Rows RunOf(const Today& saved, bc_id folder) const {
+    Rows in;
+    std::vector<size_t> at;
+    for (size_t i = 0; i < saved.rows.size(); ++i) {
+      auto handed = saved.folders.find(saved.rows[i]);
+      if ((handed == saved.folders.end() ? TodayFolderOf(*work_, saved.rows[i]) : handed->second) ==
+          folder) {
+        in.push_back(saved.rows[i]);
+        at.push_back(i);
+      }
+    }
+    EXPECT_TRUE(at.empty() || at.back() - at.front() + 1 == at.size());
+    return in;
   }
 
   // Whether |tab| has the node it left with, its id and its place.
@@ -71,10 +109,12 @@ class HandedBackTest : public testing::Test {
     return node && node->id == left.node.id && node->position.Equals(left.node.position);
   }
 
-  // Each of Work's rows with its node, its id and its place, as text to compare.
+  // Each of Work's rows and today's folders with its node, its id and its place, as text to
+  // compare.
   std::map<bc_id, std::string> Nodes() const {
     std::map<bc_id, std::string> nodes;
-    for (const Rows* rows : {&work_->pinned_rows(), &work_->today()}) {
+    const Rows today_folders = work_->TodayFolders();
+    for (const Rows* rows : {&work_->pinned_rows(), &work_->today(), &today_folders}) {
       for (bc_id row : *rows) {
         const Space::Node* node = work_->NodeOf(row);
         nodes[row] = node ? node->id.AsLowercaseString() + " " + node->position.ToDebugString()
@@ -262,6 +302,162 @@ TEST_F(HandedBackTest, ATodayTabStaysLooseOnceItsSplitsOtherTabIsPinned) {
   Return(13, left);
   EXPECT_EQ(work_->today(), (Rows{11, 13}));
   EXPECT_EQ(work_->Panes(13), Rows{13});
+}
+
+TEST_F(HandedBackTest, OnlyATodayTabInATodaysFolderHasOne) {
+  const bc_id trip = AddTrip();
+  EXPECT_EQ(TodayFolderOf(*work_, 22), trip);
+  EXPECT_EQ(TodayFolderOf(*work_, 24), 0u);
+  // A pinned tab's folder is its pin's.
+  EXPECT_EQ(TodayFolderOf(*work_, 2), 0u);
+}
+
+TEST_F(HandedBackTest, ATodayTabComesBackIntoItsTodaysFolderFromBetweenItsTabs) {
+  const bc_id trip = AddTrip();
+  const Left left = Give(22);
+  EXPECT_EQ(work_->TodayFolderTabs(trip), (Rows{21, 23}));
+  Return(22, left);
+  EXPECT_EQ(work_->today(), (Rows{11, 12, 13, 21, 22, 23, 24}));
+  EXPECT_EQ(work_->TodayFolderTabs(trip), (Rows{21, 22, 23}));
+  EXPECT_TRUE(HasNode(22, left));
+}
+
+// At the folder's edge its place alone is beside the folder: what's kept of it puts it inside.
+TEST_F(HandedBackTest, ATodaysFoldersFirstTabAndItsLastComeBackIntoIt) {
+  const bc_id trip = AddTrip();
+  for (bc_id tab : {21, 23}) {
+    const Left left = Give(tab);
+    Return(tab, left);
+    EXPECT_EQ(work_->today(), (Rows{11, 12, 13, 21, 22, 23, 24})) << tab;
+    EXPECT_EQ(work_->TodayFolderTabs(trip), (Rows{21, 22, 23})) << tab;
+    EXPECT_TRUE(HasNode(tab, left)) << tab;
+  }
+}
+
+TEST_F(HandedBackTest, OnceItsTodaysFolderIsDeletedItsLooseAtItsPlace) {
+  const bc_id trip = AddTrip();
+  const Left left = Give(22);
+  work_->DeleteFolder(trip);
+  Return(22, left);
+  EXPECT_EQ(work_->today(), (Rows{11, 12, 13, 21, 22, 23, 24}));
+  // No folder is made for it.
+  EXPECT_TRUE(work_->TodayFolders().empty());
+  EXPECT_EQ(work_->FolderOf(22), 0u);
+  EXPECT_TRUE(HasNode(22, left));
+}
+
+// A today's folder goes with its last tab, so one whose tabs were all given isn't there to come
+// back to.
+TEST_F(HandedBackTest, OnceItsTodaysFolderWentWithItsLastTabItsLooseAtItsPlace) {
+  const bc_id trip = AddTrip();
+  std::map<bc_id, Left> left;
+  for (bc_id tab : {21, 22, 23}) {
+    left[tab] = Give(tab);
+  }
+  EXPECT_FALSE(work_->IsTodayFolder(trip));
+  for (bc_id tab : {22, 21, 23}) {
+    Return(tab, left[tab]);
+    EXPECT_TRUE(work_->TodayFolders().empty()) << tab;
+  }
+  EXPECT_EQ(work_->today(), (Rows{11, 12, 13, 21, 22, 23, 24}));
+}
+
+TEST_F(HandedBackTest, NoTodaysFoldersNodeChangesWithAGiveAndAReturn) {
+  AddTrip();
+  for (bc_id tab : {31, 32}) {
+    work_->AddAt(tab, SIZE_MAX);
+  }
+  ASSERT_TRUE(work_->AddTodayFolder("Plans", {31, 32}));
+  const std::map<bc_id, std::string> before = Nodes();
+  for (bc_id tab : {21, 22, 23, 24, 31, 32}) {
+    const Left left = Give(tab);
+    Return(tab, left);
+    EXPECT_EQ(Nodes(), before) << tab;
+  }
+}
+
+TEST_F(HandedBackTest, AHandedTodayTabIsSavedInItsTodaysFolderWhereItComesBack) {
+  const bc_id trip = AddTrip();
+  for (bc_id tab : {21, 22, 23}) {
+    const Left left = Give(tab);
+    const Today saved = SavedToday(tab, left);
+    EXPECT_EQ(saved.rows, (Rows{11, 12, 13, 21, 22, 23, 24})) << tab;
+    EXPECT_EQ(RunOf(saved, trip), (Rows{21, 22, 23})) << tab;
+    Return(tab, left);
+  }
+  // One that was in none is saved in none.
+  const Left left = Give(24);
+  const Today saved = SavedToday(24, left);
+  EXPECT_EQ(saved.rows, (Rows{11, 12, 13, 21, 22, 23, 24}));
+  EXPECT_TRUE(saved.folders.empty());
+}
+
+TEST_F(HandedBackTest, HandedTodayTabsOfOneTodaysFolderAreSavedInItInTheirOrder) {
+  const bc_id trip = AddTrip();
+  const Left first = Give(21), second = Give(22);
+  const Today saved =
+      TodayWith(*work_, {{.tab = 22, .node = second.node, .folder = second.today_folder},
+                         {.tab = 21, .node = first.node, .folder = first.today_folder}});
+  EXPECT_EQ(saved.rows, (Rows{11, 12, 13, 21, 22, 23, 24}));
+  EXPECT_EQ(RunOf(saved, trip), (Rows{21, 22, 23}));
+}
+
+// The user moved the folder meanwhile: the tab's own place is where the folder was, and it's saved
+// with the folder's tabs all the same, or a launch would find them apart and bring back none.
+TEST_F(HandedBackTest, AHandedTodayTabIsSavedWithItsTodaysFolderWhereverThatIsNow) {
+  const bc_id trip = AddTrip();
+  const Left left = Give(22);
+  work_->MoveFolder(trip, /*pinned=*/false, 0, 0, &Url);
+  ASSERT_EQ(work_->today(), (Rows{21, 23, 11, 12, 13, 24}));
+  const Today saved = SavedToday(22, left);
+  EXPECT_EQ(RunOf(saved, trip).size(), 3u);
+  EXPECT_EQ(saved.folders.at(22), trip);
+  Return(22, left);
+  EXPECT_EQ(work_->today(), saved.rows);
+  EXPECT_EQ(work_->TodayFolderTabs(trip).size(), 3u);
+}
+
+TEST_F(HandedBackTest, AHandedTodayTabWhoseTodaysFolderIsGoneIsSavedLoose) {
+  const bc_id trip = AddTrip();
+  const Left left = Give(22);
+  work_->DeleteFolder(trip);
+  const Today saved = SavedToday(22, left);
+  EXPECT_EQ(saved.rows, (Rows{11, 12, 13, 21, 22, 23, 24}));
+  EXPECT_TRUE(saved.folders.empty());
+}
+
+// A tab that was in no today's folder, whose place is now between two tabs the user made a folder
+// of meanwhile, comes back in that folder: the user's folder stays whole, and none is made.
+TEST_F(HandedBackTest, ATodayTabComesBackIntoATodaysFolderMadeAroundItsPlaceMeanwhile) {
+  for (bc_id tab : {21, 22, 23}) {
+    work_->AddAt(tab, SIZE_MAX);
+  }
+  const Left left = Give(22);
+  EXPECT_EQ(left.today_folder, 0u);
+  const bc_id trip = work_->AddTodayFolder("Trip", {21, 23});
+  ASSERT_TRUE(trip);
+  Return(22, left);
+  EXPECT_EQ(work_->today(), (Rows{11, 12, 13, 21, 22, 23}));
+  EXPECT_EQ(work_->TodayFolderTabs(trip), (Rows{21, 22, 23}));
+  EXPECT_EQ(work_->TodayFolders(), Rows{trip});
+  EXPECT_TRUE(HasNode(22, left));
+}
+
+// And it's saved in that folder meanwhile, so after a quit it's there as after a return.
+TEST_F(HandedBackTest, ATodayTabIsSavedInATodaysFolderMadeAroundItsPlaceMeanwhile) {
+  for (bc_id tab : {21, 22, 23}) {
+    work_->AddAt(tab, SIZE_MAX);
+  }
+  const Left left = Give(22);
+  const bc_id trip = work_->AddTodayFolder("Trip", {21, 23});
+  ASSERT_TRUE(trip);
+  const Today saved = SavedToday(22, left);
+  EXPECT_EQ(saved.rows, (Rows{11, 12, 13, 21, 22, 23}));
+  EXPECT_EQ(RunOf(saved, trip), (Rows{21, 22, 23}));
+  EXPECT_EQ(saved.folders.at(22), trip);
+  // Beside the folder, not between two of its tabs, it's in none.
+  const Left beside = Give(13);
+  EXPECT_TRUE(SavedToday(13, beside).folders.empty());
 }
 
 }  // namespace
