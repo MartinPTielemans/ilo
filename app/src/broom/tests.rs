@@ -22,17 +22,18 @@ fn names(folders: &[Folder]) -> Vec<(&str, Vec<usize>)> {
 }
 
 #[test]
-fn fewer_than_two_tabs_hand_nothing() {
-    assert!(handed(&tabs(0)).is_none());
-    assert!(handed(&tabs(1)).is_none());
-    assert!(handed(&tabs(2)).is_some());
+fn fewer_than_four_tabs_hand_nothing() {
+    for count in 0..4 {
+        assert!(handed(&tabs(count)).is_none(), "{count}");
+    }
+    assert!(handed(&tabs(4)).is_some());
 }
 
 #[test]
 fn each_tab_is_handed_as_a_number_a_title_and_a_host_alone() {
-    let list: Value = serde_json::from_str(&handed(&tabs(3)).unwrap()).unwrap();
+    let list: Value = serde_json::from_str(&handed(&tabs(FEWEST)).unwrap()).unwrap();
     let list = list.as_array().unwrap();
-    assert_eq!(list.len(), 3);
+    assert_eq!(list.len(), FEWEST);
     for (at, tab) in list.iter().enumerate() {
         let tab = tab.as_object().unwrap();
         let mut keys: Vec<&str> = tab.keys().map(String::as_str).collect();
@@ -313,6 +314,19 @@ fn sorts(body: &str) -> String {
     format!("echo '{said}'")
 }
 
+#[test]
+fn two_runs_made_back_to_back_have_two_folders() {
+    let (first, second) = (Run::new(CAP).unwrap(), Run::new(CAP).unwrap());
+    let folders = [first.folder.clone(), second.folder.clone()];
+    assert_ne!(folders[0], folders[1]);
+    assert!(folders.iter().all(|folder| folder.is_dir()));
+    drop((first, second));
+    assert!(
+        folders.iter().all(|folder| !folder.exists()),
+        "each goes with its run"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn a_run_hands_the_list_and_reads_the_folders() {
@@ -321,8 +335,8 @@ fn a_run_hands_the_list_and_reads_the_folders() {
         &sorts(r#"{"folders":[{"name":"Trips","tabs":[2,1]}]}"#),
     );
     let run = Run::new(CAP).unwrap();
-    let list = handed(&tabs(3)).unwrap();
-    let folders = run.answer(&stand_in.program(), &list, 3).unwrap();
+    let list = handed(&tabs(FEWEST)).unwrap();
+    let folders = run.answer(&stand_in.program(), &list, FEWEST).unwrap();
     assert_eq!(names(&folders), [("Trips", vec![1, 0])]);
     assert_eq!(
         std::fs::read_to_string(stand_in.at("handed")).unwrap(),
@@ -346,7 +360,7 @@ fn a_run_hands_the_list_and_reads_the_folders() {
 fn a_claude_too_old_is_handed_nothing() {
     let stand_in = StandIn::new("2.0.9", &sorts(r#"{"folders":[]}"#));
     let run = Run::new(CAP).unwrap();
-    let answer = run.answer(&stand_in.program(), &handed(&tabs(3)).unwrap(), 3);
+    let answer = run.answer(&stand_in.program(), &handed(&tabs(FEWEST)).unwrap(), FEWEST);
     assert_eq!(answer.err(), Some(Failed::TooOld));
     assert!(!stand_in.at("handed").exists());
 }
@@ -361,7 +375,7 @@ fn a_run_that_fails_or_says_something_else_moves_nothing() {
     ] {
         let stand_in = StandIn::new("2.1.332", body);
         let run = Run::new(CAP).unwrap();
-        let answer = run.answer(&stand_in.program(), &handed(&tabs(3)).unwrap(), 3);
+        let answer = run.answer(&stand_in.program(), &handed(&tabs(FEWEST)).unwrap(), FEWEST);
         assert_eq!(answer.err(), Some(Failed::Unread), "{body}");
     }
 }
@@ -375,7 +389,7 @@ fn a_version_that_isnt_read_hands_nothing_and_never_started() {
         let stand_in = StandIn::answering(version, &sorts(r#"{"folders":[]}"#));
         let run = Run::new(Duration::from_millis(300)).unwrap();
         let started = Instant::now();
-        let answer = run.answer(&stand_in.program(), &handed(&tabs(3)).unwrap(), 3);
+        let answer = run.answer(&stand_in.program(), &handed(&tabs(FEWEST)).unwrap(), FEWEST);
         assert_eq!(answer.err(), Some(Failed::NotStarted), "{version}");
         assert!(started.elapsed() < Duration::from_secs(5), "{version}");
         assert!(!stand_in.at("handed").exists(), "{version}");
@@ -388,7 +402,7 @@ fn the_cap_kills_the_run_with_all_it_started() {
     let stand_in = StandIn::new("2.1.332", "(sleep 1; touch \"$0.late\") &\nsleep 20");
     let run = Run::new(Duration::from_millis(300)).unwrap();
     let started = Instant::now();
-    let answer = run.answer(&stand_in.program(), &handed(&tabs(3)).unwrap(), 3);
+    let answer = run.answer(&stand_in.program(), &handed(&tabs(FEWEST)).unwrap(), FEWEST);
     assert_eq!(answer.err(), Some(Failed::TooLong));
     assert!(started.elapsed() < Duration::from_secs(5));
     std::thread::sleep(Duration::from_millis(1500));
@@ -411,13 +425,13 @@ fn ending_a_run_kills_it_and_moves_nothing() {
         ender.end();
     });
     let started = Instant::now();
-    let answer = run.answer(&stand_in.program(), &handed(&tabs(3)).unwrap(), 3);
+    let answer = run.answer(&stand_in.program(), &handed(&tabs(FEWEST)).unwrap(), FEWEST);
     ends.join().unwrap();
     assert_eq!(answer.err(), Some(Failed::Ended));
     assert!(started.elapsed() < Duration::from_secs(5));
     let ended = Run::new(CAP).unwrap();
     ended.end();
-    let answer = ended.answer(&stand_in.program(), &handed(&tabs(3)).unwrap(), 3);
+    let answer = ended.answer(&stand_in.program(), &handed(&tabs(FEWEST)).unwrap(), FEWEST);
     assert_eq!(
         answer.err(),
         Some(Failed::Ended),

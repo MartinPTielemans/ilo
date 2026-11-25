@@ -22,7 +22,7 @@ thread_local! {
     /// What each window's broom shows, by the window's core id; a window whose broom isn't drawn
     /// has none.
     static SHOWN: RefCell<HashMap<bc::bc_id, Broom>> = RefCell::default();
-    /// Whether each Space has the two tabs a sort needs, as the pass last found, by its core id.
+    /// Whether each Space has the tabs a sort needs, as the pass last found, by its core id.
     /// A Space no pass has looked at since it changed has none.
     static SORTS: RefCell<HashMap<bc::bc_id, bool>> = RefCell::default();
     /// The one sort running.
@@ -102,10 +102,11 @@ pub(crate) fn page_counts_changed(cx: &mut App) {
 }
 
 /// Whether the core can put a sort's answer in place, as today's folders: known without a run,
-/// and part of the one answer that makes the broom be. This core can't, as its header has no
-/// `bc_folder_create_today`. Nor can Windows, till its run is killed as a job object, whole.
+/// and part of the one answer that makes the broom be. The core can where its header has
+/// `bc_folder_create_today`, which build.rs reads. Windows can't, till its run is killed as a job
+/// object, whole.
 fn makes_today_folders() -> bool {
-    let core = false;
+    let core = cfg!(today_folders);
     core && cfg!(not(target_os = "windows"))
 }
 
@@ -123,8 +124,8 @@ pub(crate) fn agents_changed(cx: &mut App) {
     settle_all(cx);
 }
 
-/// The pass: whether `space` has two tabs a sort would hand over, from what `shell` holds, looking
-/// no further than the second.
+/// The pass: whether `space` has the tabs a sort needs to hand over, from what `shell` holds,
+/// looking no further than the last of them.
 fn pass(space: bc::bc_id, shell: &Entity<Shell>, cx: &App) {
     let sorts = shell.read(cx).broom_sorts(space);
     SORTS.with_borrow_mut(|kept| kept.insert(space, sorts));
@@ -273,10 +274,11 @@ fn ended(
             .and_then(|each| each.shell.upgrade())
     });
     // Not handed over, so no line says it was: the run didn't start or read the program's
-    // version, or the program was too old to take it.
+    // version, or the program was too old to take it. An ended run writes nothing either, however
+    // far it got.
     let given = !matches!(
         answer,
-        Err(broom::Failed::NotStarted | broom::Failed::TooOld)
+        Err(broom::Failed::NotStarted | broom::Failed::TooOld | broom::Failed::Ended)
     );
     let sorted = match (answer, shell) {
         (Ok(folders), Some(shell)) => shell.update(cx, |shell, cx| {

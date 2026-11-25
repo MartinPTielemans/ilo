@@ -326,8 +326,8 @@ impl Shell {
             (entry, action)
         };
         let mut items = vec![command(Command::SortBySite)];
-        // Where the broom is drawn, dimmed as it is.
-        if self.browser.broom().is_some() {
+        // Only where the broom would sort: with nothing to sort, or a sort running, it's not offered.
+        if self.browser.broom().is_some_and(super::Broom::sorts) {
             items.push(command(Command::SortIntoFolders));
         }
         items.push(command(Command::Clear));
