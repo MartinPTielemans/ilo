@@ -204,6 +204,7 @@ enum Popup {
     /// Threads › A new thread starts with: its Access and its Model.
     NewThreadAccess,
     NewThreadModel,
+    NewThreadEffort,
     /// General's Page zoom.
     PageZoom,
     /// The chip saying whose settings a group shows.
@@ -225,6 +226,7 @@ impl Popup {
             Popup::Model(_) => browser::agents::task::MODEL.into(),
             Popup::NewThreadAccess => browser::agents::tier::ACCESS.into(),
             Popup::NewThreadModel => browser::agents::task::MODEL.into(),
+            Popup::NewThreadEffort => browser::command_bar::EFFORT_NAME.into(),
             Popup::PageZoom => "Page zoom".into(),
         }
     }

@@ -5,7 +5,7 @@
 use super::*;
 use browser::agents::task::MODEL;
 use browser::agents::tier::{ACCESS, Tier};
-use browser::command_bar::{self, ModelPick};
+use browser::command_bar::{self, EFFORT_DEFAULT, EFFORT_NAME, ModelPick};
 
 /// The group's heading and the line under it, as drawn (S8).
 const NEW_THREAD: &str = "A new thread starts with";
@@ -13,7 +13,8 @@ const NEW_THREAD_FOOT: &str =
     "Where a new thread starts. Pick differently for one thread where you write it.";
 
 impl Settings {
-    /// The group, while threads are on: Access, and Model once an assistant is signed in.
+    /// The group, while threads are on: Access, Model once an assistant is signed in, and Effort
+    /// while the assistant a new thread starts on has a program that takes one.
     pub(super) fn new_thread(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
         let look = &self.look;
         let space = crate::command_bar_host::front_space(cx);
@@ -39,15 +40,29 @@ impl Settings {
         if let Some(agent) = command_bar::starts_on(&offered, picked.as_ref()) {
             let model = command_bar::next_model(picked.as_ref(), agent);
             let words = command_bar::model_words(agent, &model);
-            let agents = agents.clone();
+            let choosing = agents.clone();
             let choose = cx.listener(move |settings, _, window, cx| {
-                settings.choose_new_model(&agents, window, cx)
+                settings.choose_new_model(&choosing, window, cx)
             });
             let model = self
                 .popup(Popup::NewThreadModel, words.into(), POPUP_WIDTH, choose)
                 .child(self.drawn("new thread model".into()))
                 .into_any_element();
             rows.push(setting(look, MODEL, None, vec![model]));
+            let levels = command_bar::efforts_of(&agent.id);
+            if !levels.is_empty() {
+                let effort = last.effort.filter(|level| levels.contains(level));
+                let words = effort.map_or(EFFORT_DEFAULT.into(), command_bar::effort_name);
+                let agents = agents.clone();
+                let choose = cx.listener(move |settings, _, window, cx| {
+                    settings.choose_effort(&agents, levels, effort, window, cx)
+                });
+                let effort = self
+                    .popup(Popup::NewThreadEffort, words.into(), POPUP_WIDTH, choose)
+                    .child(self.drawn("new thread effort".into()))
+                    .into_any_element();
+                rows.push(setting(look, EFFORT_NAME, None, vec![effort]));
+            }
         }
         vec![
             Block::Heading(NEW_THREAD.into()),
@@ -80,6 +95,32 @@ impl Settings {
             settings.update(cx, |settings, cx| settings.chose(cx)).ok();
         });
         self.pop_up(Popup::NewThreadAccess, items, picked, window, cx);
+    }
+
+    /// Effort's menu: the composer's effort menu, for the program of the assistant a new thread
+    /// starts on.
+    fn choose_effort(
+        &mut self,
+        agents: &Entity<Agents>,
+        levels: &'static [&'static str],
+        current: Option<&'static str>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (picks, items) = command_bar::effort_choices(levels, current);
+        let (settings, agents) = (cx.weak_entity(), agents.clone());
+        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
+            if let Some(&effort) = picked.and_then(|at| picks.get(at)) {
+                log!("browser: new thread effort {}", effort.unwrap_or("default"));
+                let space = crate::command_bar_host::front_space(cx);
+                agents.update(cx, |agents, cx| {
+                    agents.set_new_thread_effort(space, effort);
+                    cx.notify();
+                });
+            }
+            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
+        });
+        self.pop_up(Popup::NewThreadEffort, items, picked, window, cx);
     }
 
     /// Model's menu: the composer's model menu, without the way to Settings it's already in.

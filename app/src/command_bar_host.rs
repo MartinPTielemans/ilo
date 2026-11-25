@@ -330,16 +330,16 @@ impl command_bar::Host for Bar {
         settings::show_agents(cx);
     }
 
-    fn composer_last(
-        &self,
-        cx: &App,
-    ) -> (browser::agents::tier::Tier, Option<(SharedString, String)>) {
+    fn composer_last(&self, cx: &App) -> command_bar::Opens {
         let Some(agents) = browser::agents::global(cx) else {
             return Default::default();
         };
         let last = agents.read(cx).composer_last(front_space(cx));
-        let model = last.model.map(|(cli, model)| (cli.id().into(), model));
-        (last.tier, model)
+        command_bar::Opens {
+            tier: last.tier,
+            model: last.model.map(|(cli, model)| (cli.id().into(), model)),
+            effort: last.effort,
+        }
     }
 
     fn sign_in(&self, agent: &str, _: &mut App) {

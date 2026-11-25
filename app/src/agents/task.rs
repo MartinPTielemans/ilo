@@ -781,12 +781,24 @@ pub struct Start {
 
 /// What the composer last started a thread with in a profile, which it opens with there next:
 /// its level, never Full access, and the model picked on its assistant. Nothing of the words.
+/// Settings' `A new thread starts with` sets these too, and its effort, which only Settings sets.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Last {
     pub tier: Tier,
     /// The assistant, and the model picked on it by id, empty for its own default; None for
     /// Settings' assistant and model.
     pub model: Option<(Cli, String)>,
+    /// The effort level a new thread starts at, one a CLI's `efforts` lists, for an assistant
+    /// whose program takes it; None for the program's own. A composer's pick holds for its
+    /// thread alone and never comes here.
+    pub effort: Option<&'static str>,
+}
+
+/// `level` as one of the effort levels a CLI takes, the only ones ever kept or passed.
+pub fn known_effort(level: &str) -> Option<&'static str> {
+    (Cli::ALL.into_iter())
+        .flat_map(|cli| cli.efforts().iter().copied())
+        .find(|each| *each == level)
 }
 
 /// The longest address a task gets for a page the user added: a page's over it isn't offered.
@@ -952,8 +964,28 @@ impl Agents {
             Tier::Full => Tier::default(),
             tier => tier,
         };
-        let last = Last { tier, model };
+        let effort = self.tasks.last.get(&profile).and_then(|last| last.effort);
+        let last = Last {
+            tier,
+            model,
+            effort,
+        };
         if self.tasks.last.get(&profile) != Some(&last) {
+            self.tasks.last.insert(profile, last);
+            self.save();
+        }
+    }
+
+    /// Settings' Effort: the level a new thread in `space`'s profile starts at, None for the
+    /// program's own; what the composer last started with stays.
+    pub fn set_new_thread_effort(&mut self, space: u64, effort: Option<&'static str>) {
+        let profile = self.browser.space_profile(space);
+        if profile.is_empty() {
+            return;
+        }
+        let mut last = self.tasks.last.get(&profile).cloned().unwrap_or_default();
+        if last.effort != effort {
+            last.effort = effort;
             self.tasks.last.insert(profile, last);
             self.save();
         }

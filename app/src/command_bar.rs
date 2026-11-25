@@ -381,6 +381,29 @@ pub fn model_choices(
     (items, picks)
 }
 
+/// The effort menu, as what each row picks and its items: Default, which leaves the level to the
+/// program, then `levels`, each by `effort_name`, `picked` checked, Default with none. Nothing for
+/// a program that takes no effort. The composer and Settings' `A new thread starts with` both
+/// open it.
+pub fn effort_choices(
+    levels: &'static [&'static str],
+    picked: Option<&'static str>,
+) -> (Vec<Option<&'static str>>, Vec<MenuEntry>) {
+    if levels.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let picks: Vec<Option<&'static str>> = std::iter::once(None)
+        .chain(levels.iter().map(|level| Some(*level)))
+        .collect();
+    let items = (picks.iter())
+        .map(|&level| MenuEntry {
+            checked: picked.filter(|each| levels.contains(each)) == level,
+            ..MenuEntry::named(level.map_or(EFFORT_DEFAULT.into(), effort_name), true)
+        })
+        .collect();
+    (picks, items)
+}
+
 /// Whether the composer's model pick is for the assistant `id`.
 fn ask_model_on(ask: Option<&Ask>, id: &SharedString) -> bool {
     ask.and_then(|ask| ask.model.as_ref())
@@ -430,8 +453,8 @@ const MODEL: &str = "composer-model";
 const EFFORT: &str = "composer-effort";
 /// What the effort trigger reads before a pick, and the menu's row that leaves the level to the
 /// program (words table, D6).
-const EFFORT_NAME: &str = "Effort";
-const EFFORT_DEFAULT: &str = "Default";
+pub const EFFORT_NAME: &str = "Effort";
+pub const EFFORT_DEFAULT: &str = "Default";
 
 /// The most settings the bar lists for what's typed, after the commands that start with it.
 const SETTINGS_SHOWN: usize = 3;
@@ -462,21 +485,31 @@ struct Ask {
     /// The assistant and model picked on the model menu, by the assistant's id and the model's,
     /// empty for its own default; None for the first ready assistant on Settings' model.
     model: Option<(SharedString, String)>,
-    /// The effort level picked on the effort menu, one of its assistant's `Cli::efforts`; None
-    /// for the program's own, which ilo then passes nothing for. It holds for this thread only.
+    /// The effort level picked on the effort menu, one of its assistant's `Cli::efforts`, or
+    /// Settings' until then; None for the program's own, which ilo then passes nothing for. A
+    /// pick holds for this thread only.
     effort: Option<&'static str>,
+}
+
+/// What the composer opens with: the level and model it last started a thread with, by the
+/// assistant's id and the model's, and Settings' effort.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Opens {
+    pub tier: Tier,
+    pub model: Option<(SharedString, String)>,
+    pub effort: Option<&'static str>,
 }
 
 /// The effort levels the program of the assistant `id` takes, from the one list
 /// (`Cli::efforts`); none for an assistant ilo doesn't run, or one that takes none.
-fn efforts_of(id: &str) -> &'static [&'static str] {
+pub fn efforts_of(id: &str) -> &'static [&'static str] {
     crate::agents::runner::Cli::from_id(id).map_or(&[], |cli| cli.efforts())
 }
 
 /// A level's name on the effort menu and its trigger: the words table's for those it names (D6),
 /// else the program's own with its first letter capital. It is only ever a label: the program is
 /// passed the level itself.
-fn effort_name(level: &str) -> String {
+pub fn effort_name(level: &str) -> String {
     match level {
         "low" => "Low".into(),
         "medium" => "Medium".into(),
@@ -792,10 +825,11 @@ pub trait Host {
         cx: &mut App,
     );
     /// The level and model the composer last started a thread with in the profile of the Space
-    /// the bar shows over, Full access never: what its choices open at. Only the composer's own
-    /// starts set it; no agent reads or sets it.
-    fn composer_last(&self, _: &App) -> (Tier, Option<(SharedString, String)>) {
-        (Tier::default(), None)
+    /// the bar shows over, Full access never, and Settings' effort: what its choices open at.
+    /// Only the composer's own starts and Settings' `A new thread starts with` set it; no agent
+    /// reads or sets it.
+    fn composer_last(&self, _: &App) -> Opens {
+        Opens::default()
     }
     /// Starts signing in to the assistant `agent`, as Settings' Sign In does.
     fn sign_in(&self, _agent: &str, _: &mut App) {}
@@ -2425,12 +2459,12 @@ impl CommandBar {
             self.favicons.insert(url.to_string(), None);
             self.host.page_favicon(url);
         }
-        let (tier, model) = self.host.composer_last(cx);
+        let last = self.host.composer_last(cx);
         self.ask = Some(Ask {
             page,
-            tier,
-            model,
-            effort: None,
+            tier: last.tier,
+            model: last.model,
+            effort: last.effort,
         });
         self.completion.clear();
         self.asked = typed.clone();
@@ -2549,28 +2583,14 @@ impl CommandBar {
         let Some(agent) = self.composer_assistant() else {
             return;
         };
-        let levels = efforts_of(&agent.id);
+        let (levels, items) = effort_choices(efforts_of(&agent.id), ask.effort);
         if levels.is_empty() {
             return;
         }
-        let default = MenuEntry {
-            checked: ask.effort.is_none(),
-            ..MenuEntry::named(EFFORT_DEFAULT, true)
-        };
-        let items = std::iter::once(default)
-            .chain(levels.iter().map(|level| MenuEntry {
-                checked: ask.effort == Some(*level),
-                ..MenuEntry::named(effort_name(level), true)
-            }))
-            .collect();
         let bar = cx.entity().downgrade();
         let chosen = Box::new(
             move |closed: crate::menu::Closed, _: &mut Window, cx: &mut App| {
-                // Row 0 is Default; each other row is its level on the program's own list.
-                let picked = closed.chosen().map(|item| match item {
-                    0 => None,
-                    item => levels.get(item - 1).copied(),
-                });
+                let picked = closed.chosen().and_then(|item| levels.get(item).copied());
                 let closed = |bar: &mut Self, cx: &mut Context<Self>| {
                     bar.menu_closed(cx);
                     picked.map(|level| bar.pick_effort(level, cx));
