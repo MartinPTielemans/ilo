@@ -286,11 +286,29 @@ fn each_palette_is_known_by_its_colours_until_one_is_changed_by_hand() {
             "palette {index} by hand"
         );
     }
-    // Only the drawing's own is named.
-    let named: Vec<_> = (0..layout::palette_count())
-        .filter_map(layout::palette_name)
-        .collect();
-    assert_eq!(named, ["Dusk"]);
+}
+
+#[test]
+fn each_chosen_palette_shows_its_name_and_a_look_by_hand_none() {
+    let names = [
+        "No color", "Dusk", "Lagoon", "Ember", "Meadow", "Sorbet", "Slate", "Midnight",
+    ];
+    assert_eq!(layout::palette_count(), names.len());
+    assert_eq!(layout::chosen_name(None), Some("No color"));
+    for (index, name) in names.into_iter().enumerate().skip(1) {
+        let made = layout::palette_theme(index, None).unwrap();
+        assert_eq!(
+            layout::chosen_name(Some(&made)),
+            Some(name),
+            "palette {index}"
+        );
+        let moved = made.moved(0, made.x * 0.5, made.y * 0.5);
+        assert_eq!(
+            layout::chosen_name(Some(&moved)),
+            None,
+            "palette {index} by hand"
+        );
+    }
 }
 
 #[gpui::test]

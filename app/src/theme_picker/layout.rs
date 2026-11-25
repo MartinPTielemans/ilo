@@ -173,10 +173,18 @@ fn same_colors(a: &Theme, b: &Theme) -> bool {
     a.len() == b.len() && a.iter().zip(&b).all(|(&a, &b)| near(a, b))
 }
 
-/// The name shown at the right of the palettes' label for palette `index`: only the drawing's one
-/// is named, until the wording pass names the rest.
+/// Palette `index`'s name, which its disc reads as.
 pub fn palette_name(index: usize) -> Option<&'static str> {
-    (index == NAMED_PALETTE as usize).then_some("Dusk")
+    PALETTE_NAMES.get(index).copied()
+}
+
+// Each disc has its name.
+const _: () = assert!(PALETTE_NAMES.len() == palette_count());
+
+/// What the palettes' label shows at its right for a Space themed `theme`: the chosen palette's
+/// name, and none for a look changed by hand, which is no palette's.
+pub fn chosen_name(theme: Option<&Theme>) -> Option<&'static str> {
+    palette_of(theme).and_then(palette_name)
 }
 
 /// The pad's point under the field's point (x, y): across from the hue, down from the lightness,

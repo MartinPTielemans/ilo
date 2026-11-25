@@ -1483,9 +1483,7 @@ impl Render for ThemePicker {
             layout::palettes_top(),
             "Palettes".into(),
             text_3,
-            chosen_palette
-                .and_then(layout::palette_name)
-                .map(str::to_owned),
+            layout::chosen_name(theme.as_ref()).map(str::to_owned),
         );
         let discs = (0..layout::palette_count()).map(|index| {
             let (x, y) = layout::disc(index);
@@ -1501,12 +1499,7 @@ impl Render for ThemePicker {
                     linear_color_stop(rgb(*second), 1.),
                 ),
             };
-            let name: SharedString = match index {
-                0 => "No color".into(),
-                index => layout::palette_name(index)
-                    .map(SharedString::from)
-                    .unwrap_or_else(|| format!("Palette {index}").into()),
-            };
+            let name: SharedString = layout::palette_name(index).unwrap_or_default().into();
             div()
                 .id(("palette", index))
                 .when(a11y, |slot| {
