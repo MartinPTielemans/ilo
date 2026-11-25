@@ -1789,7 +1789,6 @@ divider-gap = 9.0
 # In the sidebar the line is the New Tab line's own: after its label, to Clear or the line's end,
 # and what's kept ends this far over that line while there are tabs today.
 today-gap = 6.0
-clear-gap = 3.0
 clear-height = 20.0
 # The broom before Clear on the New Tab line, where it's drawn: its glyph in a box of its own, the
 # line's gap before Clear, which keeps its place, and the hairline ends as far before the glyph.
@@ -3005,15 +3004,18 @@ rim = 0.5
 # button, the button turns into a plate that grows upward out of the foot, inside the sidebar, and
 # lists this many downloads, newest first.
 count = 4
-# The floating level's fill, as a menu's, over the window's own look, and the window's inner line,
-# 1 px, along the whole of its outline, which is the plate and the button's box under it as one
+# The floating level's fill, as a menu's, over the window's own look, and the window's inner line
+# along the whole of its outline, which is the plate and the button's box under it as one
 # shape; a menu's shadow lies round it. On the sidebar the fill alone is nearly the sidebar's own
 # tone, so the line and the shadow are what lift it. Its top corners and its far bottom one are a
-# panel's, the near bottom one square where it runs into the button.
+# panel's, the near bottom one square where it runs into the button. The fill and the line are the
+# drawing's floating fill and rim, held here until a menu takes the same: then one source for both.
 fill = 0x3030_36eb
 light-fill = 0xf6f5_f1eb
 rim = 0xffff_ff1a
 light-rim = 0x0000_001f
+# The line's width. It's drawn half of this inside the outline, so all of it lies on the plate.
+line = 1.0
 radius = 16.0
 padding = 6.0
 # The button's own box takes the fill, round at its foot as the window's corner is, and a curve
