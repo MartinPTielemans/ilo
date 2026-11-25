@@ -6092,9 +6092,36 @@ pub(super) fn icon_slot(drawn: impl IntoElement) -> gpui::Div {
         .child(drawn)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The room the New Tab line's hairline had when it was last painted, and whether it was
+    /// drawn in it, for a test of a narrow sidebar's.
+    static TODAY_HAIRLINE: std::cell::Cell<Option<(Pixels, bool)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The New Tab line's hairline in `color`, `line` thick, over the room it's laid out in. In room
+/// shorter than the line's own gap it isn't drawn: what would be left of it is a dot between the
+/// label and Clear, which reads as a fault and not as a line.
+fn today_hairline(color: Hsla, line: Pixels) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |room, _, window, _| {
+            let drawn = room.size.width >= px(DIVIDER_GAP);
+            #[cfg(test)]
+            TODAY_HAIRLINE.set(Some((room.size.width, drawn)));
+            if drawn {
+                window.paint_quad(gpui::fill(room, color));
+            }
+        },
+    )
+    .flex_1()
+    .h(line)
+}
+
 /// The New Tab line's own line, after its label while there are tabs today: a hairline that takes
-/// the room the label leaves, then `clear`, which ends where the titles do, or before `broom`,
-/// which then ends there.
+/// the room the label leaves, where that is a line's worth, then `clear`, which ends where the
+/// titles do, or before `broom`, which then ends there.
 fn today_line(
     palette: &Palette,
     line: Pixels,
@@ -6109,7 +6136,7 @@ fn today_line(
         .mr(px(TITLE_END_INSET))
         .flex()
         .items_center()
-        .child(div().flex_1().h(line).bg(palette.faint(DIVIDER)))
+        .child(today_hairline(palette.faint(DIVIDER), line))
         .child(clear)
         .children(broom)
 }

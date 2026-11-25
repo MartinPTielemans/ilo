@@ -12,6 +12,7 @@ use crate::{
         Command, Folders, Page, SHOWN_FILL, Shell, SidebarRight, browser::Split, recorder::Recorder,
     },
     theme::{self, Appearance},
+    tokens::palette::SHOWN,
     tokens::shell::{DIVIDER, HAIRLINE, PLATE_HEIGHT, PLATE_INSET},
 };
 
@@ -271,14 +272,13 @@ fn an_open_favorites_tile_fills_with_its_pages_colour_where_it_stands(cx: &mut T
     let look = |shell: &Shell| shell.open_look(shell.page_fill(20), None);
     let (fill, width, _) = shell.read_with(cx, |shell, _| look(shell));
     assert_eq!((hex(fill), width), (WHITE, HAIRLINE));
-    // A dark page's tile has the hairline a dark page's shape has.
+    // A dark page's tile has a hairline of the ink a dark page's shape has, firmer than the
+    // line's, which the idle tiles beside it would hide.
     show(&shell, cx, 20, Some(DARK));
     let (fill, width, ring) = shell.read_with(cx, |shell, _| look(shell));
     let on = shell.read_with(cx, |shell, _| shell.line_palette(20));
-    assert_eq!(
-        (hex(fill), width, ring),
-        (DARK, HAIRLINE, on.faint(DIVIDER))
-    );
+    assert_eq!((hex(fill), width, ring), (DARK, HAIRLINE, on.faint(SHOWN)));
+    assert!(ring.a > on.faint(DIVIDER).a);
     // Until its page reports one, the tile keeps the look its icon gives it.
     show(&shell, cx, 20, None);
     shell.read_with(cx, |shell, _| assert_eq!(shell.page_fill(20), None));
