@@ -1617,7 +1617,6 @@ impl TalkView {
                             else {
                                 return;
                             };
-                            // check.sh reads this line.
                             log!("browser: command open-task-pages via page row");
                             shell.open_task_pages(agent, Some(on), from, cx);
                         })
@@ -3418,7 +3417,6 @@ const MODEL: &str = "conversation-model";
 fn open_told(tab: u64, at: Rc<Cell<Option<Bounds<Pixels>>>>) -> impl Fn(Bounds<Pixels>) + 'static {
     move |bounds| {
         if at.replace(Some(bounds)) != Some(bounds) {
-            // check.sh reads this line, to click it.
             log!(
                 "browser: page row open {tab} at {:.0} {:.0} {:.0} {:.0}",
                 f32::from(bounds.origin.x),
