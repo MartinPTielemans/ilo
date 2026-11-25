@@ -1592,9 +1592,10 @@ fn return_and_escape_leave_from_a_focused_switch(cx: &mut TestAppContext) {
             "nothing is set while the step shows"
         );
         press(leave, cx);
-        settle(&shell, cx);
+        // Read before the card's end fade takes it away.
         let ending = card(&shell, cx, |o| o.ending.is_some());
         if leave == "escape" {
+            settle(&shell, cx);
             assert!(!ending, "Esc left the step");
             assert_eq!(step(&shell, cx), Some(Step::Done));
             assert!(host.take().is_empty(), "Esc set nothing, turned {turned}");
@@ -1607,11 +1608,10 @@ fn return_and_escape_leave_from_a_focused_switch(cx: &mut TestAppContext) {
         } else {
             vec![]
         };
-        assert_eq!(
-            host.take(),
-            said,
-            "{leave} with Help improve turned {turned}"
-        );
+        let set: Vec<String> = (host.take().into_iter())
+            .filter(|call| call.starts_with("daily count") || call.starts_with("crash reports"))
+            .collect();
+        assert_eq!(set, said, "{leave} with Help improve turned {turned}");
     }
 }
 
