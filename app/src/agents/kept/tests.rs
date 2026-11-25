@@ -74,17 +74,13 @@ fn launch() -> Launch {
 
 #[test]
 fn the_table_has_a_row_for_each_assistant() {
-    assert_eq!(keeps(Cli::Claude), Keeps::WhenWanted);
+    assert_eq!(keeps(Cli::Claude), Keeps::Always);
     assert_eq!(keeps(Cli::Codex), Keeps::Never);
-    assert!(matches!(decide(Cli::Claude, true, false), Keep::New(_)));
-    assert_eq!(decide(Cli::Claude, false, false), Keep::Nothing);
-    // Codex keeps nothing, whatever the switch says.
-    assert_eq!(decide(Cli::Codex, true, false), Keep::Nothing);
-    assert_eq!(decide(Cli::Codex, false, false), Keep::Nothing);
-    // A task with files keeps nothing, whatever the switch says, as one with the switch off.
+    assert!(matches!(decide(Cli::Claude, false), Keep::New(_)));
+    // Codex keeps nothing, and a task with files keeps nothing, whose assistant it is.
+    assert_eq!(decide(Cli::Codex, false), Keep::Nothing);
     for cli in [Cli::Claude, Cli::Codex] {
-        assert_eq!(decide(cli, true, true), decide(cli, false, false));
-        assert_eq!(decide(cli, false, true), Keep::Nothing);
+        assert_eq!(decide(cli, true), Keep::Nothing);
     }
 }
 

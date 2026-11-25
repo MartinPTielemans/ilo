@@ -119,10 +119,10 @@ pub enum Nowhere {
 /// Whether an assistant's runs can be kept.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Keeps {
-    /// Never: each run keeps nothing, whatever is wanted.
+    /// Never: each run keeps nothing.
     Never,
-    /// When a run is wanted kept.
-    WhenWanted,
+    /// Each run that can be: one with no files (`decide`).
+    Always,
 }
 
 /// The table: one row for each assistant.
@@ -130,20 +130,19 @@ pub const fn keeps(cli: Cli) -> Keeps {
     match cli {
         // Its print-mode conversations stay out of its own history in a terminal, in a folder of
         // ilo's that no terminal is in.
-        Cli::Claude => Keeps::WhenWanted,
+        Cli::Claude => Keeps::Always,
         // Until a run shows its app-server's threads stay out of its own history in a terminal.
         Cli::Codex => Keeps::Never,
     }
 }
 
-/// What a new run of `cli` keeps. `wanted` is why it would be kept at all: today Settings ›
-/// Agents' switch alone. A `walled` run, a task's with files, keeps nothing whatever is wanted:
-/// its assistant can't write where it keeps conversations. The runner is told only what comes
-/// of it, never the reason.
-pub fn decide(cli: Cli, wanted: bool, walled: bool) -> Keep {
-    match (keeps(cli), wanted && !walled) {
-        (Keeps::WhenWanted, true) => Keep::New(Id::new()),
-        (Keeps::WhenWanted, false) | (Keeps::Never, _) => Keep::Nothing,
+/// What a new run of `cli` keeps: nothing the user sets decides it. A `walled` run, a task's
+/// with files, keeps nothing: its assistant can't write where it keeps conversations. The runner
+/// is told only what comes of it, never the reason.
+pub fn decide(cli: Cli, walled: bool) -> Keep {
+    match (keeps(cli), walled) {
+        (Keeps::Always, false) => Keep::New(Id::new()),
+        (Keeps::Always, true) | (Keeps::Never, _) => Keep::Nothing,
     }
 }
 
@@ -273,10 +272,8 @@ pub struct Record {
 #[derive(Debug, Default)]
 pub struct Kept {
     records: Vec<Record>,
-    /// Settings › Agents' Keep finished tasks, off.
-    pub off: bool,
     /// The tasks whose conversation was removed from under them, as Remove All does: each had
-    /// one, where a task that started with the switch off never did, and the two say so apart.
+    /// one, where a task with files never did, and the two say so apart.
     removed_from: Vec<String>,
 }
 
