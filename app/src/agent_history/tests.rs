@@ -165,5 +165,5 @@ fn a_sorts_entry_is_counts_alone() {
             ..Sorted::default()
         },
     );
-    assert_eq!(read(&write(&[failed.clone()])), vec![failed]);
+    assert_eq!(read(&write(std::slice::from_ref(&failed))), vec![failed]);
 }

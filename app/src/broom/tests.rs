@@ -244,6 +244,20 @@ impl StandIn {
         let program = folder.join("claude");
         std::fs::write(&program, script).unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // Another test's thread that forked while the script was open for writing holds it until
+        // its child runs, and it won't run meanwhile ("Text file busy"): ask its version, which
+        // leaves nothing behind, until it runs.
+        for _ in 0..200 {
+            match crate::child::command(&program).arg("--version").output() {
+                Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(Duration::from_millis(10))
+                }
+                ran => {
+                    ran.expect("the stand-in didn't run");
+                    break;
+                }
+            }
+        }
         StandIn { folder }
     }
 
