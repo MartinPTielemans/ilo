@@ -45,6 +45,7 @@
 #include "browser_core/platform/window_views.h"
 #include "browser_core/profiles.h"
 #include "browser_core/script_dialog.h"
+#include "browser_core/secure_connections_rule.h"
 #include "browser_core/session.h"
 #include "browser_core/side_panel.h"
 #include "browser_core/space.h"
@@ -446,17 +447,35 @@ std::string Handing(bc_id window, bc_id tab) {
       {"window ", base::NumberToString(window), ", tab ", base::NumberToString(tab)});
 }
 
+// The load an agent's open started in the tab it made, while that open asks (OpenHeld).
+secure_connections_rule::Started g_started;
+
 // What a tab MakeHeldBy made loads, and the Space holding it, kept on its page until its tab strip
 // has it.
 class HeldLoad : public content::WebContentsUserData<HeldLoad> {
  public:
   // Starts the page of |contents|, held by its Space first, if MakeHeldBy made it and it hasn't
-  // started, and gives the navigation it started. Chrome's tab helpers are on it by now: its tab
-  // strip took it, or Navigate, which inserts it, has returned.
-  static base::WeakPtr<content::NavigationHandle> Start(content::WebContents* contents) {
-    HeldLoad* held = contents ? FromWebContents(contents) : nullptr;
+  // started, and tells the open that asks, if one does, the navigation it started or that it
+  // started none. Chrome's tab helpers are on it by now: its tab strip took it, or Navigate, which
+  // inserts it, has returned.
+  static void Start(content::WebContents* contents) {
+    const Begun begun = contents ? Begin(contents) : Begun();
+    secure_connections_rule::Keep(g_started, begun.tab, begun.load);
+  }
+
+ private:
+  friend class content::WebContentsUserData<HeldLoad>;
+
+  // What a start began: the navigation's id in its tab, both 0 if it began none.
+  struct Begun {
+    bc_id tab = 0;
+    int64_t load = 0;
+  };
+
+  static Begun Begin(content::WebContents* contents) {
+    HeldLoad* held = FromWebContents(contents);
     if (!held) {
-      return nullptr;
+      return {};
     }
     const bc_id space_id = held->space_;
     content::NavigationController::LoadURLParams load = std::move(held->load_);
@@ -467,7 +486,7 @@ class HeldLoad : public content::WebContentsUserData<HeldLoad> {
     // A Space gone before its tab had a page leaves the tab without one.
     Space* space = Space::FromId(space_id);
     if (!space) {
-      return nullptr;
+      return {};
     }
     const bc_id tab = Tab::IdOf(contents);
     if (!Space::Holding(tab)) {
@@ -481,11 +500,10 @@ class HeldLoad : public content::WebContentsUserData<HeldLoad> {
       ui_data->set_navigation_initiated_from_sync(from_sync);
       load.navigation_ui_data = std::move(ui_data);
     }
-    return contents->GetController().LoadURLWithParams(load);
+    const base::WeakPtr<content::NavigationHandle> started =
+        contents->GetController().LoadURLWithParams(load);
+    return {.tab = tab, .load = started ? started->GetNavigationId() : 0};
   }
-
- private:
-  friend class content::WebContentsUserData<HeldLoad>;
 
   HeldLoad(content::WebContents* contents, bc_id space, NavigateParams& params)
       : content::WebContentsUserData<HeldLoad>(*contents),
@@ -2090,13 +2108,16 @@ content::WebContents* Window::OpenHeld(Space& space,
   MakeHeldBy(space, params);
   // The app hears only of the tabs it didn't open.
   base::AutoReset<bool> opening(&opening_tab_, true);
+  // Where a window watches the strip, it starts the page as Navigate inserts the tab, and the
+  // start below finds it started: the load is read from whichever start made it, and from none
+  // before this open or after it.
+  secure_connections_rule::Ask(g_started);
   Navigate(&params);
-  SizeForAgent(params.navigated_or_inserted_contents);
-  if (base::WeakPtr<content::NavigationHandle> started =
-          HeldLoad::Start(params.navigated_or_inserted_contents)) {
-    *load = started->GetNavigationId();
-  }
-  return params.navigated_or_inserted_contents;
+  content::WebContents* made = params.navigated_or_inserted_contents;
+  SizeForAgent(made);
+  HeldLoad::Start(made);
+  *load = secure_connections_rule::TakeFor(g_started, made ? Tab::IdOf(made) : 0);
+  return made;
 }
 
 content::WebContents* Window::OpenFromPinned(bc_id pinned, const GURL& url, bool typed_http) {

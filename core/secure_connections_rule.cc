@@ -23,6 +23,22 @@ PutBack PutBackTo(bool has_a_page_behind) {
   return has_a_page_behind ? PutBack::kBack : PutBack::kClosed;
 }
 
+void Ask(Started& kept) {
+  kept = {.asked = true};
+}
+
+void Keep(Started& kept, uint64_t tab, int64_t load) {
+  if (kept.asked && load != 0) {
+    kept.tab = tab;
+    kept.load = load;
+  }
+}
+
+int64_t TakeFor(Started& kept, uint64_t tab) {
+  const Started had = std::exchange(kept, {});
+  return had.tab == tab ? had.load : 0;
+}
+
 Asked TakenBy(Asked& kept, bool waits) {
   const Asked taken = std::exchange(kept, {});
   return waits ? taken : Asked();
