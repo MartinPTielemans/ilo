@@ -794,7 +794,7 @@ fn other_apps_agents_have_their_row_on_both_paths(cx: &mut TestAppContext) {
         press(key, cx);
         assert_eq!(
             host.take(),
-            vec![format!("agents {agents}")],
+            vec![format!("threads {agents}")],
             "the pick sets the agents' switch alone"
         );
         assert_eq!(host.other_apps.get(), Some(false), "and leaves other apps'");
