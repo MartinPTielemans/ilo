@@ -114,6 +114,16 @@ pub(super) fn at(x: f32, y: f32) -> gpui::Div {
 }
 
 /// The step's heading and its line, at the column's start or centred over the card.
+/// A heading's `title` in the display face at the headings' weight, a line `height` tall.
+pub(super) fn heading_text(
+    title: impl Into<SharedString>,
+    size: f32,
+    height: f32,
+    cx: &mut App,
+) -> gpui::Div {
+    display_text(title, size, height, cx).font_weight(FontWeight(t::HEADING_WEIGHT))
+}
+
 pub(super) fn heading(
     (title, line): (SharedString, SharedString),
     centred: bool,
@@ -129,11 +139,7 @@ pub(super) fn heading(
     let x = if centred { 0. } else { x };
     div()
         .child(
-            place(at(x, y)).child(
-                display_text(title, size, height, cx)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(inks.text(1.)),
-            ),
+            place(at(x, y)).child(heading_text(title, size, height, cx).text_color(inks.text(1.))),
         )
         .when(!line.is_empty(), |both| {
             both.child(

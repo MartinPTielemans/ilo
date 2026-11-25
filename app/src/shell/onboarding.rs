@@ -1727,11 +1727,7 @@ impl Shell {
                     .w(px(t::WIDTH))
                     .flex()
                     .justify_center()
-                    .child(
-                        display_text(title, size, height, cx)
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(inks.text(1.)),
-                    ),
+                    .child(card::heading_text(title, size, height, cx).text_color(inks.text(1.))),
             )
             .when(!rows.is_empty(), |done| {
                 done.child(
