@@ -44,6 +44,12 @@ fn main() {
     let name_text = std::fs::read_to_string(&name).expect("no branding/name");
     println!("cargo:rustc-env=APP_NAME={}", name_text.trim());
     println!("cargo:rerun-if-changed={}", name.display());
+    // The product's name as the app's own strings say it (src/product.rs), which a fork changes
+    // as it does the name above; the bundle, its file and data folder keep branding/name.
+    let product = root.join("branding/product");
+    let product_text = std::fs::read_to_string(&product).expect("no branding/product");
+    println!("cargo:rustc-env=PRODUCT_NAME={}", product_text.trim());
+    println!("cargo:rerun-if-changed={}", product.display());
     // Default service URLs a fork changes (principle 2): the site, for help and release notes, and
     // where a new issue is filed (src/build_info.rs).
     for (file, variable) in [
