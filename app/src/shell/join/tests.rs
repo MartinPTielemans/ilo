@@ -3,7 +3,7 @@
 
 use std::rc::Rc;
 
-use gpui::{Entity, Hsla, TestAppContext, VisualTestContext, rgb};
+use gpui::{Entity, Hsla, TestAppContext, VisualTestContext, px, rgb};
 
 use super::{JOINED, Joined};
 use crate::{
@@ -13,7 +13,9 @@ use crate::{
     },
     theme::{self, Appearance},
     tokens::palette::SHOWN,
-    tokens::shell::{DIVIDER, HAIRLINE, PLATE_HEIGHT, PLATE_INSET},
+    tokens::shell::{
+        DIVIDER, HAIRLINE, JOIN_RADIUS, PAGE_OUTLINE_WIDTH, PLATE_HEIGHT, PLATE_INSET,
+    },
 };
 
 /// Made-up pages' colours: a white one, a dark one and a blue one.
@@ -233,6 +235,73 @@ fn with_the_sidebar_on_the_right_the_line_runs_to_the_page_on_its_left(cx: &mut 
     assert!(joined.page_left);
     assert_eq!(f32::from(joined.line.left()), left);
     assert_eq!(f32::from(joined.line.right()), left + width - PLATE_INSET);
+}
+
+#[gpui::test]
+fn the_shape_ends_on_the_pixel_of_the_screen_the_page_starts_on(cx: &mut TestAppContext) {
+    let (shell, cx) = window(cx);
+    show(&shell, cx, 10, Some(BLUE));
+    for scale in [1., 2.] {
+        cx.simulate_scale_factor_change(scale);
+        // Widths between two of the screen's pixels too, as the sidebar's is while it settles.
+        for width in [228., 228.3, 228.7, 301.25] {
+            shell.update(cx, |shell, cx| {
+                shell.sidebar_width = width;
+                cx.notify();
+            });
+            let (joined, _) = drawn(&shell, cx);
+            let joined = joined.expect("the open tab's line isn't joined to its page");
+            let page = shell.read_with(cx, |shell, _| shell.card_left());
+            assert_eq!(page, width);
+            // A path is drawn where it's laid, between two pixels too, and the page's card on
+            // the whole one nearest its place: so is the line's end.
+            let end = f32::from(joined.line.right()) * scale;
+            assert_eq!(end.fract(), 0., "{width} at {scale}x: ends at {end}");
+            assert!(
+                (end - page * scale).abs() <= 0.5,
+                "{width} at {scale}x: {end}"
+            );
+        }
+    }
+}
+
+#[gpui::test]
+fn the_line_round_a_dark_pages_shape_stops_at_the_pages_own(cx: &mut TestAppContext) {
+    let (shell, cx) = window(cx);
+    let (line, curve) = (px(PAGE_OUTLINE_WIDTH), px(JOIN_RADIUS));
+    // A light page's shape has no line, so none to keep anywhere.
+    show(&shell, cx, 10, Some(WHITE));
+    let (joined, _) = drawn(&shell, cx);
+    assert_eq!(joined.and_then(|joined| joined.lined), None);
+    show(&shell, cx, 10, Some(DARK));
+    for right in [false, true] {
+        cx.update(|_, cx| cx.set_global(SidebarRight(right)));
+        let (joined, _) = drawn(&shell, cx);
+        let joined = joined.expect("the open tab's line isn't joined to its page");
+        assert_eq!(joined.page_left, right);
+        let lined = joined
+            .lined
+            .expect("a dark page's shape has no line round it");
+        // The page's own line is a line's width outside the page, down its whole side: the
+        // shape's stops beside it, from the curve above the line to the one below.
+        // Round the line's far end it is all there.
+        match right {
+            false => {
+                assert_eq!(lined.right(), joined.line.right() - line);
+                assert!(lined.left() <= joined.line.left() - line);
+            }
+            true => {
+                assert_eq!(lined.left(), joined.line.left() + line);
+                assert!(lined.right() >= joined.line.right() + line);
+            }
+        }
+        assert_eq!(lined.top(), joined.line.top() - curve, "right {right}");
+        assert_eq!(
+            lined.bottom(),
+            joined.line.bottom() + curve,
+            "right {right}"
+        );
+    }
 }
 
 #[gpui::test]
