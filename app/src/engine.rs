@@ -1352,6 +1352,15 @@ impl Browser for Engine {
         shell::FavoritesScope::from_core(unsafe { bc::bc_favorites_scope() })
     }
 
+    fn secure_connections(&self, profile: u64) -> Option<bool> {
+        let mut on = false;
+        unsafe { bc::bc_profile_secure_connections(profile, &mut on) }.then_some(on)
+    }
+
+    fn set_secure_connections(&self, profile: u64, on: bool, _: &mut App) -> bool {
+        unsafe { bc::bc_profile_set_secure_connections(profile, on) }
+    }
+
     fn keeps_passkeys(&self) -> bool {
         crate::platform::keeps_passkeys()
     }

@@ -1688,6 +1688,15 @@ impl Browser for Fake {
 
     fn delete_profile(&self, _: u64, _: &mut App) {}
 
+    // On, as a new profile has it; the preview keeps no setting.
+    fn secure_connections(&self, _: u64) -> Option<bool> {
+        Some(true)
+    }
+
+    fn set_secure_connections(&self, _: u64, _: bool, _: &mut App) -> bool {
+        false
+    }
+
     fn favorites_scope(&self, _: &mut App) -> shell::FavoritesScope {
         shell::FavoritesScope::default()
     }
