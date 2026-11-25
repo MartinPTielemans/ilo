@@ -191,16 +191,21 @@ fn each_survives_a_relaunch_by_itself(cx: &mut TestAppContext) {
     }
 }
 
-/// Settings saved before the two switches come up once as the user had them: the inside switch
-/// on only where agents and the command bar's tasks both were, other apps' agents as they had
-/// them, else as agents were. A new profile has both off, and a later launch never upgrades again.
+/// Settings saved before the two switches come up once as the user had them, with nothing
+/// listening that didn't before: the inside switch on only where agents and the command bar's
+/// tasks both were, other apps' agents only where agents were on and they weren't turned off. A
+/// new profile has both off, and a later launch never upgrades again.
 #[gpui::test]
 fn the_one_switch_upgrades_once(cx: &mut TestAppContext) {
     for (saved, state) in [
         (json!({ "on": false }), (false, false)),
         (json!({ "on": true }), (true, true)),
         (json!({ "on": true, "other_apps": false }), (true, false)),
-        (json!({ "on": false, "other_apps": true }), (false, true)),
+        (json!({ "on": false, "other_apps": true }), (false, false)),
+        (
+            json!({ "on": false, "other_apps": true, "tasks": { "on": true } }),
+            (false, false),
+        ),
         (
             json!({ "on": true, "tasks": { "on": false } }),
             (false, true),

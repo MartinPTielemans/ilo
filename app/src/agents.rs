@@ -1191,16 +1191,16 @@ impl Agents {
             .and_then(crate::needs_you::Notify::from_id)
             .unwrap_or_default();
         // Settings saved before the two switches had one for every agent, and under it one for
-        // the command bar's tasks. Once, the inside switch is on only where both were, so nothing
-        // the user turned off comes on; other apps' agents keep what they had, which before they
-        // had a switch of their own was the one for every agent. Saved, each is the user's alone.
+        // the command bar's tasks. Once, the inside switch is on only where both were, and other
+        // apps' agents only where agents were and they weren't turned off, so nothing comes on
+        // and nothing listens that didn't before. Saved, each is the user's alone.
         let agents_on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
         let threads = saved.get("threads").and_then(Value::as_bool);
         let others = saved.get("other_apps").and_then(Value::as_bool);
-        let (threads_on, others_on) = (
-            threads.unwrap_or(agents_on && !tasks_off),
-            others.unwrap_or(agents_on),
-        );
+        let (threads_on, others_on) = match threads {
+            Some(threads) => (threads, others.unwrap_or(false)),
+            None => (agents_on && !tasks_off, agents_on && others.unwrap_or(true)),
+        };
         self.switches.threads.store(threads_on, SeqCst);
         self.switches.others.store(others_on, SeqCst);
         self.scripts = saved
