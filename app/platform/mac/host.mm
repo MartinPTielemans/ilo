@@ -6218,10 +6218,52 @@ void host_add_first_run(void* first_run_view) {
                   });
                 }];
   }
-  // The system's buttons, but its size is fixed: nothing to zoom to, resize or tab with.
-  g_first_run.styleMask &= ~NSWindowStyleMaskResizable;
-  [g_first_run standardWindowButton:NSWindowZoomButton].enabled = NO;
+  // The card is the window: no title bar, buttons or frame of the system's, whose rim and corners
+  // would show round the card's own, and its shadow the card's shape (host_set_first_run_frame).
+  // A borderless window takes the keyboard as GPUI's window says it can.
+  g_first_run.styleMask = NSWindowStyleMaskBorderless | NSWindowStyleMaskFullSizeContentView;
+  g_first_run.hasShadow = YES;
   g_first_run.tabbingMode = NSWindowTabbingModeDisallowed;
+}
+
+// A mask for the glass with corners of |radius|, stretched to any size between them.
+static NSImage* FirstRunMask(double radius) {
+  const CGFloat edge = radius * 2 + 1;
+  NSImage* mask = [NSImage imageWithSize:NSMakeSize(edge, edge)
+                                 flipped:NO
+                          drawingHandler:^BOOL(NSRect rect) {
+                            [NSColor.blackColor setFill];
+                            [[NSBezierPath bezierPathWithRoundedRect:rect
+                                                             xRadius:radius
+                                                             yRadius:radius] fill];
+                            return YES;
+                          }];
+  mask.capInsets = NSEdgeInsetsMake(radius, radius, radius, radius);
+  mask.resizingMode = NSImageResizingModeStretch;
+  return mask;
+}
+
+void host_set_first_run_frame(double width, double height, double radius) {
+  if (!g_first_run) {
+    return;
+  }
+  NSView* content = g_first_run.contentView;
+  const NSRect bounds = content.bounds;
+  const NSRect card = NSMakeRect(round(NSMidX(bounds) - width / 2),
+                                 round(NSMidY(bounds) - height / 2), width, height);
+  // GPUI's glass fills the window; it's kept to the card, which the UI draws over it.
+  for (NSView* view in content.subviews) {
+    if ([view isKindOfClass:NSVisualEffectView.class]) {
+      NSVisualEffectView* glass = (NSVisualEffectView*)view;
+      glass.autoresizingMask = NSViewNotSizable;
+      glass.frame = card;
+      glass.maskImage = FirstRunMask(radius);
+    }
+  }
+  // The shadow is the window's drawn shape, read once this frame is on screen.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [g_first_run invalidateShadow];
+  });
 }
 
 void host_show_first_run(void) {
