@@ -1515,16 +1515,22 @@ impl Agents {
 
     /// The core checked a call of an agent's on `tab` not made here, as the driver's: an entry
     /// for the log. The calls made here log their own, as the core's report comes while they
-    /// run.
+    /// run. The entry is about the site the core `named`, or with none about the tab's page.
     pub fn checked(
         &mut self,
         agent: &str,
         tab: u64,
         action: &str,
         refused: &str,
+        named: Option<&str>,
         cx: &mut Context<Self>,
     ) {
-        let site = site(&self.browser.tab(tab, cx).url);
+        let named = named.map(named_site);
+        if tools::not_secure(action, refused) {
+            // Never by where the tab is, which is the page it's put back on.
+            return self.not_secure(agent, tab, &named.unwrap_or_default(), cx);
+        }
+        let site = named.unwrap_or_else(|| site(&self.browser.tab(tab, cx).url));
         self.note_page(
             agent,
             (self.holder(agent, tab), tab),
@@ -1532,6 +1538,30 @@ impl Agents {
             &site,
             refused,
         );
+        cx.notify();
+    }
+
+    /// The core stopped a page of `host` in the agent's `tab`, which answered only over http, and
+    /// puts the tab back: an entry for the log, by the host the core names, as the tab is leaving
+    /// that page, or by none. The step that waits on the page, the oldest there as the core takes a tab's one
+    /// at a time, ends as one that never went, in the words that has: the agent learns no more.
+    fn not_secure(&mut self, agent: &str, tab: u64, host: &str, cx: &mut Context<Self>) {
+        let by = (self.holder(agent, tab), tab);
+        self.note_page(agent, by, tools::NOT_SECURE_ACTION, host, "");
+        let waiting = (self.acting.iter())
+            .filter(|(_, acting)| acting.tab == tab)
+            .map(|(request, _)| *request)
+            .min();
+        if let Some(acting) = waiting.and_then(|request| self.acting.remove(&request)) {
+            // It didn't go, so the user's yes for where it was to go goes with it.
+            self.cleared.remove(&tab);
+            let why = match acting.opened {
+                true => "The tab couldn't open.",
+                false => "The tab couldn't go there.",
+            };
+            _ = acting.reply.send(ToolResult::error(why));
+            self.advance(cx);
+        }
         cx.notify();
     }
 
@@ -5814,6 +5844,24 @@ pub fn site(url: &str) -> String {
         None => host.split(':').next().unwrap_or_default(),
     };
     host.strip_prefix("www.").unwrap_or(host).to_string()
+}
+
+/// The site an entry of the core's names itself, as `site` gives a page's: a host alone, or
+/// nothing, which the log reads as a page. Anything of an address beside its host, a path, a
+/// query, a port or a name and password, makes it nothing rather than be cut down to one: the
+/// core sends none, so what has one isn't the core's to believe.
+pub fn named_site(named: &str) -> String {
+    let name = |host: &str| {
+        (host.chars()).all(|each| each.is_ascii_alphanumeric() || matches!(each, '.' | '-' | '_'))
+    };
+    let address = |host: &str| {
+        (host.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')))
+            .is_some_and(|inner| inner.chars().all(|each| each.is_ascii_hexdigit() || each == ':'))
+    };
+    match !named.is_empty() && (name(named) || address(named)) {
+        true => named.strip_prefix("www.").unwrap_or(named).to_string(),
+        false => String::new(),
+    }
 }
 
 /// The kinds of page `site` names for a page off the web, whose address it doesn't give.

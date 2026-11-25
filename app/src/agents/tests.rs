@@ -3682,6 +3682,7 @@ fn the_cores_reports_come_to_the_log(cx: &mut TestAppContext) {
             10,
             "act",
             "The tab isn't in the agent's own Space.",
+            None,
             cx,
         );
         agents.session_ended("claude-code", 20, "taken back", cx);
@@ -3695,6 +3696,140 @@ fn the_cores_reports_come_to_the_log(cx: &mut TestAppContext) {
     assert_eq!(log[1].1, "en.wikipedia.org");
     assert_eq!(tools::describe(&log[0].0), "You took the tab over");
     assert!(log.iter().all(|entry| entry.0 != "disconnected"));
+}
+
+/// A page that answers only over http never opens in an agent's tab: the core stops it and says
+/// so, and the open that waits on the page ends as one that never opened, in those words alone.
+/// The log has the page by its host, as the core names it, not by where the tab is.
+#[gpui::test]
+fn a_page_without_a_secure_connection_ends_the_open_that_waits_on_it(cx: &mut TestAppContext) {
+    let (browser, configs) = (Rc::new(Made::default()), Arc::new(Configs::default()));
+    let agents = agents(&browser, &configs, None, cx);
+    agents.update(cx, |agents, cx| agents.connect(Client::ClaudeCode, cx));
+    cx.run_until_parked();
+    let answer = call(
+        &agents,
+        "claude-code",
+        "open_tab",
+        json!({ "url": "http://plain.example/in?name=value" }),
+        cx,
+    );
+    let (tab, request, ..) = browser.pages.borrow()[0].clone();
+    assert!(answer.try_recv().is_err(), "it answered before its page");
+    agents.update(cx, |agents, cx| {
+        let named = Some("plain.example");
+        agents.checked("claude-code", tab, "open_page", "not_secure", named, cx);
+    });
+    assert_eq!(
+        answer.recv().unwrap(),
+        ToolResult::error("The tab couldn't open.")
+    );
+    let log = log(&agents, "claude-code", cx);
+    assert_eq!(
+        log[0],
+        ("open_page".into(), "plain.example".into(), "".into())
+    );
+    let did = tools::Did {
+        tool: log[0].0.clone(),
+        site: log[0].1.clone(),
+        ..Default::default()
+    };
+    assert_eq!(
+        tools::step_title(&did, tools::Tense::Done),
+        "Not opened: no secure connection · plain.example"
+    );
+    // The core's answer as the tab it put back closes is nobody's.
+    agents.update(cx, |agents, cx| {
+        let ended = "The agent's session with the tab ended.".to_string();
+        agents.page_done(request, ended, Some(Failure::Other), cx);
+    });
+    assert!(answer.try_recv().is_err(), "the open answered twice");
+}
+
+/// As is the step that took a tab the agent had to such a page, which the core puts back to the
+/// page it was at. An entry of the core's for anything else ends no step.
+#[gpui::test]
+fn a_page_without_a_secure_connection_ends_the_step_that_went_there(cx: &mut TestAppContext) {
+    let (agents, _, _) = connected(cx);
+    let answer = call(
+        &agents,
+        "claude-code",
+        "navigate",
+        json!({ "tab": 20, "url": "http://plain.example/" }),
+        cx,
+    );
+    agents.update(cx, |agents, cx| {
+        let named = Some("plain.example");
+        agents.checked("claude-code", 20, "open_page", "another", named, cx);
+        agents.checked("claude-code", 20, "open_pages", "not_secure", named, cx);
+    });
+    assert!(answer.try_recv().is_err(), "another entry ended the step");
+    agents.update(cx, |agents, cx| {
+        let named = Some("plain.example");
+        agents.checked("claude-code", 20, "open_page", "not_secure", named, cx);
+    });
+    assert_eq!(
+        answer.recv().unwrap(),
+        ToolResult::error("The tab couldn't go there.")
+    );
+    // One with no step waiting, as a tab handed back at Chrome's warning, is the log's alone.
+    agents.update(cx, |agents, cx| {
+        let named = Some("other.example");
+        agents.checked("claude-code", 20, "open_page", "not_secure", named, cx);
+    });
+    let log = log(&agents, "claude-code", cx);
+    assert_eq!(
+        log[0],
+        ("open_page".into(), "other.example".into(), "".into())
+    );
+}
+
+/// An entry of the core's is about the site it names, not the page its tab shows, and about the
+/// tab's page when it names none. The name is a host alone: one with more of an address in it, a
+/// path, a query, a port or a name and password, names nothing, and the entry reads a page.
+#[gpui::test]
+fn the_site_the_core_names_is_the_entrys_and_only_a_host(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let shown = cx.update(|cx| site(&browser.tab(20, cx).url));
+    assert!(!shown.is_empty() && shown != "named.example");
+    let why = "The page asked for a device.";
+    agents.update(cx, |agents, cx| {
+        agents.checked("claude-code", 20, "request_device usb", why, None, cx);
+        let named = Some("named.example");
+        agents.checked("claude-code", 20, "request_device usb", why, named, cx);
+    });
+    let entries = log(&agents, "claude-code", cx);
+    assert_eq!(entries[1].1, shown);
+    assert_eq!(entries[0].1, "named.example");
+    for more in [
+        "named.example/path",
+        "named.example?query=1",
+        "named.example#part",
+        "named.example:8080",
+        "user:pass@named.example",
+        "user@named.example",
+        "http://named.example",
+        "named.example other.example",
+        "",
+    ] {
+        assert_eq!(named_site(more), "", "{more} was taken as a host");
+        agents.update(cx, |agents, cx| {
+            agents.checked("claude-code", 20, "open_page", "not_secure", Some(more), cx);
+        });
+        let entries = log(&agents, "claude-code", cx);
+        assert_eq!(entries[0].1, "", "{more} is in the log");
+        let did = tools::Did {
+            tool: entries[0].0.clone(),
+            site: entries[0].1.clone(),
+            ..Default::default()
+        };
+        assert_eq!(
+            tools::step_title(&did, tools::Tense::Done),
+            "Not opened: no secure connection · a page"
+        );
+    }
+    assert_eq!(named_site("www.named.example"), "named.example");
+    assert_eq!(named_site("[2001:db8::1]"), "[2001:db8::1]");
 }
 
 #[test]
