@@ -499,7 +499,10 @@ fn group_talk(talk: &mut Conversation, items: &[TraceItem]) {
         items: steps,
     });
     talk.lines = match card.word {
-        Word::Done => vec![worked, Line::Said(card.status.clone())],
+        Word::Done => {
+            talk.finished = vec![(1, "14:02".into())];
+            vec![worked, Line::Said(card.status.clone())]
+        }
         Word::NeedsYou => vec![
             worked,
             Line::Ilo(IloLine {
@@ -698,6 +701,8 @@ pub(crate) fn bench_task(talk: &mut Conversation, items: Vec<TraceItem>) {
             if ended {
                 talk.on = None;
             }
+            // Its answer, the line after the trace, finished when the task did.
+            talk.finished = vec![(1, "14:02".into())];
             let mut lines = vec![
                 done(0, &items),
                 Line::Said(

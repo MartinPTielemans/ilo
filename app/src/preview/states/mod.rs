@@ -205,4 +205,26 @@ mod tests {
             );
         }
     }
+
+    /// A done task's answer has its finish time under it, so its conversation draws the row with
+    /// Copy and the time, as the app's does.
+    #[test]
+    fn a_done_tasks_answer_says_when_it_finished() {
+        use browser::agents::task::{Line, Word};
+        let cards = super::tasks::task_cards(0);
+        let done: Vec<_> = cards
+            .iter()
+            .filter(|card| card.word == Word::Done)
+            .collect();
+        assert!(!done.is_empty(), "the preview has no done task");
+        for card in done {
+            let talk = super::tasks::task_conversation(card.agent.clone());
+            let answer = (talk.lines.iter()).position(|line| matches!(line, Line::Said(_)));
+            let Some(answer) = answer else {
+                panic!("{}'s conversation has no answer", card.title);
+            };
+            let timed = talk.finished.iter().any(|(at, _)| *at == answer);
+            assert!(timed, "{}'s answer has no finish time", card.title);
+        }
+    }
 }
