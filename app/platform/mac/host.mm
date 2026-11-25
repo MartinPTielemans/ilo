@@ -95,6 +95,9 @@ static NSPasteboardType const kTabDragType = @"dev.ilo.browser.tab";
 }
 @end
 
+// Little ilo's window as its UI's view joins it (below).
+static void LittleViewJoinedWindow(NSView* view);
+
 // The view the UI draws in. It takes the links and files dragged onto it, from the page or another
 // app, for the UI, and the tabs host_drag_tab drags from the app's windows.
 @interface HostUIView : NSView
@@ -195,6 +198,12 @@ static NSPasteboardType const kTabDragType = @"dev.ilo.browser.tab";
 // Only as the pointer moves, so a drag held still doesn't wake the UI.
 - (BOOL)wantsPeriodicDraggingUpdates {
   return NO;
+}
+
+// The core puts the view in its window just before it first orders the window in.
+- (void)viewDidMoveToWindow {
+  [super viewDidMoveToWindow];
+  LittleViewJoinedWindow(self);
 }
 @end
 
@@ -1950,6 +1959,17 @@ static void ToShownDesktop(Browser* browser, NSWindow* window) {
   ToActiveSpaceOnceShown(window);
 }
 
+// Little ilo's window as its UI's |view| joins it, before the core first orders it in. AppKit takes
+// a window that can go full screen into full screen as it's ordered in on its app's full-screen
+// desktop, to a desktop of its own, so over a full-screen browser window it's the auxiliary by
+// then: made one once its UI showed, it had gone full screen already (#4179).
+static void LittleViewJoinedWindow(NSView* view) {
+  Browser* browser = BrowserWithView((__bridge void*)view);
+  if (browser && browser->little && view.window) {
+    ToShownDesktop(browser, view.window);
+  }
+}
+
 // The window on screen right behind |window| at the normal level, one with something to see, and
 // its process, as the window server stacks every app's windows.
 static bool WindowBehind(NSWindow* window, CGWindowID* behind, pid_t* owner) {
@@ -2060,7 +2080,6 @@ void host_show_window_behind(void* ui_view, void* above_ui_view) {
     PlaceTitlebarSide(browser);
   }
   if (browser->little) {
-    ToShownDesktop(browser, window);
     // Its own motion, or none under Reduce Motion, rather than AppKit's for a new window.
     window.animationBehavior = NSWindowAnimationBehaviorNone;
     // Closing it over another app's window, mid-grow too, leaves that app in front (#1692): the
