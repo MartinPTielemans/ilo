@@ -27,7 +27,7 @@ forget_appearance
 # Settings › Links' switch is kept off as this file, which an earlier run's end may have left.
 cards_off="$profile_dir/link-cards-off"
 rm -f "$cards_off"
-# The agent's token, which Settings › Agents keeps, on from the launch as mcp.sh's.
+# The agent's token, which Settings › Other apps keeps, on from the launch as mcp.sh's.
 agents_file="$(dirname "$saved")/Agents"
 token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
 printf '{"on":true,"agents":[{"client":"mcp-client","token":"%s"}]}' "$token" > "$agents_file"

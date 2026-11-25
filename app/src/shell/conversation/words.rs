@@ -22,6 +22,13 @@ pub fn working(agent: &str) -> String {
     format!("{agent} is working")
 }
 
+/// The assistant's own words as a screen reader is told them, the first line of its answer: the
+/// mark before them is the app's, and spoken only, so nothing an assistant writes is heard as a
+/// line of the product's.
+pub fn says(assistant: &str, said: &str) -> String {
+    format!("{assistant} says {said}")
+}
+
 /// A task the user stopped, as the last line of its log says it.
 const YOU_STOPPED: &str = "You stopped it";
 

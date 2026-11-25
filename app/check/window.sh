@@ -1193,7 +1193,7 @@ reveal_at_edge "the pointer at the edge didn't bring the sidebar out again"
 send key s cmd
 toggle ui shown "⌘S with the sidebar out"
 check_reveal "with the sidebar docked by ⌘S"
-# Settings › Tabs & Sidebar's edge switch off (#1636): the pointer moving along the edge of the
+# Settings › Tabs & Spaces' edge switch off (#1636): the pointer moving along the edge of the
 # window with its sidebar hidden brings nothing out, and ⌘S still shows it. On again after.
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
@@ -1203,8 +1203,8 @@ send clickkey $(drawn "toolbar General")
 send clickkey $(drawn "toolbar About")
 settings_drew About
 ../tools/window-screenshot.sh "$pid" "$out/settings-about.png" || fail "no window to capture"
-send clickkey $(drawn "toolbar Tabs & Sidebar")
-settings_drew "Tabs & Sidebar"
+send clickkey $(drawn "toolbar Tabs & Spaces")
+settings_drew "Tabs & Spaces"
 ../tools/window-screenshot.sh "$pid" "$out/settings-tabs.png" || fail "no window to capture"
 in_sight "switch edge reveals sidebar" || fail "Settings didn't draw the edge's switch"
 send clickkey $at
@@ -1225,17 +1225,17 @@ sleep 1
 send key s cmd
 toggle ui shown "⌘S with the edge off"
 send menu Settings…
-expect '^browser: settings shown Tabs & Sidebar$' "Settings… didn't show Tabs & Sidebar again"
-settings_drew "Tabs & Sidebar"
+expect '^browser: settings shown Tabs & Spaces$' "Settings… didn't show Tabs & Spaces again"
+settings_drew "Tabs & Spaces"
 in_sight "switch edge reveals sidebar" || fail "Settings didn't draw the edge's switch"
 send clickkey $at
 expect '^browser: edge reveals sidebar on$' "a click on the edge's switch didn't turn it on again"
 # The sidebar on the right, picked in Settings as a user does, comes out from the window's last
 # column, where on Linux the band at the right edge is the UI's too (#3219). Back on the left after.
-# Sidebar position is Appearance's (#4092).
-send clickkey $(drawn "toolbar Appearance")
-expect '^browser: settings tab Appearance$' "a click on Appearance didn't show its section"
-settings_drew Appearance
+# Sidebar position is Window's (#4092).
+send clickkey $(drawn "toolbar Window")
+expect '^browser: settings tab Window$' "a click on Window didn't show its section"
+settings_drew Window
 in_sight "sidebar position option Right" || fail "Settings didn't draw Right's drawing"
 send clickkey $at
 expect '^browser: sidebar on the right$' "a click on Right's drawing didn't move the sidebar"
@@ -1254,8 +1254,8 @@ expect '^browser: reveal shown$' "the pointer at the window's right edge didn't 
 send key s cmd
 expect '^browser: sidebar shown$' "⌘S with the sidebar out on the right didn't dock it"
 send menu Settings…
-expect '^browser: settings shown Appearance$' "Settings… didn't show Appearance again"
-settings_drew Appearance
+expect '^browser: settings shown Window$' "Settings… didn't show Window again"
+settings_drew Window
 in_sight "sidebar position option Left" || fail "Settings didn't draw Left's drawing"
 send clickkey $at
 expect '^browser: sidebar on the left$' "a click on Left's drawing didn't move the sidebar back"

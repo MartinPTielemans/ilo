@@ -271,13 +271,13 @@ start() {
   device "$1"
   await_load
 }
-# Shows Settings › Sync and starts signing in.
+# Shows Settings › Sync & Import and starts signing in.
 open_sign_in() {
   send menu Settings…
   expect '^browser: settings shown ' "Settings… didn't show Settings on $on"
-  send clickkey $(drawn "toolbar Sync")
-  expect '^browser: settings tab Sync$' "a click on Sync didn't show its tab on $on"
-  at=$(drawn "sync sign-in") || fail "Settings › Sync didn't draw Sign In on $on"
+  send clickkey $(drawn "toolbar Sync & Import")
+  expect '^browser: settings tab Sync & Import$' "a click on Sync & Import didn't show its tab on $on"
+  at=$(drawn "sync sign-in") || fail "Settings › Sync & Import didn't draw Sign In on $on"
   send clickkey $at
   expect '^browser: account SigningIn None$' "Sign In didn't start signing in on $on"
   await 'browser: sync sign-in loaded /authorize$' ||

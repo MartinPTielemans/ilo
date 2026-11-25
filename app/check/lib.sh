@@ -994,10 +994,10 @@ switch() {
   send key $1
   expect "^browser: selected $2 in " "key $1 didn't show tab $2 of \"$(today)\""
 }
-# The center of row $1 of Today, counting from 0: rows are 41 apart under "+ New Tab", which is
-# under the divider, 15 tall, and the Space's name, 44 tall and 90 below the window's top.
+# The center of row $1 of Today, counting from 0: rows are 34 apart under "+ New Tab", which is
+# under the gap over Today, 6 tall, and the Space's name, 42 tall and 86 below the window's top.
 row() {
-  echo "100 $((90 + 44 + 15 + 41 * ($1 + 1) + 20))"
+  echo "100 $((86 + 42 + 6 + 34 * ($1 + 1) + 17))"
 }
 # The CPU time the browser's processes have taken, in seconds, and how many there are: on Linux
 # from /proc, in clock ticks, on Windows from WMI, in 100 ns, on the Mac from ps, in hundredths.
@@ -1136,14 +1136,14 @@ plus_adds() {
 # The centre of pinned row $1, counting from 0, under the Space's name, and of the ✕ it shows
 # under the pointer.
 pinned_row() {
-  echo "100 $((90 + 44 + 41 * $1 + 20))"
+  echo "100 $((86 + 42 + 34 * $1 + 17))"
 }
 pinned_close() {
-  echo "202 $((90 + 44 + 41 * $1 + 20))"
+  echo "202 $((86 + 42 + 34 * $1 + 17))"
 }
 # Its favicon's.
 pinned_favicon() {
-  echo "26 $((90 + 44 + 41 * $1 + 20))"
+  echo "26 $((86 + 42 + 34 * $1 + 17))"
 }
 
 # What the profile keeps for Safari's engine, as JSON: its sites, the notes it closed and the listed

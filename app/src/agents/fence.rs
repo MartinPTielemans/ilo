@@ -19,11 +19,6 @@ pub const SPOKEN: &str = "Site agents can't open or use";
 /// The sentence under the list.
 pub const FOOT: &str = "Agents can't open or use these sites, whatever a thread's access.";
 
-/// Why the card asks, under what the agent wants: the user's own list.
-pub fn why(site: &str) -> String {
-    format!("You set agents to always ask first on {site}.")
-}
-
 /// What an agent's call on a tab it came to without an open asks: the tab is there already, so
 /// it asks to use the site where an open asks to open it, with the same answers.
 pub fn arrival(site: &str) -> String {

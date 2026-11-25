@@ -181,19 +181,6 @@ pub struct Status {
     pub held: Vec<(u64, SharedString)>,
 }
 
-/// The user's answer to an agent's question.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Answer {
-    /// This once.
-    Once,
-    /// Now and whenever the agent asks on the site again.
-    Always,
-    /// Not now, nor when it asks on the site again.
-    Never,
-    /// Not now: the ×.
-    Dismiss,
-}
-
 /// What the agents ask of the browser: the core, in main.rs, or what a test makes up. Calls into
 /// the core take the app, as one may tell the windows something before it returns.
 pub trait Browser {
@@ -3815,22 +3802,7 @@ impl Agents {
             }
         }
         cx.notify();
-        let answer = match why {
-            _ if told.is_some() => told.unwrap(),
-            SAID_NO => format!("The user said no: you can't {}. Don't try again.", act.what),
-            NO_ANSWER => format!(
-                "The user didn't answer in 5 minutes, so you can't {} now. Ask them where you \
-                 started the task before you try again.",
-                act.what
-            ),
-            SAID_NEVER => {
-                format!(
-                    "The user said never on {site}: you can't {}. Don't try again.",
-                    act.what
-                )
-            }
-            _ => why.to_string(),
-        };
+        let answer = told.unwrap_or_else(|| why.to_string());
         _ = act.reply.send(ToolResult {
             kind,
             ..ToolResult::error(answer)
@@ -5601,25 +5573,18 @@ fn finish(sending: Sending, error: bool, kind: Option<tools::Kind>) {
     });
 }
 
-/// What the log says of an action the user refused, now or for good on its site.
-const SAID_NO: &str = "You said no.";
-/// What the log says of an action that asked and had no answer in ASK_WAIT.
-const NO_ANSWER: &str = "No answer in 5 minutes.";
-
-/// The spec's: how long an action asking first waits for the user's answer.
-const ASK_WAIT: Duration = Duration::from_secs(5 * 60);
 /// The spec's: how long a handoff's call waits for the user to hand the tab back.
 const HANDOFF_WAIT: Duration = Duration::from_secs(15 * 60);
-/// A check's waits in place of ASK_WAIT, HANDOFF_WAIT and task::QUIET, in seconds, as
+/// A check's waits in place of HANDOFF_WAIT and task::QUIET, in seconds, as
 /// `--agent-waits=<ask>,<handoff>[,<quiet>]`, so a run sees each end without waiting minutes, or a
-/// run whose own work pauses its calls keeps one task. Not read in a prod build.
+/// run whose own work pauses its calls keeps one task. Not read in a prod build. Nothing asks any
+/// more, so the first is taken and unused: check scripts still pass all three by position.
 const WAITS_SWITCH: &str = "--agent-waits";
 
-/// How long an ask and a handoff wait, and a session quiet after its last page: the spec's, or a
-/// check's from the launch's arguments.
+/// How long a handoff waits, and a session quiet after its last page: the spec's, or a check's
+/// from the launch's arguments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Waits {
-    ask: Duration,
     handoff: Duration,
     quiet: Duration,
 }
@@ -5627,7 +5592,6 @@ struct Waits {
 impl Waits {
     fn new(given: &[String], prod: bool) -> Waits {
         let spec = Waits {
-            ask: ASK_WAIT,
             handoff: HANDOFF_WAIT,
             quiet: task::QUIET,
         };
@@ -5640,8 +5604,7 @@ impl Waits {
         };
         let seconds = |word: &str| word.parse::<u64>().ok().map(Duration::from_secs);
         match value.split(',').collect::<Vec<_>>()[..] {
-            [ask, handoff, ref quiet @ ..] if quiet.len() <= 1 => Waits {
-                ask: seconds(ask).unwrap_or(spec.ask),
+            [_ask, handoff, ref quiet @ ..] if quiet.len() <= 1 => Waits {
                 handoff: seconds(handoff).unwrap_or(spec.handoff),
                 quiet: (quiet.first().and_then(|quiet| seconds(quiet))).unwrap_or(spec.quiet),
             },
@@ -5660,7 +5623,6 @@ impl Waits {
 }
 /// Why discarding a page the agent didn't open asks the user first.
 const UNSAVED: &str = "Its page may have unsaved changes, which closing it loses.";
-const SAID_NEVER: &str = "You said never on this site.";
 /// Why an action asks on a site the user fenced, which fence.rs words for the card.
 const FENCED: &str = "fenced";
 /// Why an act is refused on a site outside its task's Sites, as FENCED is a stand-in.

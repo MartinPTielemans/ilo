@@ -1786,7 +1786,11 @@ impl Shell {
                 {
                     self.theme_preview = None;
                 }
-                browser.set_space_theme(space, theme, cx);
+                // Its Transparency stays beside whatever theme it's given (space_transparency).
+                let kept = self.spaces.iter().find(|each| each.id == space);
+                let kept = kept.and_then(|space| space.transparency);
+                let text = crate::space_transparency::with(theme, kept);
+                browser.set_space_theme(space, &text, cx);
                 browser.set_space_color(space, *color, cx);
                 cx.notify();
             }

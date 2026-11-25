@@ -15,7 +15,9 @@ use super::{
     Curve, DROP_LINE, DROP_LINE_END, DROP_RING, DROP_RING_X, Edit, FOOTER_HEIGHT, SPACE_DROP_LINE,
     SPACE_HEIGHT, SWITCHER_INSET, Shell, What, footer::space_cells,
 };
+use crate::space_icon::SpaceIcon;
 use crate::tokens::shell::library::{CARD_GAP, CARD_WIDTH, SPACES_INSET, SPACES_LEFT};
+use crate::tokens::shell::{SPACE_ICON_PITCH, SPACE_PITCH};
 
 /// A Space's dot or card handle pressed and dragged, as GPUI holds it. Which Space, and along
 /// what, is the Shell's to keep, in its SpaceDrag.
@@ -262,10 +264,17 @@ impl Shell {
         Some(before)
     }
 
-    /// The switcher's cells for the Spaces as they are, in a span `span` wide.
+    /// The switcher's cells for the Spaces as they are, in a span `span` wide. A dot's pitch is
+    /// its own, and an icon keeps the wider one it had, or two would lie against each other.
     pub(super) fn switcher_cells(&self, span: f32) -> Vec<f32> {
         let shown = self.spaces.iter().position(|space| space.id == self.space);
-        space_cells(span, self.spaces.len(), shown.unwrap_or(usize::MAX))
+        let pitches: Vec<f32> = (self.spaces.iter())
+            .map(|space| match SpaceIcon::parse(&space.icon) {
+                SpaceIcon::Dot => SPACE_PITCH,
+                SpaceIcon::Glyph(_) | SpaceIcon::Emoji(_) => SPACE_ICON_PITCH,
+            })
+            .collect();
+        space_cells(span, &pitches, shown.unwrap_or(usize::MAX))
     }
 
     /// Where each dot's and card's middle is drawn now, from its row's left, gliding ones where
