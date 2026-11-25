@@ -47,11 +47,11 @@ fi
 favorites() {
   grep '^browser: favorites' "$log" | tail -1 | sed 's/^browser: favorites *//'
 }
-# One favorite is one tile across the sidebar, 47 tall and 90 below the window's top, under the URL
-# field, and its row of tiles takes the Space's rows 55 down, with the 8 under it.
+# One favorite is one tile across the sidebar, 40 tall and 90 below the window's top, under the URL
+# field, and its row of tiles takes the Space's rows 44 down, with the 4 under it.
 tile="114 114"
 tiled_row() {
-  echo "100 $(($(row "$1" | cut -d' ' -f2) + 55))"
+  echo "100 $(($(row "$1" | cut -d' ' -f2) + 44))"
 }
 open_from_bar "http://localhost:$port/two.html"
 b=$tab
@@ -148,8 +148,8 @@ expect '^browser: tooltip window shown$' "the sidebar button's tooltip didn't fa
 ../tools/window-screenshot.sh "$pid" "$out/header-tooltip.png" || fail "no window to capture"
 send move 100 400
 expect '^browser: tooltip hidden$' "the pointer leaving the sidebar button didn't hide its tooltip"
-# Clear, at the end of the divider over Today, says what it does in Arc's words, under it.
-send move 200 191
+# Clear, at the end of the New Tab line, says what it does in Arc's words, under it.
+send move 200 195
 expect '^browser: clear hovered 1$' "Clear didn't see the pointer come over it"
 expect '^browser: tooltip shown Clear unpinned tabs in this space$' \
   "resting on Clear didn't show its tooltip"
