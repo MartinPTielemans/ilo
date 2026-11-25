@@ -1666,15 +1666,20 @@ check_layout "after a double-click on the sidebar's edge"
 # which a capture of the window alone leaves out, so this captures the screen, and only a check
 # VM's screen, and its appearance, are the check's to change: check.sh runs it dark, and this
 # turns it light for the light pass and back after.
-# Colours the Space black from the theme picker's field, which is black at its middle.
+# Colours the Space black from the theme panel's value field, which is there once the Space has a
+# colour: the first palette, then 000000 typed into it and return.
 black_space() {
   post rightclick 100 112
   expect "^browser: menu shown $(cased 'Change Space Icon…')" "a right-click on the Space's name showed no menu"
   send choose "$(cased 'Edit Theme Color…')"
   expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
   expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
-  send clickkey 191.5 178.5
-  expect '^browser: colored space [0-9]* 000000$' "the field's middle didn't colour the Space black"
+  send clickkey $(panel_at palette 1)
+  expect '^browser: colored space [0-9]* [0-9a-f]*$' "the first palette didn't colour the Space"
+  send clickkey $(panel_at value)
+  send type 000000
+  send key return
+  expect '^browser: colored space [0-9]* 000000$' "000000 in the value field didn't colour the Space black"
   send key escape
   expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
   send move $page_point
@@ -1995,11 +2000,13 @@ public static extern bool SetProcessDPIAware();
     send choose "$(cased 'Edit Theme Color…')"
     expect '^browser: theme picker shown$' "Edit Theme Color… didn't show the theme picker"
     expect '^browser: theme picker drawn$' "the theme picker didn't draw itself on screen"
-    send clickkey "$(swatch_x 7)" $swatch_y
-    expect '^browser: colored space [0-9]* 7eb6d5$' "the blue swatch didn't colour the Space"
+    send clickkey $(panel_at palette 2)
+    expect '^browser: colored space [0-9]* [0-9a-f]*$' "the blue palette didn't colour the Space"
+    blue=$(grep '^browser: colored space ' "$log" | tail -1 | cut -d' ' -f5)
+    near_color "$blue" "$(panel_color 2)" || fail "the blue palette coloured the Space $blue, not $(panel_color 2)"
     send key escape
     expect '^browser: theme picker hidden$' "escape didn't close the theme picker"
-    taskbar_dot 7eb6d5 0b8045 blue || fail "the taskbar button's dot didn't take the blue Space's 7eb6d5"
+    taskbar_dot "$blue" 0b8045 blue || fail "the taskbar button's dot didn't take the blue Space's $blue"
     same_place "$green_at" || fail "the blue dot is at $dot, not at the green one's $green_at"
   fi
   send menu Settings…
