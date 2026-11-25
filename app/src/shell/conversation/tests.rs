@@ -1417,6 +1417,67 @@ fn the_stopped_lines_hand_back_takes_no_press_until_it_has_stood(cx: &mut TestAp
     );
 }
 
+/// The Focus command's keys reach the stopped line's Hand Back as they do any ilo line's button,
+/// under the same wait as its click: ↩ presses it only once the keys have been there a moment
+/// and the button has stood where it is.
+#[gpui::test]
+fn the_focus_keys_press_hand_back_only_once_it_has_stood(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    let talk = Conversation {
+        lines: vec![Line::Ilo(IloLine {
+            key: 7,
+            kind: IloKind::YouStopped { pages: 2 },
+            settled: false,
+        })],
+        ..conversation(0)
+    };
+    shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let pressed = |host: &Rc<Recorder>| -> Vec<String> {
+        (host.take().into_iter())
+            .filter(|line| line.contains("PagesBack"))
+            .collect()
+    };
+    host.take();
+    focus_command(&shell, "ui", cx);
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        pressed(&host),
+        Vec::<String>::new(),
+        "a key as the keys came"
+    );
+    // The keys have been there long enough, the button hasn't stood.
+    let keys_waited = |view: &Entity<super::TalkView>, cx: &mut VisualTestContext| {
+        view.update(cx, |view, _| {
+            let keys = view.ilo_keys.as_mut().expect("the keys left the line");
+            keys.last -= crate::agents::tier::PROTECT * 2;
+        });
+    };
+    keys_waited(&view, cx);
+    view.update(cx, |view, _| {
+        for (_, since) in view.ilo_drawn.borrow_mut().values_mut() {
+            *since = std::time::Instant::now();
+        }
+    });
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        pressed(&host),
+        Vec::<String>::new(),
+        "a key before it had stood"
+    );
+    keys_waited(&view, cx);
+    view.update(cx, |view, _| {
+        for (_, since) in view.ilo_drawn.borrow_mut().values_mut() {
+            *since -= std::time::Duration::from_secs(5);
+        }
+    });
+    cx.simulate_keystrokes("enter");
+    assert_eq!(pressed(&host), ["task task-1 PagesBack"]);
+}
+
 /// The lines of a wall ilo couldn't put up around a task's files, and of a run it couldn't end
 /// whole (#4101), each whole: what ilo did, then why, with the folder's or the file's name quoted
 /// as the user's own and nothing else of the line drawn as a name.

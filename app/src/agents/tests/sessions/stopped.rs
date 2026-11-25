@@ -232,6 +232,71 @@ fn an_open_that_came_before_the_stop_opens_nothing_and_starts_no_task(cx: &mut T
     assert_eq!(rail(&agents, &second, cx), [30]);
 }
 
+/// The refusal's entry has a site only from a page of that client's own sessions: a call that came
+/// before the Stop and names a tab of the user's leaves an entry with none, where one on the
+/// stopped task's own page has its site, as a refusal's entry does.
+#[gpui::test]
+fn a_refused_calls_entry_has_no_site_from_a_tab_that_isnt_its_clients(cx: &mut TestAppContext) {
+    let (agents, browser, first) = lowered(Tier::Work, cx);
+    (browser.tabs.borrow_mut()).push((41, 1, "Bank", "https://bank.example/"));
+    let came = std::time::Instant::now();
+    stop(&agents, &first, cx);
+    let sites = |cx: &mut TestAppContext| {
+        agents.read_with(cx, |agents, _| {
+            (agents.activity("claude-code"))
+                .filter(|entry| entry.refused == STOPPED)
+                .map(|entry| entry.site.to_string())
+                .collect::<Vec<_>>()
+        })
+    };
+    let read = |id: u64, tab: u64, cx: &mut TestAppContext| {
+        let arguments = json!({ "tab": tab });
+        refused_as_stopped(call_on(&agents, 1, id, "read_page", arguments, came, cx));
+    };
+    read(4, 41, cx);
+    assert_eq!(sites(cx), [String::new()]);
+    read(5, 20, cx);
+    let own = site(
+        browser
+            .tabs
+            .borrow()
+            .iter()
+            .find(|tab| tab.0 == 20)
+            .unwrap()
+            .3,
+    );
+    assert_eq!(sites(cx), [own, String::new()]);
+}
+
+/// A stopped task that is dropped, as the Archive keeps only so many, closes its pages: the
+/// withholding goes with the task, and its client reaches none of the pages it held.
+#[gpui::test]
+fn a_dropped_stopped_tasks_pages_close(cx: &mut TestAppContext) {
+    let (agents, browser, first) = lowered(Tier::Work, cx);
+    stop(&agents, &first, cx);
+    agents.update(cx, |agents, cx| {
+        assert!(agents.withheld("claude-code", 20));
+        agents.drop_task(&first, cx);
+        assert!(!agents.withheld("claude-code", 20));
+    });
+    assert!(
+        !browser.tabs.borrow().iter().any(|tab| tab.0 == 20),
+        "its page stayed open"
+    );
+
+    hello_on(&agents, "claude-code", 2, "claude-code", cx);
+    let now = std::time::Instant::now;
+    let pages = browser.pages.borrow().len();
+    let clicked = coupon(&agents, (2, 4, 20), cx).try_recv();
+    let clicked = clicked.expect("the click wasn't answered at once");
+    assert!(clicked.error, "it clicked: {}", clicked.text);
+    answered(&agents, 4, cx);
+    assert_eq!(browser.pages.borrow().len(), pages, "the click went");
+    let listed = call_on(&agents, 2, 5, "list_tabs", json!({}), now(), cx);
+    let listed = listed.try_recv().expect("its tabs, at once");
+    assert_eq!(listed.text, tools::tab_list(&[], None, &[]));
+}
+
 /// On a new connection the stopped task's page isn't listed, and a call that names no tab never
 /// falls on it. A page that connection opens is a new task's, at the level the stopped one was
 /// left at, and that task holds none of the stopped task's pages.

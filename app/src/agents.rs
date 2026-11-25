@@ -1716,6 +1716,8 @@ impl Agents {
     /// handed back, whichever connection it comes on and whatever that connection's task may
     /// do, or one that came before the Stop, whatever it would open (#4209). Both are read from
     /// the stopped task's own state: a later call that opens a page of its own is a new task's.
+    /// The page is only ever one of that client's sessions' own, so the log's entry has no site
+    /// from a tab a call merely named.
     fn stopped_call(&self, call: &Call) -> Option<Option<u64>> {
         Client::from_id(&call.agent)?;
         let withheld = |tab: &u64| self.withheld(&call.agent, *tab);
@@ -1733,7 +1735,8 @@ impl Agents {
         if let Some(tab) = last.filter(withheld) {
             return Some(Some(tab));
         }
-        (self.came_before_stop(&call.agent, call.at)).then(|| named.first().copied())
+        let own = |tab: &u64| self.session_page(&call.agent, *tab);
+        (self.came_before_stop(&call.agent, call.at)).then(|| named.into_iter().find(own))
     }
 
     /// A call on a tab that came to a site the user put off limits (#3724), or one outside its

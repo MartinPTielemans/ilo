@@ -3102,6 +3102,13 @@ impl Agents {
             })
     }
 
+    /// Whether `tab` is a page of a session of the outside client `agent`'s, under way or ended.
+    pub(super) fn session_page(&self, agent: &str, tab: u64) -> bool {
+        (self.tasks.tasks.iter())
+            .filter_map(|task| task.session.as_ref())
+            .any(|session| session.agent == agent && session.tabs.contains(&tab))
+    }
+
     /// Whether a call of the outside client `agent`'s that came at `at` came before the user
     /// stopped a task of its: the stopped task's own then, whichever connection it came on.
     pub(super) fn came_before_stop(&self, agent: &str, at: Instant) -> bool {
