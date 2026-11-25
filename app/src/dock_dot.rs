@@ -194,6 +194,7 @@ mod tests {
         };
         let row = crate::settings_search::Entry {
             section: crate::settings_column::Section::General,
+            group: None,
             under: None,
             name: switch.name.into(),
             line: Some(switch.line.into()),

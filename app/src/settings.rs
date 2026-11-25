@@ -56,11 +56,11 @@ use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
 use browser::tokens::radius;
 use browser::tokens::settings::form;
 use browser::tokens::settings::{
-    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS, DETAIL,
+    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS,
     DETAIL_LINE, DETAIL_TOP, END_GAP, FIELD_PADDING, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME,
-    GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE,
-    LEDE_TOP, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SENT_TUCK, SHARE_TOP,
-    SHORT_PADDING, SHORT_ROW, SIDE_ROOM, TEXT_X, TITLE, WIDTH,
+    GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_LINE, HEADING_TOP, HEADING_X,
+    HEIGHT, LEDE_LINE, LEDE_TOP, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SEARCH_PLACEHOLDER,
+    SECTION_TEXT, SENT_TUCK, SHARE_TOP, SHORT_PADDING, SHORT_ROW, SIDE_ROOM, TEXT_X, TITLE, WIDTH,
 };
 use browser::tokens::shell::{
     WINDOW_BUTTON_GLYPH, WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y, WINDOWS_BUTTON_GLYPH,
@@ -1087,10 +1087,9 @@ fn view(cx: &mut App) -> Entity<Settings> {
                     return Colors::default();
                 };
                 let settings = settings.read(cx);
-                // The field's "Search" is the rows' grey over the field's own plate, not over a
-                // group's.
+                // The field's "Search" over the field's own plate, not over a group's.
                 Colors {
-                    placeholder: settings.base().opacity(DETAIL).into(),
+                    placeholder: settings.base().opacity(SEARCH_PLACEHOLDER).into(),
                     ..settings.look.field()
                 }
             })
@@ -1511,7 +1510,7 @@ impl Settings {
             div()
                 .mt(px(LEDE_TOP))
                 .line_height(px(LEDE_LINE))
-                .text_color(base.opacity(DETAIL))
+                .text_color(self.look.detail)
                 .child(lede)
         });
         let head = div()
@@ -1523,8 +1522,8 @@ impl Settings {
         let mut after_heading = None;
         let blocks = blocks.into_iter().map(|block| {
             let top = match (after_heading, &block) {
-                (None, _) => FIRST_GROUP,
                 (_, Block::Heading(_) | Block::Crumb(..)) => HEADING_TOP,
+                (None, _) => FIRST_GROUP,
                 (Some(true), _) => HEADING_BOTTOM,
                 (_, Block::Under(_)) => BUTTONS_TOP,
                 _ => GROUP_GAP,
@@ -1559,13 +1558,14 @@ impl Settings {
             .children(blocks)
     }
 
-    /// A heading over the group after it, on the text's column.
+    /// A heading over the group after it, 4 in from the groups' edge, as drawn.
     fn heading(&self, heading: SharedString) -> gpui::Div {
         div()
             .relative()
             .child(self.card.mark(heading.clone()))
-            .px(px(TEXT_X))
-            .text_size(px(text::SMALL))
+            .px(px(HEADING_X))
+            .line_height(px(HEADING_LINE))
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(self.look.heading)
             .child(heading)
     }
@@ -1578,7 +1578,7 @@ impl Settings {
             let div = self.flashed(&row.name, row.div);
             match row.nested {
                 true => (div.pl(px(x)), x),
-                false => (div, ROW_X),
+                false => (div, 0.),
             }
         });
         group_lined(&self.look, rows)
@@ -6274,11 +6274,17 @@ impl Settings {
         pages.sort_by_key(|page| Section::all().position(|each| each == page.section));
         let (mut entries, mut divs, mut under) = (Vec::new(), Vec::new(), Vec::new());
         for page in pages {
+            // The heading over the groups that follow it, which the search reads too.
+            let mut group = None;
             for block in page.blocks {
                 let rows = match block {
                     Block::Rows(rows) => rows,
                     Block::Under(buttons) => {
                         under.push((page.section, buttons));
+                        continue;
+                    }
+                    Block::Heading(heading) | Block::Crumb(heading, _) => {
+                        group = Some(heading);
                         continue;
                     }
                     _ => continue,
@@ -6290,6 +6296,7 @@ impl Settings {
                 for row in rows {
                     entries.push(Entry {
                         section: page.section,
+                        group: group.clone(),
                         under: row.nested.then(|| head.clone()).flatten(),
                         name: row.name,
                         line: row.line,
