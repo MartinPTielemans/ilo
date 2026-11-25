@@ -101,6 +101,12 @@ handed_back::Today TodayWith(const Space& home);
 // back now.
 handed_back::Pinned PinnedWith(const Space& home);
 
+// bc_tab_handed_place.
+bool PlaceOf(bc_id tab, bc_handed_place* place);
+
+// bc_tab_handed_tile.
+bc_id OnTile(bc_id tile);
+
 }  // namespace browser_core::handed
 
 #endif  // BROWSER_CORE_HANDED_H_

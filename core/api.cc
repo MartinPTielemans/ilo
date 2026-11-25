@@ -751,6 +751,49 @@ bool bc_tab_take_back(bc_id tab) {
   return browser_core::EndTabSession(tab, BC_AGENT_SESSION_TAKEN_BACK);
 }
 
+namespace {
+
+// What handed_give_rule asks of |tab|, which |from| holds or, for a |favorite|, shows, as the user
+// would give it into |to|, or with none into an agent's Space of its own profile. |left| is what's
+// kept of it as it leaves (handed::Leaving). Only reads, of what the core has: the give and
+// bc_tab_may_be_given both ask it, so the answer is one fact.
+browser_core::handed_give_rule::Tab GiveFacts(bc_id tab,
+                                              const browser_core::Space& from,
+                                              bool favorite,
+                                              const browser_core::Space* to,
+                                              const browser_core::handed::Mark& left) {
+  const browser_core::Tab* page = browser_core::Tab::Get(tab);
+  content::WebContents* contents = browser_core::Tab::FromId(tab);
+  const browser_core::Tab::Captures captures =
+      page ? page->captures() : browser_core::Tab::Captures();
+  const std::string profile =
+      favorite ? browser_core::Favorites::ProfileOf(tab) : from.profile();
+  return {
+      .users = !from.agent() && !from.own(),
+      .to_agent = !to || to->agent().has_value(),
+      .same_profile = !to || profile == to->profile(),
+      .live_folder = left.pin &&
+                     std::ranges::any_of(left.pin->folders,
+                                         [&](const auto& folder) {
+                                           return from.FolderLive(folder.id) != 0;
+                                         }),
+      .favorite_split = favorite && browser_core::Favorites::Panes(tab).size() > 1,
+      .stands_in = browser_core::handed::KeepsATile(tab),
+      .web_page = page && !page->system_page() && page->Url().SchemeIsHTTPOrHTTPS() &&
+                  (!contents || contents->GetLastCommittedURL().SchemeIsHTTPOrHTTPS()),
+      .camera = captures.camera,
+      .microphone = captures.microphone,
+      .screen = captures.screen,
+      .permission_asked = browser_core::PermissionQuestion::Pending(contents),
+      .dialog = browser_core::PageDialog::Up(tab),
+      .saved_login = browser_core::SavedLoginFits(contents),
+      .device = UsesDevice(contents),
+      .files = contents && contents->HasFileSystemAccessHandles(),
+  };
+}
+
+}  // namespace
+
 bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   browser_core::Space* from = browser_core::Space::Holding(tab);
   // A favorite is in no Space, and is given from the one that shows it.
@@ -764,7 +807,6 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
     return false;
   }
   content::WebContents* contents = browser_core::Tab::FromId(tab);
-  const browser_core::Tab::Captures captures = page->captures();
   // Where it leaves, for its way back (handed.h): its place, the split view it leaves with the
   // give, as a tab taken out of one by hand does, and a pinned tab's pin, which it goes without.
   // A favorite leaves its tile, which the give has a tab without a page keep.
@@ -773,28 +815,7 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   // The page goes as it is, with its profile's logins, so never into another profile's Space,
   // where it would load again. And only a tab that may be handed: the app asks the same before it
   // gives one, and the rule holds here whatever asked.
-  if (!browser_core::handed_give_rule::MayGive({
-          .users = !from->agent() && !from->own(),
-          .to_agent = to->agent().has_value(),
-          .same_profile = (favorite ? browser_core::Favorites::ProfileOf(tab) : from->profile()) ==
-                          to->profile(),
-          .live_folder = left.pin && std::ranges::any_of(left.pin->folders,
-                                                         [&](const auto& folder) {
-                                                           return from->FolderLive(folder.id) != 0;
-                                                         }),
-          .favorite_split = favorite && browser_core::Favorites::Panes(tab).size() > 1,
-          .stands_in = browser_core::handed::KeepsATile(tab),
-          .web_page = !page->system_page() && page->Url().SchemeIsHTTPOrHTTPS() &&
-                      (!contents || contents->GetLastCommittedURL().SchemeIsHTTPOrHTTPS()),
-          .camera = captures.camera,
-          .microphone = captures.microphone,
-          .screen = captures.screen,
-          .permission_asked = browser_core::PermissionQuestion::Pending(contents),
-          .dialog = browser_core::PageDialog::Up(tab),
-          .saved_login = browser_core::SavedLoginFits(contents),
-          .device = UsesDevice(contents),
-          .files = contents && contents->HasFileSystemAccessHandles(),
-      })) {
+  if (!browser_core::handed_give_rule::MayGive(GiveFacts(tab, *from, favorite, to, left))) {
     return false;
   }
   const bool moved = browser_core::arrange_rule::GiveToAgent(
@@ -841,6 +862,31 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
 
 bool bc_tab_return_from_agent(bc_id tab) {
   return browser_core::handed::Return(tab);
+}
+
+bool bc_tab_handed_place(bc_id tab, bc_handed_place* place) {
+  return browser_core::handed::PlaceOf(tab, place);
+}
+
+bc_id bc_tab_handed_tile(bc_id tile) {
+  return browser_core::handed::OnTile(tile);
+}
+
+bool bc_tab_may_be_given(bc_id tab) {
+  const browser_core::Space* from = browser_core::Space::Holding(tab);
+  // As the give: a favorite is in no Space, and is given from the one that shows it.
+  const bool favorite = !from && browser_core::Favorites::Has(tab);
+  if (favorite) {
+    from = ShowingFavorite(tab);
+  }
+  if (!from || !browser_core::Tab::Get(tab)) {
+    return false;
+  }
+  const browser_core::handed::Mark left = favorite
+                                              ? browser_core::handed::Mark{.home = from->id()}
+                                              : browser_core::handed::Leaving(*from, tab);
+  return browser_core::handed_give_rule::MayGive(
+      GiveFacts(tab, *from, favorite, /*to=*/nullptr, left));
 }
 
 bool bc_agent_hand_off(const char* agent, bc_id tab) {

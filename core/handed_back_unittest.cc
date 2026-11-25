@@ -460,5 +460,78 @@ TEST_F(HandedBackTest, ATodayTabIsSavedInATodaysFolderMadeAroundItsPlaceMeanwhil
   EXPECT_TRUE(SavedToday(13, beside).folders.empty());
 }
 
+// The app draws the row of a pin an agent has where the pin comes back, in its folder.
+TEST_F(HandedBackTest, AHandedPinsPlaceIsWhereItComesBack) {
+  const Left left = Give(5);
+  const Pinned saved = SavedWith(5, left);
+  const std::optional<Place> place = PlaceOf(saved.rows, saved.folders, 5);
+  ASSERT_TRUE(place);
+  Return(5, left);
+  EXPECT_EQ(place->index, RowOf(5));
+  EXPECT_EQ(place->folder, work_->FolderOf(5));
+  EXPECT_EQ(place->folder, docs_);
+}
+
+TEST_F(HandedBackTest, AHandedPinWhoseFolderIsGoneHasItsPlaceOutsideIt) {
+  const Left left = Give(5);
+  work_->DeleteFolder(docs_);
+  const Pinned saved = SavedWith(5, left);
+  const std::optional<Place> place = PlaceOf(saved.rows, saved.folders, 5);
+  ASSERT_TRUE(place);
+  EXPECT_EQ(place->folder, 0u);
+  Return(5, left);
+  EXPECT_EQ(place->index, RowOf(5));
+}
+
+// Each among the rows with the other: the app puts both rows in, top to bottom, and has the list
+// the Space has once both are back.
+TEST_F(HandedBackTest, TwoHandedPinsOfOneFolderHaveTheirPlacesInOrder) {
+  const Left two = Give(2);
+  const Left five = Give(5);
+  const Pinned saved = PinnedWith(*work_, {{.tab = 5, .node = five.node, .pin = *five.pin},
+                                           {.tab = 2, .node = two.node, .pin = *two.pin}});
+  const std::optional<Place> upper = PlaceOf(saved.rows, saved.folders, 2);
+  const std::optional<Place> lower = PlaceOf(saved.rows, saved.folders, 5);
+  ASSERT_TRUE(upper && lower);
+  Return(2, two);
+  Return(5, five);
+  EXPECT_EQ(upper->index, RowOf(2));
+  EXPECT_EQ(lower->index, RowOf(5));
+  EXPECT_EQ(upper->folder, docs_);
+  EXPECT_EQ(lower->folder, docs_);
+}
+
+TEST_F(HandedBackTest, AHandedTodayTabsPlaceIsWhereItComesBackInItsTodaysFolder) {
+  const bc_id trip = AddTrip();
+  const Left left = Give(22);
+  const Today saved = SavedToday(22, left);
+  const std::optional<Place> place = PlaceOf(saved.rows, saved.folders, 22);
+  ASSERT_TRUE(place);
+  Return(22, left);
+  const Rows& today = work_->today();
+  EXPECT_EQ(place->index, static_cast<size_t>(std::ranges::find(today, 22) - today.begin()));
+  EXPECT_EQ(place->folder, trip);
+  EXPECT_EQ(TodayFolderOf(*work_, 22), trip);
+}
+
+TEST_F(HandedBackTest, ATodayTabInNoFolderHasItsPlaceInNone) {
+  const Left left = Give(11);
+  const Today saved = SavedToday(11, left);
+  const std::optional<Place> place = PlaceOf(saved.rows, saved.folders, 11);
+  ASSERT_TRUE(place);
+  EXPECT_EQ(place->folder, 0u);
+  Return(11, left);
+  const Rows& today = work_->today();
+  EXPECT_EQ(place->index, static_cast<size_t>(std::ranges::find(today, 11) - today.begin()));
+}
+
+// One that isn't handed out of the Space, or is the other kind of row.
+TEST_F(HandedBackTest, ATabThatIsNotAmongTheRowsHasNoPlace) {
+  const Left left = Give(5);
+  const Pinned saved = SavedWith(5, left);
+  EXPECT_FALSE(PlaceOf(saved.rows, saved.folders, 11));
+  EXPECT_FALSE(PlaceOf(saved.rows, saved.folders, 99));
+}
+
 }  // namespace
 }  // namespace browser_core::handed_back

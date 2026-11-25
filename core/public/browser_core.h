@@ -2204,23 +2204,30 @@ BC_EXPORT void bc_file_field_drop(bc_id field);
 
 // The user gives the agent whose Space is |space| their |tab|, which moves there as
 // bc_tab_move_to_space moves a tab, and the agent may act in it as in its own from then on. Only
-// one of the user's tabs, into an agent's Space of the same profile, as the page goes as it is. And
-// only a Today tab of a Space the Spaces list has, at an http or https page in Chromium's engine,
-// that isn't in a split view and whose page isn't using the camera, the microphone or a screen's, a
-// window's or a tab's picture, asks for no permission (tab_permission_asked, or a request kept for
-// when the tab is shown), has none of its dialogs up (tab_dialog), has no sign-in form the profile
-// has a saved login for, filled in or not, has no device open and isn't being told the location,
-// and holds no file or folder of the user's: never a pinned tab, a favorite, or a tab of a private
-// window or another window's own Space. The app asks the same before it gives one; this is the
-// answer that holds whatever asks. A hold on it from an earlier agent ends. Returns whether it
-// moved. The user's: an agent never takes the user's tabs, so agents get none.
+// one of the user's tabs, into an agent's Space of the same profile, as the page goes as it is: a
+// Today tab or a pinned tab of a Space the Spaces list has, or a favorite, at an http or https
+// page in Chromium's engine, and never a tab of a private window or another window's own Space.
+// Which of those is refused for what its page is doing, asks or holds is one rule's to say, with
+// why for each (handed_give_rule.h), and bc_tab_may_be_given answers by it without giving. The app
+// asks the same before it gives one; this is the answer that holds whatever asks. A hold on it
+// from an earlier agent ends. Returns whether it moved. The user's: an agent never takes the
+// user's tabs, so agents get none.
+//
+// The agent has it as a tab alone. One in a split view leaves it with the give, as a tab taken out
+// of one by hand does. A pinned tab goes without its pin, which the core keeps for its way back
+// with the folders it was in. A favorite's tile stays where it is, as it is: a tab without a page
+// keeps it (bc_tab_handed_tile), which gets no page whatever shows or loads it, until the favorite
+// is back on it. A Picture in Picture window of its page closes, and its video at the app's media
+// card ends.
 //
 // A window showing the tab doesn't go with it: it shows what closing the tab would show next. From
-// the give until the tab leaves the agent's Space the core keeps where it left, and the tab never
-// closes with that Space: deleting it (bc_space_delete) returns the tab first, as
-// bc_tab_return_from_agent does, or moves it to the first Space of the user's if the one it left
-// is gone. Moving the tab to a Space of the user's (bc_tab_move_to_space) takes it back too, to
-// the top of that Space. No agent's close closes it (bc_agent_close_tab).
+// the give until the tab leaves the agent's Space the core keeps where it left
+// (bc_tab_handed_place), and the tab never closes with that Space: deleting it (bc_space_delete)
+// returns the tab first, as bc_tab_return_from_agent does, or moves it to the first Space of the
+// user's if the one it left is gone. Moving the tab to a Space of the user's
+// (bc_tab_move_to_space) takes it back too, to the top of that Space. No close closes it while the
+// agent has it: an agent's is refused (bc_agent_close_tab), and bc_tab_close gives it back, as a
+// deleted Space does.
 //
 // The history the tab had is the user's: for as long as the agent has it, nothing takes the tab to
 // an entry it had at the give other than the one it was on, not the agent's back or forward
@@ -2237,13 +2244,54 @@ BC_EXPORT void bc_file_field_drop(bc_id field);
 BC_EXPORT bool bc_tab_give_to_agent(bc_id tab, bc_id space);
 
 // Returns |tab|, which the user gave an agent (bc_tab_give_to_agent) and which is in that agent's
-// Space still, to the Space it left: a Today tab at the place it left there, on the page it's at
-// now, and the user's again as a tab moved out of an agent's Space is, the agent's session in it
-// ended. A window showing it goes with it. Returns false, moving nothing, for a tab that wasn't
-// given or has left the agent's Space since, or whose Space is gone or in another profile now:
-// bc_tab_move_to_space then takes it to a Space the app picks. The user's and the app's: agents
-// get none.
+// Space still, to where it left (bc_tab_handed_place): a Today tab at its place in the Space it
+// left, in the today's folder it was in while that Space has the folder; a pinned tab pinned as it
+// was, in the folder that held it or, once that's gone, the nearest one left of those that held
+// that; a favorite onto its tile; and each into the split view it left while one of that split's
+// tabs is still in its list. On the page it's at now, and the user's again as a tab moved out of
+// an agent's Space is, the agent's session in it ended. A window showing it goes with it. Returns
+// false, moving nothing, for a tab that wasn't given or has left the agent's Space since, or whose
+// Space is gone or in another profile now: bc_tab_move_to_space then takes it to a Space the app
+// picks. The user's and the app's: agents get none.
 BC_EXPORT bool bc_tab_return_from_agent(bc_id tab);
+
+// Where a tab an agent has from the user would come back now (bc_tab_handed_place).
+typedef struct bc_handed_place {
+  // The Space it comes back into, or 0 for a favorite that goes back onto its tile.
+  bc_id home;
+  // Whether it comes back pinned, a row among bc_space_pinned's, and not a Today tab among
+  // bc_space_today's.
+  bool pinned;
+  // The folder it comes back into, one of the pinned tabs' or one of today's, or 0 for none.
+  bc_id folder;
+  // Its index among those rows, top to bottom, with every tab handed out of |home| among them,
+  // each where it would come back: put in by their indexes, lowest first, they make the list the
+  // Space has once all are back.
+  size_t index;
+  // For a favorite that goes back onto its tile, the tab that keeps the tile meanwhile, which
+  // bc_favorites lists in its place, and the rest is 0. Else 0.
+  bc_id tile;
+} bc_handed_place;
+
+// Says in |place| where |tab|, which an agent has from the user (bc_tab_give_to_agent), would come
+// back if bc_tab_return_from_agent returned it now, by what the session saves it by. False, with
+// |place| as it was, for a tab no agent has from the user and for one that call wouldn't move. A
+// read, changing nothing. For the app's own row of that tab among the user's, and nothing else: no
+// agent's tool or its answer has it, and no log line. The user's and the app's: agents get none.
+BC_EXPORT bool bc_tab_handed_place(bc_id tab, bc_handed_place* place);
+
+// The tab an agent has from the user whose tile |tile| keeps, a favorite without a page
+// (bc_tab_give_to_agent), or 0 if it keeps none. As bc_tab_handed_place: a read, for the app's own
+// tile only.
+BC_EXPORT bc_id bc_tab_handed_tile(bc_id tile);
+
+// Whether bc_tab_give_to_agent would give |tab| to an agent's Space of its own profile now: yes or
+// no, and never which part of the rule says no. A read of what the core has, changing nothing in
+// the tab: it starts no lookup, and one not answered yet, as of a saved login for a form on the
+// page, reads as no. For the app's list of the tabs the user may give, asked as that list opens
+// and before a give, not as the user types or switches tabs. As bc_tab_handed_place, the app's
+// alone: no agent's tool or its answer has it, and no log line.
+BC_EXPORT bool bc_tab_may_be_given(bc_id tab);
 
 // The profile the Space's tabs open in, which its favorites are in.
 BC_EXPORT bc_id bc_space_profile(bc_id space);
