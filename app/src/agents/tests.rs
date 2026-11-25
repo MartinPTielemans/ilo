@@ -3183,6 +3183,65 @@ fn no_tool_touches_a_tasks_access() {
     }
 }
 
+/// No tool names or picks a thread's model, for an agent from outside or a thread ilo runs, and
+/// outside the tests a pick is made in one place, the model menu's click in the thread's view
+/// (shell/conversation.rs), which agents/task.rs takes: no agent's call reaches it.
+#[test]
+fn only_the_model_menus_click_picks_a_threads_model() {
+    for agent in ["claude-code", "task-1"] {
+        let listed = tools::list(agent).to_string().to_lowercase();
+        assert!(!listed.contains("model"), "{agent}'s tools say model");
+        for name in tools::names(agent) {
+            assert!(!name.contains("model"), "{agent} has {name}");
+        }
+    }
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let (mut paths, mut made) = (vec![src.clone()], Vec::new());
+    while let Some(path) = paths.pop() {
+        if path.is_dir() {
+            let entries = std::fs::read_dir(&path).unwrap();
+            paths.extend(entries.map(|entry| entry.unwrap().path()));
+            continue;
+        }
+        let file = path
+            .strip_prefix(&src)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let tests = file.ends_with("tests.rs") || file.contains("/tests/");
+        if tests || !file.ends_with(".rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        for (at, _) in text.match_indices("TaskAction::PickModel(") {
+            let line = text[at..]
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            made.push(format!("{file}: {line}"));
+        }
+    }
+    made.sort();
+    assert_eq!(made.len(), 2, "{made:#?}");
+    assert!(
+        made[0].starts_with("agents/task.rs: TaskAction::PickModel(id) =>"),
+        "{made:#?}"
+    );
+    assert!(made[1].starts_with("shell/conversation.rs: "), "{made:#?}");
+    let view = std::fs::read_to_string(src.join("shell/conversation.rs")).unwrap();
+    let at = view.find("TaskAction::PickModel(").unwrap();
+    let menu = view[..at]
+        .rfind("fn ")
+        .map(|start| &view[start..])
+        .unwrap_or_default();
+    assert!(
+        menu.starts_with("fn model_menu("),
+        "made outside the model menu"
+    );
+}
+
 /// No tool reads a task's card or another task's steps: a card is made only for the windows
 /// (`Agents::cards` and `shown_cards`, which the windows' observer alone calls), and no tool's
 /// name offers one.
