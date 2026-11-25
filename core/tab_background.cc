@@ -7,8 +7,17 @@ namespace browser_core {
 TabBackground::Step TabBackground::Changed(std::optional<uint32_t> argb,
                                            bool shown,
                                            base::TimeTicks now) {
-  const std::optional<uint32_t> color =
-      argb && *argb >> 24 == 0xff ? std::optional(*argb & 0xffffff) : std::nullopt;
+  page_ = argb && *argb >> 24 == 0xff ? std::optional(*argb & 0xffffff) : std::nullopt;
+  return Keep(shown, now);
+}
+
+TabBackground::Step TabBackground::Covered(bool covered, bool shown, base::TimeTicks now) {
+  covered_ = covered;
+  return Keep(shown, now);
+}
+
+TabBackground::Step TabBackground::Keep(bool shown, base::TimeTicks now) {
+  const std::optional<uint32_t> color = covered_ ? std::nullopt : page_;
   if (color == color_) {
     return {};
   }

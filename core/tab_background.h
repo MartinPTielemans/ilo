@@ -30,6 +30,10 @@ class TabBackground {
 
   // The page's background is |argb| now, or it reports none. |shown|: a window shows the tab.
   Step Changed(std::optional<uint32_t> argb, bool shown, base::TimeTicks now);
+  // Whether the pane shows something of the core's own in the page's place: the card of a page
+  // that died, or a page of the system's engine. For that long the colour kept is none, a change
+  // as any other, and the page's own is held for when the pane shows the page again.
+  Step Covered(bool covered, bool shown, base::TimeTicks now);
   // The wait a step asked for is over. One for a tab no window shows any more ends there, told
   // nothing: the next window to show it reads color().
   Step Settled(bool shown, base::TimeTicks now);
@@ -43,6 +47,12 @@ class TabBackground {
   bool waiting() const { return waiting_; }
 
  private:
+  // Keeps the page's colour, or none while it's covered, and says what a change asks for.
+  Step Keep(bool shown, base::TimeTicks now);
+
+  // The page's own colour, as it last reported it.
+  std::optional<uint32_t> page_;
+  bool covered_ = false;
   std::optional<uint32_t> color_;
   // When the colour last changed.
   base::TimeTicks changed_at_;

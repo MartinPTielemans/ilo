@@ -17,6 +17,7 @@ constexpr base::TimeDelta kFrame = base::Milliseconds(16);
 // was told.
 struct FakeTab {
   void Change(std::optional<uint32_t> argb) { Apply(background.Changed(argb, shown, now)); }
+  void Cover(bool covered) { Apply(background.Covered(covered, shown, now)); }
 
   // Time passes, and the wait ends when it's due.
   void Pass(base::TimeDelta time) {
@@ -177,6 +178,55 @@ TEST(TabBackgroundTest, LeavingThePageTellsAWaitingChange) {
   EXPECT_EQ(tab.background.color(), 0x16140fu);
   // With nothing waiting, leaving tells nothing: the new page keeps the colour until its own.
   EXPECT_FALSE(tab.background.LeftPage(/*shown=*/true).tell);
+}
+
+// A page that died: the pane shows the core's card, so the colour is none until the page is back,
+// and then the one it had, as a page that loads again in the same colour reports no change.
+TEST(TabBackgroundTest, ACoveredPageIsNoneAndHasItsColourAgainAfter) {
+  FakeTab tab;
+  tab.Change(kInk);
+  tab.Pass(base::Seconds(1));
+  tab.Cover(true);
+  EXPECT_FALSE(tab.background.color());
+  ASSERT_EQ(tab.told.size(), 2u);
+  EXPECT_FALSE(tab.told[1]);
+  // Covered already: nothing more.
+  tab.Cover(true);
+  EXPECT_EQ(tab.told.size(), 2u);
+  tab.Pass(base::Seconds(1));
+  tab.Cover(false);
+  ASSERT_EQ(tab.told.size(), 3u);
+  EXPECT_EQ(tab.told[2], 0x16140fu);
+  EXPECT_FALSE(tab.due);
+}
+
+// What the page reports while it's covered is held and not told: the pane doesn't show it.
+TEST(TabBackgroundTest, AColourReportedWhileCoveredWaitsForThePage) {
+  FakeTab tab;
+  tab.Change(kInk);
+  tab.Pass(base::Seconds(1));
+  tab.Cover(true);
+  tab.Pass(base::Seconds(1));
+  tab.Change(kWhite);
+  EXPECT_FALSE(tab.background.color());
+  EXPECT_EQ(tab.told.size(), 2u);
+  EXPECT_EQ(tab.waits, 0);
+  tab.Cover(false);
+  ASSERT_EQ(tab.told.size(), 3u);
+  EXPECT_EQ(tab.told[2], 0xffffffu);
+}
+
+// A tab no window shows, covered and back: the switch reads none, then the page's colour.
+TEST(TabBackgroundTest, ACoveredTabNotShownTellsNothing) {
+  FakeTab tab;
+  tab.shown = false;
+  tab.Change(kInk);
+  tab.Cover(true);
+  EXPECT_FALSE(tab.background.color());
+  tab.Cover(false);
+  EXPECT_EQ(tab.background.color(), 0x16140fu);
+  EXPECT_TRUE(tab.told.empty());
+  EXPECT_EQ(tab.waits, 0);
 }
 
 }  // namespace

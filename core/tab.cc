@@ -415,8 +415,7 @@ void Tab::Attach(content::WebContents* contents) {
   // hasn't painted tells of it when it does, as Chromium has it, and until then the tab has the
   // colour it kept without a page: the empty document a tab starts with never gives it one.
   if (contents->CompletedFirstVisuallyNonEmptyPaint()) {
-    reported_background_ = contents->GetBackgroundColor();
-    background_.Changed(reported_background_, /*shown=*/false, base::TimeTicks::Now());
+    background_.Changed(contents->GetBackgroundColor(), /*shown=*/false, base::TimeTicks::Now());
   }
   TabLink::CreateForWebContents(contents, id_);
   // Its page's camera, microphone and sharing, as Chrome's tab strip marks them. Not once quitting,
@@ -747,7 +746,9 @@ void Tab::Unload() {
     DropSystemPage();
   }
   // The next page starts with nothing wrong, and on Chrome's white.
-  crashed_ = false;
+  if (std::exchange(crashed_, false)) {
+    CoverChangedSoon();
+  }
   ClearHang();
   reload_after_kill_.reset();
   focus_when_ready_ = false;
@@ -1120,21 +1121,28 @@ void Tab::EngineChanged() {
   base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(&Tab::ReportTitle, weak_factory_.GetWeakPtr()));
   // The system's engine reports no background colour, and Chromium's page has the one it had.
-  // Posted, as the title is: the app may be in the call that changed the engine.
-  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
-      FROM_HERE, base::BindOnce(&Tab::BackgroundChanged, weak_factory_.GetWeakPtr()));
+  CoverChangedSoon();
 }
 
 void Tab::OnBackgroundColorChanged() {
   // Chromium tells of the primary page's colour once the page has painted, and only when it
   // differs from the one it last told: a new page keeps the one before until then.
-  reported_background_ = web_contents()->GetBackgroundColor();
-  BackgroundChanged();
+  TellBackground(background_.Changed(web_contents()->GetBackgroundColor(),
+                                     Window::Showing(id_) != nullptr, base::TimeTicks::Now()));
 }
 
-void Tab::BackgroundChanged() {
-  TellBackground(background_.Changed(system_page_ ? std::nullopt : reported_background_,
-                                     Window::Showing(id_) != nullptr, base::TimeTicks::Now()));
+void Tab::CoverChangedSoon() {
+  // Posted, as the title is: the app may be in the call that changed the engine, and Chromium in
+  // the one telling of a page that died.
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
+      FROM_HERE, base::BindOnce(&Tab::CoverChanged, weak_factory_.GetWeakPtr()));
+}
+
+void Tab::CoverChanged() {
+  // The pane of a page that died shows the core's card and not the page, as one on the system's
+  // engine shows that engine's view: the open tab's line isn't drawn in a colour the pane hasn't.
+  TellBackground(background_.Covered(system_page_ || crashed_, Window::Showing(id_) != nullptr,
+                                     base::TimeTicks::Now()));
 }
 
 void Tab::BackgroundSettled() {
@@ -1478,6 +1486,7 @@ void Tab::DidFinishNavigation(content::NavigationHandle* navigation) {
     TellBackground(background_.LeftPage(Window::Showing(id_) != nullptr));
     if (std::exchange(crashed_, false)) {
       LayOutSoon();
+      CoverChangedSoon();
     }
   }
   // Back or forward to a page whose entry kept its title changes the tab's title with no
@@ -1737,6 +1746,7 @@ void Tab::RenderViewReady() {
   // A page that died has a renderer again, loading it: its pane shows it again.
   if (std::exchange(crashed_, false)) {
     LayOutSoon();
+    CoverChangedSoon();
     StateChanged();
   }
   // As Chrome's reload focuses the page, as the user asked for it. The view the keyboard was in
@@ -1921,6 +1931,7 @@ void Tab::PrimaryMainFrameRenderProcessGone(base::TerminationStatus status) {
     if (Window::Showing(id_)) {
       crashed_ = true;
       LayOutSoon();
+      CoverChangedSoon();
     } else {
       // Behind, it has nothing to show the user, so it's unloaded, as Chrome does with a page it
       // ended for memory, and loads again once it's shown.
@@ -2015,6 +2026,7 @@ void Tab::LeftWindow() {
                        if (tab && tab->crashed_ && tab->web_contents() &&
                            !Window::Showing(tab->id_)) {
                          tab->crashed_ = false;
+                         tab->CoverChanged();
                          tab->web_contents()->GetController().SetNeedsReload();
                          tab->StateChanged();
                        }
