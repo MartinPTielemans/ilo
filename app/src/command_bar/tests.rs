@@ -3853,6 +3853,40 @@ fn the_ask_is_left_as_site_search_is(cx: &mut TestAppContext) {
     assert_eq!(bar.calls(), ["asking false", "dismiss"]);
 }
 
+/// Going back from ⌘T's composer keeps the words and asks nothing for them until the user's
+/// next edit: words written for an assistant don't go to the search provider for ⇥, ⇧⇥ or Esc.
+#[gpui::test]
+fn leaving_the_composer_asks_nothing_for_the_kept_words(cx: &mut TestAppContext) {
+    let asked = |bar: &mut Bar| -> Vec<String> {
+        (bar.host.asked.take().into_iter())
+            .map(|(text, _)| text)
+            .collect()
+    };
+    for back in ["tab", "shift-tab", "escape"] {
+        let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+        bar.type_text("book");
+        bar.keys("tab");
+        bar.type_text(" a table for two");
+        asked(&mut bar);
+        bar.keys(back);
+        assert_eq!(
+            asked(&mut bar),
+            Vec::<String>::new(),
+            "{back} sent the words"
+        );
+        if back == "escape" {
+            continue;
+        }
+        assert_eq!(
+            bar.input().0,
+            "book a table for two",
+            "{back} lost the words"
+        );
+        bar.type_text("!");
+        assert_eq!(asked(&mut bar), ["book a table for two!"]);
+    }
+}
+
 /// Where the bar can start a thread, its field says so with nothing typed (Z2); with tasks off,
 /// over a private window or with no assistant set up it says E1, as before. The words follow the
 /// assistants the browser learns while the bar shows.
@@ -4824,6 +4858,27 @@ impl Resting {
             })
             .unwrap();
         self.cx.run_until_parked();
+    }
+}
+
+/// Going back from the composer at rest keeps the words and asks nothing for them until the
+/// user's next edit: ⇥, ⇧⇥, Esc and a change of Space send nothing to the search provider.
+#[gpui::test]
+fn leaving_a_resting_composer_asks_nothing_for_the_kept_words(cx: &mut TestAppContext) {
+    for back in ["tab", "shift-tab", "escape", "another Space"] {
+        let mut rest = Resting::with_claude(cx);
+        rest.type_text("book");
+        rest.keys("tab");
+        rest.type_text(" a table");
+        rest.asked();
+        match back {
+            "another Space" => rest.change_space(),
+            keys => rest.keys(keys),
+        }
+        assert_eq!(rest.composer(), (false, "book a table".into()), "{back}");
+        assert_eq!(rest.asked(), Vec::<String>::new(), "{back} sent the words");
+        rest.type_text("!");
+        assert_eq!(rest.asked(), ["book a table!"], "{back}");
     }
 }
 
