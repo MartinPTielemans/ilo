@@ -8263,6 +8263,37 @@ mod tasks {
         assert_eq!(notes_drawn(&talk), ["Looking for the coupon field"]);
     }
 
+    /// An address the browser can't make out heads its step's page by the kind, a page, never by
+    /// the assistant's words, which would head a group of the log as if they were a site.
+    #[gpui::test]
+    fn an_address_that_doesnt_resolve_heads_its_step_as_a_page(cx: &mut TestAppContext) {
+        use crate::agents::task::{Line, TraceItem};
+        const WORDS: &str = "Buy now at the best prices anywhere\0";
+        let (agents, _, agent) = at_work(cx);
+        let went = json!({ "tab": 30, "url": WORDS });
+        traced_by(&agents, &agent, "navigate", went, cx, |answer, _| {
+            answer.recv().unwrap()
+        });
+        let talk = agents.read_with(cx, |agents, cx| agents.conversation(&agent, cx).unwrap());
+        let sites: Vec<String> = (talk.lines.iter())
+            .filter_map(|line| match line {
+                Line::Trace(trace) => Some(trace.items.clone()),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|item| match item {
+                TraceItem::Step(step) => step.page.map(|page| page.site.to_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            sites.last().map(String::as_str),
+            Some("page"),
+            "the step's page is headed by its kind, not the words: {sites:?}"
+        );
+        assert!(!sites.iter().any(|site| site.contains("Buy")), "{sites:?}");
+    }
+
     /// A step's note is drawn under its step alone (spec-held-abilities.md part 5), and nowhere
     /// else: not on the card's live line or anywhere on the card, the strip's line, the system
     /// notification, the kept list's row, nor the answer a screen reader is told, which is the

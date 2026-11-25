@@ -3721,7 +3721,8 @@ impl Agents {
                             did.page = address(&url);
                             did.text = url;
                         }
-                        None => (did.site, did.page) = (page::clip(url, 40), page::clip(url, 60)),
+                        // The site is a host or a kind of page, never the assistant's words.
+                        None => (did.site, did.page) = ("page".into(), page::clip(url, 60)),
                     }
                     if tool == "open_tab" {
                         did.tab = None;
