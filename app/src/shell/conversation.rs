@@ -64,10 +64,10 @@ use crate::tokens::shell::conversation::{
     PAGE_CHIP_HEIGHT, PAGE_CHIP_X, PAGE_LINE, PARAGRAPH_GAP, PICTURE_EMPTY_GLYPH, PICTURE_HEIGHT,
     PICTURE_WIDTH, RADIUS, REPLY_BOTTOM, REPLY_FILL, REPLY_GAP, REPLY_HEIGHT, REPLY_INSET,
     REPLY_KEY_END, REPLY_RIM, SHIMMER, SHIMMER_BAND, SHIMMER_PERIOD, SITE_GAP, STEP_RING,
-    STEP_RING_STROKE, STRETCH_GAP, TEXT, TEXT_3, TEXT_LINE, TITLE_LINE, TOP, TRACE_BELOW,
-    TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH, TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER, TRACE_LINE,
-    TRACE_NOTE, TRACE_PICTURE_HEIGHT, TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH, TRACE_TEXT,
-    TRACE_TEXT_LINE, TRACE_TITLE,
+    STEP_RING_STROKE, STRETCH_GAP, TEXT, TEXT_3, TEXT_LINE, TITLE_LINE, TITLE_SIZE, TOP,
+    TRACE_BELOW, TRACE_CHEVRON, TRACE_GAP, TRACE_GLYPH, TRACE_GLYPH_ALPHA, TRACE_HANG, TRACE_HOVER,
+    TRACE_LINE, TRACE_NOTE, TRACE_PICTURE_HEIGHT, TRACE_PICTURE_RADIUS, TRACE_PICTURE_WIDTH,
+    TRACE_TEXT, TRACE_TEXT_LINE, TRACE_TITLE,
 };
 use crate::tokens::shell::task::motion::{CHIPS, CHIPS_RISE, HEIGHT, RING_TURN};
 use crate::tokens::shell::task::{
@@ -1230,7 +1230,7 @@ impl TalkView {
             .child(
                 div()
                     .truncate()
-                    .text_size(px(text::TITLE))
+                    .text_size(px(TITLE_SIZE))
                     .line_height(px(TITLE_LINE))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(palette.text(TITLE))
@@ -1241,9 +1241,9 @@ impl TalkView {
                     .mt(px(META_GAP))
                     .min_w_0()
                     .whitespace_nowrap()
-                    .text_size(px(text::SMALL))
+                    .text_size(px(text::BODY))
                     .line_height(px(META_LINE))
-                    .text_color(palette.gray(STATUS))
+                    .text_color(palette.gray(TRACE_NOTE))
                     .child(about),
             );
         div()

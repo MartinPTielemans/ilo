@@ -3110,10 +3110,14 @@ top = 30.0
 # 0.68 of the ink, the least that reads at 4.5:1 on the chip over the plain light window, where
 # the toast's 0.6 read 3.75:1 (#1080).
 chip-key = 0.68
-title-line = 20.0
-meta-line = 15.0
-meta-gap = 1.0
-header-bottom = 14.0
+# The stage's head (spec-thread-stage.md): the thread's title at `title-size` on `title-line`,
+# semibold, then `meta-gap` under it the line of who works on it at the body size on `meta-line` in
+# text-2, and the log `header-bottom` under the head.
+title-size = 20.0
+title-line = 26.0
+meta-line = 16.0
+meta-gap = 2.0
+header-bottom = 22.0
 # A task's pages are pictured at the page's own shape, this size's (#1080), and drawn on its rail at
 # the rail's width ([shell.task]). The pictures are taken at twice this size, when the agent acts.
 picture-width = 326.0
