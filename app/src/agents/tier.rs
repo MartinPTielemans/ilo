@@ -20,7 +20,8 @@ pub enum Tier {
     /// It opens pages, reads, scrolls and takes pictures, and changes nothing.
     Look,
     /// It types, presses, fills in and sends forms, but not what ilo recognises as paying, placing
-    /// an order, sending a message as the user, or a bank's site. Where every task starts.
+    /// an order, sending a message as the user, or a bank's site. Where every task starts, but
+    /// an outside client's whose others the user left lower (`Agents::starting_tier`).
     #[default]
     Work,
     /// Everything the user could do on a page. Set by the user for one task, never a default and
@@ -307,6 +308,17 @@ pub fn changed_turn(from: Tier, to: Tier) -> String {
 /// The activity log's words for a change of tier, which its entry keeps as its target.
 pub fn changed_logged(from: Tier, to: Tier) -> String {
     format!("{} → {}", from.label(), to.label())
+}
+
+/// The activity log's words for a change of the sites a task may use, as `changed_logged`'s for
+/// its level: the menu's names with how many sites, never an address.
+pub fn sites_logged(from: &Sites, to: &Sites) -> String {
+    let name = |sites: &Sites| match sites {
+        Sites::Any => ANY_SITE.to_string(),
+        Sites::Only(only) if only.len() == 1 => format!("{ONLY_ADDED} · 1 site"),
+        Sites::Only(only) => format!("{ONLY_ADDED} · {} sites", only.len()),
+    };
+    format!("{} → {}", name(from), name(to))
 }
 
 /// The activity log's words for the tier a task starts at, which its start's entry keeps as its

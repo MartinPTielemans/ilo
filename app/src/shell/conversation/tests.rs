@@ -10,7 +10,7 @@ use gpui::{
 
 use super::Fold;
 
-use crate::agents::task::ilo::{HelpersLimit, IloButton, IloKind, IloLine};
+use crate::agents::task::ilo::{HelpersLimit, IloButton, IloKind, IloLine, LeftOut, Reach};
 use crate::agents::task::{
     Card, Conversation, Dot, Line, Opens, Trace, TraceItem, TraceStep, Word,
 };
@@ -83,6 +83,7 @@ fn conversation(steps: usize) -> Conversation {
         tabs: vec![(30, "skyscanner.net".into())],
         on: Some(30),
         stoppable: true,
+        live: Default::default(),
         open: None,
         answers: Vec::new(),
         writing: false,
@@ -1331,6 +1332,128 @@ fn a_site_is_never_in_quotes_and_a_pages_words_are(_: &mut TestAppContext) {
     assert_eq!(&line[at], "boxoffice.example");
 }
 
+/// The lines of a wall ilo couldn't put up around a task's files, and of a run it couldn't end
+/// whole (#4101), each whole: what ilo did, then why, with the folder's or the file's name quoted
+/// as the user's own and nothing else of the line drawn as a name.
+#[gpui::test]
+fn a_wall_that_wasnt_put_up_says_what_ilo_did_and_why(_: &mut TestAppContext) {
+    use super::words::{head, tail, with_name};
+    let said = |kind: &IloKind| {
+        let (own, name) = head(kind, "Claude");
+        let own = format!("ilo {own}");
+        let Some(name) = name else {
+            assert_eq!(tail(kind, "Claude"), None);
+            return (own, String::new());
+        };
+        let (mut said, at) = with_name(kind, &own, &name);
+        let quoted = said[at].to_string();
+        said.extend(tail(kind, "Claude"));
+        (said, quoted)
+    };
+    let without = |left| IloKind::StartedWithout { left };
+    let stopped = |left| IloKind::NotRestarted { left };
+    let left = |reach| IloKind::LeftRunning { reach };
+    let cases = [
+        (
+            without(LeftOut::Folder("Trip".into())),
+            "ilo started this task without \u{201c}Trip\u{201d}: ilo couldn't limit Claude to \
+             that folder",
+            "\u{201c}Trip\u{201d}",
+        ),
+        (
+            without(LeftOut::File("seats.pdf".into())),
+            "ilo started this task without \u{201c}seats.pdf\u{201d}: ilo couldn't limit Claude \
+             to that file",
+            "\u{201c}seats.pdf\u{201d}",
+        ),
+        (
+            without(LeftOut::Files(3)),
+            "ilo started this task without your 3 files: ilo couldn't limit Claude to them",
+            "",
+        ),
+        (
+            IloKind::KeptAt {
+                at: Tier::Work,
+                refused: Tier::Full,
+                folder: "Trip".into(),
+            },
+            "ilo kept this task at Work on pages: ilo couldn't limit Claude to \
+             \u{201c}Trip\u{201d} at Full access",
+            "\u{201c}Trip\u{201d}",
+        ),
+        (
+            IloKind::SetBack {
+                at: Tier::Work,
+                refused: Tier::Full,
+                folder: "Trip".into(),
+            },
+            "ilo set this task back to Work on pages: ilo couldn't limit Claude to \
+             \u{201c}Trip\u{201d} at Full access",
+            "\u{201c}Trip\u{201d}",
+        ),
+        (
+            stopped(LeftOut::Folder("Trip".into())),
+            "ilo stopped this task: ilo couldn't restart Claude without \u{201c}Trip\u{201d}",
+            "\u{201c}Trip\u{201d}",
+        ),
+        (
+            stopped(LeftOut::File("seats.pdf".into())),
+            "ilo stopped this task: ilo couldn't restart Claude without \
+             \u{201c}seats.pdf\u{201d}",
+            "\u{201c}seats.pdf\u{201d}",
+        ),
+        (
+            stopped(LeftOut::Files(3)),
+            "ilo stopped this task: ilo couldn't restart Claude without your 3 files",
+            "",
+        ),
+        (
+            IloKind::NotRaised {
+                refused: Tier::Full,
+            },
+            "ilo stopped this task: ilo couldn't restart Claude at Full access",
+            "",
+        ),
+        (
+            left(Reach::Folder("Trip".into())),
+            "ilo couldn't end everything Claude started: what's left can still reach \
+             \u{201c}Trip\u{201d}. Restarting this computer ends it.",
+            "\u{201c}Trip\u{201d}",
+        ),
+        (
+            left(Reach::Files),
+            "ilo couldn't end everything Claude started: what's left can still reach this \
+             task's files. Restarting this computer ends it.",
+            "",
+        ),
+        (
+            left(Reach::Both("Trip".into())),
+            "ilo couldn't end everything Claude started: what's left can still reach \
+             \u{201c}Trip\u{201d} and this task's files. Restarting this computer ends it.",
+            "\u{201c}Trip\u{201d}",
+        ),
+        (
+            IloKind::EndedLeft,
+            "ilo ended what Claude had left running",
+            "",
+        ),
+    ];
+    for (kind, whole, name) in cases {
+        assert_eq!(
+            said(&kind),
+            (whole.to_string(), name.to_string()),
+            "{kind:?}"
+        );
+        assert_eq!(super::words::body(&kind, "Trip"), None);
+        let line = IloLine {
+            key: 0,
+            kind,
+            settled: false,
+        };
+        assert!(crate::agents::task::ilo::buttons(&line).is_empty());
+    }
+}
+
 /// An ilo line's head is a sentence: where ilo is its subject the mark is its first word and a verb
 /// of ilo's follows ("ilo stopped Claude at …"); where it isn't, a middle dot sets the mark off
 /// and the sentence starts with a capital ("ilo · Claude needs this tab back").
@@ -1339,7 +1462,9 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
     use super::words::head;
     use crate::agents::task::ilo::SignedInWith;
     // ilo's verbs. A new head that starts with another word fails here, to be read as a sentence.
-    const VERBS: [&str; 4] = ["stopped", "signed", "handed", "resumed"];
+    const VERBS: [&str; 9] = [
+        "stopped", "signed", "handed", "resumed", "started", "kept", "set", "couldn't", "ended",
+    ];
     let every = [
         IloKind::Stopped {
             tab: 1,
@@ -1372,6 +1497,38 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             from: Tier::Work,
             to: Tier::Full,
         },
+        IloKind::StartedWithout {
+            left: LeftOut::Folder("Trip".into()),
+        },
+        IloKind::StartedWithout {
+            left: LeftOut::Files(3),
+        },
+        IloKind::KeptAt {
+            at: Tier::Work,
+            refused: Tier::Full,
+            folder: "Trip".into(),
+        },
+        IloKind::SetBack {
+            at: Tier::Work,
+            refused: Tier::Full,
+            folder: "Trip".into(),
+        },
+        IloKind::NotRestarted {
+            left: LeftOut::Folder("Trip".into()),
+        },
+        IloKind::NotRestarted {
+            left: LeftOut::Files(3),
+        },
+        IloKind::NotRaised {
+            refused: Tier::Full,
+        },
+        IloKind::LeftRunning {
+            reach: Reach::Folder("Trip".into()),
+        },
+        IloKind::LeftRunning {
+            reach: Reach::Files,
+        },
+        IloKind::EndedLeft,
         IloKind::Resumed { tier: Tier::Work },
         IloKind::KeptHere,
         IloKind::Gone,
@@ -1400,6 +1557,13 @@ fn an_ilo_lines_head_reads_as_a_sentence_after_the_mark(_: &mut TestAppContext) 
             | IloKind::TabBack { .. }
             | IloKind::SignedIn { .. }
             | IloKind::TierChanged { .. }
+            | IloKind::StartedWithout { .. }
+            | IloKind::KeptAt { .. }
+            | IloKind::SetBack { .. }
+            | IloKind::NotRestarted { .. }
+            | IloKind::NotRaised { .. }
+            | IloKind::LeftRunning { .. }
+            | IloKind::EndedLeft
             | IloKind::Resumed { .. }
             | IloKind::KeptHere
             | IloKind::Gone
@@ -1578,6 +1742,238 @@ fn the_focus_command_alone_brings_the_keys_to_an_ilo_lines_buttons(cx: &mut Test
         pressed(&host),
         Vec::<String>::new(),
         "Escape or the key pressed a button"
+    );
+}
+
+/// The Focus command, `from` the UI's keys or the page's.
+fn focus_command(shell: &Entity<Shell>, from: &str, cx: &mut VisualTestContext) {
+    shell.update(cx, |shell, cx| {
+        shell.run(Command::FocusAgentQuestion, from, cx)
+    });
+    cx.run_until_parked();
+}
+
+/// Task-1's page 30 watched over its conversation from a picture's place, by the user.
+fn watch_page(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
+    use gpui::{Bounds, size};
+    let thumb = Bounds::new(point(px(400.), px(300.)), size(px(160.), px(100.)));
+    shell.update(cx, |shell, cx| {
+        shell.watch_task_page(30, thumb, None, false, cx)
+    });
+    cx.run_until_parked();
+}
+
+/// Whether GPUI's focus is on one of the view's ilo buttons' handles.
+fn on_an_ilo_button(view: &Entity<super::TalkView>, cx: &mut VisualTestContext) -> bool {
+    cx.update(|window, cx| {
+        let stops = &view.read(cx).ilo_stops;
+        stops.iter().any(|stop| stop.is_focused(window))
+    })
+}
+
+/// Over a page of the task's watched from its conversation the Focus command keys no line, whose
+/// buttons aren't in sight: with the keyboard the window's it goes back to the conversation, to
+/// its reply field, and rings nothing, and the command again, with the line drawn, is what rings
+/// a button.
+#[gpui::test]
+fn the_focus_command_over_a_page_watched_goes_back_and_keys_no_line(cx: &mut TestAppContext) {
+    let (shell, host, view, cx) = stopped_at_order(cx);
+    watch_page(&shell, cx);
+    host.take();
+    focus_command(&shell, "ui", cx);
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.task_shown()),
+        Some((3, None)),
+        "the key didn't go back to the conversation"
+    );
+    assert!(
+        view.read_with(cx, |view, _| view.ilo_keys.is_none()),
+        "the key over a page watched keyed a line"
+    );
+    let calls = host.take();
+    assert!(
+        !calls.iter().any(|call| call == "focus page"),
+        "the key gave a page the keyboard: {calls:?}"
+    );
+    let reply = view.read_with(cx, |view, cx| view.reply.focus_handle(cx));
+    assert!(
+        cx.update(|window, _| reply.is_focused(window)),
+        "the reply field hasn't the keyboard"
+    );
+    cx.simulate_keystrokes("enter space");
+    assert!(
+        !host
+            .take()
+            .iter()
+            .any(|line| line.contains("SetTier") || line.contains("TakeOver")),
+        "a key after it pressed an ilo line's button"
+    );
+    focus_command(&shell, "ui", cx);
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
+}
+
+/// A page the user has keeps the view and the key: one they hold from its agent, as a sign-in
+/// handed to them or one taken over, whoever has the keyboard, and one with the keyboard. The
+/// key from the page stays the page's.
+#[gpui::test]
+fn the_focus_command_does_nothing_on_a_page_the_user_has(cx: &mut TestAppContext) {
+    use crate::agents::Status;
+    let (shell, host, view, cx) = stopped_at_order(cx);
+    watch_page(&shell, cx);
+    let nothing = |why: &str, cx: &mut VisualTestContext| {
+        host.take();
+        focus_command(&shell, "ui", cx);
+        focus_command(&shell, "page", cx);
+        assert_eq!(host.take(), Vec::<String>::new(), "{why}");
+        assert_eq!(
+            shell.read_with(cx, |shell, _| shell.task_shown()),
+            Some((3, Some(30))),
+            "{why}: the page was left"
+        );
+        assert!(
+            view.read_with(cx, |view, _| view.ilo_keys.is_none()),
+            "{why}: a line was keyed"
+        );
+        for key in ["alt-shift-cmd-a", "ctrl-shift-a"] {
+            assert!(
+                !shell.update(cx, |shell, cx| shell.run_ilo_page_key(key, false, cx)),
+                "{why}: the key was kept from the page"
+            );
+        }
+    };
+    // The page has the keyboard, as after a click in it.
+    host.page_keys.set(Some(true));
+    nothing("the page has the keyboard", cx);
+    // The user holds it, with the keyboard in the UI, as after a click in the sidebar.
+    host.page_keys.set(Some(false));
+    let held = Status {
+        agent: "task-1".into(),
+        name: "Claude".into(),
+        space: 3,
+        doing: "".into(),
+        held: vec![(30, "Sign in".into())],
+    };
+    shell.update(cx, |shell, cx| shell.set_agent_status(vec![held], cx));
+    cx.run_until_parked();
+    nothing("the user holds the page", cx);
+}
+
+/// The keys on a line end the moment its conversation is no longer what the area draws, under a
+/// page watched over it or with the area closed, and never come back by themselves: drawn again,
+/// no button is ringed and no key presses one until the Focus command, whose guard counts from
+/// then.
+#[gpui::test]
+fn the_keys_end_as_the_conversation_stops_being_drawn(cx: &mut TestAppContext) {
+    let (shell, host, view, cx) = stopped_at_order(cx);
+    let pressed = |host: &Rc<Recorder>| -> Vec<String> {
+        (host.take().into_iter())
+            .filter(|line| line.contains("SetTier") || line.contains("TakeOver"))
+            .collect()
+    };
+    let stood = |view: &Entity<super::TalkView>, cx: &mut VisualTestContext| {
+        view.update(cx, |view, _| {
+            for (_, since) in view.ilo_drawn.borrow_mut().values_mut() {
+                *since -= std::time::Duration::from_secs(5);
+            }
+        });
+    };
+    let unkeyed = |what: &str, cx: &mut VisualTestContext| {
+        assert!(
+            view.read_with(cx, |view, _| view.ilo_keys.is_none()),
+            "{what}: the keys stayed"
+        );
+        assert!(
+            !on_an_ilo_button(&view, cx),
+            "{what}: a button kept the focus"
+        );
+    };
+    focus_command(&shell, "ui", cx);
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
+    watch_page(&shell, cx);
+    unkeyed("a page watched over it", cx);
+    // Back at the conversation, long after: nothing is keyed, and no key presses.
+    shell.update(cx, |shell, cx| shell.task_page_back(cx));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), None);
+    unkeyed("drawn again", cx);
+    stood(&view, cx);
+    host.take();
+    cx.simulate_keystrokes("enter space");
+    assert_eq!(pressed(&host), Vec::<String>::new(), "a key pressed");
+    // The command keys it again, and a key at once presses nothing: the guard counts from here.
+    focus_command(&shell, "ui", cx);
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        pressed(&host),
+        Vec::<String>::new(),
+        "the guard didn't count"
+    );
+
+    // The area closes with the keys on the line, and shows the conversation again.
+    shell.update(cx, |shell, cx| shell.close_task(cx));
+    cx.run_until_parked();
+    unkeyed("the area closed", cx);
+    shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), None);
+    unkeyed("shown again", cx);
+    stood(&view, cx);
+    host.take();
+    cx.simulate_keystrokes("enter space");
+    assert_eq!(pressed(&host), Vec::<String>::new(), "a key pressed");
+}
+
+/// Keys that end as a window of the app's own takes the keyboard, as the command bar opened over
+/// the line, leave GPUI's focus where the key again would have put the keyboard, on what the
+/// window draws: its keys are heard once the keyboard is back, the Focus command's too, with no
+/// click (#3869). Nothing is keyed by itself, and no key presses.
+#[gpui::test]
+fn keys_ended_by_a_window_over_the_line_leave_the_windows_keys_heard(cx: &mut TestAppContext) {
+    let (shell, host, view, cx) = stopped_at_order(cx);
+    let reply = view.read_with(cx, |view, cx| view.reply.focus_handle(cx));
+    assert!(cx.update(|window, _| reply.is_focused(window)));
+    focus_command(&shell, "ui", cx);
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), Some(0));
+    assert!(on_an_ilo_button(&view, cx));
+    host.app_active.set(true);
+    host.take();
+    shell.update(cx, |shell, cx| shell.ilo_keys_window_inactive(cx));
+    cx.run_until_parked();
+    assert!(
+        view.read_with(cx, |view, _| view.ilo_keys.is_none()),
+        "the keys stayed under the window"
+    );
+    assert!(
+        cx.update(|window, _| reply.is_focused(window)),
+        "the focus isn't where the keyboard came from"
+    );
+    let calls = host.take();
+    assert!(
+        !calls.iter().any(|call| call.starts_with("focus")),
+        "the keyboard moved under the window: {calls:?}"
+    );
+    view.update(cx, |view, _| {
+        for (_, since) in view.ilo_drawn.borrow_mut().values_mut() {
+            *since -= std::time::Duration::from_secs(5);
+        }
+    });
+    cx.simulate_keystrokes("enter");
+    assert_eq!(view.read_with(cx, |view, _| view.ilo_ring(7)), None);
+    assert!(
+        !host
+            .take()
+            .iter()
+            .any(|line| line.contains("SetTier") || line.contains("TakeOver")),
+        "a key after the window pressed an ilo line's button"
+    );
+    // The command's own key, through the window's bindings.
+    cx.simulate_keystrokes("alt-shift-cmd-a");
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |view, _| view.ilo_ring(7)),
+        Some(0),
+        "the Focus command's key wasn't heard"
     );
 }
 
@@ -1806,6 +2202,7 @@ fn a_task_that_takes_no_reply_offers_start_again_in_its_fields_place(cx: &mut Te
             }),
         ],
         stoppable: false,
+        live: Default::default(),
         ..conversation(0)
     };
     shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
@@ -1854,6 +2251,7 @@ fn ended(kind: IloKind) -> Conversation {
             }),
         ],
         stoppable: false,
+        live: Default::default(),
         ..conversation(0)
     }
 }
@@ -2074,7 +2472,7 @@ fn the_level_chip_says_the_tasks_level_and_opens_its_menu(cx: &mut TestAppContex
     cx.update(|_, cx| host.choose("Work on pages", cx));
     assert_eq!(
         host.take(),
-        vec!["task task-1 SetTier(Work)".to_string()],
+        vec!["task task-1 PickTier(Work)".to_string()],
         "the pick is the user's press on the task"
     );
 }
@@ -2362,6 +2760,56 @@ fn the_live_line_over_the_reply_names_only_the_step_under_way(cx: &mut TestAppCo
         1,
         "Take Over left the live line between steps"
     );
+}
+
+/// While the task waits at a refused or a handed step, or on its own question, no live line
+/// stands, as ilo's line with its own buttons is the last over the field; on a page the user took
+/// over it says they're driving, with Hand Back, which goes as the ilo line's does. Never Take
+/// Over or working then, whatever step its trace has under way.
+#[gpui::test]
+fn the_live_line_never_says_working_while_the_task_needs_the_user(cx: &mut TestAppContext) {
+    use crate::agents::task::Live;
+    let (shell, host, cx) = shown(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(3)), cx)
+    });
+    let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
+    let yours = |site: Option<&str>| Live::Yours {
+        tab: 30,
+        site: site.map(Into::into),
+    };
+    for live in [Live::Refused, Live::Handed, Live::Asked, yours(None)] {
+        let talk = Conversation {
+            live: live.clone(),
+            ..conversation(3)
+        };
+        assert!(super::under_way(&talk.lines).is_some(), "no step under way");
+        shell.update(cx, |shell, cx| shell.set_conversation(Some(talk), cx));
+        view.update(cx, |_, cx| cx.notify());
+        cx.run_until_parked();
+        let chips = view.read_with(cx, |view, _| view.take_over_drawn.borrow().len());
+        assert_eq!(chips, 0, "Take Over stood on the live line at {live:?}");
+        let hand_back = view.read_with(cx, |view, _| view.hand_back_drawn.get());
+        assert_eq!(
+            hand_back.is_some(),
+            matches!(live, Live::Yours { .. }),
+            "{live:?}"
+        );
+    }
+    assert_eq!(super::words::live(&Live::Refused), None);
+    assert_eq!(super::words::live(&Live::Handed), None);
+    assert_eq!(
+        super::words::live(&yours(None)).as_deref(),
+        Some("You're driving")
+    );
+    assert_eq!(
+        super::words::live(&yours(Some("maat.pt"))).as_deref(),
+        Some("You're driving maat.pt")
+    );
+    let hand_back = view.read_with(cx, |view, _| view.hand_back_drawn.get().unwrap());
+    host.take();
+    cx.simulate_click(hand_back.center(), Modifiers::none());
+    assert_eq!(host.take(), ["task task-1 HandBack(30)"]);
 }
 
 /// Beside its page, Take Over stands once on the lines, on the task's own step under way, which

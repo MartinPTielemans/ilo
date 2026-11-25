@@ -596,15 +596,14 @@ mod tests {
     }
 
     /// With no row to ring the app leaves the keyboard in the page, which wraps: a hidden
-    /// sidebar, full screen, the top bar, and a tab the window doesn't show, as Peek's or another
+    /// sidebar, full screen, and a tab the window doesn't show, as Peek's or another
     /// window's.
     #[gpui::test]
     fn with_no_row_to_ring_the_page_wraps(cx: &mut TestAppContext) {
         type Set = fn(&mut Shell);
-        let cases: [(&str, u64, Set); 5] = [
+        let cases: [(&str, u64, Set); 4] = [
             ("sidebar hidden", 20, |shell| shell.sidebar_hidden = true),
             ("full screen", 20, |shell| shell.page_fullscreen = true),
-            ("top bar", 20, |shell| shell.top_bar = true),
             ("another window's tab", 99, |_| {}),
             ("a tab not shown", 21, |_| {}),
         ];

@@ -214,6 +214,7 @@ impl Shell {
         if self.task_core == 0 && self.task_space(self.space).is_some() {
             self.show_users_space(cx);
         }
+        self.show_started_task(None, cx);
     }
 
     pub(super) fn task_space(&self, space: u64) -> Option<&Space> {
@@ -889,7 +890,7 @@ impl Shell {
             log!("browser: task area {space} back");
         }
         self.lay_out_page(cx);
-        self.reshape_foot(cx);
+        self.restore_foot(cx);
         // The Agents send its conversation as it is now, as they sent none while it was aside.
         if let Some(agent) = self.talk_agent() {
             self.browser.show_task(agent, cx);
@@ -1033,7 +1034,6 @@ impl Shell {
             | Command::RecordTrace
             | Command::StayOnTop
             | Command::MoveSidebar
-            | Command::ToggleTopBar
             | Command::TaskManager
             | Command::Settings
             | Command::KeyboardShortcuts

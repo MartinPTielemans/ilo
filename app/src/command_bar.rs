@@ -416,7 +416,6 @@ fn command_glyph(command: shell::Command) -> &'static str {
         Command::FlipSplit => "icons/arrow-left-right.svg",
         Command::ToggleSidebar => "icons/panel-left.svg",
         Command::MoveSidebar => "icons/panel-right.svg",
-        Command::ToggleTopBar => "icons/panel-top.svg",
         Command::CapturePortion | Command::CaptureFullPage => "icons/camera.svg",
         Command::CapturePortrait | Command::CapturePortraitNow => "icons/image.svg",
         Command::SavePage => "icons/save.svg",
@@ -936,11 +935,8 @@ fn new_bar(
     cx: &mut App,
 ) -> Entity<CommandBar> {
     let input = cx.new(|cx| {
-        TextInput::new(PLACEHOLDER_TEXT, cx)
-            .placeholder_color(palette::current(cx).on_overlay(PLACEHOLDER))
-            .caret_color(palette::current(cx).accent)
-            .selection_color(palette::current(cx).selection())
-            .paste_and_go()
+        // Its colours are the bar's to give each time it draws.
+        TextInput::new(PLACEHOLDER_TEXT, cx).paste_and_go()
     });
     cx.new(|cx| {
         cx.observe_in(&input, window, |bar: &mut CommandBar, _, window, cx| {

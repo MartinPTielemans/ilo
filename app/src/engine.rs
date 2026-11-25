@@ -1467,11 +1467,6 @@ impl Browser for Engine {
         unsafe { platform::host_set_sidebar_right(self.ui_view, right) };
     }
 
-    #[cfg(target_os = "windows")]
-    fn set_window_buttons_right(&self, right: bool, _: &mut App) {
-        unsafe { platform::host_set_window_buttons_right(self.ui_view, right) };
-    }
-
     fn little_drawn(&self, _: &mut App) {
         unsafe { platform::host_grow_little_window(self.ui_view) };
     }
@@ -1931,12 +1926,19 @@ impl Browser for Engine {
         start: browser::agents::task::Start,
         _: &mut App,
     ) {
-        let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
-            return;
-        };
-        let asked = asked.to_string();
+        let (agent, asked, window) = (agent.to_string(), asked.to_string(), self.window);
         agents_core::update(move |agents, cx| {
-            agents.start_task(cli, &asked, None, home, start, cx);
+            let cli = browser::agents::runner::Cli::from_id(&agent);
+            let started = cli.and_then(|cli| agents.start_task(cli, &asked, None, home, start, cx));
+            // The composer's ↩ opens the view of the task it started alone, or of none.
+            let shell = WINDOWS.with_borrow(|windows| {
+                (windows.iter().find(|w| w.id == window)).and_then(|w| w.shell.upgrade())
+            });
+            if let Some(shell) = shell {
+                shell.update(cx, |shell, _| {
+                    shell.composed_started(started.map(Into::into))
+                });
+            }
         });
     }
 
@@ -2127,10 +2129,6 @@ impl Browser for Engine {
 
     fn keep_sidebar_right(&self, right: bool, cx: &mut App) {
         settings::set_sidebar_right(right, cx);
-    }
-
-    fn keep_top_bar(&self, on: bool, cx: &mut App) {
-        settings::set_top_bar(on, cx);
     }
 
     fn shortcuts(&self, cx: &mut App) {

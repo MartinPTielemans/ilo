@@ -91,7 +91,7 @@ if [ "$active" != 1 ]; then
 fi
 # The pointer on a link reports its address, which shows in a plate in the card's bottom left
 # corner after a moment, and the plate goes when the pointer leaves the link. The page's link is
-# 200 by 40 points, 100 in from the card's top left, which is 228 and 10 in from the window's.
+# 200 by 40 points, 100 in from the card's top left, which is 228 and 8 in from the window's.
 link_point="430 130"
 send move $link_point
 expect "^browser: link target http://127.0.0.1:$port/notes.txt\$" \
@@ -593,7 +593,7 @@ expect '^browser: library shown$' "⇧⌘L didn't open the Library"
 send layout
 view=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout' |
   sed -n 's/.*WebContentsViewCocoa \([0-9,]* [0-9x]*\).*/\1/p')
-[ "$view" = "417,10 ${docked#* }" ] ||
+[ "$view" = "417,8 ${docked#* }" ] ||
   fail "the Library didn't push the page to 417 at its width: it's at $view, docked at $docked"
 ../tools/window-screenshot.sh "$pid" "$out/library.png" || fail "no window to capture"
 # History lists the pages this run visited among its closed tabs (#2337). The pointer on a row

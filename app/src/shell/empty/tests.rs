@@ -5,7 +5,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui::{Entity, Modifiers, Pixels, Point, TestAppContext, VisualTestContext, point, px};
+use gpui::{
+    Entity, Modifiers, Pixels, Point, SharedString, TestAppContext, VisualTestContext, point, px,
+};
 
 use crate::agents::task::{Card, Dot};
 use crate::agents::tier::Tier;
@@ -335,61 +337,162 @@ fn return_in_ask_starts_the_task(cx: &mut TestAppContext) {
     assert_eq!(typed, "");
 }
 
-/// ↩ in Ask opens the started task's view as its card comes in, as the Space has no page to stay
-/// on; a card of another Space's task opens nothing.
-#[gpui::test]
-fn return_in_ask_opens_the_started_task(cx: &mut TestAppContext) {
+/// ↩ in Ask with "book a table" typed, on a window with no tab.
+fn composed(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
     let (shell, cx, host) = window_with_no_tab(cx);
     cx.simulate_click(middle(&shell, cx), Modifiers::none());
     cx.simulate_keystrokes("tab");
     cx.simulate_input("book a table");
     cx.simulate_keystrokes("enter");
-    // The core makes the task's Space before its card comes, as the Agents do.
-    let started = card(2, Dot::Working);
-    host.space_agents
-        .borrow_mut()
-        .insert(started.space, started.agent.clone());
+    (shell, cx, host)
+}
+
+/// Tasks of Space 1, each card's own Space made as the core makes it before its card comes, as
+/// the Agents do, so its view can open.
+fn made(cards: &[Card], shell: &Entity<Shell>, host: &Recorder, cx: &mut VisualTestContext) {
+    let space = |id: u64, name: &str, agent: &str| {
+        let (name, agent) = (name.to_string().into(), agent.to_string().into());
+        (id, name, None, 0, "".into(), agent, "".into())
+    };
+    let mut spaces = vec![space(1, "Space", "")];
+    for made in cards {
+        host.space_agents
+            .borrow_mut()
+            .insert(made.space, made.agent.clone());
+        spaces.push(space(made.space, &made.title, "Claude"));
+    }
     shell.update(cx, |shell, cx| {
-        let space = |id: u64, name: &str, agent: &str| {
-            let (name, agent) = (name.to_string().into(), agent.to_string().into());
-            (id, name, None, 0, "".into(), agent, "".into())
-        };
-        shell.set_spaces(
-            vec![
-                space(1, "Space", ""),
-                space(started.space, "Book a table", "Claude"),
-            ],
-            cx,
-        );
-        shell.set_tabs(
-            started.space,
-            Vec::new(),
-            vec![started.space * 10],
-            Vec::new(),
-            Folders::default(),
-            cx,
-        );
+        shell.set_spaces(spaces, cx);
+        for made in cards {
+            shell.set_tabs(
+                made.space,
+                Vec::new(),
+                vec![made.space * 10],
+                Vec::new(),
+                Folders::default(),
+                cx,
+            );
+        }
     });
+}
+
+/// The task whose view is open, once the cards are `cards`.
+fn opened(
+    shell: &Entity<Shell>,
+    cards: Vec<Card>,
+    cx: &mut VisualTestContext,
+) -> Option<SharedString> {
+    shell.update(cx, |shell, cx| shell.set_task_cards(cards, cx));
+    cx.run_until_parked();
+    shell.read_with(cx, |shell, _| shell.talk_agent())
+}
+
+/// ↩ in Ask opens the started task's view as its card comes in, as the Space has no page to stay
+/// on; a card of another Space's task opens nothing.
+#[gpui::test]
+fn return_in_ask_opens_the_started_task(cx: &mut TestAppContext) {
+    let (shell, cx, host) = composed(cx);
+    let started = card(2, Dot::Working);
+    made(std::slice::from_ref(&started), &shell, &host, cx);
     let elsewhere = Card {
         home: 2,
         ..card(1, Dot::Working)
     };
-    shell.update(cx, |shell, cx| {
-        shell.set_task_cards(vec![elsewhere.clone()], cx)
-    });
+    let cards = vec![elsewhere.clone()];
     assert_eq!(
-        shell.read_with(cx, |shell, _| shell.talk_agent()),
+        opened(&shell, cards, cx),
         None,
         "another Space's task opened"
     );
-    shell.update(cx, |shell, cx| {
-        shell.set_task_cards(vec![started, elsewhere], cx)
-    });
-    cx.run_until_parked();
     assert_eq!(
-        shell.read_with(cx, |shell, _| shell.talk_agent()),
+        opened(&shell, vec![started, elsewhere], cx),
         Some("task-2".into()),
         "the started task's view didn't open"
+    );
+}
+
+/// ↩ in Ask from the resting field opens the started task's conversation in the page's place,
+/// though its card comes before the window hears of the task's Space, as the core tells that
+/// after the call that made it: the start waits for the Space, and opens as it comes.
+#[gpui::test]
+fn return_in_ask_opens_its_task_when_its_space_comes_after_its_card(cx: &mut TestAppContext) {
+    let (shell, cx, host) = composed(cx);
+    let started = card(2, Dot::Working);
+    shell.update(cx, |shell, cx| {
+        shell.composed_started(Some("task-2".into()));
+        shell.set_task_cards(vec![started.clone()], cx);
+    });
+    cx.run_until_parked();
+    let area = |cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| {
+            (shell.talk_agent(), shell.task_area.is_some())
+        })
+    };
+    assert_eq!(
+        area(cx),
+        (None, false),
+        "it opened with no Space to open in"
+    );
+    made(std::slice::from_ref(&started), &shell, &host, cx);
+    cx.run_until_parked();
+    assert_eq!(
+        area(cx),
+        (Some("task-2".into()), true),
+        "the started task's conversation didn't take the page's place once its Space came"
+    );
+}
+
+/// Once the Agents say which task ↩ started, that one's card alone opens a view: another of the
+/// same Space that comes first opens none.
+#[gpui::test]
+fn return_in_ask_opens_the_task_it_started_alone(cx: &mut TestAppContext) {
+    let (shell, cx, host) = composed(cx);
+    let (other, started) = (card(3, Dot::Working), card(2, Dot::Working));
+    made(&[other.clone(), started.clone()], &shell, &host, cx);
+    shell.update(cx, |shell, _| shell.composed_started(Some("task-2".into())));
+    assert_eq!(opened(&shell, vec![other.clone()], cx), None);
+    assert_eq!(
+        opened(&shell, vec![other, started], cx),
+        Some("task-2".into())
+    );
+}
+
+/// A ↩ that started no task leaves no mark: the next task of that Space, another's, opens no view
+/// by itself.
+#[gpui::test]
+fn a_start_that_made_no_task_opens_no_later_one(cx: &mut TestAppContext) {
+    let (shell, cx, host) = composed(cx);
+    let later = card(2, Dot::Working);
+    made(std::slice::from_ref(&later), &shell, &host, cx);
+    shell.update(cx, |shell, _| shell.composed_started(None));
+    assert_eq!(
+        opened(&shell, vec![later], cx),
+        None,
+        "a stale mark opened it"
+    );
+}
+
+/// The user who leaves the empty page after ↩, here for another task's conversation, leaves the
+/// start's mark behind: back on the empty page, the next task of that Space opens no view.
+#[gpui::test]
+fn leaving_the_empty_page_forgets_the_start(cx: &mut TestAppContext) {
+    let (shell, cx, host) = window_with_no_tab(cx);
+    let (seen, later) = (card(3, Dot::Working), card(2, Dot::Working));
+    made(&[seen.clone(), later.clone()], &shell, &host, cx);
+    assert_eq!(opened(&shell, vec![seen.clone()], cx), None);
+    cx.simulate_click(middle(&shell, cx), Modifiers::none());
+    cx.simulate_keystrokes("tab");
+    cx.simulate_input("book a table");
+    cx.simulate_keystrokes("enter");
+    shell.update(cx, |shell, cx| shell.show_task("task-3".into(), cx));
+    cx.run_until_parked();
+    shell.update(cx, |shell, cx| shell.close_task(cx));
+    cx.run_until_parked();
+    assert_eq!(shell.read_with(cx, |shell, _| shell.talk_agent()), None);
+    assert_eq!(
+        opened(&shell, vec![seen, later], cx),
+        None,
+        "a mark left from before opened it"
     );
 }
 

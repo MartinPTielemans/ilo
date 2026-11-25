@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::sleep;
 
+use super::super::Granted;
 use super::*;
 
 /// A granted folder and a folder beside it, outside it, removed after the test.
@@ -49,12 +50,20 @@ impl Folders {
         symlink(target, self.at(path)).unwrap();
     }
 
+    /// A folder granted and then removed.
+    fn removed(&self) -> Granted {
+        self.dir("removed");
+        let granted = Granted::picked_for_test(self.at("removed"));
+        fs::remove_dir(self.at("removed")).unwrap();
+        granted
+    }
+
     /// The wall of a task that started now: what's made before this is the user's, after it the
     /// task's.
     fn start(&self) -> Wall {
         sleep(Duration::from_millis(30));
         let wall = Wall {
-            folder: Some(self.root.clone()),
+            folder: Some(Granted::picked_for_test(self.root.clone())),
             started: SystemTime::now(),
             launcher: None,
             tmp: None,
@@ -399,7 +408,7 @@ fn a_folder_deeper_than_the_walk_goes_is_counted_not_passed_over() {
 fn a_folder_that_cannot_be_opened_is_its_own_answer() {
     let folders = Folders::new();
     let mut wall = folders.start();
-    wall.folder = Some(folders.at("removed"));
+    wall.folder = Some(folders.removed());
     let walked = walk(&wall);
     assert!(walked.root_unread);
     assert_eq!((walked.unread, walked.first_unread), (0, None));
@@ -423,7 +432,7 @@ fn no_give_up_reads_as_a_clean_walk() {
             ..LIMITS
         },
     );
-    wall.folder = Some(folders.at("removed"));
+    wall.folder = Some(folders.removed());
     let root_unread = walk(&wall);
 
     for walked in [unread, stopped, root_unread] {
