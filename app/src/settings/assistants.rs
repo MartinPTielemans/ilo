@@ -119,54 +119,39 @@ impl Settings {
     }
 
     /// Notifications' Notify: when a task that finishes or needs the user posts its
-    /// notification.
+    /// notification, its three choices in a track as the drawing has `Tell me` (S8), in the
+    /// table's words.
     pub(super) fn when_to_notify(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Row {
         let chosen = agents.read(cx).notify();
-        let agents = agents.clone();
-        let popup = self.popup(
-            Popup::Notify,
-            chosen.title().into(),
-            POPUP_WIDTH,
-            cx.listener(move |settings, _, window, cx| {
-                settings.choose_notify(&agents, chosen, window, cx)
-            }),
+        let choices = Notify::ALL.map(|notify| SharedString::from(notify.title()));
+        let at = Notify::ALL.iter().position(|&each| each == chosen);
+        let track = segmented(
+            &self.look,
+            "when-to-notify",
+            &choices,
+            at,
+            self.a11y,
+            |index, segment| {
+                let notify = Notify::ALL[index];
+                let agents = agents.clone();
+                segment
+                    .child(self.drawn(format!("notify {}", notify.id())))
+                    .on_click(move |_, _, cx| {
+                        if notify == chosen {
+                            return;
+                        }
+                        // check.sh waits for this line.
+                        log!("browser: notify {}", notify.id());
+                        agents.update(cx, |agents, cx| agents.set_notify(notify, cx));
+                    })
+            },
         );
         setting(
             &self.look,
             WHEN_TO_NOTIFY,
             None,
-            vec![
-                popup
-                    .child(self.drawn("when to notify".into()))
-                    .into_any_element(),
-            ],
+            vec![track.into_any_element()],
         )
-    }
-
-    fn choose_notify(
-        &mut self,
-        agents: &Entity<Agents>,
-        chosen: Notify,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) {
-        let items = (Notify::ALL.iter())
-            .map(|&each| MenuEntry {
-                checked: each == chosen,
-                over: each == chosen,
-                ..MenuEntry::new(each.title(), true)
-            })
-            .collect();
-        let (settings, agents) = (cx.weak_entity(), agents.clone());
-        let picked = Box::new(move |picked: Option<usize>, cx: &mut App| {
-            if let Some(&notify) = picked.and_then(|at| Notify::ALL.get(at)) {
-                // check.sh waits for this line.
-                log!("browser: notify {}", notify.id());
-                agents.update(cx, |agents, cx| agents.set_notify(notify, cx));
-            }
-            settings.update(cx, |settings, cx| settings.chose(cx)).ok();
-        });
-        self.pop_up(Popup::Notify, items, picked, window, cx);
     }
 
     /// Opens a signed-in assistant's ⋯ menu: Sign Out, which asks first. Its Model is its own row.
