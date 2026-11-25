@@ -62,7 +62,7 @@ use crate::tokens::settings::{
 };
 use crate::tokens::shell::import::{
     BADGE, KIND_CHIP_FILL, KIND_CHIP_GAP, KIND_CHIP_HEIGHT, KIND_CHIP_INSET, KIND_CHIP_LINE,
-    KIND_CHIP_RADIUS, KIND_CHIP_TEXT, KINDS_LABEL, KINDS_LABEL_GAP, KINDS_LABEL_LINE, KINDS_TOP,
+    KIND_CHIP_TEXT, KINDS_LABEL, KINDS_LABEL_GAP, KINDS_LABEL_LINE, KINDS_TOP,
 };
 use crate::tokens::text;
 use found::{Address, Found, FromProfile, Page, Split, Tab};
@@ -2482,7 +2482,7 @@ impl ImportView {
                 .px(px(KIND_CHIP_INSET))
                 .flex()
                 .items_center()
-                .rounded(px(KIND_CHIP_RADIUS))
+                .rounded_full()
                 .text_size(px(KIND_CHIP_TEXT))
                 .line_height(px(KIND_CHIP_LINE))
                 .when(on, |chip| chip.bg(fill).text_color(look.ink))

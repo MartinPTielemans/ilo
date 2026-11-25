@@ -2807,7 +2807,6 @@ kinds-label = 11.0
 kinds-label-line = 14.0
 kinds-label-gap = 8.0
 kind-chip-height = 26.0
-kind-chip-radius = 13.0
 kind-chip-inset = 11.0
 kind-chip-gap = 6.0
 kind-chip-text = 12.0

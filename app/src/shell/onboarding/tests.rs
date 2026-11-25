@@ -1980,7 +1980,7 @@ fn each_step_rests_on_a_control(cx: &mut TestAppContext) {
 }
 
 /// At the import the keyboard rests on its view's button, and ↩ presses it once: the list's
-/// press brings the browser's choices, and only the next imports it.
+/// press imports the browser at once, with the chips' kinds, and leaves no button for a second ↩.
 #[gpui::test]
 fn return_at_the_import_presses_its_button_once(cx: &mut TestAppContext) {
     use crate::import::tests::Browser;
@@ -1991,13 +1991,11 @@ fn return_at_the_import_presses_its_button_once(cx: &mut TestAppContext) {
     let words = guide(cx).button.expect("the list's button");
     assert_eq!(keyed(cx), Some((Role::Button, words)));
     press("enter", cx);
-    let choices = guide(cx).title;
-    assert_ne!(choices, "Here it comes.", "↩ pressed it twice");
-    press("enter", cx);
+    assert_eq!(guide(cx).title, "Here it comes.", "↩ imports it");
     assert_eq!(
-        guide(cx).title,
-        "Here it comes.",
-        "and its choices' imports"
+        guide(cx).button,
+        None,
+        "with nothing left for ↩ to press again"
     );
     assert_eq!(step(&shell, cx), Some(Step::Import));
 }
