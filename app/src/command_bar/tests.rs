@@ -229,6 +229,10 @@ impl Host for Recorder {
         self.record(format!("show setting {} › {name}", section.name()));
     }
 
+    fn look_for_agents(&self, _: &mut App) {
+        self.record("look for agents".into());
+    }
+
     fn asking(&self, shown: bool, _: &mut App) {
         self.record(format!("asking {shown}"));
     }
@@ -277,6 +281,7 @@ fn agents(listed: &[(&str, Option<&str>)]) -> Option<TaskAgents> {
             },
             model: (id == "claude").then(|| "Haiku".into()),
             resets: resets.map(|at| at.to_string().into()),
+            ..TaskAgent::default()
         })
         .collect();
     Some(TaskAgents {
@@ -1296,7 +1301,7 @@ fn a_site_search_lists_only_the_search_for_whats_typed(cx: &mut TestAppContext) 
         .unwrap();
     assert_eq!(placeholder, "Search…");
     bar.keys("escape");
-    assert_eq!(label(&mut bar).as_deref(), Some("Search or Enter URL"));
+    assert_eq!(label(&mut bar).as_deref(), Some("Search or enter address"));
 }
 
 /// Leaving a site search puts back what was typed before Tab, as Arc's ⌫ and ⇧Tab do, not the
@@ -3028,8 +3033,7 @@ fn space_puts_new_space_first(cx: &mut TestAppContext) {
 }
 
 /// The hidden words: "duplicate" finds New Window after Duplicate Current Tab, as Arc's does with
-/// a page, and "hide" Collapse Pinned Tabs and Toggle Sidebar after Hide Sidebar and Hide Top Bar,
-/// which this host lists whether the bar is on or not.
+/// a page, and "hide" Collapse Pinned Tabs and Toggle Sidebar after Hide Sidebar.
 #[gpui::test]
 fn a_hidden_word_finds_its_command(cx: &mut TestAppContext) {
     let mut bar = Bar::with_commands(cx);
@@ -3046,7 +3050,6 @@ fn a_hidden_word_finds_its_command(cx: &mut TestAppContext) {
     let expected = [
         "Hide Sidebar ⌘S".to_string(),
         search("hide"),
-        "Hide Top Bar ⇧⌘D".into(),
         "Collapse Pinned Tabs".into(),
         "Toggle Sidebar ⌘S".into(),
     ];
@@ -3210,7 +3213,7 @@ fn a_screen_reader_hears_the_selected_row_as_the_keys_move_it(cx: &mut TestAppCo
     };
 
     let field = &nodes(Role::TextInput)[0];
-    assert_eq!(field.1.label(), Some("Search or Enter URL"));
+    assert_eq!(field.1.label(), Some("Search or enter address"));
     assert_eq!(field.1.value(), Some("do"));
     assert_eq!(tree.focus, field.0);
     let list = &nodes(Role::ListBox)[0];

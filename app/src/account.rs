@@ -629,11 +629,11 @@ impl Account {
 
     fn change_server(&mut self, cx: &mut Context<Self>) {
         let server = self.state.server.clone();
+        let colors = crate::settings_rows::field_colors(cx, |account: &Self| account.look);
         let input = cx.new(|cx| {
             TextInput::new("https://", cx)
                 .spoken("Sync Server Address")
-                .placeholder_color(self.look.detail)
-                .caret_color(self.look.ink)
+                .follows(colors)
                 .with_text(server)
         });
         self.server = Some(Field {
@@ -668,11 +668,11 @@ impl Account {
         if self.state.status == Status::Pairing {
             self.host.cancel();
         }
+        let colors = crate::settings_rows::field_colors(cx, |account: &Self| account.look);
         let input = cx.new(|cx| {
             TextInput::new("24 words", cx)
                 .spoken("Recovery Words")
-                .placeholder_color(self.look.detail)
-                .caret_color(self.look.ink)
+                .follows(colors)
         });
         self.entering = Some(Field {
             input,
@@ -907,8 +907,8 @@ impl Account {
                 div()
                     .pl(px(ROW_X))
                     .flex()
-                    // Under the step's button, centred as it is.
-                    .when(self.step, |line| line.pl_0().justify_center())
+                    // On first run's sheet, at the step's words' left edge.
+                    .when(self.step, |line| line.pl_0())
                     .text_size(px(text::SMALL))
                     .text_color(self.look.detail)
                     .child(format!("Server: {name} · "))

@@ -1049,9 +1049,9 @@ runner_cpu() {
   echo "${model:-a CPU that names no model}, ${count:-an unknown number of} CPUs"
 }
 
-# The page view keeps the sidebar's 228 points on its left and 10 on its other sides, over GPUI's
+# The page view keeps the sidebar's 228 points on its left and 8 on its other sides, over GPUI's
 # view, which fills the window. A full-screen page ("fills") covers the whole window, and with the
-# sidebar hidden ("inset") it's 10 in from every side.
+# sidebar hidden ("inset") it's 8 in from every side.
 check_layout() {
   send layout
   layout=$(sed -n "/^browser: drive $step: /,\$p" "$log" | grep -m1 '^browser: layout')
@@ -1064,11 +1064,11 @@ check_layout() {
   # Past the sidebar, 228 wide unless $2 gives its width.
   left=228
   case "${2:-}" in [0-9]*) left=$2 ;; esac
-  expected="$left,10 $((width - left - 10))x$((height - 20))"
+  expected="$left,8 $((width - left - 8))x$((height - 16))"
   # Rounded as the card's corners, square when it fills the window.
-  expected_radius=6
+  expected_radius=10
   [ "${2:-}" = fills ] && expected="0,0 $content" && expected_radius=
-  [ "${2:-}" = inset ] && expected="10,10 $((width - 20))x$((height - 20))"
+  [ "${2:-}" = inset ] && expected="8,8 $((width - 16))x$((height - 16))"
   [ "$view" = "$expected" ] || fail "$1: the page view is at $view in a $content window"
   [ "$radius" = "$expected_radius" ] ||
     fail "$1: the page's corners have a radius of ${radius:-0}, not ${expected_radius:-0}"

@@ -5,8 +5,7 @@ use crate::*;
 /// A Settings group whose row is chosen from drawings, on its card as Settings draws it.
 #[derive(Clone, Copy)]
 pub(crate) enum Pictures {
-    /// Appearance: Appearance, the one `chosen`, Page zoom, and Sidebar position, `right` chosen,
-    /// and the Top bar under it.
+    /// Appearance: Appearance, the one `chosen`, Page zoom, and Sidebar position, `right` chosen.
     Appearance {
         appearance: browser::theme::Appearance,
         right: bool,
@@ -19,6 +18,8 @@ pub(crate) enum Pictures {
     CommandLine(CommandLine),
     /// Your assistant's rows in their states, `signed_in` or before (#4100).
     Assistants { signed_in: bool },
+    /// Your assistant with one signed in, its Model chosen, and one not, then Notifications.
+    Models,
     /// Agents' Site notes (#4122): the switch, on, and the sites' rows, the first `open`.
     SiteNotes { open: bool },
 }
@@ -53,12 +54,7 @@ pub(crate) fn preview_pictures(shown: Pictures, cx: &mut App) {
     let options = browser::settings_column::window_options(bounds, "Settings".into());
     let opened = cx.open_window(options, |_, cx| {
         cx.new(|cx| {
-            let look = browser::settings_rows::Look::settings(true);
-            let search = cx.new(|cx| {
-                browser::text_input::TextInput::new("Search", cx)
-                    .placeholder_color(look.detail)
-                    .caret_color(look.ink)
-            });
+            let search = cx.new(|cx| browser::text_input::TextInput::new("Search", cx));
             PicturesPage {
                 shown,
                 card: Card::default(),
@@ -91,15 +87,18 @@ impl gpui::Render for PicturesPage {
         use browser::settings_column::{self, Section};
         use browser::settings_pictures::{appearance_picker, favorites_picker, picker};
         use browser::settings_rows::{
-            Look, command_export, command_text, drawn, end, frame, glyph_plate, group, pictured,
-            popup, stop_button, stop_switch, text as row_text,
+            Look, command_export, command_text, drawn, end, frame, glyph_plate, group_lined,
+            pictured, popup, stop_button, stop_switch, text as row_text,
         };
         use browser::theme::Appearance;
         use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
         use browser::tokens::settings::{
-            BUTTONS_TOP, CONTROL_GAP, DETAIL_LINE, FIRST_GROUP, GROUP_GAP, HEADING_BOTTOM,
-            HEADING_TOP, NAME, POPUP_WIDTH, SHARE_TOP, SIDE_ROOM, TEXT_X,
+            BUTTONS_TOP, CONTROL_GAP, DETAIL_LINE, FIRST_GROUP, GLYPH_PLATE, GLYPH_PLATE_GAP,
+            GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, NAME, POPUP_WIDTH, ROW_X, SHARE_TOP, SIDE_ROOM,
+            TEXT_X,
         };
+        // Where a feature's own setting's text and the hairline over it start, as in Settings.
+        const NESTED_X: f32 = ROW_X + GLYPH_PLATE + GLYPH_PLATE_GAP;
         use browser::tokens::text;
         use gpui::{ParentElement, Styled, div, rgb};
         // Settings takes Light's or Dark's look when it's chosen, and the system's for Automatic.
@@ -115,6 +114,11 @@ impl gpui::Render for PicturesPage {
             _ => preview_tone() != Some(Tone::Light),
         };
         let look = Look::settings(dark);
+        // The page's look is this frame's, so its field gets it as the page draws.
+        let colors = look.field();
+        self.search.update(cx, |search, _| {
+            search.set_colors(colors.placeholder, colors.caret, colors.selection)
+        });
         let base = if dark { rgb(PAPER) } else { rgb(INK) };
         let a11y = window.is_a11y_active();
         let field = browser::settings_search::field(
@@ -128,7 +132,9 @@ impl gpui::Render for PicturesPage {
             Pictures::Favorites(_) => Section::TabsAndSidebar,
             Pictures::Appearance { .. } => Section::Appearance,
             Pictures::General => Section::General,
-            Pictures::CommandLine(_) | Pictures::Assistants { .. } => Section::Agents,
+            Pictures::CommandLine(_) | Pictures::Assistants { .. } | Pictures::Models => {
+                Section::Agents
+            }
             Pictures::SiteNotes { .. } => Section::Agents,
         };
         let column = settings_column::column(
@@ -152,6 +158,8 @@ impl gpui::Render for PicturesPage {
         // last, as Site notes' is.
         let mut under: Option<&str> = None;
         let mut foot: Option<&str> = None;
+        // The rows, by group and place, that are a feature's own settings under it.
+        let mut nested: Vec<(usize, usize)> = Vec::new();
         let blocks: Vec<(Option<&str>, Vec<gpui::Div>)> = match self.shown {
             Pictures::Appearance { appearance, right } => {
                 let three = appearance_picker(
@@ -210,17 +218,6 @@ impl gpui::Render for PicturesPage {
                         POPUP_WIDTH,
                         false,
                     ))]));
-                let top_bar = frame()
-                    .child(row_text(
-                        &look,
-                        "Top bar",
-                        Some(
-                            "The URL field and the sidebar's buttons in a row across the window's \
-                             top, the page under it. ⇧⌘D turns it on and off."
-                                .into(),
-                        ),
-                    ))
-                    .child(switch("top bar", false));
                 // Transparency under Appearance, at the level kept, as Settings has it (#4129).
                 let transparency = browser::transparency::row(
                     &look,
@@ -245,17 +242,14 @@ impl gpui::Render for PicturesPage {
                 }
                 groups.extend([(
                     Some("Layout"),
-                    vec![
-                        pictured(
-                            &look,
-                            "Sidebar position",
-                            "The side of the window the sidebar, the Library and the \
-                                 window's buttons are on."
-                                .into(),
-                            pair,
-                        ),
-                        top_bar,
-                    ],
+                    vec![pictured(
+                        &look,
+                        "Sidebar position",
+                        "The side of the window the sidebar, the Library and the \
+                             window's buttons are on."
+                            .into(),
+                        pair,
+                    )],
                 )]);
                 groups
             }
@@ -459,11 +453,11 @@ impl gpui::Render for PicturesPage {
                     (Some("Command line"), vec![command]),
                 ]
             }
-            Pictures::Assistants { signed_in } => {
+            Pictures::Assistants { .. } | Pictures::Models => {
                 use browser::agents::ready::Ready;
                 use browser::agents::runner::Cli;
                 use browser::agents::sign_in::{Row, shown};
-                use browser::settings_rows::{another_agent_row, assistant_row};
+                use browser::settings_rows::assistant_row;
                 let row = |cli, ready, plan: Option<&str>, row: Row, marked| {
                     let shown = shown(cli, ready, plan, &row);
                     assistant_row(
@@ -476,22 +470,65 @@ impl gpui::Render for PicturesPage {
                         Rc::new(|_, _, _| {}),
                     )
                 };
-                // Where the parity sheet waits for the rows to be drawn.
-                let another = || {
-                    another_agent_row(&look, a11y, |_, _| {})
+                // Its Model row, as Settings draws it under its row, on `chosen` or its default.
+                let model = |cli: Cli, chosen: Option<&str>| {
+                    use browser::agents::task::{MODEL, model_default};
+                    let label = chosen.map_or_else(|| model_default(cli), str::to_string);
+                    let popup = popup(&look, label, POPUP_WIDTH, false);
+                    frame()
+                        .child(row_text(&look, MODEL, None))
+                        .child(end([gpui::IntoElement::into_any_element(popup)]))
+                        .pl(px(NESTED_X))
+                };
+                // The group's last row, where the parity sheet waits for the rows to be drawn.
+                let last = || {
+                    model(Cli::Codex, None)
                         .relative()
                         .child(drawn("assistant rows".into(), self.logged.clone()))
                 };
                 // A made-up assistant's words, as a failed sign-in shows them.
                 let said = "Your workspace doesn't allow Codex".to_string();
-                match signed_in {
-                    false => vec![
+                nested = vec![(0, 1), (0, 3)];
+                match self.shown {
+                    Pictures::Models => {
+                        use browser::agents::tier::{ACCESS, Tier};
+                        use browser::needs_you::{Notify, WHEN_TO_NOTIFY};
+                        // Words only, as Settings has no control there.
+                        let access = Tier::ALL
+                            .map(|tier| {
+                                frame().child(row_text(
+                                    &look,
+                                    tier.label(),
+                                    Some(tier.explained().into()),
+                                ))
+                            })
+                            .into();
+                        let when = popup(&look, Notify::Away.title(), POPUP_WIDTH, false);
+                        let when = frame()
+                            .child(row_text(&look, WHEN_TO_NOTIFY, None))
+                            .child(end([gpui::IntoElement::into_any_element(when)]));
+                        vec![
+                            (
+                                Some("Your assistant"),
+                                vec![
+                                    row(Cli::Claude, Ready::SignedIn, None, Row::Idle, true),
+                                    model(Cli::Claude, Some("Sonnet")),
+                                    row(Cli::Codex, Ready::SignedOut, None, Row::Idle, false),
+                                    last(),
+                                ],
+                            ),
+                            (Some(ACCESS), access),
+                            (Some(browser::needs_you::NOTIFICATIONS), vec![when]),
+                        ]
+                    }
+                    Pictures::Assistants { signed_in: false } => vec![
                         (
                             Some("Your assistant"),
                             vec![
                                 row(Cli::Claude, Ready::SignedOut, None, Row::Idle, false),
+                                model(Cli::Claude, None),
                                 row(Cli::Codex, Ready::NotFound, None, Row::Idle, false),
-                                another(),
+                                last(),
                             ],
                         ),
                         (
@@ -524,13 +561,14 @@ impl gpui::Render for PicturesPage {
                             ],
                         ),
                     ],
-                    true => vec![
+                    _ => vec![
                         (
                             Some("Your assistant"),
                             vec![
                                 row(Cli::Claude, Ready::SignedIn, None, Row::Idle, true),
+                                model(Cli::Claude, None),
                                 row(Cli::Codex, Ready::SignedIn, Some("Plus"), Row::Idle, false),
-                                another(),
+                                last(),
                             ],
                         ),
                         (
@@ -597,7 +635,15 @@ impl gpui::Render for PicturesPage {
                 div()
                     .mt(px(top))
                     .children(heading)
-                    .child(group(&look, rows))
+                    .child(group_lined(
+                        &look,
+                        (rows.into_iter().enumerate()).map(|(at, row)| {
+                            match nested.contains(&(index, at)) {
+                                true => (row, NESTED_X),
+                                false => (row, ROW_X),
+                            }
+                        }),
+                    ))
                     .children(under)
             });
         // The page's name, and General's sentence and Make Default, as Settings draws them.
@@ -609,12 +655,17 @@ impl gpui::Render for PicturesPage {
         )
         .text_color(base.opacity(browser::tokens::settings::TITLE));
         let general = matches!(self.shown, Pictures::General);
-        let lede = general.then(|| {
+        let lede = match self.shown {
+            Pictures::General => Some("ilo isn't your default browser."),
+            Pictures::Models => Some(browser::agents::tier::NEVER_GETS),
+            _ => None,
+        };
+        let lede = lede.map(|lede| {
             div()
                 .mt(px(browser::tokens::settings::LEDE_TOP))
                 .line_height(px(browser::tokens::settings::LEDE_LINE))
                 .text_color(base.opacity(browser::tokens::settings::DETAIL))
-                .child("ilo isn't your default browser.")
+                .child(lede)
         });
         let make = general.then(|| {
             div()

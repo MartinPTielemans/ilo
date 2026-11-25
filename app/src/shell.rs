@@ -34,9 +34,7 @@ use crate::{
 
 mod access;
 mod agent_bar;
-mod agent_card_keys;
 mod agent_pointer;
-mod agent_question;
 #[cfg(test)]
 mod app_menu_tests;
 mod arrange;
@@ -71,8 +69,6 @@ mod commands;
 mod conversation;
 #[cfg(test)]
 mod copy_tests;
-#[cfg(test)]
-mod corner_tests;
 mod display_face;
 #[cfg(test)]
 mod dock_dot;
@@ -130,7 +126,6 @@ mod side_tests;
 mod space_order_tests;
 mod task_cards;
 #[cfg(test)]
-mod top_bar_tests;
 #[cfg(test)]
 mod undo_tests;
 #[cfg(test)]
@@ -162,10 +157,11 @@ mod split_fold_tests;
 mod split_targets;
 pub(crate) mod swap;
 mod swipe;
+#[cfg(test)]
+mod tab_background_tests;
 mod task_area;
 mod themes;
 mod tile_theme;
-mod top_bar;
 mod trace;
 mod translate;
 mod trouble;
@@ -228,7 +224,7 @@ pub use rows::LoneSpaceHeader;
 use rows::{Breath, UNLOAD};
 use scaled::scaled;
 pub use side_panel::SidePanel;
-pub use sidebar::{SidebarEdge, SidebarRight, TopBar, edge_reveals, sidebar_right, top_bar};
+pub use sidebar::{SidebarEdge, SidebarRight, edge_reveals, sidebar_right};
 use swap::{ARROW_DOWN, Swapped, Swaps};
 pub use themes::{AppAppearance, app_appearance};
 use tile_theme::TileTheme;
@@ -241,33 +237,6 @@ pub use crate::tokens::shell::CARD_INSET;
 pub use crate::tokens::shell::CARD_RADIUS;
 pub use crate::tokens::shell::SIDEBAR_WIDTH;
 use crate::tokens::shell::SPLIT_GAP;
-
-/// The radius of the card's corners and the page's in a window whose own corner is `window`, or 0
-/// where it's square: concentric with it, so the frame between them is as thick round the curve as
-/// along the sides, and never under 0 where the frame is wider than the window's curve (Windows
-/// 11's). A square corner has no curve to follow, and the card keeps ilo's own, so a Mac window
-/// going full screen keeps its card as it was.
-pub fn card_radius(window: f32) -> f32 {
-    match window > 0. {
-        true => (window - CARD_INSET).max(0.),
-        false => CARD_RADIUS,
-    }
-}
-
-/// The radius of the corners the OS gives a browser window that isn't maximized or full screen, or
-/// 0 where they're square.
-pub fn window_radius() -> f32 {
-    use crate::tokens::shell as tokens;
-    #[cfg(target_os = "macos")]
-    return tokens::WINDOW_RADIUS_MAC;
-    #[cfg(target_os = "windows")]
-    return match crate::build_info::windows_11() {
-        true => tokens::WINDOW_RADIUS_WINDOWS,
-        false => 0.,
-    };
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    return tokens::WINDOW_RADIUS_LINUX;
-}
 
 /// The most pages a split view shows, as the core's Space has it.
 const MAX_PANES: usize = 3;
@@ -337,8 +306,10 @@ const SELECTED_UNHOVER: f32 = 0.17;
 const PRESS_SCALE: f32 = 0.99;
 const PRESS_TIME: f32 = 0.07;
 // A pressed header button, back, forward or reload, shrinks the same way, also 1 pt in at each end,
-// so a press reads the same on a 32 pt button as on a row (ours: Arc's isn't recorded).
-const NAV_PRESS_SCALE: f32 = (NAV_SIZE - 2.) / NAV_SIZE;
+// so a press reads the same on its plate as on a row (ours: Arc's isn't recorded).
+const NAV_PRESS_SCALE: f32 = (CONTROLS_PLATE - 2.) / CONTROLS_PLATE;
+// The first row's buttons share the window buttons' line.
+const CONTROLS_TOP: f32 = WINDOW_BUTTON_Y - CONTROLS_PLATE / 2.;
 // A pressed row comes away once the pointer has moved this far (ours), and the tiles make room for
 // a dragged tab critically damped, as Arc's do (docs/ux-spec.md › Motion: Favorites room).
 const DRAG_START: f32 = 4.;
@@ -394,15 +365,16 @@ const WHEEL_LINE: f32 = 10.;
 const WHEEL_BURST: Duration = Duration::from_millis(49);
 const WHEEL_REST: Duration = Duration::from_millis(250);
 
-use crate::tokens::shell::FULL_SCREEN_SIDEBAR_BUTTON_X;
-use crate::tokens::shell::NAV_AFTER_SIDEBAR;
+use crate::tokens::shell::CONTROLS_GAP;
+use crate::tokens::shell::CONTROLS_GLYPH;
+use crate::tokens::shell::CONTROLS_INSET;
+use crate::tokens::shell::CONTROLS_PLATE;
+use crate::tokens::shell::CONTROLS_SIDEBAR_GLYPH;
 use crate::tokens::shell::NAV_GLYPH;
 use crate::tokens::shell::NAV_PITCH;
 use crate::tokens::shell::NAV_RADIUS;
 use crate::tokens::shell::NAV_SIZE;
-use crate::tokens::shell::NAV_TOP;
-use crate::tokens::shell::NAV_TRAIL;
-use crate::tokens::shell::SIDEBAR_BUTTON_X;
+use crate::tokens::shell::{PAGE_OUTLINE, PAGE_OUTLINE_LIGHT, PAGE_OUTLINE_WIDTH};
 
 use crate::tokens::shell::URL_BUTTON_GLYPH;
 use crate::tokens::shell::URL_BUTTON_INSET;
@@ -578,7 +550,6 @@ pub(crate) const TILE_HOVERED: f32 =
 use crate::tokens::shell::CREATE_UNNAMED;
 use crate::tokens::shell::DEVELOPER_OUTLINE;
 use crate::tokens::shell::DEVELOPER_OUTLINE_WIDTH;
-use crate::tokens::shell::DEVELOPER_SELECTED;
 use crate::tokens::shell::DEVELOPER_TILE;
 use crate::tokens::shell::FORM_GLYPH_COLOR;
 use crate::tokens::shell::FORM_PILL;
@@ -586,7 +557,6 @@ use crate::tokens::shell::FORM_PLACEHOLDER;
 use crate::tokens::shell::FORM_PLATE;
 use crate::tokens::shell::FORM_TEXT;
 use crate::tokens::shell::NAV;
-use crate::tokens::shell::NAV_DISABLED;
 use crate::tokens::shell::NAV_HOVERED;
 use crate::tokens::shell::NAV_INACTIVE;
 use crate::tokens::shell::SPACE_HOVERED;
@@ -661,6 +631,9 @@ struct Tab {
     theme: RefCell<Option<(u64, Option<Rc<TileTheme>>)>>,
     /// Its page is on another host than the URL it's pinned or a favorite at, which its row names.
     left_pinned_host: bool,
+    /// Its page's own background colour, 0xRRGGBB in sRGB, which the open tab's line takes. None
+    /// while the page has no single opaque one.
+    background: Option<u32>,
 }
 
 impl Tab {
@@ -675,6 +648,10 @@ impl Tab {
 
     fn keep_page(&mut self, page: Page) -> bool {
         replace(&mut self.page, page)
+    }
+
+    fn keep_background(&mut self, color: Option<u32>) -> bool {
+        replace(&mut self.background, color)
     }
 }
 
@@ -1354,6 +1331,14 @@ enum Switch {
     Tab(u64),
 }
 
+/// What the composer's ↩ started, as the shell knows it: a start asked from Space `Asked`, until
+/// the Agents say which task it made, or that it made none.
+#[derive(Clone, Debug, PartialEq)]
+enum ShowStarted {
+    Asked(u64),
+    Task(SharedString),
+}
+
 pub struct Shell {
     browser: Rc<dyn Browser>,
     /// Holds GPUI's focus while nothing in the shell takes it, so the shortcuts have their context.
@@ -1477,6 +1462,9 @@ pub struct Shell {
     beside_frames: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
     /// The plates the sidebar's buttons with a tooltip were last drawn in, by their command.
     button_frames: Rc<RefCell<HashMap<&'static str, Bounds<Pixels>>>>,
+    /// The sidebar button whose press ended its tooltip, by its command, which asks for none until
+    /// the pointer has left it: GPUI calls a held button left, and at the release hovered again.
+    tip_pressed: Cell<Option<&'static str>>,
     /// The icon slots the Library's Space cards were last drawn with, by Space, for their
     /// tooltips and the icon picker to hang from.
     slot_frames: Rc<RefCell<HashMap<u64, Bounds<Pixels>>>>,
@@ -1673,8 +1661,6 @@ pub struct Shell {
     sidebar_hidden: bool,
     /// Whether the window's own buttons show (`window_buttons_shown`).
     window_buttons: bool,
-    /// Whether the host has them at the bar's end (`buttons_at_bar_end`).
-    buttons_at_bar_end: bool,
     /// The window's own buttons as the system draws them, once it has said, which the copies
     /// drawn in their place match.
     window_button_geometry: Option<WindowButtonGeometry>,
@@ -1883,20 +1869,6 @@ pub struct Shell {
     /// The Cast dialog the core reports for the tab it's for (cast.rs).
     cast: Option<(u64, Cast)>,
     cast_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// What an agent asks the user first, in every window (agent_question.rs).
-    agent_question: Option<crate::agents::Question>,
-    agent_question_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// Each row of a card of several changes as it was drawn, its text and where the agent's mark
-    /// is in it, which the tests read.
-    #[cfg(test)]
-    agent_question_rows: RefCell<Vec<(gpui::TextLayout, std::ops::Range<usize>)>>,
-    /// The agent card's buttons, in its buttons' order, which Focus Agent Question gives the
-    /// keyboard (#3869).
-    agent_card_buttons: [FocusHandle; agent_card_keys::MOST_BUTTONS],
-    /// The room the agent card's key chips have, as last drawn.
-    agent_card_room: Rc<Cell<agent_card_keys::CardRoom>>,
-    /// The keyboard on the agent card's buttons, while it is.
-    card_keys: Option<agent_card_keys::CardKeys>,
     /// Every Space's agent tasks' cards, newest first, as the Agents last said (Agent task).
     task_cards: Vec<crate::agents::task::Card>,
     /// The window's tasks' plates at the sidebar's foot, and ⌘T's slot among them.
@@ -1911,6 +1883,11 @@ pub struct Shell {
     agent_history: Vec<crate::agent_history::Past>,
     /// The task the Archive brought back, whose conversation opens once its card is back.
     show_restored: Option<SharedString>,
+    /// What the composer's ↩ started: that task's view opens as its card comes in, if its Space
+    /// still shows no page.
+    show_started: Option<ShowStarted>,
+    /// The tasks a run before left that Latest tasks lists until one is opened (`set_kept_cards`).
+    kept_cards: Vec<crate::agents::task::Card>,
     /// The task's conversation shown in the page's place, and whether its field takes the keyboard
     /// once drawn (Agent task).
     talk: Option<conversation::Talk>,
@@ -1922,6 +1899,8 @@ pub struct Shell {
     /// page area shows of one (task_area.rs).
     task_spaces: Vec<Space>,
     task_area: Option<task_area::TaskArea>,
+    /// The task's view as it stood at a close of the window its pages haven't answered.
+    task_closing: Option<task_area::Closing>,
     /// The task Space the core shows while one of its pages is watched, else 0.
     task_core: u64,
     task_live_logged: Option<u64>,
@@ -2060,8 +2039,6 @@ pub struct Shell {
     /// Whether the sidebar is on the window's right, as `SidebarRight` said as the window last
     /// drew (`Shell::right`).
     right: bool,
-    /// Whether Top bar is on, as `TopBar` said as the window last drew (`Shell::bar_on`).
-    top_bar: bool,
     forced_tone: Option<Tone>,
     /// Whether something blurs what's behind the window under its tint, as the Mac's material
     /// does. Where nothing does, the tint would show what's behind sharp, so the window draws its
@@ -2181,6 +2158,7 @@ impl Shell {
             #[cfg(test)]
             beside_frames: Rc::default(),
             button_frames: Rc::default(),
+            tip_pressed: Cell::default(),
             slot_frames: Rc::default(),
             brush_frames: Rc::default(),
             card_press_closes: false,
@@ -2269,7 +2247,6 @@ impl Shell {
             full_screen_timing: None,
             sidebar_hidden: false,
             window_buttons: true,
-            buttons_at_bar_end: false,
             window_button_geometry: None,
             sidebar_width,
             resize: None,
@@ -2370,24 +2347,20 @@ impl Shell {
             cast: None,
             cast_drawn: Rc::default(),
             question_settling: RefCell::default(),
-            agent_question: None,
-            agent_question_drawn: Rc::default(),
-            #[cfg(test)]
-            agent_question_rows: RefCell::default(),
-            agent_card_buttons: std::array::from_fn(|_| cx.focus_handle()),
-            agent_card_room: Rc::default(),
-            card_keys: None,
             task_cards: Vec::new(),
             foot: task_cards::Foot::default(),
             closed_task: None,
             archived_tasks: Vec::new(),
             agent_history: Vec::new(),
             show_restored: None,
+            show_started: None,
+            kept_cards: Vec::new(),
             talk: None,
             focus_talk: false,
             agent_status: Vec::new(),
             task_spaces: Vec::new(),
             task_area: None,
+            task_closing: None,
             task_core: 0,
             task_live_logged: None,
             task_strip_drawn: Rc::default(),
@@ -2466,7 +2439,6 @@ impl Shell {
             clean_links: cx.try_global::<CleanLinksOn>().is_none_or(|on| on.0),
             lone_header: false,
             right: false,
-            top_bar: false,
             forced_tone: None,
             blurred: BLURRED,
             window_active: true,
@@ -2832,13 +2804,10 @@ impl Shell {
         }
     }
 
-    /// The radius of the card's corners and the page's, which follow the window's own corner while
-    /// the OS rounds it.
+    /// The radius of the card's corners and the page's: the same in every window, whatever corner
+    /// the OS gives it.
     pub fn card_radius(&self) -> f32 {
-        card_radius(match self.full_screen || self.maximized {
-            true => 0.,
-            false => window_radius(),
-        })
+        CARD_RADIUS
     }
 
     /// Where the page goes as the window's content takes `viewport`, unless it's held where it is
@@ -2901,7 +2870,7 @@ impl Shell {
         (
             f32::from(pane.left()),
             f32::from(frame.right() - pane.right()),
-            f32::from(pane.top() - frame.top()) + self.bar_drop(),
+            f32::from(pane.top() - frame.top()),
         )
     }
 
@@ -3163,6 +3132,10 @@ impl Shell {
 
     /// The Space the window shows. Which of its tabs shows follows in set_selected.
     pub fn set_space(&mut self, space: u64, cx: &mut Context<Self>) {
+        // Another Space shown leaves the empty page the composer's start was made from.
+        if space != self.space() {
+            self.show_started = None;
+        }
         // Another Space shown ends ⌘W's wait for the tab its own showed next (#3570).
         if self.close_waits.is_some_and(|(waits, _)| waits != space) {
             self.close_waits = None;
@@ -3549,6 +3522,10 @@ impl Shell {
     }
 
     pub fn set_selected(&mut self, tab: u64, cx: &mut Context<Self>) {
+        // A page shown leaves the empty page the composer's start would have opened over.
+        if tab != 0 {
+            self.show_started = None;
+        }
         // ⌘W's wait is for this selection only, whichever way it goes (#3570).
         let close_waits = self.close_waits.take();
         if self.task_tab_shown(tab, cx) {
@@ -3777,6 +3754,19 @@ impl Shell {
             self.card_changed(tab, cx);
         }
         self.tab_changed(tab, changed, cx);
+    }
+
+    /// The page of `tab` has the background colour `color`, 0xRRGGBB in sRGB, or with None no
+    /// single opaque one (tab_background_color_changed, and bc_tab_background_color as a tab is
+    /// shown).
+    pub fn set_tab_background(&mut self, tab: u64, color: Option<u32>, cx: &mut Context<Self>) {
+        let changed = self.tabs.entry(tab).or_default().keep_background(color);
+        self.tab_changed(tab, changed, cx);
+    }
+
+    /// The background colour of the page of `tab`, as set_tab_background last had it.
+    pub fn tab_background(&self, tab: u64) -> Option<u32> {
+        self.tabs.get(&tab)?.background
     }
 
     fn tab_changed(&self, tab: u64, changed: bool, cx: &mut Context<Self>) {
@@ -4627,7 +4617,6 @@ impl Render for Shell {
                 cx.defer_in(window, |shell, _, cx| shell.live_space_shown(cx));
             }
         }
-        self.step_card_keys(window, cx);
         self.lone_header = cx
             .try_global::<LoneSpaceHeader>()
             .is_some_and(|kept| kept.0);
@@ -4635,10 +4624,6 @@ impl Render for Shell {
         let right = sidebar::sidebar_right(cx) && self.little.is_none();
         if right != self.right {
             self.set_sidebar_right(right, cx);
-        }
-        let top_bar = sidebar::top_bar(cx) && self.little.is_none();
-        if top_bar != self.top_bar {
-            self.set_top_bar(top_bar, cx);
         }
         self.full_screen_step("drawn", window.viewport_size());
         self.shape_safe_start(cx);
@@ -4886,11 +4871,6 @@ impl Render for Shell {
             self.window_buttons = window_buttons;
             self.browser.show_window_buttons(window_buttons, cx);
         }
-        let at_bar_end = self.buttons_at_bar_end();
-        if at_bar_end != self.buttons_at_bar_end {
-            self.buttons_at_bar_end = at_bar_end;
-            self.browser.set_window_buttons_right(at_bar_end, cx);
-        }
         // AppKit's say how they're drawn once they show, out of full screen, as at rest.
         if self.window_button_geometry.is_none() && window_buttons {
             self.window_button_geometry = self.browser.window_button_geometry(cx);
@@ -5058,7 +5038,6 @@ impl Render for Shell {
             .children(self.side_panel(cx))
             .children(under)
             .children(sidebar)
-            .children(self.top_bar_row(cx))
             .children(over)
             .children(edge)
             .children(own_buttons)
@@ -5077,11 +5056,18 @@ impl Shell {
         let (frame, _) = self.page_frame(self.viewport);
         // At the pages' scale, as a tab or a link over them draws them smaller.
         let (scale, radius) = (self.content_scale.now(), self.card_radius());
-        let card = |bounds, fill| {
-            card(
-                split_targets::scaled_about(bounds, frame.center(), scale),
+        let scaled = |bounds| split_targets::scaled_about(bounds, frame.center(), scale);
+        let card = |bounds, fill| card(scaled(bounds), radius, fill);
+        // A page that takes the window has no edge to keep. The side that meets the docked
+        // sidebar has no line: the open tab's row runs into the page there.
+        let outlined = self.card_left() > 0.;
+        let meets_sidebar = self.card_left() == self.width();
+        let outline = |bounds| {
+            card_outline(
+                scaled(bounds),
                 radius,
-                fill,
+                meets_sidebar.then_some(self.right),
+                self.palette.tone,
             )
         };
         let panes = self.panes(self.selected);
@@ -5094,24 +5080,24 @@ impl Shell {
         };
         let split = panes.len() > 1;
         let (stacked, shares) = (self.stacked(self.selected), self.shares(self.selected));
-        let mut cards: Vec<_> = pane_frames(frame, panes.len(), stacked, &shares)
-            .into_iter()
-            .zip(&panes)
-            .map(|(bounds, &tab)| {
-                let focused = split && tab == self.selected;
-                card(bounds, self.palette.page)
-                    .when(focused, |card| card.shadow(vec![glow.clone()]))
-            })
-            .collect();
+        let mut frames = pane_frames(frame, panes.len(), stacked, &shares);
+        let focused = (panes.iter()).position(|&tab| split && tab == self.selected);
         if let Some(with) = self.adding_pane {
             let count = self.panes(with).len() + 1;
             let (full, _) = self.card_frames(self.viewport);
-            cards.push(card(
-                pane_frames(full, count, self.stacked(with), &[])[count - 1],
-                self.palette.page,
-            ));
+            frames.push(pane_frames(full, count, self.stacked(with), &[])[count - 1]);
         }
-        cards
+        // The lines first, under every card and its glow.
+        let outlines = frames
+            .iter()
+            .filter(|_| outlined)
+            .map(|&bounds| outline(bounds));
+        let cards = frames.iter().enumerate().map(|(index, &bounds)| {
+            card(bounds, self.palette.page).when(focused == Some(index), |card| {
+                card.shadow(vec![glow.clone()])
+            })
+        });
+        outlines.chain(cards).collect()
     }
 
     /// The sidebar: the header's buttons, the URL field and the Space's tabs, or the Create a
@@ -5123,12 +5109,7 @@ impl Shell {
             .top_0()
             .bottom_0()
             .w(px(self.width()))
-            .children(
-                (!self.bar_on())
-                    .then(|| self.nav_buttons(cx))
-                    .into_iter()
-                    .flatten(),
-            );
+            .children(self.nav_buttons(cx));
         let leaving = self
             .leaving_form
             .as_ref()
@@ -5172,7 +5153,7 @@ impl Shell {
                     .w(px(self.width()))
                     .when(leaving.is_some(), |page| page.opacity(0.));
                 let page = page
-                    .children((!self.bar_on()).then(|| self.with_page(self.url_field(cx))))
+                    .child(self.with_page(self.url_field(cx)))
                     .children(self.scroll_edge_line().map(|line| self.with_page(line)))
                     .children(self.foot_edge_line().map(|line| self.with_page(line)))
                     .child(self.space_pages(cx))
@@ -5190,8 +5171,6 @@ impl Shell {
                     .children(self.pair_card(cx))
                     .children(self.cast_card(cx))
                     .children(self.task_foot(cx))
-                    // Over the tasks' plates, which a tall request's card reaches past (#3548).
-                    .children(self.agent_question_card(cx))
                     // Over the tasks' plates, which its open grows over.
                     .children(self.media_player_cards(cx))
                     // Over the players and the task's foot, which it opens over.
@@ -5344,7 +5323,7 @@ impl Shell {
                 return row.child(
                     split_plate(segments)
                         .when(panes.contains(&selected), |plate| {
-                            selected_plate(&self.palette, plate, 1., 0., developer)
+                            selected_plate(&self.palette, plate, 1., 0.)
                         })
                         .when(developer, |plate| {
                             plate.child(developer_outline(&self.palette, PLATE_RADIUS))
@@ -5370,7 +5349,7 @@ impl Shell {
                     title(&self.palette, self.title(tab), bright).pr(px(TITLE_END_INSET)),
                 )
                 .when(tab == selected, |plate| {
-                    selected_plate(&self.palette, plate, 1., 0., developer)
+                    selected_plate(&self.palette, plate, 1., 0.)
                 })
                 .when(developer, |plate| {
                     plate.child(developer_outline(&self.palette, PLATE_RADIUS))
@@ -5636,10 +5615,7 @@ impl Shell {
                 div()
                     .absolute()
                     .left(px(left))
-                    .top(px(match self.bar_on() {
-                        true => crate::tokens::shell::TOP_BAR,
-                        false => REVEAL_INSET,
-                    }))
+                    .top(px(REVEAL_INSET))
                     .bottom(px(REVEAL_INSET))
                     .w(px(self.width()))
                     .rounded(px(REVEAL_RADIUS))
@@ -5662,30 +5638,11 @@ impl Shell {
                         )
                         .opacity(weight)
                     }))
-                    .children((!self.bar_on()).then(|| self.window_buttons(px(self.width()), cx)))
+                    .child(self.window_buttons(px(self.width()), cx))
                     .child(self.sidebar(cx).left_0())
                     .children(edge)
                     .child(self.scroll_listener(false, cx)),
             )
-            // Its window spans the bar's end over the sidebar's column, so it draws the bar's
-            // buttons and the window's where the bar has them, and they take its clicks.
-            .children(self.bar_on().then(|| {
-                let column = match self.right {
-                    true => span - self.width(),
-                    false => 0.,
-                };
-                div()
-                    .absolute()
-                    .top_0()
-                    .left(px(column))
-                    .w(px(self.width()))
-                    .h(px(crate::tokens::shell::TOP_BAR))
-                    .children(
-                        (!self.buttons_at_bar_end())
-                            .then(|| self.window_buttons(px(self.width()), cx)),
-                    )
-                    .children(self.nav_buttons(cx))
-            }))
             .child(self.reveal_listener(cx))
             // The mouse's back and forward buttons over the panel page the Spaces, as over the
             // docked sidebar, its window hearing them as the browser window does.
@@ -5712,7 +5669,7 @@ impl Shell {
     fn window_buttons(&self, across: Pixels, cx: &mut Context<Self>) -> AnyElement {
         let right = self.right;
         if cfg!(target_os = "windows") {
-            return self.windows_buttons(right || self.buttons_at_bar_end(), cx);
+            return self.windows_buttons(right, cx);
         }
         let zoom = if self.maximized {
             "icons/window-restore.svg"
@@ -5854,6 +5811,32 @@ fn card(bounds: Bounds<Pixels>, radius: f32, fill: Rgba) -> gpui::Div {
         .h(bounds.size.height)
         .rounded(px(radius))
         .bg(fill)
+}
+
+/// The line round a card at `bounds` where it faces the window, outside it, on every side but
+/// the one that meets the sidebar: `open` is None with no sidebar beside it, or whether that side
+/// is the right. It has no fill, as the card's own may show the window through.
+fn card_outline(bounds: Bounds<Pixels>, radius: f32, open: Option<bool>, tone: Tone) -> gpui::Div {
+    let width = px(PAGE_OUTLINE_WIDTH);
+    let [left, right] = [Some(false), Some(true)].map(|side| match open == side {
+        true => px(0.),
+        false => width,
+    });
+    div()
+        .absolute()
+        .left(bounds.left() - left)
+        .top(bounds.top() - width)
+        .w(bounds.size.width + left + right)
+        .h(bounds.size.height + 2. * width)
+        .rounded(px(radius + PAGE_OUTLINE_WIDTH))
+        .border_color(rgba(match tone {
+            Tone::Dark => PAGE_OUTLINE,
+            Tone::Light => PAGE_OUTLINE_LIGHT,
+        }))
+        .border_t(width)
+        .border_b(width)
+        .border_l(left)
+        .border_r(right)
 }
 
 /// `way`, but past `low` or `high` only a little further, on the Space pages' rubber band.
@@ -6205,28 +6188,20 @@ fn split_plate(segments: impl IntoIterator<Item = impl IntoElement>) -> gpui::Di
         .children(segments)
 }
 
-/// The selected tab's plate, at `opacity` while it fades in, a step firmer at rest in Developer
-/// Mode, which the pointer takes to the same plate as another tab's.
-fn selected_plate(
-    palette: &Palette,
-    plate: gpui::Div,
-    opacity: f32,
-    hover: f32,
-    developer: bool,
-) -> gpui::Div {
-    let fill = palette.shown(hover);
-    let firmer = if developer {
-        DEVELOPER_SELECTED - crate::palette::STATE_SELECTED
-    } else {
-        0.
-    };
-    let fill = Hsla {
-        a: (fill.a + firmer * (1. - hover)).min(1.),
-        ..fill
-    };
-    plate
-        .bg(fill.opacity(opacity))
-        .shadow(palette.shown_shadow(opacity))
+/// The selected tab's plate, at `opacity` while it fades in. It's the palette's in every mode: a
+/// fill firmer than the one the palette reckoned takes its title under what text needs over a
+/// bright window, so Developer Mode's mark is its outline alone.
+fn selected_plate(palette: &Palette, plate: gpui::Div, opacity: f32, hover: f32) -> gpui::Div {
+    let fill = palette.shown(hover).opacity(opacity);
+    #[cfg(test)]
+    SHOWN_FILL.set(Some(fill));
+    plate.bg(fill).shadow(palette.shown_shadow(opacity))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The fill `selected_plate` last laid, for a test of what a row's plate is drawn in.
+    static SHOWN_FILL: Cell<Option<Hsla>> = const { Cell::new(None) };
 }
 
 /// The shown tab's outline in Developer Mode, inside its plate's or tile's `radius` corners, over

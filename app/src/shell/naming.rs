@@ -8,9 +8,8 @@ use std::{rc::Rc, time::Duration};
 use gpui::{App, Context, Focusable, Point, SharedString, Window, div, point, prelude::*, px};
 
 use super::{
-    CancelName, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FORM_PLACEHOLDER, FORM_TEXT, KeepName,
-    NEW_FOLDER, Naming, PLATE_INSET, Pending, Renaming, SPACE_ICON_SLOT, SPACE_ICON_X, Shell,
-    field_opens,
+    CancelName, FAVICON_SIZE, FAVICON_X, FOLDER_INDENT, FORM_TEXT, KeepName, NEW_FOLDER, Naming,
+    PLATE_INSET, Pending, Renaming, SPACE_ICON_SLOT, SPACE_ICON_X, Shell, field_opens,
     undo::{Prop, Value},
 };
 use crate::{
@@ -49,9 +48,10 @@ impl Shell {
             return;
         }
         log!("browser: rename space {space}");
+        let colors = Self::form_colors(cx);
         let name = cx.new(|cx| {
             TextInput::new("Space name", cx)
-                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
+                .follows(colors)
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
@@ -96,9 +96,10 @@ impl Shell {
         self.keep_name(window, cx);
         // check.sh waits for this line.
         log!("browser: rename space {space} in library");
+        let colors = Self::form_colors(cx);
         let name = cx.new(|cx| {
             TextInput::new("Space name", cx)
-                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
+                .follows(colors)
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
@@ -125,9 +126,10 @@ impl Shell {
             Naming::Split(first) => log!("browser: rename split {first}"),
             _ => log!("browser: rename tab {tab}"),
         }
+        let colors = Self::form_colors(cx);
         let name = cx.new(|cx| {
             TextInput::new(placeholder, cx)
-                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
+                .follows(colors)
                 .with_text(text)
         });
         self.renaming = Some(Renaming {
@@ -149,9 +151,10 @@ impl Shell {
     pub(super) fn edit_pinned_url(&mut self, tab: u64, cx: &mut Context<Self>) {
         log!("browser: edit pinned url {tab}");
         let url = self.browser.pinned_url(tab);
+        let colors = Self::form_colors(cx);
         let field = cx.new(|cx| {
             TextInput::new("Pinned URL", cx)
-                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
+                .follows(colors)
                 .with_text(url.into())
         });
         self.renaming = Some(Renaming {
@@ -502,9 +505,10 @@ impl Shell {
     }
 
     pub(super) fn name_folder(&mut self, folder: u64, name: SharedString, cx: &mut Context<Self>) {
+        let colors = Self::form_colors(cx);
         let name = cx.new(|cx| {
             TextInput::new("Folder name", cx)
-                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
+                .follows(colors)
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
@@ -550,9 +554,10 @@ impl Shell {
     /// Shows the new Board's row with its name in a field, all selected, to type another over.
     pub(super) fn name_board(&mut self, tab: u64, cx: &mut Context<Self>) {
         log!("browser: name board {tab}");
+        let colors = Self::form_colors(cx);
         let name = cx.new(|cx| {
             TextInput::new("Board name", cx)
-                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
+                .follows(colors)
                 .with_text(BOARD.into())
         });
         self.renaming = Some(Renaming {
@@ -580,9 +585,10 @@ impl Shell {
         name: SharedString,
         cx: &mut Context<Self>,
     ) {
+        let colors = Self::form_colors(cx);
         let name = cx.new(|cx| {
             TextInput::new(name.clone(), cx)
-                .placeholder_color(self.palette.gray(FORM_PLACEHOLDER))
+                .follows(colors)
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
@@ -702,7 +708,7 @@ impl Shell {
         if to_page {
             self.page_took_keyboard(window, cx);
         } else {
-            self.card_keys_window_left("app", cx);
+            self.ilo_keys_window_left("app", cx);
         }
     }
 

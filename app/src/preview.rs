@@ -1275,9 +1275,6 @@ impl Browser for Fake {
     fn answer_permission(&self, _: u64, _: shell::Answer, _: &mut App) {}
 
     // The preview has no agents.
-    fn answer_agent(&self, _: u64, _: browser::agents::Answer, _: &mut App) {}
-
-    fn choose_agent_file(&self, _: u64, _: u64, _: &mut App) {}
 
     // The made-up pages ask no dialogs.
     fn show_page_dialog(&self, _: Option<shell::ShownPageDialog>, _: &mut App) {}
@@ -1379,8 +1376,9 @@ impl Browser for Fake {
         _: Option<Bounds<Pixels>>,
         cx: &mut App,
     ) {
-        // No command bar here: a new tab opens at once.
-        if editing.is_some() {
+        // No command bar here: a new tab opens at once. PREVIEW_BAR's bar is ⌘T's, up already
+        // when the shell's command asks for it, so there is nothing to open.
+        if editing.is_some() || command_bar::is_open(cx) {
             return;
         }
         let tab = self.next_id.get();
@@ -1720,7 +1718,7 @@ impl Browser for Fake {
     }
 
     // The preview runs no tasks.
-    fn start_task(&self, _: &str, _: &str, _: u64, _: Tier, _: &mut App) {}
+    fn start_task(&self, _: &str, _: &str, _: u64, _: browser::agents::task::Start, _: &mut App) {}
 
     fn field_window_typing(&self, _: &mut App) -> bool {
         false
@@ -2032,7 +2030,8 @@ impl Browser for Fake {
         dialog::ask(None, message, detail, action, confirmed, cx);
     }
 
-    fn quit(&self, cx: &mut App) {
+    // The preview keeps no session, so there's nothing to do first.
+    fn quit(&self, _: Rc<dyn Fn(&mut App)>, cx: &mut App) {
         cx.quit();
     }
 
@@ -2149,6 +2148,12 @@ impl command_bar::Host for PreviewBar {
             name: "Claude".into(),
             glyph: "icons/terminal.svg",
             model: Some("Haiku".into()),
+            model_id: "haiku".into(),
+            default_row: "Claude Code's default".into(),
+            default_model: Some("Sonnet".into()),
+            models: [("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")]
+                .map(|(id, name)| (id.to_string(), name.to_string()))
+                .to_vec(),
             resets: None,
         };
         Some(command_bar::TaskAgents {
@@ -2160,6 +2165,8 @@ impl command_bar::Host for PreviewBar {
     fn over_private(&self) -> bool {
         false
     }
+
+    fn look_for_agents(&self, _: &mut App) {}
 
     fn asking(&self, _: bool, _: &mut App) {}
 
@@ -2260,6 +2267,36 @@ fn preview_profiles() -> Vec<(u64, SharedString)> {
 
 /// PREVIEW_APPEARANCE=light or =dark draws the window as if the system's appearance were that,
 /// as a headless session has none to switch.
+/// The assistants' rows for PREVIEW_ONBOARDING_ASSISTANTS, and the one marked.
+fn onboarding_assistants(
+    state: &str,
+) -> Option<(
+    Vec<(
+        browser::agents::runner::Cli,
+        browser::agents::sign_in::Shown,
+    )>,
+    Option<browser::agents::runner::Cli>,
+)> {
+    use browser::agents::ready::Ready;
+    use browser::agents::runner::Cli;
+    use browser::agents::sign_in::{Row, shown};
+    let ([claude, codex], plan, marked) = match state {
+        "checking" => ([Ready::Unknown, Ready::Unknown], None, None),
+        "start" => ([Ready::SignedOut, Ready::NotFound], None, None),
+        "signed-in" => (
+            [Ready::SignedIn, Ready::SignedIn],
+            Some("Plus"),
+            Some(Cli::Claude),
+        ),
+        _ => return None,
+    };
+    let rows = vec![
+        (Cli::Claude, shown(Cli::Claude, claude, None, &Row::Idle)),
+        (Cli::Codex, shown(Cli::Codex, codex, plan, &Row::Idle)),
+    ];
+    Some((rows, marked))
+}
+
 fn preview_tone() -> Option<Tone> {
     match states::var("PREVIEW_APPEARANCE").ok()?.as_str() {
         "light" => Some(Tone::Light),
@@ -2269,7 +2306,7 @@ fn preview_tone() -> Option<Tone> {
 }
 
 /// PREVIEW_TASK_RING=<stop> (with PREVIEW_TASKS=open) watches the working task's page, and
-/// rings the stop named, as Tab from the window does: none, card, back, page, take-over or stop
+/// rings the stop named, as Tab from the window does: none, header, back, page, take-over or stop
 /// (#3220). PREVIEW_TASK's bench stands on its page the same way, with no ring.
 fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
     let bench = states::var_os("PREVIEW_TASK").is_some();
@@ -2279,17 +2316,17 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
     else {
         return;
     };
-    // Tabs after the strip's first stop, the task's card.
+    // Tabs after the strip's first stop, the task's header.
     let tabs = match stop.as_str() {
-        "card" => Some(0),
+        "header" => Some(0),
         "back" => Some(1),
         "page" => Some(2),
         "take-over" => Some(3),
         "stop" => Some(4),
         _ => None,
     };
-    // The bench's page is its conversation's.
-    let tab = FIRST_TASK + if bench { 200 } else { 300 };
+    // The task's first page, which its Space has from the start.
+    let tab = FIRST_TASK + 200;
     let agent: SharedString = format!("task-{FIRST_TASK}").into();
     cx.spawn(async move |cx| {
         // After the conversation the card's click opens.
@@ -2298,30 +2335,15 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
             .await;
         shell
             .update(cx, |shell, cx| {
-                let none = Folders::default();
-                // The task's pages: its one, or with helpers (#4102) each helper's, which are the
-                // task's own in its group at the sidebar's foot and on Pages.
-                let helpers = bench_helpers();
-                let pages = &HELPER_PAGES[..helpers.unwrap_or(1)];
-                let tabs: Vec<u64> = (tab..).take(pages.len()).collect();
-                shell.set_tabs(FIRST_TASK, Vec::new(), tabs.clone(), Vec::new(), none, cx);
-                for (&tab, &(title, url)) in tabs.iter().zip(pages) {
-                    shell.set_title(tab, title.into(), cx);
-                    let page = Page {
-                        url: url.into(),
-                        ..Default::default()
-                    };
-                    shell.set_page(tab, page, cx);
-                }
-                // The helpers' pages came after the conversation opened, on Talk, so it stays
-                // there with all four on Pages.
-                if let Some(count) = helpers.filter(|count| *count > 1) {
+                // The helpers' pages (#4102) came after the conversation opened, on Talk, so it
+                // stays there with all four on Pages.
+                if let Some(count) = bench_helpers().filter(|count| *count > 1) {
                     let mut talk = task_conversation(agent.clone());
                     talk.tabs = helper_tabs();
                     talk.tabs.truncate(count);
                     shell.set_conversation(Some(talk), cx);
                 }
-                shell.watch_task_page(tab, Bounds::default(), None, cx);
+                shell.watch_task_page(tab, Bounds::default(), None, false, cx);
                 shell.set_space(FIRST_TASK, cx);
                 shell.set_selected(tab, cx);
                 // A task that has ended is at work nowhere.
@@ -2336,6 +2358,8 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
                         let (tab, _) = helper_tabs().swap_remove(HELPER_WAITING);
                         vec![(tab, "Sign in".into())]
                     }
+                    // Its one page, handed to the user for a sign-in.
+                    false if bench_yours() => vec![(tab, "Sign in".into())],
                     false => Vec::new(),
                 };
                 let status = browser::agents::Status {
@@ -2346,7 +2370,10 @@ fn preview_task_ring(shell: WeakEntity<Shell>, cx: &mut App) {
                     held,
                 };
                 shell.set_agent_status(vec![status], cx);
-                shell.agent_acted(agent, tab, cx);
+                // A page handed to the user has nothing at work on it, so no ring.
+                if !bench_yours() {
+                    shell.agent_acted(agent, tab, cx);
+                }
             })
             .ok();
         // Once the page is in place, which is when the ring reaches it.
@@ -2608,10 +2635,6 @@ fn main() {
             if preview_recent().is_some() {
                 browser::recent::set_switches(true, Default::default(), cx);
             }
-            // PREVIEW_TOP_BAR=1 starts with Settings' Top bar on.
-            if states::var_os("PREVIEW_TOP_BAR").is_some() {
-                cx.set_global(shell::TopBar(true));
-            }
             // PREVIEW_UPDATE=ready or =available shows the update banner on a made-up 0.1.5, opened
             // as under the pointer with =ready-open or =available-open, and PREVIEW_UPDATE_CHECKS=off
             // as with the updater's automatic checks off.
@@ -2674,9 +2697,15 @@ fn main() {
             // PREVIEW_ASSISTANTS=start or signed-in shows Settings › Agents' Your assistant, its
             // rows in each state before a sign-in and while and after it fails, or signed in and
             // signing out, with the same rows as Settings draws (#4100).
+            // =models shows one signed in, its Model chosen, and one not, then Notifications.
             if let Ok(state) = states::var("PREVIEW_ASSISTANTS") {
-                let signed_in = state == "signed-in";
-                preview_pictures(Pictures::Assistants { signed_in }, cx);
+                let shown = match state.as_str() {
+                    "models" => Pictures::Models,
+                    _ => Pictures::Assistants {
+                        signed_in: state == "signed-in",
+                    },
+                };
+                preview_pictures(shown, cx);
                 return;
             }
             // PREVIEW_SITE_NOTES=open or closed shows Settings › Agents' Site notes (#4122), its
@@ -3006,60 +3035,6 @@ fn main() {
                         shell.set_agent_status(vec![status], cx);
                         if handoff {
                             shell.set_selected(reading[3], cx);
-                            let question = browser::agents::Question {
-                                id: 1,
-                                agent: "Claude Code".into(),
-                                from: "claude-code".into(),
-                                what: "hand you a tab".into(),
-                                why,
-                                handoff: Some(reading[3]),
-                                back,
-                                ..Default::default()
-                            };
-                            shell.set_agent_question(Some(question), cx);
-                        }
-                        // =click with PREVIEW_AGENT_ASKS=click asks to click on the page, =long
-                        // with a long name and site, and =request asks a request's one change, so
-                        // the two cards' heads compare (#3836).
-                        let ask = |asks: &str, site: &str| browser::agents::Question {
-                            id: 1,
-                            agent: "Claude Code".into(),
-                            from: "claude-code".into(),
-                            what: format!("{asks} on {site}").into(),
-                            asks: asks.to_string().into(),
-                            why: "It looks like a payment or an order.".into(),
-                            site: site.to_string().into(),
-                            each_time: true,
-                            ..Default::default()
-                        };
-                        let asked = match states::var("PREVIEW_AGENT_ASKS").as_deref() {
-                            Ok("click") => {
-                                Some(ask("click \u{201c}Place order\u{201d}", "shop.example"))
-                            }
-                            Ok("long") => {
-                                let name = "click \u{201c}Place order and pay \u{a3}1,249.00 with \
-                                            the card ending 4417\u{201d}";
-                                Some(ask(name, "checkout.payments.northwind-outfitters.example"))
-                            }
-                            Ok("request") => Some(browser::agents::Question {
-                                what: "make a change on shop.example".into(),
-                                asks: "".into(),
-                                why: "Changes ask every time.".into(),
-                                changes: vec![browser::agents::request::Request {
-                                    method: "PATCH".into(),
-                                    url: "https://shop.example/api/cart".into(),
-                                    path: "/api/cart".into(),
-                                    headers: Vec::new(),
-                                    body: "{\"items\":[]}".into(),
-                                    what: "Empty the cart.".into(),
-                                }]
-                                .into(),
-                                ..ask("", "shop.example")
-                            }),
-                            _ => None,
-                        };
-                        if asked.is_some() {
-                            shell.set_agent_question(asked, cx);
                         }
                     }
                     let favorite = states::var("PREVIEW_FAVORITE")
@@ -3115,32 +3090,48 @@ fn main() {
                         }
                     }
                     if let Some(tasks) = &tasks {
-                        let pages: Vec<u64> = (FIRST_TASK + 100..).take(TASK_PAGES.len()).collect();
-                        let none = Folders::default();
-                        shell.set_tabs(
-                            FIRST_TASK + 2,
-                            Vec::new(),
-                            pages.clone(),
-                            Vec::new(),
-                            none,
-                            cx,
-                        );
-                        for (&tab, (title, url)) in pages.iter().zip(TASK_PAGES) {
-                            shell.set_title(tab, title.into(), cx);
-                            shell.set_page(
-                                tab,
-                                Page {
-                                    url: url.into(),
-                                    ..Default::default()
-                                },
-                                cx,
-                            );
+                        // Each task's Space holds its pages, which its group lists.
+                        for (at, space) in (FIRST_TASK..).take(TASKS.len()).enumerate() {
+                            let pages = task_pages(at);
+                            let tabs = pages.iter().map(|&(tab, ..)| tab).collect();
+                            let none = Folders::default();
+                            shell.set_tabs(space, Vec::new(), tabs, Vec::new(), none, cx);
+                            for (tab, title, url) in pages {
+                                shell.set_title(tab, title.into(), cx);
+                                shell.set_page(
+                                    tab,
+                                    Page {
+                                        url: url.into(),
+                                        ..Default::default()
+                                    },
+                                    cx,
+                                );
+                            }
                         }
-                        shell.set_task_cards(task_cards(first_space), cx);
+                        let cards = task_cards(first_space);
+                        // The working task is at work in its first page.
+                        let working = cards.iter().find(|card| card.word == Word::Working);
+                        if let Some(card) = working {
+                            shell.agent_acted(card.agent.clone(), FIRST_TASK + 200, cx);
+                        }
+                        // The task that needs the user handed them its third page, to sign in.
+                        let waits = cards.iter().find(|card| card.word == Word::NeedsYou);
+                        if let Some(card) = waits.filter(|_| group_state().is_some()) {
+                            let status = browser::agents::Status {
+                                agent: card.agent.clone(),
+                                name: card.name.clone(),
+                                space: card.space,
+                                doing: SharedString::default(),
+                                held: vec![(FIRST_TASK + 202, "Sign in".into())],
+                            };
+                            shell.set_agent_status(vec![status], cx);
+                        }
+                        shell.set_task_cards(cards, cx);
                         // After the first frame, which sets the palette the reply field takes, as
-                        // a click on the card comes after it.
-                        if tasks == "open" {
-                            let (shown, agent) = (cx.weak_entity(), format!("task-{FIRST_TASK}"));
+                        // a click on the header comes after it.
+                        if let Some(at) = shown_task(tasks) {
+                            let agent = format!("task-{}", FIRST_TASK + at as u64);
+                            let shown = cx.weak_entity();
                             window.on_next_frame(move |_, cx| {
                                 shown
                                     .update(cx, |shell, cx| {
@@ -3201,6 +3192,13 @@ fn main() {
                         }
                         if parts.next() == Some("on") {
                             shell.onboarding_count_on(cx);
+                        }
+                        // PREVIEW_ONBOARDING_ASSISTANTS=checking, =start or =signed-in gives
+                        // the assistants' step its rows in each state they read.
+                        let assistants = states::var("PREVIEW_ONBOARDING_ASSISTANTS").ok();
+                        if let Some(rows) = assistants.as_deref().and_then(onboarding_assistants) {
+                            let (rows, marked) = rows;
+                            shell.onboarding_show_assistants(rows, marked, cx);
                         }
                         // PREVIEW_ONBOARDING_PICK=<n> picks the nth swatch at the color step.
                         let pick = std::env::var("PREVIEW_ONBOARDING_PICK").ok();
@@ -3289,6 +3287,14 @@ fn main() {
                 let top = y as f32 + command_bar::centered_top(height as f32);
                 let at = point(px(left as f32), px(top));
                 preview_bar(&mode, at, cx);
+                // The bar is ⌘T's, so the shell runs ⌘T's command as it does in the app and New
+                // Tab's row has the plate under it: a frame without it differs from the app in
+                // what a look is judged by (#4091).
+                if let Some(shell) = shell_window {
+                    shell
+                        .update(cx, |shell, _, cx| shell.run(Command::NewTab, "preview", cx))
+                        .ok();
+                }
             }
             if account.as_deref() == Some("approve") {
                 if !DIALOG_OPEN.replace(true) {
@@ -3768,8 +3774,10 @@ fn preview_model_menu(bounds: Bounds<Pixels>, cli: &str, cx: &mut App) {
         ))),
     }
     .unwrap_or_default();
+    let first = (browser::agents::runner::Cli::from_id(cli))
+        .map_or_else(String::new, browser::agents::task::model_default);
     let (_, items) =
-        browser::agents::task::model_menu(chosen, models.default.as_deref(), models.listed);
+        browser::agents::task::model_menu(chosen, &first, models.default.as_deref(), models.listed);
     let light = preview_tone() == Some(Tone::Light);
     if menu::open_at(Rc::new(PreviewMenu), bounds, cx).is_none() {
         return;

@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui::{
-    BoxShadow, Rgba, SharedString,
+    App, BoxShadow, Context, Rgba, SharedString,
     accesskit::{HasPopup, Role, Toggled},
     canvas, div, point,
     prelude::*,
@@ -15,6 +15,7 @@ use gpui::{
 use crate::agents::request::Sent;
 pub use crate::keyboard_ring::{ring, ring_round};
 use crate::palette::{INK, NO_THEME_ACCENT, OVERLAY_DARK, PAPER};
+use crate::text_input::Colors;
 use crate::tokens::palette::{ACCENT_HOVERED, ACCENT_PRESSED, DIALOG_LIGHT};
 use crate::tokens::radius;
 use crate::tokens::settings::{
@@ -34,7 +35,7 @@ use crate::tokens::settings::{SENT_CHEVRON, SENT_GAP, SENT_INDENT, SENT_LABEL, S
 use crate::tokens::text::SMALL;
 
 mod assistant;
-pub use assistant::{Act, another_agent_row, assistant_row};
+pub use assistant::{Act, another_agent_name_row, another_agent_row, assistant_row};
 
 /// The places `drawn` logged, one a control, shared by a view's controls.
 pub type Drawn = Rc<RefCell<DrawnLog>>;
@@ -419,6 +420,29 @@ impl Look {
     pub fn light(&self) -> bool {
         let lum = |c: Rgba| c.r + c.g + c.b;
         lum(self.ink) < lum(self.surface)
+    }
+
+    /// What a field among the rows draws in: its placeholder their grey, its caret their ink.
+    pub fn field(&self) -> Colors {
+        Colors {
+            placeholder: self.detail.into(),
+            caret: self.ink.into(),
+            ..Colors::default()
+        }
+    }
+}
+
+/// A field's colours as it draws, in the look its `owner` has then: the field stays as the rows
+/// go from dark to light with their window.
+pub fn field_colors<V: 'static>(
+    owner: &Context<V>,
+    look: fn(&V) -> Look,
+) -> impl Fn(&App) -> Colors + 'static + use<V> {
+    let owner = owner.weak_entity();
+    move |cx| {
+        owner
+            .upgrade()
+            .map_or_else(Colors::default, |owner| look(owner.read(cx)).field())
     }
 }
 

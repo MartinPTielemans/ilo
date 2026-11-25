@@ -165,6 +165,16 @@ fn spawn(cli: &mut Command) -> std::io::Result<Child> {
             "a test may start only a stand-in in its folder, not {}",
             program.display()
         );
+        // A stand-in written a moment ago can still be open in a child another test forked and
+        // hasn't yet exec'd, and Linux won't run a file open for writing (#4180).
+        for _ in 0..100 {
+            match cli.spawn() {
+                Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(std::time::Duration::from_millis(10))
+                }
+                spawned => return spawned,
+            }
+        }
     }
     cli.spawn()
 }

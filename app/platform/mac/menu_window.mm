@@ -8,6 +8,7 @@
 #import <Cocoa/Cocoa.h>
 
 #include <initializer_list>
+#include <vector>
 
 #include "menu_window.h"
 
@@ -20,6 +21,9 @@ namespace {
 
 NSWindow* g_window;
 NSView* g_view;
+// The window's material under the open panels and not the room round them, which the UI draws
+// their shadows in (#4090).
+NSVisualEffectView* g_glass;
 bool (*g_pointer)(int, double, double);
 void (*g_dismissed)(void);
 bool (*g_choose)(const char*);
@@ -175,6 +179,16 @@ void host_add_menu_window(void* view,
   // panels' shadows, inside the window.
   g_window.styleMask = NSWindowStyleMaskBorderless;
   g_window.hasShadow = NO;
+  // One glass with the window, as under the overlays (host.mm): the HUD window's material under
+  // the UI's fill at the transparency level. AppKit makes it opaque with Reduce Transparency or
+  // Increase Contrast. Hidden until the UI says where the panels are.
+  g_glass = [[NSVisualEffectView alloc] initWithFrame:g_view.frame];
+  g_glass.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+  g_glass.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+  g_glass.material = NSVisualEffectMaterialHUDWindow;
+  g_glass.state = NSVisualEffectStateActive;
+  g_glass.hidden = YES;
+  [g_view.superview addSubview:g_glass positioned:NSWindowBelow relativeTo:g_view];
   constexpr NSEventMask kEvents =
       NSEventMaskMouseMoved | NSEventMaskLeftMouseDragged | NSEventMaskRightMouseDragged |
       NSEventMaskOtherMouseDragged | NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown |
@@ -279,6 +293,40 @@ void host_show_menu_window(void* ui_view,
       fprintf(stderr, "browser: menu window shown %.1f ms after the press\n", ms);
     }
   });
+}
+
+void host_set_menu_glass(const double* panels, size_t count, bool light) {
+  if (!g_glass) {
+    return;
+  }
+  struct Panel {
+    NSRect rect;
+    double radius;
+  };
+  std::vector<Panel> shapes;
+  for (size_t index = 0; index < count; index++) {
+    const double* at = &panels[5 * index];
+    shapes.push_back({NSMakeRect(at[0], at[1], at[2], at[3]), at[4]});
+  }
+  // At the size the window is going to, from its top left as the UI measures, so it lines up
+  // with the panels once the window has moved there.
+  NSImage* mask = [NSImage imageWithSize:g_frame.size
+                                 flipped:YES
+                          drawingHandler:^BOOL(NSRect) {
+                            [NSColor.blackColor setFill];
+                            for (const Panel& panel : shapes) {
+                              [[NSBezierPath bezierPathWithRoundedRect:panel.rect
+                                                               xRadius:panel.radius
+                                                               yRadius:panel.radius] fill];
+                            }
+                            return YES;
+                          }];
+  mask.resizingMode = NSImageResizingModeStretch;
+  g_glass.maskImage = mask;
+  // The window's look, which the UI's fill over it is drawn for, as its material's (host.mm).
+  g_glass.appearance =
+      [NSAppearance appearanceNamed:light ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua];
+  g_glass.hidden = count == 0;
 }
 
 void host_hide_menu_window(void) {

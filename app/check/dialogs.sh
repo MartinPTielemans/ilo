@@ -545,7 +545,7 @@ grep -v '^browser: drive ' "$log" | grep -q zq7lovelace && fail "the password re
 # app outlives them all with no panic.
 go_from_bar "$site"
 expect "^browser: title $page ready\$" "the served page didn't load for its link"
-# 200 by 40 points, 100 in from the card's top left, which is 228 and 10 in from the window's.
+# 200 by 40 points, 100 in from the card's top left, which is 228 and 8 in from the window's.
 link_point="430 130"
 for round in $(seq 20); do
   send move $link_point

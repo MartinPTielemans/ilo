@@ -352,7 +352,7 @@ await_views() {
   done
   fail "$2: the window shows $(echo "$views" | wc -l | tr -d ' ') page views, not $1"
 }
-# DevTools fill the card, which is 228 from the left and 10 from the other edges, and the page
+# DevTools fill the card, which is 228 from the left and 8 from the other edges, and the page
 # keeps its left part.
 check_docked() {
   [ -n "$sees_devtools" ] || return 0
@@ -362,10 +362,10 @@ check_docked() {
   devtools=$(echo "$views" | sed -n 1p)
   docked=$(echo "$views" | sed -n 2p)
   docked_width=$(echo "$docked" | sed 's/.* \([0-9]*\)x.*/\1/')
-  [ "$devtools" = "228,10 $((width - 238))x$((height - 20))" ] ||
+  [ "$devtools" = "228,8 $((width - 236))x$((height - 16))" ] ||
     fail "$1: DevTools are at $devtools in a $content window"
-  [ "$docked" = "228,10 ${docked_width}x$((height - 20))" ] &&
-    [ "$docked_width" -gt 0 ] && [ "$docked_width" -lt $((width - 238)) ] ||
+  [ "$docked" = "228,8 ${docked_width}x$((height - 16))" ] &&
+    [ "$docked_width" -gt 0 ] && [ "$docked_width" -lt $((width - 236)) ] ||
     fail "$1: the page is at $docked, beside DevTools at $devtools"
 }
 send click $page_point

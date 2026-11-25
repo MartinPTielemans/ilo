@@ -14,15 +14,16 @@
 # held at the card's top (a page that fits never scrolls, #2102), and the URL
 # field's translate mark lit under the pointer, light and dark (#2112), the foot bar with two lines
 # over the page's bottom, as pointing's, whose keys read as this system's menus write them (#2380),
-# Settings › Agents' Model menu for Claude, Sonnet chosen, and for Codex, on Default, Default naming
-# its model, light and dark (#2455), and the safe-start card at the sidebar's foot, light and dark,
+# Settings › Agents' Model menu for Claude, Sonnet chosen, and for Codex, on its own default, which
+# names its model, light and dark (#2455), and its Model rows, one assistant signed in and one not,
+# then Access and Notifications under them, light and dark (#4100), and the safe-start card at the
+# sidebar's foot, light and dark,
 # and in the narrowest sidebar with ad blocking off (#2345), a Live Folder of made-up pull
 # requests, open light and dark, closed with its count, signed out and after a failed refresh,
 # light and dark, with its tooltip then, the Space's menu with Live Folders open, light and dark,
 # the folder's menu, and in the narrowest sidebar, and frames of a press on its row, 4 s in, for a
 # video of it (#2979), on Wayland, the footer's menu control, which only Linux and Windows draw, at
-# rest and with its menu open above it, light and dark (#3148), the top bar, with the sidebar on
-# the left and on the right (#3160), and Library › Boards, light and dark, a Board's row's menu,
+# rest and with its menu open above it, light and dark (#3148), and Library › Boards, light and dark, a Board's row's menu,
 # and the protected-media note, whose card a Board's refused save follows in the page (#3073), the
 # keyboard's ring on New Tab's row in an empty Space, light and dark (#3151), and on Library ›
 # Boards' second row, light and dark (#3238), an outside agent's card at work, done, and done
@@ -93,8 +94,6 @@ screens=(
   "live-folder-states-light|live folder 9000 answered|PREVIEW_LIVE_FOLDER=states PREVIEW_APPEARANCE=light"
   "live-folder-states-dark|live folder 9000 answered|PREVIEW_LIVE_FOLDER=states PREVIEW_APPEARANCE=dark"
   "live-folder-press|selected 9001|PREVIEW_LIVE_FOLDER=open PREVIEW_APPEARANCE=light PREVIEW_PRESS=100,553"
-  "top-bar|drawn at|PREVIEW_TOP_BAR=1"
-  "top-bar-right|drawn at|PREVIEW_TOP_BAR=1 PREVIEW_SIDEBAR_RIGHT=1"
   "library-boards-light|library boards|PREVIEW_LIBRARY=boards PREVIEW_APPEARANCE=light"
   "library-boards-dark|library boards|PREVIEW_LIBRARY=boards PREVIEW_APPEARANCE=dark"
   "library-boards-menu|menu drawn|PREVIEW_LIBRARY=boards PREVIEW_MENU=180,111"
@@ -129,6 +128,8 @@ screens=(
   "assistants-start-dark|settings assistant rows|PREVIEW_ASSISTANTS=start PREVIEW_APPEARANCE=dark"
   "assistants-signed-in-light|settings assistant rows|PREVIEW_ASSISTANTS=signed-in PREVIEW_APPEARANCE=light"
   "assistants-signed-in-dark|settings assistant rows|PREVIEW_ASSISTANTS=signed-in PREVIEW_APPEARANCE=dark"
+  "assistants-models-light|settings assistant rows|PREVIEW_ASSISTANTS=models PREVIEW_APPEARANCE=light"
+  "assistants-models-dark|settings assistant rows|PREVIEW_ASSISTANTS=models PREVIEW_APPEARANCE=dark"
 )
 case $(uname -s) in
   MINGW* | MSYS*) systems=(windows) drag= ;;

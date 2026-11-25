@@ -90,8 +90,6 @@ fn space_one_menu(menu: &[String]) -> bool {
         "New Tab",
         "New Folder…",
         "—",
-        "Show Top Bar",
-        "—",
         "Change Space Icon…",
         "Rename Space…",
         "Edit Theme Color…",
@@ -184,15 +182,8 @@ fn an_empty_spaces_empty_space_shows_its_menu(cx: &mut TestAppContext) {
     let menus = right_click(cx, &host, (100., new_tab_row + ROW_PITCH + 20.));
     assert_eq!(menus.len(), 1, "{menus:?}");
     assert_eq!(
-        menus[0][..6],
-        [
-            "New Tab",
-            "New Folder…",
-            "—",
-            "Show Top Bar",
-            "—",
-            "Change Space Icon…"
-        ]
+        menus[0][..4],
+        ["New Tab", "New Folder…", "—", "Change Space Icon…"]
     );
     // Delete Space is on: Space 1 is left.
     assert!(
@@ -234,15 +225,8 @@ fn a_right_click_mid_swipe_is_for_the_space_under_the_pointer(cx: &mut TestAppCo
     let menus = right_click(cx, &host, beside);
     assert_eq!(menus.len(), 1, "{menus:?}");
     assert_eq!(
-        menus[0][..6],
-        [
-            "New Tab",
-            "New Folder…",
-            "—",
-            "Show Top Bar",
-            "—",
-            "Change Space Icon…"
-        ]
+        menus[0][..4],
+        ["New Tab", "New Folder…", "—", "Change Space Icon…"]
     );
     assert_eq!(new_tab(cx, &host), [2], "New Tab went to the Space beside");
 
@@ -279,15 +263,8 @@ fn a_right_click_mid_swipe_is_for_the_space_under_the_pointer(cx: &mut TestAppCo
     let menus = right_click(cx, &host, first);
     assert_eq!(menus.len(), 1, "a right-click mid-slide: {menus:?}");
     assert_eq!(
-        menus[0][..6],
-        [
-            "New Tab",
-            "New Folder…",
-            "—",
-            "Show Top Bar",
-            "—",
-            "Change Space Icon…"
-        ]
+        menus[0][..4],
+        ["New Tab", "New Folder…", "—", "Change Space Icon…"]
     );
     assert!(
         new_tab(cx, &host).is_empty(),

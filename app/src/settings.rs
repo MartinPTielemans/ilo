@@ -25,12 +25,12 @@ use browser::log;
 use browser::notes;
 use browser::passwords::{self, Login};
 use browser::shell::{self, CancelName, Command, Holder, KeepName, MenuEntry, Refused, UserKeys};
-use browser::text_input::{self, TextInput};
+use browser::text_input::{self, Colors, TextInput};
 use browser::theme::Appearance;
 use browser::updates::{self, NightlyRow, Track, VersionRow};
 use browser::widevine::{self, Widevine, WidevineRow};
 use gpui::{
-    AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, Global, Hsla,
+    AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, Global,
     KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, PathPromptOptions, Rgba, SharedString,
     Subscription, Window, WindowHandle, WindowOptions, actions, canvas, div, point, prelude::*, px,
     rgb, rgba, size, svg,
@@ -43,17 +43,16 @@ use browser::settings_card::{self, Card, Paging};
 use browser::settings_column::{self, Section};
 use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
-    Act, Chip, Look as RowLook, SLIDE, another_agent_row, assistant_row, chevron_slot, chip,
-    command_export, command_text, detailed_row, end, frame, glyph_plate, group, group_lined,
-    named_button, row, sent_part, stop_button, stop_chip, stop_popup, stop_restore, stop_switch,
-    text,
+    Act, Chip, Look as RowLook, SLIDE, assistant_row, chevron_slot, chip, command_export,
+    command_text, detailed_row, end, frame, glyph_plate, group, group_lined, named_button, row,
+    sent_part, stop_button, stop_chip, stop_popup, stop_restore, stop_switch, text,
 };
 use browser::settings_search::{
     self, EndSearch, Entry, NextControl, PageBottom, PageDown, PageTop, PageUp, PreviousControl,
     Search,
 };
 use browser::settings_shortcuts::{Keys, SHORTCUTS};
-use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
+use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
 use browser::tokens::radius;
 use browser::tokens::settings::{
     BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS, DETAIL,
@@ -182,6 +181,10 @@ enum Popup {
     Notes(u64),
     /// A signed-in assistant's ⋯ menu, in Agents › Your assistant.
     Assistant(Cli),
+    /// An assistant's Model, under its row in Agents › Your assistant.
+    Model(Cli),
+    /// Agents › Notifications' Notify.
+    Notify,
     /// General's Page zoom.
     PageZoom,
 }
@@ -196,6 +199,8 @@ impl Popup {
             Popup::ArchiveAfter(_) => "Archive Today tabs after".into(),
             Popup::Notes(_) => "New Note".into(),
             Popup::Assistant(cli) => format!("{} options", cli.assistant()).into(),
+            Popup::Model(_) => browser::agents::task::MODEL.into(),
+            Popup::Notify => browser::needs_you::WHEN_TO_NOTIFY.into(),
             Popup::PageZoom => "Page zoom".into(),
         }
     }
@@ -1074,22 +1079,33 @@ fn view(cx: &mut App) -> Entity<Settings> {
         updates::observe_view(cx, |_, cx| cx.notify()).detach();
         let agents = agents::global(cx);
         let agents = agents.map(|agents| cx.observe(&agents, |_, _, cx| cx.notify()));
+        // Each field takes the look Settings has as it draws, which follows the window.
+        let settings: gpui::WeakEntity<Settings> = cx.weak_entity();
         let search = cx.new(|cx| {
-            TextInput::new("Search", cx)
-                .placeholder_color(look.detail)
-                .caret_color(look.ink)
+            TextInput::new("Search", cx).follows(move |cx| {
+                let Some(settings) = settings.upgrade() else {
+                    return Colors::default();
+                };
+                let settings = settings.read(cx);
+                // The field's "Search" is the rows' grey over the field's own plate, not over a
+                // group's.
+                Colors {
+                    placeholder: settings.base().opacity(DETAIL).into(),
+                    ..settings.look.field()
+                }
+            })
         });
         cx.observe(&search, |_, _, cx| cx.notify()).detach();
+        let colors = browser::settings_rows::field_colors(cx, |settings: &Settings| settings.look);
         let filter = cx.new(|cx| {
             TextInput::new("example.com##.banner", cx)
-                .placeholder_color(look.detail)
-                .caret_color(look.ink)
+                .follows(colors)
                 .spoken("New filter")
         });
+        let colors = browser::settings_rows::field_colors(cx, |settings: &Settings| settings.look);
         let fence_field = cx.new(|cx| {
             TextInput::new(agents::fence::PLACEHOLDER, cx)
-                .placeholder_color(look.detail)
-                .caret_color(look.ink)
+                .follows(colors)
                 .spoken(agents::fence::SPOKEN)
         });
         // ⇥ stops at the field, after the sections.
@@ -1453,17 +1469,6 @@ impl Settings {
         if let Some(links) = &self.links {
             links.update(cx, |links, cx| links.set_look(look, cx));
         }
-        let selection = Hsla::from(rgb(NO_THEME_ACCENT)).opacity(SELECTION);
-        // The field's "Search" is the rows' grey over the field's own plate, not over a group's.
-        let placeholder = self.base().opacity(DETAIL);
-        self.search.update(cx, |search, cx| {
-            search.set_colors(placeholder.into(), look.ink.into(), selection);
-            cx.notify();
-        });
-        self.filter.update(cx, |filter, cx| {
-            filter.set_colors(look.detail.into(), look.ink.into(), selection);
-            cx.notify();
-        });
         // check.sh waits for this line.
         log!(
             "browser: settings look {}",
@@ -1772,8 +1777,8 @@ impl Settings {
     }
 
     /// Appearance (#4092): the settings whose choice is a picture, Appearance and Sidebar
-    /// position, with Page zoom and the Top bar beside them.
-    fn appearance_page(&self, accent: Rgba, cx: &mut Context<Self>) -> Page {
+    /// position, with Page zoom beside them.
+    fn appearance_page(&self, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
         let appearance = self.appearance;
         let appearance_line: SharedString = match cfg!(target_os = "macos") {
@@ -1875,24 +1880,7 @@ impl Settings {
                 .into(),
             pair,
         );
-        let top_bar = self.toggle("top bar", "Top bar", off(TOP_BAR), set_top_bar, accent, cx);
-        let top_bar_keys = shell::keystroke_label("shift-cmd-d");
-        let top_bar = setting(
-            look,
-            "Top bar",
-            Some(
-                format!(
-                    "The URL field and the sidebar's buttons in a row across the window's top, \
-                     the page under it. {top_bar_keys} turns it on and off."
-                )
-                .into(),
-            ),
-            vec![top_bar],
-        );
-        groups.extend([
-            Block::Heading("Layout".into()),
-            Block::Rows(vec![position, top_bar]),
-        ]);
+        groups.extend([Block::Heading("Layout".into()), Block::Rows(vec![position])]);
         Page::new(Section::Appearance, "", groups)
     }
 
@@ -3261,10 +3249,10 @@ impl Settings {
 
     /// Shows the profile's name in a field, all selected, to type a new one over.
     fn rename(&mut self, profile: u64, name: SharedString, cx: &mut Context<Self>) {
+        let colors = browser::settings_rows::field_colors(cx, |settings: &Self| settings.look);
         let name = cx.new(|cx| {
             TextInput::new("Profile name", cx)
-                .placeholder_color(self.look.detail)
-                .caret_color(self.look.ink)
+                .follows(colors)
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
@@ -3771,15 +3759,26 @@ impl Settings {
         });
         // Under tasks' own switch, while they're on: whether a finished one is kept (#4105).
         let keeps = (on && tasks_on).then(|| self.kept_tasks(agents, accent, cx));
-        let rows = [master].into_iter().chain(tasks).chain(keeps);
+        // And under that, each one kept, which is the list of what is.
+        let kept = match on && tasks_on {
+            true => self.kept_rows(agents, cx),
+            false => Vec::new(),
+        };
+        let rows = [master].into_iter().chain(tasks).chain(keeps).chain(kept);
         let mut blocks = vec![Block::Rows(rows.collect())];
         if tasks_on {
             blocks.push(Block::Heading("Your assistant".into()));
             blocks.push(Block::Group(self.assistants(agents, cx)));
-            blocks.push(Block::Under(foot(look, NO_ASSISTANT_OF_ITS_OWN)));
+            blocks.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
+            blocks.extend(self.access());
+        }
+        // ⌘T's tasks and outside agents' sessions notify alike, so it's here while agents are on.
+        // The Mac, Windows and Linux each post them (needs_you_host.rs).
+        if on {
+            blocks.push(Block::Heading(browser::needs_you::NOTIFICATIONS.into()));
+            blocks.push(Block::Rows(vec![self.when_to_notify(agents, cx)]));
         }
         blocks.push(Block::Heading(APPS_THAT_CONNECT.into()));
-        // Another app's How to Connect comes here.
         let apps = SharedString::from(APPS_THAT_CONNECT);
         blocks.push(Block::Group(self.flashed(&apps, group(look, clients))));
         // Shown as Apps that connect are, whether agents are on or off: the command says they're
@@ -3880,11 +3879,28 @@ impl Settings {
                 )],
             )));
         }
-        Page::new(
-            Section::Agents,
-            "Agents never see your passwords, cookies or autofill.",
-            blocks,
-        )
+        Page::new(Section::Agents, agents::tier::NEVER_GETS, blocks)
+    }
+
+    /// Access: what each tier lets a task do, in words only, since only a task's own menu sets
+    /// one. The level's menu opens Settings here, flashing the group (settings::show_row).
+    fn access(&self) -> Vec<Block> {
+        use agents::tier::{ACCESS, Tier};
+        let look = &self.look;
+        let rows = Tier::ALL.map(|tier| {
+            setting(
+                look,
+                tier.label(),
+                Some(tier.explained().into()),
+                Vec::new(),
+            )
+            .div
+        });
+        let heading: SharedString = ACCESS.into();
+        vec![
+            Block::Heading(heading.clone()),
+            Block::Group(self.flashed(&heading, group(look, rows))),
+        ]
     }
 
     /// Always ask first (#3724): the sites the user fenced, each with Remove, then Add Site…, which
@@ -4241,8 +4257,8 @@ impl Settings {
 
     /// Keep finished tasks: its switch, how many ilo holds a conversation's id for, which isn't a
     /// promise each still takes a reply, and Remove All…, which asks first, as nothing brings a
-    /// conversation back. Turning it off offers the same. The line under it names who keeps none,
-    /// from kept.rs's table.
+    /// conversation back. Turning it off offers the same. The line under it says what is kept and
+    /// where, then names who keeps none, from kept.rs's table.
     fn kept_tasks(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> Row {
         let look = &self.look;
         let model = agents.read(cx);
@@ -4252,7 +4268,7 @@ impl Settings {
             let set = move |on, cx: &mut App| {
                 agents.update(cx, |agents, cx| agents.set_keeps_tasks(on, cx));
                 if !on && kept > 0 {
-                    ask_remove_kept(agents.clone(), kept, cx);
+                    ask_remove_kept(agents.clone(), kept, None, cx);
                 }
             };
             self.toggle(
@@ -4275,55 +4291,62 @@ impl Settings {
         let remove = (kept > 0).then(|| {
             let agents = agents.clone();
             self.button("remove-kept-tasks", REMOVE_ALL)
-                .on_click(move |_, _, cx| ask_remove_kept(agents.clone(), kept, cx))
+                .on_click(move |_, _, cx| ask_remove_kept(agents.clone(), kept, None, cx))
                 .into_any_element()
         });
-        let line: Vec<String> = Cli::ALL
-            .into_iter()
-            .filter(|cli| agents::kept::keeps(*cli) == agents::kept::Keeps::Never)
-            .map(|cli| format!("{} doesn't keep finished tasks.", cli.name()))
-            .collect();
         let controls = count.into_iter().chain(remove).chain([switch]).collect();
-        nested(setting(
-            look,
-            KEEP_TASKS,
-            (!line.is_empty()).then(|| line.join(" ").into()),
-            controls,
-        ))
+        nested(setting(look, KEEP_TASKS, Some(KEPT_WHERE.into()), controls))
     }
 
-    /// Asks before the `kept` finished tasks' conversations are removed, as nothing brings them
-    /// back: in an alert, or on Linux in Settings' own dialog, as a profile's Delete asks.
+    /// The finished tasks kept, the last to end first, each by its title and the Archive's own
+    /// words for it, with Remove, which asks first as Remove All… does: the list of what ilo
+    /// keeps of them, and the way out for one.
+    fn kept_rows(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Row> {
+        let kept = agents.read(cx).kept_list(cx);
+        (kept.into_iter())
+            .map(|(task, title, about)| {
+                let agents = agents.clone();
+                let remove = self
+                    .button(SharedString::from(format!("remove-kept-{task}")), REMOVE)
+                    .on_click(move |_, _, cx| {
+                        ask_remove_kept(agents.clone(), 1, Some(task.clone()), cx)
+                    })
+                    .into_any_element();
+                nested(setting(&self.look, title, Some(about), vec![remove]))
+            })
+            .collect()
+    }
+
+    /// Asks before the `kept` finished tasks' conversations are removed, or `only` that task's,
+    /// as nothing brings them back: in an alert, or on Linux in Settings' own dialog, as a
+    /// profile's Delete asks.
     fn ask_remove_kept(
         &mut self,
         agents: &Entity<Agents>,
         kept: usize,
+        only: Option<SharedString>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let from = agents::kept::COMPUTER;
         let (message, detail, action) = match kept {
             1 => (
                 "Remove 1 finished task?".to_string(),
-                format!(
-                    "The conversation is removed from {from}. A task that is still working keeps \
-                     its own."
-                ),
-                "Remove",
+                "The conversation is removed from this computer.".to_string(),
+                REMOVE,
             ),
             kept => (
                 format!("Remove {kept} finished tasks?"),
-                format!(
-                    "Their conversations are removed from {from}. A task that is still working \
-                     keeps its own."
-                ),
+                "Their conversations are removed from this computer.".to_string(),
                 "Remove All",
             ),
         };
         let agents = agents.clone();
         let remove = move |cx: &mut App| {
             log!("browser: kept tasks removed from settings");
-            agents.update(cx, |agents, cx| agents.remove_kept_tasks(cx))
+            agents.update(cx, |agents, cx| match &only {
+                Some(task) => agents.remove_kept_task(task, cx),
+                None => agents.remove_kept_tasks(cx),
+            })
         };
         #[cfg(target_os = "linux")]
         dialog::ask_in(
@@ -5327,9 +5350,6 @@ const RECENT_SITES_OFF: &str = "recent-off-sites";
 /// never synced.
 const SIDEBAR_RIGHT: &str = "sidebar-right";
 
-/// Top bar, there while it's on (#3160): this device's, as Sidebar position is, and never synced.
-const TOP_BAR: &str = "top-bar";
-
 fn off(name: &str) -> bool {
     std::path::Path::new(&format!("{}/{name}", crate::profile_dir())).exists()
 }
@@ -5346,7 +5366,6 @@ fn set_off(name: &str, is_off: bool) {
 pub fn read_switches(cx: &mut App) {
     cx.set_global(shell::SidebarEdge(!off(NO_EDGE_REVEAL)));
     cx.set_global(shell::SidebarRight(off(SIDEBAR_RIGHT)));
-    cx.set_global(shell::TopBar(off(TOP_BAR)));
     browser::dock_dot::set_plain(off(DOCK_ICON_PLAIN), cx);
     browser::recent::set_switches(!off(NO_RECENT), recent_sites_off(), cx);
 }
@@ -5393,14 +5412,6 @@ pub fn sidebar_right_kept() -> bool {
 pub fn set_sidebar_right(right: bool, cx: &mut App) {
     set_off(SIDEBAR_RIGHT, right);
     cx.set_global(shell::SidebarRight(right));
-    cx.refresh_windows();
-}
-
-/// Turns Top bar on or off: kept on this device, and every window follows at once, as each reads
-/// it as it draws.
-pub fn set_top_bar(on: bool, cx: &mut App) {
-    set_off(TOP_BAR, on);
-    cx.set_global(shell::TopBar(on));
     cx.refresh_windows();
 }
 
@@ -5576,16 +5587,12 @@ fn method(target: &str) -> &str {
     target.split(' ').next().unwrap_or_default()
 }
 
-/// Apps that connect's heading, which Another app's How to Connect goes to.
+/// Apps that connect's heading.
 const APPS_THAT_CONNECT: &str = "Apps that connect";
 
-/// What Your assistant's rows never do, under them.
-const NO_ASSISTANT_OF_ITS_OWN: &str = concat!(
-    env!("APP_NAME"),
-    " has no assistant of its own. You sign in on your assistant's page, and ",
-    env!("APP_NAME"),
-    " never sees or keeps your login."
-);
+/// What Your assistant's rows never do, under them. That ilo has no assistant of its own is first
+/// run's to say.
+const NEVER_SEES_LOGIN: &str = concat!(env!("APP_NAME"), " never sees your assistant's login.");
 
 /// A line under a group that says more of it, in a row's line's grey, as Fenced sites' has.
 fn foot(look: &RowLook, line: impl Into<SharedString>) -> gpui::Div {
@@ -5623,24 +5630,23 @@ fn feature_row(
         .when(!controls.is_empty(), |row| row.child(end(controls)))
 }
 
-/// Settings › Agents' switch that keeps finished tasks, and its button. A kept task takes a reply
-/// while the browser runs, and the name promises no more.
-const KEEP_TASKS: &str = concat!(
-    "Keep finished tasks until you quit ",
-    env!("APP_NAME"),
-    ", so you can reply"
-);
+/// Settings › Agents' switch that keeps finished tasks, what its line says is kept and where,
+/// and its buttons: a kept task's own, and the one for them all. An assistant that keeps none
+/// has no task in the list, which says it.
+const KEEP_TASKS: &str = "Keep finished tasks so you can reply";
+const KEPT_WHERE: &str = "Titles only. Conversations stay with your assistant.";
+const REMOVE: &str = "Remove";
 const REMOVE_ALL: &str = "Remove All…";
 
-/// Asks before the kept conversations go (`Settings::ask_remove_kept`), once the click that asked
-/// is over, in Settings' window.
-fn ask_remove_kept(agents: Entity<Agents>, kept: usize, cx: &mut App) {
+/// Asks before the kept conversations go, or `only` that task's (`Settings::ask_remove_kept`),
+/// once the click that asked is over, in Settings' window.
+fn ask_remove_kept(agents: Entity<Agents>, kept: usize, only: Option<SharedString>, cx: &mut App) {
     cx.defer(move |cx| {
         let Some(window) = cx.try_global::<SettingsWindow>().map(|w| w.0) else {
             return;
         };
         let ask = |settings: &mut Settings, window: &mut Window, cx: &mut Context<Settings>| {
-            settings.ask_remove_kept(&agents, kept, window, cx)
+            settings.ask_remove_kept(&agents, kept, only.clone(), window, cx)
         };
         window.update(cx, ask).ok();
     });
@@ -6084,7 +6090,7 @@ impl Settings {
     ) -> Page {
         match section {
             Section::General => self.general(&profiles(), accent, cx),
-            Section::Appearance => self.appearance_page(accent, cx),
+            Section::Appearance => self.appearance_page(cx),
             Section::TabsAndSidebar => self.tabs_and_sidebar(&profiles(), accent, cx),
             Section::Features => self.features(&profiles(), accent, cx),
             Section::Agents => match agents::global(cx) {
@@ -6149,7 +6155,7 @@ impl Settings {
         let profiles = profiles();
         let mut pages = vec![
             self.general(&profiles, accent, cx),
-            self.appearance_page(accent, cx),
+            self.appearance_page(cx),
             self.tabs_and_sidebar(&profiles, accent, cx),
             self.features(&profiles, accent, cx),
         ];

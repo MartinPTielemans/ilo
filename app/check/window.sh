@@ -876,21 +876,23 @@ drag() {
   moves=$count
 }
 drag 115 24 moves "the header"
-drag 138 24 stays "the back button"
+drag 158 24 stays "the back button"
 drag 110 64 stays "the URL field"
 drag 110 112 stays "the Space's name"
 drag 110 195 stays "a tab's row"
 drag 110 400 moves "the empty sidebar"
 # On Windows the frame keeps the top 8 points, Windows' resize border (platform/windows/host.cc's
-# FrameHit), as Windows' windows resize by theirs, and the card's margin under it moves the window:
-# design/tokens.toml's card-inset is 10.
+# FrameHit), as Windows' windows resize by theirs. The card starts where that ends, as
+# design/tokens.toml's card-inset is 8, so no margin over the card is left to move the window by
+# there.
 if windows; then
   drag 600 5 stays "the frame's top edge, which resizes"
+else
+  # Not nearer the top: KWin maximizes a window moved with the pointer within 5 pixels of the
+  # screen's top, its quick-maximize zone, as it does under a hand.
+  drag 600 6 moves "the card's top margin"
 fi
-# Not nearer the top: KWin maximizes a window moved with the pointer within 5 pixels of the screen's
-# top, its quick-maximize zone, as it does under a hand.
-drag 600 9 moves "the card's top margin"
-drag $((width - 8)) 300 moves "the card's right margin"
+drag $((width - 4)) 300 moves "the card's right margin"
 # A double-click there does what System Settings › Desktop & Dock says a title bar's does: zoom,
 # unless it's set to something else. Sway, the Wayland session's compositor, maximizes no window:
 # its windows tile or float, so there's no zoom to see.
@@ -920,7 +922,7 @@ expect '^browser: command bar shown$' "a double-click on the empty sidebar didn'
 send key escape
 expect '^browser: command bar hidden$' "escape didn't close the command bar"
 
-# ⌘S hides the sidebar, with the page focused or the UI, and the card takes its place, 10 in from
+# ⌘S hides the sidebar, with the page focused or the UI, and the card takes its place, 8 in from
 # every side, as the window's buttons go. ⌘S and the sidebar button bring both back.
 # toggle <from> <hidden|shown> <what>: waits for the sidebar to finish moving after the command.
 toggle() {
@@ -1337,32 +1339,43 @@ hover_out() {
   send move $(row 0)
   expect '^browser: hover tab [0-9]* ' "$1 didn't draw the hover of the row under the pointer"
 }
-# drawing_procs: "<seconds>\t<command line>" of each process of what draws. uBlock Origin works
+# drawing_procs [extensions]: "<seconds>\t<command line>\t<pid>" of each process of what draws, and
+# with "extensions" the extensions' processes the sums leave out, for naming. uBlock Origin works
 # when it will, which isn't the windows' drawing measured here: its background page, in an
 # extension's process, took about 0.8 s of 4 s on Wayland, and what it asks of the browser runs in
 # Chromium's worker pools and IO threads, where it took 1.6 s of 4 s on Wayland while neither window
 # drew a frame (#2400). On Linux the threads say what they are, so those are left out of every
 # process; elsewhere only the extension's process is.
 drawing_procs() {
+  # What a process to leave out has on its command line; with "extensions", what none has.
+  local leave=--extension-process
+  [ "${1:-}" != extensions ] || leave=--not-a-flag-of-chromiums
   if windows; then
     powershell.exe -NoProfile -NonInteractive -Command "Get-CimInstance Win32_Process \
       -Filter \"Name = 'chrome.exe'\" | Where-Object { \$_.ExecutablePath -like '*\\build\\Browser\\*' -and \
-      \$_.CommandLine -notlike '*--extension-process*' } | ForEach-Object {
-      ('{0:F2}' -f ((\$_.UserModeTime + \$_.KernelModeTime) / 1e7)) + [char]9 + \$_.CommandLine }" | tr -d '\r'
+      \$_.CommandLine -notlike '*$leave*' } | ForEach-Object {
+      ('{0:F2}' -f ((\$_.UserModeTime + \$_.KernelModeTime) / 1e7)) + [char]9 + \$_.CommandLine + [char]9 + \$_.ProcessId }" | tr -d '\r'
   elif [ -d /proc ]; then
     for p in $(pgrep -f -- "$procs"); do
       line=$(tr '\0' ' ' < "/proc/$p/cmdline" 2> /dev/null)
-      case $line in *--extension-process*) continue ;; esac
+      case $line in *"$leave"*) continue ;; esac
       for t in /proc/$p/task/*; do
         case $(cat "$t/comm" 2> /dev/null) in ThreadPool* | Chrome_IOThread | Chrome_ChildIOT) continue ;; esac
         sed 's/^.*) //' "$t/stat" 2> /dev/null
-      done | awk -v hz="$(getconf CLK_TCK)" -v line="$line" '{ t += $12 + $13 } END { printf "%.2f\t%s\n", t / hz, line }'
+      done | awk -v hz="$(getconf CLK_TCK)" -v line="$line" -v p="$p" '{ t += $12 + $13 } END { printf "%.2f\t%s\t%s\n", t / hz, line, p }'
     done
   else
-    ps -Ao time=,args= | grep -F -e "$procs" | grep -v -e 'grep -F' -e --extension-process | awk '{
-      s = 0; k = split($1, part, ":"); for (i = 1; i <= k; i++) s = s * 60 + part[i]
-      $1 = ""; printf "%.2f\t%s\n", s, substr($0, 2) }'
+    ps -Ao pid=,time=,args= | grep -F -e "$procs" | grep -v -e 'grep -F' -e "$leave" | awk '{
+      p = $1; s = 0; k = split($2, part, ":"); for (i = 1; i <= k; i++) s = s * 60 + part[i]
+      $1 = ""; $2 = ""; sub(/^ +/, ""); printf "%.2f\t%s\t%s\n", s, $0, p }'
   fi
+}
+# renderer_cpu: "<pid> <seconds> <extension or other>" of each renderer, the extensions' too, by
+# the same count as drawing_procs. Its command line names no page, so no page's address goes in
+# the log (#4198).
+renderer_cpu() {
+  drawing_procs extensions | awk -F '\t' 'index($2, "--type=renderer") {
+    print $3, $1, (index($2, "--extension-process") ? "extension" : "other") }'
 }
 # drawing_cpu: "<seconds> <processes> <kind>=<seconds>...", the CPU of what draws and each kind of
 # process's share: the browser's own, the GPU's, the network service's, the pages' renderers, other
@@ -1380,24 +1393,64 @@ drawing_cpu() {
 }
 # rest_cpu [name]: $rest, the CPU in seconds what draws takes in 4 s with the pointer still, below
 # the rows, $rest_procs the processes it counts, and $rest_kinds each kind's share, such as
-# "browser 0.02 s, GPU 0.01 s". With a name, on the Mac, whose ps counts no threads apart, the
-# browser's stacks over the same 4 s go in window-rest-<name>-sample.txt, every 10 ms: a burst
-# inside the 4 s was over by the time a sample after the step could see it (#2502). Not in a
+# "browser 0.02 s, GPU 0.01 s", and $rest_renderers each renderer's, by its pid and what it is: an
+# extension's, outside the sum as ever, one started in the rest, where nothing navigates, so
+# Chromium's spare made ready for the next page, or one from before, a page's or the spare (#4198).
+# With a name, on the Mac, whose ps counts no threads apart, the browser's stacks over the same 4 s
+# go in window-rest-<name>-sample.txt, every 10 ms: a burst inside the 4 s was over by the time a
+# sample after the step could see it (#2502). Each counted renderer there then is sampled beside
+# it, and the busiest's stacks are kept in window-rest-<name>-renderer-sample.txt. Not in a
 # subshell, which would lose send's step.
 rest_cpu() {
   send move 100 600
   sleep 1 # the hover's fade out, before the window measured
-  local from to sampler=
+  local from to sampler= renderers_from renderers_to samplers= each busiest
+  renderers_from=$(renderer_cpu)
   if [ -n "${1:-}" ] && [ "$(uname)" = Darwin ]; then
+    rm -f "$out/window-rest-$1-renderer-"*
     sample "$pid" 4 10 -file "$out/window-rest-$1-sample.txt" \
       > "$out/window-rest-$1-sample.log" 2>&1 &
     sampler=$!
+    for each in $(echo "$renderers_from" | awk '$3 != "extension" { print $1 }'); do
+      sample "$each" 4 10 -file "$out/window-rest-$1-renderer-$each.txt" > /dev/null 2>&1 &
+      samplers="$samplers $!"
+    done
   fi
   from=$(drawing_cpu)
   sleep 4 # the window measured
   to=$(drawing_cpu)
+  renderers_to=$(renderer_cpu)
   [ -z "$sampler" ] || wait "$sampler" ||
     echo "window: the $1 rest's sample failed: $(tail -1 "$out/window-rest-$1-sample.log")"
+  for each in $samplers; do
+    wait "$each" || true
+  done
+  rest_renderers=$(printf '%s\n--\n%s\n' "$renderers_from" "$renderers_to" | awk '
+    $1 == "--" { after = 1; next }
+    !after { if (NF) from[$1] = $2; next }
+    NF {
+      seen[$1] = 1
+      what = $3 == "extension" ? "an extension\047s, outside the sum" : \
+        ($1 in from ? "a page\047s or the spare" : "started in the rest, the spare")
+      printf "%s%s %.2f s (%s)", (said++ ? ", " : ""), $1, $2 - ($1 in from ? from[$1] : 0), what }
+    END {
+      for (p in from) if (!(p in seen)) printf "%s%s gone in the rest", (said++ ? ", " : ""), p
+      if (!said) printf "none" }')
+  # The busiest of those sampled, as it worked over the whole rest.
+  busiest=$(printf '%s\n--\n%s\n' "$renderers_from" "$renderers_to" | awk '
+    $1 == "--" { after = 1; next }
+    !after { if (NF && $3 != "extension") from[$1] = $2; next }
+    ($1 in from) && (best == "" || $2 - from[$1] > most) { best = $1; most = $2 - from[$1] }
+    END { print best }')
+  for each in "$out/window-rest-${1:-}-renderer-"*.txt; do
+    [ -e "$each" ] || continue
+    case $each in
+    */window-rest-${1:-}-renderer-$busiest.txt) mv "$each" "$out/window-rest-$1-renderer-sample.txt" ;;
+    *) rm -f "$each" ;;
+    esac
+  done
+  [ -z "$sampler" ] || [ -z "$busiest" ] || [ -s "$out/window-rest-$1-renderer-sample.txt" ] ||
+    echo "window: the $1 rest's busiest renderer, $busiest, wasn't sampled"
   rest=$(printf '%s\n%s\n' "$from" "$to" | awk 'NR == 1 { from = $1 } NR == 2 { printf "%.2f", $1 - from }')
   rest_procs=$(echo "$to" | cut -d' ' -f2)
   rest_kinds=$(printf '%s\n%s\n' "$from" "$to" | awk '{
@@ -1410,7 +1463,7 @@ rest_cpu() {
 }
 # The sampling adds nothing the rest reads: sampled, docked read 0.00 s on the Mac (#2632).
 rest_cpu docked
-docked_cpu=$rest docked_kinds=$rest_kinds
+docked_cpu=$rest docked_kinds=$rest_kinds docked_renderers=$rest_renderers
 send key s cmd
 toggle page hidden "⌘S from the page before the sidebar out is hovered"
 send move 400 300
@@ -1420,14 +1473,17 @@ hover_out "the sidebar out by the edge"
 rest_cpu out
 out_cpu=$rest
 echo "window: at rest for 4 s, the browser's $rest_procs processes took ${docked_cpu} s of CPU" \
-  "with the sidebar docked ($docked_kinds) and ${out_cpu} s with it out ($rest_kinds)"
+  "with the sidebar docked ($docked_kinds) and ${out_cpu} s with it out ($rest_kinds)." \
+  "Renderers docked: $docked_renderers; out: $rest_renderers"
 if awk -v out="$out_cpu" -v docked="$docked_cpu" 'BEGIN { exit !(out > docked + 0.3) }'; then
   # Its age, for work that comes at a time after launch, as uBlock Origin's selfie did (#2502).
   up=$(ps -o etime= -p "$pid" | tr -d ' ')
   sampled=
   [ ! -s "$out/window-rest-out-sample.txt" ] ||
     sampled=", the browser's stacks over the rest in window-rest-out-sample.txt"
-  fail "the sidebar out at rest took ${out_cpu} s of CPU in 4 s ($rest_kinds), against ${docked_cpu} s docked ($docked_kinds), the browser up $up$sampled"
+  [ ! -s "$out/window-rest-out-renderer-sample.txt" ] ||
+    sampled="$sampled, the busiest renderer's in window-rest-out-renderer-sample.txt"
+  fail "the sidebar out at rest took ${out_cpu} s of CPU in 4 s ($rest_kinds; renderers $rest_renderers), against ${docked_cpu} s docked ($docked_kinds), the browser up $up$sampled"
 fi
 send move 600 300
 expect '^browser: reveal hidden$' "the pointer past the sidebar out didn't send it away"
@@ -1750,8 +1806,8 @@ else
       # The window reads lighter over white than over black, by about 60 in dark and 35 in light;
       # an opaque material, as Reduce Transparency draws it, reads the same over both.
       case $level in
-      0) over_black=${line%% *} ;;
-      255) [ $((${line%% *} - over_black)) -ge 10 ] || opaque="$opaque $tone," ;;
+      0) over_black=${line%%[ ,]*} ;;
+      255) [ $((${line%%[ ,]*} - over_black)) -ge 10 ] || opaque="$opaque $tone," ;;
       esac
       material="$material$tone over $level $line; "
     done

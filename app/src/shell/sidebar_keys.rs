@@ -73,6 +73,13 @@ impl Shell {
         if !self.dock(cx) && self.sidebar_hidden {
             self.toggle_sidebar(cx);
         }
+        // A task shown is at the foot: its header, or the row of its page watched.
+        let at_foot = self.shown_at_foot();
+        if let Some(stop) = at_foot.filter(|stop| self.foot_stops().contains(stop)) {
+            self.take_keyboard(cx);
+            self.focus_keys = true;
+            return self.key_strip(stop, cx);
+        }
         let rows = self.key_rows();
         let shown =
             Some(self.row_of(self.selected)).filter(|row| *row != NEW_TAB && rows.contains(row));
@@ -87,8 +94,8 @@ impl Shell {
     /// Tab and Shift+Tab with the window itself holding the keyboard, no field, row or page
     /// having it, ring a row as Focus Sidebar does. Otherwise they'd go nowhere, and the first
     /// keys a screen-reader user tries would say nothing (#3237).
-    /// With a task's page watched they ring the strip under it instead, as Focus Sidebar would
-    /// leave the page for the user's Space (page_ends.rs).
+    /// With a task's page watched they ring the strip under it instead, whose ring that page is
+    /// in (page_ends.rs).
     pub(super) fn tab_in(&mut self, reverse: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.onboarding.is_some() || !self.focus_handle.is_focused(window) {
             return cx.propagate();
@@ -121,11 +128,39 @@ impl Shell {
             }
             return;
         }
+        // The foot's stops go on from the list's last row: each task's header, its chip and its
+        // pages' rows. With a task's page watched the list's rows aren't stops, so Up ends at the
+        // foot's first.
+        let foot = self.foot_stops();
+        if let Some(at) = (self.keyed_strip).and_then(|stop| foot.iter().position(|&s| s == stop)) {
+            let last = self.key_rows().last().copied();
+            match (down, at.checked_sub(1)) {
+                (true, _) => {
+                    if let Some(&next) = foot.get(at + 1) {
+                        self.key_strip(next, cx);
+                    }
+                }
+                (false, Some(before)) => self.key_strip(foot[before], cx),
+                (false, None) => {
+                    if let Some(row) = last.filter(|_| self.watched_task_page().is_none()) {
+                        self.key_row(row, cx);
+                    }
+                }
+            }
+            return;
+        }
         let Some(keyed) = self.keyed else {
             return cx.propagate();
         };
         let rows = self.key_rows();
-        let next = match rows.iter().position(|&row| row == keyed) {
+        let at = rows.iter().position(|&row| row == keyed);
+        if down
+            && at.is_some_and(|at| at + 1 == rows.len())
+            && let Some(&stop) = foot.first()
+        {
+            return self.key_strip(stop, cx);
+        }
+        let next = match at {
             Some(at) if down => rows.get(at + 1),
             Some(at) => at.checked_sub(1).and_then(|at| rows.get(at)),
             // Its row went, closed or folded away.
@@ -312,9 +347,11 @@ impl Shell {
         } else {
             self.keyed_rows.clear();
         }
-        // The strip's stop went with its page, or as its chips changed.
+        // The strip's stop went with its page, or as its chips changed, or the foot's with its
+        // task or as its group closed.
         if let Some(stop) = self.keyed_strip
             && !self.ring_stops().contains(&Some(stop))
+            && !self.foot_stops().contains(&stop)
         {
             self.leave_strip("strip", cx);
         }
@@ -559,15 +596,14 @@ mod tests {
     }
 
     /// With no row to ring the app leaves the keyboard in the page, which wraps: a hidden
-    /// sidebar, full screen, the top bar, and a tab the window doesn't show, as Peek's or another
+    /// sidebar, full screen, and a tab the window doesn't show, as Peek's or another
     /// window's.
     #[gpui::test]
     fn with_no_row_to_ring_the_page_wraps(cx: &mut TestAppContext) {
         type Set = fn(&mut Shell);
-        let cases: [(&str, u64, Set); 5] = [
+        let cases: [(&str, u64, Set); 4] = [
             ("sidebar hidden", 20, |shell| shell.sidebar_hidden = true),
             ("full screen", 20, |shell| shell.page_fullscreen = true),
-            ("top bar", 20, |shell| shell.top_bar = true),
             ("another window's tab", 99, |_| {}),
             ("a tab not shown", 21, |_| {}),
         ];
@@ -671,9 +707,9 @@ mod tests {
         assert_eq!(ringed(&shell, cx), (Some(31), Some(31)));
     }
 
-    /// Escape in the bar New Tab's shortcut opened from the ring leaves the window holding the
+    /// Escape in the bar return on New Tab's row opened from the ring leaves the window holding the
     /// keyboard, and Tab from there rings a row again: New Tab's, in an empty Space, which a screen
-    /// reader names.
+    /// reader names. (In an empty Space ⌘T gives the Space's field the keyboard instead, #4140.)
     #[gpui::test]
     fn escape_from_a_new_tab_leaves_tab_a_row_to_ring(cx: &mut TestAppContext) {
         let (shell, cx, host) = window(cx);
@@ -682,9 +718,9 @@ mod tests {
         cx.simulate_keystrokes("tab");
         cx.run_until_parked();
         assert_eq!(ringed(&shell, cx).0, Some(NEW_TAB));
-        cx.simulate_keystrokes("cmd-t");
+        cx.simulate_keystrokes("enter");
         cx.run_until_parked();
-        assert!(host.bar_open.take(), "the shortcut opened no new tab");
+        assert!(host.bar_open.take(), "return opened no new tab");
         shell.update(cx, |shell, cx| shell.command_bar_dismissed(cx));
         cx.run_until_parked();
         let root = cx.update(|window, cx| shell.read(cx).focus_handle.is_focused(window));
