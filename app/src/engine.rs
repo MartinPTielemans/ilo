@@ -2310,6 +2310,50 @@ impl Browser for Engine {
         unsafe { platform::host_make_default_browser(settings::default_browser_answered) };
     }
 
+    // Settings' own switches, read and set as its rows do.
+    fn setting(&self, space: u64, setting: shell::Setting, _: &App) -> Option<bool> {
+        match setting {
+            shell::Setting::RestoreWindows => Some(unsafe { bc::bc_restore_windows() }),
+            shell::Setting::AdBlocking => Some(unsafe { bc::bc_ad_blocking() }),
+            shell::Setting::SavePasswords => {
+                let (profile, mut offers) = (unsafe { bc::bc_space_profile(space) }, false);
+                let what = bc::BC_SAVE_PASSWORDS as i32;
+                unsafe { bc::bc_profile_offers_to_save(profile, what, &mut offers) }
+                    .then_some(offers)
+            }
+        }
+    }
+
+    fn set_setting(&self, space: u64, setting: shell::Setting, on: bool, _: &mut App) {
+        match setting {
+            shell::Setting::RestoreWindows => unsafe { bc::bc_set_restore_windows(on) },
+            shell::Setting::AdBlocking => unsafe { bc::bc_set_ad_blocking(on) },
+            shell::Setting::SavePasswords => unsafe {
+                let profile = bc::bc_space_profile(space);
+                bc::bc_profile_set_offers_to_save(profile, bc::BC_SAVE_PASSWORDS as i32, on);
+            },
+        }
+    }
+
+    // A new profile's loads after the flow starts, and until then it's the time a profile takes
+    // the first time it's used, which Never (-1) isn't.
+    fn archive_after(&self, space: u64) -> Option<(f64, Vec<f64>)> {
+        let after = unsafe { bc::bc_profile_archive_after(bc::bc_space_profile(space)) };
+        let after = if after == 0. {
+            unsafe { bc::bc_archive_after() }
+        } else {
+            after
+        };
+        Some((after, settings::archive_times()))
+    }
+
+    fn set_archive_after(&self, space: u64, seconds: f64, _: &mut App) {
+        let profile = unsafe { bc::bc_space_profile(space) };
+        if !unsafe { bc::bc_profile_set_archive_after(profile, seconds) } {
+            unsafe { bc::bc_set_archive_after(seconds) };
+        }
+    }
+
     fn search_engines(&self, space: u64) -> (Vec<(SharedString, SharedString)>, SharedString) {
         settings::search_engines(unsafe { bc::bc_space_profile(space) }).unwrap_or_default()
     }

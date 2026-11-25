@@ -112,7 +112,7 @@ first_launch() {
   await '^browser: onboarding step intro settled$' || fail "the first launch didn't play the intro"
   steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
   case "$steps" in
-    *" opt-ins") ;;
+    *" opt-ins keys") ;;
     *) fail "the first launch's steps were '$steps', with no opt-ins step for crash reports" ;;
   esac
   for each in $steps; do

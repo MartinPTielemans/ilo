@@ -113,6 +113,11 @@ pub(super) struct Recorder {
     pub(super) crash_reports: Cell<Option<bool>>,
     pub(super) agents: Cell<Option<bool>>,
     pub(super) daily_count: Cell<Option<bool>>,
+    /// Settings' switches first run shows too, as `setting` answers: only those a test offers.
+    pub(super) settings: RefCell<HashMap<super::Setting, bool>>,
+    /// How long a Today tab waits before the archive, as `archive_after` answers, Settings' times
+    /// offered with it; None until a test gives one.
+    pub(super) archive_after: Cell<Option<f64>>,
     /// The user turned off ⌥ bringing the hidden sidebar out.
     pub(super) option_off: Cell<bool>,
     /// The user turned link previews off.
@@ -2182,6 +2187,26 @@ impl Browser for Recorder {
     fn set_daily_count(&self, on: bool, _: &mut App) {
         self.daily_count.set(Some(on));
         self.record(format!("daily count {on}"))
+    }
+
+    fn setting(&self, _: u64, setting: super::Setting, _: &App) -> Option<bool> {
+        self.settings.borrow().get(&setting).copied()
+    }
+
+    fn set_setting(&self, space: u64, setting: super::Setting, on: bool, _: &mut App) {
+        self.settings.borrow_mut().insert(setting, on);
+        self.record(format!("setting {space} {setting:?} {on}"))
+    }
+
+    fn archive_after(&self, _: u64) -> Option<(f64, Vec<f64>)> {
+        let (hour, day) = (3600., 24. * 3600.);
+        let offered = vec![12. * hour, day, 7. * day, 30. * day, -1.];
+        Some((self.archive_after.get()?, offered))
+    }
+
+    fn set_archive_after(&self, space: u64, seconds: f64, _: &mut App) {
+        self.archive_after.set(Some(seconds));
+        self.record(format!("archive after {space} {seconds}"))
     }
 
     fn close_window(&self, _: &mut App) {
