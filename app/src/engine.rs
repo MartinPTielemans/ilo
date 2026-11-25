@@ -1096,6 +1096,12 @@ impl Browser for Engine {
         bar_picks_host::folder(profile)
     }
 
+    fn archive_after(&self, profile: u64) -> Option<f64> {
+        // The core's BC_ARCHIVE_NEVER is below nothing.
+        let after = unsafe { bc::bc_profile_archive_after(profile) };
+        (after >= 0.).then_some(after)
+    }
+
     fn load_boosts(&self, profile: u64, cx: &mut App) {
         boosts_host::load(profile, cx);
     }

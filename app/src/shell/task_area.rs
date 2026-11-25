@@ -192,6 +192,7 @@ impl Shell {
                             shown: 0,
                             peeked: Vec::new(),
                             live_rooms: Default::default(),
+                            placed: Vec::new(),
                         }
                     }
                 }
@@ -204,7 +205,7 @@ impl Shell {
     /// A task's Space the window shows, as one a launch brings back, gives way to the user's.
     pub(super) fn task_spaces_changed(&mut self, cx: &mut Context<Self>) {
         if self.area_takes_space() {
-            self.reshape_foot(cx);
+            self.reshape_cards(cx);
         }
         let area = self.task_area.as_ref();
         let gone = area.is_some_and(|area| self.space_went(area.space));
@@ -404,7 +405,7 @@ impl Shell {
         log!("browser: task area {space} open");
         self.take_keyboard(cx);
         // Its group at the sidebar's foot opens to its pages, and the one shown before closes.
-        self.reshape_foot(cx);
+        self.reshape_cards(cx);
         cx.notify();
     }
 
@@ -706,7 +707,7 @@ impl Shell {
         self.talk_closed(cx);
         self.lay_out_page(cx);
         // Its group at the sidebar's foot closes to its header.
-        self.reshape_foot(cx);
+        self.reshape_cards(cx);
         if let Some(agent) = left {
             self.talk_left(agent, cx);
         }
@@ -819,7 +820,7 @@ impl Shell {
             closing.aside = area;
         }
         self.lay_out_page(cx);
-        self.reshape_foot(cx);
+        self.reshape_cards(cx);
         cx.notify();
     }
 
@@ -889,7 +890,7 @@ impl Shell {
             log!("browser: task area {space} back");
         }
         self.lay_out_page(cx);
-        self.restore_foot(cx);
+        self.restore_cards(cx);
         // The Agents send its conversation as it is now, as they sent none while it was aside.
         if let Some(agent) = self.talk_agent() {
             self.browser.show_task(agent, cx);
@@ -1446,7 +1447,7 @@ impl Shell {
                         .child(self.strip_open_listener())
                         .on_click(cx.listener(move |shell, _, _, cx| {
                             cx.stop_propagation();
-                            let from = shell.foot.strip_open.get();
+                            let from = shell.task_list.strip_open.get();
                             log!("browser: command open-task-pages via strip");
                             shell.open_task_pages(agent.clone(), Some(tab), from, cx);
                         }));

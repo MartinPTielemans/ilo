@@ -17,6 +17,7 @@ use gpui::{
     prelude::*, px,
 };
 
+use super::page_ends::StripStop;
 use super::{Command, Shell, Slot, commands::Run};
 use crate::tokens::shell::{KEYED, KEYED_RING};
 
@@ -66,6 +67,13 @@ pub(super) fn bind(cx: &mut App) {
     ]);
 }
 
+/// A stop of the sidebar's ring: a row, or one of a task card's.
+#[derive(Clone, Copy, PartialEq)]
+enum Ring {
+    Row(u64),
+    Card(StripStop),
+}
+
 impl Shell {
     /// Focus Sidebar: shows the sidebar if it's hidden, docking the reveal's, and rings the tab
     /// shown's row, else the first, with the UI holding the keyboard.
@@ -73,9 +81,11 @@ impl Shell {
         if !self.dock(cx) && self.sidebar_hidden {
             self.toggle_sidebar(cx);
         }
-        // A task shown is at the foot: its header, or the row of its page watched.
-        let at_foot = self.shown_at_foot();
-        if let Some(stop) = at_foot.filter(|stop| self.foot_stops().contains(stop)) {
+        // A task shown is its card in Today.
+        let card = self.shown_card();
+        if let Some(stop) =
+            card.filter(|&stop| self.card_stops().iter().any(|&(each, _)| each == stop))
+        {
             self.take_keyboard(cx);
             self.focus_keys = true;
             return self.key_strip(stop, cx);
@@ -128,47 +138,51 @@ impl Shell {
             }
             return;
         }
-        // The foot's stops go on from the list's last row: each task's header, its chip and its
-        // pages' rows. With a task's page watched the list's rows aren't stops, so Up ends at the
-        // foot's first.
-        let foot = self.foot_stops();
-        if let Some(at) = (self.keyed_strip).and_then(|stop| foot.iter().position(|&s| s == stop)) {
-            let last = self.key_rows().last().copied();
-            match (down, at.checked_sub(1)) {
-                (true, _) => {
-                    if let Some(&next) = foot.get(at + 1) {
-                        self.key_strip(next, cx);
-                    }
-                }
-                (false, Some(before)) => self.key_strip(foot[before], cx),
-                (false, None) => {
-                    if let Some(row) = last.filter(|_| self.watched_task_page().is_none()) {
-                        self.key_row(row, cx);
-                    }
-                }
-            }
-            return;
-        }
-        let Some(keyed) = self.keyed else {
-            return cx.propagate();
+        let ring = self.key_ring();
+        let keyed_card = (self.keyed_strip).filter(|stop| stop.at_foot());
+        let at = match (keyed_card, self.keyed) {
+            (Some(stop), _) => ring.iter().position(|&each| each == Ring::Card(stop)),
+            (None, Some(row)) => ring.iter().position(|&each| each == Ring::Row(row)),
+            (None, None) => return cx.propagate(),
         };
-        let rows = self.key_rows();
-        let at = rows.iter().position(|&row| row == keyed);
-        if down
-            && at.is_some_and(|at| at + 1 == rows.len())
-            && let Some(&stop) = foot.first()
-        {
-            return self.key_strip(stop, cx);
-        }
         let next = match at {
-            Some(at) if down => rows.get(at + 1),
-            Some(at) => at.checked_sub(1).and_then(|at| rows.get(at)),
+            Some(at) if down => ring.get(at + 1),
+            Some(at) => at.checked_sub(1).and_then(|at| ring.get(at)),
             // Its row went, closed or folded away.
-            None => rows.first(),
+            None => ring.first(),
         };
-        if let Some(&next) = next {
-            self.key_row(next, cx);
+        match next {
+            Some(&Ring::Row(row)) => self.key_row(row, cx),
+            Some(&Ring::Card(stop)) => self.key_strip(stop, cx),
+            None => {}
         }
+    }
+
+    /// The ring's stops top to bottom: the rows, with each task card's stops among Today's where
+    /// the card stands. With a task's page watched the list's rows aren't stops, only the cards'.
+    fn key_ring(&self) -> Vec<Ring> {
+        let cards = self.card_stops();
+        if self.watched_task_page().is_some() {
+            return cards
+                .into_iter()
+                .map(|(stop, _)| Ring::Card(stop))
+                .collect();
+        }
+        let layout = self.layout();
+        let mut top = f32::MIN;
+        let mut ring: Vec<(f32, Ring)> = (self.key_rows().into_iter())
+            .map(|row| {
+                let slot = match row {
+                    NEW_TAB => Slot::NewTab,
+                    row => Slot::Tab(row),
+                };
+                top = layout.get(&slot).copied().unwrap_or(top);
+                (top, Ring::Row(row))
+            })
+            .collect();
+        ring.extend(cards.into_iter().map(|(stop, top)| (top, Ring::Card(stop))));
+        ring.sort_by(|a, b| a.0.total_cmp(&b.0));
+        ring.into_iter().map(|(_, stop)| stop).collect()
     }
 
     /// The rows the ring goes over, in the sidebar's order: the favorites' tiles, then the Space's
@@ -347,11 +361,11 @@ impl Shell {
         } else {
             self.keyed_rows.clear();
         }
-        // The strip's stop went with its page, or as its chips changed, or the foot's with its
-        // task or as its group closed.
+        // The strip's stop went with its page, or as its chips changed, or a card's with its task
+        // or as its card changed.
         if let Some(stop) = self.keyed_strip
             && !self.ring_stops().contains(&Some(stop))
-            && !self.foot_stops().contains(&stop)
+            && !self.card_stops().iter().any(|&(each, _)| each == stop)
         {
             self.leave_strip("strip", cx);
         }

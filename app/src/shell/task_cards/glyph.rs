@@ -13,11 +13,14 @@ use gpui::{
     transparent_black,
 };
 
-use super::motion::{Curve, Ease};
+#[cfg(test)]
+use super::motion::Curve;
+use super::motion::Ease;
 use crate::agents::task::Dot;
-use crate::tokens::shell::task::motion::{
-    CROSSFADE, DOT_FADE, ORBIT, RING as RING_MOTION, TICK, TICK_DELAY,
-};
+use crate::tokens::shell::task::motion::{CROSSFADE, ORBIT};
+// Only `set`'s eased change reads these, and it is kept for its tests.
+#[cfg(test)]
+use crate::tokens::shell::task::motion::{DOT_FADE, RING as RING_MOTION, TICK, TICK_DELAY};
 use crate::tokens::shell::task::{
     DOT, DOT_ASKS, DOT_DONE, RING, RING_DONE, RING_STOPPED, RING_STROKE, RING_WORKING,
     RING_WORKING_SELECTED, TICK_STROKE,
@@ -108,6 +111,9 @@ impl Look {
 
 /// The glyph of one task, which eases between its states.
 pub(super) struct Glyph {
+    // Read only by `set`: a card swaps its mark on a change of state, so the eased change between
+    // glyphs is kept for its tests alone, until the orchestrator says whether it goes (P2 DONE).
+    #[cfg_attr(not(test), allow(dead_code))]
     state: State,
     ring: Ease,
     scale: Ease,
@@ -145,11 +151,8 @@ impl Glyph {
         }
     }
 
-    pub(super) fn state(&self) -> State {
-        self.state
-    }
-
     /// Goes to `state`: each part eases to its look, or, with motion reduced, the whole crossfades.
+    #[cfg(test)]
     pub(super) fn set(&mut self, state: State, now: Instant, still: bool) {
         if state == self.state {
             return;
@@ -206,6 +209,7 @@ impl Glyph {
     }
 
     /// Whether a change is still on its way at `now`, which a frame each draws.
+    #[cfg(test)]
     pub(super) fn moving(&self, now: Instant) -> bool {
         let crossfading = self.from.is_some_and(|(_, since)| {
             now.saturating_duration_since(since).as_secs_f32() < CROSSFADE
@@ -225,7 +229,8 @@ impl Glyph {
             .any(|part| part.moving(now))
     }
 
-    /// Whether the dot circles, which the foot's clock draws.
+    /// Whether the dot circles.
+    #[cfg(test)]
     pub(super) fn circling(&self) -> bool {
         self.circling.is_some()
     }
@@ -358,6 +363,106 @@ pub(super) fn paint(
             // Round caps and join, as the stroke has none of its own.
             for end in ends {
                 dot(end, TICK_STROKE / 2., colour, window);
+            }
+        }
+    }
+}
+
+/// A thread card's mark (spec-thread-card), from its task's state alone: at work the turning ring,
+/// waiting the paused disc, done the check in its circle. An ended task's is today's glyph.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Mark {
+    /// `turns` of the way round from the top.
+    Ring {
+        turns: f32,
+    },
+    /// Its circle stronger while its conversation hasn't shown since it finished.
+    Check {
+        unseen: bool,
+    },
+    Pause,
+}
+
+/// A card mark's colours: the window's ink, and the label's on a filled button.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct MarkInks {
+    pub(super) ink: Hsla,
+    pub(super) on_primary: Hsla,
+}
+
+/// Paints `mark` in `bounds`, the card's glyph box.
+pub(super) fn paint_mark(mark: Mark, bounds: Bounds<Pixels>, inks: MarkInks, window: &mut Window) {
+    use crate::tokens::shell::task_card::{
+        CHECK_STROKE, CIRCLE, CIRCLE_UNSEEN, GLYPH as BOX, PAUSE, PAUSE_BOTTOM, PAUSE_LEFT,
+        PAUSE_RIGHT, PAUSE_STROKE, PAUSE_TOP, RING as CARD_RING, RING_STROKE as CARD_STROKE, TRACK,
+    };
+    let centre = bounds.center();
+    let at = |x: f32, y: f32| point(bounds.origin.x + px(x), bounds.origin.y + px(y));
+    let circle = |radius: f32, stroke: f32, colour: Hsla, window: &mut Window| {
+        let outer = radius + stroke / 2.;
+        let square = Bounds::new(
+            point(centre.x - px(outer), centre.y - px(outer)),
+            gpui::size(px(2. * outer), px(2. * outer)),
+        );
+        let ring = quad(
+            square,
+            px(outer),
+            transparent_black(),
+            px(stroke),
+            colour,
+            BorderStyle::Solid,
+        );
+        window.paint_quad(ring);
+    };
+    // A stroke through `points` with round caps and joins, as a path's stroke has none.
+    let stroke = |points: &[Point<Pixels>], width: f32, colour: Hsla, window: &mut Window| {
+        let mut path = PathBuilder::stroke(px(width));
+        path.move_to(points[0]);
+        for &each in &points[1..] {
+            path.line_to(each);
+        }
+        if let Ok(path) = path.build() {
+            window.paint_path(path, colour);
+        }
+        for &end in points {
+            dot(end, width / 2., colour, window);
+        }
+    };
+    match mark {
+        Mark::Ring { turns } => {
+            circle(CARD_RING, CARD_STROKE, inks.ink.opacity(TRACK), window);
+            let on = |turn: f32| {
+                let angle = turn * std::f32::consts::TAU;
+                point(
+                    centre.x + px(CARD_RING * angle.sin()),
+                    centre.y - px(CARD_RING * angle.cos()),
+                )
+            };
+            let (from, to) = (on(turns), on(turns + 0.25));
+            let mut path = PathBuilder::stroke(px(CARD_STROKE));
+            path.move_to(from);
+            let radii = point(px(CARD_RING), px(CARD_RING));
+            path.arc_to(radii, px(0.), false, true, to);
+            if let Ok(path) = path.build() {
+                window.paint_path(path, inks.ink);
+            }
+            for end in [from, to] {
+                dot(end, CARD_STROKE / 2., inks.ink, window);
+            }
+        }
+        Mark::Check { unseen } => {
+            let alpha = if unseen { CIRCLE_UNSEEN } else { CIRCLE };
+            circle(CARD_RING, CHECK_STROKE, inks.ink.opacity(alpha), window);
+            // The task glyph's tick, moved from its box into the card's.
+            let inset = (crate::tokens::shell::task::GLYPH - BOX) / 2.;
+            let points = TICK_POINTS.map(|(x, y)| at(x - inset, y - inset));
+            stroke(&points, CHECK_STROKE, inks.ink, window);
+        }
+        Mark::Pause => {
+            dot(centre, PAUSE, inks.ink, window);
+            for x in [PAUSE_LEFT, PAUSE_RIGHT] {
+                let bar = [at(x, PAUSE_TOP), at(x, PAUSE_BOTTOM)];
+                stroke(&bar, PAUSE_STROKE, inks.on_primary, window);
             }
         }
     }

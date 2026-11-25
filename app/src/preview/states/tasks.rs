@@ -238,6 +238,8 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         page_steps: Vec::new(),
         retry: false,
         fix: None,
+        visited: Vec::new(),
+        ended_at: Default::default(),
     };
     let mut cards: Vec<TaskCard> = (FIRST_TASK..).zip(TASKS).map(card).collect();
     // PREVIEW_SESSION=working, done or open shows an outside agent's card alone: at work after it

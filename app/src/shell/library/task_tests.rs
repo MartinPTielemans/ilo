@@ -60,6 +60,8 @@ fn card() -> Card {
         page_steps: Vec::new(),
         retry: false,
         fix: None,
+        visited: Vec::new(),
+        ended_at: Default::default(),
     }
 }
 

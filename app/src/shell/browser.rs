@@ -447,6 +447,11 @@ pub trait Browser {
     fn profile_folder(&self, _profile: u64) -> Option<std::path::PathBuf> {
         None
     }
+    /// How long a Today tab of `profile`'s waits unseen before the core puts it away, in seconds,
+    /// or None where it never does. A thread's card done and seen goes after as long.
+    fn archive_after(&self, _profile: u64) -> Option<f64> {
+        None
+    }
     /// Library › Agents' past tasks kept for `profile`, as `agent_history::write` writes them, on
     /// this computer only: never synced, sent or put in a crash report, and no agent path reads
     /// them.

@@ -1922,7 +1922,7 @@ impl Shell {
     /// in one frame, with no toast (Arc).
     fn clear(&mut self, cx: &mut Context<Self>) {
         let space = self.space;
-        // The tasks at the foot are the window's, not the Space's, so they stay (Agent task).
+        // The task cards in Today aren't tabs, so they stay (spec-thread-card).
         if let Some(clear) = self.clear_now(cx) {
             self.keep(What::CLEAR, Some(Edit::UndoClear { space, clear }), cx);
         }

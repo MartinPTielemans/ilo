@@ -23,14 +23,10 @@ use crate::tokens::shell::{KEYED, KEYED_RING};
 /// page watched.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum StripStop {
-    /// A task's header at the sidebar's foot, by its task's number.
+    /// A task's card in Today, by its task's number.
     Header(u64),
-    /// The chip under a task's header, by its task's number.
+    /// The button on a task's card, Show Page or an ended task's chip, by its task's number.
     Chip(u64),
-    /// A page's row under its task's header, by its tab.
-    Row(u64),
-    /// The foot's count of the tasks it doesn't show.
-    More,
     Back,
     /// The page: the strip's words for an agent's page, the page itself for one the user holds.
     Page,
@@ -77,12 +73,9 @@ pub(super) struct PageEnds {
 }
 
 impl StripStop {
-    /// Whether it's one of the foot's, which the arrows go over.
+    /// Whether it's a card's, in Today's list, which the arrows go over with the rows.
     pub(super) fn at_foot(self) -> bool {
-        matches!(
-            self,
-            StripStop::Header(_) | StripStop::Chip(_) | StripStop::Row(_) | StripStop::More
-        )
+        matches!(self, StripStop::Header(_) | StripStop::Chip(_))
     }
 }
 
@@ -180,8 +173,7 @@ impl Shell {
     /// as a press there would take the page over.
     pub(super) fn key_strip_show(&mut self, stop: StripStop, cx: &mut Context<Self>) {
         match stop {
-            stop if stop.at_foot() => self.key_foot_show(stop, cx),
-            StripStop::Header(_) | StripStop::Chip(_) | StripStop::Row(_) | StripStop::More => {}
+            StripStop::Header(_) | StripStop::Chip(_) => self.key_card_show(stop, cx),
             StripStop::Back => {
                 self.leave_strip("back", cx);
                 self.task_page_back(cx);
@@ -205,7 +197,7 @@ impl Shell {
                 {
                     self.leave_strip("open", cx);
                     log!("browser: command open-task-pages via strip keys");
-                    let from = self.foot.strip_open.get();
+                    let from = self.task_list.strip_open.get();
                     self.open_task_pages(agent, Some(tab), from, cx);
                 }
             }
@@ -228,10 +220,10 @@ impl Shell {
                 StripChip::Stop => StripStop::Stop,
                 StripChip::Open => StripStop::Open,
             });
-        // The header while the foot draws it, so the ring never sits where it can't be seen.
+        // The card while the list draws it, so the ring never sits where it can't be seen.
         let header = self
             .task_strip_agent()
-            .filter(|agent| self.foot_holds(agent))
+            .filter(|agent| self.card_listed(agent))
             .map(|agent| StripStop::Header(super::task_cards::number(&agent)));
         header
             .into_iter()
@@ -379,8 +371,6 @@ fn strip_stop_name(stop: StripStop) -> &'static str {
     match stop {
         StripStop::Header(_) => "header",
         StripStop::Chip(_) => "chip",
-        StripStop::Row(_) => "row",
-        StripStop::More => "more",
         StripStop::Back => "back",
         StripStop::Page => "page",
         StripStop::TakeOver => "take-over",

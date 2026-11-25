@@ -75,7 +75,7 @@ actions!(conversation, [SendReply, StopTask]);
 mod ilo_keys;
 mod markdown;
 mod motion;
-mod words;
+pub(super) mod words;
 
 /// A chip at the page's scale, the toast's: its words, and its key after them, fainter. The
 /// conversation's and the page strip's buttons are these.
@@ -542,20 +542,13 @@ impl Shell {
     }
 
     /// ⌘W with a conversation shown: its card closes, dismissing the task, which ⌘Z and ⇧⌘T bring
-    /// back; a finished task's folds into the Archive as the conversation goes. Says whether there
-    /// was one.
+    /// back, a finished one's included, which stays in Today until then. Says whether there was one.
     pub(super) fn dismiss_talk(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(agent) = self.talk_agent() else {
             return false;
         };
         log!("browser: command dismiss-task via conversation");
-        let finished = self
-            .task_cards
-            .iter()
-            .any(|card| card.agent == agent && card.finished());
-        if !finished {
-            self.dismiss_task(agent, cx);
-        }
+        self.dismiss_task(agent, cx);
         self.close_task(cx);
         true
     }

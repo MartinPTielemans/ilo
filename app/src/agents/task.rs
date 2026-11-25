@@ -534,8 +534,12 @@ pub struct Card {
     pub dot: Dot,
     /// Its state in one word, as every place that names it says it.
     pub word: Word,
-    /// Its pages now, in its Space's order: the rows of its group at the sidebar's foot.
+    /// Its pages now, in its Space's order: the icons on its card in the sidebar.
     pub pages: Vec<u64>,
+    /// Those of `pages` a step of its has been on, which its card shows at full strength.
+    pub visited: Vec<u64>,
+    /// When it ended, in the user's time ("10:42"), or empty while it hasn't.
+    pub ended_at: SharedString,
     /// Its access, which its group's line leads with at Full access.
     pub tier: Tier,
     /// A confirmation or a handoff of the task's, which the card asks instead of the windows'.
@@ -1188,6 +1192,7 @@ impl Agents {
             (State::Failed { why, .. }, _) => (why.clone(), Dot::Ended),
         };
         let open = self.open_tabs(task, cx);
+        let pages = self.pages(task, cx);
         // The core's auto-archive can take a task's page it never showed (window.cc), and a task
         // lives for one run, so its card says where they went rather than offer them.
         // A session's pages are its own to close, so it keeps its receipt (#3652).
@@ -1214,7 +1219,11 @@ impl Agents {
             asks,
             dot,
             word: Word::of(&task.state, dot == Dot::Waiting),
-            pages: self.pages(task, cx),
+            visited: visited(task, &pages),
+            ended_at: (task.ended)
+                .map(|at| super::local_time(seconds(at)).into())
+                .unwrap_or_default(),
+            pages,
             tier: task.tier,
             question,
             open,
@@ -3476,6 +3485,13 @@ fn last_steps(task: &Task) -> Vec<SharedString> {
         .collect();
     steps.reverse();
     steps
+}
+
+/// Those of `pages` a step of `task`'s has been on.
+fn visited(task: &Task, pages: &[u64]) -> Vec<u64> {
+    (pages.iter().copied())
+        .filter(|&tab| task.trace.iter().any(|step| step.did.tab == Some(tab)))
+        .collect()
 }
 
 /// The site of the last page a task was on or went to, as its steps name it (`agents::site`), or

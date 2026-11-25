@@ -49,10 +49,6 @@ impl Shell {
         } else {
             shorter = shorter.min(viewport - scrolls_from);
         }
-        // The opened foot is capped at a share of the window's height.
-        if self.foot_cap().is_some() {
-            (shorter, taller) = (0., 0.);
-        }
         Taken {
             width,
             height,

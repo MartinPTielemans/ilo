@@ -221,6 +221,8 @@ pub(super) struct Recorder {
     pub(super) clear_browsing_data: Cell<usize>,
     /// Each profile's folder, which the test makes.
     pub(super) profile_folders: RefCell<HashMap<u64, std::path::PathBuf>>,
+    /// How long each profile's Today tabs wait unseen, in seconds; none never.
+    pub(super) archive_after: RefCell<HashMap<u64, f64>>,
     /// Each profile's Library › Agents past tasks, as the file keeps them.
     pub(super) agent_history: RefCell<HashMap<u64, String>>,
     /// The answers for good, by the key they're kept under, each its site and whether it may.
@@ -1229,6 +1231,10 @@ impl Browser for Recorder {
 
     fn profile_folder(&self, profile: u64) -> Option<std::path::PathBuf> {
         self.profile_folders.borrow().get(&profile).cloned()
+    }
+
+    fn archive_after(&self, profile: u64) -> Option<f64> {
+        self.archive_after.borrow().get(&profile).copied()
     }
 
     fn show_boosts(&self, changes: Vec<crate::boosts::Change>, _: &mut App) {
