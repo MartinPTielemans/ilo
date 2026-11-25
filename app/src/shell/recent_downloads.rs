@@ -12,12 +12,12 @@ use gpui::{
 };
 
 use super::{
-    Download, DownloadState, FOOTER_HEIGHT, Section, Shell, host,
+    Download, DownloadState, FOOTER_HEIGHT, Section, Shell, cubic_bezier, host,
     library::{LIBRARY_BACK_INSET, bytes, is_video},
 };
 use crate::palette::{Palette, Tone};
 use crate::tokens::shell::recent_downloads as t;
-use crate::tokens::shell::recent_downloads::motion::{FOLD, GROW, REST, ROWS_FROM};
+use crate::tokens::shell::recent_downloads::motion::{EASE, FOLD, GROW, REST, ROWS_FROM};
 use crate::tokens::shell::{FOOT_ROW, LIBRARY_BUTTON};
 
 /// How long the pointer rests on the button before the plate opens, so one passing it opens none.
@@ -79,10 +79,14 @@ fn opened(going: bool, from: f32, t: f32) -> f32 {
     }
 }
 
-/// How much of its size the plate has when it's `open`: on an ease-out, so it leaves the button
-/// fast and settles.
+/// How much of its size the plate has when it's `open`: on its ease, so it leaves the button fast
+/// and settles. Shut and open are exact, which the curve's solver only comes close to.
 fn grown(open: f32) -> f32 {
-    1. - (1. - open).powi(3)
+    match open {
+        open if open <= 0. => 0.,
+        open if open >= 1. => 1.,
+        open => cubic_bezier(EASE[0], EASE[1], EASE[2], EASE[3], open),
+    }
 }
 
 /// How strong the heading's ink is on the plate in a `tone` window.

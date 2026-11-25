@@ -3027,11 +3027,13 @@ bar-track = 0.1
 bar-fill = 1.0
 
 # Ours: it opens once the pointer has rested this long on the button, grows from the button's own
-# box on an ease-out with its rows fading in from this far through, and folds back faster.
+# box on `ease`, the cubic ease-out as CSS writes its curve, so it leaves the button fast and
+# settles, with its rows fading in from this far through, and folds back faster.
 [shell.recent-downloads.motion]
 rest = 0.15
 grow = 0.2
 fold = 0.15
+ease = [0.33, 1.0, 0.68, 1.0]
 rows-from = 0.5
 
 [shell.scroller]
