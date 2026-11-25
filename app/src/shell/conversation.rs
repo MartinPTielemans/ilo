@@ -94,6 +94,11 @@ mod motion;
 mod pages;
 mod words;
 
+/// The assistant's said words, in the answer and between a stretch's steps alike: the text's ink.
+fn said_ink(palette: &super::Palette) -> Hsla {
+    palette.text(TITLE)
+}
+
 /// The stage's fill, the conversation's ground in the page area: also the fill of the shown
 /// thread's card, which is one shape with it (task_cards.rs).
 pub(super) fn stage_fill(palette: &super::Palette) -> gpui::Rgba {
@@ -2115,9 +2120,11 @@ impl TalkView {
                     }
                 }
                 TraceItem::Said(text) => {
+                    // Said words are in the text's ink, between steps as in the answer: only a
+                    // thought is quiet, with its dots.
                     let said = div()
                         .py(px((TRACE_LINE - TEXT_LINE) / 2.))
-                        .text_color(look.palette.gray(SECONDARY))
+                        .text_color(said_ink(&look.palette))
                         .child(self.said("trace-said", (trace.key << 16) | index, text, &[], look));
                     nest.child(risen(
                         said.into_any_element(),
@@ -2511,7 +2518,7 @@ impl TalkView {
                         said.role(Role::Label).aria_label(plain(text))
                     })
                     .mb(px(BLOCK_GAP))
-                    .text_color(palette.text(TITLE))
+                    .text_color(said_ink(&palette))
                     .child(self.said("said", index, text, self.motion.runs(index), look))
                     .children(self.answer_foot(index, &shown.finished, look, cx))
                     .into_any_element(),

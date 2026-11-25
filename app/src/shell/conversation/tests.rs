@@ -3766,3 +3766,24 @@ fn what_came_of_a_step_sits_at_the_columns_right() {
         assert!(!kept.note_at_right());
     }
 }
+
+/// The assistant's words said between steps are in the text's ink, as the answer's are, and read
+/// on the stage in either look: never the quiet ink a thought and a step's past are in.
+#[test]
+fn said_words_between_steps_are_in_the_texts_ink() {
+    use crate::palette::{Palette, Tone, contrast, over};
+    for tone in [Tone::Dark, Tone::Light] {
+        let palette = Palette::of(None, tone);
+        let ink = super::said_ink(&palette);
+        assert_ne!(ink, palette.gray(crate::shell::SECONDARY), "{tone:?}");
+        let quiet = crate::tokens::shell::conversation::TRACE_NOTE;
+        assert_ne!(ink, palette.gray(quiet), "{tone:?}");
+        let ground = gpui::Rgba {
+            a: 1.,
+            ..super::stage_fill(&palette)
+        };
+        let ink = gpui::Rgba::from(ink);
+        let ratio = contrast(over(ground, gpui::Rgba { a: 1., ..ink }, ink.a), ground);
+        assert!(ratio >= 7., "{tone:?} {ratio:.2}:1");
+    }
+}
