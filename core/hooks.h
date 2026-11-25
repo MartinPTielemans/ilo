@@ -415,6 +415,13 @@ extern bool (*g_browser_core_no_print)(content::RenderFrameHost* frame, bool by_
 // on the Mac and Windows only, where the core sets it.
 extern bool (*g_browser_core_no_share)(content::RenderFrameHost* frame);
 
+// chrome/browser/ui/web_applications/web_app_dialog_utils.cc: whether the page in |contents| is
+// refused the dialog that asks whether to install it as an app, asked in
+// ShowWebAppInstallFlowDialog, which every such dialog passes as it would be made, beside Chrome's
+// own refusal there for a page that isn't shown. One refused ends as that one does: the install is
+// declined, and a page that asked hears it was dismissed.
+extern bool (*g_browser_core_no_app_install)(content::WebContents* contents);
+
 // content/browser/renderer_host/render_frame_host_impl.cc and
 // content/browser/web_contents/web_contents_impl.cc: whether the page in |frame| is refused a list
 // or picker of its own drawn outside it, asked in RenderFrameHostImpl::ShowPopupMenu before the

@@ -748,6 +748,7 @@ void Install(const bc_host& host) {
 #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
   g_browser_core_no_share = &NoShare;
 #endif
+  g_browser_core_no_app_install = &NoAppInstall;
   g_browser_core_refuse_passkey = &RefuseAgentPasskey;
 #if BUILDFLAG(IS_MAC)
   g_browser_core_touch_id_keychain_group = &platform::PasskeyKeychainGroup;

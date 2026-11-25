@@ -315,6 +315,14 @@ bool NoShare(content::RenderFrameHost* frame) {
   return true;
 }
 
+bool NoAppInstall(content::WebContents* contents) {
+  if (!contents || !agent_permission_rule::Refuses(Kind::kAppInstall, RuleTabOf(contents))) {
+    return false;
+  }
+  NoteRefused(Kind::kAppInstall, contents->GetOutermostWebContents());
+  return true;
+}
+
 bool NoFederatedSignIn(content::WebContents* contents) {
   if (!contents || !agent_permission_rule::Refuses(Kind::kFederatedSignIn, RuleTabOf(contents))) {
     return false;

@@ -38,7 +38,7 @@ TEST(AgentPermissionRule, AHeldTabIsRefusedAsOneNotHeldButForWhatTheUserDoesThem
     const Kind kind = KindAt(at);
     if (kind == Kind::kClipboardWrite || kind == Kind::kPrint || kind == Kind::kClientCertificate ||
         kind == Kind::kCast || kind == Kind::kExtensionInstall || kind == Kind::kFederatedSignIn ||
-        kind == Kind::kShare) {
+        kind == Kind::kShare || kind == Kind::kAppInstall) {
       EXPECT_FALSE(Refuses(kind, kHeld));
       continue;
     }
@@ -194,6 +194,20 @@ TEST(AgentPermissionRule, APageInAnAgentsSpaceIsShownNoSheetToShareWith) {
 // While the user holds the tab a share is theirs to send, as in a tab of their own.
 TEST(AgentPermissionRule, AHeldTabShares) {
   EXPECT_FALSE(Refuses(Kind::kShare, kHeld));
+}
+
+TEST(AgentPermissionRule, AUsersTabIsAskedWhetherToInstallAnApp) {
+  EXPECT_FALSE(Refuses(Kind::kAppInstall, kUsers));
+}
+
+TEST(AgentPermissionRule, APageInAnAgentsSpaceIsShownNoDialogToInstallAnApp) {
+  EXPECT_TRUE(Refuses(Kind::kAppInstall, kAgents));
+  EXPECT_STREQ(CodeWord(Kind::kAppInstall), "app_install");
+}
+
+// While the user holds the tab the install is theirs to answer, as in a tab of their own.
+TEST(AgentPermissionRule, AHeldTabIsAskedWhetherToInstallAnApp) {
+  EXPECT_FALSE(Refuses(Kind::kAppInstall, kHeld));
 }
 
 TEST(AgentPermissionRule, AUsersTabIsShownTheCertificateChooser) {
