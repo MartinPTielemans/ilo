@@ -931,22 +931,16 @@ impl ImportView {
         let app = env!("APP_NAME");
         let (title, line, button, corner) = match &self.step {
             Step::List => (
-                "Bring your stuff.".to_string(),
-                format!(
-                    "Spaces, pinned tabs, folders and favorites from the browser you used. It \
-                     all stays on {here}."
-                ),
+                "Bring your stuff".to_string(),
+                format!("From a browser on {here}."),
                 (!self.sources.is_empty())
                     .then(|| format!("Import from {}", name(self.picked_row))),
                 Corner::Skip,
             ),
             // The list's Import reads the browser first, and the list stays until that's done.
             Step::Pick { .. } if self.guided && self.import_when_read => (
-                "Bring your stuff.".to_string(),
-                format!(
-                    "Spaces, pinned tabs, folders and favorites from the browser you used. It \
-                     all stays on {here}."
-                ),
+                "Bring your stuff".to_string(),
+                format!("From a browser on {here}."),
                 None,
                 Corner::Back,
             ),
@@ -1033,11 +1027,8 @@ impl ImportView {
                 Corner::Skip,
             ),
             _ => (
-                "Bring your stuff.".to_string(),
-                format!(
-                    "Spaces, pinned tabs, folders and favorites from the browser you used. It \
-                     all stays on {here}."
-                ),
+                "Bring your stuff".to_string(),
+                format!("From a browser on {here}."),
                 None,
                 Corner::Skip,
             ),
@@ -1147,28 +1138,6 @@ impl ImportView {
     #[cfg(test)]
     pub(crate) fn offer(&mut self, tabs: Vec<Tab>) {
         self.suggested = Some(tabs);
-    }
-
-    /// Where it last logged `name` drawn, the point check.sh clicks, for a test outside it.
-    #[cfg(test)]
-    pub(crate) fn drawn_place(&self, name: &str) -> Option<gpui::Point<gpui::Pixels>> {
-        let infix = format!(" {name} at ");
-        let lines = self.drawn_at.borrow();
-        let line = (lines.lines().iter().rev()).find_map(|line| {
-            let at = line.find(&infix)?;
-            Some(line[at + infix.len()..].to_string())
-        })?;
-        let (x, y) = line.split_once(' ')?;
-        Some(gpui::point(
-            gpui::px(x.parse().ok()?),
-            gpui::px(y.parse().ok()?),
-        ))
-    }
-
-    /// The step last drawn, as check.sh reads it from the log.
-    #[cfg(test)]
-    pub(crate) fn drawn(&self) -> Option<&'static str> {
-        self.drawn
     }
 
     /// Makes `tabs` favorites of `space`, as the user ticked them.

@@ -893,6 +893,9 @@ impl AssetSource for Assets {
         if let Some(angle) = angle.and_then(|angle| angle.parse::<f32>().ok()) {
             return Ok(Some(Cow::Owned(bars_svg(angle).into_bytes())));
         }
+        if let Some(drawn) = crate::product::drawn_mark(path) {
+            return Ok(Some(Cow::Owned(drawn.into_bytes())));
+        }
         Ok(ICONS
             .iter()
             .chain(&crate::product::MARKS)

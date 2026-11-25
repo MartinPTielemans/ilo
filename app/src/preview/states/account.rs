@@ -72,7 +72,7 @@ pub(crate) fn preview_account(state: &str, cx: &mut App) {
         let page = cx.new(|cx| {
             let dialog = dialog::in_window(Rc::new(PreviewDialog), cx);
             let host = Rc::new(PreviewAccount {
-                dialog: dialog.clone(),
+                dialog: Some(dialog.clone()),
             });
             let account = cx.new(|cx| {
                 let mut account = Account::new(host, cx);
@@ -189,7 +189,8 @@ impl gpui::Render for AccountPage {
 /// A made-up account: its recovery words are made-up words, and it asks nothing of a server. It
 /// asks the user in its window's dialog.
 pub(crate) struct PreviewAccount {
-    dialog: gpui::Entity<dialog::Dialog>,
+    /// None for the onboarding's Welcome, which asks nothing of it.
+    pub(crate) dialog: Option<gpui::Entity<dialog::Dialog>>,
 }
 
 impl account::Host for PreviewAccount {
@@ -253,15 +254,11 @@ impl account::Host for PreviewAccount {
         window: &mut gpui::Window,
         cx: &mut App,
     ) {
+        let Some(dialog) = &self.dialog else {
+            return;
+        };
         dialog::ask_in(
-            &self.dialog,
-            message,
-            detail,
-            action,
-            on_return,
-            confirmed,
-            window,
-            cx,
+            dialog, message, detail, action, on_return, confirmed, window, cx,
         );
     }
 }
