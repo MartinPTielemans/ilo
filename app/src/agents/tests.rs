@@ -12913,6 +12913,8 @@ mod notes;
 mod other_apps;
 #[cfg(unix)]
 mod rewall;
+#[cfg(unix)]
+mod searches;
 mod sign_ins;
 mod uploads;
 mod went_to;

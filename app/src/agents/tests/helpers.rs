@@ -134,7 +134,7 @@ fn limit_line(run: &Run, agent: &str, cx: &mut TestAppContext) -> Option<IloLine
         })
 }
 
-/// With the switch as it ships, off, a task starts with none of its assistant's own tools and
+/// With the switch as it ships, off, a task starts with only its assistant's own search and
 /// what it's told is what it was told before helpers, to the byte. Its CLI saying helpers started
 /// changes nothing, as it has none.
 #[gpui::test]
@@ -142,7 +142,7 @@ fn off_a_task_starts_as_it_did_and_counts_no_helpers(cx: &mut TestAppContext) {
     let run = Run::new("off", cx);
     let agent = run.start(Cli::Claude, cx);
     let (args, _) = run.ran(1);
-    assert_eq!(after(&args, "--tools"), Some(""));
+    assert_eq!(after(&args, "--tools"), Some("WebSearch"));
     assert!(!args.iter().any(|arg| arg == "--agents"), "{args:?}");
     let told = std::fs::read_to_string(after(&args, "--append-system-prompt-file").unwrap());
     assert_eq!(told.unwrap(), tools::TASK_INSTRUCTIONS);
@@ -161,10 +161,7 @@ fn off_a_task_starts_as_it_did_and_counts_no_helpers(cx: &mut TestAppContext) {
 fn with_helpers_a_task_is_told_the_two_numbers_at_its_start(cx: &mut TestAppContext) {
     let (run, _) = with_helpers("told", cx);
     let (args, _) = run.ran(1);
-    assert_eq!(
-        after(&args, "--tools"),
-        Some(crate::agents::helpers::TOOLS[0])
-    );
+    assert_eq!(after(&args, "--tools"), Some("Agent,WebSearch"));
     assert!(args.iter().any(|arg| arg == "--agents"), "{args:?}");
     let told = std::fs::read_to_string(after(&args, "--append-system-prompt-file").unwrap());
     let told = told.unwrap();
@@ -653,7 +650,7 @@ fn a_first_line_with_another_kind_starts_the_task_again_without_helpers(cx: &mut
 
     let (args, again) = run.ran(2);
     assert_eq!(again, first);
-    assert_eq!(after(&args, "--tools"), Some(""));
+    assert_eq!(after(&args, "--tools"), Some("WebSearch"));
     for flag in ["--agents", "--disallowedTools"] {
         assert!(!args.iter().any(|arg| arg == flag), "{flag} in {args:?}");
     }
@@ -943,4 +940,30 @@ fn a_turn_that_ends_leaves_no_helpers_line_under_way(cx: &mut TestAppContext) {
     assert_eq!(trace.counted(), (2, Counted::Helpers));
     assert_eq!(under_way(&trace), 0);
     assert_eq!(card(&run, cx).page_steps, []);
+}
+
+/// A helper's search is a step of its own, with its words, under its line alone and never as the
+/// task's; the thread's one activity entry counts it.
+#[gpui::test]
+fn a_helpers_search_stands_under_its_own_line(cx: &mut TestAppContext) {
+    let (run, agent) = with_helpers("search", cx);
+    begun(&run, &agent, "a", cx);
+    let search = json!({ "type": "assistant", "parent_tool_use_id": "a", "message": { "content": [
+        { "type": "tool_use", "id": "s", "name": "WebSearch", "input": { "query": "stalls on Saturday" } },
+    ] } });
+    line(&run, &agent, search, cx);
+    let said = "Searched the web for “stalls on Saturday”";
+    let live = live(&run, &agent, cx);
+    let under =
+        |item: &TraceItem| matches!(item, TraceItem::Helper { step, .. } if step.title == said);
+    let own = |item: &TraceItem| matches!(item, TraceItem::Step(step) if step.title == said);
+    assert!(live.items.iter().any(under), "{live:?}");
+    assert!(!live.items.iter().any(own), "{live:?}");
+    let counted: Vec<String> = (run.agents).read_with(cx, |agents, _| {
+        (agents.activity(&agent))
+            .filter(|entry| entry.action == tools::SEARCHED)
+            .map(|entry| entry.target.to_string())
+            .collect()
+    });
+    assert_eq!(counted, ["1"]);
 }
