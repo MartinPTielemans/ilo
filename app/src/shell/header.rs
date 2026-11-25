@@ -561,15 +561,30 @@ impl Shell {
             .rounded(px(NAV_RADIUS))
     }
 
-    /// What the URL field says, in its colour: the page's host, or with no page shown, the
-    /// command bar's placeholder, there from the frame the card's mark is, or at once with a
-    /// task's conversation, which shows at once.
+    /// What the URL field says, in its colour: the page's host, the thread's title on a thread
+    /// with no page of its in place, or with no page shown, the command bar's placeholder, there
+    /// from the frame the card's mark is, or at once with a task's conversation, which shows at
+    /// once.
     pub(super) fn url_field_words(&self, url: &str, cx: &App) -> (SharedString, Hsla) {
+        if let Some(title) = self.thread_title_shown() {
+            return (title, self.palette.text(SECONDARY).into());
+        }
         let shown = match self.task_area {
             Some(_) => 1.,
             None => self.empty_opacity(cx.background_executor().now()),
         };
         self.url_words(self.field_tab(), url, shown)
+    }
+
+    /// The title of the thread the page area shows, while none of its pages is in place: the
+    /// card's, already cleaned as the card draws it, and never an address, so the field's click
+    /// and Copy URL go on seeing no tab. A thread with no title yet keeps the placeholder.
+    pub(super) fn thread_title_shown(&self) -> Option<SharedString> {
+        if self.task_area.is_none() || self.field_tab() != 0 {
+            return None;
+        }
+        let title = &self.task_card_shown()?.title;
+        (!title.trim().is_empty()).then(|| title.clone())
     }
 
     /// What a URL field showing `tab`, at `url`, says, in its colour: the page's host, "Board" for
@@ -595,8 +610,16 @@ impl Shell {
         let url = self.url(self.field_tab());
         let (words, color) = self.url_field_words(&url, cx);
         if *self.url_field_drawn.borrow() != words {
-            // check.sh reads this line.
-            log!("browser: url field {words}");
+            // check.sh reads this line. A sign-in's page's address can hold its code or a token
+            // (#4100), so its line names none of it, its host neither.
+            // A thread's title is the assistant's words, so its line doesn't carry them either.
+            if self.thread_title_shown().is_some() {
+                log!("browser: url field (a thread's title)");
+            } else if crate::agents::sign_in::quiet(self.field_tab()) {
+                log!("browser: url field (a sign-in's page)");
+            } else {
+                log!("browser: url field {words}");
+            }
             self.url_field_drawn.replace(words.clone());
         }
         // The pinned extensions' actions, at the field's end, and Copy URL and Site Controls

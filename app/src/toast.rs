@@ -18,8 +18,9 @@ use gpui::{
     prelude::*, px, size, svg,
 };
 
+use crate::glass;
 use crate::hold::{Hold, Reason};
-use crate::palette::{Float, Ground, Palette, STATE_HOVERED, STATE_PRESSED};
+use crate::palette::{Float, Ground, Palette, STATE_HOVERED, STATE_PRESSED, Tone};
 use crate::shell::{CARD_INSET, cubic_bezier, scaled::scaled_from_top, spring};
 
 // Arc's, measured at 2× (docs/ux-spec.md › Toast): 46.5 tall, 8 inside the card's top right
@@ -754,11 +755,13 @@ impl Render for Toast {
                             .size(px(CHIP_GLYPH))
                             .text_color(palette.ink),
                     ),
-                    // The key is fainter than the word it goes with.
-                    Label::Keyed(text, key) => chip
-                        .gap(px(KEY_GAP))
-                        .child(text.clone())
-                        .child(div().text_color(palette.text(KEY_COLOR)).child(key.clone())),
+                    // The key is fainter than the word it goes with, as far as a word on what
+                    // floats reads.
+                    Label::Keyed(text, key) => chip.gap(px(KEY_GAP)).child(text.clone()).child(
+                        div()
+                            .text_color(palette.on_overlay(KEY_COLOR))
+                            .child(key.clone()),
+                    ),
                 }
             })
             .collect();
@@ -792,6 +795,13 @@ impl Render for Toast {
             .bg(Float::Toast.fill(palette.tone))
             .shadow(Level::Popover.shadow())
             .opacity(pose.opacity)
+            .when(Float::Toast.over_material(), |toast| {
+                toast.child(glass::under(
+                    RADIUS,
+                    pose.opacity,
+                    palette.tone == Tone::Light,
+                ))
+            })
             .text_size(px(TEXT_SIZE))
             .font_weight(FontWeight::MEDIUM)
             .text_color(palette.ink)

@@ -116,6 +116,9 @@ pub enum Command {
     /// Brings each site's Today tabs in the Space shown together, at its first tab's place
     /// (`crate::sort_by_site`).
     SortBySite,
+    /// Sorts the Space shown's today's tabs into folders, as a click on the broom does
+    /// (Browser::start_broom, #4252): the user's alone, so no agent tool runs it.
+    SortIntoFolders,
     /// Undoes the last thing the user did that lost or moved something (`Shell::undo`).
     Undo,
     /// Does again what Undo undid.
@@ -485,6 +488,7 @@ pub(super) const BAR_COMMANDS: &[(&str, Command, &[&str])] = &[
     row(Command::CloseTab, &["close tab"]),
     row(Command::Clear, &["unpinned tabs"]),
     row(Command::SortBySite, &["group tabs by site", "tidy tabs"]),
+    row(Command::SortIntoFolders, &[]),
     row(Command::ClearCacheAndRefresh, &[]),
     row(Command::ClearCookiesAndRefresh, &[]),
     row(Command::ClearArchive, &[]),
@@ -1025,8 +1029,8 @@ pub fn copy_from_bar(text: &str, cx: &mut App) {
 }
 
 /// ⇧⌘C in the link preview copies its page's address, not the tab's under it, as Arc's Peek
-/// does, with the toast ⇧⌘C shows.
-pub fn copy_url_of_preview(url: &str, cx: &mut App) {
+/// does, with the toast ⇧⌘C shows. `tabs` are the preview's and the page it was peeked from.
+pub fn copy_url_of_preview(url: &str, tabs: &[u64], cx: &mut App) {
     let Some(shell) = key_shell(cx) else {
         return;
     };
@@ -1034,7 +1038,7 @@ pub fn copy_url_of_preview(url: &str, cx: &mut App) {
         .update(cx, |shell, cx| {
             let url = shell.copied_link(url);
             if !url.is_empty() {
-                shell.copy(&url, "Copied Current URL", cx);
+                shell.copy_from(tabs, &url, "Copied Current URL", cx);
             }
         })
         .ok();
@@ -1121,6 +1125,7 @@ impl Command {
             Command::Exit => "exit",
             Command::Clear => "clear",
             Command::SortBySite => "sort-by-site",
+            Command::SortIntoFolders => "sort-into-folders",
             Command::Undo => "undo",
             Command::Redo => "redo",
             Command::CopyUrl => "copy-url",
@@ -1445,6 +1450,11 @@ impl Shell {
     /// Runs a browser command and logs it. `from` says which side had the key: GPUI's bindings
     /// ("ui"), the browser handing it back ("page"), or the sidebar.
     pub fn run(&mut self, command: Command, from: &str, cx: &mut Context<Self>) {
+        // ⌘W and ⇧⌘W in first run's window are its close, which leaves first run once; File's
+        // Close Tab and Close Window, which the same keys reach, close nothing else there.
+        if matches!(command, Command::CloseTab | Command::CloseWindow) && self.first_run_key(cx) {
+            return self.onboarding_skip_setup("close", cx);
+        }
         // check.sh waits for these lines.
         log!("browser: command {} via {from}", command.name());
         // And a command of the user's after a close a page hasn't answered is no answer to it,
@@ -1612,6 +1622,13 @@ impl Shell {
             Command::Exit => return self.browser.toggle_full_screen(cx),
             Command::Clear => return self.clear(cx),
             Command::SortBySite => return self.sort_by_site(cx),
+            // What the browser says now, as the broom's click reads it.
+            Command::SortIntoFolders => {
+                if self.browser.broom().is_some_and(super::Broom::sorts) {
+                    self.browser.start_broom(cx);
+                }
+                return;
+            }
             // While Arrange is on, ⌘Z and the Edit menu's Undo take back its steps (shell/arrange.rs).
             Command::Undo if self.undo_arrange(self.field_tab(), cx) => return,
             Command::Undo => {
@@ -1898,7 +1915,7 @@ impl Shell {
     /// in one frame, with no toast (Arc).
     fn clear(&mut self, cx: &mut Context<Self>) {
         let space = self.space;
-        // The tasks at the foot are the window's, not the Space's, so they stay (Agent task).
+        // The task cards in Today aren't tabs, so they stay (spec-thread-card).
         if let Some(clear) = self.clear_now(cx) {
             self.keep(What::CLEAR, Some(Edit::UndoClear { space, clear }), cx);
         }
@@ -1947,7 +1964,7 @@ impl Shell {
             return;
         };
         match markdown {
-            true => self.copy(&text, toast, cx),
+            true => self.copy_from(&[tab], &text, toast, cx),
             false => self.copy_page_url(tab, text, toast, cx),
         }
     }
@@ -1956,14 +1973,14 @@ impl Shell {
     /// a share sheet, with the capture toast's Share button: ⇧⌘C's and the URL field's button's.
     fn copy_page_url(&mut self, tab: u64, url: String, toast: &str, cx: &mut Context<Self>) {
         if !self.browser.has_share_sheet() {
-            return self.copy(&url, toast, cx);
+            return self.copy_from(&[tab], &url, toast, cx);
         }
         self.browser.copy(&url, cx);
         // check.sh reads this line. A sign-in's page's address can hold its code or a token.
-        match crate::agents::sign_in::quiet(tab) {
-            true => log!("browser: copied a sign-in's page"),
-            false => log!("browser: copied {url}"),
-        }
+        log!(
+            "browser: copied {}",
+            crate::agents::sign_in::logged(tab, &url)
+        );
         let (browser, title) = (self.browser.clone(), self.title(tab));
         let share = std::rc::Rc::new(move |at, cx: &mut App| {
             browser.share_from_toast(&url, &title, at, cx)
@@ -2072,9 +2089,23 @@ impl Shell {
 
     /// Copies `text` and shows `toast`.
     pub(super) fn copy(&mut self, text: &str, toast: &str, cx: &mut Context<Self>) {
+        self.copy_from(&[], text, toast, cx);
+    }
+
+    /// Copies `text`, made from the pages of `tabs`, and shows `toast`. A sign-in's page's address
+    /// can hold its code or a token (#4100), so the line names none of it when one is.
+    pub(super) fn copy_from(
+        &mut self,
+        tabs: &[u64],
+        text: &str,
+        toast: &str,
+        cx: &mut Context<Self>,
+    ) {
         self.browser.copy(text, cx);
+        let logged =
+            (tabs.iter()).fold(text, |text, &tab| crate::agents::sign_in::logged(tab, text));
         // check.sh reads this line.
-        log!("browser: copied {text}");
+        log!("browser: copied {logged}");
         self.browser.toast(toast, None, COPIED_TIME, cx);
     }
 
@@ -2273,6 +2304,9 @@ impl Shell {
             Command::Clear => !self.today().is_empty(),
             // With every site's tabs together already, it would change nothing.
             Command::SortBySite => self.sorted_by_site(self.space).is_some(),
+            // Where the broom is drawn and takes a click: never in a private window or an agent's
+            // Space, and never with fewer than four tabs to sort or a sort running.
+            Command::SortIntoFolders => self.browser.broom().is_some_and(super::Broom::sorts),
             Command::FavoriteTab => {
                 let tab = self.selected;
                 tab != 0 && !self.favorites.contains(&tab) && self.has_room_for(tab)
@@ -2560,6 +2594,7 @@ pub(super) fn private_runs(command: Command) -> bool {
             | Command::PreviousSpace
             | Command::ViewArchive
             | Command::ClearArchive
+            | Command::SortIntoFolders
             | Command::ViewAgents
             // It keeps nothing, so it makes no Boost, though it shows its profile's.
             | Command::NewBoost

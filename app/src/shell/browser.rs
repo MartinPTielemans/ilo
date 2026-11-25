@@ -281,10 +281,6 @@ pub trait Browser {
     /// Lists the captures saved to the Library, away from the main thread, and calls
     /// `Shell::set_captures`.
     fn list_captures(&self, cx: &mut App);
-    /// What the Library button's hover lists, as `recent_downloads::HOVER_IMAGES`' and its
-    /// fellows' bits, as the user picked them from its menu.
-    fn hover_kinds(&self, cx: &mut App) -> u32;
-    fn set_hover_kinds(&self, kinds: u32, cx: &mut App);
     /// Moves the file at `path` to the system's Trash, and says whether it's gone, as it is if it
     /// was gone already.
     fn trash(&self, path: &str, cx: &mut App) -> bool;
@@ -865,9 +861,35 @@ pub trait Browser {
     fn broom(&self) -> Option<super::Broom> {
         None
     }
-    /// The user's click on the broom: sorts the Today tabs of the Space the window shows into
-    /// folders. The user's alone: no command runs it and no agent reaches it.
+    /// The user's click on the broom, its menu item or its bar entry: sorts the Today tabs of the
+    /// Space the window shows into folders. The user's alone: no agent tool, page or typed text
+    /// reaches it.
     fn start_broom(&self, _cx: &mut App) {}
+    /// Makes Sort Tabs into Folders' folders in `space`'s today's list: each of `new` a folder of
+    /// its name holding its tabs, brought together at the first one's place in their order, and
+    /// each of `joins` its tabs put at the end of that today's folder. Returns the folders made,
+    /// or None if it made none, which a core without today's folders answers.
+    fn make_today_folders(
+        &self,
+        _space: u64,
+        _new: &[(String, Vec<u64>)],
+        _joins: &[(u64, Vec<u64>)],
+        _cx: &mut App,
+    ) -> Option<Vec<u64>> {
+        None
+    }
+    /// Takes back `make_today_folders`: the folders it `made` go, leaving their tabs, the tabs it
+    /// `joined` to a today's folder leave it, and `space`'s today's rows go back to the order
+    /// `rows`; the folders that were there before stay as they were.
+    fn unsort_today(
+        &self,
+        _space: u64,
+        _made: &[u64],
+        _joined: &[u64],
+        _rows: &[u64],
+        _cx: &mut App,
+    ) {
+    }
     /// Settings › Links' Link cards: whether ⇧ on a link shows what its page says about itself.
     fn link_cards(&self) -> bool {
         false
@@ -919,20 +941,19 @@ pub trait Browser {
     /// Whether the command bar shows, which stays true through a click outside it until the app
     /// calls `Shell::command_bar_dismissed`, so a click on what opens it can tell it has closed it.
     fn command_bar_open(&self, cx: &App) -> bool;
+    /// The tab the core shows in this window now, 0 for none. The shell hears of it only when
+    /// the core's report comes, which at launch can be after the user's first keys.
+    fn shown_now(&self) -> u64 {
+        0
+    }
     /// A command bar to rest in this window's empty Space, whose page draws its field and rows
     /// (#4140). It asks nothing of the core until it's typed in.
     fn command_bar_in_place(&self, window: &mut Window, cx: &mut App) -> Entity<CommandBar>;
-    /// Runs what the user asked in the composer's Ask as a task on the assistant `agent`, from Space
-    /// `home`, with the level and model the user picked there (#4140). Only the user's ↩ there
-    /// calls it: no agent has a path to it.
-    fn start_task(
-        &self,
-        agent: &str,
-        asked: &str,
-        home: u64,
-        start: crate::agents::task::Start,
-        cx: &mut App,
-    );
+    /// Whether this system can wall a task in with its files, which the composer's `+` offers
+    /// files and a folder by (#4101).
+    fn files_available(&self, _: &App) -> bool {
+        false
+    }
     /// Whether the user types in a field of a window over this one: find, the password offer, the
     /// icon picker, the Boost editor or the folder preview. Find doesn't count once the user has
     /// gone back to the page with it still showing.
@@ -1067,6 +1088,21 @@ pub trait Browser {
     /// Asks for a picture of a task's page for its conversation, which the browser answers with
     /// `Shell::page_pictured` and `request`.
     fn task_picture(&self, tab: u64, request: u64, cx: &mut App);
+    /// Whether a picture of `tab` taken now could have been given to an agent, by the agents'
+    /// rules (Agents::keeps_picture), for a kept task's card. None is, without agents.
+    fn keeps_picture(&self, _tab: u64, _cx: &App) -> bool {
+        false
+    }
+    /// The conversation of `agent`'s task took a picture of `tab`: `picture` if its card may keep
+    /// it, else none (Agents::card_pictured).
+    fn card_pictured(
+        &self,
+        _agent: SharedString,
+        _tab: u64,
+        _picture: Option<Arc<RenderImage>>,
+        _cx: &mut App,
+    ) {
+    }
     /// The user stops the agent with the id `agent`: what it's doing and asking ends.
     fn stop_agent(&self, agent: SharedString, cx: &mut App);
     /// Selects the tab's next match, or the one before, opening its find bar if it's closed.
@@ -1116,18 +1152,37 @@ pub trait Browser {
         None
     }
     fn set_crash_reports(&self, _on: bool, _cx: &mut App) {}
-    /// Whether agents may use the browser, as Settings' switch has it, or None in a build without
-    /// the agents' server.
-    fn agents(&self, _cx: &App) -> Option<bool> {
+    /// Whether the product's own threads run, the inside switch as Settings › Threads has it, or
+    /// None in a build without the agents' server.
+    fn threads(&self, _cx: &App) -> Option<bool> {
         None
     }
-    fn set_agents(&self, _on: bool, _cx: &mut App) {}
+    fn set_threads(&self, _on: bool, _cx: &mut App) {}
+    /// Whether other apps' agents may connect, the outside switch as Settings › Other apps has
+    /// it, whatever the inside one says, or None in a build without the agents' server.
+    fn other_apps(&self, _cx: &App) -> Option<bool> {
+        None
+    }
+    fn set_other_apps(&self, _on: bool, _cx: &mut App) {}
     /// Whether the daily usage count is on, as Settings' switch has it, or None in a build that
     /// names no server for it.
     fn daily_count(&self, _cx: &App) -> Option<bool> {
         None
     }
     fn set_daily_count(&self, _on: bool, _cx: &mut App) {}
+    /// Whether `setting` is on for `space`'s profile, as Settings' switch has it, or None where
+    /// Settings doesn't offer it, or before the profile has loaded.
+    fn setting(&self, _space: u64, _setting: Setting, _cx: &App) -> Option<bool> {
+        None
+    }
+    fn set_setting(&self, _space: u64, _setting: Setting, _on: bool, _cx: &mut App) {}
+    /// How long, in seconds, a Today tab of `space`'s profile waits before it goes in the archive,
+    /// and the times Settings offers it, in its order; None before the profile has loaded. A
+    /// thread's card done and seen goes after as long; below 0 is Never.
+    fn archive_after(&self, _space: u64) -> Option<(f64, Vec<f64>)> {
+        None
+    }
+    fn set_archive_after(&self, _space: u64, _seconds: f64, _cx: &mut App) {}
     /// Opens a private window in the shown Space's profile's off-the-record session, after this
     /// one's draw.
     fn new_private_window(&self, cx: &mut App);
@@ -1291,6 +1346,17 @@ impl Default for Volume {
     fn default() -> Self {
         Volume(1.)
     }
+}
+
+/// A switch of Settings' own that first run shows too (Browser::setting).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Setting {
+    /// General's Reopen your windows and tabs.
+    RestoreWindows,
+    /// Ad Blocking's Block ads and trackers, in every profile.
+    AdBlocking,
+    /// Passwords' Offer to save passwords, the profile's own.
+    SavePasswords,
 }
 
 /// What's wrong with a tab's page, as the core says (BC_PAGE_ in browser_core.h). Agents read the

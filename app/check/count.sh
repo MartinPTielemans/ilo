@@ -93,13 +93,13 @@ launch_count() {
       fail "$1: a new profile's first launch with no page didn't play the onboarding"
   fi
 }
-# Esc through the onboarding's steps to its last, the opt-ins, where the count's switch is.
+# Skip through the onboarding's steps to the opt-ins, before the keys, where the count's switch is.
 to_opt_ins() {
   local steps each
   steps=$(grep -m1 '^browser: onboarding steps ' "$log" | cut -d' ' -f4-)
   case " $steps" in
-    *" opt-ins") ;;
-    *) fail "the onboarding's steps were '$steps', with the opt-ins not last" ;;
+    *" opt-ins keys") ;;
+    *) fail "the onboarding's steps were '$steps', with the opt-ins not just before the keys" ;;
   esac
   # The welcome settled at launch and waits for Return, and each step after for the key that left
   # the one before.
@@ -125,13 +125,16 @@ turn_count() {
   send click $(grep '^browser: onboarding daily-count at ' "$log" | tail -1 | cut -d' ' -f5-6)
   expect "^browser: onboarding daily-count $1\$" "a click on the count's switch didn't turn it $1"
 }
-# Leaves the onboarding's last step with $1, skip or the return key, which ends it.
+# Leaves the opt-ins with $1, skip or the return key, and the keys after them with Return, which
+# ends the onboarding.
 leave_onboarding() {
   case $1 in
     skip) skip_step opt-ins ;;
     *) send key "$1" ;;
   esac
-  expect '^browser: onboarding done$' "$1 at the opt-ins step didn't end the onboarding"
+  expect '^browser: onboarding step keys settled$' "$1 at the opt-ins step didn't go on to the keys"
+  send key return
+  expect '^browser: onboarding done$' "Return at the keys' step didn't end the onboarding"
   # The flow ends in the command bar, whose window holds the keyboard, so on the Mac Settings would
   # open behind the browser's window with a click meant for it landing in the sidebar.
   expect '^browser: command bar shown$' "the onboarding didn't end with the command bar"

@@ -1,7 +1,7 @@
 //! What a task's assistant may do with files on this computer, by its level (#4101). One table, so
 //! nothing else decides: the wall's rules and each assistant's start are made from it.
 
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf, Prefix};
 
 use super::tier::Tier;
 use super::wall::Granted;
@@ -76,6 +76,63 @@ impl std::fmt::Debug for Given {
     }
 }
 
+/// What the user picked on the composer's `+` for the next task: files to attach, as the system's
+/// panel gave them, and a folder they granted. Never more than the start's: a reply carries none.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct Picked {
+    pub files: Vec<PathBuf>,
+    pub folder: Option<Granted>,
+}
+
+impl std::fmt::Debug for Picked {
+    /// How many and never which, as a start's picks may reach a log (#3656).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Picked")
+            .field("files", &self.files.len())
+            .field("folder", &self.folder.is_some())
+            .finish()
+    }
+}
+
+/// The names a task's files are shown by in its conversation, and nowhere else: never a log, the
+/// 30-day file, a notification or an agent's answer (#3656). Set and cleared where `Given` is.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct Names {
+    pub folder: Option<String>,
+    pub files: Vec<String>,
+}
+
+impl std::fmt::Debug for Names {
+    /// How many alone.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Names")
+            .field("folder", &self.folder.is_some())
+            .field("files", &self.files.len())
+            .finish()
+    }
+}
+
+impl Names {
+    /// The names of what `picked` gives, as the system's panel shows each.
+    pub fn of(picked: &Picked) -> Names {
+        Names {
+            folder: (picked.folder.as_ref()).map(|folder| shown_name(folder.root())),
+            files: picked.files.iter().map(|file| shown_name(file)).collect(),
+        }
+    }
+
+    /// The names left once `given` is all the task still has.
+    pub fn kept_for(&self, given: &Given) -> Names {
+        Names {
+            folder: self.folder.clone().filter(|_| given.folder.is_some()),
+            files: match given.attached.is_some() {
+                true => self.files.clone(),
+                false => Vec::new(),
+            },
+        }
+    }
+}
+
 impl Given {
     pub fn any(&self) -> bool {
         self.folder.is_some() || self.attached.is_some()
@@ -97,37 +154,607 @@ impl Given {
     }
 }
 
+/// What ilo never gives a task as its folder: the folders whose contents are the user's secrets,
+/// their sign-ins or the system's, which `never_grantable` keeps a granted folder clear of.
+pub struct Never {
+    home: PathBuf,
+    /// Its own folders, a profile's included.
+    ilo: Vec<PathBuf>,
+    /// The task's own, where its run keeps what ilo gives it.
+    task: Option<PathBuf>,
+    /// The cloud drives' roots where the system names them, as Windows does OneDrive's, whose
+    /// name may be a business's.
+    clouds: Vec<PathBuf>,
+}
+
+impl Never {
+    /// For this user and this build, with the tasks' folder where there is one.
+    pub fn here(task: Option<PathBuf>) -> Never {
+        let named = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+        let home = PathBuf::from(std::env::var_os(named).unwrap_or_default());
+        let name = include_str!("../../branding/name").trim();
+        let ilo = [
+            PathBuf::from(crate::profile_dir()),
+            home.join("Library/Application Support").join(name),
+            home.join("Library/Caches/browser-app"),
+            home.join(".config").join(name),
+            home.join(".cache").join(name),
+            home.join(".cache/browser-app"),
+        ];
+        let mut never = Never::of(home, ilo.to_vec(), task);
+        never.clouds = ["OneDrive", "OneDriveCommercial", "OneDriveConsumer"]
+            .into_iter()
+            .filter_map(std::env::var_os)
+            .filter(|folder| !folder.is_empty())
+            .map(PathBuf::from)
+            .collect();
+        never
+    }
+
+    pub fn of(home: PathBuf, ilo: Vec<PathBuf>, task: Option<PathBuf>) -> Never {
+        let clouds = Vec::new();
+        Never {
+            home,
+            ilo,
+            task,
+            clouds,
+        }
+    }
+
+    /// Folders refused as themselves only, as each holds the user's whole work: the home folder
+    /// and a cloud drive's root (a disk's root is refused by `never_grantable`). One inside them
+    /// may be granted.
+    fn themselves(&self) -> Vec<PathBuf> {
+        let home = &self.home;
+        let mut folders = vec![home.clone()];
+        folders.extend(
+            [
+                "Dropbox",
+                "Google Drive",
+                "OneDrive",
+                "iCloud Drive",
+                "pCloud Drive",
+                "Box",
+            ]
+            .map(|drive| home.join(drive)),
+        );
+        folders.extend(self.clouds.iter().cloned());
+        folders
+    }
+
+    /// Folders refused with all inside them, and any folder holding one: the system's, other users'
+    /// homes, the user's keys and sign-ins, the assistants' own, every
+    /// browser's profiles, ilo's and the task's own.
+    fn whole(&self) -> Vec<PathBuf> {
+        let home = &self.home;
+        let mut folders: Vec<PathBuf> = [
+            // The Mac's system.
+            "/System",
+            "/Library",
+            "/private",
+            "/etc",
+            "/usr",
+            "/bin",
+            "/sbin",
+            "/var",
+            "/cores",
+            "/Network",
+            // What these hold runs outside any wall: the Mac's apps, and what's added beside the
+            // system.
+            "/Applications",
+            "/opt",
+            // Linux's.
+            "/proc",
+            "/sys",
+            "/dev",
+            "/boot",
+            "/root",
+            "/run",
+            "/lib",
+            "/lib32",
+            "/lib64",
+            "/libx32",
+            "/snap",
+            "/lost+found",
+        ]
+        .map(PathBuf::from)
+        .to_vec();
+        folders.extend(
+            [
+                // The Mac's: its keychains, cloud drives, apps' data and every browser's profiles.
+                "Library",
+                // The user's own apps, which run outside any wall.
+                "Applications",
+                // Keys and sign-ins.
+                ".ssh",
+                ".aws",
+                ".gnupg",
+                ".password-store",
+                ".local/share/keyrings",
+                ".pki",
+                ".netrc",
+                ".docker",
+                ".kube",
+                ".config/gcloud",
+                ".azure",
+                ".config/gh",
+                // The assistants' own.
+                ".claude",
+                ".claude.json",
+                ".codex",
+                ".config/claude",
+                // Browsers' profiles on Linux.
+                ".mozilla",
+                ".config/google-chrome",
+                ".config/chromium",
+                ".config/BraveSoftware",
+                ".config/microsoft-edge",
+                ".config/vivaldi",
+                ".config/opera",
+                ".var/app",
+            ]
+            .map(|folder| home.join(folder)),
+        );
+        // Other users' homes: every folder beside this one's.
+        if let Some(homes) = home.parent().filter(|homes| *homes != Path::new("/")) {
+            folders.push(homes.to_path_buf());
+        }
+        folders.extend(self.ilo.iter().cloned());
+        folders.extend(self.task.iter().cloned());
+        #[cfg(windows)]
+        folders.extend(windows(home));
+        folders
+    }
+}
+
+/// Windows's own: its tree, the programs for every user and their data, and the user's app data,
+/// which holds every app's settings and sign-ins, every browser's profiles and ilo's own. Each
+/// where the system says it is, and where it is by default.
+#[cfg(windows)]
+fn windows(home: &Path) -> Vec<PathBuf> {
+    let said = [
+        "SystemRoot",
+        "windir",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+        "ProgramData",
+        "ALLUSERSPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+    ];
+    let mut folders: Vec<PathBuf> = said
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .filter(|folder| !folder.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    folders.extend(
+        [
+            r"C:\Windows",
+            r"C:\Program Files",
+            r"C:\Program Files (x86)",
+            r"C:\ProgramData",
+        ]
+        .map(PathBuf::from),
+    );
+    folders.push(home.join("AppData"));
+    folders
+}
+
+/// A path as `never_grantable` compares it: as it is, but on Windows, whose names are the same
+/// whatever their case, in lower case.
+fn key(path: &Path) -> PathBuf {
+    match cfg!(windows) {
+        true => PathBuf::from(path.to_string_lossy().to_lowercase()),
+        false => path.to_path_buf(),
+    }
+}
+
+/// Where volumes are mounted, and how deep a volume's root is under it.
+const MOUNTS: [(&str, usize); 4] = [
+    ("/Volumes", 1),
+    ("/mnt", 1),
+    ("/media", 2),
+    ("/run/media", 2),
+];
+
+/// Whether ilo refuses `folder`, as the panel gave it, links resolved: one of `never`'s own, inside
+/// one of its wholes, or holding one. A folder under the home folder that holds none of them, and
+/// one on another disk, may be granted. The folder of homes is a whole but for the user's own.
+pub fn never_grantable(folder: &Path, never: &Never) -> bool {
+    if !folder.is_absolute() || folder.components().any(|part| part.as_os_str() == "..") {
+        return true;
+    }
+    // A disk's root: `/`, and on Windows a drive's or a network share's.
+    if folder.parent().is_none() {
+        return true;
+    }
+    // On Windows, a disk named other than as a drive or a share (a volume, a device, the verbatim
+    // forms) can reach any folder by a name none of `never`'s match.
+    if let Some(Component::Prefix(prefix)) = folder.components().next()
+        && !matches!(prefix.kind(), Prefix::Disk(_) | Prefix::UNC(..))
+    {
+        return true;
+    }
+    let folder = &key(folder);
+    if never.themselves().iter().any(|own| key(own) == *folder) {
+        return true;
+    }
+    // A volume's root, and the folder volumes are mounted in, are refused; a folder on the volume
+    // isn't, though Linux mounts some under the system's /run.
+    let mut on_a_volume = false;
+    for (mounts, depth) in MOUNTS {
+        if let Ok(under) = folder.strip_prefix(mounts) {
+            if under.components().count() <= depth {
+                return true;
+            }
+            on_a_volume = true;
+        }
+    }
+    let home = &key(&never.home);
+    never.whole().iter().any(|whole| {
+        let whole = &key(whole);
+        let system_mount = on_a_volume && whole == Path::new("/run");
+        let inside = folder.starts_with(whole) && !system_mount;
+        let holds = whole.starts_with(folder);
+        match home.parent() == Some(whole.as_path()) {
+            true => holds || (inside && !folder.starts_with(home)),
+            false => holds || inside,
+        }
+    })
+}
+
+/// The path the panel gave, its links resolved, as the folder is checked and granted by it.
+pub fn resolved(picked: &Path) -> Option<PathBuf> {
+    let resolved = plain(std::fs::canonicalize(picked).ok()?);
+    resolved.is_dir().then_some(resolved)
+}
+
+/// A resolved path in the form the user and `Never` know it. Windows resolves to its `\\?\` form,
+/// which names a drive as `\\?\C:\` and a share as `\\?\UNC\server\share`; elsewhere it's as it is.
+fn plain(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let mut parts = path.components();
+        let head = match parts.next() {
+            Some(Component::Prefix(prefix)) => match prefix.kind() {
+                Prefix::VerbatimDisk(drive) => format!("{}:\\", drive as char),
+                Prefix::VerbatimUNC(server, share) => format!(
+                    "\\\\{}\\{}\\",
+                    server.to_string_lossy(),
+                    share.to_string_lossy()
+                ),
+                _ => return path,
+            },
+            _ => return path,
+        };
+        let mut plain = PathBuf::from(head);
+        plain.extend(parts.filter(|part| matches!(part, Component::Normal(_))));
+        return plain;
+    }
+    #[cfg(not(windows))]
+    path
+}
+
+/// ilo's copies of the files the user attached, read only to the task: each into `into`, a folder
+/// only this user may open, made for them inside the task's own. A name met twice gets a number.
+/// Off the UI thread, as a file may be large. On a failure, what was copied is removed.
+pub fn copy_attached(files: &[PathBuf], into: &Path) -> std::io::Result<()> {
+    let copied = (|| {
+        let mut folder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut folder, 0o700);
+        folder.recursive(true).create(into)?;
+        let mut names = std::collections::HashSet::new();
+        for file in files {
+            let name = file.file_name().unwrap_or_default().to_string_lossy();
+            let (stem, dot) = match name.rsplit_once('.') {
+                Some((stem, ext)) if !stem.is_empty() => (stem.to_string(), format!(".{ext}")),
+                _ => (name.to_string(), String::new()),
+            };
+            let named = (1..)
+                .map(|n| match n {
+                    1 => format!("{stem}{dot}"),
+                    n => format!("{stem} {n}{dot}"),
+                })
+                .find(|named| names.insert(named.clone()))
+                .unwrap_or_default();
+            let to = into.join(named);
+            std::fs::copy(file, &to)?;
+            #[cfg(unix)]
+            std::fs::set_permissions(&to, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+        }
+        Ok(())
+    })();
+    if copied.is_err() {
+        _ = std::fs::remove_dir_all(into);
+    }
+    copied
+}
+
+/// The name a folder or file is shown by: its last part, as the system's panel shows it.
+pub fn shown_name(path: &Path) -> String {
+    match path.file_name() {
+        Some(name) => name.to_string_lossy().into_owned(),
+        None => path.to_string_lossy().into_owned(),
+    }
+}
+
+/// The files half's words (#4101), the lead's (rework-words-final.md), one constant each, here
+/// alone.
+pub mod words {
+    /// The `+` menu's rows once this system can wall a task in with its files.
+    pub const ADD_PAGE: &str = "Add Page";
+    pub const ADD_FILES: &str = "Add Files…";
+    pub const ADD_FOLDER: &str = "Add Folder…";
+
+    /// X2, the attached files' chip on the quiet line.
+    pub fn files(count: usize) -> String {
+        match count {
+            1 => "1 file".into(),
+            count => format!("{count} files"),
+        }
+    }
+
+    /// X3, the folder's one act, the same word as Settings'.
+    pub const REVOKE: &str = "Revoke";
+
+    /// Settings › Agents' heading for files and folders, which pairs with the level's "On the web".
+    pub const ON_THIS_COMPUTER: &str = "On this computer";
+    /// X9, under it on a system that can't wall a task in with them.
+    pub const NOT_AVAILABLE: &str = "Files and folders aren't available on this system.";
+    /// Settings › Agents' group of every folder a live task holds.
+    pub const FOLDERS_IN_USE: &str = "Folders in use";
+
+    /// X4, where the panel gave a folder ilo never gives.
+    pub fn never_given(folder: &str) -> String {
+        format!(
+            "ilo doesn't give \u{201c}{folder}\u{201d} to a task. Choose a folder that holds only \
+             what this task needs."
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // Each system's own paths, so each list is read as that system reads it: on Windows, /Users/sam
+    // is a path on whichever drive is current, and refused as one.
+    #[cfg(not(windows))]
+    fn never() -> Never {
+        Never::of(
+            PathBuf::from("/Users/sam"),
+            vec![PathBuf::from("/Users/sam/Library/Application Support/ilo")],
+            Some(PathBuf::from("/srv/ilo/Tasks")),
+        )
+    }
+
+    #[cfg(windows)]
+    fn never() -> Never {
+        let mut never = Never::of(
+            PathBuf::from(r"C:\Users\sam"),
+            vec![PathBuf::from(r"C:\Users\sam\AppData\Local\ilo\User Data")],
+            Some(PathBuf::from(r"D:\ilo\Tasks")),
+        );
+        never.clouds = vec![PathBuf::from(r"C:\Users\sam\OneDrive - Lakeside Studio")];
+        never
+    }
+
+    #[cfg(not(windows))]
+    const REFUSED: &[&str] = &[
+        "/",
+        "/Users",
+        "/Users/sam",
+        "/Users/kim",
+        "/Users/kim/Documents",
+        "/Users/sam/.ssh",
+        "/Users/sam/.ssh/keys",
+        "/Users/sam/.aws",
+        "/Users/sam/.gnupg",
+        "/Users/sam/.claude",
+        "/Users/sam/.codex",
+        "/Users/sam/Library",
+        "/Users/sam/Library/Keychains",
+        "/Users/sam/Library/CloudStorage/Dropbox",
+        "/Users/sam/Library/Application Support/Google/Chrome",
+        "/Users/sam/.config/google-chrome",
+        "/Users/sam/.mozilla/firefox",
+        "/Users/sam/Dropbox",
+        "/System/Library",
+        "/private/tmp/work",
+        "/etc",
+        "/usr/local",
+        "/var/log",
+        "/proc/1",
+        "/Volumes",
+        "/Volumes/Backup",
+        "/media/sam/Backup",
+        "/run/media/sam/Backup",
+        "/run/user/501",
+        "/srv/ilo",
+        "/srv/ilo/Tasks/task-1",
+        "work",
+        "/Users/sam/Documents/../.ssh",
+        "/Applications",
+        "/Applications/Utilities",
+        "/Users/sam/Applications",
+        "/opt",
+        "/opt/homebrew",
+    ];
+
+    #[cfg(windows)]
+    const REFUSED: &[&str] = &[
+        r"C:\",
+        r"D:\",
+        r"\\nas\share",
+        r"\\nas\share\",
+        r"\Users\sam\Documents",
+        "/Users/sam/Documents",
+        r"C:Users\sam\Documents",
+        r"C:\Windows",
+        r"C:\WINDOWS\System32",
+        r"c:\windows\Temp",
+        r"C:\Program Files",
+        r"C:\Program Files\Git",
+        r"C:\Program Files (x86)",
+        r"C:\ProgramData",
+        r"C:\ProgramData\Microsoft",
+        r"C:\Users",
+        r"C:\Users\kim",
+        r"C:\Users\kim\Documents",
+        r"C:\Users\sam",
+        r"c:\users\SAM",
+        r"C:\Users\sam\AppData",
+        r"C:\Users\sam\AppData\Roaming",
+        r"C:\Users\sam\AppData\Local\Google\Chrome\User Data",
+        r"C:\Users\sam\appdata\local\ilo",
+        r"C:\Users\sam\.ssh",
+        r"C:\Users\sam\.claude",
+        r"C:\Users\sam\.codex",
+        r"C:\Users\sam\OneDrive",
+        r"C:\Users\sam\Dropbox",
+        r"D:\ilo",
+        r"D:\ilo\Tasks\task-1",
+        r"d:\ILO\tasks",
+        "work",
+        r"C:\Users\sam\Documents\..\.ssh",
+        r"C:\Users\sam\OneDrive - Lakeside Studio",
+        r"c:\users\sam\onedrive - lakeside studio",
+        r"\\?\Volume{0c5a3f4e-1d2b-4c6d-8e9f-0a1b2c3d4e5f}\Photos",
+        r"\\.\C:\Users\sam\Documents",
+        r"\\?\C:\Users\sam\Documents",
+        r"\\?\UNC\nas\share\Photos",
+        r"\\?\Documents",
+    ];
+
+    #[cfg(not(windows))]
+    const GIVEN: &[&str] = &[
+        "/Users/sam/Documents",
+        "/Users/sam/Documents/Trip",
+        "/Users/sam/code/site",
+        "/Users/sam/Dropbox/Trip",
+        "/Volumes/Backup/Photos",
+        "/media/sam/Backup/Photos",
+        "/run/media/sam/Backup/Photos",
+        "/srv/site",
+    ];
+
+    #[cfg(windows)]
+    const GIVEN: &[&str] = &[
+        r"C:\Users\sam\Documents",
+        r"C:\Users\sam\Documents\Trip",
+        r"c:\users\sam\Documents",
+        r"C:\Users\sam\code\site",
+        r"C:\Users\sam\OneDrive\Trip",
+        r"C:\Users\sam\OneDrive - Lakeside Studio\Plans",
+        r"D:\Photos",
+        r"\\nas\share\Photos",
+    ];
+
     #[test]
-    fn a_level_changes_the_rules_only_of_a_task_with_a_folder() {
-        let folder = Given {
-            folder: Some(Granted::for_test()),
-            attached: Some(PathBuf::from("/nonexistent/attached")),
-        };
-        let attached = Given {
-            folder: None,
-            ..folder.clone()
-        };
-        for from in Tier::ALL {
-            for to in Tier::ALL {
-                assert!(Given::default().same_rules(from, to));
-                assert!(attached.same_rules(from, to));
-                assert_eq!(folder.same_rules(from, to), from == to, "{from:?} {to:?}");
-            }
+    fn ilo_never_gives_a_folder_of_secrets_the_system_or_others() {
+        let never = never();
+        for folder in REFUSED {
+            assert!(never_grantable(Path::new(folder), &never), "{folder}");
         }
     }
 
     #[test]
-    fn files_printed_name_no_place() {
-        let given = Given {
-            folder: Some(Granted::for_test()),
-            attached: Some(PathBuf::from("/nonexistent/Private Letters")),
-        };
-        let printed = format!("{given:?}");
-        assert_eq!(printed, "Given { folder: true, attached: true }");
+    fn a_folder_of_the_users_own_work_may_be_given() {
+        let never = never();
+        for folder in GIVEN {
+            assert!(!never_grantable(Path::new(folder), &never), "{folder}");
+        }
+    }
+
+    /// A kept thread's card folder, under the profile's, is never given, nor a folder holding it:
+    /// as this build names it, and on the made-up profile.
+    #[test]
+    fn the_kept_threads_folder_is_never_given() {
+        use crate::agents::kept::cards::FOLDER;
+        let profile = PathBuf::from(crate::profile_dir());
+        let here = Never::here(None);
+        for folder in [profile.join(FOLDER), profile.clone()] {
+            assert!(never_grantable(&folder, &here), "{}", folder.display());
+        }
+        let never = never();
+        let profile = never.ilo[0].clone();
+        let holding = profile.parent().unwrap().to_path_buf();
+        for folder in [
+            profile.join(FOLDER).join("0123"),
+            profile.join(FOLDER),
+            holding,
+        ] {
+            assert!(never_grantable(&folder, &never), "{}", folder.display());
+        }
+    }
+
+    #[test]
+    fn a_disks_root_resolves_to_a_root_and_is_refused() {
+        let root = resolved(Path::new("/")).unwrap();
+        assert_eq!(root.parent(), None, "{}", root.display());
+        assert!(never_grantable(&root, &never()));
+    }
+
+    #[test]
+    fn a_resolved_folder_is_named_as_the_user_knows_it() {
+        let here = resolved(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+        assert!(here.is_absolute(), "{}", here.display());
+        assert!(
+            !here.to_string_lossy().starts_with(r"\\?\"),
+            "{}",
+            here.display()
+        );
+        assert_eq!(resolved(&here).as_deref(), Some(here.as_path()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_resolved_forms_are_plain() {
+        let plain = |path: &str| super::plain(PathBuf::from(path));
+        assert_eq!(plain(r"\\?\C:\"), PathBuf::from(r"C:\"));
+        assert_eq!(plain(r"\\?\C:\Users\sam"), PathBuf::from(r"C:\Users\sam"));
+        assert_eq!(plain(r"\\?\UNC\nas\share"), PathBuf::from(r"\\nas\share\"));
+        assert_eq!(
+            plain(r"\\?\UNC\nas\share\Photos"),
+            PathBuf::from(r"\\nas\share\Photos")
+        );
+    }
+
+    #[test]
+    fn attached_copies_are_the_users_alone_and_keep_each_name() {
+        let dir = std::env::temp_dir().join(format!("ilo-attached-{}", std::process::id()));
+        let picked = dir.join("picked");
+        std::fs::create_dir_all(picked.join("b")).unwrap();
+        std::fs::write(picked.join("notes.txt"), "one").unwrap();
+        std::fs::write(picked.join("b/notes.txt"), "two").unwrap();
+        let into = dir.join("task-1/Attached");
+        let files = [picked.join("notes.txt"), picked.join("b/notes.txt")];
+        copy_attached(&files, &into).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(into.join("notes.txt")).unwrap(),
+            "one"
+        );
+        assert_eq!(
+            std::fs::read_to_string(into.join("notes 2.txt")).unwrap(),
+            "two"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&into), 0o700);
+            assert_eq!(mode(&into.join("notes.txt")), 0o600);
+        }
+        let gone = [picked.join("missing.txt")];
+        assert!(copy_attached(&gone, &dir.join("task-2/Attached")).is_err());
+        assert!(
+            !dir.join("task-2/Attached").exists(),
+            "a failed copy leaves nothing"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -161,5 +788,34 @@ mod tests {
         assert_eq!(look, [Op::Read, Op::Search]);
         assert_eq!(work, [Op::Read, Op::Search, Op::Make, Op::Change]);
         assert_eq!(full, Op::ALL);
+    }
+
+    #[test]
+    fn a_level_changes_the_rules_only_of_a_task_with_a_folder() {
+        let folder = Given {
+            folder: Some(Granted::for_test()),
+            attached: Some(PathBuf::from("/nonexistent/attached")),
+        };
+        let attached = Given {
+            folder: None,
+            ..folder.clone()
+        };
+        for from in Tier::ALL {
+            for to in Tier::ALL {
+                assert!(Given::default().same_rules(from, to));
+                assert!(attached.same_rules(from, to));
+                assert_eq!(folder.same_rules(from, to), from == to, "{from:?} {to:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn files_printed_name_no_place() {
+        let given = Given {
+            folder: Some(Granted::for_test()),
+            attached: Some(PathBuf::from("/nonexistent/Private Letters")),
+        };
+        let printed = format!("{given:?}");
+        assert_eq!(printed, "Given { folder: true, attached: true }");
     }
 }

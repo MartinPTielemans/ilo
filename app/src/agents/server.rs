@@ -46,6 +46,43 @@ pub(super) const END: &str = r#"{"end":true}"#;
 /// connects and disconnects agents.
 pub type Tokens = Arc<Mutex<HashMap<String, String>>>;
 
+/// The user's two switches, which the UI thread sets as the user does and the server's threads
+/// read (#4260): neither touches the other.
+#[derive(Clone, Default)]
+pub struct Switches {
+    /// The product's own threads, each connecting with its task's token.
+    pub threads: Arc<AtomicBool>,
+    /// Other apps' agents, each connecting with the token of an app the user connected.
+    pub others: Arc<AtomicBool>,
+}
+
+/// Which kind of agent a connection is, told by its token alone: by the agent id the app wrote
+/// beside the token it gave, never by anything the connecting side says.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Side {
+    /// One of the product's own threads.
+    Inside,
+    /// An app the user connected, driving the browser from outside.
+    Outside,
+}
+
+/// What a connection is told whose token the browser didn't give.
+pub const UNKNOWN_TOKEN: &str =
+    "The token isn't one the browser gave. Connect the client again in Settings › Other apps.";
+
+/// The kind `agent` is: a task's id is inside, an app's outside, and anything else neither, which
+/// is refused.
+pub fn side(agent: &str) -> Option<Side> {
+    match (
+        super::is_task_id(agent),
+        super::clients::Client::from_id(agent),
+    ) {
+        (true, _) => Some(Side::Inside),
+        (false, Some(_)) => Some(Side::Outside),
+        (false, None) => None,
+    }
+}
+
 /// The protocol versions the server speaks, newest first.
 pub(super) const VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 /// A message may be no longer, which none an agent sends comes near.
@@ -72,6 +109,7 @@ struct Shared {
     path: PathBuf,
     stopped: AtomicBool,
     tokens: Tokens,
+    switches: Switches,
     token_wait: Duration,
     /// The connections open, by a number of their own, from 1: the UI takes 0 for no connection's.
     connections: Mutex<HashMap<u64, Connection>>,
@@ -95,9 +133,10 @@ impl Server {
     pub fn start(
         path: &Path,
         tokens: Tokens,
+        switches: Switches,
         events: UnboundedSender<Event>,
     ) -> io::Result<Server> {
-        Server::listen(path, tokens, events, TOKEN_WAIT)
+        Server::listen(path, tokens, switches, events, TOKEN_WAIT)
     }
 
     /// Listens on a socket at `path`, readable and writable by the user alone, in place of any
@@ -106,6 +145,7 @@ impl Server {
     fn listen(
         path: &Path,
         tokens: Tokens,
+        switches: Switches,
         events: UnboundedSender<Event>,
         token_wait: Duration,
     ) -> io::Result<Server> {
@@ -125,6 +165,7 @@ impl Server {
             path: path.into(),
             stopped: AtomicBool::new(false),
             tokens,
+            switches,
             token_wait,
             connections: Mutex::default(),
             next_connection: AtomicU64::new(1),
@@ -142,6 +183,7 @@ impl Server {
     fn listen(
         path: &Path,
         tokens: Tokens,
+        switches: Switches,
         events: UnboundedSender<Event>,
         token_wait: Duration,
     ) -> io::Result<Server> {
@@ -150,6 +192,7 @@ impl Server {
             path: path.into(),
             stopped: AtomicBool::new(false),
             tokens,
+            switches,
             token_wait,
             connections: Mutex::default(),
             next_connection: AtomicU64::new(1),
@@ -345,11 +388,15 @@ fn serve(stream: Stream, number: u64, shared: &Shared) {
         .and_then(|first| Some(first.get("token")?.as_str()?.to_string()))
         .unwrap_or_default();
     let Some(agent) = shared.agent(&token) else {
-        let refused =
-            "The token isn't one the browser gave. Connect the client again in Settings › Agents.";
+        let refused = UNKNOWN_TOKEN;
         _ = writeln!(writer, "{}", json!({ "error": refused })).and_then(|()| writer.flush());
         return;
     };
+    if shared.refused(&agent) {
+        let off = super::bridge::off();
+        _ = writeln!(writer, "{}", json!({ "error": off })).and_then(|()| writer.flush());
+        return;
+    }
     if reader.get_mut().token_taken().is_err() {
         return;
     }
@@ -375,6 +422,7 @@ fn serve(stream: Stream, number: u64, shared: &Shared) {
             // A token the user has since disconnected, or a browser that stopped, answers no more.
             if shared.stopped.load(Ordering::SeqCst)
                 || shared.agent(&token).as_ref() != Some(&agent)
+                || shared.refused(&agent)
             {
                 break;
             }
@@ -599,6 +647,18 @@ fn lanes(line: &str) -> Vec<Lane> {
 impl Shared {
     fn agent(&self, token: &str) -> Option<String> {
         self.tokens.lock().unwrap().get(token).cloned()
+    }
+
+    /// Whether `agent` is refused: one of the product's own threads while the user has threads
+    /// off, an app's while they have other apps' agents off, whatever the other switch says, and
+    /// one of neither kind always. Its token says which: the apps the user connected have their
+    /// app's id, a thread's own start its task's.
+    fn refused(&self, agent: &str) -> bool {
+        match side(agent) {
+            Some(Side::Inside) => !self.switches.threads.load(Ordering::SeqCst),
+            Some(Side::Outside) => !self.switches.others.load(Ordering::SeqCst),
+            None => true,
+        }
     }
 
     /// Connection `number` began answering a message, or wrote its answer: a stopped one closes

@@ -234,6 +234,20 @@ impl Granted {
         }
     }
 
+    /// A folder of the test's own, which is there, with its identity, as the panel would give it.
+    #[cfg(test)]
+    pub(crate) fn at_for_test(root: PathBuf) -> Granted {
+        let identity = Identity::of(&root).expect("the test's folder is there");
+        Granted { root, identity }
+    }
+
+    /// A folder granted at `root` while `was` was there: what's at `root` now isn't it.
+    #[cfg(test)]
+    pub(crate) fn was_for_test(root: PathBuf, was: &Path) -> Granted {
+        let identity = Identity::of(was).expect("the test's folder is there");
+        Granted { root, identity }
+    }
+
     /// The same by a name of the test's own, for a test of where a folder's name reaches.
     #[cfg(test)]
     pub(crate) fn named_for_test(name: &str) -> Granted {
@@ -525,7 +539,9 @@ mod tests {
                 }
             }
         }
-        // This file's tests alone, until the panel's file joins the list by name.
+        // This file's tests alone: no surface grants one until the composer's `+` brings the
+        // system's panel back (#4140).
+        makers.sort();
         assert_eq!(makers, ["wall.rs"]);
     }
 }

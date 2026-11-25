@@ -115,6 +115,11 @@ void host_grow_little_window(void* ui_view);
 // app the active one.
 void host_show_window(void* ui_view);
 
+// Keeps the window holding |ui_view|, which the core put on screen as it made it, off screen until
+// host_show_window, whatever else asks to show it: first run's window is the only one on screen
+// until it ends. Off the Mac, nothing.
+void host_hold_window(void* ui_view);
+
 // Shows the window holding |ui_view| as host_show_window does, but right behind the browser window
 // of |above_ui_view|, neither key nor activating the app, as the windows a relaunch brings back
 // after the first.
@@ -779,21 +784,12 @@ bool host_close_other_window(void);
 // A detent on the trackpad, as a swipe's nearest Space changes.
 void host_detent(void);
 
-// Gives the Dock icon's dot the color it had when the app last quit, kept in |profile_dir|, and
-// follows the user's icon style from now on (dock.mm). For the launch, before the browser starts.
-void host_dock_dot_launch(const char* profile_dir);
-
-// Gives the Dock icon's dot |color|, as 0xRRGGBB, or without |colored| the icon's own green, once
-// it's drawn off the main thread. In the Tinted and Clear icon styles the icon stays as macOS draws
-// it. Asked again for the same color, it checks the style again.
-void host_dock_dot(bool colored, uint32_t color);
-
 // Whether the app is the active one, its windows taking the keyboard.
 bool host_app_active(void);
 
 // |count| tasks wait for the user, or none at 0: the Dock icon's badge on the Mac, the taskbar
-// button's overlay on Windows, with the count up to 9 and then 9+ in place of the Space's dot, and
-// on Linux the browser windows' urgency hint, with no count. It stays while the app is active, and
+// button's overlay on Windows, with the count up to 9 and then 9+, and on Linux the browser
+// windows' urgency hint, with no count. It stays while the app is active, and
 // nothing bounces, flashes or sounds.
 void host_needs_you_badge(int count);
 
@@ -1050,6 +1046,9 @@ bool host_choose(const char* title);
 // For the test driver: the NSWindow of the browser window whose view host_ui_view made |index|th,
 // from 0, once it's shown, else null.
 void* host_browser_window(size_t index);
+
+// For the test driver: first run's window while it's on screen, else null. The Mac's alone.
+void* host_first_run_window(void);
 
 // AppleScript, the Mac's alone (scripting.mm, ilo.sdef): what a script may ask of the app's windows,
 // Spaces and tabs, which the app answers from what its UI shows, and the commands it may give,
