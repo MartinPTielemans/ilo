@@ -275,8 +275,8 @@ fn summary(took: Option<u64>, counted: (usize, Counted)) -> (SharedString, Share
     let counted = match counted {
         (1, Counted::Steps) => "1 step".to_string(),
         (count, Counted::Steps) => format!("{count} steps"),
-        (1, Counted::Helpers) => "1 helper".to_string(),
-        (count, Counted::Helpers) => format!("{count} helpers"),
+        (1, Counted::Helpers) => "1 strand".to_string(),
+        (count, Counted::Helpers) => format!("{count} strands"),
     };
     let title = match took {
         Some(seconds) => format!("Worked for {}", duration(seconds)),

@@ -343,7 +343,7 @@ fn a_finished_task_is_there_after_a_quit_and_takes_a_reply(cx: &mut TestAppConte
         "example.com",
         "Trains to Lisbon",
         "timetable",
-        "9:05",
+        "car 4",
     ] {
         assert!(!text.contains(never), "the file has {never:?}");
     }
@@ -453,12 +453,12 @@ fn a_finding_isnt_kept_across_a_quit(cx: &mut TestAppContext) {
     });
     for (_, title, about) in listed(&next, cx).into_iter().chain(archive(&next, cx)) {
         assert!(
-            !title.contains("9:05") && !about.contains("9:05"),
+            !title.contains("car 4") && !about.contains("car 4"),
             "{title} {about}"
         );
     }
     let text = std::fs::read_to_string(index(&next)).unwrap();
-    assert!(!text.contains("9:05"), "the file has the finding");
+    assert!(!text.contains("car 4"), "the file has the finding");
 }
 
 /// Full access picked on a task that has ended isn't kept across a quit: brought back, it takes a
@@ -546,7 +546,7 @@ fn a_task_its_agent_never_named_keeps_no_title(cx: &mut TestAppContext) {
     let next = next(&run, cx);
     let archived = archive(&next, cx);
     assert_eq!(archived.len(), 1);
-    assert_eq!(archived[0].1, "Untitled task");
+    assert_eq!(archived[0].1, "Untitled thread");
     assert!(archived[0].2.starts_with("Claude · Done "));
     // Out of the Archive and back, it has no more of a title than it had.
     act(&next, &archived[0].0, TaskAction::Delete, cx);
@@ -1084,7 +1084,7 @@ fn a_past_task_whose_profile_is_gone_offers_start_again_alone(cx: &mut TestAppCo
     let next = next(&run, cx);
     let archived = archive(&next, cx);
     assert_eq!(archived.len(), 2);
-    let past = (archived.iter().find(|task| task.1 == "Untitled task"))
+    let past = (archived.iter().find(|task| task.1 == "Untitled thread"))
         .unwrap()
         .0
         .clone();

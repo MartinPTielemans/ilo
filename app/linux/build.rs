@@ -4,6 +4,10 @@ fn main() {
     let name = std::fs::read_to_string("../branding/name").expect("no branding/name");
     println!("cargo:rustc-env=APP_NAME={}", name.trim());
     println!("cargo:rerun-if-changed=../branding/name");
+    // The product's name as the app's own strings say it, as the browser's crate reads it.
+    let product = std::fs::read_to_string("../branding/product").expect("no branding/product");
+    println!("cargo:rustc-env=PRODUCT_NAME={}", product.trim());
+    println!("cargo:rerun-if-changed=../branding/product");
     // The build's own sync server, as the browser's crate reads it (its build.rs).
     let sync_server = std::fs::read_to_string("../branding/sync-server");
     println!(

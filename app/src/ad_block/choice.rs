@@ -161,19 +161,26 @@ impl EngineRow {
         let detail = match (self.chosen == self.launch.engine, self.chosen) {
             (true, Engine::Native) => concat!(
                 "The extension ",
-                env!("APP_NAME"),
+                env!("PRODUCT_NAME"),
                 " used before. It gets these lists and My filters, including new ones."
             ),
             (true, Engine::UBlockOrigin) => concat!(
                 "Turned off, ",
-                env!("APP_NAME"),
+                env!("PRODUCT_NAME"),
                 "'s own blocker blocks again, with these lists and My filters."
             ),
             (false, Engine::UBlockOrigin) => {
-                concat!("uBlock Origin blocks once ", env!("APP_NAME"), " restarts.")
+                concat!(
+                    "uBlock Origin blocks once ",
+                    env!("PRODUCT_NAME"),
+                    " restarts."
+                )
             }
             (false, Engine::Native) => {
-                concat!(env!("APP_NAME"), "'s own blocker blocks once it restarts.")
+                concat!(
+                    env!("PRODUCT_NAME"),
+                    "'s own blocker blocks once it restarts."
+                )
             }
         };
         detail.into()

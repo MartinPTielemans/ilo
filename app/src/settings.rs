@@ -176,7 +176,7 @@ impl Page {
 }
 
 /// The choice that has a command's keys reach ilo before the page.
-const PREFER_ILO: &str = concat!("Prefer ", env!("APP_NAME"));
+const PREFER_ILO: &str = concat!("Prefer ", env!("PRODUCT_NAME"));
 
 /// General's rows, as drawn, which their controls are named by too.
 const DEFAULT_BROWSER: &str = "Default browser";
@@ -1544,7 +1544,7 @@ impl Settings {
         // The one page whose heading is the app's name, with the line the first launch shows
         // under the wordmark.
         let title = match section {
-            Section::About => env!("APP_NAME"),
+            Section::About => env!("PRODUCT_NAME"),
             section => section.name(),
         };
         let base = self.base();
@@ -2335,7 +2335,7 @@ impl Settings {
         let little_on = unsafe { bc::bc_little_windows() };
         let little_switch = self.toggle(
             "little windows",
-            "Little ilo",
+            "Little Window",
             little_on,
             set_little_windows,
             accent,
@@ -2355,7 +2355,7 @@ impl Settings {
         let little = feature(
             look,
             "icons/app-window.svg",
-            concat!("Little ", env!("APP_NAME")),
+            "Little Window",
             Some(little_line.into()),
             vec![little_switch],
         );
@@ -2387,7 +2387,7 @@ impl Settings {
         let sign_in_close = nested(setting(
             look,
             "Close sign-in pages when done",
-            Some("When an app's sign-in finishes in Little ilo, its window closes.".into()),
+            Some("When an app's sign-in finishes in a Little Window, the window closes.".into()),
             vec![sign_in_close],
         ));
         // Its own settings only while it's on.
@@ -2551,7 +2551,7 @@ impl Settings {
         Page::new(
             Section::General,
             concat!(
-                env!("APP_NAME"),
+                env!("PRODUCT_NAME"),
                 "'s own tools. Off takes every way into one away, and its switch brings it back."
             ),
             blocks,
@@ -2696,7 +2696,7 @@ impl Settings {
                 accent,
                 cx,
             );
-            let line = browser::daily_count::words(env!("APP_NAME"));
+            let line = browser::daily_count::words(env!("PRODUCT_NAME"));
             let row = setting(
                 look,
                 "Send a daily usage count",
@@ -2716,7 +2716,7 @@ impl Settings {
             .child(self.drawn("open privacy policy".into()))
             .on_click(|_, _, cx| open_notice(build_info::PRIVACY_POLICY, cx));
         let line = concat!(
-            env!("APP_NAME"),
+            env!("PRODUCT_NAME"),
             " never sees the sites you visit or what you type, and never sells your data. ",
             "The policy names every service it talks to."
         );
@@ -2729,7 +2729,11 @@ impl Settings {
         blocks.push(Block::Rows(vec![policy]));
         Page::new(
             Section::Privacy,
-            concat!("What sites may do, and what ", env!("APP_NAME"), " sends."),
+            concat!(
+                "What sites may do, and what ",
+                env!("PRODUCT_NAME"),
+                " sends."
+            ),
             blocks,
         )
     }
@@ -2786,11 +2790,11 @@ impl Settings {
             }
             (false, false) => "uBlock Origin, built in, with the filter lists you turn on.",
             (true, true) => concat!(
-                env!("APP_NAME"),
+                env!("PRODUCT_NAME"),
                 "'s own ad blocker, with the filter lists your organization chose."
             ),
             (true, false) => concat!(
-                env!("APP_NAME"),
+                env!("PRODUCT_NAME"),
                 "'s own ad blocker, with the filter lists you turn on."
             ),
         };
@@ -3502,7 +3506,7 @@ impl Settings {
     fn passwords(&mut self, profiles: &[Profile], accent: Rgba, cx: &mut Context<Self>) -> Page {
         const LEDE: &str = concat!(
             "What each profile saves and fills in. ",
-            env!("APP_NAME"),
+            env!("PRODUCT_NAME"),
             " shows a login's site and username, never its password."
         );
         let Some(profile) = self.passwords_profile(profiles) else {
@@ -3814,7 +3818,7 @@ impl Settings {
             true => format!("Remove the card “{}”?", saved.title),
             false => format!("Remove the address for “{}”?", saved.title),
         };
-        let detail = format!("{} won't fill it in again.", env!("APP_NAME"));
+        let detail = format!("{} won't fill it in again.", env!("PRODUCT_NAME"));
         let remove = move || {
             // check.sh waits for this line, which names nothing saved.
             log!(
@@ -4543,12 +4547,12 @@ impl Settings {
     ) {
         let (message, detail, action) = match kept {
             1 => (
-                "Remove 1 finished task?".to_string(),
+                "Remove 1 finished thread?".to_string(),
                 "The conversation is removed from this computer.".to_string(),
                 REMOVE,
             ),
             kept => (
-                format!("Remove {kept} finished tasks?"),
+                format!("Remove {kept} finished threads?"),
                 "Their conversations are removed from this computer.".to_string(),
                 "Remove All",
             ),
@@ -5145,7 +5149,7 @@ impl Settings {
                 look,
                 "Licence",
                 concat!(
-                    env!("APP_NAME"),
+                    env!("PRODUCT_NAME"),
                     " is free software: you may use, study, share and change it under the GNU \
                      General Public License, version 3."
                 ),
@@ -5204,7 +5208,7 @@ impl Settings {
                 true => "Every 8 hours, and it downloads them in the background.".to_string(),
                 false => format!(
                     "{} won't look for new versions until you choose Check for Updates.",
-                    env!("APP_NAME")
+                    env!("PRODUCT_NAME")
                 ),
             };
             setting(
@@ -5835,7 +5839,7 @@ fn feature_row(
 /// Settings › Agents' switch that keeps finished tasks, what its line says is kept and where,
 /// and its buttons: a kept task's own, and the one for them all. An assistant that keeps none
 /// has no task in the list, which says it.
-const KEEP_TASKS: &str = "Keep finished tasks so you can reply";
+const KEEP_TASKS: &str = "Keep finished threads so you can reply";
 const KEPT_WHERE: &str = "Titles only. Conversations stay with your assistant.";
 const REMOVE: &str = "Remove";
 const REMOVE_ALL: &str = "Remove All…";

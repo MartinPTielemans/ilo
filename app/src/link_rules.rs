@@ -64,10 +64,12 @@ fn rule_name(index: usize, part: &str) -> SharedString {
     format!("Rule {} {part}", index + 1).into()
 }
 
-/// Little ilo's name in the pop-ups, the rules' file and check.sh's lines.
-const LITTLE_NAME: &str = "Little ilo";
-/// What a rule to Little ilo's pop-up says while Little ilo is off.
-const LITTLE_OFF: &str = "Little ilo is off";
+/// Little Window's place in the rules' file, unchanged so profiles from before the name keep it.
+const LITTLE_KEY: &str = "Little ilo";
+/// Little Window's name in the pop-ups and check.sh's lines.
+const LITTLE_NAME: &str = "Little Window";
+/// What a rule to Little Window's pop-up says while Little Window is off.
+const LITTLE_OFF: &str = "Little Window is off";
 
 /// Where a rule sends a link in place of a Space: the Space the regular window in front shows, as
 /// Arc's Most Recent Space. No Space of the core's has this id.
@@ -222,7 +224,7 @@ impl Rules {
     /// Meet rule was added gets it after its own, as a profile from before it does.
     pub fn parse(text: &str, spaces: &[u64]) -> Rules {
         let space = |place: &str| match place {
-            LITTLE_NAME => Some(LITTLE),
+            LITTLE_KEY => Some(LITTLE),
             FRONT_KEY => Some(FRONT),
             place => {
                 let place = place.parse::<usize>().ok()?;
@@ -270,7 +272,7 @@ impl Rules {
     /// the Meet rule was added, so a trashed one stays gone.
     pub fn to_text(&self, spaces: &[u64]) -> String {
         let place = |space: u64| match spaces.iter().position(|&each| each == space) {
-            _ if space == LITTLE => LITTLE_NAME.to_string(),
+            _ if space == LITTLE => LITTLE_KEY.to_string(),
             _ if space == FRONT => FRONT_KEY.to_string(),
             Some(index) => (index + 1).to_string(),
             None => "-".to_string(),

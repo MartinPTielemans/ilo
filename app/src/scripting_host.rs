@@ -6,6 +6,7 @@
 
 use super::*;
 use browser::agents::scripts;
+use browser::product::PRODUCT;
 
 /// Copies `text` into `out` as bc_space_name copies: up to `capacity` less one bytes, then a nul,
 /// and returns its whole length.
@@ -260,7 +261,7 @@ extern "C" fn new_tab(
 /// Why a command was refused, as the script's error says it.
 fn refusal(refused: &str) -> String {
     match refused {
-        "" | scripts::OFF => "Scripts are off in ilo's Settings › Agents.".into(),
+        "" | scripts::OFF => format!("Scripts are off in {PRODUCT}'s Settings › Agents."),
         why => {
             let mut why = why.to_string();
             why[..1].make_ascii_uppercase();
