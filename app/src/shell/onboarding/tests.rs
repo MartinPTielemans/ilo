@@ -2099,6 +2099,46 @@ fn the_imports_back_goes_back_in_its_view_first(cx: &mut TestAppContext) {
     );
 }
 
+/// The assistants' step looks for them once as it comes, off the UI thread, and each row then
+/// says what was found, as Settings › Agents' does. Nothing asks again while the step stands;
+/// shown again, it looks again.
+#[gpui::test]
+fn the_assistant_step_looks_for_the_assistants_as_it_shows(cx: &mut TestAppContext) {
+    use crate::agents::ready::{Found, Ready};
+    use crate::agents::runner::Cli;
+    let (shell, cx, host) = first_window(cx);
+    // With an assistant, as its rows show only on that path.
+    host.threads.set(Some(true));
+    let signed_out = Found {
+        ready: Ready::SignedOut,
+        ..Default::default()
+    };
+    let (agents, looks) =
+        cx.update(|_, cx| crate::agents::tests::stand_in(vec![(Cli::Claude, signed_out)], cx));
+    agents.update(cx, |agents, cx| agents.set_threads(true, cx));
+    let lines = |cx: &mut VisualTestContext| {
+        agents.read_with(cx, |agents, _| {
+            Cli::ALL.map(|cli| agents.assistant_row(cli).line)
+        })
+    };
+    assert_eq!(looks(), 0, "nothing looked before the card");
+    assert_eq!(lines(cx), ["Checking…", "Checking…"]);
+
+    started(&shell, cx);
+    assert_eq!(step(&shell, cx), Some(Step::Assistant));
+    cx.run_until_parked();
+    assert_eq!(looks(), 1, "the step's showing looked once");
+    assert_eq!(lines(cx), ["Not signed in", "Not installed"]);
+    later(&shell, cx, 5.);
+    assert_eq!(looks(), 1, "nothing looked again while it stood");
+
+    shell.update(cx, |shell, _| shell.onboarding = None);
+    started(&shell, cx);
+    assert_eq!(step(&shell, cx), Some(Step::Assistant));
+    cx.run_until_parked();
+    assert_eq!(looks(), 2, "shown again, it looked again");
+}
+
 /// In the card's narrow half no assistant's name is cut by its button: each button is beside the
 /// whole name, or, where the row has no room for both, under it.
 #[gpui::test]
@@ -2121,8 +2161,7 @@ fn the_assistants_names_are_whole_beside_or_over_their_buttons(cx: &mut TestAppC
     cx.simulate_a11y_activation();
     started(&shell, cx);
     assert_eq!(step(&shell, cx), Some(Step::Assistant));
-    // The rows say what a look found, which the test makes as Settings › Models does.
-    agents.update(cx, |agents, cx| agents.look_for_task_agents(cx));
+    // The rows say what the step's own look found.
     cx.run_until_parked();
     settle(&shell, cx);
     let lines = agents.read_with(cx, |agents, _| {
