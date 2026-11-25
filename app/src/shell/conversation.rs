@@ -286,6 +286,8 @@ pub struct TalkView {
     menu_open: Option<&'static str>,
     /// Where the folder's chip under the reply field was drawn.
     folder_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The plus before the level's chip, the add menu's (`crate::plus`).
+    plus: crate::plus::Plus,
     /// Where the last frame drew Take Over on the lines: once, on the live line.
     take_over_drawn: Rc<RefCell<Vec<Bounds<Pixels>>>>,
     /// The page row's case as last logged, with the page it was for.
@@ -502,6 +504,7 @@ impl Shell {
                     model_drawn: Rc::default(),
                     menu_open: None,
                     folder_drawn: Rc::default(),
+                    plus: crate::plus::Plus::default(),
                     take_over_drawn: Rc::default(),
                     row_logged: Cell::default(),
                     hand_back_drawn: Rc::default(),
@@ -2955,12 +2958,11 @@ impl TalkView {
             .child(self.choices(&form, look, cx))
     }
 
-    /// The composer's row under its field, the bar's own (choices.rs): the thread's level, which
-    /// opens its menu (#4094), the folder it holds (#4101), its model, which opens its assistant's
-    /// models where its program takes another for the next message and is plain words elsewhere,
-    /// and the round button: Stop while it works and nothing is
-    /// typed, else Send, which does nothing with nothing typed. A reply never carries files or a
-    /// folder, so there's no way to add one here.
+    /// The composer's row under its field, the bar's own (choices.rs): the plus, disabled where a
+    /// reply has nothing to add, the thread's level, which opens its menu (#4094), the folder it
+    /// holds (#4101), its model, which opens its assistant's models where its program takes
+    /// another for the next message and is plain words elsewhere, and the round button: Stop while
+    /// it works and nothing is typed, else Send, which does nothing with nothing typed.
     fn choices(&self, form: &Composer, look: &Look, cx: &mut Context<Self>) -> gpui::Div {
         let shown = self.shown.as_ref();
         let tier = shown.map(|shown| shown.tier).unwrap_or_default();
@@ -3009,10 +3011,26 @@ impl TalkView {
             };
             (Some(mark), said, trigger)
         });
+        let inks = self.inks(look);
+        let plus = choices::plus_look(
+            inks.dim,
+            inks.plate,
+            crate::tokens::command_bar::PLUS,
+            crate::tokens::command_bar::CHOICES_MENU_DROP,
+            look.a11y,
+        );
+        let plus = (self.plus).draw(
+            "conversation-plus",
+            self.reply_rows(),
+            &plus,
+            cx.entity_id(),
+        );
         choices::row(choices::Row {
             form: form.row,
-            inks: self.inks(look),
+            inks,
             a11y: look.a11y,
+            plus: Some(plus),
+            added: Vec::new(),
             level: (tier, level),
             model,
             effort: None,
@@ -3025,6 +3043,12 @@ impl TalkView {
             round: ("conversation-round", said, round, go),
             round_at,
         })
+    }
+
+    /// The plus's rows under the reply field: none, as a reply never carries files or a folder,
+    /// which a task is given at its start only, so the plus is disabled.
+    fn reply_rows(&self) -> Vec<crate::plus::Row> {
+        Vec::new()
     }
 
     /// The folder the task holds, by its name, whose menu has its one act, Revoke: the task goes
@@ -4485,6 +4509,7 @@ impl Render for TalkView {
         }
         self.level_drawn.set(None);
         self.folder_drawn.set(None);
+        self.plus.forget();
         self.take_over_drawn.borrow_mut().clear();
         self.hand_back_drawn.set(None);
         self.reply_drawn.set(None);

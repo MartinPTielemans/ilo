@@ -89,6 +89,8 @@ pub struct MenuEntry {
     /// What it does each time it's chosen, where choosing it leaves the menu open with it
     /// highlighted, as one of several things picked together. Its check is as this last answered.
     pub stays: Option<crate::menu::Stays>,
+    /// The icon before its title, as the add menu's rows have.
+    pub icon: Option<&'static str>,
 }
 
 impl MenuEntry {
@@ -127,6 +129,7 @@ impl MenuEntry {
             offer: false,
             out: false,
             stays: None,
+            icon: None,
         }
     }
 
@@ -160,6 +163,14 @@ impl MenuEntry {
     pub fn stays(self, chosen: impl Fn(&mut App) -> bool + 'static) -> Self {
         MenuEntry {
             stays: Some(std::rc::Rc::new(chosen)),
+            ..self
+        }
+    }
+
+    /// With `icon` before its title (`icon`).
+    pub fn icon(self, icon: &'static str) -> Self {
+        MenuEntry {
+            icon: Some(icon),
             ..self
         }
     }
