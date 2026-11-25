@@ -210,13 +210,17 @@ fn every_line_closes_what_it_opens() {
 }
 
 /// Every shape a text is made for: each assistant and level, with and without each place, the
-/// program by its folder and alone, and three folders above.
+/// program by its folder and alone, with and without an app's Developer folder, and three folders
+/// above.
 fn shapes() -> Vec<Shape> {
     let mut shapes = Vec::new();
     for cli in Cli::ALL {
         for level in Tier::ALL {
             for (folder, attached) in [(true, false), (false, true), (true, true)] {
-                for program_folder in [true, false] {
+                for (program_folder, developer) in [true, false]
+                    .into_iter()
+                    .flat_map(|one| [(one, false), (one, true)])
+                {
                     shapes.push(Shape {
                         cli,
                         level,
@@ -225,6 +229,7 @@ fn shapes() -> Vec<Shape> {
                         program_folder,
                         port: 49152,
                         ancestors: 3,
+                        developer,
                     });
                 }
             }
@@ -357,6 +362,7 @@ fn every_parameter_is_one_of_the_named() {
         CLI_HOME,
         CLAUDE_CONFIG,
         MARK,
+        DEVELOPER,
     ];
     for shape in shapes() {
         let text = text(&shape);
@@ -631,6 +637,7 @@ fn the_rules_name_each_path_resolved_and_fit_the_launcher() {
         bridge: &bridge,
         cli_home: &home,
         claude_config: None,
+        developer: None,
     };
     let rules = rules(Cli::Codex, Tier::Work, 49152, &paths, place.mark()).unwrap();
     let keys: Vec<&str> = rules.params.iter().map(|(key, _)| *key).collect();
@@ -724,6 +731,7 @@ fn the_bridge_is_its_own_literal_and_nothing_of_the_bundle_is_a_subpath() {
         bridge: &bridge,
         cli_home: &home,
         claude_config: None,
+        developer: None,
     };
     let rules = rules_for(&paths, place.mark()).unwrap();
     let bridge = std::fs::canonicalize(&bridge).unwrap();
@@ -776,6 +784,7 @@ fn a_shell_starts_inside_the_whole_text_and_has_its_folder_at_its_level() {
         bridge: Path::new("/bin/sh"),
         cli_home: &home,
         claude_config: None,
+        developer: None,
     };
     let rules = rules_for(&paths, place.mark()).unwrap();
     let wall = super::super::Wall::inside(None, &rules, &[]).unwrap();
@@ -832,6 +841,7 @@ fn a_program_named_alone_starts_inside_the_whole_text() {
         bridge: Path::new("/bin/sh"),
         cli_home: &home,
         claude_config: None,
+        developer: None,
     };
     let rules = rules_for(&paths, place.mark()).unwrap();
     assert!(!rules.text.contains(PROGRAM_DIR));
@@ -853,4 +863,230 @@ fn a_program_named_alone_starts_inside_the_whole_text() {
         "started\n",
         "{err}"
     );
+}
+
+/// An app's Developer folder is taken in its one form alone: directly in the system's Applications
+/// folder, one app, its name not hidden, nothing above or beside it, nothing walking up.
+#[test]
+fn an_apps_developer_folder_is_taken_in_its_one_form_alone() {
+    for taken in [
+        "/Applications/Xcode.app/Contents/Developer",
+        "/Applications/Xcode-beta.app/Contents/Developer",
+    ] {
+        assert_eq!(
+            developer::developer_folder(Path::new(taken)),
+            Some(Path::new(taken))
+        );
+    }
+    for refused in [
+        "/Library/Developer/CommandLineTools",
+        "/Applications",
+        "/Applications/Xcode.app",
+        "/Applications/Xcode.app/Contents",
+        "/Users/someone/Applications/Xcode.app/Contents/Developer",
+        "/Applications/Tools/Xcode.app/Contents/Developer",
+        "/Applications/A.app/B.app/Contents/Developer",
+        "/Applications/Xcode.app/Contents/Developer/..",
+        "/Applications/../Applications/Xcode.app/Contents/Developer",
+        "/Applications/Xcode.app/Contents/Developer/.",
+        "/Applications/Xcode.app/Contents/Developer/",
+        "/Applications//Xcode.app/Contents/Developer",
+        "/Applications/./Xcode.app/Contents/Developer",
+        "Applications/Xcode.app/Contents/Developer",
+        "/Applications/.Xcode.app/Contents/Developer",
+        "/Applications/.app/Contents/Developer",
+        "/Applications/Xcode/Contents/Developer",
+        "/Volumes/Other/Applications/Xcode.app/Contents/Developer",
+        "/private/Applications/Xcode.app/Contents/Developer",
+        "/",
+        "",
+    ] {
+        assert_eq!(
+            developer::developer_folder(Path::new(refused)),
+            None,
+            "{refused}"
+        );
+    }
+}
+
+/// The folder the system's link picks is taken only as an administrator left it: the link, its
+/// folder, the app, its `Contents` and the Developer folder each the owner's and no one else's to
+/// write, no link on the way, and nothing in the user's home. Anything else is no folder at all.
+#[cfg(unix)]
+#[test]
+fn the_developer_folder_is_taken_only_as_an_administrator_left_it() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+    let folder = Folder::new("developer");
+    let root = std::fs::canonicalize(&folder.0).unwrap();
+    let owner = std::fs::metadata(&root).unwrap().uid();
+    let select = root.join("private/var/select");
+    let app = root.join("Applications/Xcode.app");
+    let developer_dir = app.join("Contents/Developer");
+    std::fs::create_dir_all(&select).unwrap();
+    std::fs::create_dir_all(&developer_dir).unwrap();
+    let mode = |path: &Path, mode: u32| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap()
+    };
+    for each in [&select, &app, &app.join("Contents"), &developer_dir] {
+        mode(each, 0o755);
+    }
+    let link = select.join("developer_dir");
+    let point = |target: &str| {
+        _ = std::fs::remove_file(&link);
+        symlink(target, &link).unwrap();
+    };
+    let home = root.join("home");
+    let taken = |owner: u32, home: &Path| developer::developer(&root, owner, home);
+    assert_eq!(taken(owner, &home), None, "no link");
+    point("/Applications/Xcode.app/Contents/Developer");
+    assert_eq!(taken(owner, &home), Some(developer_dir.clone()));
+    // Another owner's, anywhere on the way.
+    assert_eq!(taken(owner + 1, &home), None, "another owner");
+    // Anyone else may write one of them.
+    for each in [&select, &app, &app.join("Contents"), &developer_dir] {
+        mode(each, 0o775);
+        assert_eq!(taken(owner, &home), None, "{each:?} group");
+        mode(each, 0o757);
+        assert_eq!(taken(owner, &home), None, "{each:?} others");
+        mode(each, 0o755);
+    }
+    // A link at any level of the app's.
+    for each in [app.clone(), app.join("Contents"), developer_dir.clone()] {
+        let aside = each.with_extension("real");
+        std::fs::rename(&each, &aside).unwrap();
+        symlink(&aside, &each).unwrap();
+        assert_eq!(taken(owner, &home), None, "{each:?} a link");
+        std::fs::remove_file(&each).unwrap();
+        std::fs::rename(&aside, &each).unwrap();
+    }
+    assert_eq!(taken(owner, &home), Some(developer_dir.clone()));
+    // The Command Line Tools, another form, or a folder in the home.
+    for target in [
+        "/Library/Developer/CommandLineTools",
+        "/Applications/Xcode.app",
+        "/Applications/Xcode.app/Contents/Developer/../Developer",
+    ] {
+        point(target);
+        assert_eq!(taken(owner, &home), None, "{target}");
+    }
+    point("/Applications/Xcode.app/Contents/Developer");
+    assert_eq!(
+        taken(owner, &root.join("Applications")),
+        None,
+        "in the home"
+    );
+    assert_eq!(taken(owner, &root), None, "the home holds it");
+    assert_eq!(taken(owner, &home), Some(developer_dir));
+}
+
+/// An app's Developer folder is read and mapped by its parameter alone, in one line, as the system's
+/// part has the Command Line Tools' folder: no name of an app and no `/Applications` in any text,
+/// and none of an app's other folders.
+#[test]
+fn the_developer_folder_is_its_parameter_and_never_in_the_text() {
+    let line = format!(
+        "(allow file-read* file-test-existence file-map-executable \
+         (subpath (param \"{DEVELOPER}\")))"
+    );
+    for shape in shapes() {
+        let text = text(&shape);
+        let named: Vec<&str> = (text.lines())
+            .filter(|each| each.contains(DEVELOPER))
+            .collect();
+        match shape.developer {
+            true => assert_eq!(named, [line.as_str()], "{shape:?}"),
+            false => assert!(named.is_empty(), "{shape:?}"),
+        }
+        for never in ["Applications", "Xcode", "SharedFrameworks", "/Contents/"] {
+            assert!(!text.contains(never), "{shape:?} {never}");
+        }
+    }
+}
+
+/// The Developer folder is a parameter with its folders above for their names, and its path is in
+/// no text; it joins only while every parameter still fits, so a task that fits without it is never
+/// refused for it, and starts without it instead.
+#[cfg(unix)]
+#[test]
+fn the_developer_folder_joins_only_while_the_parameters_fit() {
+    let folder = Folder::new("developer-rules");
+    let made = |name: &str| {
+        let path = folder.0.join(name);
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    };
+    let (granted, task, tmp, program, home) = (
+        made("granted"),
+        made("Tasks/task"),
+        made("Tasks/.tmp/0123456789abcdef"),
+        made("program"),
+        made("home"),
+    );
+    let developer_dir = made("Applications/Xcode.app/Contents/Developer");
+    let bridge = made("ilo.app/Contents/MacOS").join("mcp-bridge");
+    std::fs::write(&bridge, "").unwrap();
+    let place = Places::make(&folder.0.join("places")).unwrap();
+    let config = folder.0.join("Tasks/task.json");
+    let paths = Paths {
+        folder: Some(&granted),
+        attached: None,
+        task_dir: &task,
+        config: &config,
+        tmp: &tmp,
+        socket: &folder.0.join("Agents.sock"),
+        program: Program::Folder(&program),
+        bridge: &bridge,
+        cli_home: &home,
+        claude_config: None,
+        developer: Some(&developer_dir),
+    };
+    let root = std::fs::canonicalize(&folder.0).unwrap();
+    let up = |rules: &Rules, path: &Path| {
+        (rules.params.iter()).any(|(key, each)| key.starts_with("UP_") && each == path)
+    };
+    let with = rules_for(&paths, place.mark()).unwrap();
+    let real = root.join("Applications/Xcode.app/Contents/Developer");
+    assert!(with.params.contains(&(DEVELOPER, real.clone())));
+    for above in real.ancestors().skip(1).take(3) {
+        assert!(up(&with, above), "{above:?}");
+    }
+    assert!(with.text.contains(&format!("(param \"{DEVELOPER}\")")));
+    assert!(!with.text.contains(root.to_str().unwrap()));
+    assert!(!with.text.contains("Xcode") && !with.text.contains("Applications"));
+    let without = rules_for(
+        &Paths {
+            developer: None,
+            ..paths
+        },
+        place.mark(),
+    )
+    .unwrap();
+    assert!(!(without.params.iter()).any(|(key, _)| *key == DEVELOPER));
+    assert!(!without.text.contains(DEVELOPER));
+    assert!(!up(&without, &root.join("Applications")));
+    // The deepest granted folder that fits without it: with it, the same task starts, without it.
+    let deepest = (0..PARAMETERS_MAX)
+        .map(|depth| (0..depth).fold(granted.clone(), |path, at| path.join(at.to_string())))
+        .take_while(|deep| {
+            std::fs::create_dir_all(deep).unwrap();
+            let paths = Paths {
+                folder: Some(deep),
+                developer: None,
+                ..paths
+            };
+            rules_for(&paths, place.mark()).is_ok()
+        })
+        .last()
+        .unwrap();
+    let full = rules_for(
+        &Paths {
+            folder: Some(&deepest),
+            ..paths
+        },
+        place.mark(),
+    )
+    .unwrap();
+    assert!(!(full.params.iter()).any(|(key, _)| *key == DEVELOPER));
+    assert!(!full.text.contains(DEVELOPER));
+    assert!(full.params.len() <= PARAMETERS_MAX);
 }

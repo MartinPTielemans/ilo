@@ -17,6 +17,7 @@ use crate::agents::files::{self, Op, Place};
 use crate::agents::runner::Cli;
 use crate::agents::tier::Tier;
 
+pub mod developer;
 pub mod system;
 
 /// The assistant's own home, `CODEX_HOME` or `~/.claude`.
@@ -41,6 +42,9 @@ pub const PROGRAM_DIR: &str = "PROGRAM_DIR";
 pub const PROGRAM: &str = "PROGRAM";
 /// ilo's MCP bridge, beside ilo's own executable, which the assistant runs to reach the socket.
 pub const BRIDGE: &str = "BRIDGE";
+/// An app's own Developer folder, when the system's link picks one an administrator installed
+/// (developer.rs).
+pub const DEVELOPER: &str = "DEVELOPER";
 
 /// The parameters naming the folders above every path the text names, one each.
 const UP: [&str; PARAMETERS_MAX] = [
@@ -307,12 +311,21 @@ pub struct Shape {
     pub port: u16,
     /// How many folders above the named paths have a parameter.
     pub ancestors: usize,
+    /// Whether an app's Developer folder is read, as the Command Line Tools' folder is.
+    pub developer: bool,
 }
 
 /// The whole text of a walled task's rules.
 pub fn text(shape: &Shape) -> String {
     let mut text = String::from(BASE);
     text.push_str(&system::text());
+    // Read and mapped as the system's part has the Command Line Tools' folder, by its parameter.
+    if shape.developer {
+        text.push_str(&format!(
+            "(allow file-read* file-test-existence file-map-executable \
+             (subpath (param \"{DEVELOPER}\")))\n"
+        ));
+    }
     for (key, given, place) in [
         (FOLDER, shape.folder, Place::Folder),
         (ATTACHED, shape.attached, Place::Attached),
@@ -406,6 +419,8 @@ pub struct Paths<'a> {
     pub cli_home: &'a Path,
     /// Claude Code's `~/.claude.json`, which Codex has none of.
     pub claude_config: Option<&'a Path>,
+    /// An app's Developer folder, as developer.rs takes it.
+    pub developer: Option<&'a Path>,
 }
 
 /// Why rules weren't made for paths this deep, a sentence that names none of them.
@@ -445,6 +460,27 @@ pub fn rules(cli: Cli, level: Tier, port: u16, paths: &Paths, mark: &Mark) -> io
     if params.len() + ups.len() > PARAMETERS_MAX {
         return Err(io::Error::other(TOO_DEEP));
     }
+    // The Developer folder joins only if it still fits, so it never makes a task that fits
+    // without it too deep; one that doesn't fit starts without the app's tools.
+    let named = || (params.iter()).filter(|(key, _)| *key != MARK);
+    let developer = (paths.developer)
+        .and_then(|folder| resolved(folder).ok())
+        .map(|folder| {
+            let ups = ancestors(
+                named()
+                    .map(|(_, path)| path.as_path())
+                    .chain([folder.as_path()]),
+            );
+            (folder, ups)
+        })
+        .filter(|(_, ups)| params.len() + 1 + ups.len() <= PARAMETERS_MAX);
+    let ups = match developer {
+        Some((folder, more)) => {
+            params.push((DEVELOPER, folder));
+            more
+        }
+        None => ups,
+    };
     let shape = Shape {
         cli,
         level,
@@ -453,6 +489,7 @@ pub fn rules(cli: Cli, level: Tier, port: u16, paths: &Paths, mark: &Mark) -> io
         program_folder: matches!(paths.program, Program::Folder(_)),
         port,
         ancestors: ups.len(),
+        developer: params.iter().any(|(key, _)| *key == DEVELOPER),
     };
     params.extend(UP.iter().copied().zip(ups));
     Ok(Rules {

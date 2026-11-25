@@ -376,6 +376,12 @@ fn build(task: &WallFor) -> Result<Wall, WallRefused> {
             return Err(failed(OVERLAPS));
         }
     }
+    // The app's developer tools, if the system's link picks an app an administrator installed:
+    // read once here, so a link moved later doesn't move the wall. Anything else, today's wall.
+    #[cfg(target_os = "macos")]
+    let developer = rules::developer::developer(Path::new("/"), 0, &home);
+    #[cfg(not(target_os = "macos"))]
+    let developer: Option<PathBuf> = None;
     let place = leftovers::Place::make(task.places).map_err(|_| failed(NO_PLACE))?;
     let walled: Result<(Wall, listener::Listener), WallRefused> = (|| {
         let listener = listener::Listener::start(task.cli).map_err(|_| failed(NO_LISTENER))?;
@@ -390,6 +396,7 @@ fn build(task: &WallFor) -> Result<Wall, WallRefused> {
             bridge: &bridge,
             cli_home: task.cli_home,
             claude_config: task.claude_config,
+            developer: developer.as_deref(),
         };
         let rules = rules::rules(task.cli, task.level, listener.port(), &paths, place.mark())
             .map_err(|why| match why.to_string() == rules::TOO_DEEP {
