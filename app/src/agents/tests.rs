@@ -73,8 +73,10 @@ struct Made {
     /// The user's Spaces outside the profile the others are in, "Default", each with the name of
     /// its profile's folder.
     profiles: RefCell<Vec<(u64, &'static str)>>,
-    /// The Spaces that are a private window's own, as a test says.
+    /// The Spaces that are a private window's own, as a test says; and how often one was asked
+    /// whether it is.
     private: RefCell<Vec<u64>>,
+    space_asks: std::cell::Cell<usize>,
     /// The user's tabs given to an agent, each with the Space it left and its place there, in the
     /// order given; and those the core refuses to give, as a test says.
     given: RefCell<Vec<(u64, u64, usize)>>,
@@ -491,6 +493,7 @@ impl Browser for Made {
     }
 
     fn private_space(&self, space: u64) -> bool {
+        self.space_asks.set(self.space_asks.get() + 1);
         self.private.borrow().contains(&space)
     }
 

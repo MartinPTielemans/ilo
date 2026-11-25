@@ -247,6 +247,10 @@ pub(crate) struct Recorder {
     pub(super) agent_history: RefCell<HashMap<u64, String>>,
     /// The answers for good, by the key they're kept under, each its site and whether it may.
     pub(super) agent_answers: RefCell<HashMap<String, Vec<(String, bool)>>>,
+    /// Each time the composer asked which tabs it may offer to hand: for which thread, from which
+    /// Space, and how many tabs it asked of. And the tabs a test says can't be handed.
+    pub(super) hand_asks: RefCell<Vec<(Option<String>, u64, usize)>>,
+    pub(super) not_to_hand: RefCell<Vec<u64>>,
     /// The pages `open_page` opened, in order.
     pub(super) opened_pages: RefCell<Vec<String>>,
     /// The text `copy` put on the clipboard, in order.
@@ -1405,6 +1409,15 @@ impl Browser for Recorder {
             .get(key)
             .cloned()
             .unwrap_or_default()
+    }
+
+    fn tabs_to_hand(&self, agent: Option<&str>, space: u64, tabs: &[u64], _: &App) -> Vec<u64> {
+        let asked = (agent.map(str::to_string), space, tabs.len());
+        self.hand_asks.borrow_mut().push(asked);
+        let refused = self.not_to_hand.borrow();
+        (tabs.iter().copied())
+            .filter(|tab| !refused.contains(tab))
+            .collect()
     }
 
     fn revoke_agent_answer(&self, key: &str, site: &str, _: &mut App) {

@@ -537,6 +537,20 @@ pub trait Browser {
     /// Revoke on a past task's page: the answer for good under `key` on `site` goes, as Settings ›
     /// Agents' Revoke has it go, with its entry in the activity log.
     fn revoke_agent_answer(&self, _key: &str, _site: &str, _cx: &mut App) {}
+    /// Those of `tabs`, the user's in the Space `space_in_view`, that the composer may offer to
+    /// hand to `agent`'s thread, or with none to a thread not yet started, in their order
+    /// (`Agents::fits_among`). The composer's alone, asked as its menu of the user's tabs opens
+    /// and for its chips before a send: never at launch, on a tab switch, as the bar opens or per
+    /// key.
+    fn tabs_to_hand(
+        &self,
+        _agent: Option<&str>,
+        _space_in_view: u64,
+        _tabs: &[u64],
+        _cx: &App,
+    ) -> Vec<u64> {
+        Vec::new()
+    }
     /// Closes the window with the keyboard if it's another of the app's, such as Chrome's Task
     /// Manager, and says whether it did.
     fn close_other_window(&self, cx: &mut App) -> bool;

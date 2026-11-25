@@ -1268,6 +1268,19 @@ impl Browser for Engine {
             .collect()
     }
 
+    fn tabs_to_hand(
+        &self,
+        agent: Option<&str>,
+        space_in_view: u64,
+        tabs: &[u64],
+        cx: &App,
+    ) -> Vec<u64> {
+        let Some(agents) = browser::agents::global(cx) else {
+            return Vec::new();
+        };
+        (agents.read(cx)).fits_among(agent, space_in_view, tabs, cx)
+    }
+
     fn revoke_agent_answer(&self, key: &str, site: &str, cx: &mut App) {
         if let Some(agents) = browser::agents::global(cx) {
             agents.update(cx, |agents, cx| agents.revoke(key, Some(site), cx));
