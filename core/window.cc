@@ -507,11 +507,11 @@ WEB_CONTENTS_USER_DATA_KEY_IMPL(HeldLoad);
 
 // The area a watched page has in a new window at its default size, in CSS pixels, so a watch
 // there shows it at 1:1: the app's 1280 by 800 (window_opening.rs, WINDOW_SIZE) less the sidebar's
-// 228 and the card's inset of 10 at the right and 10 above and below (tokens.toml, [shell]), and
+// 228 and the card's inset of 8 at the right and 8 above and below (tokens.toml, [shell]), and
 // the room of 46 under a watched page (tokens.toml, [shell.task-area] page-room). An agent's tab has
 // it until a window shows it: Chromium's tab strip gives a tab added behind the active one that
 // tab's size, and with no active tab none, which nothing can picture (#3788).
-constexpr gfx::Size kAgentPageSize(1042, 734);
+constexpr gfx::Size kAgentPageSize(1044, 738);
 
 // Sizes |contents| to kAgentPageSize unless a window shows it, whose page area it then has. Its
 // view saying it shows isn't enough: on the Mac a pop-up its page made starts shown, and a view no
