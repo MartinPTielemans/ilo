@@ -15,6 +15,7 @@ bool Refuses(Kind kind, const agent_space_rule::Tab& tab) {
     case Kind::kCast:
     case Kind::kExtensionInstall:
     case Kind::kFederatedSignIn:
+    case Kind::kShare:
       return tab.agents && !tab.held;
     default:
       return tab.agents;
@@ -91,6 +92,8 @@ const char* CodeWord(Kind kind) {
       return "extension_install";
     case Kind::kFederatedSignIn:
       return "federated_sign_in";
+    case Kind::kShare:
+      return "share";
     case Kind::kOther:
     case Kind::kLeftAsToday:
       return "other";

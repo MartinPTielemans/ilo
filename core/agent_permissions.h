@@ -88,6 +88,10 @@ bool TakesDownloadQuestion(download::DownloadItem* download,
 // Space the user doesn't hold, whoever asked, the page or a command. Notes the refusal.
 bool NoCast(content::WebContents* contents);
 
+// Whether the page in |frame| is refused the system's sheet to share with, asked at each share: a
+// page in an agent's Space the user doesn't hold. Notes the refusal.
+bool NoShare(content::RenderFrameHost* frame);
+
 // Whether the page in |contents| is refused the sheet that offers the user's accounts with another
 // site to sign in with, asked as each of its requests to sign in so starts: a page in an agent's
 // Space the user doesn't hold. Notes the refusal.

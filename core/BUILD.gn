@@ -834,6 +834,8 @@ source_set("browser_core") {
     "agent_page.h",
     "agent_permissions.cc",
     "agent_permissions.h",
+    "agent_share.cc",
+    "agent_share.h",
     "agent_request.cc",
     "agent_request.h",
     "agent_session.cc",
@@ -1298,6 +1300,10 @@ source_set("browser_core") {
   }
   if (!is_win && !is_linux) {
     sources += [ "platform/battery_none.cc" ]
+  }
+  if (is_mac || is_win) {
+    # Chrome's share service, which agent_share.cc stands before: Chrome has one only here.
+    deps += [ "//chrome/browser/webshare" ]
   }
   if (is_win || is_linux) {
     sources += [

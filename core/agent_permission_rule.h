@@ -60,6 +60,8 @@ enum class Kind {
   kExtensionInstall,
   // The sheet that offers the user's accounts with another site to sign in with.
   kFederatedSignIn,
+  // The system's sheet to share what a page hands it, with the user's apps and people in it.
+  kShare,
   // A question of no kind above that the browser would have put to the user.
   kOther,
   // A kind that gives a page nothing of the user's device or person, such as a screen wake lock

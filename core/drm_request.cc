@@ -13,6 +13,7 @@
 #include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "browser_core/ad_block.h"
+#include "browser_core/agent_share.h"
 #include "browser_core/drm_request.mojom.h"
 #include "browser_core/host.h"
 #include "browser_core/protected_move_rule.h"
@@ -345,6 +346,7 @@ class DrmRequest final : public content::DocumentService<mojom::DrmRequest> {
 
 void PopulateFrameBinders(mojo::BinderMapWithContext<content::RenderFrameHost*>* map) {
   map->Add<mojom::DrmRequest>(&DrmRequest::Bind);
+  AddShareBinder(map);
 }
 
 void ForgetMediaUnsupported(content::WebContents* contents) {

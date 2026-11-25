@@ -306,6 +306,15 @@ bool NoCast(content::WebContents* contents) {
   return true;
 }
 
+bool NoShare(content::RenderFrameHost* frame) {
+  if (!frame || !agent_permission_rule::Refuses(
+                    Kind::kShare, RuleTabOf(content::WebContents::FromRenderFrameHost(frame)))) {
+    return false;
+  }
+  NoteRefused(Kind::kShare, frame);
+  return true;
+}
+
 bool NoFederatedSignIn(content::WebContents* contents) {
   if (!contents || !agent_permission_rule::Refuses(Kind::kFederatedSignIn, RuleTabOf(contents))) {
     return false;

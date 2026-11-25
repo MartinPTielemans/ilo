@@ -31,13 +31,14 @@ TEST(AgentPermissionRule, AnAgentsSpaceIsRefusedEveryKindButThoseLeftAsToday) {
 }
 
 // The user holding the tab changes these answers: their own copy writes the clipboard, and a
-// print, the choice of a certificate, of a device to cast to and of an account to sign in with,
-// and the answer to an extension's install are theirs to make.
+// print, the choice of a certificate, of a device to cast to, of an account to sign in with and of
+// where a share goes, and the answer to an extension's install are theirs to make.
 TEST(AgentPermissionRule, AHeldTabIsRefusedAsOneNotHeldButForWhatTheUserDoesThemselves) {
   for (size_t at = 0; at < kKinds; ++at) {
     const Kind kind = KindAt(at);
     if (kind == Kind::kClipboardWrite || kind == Kind::kPrint || kind == Kind::kClientCertificate ||
-        kind == Kind::kCast || kind == Kind::kExtensionInstall || kind == Kind::kFederatedSignIn) {
+        kind == Kind::kCast || kind == Kind::kExtensionInstall || kind == Kind::kFederatedSignIn ||
+        kind == Kind::kShare) {
       EXPECT_FALSE(Refuses(kind, kHeld));
       continue;
     }
@@ -179,6 +180,20 @@ TEST(AgentPermissionRule, APageInAnAgentsSpaceIsOfferedNoAccountToSignInWith) {
 // While the user holds the tab the choice of an account is theirs, as in a tab of their own.
 TEST(AgentPermissionRule, AHeldTabIsOfferedTheUsersAccountsToSignInWith) {
   EXPECT_FALSE(Refuses(Kind::kFederatedSignIn, kHeld));
+}
+
+TEST(AgentPermissionRule, AUsersTabShares) {
+  EXPECT_FALSE(Refuses(Kind::kShare, kUsers));
+}
+
+TEST(AgentPermissionRule, APageInAnAgentsSpaceIsShownNoSheetToShareWith) {
+  EXPECT_TRUE(Refuses(Kind::kShare, kAgents));
+  EXPECT_STREQ(CodeWord(Kind::kShare), "share");
+}
+
+// While the user holds the tab a share is theirs to send, as in a tab of their own.
+TEST(AgentPermissionRule, AHeldTabShares) {
+  EXPECT_FALSE(Refuses(Kind::kShare, kHeld));
 }
 
 TEST(AgentPermissionRule, AUsersTabIsShownTheCertificateChooser) {
