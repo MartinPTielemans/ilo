@@ -8,6 +8,7 @@
 
 #include <bitset>
 #include <cstddef>
+#include <string_view>
 
 #include "browser_core/agent_space_rule.h"
 
@@ -123,6 +124,36 @@ enum class PagePopup {
 // agent's Space the user doesn't hold opens neither, whoever asked: an agent's click, a key, or
 // the page itself. Its select stays shut, and nothing is drawn over the user's screen for it.
 bool RefusesPagePopup(PagePopup popup, const agent_space_rule::Tab& tab);
+
+// A field whose list or picker is drawn outside the page.
+enum class ShutField {
+  kNone,
+  // A select that shows one line and drops its list down.
+  kSelect,
+  // An input of a date or time type, with its calendar or clock.
+  kDateOrTime,
+  // An input of type color.
+  kColor,
+};
+
+// An element as its markup has it: its tag's name as the engine gives it, in capitals for an HTML
+// page's own, and the attributes that say which field it is, each "" if it has none.
+struct Markup {
+  std::string_view tag;
+  std::string_view type;
+  // Whether a select takes several options, which draws its list in the page.
+  bool multiple = false;
+  std::string_view size;
+};
+
+// What an agent's click is told it landed on, so that it doesn't spend steps on a list that stays
+// shut: the field |element| is, on a page refused its list or picker (RefusesPagePopup). Nothing
+// where the list would have opened, and nothing for a select that draws its list in the page. The
+// answer is the element's kind as the markup has it, never a word of the page.
+ShutField ShutFieldClicked(const Markup& element, const agent_space_rule::Tab& tab);
+
+// The code word the click's answer names it by, "" for none.
+std::string_view ShutWord(ShutField field);
 
 // Why Chrome would ask the user where a download's file goes.
 enum class DownloadQuestion {

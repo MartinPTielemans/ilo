@@ -1,5 +1,7 @@
 #include "browser_core/agent_permission_rule.h"
 
+#include <initializer_list>
+
 namespace browser_core::agent_permission_rule {
 
 bool Refuses(Kind kind, const agent_space_rule::Tab& tab) {
@@ -98,6 +100,96 @@ bool RefusesPagePopup(PagePopup popup, const agent_space_rule::Tab& tab) {
       return tab.agents && !tab.held;
   }
   return false;
+}
+
+namespace {
+
+char Lower(char c) {
+  return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+}
+
+// An attribute's keyword, which compares in any case.
+bool Is(std::string_view value, std::string_view keyword) {
+  if (value.size() != keyword.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < value.size(); ++i) {
+    if (Lower(value[i]) != keyword[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Whether a select's size attribute asks for more lines than one, read as HTML reads a number
+// that can't be negative: spaces, a plus sign, then digits, and whatever follows them ignored.
+bool ManyLines(std::string_view size) {
+  size_t at = 0;
+  while (at < size.size() && (size[at] == ' ' || size[at] == '\t' || size[at] == '\n' ||
+                              size[at] == '\f' || size[at] == '\r')) {
+    ++at;
+  }
+  if (at < size.size() && size[at] == '+') {
+    ++at;
+  }
+  bool many = false;
+  bool digits = false;
+  for (; at < size.size() && size[at] >= '0' && size[at] <= '9'; ++at) {
+    // Any digit after one that isn't a leading zero, or a first one over 1.
+    many = many || digits || size[at] > '1';
+    digits = digits || size[at] != '0';
+  }
+  return many;
+}
+
+ShutField FieldOf(const Markup& element) {
+  if (element.tag == "SELECT") {
+    return element.multiple || ManyLines(element.size) ? ShutField::kNone : ShutField::kSelect;
+  }
+  if (element.tag != "INPUT") {
+    return ShutField::kNone;
+  }
+  if (Is(element.type, "color")) {
+    return ShutField::kColor;
+  }
+  for (std::string_view type : {"date", "datetime-local", "month", "week", "time"}) {
+    if (Is(element.type, type)) {
+      return ShutField::kDateOrTime;
+    }
+  }
+  return ShutField::kNone;
+}
+
+}  // namespace
+
+ShutField ShutFieldClicked(const Markup& element, const agent_space_rule::Tab& tab) {
+  const ShutField field = FieldOf(element);
+  switch (field) {
+    case ShutField::kNone:
+      return field;
+    case ShutField::kSelect:
+      // The Mac draws it as the system's menu. Where it is a window of the page's, both are
+      // refused alike.
+      return RefusesPagePopup(PagePopup::kSystemMenu, tab) ? field : ShutField::kNone;
+    case ShutField::kDateOrTime:
+    case ShutField::kColor:
+      return RefusesPagePopup(PagePopup::kWindow, tab) ? field : ShutField::kNone;
+  }
+  return ShutField::kNone;
+}
+
+std::string_view ShutWord(ShutField field) {
+  switch (field) {
+    case ShutField::kNone:
+      return "";
+    case ShutField::kSelect:
+      return "select";
+    case ShutField::kDateOrTime:
+      return "date_time";
+    case ShutField::kColor:
+      return "color";
+  }
+  return "";
 }
 
 DownloadAnswer AnswersDownloadQuestion(DownloadQuestion question,

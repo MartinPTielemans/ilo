@@ -181,6 +181,69 @@ TEST(AgentPermissionRule, AHeldTabOpensAPagesPopupWindow) {
   EXPECT_FALSE(RefusesPagePopup(PagePopup::kWindow, kHeld));
 }
 
+constexpr Markup kSelect{.tag = "SELECT"};
+constexpr Markup kDate{.tag = "INPUT", .type = "date"};
+constexpr Markup kColor{.tag = "INPUT", .type = "color"};
+
+TEST(AgentPermissionRule, AnAgentsClickIsToldASelectStaysShut) {
+  EXPECT_EQ(ShutFieldClicked(kSelect, kAgents), ShutField::kSelect);
+  EXPECT_EQ(ShutFieldClicked({.tag = "SELECT", .size = "1"}, kAgents), ShutField::kSelect);
+  EXPECT_EQ(ShutFieldClicked({.tag = "SELECT", .size = "none"}, kAgents), ShutField::kSelect);
+}
+
+TEST(AgentPermissionRule, AnAgentsClickIsToldADateOrTimeFieldOpensNoCalendar) {
+  for (std::string_view type : {"date", "datetime-local", "month", "week", "time", "DATE"}) {
+    EXPECT_EQ(ShutFieldClicked({.tag = "INPUT", .type = type}, kAgents), ShutField::kDateOrTime)
+        << type;
+  }
+}
+
+TEST(AgentPermissionRule, AnAgentsClickIsToldAColorFieldOpensNoPicker) {
+  EXPECT_EQ(ShutFieldClicked(kColor, kAgents), ShutField::kColor);
+  EXPECT_EQ(ShutFieldClicked({.tag = "INPUT", .type = "Color"}, kAgents), ShutField::kColor);
+}
+
+TEST(AgentPermissionRule, ASelectThatDrawsItsListInThePageGetsNoWord) {
+  EXPECT_EQ(ShutFieldClicked({.tag = "SELECT", .multiple = true}, kAgents), ShutField::kNone);
+  for (std::string_view size : {"2", "10", " +4", "02", "3 lines"}) {
+    EXPECT_EQ(ShutFieldClicked({.tag = "SELECT", .size = size}, kAgents), ShutField::kNone) << size;
+  }
+  for (std::string_view size : {"", "0", "1", "01", "-3", "+1"}) {
+    EXPECT_EQ(ShutFieldClicked({.tag = "SELECT", .size = size}, kAgents), ShutField::kSelect)
+        << size;
+  }
+}
+
+TEST(AgentPermissionRule, AnyOtherElementGetsNoWord) {
+  for (std::string_view type : {"", "text", "datetime", "range", "file", "dates", "colour"}) {
+    EXPECT_EQ(ShutFieldClicked({.tag = "INPUT", .type = type}, kAgents), ShutField::kNone) << type;
+  }
+  // Only the engine's own name for the element counts, never an attribute a page gave another.
+  EXPECT_EQ(ShutFieldClicked({.tag = "DIV", .type = "date"}, kAgents), ShutField::kNone);
+  EXPECT_EQ(ShutFieldClicked({.tag = "BUTTON", .type = "color"}, kAgents), ShutField::kNone);
+  EXPECT_EQ(ShutFieldClicked({.tag = "select"}, kAgents), ShutField::kNone);
+  EXPECT_EQ(ShutFieldClicked({.tag = ""}, kAgents), ShutField::kNone);
+}
+
+TEST(AgentPermissionRule, AHeldTabsClickGetsNoWord) {
+  for (const Markup& element : {kSelect, kDate, kColor}) {
+    EXPECT_EQ(ShutFieldClicked(element, kHeld), ShutField::kNone) << element.type;
+  }
+}
+
+TEST(AgentPermissionRule, AClickInAUsersTabGetsNoWord) {
+  for (const Markup& element : {kSelect, kDate, kColor}) {
+    EXPECT_EQ(ShutFieldClicked(element, kUsers), ShutField::kNone) << element.type;
+  }
+}
+
+TEST(AgentPermissionRule, EachShutFieldHasACodeWordOfItsOwn) {
+  EXPECT_EQ(ShutWord(ShutField::kNone), "");
+  EXPECT_EQ(ShutWord(ShutField::kSelect), "select");
+  EXPECT_EQ(ShutWord(ShutField::kDateOrTime), "date_time");
+  EXPECT_EQ(ShutWord(ShutField::kColor), "color");
+}
+
 constexpr DownloadQuestion kDownloadQuestions[] = {
     DownloadQuestion::kUsersSaveAs,
     DownloadQuestion::kUsersSetting,
