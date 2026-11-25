@@ -1088,10 +1088,9 @@ button-plate = 0.1
 # Ours (#1636): an ilo window of its own. Its sections run down a column on the window's material,
 # as the sidebar's rows do, and the section shown sits on a card, as a page does. Its colours are
 # alphas of the palette's paper in dark and its ink in light, over the stand-in and the card.
-width = 900.0
-# Tall enough for every section, under its group's label, over the foot, at the sidebar's 36 a
-# row: the mock's 660 fits them only at 30 a row, which would shrink each one's hit area (#4092).
-height = 760.0
+# The owner's drawing: 940 by 740 to start (spec-settings.md), its pages' rows 30 tall.
+width = 940.0
+height = 740.0
 # The least it can be made: room for the column and a row with a sentence and a control.
 min-width = 720.0
 min-height = 480.0
@@ -1400,6 +1399,87 @@ share-plate = 0.06
 share-profiles-gap = 6.0
 # The Spaces' colours: ilo's green, then two of Edit's marks' (capture.markup).
 share-spaces = [0x289054, 0x0a84ff, 0xff9500]
+
+# The owner's drawing of Settings (spec-settings.md, values-settings.md): a sidebar of pages 216
+# wide down the window's glass, and the page shown on its own plane, 8 in from the window's top,
+# right and bottom. Each colour is the drawing's in dark, and light-values.md's under `light-`,
+# which the lead derived from the drawing's rule (Proposed).
+[settings.form]
+# The sidebar: 8 in at its sides and foot, the window's buttons in its first row, 44 tall.
+sidebar = 216.0
+sidebar-x = 8.0
+sidebar-bottom = 8.0
+title-row = 44.0
+# The search field, 32 tall at the row radius on the field's fill, its magnifier 14 and 8 before
+# "Search settings", 10 in, and ⌘F on a chip 18 tall, 5 in, at radius 5, 8 from its end; the
+# first row 12 under it.
+search-height = 32.0
+search-radius = 12.0
+search-left = 10.0
+search-right = 8.0
+search-gap = 8.0
+search-glyph = 14.0
+search-after = 12.0
+chip-height = 18.0
+chip-x = 5.0
+chip-radius = 5.0
+chip-text = 10.0
+chip-line = 12.0
+# A page's row: 30 tall, 10 in, its glyph 16 and 9 before its name at 13 on 16, at radius 8;
+# the page shown on the `shown` plate, its name at weight 510. Under the pointer, the button's
+# fill (ours: the drawing has no hover).
+row = 30.0
+row-x = 10.0
+row-gap = 9.0
+row-radius = 8.0
+row-glyph = 16.0
+row-text = 13.0
+row-line = 16.0
+row-shown-weight = 510.0
+# A group's heading: 34 tall, its name at 11 on 14 at its foot, 6 up, 10 in.
+heading = 34.0
+heading-bottom = 6.0
+heading-text = 11.0
+heading-line = 14.0
+# The foot: the version row, which is About's, 30 tall, its name at 12 on 16 and what the
+# updater last said at 11 on 14, 8 apart; then Chromium's settings, 28 tall, at 12 on 16, its
+# arrow 10 and 6 after it.
+foot-row = 30.0
+foot-gap = 8.0
+foot-text = 12.0
+foot-line = 16.0
+foot-word = 11.0
+foot-word-line = 14.0
+chromium-row = 28.0
+chromium-gap = 6.0
+chromium-glyph = 10.0
+# The page's plane: 8 from the window's top, right and bottom, at radius 10, with an inner line.
+panel-margin = 8.0
+panel-radius = 10.0
+# The page's title, 22 on 28 at weight 600 in the heading face, 16 over what follows it.
+title-size = 22.0
+title-line = 28.0
+title-weight = 600.0
+own-page = 0x1d1d21a8
+light-own-page = 0xfbfaf7a8
+# The drawing's #FFFFFF0F; in light the ink at the drawn tiles' strength.
+page-line = 0xffffff0f
+light-page-line = 0x0000000d
+text = 0xf3f0e8ff
+light-text = 0x161618ff
+text-2 = 0xf3f0e899
+light-text-2 = 0x161618a6
+text-3 = 0xf3f0e86b
+light-text-3 = 0x16161880
+# A row's glyph and the search's magnifier and the foot's arrow, in the controls' icon ink.
+icon = 0xf3f0e8b3
+light-icon = 0x161618b3
+field = 0xf3f0e816
+light-field = 0x16161816
+button = 0xf3f0e81a
+light-button = 0x1616181a
+shown = 0xf3f0e833
+light-shown = 0x16161829
 
 [shell]
 # The docked sidebar's width at first, where the card starts.

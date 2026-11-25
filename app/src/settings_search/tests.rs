@@ -25,19 +25,19 @@ fn rows() -> Vec<Entry> {
     let little = concat!("Little ", env!("APP_NAME"));
     vec![
         row(
-            Section::Appearance,
+            Section::Window,
             None,
             "Appearance",
             Some("Light, dark, or as the system is."),
         ),
         row(
-            Section::Appearance,
+            Section::Window,
             None,
             "Page zoom",
             Some("Every page's size, until you zoom a site, which keeps its own."),
         ),
         row(
-            Section::Appearance,
+            Section::Window,
             None,
             "Top bar",
             Some("The URL field and the sidebar's buttons in a row across the window's top."),
@@ -49,43 +49,43 @@ fn rows() -> Vec<Entry> {
             Some("Off: ilo opens one empty window, and Today tabs go to the archive."),
         ),
         row(
-            Section::TabsAndSidebar,
+            Section::TabsAndSpaces,
             None,
             "Archive Today tabs after",
             Some("Tabs you haven't looked at go to the archive. ⇧⌘T brings one back."),
         ),
         row(
-            Section::TabsAndSidebar,
+            Section::TabsAndSpaces,
             None,
             "Unload tabs you haven't looked at",
             Some("After 2 hours out of sight a tab frees its memory."),
         ),
         row(
-            Section::Appearance,
+            Section::Window,
             None,
             "Sidebar position",
             Some("The side of the window the sidebar and the window's buttons are on."),
         ),
         row(
-            Section::Features,
+            Section::General,
             None,
             little,
             Some("A small window for a quick look."),
         ),
         row(
-            Section::Features,
+            Section::General,
             Some(little),
             "Archive windows left unused after",
             Some("Counted from when you leave the window."),
         ),
         row(
-            Section::Features,
+            Section::General,
             None,
             "Peek",
             Some("Links open in a preview."),
         ),
         row(
-            Section::Features,
+            Section::General,
             None,
             "Mini Player",
             Some("A playing video or call floats over your work when you leave its tab."),
@@ -113,10 +113,10 @@ fn pip_finds_the_mini_player_by_another_name() {
     assert_eq!(names("link prev"), ["Peek"]);
 }
 
-/// The look's rows, moved out of General and Tabs & Sidebar (#4092), are each found by their
-/// names and other names, under Appearance alone.
+/// The look's rows, on Window now as the owner drew no page of appearance settings, are each
+/// found by their names and other names, under Window alone.
 #[test]
-fn the_looks_rows_are_found_under_appearance() {
+fn the_looks_rows_are_found_under_window() {
     let rows = rows();
     for (typed, name) in [
         ("dark mode", "Appearance"),
@@ -128,7 +128,7 @@ fn the_looks_rows_are_found_under_appearance() {
         let found: Vec<&Entry> = find(typed, &rows).into_iter().map(|at| &rows[at]).collect();
         let names: Vec<&str> = found.iter().map(|entry| entry.name.as_ref()).collect();
         assert_eq!(names, [name], "{typed}");
-        assert_eq!(sections(&found), [Section::Appearance], "{typed}");
+        assert_eq!(sections(&found), [Section::Window], "{typed}");
     }
 }
 
@@ -173,11 +173,7 @@ fn archive_finds_five_rows_in_three_sections() {
     );
     assert_eq!(
         sections(&found),
-        [
-            Section::TabsAndSidebar,
-            Section::Features,
-            Section::Shortcuts
-        ]
+        [Section::TabsAndSpaces, Section::General, Section::Shortcuts]
     );
 }
 
@@ -361,7 +357,7 @@ fn a_click_on_a_section_name_shows_the_section_at_the_row(cx: &mut TestAppContex
     assert_eq!(
         clicked,
         [(
-            Section::Features,
+            Section::General,
             "Archive windows left unused after".to_string()
         )]
     );

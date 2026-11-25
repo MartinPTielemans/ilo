@@ -3768,8 +3768,8 @@ fn settings_rows() -> Vec<settings_search::Entry> {
         keys: None,
     };
     vec![
-        row(Section::Features, "Peek"),
-        row(Section::Features, "Mini Player"),
+        row(Section::General, "Peek"),
+        row(Section::General, "Mini Player"),
         row(Section::Shortcuts, "Peek Link"),
     ]
 }
