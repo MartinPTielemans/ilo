@@ -2919,8 +2919,8 @@ impl TalkView {
                 text: palette.text(TITLE),
                 dim: palette.gray(SECONDARY),
                 plate: palette.plate(BAR_CHIP),
-                primary: palette.accent.into(),
-                on_primary: palette.accent_label.into(),
+                primary: primary(palette).0,
+                on_primary: primary(palette).1,
             },
             a11y: look.a11y,
             level: (tier, level),
@@ -3310,6 +3310,18 @@ fn rolled(
         .into_any_element()
 }
 
+/// A thread's `primary` and what's on it: the off-white with near-black words, in Light the
+/// reverse; never the Space's colour, as no control is green.
+fn primary(palette: super::Palette) -> (Hsla, Hsla) {
+    match palette.tone == Tone::Dark {
+        true => (rgba(HELD_PRIMARY).into(), rgba(HELD_ON_PRIMARY).into()),
+        false => (
+            rgba(LIGHT_HELD_PRIMARY).into(),
+            rgba(LIGHT_HELD_ON_PRIMARY).into(),
+        ),
+    }
+}
+
 /// What a trace, or a turn's same step on several tabs, opens to: its lines, a step in, along a
 /// rule under the glyph above them.
 /// The user's message's plate: the drawing's dark plate in Dark, the ink at a card's strength in
@@ -3327,11 +3339,7 @@ fn held_button(
         rgba(if dark { dark_value } else { light_value }).into()
     };
     let (fill, ink, weight) = match first {
-        true => (
-            pick(HELD_PRIMARY, LIGHT_HELD_PRIMARY),
-            pick(HELD_ON_PRIMARY, LIGHT_HELD_ON_PRIMARY),
-            FontWeight::SEMIBOLD,
-        ),
+        true => (primary(palette).0, primary(palette).1, FontWeight::SEMIBOLD),
         false => (
             pick(HELD_BUTTON_FILL, LIGHT_HELD_BUTTON_FILL),
             palette.text(TITLE),

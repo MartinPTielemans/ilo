@@ -3722,3 +3722,29 @@ fn the_panels_page_row_takes_over_the_page_shown(cx: &mut TestAppContext) {
         "a row with nothing under way"
     );
 }
+
+/// A thread's `primary`, under the round Stop and the held step's first button, is the same in
+/// every Space's colour, one per look, its words readable on it: never the Space's accent, so no
+/// control is green.
+#[test]
+fn a_threads_primary_is_never_the_spaces_colour() {
+    use crate::palette::{Palette, Tone, contrast};
+    use crate::theme::{Appearance, Theme};
+    for tone in [Tone::Dark, Tone::Light] {
+        let first = super::primary(Palette::of(None, tone));
+        for appearance in Appearance::ALL {
+            for (x, y) in [(0.7, 0.), (-0.7, 0.), (0., 0.7), (0., -0.7), (0.5, 0.5)] {
+                let theme = Theme {
+                    appearance,
+                    ..Theme::at(x, y)
+                };
+                let palette = Palette::of(Some(&theme), tone);
+                let (fill, ink) = super::primary(palette);
+                assert_eq!((fill, ink), first, "{tone:?} {x},{y}");
+                assert_ne!(fill, gpui::Hsla::from(palette.accent), "{tone:?} {x},{y}");
+                let ratio = contrast(gpui::Rgba::from(ink), gpui::Rgba::from(fill));
+                assert!(ratio >= 4.5, "{ratio:.2}:1");
+            }
+        }
+    }
+}
