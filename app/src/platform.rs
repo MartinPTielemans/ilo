@@ -251,8 +251,6 @@ unsafe extern "C" {
     ) -> bool;
     #[cfg(target_os = "windows")]
     pub fn host_maximize_window(ui_view: *mut c_void);
-    #[cfg(target_os = "windows")]
-    pub fn host_set_window_buttons_right(ui_view: *mut c_void, right: bool);
     pub fn host_add_reveal(
         ui_view: *mut c_void,
         reveal_view: *mut c_void,

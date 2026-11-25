@@ -512,7 +512,7 @@ expect "^browser: tab $p closed\$" "Esc didn't close the preview ⇧⌘T reopene
 still_home "after reopening the preview"
 
 # A favorite's links open it too: the pinned tab's copy, which Duplicate Tab in its menu puts at the
-# top of Today, under the pinned row, the divider and "+ New Tab", dragged onto the Space's name.
+# top of Today, under the pinned row, the gap over Today and "+ New Tab", dragged onto the Space's name.
 away
 post rightclick $(home_row)
 expect "^browser: menu shown $(cased '.*Duplicate Tab')" "a right-click on the pinned row didn't show its menu"
@@ -522,7 +522,7 @@ expect "^browser: today [1-9][0-9]* $kept\$" "Duplicate Tab didn't put a copy at
 b=$(today | cut -d' ' -f1)
 expect "^browser: selected $b\( in .*\)\{0,1\}\$" "Duplicate Tab didn't show the copy"
 expect "^browser: title $b ready\$" "the copy of the test page didn't draw"
-send press 100 $((90 + 44 + 41 + 15 + 41 + 20))
+send press 100 $((86 + 42 + 34 + 6 + 34 + 17))
 send dragto 100 200
 send dragto 114 112
 expect '^browser: drag shape tile$' "the copy's row dragged onto the Space's name didn't turn into a tile"
