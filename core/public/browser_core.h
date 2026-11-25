@@ -2205,9 +2205,11 @@ BC_EXPORT void bc_file_field_drop(bc_id field);
 // the step may take it to, and bc_tab_history lists only those. While the user holds the tab
 // (bc_tab_take_back, bc_agent_hand_off) their own back, forward and bc_tab_go_to_history go through
 // all of it, the page's own script still through none of what the tab had, and from
-// bc_tab_hand_back the entry it's on then is the one the agent can't go behind or past. The session
-// keeps the tab as the user's, with the Space it left, and the account's other devices see it there
-// as it was. Its page has an agent's page's size from the give.
+// bc_tab_hand_back the entry it's on then is the one the agent can't go behind or past. No copy is
+// made of it meanwhile: bc_tab_duplicate and bc_tab_open_history return 0, as the copy would be the
+// agent's, with all of that history. The session keeps the tab as the user's, with the Space it
+// left, and the account's other devices see it there as it was. Its page has an agent's page's size
+// from the give.
 BC_EXPORT bool bc_tab_give_to_agent(bc_id tab, bc_id space);
 
 // Returns |tab|, which the user gave an agent (bc_tab_give_to_agent) and which is in that agent's

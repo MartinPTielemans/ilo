@@ -2956,6 +2956,11 @@ bc_id Window::RestoreArchived(bc_id id) {
 }
 
 bc_id Window::Duplicate(bc_id tab) {
+  // A copy of a tab the user handed an agent would be the agent's own, with the history that
+  // stays the user's in it (handed_history.h).
+  if (handed::Of(tab)) {
+    return 0;
+  }
   const Tab* from = Tab::Get(tab);
   Space* space = Favorites::Has(tab) ? Space::FromId(space_) : Space::Holding(tab);
   if (!from || !from->profile() || !space || DirOf(from->profile()) != space->profile() ||
@@ -2983,6 +2988,10 @@ bc_id Window::Duplicate(bc_id tab) {
 }
 
 bc_id Window::OpenHistory(bc_id tab, int offset) {
+  // As Duplicate: the new tab would have all of a handed tab's history.
+  if (handed::Of(tab)) {
+    return 0;
+  }
   const Tab* from = Tab::Get(tab);
   Space* space = Favorites::Has(tab) ? Space::FromId(space_) : Space::Holding(tab);
   if (!from || !from->profile() || !space || DirOf(from->profile()) != space->profile() ||
