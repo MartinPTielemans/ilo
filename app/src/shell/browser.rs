@@ -922,6 +922,11 @@ pub trait Browser {
     /// A command bar to rest in this window's empty Space, whose page draws its field and rows
     /// (#4140). It asks nothing of the core until it's typed in.
     fn command_bar_in_place(&self, window: &mut Window, cx: &mut App) -> Entity<CommandBar>;
+    /// Whether this system can wall a task in with its files, which the composer's `+` offers
+    /// files and a folder by (#4101).
+    fn files_available(&self, _: &App) -> bool {
+        false
+    }
     /// Runs what the user asked in the composer's Ask as a task on the assistant `agent`, from Space
     /// `home`, with the level and model the user picked there (#4140). Only the user's ↩ there
     /// calls it: no agent has a path to it.

@@ -63,6 +63,8 @@ pub(super) struct Recorder {
     pub(super) resting: Rc<RefCell<Vec<String>>>,
     /// The in-place bar's profile is new: it has learned no agent till this goes false.
     pub(super) unlearned: Rc<std::cell::Cell<bool>>,
+    /// Whether it can wall a task in with its files, as `files_available` answers.
+    pub(super) files: std::cell::Cell<bool>,
     /// How many detents the trackpad was asked for.
     pub(super) detents: Cell<usize>,
     /// How many tabs and folders it was asked to move.
@@ -1876,6 +1878,10 @@ impl Browser for Recorder {
         crate::command_bar::in_place(Rc::new(host), window, cx)
     }
 
+    fn files_available(&self, _: &App) -> bool {
+        self.files.get()
+    }
+
     fn start_task(
         &self,
         agent: &str,
@@ -1896,8 +1902,17 @@ impl Browser for Recorder {
                 if only { " only them" } else { "" }
             ),
         };
+        // Files and a folder by count alone, as nothing names them but the conversation.
+        let files = match start.files.files.len() {
+            0 => String::new(),
+            count => format!(" and {count} files"),
+        };
+        let folder = match start.files.folder.is_some() {
+            true => " and a folder",
+            false => "",
+        };
         self.record(format!(
-            "start task {agent} {asked} from {home} at {}{model}{pages}",
+            "start task {agent} {asked} from {home} at {}{model}{pages}{files}{folder}",
             start.tier.label()
         ));
     }

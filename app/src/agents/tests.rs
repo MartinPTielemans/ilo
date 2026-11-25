@@ -8751,7 +8751,13 @@ mod tasks {
                     .map(|entry| entry.target.to_string())
                     .collect()
             });
-            assert_eq!(logged, vec![crate::agents::tier::started_logged(tier, 0)]);
+            assert_eq!(
+                logged,
+                vec![crate::agents::tier::started_logged(
+                    tier,
+                    Default::default()
+                )]
+            );
         }
     }
 
