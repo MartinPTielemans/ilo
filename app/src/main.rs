@@ -31,7 +31,7 @@ use browser::theme::Appearance;
 use browser::widevine::Widevine;
 use browser::window_frames::{self, Frame};
 use browser::{
-    account, boost_editor, capture, command_bar, dialog, dock_dot, elevation::Level,
+    account, boost_editor, capture, command_bar, dialog, elevation::Level,
     folder_preview, hover_card, icon_picker, launch, launch_picture, link_preview, link_target,
     log, log_always, log_in, menu, offer, passwords, site_controls, tab_switcher, theme_picker,
     toast, tooltip, updates, zoom_hud,
@@ -614,7 +614,6 @@ unsafe extern "C" fn started(_: *mut c_void) {
         log!("browser: started at {:.1} ms", unsafe {
             platform::host_since_launch()
         });
-        dock_dot::open(Rc::new(DockDot), cx);
         settings::read_switches(cx);
         // The transparency level the window and what floats over it are drawn at, before the
         // first window draws (#4128).
@@ -864,7 +863,6 @@ unsafe extern "C" fn launching(_: *mut c_void) {
     log!("browser: launch window at {:.1} ms", unsafe {
         platform::host_since_launch()
     });
-    unsafe { platform::host_dock_dot_launch(profile.as_ptr()) };
 }
 
 /// Off to another app: a toast showing waits until the user is back.

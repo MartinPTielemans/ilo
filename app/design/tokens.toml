@@ -396,10 +396,6 @@ check-glyph = 12.0
 # The red action's label and glyph.
 text = 0xffffff
 
-[dock-dot]
-# The icon's own green, which a Space in it leaves alone.
-green = 0x0E9F55
-
 [elevation]
 # Three levels, each one recipe (#317): a white rim inside the surface's edge, which reads on dark
 # pages; the outline, a black line a point of blur wide round the outside, which reads on light

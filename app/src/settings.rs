@@ -1740,34 +1740,10 @@ impl Settings {
             vec![ask],
         );
         let found: Vec<Row> = search.into_iter().chain(folders).chain([ask]).collect();
-        let mut looks = Vec::new();
-        // Where the host draws the dot: the Dock icon's, or Windows' taskbar button's.
-        if let Some(switch) = browser::dock_dot::SWITCH {
-            let colored = !off(DOCK_ICON_PLAIN);
-            let colored = self.toggle(
-                "dock icon color",
-                switch.name,
-                colored,
-                set_dock_icon_color,
-                accent,
-                cx,
-            );
-            looks.push(setting(
-                look,
-                switch.name,
-                Some(switch.line.into()),
-                vec![colored],
-            ));
-        }
         let mut blocks = vec![
             Block::Heading("Opening and quitting".into()),
             Block::Rows(opening),
         ];
-        // The Dock's row stays until its colour goes (#4078).
-        if !looks.is_empty() {
-            blocks.push(Block::Heading("Look".into()));
-            blocks.push(Block::Rows(looks));
-        }
         if !found.is_empty() {
             blocks.push(Block::Heading("Search and downloads".into()));
             blocks.push(Block::Rows(found));
@@ -5351,7 +5327,6 @@ fn set_mini_player(on: bool, _: &mut App) {
 /// The app's own switches that are on unless the user turned them off, each a file in the
 /// profile directory while it's off, as the core keeps no settings of the app's own.
 const NO_EDGE_REVEAL: &str = "no-edge-reveal";
-const DOCK_ICON_PLAIN: &str = "plain-dock-icon";
 /// What's recent in hover cards, off (#3074); and the sites Site Controls turned it off for, a line
 /// each.
 const NO_RECENT: &str = "no-recent-in-cards";
@@ -5376,7 +5351,6 @@ fn set_off(name: &str, is_off: bool) {
 pub fn read_switches(cx: &mut App) {
     cx.set_global(shell::SidebarEdge(!off(NO_EDGE_REVEAL)));
     cx.set_global(shell::SidebarRight(off(SIDEBAR_RIGHT)));
-    browser::dock_dot::set_plain(off(DOCK_ICON_PLAIN), cx);
     browser::recent::set_switches(!off(NO_RECENT), recent_sites_off(), cx);
 }
 
@@ -5428,11 +5402,6 @@ pub fn set_sidebar_right(right: bool, cx: &mut App) {
 fn set_edge_reveals(reveals: bool, cx: &mut App) {
     set_off(NO_EDGE_REVEAL, !reveals);
     cx.set_global(shell::SidebarEdge(reveals));
-}
-
-fn set_dock_icon_color(colored: bool, cx: &mut App) {
-    set_off(DOCK_ICON_PLAIN, !colored);
-    browser::dock_dot::set_plain(!colored, cx);
 }
 
 /// About's "Check for updates automatically", which only the Mac and Windows show. It reads the

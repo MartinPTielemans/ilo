@@ -174,7 +174,6 @@ pub mod daily_count;
 pub mod default_browser;
 pub mod dialog;
 pub mod dismissal;
-pub mod dock_dot;
 pub mod elevation;
 pub mod face;
 pub mod find_status;
