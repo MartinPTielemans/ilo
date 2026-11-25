@@ -100,6 +100,9 @@ pub struct WallFor<'a> {
     pub config: &'a Path,
     /// The assistant's program, as ilo found it.
     pub program: &'a Path,
+    /// The user's home, and ilo's own data: the profile the tasks' folder is in.
+    pub home: &'a Path,
+    pub data: &'a Path,
     /// ilo's MCP socket, which the assistant's bridge reaches.
     pub socket: &'a Path,
     /// ilo's MCP bridge, as `bridge` finds it.
@@ -328,6 +331,14 @@ fn build(task: &WallFor) -> Result<Wall, WallRefused> {
     }
     let program = std::fs::canonicalize(task.program).map_err(|_| failed(NO_PROGRAM))?;
     let program_dir = program.parent().ok_or_else(|| failed(NO_PROGRAM))?;
+    let resolve = |path: &Path| rules::resolved(path).unwrap_or_else(|_| path.to_path_buf());
+    let (cli_home, data) = (resolve(task.cli_home), resolve(task.data));
+    let mut kept_out = vec![cli_home.as_path(), data.as_path()];
+    kept_out.extend(folder.as_ref().map(Granted::root));
+    let program_named = match program_folder_whole(program_dir, &resolve(task.home), &kept_out) {
+        true => rules::Program::Folder(program_dir),
+        false => rules::Program::File(&program),
+    };
     // A walled task with no bridge would start with no tools, so it starts without its files.
     let bridge = (task.bridge.is_absolute())
         .then(|| std::fs::canonicalize(task.bridge).ok())
@@ -344,7 +355,7 @@ fn build(task: &WallFor) -> Result<Wall, WallRefused> {
             config: task.config,
             tmp: place.tmp(),
             socket: task.socket,
-            program_dir,
+            program: program_named,
             bridge: &bridge,
             cli_home: task.cli_home,
             claude_config: task.claude_config,
@@ -366,6 +377,31 @@ fn build(task: &WallFor) -> Result<Wall, WallRefused> {
             place.discard();
             Err(refused)
         }
+    }
+}
+
+/// Whether the rules may name the assistant's program by `dir`, the folder it's in, whole, every
+/// path resolved: outside the user's `home`, or inside it in `~/bin` or below one of its
+/// dot-folders, never a dot-folder itself; and never a folder that is, holds or is above the home
+/// or one of `kept_out`. A program kept loose in a folder of the user's would open that folder
+/// to the task, so anywhere else the rules name the program's one file.
+pub fn program_folder_whole(dir: &Path, home: &Path, kept_out: &[&Path]) -> bool {
+    if (kept_out.iter())
+        .chain([&home])
+        .any(|kept| kept.starts_with(dir))
+    {
+        return false;
+    }
+    let Ok(inside) = dir.strip_prefix(home) else {
+        return true;
+    };
+    let mut names = inside
+        .components()
+        .map(|name| name.as_os_str().to_string_lossy());
+    match (names.next(), names.next()) {
+        (Some(first), _) if first == "bin" => true,
+        (Some(first), Some(_)) => first.starts_with('.'),
+        _ => false,
     }
 }
 
@@ -444,6 +480,8 @@ mod tests {
             task_dir: Path::new("/nonexistent/Tasks/task"),
             config: Path::new("/nonexistent/Tasks/task.json"),
             program: Path::new("/nonexistent/codex"),
+            home: Path::new("/nonexistent/home"),
+            data: Path::new("/nonexistent"),
             socket: Path::new("/nonexistent/Agents.sock"),
             bridge: Path::new("/nonexistent/mcp-bridge"),
             places: Path::new("/nonexistent/Tasks/.tmp"),
@@ -495,20 +533,82 @@ mod tests {
             "Tasks/.tmp",
             "home/.codex",
             "ilo/mcp-bridge",
+            "home",
+            "profile",
         ]
         .map(|path| made.at(path));
-        let [task_dir, config, program, socket, places, cli_home, bridge] = &paths;
+        let [
+            task_dir,
+            config,
+            program,
+            socket,
+            places,
+            cli_home,
+            bridge,
+            home,
+            data,
+        ] = &paths;
         build(&WallFor {
             folder: Some(granted),
             task_dir,
             config,
             program,
+            home,
+            data,
             socket,
             bridge,
             places,
             cli_home,
             ..task(None, None)
         })
+    }
+
+    /// A program's folder is read whole only where no folder of the user's is: outside the home,
+    /// or in `~/bin` or below a dot-folder of it; never the home, a folder above it, one of its
+    /// own folders, a dot-folder itself, or a folder that is or holds one kept out.
+    #[test]
+    fn a_programs_folder_is_read_whole_only_where_no_folder_of_the_users_is() {
+        let home = Path::new("/Users/someone");
+        let cli_home = home.join(".codex");
+        let data = home.join("Library/Application Support/ilo");
+        let granted = Path::new("/Volumes/Work/project");
+        let kept_out = [cli_home.as_path(), data.as_path(), granted];
+        let whole = |dir: &str| program_folder_whole(Path::new(dir), home, &kept_out);
+        for dir in [
+            "/opt/homebrew/Cellar/codex/1.0.0/bin",
+            "/usr/local/lib/node_modules/@openai/codex/bin",
+            "/Users/someone/.local/share/claude/versions",
+            "/Users/someone/.nvm/versions/node/v22.0.0/bin",
+            "/Users/someone/.local/bin",
+            "/Users/someone/bin",
+            "/Users/someone/bin/tools",
+        ] {
+            assert!(whole(dir), "{dir} isn't read whole");
+        }
+        for dir in [
+            "/",
+            "/Users",
+            "/Users/someone",
+            "/Users/someone/Desktop",
+            "/Users/someone/Documents/tools",
+            "/Users/someone/Downloads",
+            "/Users/someone/.local",
+            "/Users/someone/.codex",
+            "/Users/someone/Library/Application Support",
+            "/Users/someone/Library/Application Support/ilo",
+            "/Volumes/Work",
+            "/Volumes/Work/project",
+        ] {
+            assert!(!whole(dir), "{dir} is read whole");
+        }
+        // An assistant's home outside the user's keeps the folders above it out too.
+        let elsewhere = [Path::new("/opt/codex-home")];
+        assert!(!program_folder_whole(Path::new("/opt"), home, &elsewhere));
+        assert!(program_folder_whole(
+            Path::new("/opt/bin"),
+            home,
+            &elsewhere
+        ));
     }
 
     #[test]

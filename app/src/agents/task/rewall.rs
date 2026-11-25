@@ -170,6 +170,8 @@ impl Agents {
         let (cli_home, claude_config) = wall::cli_home(cli);
         // None resolves to nothing too, so the start says it's without its files.
         let bridge = wall::bridge().unwrap_or_default();
+        let home = crate::agents::clients::home();
+        let data = dir.parent().unwrap_or(&dir);
         let wall = WallFor {
             cli,
             level,
@@ -178,6 +180,8 @@ impl Agents {
             task_dir: &task_dir,
             config: &config,
             program: &program,
+            home: &home,
+            data,
             socket: &self.socket,
             bridge: &bridge,
             places: &places,

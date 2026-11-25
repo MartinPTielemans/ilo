@@ -209,25 +209,62 @@ fn every_line_closes_what_it_opens() {
     }
 }
 
-/// Every shape a text is made for: each assistant and level, with and without each place, and
-/// three folders above.
+/// Every shape a text is made for: each assistant and level, with and without each place, the
+/// program by its folder and alone, and three folders above.
 fn shapes() -> Vec<Shape> {
     let mut shapes = Vec::new();
     for cli in Cli::ALL {
         for level in Tier::ALL {
             for (folder, attached) in [(true, false), (false, true), (true, true)] {
-                shapes.push(Shape {
-                    cli,
-                    level,
-                    folder,
-                    attached,
-                    port: 49152,
-                    ancestors: 3,
-                });
+                for program_folder in [true, false] {
+                    shapes.push(Shape {
+                        cli,
+                        level,
+                        folder,
+                        attached,
+                        program_folder,
+                        port: 49152,
+                        ancestors: 3,
+                    });
+                }
             }
         }
     }
     shapes
+}
+
+/// A program named alone is one literal, read and mapped as the bridge is, with nothing of its
+/// folder; named by its folder, it's that folder's subpath and no literal.
+#[test]
+fn a_program_named_alone_is_its_one_file_and_nothing_of_its_folder() {
+    for shape in shapes() {
+        let text = text(&shape);
+        let file = format!("(literal (param \"{PROGRAM}\"))");
+        let folder = format!("(subpath (param \"{PROGRAM_DIR}\"))");
+        let line = |name: &str| {
+            (text.lines())
+                .find(|line| line.contains(name))
+                .map(str::to_owned)
+        };
+        match shape.program_folder {
+            true => {
+                assert!(!text.contains(&format!("\"{PROGRAM}\"")), "{shape:?}");
+                let line = line(&folder).expect("the folder's line");
+                assert!(line.contains("file-map-executable"), "{line}");
+            }
+            false => {
+                assert!(!text.contains(PROGRAM_DIR), "{shape:?}");
+                let line = line(&file).expect("the program's line");
+                assert_eq!(
+                    line,
+                    format!(
+                        "(allow file-read-data file-read-metadata file-test-existence \
+                         file-map-executable {file})"
+                    )
+                );
+            }
+        }
+    }
 }
 
 /// ilo's part of a text: what follows the base, which is upstream's as it is.
@@ -315,6 +352,7 @@ fn every_parameter_is_one_of_the_named() {
         TMP,
         SOCKET,
         PROGRAM_DIR,
+        PROGRAM,
         BRIDGE,
         CLI_HOME,
         CLAUDE_CONFIG,
@@ -484,7 +522,7 @@ fn the_rules_name_each_path_resolved_and_fit_the_launcher() {
         config: &config,
         tmp: &tmp,
         socket: &folder.0.join("Agents.sock"),
-        program_dir: &program,
+        program: Program::Folder(&program),
         bridge: &bridge,
         cli_home: &home,
         claude_config: None,
@@ -577,7 +615,7 @@ fn the_bridge_is_its_own_literal_and_nothing_of_the_bundle_is_a_subpath() {
         config: &config,
         tmp: &tmp,
         socket: &folder.0.join("Agents.sock"),
-        program_dir: &program,
+        program: Program::Folder(&program),
         bridge: &bridge,
         cli_home: &home,
         claude_config: None,
@@ -629,7 +667,7 @@ fn a_shell_starts_inside_the_whole_text_and_has_its_folder_at_its_level() {
         config: &config,
         tmp: &tmp,
         socket: &folder.0.join("Agents.sock"),
-        program_dir: Path::new("/bin"),
+        program: Program::Folder(Path::new("/bin")),
         bridge: Path::new("/bin/sh"),
         cli_home: &home,
         claude_config: None,
@@ -655,6 +693,59 @@ fn a_shell_starts_inside_the_whole_text_and_has_its_folder_at_its_level() {
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "made\nrefused\nkept\n",
+        "{err}"
+    );
+}
+
+/// The whole text with the program named alone, as a program kept loose in a folder of the
+/// user's is: the system takes it, and the program starts inside it.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_program_named_alone_starts_inside_the_whole_text() {
+    use std::process::Stdio;
+    let folder = Folder::new("alone");
+    let made = |name: &str| {
+        let path = folder.0.join(name);
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    };
+    let (task, tmp, home) = (
+        made("Tasks/task"),
+        made("Tasks/.tmp/0123456789abcdef"),
+        made("home"),
+    );
+    let place = Places::make(&folder.0.join("places")).unwrap();
+    let config = folder.0.join("Tasks/task.json");
+    let paths = Paths {
+        folder: None,
+        attached: None,
+        task_dir: &task,
+        config: &config,
+        tmp: &tmp,
+        socket: &folder.0.join("Agents.sock"),
+        program: Program::File(Path::new("/bin/sh")),
+        bridge: Path::new("/bin/sh"),
+        cli_home: &home,
+        claude_config: None,
+    };
+    let rules = rules_for(&paths, place.mark()).unwrap();
+    assert!(!rules.text.contains(PROGRAM_DIR));
+    let wall = super::super::Wall::inside(None, &rules, &[]).unwrap();
+    let mut command = wall.command(Path::new("/bin/sh"));
+    command
+        .args(["-c", "echo started"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let (mut child, rising) = wall.start(&mut command).unwrap();
+    drop(child.stdin.take());
+    let risen = rising.expect("a walled start").risen();
+    let output = child.wait_with_output().unwrap();
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(risen, Ok(()), "{err}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "started\n",
         "{err}"
     );
 }

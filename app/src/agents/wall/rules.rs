@@ -34,8 +34,11 @@ pub const CONFIG_MD: &str = "CONFIG_MD";
 /// The task's own temporary folder, and ilo's MCP socket.
 pub const TMP: &str = "TMP";
 pub const SOCKET: &str = "SOCKET";
-/// The folder the assistant's program is in.
+/// The folder the assistant's program is in, where its folder may be read whole (wall.rs,
+/// `program_folder_whole`).
 pub const PROGRAM_DIR: &str = "PROGRAM_DIR";
+/// The assistant's program alone, where its folder may not.
+pub const PROGRAM: &str = "PROGRAM";
 /// ilo's MCP bridge, beside ilo's own executable, which the assistant runs to reach the socket.
 pub const BRIDGE: &str = "BRIDGE";
 
@@ -220,7 +223,7 @@ pub fn params(
 
 /// `path` with every link in it followed. A file not made yet, such as a sign-in a first save
 /// makes, is its folder resolved and its own name.
-fn resolved(path: &std::path::Path) -> io::Result<PathBuf> {
+pub(super) fn resolved(path: &std::path::Path) -> io::Result<PathBuf> {
     match std::fs::canonicalize(path) {
         Err(why) if why.kind() == io::ErrorKind::NotFound => {
             let (Some(folder), Some(name)) = (path.parent(), path.file_name()) else {
@@ -298,6 +301,8 @@ pub struct Shape {
     pub level: Tier,
     pub folder: bool,
     pub attached: bool,
+    /// Whether the program's folder is named whole, or the program alone.
+    pub program_folder: bool,
     /// The task's listener's port.
     pub port: u16,
     /// How many folders above the named paths have a parameter.
@@ -322,11 +327,11 @@ pub fn text(shape: &Shape) -> String {
          (allow file-read* file-test-existence (literal (param \"{CONFIG}\")) \
          (literal (param \"{CONFIG_MD}\")))\n\
          (allow file-read* file-test-existence file-write* (subpath (param \"{TMP}\")))\n\
-         (allow file-read* file-test-existence file-map-executable \
-         (subpath (param \"{PROGRAM_DIR}\")))\n\
+         {}\
          (allow file-read-data file-read-metadata file-test-existence \
          (literal (param \"{BRIDGE}\")))\n\
          (allow file-read* file-test-existence {})\n",
+        program(shape.program_folder),
         sign_in_filters(shape.cli).join(" ")
     ));
     if shape.cli == Cli::Claude {
@@ -356,6 +361,29 @@ pub fn text(shape: &Shape) -> String {
     text
 }
 
+/// The allow on the assistant's program: its folder whole, or the one file, as the bridge is named.
+fn program(folder: bool) -> String {
+    match folder {
+        true => format!(
+            "(allow file-read* file-test-existence file-map-executable \
+             (subpath (param \"{PROGRAM_DIR}\")))\n"
+        ),
+        false => format!(
+            "(allow file-read-data file-read-metadata file-test-existence file-map-executable \
+             (literal (param \"{PROGRAM}\")))\n"
+        ),
+    }
+}
+
+/// How the rules name the assistant's program, resolved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Program<'a> {
+    /// The folder it's in, read whole.
+    Folder(&'a Path),
+    /// The program's one file.
+    File(&'a Path),
+}
+
 /// The paths a walled task's rules name, as put_up has them.
 pub struct Paths<'a> {
     pub folder: Option<&'a Path>,
@@ -364,7 +392,7 @@ pub struct Paths<'a> {
     pub config: &'a Path,
     pub tmp: &'a Path,
     pub socket: &'a Path,
-    pub program_dir: &'a Path,
+    pub program: Program<'a>,
     pub bridge: &'a Path,
     pub cli_home: &'a Path,
     /// Claude Code's `~/.claude.json`, which Codex has none of.
@@ -389,7 +417,10 @@ pub fn rules(cli: Cli, level: Tier, port: u16, paths: &Paths, mark: &Mark) -> io
         (CONFIG_MD, paths.config.with_extension("md")),
         (TMP, paths.tmp.to_path_buf()),
         (SOCKET, paths.socket.to_path_buf()),
-        (PROGRAM_DIR, paths.program_dir.to_path_buf()),
+        match paths.program {
+            Program::Folder(folder) => (PROGRAM_DIR, folder.to_path_buf()),
+            Program::File(file) => (PROGRAM, file.to_path_buf()),
+        },
         (BRIDGE, paths.bridge.to_path_buf()),
         (CLI_HOME, paths.cli_home.to_path_buf()),
     ]);
@@ -410,6 +441,7 @@ pub fn rules(cli: Cli, level: Tier, port: u16, paths: &Paths, mark: &Mark) -> io
         level,
         folder: paths.folder.is_some(),
         attached: paths.attached.is_some(),
+        program_folder: matches!(paths.program, Program::Folder(_)),
         port,
         ancestors: ups.len(),
     };
