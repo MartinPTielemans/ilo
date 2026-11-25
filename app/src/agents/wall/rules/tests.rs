@@ -480,13 +480,26 @@ fn the_developer_tools_are_read_where_the_systems_link_says() {
     );
     assert_eq!(
         lines("/Library/Developer"),
-        ["(allow file-read* file-test-existence file-map-executable \
-             (subpath \"/Library/Developer/CommandLineTools\"))"]
+        [
+            "(allow file-read-metadata file-test-existence \
+             (literal \"/Library\") (literal \"/Library/Developer\"))",
+            "(allow file-read* file-test-existence file-map-executable \
+             (subpath \"/Library/Developer/CommandLineTools\"))"
+        ]
     );
+    // The folders above it are named alone: no other line names `/Library` itself.
+    assert_eq!(lines("(literal \"/Library\")").len(), 1);
+    assert!(!text.contains("(subpath \"/Library\")"));
+    assert!(!text.contains("(subpath \"/Library/Developer\")"));
     for shape in shapes() {
         let text = super::text(&shape);
         assert!(!text.contains("installondemand"), "{shape:?}");
         assert!(!text.contains("dt.CommandLineTools"), "{shape:?}");
+        // Nothing of the system's per-user folders, where other programs' files are: the tools'
+        // cache there stays unmade.
+        for folders in ["/var/folders", "xcrun"] {
+            assert!(!text.contains(folders), "{shape:?} {folders}");
+        }
     }
 }
 
