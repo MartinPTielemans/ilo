@@ -648,6 +648,19 @@ GURL Tab::Url() const {
   return unloaded_ ? unloaded_->history[unloaded_->current].virtual_url() : GURL();
 }
 
+Tab::Captures Tab::captures() const {
+  content::WebContents* contents = web_contents();
+  if (!contents || system_page_) {
+    return {};
+  }
+  const scoped_refptr<MediaStreamCaptureIndicator> capture =
+      MediaCaptureDevicesDispatcher::GetInstance()->GetMediaStreamCaptureIndicator();
+  return {.camera = capture->IsCapturingVideo(contents),
+          .microphone = capture->IsCapturingAudio(contents),
+          .screen = capture->IsCapturingTab(contents) || capture->IsCapturingWindow(contents) ||
+                    capture->IsCapturingDisplay(contents)};
+}
+
 bool Tab::At(const GURL& url) const {
   if (content::WebContents* contents = web_contents()) {
     // A page in the system's engine, or one waiting to load, is only at its own URL.

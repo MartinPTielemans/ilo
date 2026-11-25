@@ -52,6 +52,7 @@
 #include "browser_core/favicon.h"
 #include "browser_core/favorites.h"
 #include "browser_core/find.h"
+#include "browser_core/handed_give_rule.h"
 #include "browser_core/held_keys.h"
 #include "browser_core/history_import.h"
 #include "browser_core/history_list.h"
@@ -701,12 +702,29 @@ bool bc_tab_take_back(bc_id tab) {
 bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   browser_core::Space* from = browser_core::Space::Holding(tab);
   browser_core::Space* to = browser_core::Space::FromId(space);
-  // The page goes as it is, with its profile's logins, so never into another profile's Space,
-  // where it would load again.
-  if (!from || from->agent() || !to || !to->agent() || from->profile() != to->profile()) {
+  const browser_core::Tab* page = browser_core::Tab::Get(tab);
+  if (!from || !to || !page) {
     return false;
   }
   content::WebContents* contents = browser_core::Tab::FromId(tab);
+  const browser_core::Tab::Captures captures = page->captures();
+  // The page goes as it is, with its profile's logins, so never into another profile's Space,
+  // where it would load again. And only a tab that may be handed: the app asks the same before it
+  // gives one, and the rule holds here whatever asked.
+  if (!browser_core::handed_give_rule::MayGive({
+          .users = !from->agent() && !from->own(),
+          .to_agent = to->agent().has_value(),
+          .same_profile = from->profile() == to->profile(),
+          .pinned = from->IsPinned(tab),
+          .split = from->Panes(tab).size() > 1,
+          .web_page = !page->system_page() && page->Url().SchemeIsHTTPOrHTTPS() &&
+                      (!contents || contents->GetLastCommittedURL().SchemeIsHTTPOrHTTPS()),
+          .camera = captures.camera,
+          .microphone = captures.microphone,
+          .screen = captures.screen,
+      })) {
+    return false;
+  }
   const bool moved = browser_core::arrange_rule::GiveToAgent(
       [&] {
         if (browser_core::Arrange* arrange =
