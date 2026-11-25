@@ -1,0 +1,121 @@
+Lets the core say which of a tab's session history entries it may be taken to. Every traversal
+starts in the five-argument NavigationControllerImpl::GoToIndex in
+content/browser/renderer_host/navigation_controller_impl.cc: GoBack, GoForward, GoToIndex and
+GoToOffset from the browser, GoToOffsetFromRenderer for a page's history.back(), forward() and
+go(), and NavigateToNavigationApiKey for the Navigation API's back(), forward() and traverseTo(),
+which asks no delegate on its way. A NavigationThrottle sees none of the traversals within one
+document. So the filter content::SetHistoryTraversalFilter gives is asked there, with the entry's
+index, before anything of the traversal starts; its false leaves the tab on its page, and a
+Navigation API caller hears TraverseCancelled, as for a key no entry has. A hook only: a tab given
+no filter pays one null check, and which entries a tab may be taken to is the core's.
+
+diff --color -ruN a/content/browser/renderer_host/navigation_controller_impl.cc b/content/browser/renderer_host/navigation_controller_impl.cc
+--- a/content/browser/renderer_host/navigation_controller_impl.cc
++++ b/content/browser/renderer_host/navigation_controller_impl.cc
+@@ -91,6 +91,7 @@
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/content_browser_client.h"
+ #include "content/public/browser/disallow_activation_reason.h"
++#include "content/public/browser/history_traversal.h"
+ #include "content/public/browser/invalidate_type.h"
+ #include "content/public/browser/navigation_details.h"
+ #include "content/public/browser/render_view_host.h"
+@@ -1627,6 +1628,19 @@
+   CHECK_GE(index, 0);
+   CHECK_LT(static_cast<size_t>(index), entries_.size());
+ 
++  // browser_core: every traversal comes through here, the browser's own, a
++  // page's history.go() and the Navigation API's alike, so the embedder is
++  // asked here (history_traversal.h). One it refuses doesn't start, and a
++  // Navigation API caller hears so, as for an entry that isn't there.
++  if (history_traversal_filter_ && !history_traversal_filter_.Run(index)) {
++    if (initiator_rfh && navigation_api_key) {
++      initiator_rfh->GetAssociatedLocalFrame()->TraverseCancelled(
++          *navigation_api_key,
++          blink::mojom::TraverseCancelledReason::kNotFound);
++    }
++    return {};
++  }
++
+   if (entries_[index]->IsInitialEntryNotForSynchronousAboutBlank()) {
+     // We should never navigate to an existing initial NavigationEntry that is
+     // the initial NavigationEntry for the initial empty document that hasn't
+@@ -5951,6 +5965,17 @@
+              features::kReplaceInitialEntryForReload) &&
+          reload_type != ReloadType::NONE &&
+          GetLastCommittedEntry()->IsInitialEntryNotForSynchronousAboutBlank();
++}
++
++void NavigationControllerImpl::SetHistoryTraversalFilter(
++    base::RepeatingCallback<bool(int)> filter) {
++  history_traversal_filter_ = std::move(filter);
++}
++
++void SetHistoryTraversalFilter(WebContents* contents,
++                               HistoryTraversalFilter filter) {
++  static_cast<NavigationControllerImpl&>(contents->GetController())
++      .SetHistoryTraversalFilter(std::move(filter));
+ }
+ 
+ }  // namespace content
+diff --color -ruN a/content/browser/renderer_host/navigation_controller_impl.h b/content/browser/renderer_host/navigation_controller_impl.h
+--- a/content/browser/renderer_host/navigation_controller_impl.h
++++ b/content/browser/renderer_host/navigation_controller_impl.h
+@@ -212,6 +212,9 @@
+   std::vector<base::WeakPtr<NavigationRequest>> GoToIndexAndReturnAllRequests(
+       int index);
+ 
++  // browser_core: what content::SetHistoryTraversalFilter gives.
++  void SetHistoryTraversalFilter(base::RepeatingCallback<bool(int)> filter);
++
+ #if BUILDFLAG(IS_ANDROID)
+   // The difference between (Can)GoToOffsetWithSkipping and
+   // (Can)GoToOffset/(Can)GoToOffsetInSandboxedFrame is that this respects the
+@@ -1192,6 +1195,9 @@
+ 
+   // Prevent unsafe re-entrant calls to NavigateToPendingEntry.
+   bool in_navigate_to_pending_entry_ = false;
++
++  // browser_core: asked before each traversal starts (GoToIndex), or null.
++  base::RepeatingCallback<bool(int)> history_traversal_filter_;
+ 
+   // Used to find the appropriate SessionStorageNamespaceHandle for the storage
+   // partition of a NavigationEntry.
+diff --color -ruN a/content/public/browser/BUILD.gn b/content/public/browser/BUILD.gn
+--- a/content/public/browser/BUILD.gn
++++ b/content/public/browser/BUILD.gn
+@@ -221,6 +221,7 @@
+     "hid_delegate.cc",
+     "hid_delegate.h",
+     "histogram_fetcher.h",
++    "history_traversal.h",
+     "host_zoom_map.h",
+     "immersive_playback_options.h",
+     "initiator_navigation_state.cc",
+diff --color -ruN a/content/public/browser/history_traversal.h b/content/public/browser/history_traversal.h
+--- /dev/null
++++ b/content/public/browser/history_traversal.h
+@@ -0,0 +1,23 @@
++// browser_core: lets the core say which of a tab's session history entries it may be taken to.
++
++#ifndef CONTENT_PUBLIC_BROWSER_HISTORY_TRAVERSAL_H_
++#define CONTENT_PUBLIC_BROWSER_HISTORY_TRAVERSAL_H_
++
++#include "base/functional/callback.h"
++#include "content/common/content_export.h"
++
++namespace content {
++
++class WebContents;
++
++// Asked with the index of the session history entry a tab is about to be taken to, whoever asks:
++// the browser's back, forward and go to an entry, a page's history.back(), forward() and go(), and
++// the Navigation API's back(), forward() and traverseTo(). False leaves the tab on its page.
++using HistoryTraversalFilter = base::RepeatingCallback<bool(int index)>;
++
++// Has |contents| ask |filter| from now on, or nothing if it's null, as a tab starts.
++CONTENT_EXPORT void SetHistoryTraversalFilter(WebContents* contents, HistoryTraversalFilter filter);
++
++}  // namespace content
++
++#endif  // CONTENT_PUBLIC_BROWSER_HISTORY_TRAVERSAL_H_
