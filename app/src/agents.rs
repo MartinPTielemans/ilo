@@ -1526,9 +1526,9 @@ impl Agents {
         cx: &mut Context<Self>,
     ) {
         let named = named.map(named_site);
-        if let Some(asked) = tools::not_secure(action, refused) {
+        if tools::not_secure(action, refused) {
             // Never by where the tab is, which is the page it's put back on.
-            return self.not_secure(agent, tab, &named.unwrap_or_default(), asked, cx);
+            return self.not_secure(agent, tab, &named.unwrap_or_default(), cx);
         }
         let site = named.unwrap_or_else(|| site(&self.browser.tab(tab, cx).url));
         self.note_page(
@@ -1543,34 +1543,12 @@ impl Agents {
 
     /// The core stopped a page of `host` in the agent's `tab`, which answered only over http, and
     /// puts the tab back: an entry for the log, by the host the core names, as the tab is leaving
-    /// that page, or by none. Where a step of the agent's `asked` for the page, the step that
-    /// waits on it, the oldest there as the core takes a tab's one at a time, ends as one that
-    /// never went, in the words that has: the agent learns no more. A page the user went to and
-    /// handed the tab back at ends none: a step waiting there began after and still goes.
-    fn not_secure(
-        &mut self,
-        agent: &str,
-        tab: u64,
-        host: &str,
-        asked: bool,
-        cx: &mut Context<Self>,
-    ) {
+    /// that page, or by none. It ends no step. The open or the navigate that asked for the page
+    /// hears from the core itself (`Failure::NotSecure`), and any other step under way in the tab
+    /// still goes, so it's never told it didn't.
+    fn not_secure(&mut self, agent: &str, tab: u64, host: &str, cx: &mut Context<Self>) {
         let by = (self.holder(agent, tab), tab);
         self.note_page(agent, by, tools::NOT_SECURE_ACTION, host, "");
-        let waiting = (self.acting.iter())
-            .filter(|(_, acting)| asked && acting.tab == tab)
-            .map(|(request, _)| *request)
-            .min();
-        if let Some(acting) = waiting.and_then(|request| self.acting.remove(&request)) {
-            // It didn't go, so the user's yes for where it was to go goes with it.
-            self.cleared.remove(&tab);
-            let why = match acting.opened {
-                true => "The tab couldn't open.",
-                false => "The tab couldn't go there.",
-            };
-            _ = acting.reply.send(ToolResult::error(why));
-            self.advance(cx);
-        }
         cx.notify();
     }
 
@@ -4267,6 +4245,15 @@ impl Agents {
         else {
             return;
         };
+        // The page it was to open or go to answered only over http, and the core stopped it and put
+        // the tab back or closed it: the step never went, in the words that has, and the agent
+        // learns no more. An open's tab is gone, so its answer names none.
+        if error == Some(Failure::NotSecure) {
+            // It didn't go, so the user's yes for where it was to go goes with it.
+            self.cleared.remove(&tab);
+            _ = reply.send(ToolResult::error(text));
+            return self.advance(cx);
+        }
         self.went_to(entry, tab, cx);
         // What it did, as a look again for the text it waits for says it too.
         let did_note = note.clone();
@@ -5342,6 +5329,8 @@ pub enum Failure {
     Loading,
     PasswordField,
     NoOption,
+    /// The open's or the navigate's own page answered only over http and was stopped.
+    NotSecure,
 }
 
 impl Failure {

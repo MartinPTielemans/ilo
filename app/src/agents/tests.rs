@@ -3699,10 +3699,12 @@ fn the_cores_reports_come_to_the_log(cx: &mut TestAppContext) {
 }
 
 /// A page that answers only over http never opens in an agent's tab: the core stops it and says
-/// so, and the open that waits on the page ends as one that never opened, in those words alone.
-/// The log has the page by its host, as the core names it, not by where the tab is.
+/// so twice, in an entry for the log and in its answer to the open that asked for the page. The
+/// entry ends no step. The answer ends the open as one that never opened, in those words alone:
+/// the tab it would name is closed. The log has the page by its host, as the core names it, not
+/// by where the tab is.
 #[gpui::test]
-fn a_page_without_a_secure_connection_ends_the_open_that_waits_on_it(cx: &mut TestAppContext) {
+fn a_page_without_a_secure_connection_ends_its_open_by_the_cores_answer(cx: &mut TestAppContext) {
     let (browser, configs) = (Rc::new(Made::default()), Arc::new(Configs::default()));
     let agents = agents(&browser, &configs, None, cx);
     agents.update(cx, |agents, cx| agents.connect(Client::ClaudeCode, cx));
@@ -3720,10 +3722,7 @@ fn a_page_without_a_secure_connection_ends_the_open_that_waits_on_it(cx: &mut Te
         let named = Some("plain.example");
         agents.checked("claude-code", tab, "open_page", "not_secure", named, cx);
     });
-    assert_eq!(
-        answer.recv().unwrap(),
-        ToolResult::error("The tab couldn't open.")
-    );
+    assert!(answer.try_recv().is_err(), "the entry ended the open");
     let log = log(&agents, "claude-code", cx);
     assert_eq!(
         log[0],
@@ -3738,7 +3737,15 @@ fn a_page_without_a_secure_connection_ends_the_open_that_waits_on_it(cx: &mut Te
         tools::step_title(&did, tools::Tense::Done),
         "Not opened: no secure connection · plain.example"
     );
-    // The core's answer as the tab it put back closes is nobody's.
+    agents.update(cx, |agents, cx| {
+        let told = "The tab couldn't open.".to_string();
+        agents.page_done(request, told, Some(Failure::NotSecure), cx);
+    });
+    assert_eq!(
+        answer.recv().unwrap(),
+        ToolResult::error("The tab couldn't open.")
+    );
+    // An answer of the core's as the tab closes is nobody's: the open has its one.
     agents.update(cx, |agents, cx| {
         let ended = "The agent's session with the tab ended.".to_string();
         agents.page_done(request, ended, Some(Failure::Other), cx);
@@ -3746,41 +3753,60 @@ fn a_page_without_a_secure_connection_ends_the_open_that_waits_on_it(cx: &mut Te
     assert!(answer.try_recv().is_err(), "the open answered twice");
 }
 
-/// As is the step that took a tab the agent had to such a page, which the core puts back to the
-/// page it was at. An entry of the core's for anything else ends no step.
+/// As the navigate that took a tab the agent had to such a page, which the core puts back to the
+/// page it was at: it ends by the core's answer, once. A step that isn't that navigate, under
+/// way in the tab when the page is stopped, is ended by neither the entry nor the navigate's
+/// answer: it goes on in the page the tab is put back on, and is never told it didn't go.
 #[gpui::test]
-fn a_page_without_a_secure_connection_ends_the_step_that_went_there(cx: &mut TestAppContext) {
-    let (agents, _, _) = connected(cx);
-    let answer = call(
+fn a_page_without_a_secure_connection_ends_only_the_navigate_that_asked(cx: &mut TestAppContext) {
+    let (agents, browser, _) = connected(cx);
+    let scroll = call(
+        &agents,
+        "claude-code",
+        "scroll",
+        json!({ "tab": 20, "direction": "down" }),
+        cx,
+    );
+    let scrolling = browser.pages.borrow().last().unwrap().1;
+    let navigate = call(
         &agents,
         "claude-code",
         "navigate",
         json!({ "tab": 20, "url": "http://plain.example/" }),
         cx,
     );
+    let going = browser.pages.borrow().last().unwrap().1;
+    assert_ne!(scrolling, going);
     agents.update(cx, |agents, cx| {
         let named = Some("plain.example");
         agents.checked("claude-code", 20, "open_page", "another", named, cx);
-        agents.checked("claude-code", 20, "open_pages", "not_secure", named, cx);
-    });
-    assert!(answer.try_recv().is_err(), "another entry ended the step");
-    agents.update(cx, |agents, cx| {
-        let named = Some("plain.example");
         agents.checked("claude-code", 20, "open_page", "not_secure", named, cx);
     });
+    assert!(scroll.try_recv().is_err(), "the entry ended another step");
+    assert!(navigate.try_recv().is_err(), "the entry ended the navigate");
+    agents.update(cx, |agents, cx| {
+        let told = "The tab couldn't go there.".to_string();
+        agents.page_done(going, told, Some(Failure::NotSecure), cx);
+    });
     assert_eq!(
-        answer.recv().unwrap(),
+        navigate.recv().unwrap(),
         ToolResult::error("The tab couldn't go there.")
     );
-    // One with no step waiting is the log's alone.
+    assert!(scroll.try_recv().is_err(), "the navigate's answer ended it");
+    // The other step answers as it does on any page, once, and not as one that didn't go.
     agents.update(cx, |agents, cx| {
-        let named = Some("other.example");
-        agents.checked("claude-code", 20, "open_page", "not_secure", named, cx);
+        agents.page_done(scrolling, shop_tree(), None, cx)
     });
+    assert!(!scroll.recv().unwrap().error);
+    agents.update(cx, |agents, cx| {
+        agents.page_done(going, shop_tree(), None, cx);
+        agents.page_done(scrolling, shop_tree(), None, cx);
+    });
+    assert!(navigate.try_recv().is_err(), "the navigate answered twice");
+    assert!(scroll.try_recv().is_err(), "the other step answered twice");
     let log = log(&agents, "claude-code", cx);
-    assert_eq!(
-        log[0],
-        ("open_page".into(), "other.example".into(), "".into())
+    assert!(
+        (log.iter()).any(|entry| *entry == ("open_page".into(), "plain.example".into(), "".into()))
     );
 }
 
@@ -3816,13 +3842,11 @@ fn a_page_left_at_a_hand_back_ends_no_step(cx: &mut TestAppContext) {
     );
     // The step is the core's to answer still, as it goes on in the page the tab is put back on.
     assert!(!page_done(&agents, &browser, answer, shop_tree(), cx).error);
-    // The entry is known by its reason too, as a step's is.
-    assert_eq!(
-        tools::not_secure("handed_back_page", "not_secure"),
-        Some(false)
-    );
-    assert_eq!(tools::not_secure("open_page", "not_secure"), Some(true));
-    assert_eq!(tools::not_secure("handed_back_page", "another"), None);
+    // The entry is known by its reason too, under either of its actions.
+    assert!(tools::not_secure("handed_back_page", "not_secure"));
+    assert!(tools::not_secure("open_page", "not_secure"));
+    assert!(!tools::not_secure("handed_back_page", "another"));
+    assert!(!tools::not_secure("open_pages", "not_secure"));
 }
 
 /// An entry of the core's is about the site it names, not the page its tab shows, and about the
