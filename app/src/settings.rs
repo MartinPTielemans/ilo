@@ -3926,7 +3926,7 @@ impl Settings {
             threads.push(Block::Heading(browser::needs_you::NOTIFICATIONS.into()));
             threads.push(Block::Rows(vec![self.when_to_notify(agents, cx)]));
         }
-        let mut blocks = Vec::new();
+        let mut blocks = vec![Block::Rows(vec![self.other_apps(agents, accent, cx)])];
         blocks.push(Block::Heading(APPS_THAT_CONNECT.into()));
         let apps = SharedString::from(APPS_THAT_CONNECT);
         blocks.push(Block::Group(self.flashed(&apps, group(look, clients))));
@@ -4033,6 +4033,22 @@ impl Settings {
             Page::new(Section::Access, agents::tier::NEVER_GETS, access),
             Page::new(Section::OtherApps, "", blocks),
         ]
+    }
+
+    /// Other apps' own switch (#4260), at the top of their page, where it is kept: only the user's
+    /// click sets it.
+    fn other_apps(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> Row {
+        let name = format!("Let other apps' agents use {PRODUCT}");
+        let on = agents.read(cx).other_apps();
+        let switch = {
+            let agents = agents.clone();
+            let set = move |on, cx: &mut App| {
+                agents.update(cx, |agents, cx| agents.set_other_apps(on, cx))
+            };
+            self.toggle("other apps", name.clone(), on, set, accent, cx)
+        };
+        let line = "Each works in a Space of its own, never in your tabs.";
+        setting(&self.look, name, Some(line.into()), vec![switch])
     }
 
     /// Access: what each tier lets a task do, in words only, since only a task's own menu sets
