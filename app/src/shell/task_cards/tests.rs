@@ -8,7 +8,7 @@ use gpui::{AppContext as _, Entity, Modifiers, SharedString, TestAppContext, Vis
 use super::card::{Look, count, look, second_line};
 use super::glyph::Mark;
 use super::{Card, Chip, Cli, Dot, Form, Offer, PageMark, PageWord, chip, state_line};
-use crate::agents::task::Word;
+use crate::agents::task::{FINDING_KEPT, Message, Who, Word, finding};
 use crate::agents::tier::Tier;
 use crate::shell::page_ends::{STOPS_DRAWN, StripStop};
 use crate::shell::{Command, Folders, Shell, Slot, recorder::Recorder};
@@ -36,6 +36,7 @@ pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
         fix: None,
         visited: Vec::new(),
         ended_at: Default::default(),
+        finding: Default::default(),
     }
 }
 
@@ -318,6 +319,7 @@ fn a_cards_look_is_its_tasks_state_alone() {
         let with = |dot: Dot, pages: &[u64]| Card {
             status: status.into(),
             title: status.into(),
+            finding: status.into(),
             ..paged(1, dot, pages)
         };
         assert_eq!(
@@ -370,6 +372,103 @@ fn a_cards_look_is_its_tasks_state_alone() {
     assert_eq!(form(Dot::Done, false, false), Form::DoneLine);
     assert_eq!(form(Dot::Ended, true, false), Form::Ended);
     assert_eq!(form(Dot::Ended, false, false), Form::EndedLine);
+}
+
+/// A done task's finding is the first paragraph of its last answer as plain text: a link is its
+/// words, formatting and line breaks go, a right-to-left override is written out as the title's
+/// is (#3690), and it's kept to FINDING_KEPT characters.
+#[test]
+fn the_finding_is_plain_and_capped() {
+    let said = |who: Who, text: &str| Message {
+        who,
+        text: text.to_string().into(),
+        at: Instant::now(),
+    };
+    let answer = "## Booked\n\n**Taberna** for [two at 20:00](https://taberna.example/booking), \
+                  by the `window`.\nSee <https://taberna.example/menu>.\u{202E}fdp.exe\n\n\
+                  The second paragraph isn't shown.";
+    let found = finding(&[said(Who::Agent, "Looking"), said(Who::Result, answer)]);
+    assert_eq!(found.as_ref(), "Booked");
+    let answer = "**Taberna** for [two at 20:00](https://taberna.example/booking), by the \
+                  `window`.\n- See <https://taberna.example/menu>.\u{202E}fdp.exe\n\n\
+                  The second paragraph isn't shown.";
+    let found = finding(&[said(Who::Agent, "Looking"), said(Who::Result, answer)]);
+    assert_eq!(
+        found.as_ref(),
+        "Taberna for two at 20:00, by the window. See https://taberna.example/menu.\\u{202E}fdp.exe"
+    );
+    assert!(!found.contains('\u{202E}') && !found.contains('\n'));
+    // The last answer, not a question or the user's reply after it.
+    let messages = [
+        said(Who::Result, "The first."),
+        said(Who::User, "And the second?"),
+        said(Who::Agent, "The second."),
+        said(Who::Asked, "Which one?"),
+    ];
+    assert_eq!(finding(&messages).as_ref(), "The second.");
+    // None, with no answer.
+    assert!(finding(&[said(Who::User, "Book it")]).is_empty());
+    let long = "word ".repeat(100);
+    let found = finding(&[said(Who::Result, &long)]);
+    assert_eq!(found.chars().count(), FINDING_KEPT + 1);
+    assert!(found.ends_with('…'));
+}
+
+/// A done card not seen yet says its finding, its first sentence apart, wrapped to at most three
+/// lines the list makes room for; with none, as after a quit, when it ended.
+#[gpui::test]
+fn a_done_card_says_its_finding(cx: &mut TestAppContext) {
+    let (shell, _, cx) = shell_with(cx, vec![card(1, Dot::Working), card(2, Dot::Working)]);
+    let short = "Booked Taberna.";
+    let long = "Booked Taberna for two at eight, by the window, and asked them for the quiet \
+                corner, as you said the last time was loud; they will call if anything changes";
+    let done = |n: u64, finding: &str| Card {
+        finding: finding.into(),
+        ended_at: "10:42".into(),
+        ..card(n, Dot::Done)
+    };
+    shell.update(cx, |shell, cx| {
+        shell.set_task_cards(vec![done(2, long), done(1, short)], cx)
+    });
+    let height = |n: u64, shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+        shell.read_with(cx, |shell, _| {
+            let space = shell.spaces.iter().find(|space| space.id == 1).unwrap();
+            let placed = space.placed.iter().find(|placed| placed.n == n).unwrap();
+            (placed.form, placed.room)
+        })
+    };
+    let (short_form, short_room) = height(1, &shell, cx);
+    let (long_form, long_room) = height(2, &shell, cx);
+    assert_eq!(
+        (short_form, long_form),
+        (Form::DoneUnseen, Form::DoneUnseen)
+    );
+    shell.read_with(cx, |shell, _| {
+        let lines = |agent: &str| shell.task_list.finding_lines[&SharedString::from(agent)];
+        assert_eq!(lines("task-1"), 1);
+        assert_eq!(lines("task-2"), 3, "at most three lines");
+        assert!(long_room > short_room);
+    });
+    assert_eq!(
+        second_line(&done(1, short), Form::DoneUnseen, "").as_ref(),
+        short
+    );
+    let sentences = "Booked Taberna for two. The table is by the window.";
+    assert_eq!(
+        super::card::first_sentence(sentences),
+        "Booked Taberna for two.".len()
+    );
+    assert_eq!(super::card::first_sentence("No end"), "No end".len());
+    assert_eq!(
+        second_line(&done(1, ""), Form::DoneUnseen, "").as_ref(),
+        "Done · 10:42"
+    );
+    // Seen, it's a line, and says none of it.
+    assert_eq!(
+        second_line(&done(1, short), Form::DoneLine, "").as_ref(),
+        "Claude · Done"
+    );
+    draw(&shell, cx);
 }
 
 /// How many of its pages a task at work has been on is never more than it has, and isn't shown

@@ -2904,6 +2904,9 @@ title-line = 16.0
 # over a light glass falls under the reading floor sooner.
 live-line = 15.0
 done-line = 16.0
+# A done card not yet seen: its finding wraps to at most `finding-lines` on `done-line`, its first
+# sentence in text, the rest in text-2.
+finding-lines = 3
 text-2 = 0.6
 text-2-light = 0.65
 # Row 3: its pages as icons `icon` square, `icon-gap` apart, those not yet visited at

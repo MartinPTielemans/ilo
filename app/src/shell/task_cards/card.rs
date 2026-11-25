@@ -45,6 +45,15 @@ fn done_at(card: &Card) -> SharedString {
     }
 }
 
+/// Where `text`'s first sentence ends: after its first `.`, `!` or `?` that ends a word, or at its
+/// end.
+pub(super) fn first_sentence(text: &str) -> usize {
+    let ends = text.char_indices().find(|&(at, c)| {
+        matches!(c, '.' | '!' | '?') && text[at + c.len_utf8()..].starts_with(' ')
+    });
+    ends.map_or(text.len(), |(at, c)| at + c.len_utf8())
+}
+
 /// How many of its pages a task at work has been on, of them all (Z1), left out while it has one.
 pub(super) fn count(card: &Card) -> Option<SharedString> {
     let all = card.pages.len();
@@ -59,6 +68,7 @@ pub(super) fn second_line(card: &Card, form: Form, site: &str) -> SharedString {
     match form {
         Form::Working if !card.status.is_empty() => card.status.clone(),
         Form::Waits => needs_you(site),
+        Form::DoneUnseen if !card.finding.is_empty() => card.finding.clone(),
         Form::DoneUnseen => done_at(card),
         _ => state_line(card),
     }
@@ -325,26 +335,33 @@ impl Shell {
             .child(self.card_title(card, FontWeight::SEMIBOLD))
             .children(dot);
         let words = self.said(card, form);
-        let lead = state_lead(&words);
-        let line = match form {
-            Form::DoneUnseen => DONE_LINE,
-            _ => LIVE_LINE,
+        let finding = form == Form::DoneUnseen && !card.finding.is_empty();
+        let second = match finding {
+            true => self.card_finding(card, text_2).into_any_element(),
+            false => {
+                let lead = state_lead(&words);
+                let line = match form {
+                    Form::DoneUnseen => DONE_LINE,
+                    _ => LIVE_LINE,
+                };
+                let led = HighlightStyle {
+                    color: Some(self.palette.text(TITLE)),
+                    font_weight: Some(FontWeight::MEDIUM),
+                    ..HighlightStyle::default()
+                };
+                div()
+                    .h(px(line))
+                    .truncate()
+                    .text_size(px(text::SMALL))
+                    .line_height(px(line))
+                    .text_color(text_2)
+                    .child(match lead {
+                        0 => StyledText::new(words),
+                        lead => StyledText::new(words).with_highlights([(0..lead, led)]),
+                    })
+                    .into_any_element()
+            }
         };
-        let led = HighlightStyle {
-            color: Some(self.palette.text(TITLE)),
-            font_weight: Some(FontWeight::MEDIUM),
-            ..HighlightStyle::default()
-        };
-        let second = div()
-            .h(px(line))
-            .truncate()
-            .text_size(px(text::SMALL))
-            .line_height(px(line))
-            .text_color(text_2)
-            .child(match lead {
-                0 => StyledText::new(words),
-                lead => StyledText::new(words).with_highlights([(0..lead, led)]),
-            });
         let third = self.card_third(card, form, text_3, cx);
         div()
             .size_full()
@@ -356,6 +373,30 @@ impl Shell {
             .child(div().pl(px(GLYPH + GLYPH_GAP)).child(second))
             .children(third.map(|third| div().pl(px(GLYPH + GLYPH_GAP)).child(third)))
             .into_any_element()
+    }
+
+    /// A done card's finding, the agent's own words: its first sentence in the title's ink and the
+    /// rest in text-2, wrapped to the lines the list made room for and cut there. No word of it is
+    /// set heavier, as ilo's lead is, so it can't pose as ilo's.
+    fn card_finding(&self, card: &Card, text_2: Hsla) -> impl IntoElement + use<> {
+        let lines = (self.task_list.finding_lines.get(&card.agent))
+            .copied()
+            .unwrap_or(1);
+        let words = card.finding.clone();
+        let first = first_sentence(&words);
+        let ink = HighlightStyle {
+            color: Some(self.palette.text(TITLE)),
+            ..HighlightStyle::default()
+        };
+        div()
+            .h(px(DONE_LINE * lines as f32))
+            .overflow_hidden()
+            .text_size(px(text::SMALL))
+            .line_height(px(DONE_LINE))
+            .text_color(text_2)
+            .line_clamp(lines)
+            .text_ellipsis()
+            .child(StyledText::new(words).with_highlights([(0..first, ink)]))
     }
 
     /// A whole card's third row, if it has one: at work its pages, those not yet visited faint,

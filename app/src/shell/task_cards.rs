@@ -44,8 +44,8 @@ use crate::tokens::shell::task::motion::{
 };
 use crate::tokens::shell::task::{CHIP_HEIGHT, GHOST_RADIUS, GLYPH, STATUS, STOPPED};
 use crate::tokens::shell::task_card::{
-    BUTTON_HEIGHT, COUNT_LINE, DONE_LINE, GAP, ICON, LINE, LINE_AROUND, LIVE_LINE, PADDING,
-    TITLE_LINE, UNDER,
+    BUTTON_HEIGHT, COUNT_LINE, DONE_LINE, FINDING_LINES, GAP, GLYPH as CARD_GLYPH, GLYPH_GAP, ICON,
+    LINE, LINE_AROUND, LIVE_LINE, PADDING, TITLE_LINE, UNDER,
 };
 use glyph::{Glyph, State};
 use motion::{Curve, Ease};
@@ -216,13 +216,14 @@ impl Form {
 }
 
 /// The room a card in `form` takes in the list, the room under it with it: its padding, its title's
-/// line, its second line and, where it has one, its third, a gap between each.
-fn room(card: &Card, form: Form) -> f32 {
+/// line, its second line, or a finding's `lines`, and, where it has one, its third, a gap between
+/// each.
+fn room(card: &Card, form: Form, lines: usize) -> f32 {
     if form.line() {
         return LINE + 2. * LINE_AROUND;
     }
     let second = match form {
-        Form::DoneUnseen => DONE_LINE,
+        Form::DoneUnseen => DONE_LINE * lines as f32,
         _ => LIVE_LINE,
     };
     let pages = !card.pages.is_empty();
@@ -237,6 +238,23 @@ fn room(card: &Card, form: Form) -> f32 {
     };
     let third = if third > 0. { GAP + third } else { 0. };
     2. * PADDING + TITLE_LINE + GAP + second + third + UNDER
+}
+
+/// How many lines a card's `finding` takes in a list `width` wide, at most FINDING_LINES: what
+/// the card's second row has to its right, at small type.
+fn finding_lines(finding: &str, width: f32, cx: &gpui::App) -> usize {
+    if finding.is_empty() {
+        return 1;
+    }
+    let room = width - 2. * PLATE_INSET - 2. * PADDING - CARD_GLYPH - GLYPH_GAP;
+    let font = gpui::font(crate::face::UI);
+    let mut wrapper = cx
+        .text_system()
+        .line_wrapper(font, px(crate::tokens::text::SMALL));
+    let fragments = [gpui::LineFragment::text(finding)];
+    let indent = gpui::IndentAdjustment::NoIndent;
+    let breaks = wrapper.wrap_line(&fragments, px(room), indent).count();
+    (breaks + 1).min(FINDING_LINES as usize)
 }
 
 /// The room ⌘T's slot takes: a card at work's, before it has a page.
@@ -379,6 +397,8 @@ pub(super) struct TaskList {
     pub(super) strip_open: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// When the ring's turns began.
     epoch: Instant,
+    /// How many lines each card's finding takes at the sidebar's width at rest, by its task.
+    pub(super) finding_lines: HashMap<SharedString, usize>,
 }
 
 impl Default for TaskList {
@@ -400,6 +420,7 @@ impl Default for TaskList {
             rested: Rc::default(),
             strip_open: Rc::default(),
             epoch: clock(),
+            finding_lines: HashMap::new(),
         }
     }
 }
@@ -555,8 +576,14 @@ impl Shell {
         let before = self.layout();
         let homes: Vec<u64> = self.spaces.iter().map(|space| space.id).collect();
         let regular = !self.one_space();
+        let width = self.sidebar_width;
+        self.task_list.finding_lines = (self.task_cards.iter())
+            .filter(|card| !card.finding.is_empty())
+            .map(|card| (card.agent.clone(), finding_lines(&card.finding, width, cx)))
+            .collect();
         let shown = self.space;
         let list = &self.task_list;
+        let lines = |agent: &SharedString| list.finding_lines.get(agent).copied().unwrap_or(1);
         for space in &mut self.spaces {
             let listed: Vec<&Card> = (self.task_cards.iter())
                 .filter(|card| regular && lists_in(card, space.id, &homes))
@@ -579,7 +606,7 @@ impl Shell {
                         above: stood.map_or(top, |was| was.above),
                         lead: away.then_some(0),
                         form,
-                        room: room(card, form),
+                        room: room(card, form, lines(&card.agent)),
                     }
                 })
                 .collect();

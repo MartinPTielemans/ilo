@@ -1159,6 +1159,7 @@ fn a_taken_over_pages_row_ends_in_its_bars_title(cx: &mut TestAppContext) {
         fix: None,
         visited: Vec::new(),
         ended_at: Default::default(),
+        finding: Default::default(),
     };
     let hold = |why: &str, cx: &mut VisualTestContext| {
         shell.update(cx, |shell, cx| {
@@ -1516,6 +1517,7 @@ fn the_strip_says_what_the_task_does(cx: &mut TestAppContext) {
         fix: None,
         visited: Vec::new(),
         ended_at: Default::default(),
+        finding: Default::default(),
     };
     shell.update(cx, |shell, cx| {
         shell.set_page(
@@ -1850,6 +1852,7 @@ fn the_strip_under_a_page_says_that_pages_own_step(cx: &mut TestAppContext) {
         last_site: None,
         visited: Vec::new(),
         ended_at: Default::default(),
+        finding: Default::default(),
     };
     shell.update(cx, |shell, cx| {
         shell.set_task_cards(vec![card(&[])], cx);
@@ -1909,6 +1912,7 @@ fn the_strip_under_a_page_is_that_pages_own_while_the_task_waits_at_another(
         last_site: None,
         visited: Vec::new(),
         ended_at: Default::default(),
+        finding: Default::default(),
     };
     let held = |tab: u64| {
         vec![Status {
@@ -2111,6 +2115,7 @@ fn watching_working(shell: &Entity<Shell>, cx: &mut VisualTestContext) {
         fix: None,
         visited: Vec::new(),
         ended_at: Default::default(),
+        finding: Default::default(),
     };
     shell.update(cx, |shell, cx| {
         shell.set_task_cards(vec![card], cx);

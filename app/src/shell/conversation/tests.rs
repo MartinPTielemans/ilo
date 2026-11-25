@@ -47,6 +47,7 @@ fn card() -> Card {
         fix: None,
         visited: Vec::new(),
         ended_at: Default::default(),
+        finding: Default::default(),
     }
 }
 
