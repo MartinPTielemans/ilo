@@ -12,8 +12,10 @@ use gpui::{
 use super::{
     CHECK, Closed, Closing, DETAIL_GAP, GAP, Key, Layout, Look, Outcome, PADDING, Pointer,
     QUIET_RADIUS, RADIUS, ROW_X, Request, SUBMENU_REST, Swatch, Tracking, as_held, described,
-    described_held, key_of, lay_out, lay_out_over,
+    described_held, key_of, lay_out, lay_out_over, narrowed,
 };
+use gpui::Focusable as _;
+
 use crate::shell::MenuEntry;
 
 /// Seven points a character, near enough to SF's 13 pt for where things go.
@@ -1318,4 +1320,237 @@ fn every_label_reads_at_4_5_to_1_in_both_looks() {
             );
         }
     }
+}
+
+/// A model menu as the composer's: its search, each assistant's models under its name, one not
+/// signed in with Sign In, and Settings.
+fn models() -> Vec<MenuEntry> {
+    let heading = |title: &str| MenuEntry {
+        header: true,
+        ..MenuEntry::named(title.to_string(), false)
+    };
+    vec![
+        MenuEntry::search("Search models"), // 0
+        heading("Claude"),                  // 1
+        item("Default"),                    // 2
+        item("Haiku"),                      // 3
+        item("Sonnet"),                     // 4
+        heading("ChatGPT"),                 // 5
+        item("GPT-5"),                      // 6
+        item("o4-mini"),                    // 7
+        heading("Gemini"),                  // 8
+        item("Sign In").kept(),             // 9
+        MenuEntry::line(),                  // 10
+        item("Settings").kept(),            // 11
+    ]
+}
+
+/// A search leaves the rows whose titles hold what's typed, in any case, an assistant's name
+/// while one of its models is left, and Sign In and Settings whatever is typed: with no match,
+/// those alone, and no words of the search's own.
+#[test]
+fn a_search_narrows_the_rows_to_what_holds_it() {
+    let menu = models();
+    assert_eq!(narrowed(&menu, ""), (0..menu.len()).collect::<Vec<_>>());
+    assert_eq!(narrowed(&menu, "  "), (0..menu.len()).collect::<Vec<_>>());
+    assert_eq!(narrowed(&menu, "o"), [0, 1, 4, 5, 7, 8, 9, 10, 11]);
+    assert_eq!(narrowed(&menu, "HAI"), [0, 1, 3, 8, 9, 10, 11]);
+    assert_eq!(narrowed(&menu, "zzz"), [0, 8, 9, 10, 11]);
+    // A heading's own name matches nothing: it stays for its rows.
+    assert_eq!(narrowed(&menu, "claude"), [0, 8, 9, 10, 11]);
+    // Without a row a search keeps, no line is left hanging at either end.
+    let plain = vec![
+        MenuEntry::search("Search"),
+        item("Copy"),
+        MenuEntry::line(),
+        item("Paste"),
+        MenuEntry::line(),
+        item("Delete"),
+    ];
+    assert_eq!(narrowed(&plain, "p"), [0, 1, 2, 3]);
+    assert_eq!(narrowed(&plain, "paste"), [0, 3]);
+    assert_eq!(narrowed(&plain, "zzz"), [0]);
+    assert_eq!(
+        described(&plain),
+        "Copy, Paste, Delete",
+        "the field isn't a row"
+    );
+}
+
+/// Shows `items` at (100, 100) and returns how it closed once it does.
+fn show_items(items: Vec<MenuEntry>, cx: &mut VisualTestContext) -> Rc<Cell<Option<Closed>>> {
+    let chosen = Rc::new(Cell::new(None));
+    let answer = chosen.clone();
+    cx.cx.update(|cx: &mut App| {
+        let request = Request {
+            items,
+            at: at(100., 100.),
+            area: area(),
+            look: Look::dark(),
+            chosen: Box::new(move |closed, _| answer.set(Some(closed))),
+        };
+        super::show(request, cx);
+    });
+    cx.run_until_parked();
+    chosen
+}
+
+/// The menu's window, for the tests to look into.
+fn search_menu(
+    cx: &mut TestAppContext,
+) -> (
+    Rc<Recorder>,
+    gpui::WindowHandle<super::ContextMenu>,
+    VisualTestContext,
+) {
+    let host = Rc::new(Recorder::default());
+    let window = cx
+        .update(|cx| super::open(host.clone(), cx))
+        .expect("no window for the menu");
+    let cx = VisualTestContext::from_window(window.into(), cx);
+    (host, window, cx)
+}
+
+/// The search's field and the titles of the rows shown, the field's left out.
+fn searched(
+    window: gpui::WindowHandle<super::ContextMenu>,
+    cx: &mut VisualTestContext,
+) -> Option<(gpui::Entity<crate::text_input::TextInput>, Vec<String>)> {
+    window
+        .update(&mut cx.cx, |menu, _, _| {
+            let shown = menu.shown.as_ref()?;
+            let field = shown.search.as_ref()?.field.clone();
+            let rows = (shown.tracking.entries.iter())
+                .filter(|entry| !entry.field)
+                .map(|entry| entry.title.to_string())
+                .collect();
+            Some((field, rows))
+        })
+        .unwrap()
+}
+
+/// The cursor is in the field as the menu opens; what's typed there narrows the rows and selects
+/// nothing by its letters, space included; the arrows and ↩ walk and pick the rows left, and the
+/// pick is the row of the list the menu was asked to show, not of the rows left.
+#[gpui::test]
+fn the_arrows_and_return_pick_while_the_cursor_is_in_the_search(cx: &mut TestAppContext) {
+    let (host, window, mut cx) = search_menu(cx);
+    let cx = &mut cx;
+    let chosen = show_items(models(), cx);
+    let (field, _) = searched(window, cx).expect("the menu has no search");
+    let focused = cx.update(|window, cx| field.read(cx).focus_handle(cx).is_focused(window));
+    assert!(focused, "the cursor isn't in the field as the menu opens");
+
+    cx.simulate_keystrokes("o");
+    let (field, rows) = searched(window, cx).unwrap();
+    assert_eq!(
+        field.read_with(cx, |field, _| field.text().to_string()),
+        "o"
+    );
+    assert_eq!(
+        rows,
+        [
+            "Claude", "Sonnet", "ChatGPT", "o4-mini", "Gemini", "Sign In", "", "Settings"
+        ]
+    );
+    cx.simulate_keystrokes("space");
+    assert_eq!(
+        field.read_with(cx, |field, _| field.text().to_string()),
+        "o "
+    );
+    assert_eq!(chosen.get(), None, "space picked a row in a search");
+    // The field's own keys, such as ⌫, are bindings these tests don't make: the text is put back
+    // through the input method's way in.
+    cx.update(|window, cx| {
+        use gpui::EntityInputHandler as _;
+        field.update(cx, |field, cx| {
+            field.replace_text_in_range(Some(0..2), "o", window, cx)
+        })
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down enter");
+    assert_eq!(
+        chosen.get(),
+        Some(Closed::Chose(7)),
+        "o4-mini in the list asked for"
+    );
+    assert_eq!(host.calls.borrow().last(), Some(&"hide"));
+
+    // Up from nothing lit goes to the last row, which a search that matches nothing leaves.
+    let chosen = show_items(models(), cx);
+    cx.simulate_keystrokes("z z z");
+    let (_, rows) = searched(window, cx).unwrap();
+    assert_eq!(rows, ["Gemini", "Sign In", "", "Settings"]);
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        chosen.get(),
+        None,
+        "a search that matches nothing lights nothing"
+    );
+    cx.simulate_keystrokes("up enter");
+    assert_eq!(chosen.get(), Some(Closed::Chose(11)), "Settings");
+}
+
+/// ↩ and esc while an input method composes in the search are the composition's: ↩ picks
+/// nothing and closes nothing, esc leaves the menu open. Once the method commits, the rows narrow
+/// to it, and esc closes the menu, the search going with it, so the next menu's field is empty.
+#[gpui::test]
+fn return_and_escape_while_composing_in_the_search_are_the_compositions(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let (host, window, mut cx) = search_menu(cx);
+    let cx = &mut cx;
+    let chosen = show_items(models(), cx);
+    cx.simulate_keystrokes("s");
+    let (field, rows) = searched(window, cx).unwrap();
+    assert_eq!(
+        rows,
+        ["Claude", "Sonnet", "Gemini", "Sign In", "", "Settings"]
+    );
+    cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_and_mark_text_in_range(None, "ソ", None, window, cx)
+        })
+    });
+    cx.run_until_parked();
+    assert!(field.read_with(cx, |field, _| field.composing()));
+    let (_, rows) = searched(window, cx).unwrap();
+    assert_eq!(
+        rows,
+        ["Claude", "Sonnet", "Gemini", "Sign In", "", "Settings"],
+        "the rows narrowed to a composition"
+    );
+    cx.simulate_keystrokes("enter");
+    assert_eq!(chosen.get(), None, "↩ that ends a composition picked a row");
+    cx.simulate_keystrokes("escape");
+    assert_eq!(chosen.get(), None, "esc while composing closed the menu");
+    assert!(
+        searched(window, cx).is_some(),
+        "the menu closed while composing"
+    );
+    assert_eq!(
+        field.read_with(cx, |field, _| (field.text().to_string(), field.composing())),
+        ("sソ".to_string(), true)
+    );
+
+    cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_text_in_range(None, "ソ", window, cx)
+        })
+    });
+    cx.run_until_parked();
+    let (_, rows) = searched(window, cx).unwrap();
+    assert_eq!(rows, ["Gemini", "Sign In", "", "Settings"]);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(chosen.get(), Some(Closed::Otherwise));
+    assert_eq!(
+        host.calls.borrow().last(),
+        Some(&"hide"),
+        "the keyboard went nowhere back"
+    );
+    assert!(searched(window, cx).is_none());
+
+    show_items(models(), cx);
+    let (field, rows) = searched(window, cx).unwrap();
+    assert_eq!(field.read_with(cx, |field, _| field.text().to_string()), "");
+    assert_eq!(rows.len(), models().len() - 1, "the last search was kept");
 }
