@@ -20,6 +20,14 @@ MediaCaptureDevicesDispatcher::ProcessMediaAccessRequest asks g_browser_core_no_
 before any handler has the request and so before any picker, and answers a refused one
 PERMISSION_DENIED with no devices.
 
+content/browser/file_system_access/file_system_access_handle_base.cc. The constructor
+FileSystemAccessHandleBase::FileSystemAccessHandleBase, which every handle on a file or a folder
+runs, asks g_browser_core_no_file_handle for its frame, saying whether the handle is in the site's
+own storage. One the core refuses keeps fixed denied grants in place of those it came with, under
+the same path and name, as a handle in a third-party context does: every answer about a handle
+reads what it keeps, so each is a denial and nothing asks the user. The pointer is exported, as
+the clipboard's is.
+
 content/browser/renderer_host/clipboard_host_impl.cc. FrameClipboardContext::CanWrite asks
 g_browser_core_no_clipboard_write for its frame, where every write of a page's clipboard host is
 already asked whether its context may write; a refused write is dropped as one from a context that
@@ -140,6 +148,84 @@ diff --color -ruN a/components/permissions/permission_request_manager.cc b/compo
  
    if (base::CommandLine::ForCurrentProcess()->HasSwitch(
            switches::kDenyPermissionPrompts)) {
+diff --color -ruN a/content/browser/file_system_access/file_system_access_handle_base.cc b/content/browser/file_system_access/file_system_access_handle_base.cc
+--- a/content/browser/file_system_access/file_system_access_handle_base.cc
++++ b/content/browser/file_system_access/file_system_access_handle_base.cc
+@@ -5,6 +5,7 @@
+ #include "content/browser/file_system_access/file_system_access_handle_base.h"
+ 
+ #include <memory>
++#include <utility>
+ #include <vector>
+ 
+ #include "base/barrier_callback.h"
+@@ -23,8 +24,10 @@
+ #include "content/browser/file_system_access/file_system_access_manager_impl.h"
+ #include "content/browser/file_system_access/file_system_access_safe_move_helper.h"
+ #include "content/browser/file_system_access/file_system_access_transfer_token_impl.h"
++#include "content/browser/file_system_access/fixed_file_system_access_permission_grant.h"
+ #include "content/browser/web_contents/web_contents_impl.h"
+ #include "content/public/browser/file_system_access_permission_context.h"
++#include "content/public/browser/global_routing_id.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/common/content_client.h"
+ #include "mojo/public/cpp/bindings/message.h"
+@@ -36,6 +39,14 @@
+ #include "third_party/blink/public/common/storage_key/storage_key.h"
+ #include "third_party/blink/public/mojom/file_system_access/file_system_access_error.mojom-forward.h"
+ 
++// browser_core: whether a handle made for |frame| is refused the user's files,
++// which the core says of a page in an agent's Space (//browser_core/hooks.h).
++// |site_storage| says the handle is in the site's own storage, which is no
++// file of the user's. Exported, as the core is outside this component.
++CONTENT_EXPORT bool (*g_browser_core_no_file_handle)(
++    content::GlobalRenderFrameHostId frame,
++    bool site_storage) = nullptr;
++
+ namespace content {
+ 
+ using LockHandle = FileSystemAccessLockManager::LockHandle;
+@@ -45,6 +56,31 @@
+   return base::UTF16ToUTF8(url.path().BaseName().LossyDisplayName());
+ }
+ 
++// browser_core: the grants a handle keeps. One the core refuses keeps fixed
++// denied ones whatever came with it, as a handle in a third-party context
++// does, so every answer about it is a denial and nothing asks the user.
++FileSystemAccessManagerImpl::SharedHandleState KeptState(
++    const FileSystemAccessManagerImpl::BindingContext& context,
++    const storage::FileSystemURL& url,
++    const FileSystemAccessManagerImpl::SharedHandleState& state) {
++  if (!g_browser_core_no_file_handle ||
++      !g_browser_core_no_file_handle(
++          context.frame_id, url.type() == storage::kFileSystemTypeTemporary)) {
++    return state;
++  }
++  // Each keeps the path and the name it came with, which a handle the page
++  // stores again is stored under.
++  auto denied = [](FileSystemAccessPermissionGrant& grant) {
++    PathInfo path;
++    path.path = grant.GetPath();
++    path.display_name = grant.GetDisplayName();
++    return base::MakeRefCounted<FixedFileSystemAccessPermissionGrant>(
++        blink::mojom::PermissionStatus::DENIED, std::move(path));
++  };
++  return FileSystemAccessManagerImpl::SharedHandleState(
++      denied(*state.read_grant), denied(*state.write_grant));
++}
++
+ }  // namespace
+ 
+ FileSystemAccessHandleBase::FileSystemAccessHandleBase(
+@@ -55,7 +91,7 @@
+     : manager_(manager),
+       context_(context),
+       url_(url),
+-      handle_state_(handle_state) {
++      handle_state_(KeptState(context, url, handle_state)) {
+   CHECK(manager_, base::NotFatalUntil::M159);
+ 
+   // We support sandboxed file system and local file systems on all platforms.
 diff --color -ruN a/content/browser/renderer_host/clipboard_host_impl.cc b/content/browser/renderer_host/clipboard_host_impl.cc
 --- a/content/browser/renderer_host/clipboard_host_impl.cc
 +++ b/content/browser/renderer_host/clipboard_host_impl.cc
