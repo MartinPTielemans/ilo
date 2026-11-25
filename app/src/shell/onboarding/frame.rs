@@ -385,11 +385,15 @@ impl Shell {
     }
 
     /// The picture for `step`: the small browser in the Space's colour, the colour picked at the
-    /// color step once one is.
+    /// color step once one is, its assistant step's thread only with agents on.
     pub(super) fn frame_art(&self, step: Step, colors: Colors, cx: &gpui::App) -> AnyElement {
         let picked = (self.onboarding.as_ref()).and_then(|onboarding| onboarding.picked);
         let space = picked.map_or(picture::SPACE, |index| SWATCHES[index]);
-        let scene = picture::Scene::of(step);
+        // Just the browser's sidebar is tabs only, with no thread at work or chip about one.
+        let scene = match step == Step::Assistant && self.browser.agents(cx) != Some(true) {
+            true => picture::Scene::default(),
+            false => picture::Scene::of(step),
+        };
         let rest = match scene.rest {
             true => picture::Rest {
                 threads: self.threads_on(cx),
