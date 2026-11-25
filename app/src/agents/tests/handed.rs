@@ -479,6 +479,40 @@ fn a_tab_the_user_holds_goes_back_with_its_hold(cx: &mut TestAppContext) {
     assert_eq!(space_of(&run, SEATS.0), USERS);
 }
 
+/// At the user's Stop a call that waits on a handed tab they hold hears the stop, as one that
+/// waits on any hold does: they pressed Stop, they didn't return the tab. Each tab still goes
+/// back, with the entry that names nobody.
+#[gpui::test]
+fn a_call_that_waits_on_a_handed_tab_hears_the_stop(cx: &mut TestAppContext) {
+    let run = run("handed-stop-held", cx);
+    let agent = send(&run, ASKED, USERS, &[TRAINS.0, SEATS.0], cx).expect("started");
+    (run.agents).update(cx, |agents, cx| agents.take_over(&agent, TRAINS.0, cx));
+    let ask = json!({ "tab": TRAINS.0, "reason": "To book it." });
+    let asked = call(&run.agents, &agent, "ask_for_tab", ask, cx);
+    let step = json!({ "tab": SEATS.0, "reason": "Sign in." });
+    let handed_off = call(&run.agents, &agent, "hand_off", step, cx);
+    cx.run_until_parked();
+    assert!(asked.try_recv().is_err() && handed_off.try_recv().is_err());
+
+    (run.agents).update(cx, |agents, cx| {
+        agents.task_action(&agent, TaskAction::Stop, cx)
+    });
+    cx.run_until_parked();
+    let stopped = ToolResult::failed(tools::Kind::Stopped, crate::agents::STOPPED);
+    assert_eq!(asked.try_recv().expect("answered"), stopped);
+    assert_eq!(handed_off.try_recv().expect("answered"), stopped);
+    assert_eq!(tabs_of(&run, THREADS), [0; 0]);
+    assert_eq!(space_of(&run, TRAINS.0), USERS);
+    assert_eq!(space_of(&run, SEATS.0), USERS);
+    let held = run.agents.read_with(cx, |agents, _| agents.held.len());
+    assert_eq!(held, 0);
+    assert_eq!(
+        entries(&run, &agent, handed::GIVEN_BACK, cx),
+        ["example.com", "tickets.example"]
+    );
+    assert!(entries(&run, &agent, handed::TAKEN_BACK, cx).is_empty());
+}
+
 /// A handed tab that left the thread's Space by a road nobody flagged, as the core's own or a
 /// deleted Space, is the user's again with the core not asked again, and its entry names nobody:
 /// only a road of the app's that knows the user did it says so. A call on it hears no word of

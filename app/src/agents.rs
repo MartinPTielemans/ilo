@@ -5635,7 +5635,10 @@ fn answer_of(tab: u64, event: held::Event) -> ToolResult {
         held::Event::Moved => ToolResult::error(format!(
             "The user moved tab {tab} to a Space of their own. It's theirs now."
         )),
+        // The user's own return of it alone says they returned it.
         held::Event::Returned => ToolResult::error(task::handed::RETURNED),
+        // It went back with its thread still under way: no longer a tab of the agent's.
+        held::Event::GivenBack { stopped: false } => ToolResult::error(NOT_ITS_SPACE),
         _ => ToolResult::failed(tools::Kind::Stopped, STOPPED),
     }
 }

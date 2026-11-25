@@ -31,8 +31,11 @@ pub const RETURNED: &str =
 pub enum By {
     /// The user, by Return to Your Tabs, or by their own close of it.
     User,
-    /// Its thread, which closed it or is no longer under way.
+    /// Its thread, which closed it.
     Thread,
+    /// Its thread's end: it stopped being under way, by its answer, the user's Stop or any other
+    /// way, or goes.
+    Ended,
 }
 
 /// The user's tabs picked for a message: the tabs of the composer's chips at the user's send, and
@@ -439,12 +442,19 @@ impl Agents {
         let site = site(&self.browser.tab(tab, cx).url);
         let space = self.browser.space_of(tab, cx);
         // The user's own hold on it ends with it: the tab is theirs, with nothing to hand back.
-        self.let_go(tab, held::Event::Returned, cx);
+        // A call that waited on the hold hears they returned it only where they did: at their
+        // Stop it hears the stop, as one that waits on any hold does.
+        let hold_ends = match by {
+            By::User => held::Event::Returned,
+            By::Thread => held::Event::GivenBack { stopped: false },
+            By::Ended => held::Event::GivenBack { stopped: true },
+        };
+        self.let_go(tab, hold_ends, cx);
         self.forget_page(tab);
         match by {
             By::User => self.returned_by_user(agent, tab),
             // Its thread knows why its own page went, and the core ends what it was doing there.
-            By::Thread => {}
+            By::Thread | By::Ended => {}
         }
         // Where the core can't put it back, as when the Space it left is gone, it's a tab of
         // today in a Space of the user's.
@@ -454,7 +464,7 @@ impl Agents {
         }
         let entry = match by {
             By::User => TAKEN_BACK,
-            By::Thread => GIVEN_BACK,
+            By::Thread | By::Ended => GIVEN_BACK,
         };
         self.note_page(agent, (0, tab), entry, &site, "");
         cx.notify();
@@ -472,7 +482,7 @@ impl Agents {
         }
         for tab in self.handed_order(agent) {
             let came_back_on = self.browser.url_site(&self.browser.tab(tab, cx).url);
-            if self.return_tab(agent, tab, By::Thread, cx)
+            if self.return_tab(agent, tab, By::Ended, cx)
                 && let Some(task) = self.task_mut(agent)
             {
                 task.sends.came_back.retain(|(each, _)| *each != tab);
@@ -599,7 +609,7 @@ impl Agents {
             }
             self.forget_handed_of(&agent, tab, cx);
             let site = site(&self.browser.tab(tab, cx).url);
-            self.let_go(tab, held::Event::Returned, cx);
+            self.let_go(tab, held::Event::GivenBack { stopped: false }, cx);
             self.forget_page(tab);
             self.note_page(&agent, (0, tab), GIVEN_BACK, &site, "");
             cx.notify();

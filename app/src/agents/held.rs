@@ -56,9 +56,13 @@ pub(super) enum Event {
     Closed,
     /// The tab left the agent's Space for one of the user's.
     Moved,
-    /// The tab, one of the user's they had handed to the agent's thread, went back to their own
-    /// tabs.
+    /// The user returned the tab, one of theirs they had handed to the agent's thread, to their
+    /// own tabs.
     Returned,
+    /// The tab, one of the user's the agent's thread held, went back to their tabs without their
+    /// return of it. `stopped` is whether it went as its thread stopped being under way; else the
+    /// thread closed it itself, or it left by a road that names nobody.
+    GivenBack { stopped: bool },
 }
 
 impl Event {
@@ -72,7 +76,7 @@ impl Event {
             Event::Closed => "closed",
             Event::Moved => "moved",
             // The return's own entry says it, once, held or not.
-            Event::Returned => "",
+            Event::Returned | Event::GivenBack { .. } => "",
             // The agent's own entry says these, once for all its tabs: stopped, or disconnected.
             Event::Stop { .. } | Event::Gone { .. } => "",
             Event::HandOff | Event::TakeOver | Event::Passkey | Event::Ask { .. } => "",
@@ -143,7 +147,7 @@ pub(super) fn step(life: Life, event: Event) -> (Life, Actions) {
         (HandedOff, Timer | NotNow) => (Held, A::ANSWER | A::NOTE | A::CARD),
         (HandedOff | Asked, Stop { holder: true }) => (Held, A::ANSWER | A::CARD),
         (HandedOff | Asked, Gone { holder: true }) => (Held, A::DROP | A::CARD),
-        (Free, Closed | Moved | Returned) => (Free, A::NONE),
+        (Free, Closed | Moved | Returned | GivenBack { .. }) => (Free, A::NONE),
         // A closed tab's id leaves the core's set too.
         (_, Closed) => (Free, A::HAND_BACK | answer | A::NOTE | A::CARD),
         // The core keeps holding a tab that moved: bc_tab_hand_back would take the focus from
@@ -151,7 +155,7 @@ pub(super) fn step(life: Life, event: Event) -> (Life, Actions) {
         // Space anyway.
         (_, Moved) => (Free, answer | A::NOTE | A::CARD),
         // As a tab that moved, and the entry is the return's.
-        (_, Returned) => (Free, answer | A::CARD),
+        (_, Returned | GivenBack { .. }) => (Free, answer | A::CARD),
         (_, Keep | Timer | NotNow | Stop { .. } | Gone { .. }) => (life, A::NONE),
     }
 }

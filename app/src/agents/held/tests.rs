@@ -84,7 +84,7 @@ impl World {
         // The agent's own entry says a stop or a going, and a return's says the return.
         let noted_elsewhere = matches!(
             event,
-            Event::Stop { .. } | Event::Gone { .. } | Event::Returned
+            Event::Stop { .. } | Event::Gone { .. } | Event::Returned | Event::GivenBack { .. }
         );
         if left && !noted_elsewhere {
             assert!(
@@ -224,11 +224,24 @@ impl World {
         if self.tab == Place::Agents && !self.unheard {
             // A tab of theirs they had handed to A: the app ends the hold as it asks the core for
             // the return, and hears of the move after.
-            go("the user returns it to their tabs", &|w| {
-                w.app(Event::Returned);
-                assert_eq!(w.waiting, None, "a return left a call waiting");
-                (w.tab, w.unheard, w.acting) = (Place::Users, true, false);
-            });
+            let returns = [
+                ("the user returns it to their tabs", Event::Returned),
+                (
+                    "it goes back as its thread stops being under way",
+                    Event::GivenBack { stopped: true },
+                ),
+                (
+                    "it goes back with no return of the user's",
+                    Event::GivenBack { stopped: false },
+                ),
+            ];
+            for (how, event) in returns {
+                go(how, &|w| {
+                    w.app(event);
+                    assert_eq!(w.waiting, None, "a return left a call waiting");
+                    (w.tab, w.unheard, w.acting) = (Place::Users, true, false);
+                });
+            }
         }
         if self.tab != Place::Agents {
             // The app hears once from space_changed and once more from tab_closed, in either
