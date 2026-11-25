@@ -38,7 +38,6 @@ use crate::tokens::shell::agent_pointer::{COLOR, RING};
 use crate::tokens::shell::conversation::ilo::ARM;
 use crate::tokens::shell::permission::LINE;
 use crate::tokens::shell::task::STATUS;
-use crate::tokens::shell::task_area::motion::PICTURE_WAIT;
 use crate::tokens::shell::task_area::{
     BACK, BACK_GLYPH, BESIDE, BESIDE_GAP, GAP, PAGE_ROOM, PRIMARY_KEY, STRIP,
 };
@@ -65,6 +64,10 @@ pub(super) struct Closing {
     /// page's dialog is drawn over a task's conversation.
     aside: Option<TaskArea>,
 }
+/// How long, in seconds, a page going back waits for a picture of itself as it is to shrink from,
+/// as the one it came out of its thumbnail with is the conversation's, smaller and older: past it,
+/// it goes back with that one. The core answers in a frame or two where the page draws.
+pub(super) const PICTURE_WAIT: f32 = 0.1;
 
 /// A task's page watched in the page area.
 struct Watched {
