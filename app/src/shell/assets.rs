@@ -379,6 +379,34 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/leaf.svg"),
     ),
     (
+        "icons/library-boards.svg",
+        include_bytes!("../../assets/icons/library-boards.svg"),
+    ),
+    (
+        "icons/library-boosts.svg",
+        include_bytes!("../../assets/icons/library-boosts.svg"),
+    ),
+    (
+        "icons/library-downloads.svg",
+        include_bytes!("../../assets/icons/library-downloads.svg"),
+    ),
+    (
+        "icons/library-history.svg",
+        include_bytes!("../../assets/icons/library-history.svg"),
+    ),
+    (
+        "icons/library-media.svg",
+        include_bytes!("../../assets/icons/library-media.svg"),
+    ),
+    (
+        "icons/library-spaces.svg",
+        include_bytes!("../../assets/icons/library-spaces.svg"),
+    ),
+    (
+        "icons/library-threads.svg",
+        include_bytes!("../../assets/icons/library-threads.svg"),
+    ),
+    (
         "icons/library.svg",
         include_bytes!("../../assets/icons/library.svg"),
     ),

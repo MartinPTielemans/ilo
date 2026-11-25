@@ -159,20 +159,19 @@ fn failures_over(
         against(&plated(SECTION_PLATE)),
         GLYPH,
     );
-    // The selected section's glyph, on the Library's column under Arc's selected plate (#371).
-    use crate::tokens::shell::library::{COLUMN, LIBRARY_PLATE};
-    let selected: Vec<Rgba> = window
-        .iter()
-        .map(|&at| over(over(at, ink, COLUMN), ink, LIBRARY_PLATE))
-        .collect();
-    let glyph = palette.section_glyph;
+    // The shown section's glyph, name and count, on the window under the selected plate, as the
+    // Library's column has no fill of its own.
+    let plate = Rgba::from(palette.selected(0.));
+    let shown_section: Vec<Rgba> = window.iter().map(|&at| over(at, plate, plate.a)).collect();
     check(
-        "selected Library section glyph",
-        selected
-            .iter()
-            .map(|&at| contrast(glyph, at))
-            .fold(f32::MAX, f32::min),
-        GLYPH,
+        "shown Library section",
+        on(palette.text(TEXT_PRIMARY), &shown_section),
+        TEXT,
+    );
+    check(
+        "shown Library section count",
+        on(palette.text(palette.secondary()), &shown_section),
+        gray,
     );
     let targets: Vec<Rgba> = plated(TARGET_PLATE)
         .iter()
@@ -343,29 +342,27 @@ fn states(palette: &Palette, window: &[Rgba], gray: f32) -> Vec<(String, Hsla, f
             .collect()
     };
     let white = |alpha: f32| Hsla::from(WHITE).opacity(alpha);
-    let column: Vec<Rgba> = window
-        .iter()
-        .map(|&at| over(at, ink, shell::library::COLUMN))
-        .collect();
     let (overlay, dialog) = (vec![palette.overlay], vec![palette.dialog]);
-    let sections = [
-        shell::library::SECTION_HOVERED,
-        shell::library::LIBRARY_PLATE,
-    ];
     let mut states = vec![
         // On the window.
-        // A section's plates are Arc's selected one and ours under it.
+        // A section's row, at rest, under the pointer and pressed; the shown one's apart.
         (
             "Library section label",
-            palette.gray(shell::library::SECTION_LABEL),
+            palette.text(TEXT_PRIMARY),
+            TEXT,
+            lay_on(Ground::Library, window, 0., &PRESSABLE),
+        ),
+        (
+            "Library section count",
+            palette.text(palette.secondary()),
             gray,
-            lay(&column, 0., &sections),
+            lay_on(Ground::Library, window, 0., &PRESSABLE),
         ),
         (
             "Library section glyph",
             palette.glyph(shell::library::SECTION_GLYPH_UNSELECTED),
             GLYPH,
-            lay(&column, 0., &sections),
+            lay_on(Ground::Library, window, 0., &PRESSABLE),
         ),
         (
             "Library row title",

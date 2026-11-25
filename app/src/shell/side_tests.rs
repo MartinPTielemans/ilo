@@ -15,7 +15,7 @@ use super::{
     CONTROLS_PLATE, Command, Folders, Page, REVEAL_WAIT, SIDEBAR_MAX, Section, Shell, SidebarRight,
     recorder::Recorder,
 };
-use crate::tokens::shell::library::{COLUMN_WIDTH, SECTION_WIDTH, SECTION_X};
+use crate::tokens::shell::library::COLUMN_WIDTH;
 
 const WIDTH: f32 = 1000.;
 
@@ -343,7 +343,7 @@ fn on_the_right_the_library_s_columns_swap(cx: &mut TestAppContext) {
         let titles = host.menus.borrow().last().cloned().unwrap_or_default();
         titles.iter().any(|(title, _)| title == "Clear Archive")
     };
-    let middle = SECTION_X + SECTION_WIDTH / 2.;
+    let middle = COLUMN_WIDTH / 2.;
     let right = archive(&shell, cx);
     assert_eq!(
         right.x,
