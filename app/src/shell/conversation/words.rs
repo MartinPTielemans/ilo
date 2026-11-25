@@ -173,11 +173,11 @@ pub fn head(kind: &IloKind, agent: &str) -> (String, Option<String>) {
         // X6c: what the copy that failed would have given, by its count.
         IloKind::NotCopied {
             left: LeftOut::File(name) | LeftOut::Folder(name),
-        } => ("started this task without".into(), Some(name.to_string())),
+        } => ("started this thread without".into(), Some(name.to_string())),
         IloKind::NotCopied {
             left: LeftOut::Files(files),
         } => (
-            format!("started this task without {files} files: ilo couldn't copy them"),
+            format!("started this thread without {files} files: {PRODUCT} couldn't copy them"),
             None,
         ),
         IloKind::Resumed { tier } => (format!("resumed this thread at {}", tier.label()), None),
@@ -240,10 +240,10 @@ pub fn tail(kind: &IloKind, agent: &str) -> Option<String> {
         IloKind::LeftRunning {
             reach: Reach::Both(_),
         } => Some(format!(" and this thread's files{RESTART_ENDS}")),
-        IloKind::FolderGone { .. } => Some(": ilo couldn't find it".into()),
+        IloKind::FolderGone { .. } => Some(format!(": {PRODUCT} couldn't find it")),
         IloKind::NotCopied {
             left: LeftOut::File(_) | LeftOut::Folder(_),
-        } => Some(": ilo couldn't copy it".into()),
+        } => Some(format!(": {PRODUCT} couldn't copy it")),
         _ => None,
     }
 }

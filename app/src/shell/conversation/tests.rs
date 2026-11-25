@@ -1670,28 +1670,28 @@ fn a_wall_that_wasnt_put_up_says_what_ilo_did_and_why(_: &mut TestAppContext) {
             IloKind::Revoked {
                 folder: "Trip".into(),
             },
-            "ilo \u{b7} You revoked \u{201c}Trip\u{201d}",
+            "{p} \u{b7} You revoked \u{201c}Trip\u{201d}",
             "\u{201c}Trip\u{201d}",
         ),
         (
             IloKind::FolderGone {
                 folder: "Trip".into(),
             },
-            "ilo revoked \u{201c}Trip\u{201d}: ilo couldn't find it",
+            "{p} revoked \u{201c}Trip\u{201d}: {p} couldn't find it",
             "\u{201c}Trip\u{201d}",
         ),
         (
             IloKind::NotCopied {
                 left: LeftOut::File("seats.pdf".into()),
             },
-            "ilo started this task without \u{201c}seats.pdf\u{201d}: ilo couldn't copy it",
+            "{p} started this thread without \u{201c}seats.pdf\u{201d}: {p} couldn't copy it",
             "\u{201c}seats.pdf\u{201d}",
         ),
         (
             IloKind::NotCopied {
                 left: LeftOut::Files(3),
             },
-            "ilo started this task without 3 files: ilo couldn't copy them",
+            "{p} started this thread without 3 files: {p} couldn't copy them",
             "",
         ),
     ];
