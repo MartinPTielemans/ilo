@@ -790,6 +790,16 @@ alert-gap = 6.0
 # three of description and the row.
 room = 300.0
 
+[mark]
+# The product's mark (app/src/product.rs) is one colour, the text's: the palette's text at this
+# alpha, or as much more as text needs on any theme.
+ink = 1.0
+# Below this size it is the small drawing, where the under-passes' gaps would close: none, and a
+# thicker cord, so it stays three clear loops.
+small-below = 24.0
+# From this size it is the large drawing, its gaps cut by a mask; between the two, the middle one.
+large-from = 40.0
+
 [menu]
 # ilo's own context menu (ours, #331): 24 pt rows of 13 pt text in a panel of the palette's
 # overlay fills, frosted where the host blurs under it, in glass (#4090): a light from the top,
