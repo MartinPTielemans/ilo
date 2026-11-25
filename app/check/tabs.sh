@@ -642,7 +642,7 @@ send click $sidebar_point
 switch "tab ctrl" "$c"
 expect '^browser: command recent-tab via ui$' "⌃Tab with the UI focused didn't reach the UI"
 send flags
-send click 100 154
+send click 100 148
 expect '^browser: command new-tab via sidebar$' "a click on \"+ New Tab\" didn't run New Tab"
 expect '^browser: command bar shown$' "a click on \"+ New Tab\" didn't open the command bar"
 send key escape
@@ -1327,7 +1327,7 @@ open_from_bar "${site}notes.txt"
 send key w cmd
 expect_tabs "$x $kept" "$o" "closing ⌘T's tab didn't go back to the pinned tab it opened over"
 set -- $(row 1)
-send click $1 $(($2 + 41))
+send click $1 $(($2 + 34))
 expect "^browser: selected $u in " "a click on the second Today row didn't show its tab"
 open_from_bar "${site}notes.txt"
 send key w cmd
@@ -1385,7 +1385,7 @@ under=$(echo $kept | cut -d' ' -f1)
 [ -n "$under" ] || fail "no Today tab under $x: Today is \"$(today)\""
 switch "$(($(pinned | wc -w) + 2)) cmd" "$under"
 set -- $(row 0)
-send click $1 $(($2 + 41))
+send click $1 $(($2 + 34))
 expect "^browser: selected $x in " "a click on Today's top row didn't show its tab"
 send key d cmd
 expect_lists "$o $x" "$before" "after ⌘D on the link's tab"
@@ -1447,7 +1447,7 @@ open_site() {
 # The centre of Today's row $1, under the pinned tabs.
 today_row() {
   set -- $(row "$1")
-  echo "$1 $(($2 + 41 * $(echo $(pinned) | wc -w)))"
+  echo "$1 $(($2 + 34 * $(echo $(pinned) | wc -w)))"
 }
 # The links copied last, from the line logged and the two after it.
 copied() {
@@ -2402,11 +2402,11 @@ sort_item() {
   expect "^browser: menu bar Tabs: .*, Sort Today Tabs by Site$1, " \
     "the Tabs menu's Sort Today Tabs by Site wasn't ${2:-there}"
 }
-# A right-click on the line over Today, under the Space's name with no pinned tab, shows Sort Today
+# A right-click on the gap over Today, under the Space's name with no pinned tab, shows Sort Today
 # Tabs by Site, dimmed if $1 is "(disabled)", and Clear Today over the empty space's menu, captured
 # in $2.png, which escape closes.
 divider_menu() {
-  post rightclick 60 $((90 + 44 + 7))
+  post rightclick 60 $((86 + 42 + 3))
   expect "^browser: menu shown $(cased "Sort Today Tabs by Site$1, Clear Today, New Tab, New Folder…"), " \
     "a right-click on the line over Today didn't lead with Sort Today Tabs by Site${1:+ dimmed} and Clear Today"
   ../tools/window-screenshot.sh "$pid" "$out/$2.png" || fail "no window to capture"

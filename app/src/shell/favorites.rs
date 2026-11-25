@@ -14,11 +14,11 @@ use crate::icon_picker::Subject;
 use crate::tooltip::{self, Anchor, Tip};
 
 use super::{
-    Curve, DEVELOPER_TILE, DIVIDER, FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X, FOLDER_TITLE_X,
-    FOOTER_HEIGHT, HAIRLINE, LIST_TOP, PLATE_INSET, Place, Row, SECONDARY, SEGMENT_LINE,
-    SLEEPING_FAVICON, Shell, Slot, Space, TALL_FAVORITES, TILE, TILE_COLUMNS, TILE_GAP,
-    TILE_HEIGHT, TILE_MARK, TILE_MARK_INSET, TILE_MIN, TILE_RADIUS, TILE_RING, TILE_UNTHEMED,
-    TILE_UNTHEMED_LIGHT, TITLE_END_INSET, TITLE_GAP, TURN_TITLE_FADE, TileTheme,
+    BLOCK_GAP, Curve, DEVELOPER_TILE, DIVIDER, FAVICON_DRAWN, FAVICON_SIZE, FAVICON_X,
+    FOLDER_TITLE_X, FOOTER_HEIGHT, HAIRLINE, LIST_TOP, PLATE_INSET, Place, Row, SECONDARY,
+    SEGMENT_LINE, SLEEPING_FAVICON, Shell, Slot, Space, TALL_FAVORITES, TILE, TILE_COLUMNS,
+    TILE_GAP, TILE_HEIGHT, TILE_MARK, TILE_MARK_INSET, TILE_MIN, TILE_RADIUS, TILE_RING,
+    TILE_UNTHEMED, TILE_UNTHEMED_LIGHT, TITLE_END_INSET, TITLE_GAP, TURN_TITLE_FADE, TileTheme,
     access::Accessible, developer_outline, rows::capture_glyph, tile_theme::RING_WIDTH, title,
 };
 use crate::palette::{Palette, Tone};
@@ -325,12 +325,14 @@ impl Shell {
     }
 
     /// Where the Space's pages start with `count` tiles: under them, else under the URL field.
+    /// The name's line brings the block's gap over itself, so with no tiles the pages start that
+    /// far up, and the line is where the tiles' top would be.
     pub(super) fn list_top_with(&self, count: usize) -> f32 {
         let rows = self
             .tile_places(count)
             .last()
-            .map_or(0., |&[_, top, _]| top + TILE_HEIGHT);
-        LIST_TOP + if count > 0 { rows + TILE_GAP } else { 0. }
+            .map_or(-BLOCK_GAP, |&[_, top, _]| top + TILE_HEIGHT);
+        LIST_TOP + rows
     }
 
     /// Where the Space's pages start: under the tiles.

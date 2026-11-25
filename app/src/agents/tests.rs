@@ -3407,14 +3407,13 @@ fn click_on(
     call(agents, "claude-code", "click", click, cx)
 }
 
-/// A check's `--agent-waits` shortens both waits so a run sees each end, and the quiet end's when
-/// it gives a third; a prod build, or a value that isn't two or three whole seconds, keeps the
-/// spec's.
+/// A check's `--agent-waits` shortens the handoff's wait, its second, so a run sees it end, and the
+/// quiet end's when it gives a third; its first, an ask's, is taken unread, as nothing asks; a prod
+/// build, or a value that isn't two or three parts, keeps the spec's.
 #[test]
 fn a_checks_waits_stand_in_for_the_specs_outside_prod() {
     let given = |args: &[&str]| args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
     let spec = Waits {
-        ask: ASK_WAIT,
         handoff: HANDOFF_WAIT,
         quiet: task::QUIET,
     };
@@ -3422,7 +3421,6 @@ fn a_checks_waits_stand_in_for_the_specs_outside_prod() {
     assert_eq!(
         Waits::new(&given(&["--agent-waits=2,3"]), false),
         Waits {
-            ask: Duration::from_secs(2),
             handoff: Duration::from_secs(3),
             quiet: task::QUIET,
         }
@@ -3439,8 +3437,9 @@ fn a_checks_waits_stand_in_for_the_specs_outside_prod() {
     );
     assert_eq!(Waits::new(&given(&["--agent-waits=2"]), false), spec);
     assert_eq!(
-        Waits::new(&given(&["--agent-waits=x,3"]), false).ask,
-        ASK_WAIT
+        Waits::new(&given(&["--agent-waits=x,3"]), false).handoff,
+        Duration::from_secs(3),
+        "the first part is an ask's, which nothing reads"
     );
 }
 
@@ -6224,7 +6223,7 @@ mod tasks {
     use crate::agents::ready::{Found, Ready};
     use crate::agents::runner::{self, Cli, Failure, Out};
     use crate::agents::sign_in::Offer;
-    use crate::agents::task::{AskedOn, Dot, State, TaskAction};
+    use crate::agents::task::{AskedOn, Dot, State, TITLE_KEPT, TaskAction};
 
     /// A stand-in for `claude` that keeps what it's sent beside itself, and never answers. Each
     /// is in a folder of its own: tests running at once that shared one would rewrite the script
@@ -7398,6 +7397,116 @@ mod tasks {
         };
         agents.update(cx, |agents, cx| agents.handle(answered, cx));
         result
+    }
+
+    /// A task at work with one step taken on tab 30, a shop's basket, and tab 31 open beside it.
+    fn at_work(cx: &mut TestAppContext) -> (Entity<Agents>, Rc<Made>, String) {
+        let (agents, browser) = ready(None, cx);
+        let agent = start(&agents, "Use the coupon", cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Working
+        });
+        let mut tabs = browser.tabs.borrow_mut();
+        tabs.push((30, 100, "Shop", "https://shop.example/basket"));
+        tabs.push((31, 100, "Sign in", "https://example.com/login"));
+        drop(tabs);
+        let snapshot = json!({ "tab": 30 });
+        traced(
+            &agents,
+            &browser,
+            &agent,
+            "snapshot",
+            snapshot,
+            Some(shop_tree()),
+            cx,
+        );
+        (agents, browser, agent)
+    }
+
+    /// The live state, and the head of the last stretch of work with whether it shows as under way.
+    fn stretch_head(
+        agents: &Entity<Agents>,
+        agent: &str,
+        cx: &mut TestAppContext,
+    ) -> (task::Live, String, bool) {
+        agents.read_with(cx, |agents, cx| {
+            let conversation = agents.conversation(agent, cx).unwrap();
+            let trace = (conversation.lines.iter().rev())
+                .find_map(|line| match line {
+                    task::Line::Trace(trace) => Some(trace),
+                    _ => None,
+                })
+                .expect("a stretch of work");
+            (
+                conversation.live,
+                trace.summary().0.to_string(),
+                trace.running,
+            )
+        })
+    }
+
+    /// The head over a stretch reads the task's state, as the card's word does (set 4, find 5):
+    /// while the task waits on the user the stretch before is worked, never "Working".
+    fn heads_as_worked(live: task::Live, head: (task::Live, String, bool)) {
+        let (now, title, running) = head;
+        assert_eq!(now, live);
+        assert!(
+            title.starts_with("Worked for") && !running,
+            "a stretch headed {title:?} (under way: {running}) while the task was {live:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn a_stretch_heads_as_working_while_its_task_works(cx: &mut TestAppContext) {
+        let (agents, _browser, agent) = at_work(cx);
+        let (live, title, running) = stretch_head(&agents, &agent, cx);
+        assert_eq!(
+            (live, title.as_str(), running),
+            (task::Live::Working, "Working", true)
+        );
+    }
+
+    #[gpui::test]
+    fn a_stretch_that_ended_at_a_refused_step_heads_as_worked(cx: &mut TestAppContext) {
+        let (agents, browser, agent) = at_work(cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().tier = Tier::Look
+        });
+        // Its answer comes back as the app's own refusal, which ends the step.
+        let click = json!({ "tab": 30, "ref": "e1" });
+        assert!(traced(&agents, &browser, &agent, "click", click, None, cx).error);
+        heads_as_worked(task::Live::Refused, stretch_head(&agents, &agent, cx));
+    }
+
+    #[gpui::test]
+    fn a_stretch_before_a_handed_step_heads_as_worked(cx: &mut TestAppContext) {
+        let (agents, _browser, agent) = at_work(cx);
+        let reason = json!({ "reason": "Sign in, please.", "tab": 31 });
+        let _handed = call(&agents, &agent, "hand_off", reason, cx);
+        heads_as_worked(task::Live::Handed, stretch_head(&agents, &agent, cx));
+    }
+
+    #[gpui::test]
+    fn a_stretch_before_a_question_heads_as_worked(cx: &mut TestAppContext) {
+        let (agents, _browser, agent) = at_work(cx);
+        let question = json!({ "question": "Which size?" });
+        let _asked = call(&agents, &agent, "ask", question, cx);
+        heads_as_worked(task::Live::Asked, stretch_head(&agents, &agent, cx));
+    }
+
+    #[gpui::test]
+    fn a_stretch_before_the_user_took_its_page_heads_as_worked(cx: &mut TestAppContext) {
+        let (agents, _browser, agent) = at_work(cx);
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&agent, TaskAction::TakeOver(30), cx)
+        });
+        let (live, ..) = stretch_head(&agents, &agent, cx);
+        assert!(
+            matches!(live, task::Live::Yours { tab: 30, .. }),
+            "{live:?}"
+        );
+        let head = stretch_head(&agents, &agent, cx);
+        heads_as_worked(live, head);
     }
 
     /// A card's status says how far its task has got, from its own steps and never a clock (#1080):
@@ -8986,10 +9095,9 @@ mod tasks {
     }
 
     /// A card lists the task's last three steps this turn, oldest first, as the conversation's
-    /// trace lines say them, and names the site of the last page it was on; before its first
-    /// step it has none of either.
+    /// trace lines say them, and pictures its last page; before its first step it has neither.
     #[gpui::test]
-    fn a_card_lists_the_last_three_steps_and_names_the_last_site(cx: &mut TestAppContext) {
+    fn a_card_lists_the_last_three_steps_and_pictures_its_last_page(cx: &mut TestAppContext) {
         let (agents, _) = ready(None, cx);
         let agent = start(&agents, "Find two tickets", cx);
         agents.update(cx, |agents, _| {
@@ -8999,7 +9107,7 @@ mod tasks {
         });
         let card = card_of(&agents, cx);
         assert!(card.steps.is_empty(), "{:?}", card.steps);
-        assert_eq!(card.last_site, None);
+        assert_eq!(card.last_tab, None);
         for site in ["a.example", "b.example", "c.example", "d.example"] {
             let _ = call(&agents, &agent, "open_tab", json!({ "url": site }), cx);
         }
@@ -9015,14 +9123,19 @@ mod tasks {
             .map(SharedString::from)
             .to_vec()
         );
-        assert_eq!(card.last_site.as_deref(), Some("d.example"));
+        assert!(
+            card.last_tab.is_some(),
+            "no page pictured of {:?}",
+            card.pages
+        );
+        assert_eq!(card.last_tab, card.pages.last().copied());
     }
 
-    /// An address the browser didn't take names no page: its step's site is the agent's own
-    /// words, which the card's plate never shows. A task whose only open is one has no plate, and
-    /// one that reached a page before keeps that page's site.
+    /// Latest tasks' line under a card's title once its task is over: a done task's answer's first
+    /// line, and a stopped one's last finished step, never one under way at Stop nor one that
+    /// failed, or nothing.
     #[gpui::test]
-    fn an_address_the_browser_didnt_take_puts_no_site_on_the_card(cx: &mut TestAppContext) {
+    fn a_cards_line_is_the_answers_first_or_the_last_finished_step(cx: &mut TestAppContext) {
         let (agents, _) = ready(None, cx);
         let agent = start(&agents, "Find two tickets", cx);
         agents.update(cx, |agents, _| {
@@ -9030,25 +9143,85 @@ mod tasks {
             task.ended = None;
             task.state = State::Working;
         });
-        let words = "two tickets\0 for friday";
-        let _ = call(&agents, &agent, "open_tab", json!({ "url": words }), cx);
-        let card = card_of(&agents, cx);
-        assert!(
-            !card.steps.is_empty(),
-            "the open wasn't a step, so this tests nothing"
-        );
-        assert_eq!(card.last_site, None, "the plate shows the agent's words");
+        assert_eq!(card_of(&agents, cx).line, None, "a line while it works");
+        for site in ["a.example", "b.example", "c.example"] {
+            let _ = call(&agents, &agent, "open_tab", json!({ "url": site }), cx);
+        }
+        let stopped = |agents: &Entity<Agents>, cx: &mut TestAppContext| {
+            agents.update(cx, |agents, _| {
+                agents.task_mut(&agent).unwrap().state = State::Stopped;
+            });
+            card_of(agents, cx).line
+        };
+        // All three under way at Stop: none is a step it finished.
+        assert_eq!(stopped(&agents, cx), None);
+        agents.update(cx, |agents, _| {
+            let trace = &mut agents.task_mut(&agent).unwrap().trace;
+            let now = std::time::Instant::now();
+            trace[0].ended = Some(now);
+            trace[1].ended = Some(now);
+            trace[1].error = Some("Not found".into());
+        });
+        // The third was under way at Stop and the second failed, so the first is the last finished.
+        assert_eq!(stopped(&agents, cx).as_deref(), Some("Opened a.example"));
+        // The third answered as stopped, as Stop answers what's under way: still not a step it
+        // finished (a_step_under_way_at_stop_leaves_no_line).
+        agents.update(cx, |agents, _| {
+            let third = &mut agents.task_mut(&agent).unwrap().trace[2];
+            third.ended = Some(std::time::Instant::now());
+            third.error = Some(STOPPED.into());
+            third.kind = Some(tools::Kind::Stopped);
+        });
+        assert_eq!(stopped(&agents, cx).as_deref(), Some("Opened a.example"));
 
-        let _ = call(
-            &agents,
-            &agent,
-            "open_tab",
-            json!({ "url": "a.example" }),
-            cx,
-        );
-        let _ = call(&agents, &agent, "navigate", json!({ "url": words }), cx);
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Done {
+                result: "## **Two seats** on Friday\nRow 12.".into(),
+                summary: Some("Found two seats".into()),
+                tabs: Vec::new(),
+            };
+        });
         let card = card_of(&agents, cx);
-        assert_eq!(card.last_site.as_deref(), Some("a.example"));
+        assert_eq!(card.line.as_deref(), Some("Two seats on Friday"));
+        assert_eq!(card.ended_at, None, "a task of this run says when it ended");
+        agents.update(cx, |agents, _| {
+            agents.task_mut(&agent).unwrap().state = State::Done {
+                result: "".into(),
+                summary: None,
+                tabs: Vec::new(),
+            };
+        });
+        assert_eq!(card_of(&agents, cx).line, None, "Finished says Done twice");
+    }
+
+    /// A done card's line is cleaned as a title is: a link shows its label alone, what wouldn't
+    /// show or would turn the text around is written out, and past TITLE_KEPT it's clipped, so an
+    /// answer can't lay out the card's line as it likes.
+    #[gpui::test]
+    fn a_done_cards_line_is_plain_and_capped_as_a_title_is(cx: &mut TestAppContext) {
+        let (agents, _) = ready(None, cx);
+        let agent = start(&agents, "Find two tickets", cx);
+        let answer = |result: &str, cx: &mut TestAppContext| {
+            agents.update(cx, |agents, _| {
+                agents.task_mut(&agent).unwrap().state = State::Done {
+                    result: result.into(),
+                    summary: None,
+                    tabs: Vec::new(),
+                };
+            });
+            card_of(&agents, cx).line.map(String::from)
+        };
+        assert_eq!(
+            answer(
+                "**Booked** [two seats](https://a.example/b) \u{202E}\u{7}",
+                cx
+            )
+            .as_deref(),
+            Some("Booked two seats \\u{202E}\\u{0007}")
+        );
+        let long = format!("[Seats]({}) {}", "https://a.example/", "x".repeat(60));
+        let kept = format!("Seats {}…", "x".repeat(TITLE_KEPT - 6));
+        assert_eq!(answer(&long, cx), Some(kept));
     }
 
     /// A Stopped line's step up and Any site reach the task through the user's press, as Stop
@@ -9844,7 +10017,7 @@ mod sessions {
     use super::*;
     use crate::agents::task::{
         Card, Conversation, Dot, IDLE, Line, NAMED_RECENTLY, Opens, QUIET, RENAMING, TITLE_KEPT,
-        TaskAction, TraceStep,
+        TaskAction, TraceStep, Word,
     };
 
     /// Calls `tool` as Claude Code, as call `id`, which `answered` ends.
@@ -9972,6 +10145,46 @@ mod sessions {
                 _ => 0,
             })
             .sum()
+    }
+
+    /// ilo's lines about a page in the task `key`'s conversation, a step handed to the user or an
+    /// ask for the tab back: each line's key, its tab, and whether its buttons are gone.
+    fn page_lines(
+        agents: &Entity<Agents>,
+        key: &str,
+        cx: &mut TestAppContext,
+    ) -> Vec<(usize, u64, bool)> {
+        use crate::agents::task::ilo::IloKind;
+        (conversation(agents, key, cx).lines.iter())
+            .filter_map(|line| match line {
+                Line::Ilo(line) => match line.kind {
+                    IloKind::Yours { tab, .. } | IloKind::TabBack { tab } => {
+                        Some((line.key, tab, line.settled))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A second connection of Claude Code's, which has done nothing yet, hands tab 20 to the
+    /// user, as call `id`: the page is the first connection's task's (`at_work`).
+    fn second_hands_off(
+        agents: &Entity<Agents>,
+        id: u64,
+        cx: &mut TestAppContext,
+    ) -> mpsc::Receiver<ToolResult> {
+        hello_on(agents, "claude-code", 2, "claude-code", cx);
+        call_on(
+            agents,
+            2,
+            id,
+            "hand_off",
+            json!({ "tab": 20, "reason": "Sign in to example.com" }),
+            std::time::Instant::now(),
+            cx,
+        )
     }
 
     /// Claude Code connected and said hello, at work in its tab 20.
@@ -10335,7 +10548,6 @@ mod sessions {
     /// form, with nothing of the first task's name.
     #[gpui::test]
     fn a_task_lowered_is_lowered_for_a_second_connection(cx: &mut TestAppContext) {
-        use crate::agents::task::Word;
         let (agents, browser) = at_work(cx);
         answered(&agents, 2, cx);
         let looked = call_as(&agents, 3, "snapshot", json!({ "tab": 20 }), cx);
@@ -10397,6 +10609,57 @@ mod sessions {
             agents.read_with(cx, |agents, _| agents.task(key).map(|task| task.tier))
         };
         assert_eq!(tier(&second, cx), Some(Tier::Full));
+    }
+
+    /// An entry of the log names the level its act was judged at, never one it wasn't held to. A
+    /// second connection of the client's, its own task at Full access, acts on a page of a task
+    /// at Work on pages: its act is held to that task's access, so its entry, refused or done,
+    /// says Work on pages, and stays that connection's. What it does on its own page says its
+    /// own level.
+    #[gpui::test]
+    fn an_entry_names_the_level_its_act_was_judged_at(cx: &mut TestAppContext) {
+        let (agents, browser, first) = lowered(Tier::Full, cx);
+        (browser.tabs.borrow_mut()).push((31, 2, "Other", "https://example.org/"));
+        hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        let now = std::time::Instant::now;
+        let looked = call_on(&agents, 2, 5, "snapshot", json!({ "tab": 31 }), now(), cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 5, cx);
+        let second = cards(&agents, cx)[0].agent.to_string();
+        assert_ne!(first, second);
+        agents.update(cx, |agents, cx| {
+            agents.set_tier(&second, Tier::Full, cx);
+            agents.set_tier(&first, Tier::Work, cx);
+        });
+        // The newest entry about a page of `site`: whose connection's, the level it names, and
+        // whether it was refused.
+        let named = |site: &str, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| {
+                let entry = (agents.activity("claude-code"))
+                    .find(|entry| entry.site == site)
+                    .expect("no entry about that site");
+                let refused = !entry.refused.is_empty();
+                (entry.connection, entry.tier.to_string(), refused)
+            })
+        };
+        let work = Tier::Work.label().to_string();
+
+        let order = json!({ "tab": 20, "ref": "e3" });
+        let refused = call_on(&agents, 2, 6, "click", order, now(), cx);
+        assert!(refused.try_recv().expect("refused at once").error);
+        answered(&agents, 6, cx);
+        assert_eq!(named("example.com", cx), (2, work.clone(), true));
+
+        let clicked = coupon(&agents, (2, 7, 20), cx);
+        assert!(!page_done(&agents, &browser, clicked, shop_tree(), cx).error);
+        answered(&agents, 7, cx);
+        assert_eq!(named("example.com", cx), (2, work, false));
+
+        let looked = call_on(&agents, 2, 8, "snapshot", json!({ "tab": 31 }), now(), cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 8, cx);
+        let full = Tier::Full.label().to_string();
+        assert_eq!(named("example.org", cx), (2, full, false));
     }
 
     /// A file a page starts is judged where the page is, as an act there is: a second connection's
@@ -10704,35 +10967,246 @@ mod sessions {
         assert_eq!(tier(&agents, &second, cx), Tier::Full);
     }
 
-    /// One connection closing ends its own card alone: the other's works on, and its handoff
-    /// stays up for the user.
+    /// A step handed to the user stands where its page is (#4086). From a second connection of
+    /// the client's, its line and Needs you are the task's that holds the page, and no task is
+    /// made for the connection that only asked. Hand Back answers the connection that asked, as
+    /// any hand-off is answered, with nothing of the task in it, and the task's word is its own
+    /// state's again. The connection's task starts with its first work of its own, and the
+    /// hand-off is no step of it.
+    #[gpui::test]
+    fn a_hand_off_stands_where_its_page_is_whichever_connection_asks(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        let titled = json!({ "text": "Refund order 1179" });
+        call_as(&agents, 3, "title", titled, cx);
+        answered(&agents, 2, cx);
+        answered(&agents, 3, cx);
+        let first = cards(&agents, cx)[0].agent.to_string();
+
+        let handing = second_hands_off(&agents, 4, cx);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 1, "a task for a connection that only asked");
+        assert_eq!(
+            (shown[0].dot, shown[0].word),
+            (Dot::Waiting, Word::NeedsYou)
+        );
+        let asked = shown[0].question.as_ref().map(|question| question.tab);
+        assert_eq!(asked, Some(20), "the step isn't its page's task's");
+        let lines = page_lines(&agents, &first, cx);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!((lines[0].1, lines[0].2), (20, false));
+        assert!(matches!(handing.try_recv(), Err(mpsc::TryRecvError::Empty)));
+
+        agents.update(cx, |agents, cx| agents.hand_back(20, cx));
+        let answer = handing.recv().unwrap();
+        assert!(!answer.error);
+        assert_eq!(
+            answer.text,
+            "The user handed tab 20 back. Take a snapshot to see where it is now."
+        );
+        answered(&agents, 4, cx);
+        let back = cards(&agents, cx);
+        assert_eq!(back.len(), 1, "the hand-back made the asker a task");
+        assert_eq!((back[0].dot, back[0].word), (Dot::Working, Word::Working));
+        assert_eq!(back[0].question, None);
+        let lines = page_lines(&agents, &first, cx);
+        assert_eq!((lines.len(), lines[0].2), (1, true), "{lines:?}");
+
+        let answer = call_on(
+            &agents,
+            2,
+            5,
+            "open_tab",
+            json!({ "url": "example.org" }),
+            std::time::Instant::now(),
+            cx,
+        );
+        let opened = page_done(&agents, &browser, answer, shop_tree(), cx);
+        assert!(opened.text.starts_with("Opened tab 30."), "{}", opened.text);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 2, "its own page made the asker no task");
+        let second = shown[0].agent.to_string();
+        assert_ne!(first, second);
+        let own = conversation(&agents, &second, cx);
+        assert_eq!(steps(&own), 1, "{:?}", own.lines);
+        let pages = own.tabs.iter().map(|tab| tab.0).collect::<Vec<_>>();
+        assert_eq!(pages, [30]);
+        assert!(page_lines(&agents, &second, cx).is_empty());
+    }
+
+    /// Not Now on the line, in the conversation of the task that holds the page, answers the
+    /// connection that asked as any Not Now does, and still makes it no task.
+    #[gpui::test]
+    fn not_now_on_the_pages_tasks_line_answers_the_connection_that_asked(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        answered(&agents, 2, cx);
+        let first = cards(&agents, cx)[0].agent.to_string();
+        let handing = second_hands_off(&agents, 3, cx);
+        let key = page_lines(&agents, &first, cx)[0].0;
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&first, TaskAction::NotNow(key), cx)
+        });
+        let answer = handing.recv().unwrap();
+        assert!(answer.error);
+        let stays = "The user won't do the step on tab 20 now. It stays theirs; ";
+        assert!(answer.text.starts_with(stays), "{}", answer.text);
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 1);
+        assert_eq!((shown[0].word, &shown[0].question), (Word::Working, &None));
+        assert_eq!(page_lines(&agents, &first, cx)[0].2, true);
+    }
+
+    /// Whether a connection may hand a page off is the core's answer, as before: a second
+    /// connection's hand-off of a page that isn't its client's, the user's own or one that left
+    /// the client's Space though a task of the client's worked in it, is refused in the words its
+    /// first connection's is, and no task's line or word changes.
+    #[gpui::test]
+    fn a_hand_off_of_a_page_not_its_clients_is_refused_as_before(cx: &mut TestAppContext) {
+        let (agents, browser) = at_work(cx);
+        answered(&agents, 2, cx);
+        let first = cards(&agents, cx)[0].agent.to_string();
+        hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        let mut id = 2;
+        let mut refused = |connection, tab: u64, cx: &mut TestAppContext| {
+            id += 1;
+            let reason = json!({ "tab": tab, "reason": "Sign in to example.com" });
+            let now = std::time::Instant::now();
+            let answer = call_on(&agents, connection, id, "hand_off", reason, now, cx)
+                .try_recv()
+                .expect("the hand-off wasn't refused at once");
+            answered(&agents, id, cx);
+            assert!(answer.error, "tab {tab} was handed off: {}", answer.text);
+            answer.text
+        };
+        // The user's own tab.
+        assert_eq!(refused(1, 10, cx), refused(2, 10, cx));
+        // The task's page, which the user moved to a Space of their own.
+        for tab in browser.tabs.borrow_mut().iter_mut() {
+            if tab.0 == 20 {
+                tab.1 = 1;
+            }
+        }
+        assert_eq!(refused(1, 20, cx), refused(2, 20, cx));
+        assert_eq!(shown(&agents, cx), None);
+        assert!(browser.held.borrow().is_empty());
+        assert!(page_lines(&agents, &first, cx).is_empty());
+        assert_eq!(card(&agents, &first, cx).word, Word::Working);
+    }
+
+    /// An ask for a tab back stands where its page is as a step handed to the user does: from a
+    /// second connection, it's the line and the Needs you of the task that holds the page, it
+    /// makes the connection no task, and Keep on the line answers the connection that asked.
+    #[gpui::test]
+    fn an_ask_for_a_tab_back_stands_where_its_page_is(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        answered(&agents, 2, cx);
+        let first = cards(&agents, cx)[0].agent.to_string();
+        agents.update(cx, |agents, cx| agents.take_over("claude-code", 20, cx));
+        hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        let asking = call_on(
+            &agents,
+            2,
+            3,
+            "ask_for_tab",
+            json!({ "tab": 20, "reason": "To finish the order" }),
+            std::time::Instant::now(),
+            cx,
+        );
+        let shown = cards(&agents, cx);
+        assert_eq!(shown.len(), 1, "a task for a connection that only asked");
+        assert_eq!(shown[0].word, Word::NeedsYou);
+        let lines = page_lines(&agents, &first, cx);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!((lines[0].1, lines[0].2), (20, false));
+
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&first, TaskAction::NotNow(lines[0].0), cx)
+        });
+        let answer = asking.recv().unwrap();
+        assert!(answer.text.starts_with("The user keeps tab 20."));
+        assert_eq!(cards(&agents, cx).len(), 1);
+    }
+
+    /// The connection that asked closing lets its hand-off go, as its own page's would: the line
+    /// in the page's task loses its buttons and the task's word is its own again.
+    #[gpui::test]
+    fn the_asking_connection_closing_lets_its_hand_off_go(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        answered(&agents, 2, cx);
+        let first = cards(&agents, cx)[0].agent.to_string();
+        let _handing = second_hands_off(&agents, 3, cx);
+        assert_eq!(card(&agents, &first, cx).word, Word::NeedsYou);
+
+        closed(&agents, 2, cx);
+        assert_eq!(shown(&agents, cx), None, "the hand-off outlived its asker");
+        let left = card(&agents, &first, cx);
+        assert_eq!((left.word, &left.question), (Word::Working, &None));
+        assert_eq!(page_lines(&agents, &first, cx)[0].2, true);
+    }
+
+    /// One connection closing ends its own card alone. A hand-off another connection of the
+    /// client's asked for on its page stays up for the user, though the ended task's line has no
+    /// buttons and the asker has no task: its call waits on, and Hand Back from the page still
+    /// answers it as any hand-off is answered.
     #[gpui::test]
     fn a_connection_closing_ends_its_card_alone(cx: &mut TestAppContext) {
         let (agents, browser) = at_work(cx);
         answered(&agents, 2, cx);
         let first = cards(&agents, cx)[0].agent.to_string();
-        hello_on(&agents, "claude-code", 2, "claude-code", cx);
-        let handing = call_on(
-            &agents,
-            2,
-            3,
-            "hand_off",
-            json!({ "tab": 20, "reason": "Sign in to example.com" }),
-            std::time::Instant::now(),
-            cx,
-        );
-        let second = cards(&agents, cx)[0].agent.to_string();
+        let handing = second_hands_off(&agents, 3, cx);
         assert!(shown(&agents, cx).is_some());
 
         closed(&agents, 1, cx);
         assert_eq!(card(&agents, &first, cx).dot, Dot::Done);
-        let waiting = card(&agents, &second, cx);
-        assert_eq!(waiting.dot, Dot::Waiting, "{}", waiting.status);
-        assert!(waiting.question.is_some());
+        assert_eq!(cards(&agents, cx).len(), 1);
+        assert_eq!(page_lines(&agents, &first, cx)[0].2, true);
         assert!(shown(&agents, cx).is_some(), "its handoff went");
         assert!(matches!(handing.try_recv(), Err(mpsc::TryRecvError::Empty)));
         assert!(agents.read_with(cx, |agents, _| agents.is_live(Client::ClaudeCode)));
         assert!(browser.disconnected.borrow().is_empty());
+
+        agents.update(cx, |agents, cx| agents.hand_back(20, cx));
+        assert_eq!(
+            handing.recv().unwrap().text,
+            "The user handed tab 20 back. Take a snapshot to see where it is now."
+        );
+        assert!(browser.held.borrow().is_empty());
+    }
+
+    /// Nor is such a hand-off left waiting for good: 15 minutes after it, the connection that
+    /// asked hears the tab wasn't handed back, as any hand-off does.
+    #[gpui::test]
+    fn a_hand_off_whose_pages_task_ended_answers_after_15_minutes(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        answered(&agents, 2, cx);
+        let handing = second_hands_off(&agents, 3, cx);
+        closed(&agents, 1, cx);
+        cx.executor()
+            .advance_clock(HANDOFF_WAIT - Duration::from_secs(1));
+        assert!(handing.try_recv().is_err(), "it gave up before 15 minutes");
+        cx.executor().advance_clock(Duration::from_secs(1));
+        let answer = handing.recv().unwrap();
+        assert!(answer.error);
+        let waited = "The user hasn't handed tab 20 back in 15 minutes.";
+        assert!(answer.text.starts_with(waited), "{}", answer.text);
+    }
+
+    /// The user stopping the task that holds the page stops the work on it: the hand-off another
+    /// connection asked for there is let go at once, and its call is answered as a stopped task's
+    /// own waiting call is (#4209).
+    #[gpui::test]
+    fn stopping_the_pages_task_answers_the_connection_that_asked(cx: &mut TestAppContext) {
+        let (agents, _) = at_work(cx);
+        answered(&agents, 2, cx);
+        let first = cards(&agents, cx)[0].agent.to_string();
+        let handing = second_hands_off(&agents, 3, cx);
+        agents.update(cx, |agents, cx| {
+            agents.task_action(&first, TaskAction::Stop, cx)
+        });
+        let answer = handing.try_recv().expect("the hand-off outlived the Stop");
+        assert_eq!((answer.error, answer.text.as_str()), (true, STOPPED));
+        assert_eq!(answer.kind, Some(tools::Kind::Stopped));
+        assert_eq!(shown(&agents, cx), None);
+        assert_eq!(page_lines(&agents, &first, cx)[0].2, true);
     }
 
     /// A client connecting again starts a card of its own at its first acting call, which nothing
