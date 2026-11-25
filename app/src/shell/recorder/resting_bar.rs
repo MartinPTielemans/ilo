@@ -16,6 +16,8 @@ pub(in crate::shell) struct RestingBar {
     pub(in crate::shell) asked: Rc<RefCell<Vec<String>>>,
     /// A new profile's: no agent learned yet, as before the browser has looked for one.
     pub(in crate::shell) unlearned: Rc<std::cell::Cell<bool>>,
+    /// Over a private window, which starts no thread.
+    pub(in crate::shell) private: Rc<std::cell::Cell<bool>>,
 }
 
 impl RestingBar {
@@ -126,7 +128,7 @@ impl command_bar::Host for RestingBar {
         })
     }
     fn over_private(&self) -> bool {
-        false
+        self.private.get()
     }
     fn look_for_agents(&self, _: &mut App) {
         self.ask("look for agents".into());
@@ -148,6 +150,20 @@ impl command_bar::Host for RestingBar {
         _: &mut App,
     ) {
         self.ask(format!("run task {agent} {text}"));
+    }
+    fn run_task_at_rest(
+        &self,
+        agent: &str,
+        text: &str,
+        tier: crate::agents::tier::Tier,
+        model: Option<String>,
+        _: &mut App,
+    ) {
+        let model = model.map_or(String::new(), |model| format!(" with {model:?}"));
+        self.ask(format!(
+            "run task at rest {agent} {text} at {}{model}",
+            tier.id()
+        ));
     }
     fn set_up_agents(&self, _: &mut App) {
         self.ask("set up agents".into());

@@ -30,6 +30,11 @@ use serde_json::{Value, json};
 use super::runner::Cli;
 use super::tier::Tier;
 
+pub mod cards;
+pub mod unkept;
+
+use cards::CardId;
+
 /// The folder under the profile's that holds each kept task's own, and the file of their ids.
 pub const FOLDER: &str = "Kept tasks";
 /// The file of ids, in `FOLDER`: each kept conversation's id and its assistant.
@@ -242,6 +247,8 @@ pub struct Record {
     pub task: Option<String>,
     pub cli: Cli,
     pub id: Id,
+    /// Its card's own id, which names the card's folder (cards.rs): never the conversation's.
+    pub card: CardId,
     /// What the file says of its task, from its start and while it's listed: none for one
     /// deleted from the Archive, which a quit then leaves to be removed.
     pub past: Option<Past>,
@@ -312,6 +319,7 @@ impl Kept {
         task: Option<&str>,
         cli: Cli,
         id: Id,
+        card: CardId,
         profile: &str,
         past: Option<Past>,
     ) {
@@ -319,6 +327,7 @@ impl Kept {
             task: task.map(String::from),
             cli,
             id,
+            card,
             past,
             profile: profile.to_string(),
             nowhere: None,
@@ -332,7 +341,7 @@ impl Kept {
     /// Holds `id` for `task`, new, asked in `profile` and under way since `at`.
     pub fn hold(&mut self, task: &str, cli: Cli, id: Id, profile: &str, at: u64) {
         let under_way = Past::under_way(String::new(), at);
-        self.hold_for(Some(task), cli, id, profile, Some(under_way));
+        self.hold_for(Some(task), cli, id, CardId::new(), profile, Some(under_way));
     }
 
     /// The tasks an earlier run of the browser left that ended, each by its conversation's id,
@@ -379,6 +388,21 @@ impl Kept {
             .collect()
     }
 
+    /// The card of the conversation under `id`, while the browser holds it.
+    pub fn card_of(&self, id: &Id) -> Option<CardId> {
+        (self.records.iter())
+            .find(|record| record.id == *id)
+            .map(|record| record.card.clone())
+    }
+
+    /// The cards of the tasks the file lists: those a launch's sweep leaves (cards.rs).
+    pub fn cards(&self) -> Vec<CardId> {
+        (self.records.iter())
+            .filter(|record| record.past.is_some() && !record.removing)
+            .map(|record| record.card.clone())
+            .collect()
+    }
+
     /// A removal ended: the id goes if the conversation did, else it stays, marked.
     pub fn removed(&mut self, id: &Id, removed: bool) {
         match removed {
@@ -414,7 +438,9 @@ impl Kept {
             }
             // A folder's own name and nothing more: one with a path in it names no profile.
             let profile = text("profile").filter(|name| !name.contains(['/', '\\']));
-            self.hold_for(None, cli, id, profile.unwrap_or_default(), None);
+            // A row with no card of its own gets a new id, which names no card there is.
+            let card = text("card").and_then(CardId::parse).unwrap_or_default();
+            self.hold_for(None, cli, id, card, profile.unwrap_or_default(), None);
             let end =
                 text("state").and_then(|end| End::ALL.into_iter().find(|each| each.id() == end));
             let at = each.get("ended").and_then(Value::as_u64);
@@ -449,6 +475,7 @@ impl Kept {
                     row["state"] = json!(past.end.id());
                     row["ended"] = json!(past.at);
                     row["profile"] = json!(record.profile);
+                    row["card"] = json!(record.card.as_str());
                 }
                 row
             })

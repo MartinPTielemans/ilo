@@ -737,14 +737,14 @@ fn not_a_tab() -> String {
 /// A step of an agent's work, as a task's trace, its card and the activity log say it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Did {
-    /// The tool, a run's step's action, "back" or "forward", or "thought".
+    /// The tool, a run's step's action, "back" or "forward", "thought", or `SEARCHED`.
     pub tool: String,
     /// The site it was on, or went to.
     pub site: String,
     /// What on the page: an element by its name in quotes or its role, a key, a direction, or a
     /// wait's text in quotes or its seconds.
     pub target: String,
-    /// A thought's text, the address it opened, whole, what it typed when that may show (never
+    /// A thought's text, a search's words, the address it opened, whole, what it typed when that may show (never
     /// into a password field, and at most `TYPED_SHOWN` characters), or the way it scrolled in an
     /// element.
     pub text: String,
@@ -754,6 +754,10 @@ pub struct Did {
     /// The address it was on or opened, without its scheme, as such a line says each tab.
     pub page: String,
 }
+
+/// The tool of a step that's a search the assistant's program made, by its provider's own search:
+/// no tool of the browser's.
+pub const SEARCHED: &str = "web_search";
 
 /// What a step typed shows up to, in characters.
 pub const TYPED_SHOWN: usize = 40;
@@ -1042,6 +1046,14 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
         }
         "ask" => ("Asking you", "Asked you", "Couldn't ask you", String::new()),
         "thought" => ("Thinking", "Thought", "Thought", String::new()),
+        // A trace's step has its words; the activity log's entry, a thread's, its count alone.
+        SEARCHED => {
+            return match (did.text.is_empty(), did.target.parse::<usize>()) {
+                (false, _) => format!("Searched the web for “{}”", did.text),
+                (true, Ok(count)) if count > 1 => format!("Searched the web {count} times"),
+                _ => "Searched the web".into(),
+            };
+        }
         // The user's Hand Back on a stopped task, with how many pages: never a title or a site.
         PAGES_BACK if !did.target.is_empty() => {
             return format!("{} · {}", describe(PAGES_BACK), did.target);
@@ -1099,6 +1111,7 @@ pub fn step_glyph(tool: &str) -> &'static str {
         "ask" => "icons/circle-question-mark.svg",
         "upload" => "icons/file.svg",
         "thought" => "icons/lightbulb.svg",
+        SEARCHED => "icons/search.svg",
         _ => "icons/globe.svg",
     }
 }

@@ -26,7 +26,8 @@ impl Shell {
         (self.spaces.iter()).any(|entry| entry.id == space && entry.agent.is_empty())
     }
 
-    /// Whether a sort of `space` has the two tabs it needs, looking no further than the second.
+    /// Whether a sort of `space` has the `FEWEST` tabs it needs, looking no further than the last
+    /// of them.
     pub fn broom_sorts(&self, space: u64) -> bool {
         self.sortable(space).nth(broom::FEWEST - 1).is_some()
     }

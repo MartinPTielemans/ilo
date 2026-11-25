@@ -305,9 +305,10 @@ fn a_task_under_way_has_a_row_that_reads_as_one_that_broke_off() {
     kept.hold("task-1", Cli::Claude, id.clone(), "Profile 2", STARTED);
     kept.write(&root);
     let saved: Value = serde_json::from_slice(&std::fs::read(root.join(INDEX)).unwrap()).unwrap();
+    let card = kept.of("task-1").unwrap().card.clone();
     let row = json!({
         "id": id.as_str(), "cli": "claude", "title": "", "state": "failed",
-        "ended": STARTED, "profile": "Profile 2",
+        "ended": STARTED, "profile": "Profile 2", "card": card.as_str(),
     });
     assert_eq!(saved, json!([row]));
     kept.of_mut("task-1").unwrap().past.as_mut().unwrap().title = "Lisbon seats".into();
@@ -320,8 +321,8 @@ fn a_task_under_way_has_a_row_that_reads_as_one_that_broke_off() {
     assert_eq!(after.removing(|record| record.past.is_none()), []);
 }
 
-/// Of a task that has ended the file says its title, how and when it ended and its profile, and
-/// no more; a run after takes them back as they were written, and of a file someone changed,
+/// Of a task that has ended the file says its title, how and when it ended, its profile and its
+/// card's id, and no more; a run after takes them back as they were written, and of a file someone changed,
 /// only what has their shape: an end it doesn't know leaves an id alone, a profile with a path
 /// in it names none, and a title is one line of a title's length.
 #[test]
@@ -336,9 +337,10 @@ fn the_file_says_of_an_ended_task_its_title_its_end_and_its_profile() {
     });
     kept.write(&root);
     let saved: Value = serde_json::from_slice(&std::fs::read(root.join(INDEX)).unwrap()).unwrap();
+    let card = kept.of("task-1").unwrap().card.clone();
     let row = json!({
         "id": id.as_str(), "cli": "claude", "title": "Lisbon seats", "state": "limit",
-        "ended": 1_795_000_000u64, "profile": "Profile 2",
+        "ended": 1_795_000_000u64, "profile": "Profile 2", "card": card.as_str(),
     });
     assert_eq!(saved, json!([row]));
     let mut after = Kept::default();
@@ -348,6 +350,7 @@ fn the_file_says_of_an_ended_task_its_title_its_end_and_its_profile() {
     assert_eq!(left[0].2, kept.of("task-1").unwrap().past.clone().unwrap());
     after.give(&id, "task-9");
     assert_eq!(after.of("task-9").unwrap().profile, "Profile 2");
+    assert_eq!(after.of("task-9").unwrap().card, card);
     assert_eq!(after.listed().collect::<Vec<_>>(), ["task-9"]);
     assert!(after.left().is_empty());
 

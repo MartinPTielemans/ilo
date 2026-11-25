@@ -996,12 +996,6 @@ impl Browser for Fake {
     // Nor captures.
     fn list_captures(&self, _: &mut App) {}
 
-    fn hover_kinds(&self, _: &mut App) -> u32 {
-        browser::shell::HOVER_ALL
-    }
-
-    fn set_hover_kinds(&self, _: u32, _: &mut App) {}
-
     // The made-up downloads have no files, so each is gone already and none drags.
     fn trash(&self, _: &str, _: &mut App) -> bool {
         true
@@ -1737,9 +1731,6 @@ impl Browser for Fake {
         command_bar::in_place(Rc::new(PreviewBar), window, cx)
     }
 
-    // The preview runs no tasks.
-    fn start_task(&self, _: &str, _: &str, _: u64, _: browser::agents::task::Start, _: &mut App) {}
-
     fn field_window_typing(&self, _: &mut App) -> bool {
         false
     }
@@ -2089,11 +2080,11 @@ impl Browser for Fake {
         self.opt_ins.set((on, self.opt_ins.get().1));
     }
 
-    fn agents(&self, _: &App) -> Option<bool> {
+    fn threads(&self, _: &App) -> Option<bool> {
         Some(self.opt_ins.get().1)
     }
 
-    fn set_agents(&self, on: bool, _: &mut App) {
+    fn set_threads(&self, on: bool, _: &mut App) {
         self.opt_ins.set((self.opt_ins.get().0, on));
     }
 
@@ -2234,6 +2225,16 @@ impl command_bar::Host for PreviewBar {
         _: browser::agents::tier::Tier,
         _: Option<String>,
         _: Option<&'static str>,
+        _: &mut App,
+    ) {
+    }
+
+    fn run_task_at_rest(
+        &self,
+        _: &str,
+        _: &str,
+        _: browser::agents::tier::Tier,
+        _: Option<String>,
         _: &mut App,
     ) {
     }
@@ -2869,6 +2870,7 @@ fn main() {
                         .map(|(id, (title, url, days))| (id, title, url, now() - days * DAY))
                         .collect();
                     let first_download = first_archived + ARCHIVE.len() as u64;
+                    let files = states::var("PREVIEW_DOWNLOADS").as_deref() == Ok("files");
                     let downloads = (first_download..)
                         .zip(DOWNLOADS)
                         .map(
@@ -2876,7 +2878,14 @@ fn main() {
                                 id,
                                 name: name.into(),
                                 url: url.into(),
-                                path: SharedString::default(),
+                                // PREVIEW_DOWNLOADS=files gives the finished ones made-up files:
+                                // the Library button's plate lists a finished one only with one.
+                                path: match state {
+                                    DownloadState::Done if files => {
+                                        format!("/preview/{name}").into()
+                                    }
+                                    _ => SharedString::default(),
+                                },
                                 received,
                                 total,
                                 state,
@@ -3883,21 +3892,20 @@ fn preview_composer_model_menu(bounds: Bounds<Pixels>, keys: &str, cx: &mut App)
         header: true,
         ..MenuEntry::named(name.to_string(), false)
     };
-    let first = task::model_default(Cli::Claude);
-    let (_, models) = task::model_menu("", &first, models.default.as_deref(), models.listed);
+    let (_, models) = task::model_menu("", "Default", models.default.as_deref(), models.listed);
     let mut items = vec![
         MenuEntry::search("Search models"),
-        heading(Cli::Claude.name()),
+        heading(browser::settings_rows::assistant_name(Cli::Claude)),
     ];
     items.extend(models.into_iter().map(|entry| MenuEntry {
         over: false,
         ..entry
     }));
     items.extend([
-        heading(Cli::Codex.name()),
-        MenuEntry::named("Sign In", true).kept(),
+        heading(browser::settings_rows::assistant_name(Cli::Codex)),
+        MenuEntry::named("Sign In", true).offer().out(),
         MenuEntry::line(),
-        MenuEntry::named("Settings", true).kept(),
+        MenuEntry::named("Settings", true).kept().out(),
     ]);
     let keys: Vec<String> = (keys.split(','))
         .map(str::trim)

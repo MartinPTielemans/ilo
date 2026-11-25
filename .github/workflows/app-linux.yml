@@ -156,6 +156,10 @@ jobs:
           }
       - run: cargo check --release --locked --manifest-path linux/Cargo.toml --target-dir target
       - run: cargo build --release --bin preview
+      # The binaries' test builds, which no job compiled: the tests above are the library's alone,
+      # and every other build is without cfg(test), so the Browser binary's test build broke unseen
+      # once. Building it would link the engine, which isn't here, so it is checked.
+      - run: cargo check --release --tests
       # What follows decides nothing, so this tree has passed.
       - uses: ./.github/actions/tree-proof
         with:
