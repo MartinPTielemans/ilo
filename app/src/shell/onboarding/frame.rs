@@ -285,8 +285,10 @@ impl Shell {
         // until they come, and the heading sits where the drawing has it.
         let lockup = welcome.then(|| div().flex_none().h(px(t::LOCKUP)));
         let indicator = (!welcome).then(|| indicator(count, at, inks));
+        // As tall as the column, so the foot the step adds last sits at its bottom.
         div()
-            .flex_none()
+            .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
             .children(indicator)
