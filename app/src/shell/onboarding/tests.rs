@@ -854,6 +854,157 @@ fn a_replay_keeps_no_step_to_resume(cx: &mut TestAppContext) {
     assert!(!super::first_run_waiting(&dir.to_string_lossy()));
 }
 
+/// The calls of `calls` that set a switch or a setting the card offers.
+fn settings_set(calls: Vec<String>) -> Vec<String> {
+    const SET: [&str; 10] = [
+        "threads ",
+        "other apps ",
+        "daily count ",
+        "crash reports ",
+        "archive after ",
+        "space color ",
+        "space theme ",
+        "theme ",
+        "search engine ",
+        "passwords ",
+    ];
+    (calls.into_iter())
+        .filter(|call| SET.iter().any(|set| call.starts_with(set)))
+        .collect()
+}
+
+/// A first run passed through, each step left the way that takes nothing it offers (Not Now,
+/// Next with an assistant signed in, Skip, ↩ with nothing picked) to Start Browsing, sets no
+/// switch and no setting.
+#[gpui::test]
+fn passing_each_step_sets_no_switch(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    host.sync_server.set(true);
+    synced(cx, Status::SignedOut);
+    host.threads.set(Some(true));
+    host.archive_after.set(Some(DAY / 2.));
+    host.daily_count.set(Some(false));
+    host.crash_reports.set(Some(false));
+    started(&shell, cx);
+    let signed_in = Shown {
+        line: String::new(),
+        offer: Offer::SignedIn,
+    };
+    shell.update(cx, |shell, cx| {
+        shell.onboarding_show_assistants(vec![(Cli::Claude, signed_in)], None, cx)
+    });
+    host.take();
+    let mut passed = Vec::new();
+    for _ in 0..16 {
+        let Some(at) = step(&shell, cx) else { break };
+        if card(&shell, cx, |o| o.ending.is_some()) {
+            break;
+        }
+        passed.push(at);
+        match at {
+            Step::Account => click("not-now", cx),
+            Step::Import if placed("skip", cx).is_some() => click("skip", cx),
+            _ => cx.simulate_keystrokes("enter"),
+        }
+        settle(&shell, cx);
+    }
+    assert_eq!(
+        passed,
+        [
+            Step::Account,
+            Step::Assistant,
+            Step::Import,
+            Step::Space,
+            Step::Tidy,
+            Step::Done
+        ]
+    );
+    later(&shell, cx, END_FADE);
+    assert_eq!(settings_set(host.take()), Vec::<String>::new());
+}
+
+/// ⌘Q at a step sets nothing turned or picked there: the colour, the tidy bar, Help improve.
+/// They're set only as their step is left.
+#[gpui::test]
+fn a_quit_sets_nothing_turned_at_its_step(cx: &mut TestAppContext) {
+    for at in [Step::Space, Step::Tidy, Step::Done] {
+        let (shell, cx, host) = first_window(cx);
+        host.archive_after.set(Some(DAY / 2.));
+        host.daily_count.set(Some(false));
+        host.crash_reports.set(Some(false));
+        started(&shell, cx);
+        on_to(&shell, cx, at);
+        host.take();
+        match at {
+            Step::Space => cx.simulate_keystrokes("right"),
+            Step::Tidy => cx.simulate_keystrokes("right"),
+            _ => shell.update(cx, |shell, cx| shell.onboarding_switch(Switch::Help, cx)),
+        }
+        shell.update(cx, |shell, cx| shell.run(Command::Quit, "keys", cx));
+        cx.run_until_parked();
+        assert_eq!(settings_set(host.take()), Vec::<String>::new(), "{at:?}");
+        assert_eq!(
+            step(&shell, cx),
+            Some(at),
+            "{at:?}: the step stands for the quit"
+        );
+    }
+}
+
+/// ↩ that commits an input method's composition (Japanese) in the Welcome's recovery words is
+/// the method's: it doesn't pass the step, nor press its button.
+#[gpui::test]
+fn return_ending_a_composition_passes_no_step(cx: &mut TestAppContext) {
+    use gpui::EntityInputHandler as _;
+    let (shell, cx, host) = first_window(cx);
+    host.sync_server.set(true);
+    synced(cx, Status::SignedOut);
+    cx.simulate_a11y_activation();
+    started(&shell, cx);
+    cx.simulate_keystrokes("enter");
+    synced(cx, Status::Pairing);
+    settle(&shell, cx);
+    assert_eq!(step(&shell, cx), Some(Step::Account));
+    // Use Recovery Words Instead, where the screen reader has it; its field takes the keyboard.
+    let scale = cx.update(|window, _| window.scale_factor());
+    let tree = cx.a11y_tree().expect("GPUI built a tree");
+    let words = (tree.nodes.iter())
+        .map(|(_, node)| node)
+        .find(|node| {
+            node.role() == Role::Button && node.label() == Some("Use Recovery Words Instead")
+        })
+        .and_then(|node| node.bounds())
+        .expect("Use Recovery Words Instead");
+    let at = gpui::point(
+        px(((words.x0 + words.x1) / 2.) as f32 / scale),
+        px(((words.y0 + words.y1) / 2.) as f32 / scale),
+    );
+    cx.simulate_click(at, Modifiers::none());
+    settle(&shell, cx);
+    let view = shell.read_with(cx, |shell, _| {
+        shell.account_view().expect("the account's view")
+    });
+    let field = view.read_with(cx, |view, _| view.open_field().expect("the words' field"));
+    cx.update(|window, cx| {
+        field.update(cx, |field, cx| {
+            field.replace_and_mark_text_in_range(None, "ことば", None, window, cx)
+        })
+    });
+    cx.run_until_parked();
+    host.take();
+    cx.simulate_keystrokes("enter");
+    assert_eq!(
+        step(&shell, cx),
+        Some(Step::Account),
+        "↩ was the composition's"
+    );
+    assert!(
+        field.read_with(cx, |field, _| field.composing()),
+        "the marked text is the method's"
+    );
+    assert!(host.take().is_empty(), "nothing was asked of the core");
+}
+
 /// The preview opens the card at a step by its number.
 #[gpui::test]
 fn the_preview_opens_the_card_at_a_step_by_number(cx: &mut TestAppContext) {
