@@ -124,6 +124,9 @@ mod reveal_window;
 mod safe_start_host;
 mod settings;
 #[cfg(target_os = "linux")]
+#[path = "../platform/linux/first_run_window.rs"]
+mod first_run_window;
+#[cfg(target_os = "linux")]
 #[path = "../platform/linux/settings_window.rs"]
 mod settings_window;
 #[cfg(target_os = "linux")]

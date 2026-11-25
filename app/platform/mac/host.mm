@@ -6073,6 +6073,48 @@ void host_hide_settings(void) {
   [g_settings orderOut:nil];
 }
 
+// First run's window, while it's open.
+static NSWindow* g_first_run;
+static NSView* g_first_run_view;
+
+void host_add_first_run(void* first_run_view) {
+  g_first_run_view = (__bridge NSView*)first_run_view;
+  g_first_run = g_first_run_view.window;
+  // The system's buttons, but its size is fixed: nothing to zoom to, resize or tab with.
+  g_first_run.styleMask &= ~NSWindowStyleMaskResizable;
+  [g_first_run standardWindowButton:NSWindowZoomButton].enabled = NO;
+  g_first_run.tabbingMode = NSWindowTabbingModeDisallowed;
+}
+
+void host_show_first_run(void) {
+  if (!g_first_run) {
+    return;
+  }
+  // On screen once the UI has drawn it, as Settings comes, and centred on the screen the browser
+  // window opens on, as it opens before any.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!g_first_run) {
+      return;
+    }
+    NSRect visible = WindowScreen().visibleFrame;
+    NSSize size = g_first_run.frame.size;
+    [g_first_run setFrameOrigin:NSMakePoint(round(NSMidX(visible) - size.width / 2),
+                                            round(NSMidY(visible) - size.height / 2))];
+    [g_first_run_view.layer setNeedsDisplay];
+    [g_first_run_view.layer displayIfNeeded];
+    [g_first_run makeKeyAndOrderFront:nil];
+    host_close_launch_window();
+    // check.sh waits for this line.
+    fprintf(stderr, "browser: first run shown\n");
+  });
+}
+
+void host_close_first_run(void) {
+  [g_first_run orderOut:nil];
+  g_first_run = nil;
+  g_first_run_view = nil;
+}
+
 bool host_close_other_window(void) {
   NSWindow* key = NSApp.keyWindow;
   // The browser window, the windows over it and Settings take ⌘W themselves.
