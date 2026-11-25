@@ -343,7 +343,7 @@ fn a_finished_task_is_there_after_a_quit_and_takes_a_reply(cx: &mut TestAppConte
         "example.com",
         "Trains to Lisbon",
         "timetable",
-        "9:05",
+        "car 4",
     ] {
         assert!(!text.contains(never), "the file has {never:?}");
     }
@@ -453,12 +453,12 @@ fn a_finding_isnt_kept_across_a_quit(cx: &mut TestAppContext) {
     });
     for (_, title, about) in listed(&next, cx).into_iter().chain(archive(&next, cx)) {
         assert!(
-            !title.contains("9:05") && !about.contains("9:05"),
+            !title.contains("car 4") && !about.contains("car 4"),
             "{title} {about}"
         );
     }
     let text = std::fs::read_to_string(index(&next)).unwrap();
-    assert!(!text.contains("9:05"), "the file has the finding");
+    assert!(!text.contains("car 4"), "the file has the finding");
 }
 
 /// Full access picked on a task that has ended isn't kept across a quit: brought back, it takes a
