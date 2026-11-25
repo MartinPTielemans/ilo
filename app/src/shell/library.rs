@@ -2948,7 +2948,10 @@ impl Shell {
             self.browser
                 .set_agent_history(profile, &crate::agent_history::write(&living));
         }
-        self.agent_history = living;
+        // A sort's entry isn't a task, and draws nowhere until it has its words (#4252).
+        self.agent_history = (living.into_iter())
+            .filter(|past| past.sorted.is_none())
+            .collect();
     }
 
     /// Delete on a past task: it goes from Library › Agents and its file.

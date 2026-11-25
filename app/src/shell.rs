@@ -124,6 +124,7 @@ mod permission;
 mod portrait;
 #[cfg(test)]
 mod side_tests;
+mod sort_folders;
 #[cfg(test)]
 mod space_order_tests;
 mod task_cards;
@@ -176,7 +177,8 @@ pub use bar_usage::{HistoryDeleted, PICKS_FILE, history_deleted, move_old_picks,
 pub use battery::PAUSED;
 pub use broom::Broom;
 pub use browser::{
-    Browser, Folders, MediaAction, Page, Split, Trouble, Volume, WindowButton, WindowButtonGeometry,
+    Browser, Folders, MediaAction, Page, Setting, Split, Trouble, Volume, WindowButton,
+    WindowButtonGeometry,
 };
 pub use cast::{Cast, CastDevice, CastState};
 pub use chooser::{Chooser, ChooserDevice, DeviceKind, Scan};

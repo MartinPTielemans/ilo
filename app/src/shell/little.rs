@@ -820,6 +820,7 @@ pub(super) fn little_runs(command: Command) -> bool {
                     | Command::RevealTab
                     | Command::Clear
                     | Command::SortBySite
+                    | Command::SortIntoFolders
                     | Command::ToggleSidebar
                     | Command::MoveSidebar
                     | Command::AddSplit

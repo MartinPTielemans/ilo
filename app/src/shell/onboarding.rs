@@ -21,7 +21,7 @@ use gpui::{
     px, rgb,
 };
 
-use super::{Command, Shell, cubic_bezier, display_face::display_text, fade_at};
+use super::{Command, Setting, Shell, cubic_bezier, display_face::display_text, fade_at};
 use crate::account::{self, Account, AccountEvent, Status};
 use crate::default_browser::{self, Os};
 use crate::import::{Guide, ImportEvent, ImportView, Look};
@@ -45,7 +45,7 @@ use crate::tokens::shell::onboarding::window as frame_tokens;
 use crate::transparency::{self, Transparency};
 
 mod frame;
-mod loops;
+mod picture;
 mod window;
 
 pub(super) use window::FirstRun;
@@ -70,6 +70,12 @@ pub(super) enum Step {
     /// How much of what's behind the window shows through its glass: the app's one level, which
     /// the window takes at once. Left out where nothing blurs what's behind the window.
     Transparency,
+    /// How long today's tabs wait before they're put away, as a bar of Settings' times, and Settings'
+    /// Reopen your windows and tabs; left out until the core has the profile's time.
+    Tidy,
+    /// Settings' ad blocking and its offer to save passwords, as they are, each turned here at once;
+    /// left out when Settings offers neither.
+    Private,
     /// Signing in to sync: Settings › Sync's view (crate::account); left out in a build that names
     /// no sync server, and once the browser is signed in.
     Account,
@@ -78,10 +84,15 @@ pub(super) enum Step {
     Assistant,
     /// Settings' opt-in switches, both off; left out when neither is offered.
     OptIns,
+    /// The three keys that carry most of it, as the app's keys are then, and the way in.
+    Keys,
 }
 
-const STEPS: [Step; 10] = [
+/// In the drawing's order: the assistant asked early (the owner's), then what comes along, the
+/// browser's own settings, the Space's look, sync, the opt-ins and the keys.
+const STEPS: [Step; 13] = [
     Step::Intro,
+    Step::Assistant,
     Step::Import,
     Step::Favorites,
     Step::DefaultBrowser,
@@ -89,41 +100,68 @@ const STEPS: [Step; 10] = [
     Step::Color,
     // After the colour, as a Space's glow reads through the same glass.
     Step::Transparency,
+    Step::Tidy,
+    Step::Private,
     Step::Account,
-    Step::Assistant,
     Step::OptIns,
+    Step::Keys,
 ];
 
-/// The opt-ins the first launch offers, each Settings' own switch.
+/// A switch the first launch shows, each Settings' own.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(super) enum OptIn {
+pub(super) enum Switch {
     /// Off until the user turns it on, and set only as they leave the step, so nothing is sent
     /// while it shows (#2978).
     DailyCount,
     CrashReports,
-    Agents,
+    /// One the host reads and sets for the Space's profile, turned at once.
+    Setting(Setting),
 }
 
-impl OptIn {
-    const ALL: [OptIn; 3] = [OptIn::DailyCount, OptIn::CrashReports, OptIn::Agents];
+impl Switch {
+    /// The switches `step` shows, in its order: the opt-ins' and the tidy and private steps'.
+    // Outside apps' agents' switch, off until asked (step 30's third row), waits for its own
+    // setting (#4260): today's agents switch is the one the assistant step's choice will set.
+    // The private step's cookie notices wait for a row in Settings, and its secure connections
+    // for a setting in the build.
+    fn of(step: Step) -> &'static [Switch] {
+        match step {
+            Step::OptIns => &[Switch::DailyCount, Switch::CrashReports],
+            Step::Tidy => &[Switch::Setting(Setting::RestoreWindows)],
+            Step::Private => &[
+                Switch::Setting(Setting::AdBlocking),
+                Switch::Setting(Setting::SavePasswords),
+            ],
+            _ => &[],
+        }
+    }
 
     /// What check.sh calls it.
     fn name(self) -> &'static str {
         match self {
-            OptIn::DailyCount => "daily-count",
-            OptIn::CrashReports => "crash-reports",
-            OptIn::Agents => "agents",
+            Switch::DailyCount => "daily-count",
+            Switch::CrashReports => "crash-reports",
+            Switch::Setting(Setting::RestoreWindows) => "restore-windows",
+            Switch::Setting(Setting::AdBlocking) => "ad-blocking",
+            Switch::Setting(Setting::SavePasswords) => "save-passwords",
         }
     }
 
-    /// Its switch's name and its one sentence: the name Settings' row has, as it's that switch.
+    /// Its switch's name and its one sentence, if it has one: the opt-ins' the names Settings'
+    /// rows have, as they're those switches, and the drawing's for the others.
     fn words(self) -> (&'static str, SharedString) {
         match self {
-            OptIn::DailyCount => (
+            Switch::Setting(Setting::RestoreWindows) => ("Open where you left off", "".into()),
+            Switch::Setting(Setting::AdBlocking) => {
+                ("Block ads and trackers", "Built in, on every site".into())
+            }
+            // Settings' name: the drawing's "Save and fill" and its Touch ID aren't what it sets.
+            Switch::Setting(Setting::SavePasswords) => ("Offer to save passwords", "".into()),
+            Switch::DailyCount => (
                 "Send a daily usage count",
                 crate::daily_count::words(env!("APP_NAME")).into(),
             ),
-            OptIn::CrashReports => (
+            Switch::CrashReports => (
                 "Send crash reports",
                 concat!(
                     "When ",
@@ -131,13 +169,6 @@ impl OptIn {
                     " crashes, it sends a report of what went wrong, so it can be fixed."
                 )
                 .into(),
-            ),
-            // Settings' own line while it's off.
-            OptIn::Agents => (
-                "Let agents use the browser",
-                "They work in tabs of their own, which you can watch, and never see your \
-                 passwords, cookies or autofill."
-                    .into(),
             ),
         }
     }
@@ -154,9 +185,12 @@ impl Step {
             Step::SearchEngine => "search-engine",
             Step::Color => "color",
             Step::Transparency => "transparency",
+            Step::Tidy => "tidy",
+            Step::Private => "private",
             Step::Account => "account",
             Step::Assistant => "assistant",
             Step::OptIns => "opt-ins",
+            Step::Keys => "keys",
         }
     }
 
@@ -200,9 +234,12 @@ impl Step {
                 let title = concat!("Make ", env!("APP_NAME"), " your default browser.");
                 return (title, line.into(), button);
             }
-            // The engine that searches until one is picked is already the filled dot; the title
-            // alone, with no line under it (the ninth wording batch).
-            Step::SearchEngine => ("Pick a search engine.", "", "Continue"),
+            // The engine that searches until one is picked is already the filled dot (P-search).
+            Step::SearchEngine => (
+                "Pick a search engine.",
+                "You can change it later in Settings.",
+                "Continue",
+            ),
             Step::Color => (
                 "Pick a color for your first Space.",
                 "The window takes it. Each Space can have its own, from its name in the sidebar.",
@@ -210,10 +247,23 @@ impl Step {
             ),
             Step::Transparency => (
                 "How much should show through?",
+                // D5: over a light desktop the window changes too little to see "right away".
                 concat!(
                     env!("APP_NAME"),
-                    "'s window is glass. Pick one to see the window change right away."
+                    "'s window is glass, blurring what's behind it."
                 ),
+                "Continue",
+            ),
+            Step::Tidy => (
+                "Tabs that tidy themselves.",
+                "Tabs you leave open are put away after a while, so the sidebar stays short. \
+                 Pinned tabs stay, and nothing is lost.",
+                "Continue",
+            ),
+            Step::Private => (
+                "Private from the start.",
+                "These are on. Turn off what you don't want, here or for one site from its \
+                 address.",
                 "Continue",
             ),
             // Its button only while signed out; the view's own buttons are the step's after.
@@ -233,6 +283,12 @@ impl Step {
                 "Each stays off until you turn it on, and Settings has it too.",
                 "Continue",
             ),
+            // Z20's weaving word, not the name: it stays as the name changes.
+            Step::Keys => (
+                "You're woven in.",
+                "Three keys carry most of it.",
+                concat!("Open ", env!("APP_NAME")),
+            ),
         };
         (title, line.into(), button)
     }
@@ -248,11 +304,6 @@ const END_FADE: f32 = 0.2;
 /// or before it has said.
 fn signed_out(state: &account::State) -> bool {
     matches!(state.status, Status::SignedOut | Status::SigningIn)
-}
-
-/// The check draw's curve, CSS's ease-in-out.
-fn ease_in_out(x: f32) -> f32 {
-    cubic_bezier(0.42, 0., 0.58, 1., x)
 }
 
 /// The row motion's ease-out, as a dot settling into place.
@@ -297,7 +348,7 @@ pub(super) struct Onboarding {
     /// The system it runs on, for the default browser's step.
     os: Os,
     /// The opt-in switch last turned, and when, for its knob's slide.
-    switched: Option<(OptIn, Instant)>,
+    switched: Option<(Switch, Instant)>,
     /// That switch's knob has slid all the way, which check.sh hears once.
     slid: bool,
     /// The intro holds the keyboard itself, as does a step left with no control, so an assistive
@@ -330,11 +381,6 @@ pub(super) struct Onboarding {
     pub(super) since: Instant,
     /// The step before, fading as this one comes, and how far into it it was when it left.
     leaving: Option<(Step, f32)>,
-    /// When the step's loop started, while it plays: only on a visible window, never with Reduce
-    /// Motion, and never as the flow ends (loops).
-    loop_since: Option<Instant>,
-    /// The loop held this many seconds in, for the preview's captures, asking for no frames.
-    held: Option<f32>,
     /// When the last step was left, for the flow's fade.
     pub(super) ending: Option<Instant>,
     /// Light or dark where check.sh says, else the window's.
@@ -357,6 +403,52 @@ pub(super) struct Onboarding {
     /// The daily usage count's switch as turned at the opt-ins step, None while untouched: it's
     /// set as the step is left (onboarding_next), so turned on and off again it sends nothing.
     count: Option<bool>,
+    /// The tidy step's times, while the core has the profile's.
+    pub(super) tidy: Option<Tidy>,
+}
+
+/// The tidy step's bar: Settings' times, each with the drawing's word for it, the profile's own
+/// as the flow began, and the one the bar is at, set only as Continue goes on, as a shorter time
+/// puts tabs away at once.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Tidy {
+    pub(super) stops: Vec<(f64, &'static str)>,
+    was: f64,
+    pub(super) at: usize,
+}
+
+impl Tidy {
+    /// Settings' `offered` times that have a word, at the one nearest `was`; None with none.
+    fn of(was: f64, offered: &[f64]) -> Option<Tidy> {
+        let stops: Vec<(f64, &'static str)> = (offered.iter())
+            .filter_map(|&seconds| Some((seconds, stop_words(seconds)?)))
+            .collect();
+        // Never is past every time.
+        let far = |seconds: f64| if seconds < 0. { f64::MAX } else { seconds };
+        let at = (0..stops.len()).min_by(|&a, &b| {
+            let off = |at: usize| (far(stops[at].0) - far(was)).abs();
+            off(a).total_cmp(&off(b))
+        })?;
+        Some(Tidy { stops, was, at })
+    }
+
+    /// The time the bar is at, in seconds.
+    fn seconds(&self) -> f64 {
+        self.stops[self.at].0
+    }
+}
+
+/// The drawing's word for a time of Settings', which says them in hours and days.
+fn stop_words(seconds: f64) -> Option<&'static str> {
+    let day = 24. * 3600.;
+    Some(match seconds {
+        _ if seconds < 0. => "Never",
+        _ if seconds == day / 2. => "12 hours",
+        _ if seconds == day => "1 day",
+        _ if seconds == 7. * day => "1 week",
+        _ if seconds == 30. * day => "1 month",
+        _ => return None,
+    })
 }
 
 impl Onboarding {
@@ -398,6 +490,9 @@ impl Shell {
         let engines = self.browser.search_engines(self.space);
         let engine = (engines.0.iter()).position(|(keyword, _)| *keyword == engines.1);
         let opt_ins = !self.opt_ins(cx).is_empty();
+        let private = !self.switches(Step::Private, cx).is_empty();
+        let tidy = (self.browser.archive_after(self.space))
+            .and_then(|(was, offered)| Tidy::of(was, &offered));
         let account = self.signing(cx);
         let steps: Vec<Step> = STEPS
             .into_iter()
@@ -411,6 +506,8 @@ impl Shell {
                 // Left out, as the agents' switch is, in a build without the agents' server.
                 Step::Assistant => self.browser.agents(cx).is_some(),
                 Step::OptIns => opt_ins,
+                Step::Tidy => tidy.is_some(),
+                Step::Private => private,
                 // Over no glass there's nothing to show through.
                 Step::Transparency => self.blurred,
                 _ => true,
@@ -448,8 +545,6 @@ impl Shell {
             clock: cx.background_executor().clone(),
             since: cx.background_executor().now(),
             leaving: None,
-            loop_since: None,
-            held: None,
             ending: None,
             light: appearance.and_then(|name| match name {
                 "light" => Some(true),
@@ -464,6 +559,7 @@ impl Shell {
                 .map(|agents| cx.observe(&agents, |_, _, cx| cx.notify())),
             shown_assistants: None,
             count: None,
+            tidy,
         });
         // Opened outside this update, as the window draws the shell's flow as it opens.
         let shell = cx.entity();
@@ -618,7 +714,6 @@ impl Shell {
                 onboarding.leaving = Some((step, elapsed));
                 onboarding.step = next;
                 onboarding.since = onboarding.clock.now();
-                onboarding.loop_since = None;
                 onboarding.settled = false;
                 log!("browser: onboarding step {}", next.name());
                 Some(next)
@@ -664,7 +759,6 @@ impl Shell {
         onboarding.leaving = Some((step, elapsed));
         onboarding.step = before;
         onboarding.since = onboarding.clock.now();
-        onboarding.loop_since = None;
         onboarding.settled = false;
         log!("browser: onboarding step {}", before.name());
         if step == Step::Color {
@@ -711,26 +805,6 @@ impl Shell {
         }
     }
 
-    /// The step's loop is playing, and asking for frames.
-    #[cfg(test)]
-    pub(super) fn onboarding_looping(&self) -> bool {
-        (self.onboarding.as_ref()).is_some_and(|onboarding| onboarding.loop_since.is_some())
-    }
-
-    /// Holds the step's loop `at` seconds in, or lets it play from there with none, for the
-    /// preview's captures and frames.
-    pub fn onboarding_hold_loop(&mut self, at: Option<f32>, cx: &mut Context<Self>) {
-        if let Some(onboarding) = self.onboarding.as_mut() {
-            onboarding.held = at;
-            // The preview's frames start on this line.
-            log!(
-                "browser: onboarding loop {}",
-                if at.is_some() { "held" } else { "plays" }
-            );
-            cx.notify();
-        }
-    }
-
     /// Picks the `index`th swatch at the color step, as a click does, for the preview's captures.
     pub fn onboarding_pick_swatch(&mut self, index: usize, cx: &mut Context<Self>) {
         self.onboarding_pick(index, cx);
@@ -752,7 +826,7 @@ impl Shell {
 
     /// Turns the daily count's switch on at the opt-ins step, for the preview's captures.
     pub fn onboarding_count_on(&mut self, cx: &mut Context<Self>) {
-        self.onboarding_switch(OptIn::DailyCount, cx);
+        self.onboarding_switch(Switch::DailyCount, cx);
     }
 
     /// Starts the flow in `appearance` at `step`, check.sh's name for it or its number from 1 in
@@ -834,6 +908,15 @@ impl Shell {
                 log!("browser: onboarding picked color {color:06x}");
                 self.theme_changed(self.space, Theme::of_color(color), true, cx);
             }
+            // Set only if it moved, as Settings sets it, which puts away at once the tabs that have
+            // waited that long.
+            (Step::Tidy, _) => {
+                if let Some(tidy) = onboarding.tidy.as_ref().filter(|t| t.seconds() != t.was) {
+                    log!("browser: onboarding tidy set {}", tidy.stops[tidy.at].1);
+                    self.browser
+                        .set_archive_after(self.space, tidy.seconds(), cx);
+                }
+            }
             // Picked, it was applied and kept at once.
             (Step::Transparency, _) => {
                 log!(
@@ -912,9 +995,14 @@ impl Shell {
     }
 
     /// The opt-ins offered, each with whether it's on.
-    pub(super) fn opt_ins(&self, cx: &gpui::App) -> Vec<(OptIn, bool)> {
+    pub(super) fn opt_ins(&self, cx: &gpui::App) -> Vec<(Switch, bool)> {
+        self.switches(Step::OptIns, cx)
+    }
+
+    /// The switches `step` offers, each with whether it's on.
+    pub(super) fn switches(&self, step: Step, cx: &gpui::App) -> Vec<(Switch, bool)> {
         let on = |opt_in| match opt_in {
-            OptIn::DailyCount => {
+            Switch::DailyCount => {
                 let kept = self.browser.daily_count(cx)?;
                 Some(
                     self.onboarding
@@ -923,18 +1011,21 @@ impl Shell {
                         .unwrap_or(kept),
                 )
             }
-            OptIn::CrashReports => self.browser.crash_reports(cx),
-            OptIn::Agents => self.browser.agents(cx),
+            Switch::CrashReports => self.browser.crash_reports(cx),
+            Switch::Setting(setting) => self.browser.setting(self.space, setting, cx),
         };
-        OptIn::ALL
-            .into_iter()
-            .filter_map(|opt_in| Some((opt_in, on(opt_in)?)))
+        (Switch::of(step).iter())
+            .filter_map(|&opt_in| Some((opt_in, on(opt_in)?)))
             .collect()
     }
 
-    /// Turns an opt-in's switch, which is Settings' own, so it's set at once.
-    pub(super) fn onboarding_switch(&mut self, opt_in: OptIn, cx: &mut Context<Self>) {
-        let Some(&(_, on)) = self.opt_ins(cx).iter().find(|(each, _)| *each == opt_in) else {
+    /// Turns a switch of the step shown, which is Settings' own, so it's set at once.
+    pub(super) fn onboarding_switch(&mut self, opt_in: Switch, cx: &mut Context<Self>) {
+        let Some(step) = self.onboarding.as_ref().map(|onboarding| onboarding.step) else {
+            return;
+        };
+        let switches = self.switches(step, cx);
+        let Some(&(_, on)) = switches.iter().find(|(each, _)| *each == opt_in) else {
             return;
         };
         // check.sh reads this line.
@@ -943,17 +1034,16 @@ impl Shell {
             opt_in.name(),
             if on { "off" } else { "on" }
         );
-        // After this update, as turning agents off ends their ask, which reads every Shell (#2459).
-        let browser = self.browser.clone();
+        let (browser, space) = (self.browser.clone(), self.space);
         cx.defer(move |cx| match opt_in {
-            OptIn::DailyCount => {}
-            OptIn::CrashReports => browser.set_crash_reports(!on, cx),
-            OptIn::Agents => browser.set_agents(!on, cx),
+            Switch::DailyCount => {}
+            Switch::CrashReports => browser.set_crash_reports(!on, cx),
+            Switch::Setting(setting) => browser.set_setting(space, setting, !on, cx),
         });
         if let Some(onboarding) = self.onboarding.as_mut() {
             onboarding.switched = Some((opt_in, onboarding.clock.now()));
             onboarding.slid = false;
-            if opt_in == OptIn::DailyCount {
+            if opt_in == Switch::DailyCount {
                 onboarding.count = Some(!on);
             }
         }
@@ -967,6 +1057,28 @@ impl Shell {
             let last = onboarding.engines.0.len().saturating_sub(1);
             onboarding.engine = Some(index.min(last));
             cx.notify();
+        }
+    }
+
+    /// Puts the tidy step's bar at stop `at`, stopping at either end. Nothing is set until Continue.
+    pub(super) fn onboarding_tidy(&mut self, at: usize, cx: &mut Context<Self>) {
+        let Some(tidy) = self.onboarding.as_mut().and_then(|o| o.tidy.as_mut()) else {
+            return;
+        };
+        let at = at.min(tidy.stops.len() - 1);
+        if tidy.at != at {
+            tidy.at = at;
+            // check.sh reads this line.
+            log!("browser: onboarding tidy at {}", tidy.stops[at].1);
+            cx.notify();
+        }
+    }
+
+    /// Moves the tidy step's bar `by` stops along.
+    fn onboarding_tidy_by(&mut self, by: isize, cx: &mut Context<Self>) {
+        let at = (self.onboarding.as_ref()).and_then(|o| Some(o.tidy.as_ref()?.at));
+        if let Some(at) = at {
+            self.onboarding_tidy(at.saturating_add_signed(by), cx);
         }
     }
 
@@ -1049,6 +1161,9 @@ impl Shell {
             }
             (Step::Transparency, "left" | "up") => self.onboarding_level(-1, cx),
             (Step::Transparency, "right" | "down") => self.onboarding_level(1, cx),
+            // Its bar, as the colour's and the level's arrows move theirs.
+            (Step::Tidy, "left" | "down") => self.onboarding_tidy_by(-1, cx),
+            (Step::Tidy, "right" | "up") => self.onboarding_tidy_by(1, cx),
             // ↑ and ↓ move the engine's pick, as they do the import's list's.
             (Step::SearchEngine, "down") => {
                 self.onboarding_pick_engine(engine.map_or(0, |at| at + 1), cx)
@@ -1115,7 +1230,9 @@ impl Shell {
     fn onboarding_rest(&self, cx: &gpui::App) -> Option<gpui::FocusHandle> {
         let onboarding = self.onboarding.as_ref()?;
         Some(match onboarding.step {
-            Step::Color | Step::SearchEngine | Step::Transparency => onboarding.first_stop.clone(),
+            Step::Color | Step::SearchEngine | Step::Transparency | Step::Tidy => {
+                onboarding.first_stop.clone()
+            }
             step if self.onboarding_has_button(step, cx) => onboarding.continue_stop.clone(),
             _ => onboarding.focus.clone(),
         })
@@ -1201,18 +1318,8 @@ impl Shell {
         if motion >= 1. {
             onboarding.leaving = None;
         }
-        // Frames while something moves, and while the step's loop plays (loops).
+        // Frames while something moves; the picture is still.
         let ending = onboarding.ending.map(|at| onboarding.secs_since(at));
-        let looping = loops::has_loop(step)
-            && !still
-            && ending.is_none()
-            && onboarding.held.is_none()
-            && window.is_visible();
-        match looping {
-            true => _ = *onboarding.loop_since.get_or_insert(onboarding.clock.now()),
-            false => onboarding.loop_since = None,
-        }
-        let played = (onboarding.loop_since).map(|at| onboarding.secs_since(at));
         let sliding = onboarding
             .switched
             .is_some_and(|(_, at)| onboarding.secs_since(at) < SLIDE);
@@ -1223,8 +1330,7 @@ impl Shell {
         {
             log!("browser: onboarding {} slid", opt_in.name());
         }
-        onboarding.drawing =
-            !came || onboarding.leaving.is_some() || ending.is_some() || sliding || looping;
+        onboarding.drawing = !came || onboarding.leaving.is_some() || ending.is_some() || sliding;
         if onboarding.drawing {
             window.request_animation_frame();
         }
@@ -1242,14 +1348,13 @@ impl Shell {
         // window, but for Reduce Motion.
         let eased = ease_out(motion);
         let fades_in = leaving.is_some() || (step == Step::Intro && !still);
-        let looped = onboarding.held.unwrap_or_else(|| loops::at(played, still));
         // The step coming takes every click, so one on its Skip doesn't press the leaving step's too.
         let coming = self
-            .step_content(step, looped, colors, window, cx)
+            .step_content(step, colors, window, cx)
             .opacity(if fades_in { eased } else { 1. })
             .occlude();
         let gone = leaving.map(|(step, _)| {
-            self.step_content(step, loops::at(None, true), colors, window, cx)
+            self.step_content(step, colors, window, cx)
                 .opacity(1. - eased)
         });
         let opacity = ending.map_or(1., |at| fade_at(1., 0., at, END_FADE));
@@ -1273,11 +1378,10 @@ impl Shell {
         )
     }
 
-    /// A step in the window's frame, its loop `looped` seconds into its own.
+    /// A step in the window's frame.
     fn step_content(
         &self,
         step: Step,
-        looped: f32,
         colors: Colors,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1291,7 +1395,9 @@ impl Shell {
             .as_ref()
             .map_or(Os::Mac, |onboarding| onboarding.os);
         let (title, line, button) = step.message(os);
-        let switches = (step == Step::OptIns).then(|| self.opt_in_rows(colors, cx));
+        let switches = matches!(step, Step::OptIns | Step::Private)
+            .then(|| self.opt_in_rows(step, colors, cx));
+        let tidy = (step == Step::Tidy).then(|| self.tidy_step(colors, cx));
         // Taller than its room, the list scrolls in it, and the foot stays where every step has it.
         let assistants =
             (step == Step::Assistant).then(|| frame::choice(self.assistant_rows(step, colors, cx)));
@@ -1426,8 +1532,10 @@ impl Shell {
             .children(account)
             .children(assistants)
             .children(switches)
+            .children(tidy)
+            .children((step == Step::Keys).then(|| self.keys_step(colors, cx)))
             .child(self.frame_foot(step, button, colors, cx));
-        let art = self.frame_art(step, looped, colors);
+        let art = self.frame_art(step, colors, cx);
         let dialog = |pane: gpui::Stateful<gpui::Div>| {
             pane.when_some(focus, |content, focus| content.track_focus(&focus))
                 .when(named, |content| {
@@ -1447,10 +1555,10 @@ impl Shell {
         )
     }
 
-    /// The opt-ins offered in one box, as Settings' Privacy has them: a row each of its name over
-    /// its sentence, wrapping in the box, and Settings' switch in the green at the box's right edge,
+    /// The switches `step` offers in one box, as Settings' Privacy has them: a row each of its name over
+    /// its sentence, wrapping in the box, and Settings' switch in the ink at the box's right edge,
     /// centred on the row. A click anywhere on a row, the switch included, turns it.
-    fn opt_in_rows(&self, colors: Colors, cx: &mut Context<Self>) -> gpui::Div {
+    fn opt_in_rows(&self, step: Step, colors: Colors, cx: &mut Context<Self>) -> gpui::Div {
         let Some(onboarding) = self.onboarding.as_ref() else {
             return div();
         };
@@ -1458,12 +1566,20 @@ impl Shell {
             .switched
             .map(|(turned, at)| (turned, onboarding.secs_since(at)));
         // Where they're drawn is kept once the step has come, not while it slides in.
-        let settled = onboarding.step == Step::OptIns && onboarding.settled;
+        let settled = onboarding.step == step && onboarding.settled;
         let frames = onboarding.frames.clone();
         // The import step's boxes, the ink a little over the ground.
         let surface = colors.ground.blend(colors.ink(IMPORT_SURFACE));
-        let look = Look::on(surface, colors.ink(1.), rgb(SIGNAL));
-        let rows = self.opt_ins(cx).into_iter().map(|(opt_in, on)| {
+        // On is the text's ink with a knob of the ground's, as Settings' are: no green on a
+        // control (the owner's, Notes 28).
+        let look = Look {
+            knob_on: Rgba {
+                a: 1.,
+                ..colors.ground
+            },
+            ..Look::on(surface, colors.ink(1.), colors.ink(1.))
+        };
+        let rows = self.switches(step, cx).into_iter().map(|(opt_in, on)| {
             let slid = match switched {
                 Some((turned, since)) if turned == opt_in => (since / SLIDE).min(1.),
                 _ => 1.,
@@ -1476,13 +1592,15 @@ impl Shell {
                 .min_w_0()
                 .line_height(px(OPT_IN_LINE))
                 .child(div().font_weight(gpui::FontWeight::MEDIUM).child(name))
-                .child(div().text_color(colors.ink(QUIET)).child(sentence));
+                .when(!sentence.is_empty(), |words| {
+                    words.child(div().text_color(colors.ink(QUIET)).child(sentence))
+                });
             let control = div()
                 .relative()
                 .flex_none()
                 .ml(px(PADDING))
                 .child(
-                    stop_switch(&look, "switch", name, on, slid, look.accent, self.a11y)
+                    stop_switch(&look, "switch", name, on, slid, look.on, self.a11y)
                         // A press is its row's click; here only Space, as ↩ is the step's Continue.
                         .on_click(cx.listener(move |shell, event: &ClickEvent, _, cx| {
                             if matches!(
@@ -1828,13 +1946,13 @@ fn skip_frame(at: Rc<Cell<Option<Bounds<Pixels>>>>, settled: bool) -> impl IntoE
 pub(super) type Places = Rc<RefCell<HashMap<&'static str, Bounds<Pixels>>>>;
 
 /// Where each opt-in's row and switch is drawn, by the opt-in and "row" or "switch".
-type Frames = Rc<RefCell<HashMap<(OptIn, &'static str), Bounds<Pixels>>>>;
+type Frames = Rc<RefCell<HashMap<(Switch, &'static str), Bounds<Pixels>>>>;
 
 /// Keeps where an opt-in's `part` is drawn once the step has `settled`, and logs where its switch
 /// is each time it moves, as "browser: onboarding agents at x y", for check.sh to click it there.
 fn opt_in_frame(
     frames: Frames,
-    opt_in: OptIn,
+    opt_in: Switch,
     part: &'static str,
     settled: bool,
 ) -> impl IntoElement {
