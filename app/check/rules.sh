@@ -441,9 +441,10 @@ PLATE
   await "^browser: agent mcp-client handed back $own_tab\$" || fail "Hand Back didn't hand the tab back"
   got=$(second_answer | answered 2)
   case "$got" in "The user handed tab $own_tab back."*) ;; *) fail "hand_off answered: $got" ;; esac
-  # Back to the user's own page, by its row in Today, as the window was.
+  # Back to the user's own page, as the window was: a click on the card whose conversation shows
+  # puts it away.
   send click $(row 0)
-  expect '^browser: task area [0-9]* closed$' "a click on the user's tab's row didn't put the conversation away"
+  expect '^browser: task area [0-9]* closed$' "a click on the card whose conversation shows didn't put it away"
   exec 6>&-
   for _ in $(seq 100); do kill -0 "$second_pid" 2> /dev/null || break; sleep 0.1; done
   exec 7<&-
@@ -710,9 +711,18 @@ VIEW
     else
       missed "the page the user holds wasn't tried: a window of the app's was still on screen"
     fi
-    # Back to the user's own page, by its row in Today, as the window was.
+    # Back to the user's own page, as the window was. The task's card is the first thing under New
+    # Tab here, where a row of Today would be: its click goes back from the page watched to the
+    # conversation, and its next, on the card whose conversation shows, puts the conversation away.
+    backs=$(grep -c "^browser: task page $asks_tab back\$" "$log" || true)
+    thumbs=$(grep -c '^browser: task page in its thumbnail$' "$log" || true)
     send click $(row 0)
-    expect '^browser: task area [0-9]* closed$' "a click on the user's tab's row didn't put the conversation away"
+    await_more "^browser: task page $asks_tab back\$" "$backs" ||
+      fail "a click on the card of the task whose page is watched didn't go back to its conversation"
+    await_more '^browser: task page in its thumbnail$' "$thumbs" ||
+      fail "the page the user held didn't go back into its thumbnail after the card's click"
+    send click $(row 0)
+    expect '^browser: task area [0-9]* closed$' "a click on the card whose conversation shows didn't put it away"
   else
     asks "in the background, with Browser not the active app"
     ended
