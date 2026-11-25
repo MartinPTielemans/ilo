@@ -76,7 +76,7 @@ const LIBRARY_BAND_STIFFNESS: f32 = 0.25;
 /// buttons: half a pixel at 2×, so their swap from the panel's copy can't be seen.
 const LIBRARY_REST_SLACK: f32 = 0.25;
 
-use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED, TEXT_PRIMARY, Tone};
+use crate::palette::{FIELD_PLATE, Ground, STATE_HOVERED, STATE_PRESSED, TEXT_PRIMARY, Tone};
 use crate::tokens::shell::library::COLUMN_WIDTH;
 pub(super) use crate::tokens::shell::library::LIBRARY_BACK_INSET;
 use crate::tokens::shell::library::LIBRARY_PLATE;
@@ -132,17 +132,18 @@ use crate::tokens::shell::{
 };
 
 #[cfg(test)]
-use crate::tokens::shell::library::FILTER_X;
 use crate::tokens::shell::library::SEARCH_GLYPH;
 use crate::tokens::shell::library::SEARCH_GLYPH_X;
 use crate::tokens::shell::library::SEARCH_HEIGHT;
 use crate::tokens::shell::library::SEARCH_PLACEHOLDER;
 use crate::tokens::shell::library::SEARCH_RADIUS;
+use crate::tokens::shell::library::SEARCH_RIGHT;
 use crate::tokens::shell::library::SEARCH_TEXT_X;
 use crate::tokens::shell::library::SEARCH_TOP;
-use crate::tokens::shell::library::SEARCH_WIDTH;
 use crate::tokens::shell::library::SEARCH_X;
-use crate::tokens::shell::library::{FILTER_GAP, FILTER_PAD, FILTER_WIDTH};
+use crate::tokens::shell::library::{
+    FILTER_CHEVRON, FILTER_CHEVRON_GAP, FILTER_GAP, FILTER_PAD_LEFT, FILTER_PAD_RIGHT,
+};
 
 use crate::tokens::shell::library::ARCHIVE_TOP;
 use crate::tokens::shell::library::ARCHIVE_WIDTH;
@@ -1951,7 +1952,7 @@ impl Shell {
             .pl(px(SEARCH_TEXT_X))
             .pr(px(12.))
             .rounded(px(SEARCH_RADIUS))
-            .bg(self.palette.plate(LIBRARY_PLATE))
+            .bg(self.palette.plate(FIELD_PLATE))
             .block_mouse_except_scroll()
             // The page may have the keyboard.
             .on_mouse_down(
@@ -1982,21 +1983,18 @@ impl Shell {
             .child(library.search.clone());
         let field = self.with_row_keys(field, cx);
         let filter = filtered.then(|| {
-            let label = match self.archive_only() {
-                Only::All => "Filter",
-                only => only.label(),
-            };
-            // At least Arc's width, growing from its end to fit what it filters to.
+            // What it filters to, `All` included, as drawn.
+            let label = self.archive_only().label();
             self.stop(div().id("library-filter"), label.into())
                 .flex_none()
-                .min_w(px(FILTER_WIDTH))
-                .px(px(FILTER_PAD))
+                .pl(px(FILTER_PAD_LEFT))
+                .pr(px(FILTER_PAD_RIGHT))
                 .h(px(SEARCH_HEIGHT))
                 .flex()
                 .items_center()
-                .justify_center()
+                .gap(px(FILTER_CHEVRON_GAP))
                 .rounded(px(SEARCH_RADIUS))
-                .bg(self.palette.plate(LIBRARY_PLATE))
+                .bg(self.palette.plate(FIELD_PLATE))
                 .hover(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_HOVERED)))
                 .active(|style| style.bg(self.palette.ground_plate(Ground::Library, STATE_PRESSED)))
                 .block_mouse_except_scroll()
@@ -2006,6 +2004,13 @@ impl Shell {
                     shell.archive_filter_menu(event.position(), cx)
                 }))
                 .child(label)
+                .child(
+                    svg()
+                        .path("icons/chevron-down.svg")
+                        .flex_none()
+                        .size(px(FILTER_CHEVRON))
+                        .text_color(placeholder),
+                )
         });
         let spaces = self.section == Section::Spaces;
         let archive = if library.items.is_empty() {
@@ -2090,7 +2095,7 @@ impl Shell {
                         .absolute()
                         .left(px(list_x(COLUMN_WIDTH + SEARCH_X)))
                         .top(px(SEARCH_TOP))
-                        .w(px(SEARCH_WIDTH))
+                        .w(px(ARCHIVE_WIDTH - SEARCH_X - SEARCH_RIGHT))
                         .flex()
                         .gap(px(FILTER_GAP))
                         .child(field)
@@ -4560,11 +4565,11 @@ mod tests {
     use super::{
         ARCHIVE_TOP, ARCHIVE_WIDTH, ARCHIVED_LEFT, ARCHIVED_PITCH, Archived, CARD_WIDTH,
         COLUMN_WIDTH, Captured, Download, DownloadAction, DownloadChoice, DownloadState,
-        FILTER_WIDTH, FILTER_X, HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, HEADING_X, Item,
-        LIBRARY_BAND, Line, MEDIA_GAP, MEDIA_TILE, Medium, SEARCH_HEIGHT, SEARCH_TOP,
-        SECTION_HEIGHT, SECTION_X, SECTIONS_TOP, Space, bar_drawn, card_x, download_menu_items,
-        downloads_progress, library_band, panel_at_rest, past_end, plus_x, receded_opacity,
-        spaces_width,
+        FILTER_CHEVRON, FILTER_PAD_RIGHT, HEADING_BOTTOM, HEADING_HEIGHT, HEADING_TOP, HEADING_X,
+        Item, LIBRARY_BAND, Line, MEDIA_GAP, MEDIA_TILE, Medium, SEARCH_HEIGHT, SEARCH_RIGHT,
+        SEARCH_TOP, SECTION_HEIGHT, SECTION_X, SECTIONS_TOP, Space, bar_drawn, card_x,
+        download_menu_items, downloads_progress, library_band, panel_at_rest, past_end, plus_x,
+        receded_opacity, spaces_width,
     };
     use std::rc::Rc;
 
@@ -4908,7 +4913,10 @@ mod tests {
         });
         cx.run_until_parked();
         let filter = point(
-            px(COLUMN_WIDTH + FILTER_X + FILTER_WIDTH / 2.),
+            px(COLUMN_WIDTH + ARCHIVE_WIDTH
+                - SEARCH_RIGHT
+                - FILTER_PAD_RIGHT
+                - FILTER_CHEVRON / 2.),
             px(SEARCH_TOP + SEARCH_HEIGHT / 2.),
         );
         let click = |cx: &mut gpui::VisualTestContext| {
