@@ -3860,8 +3860,8 @@ CARD
   printf '%s\n' "$outline" > "$out/mcp-upload-frames.txt"
   for each in "Frame file|x.a.localhost|a subdomain's frame" "Object file|x.a.localhost|an object" \
     "Cross file|127.0.0.1|another site's frame"; do
-    name=${each%%|*} site=${each#*|} what=${each##*|}
-    site=${site%%|*}
+    name=${each%%|*} frame_site=${each#*|} what=${each##*|}
+    frame_site=${frame_site%%|*}
     ref=$(ref_in "$outline" button "$name")
     [ -n "$ref" ] || fail "the upload page's outline had no ref for the field in $what: $outline"
     upload_asks "$frames_upload_tab" "$ref" "the field in $what"
@@ -3869,10 +3869,10 @@ CARD
       ../tools/window-screenshot.sh "$pid" "$out/agent-upload.png" || fail "no window to capture"
     fi
     upload_denied "the field in $what"
-    [ "$denied" = "error: The user said no: you can't add a file to “${name}” on $site. Don't try again." ] ||
+    [ "$denied" = "error: The user said no: you can't add a file to “${name}” on $frame_site. Don't try again." ] ||
       fail "Don’t Allow on upload's card for the field in $what answered: $denied"
-    await_log "^browser: agent logged mcp-client upload $(printf '%s' "$site" | sed 's/\./\\./g') refused: You said no\\.\$" \
-      "the upload refused for the field in $what isn't in the activity log under $site"
+    await_log "^browser: agent logged mcp-client upload $(printf '%s' "$frame_site" | sed 's/\./\\./g') refused: You said no\\.\$" \
+      "the upload refused for the field in $what isn't in the activity log under $frame_site"
   done
   # Choose File… with the dialog up, the page closes its own tab, and the dialog closes with it, as
   # its Cancel would. Linux may have none, when neither a toolkit nor the portal answers. On Windows
