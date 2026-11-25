@@ -106,7 +106,7 @@ use crate::tokens::command_bar::HOVERED;
 use crate::tokens::command_bar::LINE_COLOR;
 use crate::tokens::command_bar::PLACEHOLDER;
 use crate::tokens::command_bar::ROW_GLYPH;
-use crate::tokens::command_bar::SELECTED_DIM;
+use crate::tokens::command_bar::SELECTION as FIELD_SELECTION;
 use crate::tokens::command_bar::TITLE;
 use crate::tokens::command_bar::site_colors;
 use crate::tokens::command_bar::{
@@ -115,6 +115,7 @@ use crate::tokens::command_bar::{
     MODEL_MARK, START_ARROW, START_SIZE, START_SPACE, TRIGGER_CHEVRON, TRIGGER_GAP, TRIGGER_HEIGHT,
     TRIGGER_LINE, TRIGGER_TEXT, TRIGGER_X,
 };
+use crate::tokens::command_bar::{CHOSEN, CHOSEN_KIND, LIGHT_CHOSEN, LIGHT_CHOSEN_KIND};
 use crate::tokens::text;
 /// What the field says with nothing typed: in the bar, the sidebar's field and the composer.
 pub(crate) const PLACEHOLDER_TEXT: &str = "Search or enter address";
@@ -327,6 +328,15 @@ const SEARCH_MODELS: &str = "Search models";
 /// `{assistant}'s default`.
 const DEFAULT_ROW: &str = "Default";
 const NEVER_GETS: &str = "A thread never gets passwords, cookies or your other tabs.";
+/// The selected row's plate, `shown`, and its kind's ink, text-2, each the ink at its tone's.
+fn chosen(palette: &palette::Palette) -> (Hsla, Hsla) {
+    let (plate, kind) = match palette.tone {
+        palette::Tone::Dark => (CHOSEN, CHOSEN_KIND),
+        palette::Tone::Light => (LIGHT_CHOSEN, LIGHT_CHOSEN_KIND),
+    };
+    (palette.plate(plate), palette.on_overlay(kind))
+}
+
 /// The composer's triggers, by their elements' ids.
 const LEVEL: &str = "composer-level";
 const MODEL: &str = "composer-model";
@@ -2986,14 +2996,16 @@ impl CommandBar {
         taken
     }
 
-    /// The selected row's fill and its label, and the chip's in a site search: the site's own
-    /// colour, made to read on the bar, where it has one, else the Space's accent.
-    fn accent(&self, palette: &palette::Palette) -> (Hsla, Hsla) {
-        let (fill, label) = match self.site.as_ref().and_then(|site| site.color) {
-            Some(color) => palette.site_accent(gpui::rgb(color)),
-            None => (palette.accent, palette.accent_label),
-        };
-        (fill.into(), label.into())
+    /// The mode chip's fill and its label: in a site search with a colour of its own, that colour,
+    /// made to read on the bar, else a chip's plate and the ink.
+    fn site_chip(&self, palette: &palette::Palette) -> (Hsla, Hsla) {
+        match self.site.as_ref().and_then(|site| site.color) {
+            Some(color) => {
+                let (fill, label) = palette.site_accent(gpui::rgb(color));
+                (fill.into(), label.into())
+            }
+            None => (palette.plate(CHIP), palette.ink.into()),
+        }
     }
 
     /// Whether `tab` is the one the bar edits or opens beside, which is shown, so never offered.
@@ -3326,13 +3338,9 @@ impl CommandBar {
     /// The trash a row from history shows under the pointer, where Arc's has a ✕, which takes it
     /// out: ✕ closes and trash removes (ux-principles, the owner, #1394). It's the arrow's tile, so
     /// the two read as one kind.
-    fn remove_button(&self, index: usize, selected: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn remove_button(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let palette = palette::current(cx);
-        let (accent, label) = self.accent(&palette);
-        let (tile, color) = match selected {
-            true => (label, accent),
-            false => (palette.plate(ARROW_TILE), palette.on_overlay(ARROW)),
-        };
+        let (tile, color) = (palette.plate(ARROW_TILE), palette.on_overlay(ARROW));
         div()
             .id(("remove", index))
             .when(self.a11y, |button| {
@@ -3873,7 +3881,8 @@ impl CommandBar {
         });
         let ready = !self.input.read(cx).text().trim().is_empty();
         let (fill, arrow) = match ready {
-            true => (palette.accent.into(), palette.accent_label.into()),
+            // `primary`, the ink, with `on-primary` on it.
+            true => (palette.ink.into(), palette.on_fill(palette.ink).ink.into()),
             false => (palette.plate(CHIP), dim),
         };
         let start = div()
@@ -3977,32 +3986,21 @@ impl CommandBar {
         let selected = index == self.selected;
         let thread = row.starts_thread();
         let end = self.end(row);
-        // The selected row keeps its accent under the pointer.
+        // The selected row keeps its plate under the pointer.
         let hovered = !selected && self.hovered == Some(index);
         let palette = palette::current(cx);
-        let (accent, label) = self.accent(&palette);
-        let (title, dim) = match selected {
-            true => (label, label.opacity(SELECTED_DIM)),
-            false => (palette.on_overlay(TITLE), palette.on_overlay(DIM)),
+        // The selected row differs only by its plate, `shown`, and its kind in text-2: no accent,
+        // so its title, glyphs and chips are any row's in both tones.
+        let title = palette.on_overlay(TITLE);
+        let dim = match selected {
+            true => chosen(&palette).1,
+            false => palette.on_overlay(DIM),
         };
-        // The icon sits on a tile of the accent's label in the selected row, and a command's on a
-        // faint one in the rest.
-        let glyph = match selected {
-            true => accent,
-            false => palette.on_overlay(ROW_GLYPH),
-        };
-        let tile = match (selected, row.kind()) {
-            (true, _) => Some(label),
-            (false, Kind::Command) => Some(palette.plate(CHIP)),
-            _ => None,
-        };
-        // What a Space's mark is ringed against: the selected row's tile, else the panel, which a
-        // command's faint tile hardly changes.
-        let tile_behind = if selected {
-            label
-        } else {
-            Hsla::from(palette.overlay)
-        };
+        let glyph = palette.on_overlay(ROW_GLYPH);
+        // A command's icon sits on a faint tile.
+        let tile = matches!(row.kind(), Kind::Command).then(|| palette.plate(CHIP));
+        // What a Space's mark is ringed against: the panel, which a faint plate hardly changes.
+        let tile_behind = Hsla::from(palette.overlay);
         let icon = div()
             .size(px(ICON_BOX))
             .mr(px(TITLE_X - ICON_BOX_X - ICON_BOX))
@@ -4017,12 +4015,9 @@ impl CommandBar {
                 Icon::Mark => Some(product::mark(MARK, &palette).into_any_element()),
                 _ => self.glyph(row, ICON_SIZE, glyph, Rgba::from(tile_behind)),
             });
-        // A key's chip: the accent's label with the accent on it on the selected row.
+        // A key's chip, on every row alike.
         let chip = |text: SharedString| {
-            let (fill, text_color) = match selected {
-                true => (label, accent),
-                false => (palette.plate(CHIP), dim),
-            };
+            let (fill, text_color) = (palette.plate(CHIP), dim);
             div()
                 .h(px(ICON_BOX))
                 .flex_none()
@@ -4054,7 +4049,7 @@ impl CommandBar {
             .pr(px(ROW_END))
             .rounded(px(PLATE_RADIUS))
             .text_color(title)
-            .when(selected, |line| line.bg(accent))
+            .when(selected, |line| line.bg(chosen(&palette).0))
             .when(hovered, |line| line.bg(palette.plate(HOVERED)))
             // Arc keeps the plate under the pointer as the keys move the selection.
             .hover_listener_mode(HoverListenerMode::InputModalityIndependent)
@@ -4089,25 +4084,16 @@ impl CommandBar {
                         .items_center()
                         .justify_center()
                         .rounded(px(CHIP_RADIUS))
-                        .bg(if selected {
-                            label
-                        } else {
-                            palette.plate(ARROW_TILE)
-                        })
+                        .bg(palette.plate(ARROW_TILE))
                         .child(
                             svg()
                                 .path(glyph)
                                 .size(px(END_GLYPH))
-                                .text_color(if selected {
-                                    accent
-                                } else {
-                                    palette.on_overlay(ARROW)
-                                }),
+                                .text_color(palette.on_overlay(ARROW)),
                         )
                 });
-                let tint = if selected { label } else { dim };
                 let end = if tile.is_some() { 7. } else { bare_end() };
-                let label = div().flex_none().mr(px(end)).text_color(tint);
+                let label = div().flex_none().mr(px(end)).text_color(dim);
                 line.child(div().flex_1())
                     .child(label.child(said))
                     .children(tile)
@@ -4118,24 +4104,22 @@ impl CommandBar {
             // Another computer's tab ends with that computer's name, as an agent's row with its
             // model.
             .when(!row.computer.is_empty(), |line| {
-                let tint = if selected { label } else { dim };
                 line.child(div().flex_1()).child(
                     div()
                         .flex_none()
                         .ml(px(HINT_GAP))
-                        .text_color(tint)
+                        .text_color(dim)
                         .child(row.computer.clone()),
                 )
             })
             // New Thread ends with its kind and ⇥, which grows the bar as a click does.
             .when(thread, |line| {
-                let tint = if selected { label } else { dim };
                 line.child(div().flex_1())
                     .child(
                         div()
                             .flex_none()
                             .mr(px(HINT_KEY_GAP))
-                            .text_color(tint)
+                            .text_color(dim)
                             .child(THREAD_KIND),
                     )
                     .child(chip(hint_key("tab", shell::OFF_THE_MAC).into()))
@@ -4143,7 +4127,7 @@ impl CommandBar {
             // Under the pointer, the selected row too, as Arc's.
             .when(row.removable && self.hovered == Some(index), |line| {
                 line.when(end.is_none(), |line| line.child(div().flex_1()))
-                    .child(self.remove_button(index, selected, cx))
+                    .child(self.remove_button(index, cx))
             })
     }
 }
@@ -4246,11 +4230,7 @@ impl CommandBar {
         let page = self.ask.as_ref().and_then(|ask| ask.page.as_ref());
         let favicon = page.map(|(url, _)| self.favicon(url, CHIP_FAVICON, palette.ink.into()));
         // A site search with a colour of its own is in it.
-        let colored = self.site.as_ref().is_some_and(|site| site.color.is_some());
-        let (fill, label) = match colored {
-            true => self.accent(&palette),
-            false => (palette.plate(CHIP), palette.ink.into()),
-        };
+        let (fill, label) = self.site_chip(palette);
         Some(mode_chip(fill, label, favicon, name))
     }
 
@@ -4393,12 +4373,12 @@ impl Render for CommandBar {
                 .border_color(color)
         };
         let palette = palette::current(cx);
-        // The placeholder and the accent follow the Space's, which may have changed since it opened.
+        // The placeholder follows the Space's, which may have changed since it opened.
         self.input.update(cx, |input, _| {
             input.set_colors(
                 palette.on_overlay(PLACEHOLDER),
-                palette.accent.into(),
-                palette.selection(),
+                palette.ink.into(),
+                palette.plate(FIELD_SELECTION),
             );
             input.set_fade(px(FIELD_FADE), palette.overlay.into());
         });

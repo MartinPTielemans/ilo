@@ -467,10 +467,10 @@ impl Bar {
             .unwrap()
     }
 
-    /// The selected row's fill and its label.
-    fn accent(&mut self) -> (Hsla, Hsla) {
+    /// The mode chip's fill and its label.
+    fn site_chip(&mut self) -> (Hsla, Hsla) {
         self.window
-            .read_with(&self.cx.cx, |bar, cx| bar.accent(&palette::current(cx)))
+            .read_with(&self.cx.cx, |bar, cx| bar.site_chip(&palette::current(cx)))
             .unwrap()
     }
 
@@ -1427,22 +1427,22 @@ fn a_site_search_is_in_its_sites_colour(cx: &mut TestAppContext) {
     }
 
     let mut bar = Bar::new(cx);
-    let space = bar.accent();
+    let space = bar.site_chip();
     let youtube = Suggestion {
         site: "YouTube".into(),
         ..hinting("youtube.com")
     };
     bar.type_text("yout");
     bar.suggest("yout", vec![youtube]);
-    assert_eq!(bar.accent(), space);
+    assert_eq!(bar.site_chip(), space);
     bar.keys("tab");
     let palette = bar
         .window
         .read_with(&bar.cx.cx, |_, cx| palette::current(cx))
         .unwrap();
     let (fill, label) = palette.site_accent(gpui::rgb(site_colors::YOUTUBE));
-    assert_eq!(bar.accent(), (fill.into(), label.into()));
-    assert_ne!(bar.accent(), space);
+    assert_eq!(bar.site_chip(), (fill.into(), label.into()));
+    assert_ne!(bar.site_chip(), space);
 
     let mut bar = Bar::new(cx);
     bar.type_text("gith");
@@ -1454,7 +1454,53 @@ fn a_site_search_is_in_its_sites_colour(cx: &mut TestAppContext) {
         }],
     );
     bar.keys("tab");
-    assert_eq!(bar.accent(), space);
+    assert_eq!(bar.site_chip(), space);
+}
+
+/// The bar draws none of the Space's colour (P3): its chosen row, its caret, its selection and
+/// Start are the ink at their strengths, the same over a green Space as a violet one. On the bar,
+/// in Dark and Light, the selection tells from it at 1.2:1, the least the palette's plates are told
+/// apart from what's under them, and text on it reads at 7:1, the text floor; the chosen row's
+/// kind, text-2, reads on its plate at 4.5:1.
+#[test]
+fn the_bar_draws_no_accent_and_its_selection_reads() {
+    use crate::palette::{Palette, Tone, contrast, over};
+    use crate::theme::Theme;
+    const TELLS: f32 = 1.2;
+    const TEXT: f32 = 7.;
+    const TEXT_2: f32 = 4.5;
+    for tone in [Tone::Dark, Tone::Light] {
+        let [green, violet] =
+            [0x2f9e5b, 0x5a2a9a].map(|color| Palette::of(Some(&Theme::of_color(color)), tone));
+        assert_ne!(green.accent, violet.accent);
+        assert_eq!(
+            chosen(&green),
+            chosen(&violet),
+            "{tone:?}: the chosen row follows the Space"
+        );
+        assert_eq!(green.ink, violet.ink, "{tone:?}");
+        let palette = Palette::of(None, tone);
+        let overlay = palette.overlay;
+        let selection = over(overlay, palette.ink, FIELD_SELECTION);
+        assert!(
+            contrast(selection, overlay) >= TELLS,
+            "{tone:?}: the selection tells from the bar at {:.2}:1",
+            contrast(selection, overlay)
+        );
+        assert!(
+            contrast(palette.ink, selection) >= TEXT,
+            "{tone:?}: text on the selection reads at {:.2}:1",
+            contrast(palette.ink, selection)
+        );
+        let (plate, kind) = chosen(&palette);
+        let plate = over(overlay, palette.ink, plate.a);
+        let kind = over(plate, palette.ink, kind.a);
+        assert!(
+            contrast(kind, plate) >= TEXT_2,
+            "{tone:?}: the chosen row's kind reads at {:.2}:1",
+            contrast(kind, plate)
+        );
+    }
 }
 
 /// Japanese input, as Windows' input method and AppKit's give it to the field: what it composes is
