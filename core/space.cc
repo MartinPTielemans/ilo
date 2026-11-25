@@ -1128,6 +1128,15 @@ void Space::KeepTodayFolders() {
       folder_of_.erase(today_[at]);
     }
   }
+  // Most Spaces have no today's folder, and every change comes here, a new tab's too: one pass
+  // over Today, then only a today's folder the last tab out emptied goes.
+  if (last.empty()) {
+    if (std::erase_if(folders_, [](const auto& entry) { return entry.second.today; })) {
+      std::erase_if(folder_of_,
+                    [&](const auto& entry) { return !folders_.contains(entry.second); });
+    }
+    return;
+  }
   for (size_t at = 0; at < today_.size(); ++at) {
     const bc_id folder = FolderOf(today_[at]);
     if (!folder) {

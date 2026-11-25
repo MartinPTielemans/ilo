@@ -512,6 +512,37 @@ TEST_F(SpaceTest, AnOpenedTabJoinsItsOpenersFolderAndTheLastOutTakesTheFolder) {
   EXPECT_TRUE(work_->TodayFolders().empty());
 }
 
+// A Space with no today's folder comes out of a change as it was, its pinned folders and their tabs
+// too, and a today's folder its last tab leaves still goes, with the pinned folders kept.
+TEST_F(SpaceTest, ASpaceWithNoTodaysFolderIsLeftAsItWas) {
+  Fill();
+  FillToday();
+  const auto folders = [&] {
+    std::vector<bc_id> of;
+    for (bc_id tab = 1; tab <= 7; ++tab) {
+      of.push_back(work_->FolderOf(tab));
+    }
+    return of;
+  };
+  const Rows pinned = work_->pinned_rows();
+  const std::vector<bc_id> before = folders();
+  work_->Add(16, /*opener=*/0, /*foreground=*/false);
+  work_->Remove(16);
+  EXPECT_EQ(work_->pinned_rows(), pinned);
+  EXPECT_EQ(folders(), before);
+  EXPECT_EQ(work_->today(), (Rows{11, 12, 13, 14, 15}));
+  EXPECT_TRUE(work_->TodayFolders().empty());
+
+  const bc_id folder = work_->AddTodayFolder("Trip", {12, 13});
+  ASSERT_TRUE(folder);
+  work_->Remove(12);
+  work_->Remove(13);
+  EXPECT_FALSE(work_->IsFolder(folder));
+  EXPECT_TRUE(work_->TodayFolders().empty());
+  EXPECT_EQ(work_->pinned_rows(), pinned);
+  EXPECT_EQ(folders(), before);
+}
+
 // A tab put between a folder's tabs joins it, as its run is unbroken; one moved into it goes at its
 // place among its tabs; pinning one takes it out.
 TEST_F(SpaceTest, ATodaysFoldersRunIsUnbroken) {
