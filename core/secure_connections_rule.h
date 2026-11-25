@@ -48,6 +48,11 @@ PutBack PutBackTo(bool has_a_page_behind);
 inline constexpr char kEntryAction[] = "open_page";
 inline constexpr char kEntryReason[] = "not_secure";
 
+// The entry's action for a page the user went to and left at Chrome's warning when they handed
+// the tab back. No step of the agent's asked for that page, so the app ends none on this entry:
+// a step the agent began since the hand-back still goes, and is never told it didn't.
+inline constexpr char kHandedBackAction[] = "handed_back_page";
+
 }  // namespace browser_core::secure_connections_rule
 
 #endif  // BROWSER_CORE_SECURE_CONNECTIONS_RULE_H_

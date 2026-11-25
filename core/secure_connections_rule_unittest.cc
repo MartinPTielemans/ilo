@@ -61,6 +61,12 @@ TEST(SecureConnectionsRuleTest, TheEntryIsKnownByItsTwoCodes) {
   EXPECT_STREQ(kEntryReason, "not_secure");
 }
 
+// The app tells the hand-back's entry from a step's by its action alone, so the two differ.
+TEST(SecureConnectionsRuleTest, TheHandBacksEntryHasAnActionOfItsOwn) {
+  EXPECT_STREQ(kHandedBackAction, "handed_back_page");
+  EXPECT_STRNE(kHandedBackAction, kEntryAction);
+}
+
 // An entry about the page its tab shows names no site. Every other entry the core sends is built
 // as this one, by its fields' names without the site, which leaves the site null.
 TEST(SecureConnectionsRuleTest, AnEntryBuiltWithoutASiteNamesNone) {
