@@ -10,6 +10,7 @@ bool Refuses(Ask ask, const Tab& tab) {
     case Ask::kPaste:
       return !tab.held;
     case Ask::kFilePicker:
+    case Ask::kDevice:
       return true;
   }
   return true;

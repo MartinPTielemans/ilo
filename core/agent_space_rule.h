@@ -20,11 +20,13 @@ enum class Ask {
   kPaste,
   // The picker for a file or a folder of the user's.
   kFilePicker,
+  // A USB, HID, serial or Bluetooth device the user gave the page's site.
+  kDevice,
 };
 
 // Whether the browser refuses |ask| from a page in |tab|. Nothing in a tab of the user's. In an
-// agent's Space the picker always, and a paste unless the user holds the tab, so their own paste
-// works at a step they do themselves.
+// agent's Space the picker and a device always, and a paste unless the user holds the tab, so
+// their own paste works at a step they do themselves.
 bool Refuses(Ask ask, const Tab& tab);
 
 }  // namespace browser_core::agent_space_rule

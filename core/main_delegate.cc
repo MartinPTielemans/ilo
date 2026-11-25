@@ -24,6 +24,7 @@
 #include "base/time/time.h"
 #include "browser_core/ad_block.h"
 #include "browser_core/agent_autofill.h"
+#include "browser_core/agent_devices.h"
 #include "browser_core/agent_file_field.h"
 #include "browser_core/agent_job_voter.h"
 #include "browser_core/agent_page.h"
@@ -456,6 +457,32 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
            ChromeContentBrowserClient::IsFileSystemAccessApiFilePickerAllowed(contents);
   }
 
+  // Chrome's, which give a page in an agent's Space none of its site's devices (agent_devices.h).
+  content::UsbDelegate* GetUsbDelegate() override {
+    if (!usb_delegate_) {
+      usb_delegate_ = MakeUsbDelegate();
+    }
+    return usb_delegate_.get();
+  }
+  content::HidDelegate* GetHidDelegate() override {
+    if (!hid_delegate_) {
+      hid_delegate_ = MakeHidDelegate();
+    }
+    return hid_delegate_.get();
+  }
+  content::SerialDelegate* GetSerialDelegate() override {
+    if (!serial_delegate_) {
+      serial_delegate_ = MakeSerialDelegate();
+    }
+    return serial_delegate_.get();
+  }
+  content::BluetoothDelegate* GetBluetoothDelegate() override {
+    if (!bluetooth_delegate_) {
+      bluetooth_delegate_ = MakeBluetoothDelegate();
+    }
+    return bluetooth_delegate_.get();
+  }
+
   // Chrome's, answering as Tab leaves a tab's page at either end (focus_leaving.h).
   std::unique_ptr<content::WebContentsViewDelegate> GetWebContentsViewDelegate(
       content::WebContents* web_contents) override {
@@ -551,6 +578,12 @@ class ContentBrowserClient : public ChromeContentBrowserClient {
         is_primary_main_frame, is_in_fenced_frame_tree, sandbox_flags, page_transition,
         has_user_gesture, initiating_origin, initiator_document, isolation_info, out_factory);
   }
+
+ private:
+  std::unique_ptr<content::UsbDelegate> usb_delegate_;
+  std::unique_ptr<content::HidDelegate> hid_delegate_;
+  std::unique_ptr<content::SerialDelegate> serial_delegate_;
+  std::unique_ptr<content::BluetoothDelegate> bluetooth_delegate_;
 };
 
 // Chrome's, but for the page's URL and top origin, which Chrome records for its crash reports.
