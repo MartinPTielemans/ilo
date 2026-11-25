@@ -1057,6 +1057,7 @@ impl Browser for Fake {
                         }])
                         .collect(),
                     answers: "claude-code".into(),
+                    sorted: None,
                 }
             };
         let day = 24 * 60 * 60;

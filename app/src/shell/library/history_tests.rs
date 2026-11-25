@@ -658,6 +658,7 @@ fn past(agent: &str, started: u64, ended: u64, pages: &[&str]) -> Past {
         messages: 0,
         steps: Vec::new(),
         answers: String::new(),
+        sorted: None,
     }
 }
 

@@ -45,6 +45,7 @@ fn past(id: &str, ended: u64) -> Past {
             },
         ],
         answers: "claude-code".into(),
+        sorted: None,
     }
 }
 
@@ -130,4 +131,39 @@ fn one_entry_deletes_alone() {
 fn a_row_says_what_its_receipt_did() {
     let about = past("task-1", 1_000_000).about("Tue 21:05");
     assert_eq!(about, "Claude Code · Tue 21:05 · 1 order placed · 1 page");
+}
+
+/// A sort's entry keeps its counts and its assistant alone, and a build from before sorts, which
+/// reads a task's title and pages, skips its line.
+#[test]
+fn a_sorts_entry_is_counts_alone() {
+    let sorted = Sorted {
+        handed: 12,
+        moved: 9,
+        folders: 3,
+    };
+    let sort = Past::sort("claude", 1_000, 1_030, sorted);
+    let text = write(&[sort.clone(), past("task-1", 2_000)]);
+    let line: Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+    let mut keys: Vec<&str> = line
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["agent", "ended", "id", "sorted", "started"]);
+    assert_eq!(line["agent"], "claude");
+    assert!(line.get("title").is_none() && line.get("pages").is_none());
+    assert_eq!(read(&text), vec![sort, past("task-1", 2_000)]);
+    let failed = Past::sort(
+        "claude",
+        3_000,
+        3_030,
+        Sorted {
+            handed: 4,
+            ..Sorted::default()
+        },
+    );
+    assert_eq!(read(&write(&[failed.clone()])), vec![failed]);
 }
