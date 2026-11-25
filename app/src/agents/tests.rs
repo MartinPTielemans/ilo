@@ -12978,6 +12978,7 @@ pub(crate) mod kept;
 mod lines;
 mod notes;
 mod other_apps;
+mod permission_stopped;
 #[cfg(unix)]
 mod rewall;
 mod sign_ins;

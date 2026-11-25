@@ -3283,9 +3283,12 @@ impl Shell {
             return div().into_any_element();
         };
         let when = crate::agents::local_time(each.at);
-        let under = match each.refused.is_empty() {
+        // Why it was refused, but for a permission the browser refused the page, whose title
+        // says it whole.
+        let refused = crate::agents::tools::refusal_shown(&each.action, &each.refused);
+        let under = match refused.is_empty() {
             true => when,
-            false => format!("{when} · Refused: {}", each.refused),
+            false => format!("{when} · Refused: {refused}"),
         };
         let key = (past.id.clone(), step);
         let opens = !each.url.is_empty();
