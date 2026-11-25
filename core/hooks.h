@@ -17,6 +17,7 @@
 #include "components/sync/engine/commit_and_get_updates_types.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/bluetooth_delegate.h"
+#include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/login_delegate.h"
 #include "content/public/browser/weak_document_ptr.h"
 #include "extensions/browser/extension_install_prompt_client.h"
@@ -391,5 +392,12 @@ extern bool (*g_browser_core_no_media_access)(content::WebContents* contents,
 // page in |frame| is dropped, asked in FrameClipboardContext::CanWrite at each write. Exported by
 // content, which is a library of its own in a component build.
 CONTENT_EXPORT extern bool (*g_browser_core_no_clipboard_write)(content::RenderFrameHost* frame);
+
+// content/browser/file_system_access/file_system_access_handle_base.cc: whether a handle on a file
+// or a folder made for |frame| keeps fixed denied grants in place of those it came with, asked in
+// the constructor every such handle runs. |site_storage| says the handle is in the site's own
+// storage. Exported as the clipboard's is.
+CONTENT_EXPORT extern bool (*g_browser_core_no_file_handle)(content::GlobalRenderFrameHostId frame,
+                                                            bool site_storage);
 
 #endif  // BROWSER_CORE_HOOKS_H_

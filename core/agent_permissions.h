@@ -7,6 +7,7 @@
 
 #include "browser_core/agent_permission_rule.h"
 #include "components/content_settings/core/common/content_settings_types.h"
+#include "content/public/browser/global_routing_id.h"
 
 namespace content {
 class RenderFrameHost;
@@ -39,6 +40,11 @@ bool NoMediaAccess(content::WebContents* contents, const content::MediaStreamReq
 
 // Whether a write to the clipboard by the page in |frame| is dropped.
 bool NoClipboardWrite(content::RenderFrameHost* frame);
+
+// Whether a handle on a file or a folder made for |frame| keeps no grant: one on a file of the
+// user's for a page in an agent's Space, with its entry. |site_storage| says it is in the site's
+// own storage. A worker that is no frame's is in no tab, and keeps what it has.
+bool NoFileHandle(content::GlobalRenderFrameHostId frame, bool site_storage);
 
 // Notes in the activity log that the browser refused |kind| to the page of |frame|, or of
 // |contents|, if it's in an agent's Space: once per document and kind, however often the page

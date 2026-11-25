@@ -85,6 +85,30 @@ TEST(AgentPermissionRule, ADocumentHasOneEntryPerKind) {
   EXPECT_TRUE(next.First(Kind::kCamera));
 }
 
+TEST(AgentPermissionRule, AUsersTabKeepsItsHandlesOnFiles) {
+  EXPECT_FALSE(RefusesFileHandle(/*site_storage=*/false, kUsers));
+  EXPECT_FALSE(RefusesFileHandle(/*site_storage=*/true, kUsers));
+}
+
+TEST(AgentPermissionRule, AHandleOnAUsersFileIsRefusedInAnAgentsSpace) {
+  EXPECT_TRUE(RefusesFileHandle(/*site_storage=*/false, kAgents));
+}
+
+// As the picker for a file is: the user holding the tab opens none of their files to its page.
+TEST(AgentPermissionRule, AHeldTabIsRefusedAHandleOnAUsersFileToo) {
+  EXPECT_TRUE(RefusesFileHandle(/*site_storage=*/false, kHeld));
+}
+
+TEST(AgentPermissionRule, ASitesOwnStorageIsItsPagesInAnyTab) {
+  EXPECT_FALSE(RefusesFileHandle(/*site_storage=*/true, kAgents));
+  EXPECT_FALSE(RefusesFileHandle(/*site_storage=*/true, kHeld));
+}
+
+// A worker that is no frame's is in no tab, which the wiring gives the rule as a tab of no Space.
+TEST(AgentPermissionRule, AFrameInNoTabKeepsItsHandles) {
+  EXPECT_FALSE(RefusesFileHandle(/*site_storage=*/false, Tab{}));
+}
+
 TEST(AgentPermissionRule, AUsersTabIsAskedAsEver) {
   EXPECT_EQ(TakesRequest(/*link_handler_offer=*/false, kUsers), Taken::kNo);
   EXPECT_EQ(TakesRequest(/*link_handler_offer=*/true, kUsers), Taken::kNo);

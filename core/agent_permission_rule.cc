@@ -69,11 +69,17 @@ const char* CodeWord(Kind kind) {
       return "smart_card";
     case Kind::kWebPrinting:
       return "web_printing";
+    case Kind::kFileHandle:
+      return "file_handle";
     case Kind::kOther:
     case Kind::kLeftAsToday:
       return "other";
   }
   return "other";
+}
+
+bool RefusesFileHandle(bool site_storage, const agent_space_rule::Tab& tab) {
+  return !site_storage && Refuses(Kind::kFileHandle, tab);
 }
 
 bool EntriesMade::First(Kind kind) {

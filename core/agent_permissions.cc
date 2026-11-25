@@ -197,6 +197,16 @@ bool NoClipboardWrite(content::RenderFrameHost* frame) {
   return true;
 }
 
+bool NoFileHandle(content::GlobalRenderFrameHostId id, bool site_storage) {
+  content::RenderFrameHost* frame = content::RenderFrameHost::FromID(id);
+  if (!frame || !agent_permission_rule::RefusesFileHandle(
+                    site_storage, RuleTabOf(content::WebContents::FromRenderFrameHost(frame)))) {
+    return false;
+  }
+  NoteRefused(Kind::kFileHandle, frame);
+  return true;
+}
+
 void NoteRefused(agent_permission_rule::Kind kind, content::RenderFrameHost* frame) {
   content::WebContents* contents = content::WebContents::FromRenderFrameHost(frame);
   const Tab* tab = contents ? Tab::FromWebContents(contents->GetOutermostWebContents()) : nullptr;

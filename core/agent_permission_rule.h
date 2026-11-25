@@ -44,6 +44,9 @@ enum class Kind {
   kNfc,
   kSmartCard,
   kWebPrinting,
+  // A handle on a file or a folder of the user's that the site was given before, which needs no
+  // picker.
+  kFileHandle,
   // A question of no kind above that the browser would have put to the user.
   kOther,
   // A kind that gives a page nothing of the user's device or person, such as a screen wake lock
@@ -63,6 +66,11 @@ bool Refuses(Kind kind, const agent_space_rule::Tab& tab);
 inline constexpr char kEntryAction[] = "request_permission ";
 inline constexpr char kEntryReason[] = "agent_space";
 const char* CodeWord(Kind kind);
+
+// Whether a handle on a file or a folder made for a page in |tab| is refused. One in the site's
+// own storage is no file of the user's and is the page's in any tab; any other is refused in an
+// agent's Space, held or not, as the picker for one is.
+bool RefusesFileHandle(bool site_storage, const agent_space_rule::Tab& tab);
 
 // The kinds a document's refusals have an entry for: one per document and kind, however often the
 // page asks.
