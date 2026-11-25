@@ -1368,6 +1368,9 @@ fn a_screen_reader_reads_each_steps_title_and_controls(cx: &mut TestAppContext) 
     let (shell, cx, host) = first_window(cx);
     host.sync_server.set(true);
     host.archive_after.set(Some(DAY / 2.));
+    // Help improve is offered where the build has its settings, as the card starts.
+    host.daily_count.set(Some(false));
+    host.crash_reports.set(Some(false));
     synced(cx, Status::SignedOut);
     cx.simulate_a11y_activation();
     started(&shell, cx);
@@ -1449,10 +1452,6 @@ fn a_screen_reader_reads_each_steps_title_and_controls(cx: &mut TestAppContext) 
     assert_eq!(dialogs(&said), [Step::Done.message(os).0.to_string()]);
     assert!(button(&said, "Start Browsing") && button(&said, "Make Default"));
     let help = Switch::Help.words().0.to_string();
-    host.daily_count.set(Some(false));
-    host.crash_reports.set(Some(false));
-    cx.run_until_parked();
-    cx.update(|window, cx| window.simulate_next_frame(cx));
     let said = read(cx);
     assert!(
         (said.iter()).any(|(role, name, _)| *role == Role::Switch && *name == help),
@@ -1465,6 +1464,8 @@ fn a_screen_reader_reads_each_steps_title_and_controls(cx: &mut TestAppContext) 
 #[gpui::test]
 fn a_screen_reader_follows_the_keyboard_through_each_step(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
+    host.daily_count.set(Some(false));
+    host.crash_reports.set(Some(false));
     cx.simulate_a11y_activation();
     started(&shell, cx);
     let guide = import_view(&shell, cx).read_with(cx, |view, _| view.guide());
@@ -1575,6 +1576,8 @@ fn return_and_escape_leave_from_a_focused_switch(cx: &mut TestAppContext) {
         ("escape", false),
     ] {
         let (shell, cx, host) = at_help(cx);
+        // What the steps before set as they were left.
+        host.take();
         let help = Switch::Help.words().0.to_string();
         tabbed_to(Role::Switch, &help, cx);
         if turned {
