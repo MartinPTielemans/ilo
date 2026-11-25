@@ -39,7 +39,10 @@ use crate::transparency::{self, Transparency};
 use card::Inks;
 
 mod card;
+mod resume;
 mod window;
+
+pub use resume::waiting as first_run_waiting;
 
 pub(super) use window::FirstRun;
 
@@ -93,6 +96,19 @@ impl Step {
             Step::Tidy => "5",
             Step::OtherApps => "6",
             Step::Done => "7",
+        }
+    }
+
+    /// The step's place in the design, 1 to 7, the favorites in the import's: what ⌘Q keeps.
+    fn place(self) -> u8 {
+        match self {
+            Step::Account => 1,
+            Step::Assistant => 2,
+            Step::Import | Step::Favorites => 3,
+            Step::Space => 4,
+            Step::Tidy => 5,
+            Step::OtherApps => 6,
+            Step::Done => 7,
         }
     }
 
@@ -459,7 +475,15 @@ impl Shell {
                 Step::Done => true,
             })
             .collect();
-        let first = steps[0];
+        // A run left under way resumes at its step, or the next that this launch shows; one out
+        // of range is past every step but the last, which always shows.
+        let first = match resume::read(cx) {
+            Some(kept) => (steps.iter().copied())
+                .find(|step| step.place() >= kept)
+                .unwrap_or(Step::Done),
+            None => steps[0],
+        };
+        resume::keep(first.place(), cx);
         let numbers: Vec<&str> = steps.iter().map(|step| step.number()).collect();
         // check.sh waits for these lines.
         log!("browser: onboarding started");
@@ -659,9 +683,14 @@ impl Shell {
         match at.and_then(|at| onboarding.steps.get(at + 1)).copied() {
             Some(next) => {
                 onboarding.show(next, still);
+                resume::keep(next.place(), cx);
                 log!("browser: onboarding step {}", next.number());
             }
-            None => onboarding.ending = Some(onboarding.clock.now()),
+            // Ended, there's nothing to resume, whether or not a quit then closes the card.
+            None => {
+                onboarding.ending = Some(onboarding.clock.now());
+                resume::clear(cx);
+            }
         }
         if let Some(on) = help {
             if self.browser.daily_count(cx).is_some_and(|kept| kept != on) {
@@ -709,6 +738,7 @@ impl Shell {
         onboarding.end_entry();
         log!("browser: onboarding left {} via {how}", step.number());
         onboarding.show(before, still);
+        resume::keep(before.place(), cx);
         log!("browser: onboarding step {}", before.number());
         cx.notify();
     }

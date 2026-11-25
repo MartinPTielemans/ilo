@@ -27,7 +27,8 @@ const SERVER: &str = "https://sync.example.org";
 /// A drawn shell showing one Space with no tab shown, as at a new profile's first launch, and first
 /// run's window over it, which the context returned drives: its keys and clicks go to that window.
 fn first_window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestContext, Rc<Recorder>) {
-    // The Space step keeps its level where Settings does: here, a folder of the test's own.
+    // The Space step keeps its level where Settings does, and ⌘Q the step it was at: here, a
+    // folder of the test's own.
     let dir = std::env::temp_dir().join(format!(
         "ilo-onboarding-{}-{}",
         std::process::id(),
@@ -36,6 +37,7 @@ fn first_window(cx: &mut TestAppContext) -> (Entity<Shell>, &mut VisualTestConte
     _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     cx.update(|cx| transparency::kept_in(dir.to_string_lossy().into_owned(), cx));
+    cx.update(|cx| super::resume::kept_in(dir.to_string_lossy().into_owned(), cx));
     let host = Rc::new(Recorder::default());
     let browser = host.clone();
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(browser, cx));
@@ -993,6 +995,147 @@ fn an_import_offers_its_most_visited_sites_as_favorites(cx: &mut TestAppContext)
         if leave == "enter" {
             let left = shown.read_with(cx, |view, _| view.suggested().map(<[_]>::len));
             assert_eq!(left, Some(0), "the button took the offer");
+        }
+    }
+}
+
+/// The folder a test keeps first run's step in, the one `first_window` gave it.
+fn kept_dir(cx: &mut TestAppContext) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "ilo-onboarding-{}-{}",
+        std::process::id(),
+        cx.test_function_name().unwrap_or("test")
+    ))
+}
+
+/// What first run keeps for ⌘Q, if anything.
+fn kept(dir: &std::path::Path) -> Option<String> {
+    std::fs::read_to_string(dir.join("first-run-step")).ok()
+}
+
+/// ⌘Q keeps the step's place, a number from 1 to 7 and nothing else, whatever was picked, and the
+/// card's end takes it away.
+#[gpui::test]
+fn the_step_is_kept_as_its_number_alone_until_the_end(cx: &mut TestAppContext) {
+    let dir = kept_dir(cx);
+    let (shell, cx, host) = first_window(cx);
+    host.archive_after.set(Some(DAY / 2.));
+    started(&shell, cx);
+    assert_eq!(kept(&dir).as_deref(), Some("3"), "the import's");
+    on_to(&shell, cx, Step::Space);
+    cx.simulate_keystrokes("right right");
+    assert_eq!(kept(&dir).as_deref(), Some("4"), "the pick isn't kept");
+    cx.simulate_keystrokes("enter");
+    cx.simulate_keystrokes("right");
+    assert_eq!(kept(&dir).as_deref(), Some("5"), "nor the bar's");
+    cx.simulate_keystrokes("secondary-[");
+    assert_eq!(
+        kept(&dir).as_deref(),
+        Some("4"),
+        "Back keeps the step it comes to"
+    );
+    on_to(&shell, cx, Step::Done);
+    assert_eq!(kept(&dir).as_deref(), Some("7"));
+    cx.simulate_keystrokes("enter");
+    assert_eq!(kept(&dir), None, "ended, there's nothing to resume");
+    later(&shell, cx, END_FADE);
+    assert_eq!(step(&shell, cx), None);
+    assert!(!super::first_run_waiting(&dir.to_string_lossy()));
+}
+
+/// A launch after a ⌘Q resumes at the step kept, or the next step this launch shows where that
+/// one's condition no longer holds; a number past every step is the last, which always shows, and
+/// one that isn't a number starts at the beginning. What was set comes back from the settings.
+#[gpui::test]
+fn a_launch_resumes_at_the_step_kept(cx: &mut TestAppContext) {
+    let dir = kept_dir(cx);
+    let (shell, cx, host) = first_window(cx);
+    host.archive_after.set(Some(DAY));
+    for (written, at) in [
+        ("5", Step::Tidy),
+        ("4", Step::Space),
+        ("9", Step::Done),
+        ("0", Step::Import),
+        ("x", Step::Import),
+        ("", Step::Import),
+    ] {
+        std::fs::write(dir.join("first-run-step"), written).unwrap();
+        assert!(
+            super::first_run_waiting(&dir.to_string_lossy()),
+            "{written:?}"
+        );
+        shell.update(cx, |shell, _| shell.onboarding = None);
+        started(&shell, cx);
+        assert_eq!(step(&shell, cx), Some(at), "{written:?}");
+    }
+    // At the tidy step the bar shows the time Settings has, as the profile kept it.
+    std::fs::write(dir.join("first-run-step"), "5").unwrap();
+    shell.update(cx, |shell, _| shell.onboarding = None);
+    started(&shell, cx);
+    let shown = card(&shell, cx, |o| {
+        o.tidy.as_ref().map(|tidy| tidy.stops[tidy.at].1)
+    });
+    assert_eq!(shown, Some("24 hours"));
+
+    // Kept at the Welcome, signed in since: the next step.
+    host.sync_server.set(true);
+    synced(cx, Status::On);
+    std::fs::write(dir.join("first-run-step"), "1").unwrap();
+    shell.update(cx, |shell, _| shell.onboarding = None);
+    started(&shell, cx);
+    assert_eq!(step(&shell, cx), Some(Step::Import));
+    // Kept at the tidy step, which this launch leaves out: the next that shows.
+    host.archive_after.set(None);
+    std::fs::write(dir.join("first-run-step"), "5").unwrap();
+    shell.update(cx, |shell, _| shell.onboarding = None);
+    started(&shell, cx);
+    assert_eq!(step(&shell, cx), Some(Step::Done));
+}
+
+/// The lines a check waits on name a step by its number, a switch's or button's place, and how a
+/// step was left; never what was picked, turned or typed (floor 8).
+#[gpui::test]
+fn no_line_names_a_pick(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    host.archive_after.set(Some(DAY / 2.));
+    host.daily_count.set(Some(false));
+    host.crash_reports.set(Some(false));
+    crate::heard::listen();
+    started(&shell, cx);
+    on_to(&shell, cx, Step::Space);
+    cx.simulate_keystrokes("right right right");
+    cx.simulate_keystrokes("enter");
+    settle(&shell, cx);
+    cx.simulate_keystrokes("right right");
+    cx.simulate_keystrokes("enter");
+    settle(&shell, cx);
+    shell.update(cx, |shell, cx| shell.onboarding_switch(Switch::Help, cx));
+    settle(&shell, cx);
+    cx.simulate_keystrokes("enter");
+    later(&shell, cx, END_FADE);
+    let lines = crate::heard::take();
+    let ours: Vec<&String> = (lines.iter())
+        .filter(|line| line.starts_with("browser: onboarding"))
+        .collect();
+    assert!(
+        ours.iter().any(|line| *line == "browser: onboarding done"),
+        "{ours:?}"
+    );
+    let picked = Theme::of_color(SWATCHES[2]).to_text();
+    let words = [
+        picked.as_str(),
+        "hours",
+        "days",
+        "Never",
+        " on",
+        " off",
+        "true",
+        "false",
+        "Standard",
+    ];
+    for line in ours {
+        for word in words {
+            assert!(!line.contains(word), "{line:?} names {word:?}");
         }
     }
 }
