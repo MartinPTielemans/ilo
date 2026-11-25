@@ -19,7 +19,114 @@ pub const ACCESS_ACTION: &str = "access";
 /// The actions that act on a page, which Look only refuses, as `page_tool` names them.
 pub(super) const ACTS: [&str; 4] = ["click", "type", "select_option", "press_key"];
 
+/// The tools, and run_steps' steps, that a page using the camera or the microphone answers at every
+/// level. Each reads the page or leaves what it's doing as it is: a run is judged step by step, a
+/// request's changes by their own row, and a close of a tab of the user's gives it back as it is.
+/// Any other is refused there below Full access (`stopped_in_use`), so one made later is refused
+/// on such a page until it's placed here.
+pub(super) const IN_USE_ANSWERS: [&str; 25] = [
+    "list_tabs",
+    "list_split",
+    "open_tab",
+    "snapshot",
+    "read_page",
+    "scroll",
+    "screenshot",
+    "wait",
+    "check",
+    "request",
+    "run_steps",
+    "close_tab",
+    "remove_tab",
+    "pin_tab",
+    "unpin_tab",
+    "split_tabs",
+    "add_to_split",
+    "separate_tab",
+    "sort_tabs_by_site",
+    "hand_off",
+    "ask_for_tab",
+    "ask",
+    "title",
+    "done",
+    "finish",
+];
+
+/// The log's name for a call of `tool` refused on a page in use, as that tool's own entry has it.
+fn in_use_action(tool: &str) -> &'static str {
+    match tool {
+        "navigate" => "navigate",
+        "click" => "click",
+        "type" => "type",
+        "select" => "select_option",
+        "press_key" => "press_key",
+        "upload" => "upload",
+        // One made later and not placed yet.
+        _ => "act",
+    }
+}
+
 impl Agents {
+    /// Refuses the call of `tool` if a page it's on is using the camera or the microphone and the
+    /// tool is none such a page answers below Full access. Whether it did. A call that names no
+    /// tab is on the one its connection used last, as it is where it runs.
+    pub(super) fn in_use_call(
+        &mut self,
+        by: (&str, u64, u64),
+        tool: &str,
+        arguments: &serde_json::Value,
+        reply: &std::sync::mpsc::Sender<super::ToolResult>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if IN_USE_ANSWERS.contains(&tool) {
+            return false;
+        }
+        let mut tabs = tools::tabs_named(arguments);
+        if tabs.is_empty() && !tools::NO_TAB_OF_ITS_OWN.contains(&tool) {
+            tabs.extend(self.default_tab(by.0, by.1, cx).ok());
+        }
+        (tabs.into_iter()).any(|tab| self.stopped_in_use(by, tool, tab, reply, cx))
+    }
+
+    /// Refuses `tool`, a call's or a step's of a run, on `tab` if its page is using the camera or
+    /// the microphone, the task it's judged for is below Full access and the tool is none such a
+    /// page answers: the agent hears why at once, the log keeps it and the conversation shows it,
+    /// as any act above a task's access. Whether it did. A tab the user holds, one agents may not
+    /// use and one not the agent's are refused as they are, saying nothing of the page.
+    pub(super) fn stopped_in_use(
+        &mut self,
+        (agent, connection, call): (&str, u64, u64),
+        tool: &str,
+        tab: u64,
+        reply: &std::sync::mpsc::Sender<super::ToolResult>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if IN_USE_ANSWERS.contains(&tool) || !self.browser.in_use(tab, cx) {
+            return false;
+        }
+        let space = self.browser.agent_space(agent);
+        if self.held.contains_key(&tab)
+            || self.off_limits(agent, tab, cx).is_some()
+            || !self.tabs_seen(space, cx).iter().any(|seen| seen.id == tab)
+        {
+            return false;
+        }
+        let mut act = act_of(agent, connection, call, tab, reply.clone());
+        let tier = (self.judged_task(&act)).map_or(Tier::default(), |task| task.tier);
+        if tier.allows(Why::InUse) {
+            return false;
+        }
+        let site = site(&self.browser.tab(tab, cx).url);
+        // A Never is the user's own, which no level lifts: its line offers none.
+        let why = match self.said_never(agent, &site) {
+            true => Why::Never,
+            false => Why::InUse,
+        };
+        (act.action, act.what) = (in_use_action(tool), tool.into());
+        self.stopped(act, site, why, tier, cx);
+        true
+    }
+
     /// The access the task `agent`'s act on `connection`, for its call `call` (0 for none), is of:
     /// a ⌘T task's, else its session's, else the one a new session starts with.
     pub(super) fn tier_of(&self, agent: &str, connection: u64, call: u64) -> Tier {

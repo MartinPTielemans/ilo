@@ -130,6 +130,9 @@ pub enum Why {
     SignIn,
     /// Signs in on a bank's site.
     SignInBank,
+    /// Anything but reading, on a page that is using the camera or the microphone
+    /// (access::IN_USE_ANSWERS).
+    InUse,
 }
 
 /// A row: what each tier, Look only, Work on pages and Full access, does with an act of `why`.
@@ -137,12 +140,12 @@ struct Row {
     why: Why,
     allowed: [bool; 3],
     /// The user's line's whole sentence on the refusal, `{level}` standing for the tier: one per
-    /// act, whose first words also name the act in the activity log. Fenced, OtherSite and Never
-    /// name the site instead (`why_line`).
+    /// act, whose first words also name the act in the activity log. Fenced, OtherSite, Never and
+    /// InUse name the site instead (`why_line`).
     refused: &'static str,
 }
 
-const ROWS: [Row; 12] = [
+const ROWS: [Row; 13] = [
     Row {
         why: Why::Act,
         allowed: [false, true, true],
@@ -202,6 +205,11 @@ const ROWS: [Row; 12] = [
         why: Why::SignInBank,
         allowed: [false, false, true],
         refused: "Signing in to a bank site isn't part of {level}.",
+    },
+    Row {
+        why: Why::InUse,
+        allowed: [false, false, true],
+        refused: "",
     },
 ];
 
@@ -267,12 +275,29 @@ pub fn why_line(why: Why, tier: Tier, site: &str) -> String {
         Why::Fenced => format!("{site} is on your Off limits list."),
         Why::OtherSite => format!("{site} isn't one of the sites you added."),
         Why::Never => format!("{site} is set to Never for this agent."),
+        // A page with no host to give is named as the page it is.
+        Why::InUse if site.is_empty() => IN_USE_NO_SITE.to_string(),
+        Why::InUse => {
+            format!(
+                "{site} is using the camera or microphone, so this thread can only read the page."
+            )
+        }
         _ => {
             let row = ROWS.iter().find(|row| row.why == why).unwrap();
             row.refused.replace("{level}", tier.label())
         }
     }
 }
+
+/// `why_line`'s sentence for a page in use that has no host.
+const IN_USE_NO_SITE: &str =
+    "This page is using the camera or microphone, so this thread can only read it.";
+
+/// What the agent's call answers on a page in use, whole: the page's own state is why, it names
+/// no level, as no refusal does, and says to carry on with the rest of the task.
+pub const IN_USE_TOLD: &str = "Not done: this page is using the camera or microphone, so at this \
+     task's access you can only read it. Don't repeat the step or try another way to act on the \
+     page; say what you were about to do and carry on with the rest.";
 
 /// What the agent's call answers: what was refused, that it's outside the task's access, that only
 /// the user changes that, and not to try another way. It never names a tier to ask for. `what` is
@@ -294,6 +319,7 @@ pub fn told(why: Why, tier: Tier, what: &str, site: &str) -> String {
              task's access. Only the user can change that, in ilo. Don't try another way to the \
              same end."
         ),
+        Why::InUse => IN_USE_TOLD.to_string(),
         _ => format!(
             "ilo stopped this: {what}. It isn't part of this task's access ({}). Only the user can \
              change a task's access, in ilo. Don't try another way to the same end; if they change \
@@ -466,12 +492,15 @@ mod tests {
         assert_eq!(at(Never), [false, false, false]);
         assert_eq!(at(SignIn), [false, true, true]);
         assert_eq!(at(SignInBank), [false, false, true]);
+        assert_eq!(at(InUse), [false, false, true]);
         assert_eq!(Tier::default(), Work);
         assert_eq!(Look.lifting(Act), Some(Work));
         assert_eq!(Look.lifting(Message), Some(Full));
         assert_eq!(Work.lifting(Order), Some(Full));
         assert_eq!(Full.lifting(Order), None);
         assert_eq!(Look.lifting(Fenced), None);
+        assert_eq!(Look.lifting(InUse), Some(Full));
+        assert_eq!(Work.lifting(InUse), Some(Full));
     }
 
     #[test]
@@ -486,7 +515,7 @@ mod tests {
                         other.label()
                     );
                 }
-                assert!(told.contains("Don't try another way"), "{told}");
+                assert!(told.contains("try another way"), "{told}");
             }
         }
     }
@@ -501,7 +530,7 @@ mod tests {
                 let line = why_line(row.why, tier, "shop.example");
                 assert!(line.ends_with('.') && !line.contains('{'), "{line}");
                 match row.why {
-                    Why::Fenced | Why::OtherSite | Why::Never => {
+                    Why::Fenced | Why::OtherSite | Why::Never | Why::InUse => {
                         assert!(line.starts_with("shop.example "))
                     }
                     _ => assert!(
@@ -514,6 +543,27 @@ mod tests {
                 seen.insert(why_line(row.why, Tier::Look, "")),
                 "{:?}",
                 row.why
+            );
+        }
+    }
+
+    /// A step refused on a page in use is told in the one text, with nothing of the step, the
+    /// site or the task's level in it, and the user's line names the page by its host alone, or
+    /// as the page it is where it has none.
+    #[test]
+    fn a_page_in_use_is_told_in_its_own_words() {
+        for tier in [Tier::Look, Tier::Work] {
+            let told = told(Why::InUse, tier, "click “Leave”", "meet.example");
+            assert_eq!(told, IN_USE_TOLD);
+            assert!(!told.contains("Leave") && !told.contains("meet.example"));
+            assert_eq!(
+                why_line(Why::InUse, tier, "meet.example"),
+                "meet.example is using the camera or microphone, so this thread can only read \
+                 the page."
+            );
+            assert_eq!(
+                why_line(Why::InUse, tier, ""),
+                "This page is using the camera or microphone, so this thread can only read it."
             );
         }
     }
