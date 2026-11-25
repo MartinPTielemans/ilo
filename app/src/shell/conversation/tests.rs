@@ -3581,6 +3581,35 @@ fn a_link_whose_words_name_another_host_draws_its_real_address() {
     );
 }
 
+/// An address with a `user:pass@` part opens and is drawn without it: the link's address loses
+/// it, words that hold it are drawn as the address without it, and Copy keeps neither.
+#[test]
+fn a_links_sign_in_part_is_never_opened_or_drawn() {
+    let drawn = |source: &str| match super::markdown::blocks(source).remove(0) {
+        super::markdown::Block::Paragraph(text) => super::honest(text),
+        other => panic!("not a paragraph: {other:?}"),
+    };
+    let words = drawn("[the shop](https://me:hunter2@shop.example/a)");
+    assert_eq!(words.text, "the shop");
+    assert_eq!(words.links[0].1.as_ref(), "https://shop.example/a");
+    let pages = [(30, "https://shop.example/b".into())];
+    assert!(matches!(
+        super::linked_to(&pages, &words.links[0].1),
+        Some(super::Linked::Web(url)) if url.as_ref() == "https://shop.example/a"
+    ));
+    let address = drawn("[https://me:hunter2@shop.example/a](https://me:hunter2@shop.example/a)");
+    assert_eq!(address.text, "https://shop.example/a");
+    let (range, url) = &address.links[0];
+    assert_eq!(&address.text[range.clone()], url.as_ref());
+    let copied = super::plain("See [the shop](https://me:hunter2@shop.example/a).");
+    assert!(
+        !copied.contains("hunter2") && !copied.contains("me:"),
+        "{copied}"
+    );
+    let (host, rest) = super::link_tip("https://me:hunter2@shop.example/a").unwrap();
+    assert!(!format!("{host}{rest}").contains("hunter2"));
+}
+
 /// A web link's tooltip says its host, then the rest of its address as plain text, cut in the
 /// middle.
 #[test]

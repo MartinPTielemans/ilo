@@ -4160,12 +4160,30 @@ fn link_tip(url: &str) -> Option<(SharedString, SharedString)> {
     Some((host.into(), rest.into()))
 }
 
+/// `url` without its `user:pass@` part, if it is an address that has one.
+fn without_sign_in(url: &str) -> Option<String> {
+    let mut parsed = url::Url::parse(url).ok()?;
+    if parsed.username().is_empty() && parsed.password().is_none() {
+        return None;
+    }
+    parsed.set_username("").ok()?;
+    parsed.set_password(None).ok()?;
+    Some(parsed.into())
+}
+
 /// The most of an address after its host a link's tooltip says, the ellipsis one of them.
 const LINK_TIP_MOST: usize = 48;
 
 /// `inline` with each link whose words are themselves an address on another host than the link's
 /// drawn with the link's real address in the words' place, so words can't pass for where it goes.
+/// A link's address loses any `user:pass@` part, and words that hold one are drawn as the address
+/// without it, so a click opens no sign-in the answer chose and the line shows none.
 fn honest(mut inline: Inline) -> Inline {
+    for (_, url) in &mut inline.links {
+        if let Some(bare) = without_sign_in(url) {
+            *url = bare.into();
+        }
+    }
     let mut links = inline.links.clone();
     links.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
     for (range, url) in links {
@@ -4175,10 +4193,12 @@ fn honest(mut inline: Inline) -> Inline {
         let address =
             words.contains("://") || (words.contains('.') && !words.contains(char::is_whitespace));
         let host = crate::agents::fence::host_of;
-        let (Some(said), Some(real)) = (host(words), host(url.as_ref())) else {
-            continue;
+        let signed_in = without_sign_in(words.trim()).is_some();
+        let elsewhere = match (host(words), host(url.as_ref())) {
+            (Some(said), Some(real)) => address && said != real,
+            _ => false,
         };
-        if !address || said == real {
+        if !(signed_in || elsewhere) {
             continue;
         }
         let grown = url.len() as isize - range.len() as isize;
