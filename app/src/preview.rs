@@ -2786,7 +2786,7 @@ fn main() {
                         spaces[0].2 = Some(theme.main_color());
                         spaces[0].6 = theme.to_text().into();
                     }
-                    // PREVIEW_TASKS=1 shows three tasks' cards at the foot, one at work, one
+                    // PREVIEW_TASKS=1 shows three tasks' cards in Today, one at work, one
                     // stopped and one done; =open shows the first's conversation, as its card's
                     // click does.
                     let tasks = states::var("PREVIEW_TASKS").ok().or_else(|| {
