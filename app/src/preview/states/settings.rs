@@ -23,6 +23,8 @@ pub(crate) enum Pictures {
     Models,
     /// Agents' Site notes (#4122): the switch, on, and the sites' rows, the first `open`.
     SiteNotes { open: bool },
+    /// Threads' first row, your assistant's switch, `on` or off.
+    Threads { on: bool },
 }
 
 /// Where the ilo command is (#3667).
@@ -136,6 +138,7 @@ impl gpui::Render for PicturesPage {
             Pictures::CommandLine(_) => Section::OtherApps,
             Pictures::Assistants { .. } | Pictures::Models => Section::Models,
             Pictures::SiteNotes { .. } => Section::Access,
+            Pictures::Threads { .. } => Section::Threads,
         };
         let column = settings_column::column(
             &Default::default(),
@@ -255,6 +258,17 @@ impl gpui::Render for PicturesPage {
                     )],
                 )]);
                 groups
+            }
+            Pictures::Threads { on } => {
+                // As Settings draws it: off says what off does, on is bare.
+                let name = format!("Let your assistant use {}", browser::product::PRODUCT);
+                let line = (!on).then(|| "Off: no thread starts.".into());
+                let row = frame()
+                    .child(row_text(&look, name.clone(), line))
+                    .child(end([gpui::IntoElement::into_any_element(stop_switch(
+                        &look, "agents", name, on, 1., look.on, a11y,
+                    ))]));
+                vec![(None, vec![row])]
             }
             Pictures::General => {
                 use browser::product::PRODUCT;
