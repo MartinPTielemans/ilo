@@ -1941,6 +1941,78 @@ fn turning_agents_off_ends_their_sessions(cx: &mut TestAppContext) {
     assert!(agents.read_with(cx, |agents, _| agents.is_connected(Client::ClaudeCode)));
 }
 
+/// The two switches are two: flipping one, from either state of both, never moves the other.
+#[gpui::test]
+fn flipping_one_switch_never_touches_the_other(cx: &mut TestAppContext) {
+    let (agents, _, _) = connected(cx);
+    let both = |cx: &mut TestAppContext| {
+        agents.read_with(cx, |agents, _| (agents.threads(), agents.other_apps()))
+    };
+    for threads in [false, true] {
+        for others in [false, true] {
+            agents.update(cx, |agents, cx| {
+                agents.set_threads(threads, cx);
+                agents.set_other_apps(others, cx);
+            });
+            agents.update(cx, |agents, cx| agents.set_threads(!threads, cx));
+            assert_eq!(
+                both(cx),
+                (!threads, others),
+                "threads flipped from {threads}"
+            );
+            agents.update(cx, |agents, cx| agents.set_threads(threads, cx));
+            agents.update(cx, |agents, cx| agents.set_other_apps(!others, cx));
+            assert_eq!(
+                both(cx),
+                (threads, !others),
+                "other apps flipped from {others}"
+            );
+        }
+    }
+}
+
+/// Only the user's click sets either switch: no tool, of an outside app's or a thread's, is
+/// named for a switch or for Settings.
+#[test]
+fn no_tool_sets_either_switch() {
+    for agent in ["claude-code", "task-1"] {
+        for name in tools::names(agent) {
+            for word in ["switch", "setting", "other_apps", "threads", "listen"] {
+                assert!(!name.contains(word), "{agent} has {name}");
+            }
+        }
+    }
+}
+
+/// With other apps' agents off, an app that says hello or calls a tool is never at work, so no
+/// row of Apps that connect says one is.
+#[gpui::test]
+fn with_other_apps_off_no_app_is_at_work(cx: &mut TestAppContext) {
+    let (agents, _, _) = connected(cx);
+    agents.update(cx, |agents, cx| {
+        agents.set_threads(true, cx);
+        agents.set_other_apps(false, cx);
+    });
+    let hello = Event::Hello {
+        agent: "claude-code".into(),
+        connection: 1,
+        client: "claude-code".into(),
+    };
+    agents.update(cx, |agents, cx| agents.handle(hello, cx));
+    let answer = call(&agents, "claude-code", "list_tabs", json!({}), cx);
+    cx.run_until_parked();
+    assert!(
+        !answer.try_recv().is_ok_and(|answer| !answer.error),
+        "a call was done while off"
+    );
+    for client in Client::ALL {
+        let (live, connecting) = agents.read_with(cx, |agents, _| {
+            (agents.is_live(client), agents.is_connecting(client))
+        });
+        assert!(!live && !connecting, "{client:?} shows at work while off");
+    }
+}
+
 /// What's saved: the switches and each agent's token, in a file only the user can read, which a
 /// later launch loads, starting the server if either was on.
 #[gpui::test]
