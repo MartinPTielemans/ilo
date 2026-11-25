@@ -13,10 +13,12 @@ use crate::agents::files::Given;
 use crate::agents::runner::{self, Cli, Out};
 use crate::agents::task::ilo::{IloKind, IloLine, LeftOut, Reach};
 use crate::agents::task::rewall::{
-    Change, LEFT_OUT_LOGGED, PutUp, Rewalled, STOPPED_FILES_LOGGED, STOPPED_FOLDER_LOGGED,
+    Change, LEFT_OUT_LOGGED, LEFT_RUNNING_LOGGED, PutUp, Rewalled, STOPPED_FILES_LOGGED,
+    STOPPED_FOLDER_LOGGED,
 };
 use crate::agents::task::{Line, State, Who};
 use crate::agents::tier::{self, Tier};
+use crate::agents::wall::leftovers::{SweepFailed, Swept};
 use crate::agents::wall::{Granted, Wall, WallFor, WallRefused};
 
 /// What the task was asked, as `Run::start` asks it.
@@ -637,8 +639,8 @@ fn files_taken_back_start_it_again_without_them(cx: &mut TestAppContext) {
     assert_eq!(rows.last().map(String::as_str), Some(STOPPED_FILES_LOGGED));
 }
 
-/// What the wait on a raise's restart and the sweep at a run's end will hand a task, which
-/// nothing makes yet: each is a line of ilo's in the task's conversation, in the order it came,
+/// What the wait on a raise's restart, which nothing makes yet, and the sweep at a run's end hand
+/// a task: each is a line of ilo's in the task's conversation, in the order it came,
 /// and what's left running is said by what the task had, the folder by its name and the files
 /// the user attached as the task's.
 #[gpui::test]
@@ -857,4 +859,60 @@ fn a_folders_name_is_in_ilos_line_and_nowhere_else(cx: &mut TestAppContext) {
         }
     }
     assert_eq!(notified, 3);
+}
+
+/// What the sweep after a walled run's end found, which comes once that run has ended, so most
+/// often with the next under way: a sweep that couldn't end everything is a line naming what
+/// that run was given, not what the task has now, and an entry in the log. One that could, a
+/// second answer for the same run, and one for a run never walled say nothing.
+#[gpui::test]
+fn a_sweep_that_couldnt_end_everything_is_a_line_of_what_that_run_had(cx: &mut TestAppContext) {
+    let (run, _, agent) = started("swept", folder(), cx);
+    run.ran(1);
+    let first = run_of(&run, &agent, cx);
+    // Taken back, so the run under way has nothing, while the one that ended had the folder.
+    (run.agents).update(cx, |agents, cx| {
+        let files = std::mem::take(&mut agents.task_mut(&agent).unwrap().files);
+        agents.rewall(&agent, Change::TookBack(files), "Taken back.".into(), cx);
+    });
+    run.ran(2);
+    let now = run_of(&run, &agent, cx);
+    assert_ne!(now, first);
+    let before = logged(&run, &agent, cx);
+    // As a walled start keeps them, which the stand-in's start isn't.
+    (run.agents).update(cx, |agents, _| {
+        let task = agents.task_mut(&agent).unwrap();
+        task.ran_walled = vec![(first, folder()), (now, Given::default())];
+    });
+    let swept = |at: u32, answer: Result<Swept, SweepFailed>, cx: &mut TestAppContext| {
+        let event = runner::Event {
+            agent: agent.clone(),
+            run: at,
+            out: Out::Swept(answer),
+        };
+        (run.agents).update(cx, |agents, cx| agents.task_said(event, cx));
+    };
+    swept(first, Err(SweepFailed::Cap), cx);
+    swept(first, Err(SweepFailed::Cap), cx);
+    swept(now, Ok(Swept::default()), cx);
+    swept(now + 1, Err(SweepFailed::Unlisted), cx);
+    let left: Vec<IloKind> = (lines(&run, &agent, cx).into_iter())
+        .filter(|line| matches!(line, IloKind::LeftRunning { .. }))
+        .collect();
+    assert_eq!(
+        left,
+        [IloKind::LeftRunning {
+            reach: Reach::Folder(FOLDER.into())
+        }]
+    );
+    let mut after = before;
+    after.push(LEFT_RUNNING_LOGGED.into());
+    assert_eq!(logged(&run, &agent, cx), after);
+    // Each run's answer is taken once, and the task's run goes on.
+    let kept = (run.agents).read_with(cx, |agents, _| {
+        agents.task(&agent).unwrap().ran_walled.len()
+    });
+    assert_eq!(kept, 0);
+    assert_eq!(run_of(&run, &agent, cx), now);
+    assert_eq!(run.state(&agent, cx), State::Working);
 }

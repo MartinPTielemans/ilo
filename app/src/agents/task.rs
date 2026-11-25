@@ -458,6 +458,9 @@ pub struct Task {
     /// the task's messages and steps, so its line stands where it happened: what its lines about
     /// them are written from, by the conversation's words table.
     pub(in crate::agents) rewalled: Vec<rewall::Came>,
+    /// What each walled run of its was given, by its process, until the sweep after its end
+    /// answers: what anything it left running could still reach.
+    pub(super) ran_walled: Vec<(u32, Given)>,
 }
 
 /// The message an agent is writing as the turn's last, which shows under its trace as it comes,
@@ -1615,6 +1618,7 @@ impl Agents {
             files: self.files_at_start(),
             rising: None,
             rewalled: Vec::new(),
+            ran_walled: Vec::new(),
         };
         self.tasks.tasks.push(task);
         self.tokens_changed();
@@ -1746,6 +1750,9 @@ impl Agents {
         match Process::start_kept(&launch, &keep, agent, first, events) {
             Ok(process) => {
                 if let Some(task) = self.task_mut(agent) {
+                    if process.walled() {
+                        task.ran_walled.push((process.run(), task.files.clone()));
+                    }
                     task.process = Some(process);
                     // What starts it again if its wall doesn't go up (rewall.rs).
                     task.rising = walled.then(|| rewall::Rising::of(first));
@@ -1805,6 +1812,10 @@ impl Agents {
     /// What a task's CLI said.
     pub fn task_said(&mut self, event: runner::Event, cx: &mut Context<Self>) {
         let runner::Event { agent, run, out } = event;
+        // The sweep after a run's end answers for that run, whichever run is under way now.
+        if let Out::Swept(answer) = out {
+            return self.swept(&agent, run, answer, cx);
+        }
         // A line of a run ilo ended as it started the task again isn't the task's (helpers.rs).
         let under_way = (self.task(&agent))
             .and_then(|task| task.process.as_ref())
@@ -1884,6 +1895,7 @@ impl Agents {
             Out::Started { id, deep } => self.helper_started(&agent, id, deep, cx),
             Out::NotAllowed(limit) => self.helper_not_allowed(&agent, limit, cx),
             Out::Kinds { ours } => self.helper_kinds(&agent, ours, cx),
+            Out::Swept(_) => {}
             // The turn ilo interrupted at the helpers' limit ends, however its CLI says so. The
             // first since the user wrote, the task goes on in a new turn that starts with what
             // ilo tells it; the second, the turn ends as any does and the task waits for them.
@@ -2923,6 +2935,7 @@ impl Agents {
             files: Given::default(),
             rising: None,
             rewalled: Vec::new(),
+            ran_walled: Vec::new(),
         });
         cx.notify();
         Some(key)

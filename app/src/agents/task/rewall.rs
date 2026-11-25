@@ -28,6 +28,7 @@ use crate::agents::access::ACCESS_ACTION;
 use crate::agents::files::Given;
 use crate::agents::runner::{Cli, Failure};
 use crate::agents::tier::{self, Tier};
+use crate::agents::wall::leftovers::{SweepFailed, Swept};
 use crate::agents::wall::{self, Wall, WallFor, WallRefused};
 
 /// What answers for `wall::put_up` in a test.
@@ -150,6 +151,33 @@ impl Task {
     /// A later sweep ended what a run of its had left running.
     pub(in crate::agents) fn ended_left(&mut self) {
         self.rewalled(Rewalled::EndedLeft);
+    }
+}
+
+impl Agents {
+    /// What the sweep after the end of `run`, a walled run of `key`'s, found. A sweep that
+    /// couldn't end everything leaves a line naming what that run was given, and an entry in the
+    /// log; one that could says nothing, as the run's end already showed.
+    pub(in crate::agents) fn swept(
+        &mut self,
+        key: &str,
+        run: u32,
+        answer: Result<Swept, SweepFailed>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(task) = self.task_mut(key) else {
+            return;
+        };
+        let Some(at) = (task.ran_walled.iter()).position(|(walled, _)| *walled == run) else {
+            return;
+        };
+        let (_, had) = task.ran_walled.swap_remove(at);
+        if answer.is_ok() {
+            return;
+        }
+        task.left_running(had);
+        self.note_on(key, 0, ACCESS_ACTION, "", LEFT_RUNNING_LOGGED, "");
+        cx.notify();
     }
 }
 

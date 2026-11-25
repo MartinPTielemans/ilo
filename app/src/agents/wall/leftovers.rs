@@ -260,10 +260,11 @@ impl Wall {
     }
 
     /// After a walled program and its group have ended and it's reaped: ends what it left
-    /// running out of its group, and logs how many.
-    pub fn sweep_after(&self) {
-        let Some(place) = &self.place else { return };
-        match sweep(place.mark()) {
+    /// running out of its group, logs how many, and answers what it found, for the task. None for
+    /// a wall with no place, which nothing can be inside.
+    pub fn sweep_after(&self) -> Option<Result<Swept, SweepFailed>> {
+        let answer = sweep(self.place.as_ref()?.mark());
+        match answer {
             Ok(Swept { ended: 0, .. }) => {}
             Ok(Swept { ended, walks }) => {
                 log!("browser: a walled task left {ended} running, ended over {walks} walks");
@@ -272,6 +273,7 @@ impl Wall {
                 log!("browser: what a walled task left running wasn't ended: {failed:?}")
             }
         }
+        Some(answer)
     }
 }
 
