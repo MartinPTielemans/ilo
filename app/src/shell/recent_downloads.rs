@@ -276,8 +276,6 @@ impl Shell {
         }
         let rows = recent(&self.downloads);
         if rows.is_empty() {
-            // check.sh waits for this line.
-            log!("browser: recent downloads none");
             return;
         }
         let recent = &mut self.recent_downloads;
