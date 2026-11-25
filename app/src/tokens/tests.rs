@@ -145,6 +145,9 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     // The composer's switch round its parts, and a card's page inside the card (#4140).
     "shell.composer.switch-radius",
     "shell.composer.page-radius",
+    // The theme panel's Auto · Light · Dark: a segment concentric inside its frame, as drawn.
+    "theme-panel.segment-frame-radius",
+    "theme-panel.segment-radius",
 ];
 
 #[test]

@@ -710,7 +710,6 @@ impl ThemePicker {
             return;
         };
         if done {
-            // check.sh reads this line.
             log!(
                 "browser: theme picker glass {} {:.3}",
                 editing.space,
@@ -730,7 +729,6 @@ impl ThemePicker {
         };
         editing.theme = None;
         editing.chosen = 0;
-        // check.sh reads this line.
         log!("browser: theme picker cleared {}", editing.space);
         if let Some(also) = &editing.also {
             (also.cleared.clone())(cx);
@@ -1417,7 +1415,7 @@ impl Render for ThemePicker {
             .flex()
             .items_center()
             .text_size(px(TITLE_SIZE))
-            .font_weight(FontWeight(TITLE_WEIGHT))
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(text)
             .child("Theme");
 
@@ -1473,7 +1471,7 @@ impl Render for ThemePicker {
                     .when(chosen, |segment| {
                         segment
                             .bg(palette.shown(0.))
-                            .font_weight(FontWeight(SEGMENT_WEIGHT))
+                            .font_weight(FontWeight::MEDIUM)
                             .text_color(text)
                     })
                     .when(!chosen, |segment| segment.text_color(text_2))
@@ -1540,7 +1538,7 @@ impl Render for ThemePicker {
                         .rounded_full()
                         .bg(fill)
                         .when(!chosen, |disc| {
-                            disc.border_1().border_color(at_alpha(0xffffff, DISC_RIM))
+                            disc.border_1().border_color(at_alpha(WHITE, DISC_RIM))
                         }),
                 )
         });
@@ -1571,7 +1569,8 @@ impl Render for ThemePicker {
             .rounded(px(PAD_RADIUS))
             .bg(linear_gradient(
                 180.,
-                linear_color_stop(rgba(SHADE & 0xffffff00), SHADE_FROM),
+                // The shade fades in from none of it.
+                linear_color_stop(Hsla::from(rgba(SHADE)).opacity(0.), SHADE_FROM),
                 linear_color_stop(rgba(SHADE), 1.),
             ));
         let handles: Vec<(f32, f32)> = theme.map_or_else(Vec::new, |theme| {
@@ -1626,7 +1625,7 @@ impl Render for ThemePicker {
                     .rounded_full()
                     .bg(rgb(colors[index]))
                     .border(px(ring))
-                    .border_color(rgb(0xffffff))
+                    .border_color(rgb(WHITE))
                     .shadow(drop_shadow(HANDLE_SHADOW, 3., 10.))
             });
         let count = colors.len();
@@ -1655,7 +1654,7 @@ impl Render for ThemePicker {
                     .rounded_full()
                     .bg(rgb(colors[index]))
                     .when(chosen, |point| {
-                        point.border(px(CHIP_RING)).border_color(rgb(0xffffff))
+                        point.border(px(CHIP_RING)).border_color(rgb(WHITE))
                     })
             });
             let plus = (count < MAX_COLORS).then(|| {
@@ -1705,7 +1704,7 @@ impl Render for ThemePicker {
                 .rounded(px(CHIP_HEIGHT / 2.))
                 .bg(rgb(CHIP_FILL))
                 .border_1()
-                .border_color(at_alpha(0xffffff, CHIP_RIM))
+                .border_color(at_alpha(WHITE, CHIP_RIM))
                 .children(points)
                 .children(plus)
         });
@@ -1728,7 +1727,7 @@ impl Render for ThemePicker {
                 .rounded(px(CHIP_HEIGHT / 2.))
                 .bg(rgb(CHIP_FILL))
                 .border_1()
-                .border_color(at_alpha(0xffffff, CHIP_RIM))
+                .border_color(at_alpha(WHITE, CHIP_RIM))
                 .text_size(px(LABEL_SIZE))
                 .text_color(text_2)
                 .child(content)
@@ -1772,7 +1771,7 @@ impl Render for ThemePicker {
                     .size_full()
                     .rounded(px(PAD_RADIUS))
                     .border_1()
-                    .border_color(at_alpha(0xffffff, PAD_RIM)),
+                    .border_color(at_alpha(WHITE, PAD_RIM)),
             );
 
         // The bars: each a label row, its track a small picture of what it changes, and a thumb.
@@ -1866,7 +1865,10 @@ impl Render for ThemePicker {
                                     );
                                     window.paint_quad(fill(
                                         dash,
-                                        at_alpha(0xf3f0e8, GLASS_LINES * along),
+                                        at_alpha(
+                                            crate::tokens::palette::PAPER,
+                                            GLASS_LINES * along,
+                                        ),
                                     ));
                                     x += 8.;
                                 }
@@ -1888,8 +1890,14 @@ impl Render for ThemePicker {
                                         size(px(GRAIN_DOT), px(GRAIN_DOT)),
                                     );
                                     window.paint_quad(
-                                        fill(dot, at_alpha(0xf3f0e8, GRAIN_DOTS * along))
-                                            .corner_radii(gpui::Corners::all(px(GRAIN_DOT / 2.))),
+                                        fill(
+                                            dot,
+                                            at_alpha(
+                                                crate::tokens::palette::PAPER,
+                                                GRAIN_DOTS * along,
+                                            ),
+                                        )
+                                        .corner_radii(gpui::Corners::all(px(GRAIN_DOT / 2.))),
                                     );
                                     x += GRAIN_PITCH;
                                 }
@@ -1916,7 +1924,7 @@ impl Render for ThemePicker {
                         .size_full()
                         .rounded(px(TRACK / 2.))
                         .border_1()
-                        .border_color(at_alpha(0xffffff, TRACK_RIM)),
+                        .border_color(at_alpha(WHITE, TRACK_RIM)),
                 );
             let thumb = div()
                 .absolute()
@@ -1924,7 +1932,7 @@ impl Render for ThemePicker {
                 .top(px(layout::track_y(bar) - THUMB / 2.))
                 .size(px(THUMB))
                 .rounded_full()
-                .bg(rgb(0xffffff))
+                .bg(rgb(WHITE))
                 .shadow(drop_shadow(THUMB_SHADOW, 2., 6.));
             let entity = cx.weak_entity();
             let stepper = move |by: f32, cx: &mut App| {

@@ -3351,16 +3351,18 @@ gap = 12.0
 radius = 16.0
 beside = 8.0
 margin = 8.0
+# The rims, the handles' and chosen dots' rings and the thumbs are white, as drawn; the lines and
+# dots on the bars are the palette's paper.
+white = 0xffffff
 # Its fill is `floating`, the pickers' card, with the Space's colours over it as drawn: the first at
 # this much, fading to the second at this much by 60% of the way across, at 150°.
 tint-from = 0.15
 tint-to = 0.08
 tint-reach = 0.6
 tint-angle = 150.0
-# The head, "Theme" in it 2 in.
+# The head, "Theme" in it 2 in, semibold (the drawing's 590, on our scale).
 head = 26.0
 title-size = 13.0
-title-weight = 590.0
 # A label row, above the palettes and each bar and for the note: its text 11 high, 2 in. Reset's
 # target is its word and a little round it (ours).
 label = 14.0
@@ -3369,7 +3371,7 @@ label-inset = 2.0
 reset-width = 32.0
 # Auto · Light · Dark at the head's right, as drawn: a frame 24 high, 2 inside, rounded 7, in the
 # field plate; three segments 20 high, the chosen one on the tab shown's plate rounded
-# 5, its word weight 510. Each is 44 wide (ours: the drawing sizes each by its word, 9 either side,
+# 5, its word medium (the drawing's 510, on our scale). Each is 44 wide (ours: the drawing sizes each by its word, 9 either side,
 # and one width gives each the same target).
 segment-frame = 24.0
 segment-inset = 2.0
@@ -3377,7 +3379,6 @@ segment-frame-radius = 7.0
 segment-height = 20.0
 segment-width = 44.0
 segment-radius = 5.0
-segment-weight = 510.0
 # The palettes: the row of eight discs 6 under their label, each in a 30 slot, spaced between. A
 # disc is 24 with a faint rim; the chosen one 22, ringed 1.5 in the text colour on its slot.
 palettes-gap = 6.0
