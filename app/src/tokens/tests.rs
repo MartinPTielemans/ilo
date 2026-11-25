@@ -115,6 +115,8 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "shell.recent-downloads.preview-radius",
     // The page's own corner, as the redesign draws it: between a control's and a row's.
     "shell.card-radius",
+    // The two curves that take the open tab's line into its page, which round no corner.
+    "shell.join-radius",
     // The menu's glass, concentric round its rows as the rework's mocks draw it (#4090).
     "menu.radius",
     "menu.row-radius",
