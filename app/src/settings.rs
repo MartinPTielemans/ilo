@@ -25,15 +25,15 @@ use browser::log;
 use browser::notes;
 use browser::passwords::{self, Login};
 use browser::shell::{self, CancelName, Command, Holder, KeepName, MenuEntry, Refused, UserKeys};
-use browser::text_input::{self, TextInput};
+use browser::text_input::{self, Colors, TextInput};
 use browser::theme::Appearance;
 use browser::updates::{self, NightlyRow, Track, VersionRow};
 use browser::widevine::{self, Widevine, WidevineRow};
 use gpui::{
-    AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, Global, Hsla,
-    KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, PathPromptOptions, Rgba, SharedString,
-    Subscription, Window, WindowHandle, WindowOptions, actions, canvas, div, point, prelude::*, px,
-    rgb, rgba, size, svg,
+    AnyElement, App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, FontWeight,
+    Global, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, PathPromptOptions, Rgba,
+    SharedString, Subscription, Window, WindowHandle, WindowOptions, actions, canvas, div, point,
+    prelude::*, px, rgb, rgba, size, svg,
 };
 
 use crate::{bc, ns_view, platform, show_menu};
@@ -43,26 +43,25 @@ use browser::settings_card::{self, Card, Paging};
 use browser::settings_column::{self, Section};
 use browser::settings_pictures::{appearance_title, title as side_title};
 use browser::settings_rows::{
-    Act, Chip, Look as RowLook, SLIDE, another_agent_row, assistant_row, chevron_slot, chip,
-    command_export, command_text, detailed_row, end, frame, glyph_plate, group, group_lined,
-    named_button, row, sent_part, stop_button, stop_chip, stop_popup, stop_restore, stop_switch,
-    text,
+    Act, Chip, Look as RowLook, SLIDE, assistant_row, chevron_slot, chip, command_export,
+    command_text, detailed_row, end, frame, glyph_plate, group, group_lined, named_button, row,
+    sent_part, stop_button, stop_chip, stop_popup, stop_restore, stop_switch, text,
 };
 use browser::settings_search::{
     self, EndSearch, Entry, NextControl, PageBottom, PageDown, PageTop, PageUp, PreviousControl,
     Search,
 };
 use browser::settings_shortcuts::{Keys, SHORTCUTS};
-use browser::tokens::palette::{LIGHT_STAND_IN, NO_THEME_ACCENT, SELECTION, STAND_IN};
+use browser::tokens::palette::{LIGHT_STAND_IN, STAND_IN};
 use browser::tokens::radius;
+use browser::tokens::settings::form;
 use browser::tokens::settings::{
-    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS, DETAIL,
+    BUTTONS_TOP, CHIP_GAP, CONTROL_GAP, CONTROL_HEIGHT, CONTROL_PADDING, CONTROL_RADIUS,
     DETAIL_LINE, DETAIL_TOP, END_GAP, FIELD_PADDING, FIRST_GROUP, FOUND_FLASH, FOUND_FLASH_TIME,
-    GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_TOP, HEIGHT, LEDE_LINE,
-    LEDE_TOP, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SECTION_TEXT, SENT_TUCK, SHARE_TOP,
-    SHORT_PADDING, SHORT_ROW, SIDE_ROOM, TEXT_X, TITLE, WIDTH,
+    GLYPH_PLATE, GLYPH_PLATE_GAP, GROUP_GAP, HEADING_BOTTOM, HEADING_LINE, HEADING_TOP, HEADING_X,
+    HEIGHT, LEDE_LINE, LEDE_TOP, NAME, PAGE_WIDTH, POPUP_WIDTH, ROW_X, SEARCH_PLACEHOLDER,
+    SECTION_TEXT, SENT_TUCK, SHARE_TOP, SHORT_PADDING, SHORT_ROW, SIDE_ROOM, TEXT_X, TITLE, WIDTH,
 };
-use browser::tokens::shell::library::{TITLE_LINE, TITLE_SIZE};
 use browser::tokens::shell::{
     WINDOW_BUTTON_GLYPH, WINDOW_BUTTON_SIZE, WINDOW_BUTTON_Y, WINDOWS_BUTTON_GLYPH,
     WINDOWS_BUTTON_PLATE, WINDOWS_CLOSE_HOVERED,
@@ -184,7 +183,7 @@ enum Popup {
     Assistant(Cli),
     /// An assistant's Model, under its row in Agents › Your assistant.
     Model(Cli),
-    /// Agents › Notifications' When to notify.
+    /// Agents › Notifications' Notify.
     Notify,
     /// General's Page zoom.
     PageZoom,
@@ -715,9 +714,9 @@ pub fn show_shortcuts(cx: &mut App) {
     show_on(Section::Shortcuts, cx);
 }
 
-/// Shows the Settings window on Agents, with each agent's activity.
+/// Shows the Settings window on Other apps, with each agent's activity.
 pub fn show_agents(cx: &mut App) {
-    show_on(Section::Agents, cx);
+    show_on(Section::OtherApps, cx);
 }
 
 /// Shows the Settings window on About.
@@ -725,9 +724,9 @@ pub fn show_about(cx: &mut App) {
     show_on(Section::About, cx);
 }
 
-/// Shows the Settings window on Import & Export.
+/// Shows the Settings window on Sync & Import.
 pub fn show_import(cx: &mut App) {
-    show_on(Section::ImportExport, cx);
+    show_on(Section::SyncImport, cx);
 }
 
 fn show_on(section: Section, cx: &mut App) {
@@ -814,10 +813,10 @@ fn show_now(cx: &mut App) {
             // Each show logs where its controls are drawn again, so check.sh can take a place from
             // this show rather than from one before it, which a hidden window's scroll left (#3841).
             settings.drawn_logged.borrow_mut().clear();
-            if settings.section == Section::Agents {
+            if settings.section == Section::OtherApps {
                 look_for_clients(cx);
             }
-            if settings.section == Section::Sync {
+            if settings.section == Section::SyncImport {
                 settings
                     .account
                     .update(cx, |account, cx| account.read_activity(cx));
@@ -1080,22 +1079,32 @@ fn view(cx: &mut App) -> Entity<Settings> {
         updates::observe_view(cx, |_, cx| cx.notify()).detach();
         let agents = agents::global(cx);
         let agents = agents.map(|agents| cx.observe(&agents, |_, _, cx| cx.notify()));
+        // Each field takes the look Settings has as it draws, which follows the window.
+        let settings: gpui::WeakEntity<Settings> = cx.weak_entity();
         let search = cx.new(|cx| {
-            TextInput::new("Search", cx)
-                .placeholder_color(look.detail)
-                .caret_color(look.ink)
+            TextInput::new("Search", cx).follows(move |cx| {
+                let Some(settings) = settings.upgrade() else {
+                    return Colors::default();
+                };
+                let settings = settings.read(cx);
+                // The field's "Search" over the field's own plate, not over a group's.
+                Colors {
+                    placeholder: settings.base().opacity(SEARCH_PLACEHOLDER).into(),
+                    ..settings.look.field()
+                }
+            })
         });
         cx.observe(&search, |_, _, cx| cx.notify()).detach();
+        let colors = browser::settings_rows::field_colors(cx, |settings: &Settings| settings.look);
         let filter = cx.new(|cx| {
             TextInput::new("example.com##.banner", cx)
-                .placeholder_color(look.detail)
-                .caret_color(look.ink)
+                .follows(colors)
                 .spoken("New filter")
         });
+        let colors = browser::settings_rows::field_colors(cx, |settings: &Settings| settings.look);
         let fence_field = cx.new(|cx| {
             TextInput::new(agents::fence::PLACEHOLDER, cx)
-                .placeholder_color(look.detail)
-                .caret_color(look.ink)
+                .follows(colors)
                 .spoken(agents::fence::SPOKEN)
         });
         // ⇥ stops at the field, after the sections.
@@ -1384,13 +1393,13 @@ impl Settings {
         self.shown = true;
         // Each section opens at its top.
         self.card.reset();
-        if section == Section::ImportExport {
+        if section == Section::SyncImport {
             self.show_import(cx);
         }
-        if section == Section::Agents {
+        if section == Section::OtherApps {
             look_for_clients(cx);
         }
-        if section == Section::Sync {
+        if section == Section::SyncImport {
             self.account
                 .update(cx, |account, cx| account.read_activity(cx));
         }
@@ -1459,17 +1468,6 @@ impl Settings {
         if let Some(links) = &self.links {
             links.update(cx, |links, cx| links.set_look(look, cx));
         }
-        let selection = Hsla::from(rgb(NO_THEME_ACCENT)).opacity(SELECTION);
-        // The field's "Search" is the rows' grey over the field's own plate, not over a group's.
-        let placeholder = self.base().opacity(DETAIL);
-        self.search.update(cx, |search, cx| {
-            search.set_colors(placeholder.into(), look.ink.into(), selection);
-            cx.notify();
-        });
-        self.filter.update(cx, |filter, cx| {
-            filter.set_colors(look.detail.into(), look.ink.into(), selection);
-            cx.notify();
-        });
         // check.sh waits for this line.
         log!(
             "browser: settings look {}",
@@ -1504,13 +1502,15 @@ impl Settings {
             section => section.name(),
         };
         let base = self.base();
-        let title =
-            shell::display_text(title, TITLE_SIZE, TITLE_LINE, cx).text_color(base.opacity(TITLE));
+        // In the heading face, 22 on 28, semibold (spec-settings.md › The window).
+        let title = shell::display_text(title, form::TITLE_SIZE, form::TITLE_LINE, cx)
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(base.opacity(TITLE));
         let lede = (!lede.is_empty()).then(|| {
             div()
                 .mt(px(LEDE_TOP))
                 .line_height(px(LEDE_LINE))
-                .text_color(base.opacity(DETAIL))
+                .text_color(self.look.detail)
                 .child(lede)
         });
         let head = div()
@@ -1522,8 +1522,8 @@ impl Settings {
         let mut after_heading = None;
         let blocks = blocks.into_iter().map(|block| {
             let top = match (after_heading, &block) {
-                (None, _) => FIRST_GROUP,
                 (_, Block::Heading(_) | Block::Crumb(..)) => HEADING_TOP,
+                (None, _) => FIRST_GROUP,
                 (Some(true), _) => HEADING_BOTTOM,
                 (_, Block::Under(_)) => BUTTONS_TOP,
                 _ => GROUP_GAP,
@@ -1558,13 +1558,14 @@ impl Settings {
             .children(blocks)
     }
 
-    /// A heading over the group after it, on the text's column.
+    /// A heading over the group after it, 4 in from the groups' edge, as drawn.
     fn heading(&self, heading: SharedString) -> gpui::Div {
         div()
             .relative()
             .child(self.card.mark(heading.clone()))
-            .px(px(TEXT_X))
-            .text_size(px(text::SMALL))
+            .px(px(HEADING_X))
+            .line_height(px(HEADING_LINE))
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(self.look.heading)
             .child(heading)
     }
@@ -1577,7 +1578,7 @@ impl Settings {
             let div = self.flashed(&row.name, row.div);
             match row.nested {
                 true => (div.pl(px(x)), x),
-                false => (div, ROW_X),
+                false => (div, 0.),
             }
         });
         group_lined(&self.look, rows)
@@ -1778,8 +1779,8 @@ impl Settings {
     }
 
     /// Appearance (#4092): the settings whose choice is a picture, Appearance and Sidebar
-    /// position, with Page zoom and the Top bar beside them.
-    fn appearance_page(&self, accent: Rgba, cx: &mut Context<Self>) -> Page {
+    /// position, with Page zoom beside them.
+    fn appearance_page(&self, cx: &mut Context<Self>) -> Page {
         let look = &self.look;
         let appearance = self.appearance;
         let appearance_line: SharedString = match cfg!(target_os = "macos") {
@@ -1881,25 +1882,8 @@ impl Settings {
                 .into(),
             pair,
         );
-        let top_bar = self.toggle("top bar", "Top bar", off(TOP_BAR), set_top_bar, accent, cx);
-        let top_bar_keys = shell::keystroke_label("shift-cmd-d");
-        let top_bar = setting(
-            look,
-            "Top bar",
-            Some(
-                format!(
-                    "The URL field and the sidebar's buttons in a row across the window's top, \
-                     the page under it. {top_bar_keys} turns it on and off."
-                )
-                .into(),
-            ),
-            vec![top_bar],
-        );
-        groups.extend([
-            Block::Heading("Layout".into()),
-            Block::Rows(vec![position, top_bar]),
-        ]);
-        Page::new(Section::Appearance, "", groups)
+        groups.extend([Block::Heading("Layout".into()), Block::Rows(vec![position])]);
+        Page::new(Section::Window, "", groups)
     }
 
     /// Tabs & Sidebar: when Today tabs are archived and unloaded, whether Battery Saver comes on, who
@@ -2127,7 +2111,7 @@ impl Settings {
             )]));
         }
         Page::new(
-            Section::TabsAndSidebar,
+            Section::TabsAndSpaces,
             "When Today tabs leave, and how the sidebar comes and goes.",
             blocks,
         )
@@ -2426,7 +2410,7 @@ impl Settings {
             blocks.push(Block::Group(self.always_translated(&always.0, cx)));
         }
         Page::new(
-            Section::Features,
+            Section::General,
             concat!(
                 env!("APP_NAME"),
                 "'s own tools. Off takes every way into one away, and its switch brings it back."
@@ -2671,7 +2655,7 @@ impl Settings {
                 "'s own ad blocker, with the filter lists you turn on."
             ),
         };
-        Page::new(Section::AdBlocking, lede, blocks)
+        Page::new(Section::Privacy, lede, blocks)
     }
 
     /// Block with uBlock Origin: the way back to the extension and forward again, each taking
@@ -3226,7 +3210,7 @@ impl Settings {
             Block::Under(div().flex().child(new)),
         ];
         Page::new(
-            Section::Profiles,
+            Section::TabsAndSpaces,
             "A profile keeps its own logins, cookies, history and extensions. Several Spaces can \
              share one.",
             blocks,
@@ -3267,10 +3251,10 @@ impl Settings {
 
     /// Shows the profile's name in a field, all selected, to type a new one over.
     fn rename(&mut self, profile: u64, name: SharedString, cx: &mut Context<Self>) {
+        let colors = browser::settings_rows::field_colors(cx, |settings: &Self| settings.look);
         let name = cx.new(|cx| {
             TextInput::new("Profile name", cx)
-                .placeholder_color(self.look.detail)
-                .caret_color(self.look.ink)
+                .follows(colors)
                 .with_text(name)
         });
         self.renaming = Some(Renaming {
@@ -3716,7 +3700,9 @@ impl Settings {
 
     /// Agents: the switch that lets agents in, the tasks ⇥ asks in ⌘T, the apps that connect,
     /// and each agent's permissions and what it did in this run, newest first.
-    fn agents(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> Page {
+    /// Agents' pages, Threads, Models, Access and Other apps, in that order: what was one page of
+    /// agents, each part on the page the owner drew it on (spec-settings.md › S8 to S11).
+    fn agents(&self, agents: &Entity<Agents>, accent: Rgba, cx: &mut Context<Self>) -> [Page; 4] {
         let look = &self.look;
         let on = agents.read(cx).is_on();
         let switch = {
@@ -3734,7 +3720,7 @@ impl Settings {
         };
         let master = feature(
             look,
-            Section::Agents.glyph(),
+            Section::Threads.glyph(),
             "Let agents use the browser",
             Some(about),
             vec![switch],
@@ -3783,21 +3769,25 @@ impl Settings {
             false => Vec::new(),
         };
         let rows = [master].into_iter().chain(tasks).chain(keeps).chain(kept);
-        let mut blocks = vec![Block::Rows(rows.collect())];
+        let mut threads = vec![Block::Rows(rows.collect())];
+        let (mut models, mut access) = (Vec::new(), Vec::new());
         if tasks_on {
-            blocks.push(Block::Heading("Your assistant".into()));
-            blocks.push(Block::Group(self.assistants(agents, cx)));
-            blocks.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
-            blocks.extend(self.access());
+            models.push(Block::Heading("Your assistant".into()));
+            models.push(Block::Group(self.assistants(agents, cx)));
+            models.push(Block::Under(foot(look, NEVER_SEES_LOGIN)));
+            access.extend(self.access());
+            // What a thread may reach: files and folders too, with the folders it holds to revoke.
+            access.extend(self.files_not_here(agents, cx));
+            access.extend(self.folders_in_use(agents, cx));
         }
         // ⌘T's tasks and outside agents' sessions notify alike, so it's here while agents are on.
         // The Mac, Windows and Linux each post them (needs_you_host.rs).
         if on {
-            blocks.push(Block::Heading(browser::needs_you::NOTIFICATIONS.into()));
-            blocks.push(Block::Rows(vec![self.when_to_notify(agents, cx)]));
+            threads.push(Block::Heading(browser::needs_you::NOTIFICATIONS.into()));
+            threads.push(Block::Rows(vec![self.when_to_notify(agents, cx)]));
         }
+        let mut blocks = Vec::new();
         blocks.push(Block::Heading(APPS_THAT_CONNECT.into()));
-        // Another app's How to Connect comes here.
         let apps = SharedString::from(APPS_THAT_CONNECT);
         blocks.push(Block::Group(self.flashed(&apps, group(look, clients))));
         // Shown as Apps that connect are, whether agents are on or off: the command says they're
@@ -3806,8 +3796,8 @@ impl Settings {
             blocks.push(Block::Heading("Command line".into()));
             blocks.push(Block::Rows(vec![self.command_line(agents, cx)]));
         }
-        blocks.extend(self.fenced_sites(agents, cx));
-        blocks.extend(self.site_notes(agents, accent, cx));
+        access.extend(self.fenced_sites(agents, cx));
+        access.extend(self.site_notes(agents, accent, cx));
         // AppleScript is the Mac's alone.
         if cfg!(target_os = "macos") {
             blocks.extend(self.scripts(agents, accent, cx));
@@ -3880,11 +3870,10 @@ impl Settings {
             if rows.is_empty() {
                 continue;
             }
-            listed_any = true;
-            blocks.push(Block::Heading(
+            access.push(Block::Heading(
                 format!("What {} may do from {bar}", cli.name()).into(),
             ));
-            blocks.push(Block::Group(group(look, rows)));
+            access.push(Block::Group(group(look, rows)));
         }
         if !listed_any {
             blocks.push(Block::Heading("Activity".into()));
@@ -3898,7 +3887,12 @@ impl Settings {
                 )],
             )));
         }
-        Page::new(Section::Agents, agents::tier::NEVER_GETS, blocks)
+        [
+            Page::new(Section::Threads, "", threads),
+            Page::new(Section::Models, "", models),
+            Page::new(Section::Access, agents::tier::NEVER_GETS, access),
+            Page::new(Section::OtherApps, "", blocks),
+        ]
     }
 
     /// Access: what each tier lets a task do, in words only, since only a task's own menu sets
@@ -3919,6 +3913,59 @@ impl Settings {
         vec![
             Block::Heading(heading.clone()),
             Block::Group(self.flashed(&heading, group(look, rows))),
+        ]
+    }
+
+    /// Files and folders (#4101) on a system that can't wall a task in with them: why they aren't
+    /// offered (X9), under its own heading, where a user who looks for them finds it. A block of
+    /// its own, which leans on no other row, so it can move as Settings is regrouped.
+    fn files_not_here(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
+        use agents::files::words;
+        if agents.read(cx).files_available() {
+            return Vec::new();
+        }
+        let why = line_row(&self.look, words::NOT_AVAILABLE, None, Vec::new());
+        vec![
+            Block::Heading(words::ON_THIS_COMPUTER.into()),
+            Block::Group(group(&self.look, [why])),
+        ]
+    }
+
+    /// Each folder a live task holds (#4101), with Revoke, which acts at once, under its own
+    /// heading; not drawn while no task holds one, nor where files aren't available. A block of
+    /// its own, which leans on no other row, so it can move as Settings is regrouped.
+    fn folders_in_use(&self, agents: &Entity<Agents>, cx: &mut Context<Self>) -> Vec<Block> {
+        use agents::files::words;
+        let look = &self.look;
+        let model = agents.read(cx);
+        if !model.files_available() {
+            return Vec::new();
+        }
+        let rows: Vec<gpui::Div> = (model.folders_in_use().into_iter().enumerate())
+            .map(|(index, held)| {
+                let (agents, agent) = (agents.clone(), held.agent.clone());
+                let revoke = self
+                    .button(("agent-folder-revoke", index as u64), words::REVOKE)
+                    .relative()
+                    // By its place, never the folder's name, as this line is logged.
+                    .child(self.drawn(format!("revoke folder {index}")))
+                    .on_click(move |_, _, cx| {
+                        agents.update(cx, |agents, cx| agents.revoke_folder(&agent, cx))
+                    });
+                line_row(
+                    look,
+                    held.folder,
+                    Some(held.task),
+                    vec![revoke.into_any_element()],
+                )
+            })
+            .collect();
+        if rows.is_empty() {
+            return Vec::new();
+        }
+        vec![
+            Block::Heading(words::FOLDERS_IN_USE.into()),
+            Block::Group(group(look, rows)),
         ]
     }
 
@@ -4907,7 +4954,7 @@ impl Settings {
             true => "",
             false => "Bring your things from another browser, or take your Spaces with you.",
         };
-        Page::new(Section::ImportExport, lede, blocks)
+        Page::new(Section::SyncImport, lede, blocks)
     }
 
     /// About: the app's name as the page's heading, its version and its engine's, where its
@@ -5369,9 +5416,6 @@ const RECENT_SITES_OFF: &str = "recent-off-sites";
 /// never synced.
 const SIDEBAR_RIGHT: &str = "sidebar-right";
 
-/// Top bar, there while it's on (#3160): this device's, as Sidebar position is, and never synced.
-const TOP_BAR: &str = "top-bar";
-
 fn off(name: &str) -> bool {
     std::path::Path::new(&format!("{}/{name}", crate::profile_dir())).exists()
 }
@@ -5388,7 +5432,6 @@ fn set_off(name: &str, is_off: bool) {
 pub fn read_switches(cx: &mut App) {
     cx.set_global(shell::SidebarEdge(!off(NO_EDGE_REVEAL)));
     cx.set_global(shell::SidebarRight(off(SIDEBAR_RIGHT)));
-    cx.set_global(shell::TopBar(off(TOP_BAR)));
     browser::dock_dot::set_plain(off(DOCK_ICON_PLAIN), cx);
     browser::recent::set_switches(!off(NO_RECENT), recent_sites_off(), cx);
 }
@@ -5435,14 +5478,6 @@ pub fn sidebar_right_kept() -> bool {
 pub fn set_sidebar_right(right: bool, cx: &mut App) {
     set_off(SIDEBAR_RIGHT, right);
     cx.set_global(shell::SidebarRight(right));
-    cx.refresh_windows();
-}
-
-/// Turns Top bar on or off: kept on this device, and every window follows at once, as each reads
-/// it as it draws.
-pub fn set_top_bar(on: bool, cx: &mut App) {
-    set_off(TOP_BAR, on);
-    cx.set_global(shell::TopBar(on));
     cx.refresh_windows();
 }
 
@@ -5618,15 +5653,12 @@ fn method(target: &str) -> &str {
     target.split(' ').next().unwrap_or_default()
 }
 
-/// Apps that connect's heading, which Another app's How to Connect goes to.
+/// Apps that connect's heading.
 const APPS_THAT_CONNECT: &str = "Apps that connect";
 
 /// What Your assistant's rows never do, under them. That ilo has no assistant of its own is first
 /// run's to say.
-const NEVER_SEES_LOGIN: &str = concat!(
-    env!("APP_NAME"),
-    " never sees or keeps your assistant's login."
-);
+const NEVER_SEES_LOGIN: &str = concat!(env!("APP_NAME"), " never sees your assistant's login.");
 
 /// A line under a group that says more of it, in a row's line's grey, as Fenced sites' has.
 fn foot(look: &RowLook, line: impl Into<SharedString>) -> gpui::Div {
@@ -5668,7 +5700,7 @@ fn feature_row(
 /// and its buttons: a kept task's own, and the one for them all. An assistant that keeps none
 /// has no task in the list, which says it.
 const KEEP_TASKS: &str = "Keep finished tasks so you can reply";
-const KEPT_WHERE: &str = "Titles only. The conversation stays with your assistant.";
+const KEPT_WHERE: &str = "Titles only. Conversations stay with your assistant.";
 const REMOVE: &str = "Remove";
 const REMOVE_ALL: &str = "Remove All…";
 
@@ -6035,6 +6067,7 @@ impl Render for Settings {
             found.as_deref(),
             pick,
             foot,
+            settings_column::Version::of(cx),
             self.a11y,
         );
         // Once scrolled, the section's name and the heading gone under it hold at the card's top,
@@ -6113,6 +6146,24 @@ impl Render for Settings {
     }
 }
 
+/// `first`, with each of `rest`'s blocks after its own, on `first`'s page: today's pages that the
+/// owner's drawing puts on another's, until each part has its drawn place. A page that starts with
+/// rows of its own goes under its old `name`, so where it starts reads.
+fn joined<const N: usize>(first: Page, rest: [(&'static str, Page); N]) -> Page {
+    let mut page = first;
+    for (name, other) in rest {
+        let headed = matches!(
+            other.blocks.first(),
+            Some(Block::Heading(_) | Block::Crumb(..))
+        );
+        if !headed {
+            page.blocks.push(Block::Heading(name.into()));
+        }
+        page.blocks.extend(other.blocks);
+    }
+    page
+}
+
 impl Settings {
     /// `section`'s page, as it shows on the card.
     fn section_page(
@@ -6123,35 +6174,53 @@ impl Settings {
         cx: &mut Context<Self>,
     ) -> Page {
         match section {
-            Section::General => self.general(&profiles(), accent, cx),
-            Section::Appearance => self.appearance_page(accent, cx),
-            Section::TabsAndSidebar => self.tabs_and_sidebar(&profiles(), accent, cx),
-            Section::Features => self.features(&profiles(), accent, cx),
-            Section::Agents => match agents::global(cx) {
-                Some(agents) => self.agents(&agents, accent, cx),
-                None => Page::new(Section::Agents, "", Vec::new()),
-            },
-            Section::Links => self.links(accent, cx),
-            Section::Shortcuts => self.shortcuts(accent, cx),
-            Section::Profiles => {
+            Section::General => {
                 let profiles = profiles();
-                self.focus_field(&profiles, window, cx);
-                self.profiles(&profiles, cx)
+                let general = self.general(&profiles, accent, cx);
+                joined(
+                    general,
+                    [("Features", self.features(&profiles, accent, cx))],
+                )
             }
-            Section::Passwords => self.passwords(&profiles(), accent, cx),
-            Section::Privacy => self.privacy(&profiles(), accent, cx),
-            Section::AdBlocking => {
+            Section::Window => self.appearance_page(cx),
+            Section::Privacy => {
+                let privacy = self.privacy(&profiles(), accent, cx);
                 let off_sites = off_sites();
                 self.log_off_sites(&off_sites);
-                self.ad_blocking(&off_sites, accent, cx)
+                let ad_blocking = self.ad_blocking(&off_sites, accent, cx);
+                joined(privacy, [("Ad Blocking", ad_blocking)])
             }
-            Section::Sync => Page::new(
-                Section::Sync,
-                "Sync Spaces, bookmarks, passwords and open tabs across your devices, encrypted \
-                 with a key only they hold.",
-                vec![Block::View(self.account.clone().into_any_element())],
-            ),
-            Section::ImportExport => self.import_export(cx),
+            Section::Passwords => self.passwords(&profiles(), accent, cx),
+            Section::SyncImport => {
+                let sync = Page::new(
+                    Section::SyncImport,
+                    "Sync Spaces, bookmarks, passwords and open tabs across your devices, \
+                     encrypted with a key only they hold.",
+                    vec![Block::View(self.account.clone().into_any_element())],
+                );
+                joined(sync, [("Import", self.import_export(cx))])
+            }
+            Section::Shortcuts => self.shortcuts(accent, cx),
+            Section::Threads | Section::Models | Section::Access | Section::OtherApps => {
+                match agents::global(cx) {
+                    Some(agents) => {
+                        let pages = self.agents(&agents, accent, cx);
+                        let at = pages.iter().position(|page| page.section == section);
+                        pages
+                            .into_iter()
+                            .nth(at.unwrap_or(0))
+                            .unwrap_or_else(|| Page::new(section, "", Vec::new()))
+                    }
+                    None => Page::new(section, "", Vec::new()),
+                }
+            }
+            Section::TabsAndSpaces => {
+                let profiles = profiles();
+                self.focus_field(&profiles, window, cx);
+                let tabs = self.tabs_and_sidebar(&profiles, accent, cx);
+                joined(tabs, [("Profiles", self.profiles(&profiles, cx))])
+            }
+            Section::Links => self.links(accent, cx),
             Section::About => self.about(accent, cx),
         }
     }
@@ -6189,12 +6258,12 @@ impl Settings {
         let profiles = profiles();
         let mut pages = vec![
             self.general(&profiles, accent, cx),
-            self.appearance_page(accent, cx),
+            self.appearance_page(cx),
             self.tabs_and_sidebar(&profiles, accent, cx),
             self.features(&profiles, accent, cx),
         ];
         if let Some(agents) = agents::global(cx) {
-            pages.push(self.agents(&agents, accent, cx));
+            pages.extend(self.agents(&agents, accent, cx));
         }
         pages.push(self.shortcuts(accent, cx));
         pages.push(self.privacy(&profiles, accent, cx));
@@ -6205,11 +6274,17 @@ impl Settings {
         pages.sort_by_key(|page| Section::all().position(|each| each == page.section));
         let (mut entries, mut divs, mut under) = (Vec::new(), Vec::new(), Vec::new());
         for page in pages {
+            // The heading over the groups that follow it, which the search reads too.
+            let mut group = None;
             for block in page.blocks {
                 let rows = match block {
                     Block::Rows(rows) => rows,
                     Block::Under(buttons) => {
                         under.push((page.section, buttons));
+                        continue;
+                    }
+                    Block::Heading(heading) | Block::Crumb(heading, _) => {
+                        group = Some(heading);
                         continue;
                     }
                     _ => continue,
@@ -6221,6 +6296,7 @@ impl Settings {
                 for row in rows {
                     entries.push(Entry {
                         section: page.section,
+                        group: group.clone(),
                         under: row.nested.then(|| head.clone()).flatten(),
                         name: row.name,
                         line: row.line,
@@ -6333,7 +6409,7 @@ impl Settings {
         if window.focused(cx).is_some() {
             return;
         }
-        let import = (self.section == Section::ImportExport)
+        let import = (self.section == Section::SyncImport)
             .then(|| {
                 self.import
                     .as_ref()

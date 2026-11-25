@@ -12,8 +12,8 @@ use gpui::{
 use gpui::canvas;
 
 use super::{
-    Command, FOOTER_HEIGHT, PLATE_INSET, Shell, TILE_HEIGHT, URL_FIELD_HEIGHT, URL_FIELD_TOP,
-    drag::in_sidebar,
+    Command, FOOTER_HEIGHT, LIST_TOP, PLATE_INSET, Shell, TILE_HEIGHT, URL_FIELD_HEIGHT,
+    URL_FIELD_TOP, drag::in_sidebar,
 };
 
 /// What rests at a point of the shown Space's URL field and favorites.
@@ -93,7 +93,7 @@ impl Shell {
                     .bottom_0()
                     .left(px(x))
                     .w(px(width))
-                    .children((!self.bar_on()).then(|| self.still_url_field(tab)))
+                    .child(self.still_url_field(tab))
                     .child(rows)
                     .children(self.still_tiles(&favorites, tab, cx));
                 Some(div().absolute().size_full().overflow_hidden().child(page))
@@ -109,15 +109,13 @@ impl Shell {
             return None;
         }
         let x = at.x - x;
-        // With the bar on, the field isn't in the sidebar.
-        let field =
-            !self.bar_on() && (URL_FIELD_TOP..URL_FIELD_TOP + URL_FIELD_HEIGHT).contains(&at.y);
+        let field = (URL_FIELD_TOP..URL_FIELD_TOP + URL_FIELD_HEIGHT).contains(&at.y);
         if field && (PLATE_INSET..width - PLATE_INSET).contains(&x) {
             return Some(self.field_part_at(x - PLATE_INSET));
         }
         // Tiles that scroll with the list go under the URL field.
         let top = self.tiles_top();
-        let mut tiles = tiles.iter().filter(|_| at.y >= self.list_start());
+        let mut tiles = tiles.iter().filter(|_| at.y >= LIST_TOP);
         tiles.find_map(|(&tab, &[left, tile_top, tile_width])| {
             let over = (left..left + tile_width).contains(&x)
                 && (top + tile_top..top + tile_top + TILE_HEIGHT).contains(&at.y);

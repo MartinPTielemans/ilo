@@ -1,9 +1,12 @@
 //! How an act meets its task's access (tier.rs): the one decision point, `check`, runs what the
 //! tier allows and refuses the rest at once, telling the agent and putting ilo's line in the task's
-//! conversation. Nothing waits for the user, and only the user changes a tier or a task's Sites.
+//! conversation. Nothing waits for the user, and only the user raises a tier or changes a task's
+//! Sites: ilo lowers an outside client's task only to what the user left another of its at
+//! (`starting_tier`, `left_at`).
 
 use gpui::Context;
 
+use super::task::rewall::Change;
 use super::tier::{self, Sites, Stop, Tier, Why};
 use super::{
     Act, Agents, CHANGES_ASK, Call, DOWNLOADS, FENCED, OTHER_SITE, Refused, UNSAVED, act_of, fence,
@@ -22,6 +25,24 @@ impl Agents {
     pub(super) fn tier_of(&self, agent: &str, connection: u64, call: u64) -> Tier {
         self.acting_task(agent, connection, call)
             .map_or(Tier::default(), |task| task.tier)
+    }
+
+    /// The task `act` is held to, by its access and its Sites: the one under way that holds its
+    /// page, or the page that started its download, whichever of its client's connections calls,
+    /// else the act's own, as an open's is. A second connection would otherwise pass the access
+    /// the user set on a task, and the refusal's line would change another task's.
+    pub(super) fn judged_task(&self, act: &Act) -> Option<&super::task::Task> {
+        (self.page_task(&act.agent, act.page()))
+            .or_else(|| self.acting_task(&act.agent, act.connection, act.call))
+    }
+
+    /// The access the log's entry names for what `agent` did on `connection` to the page in
+    /// `tab`, or with 0 to none: the one its act was judged at (`judged_task`), so that of the
+    /// task under way that holds the page, else the connection's own. An entry never names a
+    /// level the act wasn't held to.
+    pub(super) fn entry_tier(&self, agent: &str, connection: u64, tab: u64) -> Tier {
+        let own = || self.tier_of(agent, connection, 0);
+        (self.page_task(agent, tab)).map_or_else(own, |task| task.tier)
     }
 
     /// Why `act` on `site` is one a tier may refuse, from what would have asked (`why`), or None
@@ -53,7 +74,7 @@ impl Agents {
     /// Whether the task's Sites leave out where `act` goes or what it's on: an open's address, or
     /// its tab's page. A download comes from wherever the site keeps its files, so it isn't asked.
     pub(super) fn off_sites(&self, act: &Act, cx: &gpui::App) -> bool {
-        let Some(task) = self.acting_task(&act.agent, act.connection, act.call) else {
+        let Some(task) = self.judged_task(act) else {
             return false;
         };
         if task.sites == Sites::Any || act.download != 0 {
@@ -98,20 +119,28 @@ impl Agents {
             true => tier::plain(&site),
             false => tier::plain(&act.asks),
         };
-        let key = (self.acting_task(&act.agent, act.connection, act.call)).map(|t| t.agent.clone());
+        // The refused call came as a step of its own task before it was judged, so the line names
+        // it as it is under way.
+        let doing = (self.acting_task(&act.agent, act.connection, act.call))
+            .and_then(|task| task.trace.iter().rfind(|step| step.call == act.call))
+            .map(|step| lowered(&tools::step_title(&step.did, tools::Tense::Now)))
+            .unwrap_or_default();
+        let key = self.judged_task(&act).map(|task| task.agent.clone());
         if let Some(task) = key.as_deref().and_then(|key| self.task_mut(key)) {
-            let after = task.messages.len();
+            let (after, traced) = (task.messages.len(), task.trace.len());
             match (task.stops.iter_mut()).find(|stop| stop.same(act.tab, &at, why, tier)) {
                 Some(stop) => stop.count += 1,
                 None => task.stops.push(Stop {
                     tab: act.tab,
                     at: at.clone(),
                     site: tier::plain(&site),
+                    doing,
                     why,
                     tier,
                     count: 1,
                     appeared: std::time::Instant::now(),
                     after,
+                    traced,
                     settled: false,
                 }),
             }
@@ -143,7 +172,9 @@ impl Agents {
         cx: &mut Context<Self>,
     ) -> Option<Call> {
         let url = self.browser.tab(tab, cx).url.to_string();
-        let Some(task) = self.acting_task(&call.agent, call.connection, call.id) else {
+        let Some(task) = (self.page_task(&call.agent, tab))
+            .or_else(|| self.acting_task(&call.agent, call.connection, call.id))
+        else {
             return Some(call);
         };
         if task.sites.allows(self.browser.url_site(&url).as_deref()) {
@@ -165,15 +196,35 @@ impl Agents {
 
     /// The user changes the task `key`'s access to `tier`: from its line or its chip, never from
     /// an agent. Its refusals are settled, the log keeps the change, and a task ilo runs is told.
+    /// One with files goes up only if its wall of the new level does, and starts again inside
+    /// the wall of whichever level it's set to (rewall.rs). On a task that has ended nothing
+    /// starts: the level is the one its next reply starts at, walled then (`pick_up`).
     pub fn set_tier(&mut self, key: &str, tier: Tier, cx: &mut Context<Self>) {
-        let Some(task) = self.task_mut(key).filter(|task| task.ended.is_none()) else {
+        let Some(task) = self.task(key) else {
             return;
         };
-        let from = task.tier;
+        let (from, ended) = (task.tier, task.ended.is_some());
         if from == tier {
             return;
         }
+        let raised = match ended {
+            true => None,
+            false => match self.wall_to_raise(key, from, tier) {
+                Ok(raised) => raised,
+                Err(()) => return cx.notify(),
+            },
+        };
+        let Some(task) = self.task_mut(key) else {
+            return;
+        };
         task.tier = tier;
+        if ended {
+            task.picked_from.get_or_insert(from);
+        }
+        self.picked_past(key);
+        let Some(task) = self.task_mut(key) else {
+            return;
+        };
         for stop in &mut task.stops {
             stop.settled = true;
         }
@@ -182,6 +233,8 @@ impl Agents {
             None => (task.agent.clone(), 0),
         };
         let runs = task.cli.is_some();
+        let made = super::lines::Happened::TierChanged { from, to: tier };
+        self.place_in(key, made);
         // check.sh reads this line.
         log!(
             "browser: task {key} access {} to {}",
@@ -190,29 +243,32 @@ impl Agents {
         );
         let changed = tier::changed_logged(from, tier);
         self.note_on(&agent, connection, ACCESS_ACTION, "", &changed, "");
-        if runs {
-            self.tell_task(
-                key,
-                tier::changed_turn(from, tier),
-                tier as usize > from as usize,
-                cx,
-            );
+        if runs && !ended {
+            let change = Change::Level { from, raised };
+            self.rewall(key, change, tier::changed_turn(from, tier), cx);
         }
         cx.notify();
     }
 
-    /// The user sets the sites the task `key` may use.
+    /// The user sets the sites the task `key` may use: on one that has ended, those its next reply
+    /// works on. The log keeps the change as it keeps a level's, by the menu's names and a count.
     pub fn set_sites(&mut self, key: &str, sites: Sites, cx: &mut Context<Self>) {
-        let Some(task) = self.task_mut(key).filter(|task| task.ended.is_none()) else {
+        let Some(task) = self.task_mut(key) else {
             return;
         };
         if task.sites == sites {
             return;
         }
+        let changed = tier::sites_logged(&task.sites, &sites);
         task.sites = sites;
         for stop in (task.stops.iter_mut()).filter(|stop| stop.why == Why::OtherSite) {
             stop.settled = true;
         }
+        let (agent, connection) = match &task.session {
+            Some(session) => (session.agent.clone(), session.connection),
+            None => (task.agent.clone(), 0),
+        };
+        self.note_on(&agent, connection, ACCESS_ACTION, "", &changed, "");
         cx.notify();
     }
 
@@ -248,4 +304,12 @@ impl Agents {
             .flat_map(|task| task.stops.iter().filter(|stop| !stop.settled).cloned())
             .collect()
     }
+}
+
+/// `text` with its first letter lowered, as a step's phrase reads after "from".
+fn lowered(text: &str) -> String {
+    let mut chars = text.chars();
+    (chars.next())
+        .map(|first| first.to_lowercase().chain(chars).collect())
+        .unwrap_or_default()
 }

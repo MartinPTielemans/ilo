@@ -641,15 +641,6 @@ impl Browser for Engine {
         unsafe { bc::bc_tab_answer_permission(tab, answer as i32) };
     }
 
-    fn answer_agent(&self, question: u64, answer: browser::agents::Answer, _: &mut App) {
-        // After the shell's update, as the answer tells every window's shell the next question.
-        agents_core::update(move |agents, cx| agents.answer(question, answer, cx));
-    }
-
-    fn choose_agent_file(&self, question: u64, window: u64, _: &mut App) {
-        agents_core::update(move |agents, cx| agents.choose_file(question, window, cx));
-    }
-
     fn take_over(&self, agent: SharedString, tab: u64, _: &mut App) {
         agents_core::update(move |agents, cx| agents.take_over(&agent, tab, cx));
     }
@@ -1476,11 +1467,6 @@ impl Browser for Engine {
         unsafe { platform::host_set_sidebar_right(self.ui_view, right) };
     }
 
-    #[cfg(target_os = "windows")]
-    fn set_window_buttons_right(&self, right: bool, _: &mut App) {
-        unsafe { platform::host_set_window_buttons_right(self.ui_view, right) };
-    }
-
     fn little_drawn(&self, _: &mut App) {
         unsafe { platform::host_grow_little_window(self.ui_view) };
     }
@@ -1932,20 +1918,31 @@ impl Browser for Engine {
         command_bar::in_place(Rc::new(command_bar_host::Bar), window, cx)
     }
 
+    fn files_available(&self, _: &App) -> bool {
+        browser::agents::wall::available().is_ok()
+    }
+
     fn start_task(
         &self,
         agent: &str,
         asked: &str,
         home: u64,
-        tier: browser::agents::tier::Tier,
+        start: browser::agents::task::Start,
         _: &mut App,
     ) {
-        let Some(cli) = browser::agents::runner::Cli::from_id(agent) else {
-            return;
-        };
-        let asked = asked.to_string();
+        let (agent, asked, window) = (agent.to_string(), asked.to_string(), self.window);
         agents_core::update(move |agents, cx| {
-            agents.start_task(cli, &asked, None, home, tier, cx);
+            let cli = browser::agents::runner::Cli::from_id(&agent);
+            let started = cli.and_then(|cli| agents.start_task(cli, &asked, None, home, start, cx));
+            // The composer's ↩ opens the view of the task it started alone, or of none.
+            let shell = WINDOWS.with_borrow(|windows| {
+                (windows.iter().find(|w| w.id == window)).and_then(|w| w.shell.upgrade())
+            });
+            if let Some(shell) = shell {
+                shell.update(cx, |shell, _| {
+                    shell.composed_started(started.map(Into::into))
+                });
+            }
         });
     }
 
@@ -2121,8 +2118,13 @@ impl Browser for Engine {
     }
 
     fn off_limits(&self, cx: &mut App) {
-        let section = browser::settings_column::Section::Agents;
+        let section = browser::settings_column::Section::Access;
         settings::show_row(section, browser::agents::fence::HEADING.into(), cx);
+    }
+
+    fn agent_access(&self, cx: &mut App) {
+        let section = browser::settings_column::Section::Access;
+        settings::show_row(section, browser::agents::tier::ACCESS.into(), cx);
     }
 
     fn agents_settings(&self, cx: &mut App) {
@@ -2131,10 +2133,6 @@ impl Browser for Engine {
 
     fn keep_sidebar_right(&self, right: bool, cx: &mut App) {
         settings::set_sidebar_right(right, cx);
-    }
-
-    fn keep_top_bar(&self, on: bool, cx: &mut App) {
-        settings::set_top_bar(on, cx);
     }
 
     fn shortcuts(&self, cx: &mut App) {
@@ -2320,27 +2318,22 @@ impl Browser for Engine {
         settings::set_search_engine(unsafe { bc::bc_space_profile(space) }, keyword, name);
     }
 
-    fn welcome_window(&self, cx: &mut App) {
-        let id = self.window;
-        cx.defer(move |cx| {
-            let from = WINDOWS.with_borrow(|windows| {
-                let this = windows.iter().find(|w| w.id == id && w.regular());
-                this.or_else(|| windows.iter().find(|w| w.regular()))
-                    .cloned()
-            });
-            let Some(window) = from.and_then(|from| open_window(Some(from), None, cx)) else {
-                return;
-            };
-            let shell = WINDOWS.with_borrow(|windows| {
-                windows
-                    .iter()
-                    .find(|w| w.id == window)
-                    .and_then(|w| w.shell.upgrade())
-            });
-            if let Some(shell) = shell {
-                shell.update(cx, |shell, cx| shell.start_onboarding(None, cx));
+    fn show_first_run(&self, window: gpui::AnyWindowHandle, cx: &mut App) {
+        let view = window.update(cx, |_, window, _| crate::ns_view(window));
+        if let Ok(view) = view {
+            unsafe {
+                platform::host_add_first_run(view);
+                platform::host_show_first_run();
             }
-        });
+        }
+    }
+
+    fn end_first_run(&self, window: gpui::AnyWindowHandle, cx: &mut App) {
+        unsafe { platform::host_close_first_run() };
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .ok();
+        show_window_held_for_first_run();
     }
 
     fn new_private_window(&self, cx: &mut App) {

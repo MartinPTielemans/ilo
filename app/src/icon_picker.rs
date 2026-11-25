@@ -24,7 +24,7 @@ use crate::{
     palette::{INK, Palette, STATE_HOVERED, STATE_PRESSED},
     shell::{KEY_CONTEXT, cubic_bezier},
     space_icon::{self, GLYPHS, SpaceIcon, has_icon},
-    text_input::{self, TextInput},
+    text_input::{self, Colors, TextInput},
 };
 
 mod emoji;
@@ -218,10 +218,12 @@ pub fn open_at(
     };
     let window = cx.open_window(options, |_, cx| {
         let search = cx.new(|cx| {
-            TextInput::new("Search", cx)
-                .placeholder_color(rgba(HINT))
-                .caret_color(rgb(CARET))
-                .selection_color(rgba(HOVERED))
+            // The card is dark in every look, so the field's colours are the card's own.
+            TextInput::new("Search", cx).follows(|_| Colors {
+                placeholder: rgba(HINT).into(),
+                caret: rgb(CARET).into(),
+                selection: rgba(HOVERED).into(),
+            })
         });
         cx.new(|cx| IconPicker {
             host,

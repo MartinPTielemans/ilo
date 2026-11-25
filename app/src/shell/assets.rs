@@ -6,7 +6,7 @@ use gpui::{AssetSource, SharedString};
 
 /// The shell's glyphs, built in: Lucide's outlines (NOTICE) at one stroke weight, and the nav
 /// buttons, the Library's cards, the loading ring, the window buttons' glyphs, the close button's
-/// bars, the baseball and the planet, which are ours.
+/// bars, the baseball and the planet, which are ours. The product's mark comes from `product`.
 pub struct Assets;
 
 // The close button's bars, as Arc's: 11.4 pt between the middles of their round ends, 2 wide,
@@ -113,6 +113,10 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/bookmark.svg",
         include_bytes!("../../assets/icons/bookmark.svg"),
+    ),
+    (
+        "icons/broom.svg",
+        include_bytes!("../../assets/icons/broom.svg"),
     ),
     (
         "icons/brush-cleaning.svg",
@@ -451,14 +455,6 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/mouse-pointer-2.svg"),
     ),
     (
-        "icons/nav-back.svg",
-        include_bytes!("../../assets/icons/nav-back.svg"),
-    ),
-    (
-        "icons/nav-forward.svg",
-        include_bytes!("../../assets/icons/nav-forward.svg"),
-    ),
-    (
         "icons/nav-menu.svg",
         include_bytes!("../../assets/icons/nav-menu.svg"),
     ),
@@ -467,20 +463,12 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/nav-plus.svg"),
     ),
     (
-        "icons/nav-reload.svg",
-        include_bytes!("../../assets/icons/nav-reload.svg"),
-    ),
-    (
         "icons/nav-sidebar.svg",
         include_bytes!("../../assets/icons/nav-sidebar.svg"),
     ),
     (
         "icons/nav-sidebar-right.svg",
         include_bytes!("../../assets/icons/nav-sidebar-right.svg"),
-    ),
-    (
-        "icons/nav-stop.svg",
-        include_bytes!("../../assets/icons/nav-stop.svg"),
     ),
     (
         "icons/network.svg",
@@ -505,10 +493,6 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/panel-right.svg",
         include_bytes!("../../assets/icons/panel-right.svg"),
-    ),
-    (
-        "icons/panel-top.svg",
-        include_bytes!("../../assets/icons/panel-top.svg"),
     ),
     (
         "icons/paw-print.svg",
@@ -601,6 +585,66 @@ const ICONS: &[(&str, &[u8])] = &[
     (
         "icons/settings.svg",
         include_bytes!("../../assets/icons/settings.svg"),
+    ),
+    (
+        "icons/settings-access.svg",
+        include_bytes!("../../assets/icons/settings-access.svg"),
+    ),
+    (
+        "icons/settings-apps.svg",
+        include_bytes!("../../assets/icons/settings-apps.svg"),
+    ),
+    (
+        "icons/settings-general.svg",
+        include_bytes!("../../assets/icons/settings-general.svg"),
+    ),
+    (
+        "icons/settings-links.svg",
+        include_bytes!("../../assets/icons/settings-links.svg"),
+    ),
+    (
+        "icons/settings-models.svg",
+        include_bytes!("../../assets/icons/settings-models.svg"),
+    ),
+    (
+        "icons/settings-out.svg",
+        include_bytes!("../../assets/icons/settings-out.svg"),
+    ),
+    (
+        "icons/settings-overview.svg",
+        include_bytes!("../../assets/icons/settings-overview.svg"),
+    ),
+    (
+        "icons/settings-passwords.svg",
+        include_bytes!("../../assets/icons/settings-passwords.svg"),
+    ),
+    (
+        "icons/settings-privacy.svg",
+        include_bytes!("../../assets/icons/settings-privacy.svg"),
+    ),
+    (
+        "icons/settings-search.svg",
+        include_bytes!("../../assets/icons/settings-search.svg"),
+    ),
+    (
+        "icons/settings-shortcuts.svg",
+        include_bytes!("../../assets/icons/settings-shortcuts.svg"),
+    ),
+    (
+        "icons/settings-sync.svg",
+        include_bytes!("../../assets/icons/settings-sync.svg"),
+    ),
+    (
+        "icons/settings-tabs.svg",
+        include_bytes!("../../assets/icons/settings-tabs.svg"),
+    ),
+    (
+        "icons/settings-threads.svg",
+        include_bytes!("../../assets/icons/settings-threads.svg"),
+    ),
+    (
+        "icons/settings-window.svg",
+        include_bytes!("../../assets/icons/settings-window.svg"),
     ),
     (
         "icons/shapes.svg",
@@ -807,6 +851,10 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/window-windows-restore.svg"),
     ),
     (
+        "icons/working.svg",
+        include_bytes!("../../assets/icons/working.svg"),
+    ),
+    (
         "icons/wrench.svg",
         include_bytes!("../../assets/icons/wrench.svg"),
     ),
@@ -835,6 +883,7 @@ impl AssetSource for Assets {
         }
         Ok(ICONS
             .iter()
+            .chain(&crate::product::MARKS)
             .find(|(name, _)| *name == path)
             .map(|&(_, icon)| Cow::Borrowed(icon)))
     }
@@ -842,6 +891,7 @@ impl AssetSource for Assets {
     fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
         Ok(ICONS
             .iter()
+            .chain(&crate::product::MARKS)
             .filter(|(name, _)| name.starts_with(path))
             .map(|&(name, _)| name.into())
             .collect())
@@ -879,7 +929,7 @@ mod tests {
     fn keeps_its_own_stroke(name: &str) -> bool {
         name.starts_with("nav-")
             || name.starts_with("window-")
-            || ["loading.svg", "spaces.svg"].contains(&name)
+            || ["loading.svg", "spaces.svg", "working.svg"].contains(&name)
     }
 
     /// One family: every other glyph is an outline on Lucide's grid at the one stroke, with round

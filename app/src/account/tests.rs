@@ -295,6 +295,29 @@ fn change_takes_the_servers_address(cx: &mut TestAppContext) {
     );
 }
 
+/// The address's field stays as Settings goes from dark to light and back, and draws in the look
+/// the page has each time, not in the one it was made in.
+#[gpui::test]
+fn the_servers_field_follows_the_look(cx: &mut TestAppContext) {
+    let mut tab = shown(state(Status::SignedOut), cx);
+    tab.click("change-server");
+    let mut colours = Vec::new();
+    for dark in [false, true, false] {
+        let look = Look::settings(dark);
+        tab.account
+            .update(tab.cx, |account, cx| account.set_look(look, cx));
+        tab.cx.run_until_parked();
+        let drawn = tab.account.read_with(tab.cx, |account, cx| {
+            let field = account.server.as_ref().expect("the field stays");
+            field.input.read(cx).colors()
+        });
+        assert_eq!(drawn, look.field(), "dark {dark}");
+        colours.push(drawn);
+    }
+    assert_ne!(colours[0], colours[1], "light and dark drew the same field");
+    assert_eq!(colours[0], colours[2]);
+}
+
 /// ↩ and esc while an input method composes in the server's address are the composition's: ↩
 /// keeps no address, esc leaves the field open, and both leave the marked text for the method.
 /// Once the method has committed it, the next ↩ keeps the address.

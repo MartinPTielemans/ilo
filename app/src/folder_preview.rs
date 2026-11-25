@@ -22,9 +22,12 @@ use crate::dismissal::{By, Close, Why};
 use crate::elevation::Level;
 use crate::hover_card::{Anchor, Icon};
 use crate::hover_intent::{Intent, Next};
+use crate::motion::ms;
+// Its times, as tokens (#4108).
 use crate::palette::{Float, Palette, STATE_SELECTED};
 use crate::shell::KEY_CONTEXT;
-use crate::text_input::TextInput;
+use crate::text_input::{Colors, TextInput};
+use crate::tokens::folder_preview::motion;
 use crate::tokens::folder_preview::{
     AGE_LINE, AGE_SIZE, DIVIDER, DIVIDER_ALPHA, HINT, ICON, ICON_X, PADDING, RIM, ROW, ROW_FILL,
     ROW_RADIUS, SEARCH, SEARCH_GLYPH, TALLEST, TITLE, TITLE_LINE, TITLE_SIZE, TITLE_X,
@@ -38,11 +41,11 @@ actions!(folder_preview, [Dismiss, Choose, Up, Down]);
 /// comes onto the folder's row, and goes within 40 ms of it leaving both, fading out over 80 ms.
 /// It comes in over 90 ms, fading in as it grows from 0.85 of its size about the middle of its left
 /// edge. The host grows and fades its window, as the host draws its blur and shadow.
-pub const DWELL: Duration = Duration::from_millis(450);
-pub const LEAVE: Duration = Duration::from_millis(40);
+pub const DWELL: Duration = ms(motion::DWELL);
+pub const LEAVE: Duration = ms(motion::LEAVE);
 pub const FROM: f32 = 0.85;
-pub const IN: Duration = Duration::from_millis(90);
-pub const OUT: Duration = Duration::from_millis(80);
+pub const IN: Duration = ms(motion::IN);
+pub const OUT: Duration = ms(motion::OUT);
 /// It's 4 right of the sidebar, and kept 18 inside the window (Arc 1.171).
 const BESIDE: f32 = 4.;
 const INSIDE: f32 = 18.;
@@ -221,7 +224,7 @@ pub fn open(host: Rc<dyn Host>, cx: &mut App) -> Option<WindowHandle<FolderPrevi
         ..Default::default()
     };
     let window = cx.open_window(options, |_, cx| {
-        let search = cx.new(|cx| TextInput::new("Search", cx));
+        let search = cx.new(|cx| TextInput::new("Search", cx).follows(search_colors));
         cx.new(|cx| FolderPreview {
             host,
             focus: cx.focus_handle(),
@@ -392,11 +395,7 @@ impl FolderPreview {
         let (left, top) = place(rest.anchor, height);
         let found = (0..rest.items.len()).collect();
         let placeholder: SharedString = format!("Search {}", rest.name).into();
-        let palette = crate::palette::current(cx);
-        let (hint, ink) = (palette.on_overlay(HINT), palette.on_overlay(TITLE));
-        let selection = palette.plate(STATE_SELECTED);
         self.search.update(cx, |field, cx| {
-            field.set_colors(hint, ink, selection);
             field.set_placeholder(placeholder, cx);
             field.reset(SharedString::default(), window, cx);
         });
@@ -596,6 +595,16 @@ impl FolderPreview {
 }
 
 /// A tab's icon, at the row's icon size: its emoji, else its favicon, else the globe.
+/// The search field's colours as it draws, in the palette the rows draw in then.
+fn search_colors(cx: &App) -> Colors {
+    let palette = crate::palette::current(cx);
+    Colors {
+        placeholder: palette.on_overlay(HINT),
+        caret: palette.on_overlay(TITLE),
+        selection: palette.plate(STATE_SELECTED),
+    }
+}
+
 fn icon(palette: &Palette, icon: &Icon) -> AnyElement {
     match icon {
         Icon::Favicon(Some(favicon)) => img(favicon.clone()).size(px(ICON)).into_any_element(),

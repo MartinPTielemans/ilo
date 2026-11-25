@@ -39,8 +39,8 @@ names_said() {
 }
 step=0
 rm -f "$saved" "$launch_frame"
-# An MCP client's token, saved with Settings › Agents on, which the app reads as it starts. The file
-# goes once the server is up, so a run that stops early leaves the next checks' agents off.
+# An MCP client's token, saved with Settings › Threads on, which the app reads as it starts. The
+# file goes once the server is up, so a run that stops early leaves the next checks' agents off.
 serve
 agents_file="$profile_dir/Agents"
 token=$(python3 -I -c 'import secrets; print(secrets.token_hex(32))')
@@ -345,12 +345,6 @@ $(grep "^browser: task plate task-${session#session-} at " "$log" | tail -1 | cu
 PLATE
   send click $((px + pw / 2)) $((py + ph / 2))
   expect "^browser: task $session shown\$" "a click on the agent's card didn't show its conversation"
-  await '^browser: task pages at ' || fail "the conversation's header drew no Pages"
-  read -r gx gy gw gh <<CHIP
-$(grep '^browser: task pages at ' "$log" | tail -1 | cut -d' ' -f5-)
-CHIP
-  send click $((gx + gw / 2)) $((gy + gh / 2))
-  expect "^browser: task $session shows pages\$" "a click on Pages didn't show the grid"
   await "^browser: task picture $agent_tab at " || fail "the conversation didn't picture the agent's tab $agent_tab"
   read -r wx wy ww wh <<PICTURE
 $(grep "^browser: task picture $agent_tab at " "$log" | tail -1 | cut -d' ' -f6-)

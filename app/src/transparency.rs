@@ -148,9 +148,17 @@ pub const ONBOARDING_LINE: &str = concat!(
 struct Kept {
     level: Transparency,
     dir: String,
+    /// Whether this run has carried the level into every Space (space_transparency).
+    carried: bool,
 }
 
 impl gpui::Global for Kept {}
+
+/// The level Settings' row or the onboarding's step last set, which every Space then takes (P6).
+/// Only `set` sets it, never the launch's read, so the Spaces are given a level only on a pick.
+struct LastPick(Transparency);
+
+impl gpui::Global for LastPick {}
 
 /// The file the level is kept in, in the app's own folder: none while it's Standard.
 const FILE: &str = "transparency";
@@ -167,7 +175,12 @@ pub fn stored_in(dir: &str) -> Transparency {
 fn keep_in(dir: String, cx: &mut App) {
     let level = stored_in(&dir);
     crate::palette::set_transparency(level);
-    cx.set_global(Kept { level, dir });
+    let carried = false;
+    cx.set_global(Kept {
+        level,
+        dir,
+        carried,
+    });
 }
 
 /// Keeps the level in `dir` for a test elsewhere in the app, never the app's own folder.
@@ -199,7 +212,33 @@ pub fn set(level: Transparency, cx: &mut App) {
         Transparency::Standard => std::fs::remove_file(path),
         _ => std::fs::write(path, level.key()),
     };
+    cx.set_global(LastPick(level));
     cx.refresh_windows();
+}
+
+/// The level last picked, as `set` was given it; Standard before any pick.
+pub fn picked(cx: &App) -> Transparency {
+    cx.try_global::<LastPick>()
+        .map_or_else(Transparency::default, |picked| picked.0)
+}
+
+/// What a window watches for a pick, which every Space then takes.
+pub fn observe_picked<T: 'static>(
+    cx: &mut gpui::Context<T>,
+    picked: impl FnMut(&mut T, &mut gpui::Context<T>) + 'static,
+) -> gpui::Subscription {
+    cx.observe_global::<LastPick>(picked)
+}
+
+/// The level, once a run, for carrying it into every Space (space_transparency). None after that,
+/// and before the launch has read the level, as in a test that keeps none.
+pub(crate) fn to_carry(cx: &mut App) -> Option<Transparency> {
+    if !cx.has_global::<Kept>() || cx.global::<Kept>().carried {
+        return None;
+    }
+    let kept = cx.global_mut::<Kept>();
+    kept.carried = true;
+    Some(kept.level)
 }
 
 /// Settings' row, where the host has `glass` behind the window: the setting's name, what it does,

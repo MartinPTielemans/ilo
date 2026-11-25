@@ -23,6 +23,7 @@ use gpui::{
 
 use crate::{
     elevation::Reach,
+    list_keys::TypeAhead,
     shell::{MenuEntry, Shell, keystroke_label},
     text_input::FieldMenu,
 };
@@ -35,10 +36,6 @@ pub const LIGHT_FILL: u32 = (crate::tokens::palette::OVERLAY_LIGHT << 8) | 0xff;
 
 /// A release this close to the press that opened the menu leaves it open, as a click.
 const DRAG_SLOP: f32 = 4.;
-/// The safe triangle ends after the pointer rests this long in it.
-const SAFE_TIMEOUT: Duration = Duration::from_millis(300);
-/// Type-to-select starts over after this long without a key.
-const TYPE_RESET: Duration = Duration::from_millis(1000);
 
 /// The colours of one look, 0xRRGGBBAA, which capture's menu shares.
 pub struct Palette {
@@ -653,8 +650,7 @@ pub(crate) struct Tracking {
     pointer: Option<Point<Pixels>>,
     /// Since when the pointer has rested in the safe triangle, keeping the submenu open.
     resting: Option<Instant>,
-    typed: String,
-    typed_at: Option<Instant>,
+    typed: TypeAhead,
 }
 
 /// Whether `at` is inside the triangle `a`, `b`, `c`.
@@ -671,28 +667,6 @@ pub(crate) fn in_triangle(
     let negative = d1 < 0. || d2 < 0. || d3 < 0.;
     let positive = d1 > 0. || d2 > 0. || d3 > 0.;
     !(negative && positive)
-}
-
-/// `text` lowercased without its accents, for type-to-select.
-fn folded(text: &str) -> String {
-    const ACCENTED: [(&str, char); 8] = [
-        ("àáâãäåā", 'a'),
-        ("çćč", 'c'),
-        ("èéêëēė", 'e'),
-        ("ìíîïī", 'i'),
-        ("ñń", 'n'),
-        ("òóôõöøō", 'o'),
-        ("ùúûüū", 'u'),
-        ("ýÿ", 'y'),
-    ];
-    (text.chars().flat_map(char::to_lowercase))
-        .map(|c| {
-            ACCENTED
-                .iter()
-                .find(|(set, _)| set.contains(c))
-                .map_or(c, |&(_, base)| base)
-        })
-        .collect()
 }
 
 impl Tracking {
@@ -712,8 +686,7 @@ impl Tracking {
             pressed: false,
             pointer: Some(at),
             resting: None,
-            typed: String::new(),
-            typed_at: None,
+            typed: TypeAhead::default(),
         }
     }
 
@@ -833,7 +806,7 @@ impl Tracking {
     }
 
     /// The pointer moved to `at` at `now`. Returns whether it's resting in the safe triangle, for
-    /// `rested` to be called once SAFE_TIMEOUT has passed.
+    /// `rested` to be called once SUBMENU_REST has passed.
     pub(crate) fn moved(&mut self, at: Point<Pixels>, now: Instant) -> bool {
         if let Some(press) = self.press.as_mut() {
             press.get_or_insert(at);
@@ -853,13 +826,14 @@ impl Tracking {
         false
     }
 
-    /// The pointer has rested since its last move: in the safe triangle for SAFE_TIMEOUT, what's
+    /// The pointer has rested since its last move: in the safe triangle for SUBMENU_REST, what's
     /// under it takes the highlight. Returns how much longer it has to rest when that's not yet:
     /// a timer can fire a little early, as Windows' do by up to a clock tick (#2158).
     pub(crate) fn rested(&mut self, now: Instant) -> Option<Duration> {
         let rested = now.duration_since(self.resting?);
-        if rested < SAFE_TIMEOUT {
-            return Some(SAFE_TIMEOUT - rested);
+        let rest = Duration::from_secs_f32(SUBMENU_REST);
+        if rested < rest {
+            return Some(rest - rested);
         }
         self.resting = None;
         if let Some(at) = self.pointer {
@@ -1005,39 +979,18 @@ impl Tracking {
         Outcome::Stay
     }
 
-    /// Type-to-select: the first item of the deepest level whose title starts with what's been
-    /// typed in the last second, ignoring case and accents, or with the same letter again, the
-    /// next one that starts with it.
+    /// Type-to-select, as a list's type-ahead finds a row (list_keys.rs): in the deepest level,
+    /// the first item whose title starts with what's been typed in the last second, ignoring case
+    /// and accents, or with the same letter again, the next one that starts with it.
     fn type_select(&mut self, c: char, now: Instant) {
-        if self
-            .typed_at
-            .is_none_or(|at| now.duration_since(at) > TYPE_RESET)
-        {
-            self.typed.clear();
-        }
-        self.typed.push(c);
-        self.typed_at = Some(now);
         let (k, items) = self.deepest();
-        let typed = folded(&self.typed);
-        let mut letters = typed.chars();
-        let first = letters.next();
-        let repeated = typed.chars().count() > 1 && letters.all(|each| Some(each) == first);
-        let starts =
-            |item: &usize, with: &str| folded(&self.entries[*item].title).starts_with(with);
-        let found = if repeated {
-            let with = first.map(String::from).unwrap_or_default();
-            let after = self.open[k]
-                .highlight
-                .and_then(|item| items.iter().position(|&each| each == item));
-            let start = after.map_or(0, |at| at + 1);
-            (items[start..].iter().chain(&items[..start]))
-                .find(|item| starts(item, &with))
-                .copied()
-        } else {
-            items.iter().find(|item| starts(item, &typed)).copied()
-        };
-        if let Some(item) = found {
-            self.open[k].highlight = Some(item);
+        let at =
+            (self.open[k].highlight).and_then(|item| items.iter().position(|&each| each == item));
+        let titles: Vec<&str> = (items.iter())
+            .map(|&item| self.entries[item].title.as_ref())
+            .collect();
+        if let Some(found) = self.typed.find(c, now, at, &titles) {
+            self.open[k].highlight = Some(items[found]);
         }
     }
 
@@ -1538,7 +1491,7 @@ impl ContextMenu {
     /// highlight.
     fn wait_for_rest(&mut self, cx: &mut Context<Self>) {
         self._rest = Some(cx.spawn(async move |menu, cx| {
-            let mut wait = SAFE_TIMEOUT;
+            let mut wait = Duration::from_secs_f32(SUBMENU_REST);
             loop {
                 cx.background_executor().timer(wait).await;
                 let more = menu.update(cx, |menu, cx| {

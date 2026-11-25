@@ -512,7 +512,7 @@ expect "^browser: tab $p closed\$" "Esc didn't close the preview ⇧⌘T reopene
 still_home "after reopening the preview"
 
 # A favorite's links open it too: the pinned tab's copy, which Duplicate Tab in its menu puts at the
-# top of Today, under the pinned row, the divider and "+ New Tab", dragged onto the Space's name.
+# top of Today, under the pinned row, the gap over Today and "+ New Tab", dragged onto the Space's name.
 away
 post rightclick $(home_row)
 expect "^browser: menu shown $(cased '.*Duplicate Tab')" "a right-click on the pinned row didn't show its menu"
@@ -522,7 +522,7 @@ expect "^browser: today [1-9][0-9]* $kept\$" "Duplicate Tab didn't put a copy at
 b=$(today | cut -d' ' -f1)
 expect "^browser: selected $b\( in .*\)\{0,1\}\$" "Duplicate Tab didn't show the copy"
 expect "^browser: title $b ready\$" "the copy of the test page didn't draw"
-send press 100 $((90 + 44 + 41 + 15 + 41 + 20))
+send press 100 $((86 + 42 + 34 + 6 + 34 + 17))
 send dragto 100 200
 send dragto 114 112
 expect '^browser: drag shape tile$' "the copy's row dragged onto the Space's name didn't turn into a tile"
@@ -559,17 +559,17 @@ send click $(home_row)
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "a click on the pinned row didn't show its tab"
 link_to site
 
-# With the switch in Settings › Features off, the link goes in the pinned tab.
+# With the switch in Settings › General off, the link goes in the pinned tab.
 send click $page_point
 expect "^browser: title $a pressed [0-9]*\$" "a click on the test page's lower part didn't reach it"
 send key , cmd
 expect '^browser: settings shown General$' "⌘, didn't show Settings on its General tab"
 # Settings takes no click until it has drawn, nor a tab's rows until the tab has (#1101, #1133).
 expect '^browser: settings drew General$' "Settings didn't draw General"
-send clickkey $(settings_at "toolbar Features")
-expect '^browser: settings tab Features$' "a click on Features didn't show its section"
-settings_drew Features
-send clickkey $(settings_at "switch link previews")
+# Peek is under General's own rows: in_sight scrolls it up, from this show's frame.
+in_sight "switch link previews" '^browser: settings drew General$' ||
+  fail "Settings didn't draw the link previews' switch"
+send clickkey $at
 expect '^browser: link previews off$' "a click on the link previews switch didn't turn them off"
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -616,9 +616,11 @@ send key 1 ctrl
 expect "^browser: space $first\( in .*\)\{0,1\}\$" "⌃1 didn't show the first Space again"
 expect "^browser: selected $a\( in .*\)\{0,1\}\$" "the first Space didn't show the pinned tab again"
 send key , cmd
-expect '^browser: settings shown Features$' "⌘, didn't show Settings on its Features section"
-expect '^browser: settings drew Features$' "Settings didn't draw Features"
-send clickkey $(settings_at "switch link previews")
+expect '^browser: settings shown General$' "⌘, didn't show Settings on its General section"
+expect '^browser: settings drew General$' "Settings didn't draw General"
+in_sight "switch link previews" '^browser: settings drew General$' ||
+  fail "Settings didn't draw the link previews' switch"
+send clickkey $at
 expect '^browser: link previews on$' "a click on the link previews switch didn't turn them on"
 send clickkey $(settings_at "toolbar Links")
 expect '^browser: settings tab Links$' "a click on Links didn't show its tab"

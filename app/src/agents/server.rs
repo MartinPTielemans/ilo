@@ -46,6 +46,9 @@ pub(super) const END: &str = r#"{"end":true}"#;
 /// connects and disconnects agents.
 pub type Tokens = Arc<Mutex<HashMap<String, String>>>;
 
+/// Whether other apps' agents may connect, which the UI thread sets as the user does (#4260).
+pub type Others = Arc<AtomicBool>;
+
 /// The protocol versions the server speaks, newest first.
 pub(super) const VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 /// A message may be no longer, which none an agent sends comes near.
@@ -72,6 +75,7 @@ struct Shared {
     path: PathBuf,
     stopped: AtomicBool,
     tokens: Tokens,
+    others: Others,
     token_wait: Duration,
     /// The connections open, by a number of their own, from 1: the UI takes 0 for no connection's.
     connections: Mutex<HashMap<u64, Connection>>,
@@ -95,9 +99,10 @@ impl Server {
     pub fn start(
         path: &Path,
         tokens: Tokens,
+        others: Others,
         events: UnboundedSender<Event>,
     ) -> io::Result<Server> {
-        Server::listen(path, tokens, events, TOKEN_WAIT)
+        Server::listen(path, tokens, others, events, TOKEN_WAIT)
     }
 
     /// Listens on a socket at `path`, readable and writable by the user alone, in place of any
@@ -106,6 +111,7 @@ impl Server {
     fn listen(
         path: &Path,
         tokens: Tokens,
+        others: Others,
         events: UnboundedSender<Event>,
         token_wait: Duration,
     ) -> io::Result<Server> {
@@ -125,6 +131,7 @@ impl Server {
             path: path.into(),
             stopped: AtomicBool::new(false),
             tokens,
+            others,
             token_wait,
             connections: Mutex::default(),
             next_connection: AtomicU64::new(1),
@@ -142,6 +149,7 @@ impl Server {
     fn listen(
         path: &Path,
         tokens: Tokens,
+        others: Others,
         events: UnboundedSender<Event>,
         token_wait: Duration,
     ) -> io::Result<Server> {
@@ -150,6 +158,7 @@ impl Server {
             path: path.into(),
             stopped: AtomicBool::new(false),
             tokens,
+            others,
             token_wait,
             connections: Mutex::default(),
             next_connection: AtomicU64::new(1),
@@ -350,6 +359,11 @@ fn serve(stream: Stream, number: u64, shared: &Shared) {
         _ = writeln!(writer, "{}", json!({ "error": refused })).and_then(|()| writer.flush());
         return;
     };
+    if shared.refused(&agent) {
+        let off = super::bridge::off();
+        _ = writeln!(writer, "{}", json!({ "error": off })).and_then(|()| writer.flush());
+        return;
+    }
     if reader.get_mut().token_taken().is_err() {
         return;
     }
@@ -375,6 +389,7 @@ fn serve(stream: Stream, number: u64, shared: &Shared) {
             // A token the user has since disconnected, or a browser that stopped, answers no more.
             if shared.stopped.load(Ordering::SeqCst)
                 || shared.agent(&token).as_ref() != Some(&agent)
+                || shared.refused(&agent)
             {
                 break;
             }
@@ -431,7 +446,7 @@ enum Lane {
     InOrder,
     /// One tab's calls, in the order they came.
     Tab(u64),
-    /// ask, hand_off and ask_for_tab: one prompt at a time, the others waiting their turn.
+    /// `ONE_AT_A_TIME`'s tools: one prompt at a time, the others waiting their turn.
     Asks,
 }
 
@@ -571,6 +586,11 @@ impl<'a> Answering<'a> {
     }
 }
 
+/// What asks the user and waits for their answer one at a time, the next waiting its turn. A step
+/// the user takes on a tab (hand_off) isn't here: it holds only its tab's lane, so each tab's
+/// stands by itself and the other tabs carry on; another such step leaves this list the same way.
+const ONE_AT_A_TIME: [&str; 2] = ["ask", "ask_for_tab"];
+
 /// The lanes a message holds while it's answered.
 fn lanes(line: &str) -> Vec<Lane> {
     let message = serde_json::from_str::<Value>(line).unwrap_or_default();
@@ -587,13 +607,19 @@ fn lanes(line: &str) -> Vec<Lane> {
         (_, Some(tab)) => Some(Lane::Tab(tab)),
         (_, None) => Some(Lane::InOrder),
     };
-    let asks = matches!(tool, "ask" | "hand_off" | "ask_for_tab").then_some(Lane::Asks);
+    let asks = ONE_AT_A_TIME.contains(&tool).then_some(Lane::Asks);
     own.into_iter().chain(asks).collect()
 }
 
 impl Shared {
     fn agent(&self, token: &str) -> Option<String> {
         self.tokens.lock().unwrap().get(token).cloned()
+    }
+
+    /// Whether `agent` is another app's while the user has other apps' agents off. Its token says
+    /// which: the user's connected apps have their app's id, a task's own start its task's.
+    fn refused(&self, agent: &str) -> bool {
+        !self.others.load(Ordering::SeqCst) && super::clients::Client::from_id(agent).is_some()
     }
 
     /// Connection `number` began answering a message, or wrote its answer: a stopped one closes

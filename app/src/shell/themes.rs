@@ -7,12 +7,13 @@ use std::{cell::Cell, rc::Rc};
 use gpui::{App, Context, Global, Rgba, canvas, div, point, prelude::*, px, size};
 
 use super::{
-    Shell,
+    FORM_PLACEHOLDER, Shell,
     undo::{Prop, Value},
 };
 use crate::{
     glow,
     palette::{self, Palette, Tone},
+    text_input::Colors,
     theme::{Appearance, GRAIN_TILE, INACTIVE_TEXTURE, Texture, Theme},
     theme_picker::{self, Changed},
 };
@@ -119,7 +120,7 @@ impl Shell {
                 cx.observe_window_appearance(window, |_, _, cx| cx.notify()),
                 cx.observe_window_activation(window, |shell, window, cx| {
                     if !window.is_window_active() {
-                        shell.card_keys_window_inactive(window, cx);
+                        shell.ilo_keys_window_inactive(cx);
                     }
                     cx.notify()
                 }),
@@ -219,6 +220,16 @@ impl Shell {
         }
         if super::commands::key_shell(cx).is_some_and(|key| key == cx.weak_entity()) {
             palette::set_current(palette, cx);
+        }
+    }
+
+    /// What a form's field draws in: this window's palette as the field draws, since the field
+    /// stays as the window goes from dark to light or to a Space of another colour.
+    pub(super) fn form_colors(cx: &Context<Self>) -> impl Fn(&App) -> Colors + 'static + use<> {
+        let shell = cx.weak_entity();
+        move |cx| {
+            let palette = shell.upgrade().map(|shell| shell.read(cx).palette);
+            Colors::placeholder(palette.unwrap_or_default().gray(FORM_PLACEHOLDER))
         }
     }
 

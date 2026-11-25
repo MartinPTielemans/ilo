@@ -12,7 +12,7 @@ use gpui::{
 
 use super::{
     ARCHIVED_FAVICON_X, ARCHIVED_LEFT, ARCHIVED_PITCH, ARCHIVED_PLATE, ARCHIVED_RADIUS,
-    ARCHIVED_RIGHT, Edit, FAVICON_SIZE, Item, MenuEntry, SECONDARY, STATE_HOVERED, STATE_PRESSED,
+    ARCHIVED_RIGHT, Edit, FAVICON_SIZE, Item, MenuEntry, POINTED_ROW, SECONDARY, STATE_PRESSED,
     Section, Shell, What,
     history_list::{history_text, history_when},
 };
@@ -109,7 +109,8 @@ impl Shell {
                     .items_center()
                     .rounded(px(ARCHIVED_RADIUS))
                     .block_mouse_except_scroll()
-                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .group(POINTED_ROW)
+                    .hover(|style| style.bg(self.palette.hovered_plate()))
                     .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
                     .on_click(
                         cx.listener(move |shell, _, _, cx| shell.open_listed_board(&open, cx)),

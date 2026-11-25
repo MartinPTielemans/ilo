@@ -357,5 +357,6 @@ fn welcome(palette: &Palette, cx: &mut Context<Shell>) -> gpui::Div {
 }
 
 pub(super) mod composer;
+mod folder_panel;
 #[cfg(test)]
 mod tests;

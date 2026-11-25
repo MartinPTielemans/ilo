@@ -6,6 +6,11 @@
 /// opens Settings there by this name (settings::show_row).
 pub const ACCESS: &str = "Access";
 
+/// The level's menu's rows for where a task may go: every site, the default, or only the sites of
+/// the pages the user added to it.
+pub const ANY_SITE: &str = "Any site";
+pub const ONLY_ADDED: &str = "Only the sites you add";
+
 /// Settings › Agents' line under its name, the one place it says what a task never gets.
 pub const NEVER_GETS: &str = "A task never gets passwords, cookies or your other tabs.";
 
@@ -15,7 +20,8 @@ pub enum Tier {
     /// It opens pages, reads, scrolls and takes pictures, and changes nothing.
     Look,
     /// It types, presses, fills in and sends forms, but not what ilo recognises as paying, placing
-    /// an order, sending a message as the user, or a bank's site. Where every task starts.
+    /// an order, sending a message as the user, or a bank's site. Where every task starts, but
+    /// an outside client's whose others the user left lower (`Agents::starting_tier`).
     #[default]
     Work,
     /// Everything the user could do on a page. Set by the user for one task, never a default and
@@ -34,6 +40,12 @@ impl Tier {
             Tier::Work => "Work on pages",
             Tier::Full => "Full access",
         }
+    }
+
+    /// The lowest tier above this one at which an act refused for `why` happens, which its
+    /// refusal offers, or None if none does.
+    pub fn lifting(self, why: Why) -> Option<Tier> {
+        (Tier::ALL.into_iter()).find(|tier| *tier as usize > self as usize && tier.allows(why))
     }
 
     /// What it lets a task do, under its name in Settings › Agents' Access, each past the one below.
@@ -213,6 +225,8 @@ pub struct Stop {
     /// What it stopped, as the step names it, such as a button's name: page text, plain and capped.
     pub at: String,
     pub site: String,
+    /// The refused step's under-way phrase, its first letter lowered (`IloKind::Stopped`).
+    pub doing: String,
     pub why: Why,
     pub tier: Tier,
     pub count: u32,
@@ -220,6 +234,8 @@ pub struct Stop {
     pub appeared: std::time::Instant,
     /// How many of the task's messages came before it, which places it among them.
     pub after: usize,
+    /// How many of the task's steps came before it, which places it among them.
+    pub traced: usize,
     /// Acted on, or passed: a change of tier, Take over, or the task's end.
     pub settled: bool,
 }
@@ -294,10 +310,52 @@ pub fn changed_logged(from: Tier, to: Tier) -> String {
     format!("{} → {}", from.label(), to.label())
 }
 
+/// What a task starts with, as its start's entry counts it: never an address, a title or a name.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StartedWith {
+    /// The pages the user added.
+    pub pages: usize,
+    /// Whether they gave it a folder.
+    pub folder: bool,
+    /// How many files they attached.
+    pub files: usize,
+    /// Whether ilo couldn't copy those files, so it started without them.
+    pub left_out: bool,
+}
+
+/// The activity log's words for a change of the sites a task may use, as `changed_logged`'s for
+/// its level: the menu's names with how many sites, never an address.
+pub fn sites_logged(from: &Sites, to: &Sites) -> String {
+    let name = |sites: &Sites| match sites {
+        Sites::Any => ANY_SITE.to_string(),
+        Sites::Only(only) if only.len() == 1 => format!("{ONLY_ADDED} · 1 site"),
+        Sites::Only(only) => format!("{ONLY_ADDED} · {} sites", only.len()),
+    };
+    format!("{} → {}", name(from), name(to))
+}
+
 /// The activity log's words for the tier a task starts at, which its start's entry keeps as its
-/// target, as a change's keeps `changed_logged`.
-pub fn started_logged(tier: Tier) -> String {
-    format!("Starts at {}", tier.label())
+/// target, as a change's keeps `changed_logged`, with what it starts with, in this order: pages,
+/// folder, files.
+pub fn started_logged(tier: Tier, with: StartedWith) -> String {
+    let mut said = format!("Started at {}", tier.label());
+    match with.pages {
+        0 => {}
+        1 => said.push_str(" · 1 page"),
+        pages => said.push_str(&format!(" · {pages} pages")),
+    }
+    if with.folder {
+        said.push_str(" · a folder");
+    }
+    match with.files {
+        0 => {}
+        1 => said.push_str(" · 1 file"),
+        files => said.push_str(&format!(" · {files} files")),
+    }
+    if with.left_out {
+        said.push_str(" · files left out");
+    }
+    said
 }
 
 /// The most of a page's text a line carries.
@@ -333,6 +391,35 @@ fn capped(text: &str, most: usize) -> String {
 mod tests {
     use super::*;
 
+    /// The start's entry counts what the task starts with, pages, then folder, then files, and
+    /// names none of them.
+    #[test]
+    fn a_start_counts_its_pages_folder_and_files_in_that_order() {
+        let with = |pages, folder, files, left_out| StartedWith {
+            pages,
+            folder,
+            files,
+            left_out,
+        };
+        for (with, said) in [
+            (with(0, false, 0, false), "Started at Work on pages"),
+            (
+                with(1, true, 3, false),
+                "Started at Work on pages · 1 page · a folder · 3 files",
+            ),
+            (
+                with(2, false, 1, false),
+                "Started at Work on pages · 2 pages · 1 file",
+            ),
+            (
+                with(0, true, 2, true),
+                "Started at Work on pages · a folder · 2 files · files left out",
+            ),
+        ] {
+            assert_eq!(started_logged(Tier::Work, with), said, "{with:?}");
+        }
+    }
+
     #[test]
     fn each_tier_allows_all_the_one_below_does() {
         for row in &ROWS {
@@ -367,9 +454,11 @@ mod tests {
         assert_eq!(at(SignIn), [false, true, true]);
         assert_eq!(at(SignInBank), [false, false, true]);
         assert_eq!(Tier::default(), Work);
-        assert_eq!(Look.up(), Some(Work));
-        assert_eq!(Work.up(), Some(Full));
-        assert_eq!(Full.up(), None);
+        assert_eq!(Look.lifting(Act), Some(Work));
+        assert_eq!(Look.lifting(Message), Some(Full));
+        assert_eq!(Work.lifting(Order), Some(Full));
+        assert_eq!(Full.lifting(Order), None);
+        assert_eq!(Look.lifting(Fenced), None);
     }
 
     #[test]

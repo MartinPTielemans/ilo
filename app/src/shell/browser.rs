@@ -325,11 +325,6 @@ pub trait Browser {
     fn set_developer_mode(&self, tab: u64, on: bool, cx: &mut App);
     /// Answers what the tab's page asks (Shell::set_question), if it still asks.
     fn answer_permission(&self, tab: u64, answer: Answer, cx: &mut App);
-    /// Answers what an agent asks (Shell::set_agent_question), if it still asks.
-    fn answer_agent(&self, question: u64, answer: crate::agents::Answer, cx: &mut App);
-    /// The user pressed Choose File… on an agent's question for a page's file field: the system's
-    /// file dialog opens over `window`.
-    fn choose_agent_file(&self, question: u64, window: u64, cx: &mut App);
     /// Asks the dialog a tab's page asks over the tab's card, with the corners of its radius, or
     /// takes back the one it asks (None).
     fn show_page_dialog(&self, shown: Option<ShownPageDialog>, cx: &mut App);
@@ -668,19 +663,10 @@ pub trait Browser {
     /// Puts the window's own buttons, and the reveal's window and edge, on the window's right, or
     /// back on its left (Sidebar position, #2375).
     fn set_sidebar_right(&self, _right: bool, _cx: &mut App) {}
-    /// Windows': puts the window's buttons at its right though the sidebar is on the left, as the
-    /// top bar has them, or back with the sidebar (#3160).
-    fn set_window_buttons_right(&self, _right: bool, _cx: &mut App) {}
     /// The user moved the sidebar from the command bar: Sidebar position keeps it on this device,
     /// and every window follows.
     fn keep_sidebar_right(&self, right: bool, cx: &mut App) {
         cx.set_global(super::SidebarRight(right));
-        cx.refresh_windows();
-    }
-    /// The user turned Top bar on or off from a menu, the command bar or its key: kept on this
-    /// device, and every window follows.
-    fn keep_top_bar(&self, on: bool, cx: &mut App) {
-        cx.set_global(super::TopBar(on));
         cx.refresh_windows();
     }
     /// A Little ilo window's UI has drawn its first frame on screen, where its opening grows from
@@ -873,6 +859,15 @@ pub trait Browser {
     /// the browser keeps for it, at the window's `scale`. The user's: agents get none, as with the
     /// page's picture.
     fn card_picture(&self, tab: u64, scale: f32, cx: &mut App);
+    /// What the broom on the New Tab line shows for the Space the window shows, or None where it
+    /// isn't drawn, which the browser alone decides. It tells the shell to draw again as the
+    /// answer changes, and ends `Broom::Failed` itself.
+    fn broom(&self) -> Option<super::Broom> {
+        None
+    }
+    /// The user's click on the broom: sorts the Today tabs of the Space the window shows into
+    /// folders. The user's alone: no command runs it and no agent reaches it.
+    fn start_broom(&self, _cx: &mut App) {}
     /// Settings › Links' Link cards: whether ⇧ on a link shows what its page says about itself.
     fn link_cards(&self) -> bool {
         false
@@ -927,15 +922,20 @@ pub trait Browser {
     /// A command bar to rest in this window's empty Space, whose page draws its field and rows
     /// (#4140). It asks nothing of the core until it's typed in.
     fn command_bar_in_place(&self, window: &mut Window, cx: &mut App) -> Entity<CommandBar>;
+    /// Whether this system can wall a task in with its files, which the composer's `+` offers
+    /// files and a folder by (#4101).
+    fn files_available(&self, _: &App) -> bool {
+        false
+    }
     /// Runs what the user asked in the composer's Ask as a task on the assistant `agent`, from Space
-    /// `home`, at the level `tier` the user picked there (#4140). Only the user's ↩ there calls
-    /// it: no agent has a path to it.
+    /// `home`, with the level and model the user picked there (#4140). Only the user's ↩ there
+    /// calls it: no agent has a path to it.
     fn start_task(
         &self,
         agent: &str,
         asked: &str,
         home: u64,
-        tier: crate::agents::tier::Tier,
+        start: crate::agents::task::Start,
         cx: &mut App,
     );
     /// Whether the user types in a field of a window over this one: find, the password offer, the
@@ -1034,6 +1034,9 @@ pub trait Browser {
     fn settings(&self, cx: &mut App);
     /// Opens the Settings window on Agents' Off limits list, scrolled to it.
     fn off_limits(&self, _cx: &mut App) {}
+    /// Opens the Settings window on Agents' Access group, which explains each level: the level
+    /// menu's Settings….
+    fn agent_access(&self, _cx: &mut App) {}
     /// Opens the Settings window on Agents, for what first run's assistant step leaves to it.
     fn agents_settings(&self, _cx: &mut App) {}
     /// Opens the Settings window on its Shortcuts tab.
@@ -1081,9 +1084,17 @@ pub trait Browser {
     fn quit(&self, going: Rc<dyn Fn(&mut App)>, cx: &mut App);
     /// Opens another window on the same Spaces, after this one's draw.
     fn new_window(&self, cx: &mut App);
-    /// new_window, with a new profile's first launch playing in the new window, which shows no
-    /// page.
-    fn welcome_window(&self, _cx: &mut App) {}
+    /// Puts first run's `window`, which the shell opened unshown and draws the flow in, on screen
+    /// as a window of its own, in front with the keyboard: until first run ends it's the only
+    /// window on screen.
+    fn show_first_run(&self, _window: gpui::AnyWindowHandle, _cx: &mut App) {}
+    /// Takes first run's `window` off screen and closes it, and puts the browser window it kept
+    /// waiting at launch on screen.
+    fn end_first_run(&self, _window: gpui::AnyWindowHandle, _cx: &mut App) {}
+    /// First run's window opens on screen at once, for a host with no call that shows it.
+    fn shows_first_run_at_open(&self) -> bool {
+        false
+    }
     /// Whether the system opens http and https links with the browser, which the onboarding asks
     /// only as it starts, to leave out its step for it.
     fn is_default_browser(&self) -> bool {

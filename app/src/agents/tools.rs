@@ -29,13 +29,20 @@ pub const INSTRUCTIONS: &str = concat!(
      Where a site's \
      page uses an API, request sends its HTTP requests from the tab, signed in as the page is. split_tabs shows two or \
      three of your tabs side by side in a split view, add_to_split adds one to it, separate_tab \
-     takes one out, and list_split says which are together.\n\n\
-     Payments, orders, sending messages, banks' sites and every request that may change \
-     something ask the user first. If they say no, \
-     don't try again. You can never type into a password field: a sign-in, a 2FA prompt or a \
+     takes one out, and list_split says which are together.\n\nUnless this task has Full \
+     access, ",
+    env!("APP_NAME"),
+    " stops payments, orders, sending messages as the user, bank sites and every request you \
+     send with the request tool that may change something. The user can also set Look only (reading pages) \
+     or limit a task to some sites; ",
+    env!("APP_NAME"),
+    " stops anything outside that even with Full access. When ",
+    env!("APP_NAME"),
+    " stops a step, don't retry or work around it: say what you were about to do and carry on \
+     with the rest. Only the user can change what a task may do. You can never type into a password field: a sign-in, a 2FA prompt or a \
      CAPTCHA is the user's to do, so hand the tab to them with hand_off, and take a snapshot \
      once they hand it back, as its page will have changed. For a file field, call upload: the \
-     user chooses the file. The user can take a tab over too, \
+     user chooses the file in the page and hands the tab back. The user can take a tab over too, \
      on purpose: it's theirs until they hand it back. Carry on in your other tabs, and only \
      when the task can't go on without that one, ask for it with ask_for_tab, saying why. Use \
      run_steps for several actions in a row.\n\n\
@@ -66,7 +73,7 @@ pub const TASK_INSTRUCTIONS: &str = concat!(
      answers when there are a few to pick from. It waits for their answer.\n\n\
      Never ask for a password, a one-time code or a card number in the conversation. A sign-in, \
      a 2FA prompt or a CAPTCHA is the user's to do: hand them the tab with hand_off. For a file \
-     field, call upload: the user chooses the file.\n\n\
+     field, call upload: the user chooses the file in the page and hands the tab back.\n\n\
      Never pay, and never place an order, book or send a message unless the user asked you to. \
      When the work ends on a page only the user may finish, such as a checkout, stop there.\n\n\
      When you're done, call finish with the result in a sentence or two, and its summary in one \
@@ -565,7 +572,7 @@ fn shared() -> Value {
         {
             "name": "upload",
             "title": "Upload a file",
-            "description": "Ask the user to choose a file for a file field: an input of type file, which the outline shows as a button, often named Choose File or Browse. The user chooses it in the browser and it goes into the field. You never get its name or path, only what the page then shows of it. This waits for the user. Use it rather than clicking the field: a click opens nothing in your tab.",
+            "description": "Hand the tab to the user to choose a file for a file field: an input of type file, which the outline shows as a button, often named Choose File or Browse. The user chooses it in the page and hands the tab back. You never get its name or path, only what the page then shows of it, so take a snapshot once it's back. This waits for the user. Use it rather than clicking the field: a click opens nothing in your tab.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -948,6 +955,10 @@ pub fn step_title(did: &Did, tense: Tense) -> String {
         }
         "ask" => ("Asking you", "Asked you", "Couldn't ask you", String::new()),
         "thought" => ("Thinking", "Thought", "Thought", String::new()),
+        // The user's Hand Back on a stopped task, with how many pages: never a title or a site.
+        PAGES_BACK if !did.target.is_empty() => {
+            return format!("{} · {}", describe(PAGES_BACK), did.target);
+        }
         action => return describe(action).to_string(),
     };
     let verb = match tense {
@@ -1030,7 +1041,8 @@ pub fn reason(kind: Option<Kind>) -> String {
     let reason = match kind {
         Kind::Stopped => "stopped",
         Kind::SaidNo => "you said no",
-        Kind::Outside => "outside its access",
+        // The refusal's ilo line under the row says why (B1), so the row has no tail.
+        Kind::Outside => "",
         Kind::Password => "password field",
         Kind::NotWebPage => "not a web page",
         Kind::NotFound => "not found",
@@ -1040,6 +1052,40 @@ pub fn reason(kind: Option<Kind>) -> String {
     };
     reason.to_string()
 }
+
+/// How many pages, as a count at a line's end says it: "1 page", "3 pages", and nothing for none.
+pub fn pages_counted(pages: usize) -> Option<String> {
+    match pages {
+        0 => None,
+        1 => Some("1 page".into()),
+        pages => Some(format!("{pages} pages")),
+    }
+}
+
+/// The log's entry of the user's Hand Back on a stopped task of an outside agent's: its pages are
+/// that client's again. Not a tab's own hand back after a takeover ("handed back").
+pub const PAGES_BACK: &str = "pages handed back";
+
+/// The tabs a call's arguments name, whatever its tool: its `tab`, a split's, and each of `tabs`.
+pub fn tabs_named(arguments: &Value) -> Vec<u64> {
+    let one = ["tab", "split"]
+        .into_iter()
+        .filter_map(|name| arguments.get(name));
+    let several = arguments.get("tabs").and_then(Value::as_array);
+    one.chain(several.into_iter().flatten())
+        .filter_map(tab_id)
+        .collect()
+}
+
+/// The tools that never act on the tab their connection used last.
+pub const NO_TAB_OF_ITS_OWN: [&str; 6] = [
+    "open_tab",
+    "list_tabs",
+    "title",
+    "done",
+    "sort_tabs_by_site",
+    "split_tabs",
+];
 
 /// What an action an agent took is, for the activity log, by the name the core's entry gives it.
 pub fn describe(action: &str) -> &'static str {
@@ -1063,6 +1109,7 @@ pub fn describe(action: &str) -> &'static str {
         "released" => "Let go of the tab",
         "taken back" => "You took the tab over",
         "handed back" => "You handed the tab back",
+        PAGES_BACK => "You handed it back",
         "given" => "You gave it a tab",
         "stopped" => "You stopped it",
         "stopped by the user" => "You stopped it, which closed its connection",

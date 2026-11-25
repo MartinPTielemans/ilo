@@ -26,6 +26,7 @@ use super::{
 };
 use crate::theme::Theme;
 use crate::tokens::command_bar::{LITTLE_DOWN, LITTLE_WIDTH, ROW_HEIGHT};
+use crate::tokens::shell::header::URL_PLACEHOLDER;
 use crate::tokens::shell::{
     FAVICON_DRAWN, LITTLE_BAR, LITTLE_CHEVRON, LITTLE_CHEVRON_GLYPH, LITTLE_COPY_GAP, LITTLE_GLYPH,
     LITTLE_OPEN, LITTLE_OPEN_GAP, LITTLE_OPEN_KEY, LITTLE_OPEN_MAX, LITTLE_OPEN_PAD,
@@ -37,6 +38,9 @@ use crate::tooltip::text_width;
 
 /// The gap between the bar's title and its buttons, and between the title's parts (ours).
 const GAP: f32 = 6.;
+
+/// What the bar is named as a group, so what's gray on it knows the pointer is on its plate.
+const BAR: &str = "little-bar";
 
 /// The bar's buttons are the header's pitch apart, back to forward.
 const PITCH: f32 = super::NAV_PITCH;
@@ -128,6 +132,7 @@ impl Shell {
             name: SharedString::default(),
             color: None,
             theme: None,
+            transparency: None,
             icon: SharedString::default(),
             agent: SharedString::default(),
             profile,
@@ -581,6 +586,8 @@ impl Shell {
         // The page's host, or with no page the URL field's placeholder, which says what a click on
         // the bar does, in the URL field's colours.
         let (site, site_color) = self.url_words(tab, &url, 1.);
+        // The placeholder is gray, and takes a plate's gray on the bar's plate under the pointer.
+        let on_plate = (tab == 0).then(|| self.palette.gray_on_plate(URL_PLACEHOLDER));
         let icon = (tab != 0).then(|| self.tabs.get(&tab).and_then(|tab| tab.favicon.clone()));
         let title = self.little_bar_title(tab, &site, &url);
         let closing = self.little.as_ref().is_some_and(|little| little.closing);
@@ -600,7 +607,8 @@ impl Shell {
             .gap(px(GAP))
             .rounded(px(NAV_RADIUS))
             .block_mouse_except_scroll()
-            .hover(|style| style.bg(self.palette.plate(NAV_HOVERED)))
+            .group(BAR)
+            .hover(|style| style.bg(self.palette.hovered_plate()))
             .text_size(px(text::BODY))
             .on_mouse_down(
                 MouseButton::Left,
@@ -620,6 +628,9 @@ impl Shell {
                     .max_w(relative(0.5))
                     .truncate()
                     .text_color(site_color)
+                    .when_some(on_plate, |site, ink| {
+                        site.group_hover(BAR, move |style| style.text_color(ink))
+                    })
                     .child(site),
             )
             .child(
@@ -811,7 +822,6 @@ pub(super) fn little_runs(command: Command) -> bool {
                     | Command::SortBySite
                     | Command::ToggleSidebar
                     | Command::MoveSidebar
-                    | Command::ToggleTopBar
                     | Command::AddSplit
                     // A private window's Library has its session's downloads; a Little ilo
                     // window has no Library at all.

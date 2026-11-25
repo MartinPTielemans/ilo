@@ -24,6 +24,7 @@ pub mod files;
 mod held;
 mod helpers;
 pub mod kept;
+mod lines;
 pub mod notes;
 pub mod page;
 #[cfg(windows)]
@@ -110,20 +111,6 @@ pub enum PageAction {
     FileField,
 }
 
-/// What came of the user's Choose File… for a page's file field (file_field_done). Never a file's
-/// name or path.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum FileFieldEnd {
-    /// This many of the user's files went into the field.
-    Put(usize),
-    /// The user closed the dialog choosing none.
-    NoFile,
-    /// The field left the page, or the agent's hands, before the files could go in.
-    Left,
-    /// The dialog closed as its field was dropped, its tab closed or its session ended.
-    Closed,
-}
-
 /// A page's file field an agent asks the user to fill (upload), as the core described it.
 #[derive(Clone, Debug, PartialEq)]
 struct FileField {
@@ -160,78 +147,22 @@ struct Closing {
     reply: mpsc::Sender<ToolResult>,
 }
 
-/// What an agent asks the user's leave for, as the card in each window asks it.
-#[derive(Clone, Debug, Default)]
+/// A step in a tab that waits on the user: one an agent handed them (hand_off, upload, a
+/// sign-in), or a tab it asks back (ask_for_tab). Its task's card says so, and its line in the
+/// task's conversation has its buttons.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Question {
     pub id: u64,
     /// The agent's name, as its Space has it.
     pub agent: SharedString,
-    /// The agent's id, by which a task's card asks it rather than the windows' card.
+    /// The agent's id.
     pub from: SharedString,
-    /// What it would do, following "wants to", such as "click “Place order” on shop.example".
-    /// Whole wherever it's logged or answered.
-    pub what: SharedString,
-    /// The same without its site, "click “Place order”", for an action on the tab's page: its
-    /// card puts the site, the tab's own, on the line above, apart from the page's words (#3836).
-    /// Empty for a question that names no such site.
-    pub asks: SharedString,
-    /// Why that asks, such as "It looks like a payment or an order.", or for a handoff, what the
-    /// agent needs the user to do.
+    /// What the agent needs the user to do, or why it asks for the tab back.
     pub why: SharedString,
-    /// The tab an agent handed to the user (hand_off), whose card shows the tab or hands it back.
-    pub handoff: Option<u64>,
-    /// Whether the agent asks for that tab back (ask_for_tab), which Keep refuses, rather than
-    /// handing it to the user.
+    /// The tab.
+    pub tab: u64,
+    /// Whether the agent asks for the tab back (ask_for_tab), rather than handing it to the user.
     pub back: bool,
-    /// The requests of a call that may change something (request), each with the agent's own
-    /// sentence for it, all of them. They ask every time, so their card has no Always or Never.
-    /// Shared, as each window's card and the whole request read the same bodies.
-    pub changes: std::rc::Rc<[request::Request]>,
-    /// The site they go to, the tab's, which the card's facts name.
-    pub site: SharedString,
-    /// Whether it asks every time, as a payment does, so its card has no Always or Never.
-    pub each_time: bool,
-    /// The page's file field the agent asks the user to choose a file for (upload), whose card
-    /// chooses one or doesn't allow it.
-    pub file: Option<FileAsk>,
-    /// Whether it asks on a site the user fenced (fence.rs), so its card has Never and Allow
-    /// Once, and no Always.
-    pub fenced: bool,
-}
-
-/// A file field a card asks the user to choose a file for.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct FileAsk {
-    /// The core's id for it (bc_file_field_choose).
-    pub field: u64,
-    /// Whether the user may choose several files.
-    pub many: bool,
-}
-
-/// The windows' cards ask again whenever a question changes, which is on every Agents change, so
-/// this compares its small fields and its changes by their pointer: they're shared, never copied,
-/// and their bodies may be megabytes.
-impl PartialEq for Question {
-    fn eq(&self, other: &Question) -> bool {
-        (
-            self.id,
-            &self.agent,
-            &self.from,
-            &self.what,
-            &self.asks,
-            &self.why,
-        ) == (
-            other.id,
-            &other.agent,
-            &other.from,
-            &other.what,
-            &other.asks,
-            &other.why,
-        ) && (self.handoff, self.back, &self.site) == (other.handoff, other.back, &other.site)
-            && (self.each_time, self.file, self.fenced)
-                == (other.each_time, other.file, other.fenced)
-            && std::rc::Rc::ptr_eq(&self.changes, &other.changes)
-    }
 }
 
 /// What an agent is doing, and what the user holds from it, for the bar in its Space.
@@ -247,19 +178,6 @@ pub struct Status {
     /// The tabs the user holds from it, each with what it asked of the user, or empty if the user
     /// took it over.
     pub held: Vec<(u64, SharedString)>,
-}
-
-/// The user's answer to an agent's question.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Answer {
-    /// This once.
-    Once,
-    /// Now and whenever the agent asks on the site again.
-    Always,
-    /// Not now, nor when it asks on the site again.
-    Never,
-    /// Not now: the ×.
-    Dismiss,
 }
 
 /// What the agents ask of the browser: the core, in main.rs, or what a test makes up. Calls into
@@ -322,8 +240,6 @@ pub trait Browser {
     );
     /// The URL the address bar goes to for `text`: the page it names, else a search for it.
     fn url_for(&self, text: &str) -> Option<String>;
-    /// Shows the question for the user to answer, in every window, or takes it away (None).
-    fn ask(&self, question: Option<Question>, cx: &mut App);
     /// The agent hands the tab to the user, who holds it from agents until they hand it back
     /// (bc_agent_hand_off). Whether it did.
     fn hand_off(&self, agent: &str, tab: u64) -> bool;
@@ -342,9 +258,6 @@ pub trait Browser {
     /// Answers for the user about a download an agent's page started, which the core holds
     /// (bc_agent_download_answer): `keep` lets it go on, else it's cancelled and its file gone.
     fn answer_download(&self, download: u64, keep: bool);
-    /// Opens the system's file dialog over `window` for the user to choose a file for the page's
-    /// file `field` (bc_file_field_choose): false if it can't, else file_field_done answers once.
-    fn file_field_choose(&self, field: u64, window: u64) -> bool;
     /// Forgets the page's file `field`, closing its dialog if it's up (bc_file_field_drop).
     fn file_field_drop(&self, field: u64);
     /// Pins `tab` in its Space at the page it's at, or unpins it to the top of its Today tabs, as
@@ -389,6 +302,9 @@ pub trait Browser {
     fn profile_space(&self, profile: &str) -> u64;
     /// Whether there is a profile whose folder is named `profile`.
     fn has_profile(&self, profile: &str) -> bool;
+    /// Whether `space` is a private window's own Space. No task starts from one, as agents get
+    /// no path into private windows.
+    fn private_space(&self, space: u64) -> bool;
     /// Sends `sent` from the page in the agent's `tab`, as the page's own script could, to its own
     /// site (bc_agent_request). Its answer comes to `Agents::request_done` with `request`.
     fn request(&self, agent: &str, tab: u64, request: u64, sent: &request::Request);
@@ -575,6 +491,9 @@ struct Act {
     asks: String,
     /// The download it lets go on, for "download", else 0.
     download: u64,
+    /// The tab whose page started the download, whose task it's judged at as an act there is,
+    /// while `tab` is 0 for one; else 0.
+    started_in: u64,
     /// The file field it asks the user to choose a file for, for "upload".
     file: Option<FileField>,
     /// The HTTP requests it sends (request).
@@ -594,6 +513,12 @@ impl Act {
     fn say(&mut self, host: &str, words: impl Fn(&str) -> String) {
         self.what = words(&format!(" on {host}"));
         self.asks = words("");
+    }
+
+    /// The tab whose page it's about: its own, or for a download the one that started it. 0 for
+    /// one with none, as an open's.
+    fn page(&self) -> u64 {
+        self.tab.max(self.started_in)
     }
 }
 
@@ -786,23 +711,6 @@ struct Sending {
     reply: mpsc::Sender<ToolResult>,
 }
 
-/// An action that waits on the user.
-struct Asking {
-    question: Question,
-    site: String,
-    act: Act,
-    /// Refuses the action once ASK_WAIT passes with no answer; an answer drops it.
-    _timer: Task<()>,
-}
-
-/// An upload whose file dialog the user opened (Agents::choose_file).
-struct Choosing {
-    site: String,
-    act: Act,
-    /// Drops the field once HANDOFF_WAIT passes with no file chosen; an end drops it.
-    _timer: Task<()>,
-}
-
 /// An entry of the activity log: what an agent did, or was refused, where and when.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Activity {
@@ -901,6 +809,9 @@ pub struct Agents {
     socket: PathBuf,
     bridge: Vec<String>,
     on: bool,
+    /// Whether other apps' agents may connect while agents are on (#4260), which the server's
+    /// threads read: off for a new profile.
+    others: server::Others,
     agents: Vec<Agent>,
     /// The agents' tokens, which the server's threads read.
     tokens: server::Tokens,
@@ -951,17 +862,10 @@ pub struct Agents {
     notify: crate::needs_you::Notify,
     /// The log's last entry, by its id.
     logged: u64,
-    /// The actions waiting on the user, the first asked now.
-    asking: Vec<Asking>,
     /// The uploads waiting on the core's description of their file field, by request.
     describing: HashMap<u64, Act>,
-    /// The uploads whose file dialog the user opened, by field, until file_field_done.
-    choosing: HashMap<u64, Choosing>,
     /// The downloads the user let agents' pages make, by download.
     downloading: HashMap<u64, Downloading>,
-    /// How the downloads that ended while their question waited ended, by download: a small file
-    /// can come whole before the core's pause holds it, and its yes then answers at once.
-    ended: HashMap<u64, DownloadEnd>,
     /// The sites where each agent may (true) or may never (false) do what asks first.
     grants: HashMap<String, HashMap<String, bool>>,
     /// The hosts the user fenced, where agents always ask first (fence.rs), as they added them.
@@ -1133,6 +1037,7 @@ impl Agents {
             socket,
             bridge,
             on: false,
+            others: Arc::default(),
             agents: Vec::new(),
             tokens: Arc::default(),
             server: None,
@@ -1151,7 +1056,6 @@ impl Agents {
             gone: HashMap::new(),
             acting: HashMap::new(),
             describing: HashMap::new(),
-            choosing: HashMap::new(),
             sending: HashMap::new(),
             saved_reading: HashMap::new(),
             refs: HashMap::new(),
@@ -1161,9 +1065,7 @@ impl Agents {
             notes_off: false,
             notify: Default::default(),
             logged: 0,
-            asking: Vec::new(),
             downloading: HashMap::new(),
-            ended: HashMap::new(),
             grants: HashMap::new(),
             fenced: Vec::new(),
             cleared: HashMap::new(),
@@ -1248,7 +1150,6 @@ impl Agents {
         .collect();
         self.tasks_off = tasks.get("on").and_then(Value::as_bool) == Some(false);
         self.tasks.kept.off = tasks.get("keep").and_then(Value::as_bool) == Some(false);
-        self.tasks.kept.told = tasks.get("kept_told").and_then(Value::as_bool) == Some(true);
         // The conversations kept for the tasks of a run before go, as its tasks went (#4105): now
         // that the assistants found are known, as each removes its own.
         self.take_old_kept(cx);
@@ -1257,10 +1158,20 @@ impl Agents {
             .and_then(crate::needs_you::Notify::from_id)
             .unwrap_or_default();
         self.on = saved.get("on").and_then(Value::as_bool).unwrap_or(false);
+        // Settings saved before other apps' agents had a switch of their own let them in while
+        // agents were on, which they keep, once: saved, the switch is the user's from then on.
+        let others = saved.get("other_apps").and_then(Value::as_bool);
+        self.others.store(
+            others.unwrap_or(self.on),
+            std::sync::atomic::Ordering::SeqCst,
+        );
         self.scripts = saved
             .get("scripts")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        if others.is_none() && self.on {
+            self.save();
+        }
         if self.on {
             self.start(cx);
         }
@@ -1300,7 +1211,7 @@ impl Agents {
         self.notify
     }
 
-    /// Settings › Agents' When to notify.
+    /// Settings › Agents' Notify.
     pub fn set_notify(&mut self, notify: crate::needs_you::Notify, cx: &mut Context<Self>) {
         self.notify = notify;
         self.save();
@@ -1315,6 +1226,45 @@ impl Agents {
         self.notes_off = !on;
         self.save();
         cx.notify();
+    }
+
+    /// Whether other apps' agents may connect while agents are on: Settings › Other apps' switch,
+    /// and first run's, which the user alone sets. A task from the command bar doesn't hang on it.
+    pub fn other_apps(&self) -> bool {
+        self.others.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Sets Settings › Other apps' switch. Off, an app's agent that connects is answered as it is
+    /// with agents off, and each one's sessions end as they do when agents go off, their pages by
+    /// the same rule; the apps stay connected, listed as they are.
+    pub fn set_other_apps(&mut self, on: bool, cx: &mut Context<Self>) {
+        if on == self.other_apps() {
+            return;
+        }
+        self.others.store(on, std::sync::atomic::Ordering::SeqCst);
+        if !on {
+            self.end_other_apps(cx);
+        }
+        self.save();
+        cx.notify();
+    }
+
+    /// Ends every session of the user's connected apps' agents as `stop` ends every agent's, with
+    /// their connections closed, the server running on for the command bar's tasks.
+    fn end_other_apps(&mut self, cx: &mut Context<Self>) {
+        let apps: Vec<Client> = self.agents.iter().map(|agent| agent.client).collect();
+        for client in apps {
+            let agent = client.id();
+            self.reading.retain(|_, reading| reading.agent != agent);
+            self.forget_waiting(agent, None, cx);
+            if let Some((server, _)) = &self.server {
+                server.disconnect(agent);
+            }
+            if self.live.remove(agent) {
+                self.browser.disconnected(agent, cx);
+                self.note(agent, 0, "disconnected", "", "");
+            }
+        }
     }
 
     /// The switch in Settings › Agents. Off stops the server and ends every agent's session.
@@ -1391,13 +1341,24 @@ impl Agents {
     }
 
     /// The clients Settings › Agents lists: those found here, any connected, whose Disconnect
-    /// stays though the client has gone, and any other MCP client.
+    /// stays though the client has gone, and any other MCP client. A client whose CLI Your
+    /// assistant's look found is here though its files aren't, as where CLAUDE_CONFIG_DIR moves
+    /// them, so Any MCP client's line never calls it missing beside its row saying it's signed in.
     pub fn listed(&self) -> Vec<Client> {
+        let ran = |client: Client| {
+            client.cli().is_some_and(|cli| {
+                !matches!(
+                    self.found(cli),
+                    ready::Ready::NotFound | ready::Ready::Unknown
+                )
+            })
+        };
         (Client::APPS.into_iter())
             .filter(|client| {
                 *client == Client::Other
                     || self.found.contains(client)
                     || self.is_connected(*client)
+                    || ran(*client)
             })
             .collect()
     }
@@ -1611,7 +1572,13 @@ impl Agents {
         cx: &mut Context<Self>,
     ) {
         let site = site(&self.browser.tab(tab, cx).url);
-        self.note(agent, self.holder(agent, tab), action, &site, refused);
+        self.note_page(
+            agent,
+            (self.holder(agent, tab), tab),
+            action,
+            &site,
+            refused,
+        );
         cx.notify();
     }
 
@@ -1643,9 +1610,8 @@ impl Agents {
         }
         if why != "disconnected" {
             let site = site(&self.browser.tab(tab, cx).url);
-            self.note(agent, self.holder(agent, tab), why, &site, "");
+            self.note_page(agent, (self.holder(agent, tab), tab), why, &site, "");
             cx.notify();
-            self.fields_left(tab, cx);
         }
     }
 
@@ -1699,6 +1665,9 @@ impl Agents {
     /// What the server's threads hand over.
     pub fn handle(&mut self, event: Event, cx: &mut Context<Self>) {
         match event {
+            // A hello the server read before the user turned other apps' agents off, from a
+            // connection that's closing: nothing of it shows.
+            Event::Hello { agent, .. } if !self.may_connect(&agent) => {}
             Event::Hello {
                 agent,
                 client,
@@ -1769,6 +1738,25 @@ impl Agents {
             _ = call.reply.send(stopped);
             return;
         }
+        // An outside client's task the user stopped: a call of it is answered the same, in the
+        // one text whatever its tool, and makes no task, step or line. The log has its refusal.
+        if let Some(tab) = self.stopped_call(&call) {
+            log!(
+                "browser: agent {} call {} refused, as the user stopped it",
+                call.agent,
+                call.tool
+            );
+            let site = tab.map_or(String::new(), |tab| site(&self.browser.tab(tab, cx).url));
+            let action = match call.tool.as_str() {
+                "select" => "select_option",
+                tool => tool,
+            };
+            self.note(&call.agent, call.connection, action, &site, STOPPED);
+            cx.notify();
+            let stopped = ToolResult::failed(tools::Kind::Stopped, STOPPED);
+            _ = call.reply.send(stopped);
+            return;
+        }
         self.trace_call(&call, cx);
         // check.sh reads this line.
         log!("browser: agent {} calls {}", call.agent, call.tool);
@@ -1776,6 +1764,34 @@ impl Agents {
         if let Some(call) = self.fence_call(call, cx) {
             self.dispatch(call, cx);
         }
+    }
+
+    /// Whether `call` is one of a task of an outside client's that the user stopped, and with
+    /// it the page it's on, if it has one: a call on a page of a stopped task they haven't
+    /// handed back, whichever connection it comes on and whatever that connection's task may
+    /// do, or one that came before the Stop, whatever it would open (#4209). Both are read from
+    /// the stopped task's own state: a later call that opens a page of its own is a new task's.
+    /// The page is only ever one of that client's sessions' own, so the log's entry has no site
+    /// from a tab a call merely named.
+    fn stopped_call(&self, call: &Call) -> Option<Option<u64>> {
+        Client::from_id(&call.agent)?;
+        let withheld = |tab: &u64| self.withheld(&call.agent, *tab);
+        let named = tools::tabs_named(&call.arguments);
+        if let Some(tab) = named.iter().copied().find(withheld) {
+            return Some(Some(tab));
+        }
+        // One that names no tab acts on the tab its connection used last.
+        let own = !tools::NO_TAB_OF_ITS_OWN.contains(&call.tool.as_str());
+        let last = (self
+            .current
+            .get(&(call.agent.clone(), call.connection))
+            .copied())
+        .filter(|_| own && tools::tab_argument(&call.arguments) == Ok(None));
+        if let Some(tab) = last.filter(withheld) {
+            return Some(Some(tab));
+        }
+        let own = |tab: &u64| self.session_page(&call.agent, *tab);
+        (self.came_before_stop(&call.agent, call.at)).then(|| named.into_iter().find(own))
     }
 
     /// A call on a tab that came to a site the user put off limits (#3724), or one outside its
@@ -1833,7 +1849,10 @@ impl Agents {
                 self.space(&agent, cx);
                 // A tab of its own off the web is listed by its number alone, so it can close it,
                 // and one the user holds by its number and theirs, so where they go stays theirs.
-                let tabs = self.browser.agent_tabs(&agent, cx);
+                let mut tabs = self.browser.agent_tabs(&agent, cx);
+                // A page of a task the user stopped isn't listed to its client, by number or
+                // otherwise, until they hand it back.
+                tabs.retain(|tab| !self.withheld(&agent, tab.id));
                 // A tab that came to a fenced site is listed without its page's title or address.
                 let came: HashSet<u64> = (tabs.iter())
                     .filter(|tab| self.came_to(tab.id, cx).is_some())
@@ -1865,10 +1884,11 @@ impl Agents {
                 self.note(&agent, connection, "list_tabs", "", "");
                 cx.notify();
                 let mine: Vec<u64> = (self.pins.iter())
-                    .filter(|(_, by)| **by == agent)
+                    .filter(|(tab, by)| **by == agent && !self.withheld(&agent, **tab))
                     .map(|(&tab, _)| tab)
                     .collect();
-                let current = self.current.get(&(agent.clone(), connection)).copied();
+                let current = (self.current.get(&(agent.clone(), connection)).copied())
+                    .filter(|tab| !self.withheld(&agent, *tab));
                 _ = reply.send(ToolResult::text(tools::tab_list(&tabs, current, &mine)));
             }
             "read_page" => {
@@ -1952,6 +1972,7 @@ impl Agents {
                     note: String::new(),
                     show,
                     download: 0,
+                    started_in: 0,
                     file: None,
                     field: String::new(),
                     requests: Vec::new(),
@@ -2037,7 +2058,7 @@ impl Agents {
                     }
                 };
                 let host = site(&self.browser.tab(tab, cx).url);
-                self.note(&agent, connection, "run_steps", &host, "");
+                self.note_page(&agent, (connection, tab), "run_steps", &host, "");
                 let (_, step) = mpsc::channel();
                 let (steps, done, wait) = (steps.into(), Vec::new(), None);
                 let run = Run {
@@ -2244,7 +2265,7 @@ impl Agents {
                     .flatten()
                 {
                     let site = site(&self.browser.tab(tab, cx).url);
-                    self.note(&agent, connection, "ask_for_tab", &site, why);
+                    self.note_page(&agent, (connection, tab), "ask_for_tab", &site, why);
                     _ = reply.send(off_limits_refused(why).into());
                     return;
                 }
@@ -2269,7 +2290,7 @@ impl Agents {
                 } else {
                     ("", None)
                 };
-                self.note(&agent, connection, "ask_for_tab", &site, refused);
+                self.note_page(&agent, (connection, tab), "ask_for_tab", &site, refused);
                 if !refused.is_empty() {
                     _ = reply.send(ToolResult {
                         kind,
@@ -2294,7 +2315,7 @@ impl Agents {
                 // Before the request is read, so its answer says nothing of a page off limits. Nor
                 // of a tab not the agent's, which the core answers as any other.
                 if let Some(why) = self.off_limits(&agent, tab, cx) {
-                    self.note(&agent, connection, "request", &host, why);
+                    self.note_page(&agent, (connection, tab), "request", &host, why);
                     cx.notify();
                     _ = reply.send(off_limits_refused(why).into());
                     return;
@@ -2302,7 +2323,7 @@ impl Agents {
                 if !self.owns(&agent, tab, cx) {
                     if let Err(refused) = self.may_act(&agent, tab, "request", cx) {
                         let logged = self.log_words(tab, &refused.why, cx);
-                        self.note(&agent, connection, "request", &host, &logged);
+                        self.note_page(&agent, (connection, tab), "request", &host, &logged);
                         cx.notify();
                         _ = reply.send(refused.into());
                         return;
@@ -2311,7 +2332,7 @@ impl Agents {
                 let requests = match request::parse(&arguments, &self.browser.tab(tab, cx).url) {
                     Ok(requests) => requests,
                     Err(request::Wrong::Refused(why)) => {
-                        self.note(&agent, connection, "request", &host, &why);
+                        self.note_page(&agent, (connection, tab), "request", &host, &why);
                         cx.notify();
                         _ = reply.send(ToolResult::error(why));
                         return;
@@ -2345,6 +2366,7 @@ impl Agents {
                     asks: String::new(),
                     field: String::new(),
                     download: 0,
+                    started_in: 0,
                     file: None,
                     requests,
                     wait: None,
@@ -2367,10 +2389,17 @@ impl Agents {
         }
     }
 
-    /// Whether the agent may call tools: a client the user connected, or a task not dropped.
+    /// Whether the agent's connections are taken: any but another app's while the user has other
+    /// apps' agents off.
+    fn may_connect(&self, agent: &str) -> bool {
+        Client::from_id(agent).is_none() || self.other_apps()
+    }
+
+    /// Whether the agent may call tools: a client the user connected, while other apps' agents are
+    /// on, or a task not dropped.
     fn may_call(&self, agent: &str) -> bool {
         match Client::from_id(agent) {
-            Some(client) => self.is_connected(client),
+            Some(client) => self.is_connected(client) && self.other_apps(),
             None => is_task(agent) && self.task(agent).is_some(),
         }
     }
@@ -2817,7 +2846,7 @@ impl Agents {
             return Err(reply);
         }
         let site = site(&self.browser.tab(tab, cx).url);
-        self.note(agent, connection, "hand_off", &site, "");
+        self.note_page(agent, (connection, tab), "hand_off", &site, "");
         // check.sh reads this line.
         log!("browser: agent {agent} hands off {tab}: {why}");
         let question = self.next_request;
@@ -2910,21 +2939,6 @@ impl Agents {
         self.cleared.remove(&tab);
         self.left(tab, Gone::Closed);
         self.let_go(tab, held::Event::Closed, cx);
-        self.fields_left(tab, cx);
-    }
-
-    /// The core dropped `tab`'s file fields, as its tab closed or its agent's session there ended:
-    /// the uploads still asking for them end. One whose dialog is up hears its end from the core.
-    fn fields_left(&mut self, tab: u64, cx: &mut Context<Self>) {
-        let left = |asking: &mut Asking| asking.act.tab == tab && asking.act.file.is_some();
-        let left: Vec<Asking> = self.asking.extract_if(.., left).collect();
-        if left.is_empty() {
-            return;
-        }
-        for Asking { site, act, .. } in left {
-            self.refuse(act, &site, Refused::new(LEFT_PAGE), cx);
-        }
-        self.asked(cx);
     }
 
     /// `tab`'s page shows its own dialog of `kind`, or none any more (pages::tab_dialog), with
@@ -2954,7 +2968,13 @@ impl Agents {
             .cloned();
         if let Some(agent) = agent {
             let site = site(&self.browser.tab(tab, cx).url);
-            self.note(&agent, self.holder(&agent, tab), "page_dialog", &site, "");
+            self.note_page(
+                &agent,
+                (self.holder(&agent, tab), tab),
+                "page_dialog",
+                &site,
+                "",
+            );
             cx.notify();
         }
     }
@@ -3020,6 +3040,8 @@ impl Agents {
         let (agent, connection) = (self.held.get(&tab)).map_or((String::new(), 0), |held| {
             (held.agent.clone(), held.connection)
         });
+        // Its task's conversation says so, while the hold's entry still names whose it is.
+        self.held_lines(tab, event, life);
         if actions.has(A::ANSWER) || actions.has(A::DROP) {
             let held = self
                 .held
@@ -3064,10 +3086,10 @@ impl Agents {
                 _ => log!("browser: agent {agent} held {tab} {}", event.way()),
             }
             let site = site(&self.browser.tab(tab, cx).url);
-            self.note(&agent, connection, event.way(), &site, "");
+            self.note_page(&agent, (connection, tab), event.way(), &site, "");
         }
         if actions.has(A::CARD) {
-            self.asked(cx);
+            cx.notify();
         }
     }
 
@@ -3082,21 +3104,6 @@ impl Agents {
         }
         for (_, acting) in self.acting.extract_if(|_, acting| acting.agent == agent) {
             _ = acting.reply.send(stopped());
-        }
-        for asking in self
-            .asking
-            .extract_if(.., |asking| asking.act.agent == agent)
-        {
-            if let Some(file) = &asking.act.file {
-                self.browser.file_field_drop(file.id);
-            }
-            _ = asking.act.reply.send(stopped());
-        }
-        for (field, choosing) in
-            (self.choosing).extract_if(|_, choosing| choosing.act.agent == agent)
-        {
-            self.browser.file_field_drop(field);
-            _ = choosing.act.reply.send(stopped());
         }
         for (_, act) in self.describing.extract_if(|_, act| act.agent == agent) {
             _ = act.reply.send(stopped());
@@ -3116,7 +3123,7 @@ impl Agents {
                     server.stop(agent);
                 }
                 self.note(agent, 0, "stopped by the user", "", "");
-                self.session_stopped(agent);
+                self.session_stopped(agent, cx);
                 // No connection of the `ilo` command's is left open to close (Event::Bye).
                 if agent == Client::Command.id() {
                     self.live.remove(agent);
@@ -3125,7 +3132,7 @@ impl Agents {
             None => self.note(agent, 0, "stopped", "", ""),
         }
         self.advance(cx);
-        self.asked(cx);
+        cx.notify();
     }
 
     /// The tabs the user holds from `agent`.
@@ -3179,7 +3186,7 @@ impl Agents {
         let host = site(&self.browser.tab(tab, cx).url);
         // Before its ref is looked up, so an outline's refs say nothing of a page off limits.
         if let Some(why) = self.off_limits(agent, tab, cx) {
-            self.note(agent, connection, tool, &host, why);
+            self.note_page(agent, (connection, tab), tool, &host, why);
             _ = reply.send(off_limits_refused(why).into());
             return;
         }
@@ -3225,6 +3232,7 @@ impl Agents {
             what: String::new(),
             asks: String::new(),
             download: 0,
+            started_in: 0,
             file: None,
             requests: Vec::new(),
             wait: None,
@@ -3486,7 +3494,7 @@ impl Agents {
             true => Some(OTHER_SITE),
             false => why,
         };
-        let tier = self.tier_of(&act.agent, act.connection, act.call);
+        let tier = (self.judged_task(&act)).map_or(tier::Tier::default(), |task| task.tier);
         // A site the user answered Never for this agent stays refused at every tier until they
         // revoke it, while Settings still lists it (#4086 step 3 moves these to Off limits).
         let why = Self::why_of(&act, &site, why).map(|why| match why {
@@ -3500,21 +3508,6 @@ impl Agents {
             _ if act.action == "request" => self.send(act, true, cx),
             _ => self.run(act, cx),
         }
-    }
-
-    /// Puts the question to the user, for ASK_WAIT at most.
-    fn put_question(&mut self, question: Question, site: String, act: Act, cx: &mut Context<Self>) {
-        let id = question.id;
-        self.asking.push(Asking {
-            question,
-            site,
-            act,
-            _timer: cx.spawn(async move |agents, cx| {
-                cx.background_executor().timer(Waits::launch().ask).await;
-                _ = agents.update(cx, |agents, cx| agents.unanswered(id, cx));
-            }),
-        });
-        self.asked(cx);
     }
 
     /// An agent asks the user for a file for the page's file field `ref` (upload): the core
@@ -3533,7 +3526,7 @@ impl Agents {
         let host = site(&self.browser.tab(tab, cx).url);
         if let Err(refused) = self.may_act(agent, tab, "upload", cx) {
             let logged = self.log_words(tab, &refused.why, cx);
-            self.note(agent, connection, "upload", &host, &logged);
+            self.note_page(agent, (connection, tab), "upload", &host, &logged);
             cx.notify();
             _ = reply.send(refused.into());
             return;
@@ -3558,18 +3551,25 @@ impl Agents {
         self.act_in_page(agent, tab, request, PageAction::FileField, node, "");
     }
 
-    /// The core described the upload's file field, as JSON, or refused it with why: the card asks
-    /// the user for a file for it.
+    /// The core described the upload's file field, as JSON, or refused it with why: the step is
+    /// the user's, on the task's line, as a handoff is. They choose the file in the page itself,
+    /// and Hand Back tells the agent only that the tab came back, never what went in (#3656).
     fn file_field_described(
         &mut self,
-        mut act: Act,
+        act: Act,
         text: String,
         error: Option<Failure>,
         cx: &mut Context<Self>,
     ) {
         let host = site(&self.browser.tab(act.tab, cx).url);
         if let Some(failure) = error {
-            self.note(&act.agent, act.connection, "upload", &host, &text);
+            self.note_page(
+                &act.agent,
+                (act.connection, act.tab),
+                "upload",
+                &host,
+                &text,
+            );
             cx.notify();
             _ = act.reply.send(ToolResult {
                 kind: failure.kind(),
@@ -3580,152 +3580,53 @@ impl Agents {
         let field: Value = serde_json::from_str(&text).unwrap_or_default();
         // The core writes ids as JSON doubles, which Chromium's writer gives a ".0".
         let id = field.get("field").and_then(Value::as_f64).unwrap_or(0.0) as u64;
+        // The user picks the file with the page's own control, so the core's hold on it goes.
+        self.browser.file_field_drop(id);
         let label = field.get("label").and_then(Value::as_str).unwrap_or("");
-        // The page's words, kept inside the quotes they're shown in.
         let label = page::clip(&request::plain(label), 60);
-        let many = field.get("many").and_then(Value::as_bool).unwrap_or(false);
-        let site = match field.get("site").and_then(Value::as_str) {
-            Some(site) if !site.is_empty() => site.to_string(),
-            _ => host,
+        let files = match field.get("many").and_then(Value::as_bool) {
+            Some(true) => "files",
+            _ => "a file",
         };
-        let files = if many { "files" } else { "a file" };
-        // As on the tab's other actions, its card shows the site apart from the label (#3836):
-        // the browser's, the field frame's that gets the file, never the page's words.
-        act.say(&site, |on| match label.is_empty() {
-            true => format!("add {files} to a page{on}"),
-            false => format!("add {files} to “{label}”{on}"),
-        });
-        act.file = Some(FileField { id, label, many });
-        let agent = self.agent_name(&act.agent);
-        let question = Question {
-            id: self.next_request,
-            agent: agent.clone(),
-            from: act.agent.clone().into(),
-            what: act.what.clone().into(),
-            asks: act.asks.clone().into(),
-            why: format!("You choose the file. {agent} sees only what the page shows of it.")
-                .into(),
-            site: site.clone().into(),
-            each_time: true,
-            file: Some(FileAsk { field: id, many }),
-            ..Question::default()
+        let why = match label.is_empty() {
+            true => format!("Choose {files}."),
+            false => format!("Choose {files} for “{label}”."),
         };
-        self.next_request += 1;
-        // check.sh reads this line.
-        log!(
-            "browser: agent {} asks {} upload {}",
-            act.agent,
-            question.id,
-            act.tab
-        );
-        self.put_question(question, site, act, cx);
-    }
-
-    /// The user pressed the card's Choose File… for the question `id`: the system's file dialog
-    /// opens over `window`, and the agent waits for what came of it, HANDOFF_WAIT at most.
-    pub fn choose_file(&mut self, id: u64, window: u64, cx: &mut Context<Self>) {
-        let Some(at) = (self.asking.iter())
-            .position(|asking| asking.question.id == id && asking.act.file.is_some())
-        else {
+        let Act {
+            agent,
+            connection,
+            call,
+            tab,
+            reply,
+            ..
+        } = act;
+        let (life, actions) = self.held_step(tab, held::Event::HandOff);
+        if life != held::Life::HandedOff || !self.browser.hand_off(&agent, tab) {
+            _ = reply.send(ToolResult::failed(
+                tools::Kind::Yours,
+                "The tab is the user's already.",
+            ));
             return;
-        };
-        let Asking { site, act, .. } = self.asking.remove(at);
-        self.asked(cx);
-        let Some(field) = act.file.as_ref().map(|file| file.id) else {
-            return;
-        };
-        // check.sh reads this line.
-        log!("browser: agent {} answered {id} Choose", act.agent);
-        if !self.browser.file_field_choose(field, window) {
-            let refused = Refused::new("The file dialog couldn't open.");
-            return self.refuse(act, &site, refused, cx);
         }
-        let timer = cx.spawn(async move |agents, cx| {
-            cx.background_executor()
-                .timer(Waits::launch().handoff)
-                .await;
-            _ = agents.update(cx, |agents, cx| {
-                if let Some(Choosing { site, act, .. }) = agents.choosing.remove(&field) {
-                    let why = "The user didn't choose a file in 15 minutes.";
-                    agents.refuse(act, &site, Refused::new(why), cx);
-                }
-            });
-        });
-        let choosing = Choosing {
-            site,
-            act,
-            _timer: timer,
+        self.note_page(&agent, (connection, tab), "upload", &host, "");
+        // check.sh reads this line.
+        log!("browser: agent {agent} hands off {tab}: {why}");
+        let question = self.next_request;
+        self.next_request += 1;
+        let held = Held {
+            agent,
+            connection,
+            call,
+            why,
+            question,
+            back: None,
+            reply: Some(reply),
+            timer: None,
+            sign_in: false,
         };
-        self.choosing.insert(field, choosing);
-    }
-
-    /// What came of the user's Choose File… for the page's file `field` (file_field_done): the
-    /// agent hears how many files went in, never which.
-    pub fn file_field_done(&mut self, field: u64, end: FileFieldEnd, cx: &mut Context<Self>) {
-        let (site, act) = match self.choosing.remove(&field) {
-            Some(Choosing { site, act, .. }) => (site, act),
-            None => {
-                // The core ends a tab's earlier field as a new one shows there, its card still up.
-                let at = (self.asking.iter()).position(|asking| {
-                    asking
-                        .act
-                        .file
-                        .as_ref()
-                        .is_some_and(|file| file.id == field)
-                });
-                let Some(at) = at else {
-                    return;
-                };
-                let Asking { site, act, .. } = self.asking.remove(at);
-                self.asked(cx);
-                (site, act)
-            }
-        };
-        let (said, count) = match end {
-            FileFieldEnd::Put(count) => ("put", count),
-            FileFieldEnd::NoFile => ("none", 0),
-            FileFieldEnd::Left => ("left", 0),
-            FileFieldEnd::Closed => ("closed", 0),
-        };
-        // check.sh reads this line, which names no file.
-        log!(
-            "browser: agent {} file field {field} {said} {count}",
-            act.agent
-        );
-        let label = act.file.as_ref().map_or("", |file| file.label.as_str());
-        let why = match end {
-            FileFieldEnd::Put(count) => {
-                let files = match count {
-                    1 => "a file".to_string(),
-                    _ => format!("{count} files"),
-                };
-                let text = match label.is_empty() {
-                    true => format!("The user put {files} in the field."),
-                    false => format!("The user put {files} in “{label}”."),
-                };
-                self.browser.file_field_drop(field);
-                self.note(&act.agent, act.connection, "upload", &site, "");
-                cx.notify();
-                _ = act.reply.send(ToolResult::text(text));
-                return;
-            }
-            FileFieldEnd::NoFile => "The user chose no file.",
-            FileFieldEnd::Left => LEFT_PAGE,
-            FileFieldEnd::Closed => "The file dialog closed before the user chose a file.",
-        };
-        self.refuse(act, &site, Refused::new(why), cx);
-    }
-
-    /// The question `id` waited ASK_WAIT with no answer: the action is refused this once, as the
-    /// × refuses it, so the agent isn't left waiting on a user who went away.
-    fn unanswered(&mut self, id: u64, cx: &mut Context<Self>) {
-        let Some(at) = (self.asking.iter()).position(|asking| asking.question.id == id) else {
-            return;
-        };
-        let Asking { site, act, .. } = self.asking.remove(at);
-        log!("browser: agent {} asked {id} with no answer", act.agent);
-        self.refuse(act, &site, Refused::new(NO_ANSWER), cx);
-        self.asked(cx);
+        self.held.insert(tab, held);
+        self.carry(tab, held::Event::HandOff, life, actions, cx);
+        cx.notify();
     }
 
     /// Answers the handoff `question` of `tab` once HANDOFF_WAIT passes with the tab still the
@@ -3747,66 +3648,6 @@ impl Agents {
                 }
             });
         })
-    }
-
-    /// The user's answer to the question `id`.
-    pub fn answer(&mut self, id: u64, answer: Answer, cx: &mut Context<Self>) {
-        let Some(at) = self
-            .asking
-            .iter()
-            .position(|asking| asking.question.id == id)
-        else {
-            return self.answer_back(id, answer, cx);
-        };
-        // A file is chosen with the card's Choose File… (choose_file), so only a no answers one.
-        if self.asking[at].act.file.is_some() && matches!(answer, Answer::Once | Answer::Always) {
-            return;
-        }
-        let Asking {
-            site,
-            act,
-            question,
-            ..
-        } = self.asking.remove(at);
-        // check.sh reads this line.
-        log!("browser: agent {} answered {id} {answer:?}", act.agent);
-        // A fenced site's card has no Always: the fence would pass none (#3724).
-        let answer = match answer {
-            Answer::Always if question.fenced => Answer::Once,
-            answer => answer,
-        };
-        // A request's changes and a payment ask every time, whatever answered.
-        if act.action != "request"
-            && !question.each_time
-            && let Answer::Always | Answer::Never = answer
-        {
-            let sites = self.grants.entry(self.answers_of(&act.agent)).or_default();
-            sites.insert(site.clone(), answer == Answer::Always);
-            self.save();
-        }
-        match answer {
-            Answer::Once | Answer::Always if act.action == "request" => self.send(act, true, cx),
-            Answer::Once | Answer::Always => self.run(act, cx),
-            Answer::Never | Answer::Dismiss => {
-                self.refuse(act, &site, Refused::of(tools::Kind::SaidNo, SAID_NO), cx)
-            }
-        }
-        self.asked(cx);
-    }
-
-    /// The user's answer to an agent asking for a tab back: Hand Back, or Keep, which refuses it.
-    fn answer_back(&mut self, id: u64, answer: Answer, cx: &mut Context<Self>) {
-        let asked = (self.held.iter())
-            .find(|(_, held)| held.question == id && held.life() == held::Life::Asked);
-        let Some((&tab, held)) = asked else {
-            return;
-        };
-        // check.sh reads this line.
-        log!("browser: agent {} answered {id} {answer:?}", held.agent);
-        if let Answer::Once | Answer::Always = answer {
-            return self.hand_back(tab, cx);
-        }
-        self.let_go(tab, held::Event::Keep, cx);
     }
 
     /// The sites where the user answered the agent for good, by name: Always Allow (true) or
@@ -3958,15 +3799,10 @@ impl Agents {
         cx.notify();
     }
 
-    /// The question asked now, if any: the first action asked about, else the first handoff whose
-    /// agent waits on it, of those their agents show (`first_prompt`).
+    /// The step that waits on the user now, if any: the first handoff whose agent waits on it, of
+    /// those their agents show (`first_prompt`).
     pub fn question(&self) -> Option<Question> {
         let shown = |agent: &str, id: u64| self.first_prompt(agent) == Some(id);
-        let confirmation =
-            (self.asking.iter()).find(|asking| shown(&asking.act.agent, asking.question.id));
-        if let Some(asking) = confirmation {
-            return Some(asking.question.clone());
-        }
         let handoff = (self.held.iter())
             .filter(|(_, held)| held.reply.is_some() && shown(&held.agent, held.question))
             .min_by_key(|(_, held)| held.question);
@@ -3974,48 +3810,17 @@ impl Agents {
             id: held.question,
             agent: self.agent_name(&held.agent),
             from: held.agent.clone().into(),
-            what: match held.back {
-                Some(_) => "have a tab back".into(),
-                None => "hand you a tab".into(),
-            },
             why: held.back.as_ref().unwrap_or(&held.why).clone().into(),
-            handoff: Some(tab),
+            tab,
             back: held.back.is_some(),
-            ..Question::default()
         })
-    }
-
-    fn asked(&self, cx: &mut Context<Self>) {
-        self.browser.ask(self.question(), cx);
-        cx.notify();
     }
 
     /// The agent went, or with `connection`, that connection of its: what waits for it goes
     /// unanswered, its questions with it. Its other connections' wait on.
     fn forget_waiting(&mut self, agent: &str, connection: Option<u64>, cx: &mut Context<Self>) {
-        let asked = self.question().map(|question| question.id);
         let theirs =
             |whose: &str, on: u64| whose == agent && connection.is_none_or(|gone| gone == on);
-        // A download nobody's left to answer for leaves no file.
-        for asking in
-            (self.asking.iter()).filter(|asking| theirs(&asking.act.agent, asking.act.connection))
-        {
-            if asking.act.download != 0 {
-                self.browser.answer_download(asking.act.download, false);
-                self.ended.remove(&asking.act.download);
-            }
-            // Nor does a file field: the page gets nothing.
-            if let Some(file) = &asking.act.file {
-                self.browser.file_field_drop(file.id);
-            }
-        }
-        self.asking
-            .retain(|asking| !theirs(&asking.act.agent, asking.act.connection));
-        let choosing = (self.choosing)
-            .extract_if(|_, choosing| theirs(&choosing.act.agent, choosing.act.connection));
-        for (field, _) in choosing {
-            self.browser.file_field_drop(field);
-        }
         self.describing
             .retain(|_, act| !theirs(&act.agent, act.connection));
         self.downloading
@@ -4032,9 +3837,7 @@ impl Agents {
         for tab in held {
             self.let_go(tab, held::Event::Gone { holder: true }, cx);
         }
-        if self.question().map(|question| question.id) != asked {
-            self.asked(cx);
-        }
+        cx.notify();
     }
 
     /// Answers the action with why it's refused, which the log has.
@@ -4043,38 +3846,23 @@ impl Agents {
         let why = why.as_str();
         if act.download != 0 {
             self.browser.answer_download(act.download, false);
-            self.ended.remove(&act.download);
         }
         // Dropping a field the core ended already is harmless, so every end drops it.
         if let Some(file) = &act.file {
             self.browser.file_field_drop(file.id);
         }
         // A call's requests the user said no to are each listed, as each sent one is.
+        let by = (act.connection, act.page());
         match act.requests.as_slice() {
-            [] => self.note(&act.agent, act.connection, act.action, site, why),
+            [] => self.note_page(&act.agent, by, act.action, site, why),
             requests => {
                 for each in requests {
-                    self.note_request(&act.agent, act.connection, site, each, why);
+                    self.note_request(&act.agent, by, site, each, why);
                 }
             }
         }
         cx.notify();
-        let answer = match why {
-            _ if told.is_some() => told.unwrap(),
-            SAID_NO => format!("The user said no: you can't {}. Don't try again.", act.what),
-            NO_ANSWER => format!(
-                "The user didn't answer in 5 minutes, so you can't {} now. Ask them where you \
-                 started the task before you try again.",
-                act.what
-            ),
-            SAID_NEVER => {
-                format!(
-                    "The user said never on {site}: you can't {}. Don't try again.",
-                    act.what
-                )
-            }
-            _ => why.to_string(),
-        };
+        let answer = told.unwrap_or_else(|| why.to_string());
         _ = act.reply.send(ToolResult {
             kind,
             ..ToolResult::error(answer)
@@ -4088,7 +3876,8 @@ impl Agents {
             Fenced::Came(entry, call) => {
                 let site = site(&self.browser.tab(act.tab, cx).url);
                 self.clear(act.tab, entry, cx);
-                self.note(&act.agent, act.connection, fence::CAME_ACTION, &site, "");
+                let by = (act.connection, act.tab);
+                self.note_page(&act.agent, by, fence::CAME_ACTION, &site, "");
                 return self.dispatch(*call, cx);
             }
             Fenced::Open(entry) => Some(entry),
@@ -4274,6 +4063,7 @@ impl Agents {
             show: Show::Nothing,
             field: String::new(),
             download: id,
+            started_in: tab,
             file: None,
             requests: Vec::new(),
             wait: None,
@@ -4286,6 +4076,7 @@ impl Agents {
 
     /// Lets the download the user said yes to go on. Its end answers, or a while if it's slow.
     fn download(&mut self, act: Act, cx: &mut Context<Self>) {
+        let page = act.page();
         let Act {
             agent,
             connection,
@@ -4295,13 +4086,9 @@ impl Agents {
             reply,
             ..
         } = act;
-        self.note(&agent, connection, "download", &site(&url), "");
+        self.note_page(&agent, (connection, page), "download", &site(&url), "");
         cx.notify();
         self.browser.answer_download(download, true);
-        if let Some(end) = self.ended.remove(&download) {
-            _ = reply.send(download_answer(&name, end));
-            return self.advance(cx);
-        }
         let downloading = Downloading {
             agent,
             connection,
@@ -4328,14 +4115,6 @@ impl Agents {
     /// How a download the user let an agent's page make ended, which answers its action.
     pub fn download_ended(&mut self, download: u64, end: DownloadEnd, cx: &mut Context<Self>) {
         let Some(Downloading { name, reply, .. }) = self.downloading.remove(&download) else {
-            // Ended before the user answered for it, which the yes answers with.
-            if self
-                .asking
-                .iter()
-                .any(|asking| asking.act.download == download)
-            {
-                self.ended.insert(download, end);
-            }
             return;
         };
         _ = reply.send(download_answer(&name, end));
@@ -4382,7 +4161,7 @@ impl Agents {
         let refused = checked.as_ref().err().map_or(String::new(), |refused| {
             self.log_words(tab, &refused.why, cx)
         });
-        self.note_request(&agent, connection, &site, &next, &refused);
+        self.note_request(&agent, (connection, tab), &site, &next, &refused);
         cx.notify();
         if let Err(refused) = checked {
             sending
@@ -4495,6 +4274,7 @@ impl Agents {
         else {
             return;
         };
+        self.went_to(entry, tab, cx);
         // What it did, as a look again for the text it waits for says it too.
         let did_note = note.clone();
         if !opened_tabs.is_empty() {
@@ -4690,7 +4470,7 @@ impl Agents {
             return true;
         };
         let site = site(&self.browser.tab(tab, cx).url);
-        self.note(agent, connection, action, &site, &refused.why);
+        self.note_page(agent, (connection, tab), action, &site, &refused.why);
         cx.notify();
         _ = reply.send(refused.into());
         false
@@ -4769,15 +4549,42 @@ impl Agents {
     /// `note`. A call that brought no entry of its own (0) marks none: the log's last entry may
     /// be another call's, as calls on different tabs are under way at once.
     fn log_notes(&mut self, entry: u64, note: &notes::Note) {
-        let found = (self.log.iter_mut().rev())
+        if let Some(found) = self.logged_mut(entry) {
+            found.notes = note.name.into();
+        }
+    }
+
+    /// The log's entry `entry`, a call's or a run's step's, or None for 0, a call with none.
+    fn logged_mut(&mut self, entry: u64) -> Option<&mut Activity> {
+        (self.log.iter_mut().rev())
             .flat_map(|each| match each.id == entry {
                 true => vec![each],
                 false => each.steps.iter_mut().collect(),
             })
-            .find(|each| entry != 0 && each.id == entry);
-        if let Some(found) = found {
-            found.notes = note.name.into();
+            .find(|each| entry != 0 && each.id == entry)
+    }
+
+    /// Names the log's entry `entry`, a navigate's, a back's or a forward's the core let go, by
+    /// the site `tab` is on now that its page has answered: the host of the address the core has
+    /// for it, never one the agent wrote, and never the site it left. Once, so a call that looks
+    /// at its page again keeps the name its first answer gave it.
+    fn went_to(&mut self, entry: u64, tab: u64, cx: &mut Context<Self>) {
+        let site = site(&self.browser.tab(tab, cx).url);
+        let Some(found) = (self.logged_mut(entry)).filter(|found| {
+            goes(&found.action) && found.site.is_empty() && found.refused.is_empty()
+        }) else {
+            return;
+        };
+        if site.is_empty() {
+            return;
         }
+        found.site = site.clone().into();
+        // What the agent is doing says where too, unless it has done something else since.
+        let (agent, did) = (found.agent.to_string(), tools::describe(&found.action));
+        if (self.doing.get(&agent)).is_some_and(|doing| doing.as_ref() == did) {
+            self.doing.insert(agent, format!("{did} · {site}").into());
+        }
+        cx.notify();
     }
 
     /// `note`, what an action did, then the tab's latest outline as `show` says, which is the
@@ -4823,10 +4630,12 @@ impl Agents {
         cx: &mut Context<Self>,
     ) {
         // A tab the user holds stays where it is, as its place among the sites would tell its site.
+        // So does a page of a task the user stopped, which isn't its client's to move.
         let today = (self.browser.agent_tabs(agent, cx).into_iter()).filter(|tab| {
             !tab.pinned
                 && self.browser.off_limits(tab.id, cx).is_none()
                 && !self.held.contains_key(&tab.id)
+                && !self.withheld(agent, tab.id)
         });
         let mut rows: Vec<(u64, usize, Option<String>)> = Vec::new();
         for tab in today {
@@ -4893,7 +4702,7 @@ impl Agents {
         let refused = checked.as_ref().err().map_or(String::new(), |refused| {
             self.log_words(tab, &refused.why, cx)
         });
-        self.note(agent, connection, action, &site, &refused);
+        self.note_page(agent, (connection, tab), action, &site, &refused);
         cx.notify();
         if let Err(refused) = checked {
             _ = reply.send(refused.into());
@@ -4968,6 +4777,11 @@ impl Agents {
     /// Closing one of its own off the web reads nothing of it, and is the agent's way out of a tab
     /// that went there.
     fn may_act(&self, agent: &str, tab: u64, action: &str, cx: &mut App) -> Result<(), Refused> {
+        // The floor under every tool: a page of a task the user stopped is refused to its
+        // client, whatever the act and its level, until they hand it back (`stopped_call`).
+        if self.withheld(agent, tab) {
+            return Err(Refused::of(tools::Kind::Stopped, STOPPED));
+        }
         match self.off_limits(agent, tab, cx) {
             Some(NOT_WEB_PAGE) if action == "close_tab" => {}
             Some(why) => return Err(off_limits_refused(why)),
@@ -5035,11 +4849,16 @@ impl Agents {
         cx: &mut Context<Self>,
     ) -> bool {
         let checked = self.may_act(agent, tab, action, cx);
-        let site = site(&self.browser.tab(tab, cx).url);
+        // A tab that's let go somewhere is named by where it went, which only the core's answer
+        // knows (`went_to`): the site it's on now is the one it leaves. One refused stays there.
+        let site = match checked.is_ok() && goes(logged) {
+            true => String::new(),
+            false => site(&self.browser.tab(tab, cx).url),
+        };
         let refused = checked.as_ref().err().map_or(String::new(), |refused| {
             self.log_words(tab, &refused.why, cx)
         });
-        self.note(agent, connection, logged, &site, &refused);
+        self.note_page(agent, (connection, tab), logged, &site, &refused);
         cx.notify();
         match checked {
             Ok(()) => {
@@ -5208,9 +5027,9 @@ impl Agents {
         } else {
             "close_tab"
         };
-        self.note(
+        self.note_page(
             agent,
-            connection,
+            (connection, tab),
             logged,
             site,
             answer.as_ref().err().map_or("", String::as_str),
@@ -5267,7 +5086,9 @@ impl Agents {
         cx: &mut Context<Self>,
     ) -> Result<u64, Refused> {
         let space = self.space(agent, cx);
-        let tabs = self.tabs_seen(space, cx);
+        let mut tabs = self.tabs_seen(space, cx);
+        // A call that names no tab never falls on a page of a task the user stopped.
+        tabs.retain(|tab| !self.withheld(agent, tab.id));
         // A task with helpers has several callers on its one connection, so the tab used last
         // may be another's: a call names its tab unless the task has only one (#4102).
         if (self.task(agent)).is_some_and(|task| task.helpers.on) {
@@ -5295,11 +5116,25 @@ impl Agents {
         self.note_on(agent, connection, action, site, "", refused)
     }
 
-    /// As `note`, for a request: where it went and what it sent, or would have.
+    /// As `note`, for what it did to the page in `tab`: the entry names the access the act was
+    /// judged at, the page's task's, whichever connection sent it (`entry_tier`).
+    fn note_page(
+        &mut self,
+        agent: &str,
+        (connection, tab): (u64, u64),
+        action: &str,
+        site: &str,
+        refused: &str,
+    ) {
+        let entry = ("", Vec::new(), "");
+        self.note_entry(agent, (connection, tab), action, site, "", refused, entry)
+    }
+
+    /// As `note_page`, for a request: where it went and what it sent, or would have.
     fn note_request(
         &mut self,
         agent: &str,
-        connection: u64,
+        by: (u64, u64),
         site: &str,
         sent: &request::Request,
         refused: &str,
@@ -5309,7 +5144,7 @@ impl Agents {
         let said = request::hide_said(&sent.what).0;
         let entry = (sent.url.as_str(), sent.sent(), said.as_str());
         let target = sent.target();
-        self.note_entry(agent, connection, "request", site, &target, refused, entry);
+        self.note_entry(agent, by, "request", site, &target, refused, entry);
     }
 
     /// As `note`, for what on the page, `target`.
@@ -5323,14 +5158,15 @@ impl Agents {
         refused: &str,
     ) {
         let entry = ("", Vec::new(), "");
-        self.note_entry(agent, connection, action, site, target, refused, entry)
+        self.note_entry(agent, (connection, 0), action, site, target, refused, entry)
     }
 
+    /// The entry of what `agent` did on `connection`, to the page in `tab` or with 0 to none.
     #[allow(clippy::too_many_arguments)]
     fn note_entry(
         &mut self,
         agent: &str,
-        connection: u64,
+        (connection, tab): (u64, u64),
         action: &str,
         site: &str,
         target: &str,
@@ -5364,7 +5200,7 @@ impl Agents {
             url: SharedString::from(url.to_string()),
             sent,
             said: SharedString::from(said.to_string()),
-            tier: self.tier_of(agent, connection, 0).label().into(),
+            tier: self.entry_tier(agent, connection, tab).label().into(),
             notes: SharedString::default(),
         };
         self.logged = entry.id;
@@ -5387,7 +5223,8 @@ impl Agents {
             return;
         }
         let (events, mut handed) = futures::channel::mpsc::unbounded();
-        match server::Server::start(&self.socket, self.tokens.clone(), events) {
+        let (tokens, others) = (self.tokens.clone(), self.others.clone());
+        match server::Server::start(&self.socket, tokens, others, events) {
             Ok(server) => {
                 // check.sh reads this line.
                 log!("browser: agents server on {}", server.path().display());
@@ -5422,19 +5259,8 @@ impl Agents {
         for tab in self.held.keys().copied().collect::<Vec<_>>() {
             self.let_go(tab, held::Event::Gone { holder: true }, cx);
         }
-        // A handoff's card goes too, the user still holding its tab, and the page's file fields.
-        let asked = self.asking.iter().map(|asking| &asking.act);
-        let fields = asked.filter_map(|act| act.file.as_ref().map(|file| file.id));
-        let fields = fields
-            .chain(self.choosing.keys().copied())
-            .collect::<Vec<_>>();
-        for field in fields {
-            self.browser.file_field_drop(field);
-        }
-        self.asking.clear();
-        self.choosing.clear();
         self.describing.clear();
-        self.browser.ask(None, cx);
+        cx.notify();
         for agent in std::mem::take(&mut self.live) {
             self.browser.disconnected(&agent, cx);
             self.note(&agent, 0, "disconnected", "", "");
@@ -5478,11 +5304,11 @@ impl Agents {
             "models": models,
             "found": found,
             "keep": !self.tasks.kept.off,
-            "kept_told": self.tasks.kept.told,
             "notify": self.notify.id(),
         });
         let saved = json!({
             "on": self.on,
+            "other_apps": self.other_apps(),
             "agents": agents,
             "grants": grants,
             "fenced": self.fenced,
@@ -5600,6 +5426,13 @@ fn answer_of(tab: u64, event: held::Event) -> ToolResult {
         held::Event::Keep => ToolResult::error(format!(
             "The user keeps tab {tab}. Don't ask for it again unless they say so."
         )),
+        held::Event::NotNow => ToolResult::failed(
+            tools::Kind::Yours,
+            format!(
+                "The user won't do the step on tab {tab} now. It stays theirs; ask them where you \
+                 started the task before you go on there."
+            ),
+        ),
         held::Event::Timer => ToolResult::failed(
             tools::Kind::Yours,
             format!(
@@ -5738,6 +5571,7 @@ fn act_of(
         asks: String::new(),
         field: String::new(),
         download: 0,
+        started_in: 0,
         file: None,
         requests: Vec::new(),
         wait: None,
@@ -5801,27 +5635,18 @@ fn finish(sending: Sending, error: bool, kind: Option<tools::Kind>) {
     });
 }
 
-/// What the log says of an action the user refused, now or for good on its site.
-const SAID_NO: &str = "You said no.";
-/// What the log says of an action that asked and had no answer in ASK_WAIT.
-const NO_ANSWER: &str = "No answer in 5 minutes.";
-
-/// Why an upload ends when its field went before the user's files could go in.
-const LEFT_PAGE: &str = "The field left the page before the user chose a file.";
-/// The spec's: how long an action asking first waits for the user's answer.
-const ASK_WAIT: Duration = Duration::from_secs(5 * 60);
 /// The spec's: how long a handoff's call waits for the user to hand the tab back.
 const HANDOFF_WAIT: Duration = Duration::from_secs(15 * 60);
-/// A check's waits in place of ASK_WAIT, HANDOFF_WAIT and task::QUIET, in seconds, as
+/// A check's waits in place of HANDOFF_WAIT and task::QUIET, in seconds, as
 /// `--agent-waits=<ask>,<handoff>[,<quiet>]`, so a run sees each end without waiting minutes, or a
-/// run whose own work pauses its calls keeps one task. Not read in a prod build.
+/// run whose own work pauses its calls keeps one task. Not read in a prod build. Nothing asks any
+/// more, so the first is taken and unused: check scripts still pass all three by position.
 const WAITS_SWITCH: &str = "--agent-waits";
 
-/// How long an ask and a handoff wait, and a session quiet after its last page: the spec's, or a
-/// check's from the launch's arguments.
+/// How long a handoff waits, and a session quiet after its last page: the spec's, or a check's
+/// from the launch's arguments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Waits {
-    ask: Duration,
     handoff: Duration,
     quiet: Duration,
 }
@@ -5829,7 +5654,6 @@ struct Waits {
 impl Waits {
     fn new(given: &[String], prod: bool) -> Waits {
         let spec = Waits {
-            ask: ASK_WAIT,
             handoff: HANDOFF_WAIT,
             quiet: task::QUIET,
         };
@@ -5842,8 +5666,7 @@ impl Waits {
         };
         let seconds = |word: &str| word.parse::<u64>().ok().map(Duration::from_secs);
         match value.split(',').collect::<Vec<_>>()[..] {
-            [ask, handoff, ref quiet @ ..] if quiet.len() <= 1 => Waits {
-                ask: seconds(ask).unwrap_or(spec.ask),
+            [_ask, handoff, ref quiet @ ..] if quiet.len() <= 1 => Waits {
                 handoff: seconds(handoff).unwrap_or(spec.handoff),
                 quiet: (quiet.first().and_then(|quiet| seconds(quiet))).unwrap_or(spec.quiet),
             },
@@ -5862,7 +5685,6 @@ impl Waits {
 }
 /// Why discarding a page the agent didn't open asks the user first.
 const UNSAVED: &str = "Its page may have unsaved changes, which closing it loses.";
-const SAID_NEVER: &str = "You said never on this site.";
 /// Why an action asks on a site the user fenced, which fence.rs words for the card.
 const FENCED: &str = "fenced";
 /// Why an act is refused on a site outside its task's Sites, as FENCED is a stand-in.
@@ -6010,6 +5832,11 @@ pub fn random_token() -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// Whether `action` takes a tab to another page, so that the log names where it went.
+fn goes(action: &str) -> bool {
+    matches!(action, "navigate" | "back" | "forward")
+}
+
 /// A URL's host, without "www.", for the log. Only a web page's host names its site: another
 /// page's address can hold a file's path or an extension's id, so for one the log says only what
 /// kind of page it is.
@@ -6046,23 +5873,28 @@ pub fn web_site(site: &str) -> bool {
 }
 
 /// The local time `at`, in seconds since 1970, reads on the clock here, such as "18:00", with
-/// its day if it's a day or more away, such as "Tue 18:00".
+/// its day if it's a day or more away, such as "Tue 18:00". On the system's clock, 12- or
+/// 24-hour, as every time a task says is and History's rows are (clock.rs).
 pub fn local_time(at: u64) -> String {
     use chrono::{Local, TimeZone};
     let Some(time) = Local.timestamp_opt(at as i64, 0).single() else {
         return String::new();
     };
     let soon = time.signed_duration_since(Local::now()) < chrono::Duration::hours(20);
-    time.format(if soon { "%H:%M" } else { "%a %H:%M" })
-        .to_string()
+    let hour = crate::clock::hour_minute(crate::clock::twelve_hour());
+    match soon {
+        true => time.format(hour).to_string(),
+        false => time.format(&format!("%a {hour}")).to_string(),
+    }
 }
 
 /// When `at` was, in seconds since 1970, as a finished task says it: the time on the clock here
-/// if it was today, "13:31", else its day, "21 Nov", as a time alone reads as today's.
+/// if it was today, "13:31" or "1:31 PM" as the system's clock is, else its day, "21 Nov", as a
+/// time alone reads as today's.
 pub fn time_or_day(at: u64) -> String {
     use chrono::{Local, TimeZone};
     match Local.timestamp_opt(at as i64, 0).single() {
-        Some(time) => time_or_day_on(time, Local::now()),
+        Some(time) => time_or_day_on(time, Local::now(), crate::clock::twelve_hour()),
         None => String::new(),
     }
 }
@@ -6070,13 +5902,17 @@ pub fn time_or_day(at: u64) -> String {
 fn time_or_day_on<Zone: chrono::TimeZone>(
     time: chrono::DateTime<Zone>,
     now: chrono::DateTime<Zone>,
+    twelve: bool,
 ) -> String
 where
     Zone::Offset: std::fmt::Display,
 {
     let today = time.date_naive() == now.date_naive();
-    time.format(if today { "%H:%M" } else { "%-d %b" })
-        .to_string()
+    let form = match today {
+        true => crate::clock::hour_minute(twelve),
+        false => "%-d %b",
+    };
+    time.format(form).to_string()
 }
 
 /// An agent's sentence for a request as an opened log entry shows it, marked as its words:
@@ -6102,7 +5938,7 @@ pub fn ago(at: SystemTime, now: SystemTime) -> String {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// Whether the agent with the id `agent` runs a task the user asked from ⌘T (Agent task).
 pub fn is_task(agent: &str) -> bool {
