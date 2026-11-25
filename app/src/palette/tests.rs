@@ -1790,15 +1790,15 @@ fn a_rows_plate_under_the_pointer_is_the_one_a_card_has_on_a_dark_window() {
 ///
 /// At More the ink reads 5.45 on the window's brightest point, which a plate that tells at TELLS
 /// and a title at its bar take between them whole. There the shown plate still tells at TELLS
-/// with its title at its bar, and the pointer's, which tells first and lets its title give, is
-/// ahead of it by 0.02 at most.
+/// with its title at its bar on the colour a screen shows, and the pointer's, which tells first
+/// and lets its title give, is ahead of it by 0.025 at most.
 ///
 /// With a Space's colour the window leaves less than both take, and this holds neither to it.
 #[test]
 fn the_shown_plate_is_never_the_fainter_where_its_title_keeps_its_bar() {
     // What the pointer's plate may tell over the shown one at More, where the shown one's title
     // keeps 4.5 and the pointer's doesn't.
-    let ahead_at_more = 0.02;
+    let ahead_at_more = 0.025;
     for level in Transparency::ALL {
         set_transparency(level);
         let palette = Palette::of(None, Tone::Dark);
@@ -1833,4 +1833,99 @@ fn the_shown_plate_is_never_the_fainter_where_its_title_keeps_its_bar() {
             );
         }
     }
+}
+
+/// The Library's search field is a plate of the ink on the window, and its placeholder gray text
+/// on it: there it holds the level's bar for gray text in both looks, with a Space's colour and
+/// with none, over every point of the window over a black and a white backdrop.
+///
+/// But for one case, which is the window's and not the placeholder's: at Less, whose bar for gray
+/// text is text's own, a Space's colour can leave a dark window on which Paper itself is under
+/// that bar on a plate. There the placeholder is the ink whole, the most there is, and reads what
+/// a title on a plate under the pointer holds there (`failures_over`).
+///
+/// Only the look's own gray reads. With no Space colour the other look's, on the same field, is
+/// under every level's bar in both looks, almost the field's own colour, which is why the field
+/// takes its colours from the palette it's drawn with and keeps none.
+#[test]
+fn the_library_search_placeholder_reads_on_its_field_at_every_level() {
+    use crate::tokens::shell::library::{LIBRARY_PLATE, SEARCH_PLACEHOLDER};
+    const WHOLE_INK: f32 = 3.6;
+    let themes = grid(
+        &[0., 60., 120., 180., 240., 300.],
+        &[0.4, 1.],
+        &[0.2, 0.45, 0.8],
+        &[crate::theme::DEFAULT_INTENSITY],
+    );
+    // The least gray text of `ink` reads on `palette`'s field anywhere on its window.
+    let least = |palette: &Palette, ink: Hsla| {
+        let ink = Rgba::from(ink);
+        fine_window(palette)
+            .into_iter()
+            .map(|at| {
+                let field = over(at, palette.ink, LIBRARY_PLATE);
+                contrast(over(field, ink, ink.a), field)
+            })
+            .fold(f32::MAX, f32::min)
+    };
+    for level in Transparency::ALL {
+        set_transparency(level);
+        for theme in themes.iter().map(Some).chain([None]) {
+            for tone in [Tone::Dark, Tone::Light] {
+                let palette = Palette::of(theme, tone);
+                let gray = palette.gray(SEARCH_PLACEHOLDER);
+                let ratio = least(&palette, gray);
+                let whole = (level, tone) == (Transparency::Less, Tone::Dark)
+                    && theme.is_some()
+                    && gray.a >= 1.
+                    && ratio >= WHOLE_INK;
+                assert!(
+                    ratio >= gray_text(level) - 1e-4 || whole,
+                    "{level:?} {tone:?} {theme:?}: {ratio:.2} at {:.2} of the ink",
+                    gray.a
+                );
+            }
+        }
+        let (dark, light) = (
+            Palette::of(None, Tone::Dark),
+            Palette::of(None, Tone::Light),
+        );
+        for (palette, other) in [(&light, &dark), (&dark, &light)] {
+            let ratio = least(palette, other.gray(SEARCH_PLACEHOLDER));
+            assert!(
+                ratio < gray_text(level),
+                "{level:?} {:?}: the other look's gray reads {ratio:.2}",
+                palette.tone
+            );
+        }
+    }
+}
+
+/// The shown row's title reads at text's minimum on its plate as a screen shows it, 8 bits a
+/// channel, at every level, on a dark window with no Space's colour, where the plate's shade is
+/// solved to the least that reads (`solve_selected`): over the window's darkest ground and over
+/// its lightest, a white backdrop with the most a desktop picture lifts the material. Solved on
+/// the unrounded colour, the plate read 4.49 at More once drawn.
+#[test]
+fn the_shown_rows_title_reads_on_the_plate_as_drawn_at_every_level() {
+    for level in Transparency::ALL {
+        set_transparency(level);
+        let palette = Palette::of(None, Tone::Dark);
+        let lifted = palette.window_over_greys(0., 0., 1.);
+        let grounds = fine_window(&palette).into_iter().chain(lifted);
+        for at in grounds {
+            for hover in [0., 1.] {
+                let plate = Rgba::from(palette.shown(hover));
+                let shown = drawn(over(at, plate, plate.a));
+                let reads = contrast(palette.ink, shown);
+                assert!(
+                    reads >= TEXT,
+                    "{level:?} hover {hover}: the title reads {reads:.3} on #{:06x} over #{:06x}",
+                    hex(shown),
+                    hex(at)
+                );
+            }
+        }
+    }
+    set_transparency(Transparency::Standard);
 }

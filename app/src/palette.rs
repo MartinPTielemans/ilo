@@ -744,10 +744,10 @@ impl Palette {
     /// The selected plate's shade where the one `solve_ground` gave leaves the plate too faint to
     /// tell from the window, which a dark window with no Space's colour does where most comes
     /// through: the least at which the ink still reads on the plate at TEXT, whatever step it
-    /// falls on. It has nothing to spare there, and needs none: that window is its material alone,
-    /// one colour over each backdrop, with no points between to dip. A plate that tells already
-    /// keeps its shade, and so does any with a Space's colour or on a light window, where what
-    /// tells is the plate's shadow.
+    /// falls on, on the colour a screen shows, 8 bits a channel. It has nothing more to spare
+    /// there, and needs none: that window is its material alone, one colour over each backdrop,
+    /// with no points between to dip. A plate that tells already keeps its shade, and so does any
+    /// with a Space's colour or on a light window, where what tells is the plate's shadow.
     fn solve_selected(&self, window: &Window) -> f32 {
         let coarse = self.ground_shades[Ground::Selected as usize];
         if self.tone == Tone::Light || self.shown.is_some() {
@@ -767,7 +767,9 @@ impl Palette {
         }
         // The ink reads more the more shade its plate has, so the least shade lies between one it
         // doesn't read at and one it does: halved until the plate's colour no longer changes.
-        let reads = |shade: f32| plates(shade).all(|(plate, _)| contrast(self.ink, plate) >= TEXT);
+        // Read on the plate as drawn: one solved to TEXT exactly is under it once it's rounded.
+        let reads =
+            |shade: f32| plates(shade).all(|(plate, _)| contrast(self.ink, drawn(plate)) >= TEXT);
         let (mut short, mut least) = (0., coarse);
         for _ in 0..12 {
             let middle = (short + least) / 2.;
@@ -1678,6 +1680,11 @@ pub fn over(base: Rgba, color: Rgba, alpha: f32) -> Rgba {
         b: mix(base.b, color.b),
         a: 1.,
     }
+}
+
+/// `color` as a screen shows it, each channel one of 8 bits' 256 levels.
+pub fn drawn(color: Rgba) -> Rgba {
+    rgb(theme::packed(color))
 }
 
 /// WCAG's relative luminance.

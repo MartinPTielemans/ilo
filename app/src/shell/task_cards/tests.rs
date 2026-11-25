@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use gpui::{AppContext as _, Entity, Modifiers, SharedString, TestAppContext, VisualTestContext};
 
 use super::{
-    Card, Chip, Cli, Dot, Holds, Offer, PLATE_TOP, PageMark, PageWord, chip, group_height,
+    Card, Chip, Cli, Dot, GROW, Holds, Offer, PLATE_TOP, PageMark, PageWord, chip, group_height,
     pages_room, state_line,
 };
 use crate::agents::task::Word;
@@ -192,8 +192,8 @@ fn a_header_says_the_agents_words_only_as_its_title(cx: &mut TestAppContext) {
 
 /// A page's word and its outline are one answer (`page_mark`), which the sidebar's row, the rail's
 /// tile and the card read. While its task works every page says Working and the outline alone
-/// marks the page it's in; Done only once the task is done; Paused where it waits, stopped or
-/// broke off; at a handoff the outline is on the page that needs the user; a page they took over
+/// marks the page it's in; Done only once the task is done; Paused where it waits or broke off;
+/// Stopped on every page of a task the user stopped; at a handoff the outline is on the page that needs the user; a page they took over
 /// says they drive it; a stopped or done task has no outline.
 #[gpui::test]
 fn a_pages_word_and_outline_are_one_answer(cx: &mut TestAppContext) {
@@ -229,7 +229,7 @@ fn a_pages_word_and_outline_are_one_answer(cx: &mut TestAppContext) {
         assert_eq!(marks(&finished), [done; 2]);
         let mut stopped = card(4, Dot::Ended);
         stopped.pages = vec![60];
-        assert_eq!(marks(&stopped), [paused]);
+        assert_eq!(marks(&stopped), [mark(PageWord::Stopped, false)]);
     });
     // The page the task handed the user needs them there and has the outline; one they took over
     // says they drive it; its others are Paused. Once it works again, the page it handed them is
@@ -268,8 +268,15 @@ fn a_pages_word_and_outline_are_one_answer(cx: &mut TestAppContext) {
         }
     });
     assert_eq!(
-        [PageWord::Working, PageWord::Done, PageWord::Paused].map(PageWord::label),
-        ["Working", "Done", "Paused"]
+        [
+            PageWord::Working,
+            PageWord::Done,
+            PageWord::Paused,
+            PageWord::Stopped,
+            PageWord::Driving
+        ]
+        .map(PageWord::label),
+        ["Working", "Done", "Paused", "Stopped", "You're driving"]
     );
     assert_eq!(PageWord::NeedsYou.label(), Word::NeedsYou.after_name());
 }
@@ -1177,6 +1184,101 @@ fn the_group_shown_is_open_and_the_others_are_closed(cx: &mut TestAppContext) {
     );
     shell.update(cx, |shell, cx| shell.close_task(cx));
     assert_eq!(heights(&shell, cx), closed);
+}
+
+/// A page of the user's refuses the window's close with a task's view standing: the view is back
+/// at once as it stood (#4202), and the foot with it, its group open to its pages and nothing on
+/// it moving, whether the refusal comes with the foot at rest or while it still closes. The group
+/// closed with the foot's motion as the view stepped aside for the page's question; opening with
+/// that motion again, the view was back over a group whose pages' rows weren't yet. With more
+/// tasks than the foot has headers for, the one shown has its header back as well.
+#[gpui::test]
+fn a_refused_close_has_the_foot_back_at_once(cx: &mut TestAppContext) {
+    use crate::shell::{DialogKind, PageDialog, PageReply};
+    let one = vec![paged(1, Dot::Working, &[1010, 1011])];
+    let four = vec![
+        paged(4, Dot::Working, &[1040]),
+        paged(3, Dot::Working, &[1030]),
+        paged(2, Dot::Working, &[1020]),
+        paged(1, Dot::Working, &[1010, 1011]),
+    ];
+    let open = ROW_HEIGHT + pages_room(2);
+    // How long after the view steps aside the page's question is answered.
+    for (cards, answered) in [(one.clone(), 5.), (one, GROW / 2.), (four, GROW / 2.)] {
+        let (shell, _, cx) = with_task_spaces(cx, cards);
+        draw(&shell, cx);
+        shell.update(cx, |shell, cx| shell.show_task("task-1".into(), cx));
+        tick(5.);
+        draw(&shell, cx);
+        // Each group's task, whether it's going, its height now and its opacity now, and whether
+        // either still moves.
+        let foot = |shell: &Entity<Shell>, cx: &mut VisualTestContext| {
+            shell.read_with(cx, |shell, _| {
+                let now = super::clock();
+                let moves = (shell.foot.groups.iter())
+                    .any(|group| group.height.moving(now) || group.opacity.moving(now));
+                let groups: Vec<(u64, bool, f32, f32)> = (shell.foot.groups.iter())
+                    .filter(|group| group.height.at(now) > 0. || !group.leaving)
+                    .map(|group| {
+                        (
+                            group.holds.key(),
+                            group.leaving,
+                            group.height.at(now),
+                            group.opacity.at(now),
+                        )
+                    })
+                    .collect();
+                (groups, moves)
+            })
+        };
+        let stood = foot(&shell, cx);
+        assert!(!stood.1, "the foot never came to rest");
+        assert!(
+            stood
+                .0
+                .contains(&(Holds::Task("task-1".into()).key(), false, open, 1.)),
+            "the task shown has no open group: {stood:?}"
+        );
+
+        shell.update(cx, |shell, cx| shell.run(Command::CloseWindow, "ui", cx));
+        let question = PageDialog {
+            id: 7,
+            kind: DialogKind::Leave,
+            title: "".into(),
+            message: "".into(),
+            text: "".into(),
+            accept: "Leave".into(),
+            cancel: "Cancel".into(),
+            check: "".into(),
+            username: "".into(),
+            password: "".into(),
+        };
+        shell.update(cx, |shell, cx| {
+            shell.set_page_dialog(10, Some(question), cx)
+        });
+        assert_ne!(
+            foot(&shell, cx),
+            stood,
+            "the group stayed open with its view aside"
+        );
+        tick(answered);
+        draw(&shell, cx);
+
+        let stay = PageReply {
+            accept: false,
+            text: String::new(),
+            password: String::new(),
+            checked: false,
+        };
+        shell.update(cx, |shell, cx| shell.answer_page_dialog(10, 7, stay, cx));
+        assert_eq!(
+            foot(&shell, cx),
+            stood,
+            "the foot isn't back as it stood, answered after {answered} s"
+        );
+        draw(&shell, cx);
+        assert_eq!(foot(&shell, cx), stood);
+    }
 }
 
 /// The sidebar shows one thing at a time. On the user's own tab its row has the shown plate and
