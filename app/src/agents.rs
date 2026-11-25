@@ -527,6 +527,12 @@ impl Act {
         self.what = words(&format!(" on {host}"));
         self.asks = words("");
     }
+
+    /// The tab whose page it's about: its own, or for a download the one that started it. 0 for
+    /// one with none, as an open's.
+    fn page(&self) -> u64 {
+        self.tab.max(self.started_in)
+    }
 }
 
 /// An action's place at a site the user fenced (#3724).
@@ -1526,7 +1532,13 @@ impl Agents {
         cx: &mut Context<Self>,
     ) {
         let site = site(&self.browser.tab(tab, cx).url);
-        self.note(agent, self.holder(agent, tab), action, &site, refused);
+        self.note_page(
+            agent,
+            (self.holder(agent, tab), tab),
+            action,
+            &site,
+            refused,
+        );
         cx.notify();
     }
 
@@ -1558,7 +1570,7 @@ impl Agents {
         }
         if why != "disconnected" {
             let site = site(&self.browser.tab(tab, cx).url);
-            self.note(agent, self.holder(agent, tab), why, &site, "");
+            self.note_page(agent, (self.holder(agent, tab), tab), why, &site, "");
             cx.notify();
         }
     }
@@ -2003,7 +2015,7 @@ impl Agents {
                     }
                 };
                 let host = site(&self.browser.tab(tab, cx).url);
-                self.note(&agent, connection, "run_steps", &host, "");
+                self.note_page(&agent, (connection, tab), "run_steps", &host, "");
                 let (_, step) = mpsc::channel();
                 let (steps, done, wait) = (steps.into(), Vec::new(), None);
                 let run = Run {
@@ -2210,7 +2222,7 @@ impl Agents {
                     .flatten()
                 {
                     let site = site(&self.browser.tab(tab, cx).url);
-                    self.note(&agent, connection, "ask_for_tab", &site, why);
+                    self.note_page(&agent, (connection, tab), "ask_for_tab", &site, why);
                     _ = reply.send(off_limits_refused(why).into());
                     return;
                 }
@@ -2235,7 +2247,7 @@ impl Agents {
                 } else {
                     ("", None)
                 };
-                self.note(&agent, connection, "ask_for_tab", &site, refused);
+                self.note_page(&agent, (connection, tab), "ask_for_tab", &site, refused);
                 if !refused.is_empty() {
                     _ = reply.send(ToolResult {
                         kind,
@@ -2260,7 +2272,7 @@ impl Agents {
                 // Before the request is read, so its answer says nothing of a page off limits. Nor
                 // of a tab not the agent's, which the core answers as any other.
                 if let Some(why) = self.off_limits(&agent, tab, cx) {
-                    self.note(&agent, connection, "request", &host, why);
+                    self.note_page(&agent, (connection, tab), "request", &host, why);
                     cx.notify();
                     _ = reply.send(off_limits_refused(why).into());
                     return;
@@ -2268,7 +2280,7 @@ impl Agents {
                 if !self.owns(&agent, tab, cx) {
                     if let Err(refused) = self.may_act(&agent, tab, "request", cx) {
                         let logged = self.log_words(tab, &refused.why, cx);
-                        self.note(&agent, connection, "request", &host, &logged);
+                        self.note_page(&agent, (connection, tab), "request", &host, &logged);
                         cx.notify();
                         _ = reply.send(refused.into());
                         return;
@@ -2277,7 +2289,7 @@ impl Agents {
                 let requests = match request::parse(&arguments, &self.browser.tab(tab, cx).url) {
                     Ok(requests) => requests,
                     Err(request::Wrong::Refused(why)) => {
-                        self.note(&agent, connection, "request", &host, &why);
+                        self.note_page(&agent, (connection, tab), "request", &host, &why);
                         cx.notify();
                         _ = reply.send(ToolResult::error(why));
                         return;
@@ -2784,7 +2796,7 @@ impl Agents {
             return Err(reply);
         }
         let site = site(&self.browser.tab(tab, cx).url);
-        self.note(agent, connection, "hand_off", &site, "");
+        self.note_page(agent, (connection, tab), "hand_off", &site, "");
         // check.sh reads this line.
         log!("browser: agent {agent} hands off {tab}: {why}");
         let question = self.next_request;
@@ -2906,7 +2918,13 @@ impl Agents {
             .cloned();
         if let Some(agent) = agent {
             let site = site(&self.browser.tab(tab, cx).url);
-            self.note(&agent, self.holder(&agent, tab), "page_dialog", &site, "");
+            self.note_page(
+                &agent,
+                (self.holder(&agent, tab), tab),
+                "page_dialog",
+                &site,
+                "",
+            );
             cx.notify();
         }
     }
@@ -3018,7 +3036,7 @@ impl Agents {
                 _ => log!("browser: agent {agent} held {tab} {}", event.way()),
             }
             let site = site(&self.browser.tab(tab, cx).url);
-            self.note(&agent, connection, event.way(), &site, "");
+            self.note_page(&agent, (connection, tab), event.way(), &site, "");
         }
         if actions.has(A::CARD) {
             cx.notify();
@@ -3118,7 +3136,7 @@ impl Agents {
         let host = site(&self.browser.tab(tab, cx).url);
         // Before its ref is looked up, so an outline's refs say nothing of a page off limits.
         if let Some(why) = self.off_limits(agent, tab, cx) {
-            self.note(agent, connection, tool, &host, why);
+            self.note_page(agent, (connection, tab), tool, &host, why);
             _ = reply.send(off_limits_refused(why).into());
             return;
         }
@@ -3458,7 +3476,7 @@ impl Agents {
         let host = site(&self.browser.tab(tab, cx).url);
         if let Err(refused) = self.may_act(agent, tab, "upload", cx) {
             let logged = self.log_words(tab, &refused.why, cx);
-            self.note(agent, connection, "upload", &host, &logged);
+            self.note_page(agent, (connection, tab), "upload", &host, &logged);
             cx.notify();
             _ = reply.send(refused.into());
             return;
@@ -3495,7 +3513,13 @@ impl Agents {
     ) {
         let host = site(&self.browser.tab(act.tab, cx).url);
         if let Some(failure) = error {
-            self.note(&act.agent, act.connection, "upload", &host, &text);
+            self.note_page(
+                &act.agent,
+                (act.connection, act.tab),
+                "upload",
+                &host,
+                &text,
+            );
             cx.notify();
             _ = act.reply.send(ToolResult {
                 kind: failure.kind(),
@@ -3534,7 +3558,7 @@ impl Agents {
             ));
             return;
         }
-        self.note(&agent, connection, "upload", &host, "");
+        self.note_page(&agent, (connection, tab), "upload", &host, "");
         // check.sh reads this line.
         log!("browser: agent {agent} hands off {tab}: {why}");
         let question = self.next_request;
@@ -3778,11 +3802,12 @@ impl Agents {
             self.browser.file_field_drop(file.id);
         }
         // A call's requests the user said no to are each listed, as each sent one is.
+        let by = (act.connection, act.page());
         match act.requests.as_slice() {
-            [] => self.note(&act.agent, act.connection, act.action, site, why),
+            [] => self.note_page(&act.agent, by, act.action, site, why),
             requests => {
                 for each in requests {
-                    self.note_request(&act.agent, act.connection, site, each, why);
+                    self.note_request(&act.agent, by, site, each, why);
                 }
             }
         }
@@ -3816,7 +3841,8 @@ impl Agents {
             Fenced::Came(entry, call) => {
                 let site = site(&self.browser.tab(act.tab, cx).url);
                 self.clear(act.tab, entry, cx);
-                self.note(&act.agent, act.connection, fence::CAME_ACTION, &site, "");
+                let by = (act.connection, act.tab);
+                self.note_page(&act.agent, by, fence::CAME_ACTION, &site, "");
                 return self.dispatch(*call, cx);
             }
             Fenced::Open(entry) => Some(entry),
@@ -4015,6 +4041,7 @@ impl Agents {
 
     /// Lets the download the user said yes to go on. Its end answers, or a while if it's slow.
     fn download(&mut self, act: Act, cx: &mut Context<Self>) {
+        let page = act.page();
         let Act {
             agent,
             connection,
@@ -4024,7 +4051,7 @@ impl Agents {
             reply,
             ..
         } = act;
-        self.note(&agent, connection, "download", &site(&url), "");
+        self.note_page(&agent, (connection, page), "download", &site(&url), "");
         cx.notify();
         self.browser.answer_download(download, true);
         let downloading = Downloading {
@@ -4099,7 +4126,7 @@ impl Agents {
         let refused = checked.as_ref().err().map_or(String::new(), |refused| {
             self.log_words(tab, &refused.why, cx)
         });
-        self.note_request(&agent, connection, &site, &next, &refused);
+        self.note_request(&agent, (connection, tab), &site, &next, &refused);
         cx.notify();
         if let Err(refused) = checked {
             sending
@@ -4407,7 +4434,7 @@ impl Agents {
             return true;
         };
         let site = site(&self.browser.tab(tab, cx).url);
-        self.note(agent, connection, action, &site, &refused.why);
+        self.note_page(agent, (connection, tab), action, &site, &refused.why);
         cx.notify();
         _ = reply.send(refused.into());
         false
@@ -4612,7 +4639,7 @@ impl Agents {
         let refused = checked.as_ref().err().map_or(String::new(), |refused| {
             self.log_words(tab, &refused.why, cx)
         });
-        self.note(agent, connection, action, &site, &refused);
+        self.note_page(agent, (connection, tab), action, &site, &refused);
         cx.notify();
         if let Err(refused) = checked {
             _ = reply.send(refused.into());
@@ -4763,7 +4790,7 @@ impl Agents {
         let refused = checked.as_ref().err().map_or(String::new(), |refused| {
             self.log_words(tab, &refused.why, cx)
         });
-        self.note(agent, connection, logged, &site, &refused);
+        self.note_page(agent, (connection, tab), logged, &site, &refused);
         cx.notify();
         match checked {
             Ok(()) => {
@@ -4932,9 +4959,9 @@ impl Agents {
         } else {
             "close_tab"
         };
-        self.note(
+        self.note_page(
             agent,
-            connection,
+            (connection, tab),
             logged,
             site,
             answer.as_ref().err().map_or("", String::as_str),
@@ -5021,11 +5048,25 @@ impl Agents {
         self.note_on(agent, connection, action, site, "", refused)
     }
 
-    /// As `note`, for a request: where it went and what it sent, or would have.
+    /// As `note`, for what it did to the page in `tab`: the entry names the access the act was
+    /// judged at, the page's task's, whichever connection sent it (`entry_tier`).
+    fn note_page(
+        &mut self,
+        agent: &str,
+        (connection, tab): (u64, u64),
+        action: &str,
+        site: &str,
+        refused: &str,
+    ) {
+        let entry = ("", Vec::new(), "");
+        self.note_entry(agent, (connection, tab), action, site, "", refused, entry)
+    }
+
+    /// As `note_page`, for a request: where it went and what it sent, or would have.
     fn note_request(
         &mut self,
         agent: &str,
-        connection: u64,
+        by: (u64, u64),
         site: &str,
         sent: &request::Request,
         refused: &str,
@@ -5035,7 +5076,7 @@ impl Agents {
         let said = request::hide_said(&sent.what).0;
         let entry = (sent.url.as_str(), sent.sent(), said.as_str());
         let target = sent.target();
-        self.note_entry(agent, connection, "request", site, &target, refused, entry);
+        self.note_entry(agent, by, "request", site, &target, refused, entry);
     }
 
     /// As `note`, for what on the page, `target`.
@@ -5049,14 +5090,15 @@ impl Agents {
         refused: &str,
     ) {
         let entry = ("", Vec::new(), "");
-        self.note_entry(agent, connection, action, site, target, refused, entry)
+        self.note_entry(agent, (connection, 0), action, site, target, refused, entry)
     }
 
+    /// The entry of what `agent` did on `connection`, to the page in `tab` or with 0 to none.
     #[allow(clippy::too_many_arguments)]
     fn note_entry(
         &mut self,
         agent: &str,
-        connection: u64,
+        (connection, tab): (u64, u64),
         action: &str,
         site: &str,
         target: &str,
@@ -5090,7 +5132,7 @@ impl Agents {
             url: SharedString::from(url.to_string()),
             sent,
             said: SharedString::from(said.to_string()),
-            tier: self.tier_of(agent, connection, 0).label().into(),
+            tier: self.entry_tier(agent, connection, tab).label().into(),
             notes: SharedString::default(),
         };
         self.logged = entry.id;

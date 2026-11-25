@@ -10399,6 +10399,57 @@ mod sessions {
         assert_eq!(tier(&second, cx), Some(Tier::Full));
     }
 
+    /// An entry of the log names the level its act was judged at, never one it wasn't held to. A
+    /// second connection of the client's, its own task at Full access, acts on a page of a task
+    /// at Work on pages: its act is held to that task's access, so its entry, refused or done,
+    /// says Work on pages, and stays that connection's. What it does on its own page says its
+    /// own level.
+    #[gpui::test]
+    fn an_entry_names_the_level_its_act_was_judged_at(cx: &mut TestAppContext) {
+        let (agents, browser, first) = lowered(Tier::Full, cx);
+        (browser.tabs.borrow_mut()).push((31, 2, "Other", "https://example.org/"));
+        hello_on(&agents, "claude-code", 2, "claude-code", cx);
+        let now = std::time::Instant::now;
+        let looked = call_on(&agents, 2, 5, "snapshot", json!({ "tab": 31 }), now(), cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 5, cx);
+        let second = cards(&agents, cx)[0].agent.to_string();
+        assert_ne!(first, second);
+        agents.update(cx, |agents, cx| {
+            agents.set_tier(&second, Tier::Full, cx);
+            agents.set_tier(&first, Tier::Work, cx);
+        });
+        // The newest entry about a page of `site`: whose connection's, the level it names, and
+        // whether it was refused.
+        let named = |site: &str, cx: &mut TestAppContext| {
+            agents.read_with(cx, |agents, _| {
+                let entry = (agents.activity("claude-code"))
+                    .find(|entry| entry.site == site)
+                    .expect("no entry about that site");
+                let refused = !entry.refused.is_empty();
+                (entry.connection, entry.tier.to_string(), refused)
+            })
+        };
+        let work = Tier::Work.label().to_string();
+
+        let order = json!({ "tab": 20, "ref": "e3" });
+        let refused = call_on(&agents, 2, 6, "click", order, now(), cx);
+        assert!(refused.try_recv().expect("refused at once").error);
+        answered(&agents, 6, cx);
+        assert_eq!(named("example.com", cx), (2, work.clone(), true));
+
+        let clicked = coupon(&agents, (2, 7, 20), cx);
+        assert!(!page_done(&agents, &browser, clicked, shop_tree(), cx).error);
+        answered(&agents, 7, cx);
+        assert_eq!(named("example.com", cx), (2, work, false));
+
+        let looked = call_on(&agents, 2, 8, "snapshot", json!({ "tab": 31 }), now(), cx);
+        page_done(&agents, &browser, looked, shop_tree(), cx);
+        answered(&agents, 8, cx);
+        let full = Tier::Full.label().to_string();
+        assert_eq!(named("example.org", cx), (2, full, false));
+    }
+
     /// A file a page starts is judged where the page is, as an act there is: a second connection's
     /// read of a page of a task at Look only starts a download, which is refused and leaves no
     /// file, though that connection's own task is at the access a download goes at. The refusal
