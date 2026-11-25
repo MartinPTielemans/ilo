@@ -11,6 +11,7 @@ use std::rc::Rc;
 use gpui::{App, Global, SharedString};
 
 use crate::agents::page::clip;
+use crate::agents::task::handed::NEW_THREAD;
 use crate::agents::task::{Card, Dot, Word};
 
 /// Settings › Agents' group and row that choose when these post.
@@ -166,7 +167,7 @@ pub fn follow(cards: &[Card], when: Notify, cx: &mut App) {
         }
         // check.sh reads this line, which says no more of the task than the activity log does.
         crate::log!("browser: needs you notified {id} {}", card.agent);
-        host.notify(id, &said(card, told), "");
+        host.notify(id, &posted(card, told), "");
         notified.push(&card.agent);
     }
     state.came = (came.iter())
@@ -211,10 +212,25 @@ pub fn clicked(id: u64, cx: &App) -> Option<SharedString> {
 /// assistant's name for it, on one line and capped; an outside agent's session's is the agent's
 /// own words, which never stand where ilo speaks, so it's named by its agent, as its card is.
 pub fn said(card: &Card, told: Told) -> String {
+    words(card, &card.title, told)
+}
+
+/// The words of the notification the system is given. A thread with no title yet is titled by a
+/// tab of the user's, a page's words, which can be a mail's subject, and the system keeps its
+/// notifications: so there it reads NEW_THREAD, and the tab's title stays where it is drawn.
+fn posted(card: &Card, told: Told) -> String {
+    match card.unnamed {
+        true => words(card, NEW_THREAD, told),
+        false => said(card, told),
+    }
+}
+
+/// `said`'s words for `card`, titled `title`.
+fn words(card: &Card, title: &str, told: Told) -> String {
     let task = match card.replies {
         // Plain text, as an ilo line takes a page's, so no direction mark in a title can turn the
         // state's word around in the system's notification.
-        true => clip(&crate::agents::tier::plain(&card.title), TITLE_CHARS),
+        true => clip(&crate::agents::tier::plain(title), TITLE_CHARS),
         false => card.name.to_string(),
     };
     // Y4: its title, or an outside agent's name, then its state's word, as its card says it.

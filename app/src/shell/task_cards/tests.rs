@@ -21,6 +21,7 @@ pub(in crate::shell) fn card(n: u64, dot: Dot) -> Card {
         name: "Claude".into(),
         replies: true,
         title: "Find a flight to Lisbon".into(),
+        unnamed: false,
         status: "Searching flights".into(),
         steps: Vec::new(),
         last_tab: None,
@@ -1322,4 +1323,36 @@ fn a_pages_word_and_outline_are_one_answer(cx: &mut TestAppContext) {
         ["Working", "Done", "Paused", "Stopped", "You're driving"]
     );
     assert_eq!(PageWord::NeedsYou.label(), Word::NeedsYou.after_name());
+}
+
+/// The log's line of a card's title has nothing of what stands in for one: a thread with no title
+/// yet is titled by a tab of the user's, a page's words, which no log line holds. Its assistant's
+/// name for it is logged as any title, the same words too.
+#[gpui::test]
+fn a_title_standing_in_is_in_no_log_line(cx: &mut TestAppContext) {
+    const TABS: &str = "Trains to Lisbon";
+    let (shell, _, cx) = shell(cx);
+    let titled = |unnamed: bool| Card {
+        title: TABS.into(),
+        unnamed,
+        ..card(1, Dot::Working)
+    };
+    crate::heard::listen();
+    shell.update(cx, |shell, cx| shell.set_task_cards(vec![titled(true)], cx));
+    let lines = crate::heard::take();
+    assert!(
+        lines.contains(&"browser: task card task-1 titled ".to_string()),
+        "{lines:?}"
+    );
+    assert!(lines.iter().all(|line| !line.contains(TABS)), "{lines:?}");
+
+    crate::heard::listen();
+    shell.update(cx, |shell, cx| {
+        shell.set_task_cards(vec![titled(false)], cx)
+    });
+    let lines = crate::heard::take();
+    assert!(
+        lines.contains(&format!("browser: task card task-1 titled {TABS}")),
+        "{lines:?}"
+    );
 }

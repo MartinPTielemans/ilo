@@ -139,6 +139,9 @@ impl std::fmt::Debug for Chip {
     }
 }
 
+/// The title of a thread that has none yet and no tab's to take (table Z2b's word).
+pub const NEW_THREAD: &str = "New Thread";
+
 /// What a thread's messages of the user's carried of their tabs. In memory alone, and gone with
 /// the thread.
 #[derive(Default)]
@@ -146,6 +149,10 @@ pub(in crate::agents) struct Sends {
     /// The chips of each message that had any, by which of the user's messages it is: 0 the one
     /// that started the thread, then each reply in turn.
     chips: Vec<(usize, Vec<Chip>)>,
+    /// The first tab the message that started the thread handed, by its title as its chip shows
+    /// it, held as a title is: what the thread is titled by until its assistant names it. None
+    /// where that title is empty or no tab went.
+    first: Option<SharedString>,
     /// The replies held until the turn under way ends, in the order sent, each with its tabs'
     /// titles as they were at the user's send: one with a tab of theirs, sent while the thread
     /// was at work, and every reply sent after it.
@@ -188,8 +195,21 @@ impl Sends {
         self.unsent.extend(held.map(|(reply, _)| reply));
     }
 
+    /// What a thread with no title yet is titled by, on its card and in its panel: the first tab
+    /// its first message handed, else NEW_THREAD.
+    pub(super) fn stand_in(&self) -> SharedString {
+        (self.first.clone()).unwrap_or_else(|| SharedString::new_static(NEW_THREAD))
+    }
+
     /// The user's message `said` showed `chips`.
     pub(super) fn showed(&mut self, said: usize, chips: Vec<Chip>) {
+        // The message that started the thread: its first handed tab's title is taken here, once,
+        // from what the chip shows, so no later title of the page reaches the thread's.
+        if said == 0 {
+            let first = chips.iter().find(|chip| chip.handed);
+            let title = first.map(|chip| super::as_title(chip.title.trim()));
+            self.first = title.filter(|title| !title.is_empty()).map(Into::into);
+        }
         if !chips.is_empty() {
             self.chips.push((said, chips));
         }

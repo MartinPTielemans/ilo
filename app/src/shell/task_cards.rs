@@ -485,9 +485,11 @@ impl Shell {
                     card.status
                 );
             }
-            if was.is_none_or(|was| was.title != card.title) {
-                // check.sh reads this line: a title is one line, written out (#3690).
-                log!("browser: task card {} titled {}", card.agent, card.title);
+            if was.is_none_or(|was| (&was.title, was.unnamed) != (&card.title, card.unnamed)) {
+                // check.sh reads this line: a title is one line, written out (#3690). What stands
+                // in for one a thread doesn't have yet may be a tab's, so the line has none of it.
+                let title = if card.unnamed { "" } else { &*card.title };
+                log!("browser: task card {} titled {}", card.agent, title);
             }
             // A task that finishes out of sight keeps its whole card until its conversation shows;
             // one that comes finished, brought back after a quit, has been seen.

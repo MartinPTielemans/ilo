@@ -32,6 +32,7 @@ pub(super) fn card() -> Card {
         name: "Claude".into(),
         replies: true,
         title: "Flight to Lisbon".into(),
+        unnamed: false,
         status: "Searching flights".into(),
         steps: Vec::new(),
         last_tab: None,

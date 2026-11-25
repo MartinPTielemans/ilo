@@ -211,6 +211,7 @@ pub(crate) fn task_cards(home: u64) -> Vec<TaskCard> {
         name: "Claude".into(),
         replies: true,
         title: title.into(),
+        unnamed: false,
         status: status.into(),
         // The working task's last steps. The preview has no pictures, so no card has a plate.
         steps: match dot {
