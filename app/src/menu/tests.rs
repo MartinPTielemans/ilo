@@ -1404,8 +1404,12 @@ fn an_offer_is_in_the_secondary_ink() {
 
 /// The search's glyph stands in the checks' column, centred on the check before the model the
 /// thread starts on, and the out arrow stands after Sign In's and Settings' titles, at the row's
-/// right, and after no model's.
+/// right, and after no model's. GPUI records where an element was drawn only in a debug build.
 #[gpui::test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "GPUI records debug selectors only in debug builds"
+)]
 fn the_search_glyph_is_in_the_checks_column_and_the_out_arrow_at_the_right(
     cx: &mut TestAppContext,
 ) {
