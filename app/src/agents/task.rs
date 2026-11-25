@@ -3858,14 +3858,6 @@ fn last_finished(task: &Task) -> Option<SharedString> {
 pub const NEEDS_YOU: &str = "Needs you";
 /// A card's status while a refusal of its task's access is unsettled, before what it stopped.
 pub const STOPPED_AT: &str = "Stopped at";
-/// Z24: what a screen reader is told before the assistant's own words, `{assistant}` its name.
-pub const SAYS: &str = "{assistant} says";
-
-/// `words` of `assistant`'s as a screen reader is told them: after Z24's mark, which the app puts
-/// there and the assistant can't write, so nothing it writes is heard as a line of the browser's.
-pub fn says(assistant: &str, words: &str) -> String {
-    format!("{} {words}", SAYS.replace("{assistant}", assistant))
-}
 
 /// The most steps a card lists.
 pub const CARD_STEPS: usize = 3;

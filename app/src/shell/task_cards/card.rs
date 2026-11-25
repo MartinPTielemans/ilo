@@ -13,7 +13,7 @@ use super::{
     Chip, Form, PageWord, SLOT, Shell, chip, clock, drawn_listener, number, state_lead, state_line,
 };
 use crate::agents::task::ilo::IloButton;
-use crate::agents::task::{Card, Dot, NEEDS_YOU, says};
+use crate::agents::task::{Card, Dot, NEEDS_YOU};
 use crate::shell::conversation::words;
 use crate::shell::page_ends::StripStop;
 use crate::shell::{FAVICON_SIZE, PLATE_INSET, Slot, TILE, TITLE, dashed_plate};
@@ -59,7 +59,7 @@ pub(super) fn first_sentence(text: &str) -> usize {
 pub(super) fn spoken(card: &Card, form: Form, site: &str) -> SharedString {
     let line = second_line(card, form, site);
     match form == Form::DoneUnseen && !card.finding.is_empty() {
-        true => says(&card.name, &line).into(),
+        true => words::says(&card.name, &line).into(),
         false => line,
     }
 }
