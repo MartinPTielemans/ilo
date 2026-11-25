@@ -79,6 +79,8 @@ pub(super) struct Recorder {
     pub(super) search_engines: RefCell<(Vec<(SharedString, SharedString)>, SharedString)>,
     /// Where the pointer is in the window, as `pointer` answers.
     pub(super) pointer: Cell<Option<Point<Pixels>>>,
+    /// What the broom shows, as `broom` answers: not drawn unless a test says.
+    pub(super) broom: Cell<Option<super::Broom>>,
     /// The window over the page draws opaque, as `over_page_blends` answers.
     pub(super) over_page_opaque: Cell<bool>,
     /// This launch is a safe start, and Settings blocks ads, as `safe_start` and `ad_blocking`
@@ -760,6 +762,14 @@ impl Browser for Recorder {
 
     fn link_previews(&self) -> bool {
         !self.previews_off.get()
+    }
+
+    fn broom(&self) -> Option<super::Broom> {
+        self.broom.get()
+    }
+
+    fn start_broom(&self, _: &mut App) {
+        self.record("start broom".into())
     }
 
     fn link_cards(&self) -> bool {

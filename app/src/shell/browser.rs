@@ -859,6 +859,15 @@ pub trait Browser {
     /// the browser keeps for it, at the window's `scale`. The user's: agents get none, as with the
     /// page's picture.
     fn card_picture(&self, tab: u64, scale: f32, cx: &mut App);
+    /// What the broom on the New Tab line shows for the Space the window shows, or None where it
+    /// isn't drawn, which the browser alone decides. It tells the shell to draw again as the
+    /// answer changes, and ends `Broom::Failed` itself.
+    fn broom(&self) -> Option<super::Broom> {
+        None
+    }
+    /// The user's click on the broom: sorts the Today tabs of the Space the window shows into
+    /// folders. The user's alone: no command runs it and no agent reaches it.
+    fn start_broom(&self, _cx: &mut App) {}
     /// Settings › Links' Link cards: whether ⇧ on a link shows what its page says about itself.
     fn link_cards(&self) -> bool {
         false
