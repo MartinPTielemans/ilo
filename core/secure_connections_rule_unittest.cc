@@ -117,16 +117,24 @@ TEST(SecureConnectionsRuleTest, TheJobIsToldInTheAppsOwnTwoSentences) {
   EXPECT_STREQ(NotOpened(/*opened=*/false), "The tab couldn't go there.");
 }
 
-// The click went, so an answer that reads as one that didn't would have the agent click again.
-TEST(SecureConnectionsRuleTest, AClickThatWentIsToldSoAsItsTabIsClosedAsNotSecure) {
-  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/true, /*running=*/true, {.clicked = true}),
-            AtClose::kClickWent);
+// A click, a key, a typed Enter or a choice went, so an answer that reads as one that didn't would
+// have the agent do it again.
+TEST(SecureConnectionsRuleTest, AStepThatWentIsToldSoAsItsTabIsClosedAsNotSecure) {
+  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/true, /*running=*/true, {.went = true}),
+            AtClose::kWent);
 }
 
-// Its press never reached the page, as one still waiting for its element: it didn't go.
-TEST(SecureConnectionsRuleTest, AClickNotYetSentIsToldTheTabsEnd) {
-  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/true, /*running=*/true, {.clicked = false}),
+// Its press or its choice never reached the page, as one still waiting for its element, a type
+// still typing before its Enter, or a select that only opened its list: it didn't go.
+TEST(SecureConnectionsRuleTest, AStepNotYetSentIsToldTheTabsEnd) {
+  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/true, /*running=*/true, {.went = false}),
             AtClose::kTabEnded);
+}
+
+// A step is no wait: one that went is told so whatever load the tab's last open had.
+TEST(SecureConnectionsRuleTest, AStepThatWentIsToldSoBeforeAnyWaitsAnswer) {
+  const Running step = {.went = true, .waits = false, .asked = {.load = 7, .opened = true}};
+  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/true, /*running=*/true, step), AtClose::kWent);
 }
 
 // The page it opened was there, and went on by itself while the open still waited for it.
@@ -145,7 +153,7 @@ TEST(SecureConnectionsRuleTest, AWaitThatIsntAnOpensIsToldTheTabsEnd) {
             AtClose::kTabEnded);
 }
 
-// A type, a key, a choice, a read: there is no answer of their own for them.
+// A type with no Enter, a scroll, a read: there is no answer of their own for them.
 TEST(SecureConnectionsRuleTest, EveryOtherJobRunningIsToldTheTabsEnd) {
   EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/true, /*running=*/true, {}), AtClose::kTabEnded);
 }
@@ -155,15 +163,15 @@ TEST(SecureConnectionsRuleTest, AJobStillQueuedIsToldTheTabsEnd) {
   const Running wait = {.waits = true, .asked = {.load = 7, .opened = true}};
   EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/true, /*running=*/false, wait),
             AtClose::kTabEnded);
-  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/true, /*running=*/false, {.clicked = true}),
+  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/true, /*running=*/false, {.went = true}),
             AtClose::kTabEnded);
 }
 
 // The user's close, the agent's own, a close of the core's that didn't go: none says a page went
-// on to http, to a click or to an open's wait.
+// on to http, to a step that went or to an open's wait.
 TEST(SecureConnectionsRuleTest, ATabThatClosesAnyOtherWayTellsEveryJobTheTabsEnd) {
   const Running wait = {.waits = true, .asked = {.load = 7, .opened = true}};
-  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/false, /*running=*/true, {.clicked = true}),
+  EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/false, /*running=*/true, {.went = true}),
             AtClose::kTabEnded);
   EXPECT_EQ(ToldAtClose(/*closed_as_not_secure=*/false, /*running=*/true, wait),
             AtClose::kTabEnded);

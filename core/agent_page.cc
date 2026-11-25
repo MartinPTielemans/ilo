@@ -1390,6 +1390,10 @@ void AgentPage::ChooseNative(const std::vector<std::string>& frames,
   action.action = ax::mojom::Action::kDoDefault;
   action.target_tree_id = host->GetAXTreeID();
   action.target_node_id = node;
+  // The choice has gone from here, as a click from its press.
+  if (job_) {
+    job_->sent = true;
+  }
   host->AccessibilityPerformAction(action);
   Settle();
 }
@@ -1435,8 +1439,9 @@ void AgentPage::ClickAt(int slot, gfx::PointF at, size_t step) {
     Settle();
     return;
   }
-  // From its press on the page may leave for it, and the click has gone.
-  if (job_ && step == 1) {
+  // From its press on the page may leave for it, and the click has gone. A select's click that
+  // only opens its list is no choice yet.
+  if (job_ && step == 1 && choosing_ != Choosing::kOpened) {
     job_->sent = true;
   }
   Mouse(kSteps[step], at, slot,
@@ -1642,6 +1647,10 @@ void AgentPage::PressKey(const std::string& name, base::OnceClosure then) {
                               .Set("key", key->name == "Space" ? " " : std::string(key->name))
                               .Set("code", std::string(key->name))
                               .Set("windowsVirtualKeyCode", key->code);
+  // The key, or the Enter after a type's text, has gone from its press, as a click from its own.
+  if (job_) {
+    job_->sent = true;
+  }
   base::DictValue down = event.Clone().Set("type", key->text.empty() ? "rawKeyDown" : "keyDown");
   if (!key->text.empty()) {
     down.Set("text", std::string(key->text));
@@ -3247,7 +3256,7 @@ void AgentPage::LetGo() {
   if (job_ && !std::exchange(taken_, false)) {
     told = secure_connections_rule::ToldAtClose(
         closing, /*running=*/true,
-        {.clicked = job_->action == BC_AGENT_PAGE_CLICK && job_->sent,
+        {.went = job_->sent,
          .waits = job_->action == BC_AGENT_PAGE_QUIET,
          .asked = job_->asked});
     owed.push_front(*std::move(job_));
@@ -3262,8 +3271,8 @@ void AgentPage::LetGo() {
       case AtClose::kTabEnded:
         Owe(job, kEnded);
         break;
-      case AtClose::kClickWent:
-        // A result, not an error: the click went, and the app says what became of its tab.
+      case AtClose::kWent:
+        // A result, not an error: the step went, and the app says what became of its tab.
         base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
             FROM_HERE,
             base::BindOnce(&Report, tab_, job.request,

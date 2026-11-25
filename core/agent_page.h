@@ -135,7 +135,8 @@ class AgentPage : public content::WebContentsObserver,
     base::OnceCallback<void(bool)> put;
     // The load an open's or a navigate's wait waits on, which its call started.
     secure_connections_rule::Asked asked;
-    // Whether a click's press has gone to the page.
+    // Whether the step has gone to the page: a click's press, a key's or a typed Enter's, a
+    // select's choice. Set nowhere else, so every other job's stays false.
     bool sent = false;
   };
   using Reply = base::OnceCallback<void(const base::DictValue* result)>;

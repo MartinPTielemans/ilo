@@ -40,8 +40,8 @@ AtClose ToldAtClose(bool closed_as_not_secure, bool running, const Running& job)
   if (!closed_as_not_secure || !running) {
     return AtClose::kTabEnded;
   }
-  if (job.clicked) {
-    return AtClose::kClickWent;
+  if (job.went) {
+    return AtClose::kWent;
   }
   return job.waits && job.asked.load != 0 && job.asked.opened ? AtClose::kWentOn
                                                               : AtClose::kTabEnded;
