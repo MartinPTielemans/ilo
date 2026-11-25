@@ -517,6 +517,21 @@ impl Agents {
         self.return_tab(&agent, tab, By::User, cx)
     }
 
+    /// The user closes `tab`, with its split view where `split`. Each pane a thread holds of theirs
+    /// is returned as their close of it alone returns it, so every one has its entry and the
+    /// core's own refusal to close one never has to act. The panes still to close.
+    pub fn close_leaves(&mut self, tab: u64, split: bool, cx: &mut Context<Self>) -> Vec<u64> {
+        let mut panes = match split {
+            true => self.browser.split(tab, cx),
+            false => Vec::new(),
+        };
+        if !panes.contains(&tab) {
+            panes.insert(0, tab);
+        }
+        panes.retain(|&pane| !self.close_returns(pane, cx));
+        panes
+    }
+
     /// The user moves `tab` to a Space of theirs, on the product's own UI. One a thread holds of
     /// theirs is returned first, as by Return to Your Tabs, so the move is of a tab of their own.
     /// Whether it was one.

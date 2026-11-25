@@ -66,11 +66,19 @@ impl Browser for Engine {
 
     fn close(&self, tab: u64, split: bool, cx: &mut App) {
         // A tab of the user's a thread holds never closes while it's the thread's: their close
-        // of it returns it to their own tabs, which the activity log then says.
-        let returned = browser::agents::global(cx)
-            .is_some_and(|agents| agents.update(cx, |agents, cx| agents.close_returns(tab, cx)));
-        if !returned {
+        // of it returns it to their own tabs, which the activity log then says. Each pane of a
+        // split is asked, and the rest close.
+        let left = match browser::agents::global(cx) {
+            Some(agents) => agents.update(cx, |agents, cx| agents.close_leaves(tab, split, cx)),
+            None => vec![tab],
+        };
+        if left.contains(&tab) {
             unsafe { bc::bc_tab_close(tab, split) };
+            return;
+        }
+        // The named one went back, out of its split: the others close each by itself.
+        for pane in left {
+            unsafe { bc::bc_tab_close(pane, false) };
         }
     }
 

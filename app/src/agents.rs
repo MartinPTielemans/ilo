@@ -4888,6 +4888,11 @@ impl Agents {
                 // Removing closes the tab with its split, so each says why before the core's
                 // close would read as the user's, and one whose page kept it open says nothing.
                 let split = self.browser.split(tab, cx);
+                // A pane the thread holds of the user's is given back first, as its own close of
+                // it does, so the removal closes none.
+                for &each in split.iter().filter(|&&each| each != tab) {
+                    self.return_tab(agent, each, task::handed::By::Thread, cx);
+                }
                 for &each in &split {
                     self.went(each, agent, Gone::Removed(tab));
                 }

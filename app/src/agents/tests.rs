@@ -451,6 +451,10 @@ impl Browser for Made {
         let to = after.or(last.map(|last| last + 1)).unwrap_or(tabs.len());
         tabs.insert(to, back);
         self.returned.borrow_mut().push(tab);
+        // As the core's: it leaves the split it was in with the agent.
+        let mut splits = self.splits.borrow_mut();
+        (splits.iter_mut()).for_each(|split| split.retain(|&each| each != tab));
+        splits.retain(|split| split.len() > 1);
         true
     }
 

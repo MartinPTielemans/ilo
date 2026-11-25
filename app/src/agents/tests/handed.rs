@@ -625,6 +625,75 @@ fn the_users_close_of_a_handed_tab_returns_it(cx: &mut TestAppContext) {
     assert!(!closes(cx, TRAINS.0));
 }
 
+/// The page `agent`'s thread opens for itself, beside the two it was handed.
+fn opens_its_own(run: &Run, agent: &str, cx: &mut TestAppContext) -> u64 {
+    let page = json!({ "url": "https://shop.example/" });
+    drop(call(&run.agents, agent, "open_tab", page, cx));
+    cx.run_until_parked();
+    *(tabs_of(run, THREADS).iter())
+        .find(|tab| ![TRAINS.0, SEATS.0].contains(tab))
+        .expect("the page it opened")
+}
+
+/// The user's close of a split view asks each of its panes: one a thread holds of theirs is
+/// returned with its entry, whichever pane the close names, and only the rest are left to close.
+#[gpui::test]
+fn the_users_close_of_a_split_returns_each_handed_pane(cx: &mut TestAppContext) {
+    let run = run("handed-split-close", cx);
+    let agent = send(&run, ASKED, USERS, &[TRAINS.0, SEATS.0], cx).expect("started");
+    let own = opens_its_own(&run, &agent, cx);
+    let closes = |cx: &mut TestAppContext, tab: u64, split: bool| {
+        (run.agents).update(cx, |agents, cx| agents.close_leaves(tab, split, cx))
+    };
+    // The close names the thread's own pane: the handed one beside it goes back.
+    run.browser.splits.borrow_mut().push(vec![own, TRAINS.0]);
+    assert_eq!(closes(cx, own, true), [own]);
+    assert_eq!(space_of(&run, TRAINS.0), USERS);
+    assert!(!is_handed(&run, &agent, TRAINS.0, cx));
+    // It names the handed pane: that goes back, and the thread's own is the one to close.
+    run.browser.splits.borrow_mut().push(vec![SEATS.0, own]);
+    assert_eq!(closes(cx, SEATS.0, true), [own]);
+    assert_eq!(space_of(&run, SEATS.0), USERS);
+    assert_eq!(*run.browser.returned.borrow(), [TRAINS.0, SEATS.0]);
+    assert_eq!(
+        entries(&run, &agent, handed::TAKEN_BACK, cx),
+        ["example.com", "tickets.example"]
+    );
+    assert!(entries(&run, &agent, handed::GIVEN_BACK, cx).is_empty());
+    // A close that isn't of the split asks the named tab alone.
+    assert_eq!(closes(cx, own, false), [own]);
+}
+
+/// remove_tab closes a pinned tab with its split view. A pane the thread holds of the user's is
+/// given back first, with its entry, so the removal closes only the thread's own.
+#[gpui::test]
+fn a_remove_of_a_split_gives_back_its_handed_pane(cx: &mut TestAppContext) {
+    let run = run("handed-split-remove", cx);
+    let agent = send(&run, ASKED, USERS, &[TRAINS.0], cx).expect("started");
+    let own = opens_its_own(&run, &agent, cx);
+    let pin = |cx: &mut TestAppContext, action: &'static str| {
+        let (reply, answer) = mpsc::channel();
+        (run.agents).update(cx, |agents, cx| {
+            agents.pin(&agent, 0, action, own, reply, cx)
+        });
+        cx.run_until_parked();
+        answer.try_recv().expect("answered at once")
+    };
+    assert!(!pin(cx, "pin_tab").error);
+    run.browser.splits.borrow_mut().push(vec![own, TRAINS.0]);
+    let removed = pin(cx, "remove_tab");
+    assert!(!removed.error, "{removed:?}");
+    assert_eq!(space_of(&run, own), 0);
+    assert_eq!(space_of(&run, TRAINS.0), USERS);
+    assert_eq!(*run.browser.returned.borrow(), [TRAINS.0]);
+    assert!(!is_handed(&run, &agent, TRAINS.0, cx));
+    assert_eq!(
+        entries(&run, &agent, handed::GIVEN_BACK, cx),
+        ["example.com"]
+    );
+    assert!(entries(&run, &agent, handed::TAKEN_BACK, cx).is_empty());
+}
+
 /// Each way a thread stops being under way returns every tab it holds of the user's first: its
 /// answer, finish, Stop, a failure, its plan's limit, Dismiss and a quit, with or without a
 /// window left. Nothing closes one, none goes with the thread's Space, and the thread's own
