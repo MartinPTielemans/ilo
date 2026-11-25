@@ -113,6 +113,28 @@ if [ "$(uname)" = Darwin ]; then
     fail "light: a reopen put a window in front of first run's: $(grep '^browser: front ' "$log" | tail -1)"
   ! grep -q '^browser: window on screen after first run$' "$log" ||
     fail "light: a reopen showed the browser's window while first run showed"
+  # A link from another app opens in a Little window over first run's, as an assistant's sign-in
+  # page comes. Closing it gives first run's window the keyboard back at the welcome, which Return
+  # goes on from below, and the browser's window stays held.
+  open -a "$app" "${site}index.html"
+  little_link="^browser: link from another app ${site}index.html: tab [1-9][0-9]* in little window [0-9]* of space [0-9]*\$"
+  expect "$little_link" "light: a link while first run showed didn't open in a Little window"
+  tab=$(grep "$little_link" "$log" | tail -1 | sed 's/.*: tab \([0-9]*\) .*/\1/')
+  little=$(grep "$little_link" "$log" | tail -1 | sed 's/.* little window \([0-9]*\) .*/\1/')
+  expect "^browser: loaded $tab ${site}index.html\$" "light: the link didn't load in its Little window"
+  send key w cmd
+  expect "^browser: window closed $little\$" "light: ⌘W didn't close the link's Little window"
+  # As AppKit may hand the keyboard on a moment after.
+  for _ in $(seq 20); do
+    send front
+    case "$(grep '^browser: front ' "$log" | tail -1)" in *", key GPUIWindow "*) break ;; esac
+  done
+  grep '^browser: front ' "$log" | tail -1 | grep -q ', key GPUIWindow ' ||
+    fail "light: first run's window didn't get the keyboard back: $(grep '^browser: front ' "$log" | tail -1)"
+  ! grep -q '^browser: onboarding left ' "$log" ||
+    fail "light: the link's Little window took first run off its welcome"
+  ! grep -q '^browser: window on screen after first run$' "$log" ||
+    fail "light: a link showed the browser's window while first run showed"
 fi
 send key return
 expect '^browser: onboarding left intro via return$' "light: Return didn't go on from the welcome"
