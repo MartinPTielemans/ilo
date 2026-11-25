@@ -4,9 +4,9 @@
 
 use super::kept::Run;
 use super::*;
-use crate::agents::runner::Cli;
+use crate::agents::runner::{Cli, Out};
 use crate::agents::task::handed::{self, Picked};
-use crate::agents::task::{Start, TaskAction};
+use crate::agents::task::{Start, State, TaskAction};
 
 /// The user's Space, and a thread's, the first the browser makes.
 const USERS: u64 = 1;
@@ -204,6 +204,7 @@ fn a_tab_that_isnt_handed_leaves_nothing_and_the_others_go(cx: &mut TestAppConte
     (run.browser.profiles.borrow_mut()).push((OTHER_PROFILE, "Profile 2"));
     run.browser.not_given.borrow_mut().insert(18);
     // The Space in view is the user's: a tab elsewhere, the outside agent's own and one not open.
+    let mut runs = 0;
     for (space, tab) in [
         (USERS, 13),
         (USERS, 20),
@@ -223,12 +224,10 @@ fn a_tab_that_isnt_handed_leaves_nothing_and_the_others_go(cx: &mut TestAppConte
             !run.agents
                 .read_with(cx, |agents, _| agents.is_handed(&agent, tab))
         );
-        let told = run.agents.read_with(cx, |agents, _| {
-            agents.task(&agent).expect("its task").asked.to_string()
-        });
-        assert_eq!(told, ASKED);
+        // Each run is waited for, as the stand-in numbers its runs as they start.
+        runs += 1;
+        assert_eq!(run.ran(runs).1, ASKED);
     }
-    let runs = run.agents.read_with(cx, |agents, _| agents.tasks().count());
     let agent = send(&run, ASKED, USERS, &[16, TRAINS.0, 18], cx).expect("started");
     assert_eq!(given(&run), [TRAINS.0]);
     assert_eq!(entries(&run, &agent, handed::HANDED, cx), ["example.com"]);
@@ -589,4 +588,109 @@ fn the_users_close_of_a_handed_tab_returns_it(cx: &mut TestAppContext) {
         handed::RETURNED
     );
     assert!(!closes(cx, TRAINS.0));
+}
+
+/// Each way a thread stops being under way returns every tab it holds of the user's first: its
+/// answer, finish, Stop, a failure, its plan's limit, Dismiss and a quit, with or without a
+/// window left. Nothing closes one, none goes with the thread's Space, and the thread's own
+/// record has each return's entry.
+#[gpui::test]
+fn a_thread_no_longer_under_way_holds_no_tab_of_the_users(cx: &mut TestAppContext) {
+    use crate::agents::runner::Failure;
+    type End = fn(&Run, &str, &mut TestAppContext);
+    let ends: [(&str, End); 8] = [
+        ("answer", |run, agent, cx| run.finish(agent, cx)),
+        ("finish", |run, agent, cx| {
+            let pages = json!({ "result": "Booked.", "tabs": [TRAINS.0] });
+            let done = call(&run.agents, agent, "finish", pages, cx);
+            cx.run_until_parked();
+            assert!(!done.try_recv().expect("answered").error);
+            // A tab of the user's is none of the pages the thread leaves them.
+            let left = match run.state(agent, cx) {
+                State::Done { tabs, .. } => tabs,
+                state => panic!("not done: {state:?}"),
+            };
+            assert_eq!(left, [0u64; 0]);
+        }),
+        ("stop", |run, agent, cx| {
+            (run.agents).update(cx, |agents, cx| agents.stop_task(agent, cx))
+        }),
+        ("failure", |run, agent, cx| {
+            let failure = Failure::Other("It broke.".into());
+            (run.agents).update(cx, |agents, cx| agents.fail(agent, failure, cx))
+        }),
+        ("limit", |run, agent, cx| {
+            (run.agents).update(cx, |agents, cx| {
+                agents.fail(agent, Failure::Limit(None), cx)
+            })
+        }),
+        ("dismiss", |run, agent, cx| {
+            (run.agents).update(cx, |agents, cx| agents.dismiss_task(agent, cx))
+        }),
+        ("quit", |run, _, cx| {
+            (run.agents).update(cx, |agents, cx| agents.end_tasks(true, cx))
+        }),
+        ("quit-no-window", |run, _, cx| {
+            (run.agents).update(cx, |agents, cx| agents.end_tasks(false, cx))
+        }),
+    ];
+    for (name, end) in ends {
+        let run = run(&format!("handed-end-{name}"), cx);
+        let agent = send(&run, ASKED, USERS, &[TRAINS.0, SEATS.0], cx).expect("started");
+        end(&run, &agent, cx);
+        cx.run_until_parked();
+        assert_eq!(
+            *run.browser.returned.borrow(),
+            [TRAINS.0, SEATS.0],
+            "{name}"
+        );
+        for tab in [TRAINS.0, SEATS.0] {
+            assert_eq!(space_of(&run, tab), USERS, "{name}");
+            assert!(!is_handed(&run, &agent, tab, cx), "{name}");
+        }
+        assert!(run.browser.closes.borrow().is_empty(), "{name}");
+        assert_eq!(
+            entries(&run, &agent, handed::GIVEN_BACK, cx),
+            ["example.com", "tickets.example"],
+            "{name}"
+        );
+        assert!(entries(&run, &agent, handed::TAKEN_BACK, cx).is_empty());
+        // In the record of the thread that ended, which keeps what came before its end.
+        run.agents.read_with(cx, |agents, _| {
+            let Some(task) = agents.task(&agent) else {
+                return;
+            };
+            let given_back = (agents.log.iter())
+                .filter(|entry| entry.action.as_ref() == handed::GIVEN_BACK)
+                .all(|entry| entry.id < task.end_entry);
+            assert!(given_back, "{name}: a return noted after its thread's end");
+        });
+    }
+}
+
+/// A wait on the user is still under way: a thread that asks them, or hands them a step, keeps
+/// the tabs it holds of theirs, and so does one whose turn goes on.
+#[gpui::test]
+fn a_thread_that_waits_on_the_user_keeps_its_tabs(cx: &mut TestAppContext) {
+    let run = run("handed-waits", cx);
+    let agent = send(&run, ASKED, USERS, &[TRAINS.0, SEATS.0], cx).expect("started");
+    run.said(&agent, Out::Said("Looking at the trains.".into()), cx);
+    let handed_off = call(
+        &run.agents,
+        &agent,
+        "hand_off",
+        json!({ "tab": SEATS.0, "reason": "Sign in." }),
+        cx,
+    );
+    let ask = json!({ "question": "Row 12 or row 14?", "answers": ["Row 12", "Row 14"] });
+    let asked = call(&run.agents, &agent, "ask", ask, cx);
+    cx.run_until_parked();
+    assert!(handed_off.try_recv().is_err() && asked.try_recv().is_err());
+    assert!(matches!(run.state(&agent, cx), State::Asking { .. }));
+    assert!(run.browser.returned.borrow().is_empty());
+    for tab in [TRAINS.0, SEATS.0] {
+        assert!(is_handed(&run, &agent, tab, cx));
+        assert_eq!(space_of(&run, tab), THREADS);
+    }
+    assert!(entries(&run, &agent, handed::GIVEN_BACK, cx).is_empty());
 }

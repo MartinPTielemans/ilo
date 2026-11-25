@@ -251,6 +251,24 @@ impl Agents {
         true
     }
 
+    /// `agent`'s thread is no longer under way, or goes: every tab it holds of the user's returns
+    /// to their tabs, in the order handed, each with its entry, before the thread's record closes
+    /// and before anything closes a page of its Space. A wait on the user, an ask or a step handed
+    /// to them, is still under way, and returns none.
+    pub(super) fn hand_all_back(&mut self, agent: &str, cx: &mut Context<Self>) {
+        for tab in self.handed_order(agent) {
+            self.return_tab(agent, tab, By::Thread, cx);
+        }
+    }
+
+    /// The tabs `agent`'s thread holds of the user's, in the order handed.
+    pub fn handed_order(&self, agent: &str) -> Vec<u64> {
+        let held = self.tasks.handed.held.iter();
+        (held.filter(|each| each.agent == agent))
+            .map(|each| each.tab)
+            .collect()
+    }
+
     /// The user closes `tab`. One a thread holds of theirs never closes while it's the thread's:
     /// their close of it is their return of it, on the page it's at. Whether it was one, so nothing
     /// is to close.

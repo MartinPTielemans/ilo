@@ -2214,6 +2214,10 @@ impl Agents {
                 }
             }
             Out::Ended(None) => {
+                // No longer under way from here: the tabs it holds of the user's go back first.
+                if (self.task(&agent)).is_some_and(|task| task.state == State::Working) {
+                    self.hand_all_back(&agent, cx);
+                }
                 let Some(task) = self.task_mut(&agent) else {
                     return;
                 };
@@ -2310,6 +2314,7 @@ impl Agents {
         if let State::Limit { resets } = &state {
             self.tasks.limits.insert(cli, resets.clone());
         }
+        self.hand_all_back(agent, cx);
         if let Some(task) = self.task_mut(agent) {
             task.state = state;
             task.end(SystemTime::now());
@@ -2411,6 +2416,11 @@ impl Agents {
             cx.notify();
             return;
         }
+        // Stopped, it holds no tab of the user's: each goes back before its record closes.
+        self.hand_all_back(agent, cx);
+        let Some(task) = self.task_mut(agent) else {
+            return;
+        };
         let turn = (task.messages.iter())
             .filter(|message| message.who == Who::User)
             .count();
@@ -2580,6 +2590,9 @@ impl Agents {
         let Some(at) = self.tasks.tasks.iter().position(|task| task.agent == agent) else {
             return;
         };
+        // A tab it holds of the user's never goes with it or with its Space: each goes back
+        // first, at a quit too, whether or not the Space can be deleted then.
+        self.hand_all_back(agent, cx);
         let task = self.tasks.tasks.remove(at);
         // check.sh reads this line.
         log!("browser: task {agent} dropped");
@@ -3889,13 +3902,18 @@ impl Agents {
                     _ = reply.send(ToolResult::error(FINISH_AGAIN));
                     return;
                 }
-                let tabs = match self.left_tabs(agent, arguments, cx) {
+                let mut tabs = match self.left_tabs(agent, arguments, cx) {
                     Ok(tabs) => tabs,
                     Err(why) => {
                         _ = reply.send(ToolResult::error(why));
                         return;
                     }
                 };
+                // Done, it holds no tab of the user's: each goes back to their tabs, and is none
+                // of the pages the thread leaves them.
+                let users = self.handed_order(agent);
+                tabs.retain(|tab| !users.contains(tab));
+                self.hand_all_back(agent, cx);
                 let site = match tabs.as_slice() {
                     [tab] => site(&self.browser.tab(*tab, cx).url),
                     [] => String::new(),
