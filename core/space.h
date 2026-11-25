@@ -27,6 +27,11 @@ namespace browser_core {
 // Folders hold pinned tabs and other folders. Each sits in the pinned list followed by what's in
 // it, and moves with it.
 //
+// A today's folder holds Today tabs alone (#4252): Today stays a list of tabs, and the folder is a
+// mark on an unbroken run of them, its tabs in folder_of_. A tab put inside the run joins it, and
+// the folder goes with its last tab, so it's never empty. An agent's Space and a window's own have
+// none.
+//
 // A Space is the user's, or an agent's (decision 8), for as long as it lives: an agent may act only
 // on the tabs of its own Space.
 //
@@ -144,7 +149,13 @@ class Space {
   // Empty if the Space hasn't |tab|.
   std::vector<bc_id> Panes(bc_id tab) const;
   bool IsFolder(bc_id id) const { return folders_.contains(id); }
-  // The folder holding the pinned tab or folder |id|, else 0.
+  // Whether |id| is a today's folder.
+  bool IsTodayFolder(bc_id id) const;
+  // The today's folders, in the order of their tabs, and a today's folder's tabs, in their order.
+  std::vector<bc_id> TodayFolders() const;
+  std::vector<bc_id> TodayFolderTabs(bc_id folder) const;
+  // The folder holding the pinned tab or folder |id|, or the today's folder holding the Today tab
+  // |id|, else 0.
   bc_id FolderOf(bc_id id) const;
   // Whether |id| is |folder| or inside it.
   bool Within(bc_id id, bc_id folder) const;
@@ -222,6 +233,22 @@ class Space {
   // Makes an open folder named |name| at |index| in |folder|, else in the pinned tabs, counted as
   // Move counts. Returns it.
   bc_id AddFolder(std::string name, bc_id folder, size_t index);
+  // Makes an open today's folder named |name| of |tabs|, at least two, each a Today tab in no
+  // folder, a split view's only with all its tabs: they come together at the first one's place, in
+  // their order, every other tab keeping its own. Returns it, or 0, making none, if a tab isn't
+  // such a tab, or the Space is an agent's or a window's own.
+  bc_id AddTodayFolder(std::string name, const std::vector<bc_id>& tabs);
+  // Moves |folder| with what's in it to |index| in the pinned tabs, inside |to| if it isn't 0,
+  // counted as Move counts, if |pinned|, else among the Today tabs, |to| 0 and |index| counting a
+  // today's folder with its tabs as one, never inside another's run. Over the divider a today's
+  // folder's tabs are pinned at their |url_of|, and a pinned folder's are unpinned, the folders in
+  // it flattened into it. Does nothing for a Live Folder, an empty folder or an agent's Space
+  // moving to Today, or a folder into itself.
+  void MoveFolder(bc_id folder,
+                  bool pinned,
+                  bc_id to,
+                  size_t index,
+                  base::FunctionRef<GURL(bc_id)> url_of);
   void RenameFolder(bc_id folder, std::string name);
   void SetFolderIcon(bc_id folder, std::string icon);
   // Fills |folder| from |source|, a BC_LIVE_ source, or with 0 makes it a plain folder, the tabs in
@@ -229,14 +256,16 @@ class Space {
   void SetFolderLive(bc_id folder, int source);
   void SetOpen(bc_id folder, bool open);
   void SetPinnedOpen(bool open);
-  // Deletes |folder|, leaving what was in it where it was, in the folder that held it.
+  // Deletes |folder|, leaving what was in it where it was, in the folder that held it, or loose in
+  // Today for a today's folder.
   void DeleteFolder(bc_id folder);
   // Takes |folder| from |from|, with what's in it in its order, to the bottom of the pinned tabs:
   // the folders with their names, icons and whether they're open, and live where TakesLiveFolder
   // says yes, else plain, each tab with its pinned URL and its split. |copies| maps each of
   // |from|'s tabs that goes to another profile to the new one standing in for it here. Each is a
   // new node here, as a tab moved to another Space is. Does nothing for a folder |from| hasn't, or
-  // into a window's own Space.
+  // into a window's own Space. A today's folder goes to the top of the Today tabs, as a today's
+  // folder, and never into an agent's Space.
   void TakeFolder(Space& from, bc_id folder, const std::map<bc_id, bc_id>& copies);
 
   // Puts |tab| in a split view with |with|, at its left end if |left|, else its right end, making
@@ -308,6 +337,14 @@ class Space {
   void PlaceRows();
   // The same for the Spaces.
   static void PlaceSpaces();
+  // Where in |today_| what goes at |index| among the Today rows goes, a today's folder with its
+  // tabs counted as one, never inside a run.
+  size_t TodayAt(size_t index) const;
+  // Keeps each today's folder's tabs one run, a tab between two of its tabs joining it, and drops
+  // each today's folder with no tab, which a tab leaving it, or the Space, empties.
+  void KeepTodayFolders();
+  // A today's folder's tabs, out of Today, from |from|, with |copies| as TakeFolder has them.
+  void TakeTodayFolder(Space& from, bc_id folder, const std::map<bc_id, bc_id>& copies);
   // Past the end of the rows of |folder|, else of the pinned list, in |pinned_|.
   size_t EndOf(bc_id folder) const;
   // Where in |pinned_| what goes at |index| in |folder| goes, counted as Move counts.
@@ -335,10 +372,13 @@ class Space {
     bool open = true;
     // A BC_LIVE_ source, or 0.
     int live = 0;
+    // A today's folder's, which holds Today tabs and is in no list itself.
+    bool today = false;
   };
   std::map<bc_id, Folder> folders_;
   bool pinned_open_ = true;
-  // Each pinned tab or folder inside a folder, to the folder.
+  // Each pinned tab or folder inside a folder, and each Today tab in a today's folder, to the
+  // folder.
   std::map<bc_id, bc_id> folder_of_;
   std::vector<bc_id> today_;
   // The tabs Expect holds until they're placed.

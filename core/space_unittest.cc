@@ -1,5 +1,6 @@
 #include "browser_core/space.h"
 
+#include <algorithm>
 #include <map>
 #include <set>
 #include <string>
@@ -86,6 +87,13 @@ class SpaceTest : public testing::Test {
   }
 
   static GURL Url(bc_id tab) { return GURL("https://example.com/" + std::to_string(tab)); }
+
+  // Work's Today tabs, 11 to 15 top to bottom.
+  void FillToday() {
+    for (bc_id tab = 11; tab <= 15; ++tab) {
+      work_->AddAt(tab, work_->today().size());
+    }
+  }
 
   base::test::TaskEnvironment task_environment_;
   Space* work_ = nullptr;
@@ -436,6 +444,198 @@ TEST_F(SpaceTest, AClosedTabKeptByItsPageForgetsTheWayBack) {
   // One the user didn't close keeps the Space's pick.
   way_back.Left(26, 30);
   EXPECT_EQ(way_back.Closed(26, 21), 21);
+}
+
+// A today's folder (#4252) holds a run of Today tabs, which come together at the first one's place,
+// every other tab keeping its own.
+TEST_F(SpaceTest, ATodaysFolderBringsItsTabsTogetherAtTheFirstOnesPlace) {
+  FillToday();
+  const bc_id folder = work_->AddTodayFolder("Trip", {12, 14});
+  ASSERT_TRUE(folder);
+  EXPECT_TRUE(work_->IsTodayFolder(folder));
+  EXPECT_EQ(Space::HoldingFolder(folder), work_);
+  EXPECT_EQ(work_->today(), (Rows{11, 12, 14, 13, 15}));
+  EXPECT_EQ(work_->TodayFolders(), Rows{folder});
+  EXPECT_EQ(work_->TodayFolderTabs(folder), (Rows{12, 14}));
+  EXPECT_EQ(work_->FolderName(folder), "Trip");
+  EXPECT_TRUE(work_->IsOpen(folder));
+  EXPECT_EQ(work_->FolderOf(13), 0u);
+  EXPECT_TRUE(work_->pinned_rows().empty());
+  ASSERT_TRUE(work_->NodeOf(folder));
+}
+
+// Two tabs at least, each a Today tab of the Space in no folder, a split view's only with all its
+// tabs, and never in an agent's Space or a window's own.
+TEST_F(SpaceTest, ATodaysFolderIsRefusedTabsItCantHold) {
+  Fill();
+  FillToday();
+  EXPECT_FALSE(work_->AddTodayFolder("One", {11}));
+  EXPECT_FALSE(work_->AddTodayFolder("Twice", {11, 11}));
+  EXPECT_FALSE(work_->AddTodayFolder("Pinned", {1, 11}));
+  EXPECT_FALSE(work_->AddTodayFolder("Another Space's", {11, 7}));
+  ASSERT_TRUE(work_->Split(13, 12, GURL()));
+  EXPECT_FALSE(work_->AddTodayFolder("Half a split", {12, 15}));
+  const bc_id whole = work_->AddTodayFolder("A whole split", {12, 13});
+  EXPECT_TRUE(whole);
+  EXPECT_FALSE(work_->AddTodayFolder("Already in one", {12, 15}));
+  EXPECT_EQ(work_->TodayFolders(), Rows{whole});
+
+  Space* agent = Space::Create("Claude Code", 0, Space::Agent{.id = "claude", .name = "Claude"});
+  agent->AddAt(21, 0);
+  agent->AddAt(22, 1);
+  EXPECT_FALSE(agent->AddTodayFolder("Agent's", {21, 22}));
+  Space::Delete(agent->id());
+  Space* little = Space::CreateOwn("Default", Space::Own::kLittle);
+  little->AddAt(31, 0);
+  little->AddAt(32, 1);
+  EXPECT_FALSE(little->AddTodayFolder("Little's", {31, 32}));
+  Space::Delete(little->id());
+}
+
+// A tab a page in the folder opens is in it too (the lead's answer 2), and the last tab out takes
+// the folder with it (answer 1).
+TEST_F(SpaceTest, AnOpenedTabJoinsItsOpenersFolderAndTheLastOutTakesTheFolder) {
+  FillToday();
+  const bc_id folder = work_->AddTodayFolder("Trip", {12, 13});
+  work_->Add(16, /*opener=*/12, /*foreground=*/false);
+  EXPECT_EQ(work_->FolderOf(16), folder);
+  EXPECT_EQ(work_->TodayFolderTabs(folder), (Rows{12, 16, 13}));
+
+  work_->Move(12, /*pinned=*/false, 0, 0, [](bc_id) { return GURL(); });
+  work_->Remove(16);
+  EXPECT_EQ(work_->FolderOf(12), 0u);
+  EXPECT_TRUE(work_->IsTodayFolder(folder));
+  EXPECT_EQ(work_->TodayFolderTabs(folder), Rows{13});
+  work_->Move(13, /*pinned=*/false, 0, 0, [](bc_id) { return GURL(); });
+  EXPECT_FALSE(work_->IsFolder(folder));
+  EXPECT_EQ(Space::HoldingFolder(folder), nullptr);
+  EXPECT_TRUE(work_->TodayFolders().empty());
+}
+
+// A Space with no today's folder comes out of a change as it was, its pinned folders and their tabs
+// too, and a today's folder its last tab leaves still goes, with the pinned folders kept.
+TEST_F(SpaceTest, ASpaceWithNoTodaysFolderIsLeftAsItWas) {
+  Fill();
+  FillToday();
+  const auto folders = [&] {
+    std::vector<bc_id> of;
+    for (bc_id tab = 1; tab <= 7; ++tab) {
+      of.push_back(work_->FolderOf(tab));
+    }
+    return of;
+  };
+  const Rows pinned = work_->pinned_rows();
+  const std::vector<bc_id> before = folders();
+  work_->Add(16, /*opener=*/0, /*foreground=*/false);
+  work_->Remove(16);
+  EXPECT_EQ(work_->pinned_rows(), pinned);
+  EXPECT_EQ(folders(), before);
+  EXPECT_EQ(work_->today(), (Rows{11, 12, 13, 14, 15}));
+  EXPECT_TRUE(work_->TodayFolders().empty());
+
+  const bc_id folder = work_->AddTodayFolder("Trip", {12, 13});
+  ASSERT_TRUE(folder);
+  work_->Remove(12);
+  work_->Remove(13);
+  EXPECT_FALSE(work_->IsFolder(folder));
+  EXPECT_TRUE(work_->TodayFolders().empty());
+  EXPECT_EQ(work_->pinned_rows(), pinned);
+  EXPECT_EQ(folders(), before);
+}
+
+// A tab put between a folder's tabs joins it, as its run is unbroken; one moved into it goes at its
+// place among its tabs; pinning one takes it out.
+TEST_F(SpaceTest, ATodaysFoldersRunIsUnbroken) {
+  FillToday();
+  const bc_id folder = work_->AddTodayFolder("Trip", {12, 13, 14});
+  work_->Move(15, /*pinned=*/false, 0, 2, [](bc_id) { return GURL(); });
+  EXPECT_EQ(work_->today(), (Rows{11, 12, 15, 13, 14}));
+  EXPECT_EQ(work_->FolderOf(15), folder);
+
+  work_->Move(11, /*pinned=*/false, folder, 0, [](bc_id) { return GURL(); });
+  EXPECT_EQ(work_->TodayFolderTabs(folder), (Rows{11, 12, 15, 13, 14}));
+
+  work_->Move(15, /*pinned=*/true, 0, 0, &Url);
+  EXPECT_EQ(work_->FolderOf(15), 0u);
+  EXPECT_EQ(work_->pinned_rows(), Rows{15});
+  EXPECT_EQ(work_->TodayFolderTabs(folder), (Rows{11, 12, 13, 14}));
+}
+
+// A today's folder moves by MoveFolder alone, and nothing pinned goes in one.
+TEST_F(SpaceTest, ATodaysFolderTakesNoPinnedTabAndNoFolder) {
+  Fill();
+  FillToday();
+  const bc_id folder = work_->AddTodayFolder("Trip", {12, 13});
+  work_->Move(1, /*pinned=*/true, folder, 0, &Url);
+  EXPECT_TRUE(work_->IsPinned(1));
+  EXPECT_EQ(work_->FolderOf(1), 0u);
+  work_->Move(docs_, /*pinned=*/true, folder, 0, &Url);
+  work_->Move(folder, /*pinned=*/true, 0, 0, &Url);
+  EXPECT_EQ(work_->FolderOf(docs_), 0u);
+  EXPECT_TRUE(work_->IsTodayFolder(folder));
+  EXPECT_FALSE(std::ranges::contains(work_->pinned_rows(), folder));
+}
+
+// Over the divider a today's folder is a pinned folder, its tabs pinned at their pages; under it a
+// pinned folder is a today's folder, the folders in it flattened, an empty one refused (the lead's
+// answer 3), as is a Live Folder and any in an agent's Space.
+TEST_F(SpaceTest, AFolderCrossesTheDividerWholeBothWays) {
+  Fill();
+  FillToday();
+  const bc_id trip = work_->AddTodayFolder("Trip", {12, 13});
+  work_->MoveFolder(trip, /*pinned=*/true, 0, 1, &Url);
+  EXPECT_FALSE(work_->IsTodayFolder(trip));
+  EXPECT_EQ(work_->pinned_rows(), (Rows{1, trip, 12, 13, docs_, 2, notes_, 3, 4, 5, 6}));
+  EXPECT_EQ(work_->PinnedUrl(12), Url(12));
+  EXPECT_EQ(work_->today(), (Rows{11, 14, 15}));
+
+  work_->MoveFolder(docs_, /*pinned=*/false, 0, 1, &Url);
+  EXPECT_TRUE(work_->IsTodayFolder(docs_));
+  EXPECT_FALSE(work_->IsFolder(notes_));
+  EXPECT_EQ(work_->today(), (Rows{11, 2, 3, 4, 5, 14, 15}));
+  EXPECT_EQ(work_->TodayFolderTabs(docs_), (Rows{2, 3, 4, 5}));
+  EXPECT_FALSE(work_->PinnedUrl(2).is_valid());
+  EXPECT_EQ(work_->pinned_rows(), (Rows{1, trip, 12, 13, 6}));
+
+  const bc_id empty = work_->AddFolder("Empty", 0, 0);
+  work_->MoveFolder(empty, /*pinned=*/false, 0, 0, &Url);
+  EXPECT_FALSE(work_->IsTodayFolder(empty));
+  work_->SetFolderLive(trip, BC_LIVE_PULL_REQUESTS);
+  work_->MoveFolder(trip, /*pinned=*/false, 0, 0, &Url);
+  EXPECT_FALSE(work_->IsTodayFolder(trip));
+
+  Space* agent = Space::Create("Claude Code", 0, Space::Agent{.id = "claude", .name = "Claude"});
+  const bc_id agents = agent->AddFolder("Agent's", 0, 0);
+  agent->AddPinned(41, agents, 0, Url(41));
+  agent->MoveFolder(agents, /*pinned=*/false, 0, 0, &Url);
+  EXPECT_FALSE(agent->IsTodayFolder(agents));
+  Space::Delete(agent->id());
+}
+
+// To another Space a today's folder goes whole, split views too, at the top of its Today tabs (the
+// lead's answer 4); never to an agent's.
+TEST_F(SpaceTest, ATodaysFolderMovesWholeToTheTopOfAnotherSpacesToday) {
+  FillToday();
+  home_->AddAt(17, 0);
+  ASSERT_TRUE(work_->Split(13, 12, GURL()));
+  const Rows split = work_->Panes(12);
+  const bc_id folder = work_->AddTodayFolder("Trip", {12, 13, 14});
+  ASSERT_TRUE(folder);
+
+  Space* agent = Space::Create("Claude Code", 0, Space::Agent{.id = "claude", .name = "Claude"});
+  agent->TakeFolder(*work_, folder, {});
+  EXPECT_FALSE(agent->IsFolder(folder));
+  EXPECT_TRUE(work_->IsTodayFolder(folder));
+  Space::Delete(agent->id());
+
+  home_->TakeFolder(*work_, folder, {});
+  EXPECT_TRUE(home_->IsTodayFolder(folder));
+  EXPECT_FALSE(work_->IsFolder(folder));
+  EXPECT_EQ(home_->today().back(), 17u);
+  EXPECT_EQ(home_->TodayFolderTabs(folder).size(), 3u);
+  EXPECT_EQ(home_->Panes(12), split);
+  EXPECT_TRUE(work_->Panes(12).empty());
+  EXPECT_EQ(work_->today(), (Rows{11, 15}));
 }
 
 }  // namespace

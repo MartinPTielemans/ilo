@@ -730,11 +730,43 @@ impl Space {
     /// The tabs and folders of its pinned rows and its Today rows: each split's first stands for
     /// the split, and what's in a closed folder has none, but the tab shown's (Arc).
     fn rows(&self) -> (Vec<u64>, Vec<u64>) {
-        let today = self.today.iter().copied().filter(|&tab| !self.later(tab));
         (
             self.pinned_rows(self.folders.pinned_shut).collect(),
-            today.collect(),
+            self.today_rows(),
         )
+    }
+
+    /// Its Today rows: each today's folder's line above its tabs, what's in a closed one hidden but
+    /// the tab shown's and those peeked, as in a pinned folder (#4252).
+    fn today_rows(&self) -> Vec<u64> {
+        let shown = self.panes(self.shown)[0];
+        let mut rows = Vec::new();
+        for &tab in self.today.iter().filter(|&&tab| !self.later(tab)) {
+            let folder = self.folder_of(tab);
+            if folder != 0 && !rows.contains(&folder) {
+                rows.push(folder);
+            }
+            if folder == 0 || self.is_open(folder) || tab == shown || self.peeked.contains(&tab) {
+                rows.push(tab);
+            }
+        }
+        rows
+    }
+
+    /// Whether `row` is one of its today's folders.
+    fn today_folder(&self, row: u64) -> bool {
+        self.is_folder(row) && !self.pinned.contains(&row)
+    }
+
+    /// How many Today rows `tabs`, a run of its Today tabs from the top, make, as the browser
+    /// counts them for a today's folder's place: each split and each today's folder's tabs one.
+    fn today_rows_in(&self, tabs: &[u64]) -> usize {
+        let starts = |at: usize| {
+            let folder = self.folder_of(tabs[at]);
+            !self.later(tabs[at])
+                && (folder == 0 || at == 0 || self.folder_of(tabs[at - 1]) != folder)
+        };
+        (0..tabs.len()).filter(|&at| starts(at)).count()
     }
 
     /// Its pinned rows, with them collapsed or not: what's in a closed folder has none, but the
@@ -3564,6 +3596,13 @@ impl Shell {
         let pinned = pinned
             .into_iter()
             .filter(|&row| !self.is_folder(row) && !shut(row))
+            .collect();
+        // Collapsing the pinned tabs leaves Today's; a closed today's folder hides its own.
+        let closed = |row: u64| {
+            space.is_some_and(|space| space.holders(row).any(|folder| !space.is_open(folder)))
+        };
+        let today = (today.into_iter())
+            .filter(|&row| !self.is_folder(row) && !closed(row))
             .collect();
         [self.favorites.clone(), pinned, today].concat()
     }

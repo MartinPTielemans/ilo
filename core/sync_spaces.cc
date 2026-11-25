@@ -29,6 +29,7 @@
 #include "browser_core/sync_other_tabs.h"
 #include "browser_core/sync_spaces.pb.h"
 #include "browser_core/sync_spaces_newer.h"
+#include "browser_core/sync_today_folders.h"
 #include "browser_core/tab.h"
 #include "browser_core/window.h"
 #include "chrome/browser/profiles/profile.h"
@@ -73,18 +74,12 @@ std::string Key(const base::Uuid& id) {
   return id.AsLowercaseString();
 }
 
-// Before a Today tab's node id in its entity's id and client tag. ilo 0.1.13 and older take a kind
-// they don't know for SPACE, proto2's default, so they'd make a Space of each Today tab and write
-// it back as one over every device's copy. Their Parse takes only a bare lowercase UUID, so they
-// drop these instead (#2108).
-constexpr char kTodayPrefix[] = "today:";
-
 std::string TodayKey(const base::Uuid& id) {
   return kTodayPrefix + Key(id);
 }
 
-// The node id in |key|, an entity's id: a Today tab's after its prefix, which Index() goes by, as
-// a tab keeps its node as it's pinned or unpinned.
+// The node id in |key|, an entity's id: a Today tab's or today's folder's after its prefix, which
+// Index() goes by, as a tab or folder keeps its node as it's pinned or unpinned.
 std::string NodeKey(const std::string& key) {
   return base::StartsWith(key, kTodayPrefix) ? key.substr(sizeof(kTodayPrefix) - 1) : key;
 }
@@ -105,7 +100,8 @@ std::optional<Entity> Parse(const syncer::EntityData& data) {
   Entity entity;
   if (!data.specifics.has_ilo_space() ||
       !entity.ParseFromString(data.specifics.ilo_space().entity()) ||
-      base::StartsWith(entity.id(), kTodayPrefix) != (entity.kind() == Entity::TODAY) ||
+      base::StartsWith(entity.id(), kTodayPrefix) !=
+          (entity.kind() == Entity::TODAY || entity.kind() == Entity::TODAY_FOLDER) ||
       !base::Uuid::ParseLowercase(NodeKey(entity.id())).is_valid()) {
     return std::nullopt;
   }
@@ -219,6 +215,20 @@ std::map<std::string, Entity> Current(const std::map<std::string, Entity>& known
         }
       }
     }
+    // Its today's folders, by name and icon alone, as a pinned folder is.
+    for (bc_id folder : space->TodayFolders()) {
+      const Space::Node* node = space->NodeOf(folder);
+      if (!node || !node->id.is_valid()) {
+        continue;
+      }
+      Entity& each = all[TodayKey(node->id)];
+      each.set_id(TodayKey(node->id));
+      each.set_kind(Entity::TODAY_FOLDER);
+      each.set_space(space_key);
+      each.set_position(Bytes(node->position));
+      each.set_name(space->FolderName(folder));
+      each.set_icon(space->FolderIcon(folder));
+    }
     for (bc_id row : space->today()) {
       const Space::Node* node = space->NodeOf(row);
       Tab* tab = Tab::Get(row);
@@ -238,6 +248,10 @@ std::map<std::string, Entity> Current(const std::map<std::string, Entity>& known
       each.set_id(key);
       each.set_kind(Entity::TODAY);
       each.set_space(space_key);
+      if (const Space::Node* folder = space->NodeOf(space->FolderOf(row));
+          folder && folder->id.is_valid()) {
+        SetTodayFolder(each, Key(folder->id));
+      }
       each.set_position(Bytes(node->position));
       each.set_url(url.spec());
       each.set_name(tab->name());
@@ -262,9 +276,9 @@ std::map<std::string, Entity> Current(const std::map<std::string, Entity>& known
   return all;
 }
 
-// Whether |row| is one of |space|'s Today tabs.
+// Whether |row| is one of |space|'s Today tabs or today's folders.
 bool IsToday(const Space& space, bc_id row) {
-  return row && std::ranges::contains(space.today(), row);
+  return row && (std::ranges::contains(space.today(), row) || space.IsTodayFolder(row));
 }
 
 // Whether |a| and |b| differ only in their title, which rides along with the next change rather
@@ -291,7 +305,9 @@ std::map<std::string, Local> Index() {
       continue;
     }
     index[Key(space->node().id)] = {space, 0};
-    for (const std::vector<bc_id>* rows : {&space->pinned_rows(), &space->today()}) {
+    const std::vector<bc_id> today_folders = space->TodayFolders();
+    for (const std::vector<bc_id>* rows :
+         {&space->pinned_rows(), &space->today(), &today_folders}) {
       for (bc_id row : *rows) {
         if (const Space::Node* node = space->NodeOf(row)) {
           index[Key(node->id)] = {space, row};
@@ -619,9 +635,12 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
     for (bool progress = true; progress && !put.empty();) {
       progress = false;
       for (auto it = put.begin(); it != put.end();) {
+        // A Today tab waits for its Space alone: its parent, a pinned folder's field, is
+        // nothing to it, and it goes in its today's folder once that's made (MakeTodayFolders).
         const bool ready =
             it->kind() == Entity::SPACE ||
-            (index.contains(it->space()) && (it->parent().empty() || index.contains(it->parent())));
+            (index.contains(it->space()) &&
+             (it->kind() == Entity::TODAY || it->parent().empty() || index.contains(it->parent())));
         if (!ready) {
           ++it;
           continue;
@@ -643,8 +662,42 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
         waiting_.insert(entity.id());
       }
     }
+    MakeTodayFolders();
     // A tab now in a Space here leaves the command bar's list of another computer's.
     RefreshOtherTabs();
+  }
+
+  // Each today's folder the account has that isn't here, around the Today tabs here that name it,
+  // once two do. Not in a Space sync doesn't keep, as an agent's, nor one it hasn't got.
+  void MakeTodayFolders() {
+    std::map<std::string, Local> index;
+    for (const auto& [key, folder] : known_) {
+      if (folder.kind() != Entity::TODAY_FOLDER) {
+        continue;
+      }
+      if (index.empty()) {
+        index = Index();
+      }
+      auto space = index.find(folder.space());
+      if (index.contains(NodeKey(key)) || space == index.end() || space->second.row) {
+        continue;
+      }
+      Space& in = *space->second.space;
+      std::vector<bc_id> tabs;
+      for (bc_id row : in.today()) {
+        const Space::Node* node = in.NodeOf(row);
+        auto tab = node ? known_.find(TodayKey(node->id)) : known_.end();
+        if (tab != known_.end() && TodayFolderOf(tab->second, known_) == key) {
+          tabs.push_back(row);
+        }
+      }
+      if (const bc_id made = in.AddTodayFolder(folder.name(), tabs)) {
+        in.SetFolderIcon(made, folder.icon());
+        in.RestoreNodes(in.node(),
+                        {{made, {base::Uuid::ParseLowercase(NodeKey(key)), PositionOf(folder)}}});
+        index = Index();
+      }
+    }
   }
 
   // Deletes |space|, which sync never had, once its Today tabs are in the first of the Spaces sync
@@ -695,7 +748,10 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
       return;
     }
     Space* space = index.at(entity.space()).space;
-    const bc_id folder = entity.parent().empty() ? 0 : index.at(entity.parent()).row;
+    if (entity.kind() == Entity::TODAY_FOLDER) {
+      PutTodayFolder(entity, space, here != index.end() ? here->second : Local());
+      return;
+    }
     // A Today tab moved to another Space keeps its id, so it moves here too, as it did there: into
     // another profile's Space as a new tab of that profile's, which takes the id.
     if (here != index.end() && here->second.space != space && entity.kind() == Entity::TODAY &&
@@ -703,7 +759,7 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
       Window::MoveToSpace(here->second.row, space->id());
       const std::map<std::string, Local> moved = Index();
       if (auto now = moved.find(node_key); now != moved.end() && now->second.space == space) {
-        PutToday(entity, space, now->second.row);
+        PutToday(entity, space, now->second.row, moved);
         return;
       }
     }
@@ -716,9 +772,10 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
     }
     bc_id row = here != index.end() ? here->second.row : 0;
     if (entity.kind() == Entity::TODAY) {
-      PutToday(entity, space, row);
+      PutToday(entity, space, row, index);
       return;
     }
+    const bc_id folder = entity.parent().empty() ? 0 : index.at(entity.parent()).row;
     // Where its place puts it among the rows directly in its folder, without it.
     size_t at = 0;
     for (bc_id sibling : space->pinned_rows()) {
@@ -754,7 +811,15 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
       const Space::Node* was = space->NodeOf(row);
       // A Today tab pinned on another device is pinned here, at the URL it was pinned at there.
       const bool today = IsToday(*space, row);
-      if (today || space->FolderOf(row) != folder || !was || !was->position.Equals(node.position)) {
+      if (space->IsTodayFolder(row)) {
+        // A today's folder pinned on another device, its tabs pinned at their pages until their
+        // own entities say where.
+        space->MoveFolder(row, /*pinned=*/true, folder, at, [](bc_id tab) {
+          const Tab* each = Tab::Get(tab);
+          return each ? each->Url() : GURL();
+        });
+      } else if (today || space->FolderOf(row) != folder || !was ||
+                 !was->position.Equals(node.position)) {
         space->Move(row, /*pinned=*/true, folder, at, [&](bc_id) { return url; });
       }
       if (space->IsFolder(row)) {
@@ -767,17 +832,51 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
     space->RestoreNodes(space->node(), {{row, node}});
   }
 
-  // Puts the Today tab |entity| in |space| at its place, as |row| if it's here already. A new one
-  // has no page until it's clicked, as one the session brings back, so sync never loads a page. One
-  // another device navigated goes there without its page too, unless a window here shows it, which
-  // keeps its page; and its last showing is the account's if that's later than here.
-  void PutToday(const Entity& entity, Space* space, bc_id row) {
+  // Puts the today's folder |entity| in |space|, as |here| if it's here: renamed as it is there,
+  // at its place among them. A pinned folder unpinned on another device goes at the top of the
+  // Today tabs, its tabs' own entities saying where they go. One not here is made once two of its
+  // tabs are (MakeTodayFolders), and one in another Space here goes as its tabs leave it.
+  void PutTodayFolder(const Entity& entity, Space* space, const Local& here) {
+    const bc_id row = here.space == space ? here.row : 0;
+    if (!row || !space->IsFolder(row)) {
+      return;
+    }
+    if (!space->IsTodayFolder(row)) {
+      space->MoveFolder(row, /*pinned=*/false, 0, 0, [](bc_id) { return GURL(); });
+      if (!space->IsTodayFolder(row)) {
+        return;
+      }
+    }
+    space->RenameFolder(row, entity.name());
+    space->SetFolderIcon(row, entity.icon());
+    space->RestoreNodes(space->node(),
+                        {{row, {base::Uuid::ParseLowercase(NodeKey(entity.id())),
+                                PositionOf(entity)}}});
+  }
+
+  // Puts the Today tab |entity| in |space| at its place, in its today's folder if that's here, as
+  // |row| if it's here already. A new one has no page until it's clicked, as one the session
+  // brings back, so sync never loads a page. One another device navigated goes there without its
+  // page too, unless a window here shows it, which keeps its page; and its last showing is the
+  // account's if that's later than here.
+  void PutToday(const Entity& entity,
+                Space* space,
+                bc_id row,
+                const std::map<std::string, Local>& index) {
     const Space::Node node{base::Uuid::ParseLowercase(NodeKey(entity.id())), PositionOf(entity)};
     const GURL url(entity.url());
     const std::u16string title = base::UTF8ToUTF16(entity.title());
-    // Where its place puts it among the Today tabs, without it.
+    bc_id folder = 0;
+    if (const std::string in = TodayFolderOf(entity, known_); !in.empty()) {
+      auto it = index.find(NodeKey(in));
+      if (it != index.end() && it->second.space == space &&
+          space->IsTodayFolder(it->second.row)) {
+        folder = it->second.row;
+      }
+    }
+    // Where its place puts it among the Today tabs, or its folder's, without it.
     size_t at = 0;
-    for (bc_id sibling : space->today()) {
+    for (bc_id sibling : folder ? space->TodayFolderTabs(folder) : space->today()) {
       const Space::Node* each = space->NodeOf(sibling);
       if (sibling != row && each && each->position.LessThan(node.position)) {
         ++at;
@@ -805,12 +904,18 @@ class Bridge : public syncer::DataTypeSyncBridge, public ProfileObserver {
       if (!row) {
         return;
       }
-      space->AddAt(row, at);
+      if (folder) {
+        space->AddAt(row, 0);
+        space->Move(row, /*pinned=*/false, folder, at, [](bc_id) { return GURL(); });
+      } else {
+        space->AddAt(row, at);
+      }
     } else {
       const Space::Node* was = space->NodeOf(row);
-      if (!IsToday(*space, row) || !was || !was->position.Equals(node.position)) {
+      if (!IsToday(*space, row) || space->FolderOf(row) != folder || !was ||
+          !was->position.Equals(node.position)) {
         // A pinned tab unpinned on another device is unpinned here.
-        space->Move(row, /*pinned=*/false, 0, at, [](bc_id) { return GURL(); });
+        space->Move(row, /*pinned=*/false, folder, at, [](bc_id) { return GURL(); });
       }
       Tab* tab = Tab::Get(row);
       if (tab && Syncs(url) && url != tab->Url() && !Window::Showing(row)) {

@@ -497,12 +497,27 @@ impl Shell {
             (Place::Favorite(index.unwrap_or(0)), span, None)
         } else {
             // In another Space it goes where Move to puts it: under its pinned tabs, or at the top
-            // of its Today.
+            // of its Today, a today's folder too.
+            // Its own Space's, which may not be the one shown.
+            let today_folder = self.spaces.iter().any(|space| space.today_folder(tab));
             let fits = |&gap: &usize| {
-                (!away || gap == pinned.len()) && self.gap_depths(&pinned, gap, tab).is_some()
+                (!away || (gap == pinned.len() && !today_folder))
+                    && self.gap_depths(&pinned, gap, tab).is_some()
             };
             let places = (0..=pinned.len()).filter(fits).map(|index| (true, index));
-            let today_places = (0..=today.len()).filter(|&index| !folder && (!away || index == 0));
+            // A folder goes into Today whole, never into a today's folder, and one holding no tab
+            // or filled by a Live Folder stays over the divider.
+            let in_today = |&index: &usize| match (away, folder) {
+                (true, _) => index == 0 && (!folder || today_folder),
+                (false, false) => true,
+                (false, true) => {
+                    self.crosses_into_today(tab)
+                        && self
+                            .gap_depths(&today, index, tab)
+                            .is_some_and(|(low, _)| low == 0)
+                }
+            };
+            let today_places = (0..=today.len()).filter(in_today);
             let places = places.chain(today_places.map(|index| (false, index)));
             let layouts: Vec<_> = places
                 .map(|(in_pinned, index)| {
@@ -534,6 +549,14 @@ impl Shell {
                 return;
             };
             if in_pinned && let Some((low, high)) = self.gap_depths(&pinned, index, tab) {
+                depth = wants.clamp(low, high);
+            }
+            // In Today a tab may go into a today's folder, one in at most.
+            if !in_pinned
+                && !folder
+                && !away
+                && let Some((low, high)) = self.gap_depths(&today, index, tab)
+            {
                 depth = wants.clamp(low, high);
             }
             let place = Place::List(in_pinned, index);
@@ -875,14 +898,16 @@ impl Shell {
                     }
                     self.move_tab_to(tab, true, folder, index, cx);
                 }
-                Place::List(false, index) => {
-                    // check.sh waits for this line.
-                    log!("browser: dragged {tab} to today {index}");
-                    // The browser counts tabs, and the rows above may be split views.
+                Place::List(false, gap) => {
                     let (_, rows) = self.rows();
-                    let rows = rows.into_iter().filter(|&row| row != tab).take(index);
-                    let index = rows.map(|row| self.panes(row).len()).sum();
-                    self.move_tab_to(tab, false, 0, index, cx);
+                    let rows: Vec<u64> = rows.into_iter().filter(|&row| row != tab).collect();
+                    let (folder, index) = self.today_place(&rows, gap, drag_depth, tab, false);
+                    // check.sh waits for these lines.
+                    match folder {
+                        0 => log!("browser: dragged {tab} to today {gap}"),
+                        _ => log!("browser: dragged {tab} to today folder {folder} {index}"),
+                    }
+                    self.move_tab_to(tab, false, folder, index, cx);
                 }
             }
         }
@@ -1040,16 +1065,11 @@ impl Shell {
                 let above = folder == 0 && pinned.iter().take(gap).any(|&row| row == tab);
                 (true, folder, index - usize::from(above))
             }
-            // The browser counts tabs, and the rows above may be split views.
-            Place::List(false, gap) => (
-                false,
-                0,
-                (today.iter())
-                    .take(gap)
-                    .filter(|&&row| row != tab)
-                    .map(|&row| self.panes(row).len())
-                    .sum(),
-            ),
+            // Counted in Today's tabs, as links dropped in are, the tab's own left out.
+            Place::List(false, gap) => {
+                let (_, index) = self.today_place(&today, gap, 0, tab, false);
+                (false, 0, index)
+            }
             Place::Favorite(_) => return false,
         };
         let from = self.browser.tab_window(tab);
@@ -1149,16 +1169,12 @@ impl Shell {
                 let (folder, index) = self.pinned_place(&pinned, gap, drag.depth, INCOMING, false);
                 (true, folder, index)
             }
-            // The browser counts tabs, and the rows above may be split views.
-            Place::List(false, index) => (
-                false,
-                0,
-                today
-                    .iter()
-                    .take(index)
-                    .map(|&row| self.panes(row).len())
-                    .sum(),
-            ),
+            // Counted in Today's tabs: put between a today's folder's tabs, they join it, as the
+            // line's indent there shows.
+            Place::List(false, gap) => {
+                let (_, index) = self.today_place(&today, gap, 0, INCOMING, true);
+                (false, 0, index)
+            }
             Place::Favorite(_) => return false,
         };
         // check.sh waits for these lines.
@@ -1221,6 +1237,68 @@ impl Shell {
         Some((low, high.max(low)))
     }
 
+    /// Where a row dropped at `gap` in the Today rows `rows`, without `dragged`, at `depth` goes:
+    /// the today's folder, else 0, and its index there as the browser counts, without `dragged`
+    /// unless it's a `copy` of it that goes. A folder's index counts the Today rows above it, each
+    /// today's folder's tabs one; a tab's counts the tabs above it in its folder, or in Today.
+    fn today_place(
+        &self,
+        rows: &[u64],
+        gap: usize,
+        depth: usize,
+        dragged: u64,
+        copy: bool,
+    ) -> (u64, usize) {
+        let Some(space) = self.shown_space() else {
+            return (0, gap);
+        };
+        let folder = match gap.checked_sub(1).map(|at| rows[at]) {
+            Some(row) if depth > 0 && space.is_folder(row) => row,
+            Some(row) if depth > 0 => space.folder_of(row),
+            _ => 0,
+        };
+        // The first Today tab under the gap: a closed folder's hidden tabs are above it.
+        let below = rows.get(gap).and_then(|&row| match space.is_folder(row) {
+            true => space
+                .today
+                .iter()
+                .copied()
+                .find(|&tab| space.folder_of(tab) == row),
+            false => Some(space.panes(row)[0]),
+        });
+        let moved = |tab: &u64| {
+            !copy && (space.panes(dragged).contains(tab) || space.folder_of(*tab) == dragged)
+        };
+        let above: Vec<u64> = (space.today.iter().copied())
+            .take_while(|&tab| Some(tab) != below)
+            .filter(|tab| !moved(tab))
+            .collect();
+        match (space.is_folder(dragged), folder) {
+            (true, _) => (0, space.today_rows_in(&above)),
+            (false, 0) => (0, above.len()),
+            (false, folder) => {
+                let index = above
+                    .iter()
+                    .filter(|&&tab| space.folder_of(tab) == folder)
+                    .count();
+                (folder, index)
+            }
+        }
+    }
+
+    /// Whether the pinned or today's `folder` may go into Today: a today's folder, or a pinned one
+    /// holding a tab and not filled by a Live Folder, the empty one refused (#4252).
+    fn crosses_into_today(&self, folder: u64) -> bool {
+        let Some(space) = self.shown_space() else {
+            return false;
+        };
+        space.today_folder(folder)
+            || (!space.folders.live.contains_key(&folder)
+                && (space.pinned.iter()).any(|&row| {
+                    !space.is_folder(row) && space.holders(row).any(|each| each == folder)
+                }))
+    }
+
     /// Where a copy of `tab`, a row dragged from the list with ⌥ held, goes once let go at `to`,
     /// `depth` folders in: the browser makes it, which shows it, as Duplicate does, and puts it
     /// there, counting `tab`, which stays where it was. One step for ⌘Z, which closes it.
@@ -1233,13 +1311,9 @@ impl Shell {
                 (true, folder, index)
             }
             Place::List(false, gap) => {
-                let before = today_rows
-                    .iter()
-                    .filter(|&&row| row != tab)
-                    .nth(gap)
-                    .copied();
-                let above = today_rows.iter().take_while(|&&row| Some(row) != before);
-                (false, 0, above.map(|&row| self.panes(row).len()).sum())
+                let rows: Vec<u64> = today_rows.into_iter().filter(|&row| row != tab).collect();
+                let (folder, index) = self.today_place(&rows, gap, depth, tab, true);
+                (false, folder, index)
             }
             Place::Favorite(_) => return,
         };
@@ -1549,6 +1623,9 @@ mod to_space;
 
 #[cfg(test)]
 mod window_drag;
+
+#[cfg(test)]
+mod today_folders;
 
 #[cfg(test)]
 mod tests {

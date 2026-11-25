@@ -1115,6 +1115,14 @@ bool bc_profile_set_archive_after(bc_id profile, double seconds) {
   return browser_core::SetProfileArchiveAfter(browser_core::ProfileOrLoad(profile), after);
 }
 
+bool bc_profile_sort_tabs(bc_id profile) {
+  return browser_core::ProfileSortTabs(LoadedProfile(profile));
+}
+
+bool bc_profile_set_sort_tabs(bc_id profile, bool on) {
+  return browser_core::SetProfileSortTabs(LoadedProfile(profile), on);
+}
+
 size_t bc_profile_notes_service(bc_id profile_id, char* service, size_t capacity) {
   Profile* profile = LoadedProfile(profile_id);
   return CopyString(profile ? browser_core::notes::Service(profile) : std::string(), service,
@@ -1251,6 +1259,20 @@ bc_id bc_folder_create(bc_id id, const char* name, bc_id folder, size_t index) {
   return space ? space->AddFolder(name ? name : "", folder, index) : 0;
 }
 
+bc_id bc_folder_create_today(bc_id id, const char* name, const bc_id* tabs, size_t count) {
+  browser_core::Space* space = browser_core::Space::FromId(id);
+  // Refused here too: an agent's Space and a private window's hold none. A sort hands no split
+  // view's tab, so none is taken, though a restored folder holds whole ones.
+  if (!space || !tabs || space->agent() || space->own()) {
+    return 0;
+  }
+  std::vector<bc_id> in(tabs, tabs + count);
+  if (std::ranges::any_of(in, [&](bc_id tab) { return space->Panes(tab).size() > 1; })) {
+    return 0;
+  }
+  return space->AddTodayFolder(name ? name : "", in);
+}
+
 void bc_folder_rename(bc_id folder, const char* name) {
   if (browser_core::Space* space = browser_core::Space::HoldingFolder(folder)) {
     space->RenameFolder(folder, name ? name : "");
@@ -1281,7 +1303,8 @@ void bc_folder_set_icon(bc_id folder, const char* icon) {
 
 bc_id bc_folder_duplicate(bc_id folder) {
   browser_core::Space* space = browser_core::Space::HoldingFolder(folder);
-  if (!space) {
+  // A today's folder's menu has Rename and Delete Folder alone.
+  if (!space || space->IsTodayFolder(folder)) {
     return 0;
   }
   // A copy of the rows, which the copies go in among.
@@ -1334,9 +1357,9 @@ void bc_folder_set_open(bc_id folder, bool open) {
   }
 }
 
-void bc_folder_move(bc_id folder, bc_id to, size_t index) {
+void bc_folder_move(bc_id folder, bool pinned, bc_id to, size_t index) {
   if (browser_core::Space* space = browser_core::Space::HoldingFolder(folder)) {
-    space->Move(folder, /*pinned=*/true, to, index, &PageUrlOf);
+    space->MoveFolder(folder, pinned, to, index, &PageUrlOf);
   }
 }
 

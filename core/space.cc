@@ -276,6 +276,31 @@ void Space::RestoreNodes(const Node& space, const std::map<bc_id, Node>& rows) {
   ReportChanged();
 }
 
+bool Space::IsTodayFolder(bc_id id) const {
+  auto it = folders_.find(id);
+  return it != folders_.end() && it->second.today;
+}
+
+std::vector<bc_id> Space::TodayFolders() const {
+  std::vector<bc_id> folders;
+  for (bc_id tab : today_) {
+    const bc_id folder = FolderOf(tab);
+    if (folder && !std::ranges::contains(folders, folder)) {
+      folders.push_back(folder);
+    }
+  }
+  return folders;
+}
+
+std::vector<bc_id> Space::TodayFolderTabs(bc_id folder) const {
+  std::vector<bc_id> tabs;
+  if (IsTodayFolder(folder)) {
+    std::ranges::copy_if(today_, std::back_inserter(tabs),
+                         [&](bc_id tab) { return FolderOf(tab) == folder; });
+  }
+  return tabs;
+}
+
 bc_id Space::FolderOf(bc_id id) const {
   auto it = folder_of_.find(id);
   return it == folder_of_.end() ? 0 : it->second;
@@ -392,6 +417,10 @@ void Space::Add(bc_id tab, bc_id opener, bool foreground) {
     }
   }
   today_.insert(today_.begin() + OutsideSplits(today_, at - today_.begin()), tab);
+  // One a page in a today's folder opened is in that folder too (the lead's answer 2).
+  if (!pinned_opener && IsTodayFolder(FolderOf(opener))) {
+    folder_of_[tab] = FolderOf(opener);
+  }
   ReportChanged();
 }
 
@@ -430,6 +459,8 @@ void Space::Pin(bc_id tab, base::FunctionRef<GURL(bc_id)> url_of) {
     std::erase(today_, pane);
     pinned_.push_back(pane);
     pinned_urls_[pane] = url_of(pane);
+    // Out of its today's folder, which goes with its last tab.
+    folder_of_.erase(pane);
   }
   ReportChanged();
 }
@@ -455,9 +486,16 @@ void Space::Move(bc_id tab,
                  size_t index,
                  base::FunctionRef<GURL(bc_id)> url_of) {
   const bool is_folder = IsFolder(tab);
+  // A today's folder holds Today tabs alone, and moves by MoveFolder.
+  const bool into_today_folder = IsTodayFolder(folder);
   if ((!Has(tab) && !is_folder) || (is_folder && !pinned) || (folder && !IsFolder(folder)) ||
-      (pinned && own()) || (is_folder && Within(folder, tab))) {
+      (pinned && own()) || (is_folder && Within(folder, tab)) || IsTodayFolder(tab) ||
+      (pinned && into_today_folder) || (into_today_folder && is_folder)) {
     return;
+  }
+  // Today's only folders are today's folders.
+  if (!pinned && !into_today_folder) {
+    folder = 0;
   }
   const bool was_pinned = IsPinned(tab) || is_folder;
   // A folder's rows, else the tab's split.
@@ -474,11 +512,18 @@ void Space::Move(bc_id tab,
   }
   if (pinned) {
     pinned_.insert(pinned_.begin() + PinnedAt(folder, index), rows.begin(), rows.end());
+  } else if (into_today_folder) {
+    // At |index| among the folder's tabs, else after its last.
+    const std::vector<bc_id> in = TodayFolderTabs(folder);
+    const size_t at = index < in.size() ? std::ranges::find(today_, in[index]) - today_.begin()
+                      : in.empty()      ? today_.size()
+                                        : std::ranges::find(today_, in.back()) - today_.begin() + 1;
+    today_.insert(today_.begin() + OutsideSplits(today_, at), rows.begin(), rows.end());
   } else {
     today_.insert(today_.begin() + OutsideSplits(today_, index), rows.begin(), rows.end());
   }
   for (bc_id row : is_folder ? std::vector<bc_id>{tab} : rows) {
-    if (pinned && folder) {
+    if (folder) {
       folder_of_[row] = folder;
     } else {
       folder_of_.erase(row);
@@ -526,6 +571,107 @@ bc_id Space::AddFolder(std::string name, bc_id folder, size_t index) {
   }
   ReportChanged();
   return id;
+}
+
+bc_id Space::AddTodayFolder(std::string name, const std::vector<bc_id>& tabs) {
+  if (agent() || own() || tabs.size() < 2 ||
+      std::set(tabs.begin(), tabs.end()).size() < tabs.size()) {
+    return 0;
+  }
+  // A split view goes in whole, as one dragged in does.
+  for (bc_id tab : tabs) {
+    if (!std::ranges::contains(today_, tab) || FolderOf(tab) ||
+        !std::ranges::all_of(Panes(tab),
+                             [&](bc_id pane) { return std::ranges::contains(tabs, pane); })) {
+      return 0;
+    }
+  }
+  // Together at the first one's place, every other tab keeping its order.
+  const size_t first = std::ranges::find(today_, tabs.front()) - today_.begin();
+  const size_t before = std::ranges::count_if(
+      today_.begin(), today_.begin() + first,
+      [&](bc_id tab) { return std::ranges::contains(tabs, tab); });
+  std::erase_if(today_, [&](bc_id tab) { return std::ranges::contains(tabs, tab); });
+  today_.insert(today_.begin() + (first - before), tabs.begin(), tabs.end());
+  const bc_id id = NewId();
+  folders_[id] = {.name = std::move(name), .today = true};
+  for (bc_id tab : tabs) {
+    folder_of_[tab] = id;
+  }
+  ReportChanged();
+  return id;
+}
+
+void Space::MoveFolder(bc_id folder,
+                       bool pinned,
+                       bc_id to,
+                       size_t index,
+                       base::FunctionRef<GURL(bc_id)> url_of) {
+  if (!IsFolder(folder)) {
+    return;
+  }
+  const bool today = IsTodayFolder(folder);
+  if (pinned && !today) {
+    Move(folder, /*pinned=*/true, to, index, url_of);
+    return;
+  }
+  if (pinned) {
+    // A today's folder over the divider: a pinned folder, its tabs pinned where they are.
+    if (own() || (to && (!IsFolder(to) || IsTodayFolder(to)))) {
+      return;
+    }
+    const std::vector<bc_id> tabs = TodayFolderTabs(folder);
+    std::erase_if(today_, [&](bc_id tab) { return std::ranges::contains(tabs, tab); });
+    const size_t at = PinnedAt(to, index);
+    std::vector<bc_id> rows = {folder};
+    rows.insert(rows.end(), tabs.begin(), tabs.end());
+    pinned_.insert(pinned_.begin() + at, rows.begin(), rows.end());
+    folders_[folder].today = false;
+    if (to) {
+      folder_of_[folder] = to;
+    }
+    for (bc_id tab : tabs) {
+      pinned_urls_[tab] = url_of(tab);
+      ForgetOpener(tab);
+    }
+    ReportChanged();
+    return;
+  }
+  // To Today, among its rows, never inside another's run.
+  if (to || agent() || own() || FolderLive(folder)) {
+    return;
+  }
+  std::vector<bc_id> tabs;
+  if (today) {
+    tabs = TodayFolderTabs(folder);
+    std::erase_if(today_, [&](bc_id tab) { return std::ranges::contains(tabs, tab); });
+  } else {
+    // A pinned folder over the divider: its tabs unpinned, the folders in it flattened into it.
+    const size_t end = EndOf(folder);
+    const auto first = std::ranges::find(pinned_, folder);
+    std::vector<bc_id> rows(first + 1, pinned_.begin() + end);
+    std::ranges::copy_if(rows, std::back_inserter(tabs), [&](bc_id row) { return !IsFolder(row); });
+    // An empty folder is refused under the divider, and goes back (the lead's answer 3).
+    if (tabs.empty()) {
+      return;
+    }
+    pinned_.erase(first, pinned_.begin() + end);
+    for (bc_id row : rows) {
+      if (IsFolder(row)) {
+        folders_.erase(row);
+        folder_of_.erase(row);
+      }
+    }
+    folder_of_.erase(folder);
+    folders_[folder].today = true;
+    for (bc_id tab : tabs) {
+      pinned_urls_.erase(tab);
+      folder_of_[tab] = folder;
+    }
+  }
+  const size_t at = TodayAt(index);
+  today_.insert(today_.begin() + at, tabs.begin(), tabs.end());
+  ReportChanged();
 }
 
 void Space::RenameFolder(bc_id folder, std::string name) {
@@ -589,6 +735,10 @@ void Space::TakeFolder(Space& from, bc_id folder, const std::map<bc_id, bc_id>& 
   if (&from == this || !from.IsFolder(folder) || own()) {
     return;
   }
+  if (from.IsTodayFolder(folder)) {
+    TakeTodayFolder(from, folder, copies);
+    return;
+  }
   const auto here = [&](bc_id row) {
     auto copy = copies.find(row);
     return copy == copies.end() ? row : copy->second;
@@ -634,6 +784,47 @@ void Space::TakeFolder(Space& from, bc_id folder, const std::map<bc_id, bc_id>& 
     from.LeaveSplit(row);
   }
   // This Space first, so the app never hears of a tab in neither.
+  ReportChanged();
+  from.ReportChanged();
+}
+
+void Space::TakeTodayFolder(Space& from, bc_id folder, const std::map<bc_id, bc_id>& copies) {
+  if (agent()) {
+    return;
+  }
+  const auto here = [&](bc_id row) {
+    auto copy = copies.find(row);
+    return copy == copies.end() ? row : copy->second;
+  };
+  const std::vector<bc_id> tabs = from.TodayFolderTabs(folder);
+  std::erase_if(from.today_, [&](bc_id tab) { return std::ranges::contains(tabs, tab); });
+  // At the top of Today, as a today's folder there (the lead's answer 4).
+  std::vector<bc_id> rows;
+  std::ranges::transform(tabs, std::back_inserter(rows), here);
+  today_.insert(today_.begin(), rows.begin(), rows.end());
+  folders_[folder] = std::move(from.folders_[folder]);
+  from.folders_.erase(folder);
+  for (bc_id tab : tabs) {
+    from.folder_of_.erase(tab);
+    from.ForgetOpener(tab);
+    folder_of_[here(tab)] = folder;
+  }
+  // A split sits whole in one folder, so each with a tab here comes whole.
+  const std::set<bc_id> taken(tabs.begin(), tabs.end());
+  for (auto split = from.splits_.begin(); split != from.splits_.end();) {
+    if (!std::ranges::all_of(split->tabs, [&](bc_id tab) { return taken.contains(tab); })) {
+      ++split;
+      continue;
+    }
+    SplitView view = std::move(*split);
+    split = from.splits_.erase(split);
+    std::ranges::transform(view.tabs, view.tabs.begin(), here);
+    view.expanded = here(view.expanded);
+    splits_.push_back(std::move(view));
+  }
+  for (bc_id tab : tabs) {
+    from.LeaveSplit(tab);
+  }
   ReportChanged();
   from.ReportChanged();
 }
@@ -913,6 +1104,55 @@ bool Space::Within(bc_id id, bc_id folder) const {
   return false;
 }
 
+size_t Space::TodayAt(size_t index) const {
+  size_t at = 0;
+  for (size_t row = 0; at < today_.size() && row < index; ++row) {
+    const bc_id folder = FolderOf(today_[at]);
+    // A run, or a split, is one row.
+    do {
+      ++at;
+    } while (at < today_.size() && folder && FolderOf(today_[at]) == folder);
+    at = OutsideSplits(today_, at);
+  }
+  return at;
+}
+
+void Space::KeepTodayFolders() {
+  // Each folder's run runs from its first tab to its last: a tab put between joins it.
+  std::map<bc_id, size_t> last;
+  for (size_t at = 0; at < today_.size(); ++at) {
+    if (const bc_id folder = FolderOf(today_[at]); IsTodayFolder(folder)) {
+      last[folder] = at;
+    } else if (folder) {
+      // A Today tab is in no pinned folder.
+      folder_of_.erase(today_[at]);
+    }
+  }
+  // Most Spaces have no today's folder, and every change comes here, a new tab's too: one pass
+  // over Today, then only a today's folder the last tab out emptied goes.
+  if (last.empty()) {
+    if (std::erase_if(folders_, [](const auto& entry) { return entry.second.today; })) {
+      std::erase_if(folder_of_,
+                    [&](const auto& entry) { return !folders_.contains(entry.second); });
+    }
+    return;
+  }
+  for (size_t at = 0; at < today_.size(); ++at) {
+    const bc_id folder = FolderOf(today_[at]);
+    if (!folder) {
+      continue;
+    }
+    for (const size_t end = last[folder]; at < end; ++at) {
+      folder_of_[today_[at + 1]] = folder;
+    }
+  }
+  std::erase_if(folders_, [&](const auto& entry) {
+    return entry.second.today &&
+           std::ranges::none_of(today_, [&](bc_id tab) { return FolderOf(tab) == entry.first; });
+  });
+  std::erase_if(folder_of_, [&](const auto& entry) { return !folders_.contains(entry.second); });
+}
+
 size_t Space::EndOf(bc_id folder) const {
   if (!folder) {
     return pinned_.size();
@@ -966,6 +1206,8 @@ void Space::PlaceRows() {
   const std::vector<bc_id>& today = own() ? no_today : today_;
   std::set<bc_id> rows(pinned_.begin(), pinned_.end());
   rows.insert(today.begin(), today.end());
+  const std::vector<bc_id> today_folders = own() ? std::vector<bc_id>() : TodayFolders();
+  rows.insert(today_folders.begin(), today_folders.end());
   std::erase_if(nodes_, [&](const auto& node) { return !rows.contains(node.first); });
   // By the folder they're in, or 0.
   std::map<bc_id, std::vector<Node*>> siblings;
@@ -982,6 +1224,12 @@ void Space::PlaceRows() {
     today_nodes.push_back(&nodes_[row]);
   }
   Order(today_nodes);
+  // The today's folders too, in the order of their tabs.
+  std::vector<Node*> folder_nodes;
+  for (bc_id folder : today_folders) {
+    folder_nodes.push_back(&nodes_[folder]);
+  }
+  Order(folder_nodes);
 }
 
 // static
@@ -994,7 +1242,9 @@ void Space::PlaceSpaces() {
 }
 
 void Space::ReportChanged() {
-  // Every change to the Space comes here, so none leaves a row without its node or out of order.
+  // Every change to the Space comes here, so none leaves a row without its node or out of order,
+  // or a today's folder empty or broken.
+  KeepTodayFolders();
   PlaceRows();
   SessionChanged();
   ScheduleAutoArchive();

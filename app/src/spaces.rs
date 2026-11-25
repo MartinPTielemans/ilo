@@ -200,6 +200,22 @@ pub(crate) unsafe extern "C" fn space_changed(_: *mut c_void, space: bc::bc_id) 
             folder => _ = folders.parents.insert(row, folder),
         }
     }
+    // Today's folders (#4252), which aren't rows of the core's Today list but hold runs of it.
+    for &tab in &today {
+        let folder = unsafe { bc::bc_folder_of(tab) };
+        if folder == 0 {
+            continue;
+        }
+        folders.parents.insert(tab, folder);
+        let mut open = false;
+        if !folders.folders.contains_key(&folder) && unsafe { bc::bc_folder(folder, &mut open) } {
+            (folders.folders).insert(folder, (name(bc::bc_folder_name, folder), open));
+            let icon = name(bc::bc_folder_icon, folder);
+            if !icon.is_empty() {
+                folders.icons.insert(folder, icon);
+            }
+        }
+    }
     let Some(cx) = CX.with_borrow(Clone::clone) else {
         return;
     };
