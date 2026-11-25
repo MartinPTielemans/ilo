@@ -122,7 +122,7 @@ fn the_row_never_says_the_cores_code_words(cx: &mut TestAppContext) {
     for kind in kinds {
         let action = format!("request_permission {kind}");
         agents.update(cx, |agents, cx| {
-            agents.checked("claude-code", 20, &action, REASON, cx)
+            agents.checked("claude-code", 20, &action, REASON, None, cx)
         });
         let (logged, site, refused) = log(&agents, "claude-code", cx).remove(0);
         assert_eq!(
