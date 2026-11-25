@@ -3396,7 +3396,126 @@ fn the_copy_button_copies_the_answers_plain_text(cx: &mut TestAppContext) {
     let view = shell.read_with(cx, |shell, _| shell.talk.as_ref().unwrap().view.clone());
     view.update(cx, |view, cx| view.copy_answer(1, cx));
     let copied = cx.read(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
-    assert_eq!(copied.as_deref(), Some("Two shows at MAAT"));
+    assert_eq!(
+        copied.as_deref(),
+        Some("Two shows at MAAT (https://maat.pt)")
+    );
+}
+
+/// Copying an answer keeps every link's address after its words, once, and a bare address alone.
+#[test]
+fn a_copied_answer_keeps_its_links_addresses() {
+    let copied = super::plain(
+        "See [the agenda](https://ccb.pt/agenda) and https://maat.pt\n- [MAAT](https://maat.pt)",
+    );
+    assert_eq!(
+        copied,
+        "See the agenda (https://ccb.pt/agenda) and https://maat.pt\n\u{2022} MAAT (https://maat.pt)"
+    );
+}
+
+/// An answer's link to one of the thread's pages shows that page; one to anywhere else on the web
+/// opens a tab of the user's Space, as a link always has; any other address is plain words.
+#[test]
+fn an_answers_link_shows_its_page_or_opens_the_web() {
+    use super::Linked;
+    let pages = [(30, "https://maat.pt/".into())];
+    let to = |url: &str| super::linked_to(&pages, &url.into());
+    assert_eq!(to("https://maat.pt"), Some(Linked::Page(30)));
+    assert_eq!(
+        to("https://elsewhere.example/a"),
+        Some(Linked::Web("https://elsewhere.example/a".into()))
+    );
+    assert_eq!(
+        to("http://elsewhere.example/"),
+        Some(Linked::Web("http://elsewhere.example/".into()))
+    );
+    assert_eq!(to("file:///etc/hosts"), None);
+    assert_eq!(to("javascript:alert(1)"), None);
+}
+
+/// A web link's click asks the core for a tab of the user's Space and nothing of the thread; with
+/// ⌘ it opens behind and the thread stays. No log line says the address.
+#[gpui::test]
+fn a_web_links_click_opens_a_tab_of_the_users_space(cx: &mut TestAppContext) {
+    let (shell, host, cx) = shown(cx);
+    shell.update(cx, |shell, cx| {
+        shell.set_conversation(Some(conversation(1)), cx)
+    });
+    cx.run_until_parked();
+    host.take();
+    shell.update(cx, |shell, cx| {
+        shell.open_link("https://elsewhere.example/a", false, cx)
+    });
+    assert_eq!(
+        host.opened_pages.borrow().as_slice(),
+        ["https://elsewhere.example/a"]
+    );
+    let calls = host.take();
+    assert!(
+        !calls.iter().any(|call| call.starts_with("task")),
+        "the thread was asked something: {calls:?}"
+    );
+    shell.update(cx, |shell, cx| {
+        shell.open_link("https://elsewhere.example/b", true, cx)
+    });
+    let calls = host.take();
+    assert!(
+        calls.contains(&"open behind https://elsewhere.example/b false 0 0".to_string()),
+        "{calls:?}"
+    );
+    assert!(
+        !calls.iter().any(|call| call.starts_with("task")),
+        "{calls:?}"
+    );
+}
+
+/// Where a link's words are themselves an address on another host than the link's, the link's
+/// real address is drawn in the words' place, and copied so; words on the same host, or not an
+/// address, stay.
+#[test]
+fn a_link_whose_words_name_another_host_draws_its_real_address() {
+    let drawn = |source: &str| match super::markdown::blocks(source).remove(0) {
+        super::markdown::Block::Paragraph(text) => super::honest(text),
+        other => panic!("not a paragraph: {other:?}"),
+    };
+    let swapped = drawn("Pay at **[bank.example](https://evil.example/pay)** now");
+    assert_eq!(swapped.text, "Pay at https://evil.example/pay now");
+    assert_eq!(swapped.links.len(), 1);
+    let (range, url) = &swapped.links[0];
+    assert_eq!(&swapped.text[range.clone()], url.as_ref());
+    assert!(
+        swapped
+            .styled
+            .iter()
+            .any(|(each, _)| &swapped.text[each.clone()] == url.as_ref())
+    );
+    let same = drawn("[www.maat.pt](https://maat.pt/agenda)");
+    assert_eq!(same.text, "www.maat.pt");
+    let words = drawn("[the agenda](https://ccb.pt/agenda)");
+    assert_eq!(words.text, "the agenda");
+    assert_eq!(
+        super::plain("[bank.example](https://evil.example/pay)"),
+        "https://evil.example/pay"
+    );
+}
+
+/// A web link's tooltip says its host, then the rest of its address as plain text, cut in the
+/// middle.
+#[test]
+fn a_web_links_tooltip_is_its_address_plain_and_cut() {
+    let (host, rest) = super::link_tip("https://maat.pt/agenda?day=sat").unwrap();
+    assert_eq!(
+        (host.as_ref(), rest.as_ref()),
+        ("maat.pt", "/agenda?day=sat")
+    );
+    let long = format!("https://maat.pt/{}", "a".repeat(30) + &"z".repeat(30));
+    let (_, rest) = super::link_tip(&long).unwrap();
+    assert_eq!(rest.chars().count(), 48);
+    assert!(
+        rest.starts_with("/aaa") && rest.ends_with("zzz") && rest.contains('\u{2026}'),
+        "{rest}"
+    );
 }
 
 /// An answer's link is one only to a page of its thread, the same address but for a closing slash

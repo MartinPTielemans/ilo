@@ -309,6 +309,22 @@ pub(super) enum Fold {
 }
 
 impl Shell {
+    /// A link in a thread's answer to anywhere but its own pages, at the user's click: it opens
+    /// as a tab of the user's Space, and shows, as it always has.
+    /// With ⌘ held it opens behind, as a page's link does, and the thread stays.
+    fn open_link(&mut self, url: &str, behind: bool, cx: &mut Context<Self>) {
+        // The address is the user's to see, not the log's.
+        if behind {
+            log!("browser: task link out behind");
+            self.browser
+                .open_behind(&[url.to_string()], false, 0, 0, cx);
+            return;
+        }
+        log!("browser: task link out");
+        self.leave_task_area(cx);
+        self.browser.open_page(url, cx);
+    }
+
     /// The task whose conversation the page area shows, for the Agents to send.
     pub fn talk_agent(&self) -> Option<SharedString> {
         let talk = self.talk.as_ref()?;
@@ -1828,6 +1844,7 @@ impl TalkView {
         look: &Look,
     ) -> gpui::AnyElement {
         let palette = look.palette;
+        let inline = honest(inline);
         let bytes = |char: usize| {
             inline
                 .text
@@ -1844,10 +1861,10 @@ impl TalkView {
                 (bytes(range.start)..bytes(range.end), style)
             })
             .collect();
-        // A link is one only to a page of this thread, which a click shows; the assistant's words
-        // can't make one to anywhere else, which stays plain words.
-        let links: Vec<(std::ops::Range<usize>, u64)> = (inline.links.iter())
-            .filter_map(|(range, url)| Some((range.clone(), thread_tab(&look.thread_pages, url)?)))
+        // A link to a page of this thread shows it; one to the web opens a tab of the user's Space,
+        // as a link always has; one to anything else stays plain words.
+        let links: Vec<(std::ops::Range<usize>, Linked)> = (inline.links.iter())
+            .filter_map(|(range, url)| Some((range.clone(), linked_to(&look.thread_pages, url)?)))
             .collect();
         let linked = |range: &std::ops::Range<usize>| {
             (links.iter()).any(|(each, _)| each.start <= range.start && range.end <= each.end)
@@ -1873,15 +1890,50 @@ impl TalkView {
         if links.is_empty() {
             return text.into_any_element();
         }
-        let (ranges, tabs): (Vec<_>, Vec<u64>) = links.into_iter().unzip();
+        let (ranges, targets): (Vec<_>, Vec<Linked>) = links.into_iter().unzip();
+        // Under the pointer a web link's tooltip says its address, which nothing else here shows.
+        let tips: Vec<(std::ops::Range<usize>, (SharedString, SharedString))> = (ranges.iter())
+            .zip(&targets)
+            .filter_map(|(range, target)| match target {
+                Linked::Web(url) => Some((range.clone(), link_tip(url)?)),
+                Linked::Page(_) => None,
+            })
+            .collect();
+        let tipped = self.shell.clone();
         let shell = self.shell.clone();
         InteractiveText::new(id, text)
-            .on_click(ranges, move |index, _, cx| {
-                let Some(&tab) = tabs.get(index) else { return };
+            .when(!tips.is_empty(), |text| {
+                text.on_hover(move |at, event, _, cx| {
+                    let tip = at.and_then(|at| tips.iter().find(|(range, _)| range.contains(&at)));
+                    let Some(shell) = tipped.upgrade() else {
+                        return;
+                    };
+                    shell.update(cx, |shell, cx| {
+                        let tip = tip.map(|(_, (host, rest))| {
+                            let at = Bounds::new(event.position, size(px(1.), px(1.)));
+                            let tip = crate::tooltip::Tip::detailed(host.clone(), rest.clone());
+                            (tip, crate::tooltip::Anchor::under(at, shell.viewport))
+                        });
+                        shell.hover_tip(tip, cx);
+                    });
+                })
+            })
+            .on_click(ranges, move |index, window, cx| {
+                let Some(target) = targets.get(index) else {
+                    return;
+                };
                 let Some(shell) = shell.upgrade() else { return };
-                let view = (shell.read(cx).talk.as_ref()).map(|talk| talk.view.clone());
-                if let Some(view) = view {
-                    view.update(cx, |view, cx| view.show_page(tab, cx));
+                match target {
+                    Linked::Page(tab) => {
+                        let view = (shell.read(cx).talk.as_ref()).map(|talk| talk.view.clone());
+                        if let Some(view) = view {
+                            view.update(cx, |view, cx| view.show_page(*tab, cx));
+                        }
+                    }
+                    Linked::Web(url) => {
+                        let behind = window.modifiers().secondary(cx);
+                        shell.update(cx, |shell, cx| shell.open_link(url, behind, cx));
+                    }
                 }
             })
             .into_any_element()
@@ -4029,6 +4081,86 @@ impl Shell {
     }
 }
 
+/// Where a link in an answer goes.
+#[derive(Clone, Debug, PartialEq)]
+enum Linked {
+    /// A page of the thread, its tab.
+    Page(u64),
+    /// Any other web address, which opens as a tab of the user's Space.
+    Web(SharedString),
+}
+
+/// Where a link to `url` goes: a page among the thread's `pages`, else the web for an http(s)
+/// address, else nowhere, its words plain.
+fn linked_to(pages: &[(u64, SharedString)], url: &SharedString) -> Option<Linked> {
+    if let Some(tab) = thread_tab(pages, url) {
+        return Some(Linked::Page(tab));
+    }
+    let web = url.starts_with("https://") || url.starts_with("http://");
+    web.then(|| Linked::Web(url.clone()))
+}
+
+/// What a web link's tooltip says: its host, then the rest of its address, plain and cut in the
+/// middle.
+fn link_tip(url: &str) -> Option<(SharedString, SharedString)> {
+    let parsed = url::Url::parse(url).ok()?;
+    let host = parsed.host_str()?.to_string();
+    let after = url.find(&host)? + host.len();
+    let rest: String = (url[after..].chars()).filter(|c| !c.is_control()).collect();
+    let count = rest.chars().count();
+    let rest = match count > LINK_TIP_MOST {
+        true => {
+            let head = (LINK_TIP_MOST - 1) / 2;
+            let tail = LINK_TIP_MOST - 1 - head;
+            let start: String = rest.chars().take(head).collect();
+            let end: String = rest.chars().skip(count - tail).collect();
+            format!("{start}\u{2026}{end}")
+        }
+        false => rest,
+    };
+    Some((host.into(), rest.into()))
+}
+
+/// The most of an address after its host a link's tooltip says, the ellipsis one of them.
+const LINK_TIP_MOST: usize = 48;
+
+/// `inline` with each link whose words are themselves an address on another host than the link's
+/// drawn with the link's real address in the words' place, so words can't pass for where it goes.
+fn honest(mut inline: Inline) -> Inline {
+    let mut links = inline.links.clone();
+    links.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+    for (range, url) in links {
+        let Some(words) = inline.text.get(range.clone()) else {
+            continue;
+        };
+        let address =
+            words.contains("://") || (words.contains('.') && !words.contains(char::is_whitespace));
+        let host = crate::agents::fence::host_of;
+        let (Some(said), Some(real)) = (host(words), host(url.as_ref())) else {
+            continue;
+        };
+        if !address || said == real {
+            continue;
+        }
+        let grown = url.len() as isize - range.len() as isize;
+        let moved = |at: usize, end: bool| match at {
+            at if at <= range.start => at,
+            at if at >= range.end => (at as isize + grown) as usize,
+            _ if end => range.start + url.len(),
+            _ => range.start,
+        };
+        let map = |each: &std::ops::Range<usize>| moved(each.start, false)..moved(each.end, true);
+        inline.text.replace_range(range.clone(), url.as_ref());
+        for (each, _) in &mut inline.styled {
+            *each = map(each);
+        }
+        for (each, _) in &mut inline.links {
+            *each = map(each);
+        }
+    }
+    inline
+}
+
 /// The tab among a thread's `pages` that `url` is, the same address but for a closing slash or
 /// fragment.
 fn thread_tab(pages: &[(u64, SharedString)], url: &str) -> Option<u64> {
@@ -4345,13 +4477,28 @@ fn ilo_spoken(line: &IloLine, agent: &str) -> String {
 }
 
 /// What an agent said as its text is drawn, without the marks that style it: each paragraph and
-/// each item of a list, with its marker, on a line.
+/// each item of a list, with its marker, on a line, and a link's address after its words.
 fn plain(text: &str) -> String {
     let lines = markdown::blocks(text).into_iter().map(|block| match block {
-        Block::Paragraph(text) => text.text,
-        Block::Item { marker, text, .. } => format!("{marker} {}", text.text),
+        Block::Paragraph(text) => addressed(text),
+        Block::Item { marker, text, .. } => format!("{marker} {}", addressed(text)),
     });
     lines.collect::<Vec<_>>().join("\n")
+}
+
+/// An inline's text with each link's address in brackets after its words, unless the words are
+/// the address.
+fn addressed(inline: markdown::Inline) -> String {
+    let inline = honest(inline);
+    let mut text = inline.text;
+    let mut links = inline.links;
+    links.sort_by_key(|(range, _)| std::cmp::Reverse(range.end));
+    for (range, url) in links {
+        if text.get(range.clone()) != Some(url.as_ref()) && text.is_char_boundary(range.end) {
+            text.insert_str(range.end, &format!(" ({url})"));
+        }
+    }
+    text
 }
 
 /// What covers a part of the conversation while a page goes back over it, which takes a press there
