@@ -297,7 +297,7 @@ pub fn loose_end_row(
     let close = icon_button(look, ("loose-end-away", index), "icons/x.svg")
         .size(px(form::CLOSE_BOX))
         .when(a11y, |close| {
-            crate::settings_rows::named_button(close, format!("Put away {}", end.title()))
+            crate::settings_rows::named_button(close, format!("Dismiss {}", end.title()))
         })
         .on_click(move |_, window, cx| put_away(window, cx));
     frame()
