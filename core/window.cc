@@ -1110,6 +1110,7 @@ void Window::AdjustNavigate(NavigateParams& params) {
     // Windows, showing a window already on screen gives the window itself the user's keyboard.
     params.window_action = NavigateParams::WindowAction::kNoAction;
     window->agent_opener_ = source_id;
+    window->ForgetNextTabsOpenerSoon();
     // A pop-up content made doesn't pass MakeHeldBy, and Navigate's tab strip sizes it as it does
     // any tab added behind, so it takes the agent's size the task after (#3788).
     if (params.contents_to_insert) {
@@ -1236,6 +1237,7 @@ void Window::ForgetNextTabsOpenerSoon() {
 }
 
 void Window::ForgetNextTabsOpener() {
+  agent_opener_ = 0;
   agents_source_ = 0;
 }
 
