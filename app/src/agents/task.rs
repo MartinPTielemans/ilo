@@ -24,7 +24,7 @@ use super::helpers::{self, Helpers};
 use super::ready::{Found, Ready};
 use super::runner::{self, Cli, Failure, Launch, Out, Process};
 use super::sign_in::Offer;
-use super::tier::{Sites, Stop, Tier};
+use super::tier::{self, Sites, Stop, Tier};
 use super::{Agents, Client, Question, ToolResult, notes, page, site, tools};
 use crate::shell::MenuEntry;
 
@@ -142,6 +142,9 @@ pub struct Conversation {
     pub on: Option<u64>,
     /// Whether it works or waits on the user, which ⌘. stops.
     pub stoppable: bool,
+    /// What the live line over the reply field says of it, read where its card's word is, so the
+    /// two never disagree.
+    pub live: Live,
     /// Open under the result, which moves the tabs it left the user to them: "Open maat.pt", or
     /// "Open 2 pages".
     pub open: Option<SharedString>,
@@ -153,6 +156,28 @@ pub struct Conversation {
     pub tier: Tier,
     /// Whether it may go only to the sites of the pages the user added.
     pub only_added: bool,
+}
+
+/// Where a task under way is, as the live line over its reply field says it: working only while
+/// nothing of it waits on the user and the user doesn't have its page.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Live {
+    /// It works: the step under way, else `{assistant} is working`, with Take Over on its page.
+    #[default]
+    Working,
+    /// A step ilo refused waits on the user (its card says Needs you).
+    Refused,
+    /// The agent handed the user a step on its page, or asks for the page back, and its call
+    /// waits (its card says Needs you).
+    Handed,
+    /// The user took its page `tab` over, and the agent has no step under way on another: `site`
+    /// names it while the task has more than one page, as ilo's line of a handed page does.
+    Yours {
+        tab: u64,
+        site: Option<SharedString>,
+    },
+    /// Its own question waits on the user, which the question's line says with its answers.
+    Asked,
 }
 
 /// A line of a task's conversation.
@@ -323,6 +348,15 @@ pub struct Traced {
     /// The site whose notes its call's answer carried (#4122), by its note's name. From the
     /// answer's own field, which only the app sets, never from the answer's text.
     pub notes: Option<&'static str>,
+}
+
+impl Traced {
+    /// Whether it was under way when the user pressed Stop, which answered it as stopped: no step
+    /// that failed, and it leaves no line, in the trace or on a card, as a stopped turn has no
+    /// answer.
+    pub fn stopped(&self) -> bool {
+        self.kind == Some(tools::Kind::Stopped)
+    }
 }
 
 /// The page the user was on when they asked, which goes as its address and title only.
@@ -1017,6 +1051,27 @@ impl Agents {
         let tabs: Vec<(u64, SharedString)> = (self.pages(task, cx).into_iter())
             .map(|tab| (tab, site(&self.browser.tab(tab, cx).url).into()))
             .collect();
+        let card = self.card(task, cx);
+        let on = (task.state == State::Working)
+            .then(|| self.on(task))
+            .flatten();
+        // The card's Needs you reads the same question and refusals, so the line can't say
+        // working while the card says the task waits on the user.
+        // A page the user took over is theirs on the line unless the agent works on another.
+        let taken = (tabs.iter())
+            .find(|(tab, _)| self.held.contains_key(tab))
+            .filter(|(tab, _)| on.is_none_or(|on| on == *tab));
+        let live = match (&task.state, &card.question) {
+            (State::Asking { .. }, None) => Live::Asked,
+            (_, Some(_)) => Live::Handed,
+            _ if task.stops.iter().any(|stop| !stop.settled) => Live::Refused,
+            _ if let Some((tab, _)) = taken => Live::Yours {
+                tab: *tab,
+                site: (tabs.len() > 1)
+                    .then(|| tier::plain(&site(&self.browser.tab(*tab, cx).url)).into()),
+            },
+            _ => Live::Working,
+        };
         // The card's own word, so a refusal waiting on the user says Needs you in both. Done says
         // when, and a limit when it resets if the assistant said; without that it's the word, as
         // the name before it says whose limit it is.
@@ -1025,7 +1080,7 @@ impl Agents {
                 done_at(&super::time_or_day(seconds(at)))
             }
             State::Limit { resets } if resets.is_some() => limit_words(&task.name, resets),
-            _ => self.card(task, cx).word.after_name().to_string(),
+            _ => card.word.after_name().to_string(),
         };
         // A session's title is the agent's words or its sites, so the line under it leads with its
         // client's name, and its state goes on as a fact, in lower case (#3690).
@@ -1043,10 +1098,9 @@ impl Agents {
             page: task.page.clone(),
             lines,
             tabs,
-            on: (task.state == State::Working)
-                .then(|| self.on(task))
-                .flatten(),
+            on,
             stoppable: matches!(task.state, State::Working | State::Asking { .. }),
+            live,
             open: open_label(&self.open_tabs(task, cx)),
             answers: match &task.state {
                 State::Asking { answers, .. } if self.ask_shown(task) => answers.clone(),
@@ -2504,6 +2558,17 @@ impl Agents {
         })
     }
 
+    /// The task under way of `agent`'s whose session holds the page `tab`, among that client's
+    /// sessions only. A tab that left its Space may still be listed: the core refuses a call on it
+    /// before anything read here shows.
+    pub(super) fn page_task(&self, agent: &str, tab: u64) -> Option<&Task> {
+        (self.tasks.tasks.iter()).find(|task| {
+            task.state == State::Working
+                && (task.session.as_ref())
+                    .is_some_and(|session| session.agent == agent && session.tabs.contains(&tab))
+        })
+    }
+
     /// Tells the task `key` ilo runs what ilo has to say, `text`, which is ilo's own: now if it's
     /// working or `now` is set, which starts it on a turn, else with the user's next turn.
     pub(super) fn tell_task(&mut self, key: &str, text: String, now: bool, cx: &mut Context<Self>) {
@@ -3556,7 +3621,7 @@ fn page_steps(task: &Task) -> Vec<(u64, SharedString)> {
     let turn = task.turn();
     let steps = (task.trace.iter().enumerate().rev())
         .take_while(|(_, step)| step.after >= turn)
-        .filter(|(_, step)| step.did.tool != "thought");
+        .filter(|(_, step)| step.did.tool != "thought" && !step.stopped());
     let mut pages: Vec<(u64, SharedString)> = Vec::new();
     let mut over: Vec<u64> = Vec::new();
     for (key, step) in steps {
@@ -3607,7 +3672,7 @@ fn turn_steps(task: &Task) -> Vec<&Traced> {
     let turn = task.turn();
     (task.trace.iter().rev())
         .take_while(|step| step.after >= turn)
-        .filter(|step| step.did.tool != "thought")
+        .filter(|step| step.did.tool != "thought" && !step.stopped())
         .collect()
 }
 
@@ -3624,7 +3689,7 @@ fn lower_first(text: &str) -> String {
 /// left out.
 fn stopped(task: &Task) -> SharedString {
     match (task.trace.iter())
-        .filter(|step| step.did.tool != "thought")
+        .filter(|step| step.did.tool != "thought" && !step.stopped())
         .count()
     {
         0 => "Stopped".into(),
@@ -3811,6 +3876,38 @@ struct Stretch<'a> {
     key: Option<usize>,
     started: Option<Instant>,
     ended: Option<Instant>,
+    /// Its steps that waited on the user, from their start to their end, and the rest, which
+    /// worked: what it took counts the time the first alone filled as none (`worked`).
+    waits: Vec<(Instant, Instant)>,
+    busy: Vec<(Instant, Instant)>,
+}
+
+/// The tools whose step waits on the user from its start to its end: none of that is work.
+const WAIT_ON_USER: [&str; 4] = ["hand_off", "upload", "ask_for_tab", "ask"];
+
+/// How long a stretch from `started` to `ended` worked: all of it but the time only `waits`
+/// filled, while no step of `busy` ran. From the steps' own marks, never a timer.
+fn worked(
+    started: Instant,
+    ended: Instant,
+    waits: &[(Instant, Instant)],
+    busy: &[(Instant, Instant)],
+) -> std::time::Duration {
+    let mut marks: Vec<Instant> = (waits.iter().chain(busy))
+        .flat_map(|&(from, to)| [from, to])
+        .map(|mark| mark.clamp(started, ended))
+        .chain([started, ended])
+        .collect();
+    marks.sort();
+    marks.dedup();
+    let within = |spans: &[(Instant, Instant)], from: Instant, to: Instant| {
+        spans.iter().any(|&(start, end)| start <= from && to <= end)
+    };
+    let idle: std::time::Duration = (marks.windows(2))
+        .filter(|pair| within(waits, pair[0], pair[1]) && !within(busy, pair[0], pair[1]))
+        .map(|pair| pair[1] - pair[0])
+        .sum();
+    ended.saturating_duration_since(started) - idle
 }
 
 /// A step of a stretch, with its place in the task's trace, or what the agent said in it.
@@ -3855,6 +3952,9 @@ impl<'a> Stretch<'a> {
     }
 
     fn step(&mut self, key: usize, step: &'a Traced, helper: Option<usize>) {
+        if step.stopped() {
+            return;
+        }
         self.key.get_or_insert(key);
         self.started = Some(
             self.started
@@ -3862,6 +3962,10 @@ impl<'a> Stretch<'a> {
         );
         let end = step.ended.unwrap_or(step.started);
         self.ended = Some(self.ended.map_or(end, |ended| ended.max(end)));
+        match WAIT_ON_USER.contains(&step.did.tool.as_str()) {
+            true => self.waits.push((step.started, end)),
+            false => self.busy.push((step.started, end)),
+        }
         self.gathered.push(match helper {
             Some(helper) => Gathered::Helper(helper, key, step),
             None => Gathered::Step(key, step),
@@ -3885,6 +3989,10 @@ impl<'a> Stretch<'a> {
     fn flush(&mut self, lines: &mut Vec<Line>, running: bool, end: Option<Instant>) {
         let gathered = std::mem::take(&mut self.gathered);
         let (key, started, ended) = (self.key.take(), self.started.take(), self.ended.take());
+        let (waits, busy) = (
+            std::mem::take(&mut self.waits),
+            std::mem::take(&mut self.busy),
+        );
         let Some(key) = key else {
             lines.extend(gathered.into_iter().filter_map(|item| match item {
                 Gathered::Said(text) => Some(Line::Said(text)),
@@ -3931,11 +4039,7 @@ impl<'a> Stretch<'a> {
         let took = (!running).then(|| {
             let started = started.unwrap_or_else(Instant::now);
             let ended = ended.into_iter().chain(end).max().unwrap_or(started);
-            (ended
-                .saturating_duration_since(started)
-                .as_secs_f32()
-                .round() as u64)
-                .max(1)
+            (worked(started, ended, &waits, &busy).as_secs_f32().round() as u64).max(1)
         });
         lines.push(Line::Trace(Trace {
             key,
