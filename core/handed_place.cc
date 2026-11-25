@@ -41,4 +41,8 @@ bool KeepsATile(bool named, bool favorite) {
   return named && favorite;
 }
 
+bool CloseGivesBack(bool handed, bool with_agent) {
+  return handed && with_agent;
+}
+
 }  // namespace browser_core::handed_place

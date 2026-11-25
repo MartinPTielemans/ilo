@@ -73,6 +73,11 @@ void Left(bc_id tab);
 // bc_tab_return_from_agent.
 bool Return(bc_id tab);
 
+// |tab| is out of an agent's Space and the user's again, as a tab moved out of one is
+// (bc_tab_move_to_space), and handled now: one an agent had for longer than its Space keeps a tab
+// unseen has that long again before it's archived or its page unloads.
+void UsersAgain(bc_id tab);
+
 // The history |tab|'s page has now is the user's from here, but for the entry it's on: at the
 // give, when the user hands the tab back after holding it, and when its page is made again, as an
 // unloaded tab's is. Nothing for a tab that isn't handed or has no page.

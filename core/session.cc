@@ -317,6 +317,11 @@ SavedSpace SaveSpace(const Space& space,
     const Space::Node* node = space.NodeOf(id);
     return node ? *node : Space::Node();
   };
+  // The folder |named| has for |id|, or 0: read without writing one for a tab it doesn't name.
+  const auto named_folder = [](const std::map<bc_id, bc_id>& named, bc_id id) {
+    auto folder = named.find(id);
+    return folder == named.end() ? bc_id{0} : folder->second;
+  };
   // Each today's folder saved, to where it is among them.
   std::map<bc_id, int> today_folders;
   for (bc_id folder : space.TodayFolders()) {
@@ -366,12 +371,12 @@ SavedSpace SaveSpace(const Space& space,
         tab.node = mark->node;
         if (mark->pin) {
           tab.pinned_url = mark->pin->url;
-          auto folder = folders.find(pinned_rows.folders[id]);
+          auto folder = folders.find(named_folder(pinned_rows.folders, id));
           tab.folder = folder == folders.end() ? -1 : folder->second;
         } else {
           tab.last_seen = Window::Showing(id) ? base::Time::Now() : saving->last_seen();
           // In the today's folder it comes back into, so a launch has that folder whole.
-          auto folder = today_folders.find(today_rows.folders[id]);
+          auto folder = today_folders.find(named_folder(today_rows.folders, id));
           tab.folder = folder == today_folders.end() ? -1 : folder->second;
         }
         above = id;

@@ -1485,6 +1485,9 @@ bc_id Window::GiveFavorite(bc_id tab, bc_id space) {
   // In the agent's Space before it leaves the favorites, so the UI never hears of it in neither
   // and forgets its title.
   to->AddAt(tab, 0);
+  // Not reached: StandIn made |keeper| just now, in the profile of a favorite that isn't going,
+  // which is all Replace asks. If it were, the windows above would stay on the tab they went to
+  // and the page's own close stay off.
   if (!Favorites::Replace(tab, keeper)) {
     to->Remove(tab);
     CloseTab(keeper, /*discard=*/true);
@@ -1853,6 +1856,38 @@ void Window::FollowMove(bc_id tab, bc_id moved, bc_id from, bc_id space, bc_id n
 }
 
 // static
+void Window::GiveBack(bc_id tab) {
+  Space* in = Space::Holding(tab);
+  if (!handed::Of(tab) || !in || !in->agent() || handed::Return(tab)) {
+    return;
+  }
+  std::vector<Space*> users = Space::All();
+  std::erase_if(users, [](Space* each) {
+    return each->agent() || each->own() || DeletingSpaces().contains(each->id());
+  });
+  // In its own profile first, where the page goes as it is.
+  auto other = std::ranges::find(users, in->profile(), &Space::profile);
+  if (other == users.end()) {
+    other = users.begin();
+  }
+  if (other == users.end()) {
+    return;
+  }
+  // The user's was a Today tab, whatever the agent made of it.
+  if (in->IsPinned(tab)) {
+    in->Unpin(tab);
+  }
+  // Into another profile it goes as a new tab without its page (CopyToProfile), and no window
+  // goes with it: the address is one the thread chose, and loads with that profile's logins only
+  // once the user shows the tab themselves.
+  MoveToSpace(tab, (*other)->id(), /*to_agent=*/false,
+              /*follows=*/(*other)->profile() == in->profile());
+  if (Space::Holding(tab) == *other) {
+    handed::UsersAgain(tab);
+  }
+}
+
+// static
 bool Window::DeleteSpace(bc_id space) {
   std::vector<Space*> staying = Space::All();
   std::erase_if(staying, [](Space* each) { return DeletingSpaces().contains(each->id()); });
@@ -1871,28 +1906,7 @@ bool Window::DeleteSpace(bc_id space) {
       }
     }
     for (bc_id tab : users) {
-      if (handed::Return(tab)) {
-        continue;
-      }
-      // In its own profile first, where the page goes as it is.
-      auto other = std::ranges::find_if(staying, [&](Space* each) {
-        return !each->agent() && !each->own() && each->profile() == (*it)->profile();
-      });
-      if (other == staying.end()) {
-        other = std::ranges::find_if(staying,
-                                     [](Space* each) { return !each->agent() && !each->own(); });
-      }
-      if (other != staying.end()) {
-        // The user's was a Today tab, whatever the agent made of it.
-        if ((*it)->IsPinned(tab)) {
-          (*it)->Unpin(tab);
-        }
-        // Into another profile it goes as a new tab without its page (CopyToProfile), and no
-        // window goes with it: the address is one the thread chose, and loads with that
-        // profile's logins only once the user shows the tab themselves.
-        MoveToSpace(tab, (*other)->id(), /*to_agent=*/false,
-                    /*follows=*/(*other)->profile() == (*it)->profile());
-      }
+      GiveBack(tab);
     }
   }
   // Before the windows leave it, so it keeps the tab the one active last showed there.

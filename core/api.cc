@@ -14,6 +14,7 @@
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/notreached.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -56,6 +57,7 @@
 #include "browser_core/find.h"
 #include "browser_core/handed.h"
 #include "browser_core/handed_give_rule.h"
+#include "browser_core/handed_place.h"
 #include "browser_core/held_keys.h"
 #include "browser_core/history_import.h"
 #include "browser_core/history_list.h"
@@ -152,8 +154,6 @@ bool UsesDevice(content::WebContents* contents) {
                              [&](Kind kind) { return contents->IsCapabilityActive(kind); });
 }
 
-// Closes the Picture in Picture window of |contents|' page, Chrome's floating one for a video or
-// one its page opened for a document, if it has one. The video plays on in its page.
 // The Space the favorite |tab| is given from, as it's in none: the one its window shows, if that
 // shows it among its favorites, else the first of the user's that does. Null if none does.
 browser_core::Space* ShowingFavorite(bc_id tab) {
@@ -171,6 +171,8 @@ browser_core::Space* ShowingFavorite(bc_id tab) {
   return it == spaces.end() ? nullptr : *it;
 }
 
+// Closes the Picture in Picture window of |contents|' page, Chrome's floating one for a video or
+// one its page opened for a document, if it has one. The video plays on in its page.
 void ClosePictureInPicture(content::WebContents* contents) {
   PictureInPictureWindowManager* manager = PictureInPictureWindowManager::GetInstance();
   if (contents && manager->IsInPictureInPicture() && manager->GetWebContents() == contents) {
@@ -3165,6 +3167,22 @@ void bc_tab_move_to_space(bc_id id, bc_id space) {
 
 void bc_tab_close(bc_id id, bool split) {
   browser_core::Space* space = browser_core::Space::Holding(id);
+  // A tab an agent has from the user is the user's, and no close closes it, whoever asks: it goes
+  // back. The app returns one itself before it would close it, and says so in the activity log, so
+  // this acts only where a road of the app's didn't, and says so here, by ids alone.
+  const auto given_back = [space](bc_id tab) {
+    if (!browser_core::handed_place::CloseGivesBack(browser_core::handed::Of(tab) != nullptr,
+                                                    space && space->agent())) {
+      return false;
+    }
+    LOG(ERROR) << "browser: close of tab " << tab << " an agent has from the user, in Space "
+               << space->id() << ": given back";
+    browser_core::Window::GiveBack(tab);
+    return true;
+  };
+  if (given_back(id)) {
+    return;
+  }
   if ((space && space->IsPinned(id)) || browser_core::Favorites::Has(id)) {
     browser_core::Window::Unload(id, split);
     return;
@@ -3173,7 +3191,9 @@ void bc_tab_close(bc_id id, bool split) {
   // the last.
   const std::vector<bc_id> tabs = space && split ? space->Panes(id) : std::vector<bc_id>{id};
   for (bc_id tab : tabs) {
-    browser_core::Window::CloseTab(tab);
+    if (!given_back(tab)) {
+      browser_core::Window::CloseTab(tab);
+    }
   }
 }
 
