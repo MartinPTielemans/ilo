@@ -1087,6 +1087,20 @@ fn a_fresh_windows_field_takes_tab_without_a_click(cx: &mut TestAppContext) {
     );
 }
 
+/// At launch the core can show the window's page before the shell hears of it. The field doesn't
+/// take the window's keys then: they're that page's, which comes in a moment.
+#[gpui::test]
+fn the_field_takes_no_window_keys_from_a_page_the_core_already_shows(cx: &mut TestAppContext) {
+    let (_, cx, host) = window_with_no_tab(cx);
+    host.shown_now.set(1);
+    host.take();
+    key_window(cx);
+    assert!(
+        !host.take().contains(&"hold keyboard for page".to_string()),
+        "the field took the window's keys from the page the core shows"
+    );
+}
+
 /// ⌘T and ⌘L give the field the keyboard and open no bar over it. The sidebar's New Tab and URL
 /// field and Start Again's ask still open the bar, as they did.
 #[gpui::test]
