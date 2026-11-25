@@ -136,6 +136,18 @@ class MiniPlayerWatch : public views::WidgetObserver {
     observation_.Observe(widget);
   }
 
+#if BUILDFLAG(IS_MAC)
+  // The joining bits and the Mac's panel answer, while the window is still unshown: AppKit takes
+  // a window onto another app's full-screen Space only as it first shows, so a window counted a
+  // non-activating panel and carrying the joining bits (CanJoinAllSpaces from Init, the rest
+  // from the platform seam) gets taken onto the Space; a window born without either is kept off,
+  // and a call after its first show comes too late. OnWidgetCreated is the earliest point the
+  // core sees the widget, inside Init and after its window exists, before any show.
+  void OnWidgetCreated(views::Widget* widget) override {
+    platform::JoinSpacesBeforeFirstShow(widget);
+  }
+#endif
+
   void OnWidgetVisibilityChanged(views::Widget* widget, bool visible) override {
     if (!visible) {
       return;

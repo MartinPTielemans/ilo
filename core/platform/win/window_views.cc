@@ -1446,6 +1446,10 @@ void PassPointerThrough(views::Widget* widget) {
   new PassThrough(widget);
 }
 
+void JoinSpacesBeforeFirstShow(views::Widget* widget) {
+  // No desktop keeps a window off the workspace it shows on, so there is nothing to join.
+}
+
 std::optional<base::TimeTicks> PointerEventTime() {
   // A message's time is the tick count's, 10 to 16 ms a step, as coarse as a throw's moves.
   return std::nullopt;
