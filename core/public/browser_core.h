@@ -558,6 +558,10 @@ typedef struct bc_agent_activity {
   const char* refused;
   // A bc_agent_failure value, BC_AGENT_FAILURE_NONE if the agent may act.
   int failure;
+  // The site the entry is about where that isn't the page the tab shows, as of a page that never
+  // opened in it: its host alone, never a path, a query, a port or the name and password an
+  // address can carry. Null for an entry about the tab's own page.
+  const char* site;
 } bc_agent_activity;
 
 // The answer to an agent's HTTP request (bc_agent_request, agent_request_done).
@@ -1706,6 +1710,11 @@ typedef struct bc_host {
   // How |read| (bc_profile_read) ended, from a task of its own, once a call, and never once the
   // app is quitting. |answer| lasts only for the call.
   void (*profile_read_done)(void* context, uint64_t read, const bc_read_answer* answer);
+  // The product's name as the user reads it, for what Chrome shows in words of its own that name
+  // the browser: its warning before http. Null or empty, those keep Chrome's own name. Not a
+  // callback: read once, in bc_main, and kept by the core, so it needn't last past that call. It
+  // reaches no log line, no page and no agent's answer.
+  const char* product;
 } bc_host;
 
 // Runs Chromium in this process with these arguments (Chromium's switches) and returns its exit
@@ -2280,6 +2289,17 @@ BC_EXPORT bool bc_profile_offers_to_save(bc_id profile, int what, bool* offers);
 // Has the profile offer to save |what|, or not, and returns whether it will: not for a profile
 // that isn't loaded, or one a policy sets.
 BC_EXPORT bool bc_profile_set_offers_to_save(bc_id profile, int what, bool offer);
+// Whether |profile| always uses secure connections, as Settings › Privacy has it: on unless the
+// user turned it off. On, a page of a public site is asked for over https first, and one that
+// answers only over http waits behind Chrome's warning for the user's Continue to site, which
+// holds for that site for 15 days. Off, https is still tried first and http follows without a
+// word. A local name, an address on a private network and an address the user typed with http://
+// (bc_tab_open_typed) load as written either way. Sets |on| and returns whether it could: not
+// for a profile that isn't loaded. The user's alone: agents get no path to it.
+BC_EXPORT bool bc_profile_secure_connections(bc_id profile, bool* on);
+// Turns it on or off for |profile| and its private windows, and returns whether it could: not
+// for a profile that isn't loaded, or one a policy sets.
+BC_EXPORT bool bc_profile_set_secure_connections(bc_id profile, bool on);
 // Reads |url|, an http(s) address, with one GET on |profile|'s own session, with no tab, as the
 // site's own page would read it: with the profile's cookies for it and the site as the first
 // party, nothing taken from the HTTP cache or put in it, and no history. Cookies the answer sets
