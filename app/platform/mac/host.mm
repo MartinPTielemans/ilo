@@ -6200,6 +6200,23 @@ void host_add_first_run(void* first_run_view) {
                                                     YES)
                           .types);
     }
+    // A window over first run's that closes, such as a Little window a link from another app
+    // opened, gives the keyboard back to first run's, not to none, as the browser's is held.
+    [NSNotificationCenter.defaultCenter
+        addObserverForName:NSWindowWillCloseNotification
+                    object:nil
+                     queue:nil
+                usingBlock:^(NSNotification* notification) {
+                  if (!g_first_run || notification.object == g_first_run) {
+                    return;
+                  }
+                  dispatch_async(dispatch_get_main_queue(), ^{
+                    NSWindow* key = NSApp.keyWindow;
+                    if (g_first_run.visible && (!key || !key.visible)) {
+                      [g_first_run makeKeyAndOrderFront:nil];
+                    }
+                  });
+                }];
   }
   // The system's buttons, but its size is fixed: nothing to zoom to, resize or tab with.
   g_first_run.styleMask &= ~NSWindowStyleMaskResizable;
