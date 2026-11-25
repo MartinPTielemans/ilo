@@ -1877,6 +1877,13 @@ back-glyph = 16.0
 beside = 360.0
 beside-gap = 10.0
 
+[shell.task-area.motion]
+# Ours, in seconds. A page going back waits for a picture of itself as it is to shrink from, as
+# the one it came out of its thumbnail with is the conversation's, smaller and older, but no
+# longer than `picture-wait`: past it, it goes back with that one. The core answers in a frame or
+# two where the page draws.
+picture-wait = 0.1
+
 [shell.assets]
 # Every Lucide outline's stroke, in its 24 grid: 1.5 pt in a 16 pt box, 1.3 at 14 and 1.69 at 18.
 # The nav glyphs keep Arc's 1.75 pt in 24 and the window buttons their 1.3 in 14, so those files
