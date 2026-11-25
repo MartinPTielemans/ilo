@@ -5,6 +5,7 @@
 use serde_json::{Value, json};
 
 use super::{TabInfo, page};
+use crate::product::PRODUCT;
 
 /// What `initialize` tells the agent about the browser.
 pub const INSTRUCTIONS: &str = concat!(
@@ -781,9 +782,64 @@ pub fn close_title(did: &Did, close: Close) -> String {
 /// Why a line the page kept open is open.
 pub const KEPT: &str = "asked to stay: unsaved changes";
 
+/// The core's entry for a permission the browser refused a page in an agent's Space: this and the
+/// kind's code word, as "request_permission camera".
+const PERMISSION: &str = "request_permission ";
+
+/// What the activity log says of a permission the browser refused a page a thread holds, if
+/// `action` is the core's entry of one. Each kind has its whole sentence, with the site as the one
+/// stopped, and a kind with no sentence of its own takes the one for every other. The kind's code
+/// word and the entry's reason are the core's, for the log file: the sentence is all a user reads
+/// (`refusal_shown`).
+pub fn permission_stopped(action: &str, site: &str) -> Option<String> {
+    let kind = action.strip_prefix(PERMISSION)?;
+    let site = stopped_site(site);
+    let from = match kind {
+        "camera" | "camera_pan_tilt_zoom" => "using the camera",
+        "microphone" => "using the microphone",
+        "location" => "seeing your location",
+        "clipboard_read" => "reading the clipboard",
+        "clipboard_write" => "copying to the clipboard",
+        "screen_capture" => "recording the screen",
+        "notifications" => "sending notifications",
+        "file_picker" => "opening a file picker",
+        _ => {
+            return Some(format!(
+                "{PRODUCT} stopped a permission request from {site}"
+            ));
+        }
+    };
+    Some(format!("{PRODUCT} stopped {site} from {from}"))
+}
+
+/// The one stopped, as such a sentence names it: the page's host. A page with none, as a blank
+/// one, has no words of its own yet, so `NO_SITE` stands in for them.
+pub fn stopped_site(site: &str) -> &str {
+    match site.is_empty() {
+        true => NO_SITE,
+        false => site,
+    }
+}
+
+/// A stand-in until the words table has the form for a page with no host.
+pub const NO_SITE: &str = "a page";
+
+/// Why an entry was refused, as its row says it under what was done: nothing for a permission the
+/// browser refused a page, whose sentence says it whole and whose reason is a code word.
+pub fn refusal_shown<'a>(action: &str, refused: &'a str) -> &'a str {
+    match action.starts_with(PERMISSION) {
+        true => "",
+        false => refused,
+    }
+}
+
 /// A step's title, in one sentence: "Opening gulbenkian.pt", "Read maat.pt",
 /// "Couldn't open maat.pt/en/visit".
 pub fn step_title(did: &Did, tense: Tense) -> String {
+    // A permission the browser refused the page: its one sentence, whatever the tense.
+    if let Some(stopped) = permission_stopped(&did.tool, &did.site) {
+        return stopped;
+    }
     let site = |none: &str| match did.site.is_empty() {
         true => none.to_string(),
         false => did.site.clone(),

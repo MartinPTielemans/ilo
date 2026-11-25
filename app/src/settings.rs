@@ -3828,9 +3828,14 @@ impl Settings {
                         }
                     };
                     let what = title(entry);
-                    let refused = (entry.steps.iter().map(|step| &step.refused))
+                    // Why it was refused, but for a permission the browser refused the page,
+                    // whose title says it whole.
+                    let shown = |entry: &agents::Activity| {
+                        agents::tools::refusal_shown(&entry.action, &entry.refused).to_string()
+                    };
+                    let refused = (entry.steps.iter().map(shown))
                         .find(|refused| !refused.is_empty())
-                        .unwrap_or(&entry.refused);
+                        .unwrap_or_else(|| shown(entry));
                     let steps = entry.steps.iter().map(title);
                     let detail: SharedString = if !refused.is_empty() {
                         format!("Refused: {refused}").into()

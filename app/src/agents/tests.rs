@@ -12770,6 +12770,7 @@ pub(crate) mod kept;
 #[cfg(unix)]
 mod lines;
 mod notes;
+mod permission_stopped;
 #[cfg(unix)]
 mod rewall;
 mod sign_ins;
