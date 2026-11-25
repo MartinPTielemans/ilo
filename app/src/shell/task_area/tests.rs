@@ -1860,7 +1860,7 @@ fn on_a_thread_the_url_field_shows_its_title_and_only_shows_it(cx: &mut TestAppC
     }));
     core_shows_task(&shell, cx, 30);
     shell.read_with(cx, |shell, cx| {
-        assert_eq!(words(shell, cx).0.as_ref(), "www.gulbenkian.pt");
+        assert_eq!(words(shell, cx).0.as_ref(), "gulbenkian.pt");
     });
 }
 
