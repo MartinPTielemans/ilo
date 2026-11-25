@@ -2672,7 +2672,7 @@ bool PreviewPng(const std::wstring& path, std::vector<uint8_t>* png, double* wid
   return ok;
 }
 
-// ilo's own green, for the taskbar dot without a Space colour, as the Dock icon's own green is.
+// ilo's own green, under the count a taskbar button carries while tasks wait for the user.
 constexpr uint32_t kIloGreen = 0x0B8045;
 
 // A round dot in |rgb| (0xRRGGBB) as a 32 px icon with a soft edge and a clear surround, for the
@@ -5382,13 +5382,13 @@ void host_hide_reveal(void* ui_view) {
 }
 
 namespace {
-void ShowOverlay();  // Below, with the dot.
+void ShowOverlay();  // Below, with the count.
 }  // namespace
 
 void host_add_settings(void* settings_view) {
   g_settings.hwnd = Hwnd(settings_view);
   ShowWindow(g_settings.hwnd, SW_HIDE);
-  // Settings has a taskbar button of its own, which carries the dot as the browser windows' do
+  // Settings has a taskbar button of its own, which carries the count as the browser windows' do
   // (#3326). Explorer makes the button a moment after the window shows, and says so.
   SetWindowSubclass(
       g_settings.hwnd,
@@ -5489,17 +5489,10 @@ bool host_close_other_window(void) {
 
 void host_detent(void) {}
 
-// shortcut: Windows has no dot before a window, so nothing to restore at launch; host_dock_dot
-// gives each window's taskbar button its overlay once the windows are up.
-void host_dock_dot_launch(const char*) {}
-
-// Gives each browser window's taskbar button, and Settings' while it shows, an overlay dot in
-// |color| (0xRRGGBB), or ilo's green without |colored|, the counterpart of the Mac's Dock dot. One
-// colour for the app, as the Dock has one icon; the taskbar makes its own copy, so the icon is freed
-// after.
-// While tasks wait for the user, the dot carries their count (host_needs_you_badge).
+// Gives each browser window's taskbar button, and Settings' while it shows, an overlay with the
+// count of the tasks waiting for the user (host_needs_you_badge), and takes it away while none
+// waits. The taskbar makes its own copy, so the icon is freed after.
 namespace {
-uint32_t g_dot_color = kIloGreen;
 int g_waiting = 0;
 
 void ShowOverlay() {
@@ -5508,28 +5501,23 @@ void ShowOverlay() {
     return;
   }
   const std::wstring count = g_waiting > 9 ? L"9+" : std::to_wstring(g_waiting);
-  HICON dot = DotIcon(g_dot_color, g_waiting > 0 ? count.c_str() : nullptr);
+  HICON dot = g_waiting > 0 ? DotIcon(kIloGreen, count.c_str()) : nullptr;
   const std::wstring described =
       g_waiting == 1 ? L"A task needs you" : count + L" tasks need you";
+  const wchar_t* says = g_waiting > 0 ? described.c_str() : nullptr;
   for (HWND view : UiViews()) {
     if (IsWindow(view)) {
-      taskbar->SetOverlayIcon(GetAncestor(view, GA_ROOT), dot,
-                              g_waiting > 0 ? described.c_str() : L"Space");
+      taskbar->SetOverlayIcon(GetAncestor(view, GA_ROOT), dot, says);
     }
   }
   if (g_settings.hwnd && IsWindowVisible(g_settings.hwnd)) {
-    taskbar->SetOverlayIcon(g_settings.hwnd, dot, g_waiting > 0 ? described.c_str() : L"Space");
+    taskbar->SetOverlayIcon(g_settings.hwnd, dot, says);
   }
   if (dot) {
     DestroyIcon(dot);
   }
 }
 }  // namespace
-
-void host_dock_dot(bool colored, uint32_t color) {
-  g_dot_color = colored ? color : kIloGreen;
-  ShowOverlay();
-}
 
 void host_needs_you_badge(int count) {
   g_waiting = count;
