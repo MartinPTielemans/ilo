@@ -136,6 +136,15 @@ pub fn quiet(tab: u64) -> bool {
     (QUIET.lock().unwrap().as_ref()).is_some_and(|tabs| tabs.contains(&tab))
 }
 
+/// What a log line says of `text`, an address, a title or a link from `tab`'s page: nothing of it
+/// while the tab shows a sign-in's page, whose title can be its address and whose links its host.
+pub fn logged(tab: u64, text: &str) -> &str {
+    match quiet(tab) {
+        true => "(a sign-in's page)",
+        false => text,
+    }
+}
+
 pub(super) fn set_quiet(tab: u64, on: bool) {
     let mut tabs = QUIET.lock().unwrap();
     let tabs = tabs.get_or_insert_default();
@@ -869,6 +878,20 @@ impl Agents {
         let found = self.tasks.found.get(&cli);
         let plan = found.and_then(|found| found.plan.as_deref());
         shown(cli, self.found(cli), plan, &self.sign_in_row(cli))
+    }
+
+    /// Settings › Models' assistants: every one the app can run, in its state, whether agents
+    /// and tasks are on or not, so the page is never only its title; each with whether its model
+    /// for a new thread is drawn under it, which is once it's signed in.
+    pub fn providers(&self) -> Vec<(Cli, Shown, bool)> {
+        Cli::ALL
+            .into_iter()
+            .map(|cli| {
+                let row = self.assistant_row(cli);
+                let signed_in = row.offer == Offer::SignedIn;
+                (cli, row, signed_in)
+            })
+            .collect()
     }
 
     /// What the card of a task that failed for want of `cli`'s sign-in or install offers: its

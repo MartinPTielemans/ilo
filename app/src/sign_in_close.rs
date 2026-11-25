@@ -97,8 +97,9 @@ pub(crate) fn tab_loaded(tab: u64, url: &str, cx: &mut App) {
     if !done {
         return;
     }
-    // check.sh reads this line.
-    log!("browser: little window {window} sign-in done at {url}");
+    // check.sh reads this line. The callback's address carries its code, so the line names none of
+    // it.
+    log!("browser: little window {window} sign-in done");
     let url = url.to_string();
     cx.spawn(async move |cx| {
         cx.background_executor().timer(SHOWN_FOR).await;
