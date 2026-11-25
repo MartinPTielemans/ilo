@@ -6,7 +6,7 @@ use gpui::{
     prelude::*, px, rgb,
 };
 
-use super::{Colors, Shell, Step, display_text, loops, skip_frame, with_alpha};
+use super::{Colors, Shell, Step, display_text, picture, skip_frame, with_alpha};
 use crate::import::Corner;
 use crate::settings_rows::{named_button, ring};
 use crate::theme_picker::SWATCHES;
@@ -374,28 +374,11 @@ impl Shell {
             .children(button)
     }
 
-    /// The panel's loop for `step`, `looped` seconds into it: at the color, the Space in the
-    /// color picked, or in none, swiping to a Space in another.
-    pub(super) fn frame_art(&self, step: Step, looped: f32, colors: Colors) -> AnyElement {
-        let place = |name| (self.place(step, name)).map(IntoElement::into_any_element);
-        match step {
-            Step::Intro => loops::welcome(looped, colors, &place).into_any_element(),
-            Step::Import => loops::import(looped, colors, &place).into_any_element(),
-            Step::Favorites => loops::favorites(looped, colors, &place).into_any_element(),
-            Step::DefaultBrowser => {
-                loops::default_browser(looped, colors, &place).into_any_element()
-            }
-            Step::SearchEngine => loops::search(looped, colors, &place).into_any_element(),
-            Step::Account => loops::sync(looped, colors, &place).into_any_element(),
-            Step::Assistant => loops::assistant(looped, colors, &place).into_any_element(),
-            Step::OptIns => loops::count(looped, colors, &place).into_any_element(),
-            Step::Color => {
-                let picked = (self.onboarding.as_ref()).and_then(|onboarding| onboarding.picked);
-                let other = (picked.unwrap_or_default() + SWATCHES.len() / 2) % SWATCHES.len();
-                let (picked, other) = (picked.map(|index| SWATCHES[index]), SWATCHES[other]);
-                loops::colour(looped, picked, other, colors, &place).into_any_element()
-            }
-            Step::Transparency => div().into_any_element(),
-        }
+    /// The picture for `step`: the small browser in the Space's colour, the colour picked at the
+    /// color step once one is.
+    pub(super) fn frame_art(&self, step: Step, colors: Colors) -> AnyElement {
+        let picked = (self.onboarding.as_ref()).and_then(|onboarding| onboarding.picked);
+        let space = picked.map_or(picture::SPACE, |index| SWATCHES[index]);
+        picture::picture(picture::Scene::of(step), space, colors)
     }
 }

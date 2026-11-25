@@ -2555,111 +2555,167 @@ panel-line-alpha = 0.07
 light-panel-line = 0x000000
 light-panel-line-alpha = 0.07
 
-# Each step's loop (#4093): ten seconds, drawn in the slot from the sidebar's own measures with
-# made-up pages, its last frame where it rests and what Reduce Motion shows.
-[shell.onboarding.loops]
-period = 10.0
-# A small window in the slot: its size, its sidebar's width, a row's height and the gap above the
-# rows, the radii of the window and of a row's plate, and of a tab's icon and a page's bars.
-window-width = 340.0
-window-height = 236.0
-sidebar = 116.0
-row = 22.0
-rows-top = 46.0
+# First run's picture (spec-first-run.md, values-first-run.md "Right side: the picture"): a small
+# browser drawn from these, with made-up fixed content the same for everyone, and per step what
+# over it shows what the step changes. Dark is the drawing's; Light is light-values.md's rule.
+[shell.onboarding.picture]
+# The small window in the panel, cut off by the panel's edge: left, top, width, height.
+window = [44.0, 66.0, 620.0, 560.0]
 window-radius = 10.0
-plate-radius = 6.0
-icon-radius = 2.0
-bar-radius = 3.0
-text-size = 8.0
-# The real window's glow at the small window's size: its width to a 1280-point window's.
-scale = 0.27
-# The Space dots at the sidebar's foot: a dot, the shown Space's, the others' alpha, the gap
-# between them and how far up from the window's foot.
-dot = 4.0
-dot-shown = 6.0
-dot-alpha = 0.35
-dot-gap = 6.0
-dots-bottom = 10.0
-# The pointer fades in as the loop starts and out before it ends, over `pointer-fade`.
-pointer-fade = 0.3
-# The welcome's: the pointer goes to the next tab over `move` and presses it `click` after,
-# once from each time here: 2nd, 3rd, then the 1st again. The press's ring grows and fades
-# over `press`; the tab and its page change on the press, as a tab switch does.
-welcome-at = [0.4, 3.4, 6.4]
-# Where across the sidebar the pointer presses a tab and rests on it: past the longest title.
-press-across = 0.8
-welcome-move = 0.8
-welcome-click = 0.2
-welcome-press = 0.5
-# The color's: the sidebar's rows swipe to the next Space from `at` over `swipe`, and back.
-color-at = [0.6, 5.0]
-color-swipe = 0.6
-# The import's: the other browser's strip over ilo's window, `strip-gap` above it. Its bookmarks
-# land as favorites from `at`'s first and its tabs as tabs from its second, one every `stagger`,
-# each over `land`, coming down `drop` into place as its strip's dims to `dim`. The Spaces' dots
-# come at `spaces` and what came at `came`, each over `fade`, and all of it goes over the loop's
-# last `out`. The favorites are `tile` tiles, `tile-gap` apart, from `tiles-top` down.
-strip-height = 58.0
-strip-gap = 14.0
-tile = 22.0
-tile-gap = 4.0
-tiles-top = 22.0
-import-at = [0.4, 2.2]
-import-stagger = 0.35
-import-land = 0.35
-import-drop = 6.0
-import-dim = 0.35
-import-spaces = 4.2
-import-came = 4.8
-import-fade = 0.4
-import-out = 0.6
-# The favorites': the sites the history visited most in a strip over ilo's window, as the import's
-# other browser is. From `at`, one every `stagger`, a site's tick fills and `tick` later it lands in
-# the sidebar as a tile, as the import's favorites land; the last site stays unticked and never
-# lands. What came is said at `came`; the import's land, drop, fade and out are theirs too.
-favorites-at = 0.6
-favorites-stagger = 0.7
-favorites-tick = 0.3
-favorites-came = 3.6
-# The default browser's: a message in another app over ilo's window, its link `default-link` in
-# from the message's corner. From `default-at` the pointer goes to the link over the welcome's
-# move, clicks it and fades, and `default-open` after the press the link lands in ilo's sidebar as
-# a new tab at the top, over the import's land and drop, taking the selected plate as its page
-# shows.
-default-link = [40.0, 34.0]
-default-at = 0.6
-default-open = 0.3
-# The search engine's: from `search-at` the bar comes up over the page, its corner `search-bar` in
-# from the window's, as the import's parts fade in; the words are typed over `search-type`, and
-# `search-return` later ↩ opens the results as a new tab, over the import's land and drop.
-search-at = 0.6
-search-bar = [40.0, 60.0]
-search-type = 1.4
-search-return = 0.5
-# The sync's: a phone `sync-phone` big, as round as the window, standing `sync-phone-out` past
-# the window's right edge. At the first of `sync-at` a tab is pinned, and it crosses to the
-# phone over `sync-cross`; at the second a favorite added on the phone crosses back the same way.
-sync-at = [0.6, 5.0]
-sync-cross = 1.2
-sync-phone = [76.0, 150.0]
-sync-phone-out = 48.0
-# A name too long for the phone's row ends in a fade `sync-fade` wide, into the row's colour.
-sync-fade = 14.0
-# The assistant's: the ask comes at `assistant-at`, its three pages open at `assistant-open`, a
-# price is read from each from `assistant-read`, `assistant-stagger` apart, and the answer comes
-# at `assistant-answer`, each fading in as the import's parts do.
-assistant-at = 0.4
-assistant-open = 1.4
-assistant-read = 2.6
-assistant-stagger = 0.7
-assistant-answer = 5.0
-# Up to you's: today's count, a card `count-card` wide, fills from `count-at`, a line every
-# `count-stagger`; from `count-week` a week goes by under it, a day every `count-day`.
-count-card = 200.0
-count-at = 0.5
-count-stagger = 0.5
-count-week = 3.8
-count-day = 0.6
+window-fill = 0x1a1a1e
+window-fill-alpha = 0.85
+light-window-fill = 0xe9e7e1
+light-window-fill-alpha = 0.85
+# Its rim inside, its edge outside and its shadow: y, blur and alpha.
+rim = 0xffffff
+rim-alpha = 0.12
+light-rim = 0x000000
+light-rim-alpha = 0.12
+edge-alpha = 0.5
+light-edge-alpha = 0.16
+shadow = [18.0, 44.0]
+# A rim's or an edge's width.
+line = 1.0
+shadow-alpha = 0.45
+light-shadow-alpha = 0.16
+# The Space's colour in the window: a glow from its middle at `glow-alpha`, as wide as
+# `glow-size` and blurred by `glow-blur`; where the step is the Space's own, the window is swept
+# from it to `space-end` at `swept-alpha`.
+space = 0x7a70f4
+space-end = 0xe86ba8
+glow-alpha = 0.4
+glow-size = 300.0
+glow-blur = 160.0
+swept-alpha = 0.55
+# The inks: text, quiet and faint, and the plates: a card, a field, a button, the shown row and a
+# hairline, at the ink's strength the drawing gives them.
+text = 0xf3f0e8
+light-text = 0x161618
+quiet = 0.6
+light-quiet = 0.65
+faint = 0.42
+light-faint = 0.5
+card = 0.066
+field = 0.086
+button = 0.1
+shown = 0.2
+light-shown = 0.16
+hairline = 0.1
+# The tiles' and cards' line inside them.
+tile-line = 0xffffff
+tile-line-alpha = 0.06
+light-tile-line = 0x000000
+light-tile-line-alpha = 0.06
+
+# The small sidebar: its width, padding and gap; the window buttons' row: height, padding, gap and
+# dot; the address field: height and padding; the favorites' row: height and gap, and their marks.
+sidebar = [172.0, 7.0, 6.0]
+buttons = [30.0, 5.0, 5.0, 8.0]
+button-radius = 4.0
+lights = [0xff5f57, 0xfebc2e, 0x28c840]
+address = [26.0, 9.0]
+address-radius = 7.0
+address-text = [10.0, 13.0]
+favorites = [30.0, 5.0]
+favorite-radius = 8.0
+favorite-mark = 12.0
+favorite-mark-radius = 3.5
+favorite-round-radius = 6.0
+favorite-marks = [0x3b6fe0, 0xe5484d, 0xe93d82, 0x0f172a]
+# A row: height, padding, gap and its mark; a mark's corners, square or round.
+row = [26.0, 8.0, 7.0, 11.0]
+row-text = [10.5, 13.0]
+mark-radius = 3.0
+mark-round-radius = 6.0
+# The rows' marks: Roadmap, Budget 2027, the open tab, the parks, the Kestrel.
+marks = [0x5b6b8c, 0x1fa85b, 0xf59e2e, 0x2f9e62, 0x222222]
+# New Tab's row: height, its label's size and line, and its plus.
+new-tab = [22.0, 9.5, 12.0, 9.0]
+# The open tab: its width and its corners on the left.
+open-tab = 165.0
+open-tab-radius = 7.0
+
+# The small page: its inset, its card's corners, its head (height, padding, gap, mark), its
+# picture's height and the article's padding and gap.
+page-inset = 6.0
+page-radius = 8.0
+page-head = [36.0, 16.0, 6.0, 12.0]
+page-head-text = [11.0, 14.0]
+scene-height = 170.0
+article = [22.0, 30.0, 8.0]
+kicker-text = [8.0, 10.0]
+title-text = [22.0, 25.0]
+body-text = [10.5, 16.0]
+# The page's own colours, the same in both appearances: its ground, its ink, its quiet ink, its
+# kicker; the sky's top and foot, the sun, and the hills from the far one.
+page = 0xfaf7f0
+page-ink = 0x16140f
+page-quiet = 0x4a463d
+kicker = 0xa0703a
+sky = [0xf3a98a, 0xf2d7ae]
+sun = 0xfbecd2
+# The sun's left, top and size, and each hill's left, top and size, far to near.
+sun-at = [260.0, 36.0, 56.0]
+hills = [0x8fb47a, 0x6c9d5f, 0x4f8148]
+hills-at = [-80.0, 110.0, 300.0, 160.0, 120.0, 340.0, 20.0, 140.0, 260.0]
+
+# A caption chip over the picture: left, top, height, gap, padding before and after, its icon.
+chip = [44.0, 22.0, 28.0, 8.0, 10.0, 12.0, 13.0]
+chip-radius = 14.0
+chip-text = [12.0, 16.0]
+# The thread card in the small sidebar (with an assistant): its corners, padding, gap and its
+# ring; the line inside it; its marks and how far its lines are indented.
+thread-radius = 9.0
+thread = [7.0, 8.0, 5.0, 11.0, 18.0]
+thread-line-alpha = 0.18
+thread-marks = [0xf2b632, 0x2fa08a, 0x6b4df0]
+thread-mark = 10.0
+# The site it hasn't reached yet.
+thread-later = 0.4
+thread-sub-text = [9.5, 12.0]
+thread-count-text = [9.0, 11.0]
+# The favorites' ring: left, top, width, height, its width and its halo's.
+ring = [46.0, 129.0, 168.0, 40.0, 1.5, 6.0]
+ring-radius = 12.0
+ring-alpha = 0.8
+halo-alpha = 0.12
+# A message with a link, as another app shows one: left, top, height, padding, gap, its app's tile.
+notice = [44.0, 10.0, 46.0, 9.0, 14.0, 10.0, 28.0]
+notice-radius = 14.0
+notice-tile-radius = 8.0
+notice-fill = 0x303036
+light-notice-fill = 0xf6f5f1
+notice-alpha = 0.92
+notice-tile = 0x3fa873
+link = 0x7fc4f0
+light-link = 0x2b6fa8
+# The arrow from the message to the window: left, top and size.
+arrow = [372.0, 38.0, 40.0]
+# The small command bar: left, top, width, padding; its row's height and padding; a result's
+# height and its mark.
+bar = [96.0, 150.0, 340.0, 6.0, 36.0, 10.0, 32.0, 16.0]
+bar-at-rest = [96.0, 170.0, 48.0, 14.0]
+bar-radius = 14.0
+bar-gap = 2.0
+bar-row-radius = 9.0
+bar-mark-radius = 5.0
+bar-fill = 0x2e2e34
+light-bar-fill = 0xf6f5f1
+bar-text = [14.0, 18.0]
+bar-marks = [0xedc95a, 0xf29a38]
+bar-key-radius = 6.0
+# A phone over the window: left, top, width, height, padding, gap; its island and its Spaces.
+phone = [262.0, 226.0, 184.0, 380.0, 16.0, 14.0, 10.0]
+phone-radius = 34.0
+phone-fill = 0x0e0e10
+phone-text = 0xf3f0e8
+phone-title-text = [17.0, 22.0]
+island = [54.0, 16.0]
+island-fill = 0x000000
+island-radius = 8.0
+phone-space = [74.0, 88.0, 8.0]
+phone-space-radius = 14.0
+phone-spaces = [0x7a70f4, 0xe86ba8, 0x3b82f6, 0x2fbfa5, 0xf0803c, 0xd9479b, 0x2a2a2e, 0x2a2a2e]
 
 [shell.import]
 # Ours (#1673): while an import runs, each Space it makes is a card in its own colours, under the

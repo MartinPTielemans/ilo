@@ -45,7 +45,7 @@ use crate::tokens::shell::onboarding::window as frame_tokens;
 use crate::transparency::{self, Transparency};
 
 mod frame;
-mod loops;
+mod picture;
 mod window;
 
 pub(super) use window::FirstRun;
@@ -330,11 +330,6 @@ pub(super) struct Onboarding {
     pub(super) since: Instant,
     /// The step before, fading as this one comes, and how far into it it was when it left.
     leaving: Option<(Step, f32)>,
-    /// When the step's loop started, while it plays: only on a visible window, never with Reduce
-    /// Motion, and never as the flow ends (loops).
-    loop_since: Option<Instant>,
-    /// The loop held this many seconds in, for the preview's captures, asking for no frames.
-    held: Option<f32>,
     /// When the last step was left, for the flow's fade.
     pub(super) ending: Option<Instant>,
     /// Light or dark where check.sh says, else the window's.
@@ -448,8 +443,6 @@ impl Shell {
             clock: cx.background_executor().clone(),
             since: cx.background_executor().now(),
             leaving: None,
-            loop_since: None,
-            held: None,
             ending: None,
             light: appearance.and_then(|name| match name {
                 "light" => Some(true),
@@ -618,7 +611,6 @@ impl Shell {
                 onboarding.leaving = Some((step, elapsed));
                 onboarding.step = next;
                 onboarding.since = onboarding.clock.now();
-                onboarding.loop_since = None;
                 onboarding.settled = false;
                 log!("browser: onboarding step {}", next.name());
                 Some(next)
@@ -664,7 +656,6 @@ impl Shell {
         onboarding.leaving = Some((step, elapsed));
         onboarding.step = before;
         onboarding.since = onboarding.clock.now();
-        onboarding.loop_since = None;
         onboarding.settled = false;
         log!("browser: onboarding step {}", before.name());
         if step == Step::Color {
@@ -708,26 +699,6 @@ impl Shell {
             .is_some_and(|(space, _)| space == self.space)
         {
             self.theme_preview = None;
-        }
-    }
-
-    /// The step's loop is playing, and asking for frames.
-    #[cfg(test)]
-    pub(super) fn onboarding_looping(&self) -> bool {
-        (self.onboarding.as_ref()).is_some_and(|onboarding| onboarding.loop_since.is_some())
-    }
-
-    /// Holds the step's loop `at` seconds in, or lets it play from there with none, for the
-    /// preview's captures and frames.
-    pub fn onboarding_hold_loop(&mut self, at: Option<f32>, cx: &mut Context<Self>) {
-        if let Some(onboarding) = self.onboarding.as_mut() {
-            onboarding.held = at;
-            // The preview's frames start on this line.
-            log!(
-                "browser: onboarding loop {}",
-                if at.is_some() { "held" } else { "plays" }
-            );
-            cx.notify();
         }
     }
 
@@ -1201,18 +1172,8 @@ impl Shell {
         if motion >= 1. {
             onboarding.leaving = None;
         }
-        // Frames while something moves, and while the step's loop plays (loops).
+        // Frames while something moves; the picture is still.
         let ending = onboarding.ending.map(|at| onboarding.secs_since(at));
-        let looping = loops::has_loop(step)
-            && !still
-            && ending.is_none()
-            && onboarding.held.is_none()
-            && window.is_visible();
-        match looping {
-            true => _ = *onboarding.loop_since.get_or_insert(onboarding.clock.now()),
-            false => onboarding.loop_since = None,
-        }
-        let played = (onboarding.loop_since).map(|at| onboarding.secs_since(at));
         let sliding = onboarding
             .switched
             .is_some_and(|(_, at)| onboarding.secs_since(at) < SLIDE);
@@ -1223,8 +1184,7 @@ impl Shell {
         {
             log!("browser: onboarding {} slid", opt_in.name());
         }
-        onboarding.drawing =
-            !came || onboarding.leaving.is_some() || ending.is_some() || sliding || looping;
+        onboarding.drawing = !came || onboarding.leaving.is_some() || ending.is_some() || sliding;
         if onboarding.drawing {
             window.request_animation_frame();
         }
@@ -1242,14 +1202,13 @@ impl Shell {
         // window, but for Reduce Motion.
         let eased = ease_out(motion);
         let fades_in = leaving.is_some() || (step == Step::Intro && !still);
-        let looped = onboarding.held.unwrap_or_else(|| loops::at(played, still));
         // The step coming takes every click, so one on its Skip doesn't press the leaving step's too.
         let coming = self
-            .step_content(step, looped, colors, window, cx)
+            .step_content(step, colors, window, cx)
             .opacity(if fades_in { eased } else { 1. })
             .occlude();
         let gone = leaving.map(|(step, _)| {
-            self.step_content(step, loops::at(None, true), colors, window, cx)
+            self.step_content(step, colors, window, cx)
                 .opacity(1. - eased)
         });
         let opacity = ending.map_or(1., |at| fade_at(1., 0., at, END_FADE));
@@ -1273,11 +1232,10 @@ impl Shell {
         )
     }
 
-    /// A step in the window's frame, its loop `looped` seconds into its own.
+    /// A step in the window's frame.
     fn step_content(
         &self,
         step: Step,
-        looped: f32,
         colors: Colors,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1427,7 +1385,7 @@ impl Shell {
             .children(assistants)
             .children(switches)
             .child(self.frame_foot(step, button, colors, cx));
-        let art = self.frame_art(step, looped, colors);
+        let art = self.frame_art(step, colors);
         let dialog = |pane: gpui::Stateful<gpui::Div>| {
             pane.when_some(focus, |content, focus| content.track_focus(&focus))
                 .when(named, |content| {

@@ -147,12 +147,27 @@ const NOT_ONE_OF_FOUR: &[&str] = &[
     "transparency.menu-row-radius",
     // A card's recent rows, inside its picture's box (#3074).
     "hover-card.recent-row-radius",
-    // First run's sheet (#4093): its slot inset in its corner, the sheet's less the inset, and the
-    // loop's small window at the drawing's scale.
+    // First run's sheet (#4093): its slot inset in its corner, the sheet's less the inset.
     "shell.onboarding.sheet.slot-radius",
-    "shell.onboarding.loops.window-radius",
-    "shell.onboarding.loops.icon-radius",
-    "shell.onboarding.loops.bar-radius",
+    // First run's picture, a small browser at the drawing's scale (values-first-run.md).
+    "shell.onboarding.picture.window-radius",
+    "shell.onboarding.picture.button-radius",
+    "shell.onboarding.picture.address-radius",
+    "shell.onboarding.picture.favorite-radius",
+    "shell.onboarding.picture.favorite-mark-radius",
+    "shell.onboarding.picture.mark-radius",
+    "shell.onboarding.picture.open-tab-radius",
+    "shell.onboarding.picture.page-radius",
+    "shell.onboarding.picture.chip-radius",
+    "shell.onboarding.picture.thread-radius",
+    "shell.onboarding.picture.notice-radius",
+    "shell.onboarding.picture.notice-tile-radius",
+    "shell.onboarding.picture.bar-radius",
+    "shell.onboarding.picture.bar-row-radius",
+    "shell.onboarding.picture.bar-mark-radius",
+    "shell.onboarding.picture.phone-radius",
+    "shell.onboarding.picture.island-radius",
+    "shell.onboarding.picture.phone-space-radius",
     // The composer's switch round its parts, and a card's page inside the card (#4140).
     "shell.composer.switch-radius",
     "shell.composer.page-radius",
