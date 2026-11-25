@@ -752,9 +752,6 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
       })) {
     return false;
   }
-  // A card's video ends with the give, before the tab is an agent's: a page in an agent's Space
-  // has no Picture in Picture, at a card either (agent_space_rule.h).
-  browser_core::EndCardVideo(tab);
   const bool moved = browser_core::arrange_rule::GiveToAgent(
       [&] {
         if (browser_core::Arrange* arrange =
@@ -775,6 +772,9 @@ bool bc_tab_give_to_agent(bc_id tab, bc_id space) {
   if (!moved) {
     return false;
   }
+  // A card's video ends with the give, and only with one that happened: a page in an agent's
+  // Space has no Picture in Picture, at a card either (agent_space_rule.h).
+  browser_core::EndCardVideo(tab);
   browser_core::handed::Given(tab, home, left);
   // No window shows it any more, and it had the size of the user's window: an agent's page's own
   // from here, as each of the agent's has, for what the agent reads and pictures of it. Back with
