@@ -648,7 +648,7 @@ pub fn run(
         return fail(
             exit::UNKNOWN,
             format!(
-                "The ilo command isn't added. Add it in {} › Settings › Agents › Command line.",
+                "The ilo command isn't added. Add it in {} › Settings › Other apps.",
                 env!("APP_NAME")
             ),
         );
@@ -1035,7 +1035,11 @@ mod tests {
     fn a_run_without_the_agent_file_says_where_to_add_it() {
         let printed = run(vec!["tabs".into()], None, None, String::new);
         assert_eq!(printed.code, exit::UNKNOWN);
-        assert!(printed.err.contains("Command line"));
+        let said = format!(
+            "The ilo command isn't added. Add it in {} › Settings › Other apps.",
+            env!("APP_NAME")
+        );
+        assert!(printed.err.contains(&said), "{}", printed.err);
     }
 
     /// The command before Add, as the Store's alias is from install: the profile's server hears

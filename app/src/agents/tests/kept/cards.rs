@@ -88,7 +88,7 @@ fn a_done_kept_task_keeps_its_line_and_its_last_pages_picture(cx: &mut TestAppCo
     assert!(index.contains(id.as_str()));
     for (path, text) in run.files() {
         if !path.starts_with(root(&run)) {
-            assert!(!text.contains("9:05"), "{}", path.display());
+            assert!(!text.contains("car 4"), "{}", path.display());
         }
     }
 }

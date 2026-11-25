@@ -437,7 +437,7 @@ if [ "$driven" = 1 ]; then
   expect "$(rules_drawn none "Little ilo")" "the trash didn't take the Meet rule, leaving the empty box"
   ../tools/window-screenshot.sh "$pid" "$out/links-rules-empty.png" || fail "no window to capture"
   post clickkey $(drawn "link otherwise")
-  expect "^browser: menu shown $front, [^,]*, Little ilo (checked)\$" \
+  expect "^browser: menu shown $front, [^,]*, Little Window (checked)\$" \
     "everything else's pop-up didn't offer the Space in front, the user's Space and Little ilo"
   send choose "$front"
   expect "$(rules_drawn none "$front")" "everything else's pop-up didn't set the Space in front"
@@ -474,7 +474,7 @@ if [ "$driven" = 1 ]; then
   send type work
   expect "$(rules_drawn 'URL contains "work" → [^,;]*' "$front")" "the rule didn't take the text typed"
   post clickkey $(drawn "link space 0")
-  expect "^browser: menu shown $front (checked), [^,]*, work, Little ilo\$" \
+  expect "^browser: menu shown $front (checked), [^,]*, work, Little Window\$" \
     "the rule's Space pop-up didn't list the Space in front, the user's Spaces and Little ilo"
   send choose work
   expect "$(rules_drawn 'URL contains "work" → work' "$front")" "the rule's pop-up didn't set its Space"
@@ -510,7 +510,7 @@ if [ "$driven" = 1 ]; then
   ../tools/window-screenshot.sh "$pid" "$out/links-rules.png" || fail "no window to capture"
   # Everything else, now to the second Space.
   post clickkey $(drawn "link otherwise")
-  expect "^browser: menu shown $front (checked), [^,]*, work, Little ilo\$" \
+  expect "^browser: menu shown $front (checked), [^,]*, work, Little Window\$" \
     "everything else's pop-up didn't offer the Space in front, the user's Spaces and Little ilo"
   send choose work
   expect "$(rules_drawn "$exact, URL contains \"work\" → work" work)" "everything else's pop-up didn't set its Space"
@@ -532,7 +532,7 @@ if [ "$driven" = 1 ]; then
   post clickkey $(drawn "link space 0")
   expect "^browser: menu shown $front, [^,]*, work (checked), Little ilo\$" \
     "the rule's Space pop-up didn't offer Little ilo"
-  send choose "Little ilo"
+  send choose "Little Window"
   expect "$(rules_drawn 'URL contains "work" → Little ilo' work)" "the rule's pop-up didn't pick Little ilo"
   send key w cmd
   expect '^browser: settings hidden$' "⌘W didn't hide Settings"
@@ -548,7 +548,7 @@ if [ "$driven" = 1 ]; then
   expect '^browser: settings undo had nothing$' "⌘Z didn't reach Settings"
   none_since '^browser: link rules drawn' || fail "⌘Z brought back a rule after Settings closed"
   post clickkey $(drawn "link space 0")
-  expect "^browser: menu shown $front, [^,]*, work, Little ilo (checked)\$" \
+  expect "^browser: menu shown $front, [^,]*, work, Little Window (checked)\$" \
     "the rule's Space pop-up didn't check Little ilo"
   send choose work
   expect "$(rules_drawn 'URL contains "work" → work' work)" "the rule's pop-up didn't set the second Space"

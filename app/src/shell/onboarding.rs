@@ -170,7 +170,7 @@ impl Switch {
             ),
             Switch::DailyCount => (
                 "Send a daily usage count",
-                crate::daily_count::words(env!("APP_NAME")).into(),
+                crate::daily_count::words(env!("PRODUCT_NAME")).into(),
             ),
             Switch::OtherApps => (
                 concat!("Let other apps' agents use ", env!("APP_NAME")),
@@ -180,7 +180,7 @@ impl Switch {
                 "Send crash reports",
                 concat!(
                     "When ",
-                    env!("APP_NAME"),
+                    env!("PRODUCT_NAME"),
                     " crashes, it sends a report of what went wrong, so it can be fixed."
                 )
                 .into(),
@@ -214,7 +214,7 @@ impl Step {
         let (title, line, button) = match self {
             // The sheet's first page (#4093): what the flow is, and that each step can be skipped.
             Step::Intro => (
-                concat!("Welcome to ", env!("APP_NAME"), "."),
+                concat!("Welcome to ", env!("PRODUCT_NAME"), "."),
                 "A few steps to make it yours, and you can skip any of them.",
                 "Get Started",
             ),
@@ -246,7 +246,7 @@ impl Step {
                     true => "Make Default",
                     false => "Continue",
                 };
-                let title = concat!("Make ", env!("APP_NAME"), " your default browser.");
+                let title = concat!("Make ", env!("PRODUCT_NAME"), " your default browser.");
                 return (title, line.into(), button);
             }
             // The engine that searches until one is picked is already the filled dot (P-search).
@@ -264,7 +264,7 @@ impl Step {
                 "How much should show through?",
                 // D5: over a light desktop the window changes too little to see "right away".
                 concat!(
-                    env!("APP_NAME"),
+                    env!("PRODUCT_NAME"),
                     "'s window is glass, blurring what's behind it."
                 ),
                 "Continue",
@@ -522,7 +522,7 @@ impl Shell {
                 Step::SearchEngine => true,
                 Step::Account => account.is_some(),
                 // Left out, as the agents' switch is, in a build without the agents' server.
-                Step::Assistant => self.browser.agents(cx).is_some(),
+                Step::Assistant => self.browser.threads(cx).is_some(),
                 Step::OptIns => opt_ins,
                 Step::Tidy => tidy.is_some(),
                 Step::Private => private,
@@ -808,7 +808,7 @@ impl Shell {
 
     /// Looks for the assistants' programs, once a showing of their step, only with agents on.
     fn onboarding_look(&mut self, cx: &mut Context<Self>) {
-        let agents_on = self.browser.agents(cx) == Some(true);
+        let agents_on = self.browser.threads(cx) == Some(true);
         let Some(onboarding) = self.onboarding.as_mut() else {
             return;
         };
@@ -1099,7 +1099,7 @@ impl Shell {
     /// The assistant step's pick: with an assistant turns agents on, just the browser turns them
     /// off, Settings › Agents' one switch, set at once as the step's other switches are.
     pub(super) fn onboarding_agents(&mut self, on: bool, cx: &mut Context<Self>) {
-        if self.browser.agents(cx) != Some(!on) {
+        if self.browser.threads(cx) != Some(!on) {
             return;
         }
         log!(
@@ -1109,7 +1109,7 @@ impl Shell {
         let (browser, shell) = (self.browser.clone(), cx.entity());
         // Outside this update, as the host reads the shell as it turns agents off.
         cx.defer(move |cx| {
-            browser.set_agents(on, cx);
+            browser.set_threads(on, cx);
             shell.update(cx, |shell, cx| {
                 shell.onboarding_look(cx);
                 cx.notify();
@@ -1472,7 +1472,7 @@ impl Shell {
         // Just the browser folds the assistants' rows away for its line.
         // Under the two choices a hint, then with an assistant its rows.
         let assistants = (step == Step::Assistant).then(|| {
-            let agents = self.browser.agents(cx) == Some(true);
+            let agents = self.browser.threads(cx) == Some(true);
             let hint = match agents {
                 true => "Sign in now, or later in Settings.",
                 false => "Turn an assistant on later in Settings › Threads.",
@@ -1890,7 +1890,7 @@ impl Shell {
     fn agents_rows(&self, colors: Colors, cx: &mut Context<Self>) -> impl IntoElement {
         let surface = colors.ground.blend(colors.ink(IMPORT_SURFACE));
         let look = Look::on(surface, colors.ink(1.), rgb(SIGNAL));
-        let agents = self.browser.agents(cx) == Some(true);
+        let agents = self.browser.threads(cx) == Some(true);
         let a11y = self.a11y;
         let rows = [
             (

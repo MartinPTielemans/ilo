@@ -542,7 +542,7 @@ fn a_screen_reader_reads_each_steps_title_and_controls(cx: &mut TestAppContext) 
         let dialogs = said.iter().filter(|(role, ..)| *role == Role::Dialog);
         dialogs.map(|(_, name, _)| name.clone()).collect::<Vec<_>>()
     };
-    let welcome = concat!("Welcome to ", env!("APP_NAME"), ".");
+    let welcome = concat!("Welcome to ", env!("PRODUCT_NAME"), ".");
     assert_eq!(dialogs(&read(cx)), [welcome], "the welcome, by its title");
 
     skip_to(&shell, cx, Step::Color);
@@ -662,7 +662,7 @@ fn the_opt_ins_show_only_those_offered(cx: &mut TestAppContext) {
     // With no count's server named, only the crash reports' switch shows. Outside apps' agents
     // have none until their own setting (#4260), with agents on or off.
     host.crash_reports.set(Some(false));
-    host.agents.set(Some(false));
+    host.threads.set(Some(false));
     started(&shell, cx);
     skip_to(&shell, cx, Step::OptIns);
     assert_eq!(offered(&shell, cx), vec![(Switch::CrashReports, false)]);
@@ -681,7 +681,7 @@ fn the_opt_ins_show_only_those_offered(cx: &mut TestAppContext) {
         "Skip leaves a switch as it was turned"
     );
     assert_eq!(
-        host.agents.get(),
+        host.threads.get(),
         Some(false),
         "and the agents' as they were"
     );
@@ -702,14 +702,14 @@ fn just_the_browser_turns_agents_off(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     // The host reads the shell as it turns agents off, as the core's does.
     host.reads_shell(shell.downgrade());
-    host.agents.set(Some(true));
+    host.threads.set(Some(true));
     started(&shell, cx);
     skip_to(&shell, cx, Step::Assistant);
     host.take();
     press("down", cx);
     assert_eq!(
         host.take(),
-        vec!["agents false".to_string()],
+        vec!["threads false".to_string()],
         "just the browser"
     );
     press("down", cx);
@@ -721,7 +721,7 @@ fn just_the_browser_turns_agents_off(cx: &mut TestAppContext) {
     press("up", cx);
     assert_eq!(
         host.take(),
-        vec!["agents true".to_string()],
+        vec!["threads true".to_string()],
         "with an assistant"
     );
     assert_eq!(
@@ -729,6 +729,41 @@ fn just_the_browser_turns_agents_off(cx: &mut TestAppContext) {
         Some(Step::Assistant),
         "a pick doesn't go on"
     );
+}
+
+/// The assistant step's picks set the inside switch alone and the other apps' row the outside
+/// switch alone: whatever is picked or clicked, the other is as it was.
+#[gpui::test]
+fn each_pick_and_row_sets_its_own_switch_alone(cx: &mut TestAppContext) {
+    let (shell, cx, host) = first_window(cx);
+    host.reads_shell(shell.downgrade());
+    host.threads.set(Some(true));
+    host.other_apps.set(Some(true));
+    started(&shell, cx);
+    skip_to(&shell, cx, Step::Assistant);
+    host.take();
+    press("down", cx);
+    assert_eq!(
+        host.take(),
+        vec!["threads false".to_string()],
+        "just the browser"
+    );
+    assert_eq!(host.other_apps.get(), Some(true), "just the browser");
+    press("up", cx);
+    assert_eq!(
+        host.take(),
+        vec!["threads true".to_string()],
+        "with an assistant"
+    );
+    assert_eq!(host.other_apps.get(), Some(true), "with an assistant");
+    skip_to(&shell, cx, Step::OptIns);
+    host.take();
+    shell.update(cx, |shell, cx| {
+        shell.onboarding_switch(Switch::OtherApps, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(host.take(), vec!["other apps false".to_string()]);
+    assert_eq!(host.threads.get(), Some(true), "the row");
 }
 
 /// The opt-ins' step offers other apps' agents on both paths, off, and turning the row on sets
@@ -751,7 +786,7 @@ fn other_apps_agents_have_their_row_on_both_paths(cx: &mut TestAppContext) {
     assert_eq!(line, "Editors, terminal tools and scripts on this computer");
     // Just the browser, then with an assistant.
     for (key, agents) in [("down", false), ("up", true)] {
-        host.agents.set(Some(!agents));
+        host.threads.set(Some(!agents));
         host.other_apps.set(Some(false));
         started(&shell, cx);
         skip_to(&shell, cx, Step::Assistant);
@@ -759,7 +794,7 @@ fn other_apps_agents_have_their_row_on_both_paths(cx: &mut TestAppContext) {
         press(key, cx);
         assert_eq!(
             host.take(),
-            vec![format!("agents {agents}")],
+            vec![format!("threads {agents}")],
             "the pick sets the agents' switch alone"
         );
         assert_eq!(host.other_apps.get(), Some(false), "and leaves other apps'");
@@ -783,7 +818,7 @@ fn other_apps_agents_have_their_row_on_both_paths(cx: &mut TestAppContext) {
         });
         cx.run_until_parked();
         assert_eq!(host.take(), vec!["other apps true".to_string()]);
-        assert_eq!(host.agents.get(), Some(agents), "the agents' as picked");
+        assert_eq!(host.threads.get(), Some(agents), "the agents' as picked");
         click_skip(cx);
         in_through_the_keys(&shell, cx);
         later(&shell, cx, END_FADE);
@@ -1159,7 +1194,7 @@ fn the_tidy_step_tells_of_the_broom_only_where_it_can_be(cx: &mut TestAppContext
         (false, Some(Broom::Idle), false),
     ] {
         let (shell, cx, host) = with_settings(cx, Some(DAY / 2.), &[]);
-        host.agents.set(Some(agents));
+        host.threads.set(Some(agents));
         host.broom.set(broom);
         started(&shell, cx);
         skip_to(&shell, cx, Step::Tidy);
@@ -1867,7 +1902,7 @@ fn skip_goes_on_from_full_disk_access(cx: &mut TestAppContext) {
     let guide = view.read_with(cx, |view, _| view.guide());
     assert_eq!(
         guide.title,
-        format!("Let {} read Safari.", env!("APP_NAME"))
+        format!("Let {} read Safari.", env!("PRODUCT_NAME"))
     );
     assert_eq!(guide.button.as_deref(), Some("Open System Settings"));
     assert_eq!(guide.corner, crate::import::Corner::Back);
@@ -2527,7 +2562,7 @@ fn the_favorites_step_is_on_the_sheet(cx: &mut TestAppContext) {
 fn the_assistant_step_is_on_the_sheet_with_room_for_its_switch(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     // With an assistant, as its rows show only on that path.
-    host.agents.set(Some(true));
+    host.threads.set(Some(true));
     started(&shell, cx);
     assert_eq!(
         steps(&shell, cx).get(1),
@@ -2556,7 +2591,7 @@ fn the_assistant_step_is_on_the_sheet_with_room_for_its_switch(cx: &mut TestAppC
 #[gpui::test]
 fn the_sheets_foot_is_in_the_same_place_on_every_step(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
-    host.agents.set(Some(false));
+    host.threads.set(Some(false));
     let _agents = cx.update(|_, cx| crate::agents::tests::stand_in(Vec::new(), cx));
     started(&shell, cx);
     let mut feet = Vec::new();
@@ -2603,13 +2638,14 @@ fn the_assistant_step_looks_for_the_assistants_as_it_shows(cx: &mut TestAppConte
     use crate::agents::runner::Cli;
     let (shell, cx, host) = first_window(cx);
     // With an assistant, as its rows show only on that path.
-    host.agents.set(Some(true));
+    host.threads.set(Some(true));
     let signed_out = Found {
         ready: Ready::SignedOut,
         ..Default::default()
     };
     let (agents, looks) =
         cx.update(|_, cx| crate::agents::tests::stand_in(vec![(Cli::Claude, signed_out)], cx));
+    agents.update(cx, |agents, cx| agents.set_threads(true, cx));
     cx.simulate_a11y_activation();
     started(&shell, cx);
     let lines = |cx: &mut VisualTestContext| {
@@ -2653,14 +2689,14 @@ fn the_assistant_step_looks_for_the_assistants_as_it_shows(cx: &mut TestAppConte
 fn the_assistant_step_looks_only_after_a_yes(cx: &mut TestAppContext) {
     let (shell, cx, host) = first_window(cx);
     host.reads_shell(shell.downgrade());
-    host.agents.set(Some(false));
+    host.threads.set(Some(false));
     let (_agents, looks) = cx.update(|_, cx| crate::agents::tests::stand_in(Vec::new(), cx));
     started(&shell, cx);
     skip_to(&shell, cx, Step::Assistant);
     later(&shell, cx, STEP_MOTION);
     assert_eq!(looks(), 0, "shown with agents off, nothing looked");
     press("up", cx);
-    assert_eq!(host.agents.get(), Some(true));
+    assert_eq!(host.threads.get(), Some(true));
     assert_eq!(looks(), 1, "With an assistant looked once");
     press("up", cx);
     assert_eq!(looks(), 1, "picked again, none more");
@@ -2686,13 +2722,14 @@ fn the_assistants_names_are_whole_beside_or_over_their_buttons(cx: &mut TestAppC
     };
     let (shell, cx, host) = first_window(cx);
     // With an assistant, as its rows show only on that path.
-    host.agents.set(Some(true));
+    host.threads.set(Some(true));
     let signed_out = Found {
         ready: Ready::SignedOut,
         ..Default::default()
     };
     let (agents, _) =
         cx.update(|_, cx| crate::agents::tests::stand_in(vec![(Cli::Claude, signed_out)], cx));
+    agents.update(cx, |agents, cx| agents.set_threads(true, cx));
     cx.simulate_a11y_activation();
     started(&shell, cx);
     skip_to(&shell, cx, Step::Assistant);

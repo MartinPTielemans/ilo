@@ -344,8 +344,6 @@ impl Shell {
     /// An ended task's Start Again: the command bar opens as it does for a new tab, with what the
     /// task was first asked in its field, as an ask. Nothing is sent until the user sends it.
     pub fn ask_again(&mut self, asked: SharedString, cx: &mut Context<Self>) {
-        // It asks again at Work on pages, whatever the composer had picked.
-        self.forget_composer_tier();
         self.run(super::Command::NewTab, "start again", cx);
         self.browser.ask_again(asked, cx);
     }
@@ -2205,10 +2203,10 @@ impl TalkView {
     /// The reply field, the TextInput, so IME and the field's keys are a text field's. A session's
     /// conversation is in its agent's terminal, which a quiet line in its place says, on the text's
     /// column as it has no plate.
-    /// With Settings › Agents' Tasks from the command bar off, the line says so in the field's
-    /// place, as the task takes no more.
+    /// With the inside switch off, the line says so in the field's place, as the task takes no
+    /// more.
     fn reply(&self, look: &Look, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
-        let tasks_off = crate::agents::global(cx).is_some_and(|agents| !agents.read(cx).tasks_on());
+        let tasks_off = crate::agents::global(cx).is_some_and(|agents| !agents.read(cx).threads());
         let quiet = match (self.replies, tasks_off) {
             (false, _) => {
                 let name = self
@@ -2218,7 +2216,7 @@ impl TalkView {
                     .unwrap_or_default();
                 Some(format!("Talk to {name} where you started it."))
             }
-            (true, true) => Some("Tasks are off in Settings › Agents.".to_string()),
+            (true, true) => Some("Threads are off in Settings › Agents.".to_string()),
             (true, false) => None,
         };
         if let Some(quiet) = quiet {

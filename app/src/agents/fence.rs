@@ -17,7 +17,7 @@ pub const ADD_SITE: &str = "Add Site…";
 pub const PLACEHOLDER: &str = "Site or address";
 pub const SPOKEN: &str = "Site agents can't open or use";
 /// The sentence under the list.
-pub const FOOT: &str = "Agents can't open or use these sites, whatever a task's access.";
+pub const FOOT: &str = "Agents can't open or use these sites, whatever a thread's access.";
 
 /// What an agent's call on a tab it came to without an open asks: the tab is there already, so
 /// it asks to use the site where an open asks to open it, with the same answers.

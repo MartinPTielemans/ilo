@@ -9,6 +9,10 @@ fn main() {
     let name = std::fs::read_to_string("../branding/name").expect("no branding/name");
     println!("cargo:rustc-env=APP_NAME={}", name.trim());
     println!("cargo:rerun-if-changed=../branding/name");
+    // The product's name as the app's own strings say it, as the browser's crate reads it.
+    let product = std::fs::read_to_string("../branding/product").expect("no branding/product");
+    println!("cargo:rustc-env=PRODUCT_NAME={}", product.trim());
+    println!("cargo:rerun-if-changed=../branding/product");
     // The sync server it signs in to unless the user names another, as the browser's crate has it.
     let sync_server = std::fs::read_to_string("../branding/sync-server");
     println!(

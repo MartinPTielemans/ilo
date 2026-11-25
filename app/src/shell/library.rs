@@ -25,13 +25,13 @@ use super::{
     SPACE_DRAGGED, SPACE_SWATCH_SHOWN, Shell, Space, UNSELECTED_TITLE, URL_BUTTON_GLYPH,
     URL_BUTTON_SIZE, What,
     access::Accessible,
-    dashed_square,
+    clear_label, dashed_square,
     display_face::{cap_top, display_text},
     divider_box, favicon, file_url, folder_icon,
     header::TipSide,
     host, keystroke_label, plate, row_box, selected_plate, space_icon_drawn,
     space_order::{Along, DraggedSpace},
-    split_plate, spring_to, still_clear,
+    split_plate, spring_to,
     task_cards::number as task_number,
     title,
 };
@@ -76,7 +76,7 @@ const LIBRARY_BAND_STIFFNESS: f32 = 0.25;
 /// buttons: half a pixel at 2×, so their swap from the panel's copy can't be seen.
 const LIBRARY_REST_SLACK: f32 = 0.25;
 
-use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED};
+use crate::palette::{Ground, STATE_HOVERED, STATE_PRESSED, Tone};
 use crate::tokens::shell::library::COLUMN;
 use crate::tokens::shell::library::COLUMN_EDGE;
 use crate::tokens::shell::library::COLUMN_WIDTH;
@@ -129,6 +129,9 @@ use crate::tokens::shell::library::SPACES_LEFT;
 use crate::tokens::shell::library::SPACES_PAGE;
 use crate::tokens::shell::library::{CARD_MORE_X, CARD_MORE_Y};
 use crate::tokens::shell::{FOOT_GLYPH, FOOT_ROW, LIBRARY_BUTTON};
+use crate::tokens::shell::{
+    FOOT_PLATE, FOOT_PLATE_RADIUS, LIBRARY_OPEN_GLYPH, LIBRARY_OPEN_PLATE, LIGHT_LIBRARY_OPEN_PLATE,
+};
 
 #[cfg(test)]
 use crate::tokens::shell::library::FILTER_X;
@@ -171,8 +174,12 @@ const CAPTURE_BIT: u64 = 1 << 63;
 /// Rows laid out past the list's ends, so a scroll doesn't show them late.
 const ARCHIVE_OVERDRAW: f32 = 300.;
 use crate::tokens::shell::library::BUTTON_PROGRESS_BOTTOM;
+use crate::tokens::shell::library::BUTTON_PROGRESS_FILL;
 use crate::tokens::shell::library::BUTTON_PROGRESS_HEIGHT;
+use crate::tokens::shell::library::BUTTON_PROGRESS_TRACK;
+use crate::tokens::shell::library::BUTTON_PROGRESS_TRACK_PLATED;
 use crate::tokens::shell::library::BUTTON_PROGRESS_WIDTH;
+use crate::tokens::shell::library::LIGHT_BUTTON_PROGRESS_TRACK;
 use crate::tokens::shell::library::PROGRESS_BOTTOM;
 use crate::tokens::shell::library::PROGRESS_FILL;
 use crate::tokens::shell::library::PROGRESS_HEIGHT;
@@ -506,8 +513,8 @@ impl Only {
         match self {
             Only::All => "All",
             Only::Closed => "Closed Tabs",
-            Only::Little => "Little ilo",
-            Only::Tasks => "Tasks",
+            Only::Little => "Little Window",
+            Only::Tasks => "Threads",
             Only::Visited => "Visited",
         }
     }
@@ -1718,17 +1725,17 @@ impl Shell {
                 };
                 match (tabs, tasks) {
                     (1, 0) => format!("Its tab leaves the archive. {undo} brings it back."),
-                    (0, 1) => format!("Its task leaves the archive. {undo} brings it back."),
+                    (0, 1) => format!("Its thread leaves the archive. {undo} brings it back."),
                     (_, 0) => {
                         format!("Its {tabs} tabs leave the archive. {undo} brings them back.")
                     }
                     (0, _) => {
-                        format!("Its {tasks} tasks leave the archive. {undo} brings them back.")
+                        format!("Its {tasks} threads leave the archive. {undo} brings them back.")
                     }
                     _ => format!(
                         "Its {} and {} leave the archive. {undo} brings them back.",
                         some(tabs, "tab"),
-                        some(tasks, "task")
+                        some(tasks, "thread")
                     ),
                 }
             },
@@ -1807,8 +1814,12 @@ impl Shell {
         let tasks = self.archive_only() == Only::Tasks;
         match (section, unsearched) {
             (Section::Spaces, _) => "",
-            (Section::Archive, true) if tasks => "Finished tasks stay here until ilo quits.",
-            (Section::Archive, false) if tasks => "No tasks match.",
+            (Section::Archive, true) if tasks => concat!(
+                "Finished threads stay here until ",
+                env!("PRODUCT_NAME"),
+                " quits."
+            ),
+            (Section::Archive, false) if tasks => "No threads match.",
             (Section::Archive, unsearched) => match (self.archive_only(), unsearched) {
                 (Only::Visited, true) => "Pages you visit show here.",
                 (Only::Visited, false) => "No visited pages match.",
@@ -1817,8 +1828,8 @@ impl Shell {
                 (_, true) => "Pages you visit and tabs you close show here.",
                 (_, false) => "No pages match.",
             },
-            (Section::Agents, true) => "Your agents' finished tasks stay here for 30 days.",
-            (Section::Agents, false) => "No tasks match.",
+            (Section::Agents, true) => "Your agents' finished threads stay here for 30 days.",
+            (Section::Agents, false) => "No threads match.",
             (Section::Boosts, true) => {
                 "A Boost restyles a site. Open the site, then pick Boost in its Site Controls."
             }
@@ -2243,7 +2254,7 @@ impl Shell {
         let glow = self.foot_glow(id, CARD_WIDTH, height, CARD_RADIUS);
         let rows = space.card_lines().into_iter().map(|line| match line {
             Line::Divider => {
-                let clear = still_clear(&palette, space.clears_last(space.shown));
+                let clear = clear_label(&palette, palette.tertiary());
                 divider_box(&palette, self.hairline(), Some(clear)).into_any_element()
             }
             Line::Folder(folder, depth) => {
@@ -2775,7 +2786,7 @@ impl Shell {
         };
         let named = self.library.as_ref().is_some_and(|library| library.named);
         let about = SharedString::from(match tab.little && named {
-            true => format!("Closed {when} in Little ilo · {host}"),
+            true => format!("Closed {when} in a Little Window · {host}"),
             false => format!("Closed {when} · {host}"),
         });
         let pointed = (self.library.as_ref())
@@ -4310,12 +4321,23 @@ impl Shell {
         }
     }
 
+    /// Whether the footer's Library button wears its plate: while the Library is open, which with
+    /// the sidebar receding under it is as long as the button is still seen.
+    pub(super) fn library_lit(&self) -> bool {
+        self.library_open
+    }
+
     /// The footer's button that opens the Library, at its left (Arc). While downloads run, it keeps
     /// its glyph and name over a bar of how far they've got. The pointer resting on it shows the
-    /// recent downloads over it.
+    /// recent downloads over it. While the Library is open it wears a plate, its glyph in the
+    /// text's ink.
     pub(super) fn library_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let progress = downloads_progress(&self.downloads);
         let command = Command::ViewLibrary;
+        // While its plate of recent downloads is up the button is the plate's foot, in its fill:
+        // no plate of its own, its glyph in the ink.
+        let plated = self.recent_downloads.plated();
+        let lit = self.library_lit() && !plated;
         div()
             .id("library")
             .when(self.a11y, |button| {
@@ -4332,8 +4354,11 @@ impl Shell {
             .rounded(px(NAV_RADIUS))
             .block_mouse_except_scroll()
             .map(|button| self.with_tooltip(button, command, TipSide::Beside, cx))
-            .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
-            .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+            .when(!plated, |button| {
+                button
+                    .hover(|style| style.bg(self.palette.plate(STATE_HOVERED)))
+                    .active(|style| style.bg(self.palette.plate(STATE_PRESSED)))
+            })
             // A button has one hover handler, so this one also carries the tooltip's.
             .on_hover(cx.listener(move |shell, hovered: &bool, window, cx| {
                 shell.hover_button(
@@ -4346,17 +4371,29 @@ impl Shell {
                 shell.hover_recent_downloads(false, *hovered, window, cx)
             }))
             .on_click(cx.listener(move |shell, _, _, cx| shell.run(command, "sidebar", cx)))
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(|shell, event: &MouseDownEvent, _, cx| {
-                    shell.hover_kinds_menu(event.position, cx)
-                }),
-            )
+            .when(lit, |button| {
+                button.child(
+                    div()
+                        .absolute()
+                        .left(px((LIBRARY_BUTTON - FOOT_PLATE) / 2.))
+                        .top(px((FOOT_ROW - FOOT_PLATE) / 2.))
+                        .size(px(FOOT_PLATE))
+                        .rounded(px(FOOT_PLATE_RADIUS))
+                        .bg(self.palette.plate(match self.palette.tone {
+                            Tone::Dark => LIBRARY_OPEN_PLATE,
+                            Tone::Light => LIGHT_LIBRARY_OPEN_PLATE,
+                        })),
+                )
+            })
             .child(
                 svg()
                     .path("icons/library.svg")
                     .size(px(FOOT_GLYPH))
-                    .text_color(self.palette.glyph(NAV)),
+                    .text_color(self.palette.glyph(if lit || plated {
+                        LIBRARY_OPEN_GLYPH
+                    } else {
+                        NAV
+                    })),
             )
             .when_some(progress, |button, done| {
                 button.child(
@@ -4367,13 +4404,17 @@ impl Shell {
                         .w(px(BUTTON_PROGRESS_WIDTH))
                         .h(px(BUTTON_PROGRESS_HEIGHT))
                         .rounded(px(BUTTON_PROGRESS_HEIGHT / 2.))
-                        .bg(self.palette.faint(PROGRESS_TRACK))
+                        .bg(self.palette.faint(match self.palette.tone {
+                            _ if plated => BUTTON_PROGRESS_TRACK_PLATED,
+                            Tone::Dark => BUTTON_PROGRESS_TRACK,
+                            Tone::Light => LIGHT_BUTTON_PROGRESS_TRACK,
+                        }))
                         .child(
                             div()
                                 .h_full()
                                 .w(relative(done))
                                 .rounded(px(BUTTON_PROGRESS_HEIGHT / 2.))
-                                .bg(self.palette.glyph(PROGRESS_FILL)),
+                                .bg(self.palette.glyph(BUTTON_PROGRESS_FILL)),
                         ),
                 )
             })
@@ -4855,7 +4896,7 @@ mod tests {
                 ("All".into(), true),
                 ("".into(), false),
                 ("Closed Tabs".into(), true),
-                ("Little ilo".into(), true),
+                ("Little Window".into(), true),
                 ("".into(), false),
                 ("Visited".into(), true)
             ]
@@ -4868,7 +4909,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             [true, false, false, false, false, false]
         );
-        cx.update(|_, cx| host.choose("Little ilo", cx));
+        cx.update(|_, cx| host.choose("Little Window", cx));
         cx.run_until_parked();
         assert_eq!(tabs(cx), [2]);
 

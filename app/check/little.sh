@@ -564,9 +564,9 @@ send window 1
 send key l cmd shift
 expect '^browser: library shown$' "⇧⌘L didn't open the Library"
 post click 372 28
-expect "^browser: menu shown $(cased 'All (checked), Closed Tabs, Little ilo, Visited')\$" \
+expect "^browser: menu shown $(cased 'All (checked), Closed Tabs, Little Window, Visited')\$" \
   "a click on the archive's Filter didn't show its menu"
-send choose "$(cased 'Little ilo')"
+send choose "$(cased 'Little Window')"
 expect '^browser: archive filter little$' "choosing Little ilo didn't filter the archive"
 ../tools/window-screenshot.sh "$pid" "$out/little-archive.png" || fail "no window to capture"
 send key l cmd shift

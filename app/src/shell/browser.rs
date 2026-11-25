@@ -281,10 +281,6 @@ pub trait Browser {
     /// Lists the captures saved to the Library, away from the main thread, and calls
     /// `Shell::set_captures`.
     fn list_captures(&self, cx: &mut App);
-    /// What the Library button's hover lists, as `recent_downloads::HOVER_IMAGES`' and its
-    /// fellows' bits, as the user picked them from its menu.
-    fn hover_kinds(&self, cx: &mut App) -> u32;
-    fn set_hover_kinds(&self, kinds: u32, cx: &mut App);
     /// Moves the file at `path` to the system's Trash, and says whether it's gone, as it is if it
     /// was gone already.
     fn trash(&self, path: &str, cx: &mut App) -> bool;
@@ -958,17 +954,6 @@ pub trait Browser {
     fn files_available(&self, _: &App) -> bool {
         false
     }
-    /// Runs what the user asked in the composer's Ask as a task on the assistant `agent`, from Space
-    /// `home`, with the level and model the user picked there (#4140). Only the user's ↩ there
-    /// calls it: no agent has a path to it.
-    fn start_task(
-        &self,
-        agent: &str,
-        asked: &str,
-        home: u64,
-        start: crate::agents::task::Start,
-        cx: &mut App,
-    );
     /// Whether the user types in a field of a window over this one: find, the password offer, the
     /// icon picker, the Boost editor or the folder preview. Find doesn't count once the user has
     /// gone back to the page with it still showing.
@@ -1167,14 +1152,14 @@ pub trait Browser {
         None
     }
     fn set_crash_reports(&self, _on: bool, _cx: &mut App) {}
-    /// Whether agents may use the browser, as Settings' switch has it, or None in a build without
-    /// the agents' server.
-    fn agents(&self, _cx: &App) -> Option<bool> {
+    /// Whether the product's own threads run, the inside switch as Settings › Threads has it, or
+    /// None in a build without the agents' server.
+    fn threads(&self, _cx: &App) -> Option<bool> {
         None
     }
-    fn set_agents(&self, _on: bool, _cx: &mut App) {}
-    /// Whether other apps' agents may connect while agents are on, as Settings › Other apps'
-    /// switch has it, or None in a build without the agents' server.
+    fn set_threads(&self, _on: bool, _cx: &mut App) {}
+    /// Whether other apps' agents may connect, the outside switch as Settings › Other apps has
+    /// it, whatever the inside one says, or None in a build without the agents' server.
     fn other_apps(&self, _cx: &App) -> Option<bool> {
         None
     }
