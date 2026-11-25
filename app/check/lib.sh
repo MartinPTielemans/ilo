@@ -825,6 +825,12 @@ new_window_bar() {
   send key escape
   expect '^browser: command bar hidden$' "escape didn't close the new window's command bar"
 }
+# ⌘$1 in a window whose Space shows no page gives the bar it rests on the keyboard, where ⌘T's bar
+# opened over the card before (#4140). $2 names the window in the fail line.
+resting_key() {
+  send key "$1" cmd
+  expect '^browser: resting field has the keyboard$' "⌘$1 didn't give the $2's resting bar the keyboard"
+}
 # What the app logged since the last command was sent, or since command $1.
 since() {
   sed -n "/^browser: drive ${1:-$step}: /,\$p" "$log"

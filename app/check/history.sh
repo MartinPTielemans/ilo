@@ -760,8 +760,7 @@ if [ "$major" -ge 157 ]; then
     expect '^browser: window opened [0-9]' "⌘N didn't open a second window"
     new_window_bar
     send window "$(grep -c '^browser: window opened ' "$log")"
-    send key t cmd
-    expect '^browser: command bar shown$' "⌘T didn't open the command bar in the second window"
+    resting_key t "second window"
     send insert "${site}notes.txt"
     send key return
     expect "^browser: loaded [0-9]* ${site}notes.txt\$" "the second window didn't load ${site}notes.txt"
