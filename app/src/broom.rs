@@ -67,7 +67,8 @@ pub enum Failed {
     TooLong,
     /// It ended with a failure, said too much, or said something other than folders.
     Unread,
-    /// It was ended before it answered: the window went, turned private, or the browser quit.
+    /// It was ended before it answered: its window closed, the switch turned off, or the browser
+    /// quit.
     Ended,
 }
 

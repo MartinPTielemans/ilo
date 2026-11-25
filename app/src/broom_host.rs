@@ -274,10 +274,11 @@ fn ended(
             .and_then(|each| each.shell.upgrade())
     });
     // Not handed over, so no line says it was: the run didn't start or read the program's
-    // version, or the program was too old to take it.
+    // version, or the program was too old to take it. An ended run writes nothing either, however
+    // far it got.
     let given = !matches!(
         answer,
-        Err(broom::Failed::NotStarted | broom::Failed::TooOld)
+        Err(broom::Failed::NotStarted | broom::Failed::TooOld | broom::Failed::Ended)
     );
     let sorted = match (answer, shell) {
         (Ok(folders), Some(shell)) => shell.update(cx, |shell, cx| {
