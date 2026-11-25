@@ -85,6 +85,14 @@ fn grown(open: f32) -> f32 {
     1. - (1. - open).powi(3)
 }
 
+/// How strong the heading's ink is on the plate's fill in `tone`.
+fn heading_ink(tone: Tone) -> f32 {
+    match tone {
+        Tone::Dark => t::HEADING_INK,
+        Tone::Light => t::LIGHT_HEADING_INK,
+    }
+}
+
 /// How opaque the rows are when the plate is `open`: they come in over the second half of the way.
 fn rows_shown(open: f32) -> f32 {
     ((open - ROWS_FROM) / (1. - ROWS_FROM)).clamp(0., 1.)
@@ -466,7 +474,7 @@ impl Shell {
             .text_size(px(t::DETAIL_SIZE))
             .line_height(px(t::DETAIL_LINE))
             .font_weight(FontWeight::SEMIBOLD)
-            .text_color(self.palette.text(self.palette.tertiary()))
+            .text_color(self.palette.text(heading_ink(self.palette.tone)))
             .child("Recent downloads");
         let shadow = BoxShadow {
             // It comes with the plate's size.
@@ -674,7 +682,8 @@ mod tests {
             library::{LIBRARY_BACK_INSET, Section},
             recorder::Recorder,
         },
-        DAY, HOUR, MINUTE, RECENT_REST, WEEK, age, come, detail, grown, now, opened, rows_shown, t,
+        DAY, HOUR, MINUTE, RECENT_REST, WEEK, age, come, detail, grown, heading_ink, now, opened,
+        rows_shown, t,
     };
     use crate::palette::{Palette, TEXT, Tone, contrast, over};
     use crate::tokens::shell::recent_downloads::motion::{FOLD, GROW, ROWS_FROM};
@@ -1177,8 +1186,8 @@ mod tests {
         assert_eq!(detail(&download), "May harm your computer");
     }
 
-    /// What the plate says reads on its fill in both looks: a name at 7:1, its detail at the
-    /// text's floor, and the heading, which names what's listed and isn't needed to use it, at 3:1.
+    /// What the plate says reads on its fill in both looks: a name at 7:1, and its detail and the
+    /// heading, small text both, at the text's floor.
     #[test]
     fn the_plates_text_reads_on_its_fill() {
         for tone in [Tone::Dark, Tone::Light] {
@@ -1193,10 +1202,13 @@ mod tests {
             };
             let name = reads(palette.text(t::NAME));
             let detail = reads(palette.text(palette.secondary()));
-            let heading = reads(palette.text(palette.tertiary()));
+            let heading = reads(palette.text(heading_ink(tone)));
             assert!(name >= 7., "{tone:?}: a name reads at {name:.2}");
             assert!(detail >= TEXT, "{tone:?}: a detail reads at {detail:.2}");
-            assert!(heading >= 3., "{tone:?}: the heading reads at {heading:.2}");
+            assert!(
+                heading >= TEXT,
+                "{tone:?}: the heading reads at {heading:.2}"
+            );
             // The page glyph on its tile, and a row's plate under the pointer, which the name
             // lies on too.
             let tile = Rgba::from(palette.plate(t::TILE_FILL));
