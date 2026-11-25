@@ -587,6 +587,66 @@ const ICONS: &[(&str, &[u8])] = &[
         include_bytes!("../../assets/icons/settings.svg"),
     ),
     (
+        "icons/settings-access.svg",
+        include_bytes!("../../assets/icons/settings-access.svg"),
+    ),
+    (
+        "icons/settings-apps.svg",
+        include_bytes!("../../assets/icons/settings-apps.svg"),
+    ),
+    (
+        "icons/settings-general.svg",
+        include_bytes!("../../assets/icons/settings-general.svg"),
+    ),
+    (
+        "icons/settings-links.svg",
+        include_bytes!("../../assets/icons/settings-links.svg"),
+    ),
+    (
+        "icons/settings-models.svg",
+        include_bytes!("../../assets/icons/settings-models.svg"),
+    ),
+    (
+        "icons/settings-out.svg",
+        include_bytes!("../../assets/icons/settings-out.svg"),
+    ),
+    (
+        "icons/settings-overview.svg",
+        include_bytes!("../../assets/icons/settings-overview.svg"),
+    ),
+    (
+        "icons/settings-passwords.svg",
+        include_bytes!("../../assets/icons/settings-passwords.svg"),
+    ),
+    (
+        "icons/settings-privacy.svg",
+        include_bytes!("../../assets/icons/settings-privacy.svg"),
+    ),
+    (
+        "icons/settings-search.svg",
+        include_bytes!("../../assets/icons/settings-search.svg"),
+    ),
+    (
+        "icons/settings-shortcuts.svg",
+        include_bytes!("../../assets/icons/settings-shortcuts.svg"),
+    ),
+    (
+        "icons/settings-sync.svg",
+        include_bytes!("../../assets/icons/settings-sync.svg"),
+    ),
+    (
+        "icons/settings-tabs.svg",
+        include_bytes!("../../assets/icons/settings-tabs.svg"),
+    ),
+    (
+        "icons/settings-threads.svg",
+        include_bytes!("../../assets/icons/settings-threads.svg"),
+    ),
+    (
+        "icons/settings-window.svg",
+        include_bytes!("../../assets/icons/settings-window.svg"),
+    ),
+    (
         "icons/shapes.svg",
         include_bytes!("../../assets/icons/shapes.svg"),
     ),

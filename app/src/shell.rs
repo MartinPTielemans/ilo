@@ -153,6 +153,7 @@ mod sidebar_backups;
 mod sidebar_keys;
 mod space_form;
 mod space_order;
+mod space_transparency;
 mod split_fold;
 #[cfg(test)]
 mod split_fold_tests;
@@ -700,6 +701,9 @@ struct Space {
     color: Option<u32>,
     /// What Arc's theme picker made for it, whose main colour is `color`, if it has one.
     theme: Option<Theme>,
+    /// How much of what's behind the window comes through while it's shown, kept beside its theme
+    /// (space_transparency), or None where it keeps none.
+    transparency: Option<f32>,
     /// The emoji it shows in place of its dot and before its name, or empty.
     icon: SharedString,
     /// The profile its tabs open in, and its favorites' tabs unless they're each Space's own.
@@ -1332,12 +1336,21 @@ enum Switch {
     Tab(u64),
 }
 
-/// What the composer's ↩ started, as the shell knows it: a start asked from Space `Asked`, until
-/// the Agents say which task it made, or that it made none.
+/// What the composer's or ⌘T's ↩ started, as the shell knows it: a start asked from Space `home`,
+/// until the Agents say which task it made, or that it made none. `over` is the tab it was asked
+/// over, 0 for the empty page, which its conversation takes the place of while it still shows.
 #[derive(Clone, Debug, PartialEq)]
 enum ShowStarted {
-    Asked(u64),
-    Task(SharedString),
+    Asked { home: u64, over: u64 },
+    Task { agent: SharedString, over: u64 },
+}
+
+impl ShowStarted {
+    fn over(&self) -> u64 {
+        match self {
+            ShowStarted::Asked { over, .. } | ShowStarted::Task { over, .. } => *over,
+        }
+    }
 }
 
 pub struct Shell {
@@ -1615,6 +1628,9 @@ pub struct Shell {
     /// Whether an assistive app reads the window being drawn, so its elements say what they are
     /// (access.rs). Each render sets it from its window.
     a11y: bool,
+    /// What a screen reader is told of a task whose conversation isn't shown as it comes to need
+    /// the user or to be done, and which telling it is (`task_cards.rs`, #4244).
+    task_told: Option<(usize, SharedString)>,
     /// The row and favicon hovered when the rows were last drawn, and that row's button: "0" for
     /// none, "1" for ✕, "−" for − and "remove" for remove, for the line check.sh waits for.
     drawn_hover: (Option<Row>, Option<u64>, &'static str),
@@ -1938,6 +1954,8 @@ pub struct Shell {
     update_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     update_offer_drawn: Rc<Cell<Option<Bounds<Pixels>>>>,
     _update_watch: Subscription,
+    /// Settings' Transparency row or the onboarding's step picking a level for every Space.
+    _transparency_watch: Subscription,
     /// The safe-start card's words as last wrapped, while this launch is a safe start, and where it
     /// and its button and link are drawn (safe_start.rs).
     safe_start: Option<safe_start::Shape>,
@@ -2233,6 +2251,7 @@ impl Shell {
             wheel_paged: None,
             hovered_favicon: None,
             a11y: false,
+            task_told: None,
             drawn_hover: (None, None, "0"),
             history: undo::History::default(),
             undo_offered: false,
@@ -2388,6 +2407,7 @@ impl Shell {
             update_drawn: Rc::default(),
             update_offer_drawn: Rc::default(),
             _update_watch: crate::updates::observe_view(cx, Self::update_changed),
+            _transparency_watch: crate::transparency::observe_picked(cx, Self::transparency_picked),
             safe_start: None,
             safe_start_drawn: Rc::default(),
             safe_start_button_drawn: Rc::default(),
@@ -2481,6 +2501,7 @@ impl Shell {
             name,
             color: None,
             theme: None,
+            transparency: None,
             icon: SharedString::default(),
             agent: SharedString::default(),
             profile,
@@ -2533,6 +2554,7 @@ impl Shell {
             name: BLANK_WINDOW.into(),
             color: None,
             theme: None,
+            transparency: None,
             icon: BLANK_ICON.into(),
             agent: SharedString::default(),
             profile,
@@ -3020,8 +3042,14 @@ impl Shell {
                     if !icon.is_empty() {
                         log!("browser: iconed space {id} {icon}");
                     }
-                    if !theme.is_empty() {
-                        log!("browser: themed space {id} {theme}");
+                    // Its Transparency (P6) is logged on a line of its own.
+                    let themed = crate::space_transparency::without(&theme);
+                    if !themed.is_empty() {
+                        log!("browser: themed space {id} {themed}");
+                    }
+                    let transparency = crate::space_transparency::read(&theme);
+                    if let Some(transparency) = transparency {
+                        log!("browser: space {id} transparency {transparency:.3}");
                     }
                     log!("browser: profiled space {id} {profile}");
                     return Space {
@@ -3029,6 +3057,7 @@ impl Shell {
                         name,
                         color,
                         theme: Theme::parse(&theme),
+                        transparency,
                         icon,
                         profile,
                         agent,
@@ -3060,6 +3089,11 @@ impl Shell {
                     log!("browser: profiled space {id} {profile}");
                     reprofiled.push(id);
                 }
+                let transparency = crate::space_transparency::read(&theme);
+                if space.transparency != transparency {
+                    let shown = transparency.map_or("none".to_string(), |at| format!("{at:.3}"));
+                    log!("browser: space {id} transparency {shown}");
+                }
                 let theme = Theme::parse(&theme);
                 if space.theme != theme {
                     let text = theme.map_or("none".to_string(), |theme| theme.to_text());
@@ -3070,6 +3104,7 @@ impl Shell {
                     name,
                     color,
                     theme,
+                    transparency,
                     icon,
                     profile,
                     agent,
@@ -3091,6 +3126,7 @@ impl Shell {
         self.glide_spaces(places, kept(&order, &now) != kept(&now, &order), cx);
         self.live_profiles_changed(&reprofiled, cx);
         self.settle_theme_preview();
+        self.carry_transparency(cx);
         if let Some(form) = &self.form
             && !self.spaces.iter().any(|space| space.id == form.space)
         {
@@ -3531,8 +3567,8 @@ impl Shell {
     }
 
     pub fn set_selected(&mut self, tab: u64, cx: &mut Context<Self>) {
-        // A page shown leaves the empty page the composer's start would have opened over.
-        if tab != 0 {
+        // Another page shown leaves the one the start would have opened its conversation over.
+        if (self.show_started.as_ref()).is_some_and(|started| started.over() != tab) {
             self.show_started = None;
         }
         // ⌘W's wait is for this selection only, whichever way it goes (#3570).
@@ -5054,6 +5090,7 @@ impl Render for Shell {
             .child(self.navigate_listener(cx))
             .children(self.onboarding_layer(window, cx))
             .children(self.resize_bands(cx))
+            .children(self.task_announcer())
     }
 }
 
@@ -6492,6 +6529,7 @@ mod tests {
             name: "Space 1".into(),
             color: None,
             theme: None,
+            transparency: None,
             icon: Default::default(),
             profile: 0,
             agent: Default::default(),

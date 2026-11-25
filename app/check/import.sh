@@ -1,5 +1,5 @@
 # check.sh runs this at 340.
-# Settings › Import finds the made-up Arc in src/import/fixture and a made-up Chrome and Firefox
+# Settings' import finds the made-up Arc in src/import/fixture and a made-up Chrome and Firefox
 # beside it, never the machine's own browsers. From Arc it brings its two Spaces, one in a new profile
 # named Work as Arc's Local State names it, their pinned tabs and folders, Personal's Today tab, its
 # favorites, and the five of its link rules that can be ours, each to the Space its Arc Space became,
@@ -231,28 +231,30 @@ if [ -n "$arc" ]; then
   send key s cmd
   expect '^browser: sidebar hidden$' "⌘S didn't hide the sidebar before the import"
 fi
-# Import & Export's list has a row for each browser, its Import… button at the row's end; then a
-# browser's choices, a row each, with Back and Import under them. The files' box is under the
+# Sync & Import's import list has a row for each browser, its Import… button at the row's end; then
+# a browser's choices, a row each, with Back and Import under them. The files' box is under the
 # browsers' box. Each button is clicked where the import logs it drawn.
 if [ -n "$arc" ]; then found="Arc, Chrome, Firefox"; else found="Chrome, Firefox"; fi
 send menu Settings…
 expect '^browser: settings shown ' "Settings… didn't show Settings"
 # Clicks the import's control $1, import-go for Import or import-done for Done, where the import
 # logged it drawn since the last command: each step logs them anew, so a summary that wraps, as
-# Chrome's does in the Mac's font, or a taller row can't move the click.
+# Chrome's does in the Mac's font, or a taller row can't move the click. The import is under Sync's
+# rows, so in_sight scrolls a control under the card's edge up first.
 click_drawn() {
+  local at sight top bottom y by rest
   expect "^browser: settings $1 at " "the import didn't draw $1"
-  send clickkey $(sed -n "/^browser: drive $step: /,\$p" "$log" |
-    sed -n "s/^browser: settings $1 at //p" | tail -1)
+  in_sight "$1" "^browser: drive $step: " || fail "the import didn't draw $1"
+  send clickkey $at
 }
 settings_drew
-send clickkey $(drawn "toolbar Import & Export")
-expect '^browser: settings tab Import & Export$' \
-  "a click on Import & Export didn't show its section"
-settings_drew 'Import & Export'
+send clickkey $(drawn "toolbar Sync & Import")
+expect '^browser: settings tab Sync & Import$' \
+  "a click on Sync & Import didn't show its section"
+settings_drew 'Sync & Import'
 expect "^browser: import found $found\$" \
   "the import didn't find the fixture's $found, and only them: $(grep 'import found' "$log")"
-expect '^browser: import drawn list$' "Settings › Import & Export didn't draw its list"
+expect '^browser: import drawn list$' "Settings › Sync & Import didn't draw the import's list"
 # Each row's app icon is the system's, a plate's 28 points at the window's scale: on Linux and
 # Windows the made-up one for Chrome alone, from its desktop entry or its exe; on the Mac
 # whichever of the browsers the runner has installed, which the capture shows.
@@ -509,9 +511,9 @@ settings_drew Passwords
 await '^browser: passwords [0-9]*: login\.example\.test check@example\.test, mail\.example\.test check@example\.test, new\.example\.test new@example\.test$' ||
   fail "Settings didn't list the imported logins: $(grep '^browser: passwords [0-9]*:' "$log" | tail -1)"
 send menu Import from Other Browsers…
-expect '^browser: settings tab Import & Export$' \
-  "Import from Other Browsers… didn't show Settings' Import & Export"
-settings_drew 'Import & Export'
+expect '^browser: settings tab Sync & Import$' \
+  "Import from Other Browsers… didn't show Settings' Sync & Import"
+settings_drew 'Sync & Import'
 send key w cmd
 expect '^browser: settings hidden$' "⌘W didn't hide Settings"
 if [ -n "$arc" ]; then
@@ -621,14 +623,14 @@ store_manifest "$pinned_id" "Check Pinned"
 store_manifest cjpalhdlnbpafiamejdnhcphjbkeiagm "uBlock Origin"
 send menu Import from Other Browsers…
 expect '^browser: settings shown ' "Import from Other Browsers… didn't show Settings again"
-settings_drew 'Import & Export'
-# Import & Export finds the browsers again as it's switched to.
+settings_drew 'Sync & Import'
+# Sync & Import finds the browsers again as it's switched to.
 send clickkey $(drawn "toolbar Passwords")
 expect '^browser: settings tab Passwords$' "a click on Passwords didn't show its section"
 settings_drew Passwords
-send clickkey $(drawn "toolbar Import & Export")
-expect '^browser: settings tab Import & Export$' "a click on Import & Export didn't show its section"
-settings_drew 'Import & Export'
+send clickkey $(drawn "toolbar Sync & Import")
+expect '^browser: settings tab Sync & Import$' "a click on Sync & Import didn't show its section"
+settings_drew 'Sync & Import'
 expect '^browser: import found .*Brave' "Settings didn't find the made-up Brave once it showed again"
 click_in_sight "import-from Brave"
 expect '^browser: import pick Brave$' "Import… on Brave's row didn't show its choices"
@@ -689,13 +691,13 @@ for file in check/import/*.sh; do
   placed="${placed:+$placed, }$sidebar_source"
   send menu Import from Other Browsers…
   expect '^browser: settings shown ' "Import from Other Browsers… didn't show Settings for $sidebar_source"
-  settings_drew 'Import & Export'
+  settings_drew 'Sync & Import'
   send clickkey $(drawn "toolbar Passwords")
   expect '^browser: settings tab Passwords$' "a click on Passwords didn't show its section"
   settings_drew Passwords
-  send clickkey $(drawn "toolbar Import & Export")
-  expect '^browser: settings tab Import & Export$' "a click on Import & Export didn't show its section"
-  settings_drew 'Import & Export'
+  send clickkey $(drawn "toolbar Sync & Import")
+  expect '^browser: settings tab Sync & Import$' "a click on Sync & Import didn't show its section"
+  settings_drew 'Sync & Import'
   expect "^browser: import found .*$sidebar_source" \
     "Settings didn't find the made-up $sidebar_source $file placed: $(grep 'import found' "$log" | tail -1)"
   click_in_sight "import-from $sidebar_source"
@@ -753,13 +755,13 @@ if [ "$(uname)" = Darwin ]; then
   trap 'cleanup; chmod 644 "$safari/Bookmarks.plist" 2> /dev/null || true' EXIT
   send menu Import from Other Browsers…
   expect '^browser: settings shown ' "Import from Other Browsers… didn't show Settings for Safari"
-  settings_drew 'Import & Export'
+  settings_drew 'Sync & Import'
   send clickkey $(drawn "toolbar Passwords")
   expect '^browser: settings tab Passwords$' "a click on Passwords didn't show its section"
   settings_drew Passwords
-  send clickkey $(drawn "toolbar Import & Export")
-  expect '^browser: settings tab Import & Export$' "a click on Import & Export didn't show its section"
-  settings_drew 'Import & Export'
+  send clickkey $(drawn "toolbar Sync & Import")
+  expect '^browser: settings tab Sync & Import$' "a click on Sync & Import didn't show its section"
+  settings_drew 'Sync & Import'
   expect '^browser: import found .*Safari' "Settings didn't find the made-up Safari once it showed again"
   click_in_sight "import-from Safari"
   expect '^browser: import pick Safari$' "Import… on Safari's row didn't show its choices"

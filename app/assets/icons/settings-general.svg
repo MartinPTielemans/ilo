@@ -1,0 +1,6 @@
+<!-- The owner's drawing of Settings (values-settings.md): ilo's own. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M3.75 7.5h9M19.5 7.5h0.75M3.75 16.5h0.75M11.25 16.5h9" />
+  <circle cx="16.05" cy="7.5" r="2.55" />
+  <circle cx="7.95" cy="16.5" r="2.55" />
+</svg>

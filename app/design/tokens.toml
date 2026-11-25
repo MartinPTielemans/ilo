@@ -219,6 +219,8 @@ plate-radius = 12.0
 icon-box = 24.0
 icon-box-x = 14.0
 icon-size = 16.0
+# The product's mark in a row's box, as in the composer's input: a little over a row's icons.
+mark = 18.0
 title-x = 45.0
 # A row's content ends this far inside its plate: Arc's 10, and the 2 the plate is wider than Arc's.
 row-end = 12.0
@@ -245,6 +247,14 @@ hint-key-gap = 6.0
 field-fade = 24.0
 # The panel's corners, which the host's blur and shadow take too: the plates' 12 and their 8 in.
 radius = 20.0
+# The composer's foot, under a line after its rows: ⇥ and its words at the left, ↩ and what it
+# does at the right, the words 12 on a 16 line in the rows' dim ink (P3, screen 48).
+foot-height = 40.0
+foot-left = 20.0
+foot-right = 16.0
+foot-gap = 8.0
+foot-text = 12.0
+foot-line = 16.0
 # How far above the browser window's middle the panel's top is: Arc's is at y 396 of 1130 and at
 # 305.5 of 949, which no fraction of the height fits.
 above-middle = 169.0
@@ -1102,10 +1112,9 @@ button-plate = 0.1
 # Ours (#1636): an ilo window of its own. Its sections run down a column on the window's material,
 # as the sidebar's rows do, and the section shown sits on a card, as a page does. Its colours are
 # alphas of the palette's paper in dark and its ink in light, over the stand-in and the card.
-width = 900.0
-# Tall enough for every section, under its group's label, over the foot, at the sidebar's 36 a
-# row: the mock's 660 fits them only at 30 a row, which would shrink each one's hit area (#4092).
-height = 760.0
+# The owner's drawing: 940 by 740 to start (spec-settings.md), its pages' rows 30 tall.
+width = 940.0
+height = 740.0
 # The least it can be made: room for the column and a row with a sentence and a control.
 min-width = 720.0
 min-height = 480.0
@@ -1414,6 +1423,79 @@ share-plate = 0.06
 share-profiles-gap = 6.0
 # The Spaces' colours: ilo's green, then two of Edit's marks' (capture.markup).
 share-spaces = [0x289054, 0x0a84ff, 0xff9500]
+
+# The owner's drawing of Settings (spec-settings.md, values-settings.md): a sidebar of pages 216
+# wide down the window's glass, and the page shown on its own plane, 8 in from the window's top,
+# right and bottom. Each colour is the drawing's in dark, and light-values.md's under `light-`,
+# which the lead derived from the drawing's rule (Proposed).
+[settings.form]
+# The sidebar: 8 in at its sides and foot, the window's buttons in its first row, 44 tall.
+sidebar = 216.0
+sidebar-x = 8.0
+sidebar-bottom = 8.0
+title-row = 44.0
+# The search field, 32 tall at the row radius on the field's fill, its magnifier 14 and 8 before
+# "Search settings", 10 in, and ⌘F on a chip 18 tall, 5 in, at radius 5, 8 from its end; the
+# first row 12 under it.
+search-height = 32.0
+search-radius = 12.0
+search-left = 10.0
+search-right = 8.0
+search-gap = 8.0
+search-glyph = 14.0
+search-after = 12.0
+chip-height = 18.0
+chip-x = 5.0
+chip-radius = 5.0
+chip-text = 10.0
+chip-line = 12.0
+# A page's row: 30 tall, 10 in, its glyph 16 and 9 before its name at 13 on 16, at radius 8;
+# the page shown on the `shown` plate, its name at medium, the scale's weight nearest the
+# drawing's 510. Under the pointer, the button's fill (ours: the drawing has no hover).
+row = 30.0
+row-x = 10.0
+row-gap = 9.0
+row-radius = 8.0
+row-glyph = 16.0
+row-text = 13.0
+row-line = 16.0
+# A group's heading: 34 tall, its name at 11 on 14 at its foot, 6 up, 10 in.
+heading = 34.0
+heading-bottom = 6.0
+heading-text = 11.0
+heading-line = 14.0
+# The foot: the version row, which is About's, 30 tall, its name at 12 on 16 and what the
+# updater last said at 11 on 14, 8 apart; then Chromium's settings, 28 tall, at 12 on 16, its
+# arrow 10 and 6 after it.
+foot-row = 30.0
+foot-gap = 8.0
+foot-text = 12.0
+foot-line = 16.0
+foot-word = 11.0
+foot-word-line = 14.0
+chromium-row = 28.0
+chromium-gap = 6.0
+chromium-glyph = 10.0
+# The page's plane: 8 from the window's top, right and bottom, at radius 10, with an inner line.
+panel-margin = 8.0
+panel-radius = 10.0
+# The page's title, 22 on 28 at the drawing's 600, semibold, in the heading face.
+title-size = 22.0
+title-line = 28.0
+own-page = 0x1d1d21a8
+light-own-page = 0xfbfaf7a8
+# The drawing's #FFFFFF0F, 1 wide inside its edge; in light the ink at the drawn tiles' strength.
+page-line-width = 1.0
+page-line = 0xffffff0f
+light-page-line = 0x0000000d
+# The column's text, glyphs, field and buttons are the palette's neutrals and the sidebar's icon
+# ink; these two are Settings' own. A group's heading and the updater's word, quieter than
+# `text-secondary`, but a label, so over the palette's `text-tertiary` in light.
+text-3 = 0xf3f0e86b
+light-text-3 = 0x16161880
+# The page shown: the ink, where the sidebar's selected row is white in light.
+shown = 0xf3f0e833
+light-shown = 0x16161829
 
 [shell]
 # The docked sidebar's width at first, where the card starts.
@@ -3500,6 +3582,14 @@ menu-shadow = 0x0000004d
 menu-shadow-y = 6.0
 menu-shadow-blur = 14.0
 hairline = 0.5
+
+[space-transparency]
+# A Space's Transparency bar (P6), from solid at 0 to 1, today's More, the clearest at which text
+# still holds its floor over a white window behind. Where today's Less sits on it, so a Space
+# carried over at Less looks as the app did.
+less = 0.3
+# Where today's Standard sits on it: the value a Space comes with and Reset gives.
+start = 0.4
 
 [zoom-hud]
 # Arc's, measured at 2× (Arc 1.170 rec): 41.5 tall, 8 inside the card's top right corner, the
