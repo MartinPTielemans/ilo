@@ -310,7 +310,13 @@ fn a_run_hands_the_list_and_reads_the_folders() {
         list
     );
     let ran_in = std::fs::read_to_string(stand_in.at("where")).unwrap();
-    assert_eq!(Path::new(ran_in.trim()), run.folder, "in its own folder");
+    // The Mac's temporary folder is under /var, a link to /private/var, which the program sees.
+    let real = |path: &Path| path.canonicalize().unwrap();
+    assert_eq!(
+        real(Path::new(ran_in.trim())),
+        real(&run.folder),
+        "in its own folder"
+    );
     let folder = run.folder.clone();
     drop(run);
     assert!(!folder.exists(), "the folder goes with the run");
