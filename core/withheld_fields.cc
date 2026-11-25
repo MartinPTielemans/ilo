@@ -68,6 +68,17 @@ bool SecretAutocomplete(std::string_view autocomplete) {
   return false;
 }
 
+FieldKind KindOf(const std::optional<std::string>& type,
+                 const std::optional<std::string>& autocomplete) {
+  const bool password = type && base::EqualsCaseInsensitiveASCII(*type, "password");
+  return {password, password || (autocomplete && SecretAutocomplete(*autocomplete))};
+}
+
+void TellKinds(base::DictValue& node, bool secret, bool autofilled) {
+  node.Set("secret", secret);
+  node.Set("autofilled", autofilled);
+}
+
 gfx::RectF IntoParent(const gfx::RectF& box, const gfx::RectF& frame) {
   gfx::RectF seen = box;
   seen.Intersect(gfx::RectF(frame.size()));

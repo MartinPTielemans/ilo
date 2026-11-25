@@ -342,11 +342,12 @@ class AgentPage : public content::WebContentsObserver,
   // The first control of the |kind|s from |kind| on that |scope|'s elements have, with |id| if
   // the label names one.
   void FindChoice(int slot, int scope, std::optional<std::string> id, size_t kind, ChoiceThen then);
-  // Marks the text fields in |fields| that are for passwords, one at a time, then reads the
-  // contents of those that hold something.
+  // Marks the text fields in |fields| that are for passwords, and those secret by their
+  // autocomplete, one at a time, then reads the contents of those that hold something.
   void CheckPasswords(base::ListValue nodes,
                       std::vector<int64_t> fields,
-                      std::set<int64_t> passwords);
+                      std::set<int64_t> passwords,
+                      std::set<int64_t> secrets);
   // Describes each field in |filled| that holds something from |next| on, one at a time, then
   // answers with the tree, each field as SeenOf has an agent see it, in its pictures too.
   void ReadContents(base::ListValue nodes,
@@ -396,8 +397,9 @@ class AgentPage : public content::WebContentsObserver,
   void Offset(int slot, gfx::RectF box, Then then);
   // Tells the app where the element the job acts on is, for the agent's pointer.
   void Point(const gfx::RectF& box);
-  // Whether the element is a password field, from its attributes.
-  void IsPassword(int64_t element, base::OnceCallback<void(std::optional<bool>)> then);
+  // What the element is by its attributes (KindOf): a password field, and secret. Nothing if it
+  // couldn't be read.
+  void ReadKindOf(int64_t element, base::OnceCallback<void(std::optional<FieldKind>)> then);
   // Closes Chrome's autofill and password suggestions, which the keys would otherwise pick from.
   void HideSuggestions();
   // Whether an extension's control is what input at |at|, in the main frame's viewport, would
@@ -533,14 +535,18 @@ bool IsWebFrame(content::RenderFrameHost* frame);
 struct FieldShown {
   Seen seen = Seen::kFilled;
   std::string value;
+  // What the app is told of a text field (TellKinds).
+  bool secret = false;
+  bool autofilled = false;
 };
 
 // What a page's accessibility tree, as DevTools' Accessibility.getFullAXTree gives it, may show
 // an agent: each node without its value, and without the nodes under a field, where Chromium puts
 // what was typed or filled into it, but for a combobox's own list of options, and with
 // "password": true on the nodes in |passwords|. A field in |contents| has "holds", what it holds,
-// for Seen::kValue, and else "contents": "empty", "filled" or "changed". A native select has
-// "choices", its options' names (select_choices.h).
+// for Seen::kValue, and else "contents": "empty", "filled" or "changed", and a text field in it
+// "secret" and "autofilled", for the app alone (TellKinds). A native select has "choices", its
+// options' names (select_choices.h).
 base::ListValue AgentTree(base::ListValue nodes,
                           const std::set<int64_t>& passwords,
                           const std::map<int64_t, FieldShown>& contents);

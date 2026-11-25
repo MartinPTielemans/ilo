@@ -1,7 +1,10 @@
 #include "browser_core/withheld_fields.h"
 
+#include <optional>
+#include <string>
 #include <vector>
 
+#include "base/values.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkColor.h"
@@ -95,6 +98,46 @@ TEST(WithheldFieldsTest, WhatTheAgentSees) {
   // An empty field has nothing to withhold.
   EXPECT_FALSE(Withheld(Holding(u"")));
   EXPECT_EQ(SeenOf(Holding(u"")), Seen::kEmpty);
+}
+
+// A field's kind is read from its type and autocomplete alone, whatever it holds or wherever it
+// came from: a password field by its type, in any case, and secret, which a card's number, its
+// code, its expiry and a one-time code's field are too.
+TEST(WithheldFieldsTest, AFieldsKindIsItsMarkups) {
+  EXPECT_TRUE(KindOf("password", std::nullopt).password);
+  EXPECT_TRUE(KindOf("PassWord", std::nullopt).secret);
+  for (const char* autocomplete :
+       {"cc-number", "cc-csc", "CC-EXP", "cc-exp-month", "one-time-code", "new-password"}) {
+    const FieldKind kind = KindOf("text", std::string(autocomplete));
+    EXPECT_FALSE(kind.password) << autocomplete;
+    EXPECT_TRUE(kind.secret) << autocomplete;
+  }
+  // No type, as a textarea has none, and no autocomplete.
+  EXPECT_FALSE(KindOf(std::nullopt, std::nullopt).secret);
+  EXPECT_FALSE(KindOf("email", std::string("email")).secret);
+  EXPECT_FALSE(KindOf("tel", std::string("off")).password);
+}
+
+// The app is told both of a text field as true or false, never by a key's absence, and they
+// leave what the node shows of the field as it was.
+TEST(WithheldFieldsTest, TheAppIsToldYesOrNoOfATextField) {
+  base::DictValue plain = base::DictValue().Set("holds", "Ada");
+  TellKinds(plain, /*secret=*/false, /*autofilled=*/false);
+  EXPECT_EQ(plain.FindBool("secret"), false);
+  EXPECT_EQ(plain.FindBool("autofilled"), false);
+  EXPECT_EQ(*plain.FindString("holds"), "Ada");
+  EXPECT_EQ(plain.size(), 3u);
+
+  base::DictValue card = base::DictValue().Set("contents", "filled");
+  TellKinds(card, /*secret=*/true, /*autofilled=*/false);
+  EXPECT_EQ(card.FindBool("secret"), true);
+  EXPECT_EQ(card.FindBool("autofilled"), false);
+
+  base::DictValue filled = base::DictValue().Set("contents", "filled");
+  TellKinds(filled, /*secret=*/false, /*autofilled=*/true);
+  EXPECT_EQ(filled.FindBool("secret"), false);
+  EXPECT_EQ(filled.FindBool("autofilled"), true);
+  EXPECT_EQ(*filled.FindString("contents"), "filled");
 }
 
 // Only a field that may show what it holds is worth asking the page about.
