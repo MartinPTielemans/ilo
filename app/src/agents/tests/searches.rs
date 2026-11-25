@@ -118,3 +118,30 @@ fn a_searchs_words_are_cut_as_a_thoughts(cx: &mut TestAppContext) {
     assert_eq!(words.chars().count(), 4000);
     assert!(words.ends_with('…'), "{words}");
 }
+
+/// A task's own call by the search's name, or by a name no tool has, is answered as no tool and
+/// makes no step and no entry: a search is a step only as its assistant's provider ran it.
+#[gpui::test]
+fn a_tasks_call_by_the_searchs_name_is_no_tool(cx: &mut TestAppContext) {
+    let run = Run::new("search-called", cx);
+    let agent = run.start(Cli::Claude, cx);
+    for (id, tool) in [(1, SEARCHED), (2, "search_the_web_twice")] {
+        let (reply, answer) = mpsc::channel();
+        let call = Call {
+            id,
+            agent: agent.clone(),
+            connection: 1,
+            tool: tool.into(),
+            arguments: json!({ "query": "sleeper carriages Madrid" }),
+            reply,
+            at: std::time::Instant::now(),
+        };
+        (run.agents).update(cx, |agents, cx| agents.handle(Event::Call(call), cx));
+        assert_eq!(
+            answer.try_recv().expect("the call wasn't answered at once"),
+            ToolResult::error(format!("There's no tool {tool}."))
+        );
+    }
+    assert!(titles(&run, &agent, cx).is_empty());
+    assert!(entries(&run, &agent, cx).is_empty());
+}

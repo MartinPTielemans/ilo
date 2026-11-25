@@ -6753,6 +6753,52 @@ mod tasks {
         assert!(!asked.recv().unwrap().error, "the ask went unanswered");
     }
 
+    /// Every tool `dispatch` runs is listed for an agent that may call it, as a call by any other
+    /// name is answered as no tool before it gets there: an arm listed for nobody would never run,
+    /// and one only a task runs is listed for a task's. A made-up name is no tool, and leaves no
+    /// entry.
+    #[gpui::test]
+    fn every_tool_dispatch_runs_is_listed_and_no_other_is_one(cx: &mut TestAppContext) {
+        let source = include_str!("../agents.rs");
+        let body = &source[source.find("    fn dispatch(").expect("no dispatch")..];
+        let body = &body[..body[1..]
+            .find("\n    fn ")
+            .map_or(body.len(), |end| end + 1)];
+        let (task, outside) = (tools::names("task-1"), tools::names("claude-code"));
+        let mut arms = Vec::new();
+        for line in body.lines() {
+            // An arm of its match, at its depth, by a name or a few.
+            let Some(arm) = line.strip_prefix("            \"") else {
+                continue;
+            };
+            let Some((pattern, _)) = arm.split_once("=>") else {
+                continue;
+            };
+            let pattern = format!("\"{pattern}");
+            for name in pattern.split('"').skip(1).step_by(2) {
+                let listed = match pattern.contains("if is_task(") {
+                    true => task.iter().any(|each| each == name),
+                    false => task.iter().chain(&outside).any(|each| each == name),
+                };
+                assert!(
+                    listed,
+                    "dispatch runs {name}, which no agent that may call it is listed"
+                );
+                arms.push(name.to_string());
+            }
+        }
+        assert!(arms.len() > 15, "dispatch's arms weren't found: {arms:?}");
+
+        let (agents, _, _) = connected(cx);
+        let before = log(&agents, "claude-code", cx);
+        let answer = call(&agents, "claude-code", "sum_the_receipts", json!({}), cx);
+        assert_eq!(
+            answer.recv().unwrap(),
+            ToolResult::error("There's no tool sum_the_receipts.")
+        );
+        assert_eq!(log(&agents, "claude-code", cx), before);
+    }
+
     #[gpui::test]
     fn the_task_tools_are_a_tasks_alone(cx: &mut TestAppContext) {
         let names = tools::names("task-1");
