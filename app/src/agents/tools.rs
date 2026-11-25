@@ -449,7 +449,7 @@ fn shared() -> Value {
         {
             "name": "type",
             "title": "Type",
-            "description": "Type text into a field by its ref, in place of what it holds. submit presses Enter after. Answers with what changed in the page's outline. To fill in a form, give its fields, choices and the click that sends it as one run_steps call.",
+            "description": "Type text into a field by its ref, in place of what it holds. For a date or time field, type the value as 2026-11-25 or 14:30. submit presses Enter after. Answers with what changed in the page's outline. To fill in a form, give its fields, choices and the click that sends it as one run_steps call.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

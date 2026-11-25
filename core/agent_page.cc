@@ -1533,6 +1533,11 @@ void AgentPage::TypeInto(int64_t element, bool submit) {
   base::ReplaceSubstringsAfterOffset(&text, 0, u"\r\n", u"\n");
   std::ranges::replace(text, u'\r', u'\n');
   if (text.find(u'\n') == std::u16string::npos) {
+    // Only a date or time value is worth reading the field for: any other text goes as keys.
+    if (IsDateValueForm(job_->text)) {
+      TypeDate(element, submit);
+      return;
+    }
     TypeKeys(std::move(text), submit);
     return;
   }
@@ -1554,6 +1559,134 @@ void AgentPage::TypeInto(int64_t element, bool submit) {
            },
            weak_factory_.GetWeakPtr(), std::move(text), submit),
        SlotOfElement(element));
+}
+
+void AgentPage::TypeDate(int64_t element, bool submit) {
+  // The input with its shadow tree, where Blink's segments are, deep enough for them alone, so a
+  // large editor typed a date into isn't read whole.
+  const int slot = SlotOfElement(element);
+  Send("DOM.describeNode",
+       base::DictValue()
+           .Set("backendNodeId", NodeOfElement(element))
+           .Set("depth", 8)
+           .Set("pierce", true),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, int slot, std::string text, bool submit,
+              const base::DictValue* described) {
+             if (!page) {
+               return;
+             }
+             const base::DictValue* node = described ? described->FindDict("node") : nullptr;
+             const std::string* name = node ? node->FindString("nodeName") : nullptr;
+             std::string type;
+             std::vector<std::string> names;
+             std::vector<int> segments;
+             if (name && base::EqualsCaseInsensitiveASCII(*name, "input")) {
+               const auto attribute = [](const base::DictValue& each, std::string_view wanted) {
+                 const base::ListValue* attributes = each.FindList("attributes");
+                 for (size_t at = 0; attributes && at + 1 < attributes->size(); at += 2) {
+                   const std::string* key = (*attributes)[at].GetIfString();
+                   const std::string* value = (*attributes)[at + 1].GetIfString();
+                   if (key && value && *key == wanted) {
+                     return *value;
+                   }
+                 }
+                 return std::string();
+               };
+               type = base::ToLowerASCII(attribute(*node, "type"));
+               // Its segments in the order the field shows them: each node's shadow tree, then
+               // its children.
+               std::vector<const base::DictValue*> steps = {node};
+               while (!steps.empty()) {
+                 const base::DictValue* each = steps.back();
+                 steps.pop_back();
+                 const std::string pseudo = attribute(*each, "pseudo");
+                 const std::optional<int> id = each->FindInt("backendNodeId");
+                 if (pseudo.starts_with("-webkit-datetime-edit-") && pseudo.ends_with("-field") &&
+                     id) {
+                   names.push_back(pseudo);
+                   segments.push_back(*id);
+                 }
+                 std::vector<const base::DictValue*> inside;
+                 for (const char* key : {"shadowRoots", "children"}) {
+                   if (const base::ListValue* list = each->FindList(key)) {
+                     for (const base::Value& child : *list) {
+                       if (const base::DictValue* dict = child.GetIfDict()) {
+                         inside.push_back(dict);
+                       }
+                     }
+                   }
+                 }
+                 steps.insert(steps.end(), inside.rbegin(), inside.rend());
+               }
+             }
+             // Segments that aren't exactly the value's parts leave the field as it is, and the
+             // text goes as keys, as into any field.
+             std::optional<std::vector<std::vector<base::DictValue>>> keys =
+                 DateFieldKeys(type, text, names);
+             if (!keys) {
+               page->TypeKeys(base::UTF8ToUTF16(text), submit);
+               return;
+             }
+             page->TypeSegments(slot, std::move(segments), std::move(*keys), 0, submit);
+           },
+           weak_factory_.GetWeakPtr(), slot, job_->text, submit),
+       slot);
+}
+
+void AgentPage::TypeSegments(int slot,
+                             std::vector<int> segments,
+                             std::vector<std::vector<base::DictValue>> keys,
+                             size_t next,
+                             bool submit) {
+  if (next == segments.size()) {
+    if (submit) {
+      PressKey("Enter", base::BindOnce(&AgentPage::Settle, weak_factory_.GetWeakPtr()));
+    } else {
+      Settle();
+    }
+    return;
+  }
+  const int segment = segments[next];
+  // Each segment focused before its keys, rather than left to Blink's moving on from a full one,
+  // which a year never is, or an arrow, which would skip one Blink moved on from.
+  Send("DOM.focus", base::DictValue().Set("backendNodeId", segment),
+       base::BindOnce(
+           [](base::WeakPtr<AgentPage> page, int slot, std::vector<int> segments,
+              std::vector<std::vector<base::DictValue>> keys, size_t next, bool submit,
+              const base::DictValue* focused) {
+             if (!page) {
+               return;
+             }
+             if (!focused) {
+               page->Fail("The page didn't take the text.");
+               return;
+             }
+             std::vector<base::DictValue> typing = std::move(keys[next]);
+             base::DictValue last = std::move(typing.back());
+             typing.pop_back();
+             for (base::DictValue& key : typing) {
+               page->Send("Input.dispatchKeyEvent", std::move(key), base::DoNothing());
+             }
+             page->Send("Input.dispatchKeyEvent", std::move(last),
+                        base::BindOnce(
+                            [](base::WeakPtr<AgentPage> page, int slot, std::vector<int> segments,
+                               std::vector<std::vector<base::DictValue>> keys, size_t next,
+                               bool submit, const base::DictValue* typed) {
+                              if (!page) {
+                                return;
+                              }
+                              if (!typed) {
+                                page->Fail("The page didn't take the text.");
+                                return;
+                              }
+                              page->TypeSegments(slot, std::move(segments), std::move(keys),
+                                                 next + 1, submit);
+                            },
+                            page, slot, std::move(segments), std::move(keys), next, submit));
+           },
+           weak_factory_.GetWeakPtr(), slot, std::move(segments), std::move(keys), next, submit),
+       slot);
 }
 
 void AgentPage::TypeKeys(std::u16string text, bool submit) {

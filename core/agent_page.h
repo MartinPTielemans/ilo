@@ -223,6 +223,15 @@ class AgentPage : public content::WebContentsObserver,
   // Types the job's text into |element|, which has the keyboard, with what it held selected.
   void TypeInto(int64_t element, bool submit);
   void TypeKeys(std::u16string text, bool submit);
+  // Types the job's text, a date or time value, into |element|'s segments where it's a date or
+  // time input that shows them, and as keys otherwise.
+  void TypeDate(int64_t element, bool submit);
+  // Focuses each of |segments| from |next| on, in its frame's |slot|, and presses its |keys|.
+  void TypeSegments(int slot,
+                    std::vector<int> segments,
+                    std::vector<std::vector<base::DictValue>> keys,
+                    size_t next,
+                    bool submit);
   void PressKey(const std::string& key, base::OnceClosure then);
   // Hears the page's requests, then turns the wheel, so the answer waits for what the scroll
   // starts loading.
