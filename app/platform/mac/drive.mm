@@ -107,6 +107,9 @@
 //                                         <w>x<h>" or "none", and whether it's full screen, as
 //                                         "browser: layout full screen <0|1>"
 //   state                                 nothing, for the done line's report
+//   reopen                                sends the app the reopen Apple Event, as a click on
+//                                         the Dock's icon or a second launch does, through
+//                                         AppKit's handler to the app's delegate
 //   title [<text>]                        logs the key window's title, as "browser: key window
 //                                         titled <title>", such as a window of Chrome's. With
 //                                         <text>, once the title has it, for up to 10 s, as a
@@ -1716,6 +1719,21 @@ bool Run(const std::string& line, void (^done)(void)) {
       return true;
     }
     return false;
+  }
+  if (action == "reopen") {
+    // One sent to the app itself goes to its handler at once.
+    NSAppleEventDescriptor* reopen = [NSAppleEventDescriptor
+        appleEventWithEventClass:kCoreEventClass
+                         eventID:kAEReopenApplication
+                targetDescriptor:NSAppleEventDescriptor.currentProcessDescriptor
+                        returnID:kAutoGenerateReturnID
+                   transactionID:kAnyTransactionID];
+    NSError* error = nil;
+    if (![reopen sendEventWithOptions:NSAppleEventSendNoReply timeout:5 error:&error]) {
+      fprintf(stderr, "browser: reopen not sent: %s\n", error.localizedDescription.UTF8String);
+    }
+    done();
+    return true;
   }
   if (!window) {
     return false;

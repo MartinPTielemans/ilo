@@ -6163,9 +6163,44 @@ void* host_first_run_window(void) {
   return g_first_run.visible ? (__bridge void*)g_first_run : nullptr;
 }
 
+// Chromium's AppController's, which a reopen goes on to while first run doesn't show.
+static BOOL (*g_engine_reopen)(id, SEL, NSApplication*, BOOL);
+
+// A reopen, as a click on the Dock's icon or a second launch sends, brings first run's window to
+// the front while it shows and makes nothing: Chromium's own would make a browser window of its
+// own, as the browser's is held off screen and it finds none on screen.
+static BOOL ReopenToFirstRun(id self, SEL selector, NSApplication* app, BOOL visible) {
+  if (!g_first_run) {
+    return g_engine_reopen ? g_engine_reopen(self, selector, app, visible) : YES;
+  }
+  if (g_first_run.visible) {
+    [g_first_run makeKeyAndOrderFront:nil];
+  }
+  // check.sh reads this line.
+  if (Checked()) {
+    fprintf(stderr, "browser: reopen brought first run to the front\n");
+  }
+  return NO;
+}
+
 void host_add_first_run(void* first_run_view) {
   g_first_run_view = (__bridge NSView*)first_run_view;
   g_first_run = g_first_run_view.window;
+  static bool once = false;
+  if (!once) {
+    once = true;
+    const SEL selector = @selector(applicationShouldHandleReopen:hasVisibleWindows:);
+    Class kind = object_getClass(NSApp.delegate);
+    if (Method method = kind ? class_getInstanceMethod(kind, selector) : nullptr) {
+      g_engine_reopen = (BOOL (*)(id, SEL, NSApplication*, BOOL))method_setImplementation(
+          method, (IMP)ReopenToFirstRun);
+    } else if (kind) {
+      class_addMethod(kind, selector, (IMP)ReopenToFirstRun,
+                      protocol_getMethodDescription(@protocol(NSApplicationDelegate), selector, NO,
+                                                    YES)
+                          .types);
+    }
+  }
   // The system's buttons, but its size is fixed: nothing to zoom to, resize or tab with.
   g_first_run.styleMask &= ~NSWindowStyleMaskResizable;
   [g_first_run standardWindowButton:NSWindowZoomButton].enabled = NO;
