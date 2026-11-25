@@ -3780,6 +3780,51 @@ fn the_ask_is_left_as_site_search_is(cx: &mut TestAppContext) {
     assert_eq!(bar.calls(), ["asking false", "dismiss"]);
 }
 
+/// Where the bar can start a thread, its field says so with nothing typed (Z2); with tasks off,
+/// over a private window or with no assistant set up it says E1, as before. The words follow the
+/// assistants the browser learns while the bar shows.
+#[gpui::test]
+fn the_bar_says_it_starts_threads_where_it_can(cx: &mut TestAppContext) {
+    let placeholder = |bar: &mut Bar| {
+        (bar.window)
+            .read_with(&bar.cx.cx, |bar, cx| {
+                bar.input.read(cx).placeholder().to_string()
+            })
+            .unwrap()
+    };
+    let mut bar = Bar::with_agents(cx, &[("claude", None)], None);
+    assert_eq!(placeholder(&mut bar), "Search, or start a thread");
+
+    *bar.host.agents.borrow_mut() = agents(&[]);
+    bar.cx.cx.update(task_agents_changed);
+    bar.cx.run_until_parked();
+    assert_eq!(
+        placeholder(&mut bar),
+        "Search or enter address",
+        "the bar offers a thread with no assistant set up"
+    );
+    *bar.host.agents.borrow_mut() = agents(&[("codex", None)]);
+    bar.cx.cx.update(task_agents_changed);
+    bar.cx.run_until_parked();
+    assert_eq!(
+        placeholder(&mut bar),
+        "Search, or start a thread",
+        "an assistant set up while the bar shows"
+    );
+
+    let host = Recorder {
+        agents: RefCell::new(agents(&[("claude", None)])),
+        private: true,
+        ..Recorder::default()
+    };
+    let mut private = Bar::open(cx, Vec::new(), host);
+    assert_eq!(
+        placeholder(&mut private),
+        "Search or enter address",
+        "a private window's bar offers a thread"
+    );
+}
+
 /// Words typed put New Thread second, under the page or search ↩ takes, which ↩ on the first row
 /// goes to, never starting a thread. ⇥, ↩ on New Thread and a click on it each grow the bar into
 /// the composer with the words kept, and ⇥ or a click on Back to Search goes back with them.
