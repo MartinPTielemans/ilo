@@ -2560,3 +2560,31 @@ fn a_light_windows_plates_are_the_ink_and_hold_their_floors() {
         .collect();
     assert!(failed.is_empty(), "{failed:#?}\nall: {read:#?}");
 }
+
+/// The light look's red is for the words or the glyph of an action that destroys (#4276), so it
+/// holds text's 4.5:1 where such words lie: on the floating fill over the material at its worst
+/// for a dark ink, and on an own page all along the Transparency bar with a white window behind.
+#[test]
+fn a_light_windows_red_reads_as_words_on_what_floats_and_on_an_own_page() {
+    use crate::tokens::menu::LIGHT_DESTRUCTIVE;
+    let red = rgba(LIGHT_DESTRUCTIVE);
+    assert_eq!(red.a, 1.);
+    let floating = rgba(crate::tokens::shell::recent_downloads::LIGHT_FILL);
+    let on_float = over(rgb(LIGHT_FLOAT_MATERIAL), floating, floating.a);
+    assert!(
+        contrast(red, on_float) >= TEXT,
+        "on what floats: {:.2}",
+        contrast(red, on_float)
+    );
+    let page = rgba(crate::tokens::settings::form::LIGHT_OWN_PAGE);
+    for glass in bar() {
+        let palette = Palette::at(None, Tone::Light, glass);
+        let [_, white] = palette.window_at(0., 0.);
+        let ground = over(white, page, page.a);
+        assert!(
+            contrast(red, ground) >= TEXT,
+            "on an own page at {glass}: {:.2}",
+            contrast(red, ground)
+        );
+    }
+}

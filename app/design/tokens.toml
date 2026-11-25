@@ -905,7 +905,9 @@ light-label = 0x1616_18e6
 light-secondary = 0x1616_189e
 light-line = 0x1616_181a
 light-disabled = 0x1616_1861
-light-destructive = 0xb326_1eff
+# The dark look's red darkened so its words read on a light ground (#4276): 4.5:1 at least on the
+# floating fill over the material at its worst and on an own page with a white window behind.
+light-destructive = 0xc236_2bff
 # A destructive item's highlight, with a Paper label on it.
 destructive-fill = 0xb326_1eff
 destructive-label = 0xf3f0_e8ff
